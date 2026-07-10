@@ -220,10 +220,19 @@ export function recordCuriosity(text: string, { aired = false }: { aired?: boole
 
 // The most recent curiosity lines actually aired (newest first), for the
 // fallback brief — so the agent's free generation avoids repeating them.
+//
+// Clipped to the opening of each line: the anti-repeat only needs the SUBJECT
+// (which a spoken factoid states up front), and inlining eight full segments
+// stuffed ~500 tokens of old scripts into every curiosity prompt — reported
+// as prompt bloat by community operators (one disabled the skill over it).
+const RECENT_CURIOSITY_CLIP = 90;
 export function recentAiredCuriosity(limit = 8): string[] {
   return ledger
     .filter(e => e.aired)
     .sort((a, b) => b.at.localeCompare(a.at))
     .slice(0, limit)
-    .map(e => e.text);
+    .map(e => {
+      const t = String(e.text || '').replace(/\s+/g, ' ').trim();
+      return t.length > RECENT_CURIOSITY_CLIP ? `${t.slice(0, RECENT_CURIOSITY_CLIP).replace(/\s+\S*$/, '')}…` : t;
+    });
 }

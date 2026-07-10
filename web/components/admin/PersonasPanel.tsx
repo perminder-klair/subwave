@@ -4,7 +4,8 @@
 // One persona is "active" at a time (a scheduled Show can override which
 // persona is on air for its hour). Each persona owns its name, tagline, talk
 // frequency, soul, and full voice (TTS engine + cloud provider + voice).
-// The system prompt is one global template shared by every persona.
+// The system prompt is a library of global templates shared by every persona,
+// one active at a time ('' = the built-in default).
 // Everything POSTs to /settings and applies live — no mixer restart.
 //
 // This file is the stateful container: it owns the form, validation, save, and
@@ -15,13 +16,14 @@ import { notify, errorMessage } from '../../lib/notify';
 import { Card, Btn, Pill } from './ui';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { Modal } from '../ui/modal';
-import type { Persona, PersonaTts, FormState, SettingsResponse, CommunityPersona } from './personas/types';
-import { DIAL_NEUTRAL, PERSONA_MAX, PROMPT_MIN, PROMPT_MAX } from './personas/constants';
+import type { Persona, PersonaTts, DjPromptPreset, FormState, SettingsResponse, CommunityPersona } from './personas/types';
+import { DIAL_NEUTRAL, PERSONA_MAX } from './personas/constants';
 import {
-  clientMintId, fetchDicebearAvatar, fileToAvatarDataUrl, personaValid, voiceForSave, cloudIssue,
+  clientMintId, fetchDicebearAvatar, fileToAvatarDataUrl, personaValid, promptPresetValid,
+  voiceForSave, cloudIssue,
 } from './personas/helpers';
 import { PersonaHero } from './personas/PersonaHero';
-import { SystemPromptCard } from './personas/SystemPromptCard';
+import { SystemPromptModal } from './personas/SystemPromptModal';
 import { PersonaRoster } from './personas/PersonaRoster';
 import { PersonaEditor } from './personas/PersonaEditor';
 
@@ -38,7 +40,7 @@ export default function PersonasPanel() {
   const [editorOpen, setEditorOpen] = useState(false);
   // id of a freshly-added persona — the AI-draft field shows only while creating.
   const [creatingId, setCreatingId] = useState<string | null>(null);
-  // toggles the system-prompt editor card
+  // whether the system-prompt library modal is open
   const [showPrompt, setShowPrompt] = useState(false);
   // Bumped on every avatar mutation. Appended as ?v=… so the admin <img>
   // refetches even though the public endpoint caches for an hour — the cache
@@ -90,8 +92,26 @@ export default function PersonasPanel() {
       if (j?.values?.personas) {
         const v = j.values;
         const defaultPrompt = j.defaults?.djPrompt || '';
-        const stored = v.djPrompt || '';
-        const custom = stored !== '' && stored !== defaultPrompt;
+        // Prompt-template library. An older controller (no djPrompts field)
+        // degrades to its single custom djPrompt as a lone library entry.
+        let djPrompts: DjPromptPreset[] = Array.isArray(v.djPrompts)
+          ? v.djPrompts.map(p => ({
+              id: typeof p.id === 'string' && p.id ? p.id : clientMintId('dp_'),
+              name: typeof p.name === 'string' ? p.name : '',
+              text: typeof p.text === 'string' ? p.text : '',
+            }))
+          : [];
+        let activeDjPromptId = typeof v.activeDjPromptId === 'string' ? v.activeDjPromptId : '';
+        if (!Array.isArray(v.djPrompts)) {
+          const stored = v.djPrompt || '';
+          if (stored !== '' && stored !== defaultPrompt) {
+            djPrompts = [{ id: clientMintId('dp_'), name: 'Custom prompt', text: stored }];
+            activeDjPromptId = djPrompts[0]!.id;
+          }
+        }
+        if (activeDjPromptId && !djPrompts.some(p => p.id === activeDjPromptId)) {
+          activeDjPromptId = '';
+        }
         // Catalog of every skill. A persona with no stored `skills` (legacy /
         // code default) is treated as running all of them.
         const allSkills = (j.skills?.catalog || []).map(s => s.name);
@@ -119,8 +139,8 @@ export default function PersonasPanel() {
             skills: Array.isArray(p.skills) ? p.skills : allSkills,
           })),
           activePersonaId: v.activePersonaId ?? '',
-          useCustomPrompt: custom,
-          systemPrompt: custom ? stored : defaultPrompt,
+          djPrompts,
+          activeDjPromptId,
         });
       }
     })();
@@ -312,12 +332,28 @@ export default function PersonasPanel() {
     }
   };
 
+  // ── prompt-library helpers ─────────────────────────────────────────────────
+  const addPromptPreset = (preset: DjPromptPreset) =>
+    setForm(f => f ? { ...f, djPrompts: [...f.djPrompts, preset] } : f);
+  const patchPromptPreset = (id: string, patch: Partial<Pick<DjPromptPreset, 'name' | 'text'>>) =>
+    setForm(f => f ? { ...f, djPrompts: f.djPrompts.map(p => (p.id === id ? { ...p, ...patch } : p)) } : f);
+  const removePromptPreset = (id: string) =>
+    setForm(f => f
+      ? {
+          ...f,
+          djPrompts: f.djPrompts.filter(p => p.id !== id),
+          // Deleting the in-use template falls back to the built-in default.
+          activeDjPromptId: f.activeDjPromptId === id ? '' : f.activeDjPromptId,
+        }
+      : f);
+
   // ── validation ───────────────────────────────────────────────────────────
-  const promptText = form ? form.systemPrompt.trim() : '';
-  const promptOk = !form?.useCustomPrompt
-    || (promptText.length >= PROMPT_MIN && promptText.length <= PROMPT_MAX && promptText.includes('{name}'));
+  const promptsOk = form
+    ? form.djPrompts.every(promptPresetValid)
+      && (form.activeDjPromptId === '' || form.djPrompts.some(p => p.id === form.activeDjPromptId))
+    : false;
   const allPersonasOk = form ? form.personas.every(p => personaValid(p)) : false;
-  const canSave = !!form && allPersonasOk && promptOk
+  const canSave = !!form && allPersonasOk && promptsOk
     && form.personas.some(p => p.id === form.activePersonaId);
 
   const save = async (): Promise<boolean> => {
@@ -357,7 +393,8 @@ export default function PersonasPanel() {
             skills: p.skills,
           })),
           activePersonaId: form.activePersonaId,
-          djPrompt: form.useCustomPrompt ? form.systemPrompt.trim() : '',
+          djPrompts: form.djPrompts.map(p => ({ id: p.id, name: p.name.trim(), text: p.text.trim() })),
+          activeDjPromptId: form.activeDjPromptId,
         }),
       });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
@@ -426,31 +463,30 @@ export default function PersonasPanel() {
         onAirCloudIssue={onAirCloudIssue}
       />
 
-      {showPrompt && (
-        <SystemPromptCard
-          useCustomPrompt={form.useCustomPrompt}
-          systemPrompt={form.systemPrompt}
-          defaultPrompt={data?.defaults?.djPrompt || ''}
-          promptOk={promptOk}
-          promptText={promptText}
-          busy={busy}
-          canSave={canSave}
-          allPersonasOk={allPersonasOk}
-          onSetUseCustom={(custom) => setForm(f => f ? ({ ...f, useCustomPrompt: custom }) : f)}
-          onChangePrompt={(text) => setForm(f => f ? ({ ...f, systemPrompt: text }) : f)}
-          onRestore={() => setForm(f => f ? ({ ...f, systemPrompt: data?.defaults?.djPrompt || '' }) : f)}
-          onSave={() => { save(); }}
-          onDiscard={() => { load(); }}
-        />
-      )}
+      <SystemPromptModal
+        open={showPrompt}
+        onOpenChange={setShowPrompt}
+        presets={form.djPrompts}
+        activeId={form.activeDjPromptId}
+        defaultPrompt={data?.defaults?.djPrompt || ''}
+        busy={busy}
+        canSave={canSave}
+        allPersonasOk={allPersonasOk}
+        promptsOk={promptsOk}
+        onSetActive={(id) => setForm(f => f ? ({ ...f, activeDjPromptId: id }) : f)}
+        onAddPreset={addPromptPreset}
+        onPatchPreset={patchPromptPreset}
+        onRemovePreset={removePromptPreset}
+        onSave={async () => { if (await save()) setShowPrompt(false); }}
+        onDiscard={() => { load(); setShowPrompt(false); }}
+      />
 
       <PersonaRoster
         personas={form.personas}
         activePersonaId={form.activePersonaId}
         onAirPersonaId={onAirPersonaId}
         avatarTick={avatarTick}
-        showPrompt={showPrompt}
-        onTogglePrompt={() => setShowPrompt(s => !s)}
+        onOpenPrompt={() => setShowPrompt(true)}
         onAdd={addPersona}
         onSelect={(i) => { setCreatingId(null); setFocusIdx(i); setEditorOpen(true); }}
         communityCount={community?.length ?? null}
@@ -568,7 +604,7 @@ export default function PersonasPanel() {
         canSave={canSave}
         focusedOk={focusedOk}
         allPersonasOk={allPersonasOk}
-        promptOk={promptOk}
+        promptOk={promptsOk}
         busy={busy}
         onSave={async () => { if (await save()) setEditorOpen(false); }}
         onDiscard={() => { load(); setEditorOpen(false); }}

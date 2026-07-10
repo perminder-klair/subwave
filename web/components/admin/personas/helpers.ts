@@ -4,12 +4,28 @@ import type { Persona, SettingsResponse } from './types';
 import {
   AVATAR_TARGET_PX, DICEBEAR_STYLES,
   NAME_MAX, TAGLINE_MAX, SOUL_MAX, LANGUAGE_MAX,
+  PROMPT_NAME_MAX, PROMPT_MIN, PROMPT_MAX,
   KOKORO_RE, CHATTERBOX_VOICE_RE, POCKET_TTS_VOICE_RE,
 } from './constants';
 
-export function clientMintId() {
+// Client-minted opaque id ('p_' personas, 'dp_' prompt presets). The server
+// re-mints anything that fails its ID_RE, so these only need to be unique
+// within the form.
+export function clientMintId(prefix: string = 'p_') {
   const b = crypto.getRandomValues(new Uint8Array(3));
-  return 'p_' + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+  return prefix + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
+}
+
+// Client-side mirror of the controller's per-preset validation
+// (settings.ts:validateDjPromptsStrict) — used to gate Save.
+export function promptPresetValid(p: { name: string; text: string }): boolean {
+  const name = p.name.trim();
+  const text = p.text.trim();
+  return (
+    name.length >= 1 && name.length <= PROMPT_NAME_MAX &&
+    text.length >= PROMPT_MIN && text.length <= PROMPT_MAX &&
+    text.includes('{name}')
+  );
 }
 
 export function initialsFor(name: string): string {

@@ -117,6 +117,15 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 // that overthinks past the deadline is not a host that's down, so the call
 // must fall back to the caller's stateless path, not fail over to the backup
 // leg on a different model.
+//
+// This is also why the AI SDK's structured timeout (totalMs/stepMs/chunkMs)
+// is NOT used for the wall clock: it aborts with a DOMException named
+// 'TimeoutError', which isTransient AND isUnreachable both match — an
+// overthink would burn same-leg retries and then wrongly fail over. Only the
+// SDK's toolMs is adopted (strategy/agent.ts): a tool timeout surfaces as a
+// tool-error result the model can react to, never a thrown classifier-visible
+// error. Adopting stepMs later needs a rewrap here that renames the error
+// first.
 export function withDeadline<T>(
   ms: number | undefined,
   label: string,

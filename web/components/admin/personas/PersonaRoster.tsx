@@ -17,8 +17,8 @@ interface PersonaRosterProps {
   // "on air" pill. Equals activePersonaId unless a show overrides.
   onAirPersonaId: string;
   avatarTick: number;
-  showPrompt: boolean;
-  onTogglePrompt: () => void;
+  // Opens the system-prompt library modal.
+  onOpenPrompt: () => void;
   onAdd: () => void;
   onSelect: (idx: number) => void;
   // Shipped community catalog size (null = still loading — button disabled).
@@ -28,7 +28,7 @@ interface PersonaRosterProps {
 
 export function PersonaRoster({
   personas, activePersonaId, onAirPersonaId, avatarTick,
-  showPrompt, onTogglePrompt, onAdd, onSelect, communityCount, onCommunity,
+  onOpenPrompt, onAdd, onSelect, communityCount, onCommunity,
 }: PersonaRosterProps) {
   return (
     <section className="grid gap-4">
@@ -45,9 +45,7 @@ export function PersonaRoster({
               <span className="ml-1 text-vermilion">{communityCount}</span>
             )}
           </Btn>
-          <Btn onClick={onTogglePrompt}>
-            {showPrompt ? 'Hide system prompt' : 'System prompt'}
-          </Btn>
+          <Btn onClick={onOpenPrompt}>System prompt</Btn>
           <Btn tone="accent" onClick={onAdd} disabled={personas.length >= PERSONA_MAX}>
             + Add persona
           </Btn>

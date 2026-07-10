@@ -7,7 +7,7 @@
 // discovery tool calls (hallucination / no-explore) or an empty/invalid id.
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createDeepSeek } from '@ai-sdk/deepseek';
-import { ToolLoopAgent, tool, stepCountIs, Output } from 'ai';
+import { ToolLoopAgent, tool, isStepCount, Output } from 'ai';
 import { z } from 'zod';
 
 const N = Number(process.env.N || 5);
@@ -38,7 +38,7 @@ async function once(model, providerOptions) {
   try {
     const agent = new ToolLoopAgent({
       model, instructions: SYS, tools,
-      stopWhen: [stepCountIs(4)], temperature: 0.6, maxOutputTokens: 400,
+      stopWhen: [isStepCount(4)], temperature: 0.6, maxOutputTokens: 400,
       output: Output.object({ schema: SCHEMA }),
       ...(providerOptions ? { providerOptions } : {}),
     });

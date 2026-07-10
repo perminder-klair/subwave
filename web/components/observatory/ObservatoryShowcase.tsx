@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useMemo, useState } from 'react';
-import ConstellationMap from './ConstellationMap';
+import ConstellationGalaxy from './ConstellationGalaxy';
 import Tooltip, { type TipState } from './Tooltip';
 import { StatsView, Dossier } from './panels';
 import { buildMockLibrary, buildMockDetail, nearest, type ObsTrack } from './data';
@@ -25,7 +25,6 @@ import { buildMockLibrary, buildMockDetail, nearest, type ObsTrack } from './dat
 
 export default function ObservatoryShowcase() {
   // Seeded + deterministic, so it's built once and identical every render.
-  // 800 nodes — a denser map, still under the SVG→canvas threshold (3000).
   const lib = useMemo(() => buildMockLibrary(800), []);
 
   // Open a representative track by default: analysed, keyed, a couple of moods,
@@ -54,8 +53,8 @@ export default function ObservatoryShowcase() {
   // node, rebuilt when the selection changes. Deterministic off its seed.
   const detail = useMemo(() => (selected ? buildMockDetail(selected) : null), [selected]);
 
-  // Stable identities so ConstellationMap's memoised node layer survives the
-  // re-render a hover (tip state) triggers — matching ObservatoryApp.
+  // Stable identities so the galaxy's attribute-refresh effects don't re-run
+  // on the re-render a hover (tip state) triggers — matching ObservatoryApp.
   const onHover = useCallback((t: ObsTrack | null, e?: React.MouseEvent) => {
     if (!t || !e) {
       setTip(null);
@@ -72,7 +71,7 @@ export default function ObservatoryShowcase() {
         aria-label="Library Observatory — a constellation of a sample music library, every track placed by genre and lit by energy"
       >
         <section className="obs-embed-stage">
-          <ConstellationMap
+          <ConstellationGalaxy
             lib={lib}
             matchSet={matchSet}
             colorBy="energy"

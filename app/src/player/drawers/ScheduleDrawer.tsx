@@ -6,6 +6,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { useAppActive } from '@/hooks/useAppActive';
 import type { StationApi } from '@/lib/api';
+import { normalizeStationLocale, type StationLocale } from '@/lib/format';
 import type {
   ActiveShow,
   ScheduleShow,
@@ -19,6 +20,21 @@ const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
+}
+
+// Hour label in the station's locale (#475). The web writes "11:00 PM"; the
+// phone column's 92px time gutter can't fit a full AM/PM range, so en-US
+// compacts to "11pm" — same clock convention, phone-sized.
+function fmtHour(hour: number, locale: StationLocale): string {
+  if (locale === 'en-US') {
+    const h = hour % 24;
+    return `${h % 12 || 12}${h < 12 ? 'am' : 'pm'}`;
+  }
+  return `${pad2(hour)}:00`;
+}
+
+function fmtHourRange(start: number, end: number, locale: StationLocale): string {
+  return `${fmtHour(start, locale)} – ${fmtHour((end + 1) % 24, locale)}`;
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -119,6 +135,14 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
   // NOW highlight and the today marker, matching the station-time clock above.
   const { day: todayTz, hour: currentHour } = tzNow(now, data.timezone);
   const day = pickedDay ?? todayTz;
+  const locale = normalizeStationLocale(data.locale);
+
+  // Host plus any guest co-hosts in the studio this hour (#866) — guests are
+  // only known for the LIVE show; upcoming slots stay host-only.
+  const onNowNames = [
+    activeShow?.persona?.name,
+    ...(activeShow?.guests || []).map((g) => g?.name),
+  ].filter(Boolean);
 
   const slots = collapseSlots(data.schedule?.[day] ?? [], data.shows || [], data.personas || []);
 
@@ -127,10 +151,10 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
   // is narrower than the browser's.
   let time: string;
   try {
-    time = new Intl.DateTimeFormat(undefined, {
+    time = new Intl.DateTimeFormat(locale, {
       hour: '2-digit',
       minute: '2-digit',
-      hour12: false,
+      hour12: locale === 'en-US',
       ...(data.timezone ? { timeZone: data.timezone } : {}),
     }).format(now);
   } catch {
@@ -167,8 +191,10 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
         >
           <Text className="font-mono text-accent" style={{ fontSize: 9, letterSpacing: 3, marginBottom: 4 }}>ON NOW</Text>
           <Text className="font-body-semibold text-ink" style={{ fontSize: 16 }}>{activeShow.name}</Text>
-          {activeShow.persona?.name ? (
-            <Text className="font-body text-muted mt-0.5" style={{ fontSize: 12 }}>with {activeShow.persona.name}</Text>
+          {onNowNames.length ? (
+            <Text className="font-body text-muted mt-0.5" style={{ fontSize: 12 }}>
+              with {onNowNames.join(' & ')}
+            </Text>
           ) : null}
         </View>
       ) : null}
@@ -207,7 +233,7 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
 
       {slots.map((slot) => {
         const isNow = day === todayTz && currentHour >= slot.hour && currentHour <= slot.endHour;
-        const range = `${pad2(slot.hour)}:00 – ${pad2((slot.endHour + 1) % 24)}:00`;
+        const range = fmtHourRange(slot.hour, slot.endHour, locale);
         return (
           <View
             key={slot.hour}

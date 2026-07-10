@@ -15,6 +15,7 @@ import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import * as sfx from './sfx.js';
 import * as session from './session.js';
+import type { TurnMeta } from './session.js';
 import { getFullContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
@@ -22,6 +23,99 @@ import { djCallsAllowed, presentListeners } from './listeners.js';
 import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
 import * as liquidsoapControl from './liquidsoap-control.js';
+import type { TrackOutro, TrackKeyRange } from '../music/library-db.js';
+
+// A persona as it flows through the queue's voice path — only `id`/`name`/
+// `djMode` are read here; the rest rides through to tts.speak()/voiceGainDb().
+interface Persona {
+  id?: string;
+  name?: string;
+  djMode?: boolean;
+  [k: string]: unknown;
+}
+
+// A playable track. A loose bag by design: picks arrive from the LLM agent and
+// from Subsonic carrying different subsets, and applyMixTransition arms/strips
+// the transition-effect flags in place. Every field is optional so a partial
+// pick and a fully-analysed one share one type.
+interface Track {
+  id?: string | null;
+  title?: string | null;
+  artist?: string | null;
+  album?: string | null;
+  year?: number | null;
+  duration?: number | null;
+  bpm?: number | null;
+  musicalKey?: string | null;
+  loudnessLufs?: number | null;
+  peakDb?: number | null;
+  introMs?: number | null;
+  keyRanges?: TrackKeyRange[] | null;
+  outro?: TrackOutro | null;
+  gainDb?: number;
+  // Transition-effect flags + their stamped parameters (armed/stripped by
+  // applyMixTransition, consumed by subsonic.getAnnotatedUri and radio.liq).
+  sweep?: boolean;
+  washout?: boolean;
+  washoutAuto?: boolean;
+  washoutDelay?: number;
+  blend?: boolean;
+  dissolve?: boolean;
+  chop?: boolean;
+  chopPeriod?: number;
+  loop?: boolean;
+  loopBar?: number;
+  crossSec?: number;
+  [k: string]: unknown;
+}
+
+// One entry in the queue. `upcoming` holds these before play; `current` and
+// `history` are the same shape with the runtime-stamped startedAt/endedAt/
+// source added.
+interface QueueItem {
+  track: Track;
+  requestedBy?: string | null;
+  intent?: string | null;
+  introScript?: string | null;
+  introKind?: string;
+  aiPicked?: boolean;
+  linkPrev?: { id: string | null; title: string | null; artist: string | null } | null;
+  introWav?: string | null;
+  introAired?: boolean;
+  queuedAt?: string;
+  sent?: boolean;
+  confirmedInLiquidsoap?: boolean;
+  transitionSfx?: string;
+  startedAt?: string;
+  endedAt?: string;
+  source?: string;
+}
+
+// One row in the rolling recent-plays sidecar (the picker's repeat window).
+interface RecentPlay {
+  id: string | null;
+  title: string | null;
+  artist: string | null;
+  endedAt: string;
+}
+
+// A controller-level log line surfaced to the web UI + the DJ recap.
+interface DjLogEntry {
+  id: number;
+  kind: string;
+  message: string;
+  meta: Record<string, unknown>;
+  t: string;
+}
+
+// now-playing.json as Liquidsoap writes it.
+interface NowPlaying {
+  title?: string | null;
+  artist?: string | null;
+  album?: string | null;
+  subsonic_id?: string | null;
+  [k: string]: unknown;
+}
 
 // Random gap between DJ links on auto-played tracks. The frequency setting
 // scales how chatty the DJ is:
@@ -98,12 +192,12 @@ export function playAlreadyRecorded(
 }
 
 class Queue {
-  upcoming: any[] = [];        // request items pushed by listeners, not yet playing
-  current: any = null;         // what's broadcasting right now (request or auto)
-  history: any[] = [];         // finished tracks, newest first
-  djLog: any[] = [];           // controller-level events for the web UI
+  upcoming: QueueItem[] = [];  // request items pushed by listeners, not yet playing
+  current: QueueItem | null = null;    // what's broadcasting right now (request or auto)
+  history: QueueItem[] = [];   // finished tracks, newest first
+  djLog: DjLogEntry[] = [];    // controller-level events for the web UI
   lastSeenKey: string | null = null;   // for change detection in the watcher
-  _nowPlaying: any = null;             // last parse of now-playing.json, refreshed by the watcher
+  _nowPlaying: NowPlaying | null = null;   // last parse of now-playing.json, refreshed by the watcher
   _nowPlayingFresh = false;            // true once the watcher's first tick has landed
   senderBusy = false;          // drain-to-Liquidsoap mutex
   pickerBusy = false;          // prevent concurrent LLM picks
@@ -114,9 +208,9 @@ class Queue {
   _recentEffects: string[] = [];  // the model's last few transition CHOICES — anti-streak guard + fed back into the pick event turn
   _persistTimer: NodeJS.Timeout | null = null; // debounce for the queue.json snapshot
   _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
-  _recentPlays: { id: string | null; title: string | null; artist: string | null; endedAt: string }[] = [];
+  _recentPlays: RecentPlay[] = [];
   _emptyDjQueueStreak = 0;      // consecutive reconcile checks seeing an empty dj_queue while sent items remain — see reconcileWithDjQueue
-  _pendingVoice: { text: string; kind: string; wavPath: string; persona: any; meta: any; t: number } | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
+  _pendingVoice: { text: string; kind: string; wavPath: string; persona: Persona | null; meta: TurnMeta; t: number } | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
 
   // Snapshot upcoming/current/history to disk. The queue is otherwise purely
   // in-memory, so a controller restart (every `--build controller` rebuild)
@@ -134,8 +228,8 @@ class Queue {
           history: this.history,
           savedAt: new Date().toISOString(),
         }, null, 2));
-      } catch (err: any) {
-        console.error('[queue] persist failed:', err.message);
+      } catch (err) {
+        console.error('[queue] persist failed:', (err as Error).message);
       }
     }, 500);
   }
@@ -150,8 +244,8 @@ class Queue {
       try {
         await writeFileAtomic(config.queue.recentPlaysFile,
           JSON.stringify(this._recentPlays, null, 2));
-      } catch (err: any) {
-        console.error('[queue] recent-plays persist failed:', err.message);
+      } catch (err) {
+        console.error('[queue] recent-plays persist failed:', (err as Error).message);
       }
     }, 500);
   }
@@ -171,7 +265,7 @@ class Queue {
       // resurrecting tracks as permanent "Up next" zombies.
       const cutoff = Date.now() - 2 * 60 * 60 * 1000;
       this.upcoming = (Array.isArray(stored.upcoming) ? stored.upcoming : [])
-        .filter((i: any) => i?.track?.title && new Date(i.queuedAt || 0).getTime() > cutoff);
+        .filter((i: QueueItem) => i?.track?.title && new Date(i.queuedAt || 0).getTime() > cutoff);
       this.current = stored.current || null;
       this.history = Array.isArray(stored.history) ? stored.history : [];
       if (this.current?.track) {
@@ -191,8 +285,8 @@ class Queue {
       if (this.upcoming.some(i => i.sent)) {
         setTimeout(() => { void this.reconcileWithDjQueue(); }, 3000);
       }
-    } catch (err: any) {
-      console.error('[queue] recover failed:', err.message);
+    } catch (err) {
+      console.error('[queue] recover failed:', (err as Error).message);
     }
     if (existsSync(config.queue.recentPlaysFile)) {
       try {
@@ -202,11 +296,11 @@ class Queue {
           // ballooning if the cap was raised between restarts.
           const cutoff = Date.now() - 48 * 3_600_000;
           this._recentPlays = arr
-            .filter((p: any) => p && p.endedAt && new Date(p.endedAt).getTime() > cutoff)
+            .filter((p: RecentPlay) => p && p.endedAt && new Date(p.endedAt).getTime() > cutoff)
             .slice(0, config.queue.recentPlaysMax);
         }
-      } catch (err: any) {
-        console.error('[queue] recent-plays recover failed:', err.message);
+      } catch (err) {
+        console.error('[queue] recent-plays recover failed:', (err as Error).message);
       }
     }
     // Backfill from the events JSONL log — without this, a controller restart
@@ -264,8 +358,8 @@ class Queue {
         .sort((a, b) => b.endedAt.localeCompare(a.endedAt))
         .slice(0, config.queue.recentPlaysMax);
       this.persistRecentPlays();
-    } catch (err: any) {
-      console.error('[queue] backfill from events failed:', err.message);
+    } catch (err) {
+      console.error('[queue] backfill from events failed:', (err as Error).message);
     }
   }
 
@@ -284,7 +378,7 @@ class Queue {
   getDjRecap({ limit = 10, withinMinutes = 120, maxChars = 140 } = {}) {
     const cutoff = Date.now() - withinMinutes * 60_000;
     const seenDedupe = new Set<string>();
-    const picked: any[] = [];
+    const picked: DjLogEntry[] = [];
     for (const entry of this.djLog) {
       if (!VOICE_KINDS.has(entry.kind)) continue;
       if (new Date(entry.t).getTime() < cutoff) break;
@@ -296,7 +390,7 @@ class Queue {
       if (picked.length >= limit) break;
     }
     if (picked.length === 0) return null;
-    return picked.map((e: any) => {
+    return picked.map((e) => {
       const ago = formatAgo(Date.now() - new Date(e.t).getTime());
       const msg = (e.message || '').replace(/\s+/g, ' ').trim();
       const truncated = msg.length > maxChars ? msg.slice(0, maxChars - 1) + '…' : msg;
@@ -306,7 +400,7 @@ class Queue {
 
   // Recently played tracks, newest first. Compact shape for prompts.
   getRecentTracks(n = 6) {
-    const out: any[] = [];
+    const out: { title: string; artist: string | null; album: string | null; year: number | null }[] = [];
     for (const h of this.history.slice(0, n)) {
       const t = h.track;
       if (!t || !t.title) continue;
@@ -393,7 +487,7 @@ class Queue {
   // detect that and drop the now-stale back-announce rather than air a wrong
   // name. Left null for request intros (they never back-announce).
   async push({ track, requestedBy = null, intent = null, introScript = null, introKind = 'dj-speak', aiPicked = false, allowDuplicate = false, linkPrev = null }: {
-    track: any;
+    track: Track;
     requestedBy?: string | null;
     intent?: string | null;
     introScript?: string | null;
@@ -442,17 +536,28 @@ class Queue {
 
   // Resolve {bpm, key} for a queued track: from the track object if it carries
   // analysis, else a library lookup (queued items hold only id/title/artist).
-  mixAnalysisFor(track: any): mix.Analysis {
+  mixAnalysisFor(track: Track | null): mix.Analysis {
     if (!track) return { bpm: null, key: null };
     const rec = track.id ? library.get(track.id) : null;
     // Measured ending (outro analysis) — track object first, else the library
     // record. Feeds the ending-aware exit canvas + the chop-over-fade veto.
     const outro = track.outro ?? rec?.outro ?? null;
     const ending = outro?.ending === 'fade' || outro?.ending === 'cold' ? outro.ending : null;
-    if (track.bpm != null || track.musicalKey != null) {
-      return { bpm: track.bpm ?? null, key: track.musicalKey ?? null, ending };
-    }
-    return { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null, ending };
+    const base = (track.bpm != null || track.musicalKey != null)
+      ? { bpm: track.bpm ?? null, key: track.musicalKey ?? null }
+      : { bpm: rec?.bpm ?? null, key: rec?.musicalKey ?? null };
+    // Boundary keys (feature: key ranges) — what mixCompat actually compares
+    // across a seam: this track's opening key when it's the incoming side, its
+    // ending key when it's the outgoing one. Fall back to the dominant key.
+    const keyRanges = track.keyRanges ?? rec?.keyRanges ?? null;
+    const durSec = Number(track.duration) || rec?.durationSec || 0;
+    const durMs = durSec > 0 ? durSec * 1000 : null;
+    return {
+      ...base,
+      keyStart: mix.openingKeyFrom(keyRanges, base.key),
+      keyEnd: mix.endingKeyFrom(keyRanges, durMs, base.key),
+      ending,
+    };
   }
 
   // Resolve a track's integrated loudness + measured peak (track object first,
@@ -461,7 +566,7 @@ class Queue {
   // gainForLoudness cap the boost by real headroom instead of a blind clamp.
   // Null measurement → leaves gainDb undefined, so getAnnotatedUri emits no
   // liq_amplify and the track plays at unity gain.
-  applyLoudnessGain(track: any) {
+  applyLoudnessGain(track: Track | null) {
     if (!track) return;
     let lufs = track.loudnessLufs;
     let peakDb = track.peakDb;
@@ -499,7 +604,7 @@ class Queue {
 
   // Drop any transition-effect flags from a track (with a logged reason) so
   // getAnnotatedUri never stamps an effect the gate rejected.
-  stripEffect(track: any, reason: string) {
+  stripEffect(track: Track, reason: string) {
     const kind = track.sweep ? 'sweep' : track.blend ? 'blend' : track.dissolve ? 'dissolve' : track.chop ? 'chop' : track.loop ? 'loop' : 'washout';
     delete track.sweep;
     delete track.washout;
@@ -515,8 +620,8 @@ class Queue {
   // persona is in DJ mode. Stashes a per-transition crossfade length on the
   // track (read by subsonic.getAnnotatedUri → liq_cross_duration) and, on a
   // notable upward tempo jump, fires a rate-limited riser across the blend.
-  applyMixTransition(item: any) {
-    const persona = settings.getEffectivePersona();
+  applyMixTransition(item: QueueItem) {
+    const persona: Persona | null = settings.getEffectivePersona();
     if (!item?.track) return;
     // Persona flipped out of DJ mode between the pick and the drain: the
     // effects gate below never runs, so make sure no flag survives to annotate.
@@ -612,11 +717,15 @@ class Queue {
         const windDownSec = durSec > 0 && Number.isFinite(outro.startMs)
           ? Math.max(0, durSec - outro.startMs / 1000)
           : null;
+        // Body loudness for the tail-drop shaping — same resolution ladder as
+        // applyLoudnessGain (track object first, else the library row).
+        let bodyLufs = item.track.loudnessLufs;
+        if (bodyLufs == null && item.track.id) bodyLufs = library.get(item.track.id)?.loudnessLufs ?? null;
         // Bar-snap to the TAIL tempo when measured — outros drift/ritard.
         const exitSecs = mix.endingCrossSecondsFor(
           { bpm: outro.bpm ?? next.bpm, key: next.key, ending: outro.ending },
           windDownSec,
-          maxSec,
+          { maxSec, tailLufs: outro.lufs ?? null, bodyLufs },
         );
         if (exitSecs != null) {
           item.track.crossSec = exitSecs;
@@ -777,8 +886,8 @@ class Queue {
         if (item.introScript && !item.introWav) {
           try {
             item.introWav = await speak(item.introScript, { kind: item.introKind || 'dj-speak' });
-          } catch (err: any) {
-            this.log('error', `TTS failed: ${err.message}`);
+          } catch (err) {
+            this.log('error', `TTS failed: ${(err as Error).message}`);
           }
         }
 
@@ -829,7 +938,7 @@ class Queue {
   // (see broadcast/dj-agent.runPersonaHandoff). `opts.meta` is merged into the
   // session turn (e.g. tagging the sign-off with the outgoing persona id). Both
   // default to absent, so every existing call site is byte-identical.
-  async announce(text, kind = 'announcement', { persona = null, meta = {} }: { persona?: any; meta?: any } = {}) {
+  async announce(text, kind = 'announcement', { persona = null, meta = {} }: { persona?: Persona | null; meta?: TurnMeta } = {}) {
     if (!text || !text.trim()) return;
     try {
       const wavPath = await speak(text, { kind, persona });
@@ -844,8 +953,8 @@ class Queue {
       // Discord usually want to filter the chatty link stream separately.
       webhooks.notify(kind === 'link' ? 'dj.link' : 'dj.say',
         kind === 'link' ? { text } : { text, kind });
-    } catch (err: any) {
-      this.log('error', `Announce failed: ${err.message}`);
+    } catch (err) {
+      this.log('error', `Announce failed: ${(err as Error).message}`);
     }
   }
 
@@ -857,15 +966,15 @@ class Queue {
   // makes the two-voice persona handoff play cleanly). Each line is booth-
   // logged speaker-prefixed and appended to the session tagged with its
   // speaker, so windowMessages names a guest's words as theirs.
-  async announceExchange(lines: { persona: any; text: string }[], kind = 'banter') {
-    const rendered: { persona: any; text: string; wavPath: string }[] = [];
+  async announceExchange(lines: { persona: Persona; text: string }[], kind = 'banter') {
+    const rendered: { persona: Persona; text: string; wavPath: string }[] = [];
     try {
       for (const l of lines) {
         const wavPath = await speak(l.text, { kind, persona: l.persona });
         rendered.push({ ...l, wavPath });
       }
-    } catch (err: any) {
-      this.log('error', `Exchange render failed: ${err.message}`);
+    } catch (err) {
+      this.log('error', `Exchange render failed: ${(err as Error).message}`);
       return false;
     }
     for (const l of rendered) {
@@ -876,8 +985,8 @@ class Queue {
           role: 'segment', kind, text: l.text,
           meta: { personaId: l.persona?.id, personaName: l.persona?.name },
         });
-      } catch (err: any) {
-        this.log('error', `Exchange line failed to air: ${err.message}`);
+      } catch (err) {
+        this.log('error', `Exchange line failed to air: ${(err as Error).message}`);
       }
     }
     // One webhook for the whole exchange — per-line events would read as five
@@ -902,14 +1011,14 @@ class Queue {
   // stacking). All bookkeeping (djLog → recap/opener anti-repeat, session
   // turn, webhook) happens at AIR time, so the DJ's memory reflects what
   // actually reached the stream, not what was merely scheduled.
-  async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {} }: { persona?: any; meta?: any } = {}) {
+  async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {} }: { persona?: Persona | null; meta?: TurnMeta } = {}) {
     if (!text || !text.trim()) return;
     try {
       const wavPath = await speak(text, { kind, persona });
       this._pendingVoice = { text, kind, wavPath, persona, meta, t: Date.now() };
       this.log('scheduler', `Holding ${kind} for the next track boundary`);
-    } catch (err: any) {
-      this.log('error', `Deferred announce failed: ${err.message}`);
+    } catch (err) {
+      this.log('error', `Deferred announce failed: ${(err as Error).message}`);
     }
   }
 
@@ -933,8 +1042,8 @@ class Queue {
       this.log(p.kind, p.text);
       session.appendTurn({ role: 'segment', kind: p.kind, text: p.text, meta: p.meta });
       webhooks.notify('dj.say', { text: p.text, kind: p.kind });
-    } catch (err: any) {
-      this.log('error', `Air pending voice failed: ${err.message}`);
+    } catch (err) {
+      this.log('error', `Air pending voice failed: ${(err as Error).message}`);
     }
   }
 
@@ -944,7 +1053,7 @@ class Queue {
   // (issue #189). The WAV was rendered ahead of time in drainToLiquidsoap, so
   // this just writes the path to the duck channel and mirrors the bookkeeping
   // announce() does (djLog feeds the opener anti-repeat; session + webhook).
-  async airIntro(item: any, predecessor: any = null) {
+  async airIntro(item: QueueItem, predecessor: Track | null = null) {
     if (!item?.introWav || item.introAired || !existsSync(item.introWav)) return;
     item.introAired = true;
     // Stale back-announce safety-net. Links are written forward-looking (intro
@@ -957,7 +1066,7 @@ class Queue {
     // forward-looking line that doesn't name the previous track airs regardless.
     if (shouldDropStaleLink(item, predecessor)) {
       this.log('link-skip',
-        `Dropped stale link before "${item.track?.title}" — it named "${item.linkPrev.title}" but "${predecessor?.title || 'another track'}" actually played first`);
+        `Dropped stale link before "${item.track?.title}" — it named "${item.linkPrev!.title}" but "${predecessor?.title || 'another track'}" actually played first`);
       this.persist();
       return;
     }
@@ -968,12 +1077,12 @@ class Queue {
     try {
       await airVoice(targetFile, item.introWav, item.introScript || '', voiceGainDb(kind));
       this.persist();
-      this.log(kind, item.introScript);
-      session.appendTurn({ role: 'segment', kind, text: item.introScript });
+      this.log(kind, item.introScript!);
+      session.appendTurn({ role: 'segment', kind, text: item.introScript! });
       webhooks.notify(kind === 'link' ? 'dj.link' : 'dj.say',
         kind === 'link' ? { text: item.introScript } : { text: item.introScript, kind });
-    } catch (err: any) {
-      this.log('error', `Air intro failed: ${err.message}`);
+    } catch (err) {
+      this.log('error', `Air intro failed: ${(err as Error).message}`);
     }
   }
 
@@ -1000,13 +1109,13 @@ class Queue {
       await writeHandoff(config.liquidsoap.sfxFile, path);
       this.log('sfx', name);
       session.appendTurn({ role: 'segment', kind: 'sfx', text: name });
-    } catch (err: any) {
-      this.log('error', `playSfx failed: ${err.message}`);
+    } catch (err) {
+      this.log('error', `playSfx failed: ${(err as Error).message}`);
     }
   }
 
   // Called by the now-playing watcher when Liquidsoap reports a new track.
-  onTrackStarted(np: any) {
+  onTrackStarted(np: NowPlaying | null) {
     if (!np || !np.title) return;
     const key = `${np.subsonic_id || ''}|${np.title}|${np.artist || ''}`;
     if (key === this.lastSeenKey) return;
@@ -1201,24 +1310,24 @@ class Queue {
           // programme show can weave the episode angle into its greeting.
           try {
             await programme.ensurePlan(ctx);
-          } catch (err: any) {
-            this.log('error', `Programme plan failed: ${err.message}`);
+          } catch (err) {
+            this.log('error', `Programme plan failed: ${(err as Error).message}`);
           }
           // If that roll crossed a persona boundary, air the mic-pass first
           // (sign-off + greeting) so it plays before the incoming DJ's first
           // pick. Guarded so a handoff failure never blocks the next track.
           try {
             await djAgent.runPersonaHandoff(this, ctx);
-          } catch (err: any) {
-            this.log('error', `Persona handoff failed: ${err.message}`);
+          } catch (err) {
+            this.log('error', `Persona handoff failed: ${(err as Error).message}`);
           }
           // Programme shows: open the episode if the hourly cron hasn't
           // already (whichever call site settles the session first wins; the
           // beat flag makes the other a no-op).
           try {
             await programme.onSessionSettled(this, ctx);
-          } catch (err: any) {
-            this.log('error', `Programme episode hook failed: ${err.message}`);
+          } catch (err) {
+            this.log('error', `Programme episode hook failed: ${(err as Error).message}`);
           }
           // The pick made now airs when the track that just started ends — so
           // near a show boundary the rules to pick by are the NEXT show's, not
@@ -1237,8 +1346,8 @@ class Queue {
             pickCtx = await getFullContext(showAt);
           }
           await djAgent.runTrackEvent(this, pickCtx, { wantLink, showAt });
-        } catch (err: any) {
-          this.log('error', `DJ track event failed: ${err.message}`);
+        } catch (err) {
+          this.log('error', `DJ track event failed: ${(err as Error).message}`);
         } finally {
           this.pickerBusy = false;
         }
@@ -1314,8 +1423,8 @@ class Queue {
           `Reconciled with Liquidsoap dj_queue: dropped ${droppedCount} stale queue item(s) not present in Liquidsoap`);
         this.persist();
       }
-    } catch (err: any) {
-      this.log('error', `reconcileWithDjQueue failed: ${err.message}`);
+    } catch (err) {
+      this.log('error', `reconcileWithDjQueue failed: ${(err as Error).message}`);
     }
   }
 
@@ -1446,7 +1555,7 @@ class Queue {
   }
 
   snapshot() {
-    const mapItem = (i: any) => ({
+    const mapItem = (i: QueueItem) => ({
       title: i.track.title,
       artist: i.track.artist,
       album: i.track.album,
@@ -1492,6 +1601,11 @@ class Queue {
     }
   }
 }
+
+// The queue instance's public surface — the type modules that receive the
+// singleton (broadcast/programme.ts, dj-agent.ts) annotate their `queue` param
+// against. A type-only export, so importers pull it without a runtime cycle.
+export type QueueApi = InstanceType<typeof Queue>;
 
 function sleep(ms: number) {
   return new Promise(r => setTimeout(r, ms));

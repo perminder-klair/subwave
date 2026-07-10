@@ -37,10 +37,6 @@ export default function ArticleHead() {
         <span aria-hidden="true">·</span>
         <span>Shows, skills &amp; guest co-hosts</span>
         <span aria-hidden="true">·</span>
-        <span>Bring any LLM</span>
-        <span aria-hidden="true">·</span>
-        <span>Runs in your homelab</span>
-        <span aria-hidden="true">·</span>
         <span className="text-vermilion">Open source</span>
       </div>
     </EditorialReveal>

@@ -10,6 +10,9 @@ import * as sfx from './broadcast/sfx.js';
 import { queue } from './broadcast/queue.js';
 import * as session from './broadcast/session.js';
 import * as remoteTts from './audio/remoteTts.js';
+import * as kokoro from './audio/kokoro.js';
+import * as chatterbox from './audio/chatterbox.js';
+import * as pocketTts from './audio/pocketTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
 import { startScheduler } from './broadcast/scheduler.js';
@@ -26,6 +29,7 @@ import { router as debugRoutes } from './routes/debug.js';
 import { router as statsRoutes } from './routes/stats.js';
 import { router as djRoutes } from './routes/dj.js';
 import { router as libraryRoutes } from './routes/library.js';
+import { router as playlistsRoutes } from './routes/playlists.js';
 import { router as onboardingRoutes } from './routes/onboarding.js';
 import { router as archivesRoutes } from './routes/archives.js';
 import { router as listenersRoutes } from './routes/listeners.js';
@@ -37,6 +41,8 @@ import { router as audienceRoutes } from './routes/audience.js';
 import { router as systemRoutes } from './routes/system.js';
 import { router as generateRoutes } from './routes/generate.js';
 import { router as doctorRoutes } from './routes/doctor.js';
+import { router as connectRoutes } from './routes/connect.js';
+import { router as mcpRoutes } from './routes/mcp.js';
 import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadSetupConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
@@ -61,7 +67,18 @@ let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`[shutdown] ${signal} — closing library DB`);
+  console.log(`[shutdown] ${signal} — reaping TTS workers + closing library DB`);
+  // Reap resident Python TTS workers so they don't outlive a bare-process
+  // shutdown (npm start / dev). Docker reaps the container's process group, so
+  // there this is belt-and-suspenders. Each guarded so a dead worker never
+  // blocks the rest of shutdown.
+  for (const stopWorker of [kokoro.stop, chatterbox.stop, pocketTts.stop]) {
+    try {
+      stopWorker();
+    } catch (err) {
+      console.error('[shutdown] TTS worker stop failed:', err instanceof Error ? err.message : err);
+    }
+  }
   try {
     library.shutdown();
   } catch (err: any) {
@@ -89,6 +106,7 @@ app.use(debugRoutes);
 app.use(statsRoutes);
 app.use(djRoutes);
 app.use(libraryRoutes);
+app.use(playlistsRoutes);
 app.use(onboardingRoutes);
 app.use(archivesRoutes);
 app.use(listenersRoutes);
@@ -100,6 +118,8 @@ app.use(audienceRoutes);
 app.use(systemRoutes);
 app.use(generateRoutes);
 app.use(doctorRoutes);
+app.use(connectRoutes);
+app.use(mcpRoutes);
 
 // (manual skip is not implemented in this build — Liquidsoap controls pacing)
 
@@ -248,4 +268,13 @@ app.listen(config.server.port, async () => {
     .ensureDefaultIdent()
     .catch(err => console.error('[jingles] ident generation failed:', err.message));
   sfx.ensureDefaults().catch(err => console.error('[sfx] default generation failed:', err.message));
+
+  // Kick the Observatory sound-map projection when it's stale (library grew
+  // since the last one, or never ran). Spawns a child — never blocks this loop.
+  try {
+    const { maybeProjectOnBoot } = await import('./music/map-projection.js');
+    maybeProjectOnBoot();
+  } catch (err: any) {
+    console.error('[map-projection] boot hook failed:', err.message);
+  }
 });

@@ -22,6 +22,80 @@ import { config } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
+import type { getFullContext } from '../context.js';
+
+// The station context object the DJ/session layer keys off — the exact return
+// shape of getFullContext (type-only import, erased at runtime, so no cycle).
+export type SessionContext = Awaited<ReturnType<typeof getFullContext>>;
+
+// The scenario snapshot stored on a session (the moment it opened in).
+interface Scenario {
+  period: string | null;
+  vibe: string | null;
+  mood: string | null;
+  weather: string | null;
+  festival: string | null;
+}
+
+// Per-turn metadata bag. A few keys are read by the window builder; everything
+// else callers stash rides through untouched.
+export interface TurnMeta {
+  personaId?: string;
+  personaName?: string;
+  promptSuffix?: string;
+  [k: string]: unknown;
+}
+
+// One entry in a session's chat history.
+interface Turn {
+  t: string;
+  role: string;
+  kind: string;
+  text: string;
+  meta: TurnMeta;
+}
+
+// The producer plan for a programme episode (see broadcast/programme.ts).
+interface ProgrammePlan {
+  angle?: string | null;
+  features?: Array<{ topic?: string; kind?: string | null }>;
+  introNote?: string | null;
+  outroNote?: string | null;
+  [k: string]: unknown;
+}
+
+// Programme episode state carried on the session (plan + which beats aired).
+export interface ProgrammeState {
+  status: 'pending' | 'ok' | 'fallback';
+  plan: ProgrammePlan | null;
+  beats?: Record<string, boolean>;
+  introAiredAt: string | null;
+}
+
+// Outgoing-persona metadata stamped on a hard roll so a caller can air the
+// two-voice mic-pass.
+interface RolledFrom {
+  personaId: string;
+  personaName: string | null;
+  showName: string | null;
+}
+
+// The live DJ session (also the on-disk shape of session.json).
+interface Session {
+  id: string;
+  kind: 'show' | 'auto';
+  key: string;
+  startedAt: string;
+  endedAt: string | null;
+  show: { id?: string; name?: string; topic?: string } | null;
+  persona: { id: string; name: string } | null;
+  scenario: Scenario;
+  handoff: string | null;
+  programme: ProgrammeState | null;
+  messages: Turn[];
+  handoffAired?: boolean;
+  rolledFrom?: RolledFrom | null;
+}
 
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000;  // safety cap — roll even if key is stable
 const WINDOW_TURNS = 40;                    // turns fed to the agent
@@ -35,7 +109,7 @@ const MAX_TURNS = 500;
 const RATIONALE_WINDOW = 3;                 // most-recent dj/pick reasons kept in the window (anti-thread-momentum)
 const PERSIST_DEBOUNCE_MS = 1000;
 
-let _session: any = null;
+let _session: Session | null = null;
 let _writeTimer: NodeJS.Timeout | null = null;
 
 function mintId() {
@@ -44,12 +118,12 @@ function mintId() {
 
 // Identity of the run. Consecutive hours of the same show share one session;
 // an autonomous block rolls when its time period or dominant mood changes.
-export function sessionKeyFor(ctx: any) {
+export function sessionKeyFor(ctx: SessionContext) {
   if (ctx?.activeShow?.id) return `show:${ctx.activeShow.id}`;
   return `auto:${ctx?.time?.period || 'unknown'}:${ctx?.dominantMood || 'none'}`;
 }
 
-function scenarioOf(ctx: any) {
+function scenarioOf(ctx: SessionContext): Scenario {
   const w = ctx?.weather?.condition;
   return {
     period: ctx?.time?.period || null,
@@ -60,7 +134,7 @@ function scenarioOf(ctx: any) {
   };
 }
 
-function scenarioText(s: any) {
+function scenarioText(s: Session) {
   if (s.kind === 'show') {
     return `Show "${s.show?.name}" begins${s.show?.topic ? ` — theme: ${s.show.topic}` : ''}.` +
            ` Host: ${s.persona?.name || 'the DJ'}.`;
@@ -85,10 +159,10 @@ function scenarioText(s: any) {
 // previous session's titles into the new picker's prompt window biases it
 // toward re-picking those same tracks (observed cause of 6-8× daily repeats).
 // The picker has its own recents window for blocking repeats. Do not add titles.
-function buildHandoff(prev: any) {
+function buildHandoff(prev: Session | null): string | null {
   if (!prev) return null;
   const lastSpoken = [...prev.messages].reverse()
-    .find((m: any) => m.role === 'dj' || m.role === 'segment');
+    .find((m) => m.role === 'dj' || m.role === 'segment');
   const parts = [
     prev.kind === 'show'
       ? `the show "${prev.show?.name}"`
@@ -114,7 +188,7 @@ function schedulePersist() {
   _writeTimer = setTimeout(() => { _writeTimer = null; persist(); }, PERSIST_DEBOUNCE_MS);
 }
 
-async function archive(s: any) {
+async function archive(s: Session | null) {
   if (!s?.id) return;
   try {
     await mkdir(config.session.dir, { recursive: true });
@@ -128,7 +202,7 @@ export function getSession() {
 
 // Append a turn. `role` ∈ event|dj|track|segment; `kind` names the turn type
 // (scenario|pick|request|play|link|station-id|hourly|weather|...).
-export function appendTurn({ role, kind, text, meta = {} }: { role: string; kind: string; text?: string; meta?: any }) {
+export function appendTurn({ role, kind, text, meta = {} }: { role: string; kind: string; text?: string; meta?: TurnMeta }) {
   if (!_session) return null;
   const turn = { t: new Date().toISOString(), role, kind, text: text || '', meta };
   _session.messages.push(turn);
@@ -140,7 +214,7 @@ export function appendTurn({ role, kind, text, meta = {} }: { role: string; kind
 }
 
 // Start a fresh session for the current context.
-export function start(ctx: any, handoff: any = null): any {
+export function start(ctx: SessionContext, handoff: string | null = null): Session {
   const persona = settings.getEffectivePersona();
   _session = {
     id: mintId(),
@@ -193,7 +267,7 @@ async function end() {
 // clean slate (with a handoff line): a genuine show boundary (a scheduled
 // program begins, ends, or changes — `show:<id>` in the old or new key) and the
 // 4h MAX_SESSION_MS safety cap.
-export async function maybeRoll(ctx: any): Promise<any> {
+export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   if (!_session) return start(ctx);
   const nextKey = sessionKeyFor(ctx);
   const aged = Date.now() - new Date(_session.startedAt).getTime() > MAX_SESSION_MS;
@@ -220,7 +294,7 @@ export async function maybeRoll(ctx: any): Promise<any> {
 // site (hourly cron at :00 or the first track-start after the boundary) can
 // trigger it. Session.ts stays free of queue/TTS imports (no cycle): callers
 // read pendingHandoff() and drive the runner.
-function stampRolledFrom(next: any, prev: any) {
+function stampRolledFrom(next: Session, prev: Session) {
   const prevId = prev?.persona?.id ?? null;
   const nextId = next?.persona?.id ?? null;
   next.handoffAired = false;
@@ -253,11 +327,11 @@ export function markHandoffAired() {
 // Same persistence contract as handoffAired: state rides the session file so a
 // controller restart mid-episode resumes the plan and never double-airs a beat.
 
-export function getProgramme(): any {
+export function getProgramme(): ProgrammeState | null {
   return _session?.programme || null;
 }
 
-export function attachProgramme(programme: any) {
+export function attachProgramme(programme: ProgrammeState) {
   if (!_session) return;
   _session.programme = programme;
   schedulePersist();
@@ -278,18 +352,19 @@ export function markProgrammeBeat(beat: string) {
 // scenario turns, so it adds no prompt noise). No archive, no handoff — the
 // running history simply carries forward and the existing WINDOW_TURNS window
 // now spans the boundary.
-function softShift(ctx: any, nextKey: string): any {
-  _session.key = nextKey;
-  _session.scenario = scenarioOf(ctx);
-  const sc = _session.scenario;
+function softShift(ctx: SessionContext, nextKey: string): Session {
+  const s = _session!;  // caller (maybeRoll) only reaches here with a live session
+  s.key = nextKey;
+  s.scenario = scenarioOf(ctx);
+  const sc = s.scenario;
   const label = [
     sc.period,
     sc.mood ? `mood ${sc.mood}` : null,
     sc.weather ? `weather ${sc.weather}` : null,
   ].filter(Boolean).join(', ');
   appendTurn({ role: 'event', kind: 'scenario', text: `Shift continues — now ${label}.` });
-  logEvent('session.shift', { sessionId: _session.id, key: _session.key });
-  return _session;
+  logEvent('session.shift', { sessionId: s.id, key: s.key });
+  return s;
 }
 
 // The bounded chat window fed to the DJ agent — handoff + the last N turns,
@@ -333,7 +408,7 @@ function softShift(ctx: any, nextKey: string): any {
 // trimming these costs the picker no track-level anti-repeat coverage.
 export function windowMessages() {
   if (!_session) return [];
-  const raw: any[] = [];
+  const raw: { role: 'user' | 'assistant'; content: string }[] = [];
   if (_session.handoff) {
     raw.push({ role: 'user', content: `[Continuing on air from ${_session.handoff}]` });
   }
@@ -376,14 +451,18 @@ export function windowMessages() {
       && m.meta.personaId !== _session.persona?.id)
       ? (m.meta.personaName || 'another host')
       : null;
+    // Model-only coaching clauses ride in meta.promptSuffix so the UI-facing
+    // turn text stays a clean factual line (the /admin/dash booth log renders
+    // turns verbatim). Re-joined here — the model sees the full message.
+    const text = m.meta?.promptSuffix ? `${m.text}${m.meta.promptSuffix}` : m.text;
     const content = (m.role === 'dj' && m.kind === 'pick')
-      ? `(pick note to self — not aired) ${m.text}`
+      ? `(pick note to self — not aired) ${text}`
       : foreignSpeaker
-        ? `(${foreignSpeaker} said this on air — their words, not yours) ${m.text}`
-        : m.text;
+        ? `(${foreignSpeaker} said this on air — their words, not yours) ${text}`
+        : text;
     raw.push({ role, content });
   }
-  const out: any[] = [];
+  const out: { role: 'user' | 'assistant'; content: string }[] = [];
   for (const msg of raw) {
     const last = out[out.length - 1];
     if (last && last.role === msg.role) last.content += '\n' + msg.content;
@@ -395,13 +474,13 @@ export function windowMessages() {
 
 // Boot recovery — resume the persisted session if its key still matches the
 // current context, otherwise archive it and start fresh.
-export async function recover(ctx: any): Promise<any> {
+export async function recover(ctx: SessionContext): Promise<Session> {
   if (existsSync(config.session.currentFile)) {
     try {
       const stored = JSON.parse(await readFile(config.session.currentFile, 'utf8'));
       if (stored?.id && !stored.endedAt && stored.key === sessionKeyFor(ctx)
           && Array.isArray(stored.messages)) {
-        _session = stored;
+        _session = stored as Session;
         appendTurn({ role: 'event', kind: 'scenario', text: 'Controller restarted — session resumed.' });
         return _session;
       }

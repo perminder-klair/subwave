@@ -1,0 +1,20 @@
+{
+  "name": "audiomuse-import",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Import pre-computed track analysis (moods, bpm, key, energy) from an AudioMuse-AI instance into SUB/WAVE's library.db, so a Navidrome user who already tagged their library doesn't have to re-tag.",
+  "bin": {
+    "audiomuse-import": "./import.mjs"
+  },
+  "scripts": {
+    "start": "node import.mjs",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0"
+  }
+}

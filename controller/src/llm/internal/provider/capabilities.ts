@@ -1,5 +1,5 @@
 // Per-provider capability descriptors — the single place that translates the
-// user-facing `llm.reasoning` toggle into each provider's native thinking knob,
+// user-facing `llm.reasoning` toggle into each provider's thinking control,
 // and declares the two structural traits the strategy layer keys off
 // (does this provider need the forced-tool object path? does repeat_penalty
 // reach it?).
@@ -7,12 +7,15 @@
 // Pure: every function here is a function of the passed `cfg` only — no settings
 // or SDK imports — so the mappings are unit-pinned (controller/scripts/llm-pure.test.ts).
 //
-// Why one block per active provider (not the historical "emit every block"):
-// the AI SDK reads only the providerOptions block keyed to the active provider,
-// and the model-id regexes below are anchored, so a gateway/openrouter id like
-// "openai/gpt-5" never matches `/^gpt-5/`. Emitting only the active provider's
-// block is therefore behaviourally identical to emitting all of them and letting
-// non-matching providers ignore the rest — just far easier to read and test.
+// Thinking control rides AI SDK 7's top-level `reasoning` call option
+// ('none'|'minimal'|'medium'|…), which each first-party provider — and
+// ai-sdk-ollama v4 — translates to its native knob per call. That replaced the
+// old per-provider providerOptions fragments (thinkingBlock): the SDK NEVER
+// merges the two, and reasoning-related providerOptions silently win over the
+// top-level param, so the fragments had to go entirely when this migrated.
+// Providers with no per-call channel (OpenRouter, and the body-injection
+// openai-compatible/locca path) return undefined here and keep their
+// construction-time wiring in registry.ts.
 
 interface ThinkingArgs {
   modelId: string;
@@ -20,12 +23,24 @@ interface ThinkingArgs {
   forceNoThink: boolean;
 }
 
+// The subset of the SDK's reasoning levels SUB/WAVE emits. The boolean
+// `llm.reasoning` toggle never needs the high tiers: 'medium' is the balanced
+// "on" for providers whose reasoning must be explicitly requested, 'minimal' is
+// the floor for models that can't turn it off (OpenAI o-series/gpt-5), 'none'
+// disables, and undefined leaves the provider/model default untouched.
+export type ReasoningLevel = 'none' | 'minimal' | 'medium';
+
 export interface ProviderCapabilities {
   // Ollama-served models ignore JSON-schema constrained decoding (Ollama's
   // `format` field) and emit prose, so Output.object throws — they need the
   // forced-tool path. Everyone else uses native Output.object.
   objectStrategy: 'native' | 'tool';
-  // repeat_penalty rides inside providerOptions.ollama, so only Ollama reads it.
+  // True when a per-call repeat_penalty actually reaches this provider's wire.
+  // Currently false for EVERYONE: ai-sdk-ollama v4 dropped the per-call
+  // providerOptions.ollama channel (its schema accepts only
+  // headers/structuredOutputs), and the body-injection providers are recorded
+  // via appliedRepeatPenalty() instead. Restoring the Ollama knob needs
+  // per-value model instances or an upstream option — tracked follow-up.
   repeatPenaltyApplies: boolean;
   // llama.cpp / vLLM / LM Studio (openai-compatible, locca) take sampling +
   // thinking controls the AI SDK's openai provider has no first-class field for
@@ -34,36 +49,46 @@ export interface ProviderCapabilities {
   // validates providerOptions against its own schema and drops the rest. Flags
   // the providers openAICompatibleFetch() rewrites the body for.
   samplingViaBody?: boolean;
-  // The providerOptions fragment for this provider given the resolved model id +
-  // reasoning/forceNoThink flags.
-  thinkingBlock(a: ThinkingArgs): Record<string, unknown>;
+  // The top-level `reasoning` value for this provider given the resolved model
+  // id + reasoning/forceNoThink flags. undefined = omit the param (keep the
+  // provider/model default).
+  reasoningLevel(a: ThinkingArgs): ReasoningLevel | undefined;
   // True when the provider reads `reasoning` ONLY from model-construction
-  // settings, not per-call providerOptions (OpenRouter). For these, forceNoThink
-  // can't be honoured via thinkingBlock — instead the registry builds a separate
+  // settings, not per-call options (OpenRouter). For these, forceNoThink can't
+  // be honoured via reasoningLevel — instead the registry builds a separate
   // reasoning-disabled model instance for forced-tool legs (see languageModel's
   // forceNoThink opt). Everyone else suppresses per-call and leaves this false.
   reasoningConstructionOnly?: boolean;
 }
 
-const NONE = (): Record<string, unknown> => ({});
+const NONE = (): ReasoningLevel | undefined => undefined;
 
 const CAPS: Record<string, ProviderCapabilities> = {
   ollama: {
     objectStrategy: 'tool',
-    repeatPenaltyApplies: true,
-    // `think` reads the RAW reasoning toggle: Ollama permits forced tools while
-    // thinking, so forceNoThink leaves it unchanged. repeat_penalty / num_ctx are
-    // merged into `options` by providerOptions() below.
-    thinkingBlock: ({ reasoning }) => ({ ollama: { think: reasoning } }),
+    // v4 of ai-sdk-ollama has NO per-call repeat_penalty channel (see the
+    // interface comment) — flag it false so djText's sampling record stops
+    // claiming the knob was applied when it never reached the wire.
+    repeatPenaltyApplies: false,
+    // ai-sdk-ollama v4 maps the per-call level onto Ollama's `think` param:
+    // 'none' → think:false (safe no-op on non-thinking models, verified Ollama
+    // 0.30), undefined → the model's own default. Reads the RAW reasoning
+    // toggle: Ollama permits forced tools while thinking, so forceNoThink
+    // leaves it unchanged. NEVER emit a level string here — the package maps
+    // 'medium' → think:'medium', which 400s models that only accept boolean
+    // think (qwen3-class).
+    reasoningLevel: ({ reasoning }) => (reasoning ? undefined : 'none'),
   },
   openai: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
-    // o-series / gpt-5 always reason; only effort is tunable. No-op on gpt-4/3.5.
-    thinkingBlock: ({ modelId, reasoning }) =>
-      /^(o\d|gpt-5)/i.test(modelId)
-        ? { openai: { reasoningEffort: reasoning ? 'medium' : 'minimal' } }
-        : {},
+    // o-series / gpt-5 always reason; only effort is tunable — 'minimal' is the
+    // floor ('none' is rejected). The model-id gate must stay: the provider
+    // forwards the level as reasoning_effort VERBATIM, and gpt-4-class models
+    // 400 on receiving it. forceNoThink not factored — these models permit
+    // forced tools while reasoning.
+    reasoningLevel: ({ modelId, reasoning }) =>
+      /^(o\d|gpt-5)/i.test(modelId) ? (reasoning ? 'medium' : 'minimal') : undefined,
   },
   // openai-compatible targets self-hosted llama.cpp / vLLM / LM Studio — the
   // same local GGUF model class as ollama and locca, which emit a schema-valid
@@ -75,9 +100,10 @@ const CAPS: Record<string, ProviderCapabilities> = {
     repeatPenaltyApplies: false,
     // repeat_penalty / reasoning_format / enable_thinking are injected into the
     // request body at the transport layer (openAICompatibleFetch in the
-    // registry), not via providerOptions — the openai provider would drop them.
+    // registry) — self-hosted llama.cpp/vLLM read chat_template_kwargs, not
+    // reasoning_effort, so the top-level param must stay unset here.
     samplingViaBody: true,
-    thinkingBlock: NONE,
+    reasoningLevel: NONE,
   },
   // locca serves local llama.cpp GGUF models — the SAME model class as Ollama,
   // not a cloud endpoint. Under native Output.object + auto tool_choice they emit
@@ -89,83 +115,85 @@ const CAPS: Record<string, ProviderCapabilities> = {
     objectStrategy: 'tool',
     repeatPenaltyApplies: false,
     samplingViaBody: true,
-    thinkingBlock: NONE,
+    reasoningLevel: NONE,
   },
   anthropic: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
-    // Extended thinking is OFF by default. Opt in only when reasoning is on AND
-    // this leg isn't forcing a tool call — Claude rejects toolChoice while
-    // thinking (forceNoThink covers the forced-tool paths).
-    thinkingBlock: ({ modelId, reasoning, forceNoThink }) =>
-      reasoning && !forceNoThink && /^claude-/i.test(modelId)
-        ? { anthropic: { thinking: { type: 'adaptive' } } }
-        : {},
+    // Extended thinking is OFF by default; 'medium' opts in (the provider maps
+    // it to adaptive thinking with effort:'medium' on adaptive models, a token
+    // budget on older claude ids). 'none' disables — needed on forced-tool legs
+    // because Claude rejects toolChoice while thinking. No model-id gate: the
+    // provider owns its own id space.
+    reasoningLevel: ({ reasoning, forceNoThink }) =>
+      (reasoning && !forceNoThink ? 'medium' : 'none'),
   },
   google: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
     // Gemini thinks by default and silently chews the maxOutputTokens budget;
-    // suppress when reasoning is off. gemini-3.x → thinkingLevel:'minimal',
-    // gemini-2.5 → thinkingBudget:0.
-    thinkingBlock: ({ modelId, reasoning }) => {
-      if (reasoning) return {};
-      if (/^gemini-3/i.test(modelId)) return { google: { thinkingConfig: { thinkingLevel: 'minimal' } } };
-      if (/^gemini-2\.5/i.test(modelId)) return { google: { thinkingConfig: { thinkingBudget: 0 } } };
-      return {};
-    },
+    // 'none' suppresses (the provider maps it per model family: gemini-3.x →
+    // thinkingLevel:'minimal', gemini-2.5 → thinkingBudget:0 — the same blocks
+    // the old thinkingBlock emitted, but the model regexes live upstream now).
+    // forceNoThink not factored — Gemini permits forced tools while reasoning.
+    reasoningLevel: ({ reasoning }) => (reasoning ? undefined : 'none'),
   },
   deepseek: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
     // V4 hybrid models think by default; thinking mode rejects tool_choice, so
     // reasoning:false (or forceNoThink on a forced-tool leg) must explicitly
-    // DISABLE it or the forced-tool paths break.
-    thinkingBlock: ({ reasoning, forceNoThink }) =>
-      ({ deepseek: { thinking: { type: reasoning && !forceNoThink ? 'enabled' : 'disabled' } } }),
+    // DISABLE it or the forced-tool paths break. Reasoning on → undefined (the
+    // hybrid default already thinks; never send a level — DeepSeek coerces
+    // 'medium' up to 'high' server-side).
+    reasoningLevel: ({ reasoning, forceNoThink }) =>
+      (reasoning && !forceNoThink ? undefined : 'none'),
   },
   // OpenRouter reads `reasoning` ONLY from model-construction settings, not
-  // per-call providerOptions, so the thinking knob can't live here — it's wired
-  // in registry.ts (languageModel) off cfg.reasoning, and forced-tool legs get a
-  // separate reasoning-disabled instance (reasoningConstructionOnly). Reasoning
-  // models routed through OpenRouter (e.g. xiaomi/mimo-v2.5) think by default,
-  // and thinking mode rejects forced tool_choice, which breaks the picker.
-  openrouter: { objectStrategy: 'native', repeatPenaltyApplies: false, thinkingBlock: NONE, reasoningConstructionOnly: true },
+  // per-call options, so the thinking knob can't live here — it's wired in
+  // registry.ts (languageModel) off cfg.reasoning via extraBody, and forced-tool
+  // legs get a separate reasoning-disabled instance (reasoningConstructionOnly).
+  // Reasoning models routed through OpenRouter (e.g. xiaomi/mimo-v2.5) think by
+  // default, and thinking mode rejects forced tool_choice, which breaks the
+  // picker. Verified on @openrouter/ai-sdk-provider v3.0.0: it declares spec v4
+  // but never reads callOptions.reasoning — construction stays the only channel
+  // until upstream implements the translation.
+  openrouter: { objectStrategy: 'native', repeatPenaltyApplies: false, reasoningLevel: NONE, reasoningConstructionOnly: true },
   // Requesty is an OpenAI-compatible gateway built via createOpenAI with
-  // name:'requesty', so the AI SDK reads providerOptions under the `requesty`
-  // namespace (providerOptionsName = provider.split('.')[0]) — validated against
-  // the OpenAI options schema, which carries reasoningEffort. Mirror the openai
-  // descriptor's suppression: minimal effort when reasoning is off or on a
-  // forced-tool leg, so a reasoning model behind Requesty can still emit forced
-  // tool calls. (Non-reasoning models ignore the field.)
+  // name:'requesty', so the top-level level resolves through the same openai
+  // code path — 'minimal' lands as reasoning_effort:'minimal', the exact bytes
+  // the old providerOptions.requesty block produced. Suppress when reasoning is
+  // off or on a forced-tool leg, so a reasoning model behind Requesty can still
+  // emit forced tool calls; non-reasoning models ignore the field. (No model-id
+  // gate — requesty ids are `vendor/model`, never matched by openai's regex, and
+  // the gateway tolerates the field.)
   requesty: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
-    thinkingBlock: ({ reasoning, forceNoThink }) =>
-      reasoning && !forceNoThink ? {} : { requesty: { reasoningEffort: 'minimal' } },
+    reasoningLevel: ({ reasoning, forceNoThink }) =>
+      (reasoning && !forceNoThink ? undefined : 'minimal'),
   },
-  // Vercel AI Gateway routes to an underlying provider by `provider/model` id and
-  // forwards provider-namespaced options through. We can't know the target's
-  // namespace from here, so emit the knob for the providers that need suppressing
-  // on forced-tool legs (anthropic + deepseek); the gateway passes through only
-  // the block matching the resolved model and ignores the rest.
+  // Vercel AI Gateway serializes the full call options — including the top-level
+  // reasoning level — to the downstream provider, so 'none' suppresses whatever
+  // vendor the `provider/model` id resolves to. (The old shape emitted disable
+  // blocks for anthropic + deepseek only; this covers google/openai/xai/zai
+  // downstreams too.)
   gateway: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
-    thinkingBlock: ({ reasoning, forceNoThink }) =>
-      reasoning && !forceNoThink
-        ? {}
-        : { anthropic: { thinking: { type: 'disabled' } }, deepseek: { thinking: { type: 'disabled' } } },
+    reasoningLevel: ({ reasoning, forceNoThink }) =>
+      (reasoning && !forceNoThink ? undefined : 'none'),
   },
 };
 
-// Unknown provider id → native objects, no repeat penalty, no thinking block.
-// Matches the historical fall-through (needsToolCallObject was false, no block
-// emitted). In practice the provider is always one of the eight above.
+// Unknown provider id → native objects, no repeat penalty, provider-default
+// reasoning. Matches the historical fall-through (needsToolCallObject was
+// false, no thinking knob emitted). In practice the provider is always one of
+// the entries above.
 const DEFAULT_CAPS: ProviderCapabilities = {
   objectStrategy: 'native',
   repeatPenaltyApplies: false,
-  thinkingBlock: NONE,
+  reasoningLevel: NONE,
 };
 
 export function capabilitiesFor(provider: string | undefined): ProviderCapabilities {
@@ -192,10 +220,12 @@ export function forcedToolChoice(cfg: any): 'required' | 'auto' {
   return cfg?.toolChoice === 'auto' ? 'auto' : 'required';
 }
 
-// True when repeat_penalty actually reaches the model via providerOptions —
-// gates the sampling log so /debug doesn't claim the value was applied when the
-// provider dropped it. Ollama-only; the body-injection providers are covered by
-// appliedRepeatPenalty() instead.
+// True when a per-call repeat_penalty actually reaches the model — gates the
+// sampling log so /debug doesn't claim the value was applied when the provider
+// dropped it. Currently false for every provider (ai-sdk-ollama v4 lost the
+// per-call channel; the body-injection providers are covered by
+// appliedRepeatPenalty() instead), so the djText gate never fires — kept as the
+// chokepoint for when the Ollama channel is restored.
 export function repeatPenaltyApplies(cfg: any): boolean {
   return capabilitiesFor(cfg?.provider).repeatPenaltyApplies;
 }
@@ -232,12 +262,9 @@ export function appliedNumCtx(cfg: any): number | null {
 
 // Stamp a sampling record with the local-only knobs each call actually ran with,
 // so /admin/debug reflects them: Ollama's effective num_ctx, and the
-// repeat_penalty injected into the body for openai-compatible / locca (the
-// agent/object paths don't pass repeat_penalty through providerOptions, so this
-// is the only place it gets recorded for them). Ollama's providerOptions-carried
-// repeat_penalty is recorded separately at the djText call site via
-// repeatPenaltyApplies(), so appliedRepeatPenalty() returns null there — no
-// double-write.
+// repeat_penalty injected into the body for openai-compatible / locca — the only
+// providers where the knob currently reaches the wire at all (ai-sdk-ollama v4
+// has no per-call channel; see repeatPenaltyApplies).
 export function samplingWithLocalKnobs(cfg: any, sampling: any): any {
   const n = appliedNumCtx(cfg);
   if (n != null) sampling.num_ctx = n;
@@ -246,9 +273,10 @@ export function samplingWithLocalKnobs(cfg: any, sampling: any): any {
   return sampling;
 }
 
-// Per-provider option blocks for the AI SDK's `providerOptions` field — the
-// single chokepoint translating `llm.reasoning` (Settings → "Chain-of-thought")
-// into each provider's native thinking knob.
+// The AI SDK top-level `reasoning` value for a call — the single chokepoint
+// translating `llm.reasoning` (Settings → "Chain-of-thought") into a portable
+// per-call level the provider maps to its native thinking knob. undefined =
+// omit the param (keep the provider/model default).
 //
 // forceNoThink: this leg forces a tool call (toolChoice:'required' — every
 // objectViaToolCall + the picker's done-tool loop). Anthropic and DeepSeek both
@@ -256,24 +284,17 @@ export function samplingWithLocalKnobs(cfg: any, sampling: any): any {
 // legs only (their descriptors factor forceNoThink in); the free-text DJ calls
 // keep whatever the operator chose. OpenAI o-series/gpt-5 and Gemini permit
 // forced tools while reasoning, so forceNoThink leaves them unchanged.
-export function providerOptions(
+//
+// IMPORTANT: never reintroduce reasoning-related providerOptions alongside this
+// — the SDK doesn't merge them, and provider-specific blocks silently WIN over
+// the top-level param.
+export function reasoningFor(
   cfg: any,
-  { repeatPenalty = null, forceNoThink = false }: { repeatPenalty?: number | null; forceNoThink?: boolean } = {},
-): any {
-  const provider = cfg?.provider;
-  const block = capabilitiesFor(provider).thinkingBlock({
+  { forceNoThink = false }: { forceNoThink?: boolean } = {},
+): ReasoningLevel | undefined {
+  return capabilitiesFor(cfg?.provider).reasoningLevel({
     modelId: cfg?.model || '',
     reasoning: cfg?.reasoning === true,
     forceNoThink,
   });
-  if (provider === 'ollama') {
-    const options: any = {};
-    if (repeatPenalty != null) options.repeat_penalty = repeatPenalty;
-    const n = appliedNumCtx(cfg);
-    if (n != null) options.num_ctx = n;
-    if (Object.keys(options).length > 0) {
-      (block as any).ollama = { ...(block as any).ollama, options };
-    }
-  }
-  return block;
 }

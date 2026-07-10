@@ -45,6 +45,9 @@ services:
       - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=${ICECAST_RELAY_PASSWORD:-}
+      # Concurrent-listener ceiling for icecast (<limits><clients>).
+      # Empty/unset → 100 (the historical default).
+      - ICECAST_MAX_CLIENTS=${ICECAST_MAX_CLIENTS:-}
       - TZ=${TZ:-Europe/London}
     extra_hosts:
       # Lets Liquidsoap fetch Subsonic stream URLs that point at host services
@@ -198,6 +201,11 @@ services:
     environment:
       - TTS_HEAVY_DEVICE=${TTS_HEAVY_DEVICE:-cpu}
       - POCKET_TTS_VOICE=${POCKET_TTS_VOICE:-alba}
+      # Which heavy engines to actually load. Both are baked into the image;
+      # each costs RAM + a first-boot weight download + startup time, so set
+      # this to a single engine if you only use one. Comma-separated.
+      # e.g. TTS_HEAVY_ENGINES=pocket-tts runs PocketTTS only (no Chatterbox).
+      - TTS_HEAVY_ENGINES=${TTS_HEAVY_ENGINES:-chatterbox,pocket-tts}
       # Optional — enables PocketTTS voice CLONING (issue #238). Cloning weights
       # are gated; accept terms at huggingface.co/kyutai/pocket-tts and set
       # HF_TOKEN in your .env. Built-in voices need no token.

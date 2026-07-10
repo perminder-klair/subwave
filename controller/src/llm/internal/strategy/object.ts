@@ -15,8 +15,8 @@
 import { generateText, Output } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
-import { stripThinking, extractJson, usageOf, failureDiagnostics } from '../core/pure.js';
-import { needsToolCallObject, providerOptions, samplingWithLocalKnobs } from '../provider/capabilities.js';
+import { stripThinking, extractJson, usageOf, perfOf, warningsOf, failureDiagnostics, schemaHint } from '../core/pure.js';
+import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
 
@@ -52,45 +52,79 @@ export async function djObject({
         try {
           let object;
           let usage;
+          let perf;
+          let warnings;
           if (attempt === 1 && needsToolCallObject(l.cfg)) {
             lastVia = 'ai-sdk:tool';
-            ({ object, usage } = await withTransientRetry(kind,
+            ({ object, usage, perf, warnings } = await withTransientRetry(kind,
               () => objectViaToolCall(l, { system, prompt, schema, temperature, maxOutputTokens, signal }), signal));
           } else if (attempt === 1) {
             lastVia = 'ai-sdk';
             const result = await withTransientRetry(kind, () => generateText({
               model: l.model,
-              system,
+              instructions: system,
               prompt,
               temperature,
               maxOutputTokens,
               output: Output.object({ schema }),
-              providerOptions: providerOptions(l.cfg),
+              reasoning: reasoningFor(l.cfg),
               ...(signal ? { abortSignal: signal } : {}),
             }), signal);
             object = result.output;
             usage = usageOf(result);
+            perf = perfOf(result);
+            warnings = warningsOf(result);
           } else {
             lastVia = 'ai-sdk:recovery';
+            // Self-describing retry: the native/tool attempt above conveys the
+            // schema to the model via a real provider channel (response_format
+            // or a forced tool's inputSchema) — this plain generateText call has
+            // neither, so without restating the shape here the model is guessing
+            // required keys from whatever the caller's own prose happens to
+            // mention (observed: GLM dropping `reason`/`say` entirely — see
+            // schemaHint's comment). Also route through the no-think model +
+            // forced suppression, same as every other structured-output leg
+            // (objectViaToolCall, djAgent's done-tool path) — this was the one
+            // branch still using the operator's raw reasoning-on model instance.
+            const hint = schemaHint(schema);
             const result = await withTransientRetry(kind, () => generateText({
-              model: l.model,
-              system,
-              prompt: `${prompt}\n\nRespond with a single JSON object only — no prose, no markdown fences.`,
+              model: l.noThinkModel ?? l.model,
+              instructions: system,
+              prompt: `${prompt}\n\nRespond with a single JSON object only — no prose, no markdown fences.`
+                + (hint ? ` It MUST validate against this JSON Schema — every required key must be present:\n${hint}` : ''),
               temperature,
               maxOutputTokens,
-              providerOptions: providerOptions(l.cfg),
+              reasoning: reasoningFor(l.cfg, { forceNoThink: true }),
               ...(signal ? { abortSignal: signal } : {}),
             }), signal);
-            object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
+            try {
+              object = schema.parse(JSON.parse(extractJson(stripThinking(result.text))));
+            } catch (parseErr: any) {
+              // Surface the raw output on a shape/parse miss, mirroring the
+              // done-tool agent's diagnostics — without this a recovery-path
+              // failure carried no evidence of what the model actually
+              // produced, only the Zod/JSON error.
+              parseErr.text = result.text || '';
+              parseErr.finishReason = result.finishReason;
+              parseErr.usage = result.usage;
+              throw parseErr;
+            }
             usage = usageOf(result);
+            perf = perfOf(result);
+            warnings = warningsOf(result);
           }
           return {
             value: object,
             via: lastVia,
             sampling: samplingWithLocalKnobs(l.cfg, { temperature }),
             usage,
-            // Full, untruncated — the /debug surface shows the whole system prompt.
-            extra: { system, user: prompt, response: JSON.stringify(object).slice(0, 500) },
+            perf,
+            warnings,
+            // Full, untruncated — the /debug surface shows the whole call, and
+            // the ring buffer holds only 120 entries so size isn't a concern.
+            // (A .slice(0, 500) here used to cut pick reasons mid-sentence in
+            // /admin/debug; the durable events.jsonl still caps via cap().)
+            extra: { system, user: prompt, response: JSON.stringify(object) },
           };
         } catch (err) {
           lastErr = err;

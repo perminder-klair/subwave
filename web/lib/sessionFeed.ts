@@ -47,6 +47,31 @@ export function turnText(turn: SessionTurn | null | undefined): string {
   return text;
 }
 
+// Operator-log summary for long `event` turns. The `pick` event turn is the
+// literal prompt posted to the DJ agent — ~700 chars of link/clock/transition
+// coaching (dj-agent.ts runTrackEvent) that the model needs verbatim but that
+// drowns the booth log when rendered raw. Returns a one-liner for long event
+// turns; null means "render the turn as-is".
+export function eventTurnSummary(turn: SessionTurn | null | undefined): string | null {
+  if (turn?.role !== 'event') return null;
+  const text = turn.text || '';
+  if (text.length <= 160) return null;
+  if (turn.kind === 'pick') {
+    // Head is `Now playing "X" by Y [id: …] (after "A" by B)` — keep it, drop
+    // the raw Subsonic id, and reduce the instruction tail to flags.
+    const head = (text.split('. Pick the track to play next.')[0] ?? text)
+      .replace(/\s*\[id:[^\]]*\]/g, '');
+    const parts = [
+      `${head} → pick next`,
+      text.includes('Stay silent') ? 'silent' : 'with link',
+    ];
+    if (text.includes('Set "transition"')) parts.push('effects nudge');
+    return parts.join(' · ');
+  }
+  const firstSentence = text.match(/^[^.!?]*[.!?]/)?.[0] || text.slice(0, 140);
+  return `${firstSentence.trim()} …`;
+}
+
 // The single voice/dj turn to surface as the DJ "thinking" line under the
 // now-playing block. Walk newest→oldest and skip `dj`/pick turns whose
 // `meta.trackId` is for a track other than what's on air: a pick turn is

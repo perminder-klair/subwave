@@ -27,7 +27,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
-import { capabilitiesFor, appliedRepeatPenalty } from './capabilities.js';
+import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx } from './capabilities.js';
 
 // Memoise built clients so we don't reconstruct a provider on every call.
 // Keyed by a signature that changes whenever provider/model/key changes, so a
@@ -101,16 +101,55 @@ export function noThinkFetch(url: any, init: any, baseFetch: any = fetch) {
 //     repeat_penalty through providerOptions. `repeat_penalty` is llama.cpp's
 //     param name (vLLM's is `repetition_penalty`); to opt out, set
 //     llm.repeatPenalty to 1.0. We never clobber a value already on the body.
-//   • reasoning off → enable_thinking:false PLUS reasoning_format. Gemma-4's
+//   • reasoning off → enable_thinking:false PLUS reasoning_format PLUS an
+//     OpenRouter-style `reasoning:{enabled:false}` block (see
+//     reasoningMandatoryModel below for the effort:'minimal' exception).
+//     The chat_template_kwargs family is a llama.cpp dialect — an operator
+//     pointing this provider at a CLOUD aggregator (openrouter.ai/api/v1,
+//     or any hosted /v1 that speaks OpenRouter's reasoning extension) gets
+//     no thinking suppression from it at all: measured 57/96 with 16 leaked
+//     cells for qwen3.5-9b via openrouter.ai, vs 86/96 through the native
+//     openrouter provider whose extraBody sends exactly this block. Servers
+//     that don't know the key ignore it — the same bet as every other knob
+//     here. Gemma-4's
 //     chat template pre-seeds an empty <|channel|>thought block even with
 //     enable_thinking:false, and with reasoning_format unset (defaults to none)
 //     llama.cpp routes that thought to `content`, so it leaks into the visible
 //     script and reaches TTS. reasoning_format:"deepseek" routes it to
 //     reasoning_content, which the SDK surfaces as a reasoning part, not text
-//     (gist quirk #4).
-export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch) {
+//     (gist quirk #4). GLM-family models (Zhipu/Z.ai — including the GLM
+//     Coding Plan's api.z.ai/api/coding/paas/v4 endpoint) ignore
+//     enable_thinking entirely and read a DIFFERENT, top-level `thinking.type`
+//     field instead, so their thinking never actually turned off via the
+//     knobs above alone — the hidden chain-of-thought burned through
+//     maxOutputTokens/step budgets before a forced tool call could land,
+//     surfacing as multi-minute calls or "agent did not call the done tool
+//     before stopping". Send it alongside the others — an unrecognised field
+//     is silently ignored by servers that don't define it, same bet as the
+//     other body-injection knobs here.
+//   • parallel_tool_calls:false on tool-bearing requests — absent, llama.cpp
+//     resolves it from the chat template's capability default, which is true
+//     for Gemma-4-family templates; the model then emits several tool calls in
+//     one turn and the peg-gemma4 parser 500s on call #2, failing the whole
+//     pick/segment attempt (issue #940). The agent design is one call per step
+//     (gated discovery, COMMIT_AFTER_STEPS=1), so forcing max one call matches
+//     intent everywhere. Only sent when tools are present — strict servers
+//     reject the field on tool-less requests.
+//
+// `forceNoThink` suppresses thinking on THIS instance even when the operator
+// left reasoning on: the forced-tool structured-output legs (picker done-tool,
+// objectViaToolCall) run no-think so a reasoning model doesn't burn its whole
+// output budget thinking and then truncate mid-<think> (→ NoObjectGeneratedError
+// on every pick) or fail to emit the forced tool. Unlike Anthropic/DeepSeek
+// (per-call providerOptions) and OpenRouter (construction-time reasoning), the
+// only no-think lever these self-hosted servers have is this body injection, so
+// forceNoThink has to be honoured HERE — a distinct no-think model instance is
+// built for the picker legs (see languageModel's bodyNoThink). Without it a
+// reasoning-on locca/openai-compatible model failed schema validation on picks
+// and looped </think> at handoffs (the free-text signoff path, issue #914).
+export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoThink = false) {
   const penalty = appliedRepeatPenalty(cfg);
-  const noThink = cfg?.reasoning !== true;
+  const noThink = forceNoThink || cfg?.reasoning !== true;
   return (url: any, init: any) => {
     if (init?.body && typeof init.body === 'string') {
       try {
@@ -124,12 +163,34 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch) {
             enable_thinking: false,
           };
           if (body.reasoning_format === undefined) body.reasoning_format = 'deepseek';
+          if (body.thinking === undefined) body.thinking = { type: 'disabled' };
+          if (body.reasoning === undefined) {
+            body.reasoning = reasoningMandatoryModel(String(body.model || ''))
+              ? { effort: 'minimal' }
+              : { enabled: false };
+          }
+        }
+        if (Array.isArray(body.tools) && body.tools.length > 0 &&
+            body.parallel_tool_calls === undefined) {
+          body.parallel_tool_calls = false;
         }
         init = { ...init, body: JSON.stringify(body) };
       } catch { /* not JSON — leave the request untouched */ }
     }
     return baseFetch(url, init);
   };
+}
+
+// Reasoning-MANDATORY model families 400 on a hard reasoning disable
+// (`reasoning:{enabled:false}`): OpenAI's gpt-5/o-series ("Reasoning is
+// mandatory for this endpoint") and reasoning-only DeepSeek R1 variants. Every
+// model accepts `effort:'minimal'`, which satisfies the mandate while dropping
+// thinking low enough that forced tool calls still land. Shared by the
+// openrouter construction wiring and the openai-compatible body injection —
+// kept broad at openai/* (harmlessly dropped on non-reasoning openai models;
+// gpt-4o-mini benched clean with it).
+export function reasoningMandatoryModel(id: string): boolean {
+  return /^openai\//i.test(id) || /(^|\/)deepseek-r1/i.test(id);
 }
 
 // Ollama server URL — from settings (admin UI), falling back to the config
@@ -176,10 +237,11 @@ export const DEFAULT_REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
 // Most accept any non-empty key, so fall back to a placeholder. The fetch
 // wrapper injects the body-only knobs (repeat_penalty, and — reasoning off —
 // enable_thinking:false + reasoning_format); see openAICompatibleFetch.
-function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string) {
+function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string, forceNoThink = false) {
   // debugFetch is the inner transport, so what's recorded is the body exactly
-  // as sent (post-injection).
-  const fetchImpl = openAICompatibleFetch(cfg, debugFetch);
+  // as sent (post-injection). forceNoThink builds the picker's no-think variant
+  // (see languageModel) — thinking suppressed even with operator reasoning on.
+  const fetchImpl = openAICompatibleFetch(cfg, debugFetch, forceNoThink);
   const provider = createOpenAI({
     baseURL,
     apiKey: cfg.apiKey || 'unused',
@@ -207,13 +269,18 @@ export function resolveModelId(cfg: any): string {
 export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolean } = {}) {
   const id = resolveModelId(cfg);
   const baseUrlSig = cfg.provider === 'locca' ? loccaBaseUrl(cfg) : (cfg.baseUrl || '');
-  // Construction-time no-think: only providers whose reasoning is set at build
-  // time (OpenRouter) need a distinct reasoning-disabled instance for forced-tool
-  // legs; everyone else suppresses per-call via providerOptions, so the same
-  // cached model serves both. Keyed into the sig so the two variants don't collide.
-  const constructionNoThink = opts.forceNoThink === true
-    && capabilitiesFor(cfg.provider).reasoningConstructionOnly === true;
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${constructionNoThink ? 'nt1' : 'nt0'}`;
+  // Construction-time no-think: two provider families can't suppress thinking
+  // per-call, so a forced-tool leg needs its own reasoning-disabled INSTANCE.
+  //   - OpenRouter (reasoningConstructionOnly): reasoning is fixed at model build.
+  //   - openai-compatible / locca (samplingViaBody): no-think rides the request
+  //     BODY via openAICompatibleFetch, bound at construction — so the picker's
+  //     no-think variant must be a separate instance whose wrapper forces it.
+  // Everyone else suppresses per-call via providerOptions, so the same cached
+  // model serves both. Keyed into the sig so the variants don't collide.
+  const caps = capabilitiesFor(cfg.provider);
+  const constructionNoThink = opts.forceNoThink === true && caps.reasoningConstructionOnly === true;
+  const bodyNoThink = opts.forceNoThink === true && caps.samplingViaBody === true;
+  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;
@@ -231,14 +298,14 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       break;
     }
     case 'openai-compatible': {
-      model = openAICompatibleModel(cfg, id, cfg.baseUrl, 'openai-compatible');
+      model = openAICompatibleModel(cfg, id, cfg.baseUrl, 'openai-compatible', bodyNoThink);
       break;
     }
     case 'locca': {
       // First-class locca: an openai-compatible llama.cpp server with a sane
       // default base URL (host.docker.internal:8080) so the operator doesn't
       // hand-type a URL. Same transport as openai-compatible, incl. no-think.
-      model = openAICompatibleModel(cfg, id, loccaBaseUrl(cfg), 'locca');
+      model = openAICompatibleModel(cfg, id, loccaBaseUrl(cfg), 'locca', bodyNoThink);
       break;
     }
     case 'google': {
@@ -268,8 +335,22 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       // includes both the reasoning flag and the no-think flag, so each variant is
       // built once.
       const suppressReasoning = cfg.reasoning !== true || constructionNoThink;
+      // `enabled:false` is the DEFAULT off-switch. effort:'minimal' — the old
+      // default — is not an off-switch at all for most families, and for two
+      // of them it's actively wrong, both caught by llm-bench's thinking-leak
+      // forensics:
+      //   - enable_thinking families (Qwen, GLM): effort is a no-op, the
+      //     model thinks to the output cap (qwen3.5-9b: empty replies at
+      //     4000 billed tokens, 31-101s).
+      //   - Anthropic: OpenRouter maps ANY effort onto a thinking BUDGET, so
+      //     'minimal' turned thinking ON for claude-haiku-4.5 (81 leaked
+      //     cells) — the suppression knob was the thing enabling it.
+      // effort:'minimal' survives ONLY for the reasoning-MANDATORY families,
+      // which 400 on enabled:false ("Reasoning is mandatory") — see
+      // reasoningMandatoryModel above (shared with the openai-compatible
+      // body injection).
       model = suppressReasoning
-        ? provider(id, { extraBody: { reasoning: { effort: 'minimal' } } })
+        ? provider(id, { extraBody: { reasoning: reasoningMandatoryModel(id) ? { effort: 'minimal' } : { enabled: false } } })
         : provider(id);
       break;
     }
@@ -307,7 +388,22 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       // correctly — no `.chat(id)` override required. `baseURL` is the bare
       // Ollama host (no `/api` suffix); the package appends the path itself.
       const provider = createOllama({ baseURL: ollamaBaseUrl(cfg), fetch: debugFetch });
-      model = provider(id);
+      // Thinking suppression rides the AI SDK top-level `reasoning` call option
+      // now (capabilities reasoningFor): ai-sdk-ollama v4 maps 'none' →
+      // think:false per call, WITH precedence over any construction-time
+      // `think` setting — so nothing is wired here for it. ('none' is safe on
+      // non-thinking models: Ollama 0.30 accepts think:false as a no-op; with
+      // reasoning on the param is omitted and the model's default holds, since
+      // an explicit think:true 400s on non-thinking models.)
+      //   - num_ctx still rides construction settings.options — v4's per-call
+      //     providerOptions schema accepts only headers/structuredOutputs, so
+      //     construction is its only channel (the sig includes it so an admin
+      //     numCtx change rebuilds the instance).
+      // Per-call repeat_penalty has no v4 channel and is currently inert on
+      // this route — tracked as a follow-up; it needs per-call instances or
+      // an upstream option, not a construction setting.
+      const numCtx = appliedNumCtx(cfg);
+      model = numCtx != null ? provider(id, { options: { num_ctx: numCtx } }) : provider(id);
       break;
     }
   }

@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, createWriteStream, readFileSync } from 'node:fs'
 import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 // A structural span over the track, in milliseconds (span shape). Spans
 // are contiguous and cover the analysed window; the first is the intro/leading
@@ -105,11 +106,11 @@ function parseFinite(v: unknown): number | null {
 function coerceSpans(v: unknown): Section[] {
   if (!Array.isArray(v)) return [];
   const out: Section[] = [];
-  for (const s of v) {
-    const startMs = parseFinite((s as any)?.startMs);
-    const endMs = parseFinite((s as any)?.endMs);
+  for (const s of v as Record<string, unknown>[]) {
+    const startMs = parseFinite(s?.startMs);
+    const endMs = parseFinite(s?.endMs);
     if (startMs == null || endMs == null || endMs <= startMs) continue;
-    const kind = typeof (s as any)?.kind === 'string' ? (s as any).kind : undefined;
+    const kind = typeof s?.kind === 'string' ? s.kind : undefined;
     out.push(kind ? { startMs, endMs, kind } : { startMs, endMs });
   }
   return out;
@@ -134,11 +135,11 @@ function parseVocalRanges(v: unknown): Section[] | null {
 function parseKeyRanges(v: unknown): KeyRange[] | null {
   if (!Array.isArray(v)) return null;
   const out: KeyRange[] = [];
-  for (const s of v) {
-    const startMs = parseFinite((s as any)?.startMs);
-    const endMs = parseFinite((s as any)?.endMs);
-    const tonic = (s as any)?.tonic;
-    const mode = (s as any)?.mode;
+  for (const s of v as Record<string, unknown>[]) {
+    const startMs = parseFinite(s?.startMs);
+    const endMs = parseFinite(s?.endMs);
+    const tonic = s?.tonic;
+    const mode = s?.mode;
     if (startMs == null || endMs == null || endMs <= startMs) continue;
     if (typeof tonic !== 'string' || (mode !== 'major' && mode !== 'minor')) continue;
     out.push({ startMs, endMs, tonic, mode });
@@ -159,10 +160,10 @@ function parseMsList(v: unknown): number[] | null {
 function parsePaceCurve(v: unknown): PaceSpan[] | null {
   if (!Array.isArray(v)) return null;
   const out: PaceSpan[] = [];
-  for (const s of v) {
-    const startMs = parseFinite((s as any)?.startMs);
-    const endMs = parseFinite((s as any)?.endMs);
-    const value = parseFinite((s as any)?.value);
+  for (const s of v as Record<string, unknown>[]) {
+    const startMs = parseFinite(s?.startMs);
+    const endMs = parseFinite(s?.endMs);
+    const value = parseFinite(s?.value);
     if (startMs == null || endMs == null || value == null || endMs <= startMs) continue;
     out.push({ startMs, endMs, value });
   }
@@ -173,16 +174,17 @@ function parsePaceCurve(v: unknown): PaceSpan[] | null {
 // omits it entirely when not computed; startMs + a valid ending are the
 // required core, everything else is optional garnish.
 function parseOutro(v: unknown): OutroInfo | null {
-  const startMs = parseFinite((v as any)?.startMs);
-  const ending = (v as any)?.ending;
+  const o = v as Record<string, unknown>;
+  const startMs = parseFinite(o?.startMs);
+  const ending = o?.ending;
   if (startMs == null || startMs < 0 || (ending !== 'fade' && ending !== 'cold')) return null;
   return {
     startMs: Math.round(startMs),
     ending,
-    lufs: parseFinite((v as any)?.lufs),
-    bpm: parseFinite((v as any)?.bpm),
-    beats: parseMsList((v as any)?.beats),
-    bars: parseMsList((v as any)?.bars),
+    lufs: parseFinite(o?.lufs),
+    bpm: parseFinite(o?.bpm),
+    beats: parseMsList(o?.beats),
+    bars: parseMsList(o?.bars),
   };
 }
 
@@ -218,7 +220,40 @@ function localConfigured(): boolean {
   return !!python && existsSync(python) && existsSync(workerScript);
 }
 
-type Pending = { resolve: (m: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
+// A line of JSON from the stdio worker (or the equivalent sidecar /analyze
+// response body — same analyze payload). Protocol fields (ready/fatal/id) are
+// worker-only; the analyze fields are shared. Everything the parse* helpers
+// consume is `unknown` so they own the coercion; the couple of directly-read
+// scalars are pre-typed. Loose because the payload evolves with the worker.
+interface WorkerMessage {
+  id?: string;
+  ok?: boolean;
+  ready?: boolean;
+  fatal?: boolean;
+  error?: string;
+  // Capability flags the worker reports on its ready line (find_spec probes —
+  // no model load). The sidecar surfaces the same fields via /health.
+  audio_embedding_capable?: boolean;
+  vocal_activity_capable?: boolean;
+  text_embedding_capable?: boolean;
+  bpm?: number | null;
+  key?: string | null;
+  intro_ms?: number | null;
+  confidence?: number | null;
+  loudness_lufs?: unknown;
+  peak_db?: unknown;
+  sections?: unknown;
+  vocal_ranges?: unknown;
+  pace_curve?: unknown;
+  beats?: unknown;
+  bars?: unknown;
+  key_ranges?: unknown;
+  audio_embedding?: unknown;
+  outro?: unknown;
+  text_embeddings?: unknown;
+}
+
+type Pending = { resolve: (m: WorkerMessage) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
 
 let proc: ChildProcessWithoutNullStreams | null = null;
 let ready = false;
@@ -226,6 +261,16 @@ let booting: Promise<void> | null = null;
 let buffer = '';
 let reqSeq = 0;
 const pending = new Map<string, Pending>();
+
+// Local-backend capability flags, mirroring the sidecar's /health fields. Set
+// from the worker's ready line when it boots (authoritative — includes hard
+// load failures), or by the one-shot find_spec probe below when the doctor asks
+// before any analysis has run. null = not yet known. Without this the AIO image
+// (local backend) could never answer "can you do CLAP?" and the doctor guessed
+// — issue #966's false "you're on the lean image" warning on subwave-aio-heavy.
+let _localAudioCapable: boolean | null = null;
+let _localVocalCapable: boolean | null = null;
+let _localTextCapable: boolean | null = null;
 
 function startWorker(): Promise<void> {
   if (booting) return booting;
@@ -244,14 +289,24 @@ function startWorker(): Promise<void> {
         const line = buffer.slice(0, nl).trim();
         buffer = buffer.slice(nl + 1);
         if (!line) continue;
-        let msg: any;
+        let msg: WorkerMessage;
         try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.ready) { ready = true; clearTimeout(readyTimer); resolve(); continue; }
+        if (msg.ready) {
+          ready = true;
+          // The ready line knows about hard load failures the find_spec probe
+          // can't see, so it always overwrites.
+          if (typeof msg.audio_embedding_capable === 'boolean') _localAudioCapable = msg.audio_embedding_capable;
+          if (typeof msg.vocal_activity_capable === 'boolean') _localVocalCapable = msg.vocal_activity_capable;
+          if (typeof msg.text_embedding_capable === 'boolean') _localTextCapable = msg.text_embedding_capable;
+          clearTimeout(readyTimer);
+          resolve();
+          continue;
+        }
         if (msg.fatal) { clearTimeout(readyTimer); reject(new Error(msg.error || 'analyze worker fatal')); continue; }
-        const waiter = pending.get(msg.id);
+        const waiter = pending.get(msg.id!);
         if (!waiter) continue;
         clearTimeout(waiter.timer);
-        pending.delete(msg.id);
+        pending.delete(msg.id!);
         if (msg.ok) waiter.resolve(msg);
         else waiter.reject(new Error(msg.error || 'analyze failed'));
       }
@@ -294,7 +349,7 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
       reject(new Error('analyze request timed out'));
     }, config.analyzer.requestTimeoutMs);
     pending.set(id, {
-      resolve: (msg: any) =>
+      resolve: (msg: WorkerMessage) =>
         resolve({
           bpm: msg.bpm ?? null,
           musicalKey: msg.key ?? null,
@@ -316,6 +371,47 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
     });
     proc?.stdin.write(JSON.stringify({ id, ...req }) + '\n');
   });
+}
+
+// One-shot capability probe for the local backend — the same find_spec checks
+// the worker runs before its ready line (keep the module lists in sync with
+// analyze_worker.py), in a throwaway `python -c` so the doctor can get a
+// definitive answer without booting the persistent worker (which imports
+// librosa and stays resident). Fills only still-null flags: a booted worker's
+// ready line is authoritative and must not be overwritten by a fresh process
+// that can't know about hard load failures.
+const LOCAL_CAPABILITY_PROBE = [
+  'import importlib.util as u, json',
+  'h = lambda *m: all(u.find_spec(x) is not None for x in m)',
+  'print(json.dumps({"audio": h("torch", "transformers"), "vocal": h("torch", "demucs"), "text": h("torch", "transformers")}))',
+].join('\n');
+
+let _localProbe: Promise<void> | null = null;
+
+function probeLocalCapabilities(): Promise<void> {
+  if (_localProbe) return _localProbe;
+  _localProbe = new Promise<void>((resolve) => {
+    let out = '';
+    // Only reached when localConfigured() saw the python binary, so a spawn
+    // failure surfaces as the 'error' event, not a sync throw.
+    const p = spawn(config.analyzer.python, ['-c', LOCAL_CAPABILITY_PROBE], { stdio: ['ignore', 'pipe', 'ignore'] });
+    const timer = setTimeout(() => p.kill(), 15_000);
+    p.stdout.on('data', (c: Buffer) => { out += c.toString('utf8'); });
+    p.on('error', () => { clearTimeout(timer); _localProbe = null; resolve(); });
+    p.on('close', () => {
+      clearTimeout(timer);
+      try {
+        const caps = JSON.parse(out.trim()) as { audio?: boolean; vocal?: boolean; text?: boolean };
+        if (_localAudioCapable === null && typeof caps.audio === 'boolean') _localAudioCapable = caps.audio;
+        if (_localVocalCapable === null && typeof caps.vocal === 'boolean') _localVocalCapable = caps.vocal;
+        if (_localTextCapable === null && typeof caps.text === 'boolean') _localTextCapable = caps.text;
+      } catch {
+        _localProbe = null; // bad/empty output — stay unknown, allow retry
+      }
+      resolve();
+    });
+  });
+  return _localProbe;
 }
 
 async function analyzeViaLocal(url: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
@@ -347,10 +443,7 @@ let _sidecarBase = '';
 // flags + the winning base URL on success.
 async function probeSidecar(url: string): Promise<boolean> {
   try {
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), 5000);
-    const res = await fetch(`${url}/health`, { signal: ac.signal });
-    clearTimeout(t);
+    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: 5000 });
     if (!res.ok) return false;
     const body = (await res.json()) as {
       ok?: boolean;
@@ -385,37 +478,32 @@ async function sidecarReachable(): Promise<boolean> {
 // (a file on the shared volume the controller pre-fetched).
 async function sidecarRequest(body: ({ url: string } | { path: string }) & AnalyzeRequestOpts): Promise<AnalysisResult> {
   const base = _sidecarBase;
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), config.analyzer.requestTimeoutMs);
-  try {
-    const res = await fetch(`${base}/analyze`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: ac.signal,
-    });
-    if (!res.ok) throw new Error(`analyze sidecar ${res.status}: ${await res.text().catch(() => '')}`);
-    const resBody = (await res.json()) as any;
-    if (!resBody.ok) throw new Error(resBody.error || 'analysis failed');
-    return {
-      bpm: resBody.bpm ?? null,
-      musicalKey: resBody.key ?? null,
-      introMs: resBody.intro_ms ?? null,
-      confidence: resBody.confidence ?? null,
-      loudnessLufs: parseFinite(resBody.loudness_lufs),
-      peakDb: parseFinite(resBody.peak_db),
-      sections: parseSections(resBody.sections),
-      vocalRanges: parseVocalRanges(resBody.vocal_ranges),
-      paceCurve: parsePaceCurve(resBody.pace_curve),
-      beats: parseMsList(resBody.beats),
-      bars: parseMsList(resBody.bars),
-      keyRanges: parseKeyRanges(resBody.key_ranges),
-      audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
-      outro: parseOutro(resBody.outro),
-    };
-  } finally {
-    clearTimeout(t);
-  }
+  const res = await fetchWithTimeout(`${base}/analyze`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    timeoutMs: config.analyzer.requestTimeoutMs,
+    bodyDeadline: true,
+  });
+  if (!res.ok) throw new Error(`analyze sidecar ${res.status}: ${await res.text().catch(() => '')}`);
+  const resBody = (await res.json()) as WorkerMessage;
+  if (!resBody.ok) throw new Error(resBody.error || 'analysis failed');
+  return {
+    bpm: resBody.bpm ?? null,
+    musicalKey: resBody.key ?? null,
+    introMs: resBody.intro_ms ?? null,
+    confidence: resBody.confidence ?? null,
+    loudnessLufs: parseFinite(resBody.loudness_lufs),
+    peakDb: parseFinite(resBody.peak_db),
+    sections: parseSections(resBody.sections),
+    vocalRanges: parseVocalRanges(resBody.vocal_ranges),
+    paceCurve: parsePaceCurve(resBody.pace_curve),
+    beats: parseMsList(resBody.beats),
+    bars: parseMsList(resBody.bars),
+    keyRanges: parseKeyRanges(resBody.key_ranges),
+    audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
+    outro: parseOutro(resBody.outro),
+  };
 }
 
 function analyzeViaSidecar(url: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
@@ -450,35 +538,45 @@ export function backendLabel(): string {
 }
 
 // Whether the active backend can emit CLAP "sounds-like" audio embeddings right
-// now. null = unknown (local backend — we don't probe its venv; or sidecar not
-// yet reached); false = sidecar reachable but built without the CLAP stack
-// (WITH_CLAP=0) — the signal the admin UI turns into a "rebuild the sidecar"
-// warning. Only meaningful for the sidecar backend.
+// now. null = unknown (backend not yet reached/probed); false = the backend is
+// definitively built without the CLAP stack (sidecar WITH_CLAP=0, or a lean
+// local/AIO venv) — the signal the admin UI turns into a "switch to the heavy
+// image" warning. Sidecar answers come from /health; local answers from the
+// worker's ready line or the find_spec probe (refreshCapabilities).
 export function audioEmbeddingAvailable(): boolean | null {
-  return _backend === 'sidecar' ? _sidecarAudioCapable : null;
+  if (_backend === 'sidecar') return _sidecarAudioCapable;
+  if (_backend === 'local') return _localAudioCapable;
+  return null;
 }
 
 // Whether the active backend can emit Demucs vocal-activity ranges right now.
-// Same semantics as audioEmbeddingAvailable: null = unknown (local, or sidecar
-// not yet reached / old sidecar without the field); false = sidecar built
-// without the demucs stack (WITH_DEMUCS=0). Only meaningful for the sidecar.
+// Same semantics as audioEmbeddingAvailable: null = unknown; false = built
+// without the demucs stack (sidecar WITH_DEMUCS=0, or a lean local/AIO venv).
 export function vocalActivityAvailable(): boolean | null {
-  return _backend === 'sidecar' ? _sidecarVocalCapable : null;
+  if (_backend === 'sidecar') return _sidecarVocalCapable;
+  if (_backend === 'local') return _localVocalCapable;
+  return null;
 }
 
-// Re-read sidecar /health so capability reflects a sidecar rebuilt under a
-// long-lived controller (resolveBackend caches the backend *choice* forever,
-// but CLAP support flips when the operator rebuilds with WITH_CLAP=1). Cheap;
-// driven on the coverage staleness cadence.
+// Refresh capability so it reflects the backend actually running under a
+// long-lived controller. Sidecar: re-read /health (the sidecar can be rebuilt
+// with WITH_CLAP=1 while the controller stays up). Local: run the one-shot
+// find_spec probe unless the persistent worker already reported its ready line
+// (an image/venv swap restarts the whole AIO process, so probe-once is enough).
+// Cheap; driven on the coverage staleness cadence + the doctor checks.
 export async function refreshCapabilities(): Promise<void> {
-  if ((await resolveBackend()) === 'sidecar') await sidecarReachable();
+  const backend = await resolveBackend();
+  if (backend === 'sidecar') { await sidecarReachable(); return; }
+  if (backend === 'local' && !ready) await probeLocalCapabilities();
 }
 
 // Whether the active backend can embed TEXT through the CLAP text tower (same
-// semantics as audioEmbeddingAvailable: null = unknown/local, false = sidecar
-// definitively can't — lean build or pre-text-tower image).
+// semantics as audioEmbeddingAvailable: null = unknown, false = definitively
+// can't — lean build or pre-text-tower image).
 export function textEmbeddingAvailable(): boolean | null {
-  return _backend === 'sidecar' ? _sidecarTextCapable : null;
+  if (_backend === 'sidecar') return _sidecarTextCapable;
+  if (_backend === 'local') return _localTextCapable;
+  return null;
 }
 
 // Coerce a worker text_embeddings payload to clean number[][] or null: one
@@ -504,7 +602,7 @@ function localEmbedTexts(texts: string[], timeoutMs: number): Promise<number[][]
       reject(new Error('embed-text request timed out'));
     }, timeoutMs);
     pending.set(id, {
-      resolve: (msg: any) => resolve(parseVectors(msg.text_embeddings, texts.length)),
+      resolve: (msg: WorkerMessage) => resolve(parseVectors(msg.text_embeddings, texts.length)),
       reject,
       timer,
     });
@@ -530,24 +628,21 @@ export async function embedTexts(
   if (!backend) return null;
   if (backend === 'sidecar') {
     if (_sidecarTextCapable === false) return null;
-    const ac = new AbortController();
-    const t = setTimeout(() => ac.abort(), timeoutMs);
     try {
-      const res = await fetch(`${_sidecarBase}/embed-text`, {
+      const res = await fetchWithTimeout(`${_sidecarBase}/embed-text`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ texts }),
-        signal: ac.signal,
+        timeoutMs,
+        bodyDeadline: true,
       });
       // 404 = pre-text-tower sidecar, 500 = lean build (no torch) — both mean
       // "no text embeddings", not an error worth surfacing per call.
       if (!res.ok) return null;
-      const body = (await res.json()) as any;
+      const body = (await res.json()) as { ok?: boolean; embeddings?: unknown };
       return body?.ok ? parseVectors(body.embeddings, texts.length) : null;
     } catch {
       return null;
-    } finally {
-      clearTimeout(t);
     }
   }
   try {
@@ -641,7 +736,7 @@ export async function downloadCapped(
     // pipe, so pipeline() never resolves and every download hangs.
     let read = 0;
     async function* capped() {
-      for await (const chunk of res.body as any) {
+      for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
         read += chunk.length;
         yield chunk;
         if (read >= ANALYZE_MAX_BYTES) return; // enough audio for the window

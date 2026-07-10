@@ -55,11 +55,12 @@ export function useObservatory(adminFetch: AdminFetch, enabled: boolean, max: nu
         if (!body.tracks || body.tracks.length === 0) {
           setData(buildMockLibrary());
         } else {
-          const { tracks, genres, centers } = layoutTracks(body.tracks);
+          const { tracks, genres, centers, soundMap } = layoutTracks(body.tracks);
           setData({
             tracks,
             genres,
             centers,
+            soundMap,
             stats: body.stats,
             moodVocab: body.moodVocab || [],
             truncated: !!body.truncated,

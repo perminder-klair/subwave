@@ -107,7 +107,7 @@ export function PersonaEditor({
                 : !canSave && !allPersonasOk
                   ? <span className="text-[var(--danger)]">another persona in the roster is incomplete</span>
                   : !canSave && !promptOk
-                    ? <span className="text-[var(--danger)]">fix the custom system prompt</span>
+                    ? <span className="text-[var(--danger)]">fix the system-prompt library</span>
                     : 'changes apply on the next spoken line · no mixer restart'}
             </span>
           </div>

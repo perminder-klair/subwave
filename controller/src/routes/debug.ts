@@ -11,6 +11,7 @@ import {
   LLM_DEBUG_MAX,
 } from '../llm/log.js';
 import * as tts from '../audio/tts.js';
+import { ttsCalls } from '../stats.js';
 import * as library from '../music/library.js';
 import * as subsonicLog from '../music/subsonic-log.js';
 import { getFullContext } from '../context.js';
@@ -237,9 +238,11 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
 
   // 6c. TTS routing — which engine/voice the effective persona resolves to,
   // and whether it's silently falling back from the engine the persona asked
-  // for (e.g. a cloud voice with the Cloud engine switched off).
+  // for (e.g. a cloud voice with the Cloud engine switched off). Plus the raw
+  // TTS call ring (stats.ts, same since-boot window as the LLM ring) so the
+  // debug panel can show what actually aired, per call.
   try {
-    out.tts = tts.describeRouting();
+    out.tts = { ...tts.describeRouting(), recentCalls: ttsCalls };
   } catch (err) {
     out.tts = { error: err.message };
   }

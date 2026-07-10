@@ -1,0 +1,106 @@
+{
+  "query": {
+    "original": "Sabrina Carpenter news",
+    "show_strict_warning": false,
+    "is_navigational": false,
+    "is_news_breaking": false,
+    "spellcheck_off": true,
+    "country": "us",
+    "bad_results": false,
+    "should_fallback": false,
+    "postal_code": "",
+    "city": "",
+    "header_country": "",
+    "more_results_available": true,
+    "state": ""
+  },
+  "mixed": {
+    "type": "mixed",
+    "main": [
+      { "type": "news", "all": true },
+      { "type": "web", "index": 0, "all": false },
+      { "type": "web", "index": 1, "all": false }
+    ],
+    "top": [],
+    "side": []
+  },
+  "type": "search",
+  "infobox": {
+    "type": "graph",
+    "results": {
+      "type": "infobox",
+      "position": 1,
+      "title": "Sabrina Carpenter",
+      "long_desc": "Sabrina Annlynn Carpenter is an American singer and actress. She rose to prominence starring on the Disney Channel series Girl Meets World and has released multiple studio albums.",
+      "attributes": [
+        ["Born", "May 11, 1999"],
+        ["Genres", "Pop"]
+      ]
+    }
+  },
+  "news": {
+    "type": "news",
+    "results": [
+      {
+        "title": "Sabrina Carpenter announces 2026 world tour dates",
+        "url": "https://example.com/news/tour",
+        "description": "The pop star&#x27;s new leg adds 18 arenas across Europe, with pre-sale starting <strong>this Friday</strong>.",
+        "age": "2 days ago",
+        "page_age": "2026-07-08T09:00:00",
+        "meta_url": {
+          "scheme": "https",
+          "netloc": "example.com",
+          "hostname": "example.com",
+          "favicon": "https://imgs.search.brave.com/favicon.ico",
+          "path": "› news › tour"
+        }
+      },
+      {
+        "title": "Review: the deluxe reissue",
+        "url": "https://example.com/news/review",
+        "description": "A track-by-track look at the deluxe edition &amp; its four new songs.",
+        "age": "5 days ago",
+        "page_age": "2026-07-05T12:00:00"
+      }
+    ],
+    "mutated_by_goggles": false
+  },
+  "web": {
+    "type": "search",
+    "family_friendly": true,
+    "results": [
+      {
+        "title": "Sabrina Carpenter - Wikipedia",
+        "url": "https://en.wikipedia.org/wiki/Sabrina_Carpenter",
+        "is_source_local": false,
+        "is_source_both": false,
+        "description": "Sabrina Annlynn Carpenter (born May 11, 1999) is an American singer and actress. Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.",
+        "page_age": "2026-07-01T00:00:00",
+        "profile": {
+          "name": "Wikipedia",
+          "url": "https://en.wikipedia.org/wiki/Sabrina_Carpenter",
+          "long_name": "en.wikipedia.org",
+          "img": "https://imgs.search.brave.com/wikipedia.ico"
+        },
+        "language": "en",
+        "family_friendly": true,
+        "type": "search_result",
+        "subtype": "generic"
+      },
+      {
+        "title": "Official site",
+        "url": "https://example.com/official",
+        "description": "Tour dates, merch and music.",
+        "type": "search_result",
+        "subtype": "generic"
+      },
+      {
+        "title": "Result with empty description",
+        "url": "https://example.com/empty",
+        "description": "",
+        "type": "search_result",
+        "subtype": "generic"
+      }
+    ]
+  }
+}

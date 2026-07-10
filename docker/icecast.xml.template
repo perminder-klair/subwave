@@ -3,7 +3,7 @@
     <admin>parm@homelab</admin>
 
     <limits>
-        <clients>100</clients>
+        <clients>${ICECAST_MAX_CLIENTS}</clients>
         <sources>4</sources>
         <!-- queue-size: per-client backlog before Icecast drops a lagging
              listener. 1 MB ≈ 65s of MP3 / 85s of Opus — gives jittery mobile

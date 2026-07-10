@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import ManualShell from '../../components/manual/ManualShell';
+import DocShell from '@/components/docs/DocShell';
+import { MANUAL_PAGES } from '@/components/manual/pages';
 
 export const metadata: Metadata = {
   title: 'SUB/WAVE — Manual',
@@ -9,5 +10,9 @@ export const metadata: Metadata = {
 };
 
 export default function ManualLayout({ children }: { children: ReactNode }) {
-  return <ManualShell>{children}</ManualShell>;
+  return (
+    <DocShell pages={MANUAL_PAGES} eyebrow="THE MANUAL" ariaLabel="Manual contents">
+      {children}
+    </DocShell>
+  );
 }

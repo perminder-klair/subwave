@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
-import { Card, Btn, Eyebrow, Pill } from './ui';
+import { Card, Btn, Eyebrow } from './ui';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
+import { Modal } from '../ui/modal';
 import { V3AlertDialog } from '../ui/alert-dialog';
 
 interface Festival {
@@ -40,9 +41,22 @@ const EMPTY_FESTIVAL: Festival = {
   windowDays: 0,
 };
 
-function monthDayLabel(f: Festival): string {
-  const m = MONTH_NAMES[f.month - 1] || String(f.month);
-  return `${m} ${f.day}`;
+const sortFestivals = (list: Festival[]) =>
+  [...list].sort((a, b) => a.month - b.month || a.day - b.day);
+
+// Display-only date math (the controller owns the real window logic in
+// getFestivalContext): `active` = today falls inside the ±window, `until` =
+// days to the next occurrence, wrapping the year boundary.
+function festivalTiming(f: Festival, now: Date) {
+  const dayMs = 86400000;
+  const t0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const diffs = [-1, 0, 1].map(dy =>
+    Math.round((new Date(now.getFullYear() + dy, f.month - 1, f.day).getTime() - t0) / dayMs),
+  );
+  return {
+    active: diffs.some(d => Math.abs(d) <= (f.windowDays || 0)),
+    until: Math.min(...diffs.filter(d => d >= 0)),
+  };
 }
 
 export default function FestivalsSection() {
@@ -59,15 +73,19 @@ export default function FestivalsSection() {
     try {
       const r = await adminFetch('/settings');
       if (!r.ok) throw new Error(`failed (${r.status})`);
-      const j = (await r.json()) as any;
+      const j = (await r.json()) as {
+        values?: { festivals?: unknown };
+        tts?: { moods?: unknown };
+      } | null;
       // The controller validates + normalises festivals on every save
       // (validateFestivalsStrict), so trust the shape as-is here.
       const vals = j?.values?.festivals;
-      const loaded: Festival[] = Array.isArray(vals) ? vals : [];
-      setFestivals([...loaded].sort((a, b) => a.month - b.month || a.day - b.day));
+      const loaded = Array.isArray(vals) ? (vals as Festival[]) : [];
+      setFestivals(sortFestivals(loaded));
       // Mood vocabulary comes from the server (SHOW_MOODS via tts.moods) so
       // the dropdown never drifts from what the controller will accept.
-      setMoods(Array.isArray(j?.tts?.moods) ? j.tts.moods : []);
+      const moodVals = j?.tts?.moods;
+      setMoods(Array.isArray(moodVals) ? (moodVals as string[]) : []);
       setErr(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -97,7 +115,7 @@ export default function FestivalsSection() {
       });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setFestivals(updated);
+      setFestivals(sortFestivals(updated));
       setEditing(null);
       setEditIdx(null);
       notify.ok(`${updated.length} festival${updated.length === 1 ? '' : 's'} saved`);
@@ -153,16 +171,36 @@ export default function FestivalsSection() {
 
   if (!hydrated || needsAuth) return null;
 
+  // Group the (already month/day-sorted) list into month sections, keeping the
+  // original index so a row click edits the right entry. The soonest upcoming
+  // festival gets an "up next" tag; anything inside its window reads "now".
+  const now = new Date();
+  const timings = (festivals || []).map(f => festivalTiming(f, now));
+  const nextIdx = timings.length
+    ? timings.reduce((best, t, i) => (t.until < (timings[best]?.until ?? Infinity) ? i : best), 0)
+    : -1;
+  const months: Array<{ month: number; rows: Array<{ f: Festival; idx: number }> }> = [];
+  (festivals || []).forEach((f, idx) => {
+    const last = months[months.length - 1];
+    if (last && last.month === f.month) last.rows.push({ f, idx });
+    else months.push({ month: f.month, rows: [{ f, idx }] });
+  });
+
   return (
     <section className="grid gap-6">
-      <div>
-        <Eyebrow>festivals</Eyebrow>
-        <h2 className="text-[24px] font-bold tracking-[0.04em]">Festival calendar.</h2>
-        <p className="mt-2 text-[13px] leading-[1.5] text-muted">
-          Mood-forming dates the DJ leans into around the year. Add your local holidays,
-          regional celebrations, or personal landmarks — the station&apos;s mood shifts
-          to match the nearest active festival.
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <Eyebrow>festivals</Eyebrow>
+          <h2 className="text-[24px] font-bold tracking-[0.04em]">Festival calendar.</h2>
+          <p className="mt-2 text-[13px] leading-[1.5] text-muted">
+            Mood-forming dates the DJ leans into around the year. Add your local holidays,
+            regional celebrations, or personal landmarks — the station&apos;s mood shifts
+            to match the nearest active festival.
+          </p>
+        </div>
+        <Btn tone="accent" className="shrink-0" onClick={startAdd} disabled={festivals === null}>
+          Add festival
+        </Btn>
       </div>
 
       {err && (
@@ -176,179 +214,200 @@ export default function FestivalsSection() {
       )}
 
       {festivals !== null && (
-        <>
-          <Card title="Add festival" sub="define a new calendar entry">
-            <div className="grid gap-4">
-              {editing ? (
-                <div className="grid gap-4 rounded border border-ink p-4">
-                  <div className="flex items-center justify-between">
-                    <Eyebrow>{editIdx !== null ? 'Editing festival' : 'New festival'}</Eyebrow>
-                    <Btn sm tone="danger" onClick={cancelEdit}>cancel</Btn>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="field">
-                      <Label>Month</Label>
-                      <Select
-                        value={String(editing.month)}
-                        onValueChange={v => {
-                          // Clamp the day so switching e.g. Oct 31 → February
-                          // can't leave an impossible date in the form.
-                          const month = Number(v);
-                          setEditing(cur => cur && ({
-                            ...cur,
-                            month,
-                            day: Math.min(cur.day, DAYS_IN_MONTH(month)),
-                          }));
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {MONTH_NAMES.map((name, i) => (
-                            <SelectItem key={i + 1} value={String(i + 1)}>{name}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    <div className="field">
-                      <Label>Day</Label>
-                      <Select
-                        value={String(editing.day)}
-                        onValueChange={v => updateField('day', Number(v))}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {Array.from({ length: DAYS_IN_MONTH(editing.month) }, (_, i) => (
-                            <SelectItem key={i + 1} value={String(i + 1)}>{i + 1}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  </div>
-
-                  <div className="field">
-                    <Label>Name</Label>
-                    <Input
-                      value={editing.name}
-                      onChange={e => updateField('name', e.target.value)}
-                      placeholder="e.g. New Year's Day"
-                      maxLength={80}
-                    />
-                  </div>
-
-                  <div className="field">
-                    <Label>Description <span className="text-muted">(optional)</span></Label>
-                    <Input
-                      value={editing.description || ''}
-                      onChange={e => updateField('description', e.target.value)}
-                      placeholder="Short note about the festival"
-                      maxLength={200}
-                    />
-                    <div className="field-hint mt-1">
-                      A brief note the DJ can weave into its on-air talk when the festival
-                      is active — also shown in the list below.
-                    </div>
-                  </div>
-
-                  <div className="field">
-                    <Label>Mood</Label>
-                    <Select
-                      value={editing.mood}
-                      onValueChange={v => updateField('mood', v)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {moods.map(m => (
-                          <SelectItem key={m} value={m}>{m}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <div className="field-hint mt-1">
-                      The DJ leans into this mood when the festival is active —
-                      music selection and spoken tone shift to match.
-                    </div>
-                  </div>
-
-                  <div className="field">
-                    <Label>Window <span className="text-muted">(days)</span></Label>
-                    <Input
-                      type="number"
-                      min={0}
-                      max={14}
-                      value={String(editing.windowDays ?? 0)}
-                      onChange={e => updateField('windowDays', Math.max(0, Math.min(14, Number(e.target.value) || 0)))}
-                    />
-                    <div className="field-hint mt-1">
-                      Number of days before and after the festival date where the mood is
-                      active. e.g. 3 = the mood spans a full week around the day.
-                    </div>
-                  </div>
-
-                  <Btn onClick={commitEdit} disabled={busy || !editing.name.trim()}>
-                    {editIdx !== null ? 'Save changes' : 'Add festival'}
-                  </Btn>
-                </div>
-              ) : (
-                <Btn sm onClick={startAdd}>Add festival</Btn>
-              )}
+        <Card
+          title="Calendar"
+          sub={`${festivals.length} date${festivals.length === 1 ? '' : 's'} · click one to edit`}
+        >
+          {festivals.length === 0 ? (
+            <div className="text-[13px] text-muted italic">
+              No festivals defined. Add one to get started.
             </div>
-          </Card>
-
-          <Card
-            title="Festivals"
-            sub={`${festivals.length} calendar entr${festivals.length === 1 ? 'y' : 'ies'}`}
-          >
-            {festivals.length === 0 ? (
-              <div className="text-[13px] text-muted italic">
-                No festivals defined. Add one to get started.
-              </div>
-            ) : (
-              // grid-cols-1 pins the track to minmax(0,1fr) so a long,
-              // nowrap-truncated description can't blow the column out to its
-              // max-content width and shove the pills/buttons past the card
-              // edge (issue #898). shrink-0 on the fixed controls sends all the
-              // slack to the truncating name/description column.
-              <div className="grid grid-cols-1 gap-2">
-                {festivals.map((f, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center gap-3 border border-ink bg-bg p-3"
-                  >
-                    <Pill tone="ink" className="shrink-0">{monthDayLabel(f)}</Pill>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-[12px] font-bold tracking-[0.08em] uppercase">
-                        {f.name}
-                      </div>
-                      {f.description ? (
-                        <div className="truncate text-[12px] text-muted">{f.description}</div>
-                      ) : null}
-                    </div>
-                    <Pill className="shrink-0">{f.mood}</Pill>
-                    {f.windowDays ? (
-                      <Pill tone="ink" className="shrink-0">{f.windowDays}d window</Pill>
-                    ) : null}
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Btn sm onClick={() => startEdit(i)} disabled={busy}>
-                        Edit
-                      </Btn>
-                      <Btn sm tone="danger" onClick={() => setConfirmDelete(i)} disabled={busy}>
-                        Remove
-                      </Btn>
-                    </div>
+          ) : (
+            <div className="grid">
+              {months.map(({ month, rows }) => (
+                <div key={month}>
+                  <div className="mt-4 mb-1 flex items-center gap-3 first:mt-0">
+                    <span className="caption">{MONTH_NAMES[month - 1]}</span>
+                    <span className="flex-1 border-t border-dashed border-separator-strong" />
                   </div>
-                ))}
-              </div>
-            )}
-          </Card>
-        </>
+                  {rows.map(({ f, idx }) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => startEdit(idx)}
+                      className="grid w-full cursor-pointer grid-cols-[30px_1fr_auto] items-baseline gap-x-3 px-1.5 py-2 text-left hover:bg-[var(--ink-soft)]"
+                    >
+                      <span className="mono-num text-[12px] text-muted">
+                        {String(f.day).padStart(2, '0')}
+                      </span>
+                      <span className="min-w-0">
+                        <span className="flex items-baseline gap-2.5">
+                          <span className="truncate text-[13px] font-bold">{f.name}</span>
+                          {timings[idx]?.active ? (
+                            <span className="flex-none text-[9px] font-bold tracking-[0.2em] text-vermilion uppercase">
+                              ● now
+                            </span>
+                          ) : idx === nextIdx ? (
+                            <span className="flex-none text-[9px] font-bold tracking-[0.2em] text-muted uppercase">
+                              up next · {timings[idx]?.until}d
+                            </span>
+                          ) : null}
+                        </span>
+                        {f.description ? (
+                          <span className="block truncate text-[11px] leading-[1.5] text-muted">
+                            {f.description}
+                          </span>
+                        ) : null}
+                      </span>
+                      <span className="flex items-baseline gap-2.5 text-[10px] tracking-[0.08em] text-muted">
+                        <span>{f.mood}</span>
+                        {f.windowDays ? <span className="mono-num">±{f.windowDays}d</span> : null}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
       )}
+
+      <Modal
+        open={editing !== null}
+        onOpenChange={o => { if (!o) cancelEdit(); }}
+        title={editIdx !== null ? 'edit festival' : 'new festival'}
+        sub={editIdx !== null && editing ? editing.name : undefined}
+        width={520}
+        footer={
+          <div className="flex w-full items-center justify-between gap-2">
+            {editIdx !== null ? (
+              <Btn sm tone="danger" onClick={() => setConfirmDelete(editIdx)} disabled={busy}>
+                Remove
+              </Btn>
+            ) : (
+              <span />
+            )}
+            <div className="flex items-center gap-2">
+              <Btn sm onClick={cancelEdit} disabled={busy}>Cancel</Btn>
+              <Btn
+                sm
+                tone="accent"
+                onClick={commitEdit}
+                disabled={busy || !editing?.name.trim()}
+              >
+                {busy ? 'Saving…' : editIdx !== null ? 'Save changes' : 'Add festival'}
+              </Btn>
+            </div>
+          </div>
+        }
+      >
+        {editing && (
+          <div className="grid gap-4">
+            <div className="field">
+              <Label>Name</Label>
+              <Input
+                value={editing.name}
+                onChange={e => updateField('name', e.target.value)}
+                placeholder="e.g. New Year's Day"
+                maxLength={80}
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="field">
+                <Label>Month</Label>
+                <Select
+                  value={String(editing.month)}
+                  onValueChange={v => {
+                    // Clamp the day so switching e.g. Oct 31 → February
+                    // can't leave an impossible date in the form.
+                    const month = Number(v);
+                    setEditing(cur => cur && ({
+                      ...cur,
+                      month,
+                      day: Math.min(cur.day, DAYS_IN_MONTH(month)),
+                    }));
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MONTH_NAMES.map((name, i) => (
+                      <SelectItem key={i + 1} value={String(i + 1)}>{name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="field">
+                <Label>Day</Label>
+                <Select
+                  value={String(editing.day)}
+                  onValueChange={v => updateField('day', Number(v))}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: DAYS_IN_MONTH(editing.month) }, (_, i) => (
+                      <SelectItem key={i + 1} value={String(i + 1)}>{i + 1}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="field">
+              <Label>Description <span className="text-muted">(optional)</span></Label>
+              <Input
+                value={editing.description || ''}
+                onChange={e => updateField('description', e.target.value)}
+                placeholder="Short note about the festival"
+                maxLength={200}
+              />
+              <div className="field-hint mt-1">
+                A brief note the DJ can weave into its on-air talk when the festival is active.
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="field">
+                <Label>Mood</Label>
+                <Select
+                  value={editing.mood}
+                  onValueChange={v => updateField('mood', v)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {moods.map(m => (
+                      <SelectItem key={m} value={m}>{m}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="field">
+                <Label>Window <span className="text-muted">(days)</span></Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={14}
+                  value={String(editing.windowDays ?? 0)}
+                  onChange={e => updateField('windowDays', Math.max(0, Math.min(14, Number(e.target.value) || 0)))}
+                />
+              </div>
+            </div>
+            <div className="field-hint -mt-2">
+              Music selection and spoken tone shift into the mood for the window around
+              the date — e.g. a 3-day window spans a full week.
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <V3AlertDialog
         open={confirmDelete != null}

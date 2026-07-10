@@ -1,0 +1,11 @@
+{
+  "query": {
+    "original": "xzqv unfindable artist",
+    "show_strict_warning": false,
+    "country": "us",
+    "bad_results": true,
+    "should_fallback": true,
+    "more_results_available": false
+  },
+  "type": "search"
+}

@@ -49,9 +49,10 @@ export default function AgentAccess() {
           browser, an agent calls a tool, and the same controller does the work.
         </p>
         <p className="text-muted">
-          The server holds almost no logic of its own; each tool is a typed wrapper over
-          one controller endpoint. The agent never sees a URL or an auth header, only
-          the intent-shaped tools below.
+          It holds almost no logic of its own; each tool is a typed wrapper over one
+          controller endpoint. The agent never sees a URL or an auth header, only the
+          intent-shaped tools below. The station serves these tools over HTTP directly,
+          so a client connects with just a URL — no clone, no local process.
         </p>
       </section>
 
@@ -107,11 +108,13 @@ export default function AgentAccess() {
         <p>
           The seven read-and-request tools need no credentials: they map to the same
           public endpoints a browser uses. Everything that drives the station — voice,
-          segments, skills, effects, the queue, the skip — is gated: the server sends
-          the station's <code className="bs-code-inline">ADMIN_USER</code> /{' '}
-          <code className="bs-code-inline">ADMIN_PASS</code> as a Basic auth header, read
-          from its own environment. Without them, an agent can still see what's on air
-          and request songs; it just can't drive the DJ.
+          segments, skills, effects, the queue, the skip — is gated by the station's
+          admin credentials, passed as a Basic auth header (an{' '}
+          <code className="bs-code-inline">Authorization</code> header on the HTTP
+          endpoint, or <code className="bs-code-inline">ADMIN_USER</code> /{' '}
+          <code className="bs-code-inline">ADMIN_PASS</code> for the local stdio server).
+          Without them, an agent can still see what's on air and request songs; it just
+          can't drive the DJ.
         </p>
       </section>
 
@@ -119,14 +122,14 @@ export default function AgentAccess() {
         <p className="bs-eyebrow">WIRING IT UP</p>
         <h2>Point an MCP client at it.</h2>
         <p>
-          The server lives in the repo at <code className="bs-code-inline">mcp-subwave/</code>.
-          Build it once with <code className="bs-code-inline">npm install</code>, then
-          point any MCP client (Claude Code, Claude Desktop, or another) at the built{' '}
-          <code className="bs-code-inline">dist/index.js</code>, passing the controller
-          URL and, optionally, the admin credentials as environment variables. Inside
-          the repo itself, Claude Code picks the server up automatically from the root{' '}
-          <code className="bs-code-inline">.mcp.json</code>. The station must be
-          running first.
+          The quickest path is HTTP: point any MCP client (Claude Code, Claude Desktop,
+          or another) at <code className="bs-code-inline">&lt;your-station&gt;/api/mcp</code>,
+          passing the admin credentials as an{' '}
+          <code className="bs-code-inline">Authorization</code> header. Nothing to
+          install. The admin <strong>Connect → MCP</strong> screen gives you the exact
+          command with your station's URL already filled in. A local stdio server (run
+          from a clone) is available too when you'd rather not expose the endpoint. The
+          station must be running first.
         </p>
         <div className="bs-callout">
           <div className="bs-eyebrow">FULL REFERENCE</div>

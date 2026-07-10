@@ -85,6 +85,9 @@ services:
       - ICECAST_SOURCE_PASSWORD=\${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=\${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=\${ICECAST_RELAY_PASSWORD:-}
+      # Concurrent-listener ceiling for icecast (<limits><clients>).
+      # Empty/unset → 100 (the historical default).
+      - ICECAST_MAX_CLIENTS=\${ICECAST_MAX_CLIENTS:-}
       # Keeps the hourly archive paths (%Y-%m-%d/%H-00.mp3) on local wall time.
       - TZ=\${TZ:-Europe/London}
     extra_hosts:
@@ -289,6 +292,11 @@ services:
       - TTS_HEAVY_DEVICE=\${TTS_HEAVY_DEVICE:-cpu}
       # Default voice id used by PocketTTS when a persona doesn't override it.
       - POCKET_TTS_VOICE=\${POCKET_TTS_VOICE:-alba}
+      # Which heavy engines to actually load. Both are baked into the image;
+      # each costs RAM + a first-boot weight download + startup time, so set
+      # this to a single engine if you only use one. Comma-separated.
+      # e.g. TTS_HEAVY_ENGINES=pocket-tts runs PocketTTS only (no Chatterbox).
+      - TTS_HEAVY_ENGINES=\${TTS_HEAVY_ENGINES:-chatterbox,pocket-tts}
       # Optional — enables PocketTTS zero-shot voice CLONING (issue #238). The
       # cloning weights (kyutai/pocket-tts) are gated on Hugging Face; without a
       # token the engine loads the open weights and cloned .wav voices revert to
@@ -441,6 +449,9 @@ services:
       - ICECAST_SOURCE_PASSWORD=\${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=\${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=\${ICECAST_RELAY_PASSWORD:-}
+      # Concurrent-listener ceiling for icecast (<limits><clients>).
+      # Empty/unset → 100 (the historical default).
+      - ICECAST_MAX_CLIENTS=\${ICECAST_MAX_CLIENTS:-}
       - TZ=\${TZ:-Europe/London}
     ports:
       # BIND_ADDRESS defaults to 0.0.0.0; set 127.0.0.1 in .env for a same-host
@@ -623,6 +634,11 @@ services:
     environment:
       - TTS_HEAVY_DEVICE=\${TTS_HEAVY_DEVICE:-cpu}
       - POCKET_TTS_VOICE=\${POCKET_TTS_VOICE:-alba}
+      # Which heavy engines to actually load. Both are baked into the image;
+      # each costs RAM + a first-boot weight download + startup time, so set
+      # this to a single engine if you only use one. Comma-separated.
+      # e.g. TTS_HEAVY_ENGINES=pocket-tts runs PocketTTS only (no Chatterbox).
+      - TTS_HEAVY_ENGINES=\${TTS_HEAVY_ENGINES:-chatterbox,pocket-tts}
       # Optional — enables PocketTTS voice CLONING (issue #238). Cloning weights
       # are gated on Hugging Face; accept the terms at
       # huggingface.co/kyutai/pocket-tts and set HF_TOKEN in your root .env.
@@ -742,6 +758,9 @@ services:
       - ICECAST_SOURCE_PASSWORD=\${ICECAST_SOURCE_PASSWORD:-}
       - ICECAST_ADMIN_PASSWORD=\${ICECAST_ADMIN_PASSWORD:-}
       - ICECAST_RELAY_PASSWORD=\${ICECAST_RELAY_PASSWORD:-}
+      # Concurrent-listener ceiling for icecast (<limits><clients>).
+      # Empty/unset → 100 (the historical default).
+      - ICECAST_MAX_CLIENTS=\${ICECAST_MAX_CLIENTS:-}
       - TZ=\${TZ:-Europe/London}
     extra_hosts:
       # Lets Liquidsoap fetch Subsonic stream URLs that point at host services
@@ -895,6 +914,11 @@ services:
     environment:
       - TTS_HEAVY_DEVICE=\${TTS_HEAVY_DEVICE:-cpu}
       - POCKET_TTS_VOICE=\${POCKET_TTS_VOICE:-alba}
+      # Which heavy engines to actually load. Both are baked into the image;
+      # each costs RAM + a first-boot weight download + startup time, so set
+      # this to a single engine if you only use one. Comma-separated.
+      # e.g. TTS_HEAVY_ENGINES=pocket-tts runs PocketTTS only (no Chatterbox).
+      - TTS_HEAVY_ENGINES=\${TTS_HEAVY_ENGINES:-chatterbox,pocket-tts}
       # Optional — enables PocketTTS voice CLONING (issue #238). Cloning weights
       # are gated; accept terms at huggingface.co/kyutai/pocket-tts and set
       # HF_TOKEN in your .env. Built-in voices need no token.
@@ -1081,6 +1105,10 @@ SITE_URL=
 # ICECAST_ADMIN_PASSWORD=
 # ICECAST_RELAY_PASSWORD=
 
+# Max concurrent listeners across all mounts (icecast <limits><clients>).
+# Unset → 100. Lower it to bound bandwidth on a small host.
+# ICECAST_MAX_CLIENTS=
+
 # ───────── Overrides for the wizard's fields ─────────
 # These all live in state/settings.json after the wizard runs. Set them here
 # only if you want env to win (12-factor / CI / GitOps style deploys).
@@ -1107,7 +1135,7 @@ SITE_URL=
 # DEEPSEEK_API_KEY=
 # AI_GATEWAY_API_KEY=
 # ELEVENLABS_API_KEY=
-# SEARCH_API_KEY=tvly-...           # Tavily key (optional, paid)
+# SEARCH_API_KEY=tvly-...           # Tavily or Brave Search key (optional, paid/metered)
 # SearXNG: no env var. Configure base URL in admin UI → Settings → Search.
 # Embedding key — only when embeddings use a different provider/key than chat
 # (e.g. OpenRouter for embeddings, a local proxy for chat). Blank → inherit the
@@ -1163,6 +1191,13 @@ SITE_URL=
 #                         # ending, tail loudness/tempo — drives the
 #                         # ending-aware crossfade). Pure librosa, cheap
 #
+# Which heavy-TTS engines the tts-heavy sidecar loads. Chatterbox AND PocketTTS
+# are both baked into the image, but each costs RAM + a first-boot weight
+# download + startup time — so if you only use one, name it here and the other
+# never loads. Comma-separated; default loads both. Only matters with
+# --profile tts-heavy.
+# TTS_HEAVY_ENGINES=pocket-tts     # or: chatterbox  |  chatterbox,pocket-tts
+#
 # Memory ceilings for the model-loading sidecars (OOM containment — keeps a
 # runaway model load from taking down the host's other services). Defaults are
 # generous; raise for the heavy analyzer on large libraries, lower on a
@@ -1177,4 +1212,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version`).
-export const CLI_VERSION = `0.39.0`; // x-release-please-version
+export const CLI_VERSION = `0.40.0`; // x-release-please-version

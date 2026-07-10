@@ -25,10 +25,9 @@ import {
   checkRateLimit, clientIp,
   REQUESTS_DISABLED, REQUEST_TEXT_MAX, REQUEST_NAME_MAX,
 } from '../middleware/ratelimit.js';
+import { shuffle } from '../util/shuffle.js';
 
 export const router = express.Router();
-
-const shuffle = (arr) => [...arr].sort(() => Math.random() - 0.5);
 
 // Neutralize prompt-injection markup in listener-supplied request text before
 // it's stored, logged, displayed, or fed to the LLM. A song request is short

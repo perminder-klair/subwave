@@ -1,9 +1,9 @@
 'use client';
 
 // Shows scheduler — /admin/shows. A show is a reusable definition (name,
-// topic, owner persona, music mood). The weekly grid assigns a show to any
+// topic, owner persona, music moods). The weekly grid assigns a show to any
 // 1-hour cell, Mon–Sun. When the current hour has a show, its persona goes on
-// air, its mood (when set — empty means Any/auto) overrides the autonomous
+// air, its moods (when set — empty means Any/auto) override the autonomous
 // mood, and its topic feeds the DJ.
 // An empty hour = the station runs autonomously, as it does today.
 // Everything POSTs to /settings and applies live.
@@ -75,21 +75,22 @@ interface Show {
   /** Scripted banter breaks: short multi-voice exchanges between the host and
    *  guests, aired up to twice an hour. Only meaningful with guests set. */
   banter: boolean;
-  /** '' = Any — the show pins no mood; the autonomous mood (festival >
-   *  weather > time of day) applies while it's on air. */
-  mood: string;
+  /** [] = Any — the show pins no mood; the autonomous mood (festival >
+   *  weather > time of day) applies while it's on air. Multi-value (#929):
+   *  any selected mood satisfies the filter, all weighted equally. */
+  moods: string[];
   /** Optional theme override — empty string means "fall back to the station
    *  default while this show is on air". Validated against the live theme
    *  registry by the controller; a stale id silently falls back too. */
   themeId: string;
-  /** Optional music-steering filters — soft lean applied at pick time. Empty
-   *  string / null means "no constraint". Genre is free text resolved fuzzily
-   *  against the library; fromYear/toYear are a decade window; energy is one of
+  /** Optional music-steering filters — soft leans applied at pick time, each a
+   *  multi-value list (#929): OR within the attribute, AND across attributes.
+   *  Empty list means "no constraint". Genres are free text resolved fuzzily
+   *  against the library; eras are decade/year windows; energies come from
    *  low|medium|high. */
-  genre: string;
-  fromYear: number | null;
-  toYear: number | null;
-  energy: string;
+  genres: string[];
+  eras: EraWindow[];
+  energies: string[];
   /** When true (and ≥1 music filter is set) EVERY set filter — mood, genre,
    *  era, energy — becomes a HARD filter on the pick pool instead of a soft
    *  lean; off-filter tracks only play as a last resort to avoid silence.
@@ -120,9 +121,12 @@ interface Show {
   segmentSkill: string;
 }
 
-// Decade presets for the era dropdown → fromYear/toYear. 'any' clears the window.
-const DECADES: { key: string; label: string; from: number | null; to: number | null }[] = [
-  { key: 'any', label: 'Any era', from: null, to: null },
+/** One era window (mirrors the controller's EraWindow). Multiple windows let a
+ *  show span non-adjacent decades ("90s + 2010s"). */
+interface EraWindow { fromYear: number | null; toYear: number | null }
+
+// Decade presets for the era chips → one EraWindow each. Empty selection = any era.
+const DECADES: { key: string; label: string; from: number; to: number }[] = [
   { key: '2020', label: '2020s', from: 2020, to: 2029 },
   { key: '2010', label: '2010s', from: 2010, to: 2019 },
   { key: '2000', label: '2000s', from: 2000, to: 2009 },
@@ -134,14 +138,20 @@ const DECADES: { key: string; label: string; from: number | null; to: number | n
 ];
 const ENERGY_OPTIONS = ['low', 'medium', 'high'];
 const ANY_SENTINEL = '__any__';
+// Mirrors the controller's SHOW_FILTER_VALUES_MAX cap (settings.ts).
+const FILTER_VALUES_MAX = 6;
 
-function decadeKeyOf(s: { fromYear: number | null; toYear: number | null }): string {
-  const hit = DECADES.find(d => d.from === s.fromYear && d.to === s.toYear);
-  return hit ? hit.key : 'any';
+function sameEra(a: EraWindow, b: { from: number | null; to: number | null } | EraWindow): boolean {
+  const bf = 'from' in b ? b.from : b.fromYear;
+  const bt = 'to' in b ? b.to : b.toYear;
+  return a.fromYear === bf && a.toYear === bt;
 }
-function decadeLabelOf(s: { fromYear: number | null; toYear: number | null }): string | null {
-  const hit = DECADES.find(d => d.from === s.fromYear && d.to === s.toYear);
-  return hit && hit.from != null ? hit.label : null;
+/** Preset label ("90s") or the raw window ("1975–1984") for a custom one set via API. */
+function eraLabelOf(e: EraWindow): string {
+  const hit = DECADES.find(d => sameEra(e, d));
+  if (hit) return hit.label;
+  if (e.fromYear != null && e.toYear != null) return `${e.fromYear}–${e.toYear}`;
+  return e.fromYear != null ? `${e.fromYear}+` : `≤${e.toYear}`;
 }
 
 // View of a theme returned by GET /themes. We keep the token map here so the
@@ -230,7 +240,7 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
       </div>
       <div className="text-[11px] text-muted">
         {show
-          ? <>persona · {personaLabel} · mood · {show.mood || 'any'}{showFilterSummary(show)}</>
+          ? <>persona · {personaLabel} · mood · {show.moods.length ? show.moods.join(', ') : 'any'}{showFilterSummary(show)}</>
           : 'station runs on its own picker'}
       </div>
     </div>
@@ -240,7 +250,7 @@ function NowCard({ label, accent, slotHour, show, color, personaLabel }: NowCard
 // Compact " · genre · 80s · high" suffix for the show summary lines, omitting
 // whatever the show doesn't pin. Strict filters are flagged inline so the hard
 // lock is visible at a glance.
-function showFilterSummary(s: { mood?: string; genre: string; fromYear: number | null; toYear: number | null; energy: string; filtersStrict?: boolean; maxTrackSeconds?: number | null; playlistIds?: string[]; playlistStrict?: boolean; excludedPlaylistIds?: string[] }): string {
+function showFilterSummary(s: { moods: string[]; genres: string[]; eras: EraWindow[]; energies: string[]; filtersStrict?: boolean; maxTrackSeconds?: number | null; playlistIds?: string[]; playlistStrict?: boolean; excludedPlaylistIds?: string[] }): string {
   const len = s.maxTrackSeconds == null ? '' : s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s`;
   const nPl = s.playlistIds?.length ?? 0;
   const playlist = nPl ? `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' (strict)' : ''}` : '';
@@ -248,10 +258,50 @@ function showFilterSummary(s: { mood?: string; genre: string; fromYear: number |
   const excluded = nEx ? `${nEx} excluded` : '';
   // The strict chip covers every music filter (mood included) — only shown when
   // there's actually a filter for it to bite on.
-  const strict = s.filtersStrict && (s.mood || s.genre || s.energy || s.fromYear != null || s.toYear != null)
+  const strict = s.filtersStrict && (s.moods.length || s.genres.length || s.energies.length || s.eras.length)
     ? 'strict filters' : '';
-  const bits = [s.genre, decadeLabelOf(s), s.energy, strict, len, playlist, excluded].filter(Boolean);
+  const bits = [
+    s.genres.join(', '),
+    s.eras.map(eraLabelOf).join(', '),
+    s.energies.join(', '),
+    strict, len, playlist, excluded,
+  ].filter(Boolean);
   return bits.length ? ` · ${bits.join(' · ')}` : '';
+}
+
+// Toggleable chip row for the multi-select music filters (#929). Selected
+// chips invert; unselected ones grey out once the cap is hit. Same visual
+// language as the LibraryPanel energy pills.
+function ChipRow({ options, selected, onToggle, cap = FILTER_VALUES_MAX }: {
+  options: { key: string; label: string }[];
+  selected: string[];
+  onToggle: (key: string) => void;
+  cap?: number;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      {options.map(o => {
+        const on = selected.includes(o.key);
+        const atCap = !on && selected.length >= cap;
+        return (
+          <button
+            key={o.key}
+            type="button"
+            aria-pressed={on}
+            disabled={atCap}
+            onClick={() => onToggle(o.key)}
+            className={cn(
+              'border border-ink px-2 py-0.5 text-[12px]',
+              on ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
+              atCap && 'cursor-not-allowed opacity-40',
+            )}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 function clientMintId() {
@@ -280,7 +330,7 @@ function showValid(s: Show): boolean {
 // At least one music filter set — the Strict filter toggle only means
 // something when there's a filter for it to harden.
 function hasAnyMusicFilter(s: Show): boolean {
-  return !!(s.mood || s.genre.trim() || s.energy || s.fromYear != null || s.toYear != null);
+  return !!(s.moods.length || s.genres.length || s.energies.length || s.eras.length);
 }
 
 export default function ShowsPanel() {
@@ -409,12 +459,16 @@ export default function ShowsPanel() {
           personaId: s.personaId ?? '',
           guestPersonaIds: Array.isArray(s.guestPersonaIds) ? s.guestPersonaIds : [],
           banter: s.banter ?? false,
-          mood: s.mood ?? '',
+          // Plural lists are canonical (#929); a legacy singular field from a
+          // stale response still hydrates as a one-element list.
+          moods: Array.isArray(s.moods) ? s.moods : (s as { mood?: string }).mood ? [(s as { mood?: string }).mood!] : [],
           themeId: s.themeId ?? '',
-          genre: s.genre ?? '',
-          fromYear: s.fromYear ?? null,
-          toYear: s.toYear ?? null,
-          energy: s.energy ?? '',
+          genres: Array.isArray(s.genres) ? s.genres : (s as { genre?: string }).genre ? [(s as { genre?: string }).genre!] : [],
+          eras: Array.isArray(s.eras) ? s.eras : (() => {
+            const { fromYear = null, toYear = null } = s as { fromYear?: number | null; toYear?: number | null };
+            return fromYear != null || toYear != null ? [{ fromYear, toYear }] : [];
+          })(),
+          energies: Array.isArray(s.energies) ? s.energies : (s as { energy?: string }).energy ? [(s as { energy?: string }).energy!] : [],
           filtersStrict: s.filtersStrict ?? false,
           maxTrackSeconds: s.maxTrackSeconds ?? null,
           playlistIds: Array.isArray(s.playlistIds) ? s.playlistIds : [],
@@ -530,8 +584,8 @@ export default function ShowsPanel() {
         ...f,
         shows: [...f.shows, {
           id, name: '', topic: '',
-          personaId: personas[0]?.id || '', guestPersonaIds: [], banter: false, mood: '',
-          themeId: '', genre: '', fromYear: null, toYear: null, energy: '',
+          personaId: personas[0]?.id || '', guestPersonaIds: [], banter: false, moods: [],
+          themeId: '', genres: [], eras: [], energies: [],
           filtersStrict: false, maxTrackSeconds: null,
           playlistIds: [], playlistStrict: false, excludedPlaylistIds: [],
           programme: false, segmentSkill: '',
@@ -727,9 +781,11 @@ export default function ShowsPanel() {
             guestPersonaIds: (s.guestPersonaIds || []).filter(id => id !== s.personaId),
             // Banter only means something with guests in the studio.
             banter: (s.guestPersonaIds?.length ?? 0) > 0 && s.banter,
-            mood: s.mood,
+            moods: s.moods,
             themeId: s.themeId || '',
-            genre: s.genre.trim(), fromYear: s.fromYear, toYear: s.toYear, energy: s.energy || '',
+            genres: s.genres.map(g => g.trim()).filter(Boolean),
+            eras: s.eras,
+            energies: s.energies,
             // Strict only means something with at least one music filter set.
             filtersStrict: hasAnyMusicFilter(s) && s.filtersStrict,
             maxTrackSeconds: s.maxTrackSeconds,
@@ -1089,6 +1145,16 @@ function ShowEditor({
   update, onSave, onClose, onRemove,
 }: ShowEditorProps) {
   const valid = showValid(show);
+  // Free-text genre being typed before it's added as a chip. The editor is
+  // remounted per show (keyed at the call site), so this resets on switch.
+  const [genreDraft, setGenreDraft] = useState('');
+  const addGenre = (g: string) => {
+    const v = g.trim().slice(0, 64);
+    if (!v || show.genres.length >= FILTER_VALUES_MAX) return;
+    if (show.genres.some(x => x.toLowerCase() === v.toLowerCase())) { setGenreDraft(''); return; }
+    update({ genres: [...show.genres, v] });
+    setGenreDraft('');
+  };
   return (
     <EditorDialog
       open
@@ -1266,80 +1332,121 @@ function ShowEditor({
         </Card>
 
         <Card flat title="Music" bodyClass="grid gap-3.5">
-          <div className="stack-mobile grid grid-cols-3 gap-3">
-            <Field>
-              <Label>music mood</Label>
-              <Select
-                value={show.mood || ANY_SENTINEL}
-                onValueChange={val => update({ mood: val === ANY_SENTINEL ? '' : val })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value={ANY_SENTINEL}>Any (auto)</SelectItem>
-                    {moods.map(m => <SelectItem key={m} value={m}>{m}</SelectItem>)}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field>
-              <Label>era</Label>
-              <Select
-                value={decadeKeyOf(show)}
-                onValueChange={val => {
-                  const d = DECADES.find(x => x.key === val);
-                  update({ fromYear: d?.from ?? null, toYear: d?.to ?? null });
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    {DECADES.map(d => <SelectItem key={d.key} value={d.key}>{d.label}</SelectItem>)}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field>
-              <Label>energy</Label>
-              <Select
-                value={show.energy || ANY_SENTINEL}
-                onValueChange={val => update({ energy: val === ANY_SENTINEL ? '' : val })}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectGroup>
-                    <SelectItem value={ANY_SENTINEL}>Any</SelectItem>
-                    {ENERGY_OPTIONS.map(e => <SelectItem key={e} value={e}>{e}</SelectItem>)}
-                  </SelectGroup>
-                </SelectContent>
-              </Select>
-            </Field>
-          </div>
+          <Field>
+            <Label>music moods</Label>
+            <ChipRow
+              options={moods.map(m => ({ key: m, label: m }))}
+              selected={show.moods}
+              onToggle={m => update({
+                moods: show.moods.includes(m)
+                  ? show.moods.filter(x => x !== m)
+                  : [...show.moods, m],
+              })}
+            />
+            <span className="field-hint">
+              Pick any that fit — a track matching any selected mood qualifies.
+              None selected = Any (auto): the station&apos;s autonomous mood applies.
+            </span>
+          </Field>
 
           <Field>
-            <Label htmlFor="show-genre">genre lean</Label>
-            <Input
-              id="show-genre"
-              type="text" value={show.genre} maxLength={64}
-              list="show-genre-options"
-              onChange={(e: ChangeEvent<HTMLInputElement>) => update({ genre: e.target.value })}
-              placeholder="e.g. Jazz (optional)"
+            <Label>eras</Label>
+            <ChipRow
+              options={DECADES.map(d => ({ key: d.key, label: d.label }))}
+              selected={DECADES.filter(d => show.eras.some(e => sameEra(e, d))).map(d => d.key)}
+              onToggle={key => {
+                const d = DECADES.find(x => x.key === key)!;
+                const existing = show.eras.find(e => sameEra(e, d));
+                update({
+                  eras: existing
+                    ? show.eras.filter(e => e !== existing)
+                    : [...show.eras, { fromYear: d.from, toYear: d.to }],
+                });
+              }}
             />
+            {/* Custom windows (set via the API — no preset matches) stay
+                visible and removable so they can't silently constrain picks. */}
+            {show.eras.some(e => !DECADES.some(d => sameEra(e, d))) && (
+              <div className="flex flex-wrap gap-1">
+                {show.eras.filter(e => !DECADES.some(d => sameEra(e, d))).map((e, i) => (
+                  <button
+                    key={`${e.fromYear ?? ''}-${e.toYear ?? ''}-${i}`}
+                    type="button"
+                    onClick={() => update({ eras: show.eras.filter(x => x !== e) })}
+                    className="border border-ink bg-ink px-2 py-0.5 text-[12px] text-bg"
+                    title="Remove this custom era window"
+                  >
+                    {eraLabelOf(e)} ×
+                  </button>
+                ))}
+              </div>
+            )}
+            <span className="field-hint">
+              Pick any decades — non-adjacent ones work ({'"'}90s + 2010s{'"'}).
+              None selected = any era.
+            </span>
+          </Field>
+
+          <Field>
+            <Label>energy</Label>
+            <ChipRow
+              options={ENERGY_OPTIONS.map(e => ({ key: e, label: e }))}
+              selected={show.energies}
+              onToggle={e => update({
+                energies: show.energies.includes(e)
+                  ? show.energies.filter(x => x !== e)
+                  : [...show.energies, e],
+              })}
+              cap={ENERGY_OPTIONS.length}
+            />
+          </Field>
+
+          <Field>
+            <Label htmlFor="show-genre">genre leans</Label>
+            {show.genres.length > 0 && (
+              <div className="flex flex-wrap gap-1">
+                {show.genres.map(g => (
+                  <button
+                    key={g}
+                    type="button"
+                    onClick={() => update({ genres: show.genres.filter(x => x !== g) })}
+                    className="border border-ink bg-ink px-2 py-0.5 text-[12px] text-bg"
+                    title="Remove this genre"
+                  >
+                    {g} ×
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Input
+                id="show-genre"
+                type="text" value={genreDraft} maxLength={64}
+                list="show-genre-options"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setGenreDraft(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addGenre(genreDraft); } }}
+                placeholder={show.genres.length ? 'add another genre' : 'e.g. Jazz (optional)'}
+                disabled={show.genres.length >= FILTER_VALUES_MAX}
+              />
+              <Btn
+                onClick={() => addGenre(genreDraft)}
+                disabled={!genreDraft.trim() || show.genres.length >= FILTER_VALUES_MAX}
+              >
+                Add
+              </Btn>
+            </div>
             <datalist id="show-genre-options">
               {[...genres].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })).map(g => <option key={g} value={g} />)}
             </datalist>
+            <span className="field-hint">
+              Up to {FILTER_VALUES_MAX}; a track matching any of them qualifies.
+            </span>
           </Field>
 
           <GenreSuggest
             adminFetch={adminFetch}
-            value={show.genre}
-            onSelect={(g) => update({ genre: g })}
+            value={genreDraft}
+            onSelect={addGenre}
           />
 
           <div className="flex items-start gap-3">
@@ -1690,7 +1797,7 @@ function GridCell({
       onTouchStart={onTouchStart}
       onTouchEnd={onTouchEnd}
       title={
-        (show ? `${show.name}${show.mood ? ` (${show.mood})` : ''}` : `${label} ${String(hour).padStart(2, '0')}:00, empty`)
+        (show ? `${show.name}${show.moods.length ? ` (${show.moods.join(', ')})` : ''}` : `${label} ${String(hour).padStart(2, '0')}:00, empty`)
         + (isNow ? ' · on air now' : '')
       }
       className={cn(
@@ -1745,7 +1852,7 @@ function ShowDefRow({ show: s, index: i, ok, hrs, personaLabel, onEdit }: ShowDe
       <div className="grid grid-cols-[1fr_auto] items-center gap-4">
         <div className="min-w-0">
           <div className="text-[12px] leading-[1.6] text-muted">
-            persona · {personaLabel} · mood · {s.mood || 'any'}{showFilterSummary(s)}
+            persona · {personaLabel} · mood · {s.moods.length ? s.moods.join(', ') : 'any'}{showFilterSummary(s)}
           </div>
           {s.topic.trim() && (
             <div className="mt-1 line-clamp-2 text-[12px] leading-[1.6] text-muted italic">

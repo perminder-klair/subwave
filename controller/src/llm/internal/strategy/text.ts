@@ -7,8 +7,8 @@
 import { generateText } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
-import { stripThinking, usageOf, failureDiagnostics } from '../core/pure.js';
-import { providerOptions, repeatPenaltyApplies, samplingWithLocalKnobs } from '../provider/capabilities.js';
+import { stripThinking, truncationError, usageOf, perfOf, warningsOf, failureDiagnostics } from '../core/pure.js';
+import { reasoningFor, repeatPenaltyApplies, samplingWithLocalKnobs } from '../provider/capabilities.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
 
 // Hard output-token cap. A reasoning model with no cap can generate until it
@@ -41,18 +41,28 @@ export async function djText({
     async (leg) => {
       const result = await withTransientRetry(kind, () => generateText({
         model: leg.model,
-        system,
+        instructions: system,
         prompt,
         temperature,
         topP,
         ...(seed != null ? { seed } : {}),
         maxOutputTokens,
-        providerOptions: providerOptions(leg.cfg, { repeatPenalty }),
+        reasoning: reasoningFor(leg.cfg),
         ...(signal ? { abortSignal: signal } : {}),
       }), signal);
+      // A free-text DJ script that hit the output-token cap is never a usable
+      // reply — real scripts run ~150 tokens against the 4000-token backstop,
+      // so 'length' means a reasoning model ran away mid-thought (issue #947:
+      // it tied up the TTS GPU for minutes). Fail the call instead —
+      // announce-path callers catch and skip the segment, so the station
+      // stays on air, just without this talk break.
+      const truncated = truncationError(result);
+      if (truncated) throw truncated;
       const out = stripThinking(result.text);
       // Only record sampling knobs that actually reached the model — see
-      // repeatPenaltyApplies() and providerOptions handling.
+      // repeatPenaltyApplies() (currently false everywhere: ai-sdk-ollama v4
+      // lost the per-call channel) and samplingWithLocalKnobs() for the
+      // body-injection providers.
       const sampling: any = { temperature, top_p: topP, seed };
       if (repeatPenaltyApplies(leg.cfg)) sampling.repeat_penalty = repeatPenalty;
       samplingWithLocalKnobs(leg.cfg, sampling);
@@ -61,6 +71,8 @@ export async function djText({
         via: 'ai-sdk',
         sampling,
         usage: usageOf(result),
+        perf: perfOf(result),
+        warnings: warningsOf(result),
         // Full, untruncated — the /debug surface shows the whole system prompt.
         extra: { system, user: prompt, response: out },
       };

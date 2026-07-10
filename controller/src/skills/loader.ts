@@ -398,10 +398,3 @@ export async function loadSkills(): Promise<any[]> {
   queue.log('scheduler', `[skills] loaded ${out.length} skill(s): ${seededN} built-in, ${customN} custom`);
   return loadedSkills;
 }
-
-// Discover + load. Called once at boot AFTER the seeder has populated state/skills
-// (server.js orders seedBuiltinSkills() before this).
-export async function loadAllSkills(): Promise<void> {
-  await discoverSeededKinds();
-  await loadSkills();
-}

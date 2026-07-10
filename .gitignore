@@ -42,3 +42,14 @@ docs/screenshots/
 # Local host-specific compose overrides (CPU caps, etc.)
 docker-compose.override.yml
 scripts/.fx-render/
+
+# llm-bench reports (local benchmark artifacts)
+controller/scripts/llm-bench/reports/
+
+# design-sync (machine state — the durable set in .design-sync/ IS committed)
+.ds-sync/
+ds-bundle/
+.design-sync/.cache/
+.design-sync/learnings/
+.design-sync/node_modules
+web/.ds-styles.css

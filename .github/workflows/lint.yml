@@ -48,4 +48,13 @@ jobs:
 
       - run: npm ci --no-audit --no-fund
 
+      # mcp-subwave is a thin launcher that imports the shared MCP sources from
+      # controller/src/mcp/**, so its `tsc --noEmit` type-checks those files —
+      # which resolve @modelcontextprotocol/sdk + zod from controller/node_modules.
+      # Install the controller's deps too, or the type-check can't find them.
+      - name: Install controller deps (mcp-subwave cross-package import)
+        if: matrix.package == 'mcp-subwave'
+        working-directory: controller
+        run: npm ci --no-audit --no-fund
+
       - run: npm run lint

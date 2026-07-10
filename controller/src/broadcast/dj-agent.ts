@@ -19,15 +19,19 @@ import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/sh
 import * as library from '../music/library.js';
 import * as mix from '../music/mix.js';
 import * as journey from '../music/journey.js';
+import { shuffle } from '../util/shuffle.js';
 import * as dj from '../llm/dj.js';
 import { energyForDaypart } from '../context.js';
 import { defineAgent } from '../llm/agent.js';
-import { djObject, nearestId } from '../llm/sdk.js';
+import { djObject, nearestId, modelTolerant, stripThinking } from '../llm/sdk.js';
 import { buildPickerTools } from '../llm/tools.js';
 import { recordPick } from '../llm/log.js';
 import * as budget from './dj-budget.js';
+import { speechPaceScale } from '../audio/tts.js';
+import { normalizeForSpeech } from '../audio/speech-text.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { recencyWindowsForLibrary, effectiveNoRepeatWindow } from '../music/recency.js';
+import { hasEraBound } from '../music/show-filter.js';
 import { djCallsAllowed } from './listeners.js';
 
 // --- Feature 4: DJ-mode mini-runs ------------------------------------------
@@ -98,10 +102,6 @@ function maybeAttachJourney(rs: RunState, current: any, totalSteps: number): voi
   }
 }
 
-function shuffle<T>(arr: T[]): T[] {
-  return [...arr].sort(() => Math.random() - 0.5);
-}
-
 // Resolve {bpm, key} for a track via the library DB (queued/agent picks carry
 // only id/title/artist). library.bpmKeyFor prefers the analyzer's numbers and
 // treats Navidrome's ID3-derived `bpm: 0` as unknown (#862).
@@ -163,12 +163,22 @@ export function runActive(): boolean {
   return !!(runState && runState.remaining > 0);
 }
 
+// Plain .nullable() fields, deliberately — GLM's malformed spellings of
+// "nothing" (the string "null", an omitted key, a double-JSON-encoded object)
+// are repaired by the modelTolerant wrapper in pickSchema() below, at the
+// OBJECT level. Do not wrap individual fields in a preprocess: a per-field
+// pipe drops that field from the tool inputSchema's `required` array (the AI
+// SDK renders Zod with io:'input'), which invites every provider to omit it —
+// see modelTolerant's comment in core/pure.ts.
 export const PICK_SCHEMA = z.object({
   id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
   reason: z.string().describe('internal scratchpad only — max 12 words, never shown to the listener; do not justify, just note what makes THIS pick a fresh step (new artist, a shift in energy/era/texture), not a vibe label you would recycle pick after pick (e.g. "new artist, lifts the energy", never a repeated "mellow reflective step")'),
   say: z.string().nullable().describe('when the latest event message says to write a spoken link, set this to one or two natural sentences in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). Never state a clock time unless the event message tells you when the link airs — then use exactly that time. When the event says stay silent, set this to null'),
   // Transition effects (only honoured when the system prompt offers them — persona djMode, see settings.effectsActive).
-  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop']).nullable().describe('transition treatment for this pick: "blend" — spectral handover: your pick and the track before it trade the spectrum in complementary bands across a long crossfade so they feel like ONE continuous piece; reserve it for an exceptionally locked pair (near-identical tempo, close key) — a plain crossfade already handles an ordinary same-lane pick, so this should be an occasional call, not your default. "sweep" — the track playing before your pick sinks under a slowly closing filter while your pick rises clean; choose it for a real gear-change (big jump in energy, tempo, or mood). "washout" — THIS pick dissolves into a pulsing echo tail as it ENDS, ringing out into whatever follows; choose it to close a chapter (end of a themed run, before a talk break, or out of a dreamy track). "dissolve" — the track playing before your pick melts into a diffuse ambient wash as your pick rises clean through it; the SMOOTH way across a clash (sweep is the dramatic way) — choose it for a tempo/mood mismatch you want to hide rather than announce. "chop" — the track playing before your pick is cut rhythmically on its own beat, stabs thinning out as your pick rises through the gaps; the PERCUSSIVE way across a clash — choose it to jump energy UP on a beat-driven track (a drop, a takeover moment), never out of something ambient. "loop" — THIS pick\'s last bar is caught in a tempo-synced loop as it ENDS, repeating hypnotically under the next track before it cuts away; choose it to leave a groove-driven track with intent — a great riff, a locked drum pattern, the end of a rhythmic run (it needs the track\'s measured tempo; the station drops it otherwise). "normal" or null for a plain crossfade'),
+  // One-line pointer only: the full coaching is dj.effectsGuidance() in the
+  // system prompt. This description used to repeat all of it, so every agent
+  // pick carried the effects text TWICE (~500 wasted tokens per call).
+  transition: z.enum(['normal', 'blend', 'sweep', 'washout', 'dissolve', 'chop', 'loop']).nullable().describe('transition treatment per the TRANSITION EFFECTS guidance: "washout"/"loop" end THIS pick (loop needs measured tempo), "sweep"/"dissolve"/"chop" carry the previous track across a clash (chop only out of beat-driven material), "blend" only for an exceptionally locked pair; "normal" or null for a plain crossfade'),
 });
 
 // Same shape, transition coaching stripped. Zod field descriptions travel to
@@ -187,11 +197,22 @@ export const PICK_SCHEMA_NO_FX = PICK_SCHEMA.extend({
 // persona stretched to 4-6 sentence links on the pool path (generateLink gets
 // lengthPhrase in its prompt) but snapped back to the consts' hard-coded "one
 // or two sentences" whenever the default-on agent picker was doing the talking.
-export function pickSchema() {
+// The plain (un-wrapped) object — for callers that still need to .extend()
+// (repickFromSeen pins `id` to the run's own candidate set). Extend THIS,
+// then re-wrap with modelTolerant; a ZodPreprocess pipe has no .extend.
+function pickSchemaBase() {
   const base = settings.effectsActive() ? PICK_SCHEMA : PICK_SCHEMA_NO_FX;
   return base.extend({
     say: z.string().nullable().describe(`when the latest event message says to write a spoken link, set this to ${dj.lengthPhrase('link')} of natural speech in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). Never state a clock time unless the event message tells you when the link airs — then use exactly that time. When the event says stay silent, set this to null`),
   });
+}
+
+export function pickSchema() {
+  // modelTolerant repairs GLM's malformed nullable spellings ("null"-the-
+  // string, an omitted key) at the object level, on every parse path (done-
+  // tool args, text salvage) — the wire schema stays identical to the plain
+  // object's, all fields still required. See core/pure.ts.
+  return modelTolerant(pickSchemaBase());
 }
 
 // Resolved per run, like pickSchema: the intro length follows the on-air
@@ -199,7 +220,9 @@ export function pickSchema() {
 // lengthPhrase('intro') in its prompt, so without this overlay an 'extended'
 // storytelling persona kept its long intros on the cascade path but snapped
 // back to an unspecified length whenever the agent handled the request.
-function requestSchema() {
+// Exported for scripts/llm-bench (same precedent as pickSystem/pickSchema for
+// picker-test.mjs) — live callers stay on requestAgent.
+export function requestSchema() {
   return z.object({
     id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
     ack: z.string().describe('short on-air acknowledgement of the listener, in character — max 20 words; no "thank you for listening" or self-intros'),
@@ -272,7 +295,8 @@ ${dj.PICKER_CRITERIA}
 Finding candidates: prefer tools backed by the local library — searchLibrary, songsByGenre, tracksByMood, tracksByEnergy, randomSongs, and the audio/embedding similarity tools. similarSongs and topSongsByArtist use external data and often return little, so try them second. If a tool returns nothing, switch tools rather than retrying. If a tool returns only a few tracks (fewer than ~4), make one more discovery call with a different tool before choosing, so you pick from a real range rather than whatever the first call happened to surface.${dj.effectsGuidance()}${settings.agentLanguageReminder(persona, 'the "say" link')}`;
 }
 
-function requestSystem() {
+// Exported for scripts/llm-bench, like requestSchema above.
+export function requestSystem() {
   const persona = settings.getEffectivePersona();
   return `${settings.agentPersonaPreamble(persona)}
 
@@ -319,8 +343,9 @@ function breakerFailure(queue: any) {
 // `pickerAgent.maxSteps` / `pickerAgent.timeoutMs` so test runs match prod
 // without drifting. The hard timeout is what fails fast into the stateless
 // fallback below instead of dragging on a pathological model call — enforced
-// by withDeadline in llm/sdk.ts (main + recovery runs each get the full
-// budget, so worst case per agent call is ~2× this). It comes from
+// by runDeadlined's shared deadline in agent.ts (native run, main run, and
+// both recovery attempts all draw down the SAME overall budget, so worst
+// case per agent call is this value, not a multiple of it). It comes from
 // settings.llm.agentTimeoutMs (default 45s, admin-tunable) — slow
 // reasoning-heavy cloud models routinely need 20-40s per pick, and a pick has
 // a whole track length of slack; the deadline exists to contain the unbounded
@@ -335,9 +360,18 @@ export const pickerAgent = defineAgent({
   // the on-air persona's djMode, and the say length its scriptLength — same
   // reason effectsGuidance() is dynamic. See pickSchema above.
   schema: () => pickSchema(),
-  // The done-tool path ends the loop at step 1 (COMMIT_AFTER_STEPS in sdk.js)
-  // on every provider now; maxSteps is just the backstop.
-  maxSteps: 4,
+  // The done-tool path is meant to end the loop at step 1 (COMMIT_AFTER_STEPS
+  // in agent.ts): step 0 discovers, step 1 commits. That held for every
+  // provider UNTIL GLM (Zhipu/Z.ai) — it can decline the forced `done` call
+  // repeatedly within the SAME conversation rather than complying on the first
+  // attempt, so a taller maxSteps stopped being a rarely-hit backstop and
+  // became a real (and wasted) retry budget: each extra step just grows an
+  // increasingly "I already declined" trail, which made compliance WORSE, not
+  // better, in testing. 2 keeps the main run to exactly discovery + one
+  // committed attempt and hands off to agent.ts's own two-tier recovery (which
+  // includes a clean-context retry) sooner — recovery is the mechanism that
+  // actually rescues these, not more steps on a polluted trail.
+  maxSteps: 2,
   timeoutMs: agentDeadline,
   buildSystem: ({ showAt }: any = {}) => pickSystem(showAt ?? null),
   buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, playlistLock, playlistTracks, excludedIds, showAt }) => {
@@ -351,12 +385,12 @@ export const pickerAgent = defineAgent({
     // (issue #447), so no length cap is passed here.
     const activeShow = settings.resolveActiveShow(showAt ?? undefined);
     const strict = !!(activeShow?.filtersStrict);
-    const genreLock = strict && activeShow?.genre ? activeShow.genre : null;
-    const eraLock = strict && (activeShow?.fromYear != null || activeShow?.toYear != null)
-      ? { fromYear: activeShow.fromYear, toYear: activeShow.toYear }
-      : null;
-    const moodLock = strict && activeShow?.mood ? activeShow.mood : null;
-    const energyLock = strict && activeShow?.energy ? activeShow.energy : null;
+    // Each lock is an any-of list (#929): a candidate passes when it matches
+    // ANY entry; the locks AND together across attributes.
+    const genreLock = strict && activeShow?.genres?.length ? activeShow.genres : null;
+    const eraLock = strict && hasEraBound(activeShow?.eras) ? activeShow.eras : null;
+    const moodLock = strict && activeShow?.moods?.length ? activeShow.moods : null;
+    const energyLock = strict && activeShow?.energies?.length ? activeShow.energies : null;
     // playlistLock / playlistTracks are pre-resolved by pickViaAgent (the
     // Navidrome fetch is async; buildTools is sync) and threaded through run().
     const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, moodLock, energyLock, playlistLock, playlistTracks, excludedIds });
@@ -374,7 +408,8 @@ export const requestAgent = defineAgent({
   // Function form — resolved per run so the intro length follows the on-air
   // persona's scriptLength (see requestSchema).
   schema: () => requestSchema(),
-  maxSteps: 4,
+  // See pickerAgent.maxSteps above — same reasoning.
+  maxSteps: 2,
   timeoutMs: agentDeadline,
   buildSystem: () => requestSystem(),
   // resolveReferences adds the web-backed reference resolver (request path only;
@@ -411,6 +446,26 @@ function trackFields(song) {
   };
 }
 
+// Talk-within-the-intro budget (#962), applied to a between-track link in DJ
+// mode: trim to the pick's measured intro runway so the DJ lands before the
+// vocals — sentence/clause-complete or dropped (null), never a fragment.
+// Enforced on the SPOKEN form of the line: tts.speak() later runs
+// normalizeForSpeech(stripThinking(...)), which can EXPAND display symbols
+// into extra words ("$5 million" → "5 million dollars"), so counting the raw
+// text under-budgets the line that actually airs. The normalized text is what
+// gets aired/queued — speak()'s own normalize pass is a no-op on it.
+// speechPaceScale('link') maps the word ceiling to the rate the line will be
+// spoken at (engine × persona × daypart). Returns the text unchanged when not
+// in DJ mode; enforceIntroBudget itself no-ops on an un-analysed pick.
+function trimLinkToIntro(text: string | null | undefined, song: any): string | null {
+  const raw = (text || '').trim();
+  if (!raw) return null;
+  if (!settings.getEffectivePersona()?.djMode) return raw;
+  // Same corrections as speak() so the word count matches the aired text.
+  const spoken = normalizeForSpeech(stripThinking(raw), settings.get().tts?.corrections);
+  return dj.enforceIntroBudget(spoken, introMsOf(song), speechPaceScale('link')) || null;
+}
+
 // `link`, when present, is the between-track line to speak as this pick starts
 // playing. It's attached to the queued item so the queue airs it at the
 // transition INTO this track (queue.airIntro), not over whatever is currently
@@ -429,6 +484,12 @@ async function enqueuePick(
   linkPrev: any = null,
   { sweep = false, washout = false, blend = false, dissolve = false, chop = false, loop = false }: { sweep?: boolean; washout?: boolean; blend?: boolean; dissolve?: boolean; chop?: boolean; loop?: boolean } = {},
 ): Promise<number> {
+  // Single chokepoint for the intro budget: every pick path (agent, pool, any
+  // future producer) funnels its link through here, so enforcement can't be
+  // skipped by a new caller. Idempotent — callers that already trimmed (the
+  // agent path does, to record the aired text in its session turn) pass
+  // through unchanged.
+  const introLink = trimLinkToIntro(link, song);
   const track: any = trackFields(song);
   // Flag the transition effects on this pick (DJ mode only). getAnnotatedUri
   // stamps liq_sweep / liq_washout / liq_dissolve / liq_chop; radio.liq ramps
@@ -446,7 +507,7 @@ async function enqueuePick(
     track,
     requestedBy: null,
     intent: reason || 'ai pick',
-    introScript: link,
+    introScript: introLink,
     introKind: 'link',
     aiPicked: true,
     linkPrev,
@@ -471,9 +532,9 @@ async function enqueuePick(
 async function repickFromSeen({ seen, badId, wantLink }: { seen: Map<string, any>; badId: string | null; wantLink: boolean }) {
   const ids = [...seen.keys()];
   if (ids.length === 0) return null;
-  const schema = pickSchema().extend({
+  const schema = modelTolerant(pickSchemaBase().extend({
     id: z.enum(ids as [string, ...string[]]).describe('the exact id of one candidate'),
-  });
+  }));
   try {
     return await djObject({
       system: pickSystem(),
@@ -550,10 +611,10 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   // The agent returned an id that isn't in the candidate set it was shown.
   // Two-stage salvage before giving up on the run (both observed live):
   //   1. Near-miss repair — the model transcribed a REAL id imperfectly
-  //      (glm-5.1 dropped the final character of a 22-char nanoid it had
-  //      picked from its own tool results). nearestId only accepts a single
-  //      unambiguous prefix / edit-distance-1 match, so this can't misfire
-  //      onto a different track. Free — no model call.
+  //      (glm-5.1 dropped the final character of a 22-char nanoid; small
+  //      local models corrupt 2-3 chars at a time, #939). nearestId only
+  //      accepts an unambiguous prefix / clear-winner edit-distance match,
+  //      so this can't misfire onto a different track. Free — no model call.
   //   2. Corrective re-pick — the model fabricated an id outright (gpt-5-mini
   //      after an empty tool result) while its `seen` map held real
   //      candidates. One djObject call constrained to those ids (grammar-
@@ -589,11 +650,11 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   }
 
   const rawSay = typeof object.say === 'string' ? object.say.trim() : '';
-  // Talk-within-the-intro (feature 3a): in DJ mode, hard-trim the link to the
-  // pick's measured intro runway so the DJ lands before the vocals instead of
-  // talking over them. No-op when the pick is un-analysed or not in DJ mode.
-  const djMode = !!settings.getEffectivePersona()?.djMode;
-  const say = (djMode && rawSay) ? dj.enforceIntroBudget(rawSay, introMsOf(song)) : rawSay;
+  // Talk-within-the-intro (feature 3a): enqueuePick re-applies this trim at
+  // the chokepoint (idempotent); it runs here too so the session turn below
+  // records the line as it will actually air — trimmed, and dropped links as
+  // null, never a line the listeners didn't hear.
+  const say = trimLinkToIntro(rawSay, song) || '';
   // Transition effects on this pick (persona djMode via settings.effectsActive),
   // independent of whether a link airs.
   const link = (wantLink && say) ? say : null;
@@ -661,6 +722,8 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
+  // Talk-within-the-intro rides enqueuePick's trimLinkToIntro chokepoint —
+  // the pool link needs no enforcement of its own here (#962 follow-up).
   // Transition effects ride the pool path too (pickNextTrack only offers the
   // field when settings.effectsActive()), so a DJ-mode persona keeps its craft
   // while picks run through this fallback. Re-check effectsActive at enqueue
@@ -802,16 +865,22 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null }: { w
     const effectClause = settings.effectsActive()
       ? ` Set "transition" by what THIS moment needs — "washout" to dissolve out as it ends, "loop" to catch this pick's last bar in a repeating loop as it ends, "sweep" for a gear-change entry, "dissolve" to melt a clash into ambience, "chop" to cut a beat-driven track out on the beat for an energy jump, "blend" ONLY for an exceptionally locked pair (a plain crossfade already handles ordinary same-lane picks), "normal" for a plain hand-off. Vary your craft: never the same transition three picks running, and if your last pick used an effect, lean "normal" now unless the moment clearly calls again.${historyNote}`
       : '';
+    // The turn is split in two: `text` is the factual event (what the booth
+    // log on /admin/dash shows the operator), `meta.promptSuffix` carries the
+    // model-facing coaching clauses (transition nudge, clock rule, run/journey
+    // steering). windowMessages() re-joins them for the agent, so the model
+    // sees the same message as before — the operator just stops reading
+    // prompt engineering in the booth log.
     const eventText = `Now playing "${current?.title}" by ${current?.artist}`
       + (current?.id ? ` [id: ${current.id}]` : '')
       + (previous ? ` (after "${previous.title}" by ${previous.artist})` : '')
       + '. Pick the track to play next.'
-      + linkClause
-      + clockClause
-      + effectClause
-      + runClause
-      + journeyClause;
-    session.appendTurn({ role: 'event', kind: 'pick', text: eventText });
+      + linkClause;
+    const promptSuffix = `${clockClause}${effectClause}${runClause}${journeyClause}`;
+    session.appendTurn({
+      role: 'event', kind: 'pick', text: eventText,
+      meta: promptSuffix ? { promptSuffix } : {},
+    });
 
     // `!cheap`: in the soft budget tier we skip the multi-step agent tool-loop
     // and go straight to the one-call pool picker below to stretch the budget.
@@ -894,9 +963,10 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     });
 
     let song = object?.id ? extras.seen.get(object.id) : null;
-    // Near-miss repair, same as the pick path: a single unambiguous prefix /
-    // edit-distance-1 match against the run's own candidates rescues an id the
-    // model transcribed imperfectly. No re-pick stage here — a request that
+    // Near-miss repair, same as the pick path: an unambiguous prefix /
+    // clear-winner edit-distance match against the run's own candidates
+    // rescues an id the model transcribed imperfectly (#939). No re-pick
+    // stage here — a request that
     // can't resolve should fall to the caller's stateless matcher cascade,
     // which understands the listener's actual text.
     if (!song && object?.id && extras.seen.size) {

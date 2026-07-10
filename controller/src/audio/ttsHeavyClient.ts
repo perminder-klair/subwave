@@ -16,6 +16,8 @@
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { cachedHealthProbe } from '../util/health-probe.js';
 
 const PROBE_TIMEOUT_MS = 5_000;
 
@@ -31,6 +33,23 @@ export function isRemoteEnabled(): boolean {
 // once the worker has declared whether the gated cloning weights loaded.
 export type ProbeMeta = { voiceCloning: boolean | null };
 
+// Sidecar-wide health snapshot, refreshed on every /health probe (independent
+// of the per-engine onChange, which only fires on availability/capability
+// changes). Lets the admin UI tell "sidecar down" apart from "sidecar up but
+// this engine disabled via TTS_HEAVY_ENGINES". `enabled` is the sidecar's
+// configured engine list; null when the sidecar is unreachable OR is an older
+// image that doesn't report the field (so callers fall back to old behaviour).
+let cachedHealth: { up: boolean; enabled: string[] | null } = { up: false, enabled: null };
+
+// The tts-heavy sidecar's configured engines (TTS_HEAVY_ENGINES). Returns null
+// when not in sidecar mode, the sidecar is unreachable, or it's too old to
+// report the list — in every "unknown" case, so the UI degrades to the plain
+// "sidecar off" label rather than guessing.
+export function heavyEnabledEngines(): string[] | null {
+  if (!config.ttsHeavy.url) return null;
+  return cachedHealth.up ? cachedHealth.enabled : null;
+}
+
 // One /health probe. `available` is true iff the sidecar reports ok and lists
 // the requested engine. Network/timeout/parse failures collapse to
 // unavailable — the dispatcher reads the result the same way it reads an
@@ -40,15 +59,22 @@ async function probeOnce(engine: RemoteEngine): Promise<{ available: boolean; me
   const url = config.ttsHeavy.url;
   const miss = { available: false, meta: { voiceCloning: null } as ProbeMeta };
   if (!url) return miss;
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), PROBE_TIMEOUT_MS);
   try {
-    const res = await fetch(`${url}/health`, { signal: ac.signal });
-    if (!res.ok) return miss;
+    const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: PROBE_TIMEOUT_MS, bodyDeadline: true });
+    if (!res.ok) {
+      cachedHealth = { up: false, enabled: null };
+      return miss;
+    }
     const body = (await res.json()) as {
       ok?: boolean;
       engines?: string[];
+      enabled?: string[];
       pocket_voice_cloning?: boolean | null;
+    };
+    // Refresh the sidecar-wide snapshot on every probe (see cachedHealth).
+    cachedHealth = {
+      up: !!body.ok,
+      enabled: Array.isArray(body.enabled) ? body.enabled : null,
     };
     const available =
       !!body.ok && Array.isArray(body.engines) && body.engines.includes(engine);
@@ -58,9 +84,8 @@ async function probeOnce(engine: RemoteEngine): Promise<{ available: boolean; me
         : null;
     return { available, meta: { voiceCloning } };
   } catch {
+    cachedHealth = { up: false, enabled: null };
     return miss;
-  } finally {
-    clearTimeout(t);
   }
 }
 
@@ -76,30 +101,28 @@ export function startProbeLoop(
   onChange: (avail: boolean, meta: ProbeMeta) => void,
 ): void {
   if (!config.ttsHeavy.url) return;
-  let lastAvail = false;
-  let lastCloning: boolean | null = null;
-  const tick = async () => {
-    const { available, meta } = await probeOnce(engine);
-    if (available !== lastAvail) {
-      console.log(
-        `[${engine}] tts-heavy sidecar ${available ? 'available' : 'unavailable'} (${config.ttsHeavy.url})`,
-      );
-    }
-    if (available !== lastAvail || meta.voiceCloning !== lastCloning) {
-      if (engine === 'pocket-tts' && available && meta.voiceCloning === false) {
+  cachedHealthProbe<{ available: boolean; meta: ProbeMeta }>({
+    probe: () => probeOnce(engine),
+    intervalMs: config.ttsHeavy.probeIntervalMs,
+    initial: { available: false, meta: { voiceCloning: null } },
+    // Fire onChange whenever availability OR the cloning flag moves, so a
+    // sidecar that finishes loading the cloning weights after boot is reflected.
+    equals: (a, b) => a.available === b.available && a.meta.voiceCloning === b.meta.voiceCloning,
+    onChange: (next, prev) => {
+      if (next.available !== prev.available) {
+        console.log(
+          `[${engine}] tts-heavy sidecar ${next.available ? 'available' : 'unavailable'} (${config.ttsHeavy.url})`,
+        );
+      }
+      if (engine === 'pocket-tts' && next.available && next.meta.voiceCloning === false) {
         console.warn(
           '[pocket-tts] sidecar reports voice cloning UNAVAILABLE — cloned .wav '
             + 'voices will fall back to a built-in. Set HF_TOKEN to enable cloning.',
         );
       }
-      lastAvail = available;
-      lastCloning = meta.voiceCloning;
-      onChange(available, meta);
-    }
-  };
-  tick();
-  const handle = setInterval(tick, config.ttsHeavy.probeIntervalMs);
-  handle.unref?.();
+      onChange(next.available, next.meta);
+    },
+  }).start();
 }
 
 export type RemoteSpeakRequest = {
@@ -115,25 +138,18 @@ export async function speakRemote(req: RemoteSpeakRequest): Promise<string> {
   if (!url) throw new Error('tts-heavy URL not configured');
   await mkdir(path.dirname(req.out), { recursive: true });
 
-  const ac = new AbortController();
-  const t = setTimeout(() => ac.abort(), config.ttsHeavy.requestTimeoutMs);
-  let res: Response;
-  try {
-    res = await fetch(`${url}/speak`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        engine: req.engine,
-        text: req.text.trim(),
-        voice: req.voice ?? '',
-        reference_wav: req.referenceWav ?? '',
-        out: req.out,
-      }),
-      signal: ac.signal,
-    });
-  } finally {
-    clearTimeout(t);
-  }
+  const res = await fetchWithTimeout(`${url}/speak`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      engine: req.engine,
+      text: req.text.trim(),
+      voice: req.voice ?? '',
+      reference_wav: req.referenceWav ?? '',
+      out: req.out,
+    }),
+    timeoutMs: config.ttsHeavy.requestTimeoutMs,
+  });
   if (!res.ok) {
     const errBody = await res.text().catch(() => '');
     throw new Error(`tts-heavy ${res.status}: ${errBody || res.statusText}`);

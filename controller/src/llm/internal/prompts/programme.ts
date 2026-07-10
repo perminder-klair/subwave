@@ -43,6 +43,20 @@ const planSchema = (maxFeatures: number) => z.object({
     .describe('how the sign-off wraps the episode — call back to the angle or the feature; a note to the host'),
 });
 
+// The producer only picks WHICH capability builds each feature; the full
+// SKILL.md brief is applied by the segment director when the beat actually
+// runs. Offering whole briefs here made the menu the bulk of the plan prompt
+// (a dozen kinds × multi-sentence briefs), enough to sink small local models
+// on the structured call — so each kind gets one line: its first sentence,
+// word-capped.
+const MENU_DESC_MAX = 160;
+function menuDesc(text: string): string {
+  const flat = String(text || '').replace(/\s+/g, ' ').trim();
+  const sentence = (flat.match(/^.*?[.!?](?=\s|$)/) || [flat])[0];
+  if (sentence.length <= MENU_DESC_MAX) return sentence;
+  return `${sentence.slice(0, MENU_DESC_MAX).replace(/\s+\S*$/, '')}…`;
+}
+
 // `skillKinds` is the capability menu the plan may build features from
 // (already filtered to enabled + host-owned + ready by the caller). When the
 // show pins `segmentSkill`, the caller passes just that one and the plan is
@@ -61,7 +75,7 @@ export async function generateProgrammePlan({
   const kindsClause = pinnedKind
     ? `Every feature segment is built with the "${pinnedKind}" capability — write each feature topic as a brief for it.`
     : skillKinds.length
-      ? `Feature segments may be built with one of these capabilities (set "kind", or null for straight talk):\n${skillKinds.map((k: any) => `- ${k.kind}: ${k.desc}`).join('\n')}`
+      ? `Feature segments may be built with one of these capabilities (set "kind", or null for straight talk):\n${skillKinds.map((k: any) => `- ${k.kind}: ${menuDesc(k.desc)}`).join('\n')}`
       : 'No data capabilities are available — set every feature "kind" to null (straight talk from the host).';
 
   const system = `You are the producer of a radio programme on a personal internet radio station. Given the show's standing brief and the moment, write today's episode plan: the angle this airing takes, what the opening establishes, one feature segment per hour, and how the sign-off wraps. Notes are for the host — concrete, specific, grounded in the brief. Never invent listener messages, callers, or events. Vary the angle from episode to episode.`;

@@ -135,12 +135,17 @@ export function buildContextLines(
     // evening show kept mellowing out. With a mood pinned, keep the period
     // label (the clock is real) and stand the vibe down; the show line below
     // carries the tone instead.
-    lines.push(context?.activeShow?.mood
+    lines.push(context?.activeShow?.moods?.length
       ? `Period: ${context.time.period}`
       : `Period: ${context.time.period} (${context.time.vibe})`);
   }
   if (on('weather') && context?.weather && context.weather.condition && context.weather.condition !== 'unknown') {
-    lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp}°${context.weather.tempUnit || 'C'}` : ''}`);
+    // Spoken form ("24 degrees Celsius"), not display form ("24°C") — the
+    // model echoes whatever unit shape the prompt uses, and a °F/°C echo
+    // reaches TTS as "seventy-six F" (issue #963). The speech-text normalizer
+    // is the backstop; this stops the most common case at the source.
+    const unitWord = (context.weather.tempUnit || 'C') === 'F' ? 'Fahrenheit' : 'Celsius';
+    lines.push(`Weather in ${context.weather.location}: ${context.weather.condition}${context.weather.temp != null ? `, ${context.weather.temp} degrees ${unitWord}` : ''}`);
   }
   if (on('festival') && context?.festival) {
     const note = context.festival.description ? ` — ${context.festival.description}` : '';
@@ -152,10 +157,13 @@ export function buildContextLines(
     // getFullContext) keeps mid-show links and segments on today's line, not
     // just the standing brief.
     const angle = context.activeShow.episodeAngle ? ` Today's episode angle: ${context.activeShow.episodeAngle}.` : '';
-    // The pinned mood already steers the pick pool via dominantMood, but the
-    // talk prompts never saw it — say it here so the delivery follows the
+    // The pinned moods already steer the pick pool via dominantMood, but the
+    // talk prompts never saw them — say them here so the delivery follows the
     // show's brief, not the hour's default.
-    const mood = context.activeShow.mood ? ` Its mood is ${context.activeShow.mood} — let that set the tone, not the time of day.` : '';
+    const showMoods: string[] = context.activeShow.moods ?? [];
+    const mood = showMoods.length
+      ? ` Its mood is ${showMoods.join(' / ')} — let that set the tone, not the time of day.`
+      : '';
     lines.push(`On now: the show "${context.activeShow.name}"${topic}.${angle}${mood} Stay loosely on its theme.`);
   }
   if (on('listeners') && context?.listeners?.count != null) {

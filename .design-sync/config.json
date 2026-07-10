@@ -1,0 +1,22 @@
+{
+  "projectId": "af12bc69-b3e1-4228-a959-49b9ebbd7c70",
+  "shape": "package",
+  "readmeHeader": ".design-sync/conventions.md",
+  "pkg": "sub-wave-web",
+  "globalName": "SubWave",
+  "entry": "web/dist/index.js",
+  "srcDir": "components/ui",
+  "tsconfig": "../.design-sync/tsconfig.dsync.json",
+  "cssEntry": ".ds-styles.css",
+  "extraEntries": ["../.design-sync/extra-exports.ts"],
+  "extraFonts": ["../.design-sync/fonts/fonts.css"],
+  "provider": { "component": "MotionProvider" },
+  "overrides": {
+    "Modal": { "cardMode": "single", "viewport": "800x620" },
+    "FullDialog": { "cardMode": "single", "viewport": "960x680" },
+    "EditorDialog": { "cardMode": "single", "viewport": "960x680" },
+    "V3AlertDialog": { "cardMode": "single", "viewport": "720x480" },
+    "Sheet": { "cardMode": "single", "viewport": "960x640" }
+  },
+  "buildCmd": "cd web && npx --yes @tailwindcss/cli@4.3.0 -i ../.design-sync/tailwind-entry.css -o .ds-styles.css"
+}

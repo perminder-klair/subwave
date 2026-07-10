@@ -93,6 +93,17 @@ export function probeDurationSec(filePath: string): Promise<number | null> {
 
 export type TranscodeFormat = 'wav' | 'mp3';
 
+// ffmpeg's atempo filter only accepts 0.5–2.0 per instance; factors outside
+// that range are reached by chaining instances (e.g. 4.0 → atempo=2.0,atempo=2.0).
+export function atempoChain(factor: number): string {
+  const steps: string[] = [];
+  let f = factor;
+  while (f > 2.0) { steps.push('atempo=2.0'); f /= 2.0; }
+  while (f < 0.5) { steps.push('atempo=0.5'); f /= 0.5; }
+  steps.push(`atempo=${f.toFixed(4)}`);
+  return steps.join(',');
+}
+
 function runFfmpeg(args: string[]): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     const proc = spawn('ffmpeg', args);
@@ -113,7 +124,7 @@ function runFfmpeg(args: string[]): Promise<void> {
 // loudnorm on <2s of audio is unreliable.
 export async function transcodeAudio(
   input: Buffer,
-  { outPath, format, loudnorm = false }: { outPath: string; format: TranscodeFormat; loudnorm?: boolean },
+  { outPath, format, loudnorm = false, atempo }: { outPath: string; format: TranscodeFormat; loudnorm?: boolean; atempo?: number },
 ): Promise<void> {
   if (!input?.length) throw new Error('empty audio buffer');
   await mkdir(path.dirname(outPath), { recursive: true });
@@ -122,7 +133,10 @@ export async function transcodeAudio(
   await writeFile(tmp, input);
   try {
     const args = ['-hide_banner', '-loglevel', 'error', '-i', tmp];
-    if (loudnorm) args.push('-af', 'loudnorm=I=-16:TP=-1.5:LRA=11');
+    const filters: string[] = [];
+    if (loudnorm) filters.push('loudnorm=I=-16:TP=-1.5:LRA=11');
+    if (atempo && Number.isFinite(atempo) && atempo > 0 && atempo !== 1.0) filters.push(atempoChain(atempo));
+    if (filters.length) args.push('-af', filters.join(','));
     if (format === 'wav') args.push('-c:a', 'pcm_s16le');
     else args.push('-c:a', 'libmp3lame', '-q:a', '4');
     args.push('-y', outPath);

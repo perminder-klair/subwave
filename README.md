@@ -139,6 +139,16 @@ to Piper. The old `docker build --build-arg WITH_CHATTERBOX=1` path still
 works if you already have a custom-built controller image — see
 `docker/Dockerfile.controller`.
 
+**Run just one engine.** Both engines load by default, but each costs RAM and a
+first-boot weight download. If you only use one, name it in `.env` and the other
+never loads:
+
+```ini
+TTS_HEAVY_ENGINES=pocket-tts       # PocketTTS only (no Chatterbox)
+# TTS_HEAVY_ENGINES=chatterbox     # Chatterbox only
+# TTS_HEAVY_ENGINES=chatterbox,pocket-tts   # default — both
+```
+
 Acoustic analysis (tempo/key/loudness) does **not** need the heavy TTS sidecar —
 it runs in its own `subwave-analyzer` service, which **starts by default**
 alongside the controller and web. The default image is **lean and multi-arch**
@@ -279,11 +289,13 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
 - **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them.
+- **[`docs/navidrome-libraries.md`](docs/navidrome-libraries.md):** keeping audiobooks / seasonal collections off air with a dedicated, library-scoped Navidrome user.
 - **[`CLAUDE.md`](CLAUDE.md):** deep architecture reference and the
   non-obvious constraints behind each subsystem.
 - **[`CONTRIBUTING.md`](CONTRIBUTING.md):** how to contribute.
 - **[`SECURITY.md`](SECURITY.md):** reporting security issues.
 - **[`mcp-subwave/README.md`](mcp-subwave/README.md):** the MCP server.
+- **[`docs/api.md`](docs/api.md):** the HTTP API, the in-app **Connect** explorer + playground, OpenAPI export, and Home Assistant / Music Assistant recipes.
 
 ## Music licensing
 

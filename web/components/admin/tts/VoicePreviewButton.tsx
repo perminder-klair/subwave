@@ -18,6 +18,16 @@ interface VoicePreviewButtonProps {
   speed?: number;
   // Kokoro phonemizer language override (e.g. "en-gb", "ja").
   lang?: string;
+  // Unsaved ElevenLabs voice_settings sliders (issue #696) — sent so the sample
+  // auditions the CURRENT slider positions, not the last-saved values. Only
+  // meaningful when engine is 'cloud' with the elevenlabs provider; the server
+  // ignores it everywhere else.
+  voiceSettings?: {
+    voiceStability: number;
+    voiceStyle: number;
+    voiceSimilarityBoost: number;
+    voiceUseSpeakerBoost: boolean;
+  };
   adminFetch: AdminAuth['adminFetch'];
   disabled?: boolean;
   className?: string;
@@ -26,7 +36,7 @@ interface VoicePreviewButtonProps {
 type PreviewState = 'idle' | 'loading' | 'playing' | 'error';
 
 export function VoicePreviewButton({
-  engine, voice, cloudProvider, speed, lang, adminFetch, disabled, className,
+  engine, voice, cloudProvider, speed, lang, voiceSettings, adminFetch, disabled, className,
 }: VoicePreviewButtonProps) {
   const [state, setState] = useState<PreviewState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -50,7 +60,7 @@ export function VoicePreviewButton({
       const r = await adminFetch('/settings/tts/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ engine, voice, cloudProvider, speed, lang }),
+        body: JSON.stringify({ engine, voice, cloudProvider, speed, lang, voiceSettings }),
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({})) as { message?: string };
