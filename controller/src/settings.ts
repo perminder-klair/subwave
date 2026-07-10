@@ -584,7 +584,6 @@ const ID_RE = /^[a-z0-9_]{3,32}$/;
 // reuses ID_RE's shape so an avatar field can never reference a basename
 // outside the persona-avatars directory. Empty is also valid (no avatar set).
 export const AVATAR_FILENAME_RE = /^[a-z0-9_]{3,32}\.(png|jpe?g|webp)$/;
-export const AVATAR_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'] as const;
 // Skill slugs (e.g. 'weather', 'random-facts'). The skills registry is the
 // source of truth for which slugs exist; settings only checks the shape.
 const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;

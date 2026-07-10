@@ -45,12 +45,6 @@ export const ANALYSIS_VERSION = 6;
 // metadata/lyric-derived) and live in their own vec0 table.
 export const AUDIO_EMBEDDING_DIM = 512;
 
-// Audio-embedding model+method version. Independent of ANALYSIS_VERSION
-// (bpm/key/intro) so a CLAP model swap can re-target audio vectors without
-// forcing a full bpm/key re-analysis, and vice-versa. Bump when the CLAP model
-// or its preprocessing changes.
-export const AUDIO_EMBEDDING_VERSION = 1;
-
 // A track counts as "tagged" only when it carries at least one mood. An empty
 // array ('[]') is written by the legacy moods.json migration and by the tagger
 // when the LLM returns no moods for a track — and an analysis-only track that
@@ -655,8 +649,8 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
   }
 
   // Audio-vector table — a parallel vec0 index at the fixed CLAP dim. Created
-  // on demand and self-heals if a future audio reseed (dropAudioVectors) drops
-  // it, exactly like track_vectors above. It needs no dim negotiation because
+  // on demand and self-heals if a future audio reseed drops it, exactly like
+  // track_vectors above. It needs no dim negotiation because
   // AUDIO_EMBEDDING_DIM is constant, so it lives outside the reseed branch.
   const hasAudioVecTable = d
     .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='track_audio_vectors'`)
@@ -825,13 +819,6 @@ export function setEmbeddingMeta(
 // Audio-embedding provenance — which CLAP model wrote the current audio
 // vectors. Distinct table from embedding_meta (text); the two spaces are
 // independent. Null until the first audio vector is written.
-export function getAudioEmbeddingMeta(): { model: string; dim: number } | null {
-  const row = requireDb()
-    .prepare('SELECT model, dim FROM audio_embedding_meta WHERE pk = 1')
-    .get() as { model: string; dim: number } | undefined;
-  return row || null;
-}
-
 export function setAudioEmbeddingMeta(model: string, dim: number): void {
   requireDb()
     .prepare(
@@ -1143,17 +1130,6 @@ export function upsertTrackAudioVector(id: string, vector: number[] | Float32Arr
   d.prepare(`INSERT INTO track_audio_vectors (id, embedding) VALUES (?, ?)`).run(id, buf);
 }
 
-// Drop + recreate the audio vec0 table at the fixed CLAP dim — the audio
-// counterpart to dropVectors(), for an AUDIO_EMBEDDING_VERSION / model swap.
-export function dropAudioVectors(): void {
-  const d = requireDb();
-  runDdl(d, 'DROP TABLE IF EXISTS track_audio_vectors');
-  runDdl(d,
-    `CREATE VIRTUAL TABLE track_audio_vectors USING vec0(` +
-      `id TEXT PRIMARY KEY, embedding FLOAT[${AUDIO_EMBEDDING_DIM}] distance_metric=cosine)`,
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Vector queries
 // ---------------------------------------------------------------------------
@@ -1225,10 +1201,6 @@ export function vectorCount(): number {
   return (requireDb().prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as {
     n: number;
   }).n;
-}
-
-export function hasAudioVector(id: string): boolean {
-  return !!requireDb().prepare(`SELECT 1 FROM track_audio_vectors WHERE id = ?`).get(id);
 }
 
 // The raw TEXT embedding vector for a track (a copy, not a view into the DB
@@ -1327,16 +1299,6 @@ export function setMapProjectionMeta(algo: string, space: string, count: number)
 // the vocabulary's CLAP TEXT embeddings against each track's stored audio
 // vector. Sound-derived, so they complement the LLM's metadata-guessed `moods`.
 // ---------------------------------------------------------------------------
-
-export function setTrackAudioMoods(
-  id: string,
-  moods: string[],
-  scores: Record<string, number>,
-): void {
-  requireDb()
-    .prepare(`UPDATE tracks SET audio_moods = ?, audio_mood_scores_json = ? WHERE id = ?`)
-    .run(JSON.stringify(moods), JSON.stringify(scores), id);
-}
 
 // Transactional bulk write for the scoring pass — one commit per batch instead
 // of one per track (the pass touches every vector-carrying row).
