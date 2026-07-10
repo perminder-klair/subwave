@@ -30,7 +30,7 @@ import { Output, isStepCount, hasToolCall, ToolLoopAgent, tool } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry, withDeadline } from '../core/retry.js';
 import { stripThinking, extractJson, usageOf, flattenToolCalls, failureDiagnostics } from '../core/pure.js';
-import { needsToolCallObject, providerOptions, samplingWithLocalKnobs, forcedToolChoice } from '../provider/capabilities.js';
+import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs, forcedToolChoice } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { agentPlan } from './plan.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
@@ -102,7 +102,7 @@ function buildRecoveryAgent(leg: any, system: string, allTools: any, temperature
     maxOutputTokens,
     // Recovery forces done-only every step, so it has the same
     // Anthropic/DeepSeek thinking conflict as the main run — suppress here too.
-    providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
+    reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
     toolChoice: forcedChoice,
     prepareStep: async () => ({ activeTools: ['done'], toolChoice: forcedChoice }),
   } as any);
@@ -213,7 +213,7 @@ export async function djAgent({
               // Thinking off: makes deepseek reliable (5/5 vs 1/5) and is harmless
               // elsewhere — the pick is structured extraction; the DJ's free-text
               // (djText) still reasons.
-              providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
+              reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
               output: Output.object({ schema }),
             } as any);
             const nr: any = await runDeadlined(deadlineAt, kind, 'native run', nativeAgent, messages);
@@ -275,7 +275,7 @@ export async function djAgent({
           maxOutputTokens,
           // useDoneTool forces tool calls every step — suppress thinking on the
           // providers that reject forced tools mid-reasoning (Anthropic/DeepSeek).
-          providerOptions: providerOptions(leg.cfg, { forceNoThink: useDoneTool }),
+          reasoning: reasoningFor(leg.cfg, { forceNoThink: useDoneTool }),
           ...(useDoneTool ? { toolChoice: forcedChoice } : {}),
           ...(prepareStep ? { prepareStep } : {}),
           // Native path: structured output via Output.object. Done-tool path: the

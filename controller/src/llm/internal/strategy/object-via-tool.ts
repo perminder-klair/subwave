@@ -8,7 +8,7 @@
 
 import { generateText, tool, isStepCount } from 'ai';
 import { usageOf } from '../core/pure.js';
-import { providerOptions, forcedToolChoice } from '../provider/capabilities.js';
+import { reasoningFor, forcedToolChoice } from '../provider/capabilities.js';
 
 export async function objectViaToolCall(
   leg: any,
@@ -35,7 +35,7 @@ export async function objectViaToolCall(
     // emits via the tool; a miss throws below → caller's fallback.
     toolChoice: forcedToolChoice(leg.cfg),
     stopWhen: isStepCount(1),
-    providerOptions: providerOptions(leg.cfg, { forceNoThink: true }),
+    reasoning: reasoningFor(leg.cfg, { forceNoThink: true }),
     ...(signal ? { abortSignal: signal } : {}),
   } as any);
   if (captured === undefined) throw new Error('model never called the emit tool');

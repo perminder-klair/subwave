@@ -12,7 +12,7 @@ import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import { stripThinking, truncationError, extractJson, usageOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, snapV3Stability, modelTolerant, schemaHint } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
-import { providerOptions, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
+import { reasoningFor, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
@@ -339,48 +339,54 @@ async function main() {
   });
 
   // ---- per-provider thinking knob (the single most regression-prone mapping) ----
-  console.log('providerOptions(cfg, {reasoning, forceNoThink}):');
-  await test('ollama: think tracks raw reasoning toggle', () => {
-    assert.deepEqual(providerOptions({ provider: 'ollama', model: 'qwen3', reasoning: false }), { ollama: { think: false } });
-    assert.deepEqual(providerOptions({ provider: 'ollama', model: 'qwen3', reasoning: true }), { ollama: { think: true } });
+  // reasoningFor emits the AI SDK top-level `reasoning` level; the provider maps
+  // it to its native knob. undefined = param omitted (provider/model default).
+  console.log('reasoningFor(cfg, {forceNoThink}):');
+  await test('ollama: none when reasoning off, undefined when on — NEVER a level string (boolean-think models 400)', () => {
+    assert.equal(reasoningFor({ provider: 'ollama', model: 'qwen3', reasoning: false }), 'none');
+    assert.equal(reasoningFor({ provider: 'ollama', model: 'qwen3', reasoning: true }), undefined);
+    // Ollama permits forced tools while thinking — forceNoThink leaves it unchanged.
+    assert.equal(reasoningFor({ provider: 'ollama', model: 'qwen3', reasoning: true }, { forceNoThink: true }), undefined);
   });
-  await test('ollama: repeat_penalty + num_ctx ride in options (local only)', () => {
-    assert.deepEqual(
-      providerOptions({ provider: 'ollama', model: 'qwen3', numCtx: 16384 }, { repeatPenalty: 1.2 }),
-      { ollama: { think: false, options: { repeat_penalty: 1.2, num_ctx: 16384 } } },
-    );
-    // :cloud models manage their own context — no num_ctx.
-    assert.deepEqual(
-      providerOptions({ provider: 'ollama', model: 'glm-5.1:cloud', numCtx: 16384 }),
-      { ollama: { think: false } },
-    );
+  await test('deepseek: reasoning:false (or forceNoThink) DISABLES thinking; on → default (hybrids already think)', () => {
+    assert.equal(reasoningFor({ provider: 'deepseek', model: 'deepseek-v4-flash', reasoning: false }), 'none');
+    assert.equal(reasoningFor({ provider: 'deepseek', model: 'deepseek-v4-flash', reasoning: true }), undefined);
+    assert.equal(reasoningFor({ provider: 'deepseek', model: 'deepseek-v4-flash', reasoning: true }, { forceNoThink: true }), 'none');
   });
-  await test('deepseek: reasoning:false (or forceNoThink) DISABLES thinking', () => {
-    assert.deepEqual(providerOptions({ provider: 'deepseek', model: 'deepseek-v4-flash', reasoning: false }), { deepseek: { thinking: { type: 'disabled' } } });
-    assert.deepEqual(providerOptions({ provider: 'deepseek', model: 'deepseek-v4-flash', reasoning: true }), { deepseek: { thinking: { type: 'enabled' } } });
-    assert.deepEqual(providerOptions({ provider: 'deepseek', model: 'deepseek-v4-flash', reasoning: true }, { forceNoThink: true }), { deepseek: { thinking: { type: 'disabled' } } });
+  await test('anthropic: medium only when reasoning on AND not forced-tool; none otherwise', () => {
+    assert.equal(reasoningFor({ provider: 'anthropic', model: 'claude-haiku-4.5', reasoning: true }), 'medium');
+    assert.equal(reasoningFor({ provider: 'anthropic', model: 'claude-haiku-4.5', reasoning: true }, { forceNoThink: true }), 'none');
+    assert.equal(reasoningFor({ provider: 'anthropic', model: 'claude-haiku-4.5', reasoning: false }), 'none');
   });
-  await test('anthropic: adaptive only when reasoning on AND not forced-tool', () => {
-    assert.deepEqual(providerOptions({ provider: 'anthropic', model: 'claude-haiku-4.5', reasoning: true }), { anthropic: { thinking: { type: 'adaptive' } } });
-    assert.deepEqual(providerOptions({ provider: 'anthropic', model: 'claude-haiku-4.5', reasoning: true }, { forceNoThink: true }), {});
-    assert.deepEqual(providerOptions({ provider: 'anthropic', model: 'claude-haiku-4.5', reasoning: false }), {});
+  await test('google: none when reasoning off (provider maps it per family), default when on', () => {
+    assert.equal(reasoningFor({ provider: 'google', model: 'gemini-3.5-flash', reasoning: false }), 'none');
+    assert.equal(reasoningFor({ provider: 'google', model: 'gemini-2.5-flash', reasoning: false }), 'none');
+    assert.equal(reasoningFor({ provider: 'google', model: 'gemini-3.5-flash', reasoning: true }), undefined);
   });
-  await test('google: gemini-3 → thinkingLevel:minimal, 2.5 → thinkingBudget:0 (reasoning off)', () => {
-    assert.deepEqual(providerOptions({ provider: 'google', model: 'gemini-3.5-flash', reasoning: false }), { google: { thinkingConfig: { thinkingLevel: 'minimal' } } });
-    assert.deepEqual(providerOptions({ provider: 'google', model: 'gemini-2.5-flash', reasoning: false }), { google: { thinkingConfig: { thinkingBudget: 0 } } });
-    assert.deepEqual(providerOptions({ provider: 'google', model: 'gemini-3.5-flash', reasoning: true }), {});
+  await test('openai: effort level only on o-series/gpt-5 (sent verbatim as reasoning_effort — gpt-4-class 400s on it)', () => {
+    assert.equal(reasoningFor({ provider: 'openai', model: 'o3', reasoning: false }), 'minimal');
+    assert.equal(reasoningFor({ provider: 'openai', model: 'o3', reasoning: true }), 'medium');
+    assert.equal(reasoningFor({ provider: 'openai', model: 'gpt-5-mini', reasoning: true }), 'medium');
+    assert.equal(reasoningFor({ provider: 'openai', model: 'gpt-4.1-mini', reasoning: false }), undefined);
   });
-  await test('openai: reasoningEffort only on o-series/gpt-5', () => {
-    assert.deepEqual(providerOptions({ provider: 'openai', model: 'o3', reasoning: false }), { openai: { reasoningEffort: 'minimal' } });
-    assert.deepEqual(providerOptions({ provider: 'openai', model: 'o3', reasoning: true }), { openai: { reasoningEffort: 'medium' } });
-    assert.deepEqual(providerOptions({ provider: 'openai', model: 'gpt-4.1-mini', reasoning: false }), {});
+  await test('requesty: minimal when suppressing — same wire bytes as the old providerOptions.requesty block', () => {
+    assert.equal(reasoningFor({ provider: 'requesty', model: 'openai/gpt-4o-mini', reasoning: true }), undefined);
+    assert.equal(reasoningFor({ provider: 'requesty', model: 'openai/gpt-4o-mini', reasoning: false }), 'minimal');
+    assert.equal(reasoningFor({ provider: 'requesty', model: 'openai/gpt-4o-mini', reasoning: true }, { forceNoThink: true }), 'minimal');
   });
-  await test('openai-compatible: no providerOptions block (transport handles thinking)', () => {
-    assert.deepEqual(providerOptions({ provider: 'openai-compatible', model: 'qwen3', reasoning: false }), {});
+  await test('gateway: none forwarded to the downstream vendor when suppressing (replaces the dual-block hack)', () => {
+    assert.equal(reasoningFor({ provider: 'gateway', model: 'anthropic/claude-haiku-4.5', reasoning: true }), undefined);
+    assert.equal(reasoningFor({ provider: 'gateway', model: 'anthropic/claude-haiku-4.5', reasoning: false }), 'none');
+    assert.equal(reasoningFor({ provider: 'gateway', model: 'deepseek/deepseek-v4', reasoning: true }, { forceNoThink: true }), 'none');
   });
-  await test('locca: shares the openai-compatible path — no providerOptions block', () => {
-    assert.deepEqual(providerOptions({ provider: 'locca', model: 'qwen3', reasoning: false }), {});
-    assert.deepEqual(providerOptions({ provider: 'locca', model: 'qwen3', reasoning: true }), {});
+  await test('openrouter: always undefined — reasoning is fixed at model construction (extraBody in the registry)', () => {
+    assert.equal(reasoningFor({ provider: 'openrouter', model: 'xiaomi/mimo-v2.5', reasoning: false }), undefined);
+    assert.equal(reasoningFor({ provider: 'openrouter', model: 'xiaomi/mimo-v2.5', reasoning: true }, { forceNoThink: true }), undefined);
+  });
+  await test('openai-compatible + locca: always undefined — thinking rides the body injection, not the param', () => {
+    assert.equal(reasoningFor({ provider: 'openai-compatible', model: 'qwen3', reasoning: false }), undefined);
+    assert.equal(reasoningFor({ provider: 'locca', model: 'qwen3', reasoning: false }), undefined);
+    assert.equal(reasoningFor({ provider: 'locca', model: 'qwen3', reasoning: true }), undefined);
   });
   await test('capability flags: tool-object covers ollama + locca + openai-compatible; repeat-penalty is Ollama-only', () => {
     assert.equal(needsToolCallObject({ provider: 'ollama' }), true);

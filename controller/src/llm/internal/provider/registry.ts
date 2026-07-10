@@ -363,28 +363,22 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       // correctly — no `.chat(id)` override required. `baseURL` is the bare
       // Ollama host (no `/api` suffix); the package appends the path itself.
       const provider = createOllama({ baseURL: ollamaBaseUrl(cfg), fetch: debugFetch });
-      // v4 of the package reads `think` and Ollama `options` from MODEL
-      // CONSTRUCTION settings — its per-call providerOptions schema accepts
-      // only headers/structuredOutputs, so the old providerOptions.ollama
-      // block (capabilities thinkingBlock) was silently dropped and thinking
-      // suppression never reached the wire (caught by llm-bench's
-      // thinking-leak forensics on glm-5.2:cloud: 24 leaked cells with
-      // reasoning off).
-      //   - reasoning off → think:false. Safe on non-thinking models
-      //     (verified: Ollama 0.30 accepts it as a no-op).
-      //   - reasoning on → OMIT think: thinking models think by default,
-      //     and an explicit think:true 400s on non-thinking models
-      //     ("does not support thinking") — a combo operators can configure.
-      //   - num_ctx rides settings.options (same dead-channel casualty; the
-      //     sig includes it so an admin numCtx change rebuilds the instance).
+      // Thinking suppression rides the AI SDK top-level `reasoning` call option
+      // now (capabilities reasoningFor): ai-sdk-ollama v4 maps 'none' →
+      // think:false per call, WITH precedence over any construction-time
+      // `think` setting — so nothing is wired here for it. ('none' is safe on
+      // non-thinking models: Ollama 0.30 accepts think:false as a no-op; with
+      // reasoning on the param is omitted and the model's default holds, since
+      // an explicit think:true 400s on non-thinking models.)
+      //   - num_ctx still rides construction settings.options — v4's per-call
+      //     providerOptions schema accepts only headers/structuredOutputs, so
+      //     construction is its only channel (the sig includes it so an admin
+      //     numCtx change rebuilds the instance).
       // Per-call repeat_penalty has no v4 channel and is currently inert on
       // this route — tracked as a follow-up; it needs per-call instances or
       // an upstream option, not a construction setting.
-      const ollamaSettings: any = {};
-      if (cfg.reasoning !== true) ollamaSettings.think = false;
       const numCtx = appliedNumCtx(cfg);
-      if (numCtx != null) ollamaSettings.options = { num_ctx: numCtx };
-      model = Object.keys(ollamaSettings).length ? provider(id, ollamaSettings) : provider(id);
+      model = numCtx != null ? provider(id, { options: { num_ctx: numCtx } }) : provider(id);
       break;
     }
   }

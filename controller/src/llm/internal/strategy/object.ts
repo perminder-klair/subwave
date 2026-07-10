@@ -16,7 +16,7 @@ import { generateText, Output } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
 import { stripThinking, extractJson, usageOf, failureDiagnostics, schemaHint } from '../core/pure.js';
-import { needsToolCallObject, providerOptions, samplingWithLocalKnobs } from '../provider/capabilities.js';
+import { needsToolCallObject, reasoningFor, samplingWithLocalKnobs } from '../provider/capabilities.js';
 import { objectViaToolCall } from './object-via-tool.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
 
@@ -65,7 +65,7 @@ export async function djObject({
               temperature,
               maxOutputTokens,
               output: Output.object({ schema }),
-              providerOptions: providerOptions(l.cfg),
+              reasoning: reasoningFor(l.cfg),
               ...(signal ? { abortSignal: signal } : {}),
             }), signal);
             object = result.output;
@@ -90,7 +90,7 @@ export async function djObject({
                 + (hint ? ` It MUST validate against this JSON Schema — every required key must be present:\n${hint}` : ''),
               temperature,
               maxOutputTokens,
-              providerOptions: providerOptions(l.cfg, { forceNoThink: true }),
+              reasoning: reasoningFor(l.cfg, { forceNoThink: true }),
               ...(signal ? { abortSignal: signal } : {}),
             }), signal);
             try {

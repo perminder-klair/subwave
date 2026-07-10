@@ -8,7 +8,7 @@ import { generateText } from 'ai';
 import { withFailover } from '../core/failover.js';
 import { withTransientRetry } from '../core/retry.js';
 import { stripThinking, truncationError, usageOf, failureDiagnostics } from '../core/pure.js';
-import { providerOptions, repeatPenaltyApplies, samplingWithLocalKnobs } from '../provider/capabilities.js';
+import { reasoningFor, repeatPenaltyApplies, samplingWithLocalKnobs } from '../provider/capabilities.js';
 import { resolveMaxOutputTokens } from '../../../settings.js';
 
 // Hard output-token cap. A reasoning model with no cap can generate until it
@@ -47,7 +47,7 @@ export async function djText({
         topP,
         ...(seed != null ? { seed } : {}),
         maxOutputTokens,
-        providerOptions: providerOptions(leg.cfg, { repeatPenalty }),
+        reasoning: reasoningFor(leg.cfg),
         ...(signal ? { abortSignal: signal } : {}),
       }), signal);
       // A free-text DJ script that hit the output-token cap is never a usable
