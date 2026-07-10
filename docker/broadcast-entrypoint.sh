@@ -126,7 +126,15 @@ export ICECAST_HOST=localhost
 # delimiter keeps slashes safe.
 
 # Concurrent-listener ceiling (<limits><clients>). Empty/unset → the stock 100.
+# A non-numeric value would render invalid XML and fail icecast at boot, so
+# fall back to the default with a warning instead of taking the stream down.
 ICECAST_MAX_CLIENTS="${ICECAST_MAX_CLIENTS:-100}"
+case "$ICECAST_MAX_CLIENTS" in
+    *[!0-9]*|'')
+        echo "broadcast: ICECAST_MAX_CLIENTS='$ICECAST_MAX_CLIENTS' is not a number — using 100" >&2
+        ICECAST_MAX_CLIENTS=100
+        ;;
+esac
 
 sed \
     -e "s|\${ICECAST_SOURCE_PASSWORD}|$ICECAST_SOURCE_PASSWORD|g" \
