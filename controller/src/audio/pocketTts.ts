@@ -181,21 +181,6 @@ async function ensureWorker(): Promise<PocketTtsWorker> {
   }
 }
 
-// PocketTTS built-in voices. A persona's `tts.voice` is either one of these
-// ids OR a `.wav` filename in the shared voice folder (zero-shot cloning).
-// The worker also guards against unknown ids by falling back to the default,
-// so a stale value never breaks a spoken segment.
-export const BUILTIN_VOICES = [
-  'alba',
-  'anna',
-  'charles',
-  'estelle',
-  'giovanni',
-  'juergen',
-  'lola',
-  'rafael',
-] as const;
-
 const WAV_RE = /^[A-Za-z0-9_.-]{1,80}\.wav$/i;
 
 // Split a persona's `tts.voice` into the two fields the worker needs.
