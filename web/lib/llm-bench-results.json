@@ -4,12 +4,12 @@
   {
    "model": "google:gemini-3.5-flash",
    "route": "google",
-   "benchedAt": "2026-07-09",
+   "benchedAt": "2026-07-10",
    "iterations": 3,
    "reasoning": false,
    "coverage": "full",
    "overall": {
-    "ok": 95,
+    "ok": 94,
     "total": 96
    },
    "groups": {
@@ -30,7 +30,7 @@
      "total": 6
     },
     "requests": {
-     "ok": 15,
+     "ok": 14,
      "total": 15
     },
     "scripts": {
@@ -42,7 +42,7 @@
      "total": 24
     }
    },
-   "poolPickP50s": 1.5,
+   "poolPickP50s": 1.2,
    "verdict": "agent-capable",
    "notes": "Best score on record; agent cells 18/18 at 1–2 s. Single miss: one \"coming up next\" slip."
   },
@@ -139,12 +139,12 @@
   {
    "model": "openrouter:openai/gpt-5-mini",
    "route": "openrouter",
-   "benchedAt": "2026-07-09",
+   "benchedAt": "2026-07-10",
    "iterations": 3,
    "reasoning": false,
    "coverage": "full",
    "overall": {
-    "ok": 91,
+    "ok": 92,
     "total": 96
    },
    "groups": {
@@ -165,7 +165,7 @@
      "total": 6
     },
     "requests": {
-     "ok": 13,
+     "ok": 14,
      "total": 15
     },
     "scripts": {
@@ -177,7 +177,7 @@
      "total": 24
     }
    },
-   "poolPickP50s": 1.5,
+   "poolPickP50s": 1.8,
    "verdict": "agent-capable",
    "notes": "Repeats artists under shortlist pressure; sometimes serves the wrong track on exact-title requests."
   },
@@ -270,6 +270,51 @@
    "poolPickP50s": 1,
    "verdict": "agent-capable",
    "notes": "Zero structural failures; misses are editorial (variety traps, unoffered feature kinds)."
+  },
+  {
+   "model": "deepseek:deepseek-v4-flash",
+   "route": "deepseek",
+   "benchedAt": "2026-07-10",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 85,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 0,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 14,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 20,
+     "total": 21
+    },
+    "shows": {
+     "ok": 21,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 1.5,
+   "verdict": "pool-mode",
+   "notes": "First direct-provider row (early testing was 0/4 direct vs 4/4 via openrouter). Pool cells clean; agent picks 0/6 — emits hallucinated ids instead of exploring. Segments/requests/scripts solid."
   },
   {
    "model": "locca:gemma-4-12b-it-Q4_K_M.gguf",
