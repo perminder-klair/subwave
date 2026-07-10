@@ -485,51 +485,6 @@
    "notes": "Structured/pool kinds only (×2) on a CPU host — latency excluded. Same family habits as the 31B."
   },
   {
-   "model": "ollama:deepseek-v4-flash:cloud",
-   "route": "ollama",
-   "benchedAt": "2026-07-09",
-   "iterations": 3,
-   "reasoning": false,
-   "coverage": "full",
-   "overall": {
-    "ok": 82,
-    "total": 96
-   },
-   "groups": {
-    "pickPool": {
-     "ok": 12,
-     "total": 12
-    },
-    "pickAgent": {
-     "ok": 4,
-     "total": 6
-    },
-    "segPool": {
-     "ok": 12,
-     "total": 12
-    },
-    "segAgent": {
-     "ok": 6,
-     "total": 6
-    },
-    "requests": {
-     "ok": 11,
-     "total": 15
-    },
-    "scripts": {
-     "ok": 20,
-     "total": 21
-    },
-    "shows": {
-     "ok": 17,
-     "total": 24
-    }
-   },
-   "poolPickP50s": 8.4,
-   "verdict": "pool-mode",
-   "notes": "Invented track ids twice under pressure; occasional stage directions. Fallback leg, not a primary."
-  },
-  {
    "model": "openrouter:anthropic/claude-haiku-4.5",
    "route": "openrouter",
    "benchedAt": "2026-07-10",
@@ -663,6 +618,51 @@
    "poolPickP50s": 2.1,
    "verdict": "avoid",
    "notes": "Re-benched on AI SDK 7 branch: 77/96 (was 79) — same profile, agent picks 0/6 hallucinated ids, verbose scripts. Verdict unchanged."
+  },
+  {
+   "model": "ollama:deepseek-v4-flash:cloud",
+   "route": "ollama",
+   "benchedAt": "2026-07-10",
+   "iterations": 3,
+   "reasoning": false,
+   "coverage": "full",
+   "overall": {
+    "ok": 75,
+    "total": 96
+   },
+   "groups": {
+    "pickPool": {
+     "ok": 5,
+     "total": 12
+    },
+    "pickAgent": {
+     "ok": 1,
+     "total": 6
+    },
+    "segPool": {
+     "ok": 12,
+     "total": 12
+    },
+    "segAgent": {
+     "ok": 6,
+     "total": 6
+    },
+    "requests": {
+     "ok": 13,
+     "total": 15
+    },
+    "scripts": {
+     "ok": 20,
+     "total": 21
+    },
+    "shows": {
+     "ok": 18,
+     "total": 24
+    }
+   },
+   "poolPickP50s": 3.6,
+   "verdict": "pool-mode",
+   "notes": "Re-benched on AI SDK 7 branch: 75/96 (was 82). think:false honored on a raw probe but 7 cells still leaked thinking on complex prompts — intermittent relay/model-side, same class as the minimax regression, milder. Plus 3 hallucinated ids. Direct deepseek provider (85/96) is the better route for this model now."
   },
   {
    "model": "ollama:minimax-m2.7:cloud",
