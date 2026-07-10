@@ -138,7 +138,11 @@ router.get('/library/genres/related', requireAdmin, async (_req, res) => {
 // (Libraries above ~3k render on the canvas renderer; only small ones keep the
 // animated SVG path.)
 const OBSERVATORY_DEFAULT_MAX = Math.max(500, Number(process.env.OBSERVATORY_MAX) || 25000);
-const OBSERVATORY_HARD_MAX = Math.max(OBSERVATORY_DEFAULT_MAX, Number(process.env.OBSERVATORY_HARD_MAX) || 100000);
+// 200k ceiling is stress-verified (scripts/observatory-scale.test.ts + the
+// browser harness): lean sampled read ~1 s, 75 MB payload (10 MB gzipped),
+// 60 fps render with a ~2 s one-time geometry stall. Operators who want more
+// can raise OBSERVATORY_HARD_MAX — 400k measured workable too (~4 s stall).
+const OBSERVATORY_HARD_MAX = Math.max(OBSERVATORY_DEFAULT_MAX, Number(process.env.OBSERVATORY_HARD_MAX) || 200000);
 router.get('/library/observatory', requireAdmin, async (req, res) => {
   try {
     await library.load();

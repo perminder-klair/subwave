@@ -66,8 +66,9 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
 }
 
 // Node-cap ladder offered in the MAP SIZE control, clamped to the server's
-// hardMax. The WebGL galaxy renderer draws the whole ladder comfortably.
-const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 25000, 50000, 100000];
+// hardMax. The WebGL galaxy renderer draws the whole ladder comfortably —
+// 200k stress-measured at 60 fps (one-time ~2 s geometry stall on load).
+const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 25000, 50000, 100000, 200000];
 // Display fallback for the MAP SIZE selector before the first load resolves.
 // The real default lives on the server (OBSERVATORY_MAX): with nothing stored
 // we fetch without ?max= and adopt the cap the response reports, so an
