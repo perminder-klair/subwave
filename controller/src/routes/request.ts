@@ -14,6 +14,13 @@ import * as session from '../broadcast/session.js';
 import * as requestLog from '../broadcast/request-log.js';
 import * as listeners from '../broadcast/listeners.js';
 import * as webhooks from '../broadcast/webhooks.js';
+import * as settings from '../settings.js';
+import {
+  pickStrictCandidate,
+  strictFailureMessage,
+  strictRequestSatisfied,
+  strictRequestTarget,
+} from './request-strict.js';
 import {
   checkRateLimit, clientIp,
   REQUESTS_DISABLED, REQUEST_TEXT_MAX, REQUEST_NAME_MAX,
@@ -300,36 +307,53 @@ async function resolveRequest(entry) {
     });
   }
 
+  const currentTrack = queue.current?.track || null;
+  const strictRequests = !!settings.get().llm?.strictRequests;
+  let matched: any = null;
+  let strictTarget: any = null;
+  if (strictRequests) {
+    matched = await dj.matchRequest(text, {
+      listenerName: requester,
+      nowPlaying: currentTrack,
+    });
+    strictTarget = strictRequestTarget(matched);
+  }
+
   // Conversational DJ agent — when enabled it searches the library itself with
   // the discovery tools and writes the intro, posting the request into the
   // live session. On any failure, fall through to the stateless matcher
   // cascade below so a request is never dropped.
-  try {
-    const agentRes = await djAgent.runRequest(queue, ctx, { requester, text });
-    if (agentRes) {
-      queue.log('request', `agent resolved: ${agentRes.track.title} — ${agentRes.track.artist}`);
-      entry.path = 'agent';
-      entry.pickSource = 'agent';
-      entry.pick = agentRes.track;
-      entry.introScript = agentRes.introScript || null;
-      return resolved({
-        ack: agentRes.ack,
-        track: agentRes.track,
-        queuePosition: queue.upcoming.length,
-      });
+  if (!strictTarget?.specific) {
+    try {
+      const agentRes = await djAgent.runRequest(queue, ctx, { requester, text });
+      if (agentRes) {
+        queue.log('request', `agent resolved: ${agentRes.track.title} — ${agentRes.track.artist}`);
+        entry.path = 'agent';
+        entry.pickSource = 'agent';
+        entry.pick = agentRes.track;
+        entry.introScript = agentRes.introScript || null;
+        return resolved({
+          ack: agentRes.ack,
+          track: agentRes.track,
+          queuePosition: queue.upcoming.length,
+        });
+      }
+    } catch (err) {
+      queue.log('error', `DJ agent request failed: ${err.message} — falling back`);
     }
-  } catch (err) {
-    queue.log('error', `DJ agent request failed: ${err.message} — falling back`);
   }
 
   // 1. LLM matches intent — pass current track so vibe queries can be
   // interpreted against what's actually on-air ("match this energy",
   // "something slower than this", etc.).
-  const currentTrack = queue.current?.track || null;
-  const matched = await dj.matchRequest(text, {
-    listenerName: requester,
-    nowPlaying: currentTrack,
-  });
+  if (!matched) {
+    matched = await dj.matchRequest(text, {
+      listenerName: requester,
+      nowPlaying: currentTrack,
+    });
+  }
+  strictTarget = strictRequests ? (strictTarget || strictRequestTarget(matched)) : null;
+  const strictSpecific = !!strictTarget?.specific;
   queue.log('intent', `"${text}" → ${matched.intent || '(no intent)'}`, {
     mood: matched.mood,
     scope: matched.scope,
@@ -386,6 +410,9 @@ async function resolveRequest(entry) {
       recentIds,
     });
     if (pick) pickSource = 'artist-sort';
+  }
+  if (strictSpecific && matched.artist && !namedSongTitle && !pick) {
+    return failed(strictFailureMessage(strictTarget));
   }
 
   // 2b. Genre path — match the listener's genre against the library's real
@@ -445,8 +472,11 @@ async function resolveRequest(entry) {
     if (terms.length > 0) {
       let candidates: any[] = [];
       for (const term of terms) {
-        const songOffset = Math.floor(Math.random() * 3) * 25;
-        let r = await subsonic.search(term, { songCount: 25, songOffset });
+        const songOffset = strictSpecific ? 0 : Math.floor(Math.random() * 3) * 25;
+        let r = await subsonic.search(term, {
+          songCount: strictSpecific ? 50 : 25,
+          ...(songOffset > 0 ? { songOffset } : {}),
+        });
         // A deep offset can land past the end of the result set — fall back
         // to the first page so a valid query never comes back empty.
         if (r.length === 0 && songOffset > 0) {
@@ -460,9 +490,16 @@ async function resolveRequest(entry) {
         seen.add(s.id);
         return true;
       });
-      pick = randomFresh(unique);
-      if (pick) pickSource = 'search';
+      pick = strictSpecific ? pickStrictCandidate(strictTarget, unique) : randomFresh(unique);
+      if (pick) pickSource = strictSpecific ? 'strict-search' : 'search';
     }
+  }
+  if (strictSpecific && namedSongTitle && !pick) {
+    return failed(strictFailureMessage(strictTarget));
+  }
+
+  if (strictSpecific && pick && !strictRequestSatisfied(strictTarget, pick)) {
+    return failed(strictFailureMessage(strictTarget));
   }
 
   // 2d. Mood-tagged library — the right vocabulary for vibe queries. The
