@@ -35,7 +35,12 @@ export interface ProviderCapabilities {
   // `format` field) and emit prose, so Output.object throws — they need the
   // forced-tool path. Everyone else uses native Output.object.
   objectStrategy: 'native' | 'tool';
-  // repeat_penalty rides inside providerOptions.ollama, so only Ollama reads it.
+  // True when a per-call repeat_penalty actually reaches this provider's wire.
+  // Currently false for EVERYONE: ai-sdk-ollama v4 dropped the per-call
+  // providerOptions.ollama channel (its schema accepts only
+  // headers/structuredOutputs), and the body-injection providers are recorded
+  // via appliedRepeatPenalty() instead. Restoring the Ollama knob needs
+  // per-value model instances or an upstream option — tracked follow-up.
   repeatPenaltyApplies: boolean;
   // llama.cpp / vLLM / LM Studio (openai-compatible, locca) take sampling +
   // thinking controls the AI SDK's openai provider has no first-class field for
@@ -61,7 +66,10 @@ const NONE = (): ReasoningLevel | undefined => undefined;
 const CAPS: Record<string, ProviderCapabilities> = {
   ollama: {
     objectStrategy: 'tool',
-    repeatPenaltyApplies: true,
+    // v4 of ai-sdk-ollama has NO per-call repeat_penalty channel (see the
+    // interface comment) — flag it false so djText's sampling record stops
+    // claiming the knob was applied when it never reached the wire.
+    repeatPenaltyApplies: false,
     // ai-sdk-ollama v4 maps the per-call level onto Ollama's `think` param:
     // 'none' → think:false (safe no-op on non-thinking models, verified Ollama
     // 0.30), undefined → the model's own default. Reads the RAW reasoning
@@ -211,10 +219,12 @@ export function forcedToolChoice(cfg: any): 'required' | 'auto' {
   return cfg?.toolChoice === 'auto' ? 'auto' : 'required';
 }
 
-// True when repeat_penalty actually reaches the model via providerOptions —
-// gates the sampling log so /debug doesn't claim the value was applied when the
-// provider dropped it. Ollama-only; the body-injection providers are covered by
-// appliedRepeatPenalty() instead.
+// True when a per-call repeat_penalty actually reaches the model — gates the
+// sampling log so /debug doesn't claim the value was applied when the provider
+// dropped it. Currently false for every provider (ai-sdk-ollama v4 lost the
+// per-call channel; the body-injection providers are covered by
+// appliedRepeatPenalty() instead), so the djText gate never fires — kept as the
+// chokepoint for when the Ollama channel is restored.
 export function repeatPenaltyApplies(cfg: any): boolean {
   return capabilitiesFor(cfg?.provider).repeatPenaltyApplies;
 }
@@ -251,12 +261,9 @@ export function appliedNumCtx(cfg: any): number | null {
 
 // Stamp a sampling record with the local-only knobs each call actually ran with,
 // so /admin/debug reflects them: Ollama's effective num_ctx, and the
-// repeat_penalty injected into the body for openai-compatible / locca (the
-// agent/object paths don't pass repeat_penalty through providerOptions, so this
-// is the only place it gets recorded for them). Ollama's providerOptions-carried
-// repeat_penalty is recorded separately at the djText call site via
-// repeatPenaltyApplies(), so appliedRepeatPenalty() returns null there — no
-// double-write.
+// repeat_penalty injected into the body for openai-compatible / locca — the only
+// providers where the knob currently reaches the wire at all (ai-sdk-ollama v4
+// has no per-call channel; see repeatPenaltyApplies).
 export function samplingWithLocalKnobs(cfg: any, sampling: any): any {
   const n = appliedNumCtx(cfg);
   if (n != null) sampling.num_ctx = n;

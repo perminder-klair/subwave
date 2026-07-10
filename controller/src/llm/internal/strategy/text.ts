@@ -60,7 +60,9 @@ export async function djText({
       if (truncated) throw truncated;
       const out = stripThinking(result.text);
       // Only record sampling knobs that actually reached the model — see
-      // repeatPenaltyApplies() and providerOptions handling.
+      // repeatPenaltyApplies() (currently false everywhere: ai-sdk-ollama v4
+      // lost the per-call channel) and samplingWithLocalKnobs() for the
+      // body-injection providers.
       const sampling: any = { temperature, top_p: topP, seed };
       if (repeatPenaltyApplies(leg.cfg)) sampling.repeat_penalty = repeatPenalty;
       samplingWithLocalKnobs(leg.cfg, sampling);

@@ -268,8 +268,8 @@ function clampNumCtx(raw: any, def: number): number {
 // repeat_penalty for local openai-compatible / locca servers. Clamped to
 // [1.0, 2.0]: 1.0 is OFF (a no-op, never injected), and >2.0 mangles output.
 // Non-numeric/NaN falls back to `def`. See appliedRepeatPenalty() in
-// capabilities.ts — Ollama reads its own value via providerOptions and ignores
-// this field.
+// capabilities.ts — Ollama ignores this field (ai-sdk-ollama v4 has no
+// per-call repeat_penalty channel at all; restoration is a tracked follow-up).
 function clampRepeatPenalty(raw: any, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.min(2.0, Math.max(1.0, raw));
@@ -1093,7 +1093,7 @@ const DEFAULTS = {
     // model still loops, or set 1.0 to disable (e.g. a vLLM server that rejects
     // the `repeat_penalty` body field). Injected into the request body — the AI
     // SDK's openai provider has no field for it. Ignored by every other provider
-    // (Ollama reads its own value via providerOptions).
+    // (incl. Ollama: ai-sdk-ollama v4 has no per-call repeat_penalty channel).
     repeatPenalty: 1.15,
     // When on, the session DJ agent drives track-picking, links and listener
     // requests as a tool-loop over the session chat history (broadcast/

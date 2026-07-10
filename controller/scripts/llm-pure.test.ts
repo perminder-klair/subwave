@@ -388,14 +388,18 @@ async function main() {
     assert.equal(reasoningFor({ provider: 'locca', model: 'qwen3', reasoning: false }), undefined);
     assert.equal(reasoningFor({ provider: 'locca', model: 'qwen3', reasoning: true }), undefined);
   });
-  await test('capability flags: tool-object covers ollama + locca + openai-compatible; repeat-penalty is Ollama-only', () => {
+  await test('capability flags: tool-object covers ollama + locca + openai-compatible; per-call repeat-penalty reaches no one', () => {
     assert.equal(needsToolCallObject({ provider: 'ollama' }), true);
     assert.equal(needsToolCallObject({ provider: 'openai' }), false);
     // locca + openai-compatible serve local GGUF models that don't explore under
     // native Output.object (explored=false on gemma-4-12b / qwen3.5-9b) — same as ollama.
     assert.equal(needsToolCallObject({ provider: 'locca' }), true);
     assert.equal(needsToolCallObject({ provider: 'openai-compatible' }), true);
-    assert.equal(repeatPenaltyApplies({ provider: 'ollama' }), true);
+    // ai-sdk-ollama v4 dropped the per-call providerOptions.ollama channel, so
+    // the sampling record must not claim repeat_penalty applied (restoration is
+    // a tracked follow-up); body-injection providers record via
+    // appliedRepeatPenalty() below instead.
+    assert.equal(repeatPenaltyApplies({ provider: 'ollama' }), false);
     assert.equal(repeatPenaltyApplies({ provider: 'deepseek' }), false);
     assert.equal(repeatPenaltyApplies({ provider: 'locca' }), false);
     assert.equal(appliedNumCtx({ provider: 'ollama', model: 'qwen3', numCtx: 8192 }), 8192);
@@ -409,8 +413,8 @@ async function main() {
     assert.equal(appliedRepeatPenalty({ provider: 'locca', repeatPenalty: 1.25 }), 1.25);
     // 1.0 (or below) is a no-op — never injected.
     assert.equal(appliedRepeatPenalty({ provider: 'openai-compatible', repeatPenalty: 1.0 }), null);
-    // Ollama reads its own value via providerOptions.ollama.options — not here
-    // (no double-write into the sampling record).
+    // Ollama has no per-call channel at all on ai-sdk-ollama v4 — never
+    // recorded as applied.
     assert.equal(appliedRepeatPenalty({ provider: 'ollama', repeatPenalty: 1.2 }), null);
     // Cloud providers never inject.
     assert.equal(appliedRepeatPenalty({ provider: 'openai', repeatPenalty: 1.2 }), null);
