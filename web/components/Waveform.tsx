@@ -42,10 +42,13 @@ function resolvePalette(el: HTMLElement): Palette {
   return { bar: bar || '#161412', past: past || '#d94b2a' };
 }
 
-// Per-bar [start, end) analyser-bin spans for the log sweep. Each bar averages
-// every bin it covers (a single sampled bin flickers on narrowband content).
-// Cached by the caller — this only changes if the FFT size or context sample
-// rate does.
+// Per-bar [start, end) analyser-bin spans for the log sweep, kept FRACTIONAL.
+// At the low end several bars fit inside one FFT bin — with integer spans they
+// all read that bin and the strip's left edge moved as one block, so narrow
+// spans are sampled by interpolating between neighbouring bins instead (see
+// the drive loop). Wide bars (span ≥ 1 bin) average every bin they cover (a
+// single sampled bin flickers on narrowband content). Cached by the caller —
+// this only changes if the FFT size or context sample rate does.
 function buildBinRanges(binCount: number, sampleRate: number): Array<[number, number]> {
   const nyquist = sampleRate / 2;
   const hi = Math.min(FREQ_HI, nyquist);
@@ -53,9 +56,9 @@ function buildBinRanges(binCount: number, sampleRate: number): Array<[number, nu
   for (let i = 0; i < BARS; i++) {
     const f0 = FREQ_LO * Math.pow(hi / FREQ_LO, i / BARS);
     const f1 = FREQ_LO * Math.pow(hi / FREQ_LO, (i + 1) / BARS);
-    const b0 = Math.min(binCount - 1, Math.max(0, Math.floor((f0 / nyquist) * binCount)));
-    const b1 = Math.min(binCount, Math.max(b0 + 1, Math.ceil((f1 / nyquist) * binCount)));
-    ranges.push([b0, b1]);
+    const p0 = Math.min(binCount - 1, Math.max(0, (f0 / nyquist) * binCount));
+    const p1 = Math.min(binCount, Math.max(p0, (f1 / nyquist) * binCount));
+    ranges.push([p0, p1]);
   }
   return ranges;
 }
@@ -218,10 +221,22 @@ export default memo(function Waveform({ audioRef, tunedIn, trackStartedAt, durat
       }
       const ranges = rangesRef.current.ranges;
       for (let i = 0; i < BARS; i++) {
-        const [b0, b1] = ranges[i] ?? [0, 1];
-        let sum = 0;
-        for (let b = b0; b < b1; b++) sum += bins[b] ?? 0;
-        levels[i] = sum / ((b1 - b0) * 255);
+        const [p0, p1] = ranges[i] ?? [0, 1];
+        if (p1 - p0 < 1) {
+          // Narrow bar (low end) — lerp the spectrum at the bar's centre so
+          // adjacent bars straddling the same bin still differ.
+          const c = Math.min(bins.length - 1, (p0 + p1) / 2);
+          const b = Math.floor(c);
+          const v0 = bins[b] ?? 0;
+          const v1 = bins[b + 1] ?? v0;
+          levels[i] = (v0 + (v1 - v0) * (c - b)) / 255;
+        } else {
+          const b0 = Math.floor(p0);
+          const b1 = Math.max(b0 + 1, Math.ceil(p1));
+          let sum = 0;
+          for (let b = b0; b < b1; b++) sum += bins[b] ?? 0;
+          levels[i] = sum / ((b1 - b0) * 255);
+        }
       }
       draw();
     };
