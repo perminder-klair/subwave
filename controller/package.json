@@ -26,7 +26,7 @@
     "@ai-sdk/google": "^4.0.11",
     "@ai-sdk/openai": "^4.0.11",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@openrouter/ai-sdk-provider": "^2.10.0",
+    "@openrouter/ai-sdk-provider": "^3.0.0",
     "adm-zip": "^0.5.16",
     "ai": "^7.0.19",
     "ai-sdk-ollama": "^4.0.0",

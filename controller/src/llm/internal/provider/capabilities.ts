@@ -149,14 +149,15 @@ const CAPS: Record<string, ProviderCapabilities> = {
     reasoningLevel: ({ reasoning, forceNoThink }) =>
       (reasoning && !forceNoThink ? undefined : 'none'),
   },
-  // OpenRouter (v2.x) reads `reasoning` ONLY from model-construction settings,
-  // not per-call options, so the thinking knob can't live here — it's wired in
+  // OpenRouter reads `reasoning` ONLY from model-construction settings, not
+  // per-call options, so the thinking knob can't live here — it's wired in
   // registry.ts (languageModel) off cfg.reasoning via extraBody, and forced-tool
   // legs get a separate reasoning-disabled instance (reasoningConstructionOnly).
   // Reasoning models routed through OpenRouter (e.g. xiaomi/mimo-v2.5) think by
   // default, and thinking mode rejects forced tool_choice, which breaks the
-  // picker. Revisit when bumping @openrouter/ai-sdk-provider to v3 (may add the
-  // per-call channel).
+  // picker. Verified on @openrouter/ai-sdk-provider v3.0.0: it declares spec v4
+  // but never reads callOptions.reasoning — construction stays the only channel
+  // until upstream implements the translation.
   openrouter: { objectStrategy: 'native', repeatPenaltyApplies: false, reasoningLevel: NONE, reasoningConstructionOnly: true },
   // Requesty is an OpenAI-compatible gateway built via createOpenAI with
   // name:'requesty', so the top-level level resolves through the same openai
