@@ -41,6 +41,7 @@ import { useSleepTimer } from '@/hooks/useSleepTimer';
 import { useStationFeed } from '@/hooks/useStationFeed';
 import type { StationApi } from '@/lib/api';
 import type { StationLocale } from '@/lib/format';
+import { FORMAT_OPTIONS } from '@/lib/audioFormat';
 import type {
   ActiveShow,
   NowPlayingTrack,
@@ -56,6 +57,7 @@ import TopBar from './TopBar';
 import TransportBar from './TransportBar';
 import Waveform from './Waveform';
 import BackPanelDrawer from './drawers/BackPanelDrawer';
+import AudioFormatDrawer from './drawers/AudioFormatDrawer';
 import BoothDrawer from './drawers/BoothDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import ScheduleDrawer from './drawers/ScheduleDrawer';
@@ -177,7 +179,7 @@ export default function PlayerScreen() {
   const { colors, mode, themes, activeId } = useTheme();
 
   const { isConnected } = useConnectivity();
-  const localPlayer = usePlayer(api, 1, isConnected);
+  const localTunedInRef = useRef(false);
 
   const {
     nowPlaying,
@@ -186,6 +188,7 @@ export default function PlayerScreen() {
     dj,
     listeners,
     streamOnline,
+    stream,
     llmTokens,
     state,
     session,
@@ -197,7 +200,17 @@ export default function PlayerScreen() {
     // screen (useNowPlayingInfo) tracks the broadcast; idle + backgrounded
     // polls nothing at all. While casting there's no local audio session, so
     // the OS suspends us in the background anyway — no point polling.
-  } = useStationFeed(api, { backgroundPoll: localPlayer.tunedIn });
+  } = useStationFeed(api, { backgroundPoll: localTunedInRef });
+  const streamEnablement = useMemo(() => ({
+    mp3: true,
+    opus: stream?.opusEnabled === true,
+    aac: stream?.aacEnabled === true,
+    flac: stream?.flacEnabled === true,
+  }), [stream?.opusEnabled, stream?.aacEnabled, stream?.flacEnabled]);
+  const localPlayer = usePlayer(api, 1, isConnected, streamEnablement);
+  useEffect(() => {
+    localTunedInRef.current = localPlayer.tunedIn;
+  }, [localPlayer.tunedIn]);
   const boothFeed = session.messages;
 
   const stationName = typeof dj?.station === 'string' ? dj.station : undefined;
@@ -326,7 +339,11 @@ export default function PlayerScreen() {
   // component's intended pattern): the masthead's single button opens the
   // "back panel"; its TIMER/FASCIA rows swap content in place — no
   // modal-dismissal race between stacked sheets.
-  const [activeSheet, setActiveSheet] = useState<'panel' | 'sleep' | 'themes' | null>(null);
+  const [activeSheet, setActiveSheet] = useState<'panel' | 'audio' | 'sleep' | 'themes' | null>(null);
+  const audioFormatLabel = useMemo(
+    () => FORMAT_OPTIONS.find((option) => option.id === localPlayer.format)?.label ?? 'MP3',
+    [localPlayer.format],
+  );
   const themeName = useMemo(
     () => themes.find((t) => t.id === activeId)?.name ?? null,
     [themes, activeId],
@@ -500,7 +517,13 @@ export default function PlayerScreen() {
       <Sheet
         open={activeSheet !== null}
         onClose={() => setActiveSheet(null)}
-        title={activeSheet === 'panel' ? 'Back panel' : activeSheet === 'sleep' ? 'Sleep timer' : 'Theme'}
+        title={activeSheet === 'panel'
+          ? 'Back panel'
+          : activeSheet === 'audio'
+            ? 'Audio format'
+            : activeSheet === 'sleep'
+              ? 'Sleep timer'
+              : 'Theme'}
       >
         {activeSheet === 'panel' ? (
           <BackPanelDrawer
@@ -509,8 +532,18 @@ export default function PlayerScreen() {
             sleepActive={sleep.active}
             sleepRemainingSec={sleep.remainingSec}
             themeName={themeName}
+            audioFormatLabel={audioFormatLabel}
+            onOpenAudio={() => setActiveSheet('audio')}
             onOpenSleep={() => setActiveSheet('sleep')}
             onOpenThemes={() => setActiveSheet('themes')}
+          />
+        ) : null}
+        {activeSheet === 'audio' ? (
+          <AudioFormatDrawer
+            format={localPlayer.format}
+            availability={localPlayer.availability}
+            formatFailure={localPlayer.formatFailure}
+            onSelect={localPlayer.selectFormat}
           />
         ) : null}
         {activeSheet === 'sleep' ? (

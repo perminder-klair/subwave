@@ -11,7 +11,7 @@
 //   * unchanged payloads keep their previous object identity, so consumers'
 //     useMemo/React.memo actually hold between polls.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import { useAppActive } from '@/hooks/useAppActive';
 import type { StationApi } from '@/lib/api';
 import { DEFAULT_STATION_LOCALE, type StationLocale } from '@/lib/format';
@@ -59,7 +59,7 @@ const OFFLINE_CONFIRM_POLLS = 4;
 
 export function useStationFeed(
   api: StationApi | null,
-  opts?: { backgroundPoll?: boolean },
+  opts?: { backgroundPoll?: boolean | RefObject<boolean> },
 ): StationFeed {
   const backgroundPoll = opts?.backgroundPoll ?? false;
   const [nowPlaying, setNowPlaying] = useState<NowPlayingTrack | null>(null);
@@ -118,7 +118,9 @@ export function useStationFeed(
   useEffect(() => {
     if (!api) return;
     const background = !appActive;
-    if (background && !backgroundPoll) return;
+    const shouldPollInBackground =
+      typeof backgroundPoll === 'boolean' ? backgroundPoll : backgroundPoll.current;
+    if (background && !shouldPollInBackground) return;
     let cancelled = false;
 
     const applyNowPlaying = (npRes: NowPlayingResponse) => {

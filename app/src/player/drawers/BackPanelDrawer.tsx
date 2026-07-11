@@ -8,7 +8,7 @@
 // and FASCIA are drill-in rows — the parent swaps this sheet's content for
 // the sleep/themes drawers in place (one <Sheet>, switched content).
 
-import { ChevronRight, MoonStar, Palette } from 'lucide-react-native';
+import { AudioLines, ChevronRight, MoonStar, Palette } from 'lucide-react-native';
 import type { ReactNode } from 'react';
 import { Platform, Pressable, Text, View } from 'react-native';
 import { CastButton } from 'react-native-google-cast';
@@ -23,6 +23,8 @@ export interface BackPanelDrawerProps {
   sleepActive: boolean;
   sleepRemainingSec: number | null;
   themeName: string | null;
+  audioFormatLabel: string;
+  onOpenAudio: () => void;
   onOpenSleep: () => void;
   onOpenThemes: () => void;
 }
@@ -33,6 +35,8 @@ export default function BackPanelDrawer({
   sleepActive,
   sleepRemainingSec,
   themeName,
+  audioFormatLabel,
+  onOpenAudio,
   onOpenSleep,
   onOpenThemes,
 }: BackPanelDrawerProps) {
@@ -68,6 +72,16 @@ export default function BackPanelDrawer({
           </View>
         </View>
       ) : null}
+
+      <SectionLabel text="AUDIO" />
+      <PanelRow
+        icon={<AudioLines size={18} color={colors.muted} />}
+        title="Audio format"
+        value={audioFormatLabel}
+        onPress={onOpenAudio}
+      />
+
+      <View style={{ height: 14 }} />
 
       <SectionLabel text="TIMER" />
       <PanelRow
