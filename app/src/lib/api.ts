@@ -20,6 +20,7 @@ import type {
   StationState,
   ThemesPayload,
 } from './types';
+import type { StreamUrls } from './audioFormat';
 
 export interface RequestBody {
   text: string;
@@ -74,10 +75,9 @@ export interface StationApi {
    *  emits it WITHOUT the `/api` prefix; this client adds it like every other
    *  endpoint. */
   avatar(path: string): string;
-  /** The live MP3 Icecast mount — the universal floor; Opus/Ogg is skipped on
-   *  native for the same chained-Ogg reasons the web pins iOS to MP3. Carries NO
-   *  embedded credentials — see streamHeaders(). */
-  streamUrl(): string;
+  /** Absolute URLs for every Icecast mount. They carry NO embedded
+   *  credentials — see streamHeaders(). */
+  streamUrls(): StreamUrls;
   /** Headers to attach to the audio stream request. When the station URL
    *  embedded HTTP basic-auth credentials (`https://user:pass@host`), this
    *  returns `{ Authorization: 'Basic …' }`; otherwise `undefined`. iOS AVPlayer
@@ -191,7 +191,7 @@ export function createApi(rawBase: string): StationApi {
   // userinfo, so the API polls and cover/avatar artwork already work with a
   // basic-auth station. Only the audio path is broken — iOS AVPlayer drops
   // userinfo — so we produce a credential-free URL + Authorization header for
-  // the stream alone (streamUrl/streamHeaders below), leaving every other
+  // the stream alone (streamUrls/streamHeaders below), leaving every other
   // request untouched (#764).
   const base = normalizeBase(rawBase);
   const { base: cleanBase, authorization } = splitCredentials(rawBase);
@@ -257,7 +257,12 @@ export function createApi(rawBase: string): StationApi {
       if (/^https?:\/\//i.test(path)) return path;
       return api(path.startsWith('/') ? path : `/${path}`);
     },
-    streamUrl: () => `${cleanBase}/stream.mp3`,
+    streamUrls: () => ({
+      mp3: `${cleanBase}/stream.mp3`,
+      opus: `${cleanBase}/stream.opus`,
+      aac: `${cleanBase}/stream.aac`,
+      flac: `${cleanBase}/stream.flac`,
+    }),
     streamHeaders: () => streamAuthHeaders,
   };
 }

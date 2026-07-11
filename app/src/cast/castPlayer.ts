@@ -14,7 +14,7 @@
 import { MediaStreamType, type RemoteMediaClient } from 'react-native-google-cast';
 
 export interface CastStreamMeta {
-  /** Credential-free live MP3 mount (api.streamUrl()). Deliberately NOT
+  /** Credential-free live MP3 mount (api.streamUrls().mp3). Deliberately NOT
    *  cache-busted: Icecast always serves the live edge to a new client, and a
    *  stable URL lets useCast recognise (and adopt) an already-running session
    *  after an app restart. */

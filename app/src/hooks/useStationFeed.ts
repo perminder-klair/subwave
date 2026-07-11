@@ -21,6 +21,7 @@ import type {
   ListenerCount,
   NowPlayingResponse,
   NowPlayingTrack,
+  PublicStreamInfo,
   SessionPayload,
   StationContext,
   StationState,
@@ -33,6 +34,7 @@ export interface StationFeed {
   activeShow: ActiveShow | null;
   listeners: ListenerCount | number | null;
   streamOnline: boolean | null;
+  stream: PublicStreamInfo | null;
   /** Cumulative since-boot LLM token total, or null before the first poll. */
   llmTokens: number | null;
   state: StationState;
@@ -66,6 +68,7 @@ export function useStationFeed(
   const [activeShow, setActiveShow] = useState<ActiveShow | null>(null);
   const [listeners, setListeners] = useState<ListenerCount | number | null>(null);
   const [streamOnline, setStreamOnline] = useState<boolean | null>(null);
+  const [stream, setStream] = useState<PublicStreamInfo | null>(null);
   const [llmTokens, setLlmTokens] = useState<number | null>(null);
   const [state, setState] = useState<StationState>(EMPTY_STATE);
   const [session, setSession] = useState<SessionPayload>(EMPTY_SESSION);
@@ -103,6 +106,7 @@ export function useStationFeed(
     setActiveShow(null);
     setListeners(null);
     setStreamOnline(null);
+    setStream(null);
     setLlmTokens(null);
     setState(EMPTY_STATE);
     setSession(EMPTY_SESSION);
@@ -142,6 +146,7 @@ export function useStationFeed(
           if (offlinePollsRef.current >= OFFLINE_CONFIRM_POLLS) setStreamOnline(false);
         }
       }
+      setIfChanged('stream', npRes.stream ?? null, setStream);
       if (typeof npRes.llmTokens === 'number') setIfChanged('llmTokens', npRes.llmTokens, setLlmTokens);
       if (typeof npRes.timezone === 'string' && npRes.timezone) setTimezone(npRes.timezone);
       if (npRes.locale === 'en-US' || npRes.locale === 'en-GB') setLocale(npRes.locale);
@@ -202,6 +207,7 @@ export function useStationFeed(
     activeShow,
     listeners,
     streamOnline,
+    stream,
     llmTokens,
     state,
     session,

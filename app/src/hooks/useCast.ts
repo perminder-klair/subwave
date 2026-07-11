@@ -78,7 +78,7 @@ export function useCast(
     // (PlayerScreen disarms the sleep timer on a true→false transition).
     setCastTunedIn(true);
     try {
-      await loadLiveStream(c, { url: a.streamUrl(), ...metaRef.current });
+      await loadLiveStream(c, { url: a.streamUrls().mp3, ...metaRef.current });
     } catch {
       setCastTunedIn(false);
     }
@@ -119,7 +119,7 @@ export function useCast(
     const url = mediaStatus?.mediaInfo?.contentUrl;
     const ps = mediaStatus?.playerState;
     if (
-      url && url.startsWith(a.streamUrl()) &&
+      url && url.startsWith(a.streamUrls().mp3) &&
       (ps === MediaPlayerState.PLAYING || ps === MediaPlayerState.BUFFERING || ps === MediaPlayerState.LOADING)
     ) {
       setCastTunedIn(true);

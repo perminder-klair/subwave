@@ -134,7 +134,7 @@ export function usePlayer(
     plog('reconnect → loadAndPlay');
     setStatus('connecting');
     try {
-      await loadAndPlay({ url: a.streamUrl(), headers: a.streamHeaders() });
+      await loadAndPlay({ url: a.streamUrls().mp3, headers: a.streamHeaders() });
       await TrackPlayer.setVolume(volume);
     } catch {
       // A throw here may not surface as a PlaybackError event — re-arm
@@ -260,7 +260,7 @@ export function usePlayer(
     retryCount.current = 0;
     setTunedIn(true);
     setStatus('connecting');
-    loadAndPlay({ url: a.streamUrl(), headers: a.streamHeaders() })
+    loadAndPlay({ url: a.streamUrls().mp3, headers: a.streamHeaders() })
       .then(() => TrackPlayer.setVolume(volume))
       .catch(() => { if (tunedInRef.current) armWatchdog(nextRetryDelay()); });
   }, [stop, volume, armWatchdog, nextRetryDelay]);

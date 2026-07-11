@@ -4,6 +4,7 @@ import {
   FORMAT_OPTIONS, availabilityFor, resolveFormatPreference,
   streamPreferenceKey, streamUrlFor, type StreamUrls,
 } from '../src/lib/audioFormat.ts';
+import { createApi } from '../src/lib/api.ts';
 
 const enabled = { mp3: true, opus: true, aac: true, flac: true } as const;
 const urls: StreamUrls = {
@@ -39,4 +40,12 @@ assert.equal(credentialedKey.includes('listener'), false);
 assert.equal(credentialedKey.includes('secret'), false);
 assert.equal(credentialedKey.includes('/private'), false);
 assert.equal(streamUrlFor(urls, 'flac'), 'https://radio.test/stream.flac');
+const api = createApi('https://user:pass@Radio.Test/');
+assert.deepEqual(api.streamUrls(), {
+  mp3: 'https://Radio.Test/stream.mp3',
+  opus: 'https://Radio.Test/stream.opus',
+  aac: 'https://Radio.Test/stream.aac',
+  flac: 'https://Radio.Test/stream.flac',
+});
+assert.ok(api.streamHeaders()?.Authorization?.startsWith('Basic '));
 console.log('audio-format tests passed');
