@@ -18,7 +18,7 @@ import BackupPanel from './BackupPanel';
 import FestivalsSection from './FestivalsSection';
 import {
   Radio, Palette, Cpu, Mic, Library, Search, Music, AudioLines,
-  Activity, Archive, Save, AlertTriangle, CalendarDays,
+  Activity, Archive, Save, AlertTriangle, CalendarDays, BrainCircuit,
 } from 'lucide-react';
 import {
   SectionHeader, ELEVENLABS_VS_DEFAULTS,
@@ -27,6 +27,7 @@ import {
 } from './settings/shared';
 import { TtsSection } from './settings/TtsSection';
 import { LlmSection } from './settings/LlmSection';
+import { BrainSection } from './settings/BrainSection';
 import { SearchSection } from './settings/SearchSection';
 import { LibrarySection } from './settings/LibrarySection';
 import { StationSection } from './settings/StationSection';
@@ -39,6 +40,7 @@ const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
   { id: 'theme',    label: 'Theme', hint: 'station-wide palette', icon: Palette },
   { id: 'festivals', label: 'Festivals', hint: 'calendar · mood', icon: CalendarDays },
+  { id: 'brain',    label: 'DJ Brain', hint: 'one-field brain + voice', icon: BrainCircuit },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine', icon: Mic },
   { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation', icon: Library },
@@ -506,6 +508,12 @@ export default function SettingsPanel() {
           <>
             {activeSection === 'tts' && data.tts && (
               <TtsSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh}
+              />
+            )}
+            {activeSection === 'brain' && (
+              <BrainSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh}
               />

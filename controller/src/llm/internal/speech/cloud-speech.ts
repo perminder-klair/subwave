@@ -89,6 +89,25 @@ function clampSpeed(speed: any, provider: string) {
   return Math.min(hi, Math.max(lo, n));
 }
 
+// Where the computed speech `speed` gets applied. Pure so the routing decision
+// is unit-pinned in scripts/llm-pure.test.ts rather than inferred from the call
+// site. Returns what to put in the request body's `speed` field (`body`, null =
+// omit it) and the ffmpeg atempo factor to stretch the rendered audio locally
+// (`atempo`, null = skip). At most one is ever non-null:
+//   speed === 1.0 (unity)          → { body: null,  atempo: null }  nothing to do
+//   non-compat provider            → { body: speed, atempo: null }  server honours speed
+//   openai-compatible + sendSpeed  → { body: speed, atempo: null }  told to honour it
+//   openai-compatible + !sendSpeed → { body: null,  atempo: speed } stretch locally (issue #942)
+export function speedDirective(
+  provider: string,
+  sendSpeed: boolean,
+  speed: number,
+): { body: number | null; atempo: number | null } {
+  if (speed === 1.0) return { body: null, atempo: null };
+  if (provider === 'openai-compatible' && !sendSpeed) return { body: null, atempo: speed };
+  return { body: speed, atempo: null };
+}
+
 // Minimal language-name → ISO 639-1 map for the ElevenLabs `language` param
 // (its language_code). OpenAI's gpt-4o-mini-tts takes a free-text instruction
 // instead, so it needs no map. Best-effort — an unknown name falls through to
@@ -238,16 +257,24 @@ export async function speak(
   // sent when it differs from default so default stations are unaffected and
   // providers that ignore the field never see it.
   //
-  // openai-compatible servers NEVER receive `speed` — their implementations
-  // are wildly uneven (issue #942: a Chatterbox shim behind LiteLLM produced
-  // comb-filtered "echo chamber" audio with broken mp3 frame timestamps
-  // whenever `speed` was present, and daypart energy makes it non-unity most
-  // of the day). Instead the server renders at its natural 1x and the rate is
-  // applied locally below via ffmpeg atempo — the slider/persona/daypart knobs
-  // still work (the point of #897), but the fragile server-side path is gone.
+  // openai-compatible servers default to NOT receiving `speed` — their
+  // implementations are wildly uneven (issue #942: a Chatterbox shim behind
+  // LiteLLM produced comb-filtered "echo chamber" audio with broken mp3 frame
+  // timestamps whenever `speed` was present, and daypart energy makes it
+  // non-unity most of the day). Instead the server renders at its natural 1x
+  // and the rate is applied locally below via ffmpeg atempo — the slider/
+  // persona/daypart knobs still work (the point of #897), but the fragile
+  // server-side path is gone.
+  //
+  // Escape hatch: tts.cloud.sendSpeed puts a compat server back on the native
+  // `speed` field and skips the local stretch — for a server that honours it
+  // cleanly (e.g. the hosted DJ Brain voice), where native speed beats
+  // time-stretch artifacts. openai / elevenlabs always take the field.
+  // speedDirective() owns the routing (unit-pinned in scripts/llm-pure.test.ts).
   const isCompat = c.provider === 'openai-compatible';
   const speed = clampSpeed(config.tts.cloudSpeed * (speedScale != null ? speedScale : 1), c.provider);
-  const stretchLocally = isCompat && speed !== 1.0;
+  const rate = speedDirective(c.provider, !!c.sendSpeed, speed);
+  const stretchLocally = rate.atempo != null;
 
   // ElevenLabs voice_settings — expressive knobs the operator tunes in the
   // Cloud TTS section of admin → Settings (issue #696). Only spread when the
@@ -279,7 +306,7 @@ export async function speak(
     model: speechModel(c),
     text,
     voice: c.voice || undefined,
-    ...(speed !== 1.0 && !isCompat ? { speed } : {}),
+    ...(rate.body != null ? { speed: rate.body } : {}),
     // Persona character (soul) + language → provider-native delivery hint
     // (issues #579 / #558).
     ...deliveryHint({ language, soul }, c.provider, c.model),

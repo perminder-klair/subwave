@@ -20,7 +20,7 @@ import { DEFAULT_LOCCA_EMBED_BASE_URL, openAICompatibleFetch } from '../src/llm/
 import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT, clampMaxOutputTokens, resolveMaxOutputTokens, MAX_OUTPUT_TOKENS_MIN, MAX_OUTPUT_TOKENS_MAX, effectiveFrequency, SCRIPT_LENGTHS } from '../src/settings.js';
 import { lengthMode, lengthPhrase } from '../src/llm/internal/prompts/system.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
-import { resolveCloudModel } from '../src/llm/internal/speech/cloud-speech.js';
+import { resolveCloudModel, speedDirective } from '../src/llm/internal/speech/cloud-speech.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -816,6 +816,27 @@ async function main() {
     assert.equal(clamped.tts.speed, 2.0);          // clamped to max
     const [bare] = validatePersonasStrict([base]);
     assert.equal(bare.tts.speed, TTS_SPEED_DEFAULT); // absent → unity
+  });
+
+  // ---- speedDirective: where the computed cloud-TTS speed is applied ----
+  // At most one of body/atempo is ever non-null — the cloud engine either sends
+  // `speed` upstream OR stretches locally, never both. Guards the issue #942
+  // fix (compat servers stretch locally) AND its sendSpeed escape hatch.
+  console.log('speedDirective (send `speed` upstream vs. local ffmpeg atempo):');
+  await test('openai-compatible + sendSpeed off → stretch locally, body omitted', () => {
+    assert.deepEqual(speedDirective('openai-compatible', false, 1.4), { body: null, atempo: 1.4 });
+  });
+  await test('openai-compatible + sendSpeed on → send speed upstream, no local stretch', () => {
+    assert.deepEqual(speedDirective('openai-compatible', true, 1.4), { body: 1.4, atempo: null });
+  });
+  await test('non-compat providers always send speed upstream (sendSpeed irrelevant)', () => {
+    assert.deepEqual(speedDirective('openai', false, 1.4), { body: 1.4, atempo: null });
+    assert.deepEqual(speedDirective('elevenlabs', false, 0.9), { body: 0.9, atempo: null });
+  });
+  await test('unity speed (1.0) → nothing anywhere, for every provider/flag combo', () => {
+    assert.deepEqual(speedDirective('openai-compatible', false, 1.0), { body: null, atempo: null });
+    assert.deepEqual(speedDirective('openai-compatible', true, 1.0), { body: null, atempo: null });
+    assert.deepEqual(speedDirective('openai', false, 1.0), { body: null, atempo: null });
   });
 
   // ---- showMusicLean: soft lean vs strict genre lock (shared by both pick paths) ----

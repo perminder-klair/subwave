@@ -1138,6 +1138,15 @@ const DEFAULTS = {
       voiceStyle: 0,
       voiceSimilarityBoost: 0.75,
       voiceUseSpeakerBoost: true,
+      // openai-compatible only: send the computed speech `speed` upstream in the
+      // request body instead of applying it locally via ffmpeg atempo. Off by
+      // default because compat servers are uneven with the field (issue #942:
+      // some shims produced comb-filtered audio when `speed` was present), so we
+      // stretch locally when unsure. Turn it on when the server honours `speed`
+      // natively — e.g. the hosted DJ Brain voice — since native speed beats
+      // time-stretch artifacts. Inert for openai / elevenlabs (they always send
+      // speed). See speedDirective() in llm/internal/speech/cloud-speech.ts.
+      sendSpeed: false,
     },
     // Remote engine — a user-configured self-hosted TTS endpoint that renders
     // audio over HTTP (POST /speak → audio body, gated on a /health probe).
@@ -1970,6 +1979,10 @@ export async function load() {
           typeof stored.tts?.cloud?.voiceUseSpeakerBoost === 'boolean'
             ? stored.tts.cloud.voiceUseSpeakerBoost
             : DEFAULTS.tts.cloud.voiceUseSpeakerBoost,
+        sendSpeed:
+          typeof stored.tts?.cloud?.sendSpeed === 'boolean'
+            ? stored.tts.cloud.sendSpeed
+            : DEFAULTS.tts.cloud.sendSpeed,
       },
       remote: {
         url:
@@ -3230,6 +3243,12 @@ export async function update(patch) {
       }
       if (c.voiceUseSpeakerBoost !== undefined) {
         next.tts.cloud.voiceUseSpeakerBoost = !!c.voiceUseSpeakerBoost;
+      }
+      // openai-compatible: send `speed` upstream vs. stretch locally (see
+      // speedDirective / issue #942). Plain boolean coercion — only consulted on
+      // the compat path, inert elsewhere.
+      if (c.sendSpeed !== undefined) {
+        next.tts.cloud.sendSpeed = !!c.sendSpeed;
       }
       // An OpenAI-compatible TTS server has no canonical endpoint — refuse to
       // save the provider without one. Mirrors the LLM-side check below.
