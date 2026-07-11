@@ -3,7 +3,7 @@
 import { isValidElement, memo, type ReactNode } from 'react';
 import { m } from 'motion/react';
 import { cn } from '@/lib/cn';
-import OdometerNumber from './OdometerNumber';
+import OdometerNumber from '@/components/OdometerNumber';
 import type { PlayerDrawer } from './CommandPalette';
 
 interface RailItem {

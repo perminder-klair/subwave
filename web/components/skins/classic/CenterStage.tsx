@@ -9,7 +9,7 @@ import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import { useElapsed } from '@/hooks/useElapsed';
 import DjThinkingLine from './DjThinkingLine';
 import CountUp from './CountUp';
-import { Ripple } from './ui/ripple';
+import { Ripple } from '@/components/ui/ripple';
 import { isDjTurn } from '@/lib/sessionFeed';
 import { useStationClient } from '@/lib/stationClient';
 import type { NowPlayingTrack, QueueEntry, SessionTurn } from '@/lib/types';

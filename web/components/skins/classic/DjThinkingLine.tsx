@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import { selectThinkingTurn, turnClass, turnText } from '@/lib/sessionFeed';
-import BoothBuddy, { type BuddyMood } from './BoothBuddy';
+import BoothBuddy, { type BuddyMood } from '@/components/BoothBuddy';
 import { useLiteMode } from '@/hooks/useLiteMode';
 import type { SessionTurn } from '@/lib/types';
 

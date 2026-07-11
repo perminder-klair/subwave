@@ -7,8 +7,8 @@ import {
   CommandEmpty,
   CommandGroup,
   CommandItem,
-} from './ui/command';
-import { Kbd } from './ui/kbd';
+} from '@/components/ui/command';
+import { Kbd } from '@/components/ui/kbd';
 
 export type PlayerDrawer = 'timeline' | 'booth' | 'request' | 'schedule';
 

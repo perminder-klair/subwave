@@ -2,7 +2,7 @@
 
 import * as Dialog from '@radix-ui/react-dialog';
 import { cn } from '@/lib/cn';
-import { Kbd } from './ui/kbd';
+import { Kbd } from '@/components/ui/kbd';
 
 interface Shortcut {
   keys: string[];

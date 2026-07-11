@@ -2,7 +2,7 @@
 
 import { memo } from 'react';
 import { buildTagline } from '@/lib/tagline';
-import ThemeSwitcher from './ThemeSwitcher';
+import ThemeSwitcher from '@/components/ThemeSwitcher';
 import type { ActiveShow, StationContext } from '@/lib/types';
 
 export interface TopBarProps {
