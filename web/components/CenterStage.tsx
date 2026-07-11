@@ -11,7 +11,7 @@ import DjThinkingLine from './DjThinkingLine';
 import CountUp from './CountUp';
 import { Ripple } from './ui/ripple';
 import { isDjTurn } from '@/lib/sessionFeed';
-import { useStationOrigin } from '@/lib/stationOrigin';
+import { useStationClient } from '@/lib/stationClient';
 import type { NowPlayingTrack, QueueEntry, SessionTurn } from '@/lib/types';
 
 /** How close to the end of the current track (seconds) the "up next" tease
@@ -70,7 +70,7 @@ export interface CenterStageProps {
 }
 
 export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens, feed, djLineOn, boothBuddyOn, offline, upNext, onOpenBooth, onOpenTimeline }: CenterStageProps) {
-  const { apiUrl } = useStationOrigin();
+  const client = useStationClient();
   // The 1s elapsed tick lives here, in the component that displays it, so it
   // only re-renders this subtree — not the whole player (see useElapsed).
   const elapsed = useElapsed(trackStartedAt);
@@ -84,9 +84,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
   const hasMeta = metaTokens.length > 0 || moodPhrase.length > 0;
   const duration = nowPlaying?.duration ?? 0;
   const subsonicId = nowPlaying?.subsonic_id ?? null;
-  const coverSrc = subsonicId
-    ? `${apiUrl}/cover/${encodeURIComponent(subsonicId)}`
-    : null;
+  const coverSrc = subsonicId ? client.coverUrl(subsonicId) : null;
   const showArt = !!coverSrc && !offline;
   // Title key keeps placeholder + real titles in the same AnimatePresence so
   // the first-track-arrives transition cross-dissolves the "scanning" line out.

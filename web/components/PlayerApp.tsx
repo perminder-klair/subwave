@@ -27,7 +27,7 @@ import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useCoverColors } from '@/hooks/useCoverColors';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import { cn } from '@/lib/cn';
-import { useStationOrigin } from '@/lib/stationOrigin';
+import { defaultStationClient, useStationClient } from '@/lib/stationClient';
 import type { QueueEntry, RequestResult } from '@/lib/types';
 
 const DRAWER_TITLES: Record<PlayerDrawer, string> = {
@@ -49,7 +49,7 @@ export interface PlayerAppProps {
 
 export default function PlayerApp({ contained = false }: PlayerAppProps) {
   const router = useRouter();
-  const { apiUrl } = useStationOrigin();
+  const client = useStationClient();
   const { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone, locale } = useStationFeed();
   const boothFeed = session.messages;
   const { audioRef, tunedIn, status, volume, setVolume, tune, toggleMute, muted, idleStopped } = usePlayer();
@@ -62,13 +62,9 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
   // needsSetup is about *this* install, not a remote station.
   useEffect(() => {
     if (contained) return;
-    const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
-    fetch(`${API}/onboarding/status`)
-      .then(r => (r.ok ? r.json() : null))
-      .then((j: { needsSetup?: boolean } | null) => {
-        if (j?.needsSetup) router.push('/onboarding');
-      })
-      .catch(() => {});
+    defaultStationClient.onboardingStatus().then(j => {
+      if (j?.needsSetup) router.push('/onboarding');
+    });
   }, [contained, router]);
 
   // streamOnline is null until the first poll resolves — only treat an
@@ -99,17 +95,12 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
     }
     const q = new URLSearchParams(window.location.search);
     const utmSource = q.get('utm_source') || q.get('ref') || q.get('source') || undefined;
-    fetch(`${apiUrl}/beacon`, {
-      method: 'POST',
-      keepalive: true,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        referrer: document.referrer || '',
-        path: window.location.pathname,
-        utmSource,
-      }),
-    }).catch(() => {});
-  }, [apiUrl]);
+    client.beacon({
+      referrer: document.referrer || '',
+      path: window.location.pathname,
+      utmSource,
+    });
+  }, [client]);
 
   // Persona avatar to surface on the OS lock screen while the DJ is talking.
   // Prefer the on-air show's persona (a scheduled show can hand the hour to a
@@ -121,7 +112,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
     (typeof activeShow?.persona?.avatar === 'string' && activeShow.persona.avatar) ||
     (typeof dj?.avatar === 'string' ? dj.avatar : '') ||
     '';
-  const personaAvatarUrl = avatarPath ? `${apiUrl}${avatarPath}` : null;
+  const personaAvatarUrl = avatarPath ? client.resolve(avatarPath) : null;
   const personaName =
     (typeof activeShow?.persona?.name === 'string' && activeShow.persona.name) ||
     (typeof dj?.name === 'string' ? dj.name : '') ||
@@ -149,9 +140,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
   // cover and feed them to the gradient layer behind the player. Same coverSrc
   // shape as CenterStage so the extraction hits the controller's cached proxy.
   const coverSubsonicId = nowPlaying?.subsonic_id ?? null;
-  const coverSrc = coverSubsonicId
-    ? `${apiUrl}/cover/${encodeURIComponent(coverSubsonicId)}`
-    : null;
+  const coverSrc = coverSubsonicId ? client.coverUrl(coverSubsonicId) : null;
   const coverColors = useCoverColors(coverSrc);
   const ambientRef = useRef<HTMLDivElement | null>(null);
   useDynamicStyle(ambientRef, {
@@ -281,12 +270,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
     if (!requestText.trim() || isSubmitting) return null;
     setIsSubmitting(true);
     try {
-      const res = await fetch(`${apiUrl}/request`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: requestText.trim(), name: requesterName.trim() }),
-      });
-      const data = (await res.json()) as RequestResult;
+      const data = await client.submitRequest(requestText.trim(), requesterName.trim());
       if (data.success) setRequestText('');
       return data;
     } catch {
@@ -299,15 +283,8 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
 
   // Poll a submitted request for its outcome. Returns the controller's
   // status payload, or null on a network error so the drawer keeps trying.
-  const pollRequest = async (requestId: string): Promise<RequestResult | null> => {
-    try {
-      const res = await fetch(`${apiUrl}/request/${requestId}`);
-      if (res.status === 404) return { success: false, status: 'unknown' };
-      return (await res.json()) as RequestResult;
-    } catch {
-      return null;
-    }
-  };
+  const pollRequest = (requestId: string): Promise<RequestResult | null> =>
+    client.requestStatus(requestId);
 
   return (
     <div
