@@ -20,6 +20,14 @@ export const SKINS: SkinManifest[] = [
     skinApiVersion: SKIN_API_VERSION,
     load: () => import('./classic/ClassicSkin'),
   },
+  {
+    id: 'terminal',
+    name: 'Terminal',
+    description:
+      'Text-only monospace readout — no artwork, no canvas. For kiosks, tiny windows, and purists.',
+    skinApiVersion: SKIN_API_VERSION,
+    load: () => import('./terminal/TerminalSkin'),
+  },
 ];
 
 export const DEFAULT_SKIN_ID = 'classic';
