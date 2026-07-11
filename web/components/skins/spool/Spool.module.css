@@ -1,0 +1,20 @@
+/* Spool skin — keyframes for the rotating cassette hubs. The supply reel
+   thins and the take-up reel fattens via dynamic sizing (useDynamicStyle);
+   rotation itself is pure CSS so it never re-renders anything. */
+
+@keyframes spool-spin {
+  to { transform: rotate(360deg); }
+}
+
+.hub {
+  animation: spool-spin 2.4s linear infinite;
+  animation-play-state: paused;
+}
+
+.hubFast {
+  animation-duration: 1.7s;
+}
+
+.spinning {
+  animation-play-state: running;
+}

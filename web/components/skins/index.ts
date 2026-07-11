@@ -21,6 +21,14 @@ export const SKINS: SkinManifest[] = [
     load: () => import('./classic/ClassicSkin'),
   },
   {
+    id: 'spool',
+    name: 'Spool',
+    description:
+      'A walkman deck — the whole station fits on one cassette.',
+    skinApiVersion: SKIN_API_VERSION,
+    load: () => import('./spool/SpoolSkin'),
+  },
+  {
     id: 'tty',
     name: 'TTY',
     description:
