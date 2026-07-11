@@ -180,8 +180,9 @@ export interface StationState {
   djLog: DjLogEntry[];
   timezone?: string;
   locale?: StationLocale;
-  /** Station-wide listener-player UI toggles (from GET /state). */
-  ui?: { boothBuddy?: boolean };
+  /** Station-wide listener-player UI settings (from GET /state). `skin` is
+   *  the operator's player-skin pick (see components/skins). */
+  ui?: { boothBuddy?: boolean; skin?: string };
 }
 
 /** A single turn in the live DJ session — `voice` (spoken on-air), `dj` (the

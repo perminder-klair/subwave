@@ -1,11 +1,12 @@
 'use client';
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
-import { Palette, Zap } from 'lucide-react';
+import { LayoutTemplate, Palette, Zap } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useDynamicStyle } from '../hooks/useDynamicStyle';
 import { useLiteMode } from '../hooks/useLiteMode';
 import { useThemeSwitcher } from './ThemeBootstrap';
+import { useSkinSelection } from './skins/SkinContext';
 
 /** The columns shown in each card's swatch — paper, ink, accent, overlay.
  *  Matches admin Settings → Theme so the same vocabulary travels with the
@@ -41,6 +42,11 @@ export interface ThemeSwitcherProps {
 // would draw the eye more than just appearing once.
 export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps) {
   const ctx = useThemeSwitcher();
+  // Skin selection is only available inside a PlayerShell; the admin header
+  // variant gets null and hides the section. With a single shipped skin
+  // there's nothing to switch, so the section also stays hidden then.
+  const skinCtx = useSkinSelection();
+  const showSkins = skinCtx != null && skinCtx.skins.length > 1;
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -182,6 +188,68 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
               </span>
             )}
           </button>
+
+          {/* Player-skin picker — a different face for the whole player, not
+              just a palette. Mirrors the theme rows: listener pick beats the
+              station default until reset. */}
+          {showSkins && skinCtx && (
+            <>
+              <span className="v3-eyebrow mt-2 border-b border-soft-border px-1 pb-1 text-[10px] tracking-[0.3em]">
+                Player skin
+              </span>
+              {skinCtx.skins.map(s => {
+                const isActive = s.id === skinCtx.effectiveId;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={isActive}
+                    onClick={() => {
+                      skinCtx.setOverride(s.id);
+                      setOpen(false);
+                      triggerRef.current?.focus();
+                    }}
+                    className={cn(
+                      'flex w-full items-center gap-2 border px-2 py-1.5 text-left',
+                      isActive
+                        ? 'border-vermilion bg-[var(--ink-softer)]'
+                        : 'border-soft-border bg-bg hover:bg-[var(--overlay)]',
+                    )}
+                  >
+                    <LayoutTemplate className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    <span className="grid min-w-0 flex-1 gap-0.5">
+                      <span className="truncate text-[11px] font-bold tracking-[0.12em] uppercase">
+                        {s.name}
+                      </span>
+                      <span className="truncate text-[10px] leading-[1.3] text-muted">
+                        {s.description}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  skinCtx.setOverride(null);
+                  setOpen(false);
+                  triggerRef.current?.focus();
+                }}
+                disabled={!skinCtx.overrideId}
+                className={cn(
+                  'mt-1 w-full border-0 bg-transparent px-2 py-1 text-left text-[10px] tracking-[0.2em] text-muted uppercase',
+                  skinCtx.overrideId ? 'cursor-pointer hover:text-ink' : 'cursor-default opacity-60',
+                )}
+              >
+                ↺ Use station skin
+                <span className="ml-1 normal-case opacity-70">
+                  ({skinCtx.skins.find(s => s.id === skinCtx.stationSkinId)?.name ?? skinCtx.stationSkinId})
+                </span>
+              </button>
+            </>
+          )}
 
           {/* Low-power toggle. Drops backdrop blur + animations so weak GPUs
               (kiosks, Raspberry Pi) stop re-compositing frosted layers every

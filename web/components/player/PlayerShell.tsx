@@ -3,16 +3,37 @@
 // The player chrome every skin gets for free: the headless core provider
 // (feed poll, audio engine, signal probe, OS media session), the <audio>
 // element skins tap for the Web Audio visualiser, the contained-embedding
-// portal plumbing, and the toaster. A skin renders everything else.
+// portal plumbing, the toaster — and the skin resolution itself.
+//
+// Skin precedence mirrors the theme system: listener override (localStorage)
+// beats the station default (ui.skin on GET /state) beats the built-in
+// fallback. The last-seen station skin is cached so a returning visitor
+// boots straight into the right skin; contained showcases follow the remote
+// station strictly (no override, no cache poisoning).
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Toaster } from '@/components/ui/toaster';
 import { cn } from '@/lib/cn';
+import {
+  cacheStationSkin,
+  loadCachedStationSkin,
+  loadSkinOverride,
+  saveSkinOverride,
+} from '@/lib/skin';
+import {
+  DEFAULT_SKIN_COMPONENT,
+  DEFAULT_SKIN_ID,
+  SKINS,
+  SKIN_COMPONENTS,
+  resolveSkinId,
+} from '@/components/skins';
+import { SkinSelectionProvider, type SkinSelection } from '@/components/skins/SkinContext';
 import type { SkinComponent } from '@/components/skins/types';
-import { PlayerCoreProvider, usePlayerAudio } from './PlayerCore';
+import { PlayerCoreProvider, usePlayerAudio, usePlayerFeed } from './PlayerCore';
 
 export interface PlayerShellProps {
-  skin: SkinComponent;
+  /** Explicit skin — bypasses registry resolution (previews, tests). */
+  skin?: SkinComponent;
   /** Rendered inside a showcase frame (landing page) rather than full-page:
    *  absolute instead of fixed positioning, dialogs portal into the frame,
    *  no toaster. */
@@ -27,21 +48,64 @@ export default function PlayerShell({ skin, contained = false }: PlayerShellProp
   );
 }
 
-function ShellChrome({ skin: Skin, contained }: { skin: SkinComponent; contained: boolean }) {
+function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boolean }) {
   const { audioRef } = usePlayerAudio();
+  const { state } = usePlayerFeed();
+  const stationSkinRaw = typeof state.ui?.skin === 'string' && state.ui.skin ? state.ui.skin : null;
+
+  // localStorage is effect-only (SSR renders the default), so a listener with
+  // an override or a cached non-default station skin sees it one tick after
+  // hydration — same trade the theme override makes.
+  const [overrideId, setOverrideId] = useState<string | null>(null);
+  const [cachedStation, setCachedStation] = useState<string | null>(null);
+  useEffect(() => {
+    if (contained) return; // showcases follow the remote station strictly
+    setOverrideId(loadSkinOverride());
+    setCachedStation(loadCachedStationSkin());
+  }, [contained]);
+  useEffect(() => {
+    if (contained || !stationSkinRaw) return;
+    cacheStationSkin(stationSkinRaw);
+  }, [contained, stationSkinRaw]);
+
+  const stationSkinId = stationSkinRaw ?? cachedStation ?? DEFAULT_SKIN_ID;
+  const effectiveId = resolveSkinId(stationSkinId, contained ? null : overrideId);
+
+  const setOverride = useCallback((id: string | null) => {
+    saveSkinOverride(id);
+    setOverrideId(id);
+  }, []);
+
+  const selection = useMemo<SkinSelection>(
+    () => ({
+      skins: SKINS,
+      stationSkinId: resolveSkinId(stationSkinId, null),
+      overrideId,
+      effectiveId,
+      setOverride,
+    }),
+    [stationSkinId, overrideId, effectiveId, setOverride],
+  );
+
   const rootRef = useRef<HTMLDivElement | null>(null);
   // Drawers/dialogs portal here when contained so they stay inside the frame.
   const [portalNode, setPortalNode] = useState<HTMLElement | null>(null);
   useEffect(() => { if (contained) setPortalNode(rootRef.current); }, [contained]);
 
+  // A skin swap remounts the skin subtree, but the <audio> element lives
+  // here in the shell — playback never hiccups when the face changes.
+  const Skin = skin ?? SKIN_COMPONENTS[effectiveId] ?? DEFAULT_SKIN_COMPONENT;
+
   return (
-    <div
-      ref={rootRef}
-      className={cn(contained ? 'absolute' : 'fixed', 'inset-0 overflow-hidden bg-bg text-ink')}
-    >
-      <audio ref={audioRef} crossOrigin="anonymous" preload="auto" />
-      <Skin contained={contained} portalNode={portalNode} />
-      {!contained && <Toaster />}
-    </div>
+    <SkinSelectionProvider value={selection}>
+      <div
+        ref={rootRef}
+        className={cn(contained ? 'absolute' : 'fixed', 'inset-0 overflow-hidden bg-bg text-ink')}
+      >
+        <audio ref={audioRef} crossOrigin="anonymous" preload="auto" />
+        <Skin contained={contained} portalNode={portalNode} />
+        {!contained && <Toaster />}
+      </div>
+    </SkinSelectionProvider>
   );
 }

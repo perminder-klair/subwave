@@ -1077,7 +1077,10 @@ const DEFAULTS = {
   // player reads these via GET /state (alongside the theme) and applies them
   // live; no restart. `boothBuddy` gates the DJ-line mascot — OFF by default,
   // so the line shows the classic ♪/◇ marker until an operator opts in.
-  ui: { boothBuddy: false },
+  // `skin` is the station-wide player-skin id — the web app owns the skin
+  // registry and falls back to its default on an unknown id, so the
+  // controller only stores a slug, never validates against a list.
+  ui: { boothBuddy: false, skin: 'classic' },
   // Global DJ prompt template. '' means "use DEFAULT_DJ_PROMPT_TEMPLATE".
   // Always the RESOLVED text of the active djPrompts entry — kept so
   // renderDjPrompt() (and an older controller sharing the same settings.json)
@@ -1885,6 +1888,10 @@ export async function load() {
         typeof stored.ui?.boothBuddy === 'boolean'
           ? stored.ui.boothBuddy
           : DEFAULTS.ui.boothBuddy,
+      skin:
+        typeof stored.ui?.skin === 'string' && stored.ui.skin.trim()
+          ? stored.ui.skin.trim()
+          : DEFAULTS.ui.skin,
     },
     personas,
     activePersonaId,
@@ -3511,6 +3518,14 @@ export async function update(patch) {
     const ui = patch.ui || {};
     if (ui.boothBuddy !== undefined) {
       next.ui.boothBuddy = !!ui.boothBuddy;
+    }
+    if (ui.skin !== undefined) {
+      // Slug only — the web registry resolves it and falls back on unknowns,
+      // so an invalid value is dropped rather than erroring the whole patch.
+      const slug = String(ui.skin).trim().toLowerCase();
+      if (/^[a-z0-9][a-z0-9-]{0,31}$/.test(slug)) {
+        next.ui.skin = slug;
+      }
     }
   }
   if ('webhooks' in patch) {

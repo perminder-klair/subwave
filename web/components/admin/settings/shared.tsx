@@ -262,7 +262,7 @@ export interface SettingsData {
       enrichment?: Partial<EmbeddingEnrichmentForm>;
     };
     sfx?: { enabled?: boolean };
-    ui?: { boothBuddy?: boolean };
+    ui?: { boothBuddy?: boolean; skin?: string };
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;
       listenbrainz?: Partial<ScrobbleListenbrainzForm>;
