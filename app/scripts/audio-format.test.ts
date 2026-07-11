@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   FORMAT_OPTIONS, availabilityFor, resolveFormatPreference,
   fallbackForLoadRejection, shouldApplyHydratedPreference,
+  resolveHydratedPreference,
   streamPreferenceKey, streamUrlFor, type StreamUrls,
 } from '../src/lib/audioFormat.ts';
 import { createApi } from '../src/lib/api.ts';
@@ -23,6 +24,11 @@ for (const platform of ['ios', 'android'] as const) {
   assert.deepEqual(a.flac, { available: false, reason: 'device' });
 }
 assert.equal(availabilityFor('ios', { ...enabled, aac: false }, new Set()).aac.reason, 'station');
+for (const platform of ['ios', 'android'] as const) {
+  const disabled = { ...enabled, opus: false, flac: false };
+  assert.equal(availabilityFor(platform, disabled, new Set()).opus.reason, 'device');
+  assert.equal(availabilityFor(platform, disabled, new Set()).flac.reason, 'device');
+}
 assert.equal(availabilityFor('ios', enabled, new Set(['aac'])).aac.reason, 'failed');
 assert.equal(resolveFormatPreference('aac', availabilityFor('ios', enabled, new Set())), 'aac');
 assert.equal(resolveFormatPreference('opus', availabilityFor('ios', enabled, new Set())), 'mp3');
@@ -60,4 +66,8 @@ assert.equal(fallbackForLoadRejection('mp3', 4, 4, 'https://a.test', 'https://a.
 assert.equal(shouldApplyHydratedPreference('https://a.test', 'https://a.test', 2, 2), true);
 assert.equal(shouldApplyHydratedPreference('https://a.test', 'https://b.test', 2, 2), false);
 assert.equal(shouldApplyHydratedPreference('https://a.test', 'https://a.test', 1, 2), false);
+const iosAvailability = availabilityFor('ios', enabled, new Set());
+assert.equal(resolveHydratedPreference('aac', iosAvailability, false, 2, 2), null);
+assert.equal(resolveHydratedPreference('aac', iosAvailability, true, 2, 2), 'aac');
+assert.equal(resolveHydratedPreference('aac', iosAvailability, true, 1, 2), null);
 console.log('audio-format tests passed');

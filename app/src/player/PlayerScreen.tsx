@@ -201,12 +201,12 @@ export default function PlayerScreen() {
     // polls nothing at all. While casting there's no local audio session, so
     // the OS suspends us in the background anyway — no point polling.
   } = useStationFeed(api, { backgroundPoll: localTunedInRef });
-  const streamEnablement = useMemo(() => ({
+  const streamEnablement = useMemo(() => stream ? ({
     mp3: true,
-    opus: stream?.opusEnabled === true,
-    aac: stream?.aacEnabled === true,
-    flac: stream?.flacEnabled === true,
-  }), [stream?.opusEnabled, stream?.aacEnabled, stream?.flacEnabled]);
+    opus: stream.opusEnabled === true,
+    aac: stream.aacEnabled === true,
+    flac: stream.flacEnabled === true,
+  }) : null, [stream]);
   const localPlayer = usePlayer(api, 1, isConnected, streamEnablement);
   useEffect(() => {
     localTunedInRef.current = localPlayer.tunedIn;

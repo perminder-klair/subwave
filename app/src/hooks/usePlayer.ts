@@ -18,7 +18,7 @@ import type { StationApi } from '@/lib/api';
 import {
   availabilityFor,
   fallbackForLoadRejection,
-  resolveFormatPreference,
+  resolveHydratedPreference,
   shouldApplyHydratedPreference,
   streamUrlFor,
   type AudioFormat,
@@ -69,7 +69,7 @@ export function usePlayer(
   // Device-level reachability (from useConnectivity), threaded in so a regained
   // link triggers an immediate reconnect rather than waiting for the watchdog.
   isConnected: boolean | null = null,
-  streamEnablement: StreamEnablement = DEFAULT_STREAM_ENABLEMENT,
+  streamEnablement: StreamEnablement | null = null,
 ): Player {
   const [tunedIn, setTunedIn] = useState(false);
   const [status, setStatus] = useState<PlayerStatus>('idle');
@@ -86,7 +86,12 @@ export function usePlayer(
   const playbackGenerationRef = useRef(0);
   const selectionRevisionRef = useRef(0);
   const formatHydrationPromiseRef = useRef<Promise<void>>(Promise.resolve());
-  const streamEnablementRef = useRef(streamEnablement);
+  const streamEnablementRef = useRef<StreamEnablement | null>(streamEnablement);
+  const hydratedPreferenceRef = useRef<{
+    base: string;
+    stored: AudioFormat | null;
+    selectionRevision: number;
+  } | null>(null);
   const watchdog = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Consecutive failed reconnects since the last successful 'playing' — drives
   // the exponential backoff below.
@@ -98,7 +103,7 @@ export function usePlayer(
 
   const availability = useMemo(() => availabilityFor(
     Platform.OS === 'ios' ? 'ios' : 'android',
-    streamEnablement,
+    streamEnablement ?? DEFAULT_STREAM_ENABLEMENT,
     failedFormatsRef.current,
     // formatFailure is the state signal for failedFormatsRef mutations.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -112,6 +117,7 @@ export function usePlayer(
     selectionRevisionRef.current += 1;
     const hydrationSelectionRevision = selectionRevisionRef.current;
     failedFormatsRef.current.clear();
+    hydratedPreferenceRef.current = null;
     setFormatFailure(null);
     formatRef.current = 'mp3';
     setFormat('mp3');
@@ -123,12 +129,20 @@ export function usePlayer(
       if (!shouldApplyHydratedPreference(
         base, apiRef.current?.base, hydrationSelectionRevision, selectionRevisionRef.current,
       )) return;
+      hydratedPreferenceRef.current = {
+        base, stored, selectionRevision: hydrationSelectionRevision,
+      };
+      const enablement = streamEnablementRef.current;
       const nextAvailability = availabilityFor(
         Platform.OS === 'ios' ? 'ios' : 'android',
-        streamEnablementRef.current,
+        enablement ?? DEFAULT_STREAM_ENABLEMENT,
         failedFormatsRef.current,
       );
-      const resolved = resolveFormatPreference(stored, nextAvailability);
+      const resolved = resolveHydratedPreference(
+        stored, nextAvailability, enablement !== null,
+        hydrationSelectionRevision, selectionRevisionRef.current,
+      );
+      if (resolved === null) return;
       formatRef.current = resolved;
       setFormat(resolved);
     }).catch(() => {});
@@ -239,9 +253,30 @@ export function usePlayer(
   // failures, but ensure the exposed target and RNTP mount cannot remain on a
   // format the station has just disabled.
   useEffect(() => {
+    if (streamEnablement === null) return;
     const currentAvailability = availabilityFor(
       Platform.OS === 'ios' ? 'ios' : 'android', streamEnablement, failedFormatsRef.current,
     );
+    const hydrated = hydratedPreferenceRef.current;
+    if (hydrated && hydrated.base === apiRef.current?.base) {
+      const resolved = resolveHydratedPreference(
+        hydrated.stored, currentAvailability, true,
+        hydrated.selectionRevision, selectionRevisionRef.current,
+      );
+      if (resolved !== null) {
+        const changed = formatRef.current !== resolved;
+        formatRef.current = resolved;
+        setFormat(resolved);
+        if (changed && tunedInRef.current) {
+          clearWatchdog();
+          setStatus('connecting');
+          loadFormat(resolved).catch(() => {
+            if (tunedInRef.current) armWatchdogRef.current(nextRetryDelay());
+          });
+          return;
+        }
+      }
+    }
     if (currentAvailability[formatRef.current].available) return;
     formatRef.current = 'mp3';
     setFormat('mp3');
@@ -405,7 +440,7 @@ export function usePlayer(
     if (!a) return;
     const currentAvailability = availabilityFor(
       Platform.OS === 'ios' ? 'ios' : 'android',
-      streamEnablement,
+      streamEnablement ?? DEFAULT_STREAM_ENABLEMENT,
       failedFormatsRef.current,
     );
     if (!currentAvailability[next].available) return;

@@ -24,8 +24,8 @@ export function availabilityFor(
   failed: ReadonlySet<AudioFormat>,
 ): FormatAvailability {
   return Object.fromEntries(FORMAT_OPTIONS.map(({ id }) => {
-    if (!enabled[id]) return [id, { available: false, reason: 'station' }];
     if (!DEVICE_SUPPORT[platform][id]) return [id, { available: false, reason: 'device' }];
+    if (!enabled[id]) return [id, { available: false, reason: 'station' }];
     if (failed.has(id)) return [id, { available: false, reason: 'failed' }];
     return [id, { available: true }];
   })) as FormatAvailability;
@@ -65,4 +65,15 @@ export function shouldApplyHydratedPreference(
 ): boolean {
   return hydrationBase === activeBase
     && hydrationSelectionRevision === activeSelectionRevision;
+}
+
+export function resolveHydratedPreference(
+  stored: AudioFormat | null,
+  availability: FormatAvailability,
+  capabilitiesKnown: boolean,
+  hydrationSelectionRevision: number,
+  activeSelectionRevision: number,
+): AudioFormat | null {
+  if (!capabilitiesKnown || hydrationSelectionRevision !== activeSelectionRevision) return null;
+  return resolveFormatPreference(stored, availability);
 }
