@@ -29,6 +29,14 @@ export const SKINS: SkinManifest[] = [
     load: () => import('./spool/SpoolSkin'),
   },
   {
+    id: 'subamp',
+    name: 'Subamp',
+    description:
+      "A compact modular player — deck, booth and log stacked like it's 1998.",
+    skinApiVersion: SKIN_API_VERSION,
+    load: () => import('./subamp/SubampSkin'),
+  },
+  {
     id: 'tty',
     name: 'TTY',
     description:
