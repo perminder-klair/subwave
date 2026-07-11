@@ -50,8 +50,10 @@ export function streamUrlFor(urls: StreamUrls, format: AudioFormat): string {
 
 export function fallbackForLoadRejection(
   format: AudioFormat, errorGeneration: number, activeGeneration: number,
+  attemptedBase: string, activeBase: string | undefined, tunedIn: boolean,
 ): { fallback: 'mp3'; failed: AudioFormat } | null {
-  if (errorGeneration !== activeGeneration || format === 'mp3') return null;
+  if (!tunedIn || attemptedBase !== activeBase
+    || errorGeneration !== activeGeneration || format === 'mp3') return null;
   return { fallback: 'mp3', failed: format };
 }
 

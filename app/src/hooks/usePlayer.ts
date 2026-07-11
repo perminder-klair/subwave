@@ -106,6 +106,9 @@ export function usePlayer(
 
   useEffect(() => {
     const base = api?.base;
+    // Invalidate every load owned by the previous station before its promise
+    // can reject into this station's session.
+    playbackGenerationRef.current += 1;
     selectionRevisionRef.current += 1;
     const hydrationSelectionRevision = selectionRevisionRef.current;
     failedFormatsRef.current.clear();
@@ -208,7 +211,7 @@ export function usePlayer(
       await TrackPlayer.setVolume(volumeRef.current);
       return null;
     } catch (error) {
-      return { error, generation, format: next };
+      return { error, generation, format: next, base: a.base };
     }
   }, []);
 
@@ -217,10 +220,12 @@ export function usePlayer(
     if (!rejection) return;
     const failed = fallbackForLoadRejection(
       rejection.format, rejection.generation, playbackGenerationRef.current,
+      rejection.base, apiRef.current?.base, tunedInRef.current,
     );
-    // A newer load superseded this rejection. It must not affect the current
-    // mount, its availability, or the reconnect schedule.
-    if (rejection.generation !== playbackGenerationRef.current) return;
+    // An abandoned tune, another station, or a newer load superseded this
+    // rejection. It must not affect the current mount, availability, or retry.
+    if (!tunedInRef.current || rejection.base !== apiRef.current?.base
+      || rejection.generation !== playbackGenerationRef.current) return;
     if (!failed) throw rejection.error;
     failedFormatsRef.current.add(failed.failed);
     setFormatFailure(failed.failed);
@@ -353,6 +358,9 @@ export function usePlayer(
 
   const stop = useCallback(() => {
     clearWatchdog();
+    // Any in-flight load now belongs to an abandoned tune session. Its later
+    // rejection must not blacklist a format or start a fallback load.
+    playbackGenerationRef.current += 1;
     tunedInRef.current = false;
     setTunedIn(false);
     setStatus('idle');

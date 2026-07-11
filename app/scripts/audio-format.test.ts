@@ -49,9 +49,14 @@ assert.deepEqual(api.streamUrls(), {
   flac: 'https://Radio.Test/stream.flac',
 });
 assert.ok(api.streamHeaders()?.Authorization?.startsWith('Basic '));
-assert.deepEqual(fallbackForLoadRejection('aac', 4, 4), { fallback: 'mp3', failed: 'aac' });
-assert.equal(fallbackForLoadRejection('aac', 3, 4), null);
-assert.equal(fallbackForLoadRejection('mp3', 4, 4), null);
+assert.deepEqual(
+  fallbackForLoadRejection('aac', 4, 4, 'https://a.test', 'https://a.test', true),
+  { fallback: 'mp3', failed: 'aac' },
+);
+assert.equal(fallbackForLoadRejection('aac', 3, 4, 'https://a.test', 'https://a.test', true), null);
+assert.equal(fallbackForLoadRejection('aac', 4, 4, 'https://a.test', 'https://b.test', true), null);
+assert.equal(fallbackForLoadRejection('aac', 4, 4, 'https://a.test', 'https://a.test', false), null);
+assert.equal(fallbackForLoadRejection('mp3', 4, 4, 'https://a.test', 'https://a.test', true), null);
 assert.equal(shouldApplyHydratedPreference('https://a.test', 'https://a.test', 2, 2), true);
 assert.equal(shouldApplyHydratedPreference('https://a.test', 'https://b.test', 2, 2), false);
 assert.equal(shouldApplyHydratedPreference('https://a.test', 'https://a.test', 1, 2), false);

@@ -48,3 +48,16 @@ Implemented native live-format selection, per-station preference hydration, sele
 - `cd app && npm run typecheck`: passed.
 - `cd app && npx eslint src/hooks/usePlayer.ts src/lib/audioFormat.ts scripts/audio-format.test.ts --rule 'react-hooks/refs: off' --rule 'react-hooks/set-state-in-effect: off'`: passed with zero findings. The two disabled React Compiler rules are the same documented repository/toolchain incompatibilities affecting the required ref-backed availability and station-reset effect patterns.
 - `cd app && npm run lint`: ran and reported the unchanged broad baseline of 43 errors and 4 warnings across the app, including the two previously documented findings in `usePlayer.ts`.
+
+## Re-review lifecycle invalidation follow-up (2026-07-10)
+
+- Every explicit stop and station-base effect now increments the playback generation, invalidating promises owned by the abandoned tune/station.
+- Each direct rejection carries its attempted station base in addition to format and generation. Optional-format blacklisting and MP3 fallback require an active matching generation, the same current station base, and `tunedInRef.current === true`.
+- Rejections from a tune-out, prior station, or superseded load return without blacklisting, fallback, or retry scheduling. The conservative reconnect-only policy for unattributed RNTP `PlaybackError` events remains unchanged.
+
+### Fresh verification evidence
+
+- RED: `cd app && npm run test:audio-format` failed on the new station-mismatch assertion because the prior helper ignored base/tuned ownership.
+- GREEN: `cd app && npm run test:audio-format` passed, including stale-generation, base-mismatch, and tuned-out rejection cases.
+- `cd app && npm run typecheck`: passed.
+- `cd app && npx eslint src/hooks/usePlayer.ts src/lib/audioFormat.ts scripts/audio-format.test.ts --rule 'react-hooks/refs: off' --rule 'react-hooks/set-state-in-effect: off'`: passed with zero findings.
