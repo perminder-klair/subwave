@@ -20,6 +20,7 @@ import { useTuneInGate } from '@/components/player/useTuneInGate';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useElapsed } from '@/hooks/useElapsed';
 import { useClock } from '@/lib/hooks';
+import ThemeSwitcher from '@/components/ThemeSwitcher';
 import { cn } from '@/lib/cn';
 import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import { useStationClient } from '@/lib/stationClient';
@@ -152,9 +153,12 @@ export default function SubampSkin(_props: SkinProps) {
       <div className="absolute top-7 left-9 hidden text-[10px] tracking-[0.24em] text-muted uppercase lg:block">
         {stationName} — {showName ? `${showName} with ${djName}` : `with ${djName}`}
       </div>
-      <div className="absolute top-7 right-9 hidden text-[10px] tracking-[0.24em] text-muted uppercase lg:block">
-        {[clock ? turnClock(clock.getTime(), timezone, stationLocale) : '', contextLine(context)]
-          .filter(Boolean).join(' · ')}
+      <div className="absolute top-6 right-4 z-10 flex items-center gap-3 lg:top-7 lg:right-9">
+        <span className="hidden text-[10px] tracking-[0.24em] text-muted uppercase lg:inline">
+          {[clock ? turnClock(clock.getTime(), timezone, stationLocale) : '', contextLine(context)]
+            .filter(Boolean).join(' · ')}
+        </span>
+        <ThemeSwitcher />
       </div>
       <div className="absolute bottom-7 left-9 hidden text-[10px] tracking-[0.18em] text-muted uppercase lg:block">
         {offline

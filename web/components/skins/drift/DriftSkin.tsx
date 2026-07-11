@@ -21,6 +21,7 @@ import { useCoverColors } from '@/hooks/useCoverColors';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import { useElapsed } from '@/hooks/useElapsed';
 import { useClock } from '@/lib/hooks';
+import ThemeSwitcher from '@/components/ThemeSwitcher';
 import { cn } from '@/lib/cn';
 import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import { useStationClient } from '@/lib/stationClient';
@@ -148,13 +149,16 @@ export default function DriftSkin(_props: SkinProps) {
       <div className="absolute top-7 left-8 max-w-[45%] truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase">
         {stationName} — {showName ? `${showName} with ${djName}` : `small hours with ${djName}`}
       </div>
-      <div className="absolute top-7 right-8 max-w-[45%] truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase">
-        {clock
-          ? [
-              `${turnClock(clock.getTime(), timezone, stationLocale)} ${stationWeekday(clock, timezone)}`,
-              contextLine(context),
-            ].filter(Boolean).join(' · ')
-          : contextLine(context)}
+      <div className="absolute top-7 right-8 flex max-w-[45%] items-center gap-3">
+        <span className="min-w-0 truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase">
+          {clock
+            ? [
+                `${turnClock(clock.getTime(), timezone, stationLocale)} ${stationWeekday(clock, timezone)}`,
+                contextLine(context),
+              ].filter(Boolean).join(' · ')
+            : contextLine(context)}
+        </span>
+        <ThemeSwitcher />
       </div>
       <div className="absolute bottom-7 left-8 max-w-[38%] truncate font-mono text-[10px] tracking-[0.18em] text-muted uppercase">
         {upNext?.title ? `up next · ${[upNext.title, upNext.artist].filter(Boolean).join(' — ')}` : ''}

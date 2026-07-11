@@ -16,6 +16,7 @@ import { useTuneInGate } from '@/components/player/useTuneInGate';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useElapsed } from '@/hooks/useElapsed';
 import { useClock } from '@/lib/hooks';
+import ThemeSwitcher from '@/components/ThemeSwitcher';
 import { cn } from '@/lib/cn';
 import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import { useStationClient } from '@/lib/stationClient';
@@ -136,9 +137,12 @@ export default function TtySkin(_props: SkinProps) {
             {showName ? <> ▸ {showName.toUpperCase()}</> : null}
             <span className="text-[var(--accent)]"> — WITH {djName.toUpperCase()}</span>
           </div>
-          <div className="truncate text-[12px] tracking-[0.1em] text-muted uppercase">
-            {[contextLine(context), clock ? turnClock(clock.getTime(), timezone, stationLocale) : '']
-              .filter(Boolean).join(' · ')}
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="truncate text-[12px] tracking-[0.1em] text-muted uppercase">
+              {[contextLine(context), clock ? turnClock(clock.getTime(), timezone, stationLocale) : '']
+                .filter(Boolean).join(' · ')}
+            </span>
+            <ThemeSwitcher />
           </div>
         </div>
 

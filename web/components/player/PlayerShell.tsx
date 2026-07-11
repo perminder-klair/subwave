@@ -12,7 +12,10 @@
 // station strictly (no override, no cache poisoning).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { Toaster } from '@/components/ui/toaster';
+import { useThemeSwitcher } from '@/components/ThemeBootstrap';
+import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { cn } from '@/lib/cn';
 import {
   cacheStationSkin,
@@ -86,6 +89,31 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
     }),
     [stationSkinId, overrideId, effectiveId, setOverride],
   );
+
+  // Shell-level cycling shortcuts — they must work in EVERY skin (a skin
+  // without a visible switcher must never strand the listener): `s` cycles
+  // the skin override, `t` cycles the theme override. Toasts name the pick
+  // so a rapid cycle stays legible. Bare keys are already suppressed while
+  // a text field has focus (useKeyboardShortcuts).
+  const themeCtx = useThemeSwitcher();
+  const cycleSkin = useCallback(() => {
+    if (contained) return;
+    const i = SKINS.findIndex(s => s.id === effectiveId);
+    const next = SKINS[(i + 1) % SKINS.length];
+    if (!next) return;
+    setOverride(next.id);
+    toast(`Skin: ${next.name}`);
+  }, [contained, effectiveId, setOverride]);
+  const cycleTheme = useCallback(() => {
+    if (contained || !themeCtx || themeCtx.themes.length === 0) return;
+    const { themes, effectiveId: themeId, setOverride: setThemeOverride } = themeCtx;
+    const i = themes.findIndex(t => t.id === themeId);
+    const next = themes[(i + 1) % themes.length];
+    if (!next) return;
+    setThemeOverride(next.id);
+    toast(`Theme: ${next.name}`);
+  }, [contained, themeCtx]);
+  useKeyboardShortcuts({ s: cycleSkin, t: cycleTheme }, { disabled: contained });
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   // Drawers/dialogs portal here when contained so they stay inside the frame.

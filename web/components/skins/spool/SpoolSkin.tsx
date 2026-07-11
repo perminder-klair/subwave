@@ -19,6 +19,7 @@ import { useTuneInGate } from '@/components/player/useTuneInGate';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useElapsed } from '@/hooks/useElapsed';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
+import ThemeSwitcher from '@/components/ThemeSwitcher';
 import { cn } from '@/lib/cn';
 import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import { useStationClient } from '@/lib/stationClient';
@@ -143,8 +144,11 @@ export default function SpoolSkin(_props: SkinProps) {
           )}
           <span className="truncate font-mono text-[11px] tracking-[0.18em] text-[var(--accent)] uppercase">with {djName}</span>
         </div>
-        <div className="truncate font-mono text-[11px] tracking-[0.16em] text-muted uppercase">
-          {contextLine(context)}
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="truncate font-mono text-[11px] tracking-[0.16em] text-muted uppercase">
+            {contextLine(context)}
+          </span>
+          <ThemeSwitcher />
         </div>
       </div>
 
