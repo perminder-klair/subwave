@@ -21,14 +21,25 @@ export const SKINS: SkinManifest[] = [
     load: () => import('./classic/ClassicSkin'),
   },
   {
-    id: 'terminal',
-    name: 'Terminal',
+    id: 'tty',
+    name: 'TTY',
     description:
-      'Text-only monospace readout — no artwork, no canvas. For kiosks, tiny windows, and purists.',
+      'The station as a live process — panes and a status line, everything tails.',
     skinApiVersion: SKIN_API_VERSION,
-    load: () => import('./terminal/TerminalSkin'),
+    load: () => import('./tty/TtySkin'),
   },
 ];
+
+/** Renamed/retired skin ids — resolved to their successor so an operator's
+ *  saved setting keeps working across upgrades. */
+const LEGACY_SKIN_ALIASES: Record<string, string> = {
+  terminal: 'tty',
+};
+
+function canonicalSkinId(id: string | null | undefined): string | null {
+  if (!id) return null;
+  return LEGACY_SKIN_ALIASES[id] ?? id;
+}
 
 export const DEFAULT_SKIN_ID = 'classic';
 
@@ -36,15 +47,17 @@ export function isKnownSkin(id: string | null | undefined): id is string {
   return !!id && SKINS.some(s => s.id === id);
 }
 
-/** Listener override beats station default beats built-in fallback; unknown
- *  ids (a skin removed from the build, a typo in settings) fall through so
- *  the player always renders. */
+/** Listener override beats station default beats built-in fallback; legacy
+ *  ids map to their successor, and unknown ids (a skin removed from the
+ *  build, a typo in settings) fall through so the player always renders. */
 export function resolveSkinId(
   stationId: string | null | undefined,
   overrideId: string | null,
 ): string {
-  if (isKnownSkin(overrideId)) return overrideId;
-  if (isKnownSkin(stationId)) return stationId;
+  const override = canonicalSkinId(overrideId);
+  if (isKnownSkin(override)) return override;
+  const station = canonicalSkinId(stationId);
+  if (isKnownSkin(station)) return station;
   return DEFAULT_SKIN_ID;
 }
 
