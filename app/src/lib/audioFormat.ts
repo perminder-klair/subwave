@@ -47,3 +47,10 @@ export function streamPreferenceKey(base: string): string {
 export function streamUrlFor(urls: StreamUrls, format: AudioFormat): string {
   return urls[format];
 }
+
+export function fallbackForPlaybackError(
+  format: AudioFormat, errorGeneration: number, activeGeneration: number,
+): { fallback: 'mp3'; failed: AudioFormat } | null {
+  if (errorGeneration !== activeGeneration || format === 'mp3') return null;
+  return { fallback: 'mp3', failed: format };
+}

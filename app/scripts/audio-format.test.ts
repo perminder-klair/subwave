@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import {
   FORMAT_OPTIONS, availabilityFor, resolveFormatPreference,
-  streamPreferenceKey, streamUrlFor, type StreamUrls,
+  fallbackForPlaybackError, streamPreferenceKey, streamUrlFor, type StreamUrls,
 } from '../src/lib/audioFormat.ts';
 import { createApi } from '../src/lib/api.ts';
 
@@ -48,4 +48,7 @@ assert.deepEqual(api.streamUrls(), {
   flac: 'https://Radio.Test/stream.flac',
 });
 assert.ok(api.streamHeaders()?.Authorization?.startsWith('Basic '));
+assert.deepEqual(fallbackForPlaybackError('aac', 4, 4), { fallback: 'mp3', failed: 'aac' });
+assert.equal(fallbackForPlaybackError('aac', 3, 4), null);
+assert.equal(fallbackForPlaybackError('mp3', 4, 4), null);
 console.log('audio-format tests passed');

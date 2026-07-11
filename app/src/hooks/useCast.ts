@@ -210,6 +210,7 @@ export function useCast(
     () =>
       connected
         ? {
+            ...local,
             tunedIn: castTunedIn || local.tunedIn,
             status: castStatus,
             volume: castVolume,
