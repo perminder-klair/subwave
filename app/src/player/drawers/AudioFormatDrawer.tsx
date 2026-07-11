@@ -29,7 +29,7 @@ export default function AudioFormatDrawer({
   const { colors } = useTheme();
 
   return (
-    <View>
+    <View accessibilityRole="radiogroup" accessibilityLabel="Audio format">
       {formatFailure ? (
         <Text className="font-body text-muted" style={{ fontSize: 13, marginBottom: 12 }}>
           Playback fell back to MP3.

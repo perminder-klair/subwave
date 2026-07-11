@@ -216,9 +216,10 @@ export default function PlayerScreen() {
   const stationName = typeof dj?.station === 'string' ? dj.station : undefined;
   const djName = typeof dj?.name === 'string' ? dj.name : undefined;
 
+  const subsonicId = nowPlaying?.subsonic_id;
   const coverSrc = useMemo(
-    () => (api && nowPlaying?.subsonic_id ? api.cover(nowPlaying.subsonic_id) : null),
-    [api, nowPlaying?.subsonic_id],
+    () => (api && subsonicId ? api.cover(subsonicId) : null),
+    [api, subsonicId],
   );
 
   // Google Cast, merged over the local player: with no session this is
