@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
 import { AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { CalendarClock, History, Mic } from 'lucide-react';
@@ -19,15 +18,17 @@ import TimelineDrawer from './drawers/TimelineDrawer';
 import BoothDrawer from './drawers/BoothDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import ScheduleDrawer from './drawers/ScheduleDrawer';
-import { useStationFeed } from '@/hooks/useStationFeed';
-import { usePlayer } from '@/hooks/usePlayer';
-import { useSignal } from '@/hooks/useSignal';
-import { useMediaSession } from '@/hooks/useMediaSession';
+import {
+  PlayerCoreProvider,
+  usePlayerActions,
+  usePlayerAudio,
+  usePlayerFeed,
+} from './player/PlayerCore';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useCoverColors } from '@/hooks/useCoverColors';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import { cn } from '@/lib/cn';
-import { defaultStationClient, useStationClient } from '@/lib/stationClient';
+import { useStationClient } from '@/lib/stationClient';
 import type { QueueEntry, RequestResult } from '@/lib/types';
 
 const DRAWER_TITLES: Record<PlayerDrawer, string> = {
@@ -47,89 +48,34 @@ export interface PlayerAppProps {
   contained?: boolean;
 }
 
+// The player entry point: mounts the headless core (feed poll, audio engine,
+// media session) and the UI beneath it. Install-level page effects (first-run
+// redirect, audience beacon) live in player/PlayerPageEffects, mounted by the
+// full-page routes — never by showcase embeds.
 export default function PlayerApp({ contained = false }: PlayerAppProps) {
-  const router = useRouter();
+  return (
+    <PlayerCoreProvider>
+      <PlayerBody contained={contained} />
+    </PlayerCoreProvider>
+  );
+}
+
+function PlayerBody({ contained }: { contained: boolean }) {
   const client = useStationClient();
-  const { nowPlaying, context, dj, activeShow, listeners, streamOnline, llmTokens, state, session, trackStartedAt, timezone, locale } = useStationFeed();
+  const {
+    nowPlaying, context, dj, activeShow, listeners, llmTokens,
+    state, session, trackStartedAt, timezone, locale,
+  } = usePlayerFeed();
   const boothFeed = session.messages;
-  const { audioRef, tunedIn, status, volume, setVolume, tune, toggleMute, muted, idleStopped } = usePlayer();
-
-  // First-run redirect — if this install hasn't been configured yet (no
-  // Navidrome creds), bounce the operator into the wizard instead of dropping
-  // them on a silent player. Mirrors AdminShell. Only for the full-page player:
-  // `contained` instances embedded in showcases must never redirect, and the
-  // check hits the same-origin controller (/api), not the multi-station origin —
-  // needsSetup is about *this* install, not a remote station.
-  useEffect(() => {
-    if (contained) return;
-    defaultStationClient.onboardingStatus().then(j => {
-      if (j?.needsSetup) router.push('/onboarding');
-    });
-  }, [contained, router]);
-
-  // streamOnline is null until the first poll resolves — only treat an
-  // explicit false as offline so the player never flashes "offline" on load.
-  const offline = streamOnline === false;
-
-  // Connection-health meter for the footer's signal scale — measured latency
-  // to the controller, probed only while tuned in (see useSignal).
-  const signal = useSignal({ tunedIn, status, offline });
+  const { audioRef, tunedIn, status, volume, muted, idleStopped, offline, signal } =
+    usePlayerAudio();
+  const { tune, toggleMute, setVolume, submitRequest: coreSubmitRequest, pollRequest } =
+    usePlayerActions();
 
   // Listener count now lives in the footer's signal readout (not the header) —
   // normalise the feed's number | { current } | null shape to a plain count.
   const listenerCount =
     listeners == null ? null : typeof listeners === 'number' ? listeners : (listeners.current ?? null);
-
-  // One-shot audience beacon: hand the controller the external referrer + any
-  // UTM tag on first load. The referrer is browser-only knowledge — by the time
-  // the API polls run, it's same-origin — so we report document.referrer here.
-  // Guarded by a per-tab sessionStorage flag so refreshes/remounts don't double
-  // count; the controller also dedupes by IP. Best-effort, never blocks.
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      if (sessionStorage.getItem('sw_beacon')) return;
-      sessionStorage.setItem('sw_beacon', '1');
-    } catch {
-      /* private mode: no storage — proceed, the server dedupes by IP */
-    }
-    const q = new URLSearchParams(window.location.search);
-    const utmSource = q.get('utm_source') || q.get('ref') || q.get('source') || undefined;
-    client.beacon({
-      referrer: document.referrer || '',
-      path: window.location.pathname,
-      utmSource,
-    });
-  }, [client]);
-
-  // Persona avatar to surface on the OS lock screen while the DJ is talking.
-  // Prefer the on-air show's persona (a scheduled show can hand the hour to a
-  // different DJ); fall back to the global "active" persona from /now-playing.
-  // The controller emits a path without the `/api` prefix; prepend the
-  // station's API base so this resolves the same way in prod (via Caddy),
-  // dev (direct origin), and the landing showcase (remote station).
-  const avatarPath =
-    (typeof activeShow?.persona?.avatar === 'string' && activeShow.persona.avatar) ||
-    (typeof dj?.avatar === 'string' ? dj.avatar : '') ||
-    '';
-  const personaAvatarUrl = avatarPath ? client.resolve(avatarPath) : null;
-  const personaName =
-    (typeof activeShow?.persona?.name === 'string' && activeShow.persona.name) ||
-    (typeof dj?.name === 'string' ? dj.name : '') ||
-    null;
-
-  // Wire OS-level media controls (lock screen, headphones, car display).
-  // No onSkip on the public listener — a stray AirPods double-tap shouldn't
-  // skip the song for every other listener on the station.
-  useMediaSession({
-    tunedIn,
-    nowPlaying,
-    audioRef,
-    onTune: tune,
-    boothFeed,
-    personaAvatarUrl,
-    personaName,
-  });
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   // Drawers/dialogs portal here when contained so they stay inside the frame.
@@ -270,7 +216,7 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
     if (!requestText.trim() || isSubmitting) return null;
     setIsSubmitting(true);
     try {
-      const data = await client.submitRequest(requestText.trim(), requesterName.trim());
+      const data = await coreSubmitRequest(requestText.trim(), requesterName.trim());
       if (data.success) setRequestText('');
       return data;
     } catch {
@@ -280,11 +226,6 @@ export default function PlayerApp({ contained = false }: PlayerAppProps) {
       setIsSubmitting(false);
     }
   };
-
-  // Poll a submitted request for its outcome. Returns the controller's
-  // status payload, or null on a network error so the drawer keeps trying.
-  const pollRequest = (requestId: string): Promise<RequestResult | null> =>
-    client.requestStatus(requestId);
 
   return (
     <div

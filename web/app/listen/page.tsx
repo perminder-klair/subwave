@@ -1,5 +1,6 @@
 import type { Viewport } from 'next';
 import PlayerApp from '@/components/PlayerApp';
+import PlayerPageEffects from '@/components/player/PlayerPageEffects';
 import { pageMeta } from '@/lib/seo';
 
 export const metadata = pageMeta({
@@ -17,5 +18,10 @@ export const viewport: Viewport = {
 };
 
 export default function ListenPage() {
-  return <PlayerApp />;
+  return (
+    <>
+      <PlayerPageEffects />
+      <PlayerApp />
+    </>
+  );
 }
