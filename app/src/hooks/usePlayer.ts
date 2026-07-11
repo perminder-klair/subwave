@@ -17,8 +17,9 @@ import { getLastLiveMeta, loadAndPlay, setupPlayer, teardown } from '@/audio/pla
 import type { StationApi } from '@/lib/api';
 import {
   availabilityFor,
-  fallbackForPlaybackError,
+  fallbackForLoadRejection,
   resolveFormatPreference,
+  shouldApplyHydratedPreference,
   streamUrlFor,
   type AudioFormat,
   type FormatAvailability,
@@ -83,8 +84,9 @@ export function usePlayer(
   const formatRef = useRef<AudioFormat>('mp3');
   const volumeRef = useRef(initialVolume);
   const playbackGenerationRef = useRef(0);
-  const currentLoadGenerationRef = useRef(0);
+  const selectionRevisionRef = useRef(0);
   const formatHydrationPromiseRef = useRef<Promise<void>>(Promise.resolve());
+  const streamEnablementRef = useRef(streamEnablement);
   const watchdog = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Consecutive failed reconnects since the last successful 'playing' — drives
   // the exponential backoff below.
@@ -92,6 +94,7 @@ export function usePlayer(
   useEffect(() => { tunedInRef.current = tunedIn; }, [tunedIn]);
   useEffect(() => { apiRef.current = api; }, [api]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
+  useEffect(() => { streamEnablementRef.current = streamEnablement; }, [streamEnablement]);
 
   const availability = useMemo(() => availabilityFor(
     Platform.OS === 'ios' ? 'ios' : 'android',
@@ -103,6 +106,8 @@ export function usePlayer(
 
   useEffect(() => {
     const base = api?.base;
+    selectionRevisionRef.current += 1;
+    const hydrationSelectionRevision = selectionRevisionRef.current;
     failedFormatsRef.current.clear();
     setFormatFailure(null);
     formatRef.current = 'mp3';
@@ -111,19 +116,21 @@ export function usePlayer(
       formatHydrationPromiseRef.current = Promise.resolve();
       return;
     }
-    let alive = true;
-    const nextAvailability = availabilityFor(
-      Platform.OS === 'ios' ? 'ios' : 'android', streamEnablement, failedFormatsRef.current,
-    );
     const hydration = loadFormatPreference(base).then((stored) => {
-      if (!alive || apiRef.current?.base !== base) return;
+      if (!shouldApplyHydratedPreference(
+        base, apiRef.current?.base, hydrationSelectionRevision, selectionRevisionRef.current,
+      )) return;
+      const nextAvailability = availabilityFor(
+        Platform.OS === 'ios' ? 'ios' : 'android',
+        streamEnablementRef.current,
+        failedFormatsRef.current,
+      );
       const resolved = resolveFormatPreference(stored, nextAvailability);
       formatRef.current = resolved;
       setFormat(resolved);
     }).catch(() => {});
     formatHydrationPromiseRef.current = hydration;
-    return () => { alive = false; };
-  }, [api?.base, streamEnablement]);
+  }, [api?.base]);
 
   useEffect(() => { setupPlayer().catch(() => {}); }, []);
 
@@ -187,19 +194,59 @@ export function usePlayer(
   // reconnect() needs armWatchdog, which needs reconnect — bridge with a ref.
   const armWatchdogRef = useRef<(delay: number) => void>(() => {});
 
-  const loadFormat = useCallback(async (next: AudioFormat) => {
+  const loadOnce = useCallback(async (next: AudioFormat) => {
     const a = apiRef.current;
     if (!a) return;
     const generation = ++playbackGenerationRef.current;
-    currentLoadGenerationRef.current = generation;
     formatRef.current = next;
     setFormat(next);
-    await loadAndPlay({
-      url: streamUrlFor(a.streamUrls(), next),
-      headers: a.streamHeaders(),
-    });
-    await TrackPlayer.setVolume(volumeRef.current);
+    try {
+      await loadAndPlay({
+        url: streamUrlFor(a.streamUrls(), next),
+        headers: a.streamHeaders(),
+      });
+      await TrackPlayer.setVolume(volumeRef.current);
+      return null;
+    } catch (error) {
+      return { error, generation, format: next };
+    }
   }, []);
+
+  const loadFormat = useCallback(async (next: AudioFormat) => {
+    const rejection = await loadOnce(next);
+    if (!rejection) return;
+    const failed = fallbackForLoadRejection(
+      rejection.format, rejection.generation, playbackGenerationRef.current,
+    );
+    // A newer load superseded this rejection. It must not affect the current
+    // mount, its availability, or the reconnect schedule.
+    if (rejection.generation !== playbackGenerationRef.current) return;
+    if (!failed) throw rejection.error;
+    failedFormatsRef.current.add(failed.failed);
+    setFormatFailure(failed.failed);
+    const fallbackRejection = await loadOnce(failed.fallback);
+    if (fallbackRejection && fallbackRejection.generation === playbackGenerationRef.current) {
+      throw fallbackRejection.error;
+    }
+  }, [loadOnce]);
+
+  // Enablement may refresh while a station remains selected. Preserve session
+  // failures, but ensure the exposed target and RNTP mount cannot remain on a
+  // format the station has just disabled.
+  useEffect(() => {
+    const currentAvailability = availabilityFor(
+      Platform.OS === 'ios' ? 'ios' : 'android', streamEnablement, failedFormatsRef.current,
+    );
+    if (currentAvailability[formatRef.current].available) return;
+    formatRef.current = 'mp3';
+    setFormat('mp3');
+    if (!tunedInRef.current) return;
+    clearWatchdog();
+    setStatus('connecting');
+    loadFormat('mp3').catch(() => {
+      if (tunedInRef.current) armWatchdogRef.current(nextRetryDelay());
+    });
+  }, [streamEnablement, clearWatchdog, loadFormat, nextRetryDelay]);
 
   const reconnect = useCallback(async () => {
     clearWatchdog();
@@ -255,23 +302,10 @@ export function usePlayer(
       if (event.type === Event.PlaybackError) {
         if (tunedInRef.current) {
           setStatus('connecting');
-          const failed = fallbackForPlaybackError(
-            formatRef.current,
-            currentLoadGenerationRef.current,
-            playbackGenerationRef.current,
-          );
-          if (failed) {
-            failedFormatsRef.current.add(failed.failed);
-            setFormatFailure(failed.failed);
-            formatRef.current = failed.fallback;
-            setFormat(failed.fallback);
-            clearWatchdog();
-            loadFormat(failed.fallback).catch(() => {
-              if (tunedInRef.current) armWatchdog(nextRetryDelay());
-            });
-          } else {
-            armWatchdog(nextRetryDelay());
-          }
+          // RNTP does not identify which historical load emitted this event.
+          // Treat it as a transport interruption only; promise rejections in
+          // loadFormat are the sole source of optional-format blacklisting.
+          armWatchdog(nextRetryDelay());
         }
         return;
       }
@@ -367,6 +401,7 @@ export function usePlayer(
       failedFormatsRef.current,
     );
     if (!currentAvailability[next].available) return;
+    selectionRevisionRef.current += 1;
     formatRef.current = next;
     setFormat(next);
     setFormatFailure(null);

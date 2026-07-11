@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict';
 import {
   FORMAT_OPTIONS, availabilityFor, resolveFormatPreference,
-  fallbackForPlaybackError, streamPreferenceKey, streamUrlFor, type StreamUrls,
+  fallbackForLoadRejection, shouldApplyHydratedPreference,
+  streamPreferenceKey, streamUrlFor, type StreamUrls,
 } from '../src/lib/audioFormat.ts';
 import { createApi } from '../src/lib/api.ts';
 
@@ -48,7 +49,10 @@ assert.deepEqual(api.streamUrls(), {
   flac: 'https://Radio.Test/stream.flac',
 });
 assert.ok(api.streamHeaders()?.Authorization?.startsWith('Basic '));
-assert.deepEqual(fallbackForPlaybackError('aac', 4, 4), { fallback: 'mp3', failed: 'aac' });
-assert.equal(fallbackForPlaybackError('aac', 3, 4), null);
-assert.equal(fallbackForPlaybackError('mp3', 4, 4), null);
+assert.deepEqual(fallbackForLoadRejection('aac', 4, 4), { fallback: 'mp3', failed: 'aac' });
+assert.equal(fallbackForLoadRejection('aac', 3, 4), null);
+assert.equal(fallbackForLoadRejection('mp3', 4, 4), null);
+assert.equal(shouldApplyHydratedPreference('https://a.test', 'https://a.test', 2, 2), true);
+assert.equal(shouldApplyHydratedPreference('https://a.test', 'https://b.test', 2, 2), false);
+assert.equal(shouldApplyHydratedPreference('https://a.test', 'https://a.test', 1, 2), false);
 console.log('audio-format tests passed');
