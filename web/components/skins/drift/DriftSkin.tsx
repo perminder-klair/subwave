@@ -26,6 +26,7 @@ import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import { useStationClient } from '@/lib/stationClient';
 import {
   contextLine,
+  entryTime,
   lastVoiceLine,
   listenerCountOf,
   progressRatio,
@@ -284,7 +285,7 @@ export default function DriftSkin(_props: SkinProps) {
             <div className="flex flex-col gap-1 border-t border-soft-border pt-2.5">
               {history.map((h, i) => (
                 <div key={`${h.t ?? i}-${h.title ?? i}`} className="flex gap-2.5 font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
-                  <span>{turnClock(h.t, timezone, stationLocale)}</span>
+                  <span>{turnClock(entryTime(h), timezone, stationLocale)}</span>
                   <span className="min-w-0 flex-1 truncate">
                     {h.title ?? '?'}{h.artist ? ` — ${h.artist}` : ''}
                   </span>

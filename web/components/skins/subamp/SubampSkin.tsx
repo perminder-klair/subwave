@@ -26,6 +26,7 @@ import { useStationClient } from '@/lib/stationClient';
 import {
   boothLines,
   contextLine,
+  entryTime,
   listenerCountOf,
   trackMeta,
   turnClock,
@@ -309,7 +310,7 @@ export default function SubampSkin(_props: SkinProps) {
                 <span className="min-w-0 flex-1 truncate">
                   {h.title ?? '?'}{h.artist ? ` — ${h.artist}` : ''}
                 </span>
-                <span>{turnClock(h.t, timezone, stationLocale)}</span>
+                <span>{turnClock(entryTime(h), timezone, stationLocale)}</span>
               </div>
             ))}
             <div className="-mx-2 flex gap-2.5 bg-[var(--field)] px-2 py-0.5 text-[11px] font-bold tracking-[0.06em] text-[var(--accent)] uppercase">

@@ -59,6 +59,18 @@ export function lastVoiceLine(messages: SessionTurn[]): BoothLine | null {
   return null;
 }
 
+/** Timestamp of a queue/history entry. The live controller stamps history
+ *  with `queuedAt`; `t` is the documented field on older payloads — accept
+ *  either so clocks render on both. */
+export function entryTime(
+  e: { t?: string; [k: string]: unknown } | null | undefined,
+): string | undefined {
+  if (!e) return undefined;
+  if (typeof e.t === 'string') return e.t;
+  const q = e['queuedAt'];
+  return typeof q === 'string' ? q : undefined;
+}
+
 /** HH:MM in the station's zone for a turn/history timestamp, '--:--' when
  *  unparseable. */
 export function turnClock(

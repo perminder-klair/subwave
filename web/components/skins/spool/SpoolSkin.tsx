@@ -24,6 +24,7 @@ import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import { useStationClient } from '@/lib/stationClient';
 import {
   contextLine,
+  entryTime,
   lastVoiceLine,
   listenerCountOf,
   progressRatio,
@@ -159,7 +160,7 @@ export default function SpoolSkin(_props: SkinProps) {
               <MiniHubs />
               <div className="flex items-baseline justify-between gap-2">
                 <span className="min-w-0 truncate text-[13px] font-bold">{h.title ?? '?'}</span>
-                <span className="flex-none font-mono text-[10px] text-muted">{turnClock(h.t, timezone, stationLocale)}</span>
+                <span className="flex-none font-mono text-[10px] text-muted">{turnClock(entryTime(h), timezone, stationLocale)}</span>
               </div>
               {h.artist && <div className="truncate text-[11px] text-muted">{h.artist}</div>}
             </div>

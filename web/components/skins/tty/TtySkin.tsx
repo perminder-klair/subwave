@@ -22,6 +22,7 @@ import { useStationClient } from '@/lib/stationClient';
 import {
   boothLines,
   contextLine,
+  entryTime,
   listenerCountOf,
   progressRatio,
   trackMeta,
@@ -243,7 +244,7 @@ export default function TtySkin(_props: SkinProps) {
             {history.length === 0 && <div className="text-[12px] text-muted">nothing yet this session</div>}
             {history.map((h, i) => (
               <div key={`${h.t ?? i}-${h.title ?? i}`} className="truncate text-[12px] uppercase">
-                <span className="text-muted">{turnClock(h.t, timezone, stationLocale)}</span>{' '}
+                <span className="text-muted">{turnClock(entryTime(h), timezone, stationLocale)}</span>{' '}
                 {h.title ?? '?'}
                 {h.artist && <span className="text-muted"> — {h.artist}</span>}
               </div>

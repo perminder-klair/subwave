@@ -279,9 +279,10 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
             />
           </div>
           <div className="field-hint">
-            {SKINS.map(s => `${s.name} — ${s.description}`).join(' ')} Listeners can
-            still pick a different skin for their own browser from the player&apos;s
-            palette menu. Applies live on the next poll, no restart.
+            The face every listener sees — each skin is a different full-screen
+            layout built on the same live data. Listeners can still pick a
+            different skin for their own browser from the player&apos;s palette
+            menu. Applies live on the next poll, no restart.
           </div>
         </div>
       </Card>
