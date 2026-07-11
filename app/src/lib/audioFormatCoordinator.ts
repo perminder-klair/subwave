@@ -16,13 +16,65 @@ export interface LatestLoadCoordinator<T> {
   invalidate(): void;
 }
 
+export interface OwnedLoadAndPlayDependencies<T> {
+  setup(): Promise<void>;
+  load(value: T): Promise<void>;
+  play(): Promise<void>;
+  reset(): Promise<void>;
+  setMeta(value: T | null): void;
+}
+
+/**
+ * Runs one native load under coordinator ownership. Native promises cannot be
+ * cancelled, so a lifecycle invalidation is compensated before this execution
+ * releases the coordinator serialization lock to a replacement.
+ */
+export async function executeOwnedLoadAndPlay<T>(
+  value: T,
+  isOwned: () => boolean,
+  dependencies: OwnedLoadAndPlayDependencies<T>,
+): Promise<void> {
+  const compensate = async () => {
+    try {
+      await dependencies.reset();
+    } finally {
+      dependencies.setMeta(null);
+    }
+  };
+
+  await dependencies.setup();
+  if (!isOwned()) {
+    await compensate();
+    return;
+  }
+  try {
+    await dependencies.load(value);
+  } catch (error) {
+    if (!isOwned()) await compensate();
+    throw error;
+  }
+  if (!isOwned()) {
+    await compensate();
+    return;
+  }
+
+  dependencies.setMeta(value);
+  try {
+    await dependencies.play();
+  } catch (error) {
+    if (!isOwned()) await compensate();
+    throw error;
+  }
+  if (!isOwned()) await compensate();
+}
+
 /**
  * RNTP load/reset operations mutate one global player. Keep exactly one in
  * flight, retain only the newest queued request, and do not call an older
  * completion "applied" when a newer request or lifecycle invalidation exists.
  */
 export function createLatestLoadCoordinator<T>(
-  execute: (value: T) => Promise<void>,
+  execute: (value: T, isOwned: () => boolean) => Promise<void>,
 ): LatestLoadCoordinator<T> {
   type Entry = {
     value: T;
@@ -40,7 +92,7 @@ export function createLatestLoadCoordinator<T>(
     pending = null;
     let error: unknown;
     try {
-      await execute(entry.value);
+      await execute(entry.value, () => entry.revision === revision);
     } catch (caught) {
       error = caught;
     }

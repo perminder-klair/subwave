@@ -109,8 +109,9 @@ export function usePlayer(
   };
   const loadCoordinatorRef = useRef<ReturnType<typeof createLatestLoadCoordinator<NativeLoad>> | null>(null);
   if (loadCoordinatorRef.current == null) {
-    loadCoordinatorRef.current = createLatestLoadCoordinator(async (load) => {
-      await loadAndPlay({ url: load.url, headers: load.headers });
+    loadCoordinatorRef.current = createLatestLoadCoordinator(async (load, isOwned) => {
+      await loadAndPlay({ url: load.url, headers: load.headers }, isOwned);
+      if (!isOwned()) return;
       await TrackPlayer.setVolume(load.volume);
     });
   }

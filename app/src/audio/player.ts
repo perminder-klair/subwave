@@ -12,6 +12,7 @@ import TrackPlayer, {
   type PlayerOptions,
   RatingType,
 } from 'react-native-track-player';
+import { executeOwnedLoadAndPlay } from '@/lib/audioFormatCoordinator';
 
 const STREAM_TRACK_ID = 'subwave-live';
 
@@ -101,21 +102,29 @@ export function getLastLiveMeta(): LiveTrackMeta | null {
  *  listeners off their HomePod ~2s after they picked it. `load()` keeps the
  *  session — and the listener's chosen output — alive (it also loads-as-first
  *  when the queue is empty, so fresh tune-ins take the same path). */
-export async function loadAndPlay(meta: LiveTrackMeta): Promise<void> {
-  await setupPlayer();
-  const bust = `${meta.url}${meta.url.includes('?') ? '&' : '?'}t=${Date.now()}`;
-  await TrackPlayer.load({
-    id: STREAM_TRACK_ID,
-    url: bust,
-    title: meta.title || 'SUB/WAVE',
-    artist: meta.artist || 'Live broadcast',
-    album: meta.album || 'SUB/WAVE',
-    artwork: meta.artwork,
-    isLiveStream: true,
-    headers: meta.headers,
+export async function loadAndPlay(
+  meta: LiveTrackMeta,
+  isOwned: () => boolean = () => true,
+): Promise<void> {
+  await executeOwnedLoadAndPlay(meta, isOwned, {
+    setup: setupPlayer,
+    load: async (next) => {
+      const bust = `${next.url}${next.url.includes('?') ? '&' : '?'}t=${Date.now()}`;
+      await TrackPlayer.load({
+        id: STREAM_TRACK_ID,
+        url: bust,
+        title: next.title || 'SUB/WAVE',
+        artist: next.artist || 'Live broadcast',
+        album: next.album || 'SUB/WAVE',
+        artwork: next.artwork,
+        isLiveStream: true,
+        headers: next.headers,
+      });
+    },
+    play: () => TrackPlayer.play(),
+    reset: () => TrackPlayer.reset(),
+    setMeta: (next) => { lastLiveMeta = next; },
   });
-  lastLiveMeta = meta;
-  await TrackPlayer.play();
 }
 
 export async function teardown(): Promise<void> {

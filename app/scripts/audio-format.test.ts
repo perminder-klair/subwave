@@ -10,6 +10,7 @@ import { createApi } from '../src/lib/api.ts';
 import {
   createFirstTuneReadiness,
   createLatestLoadCoordinator,
+  executeOwnedLoadAndPlay,
 } from '../src/lib/audioFormatCoordinator.ts';
 
 const enabled = { mp3: true, opus: true, aac: true, flac: true } as const;
@@ -80,6 +81,22 @@ function deferred<T>() {
   let reject!: (error: unknown) => void;
   const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
   return { promise, resolve, reject };
+}
+
+function ownedLoadHarness() {
+  const events: string[] = [];
+  let meta: string | null = null;
+  return {
+    events,
+    get meta() { return meta; },
+    deps: {
+      setup: async () => { events.push('setup'); },
+      load: async (value: string) => { events.push(`load:${value}`); },
+      play: async () => { events.push('play'); },
+      reset: async () => { events.push('reset'); },
+      setMeta: (value: string | null) => { meta = value; events.push(`meta:${value}`); },
+    },
+  };
 }
 
 // First tune waits for both preference storage and the first authoritative
@@ -170,6 +187,96 @@ function deferred<T>() {
   active.resolve();
   assert.equal((await first).status, 'superseded');
   assert.equal((await queued).status, 'superseded');
+}
+
+
+// Native lifecycle ownership is checked after load, before playback can begin.
+{
+  const load = deferred<void>();
+  const loadStarted = deferred<void>();
+  const harness = ownedLoadHarness();
+  harness.deps.load = async (value: string) => {
+    harness.events.push(`load:${value}`);
+    loadStarted.resolve();
+    await load.promise;
+  };
+  const coordinator = createLatestLoadCoordinator((value: string, isOwned) =>
+    executeOwnedLoadAndPlay(value, isOwned, harness.deps));
+  const request = coordinator.request('old');
+  await loadStarted.promise;
+  coordinator.invalidate();
+  load.resolve();
+  assert.equal((await request).status, 'superseded');
+  assert.deepEqual(harness.events, ['setup', 'load:old', 'reset', 'meta:null']);
+  assert.equal(harness.meta, null);
+}
+
+// Invalidation during play tears down the stale native side effect and metadata.
+{
+  const play = deferred<void>();
+  const playStarted = deferred<void>();
+  const harness = ownedLoadHarness();
+  harness.deps.play = async () => {
+    harness.events.push('play');
+    playStarted.resolve();
+    await play.promise;
+  };
+  const coordinator = createLatestLoadCoordinator((value: string, isOwned) =>
+    executeOwnedLoadAndPlay(value, isOwned, harness.deps));
+  const request = coordinator.request('old');
+  await playStarted.promise;
+  coordinator.invalidate();
+  play.resolve();
+  assert.equal((await request).status, 'superseded');
+  assert.deepEqual(
+    harness.events,
+    ['setup', 'load:old', 'meta:old', 'play', 'reset', 'meta:null'],
+  );
+  assert.equal(harness.meta, null);
+}
+
+// A valid owner keeps the in-place load and playback without resetting it.
+{
+  const harness = ownedLoadHarness();
+  const coordinator = createLatestLoadCoordinator((value: string, isOwned) =>
+    executeOwnedLoadAndPlay(value, isOwned, harness.deps));
+  assert.equal((await coordinator.request('current')).status, 'applied');
+  assert.deepEqual(harness.events, ['setup', 'load:current', 'meta:current', 'play']);
+  assert.equal(harness.meta, 'current');
+}
+
+// A replacement cannot start until stale-play compensation has completed.
+{
+  const play = deferred<void>();
+  const playStarted = deferred<void>();
+  const reset = deferred<void>();
+  const resetStarted = deferred<void>();
+  const harness = ownedLoadHarness();
+  harness.deps.play = async () => {
+    harness.events.push('play');
+    playStarted.resolve();
+    await play.promise;
+  };
+  harness.deps.reset = async () => {
+    harness.events.push('reset');
+    resetStarted.resolve();
+    await reset.promise;
+  };
+  const coordinator = createLatestLoadCoordinator((value: string, isOwned) =>
+    executeOwnedLoadAndPlay(value, isOwned, harness.deps));
+  const old = coordinator.request('old');
+  await playStarted.promise;
+  const current = coordinator.request('current');
+  play.resolve();
+  await resetStarted.promise;
+  assert.deepEqual(
+    harness.events,
+    ['setup', 'load:old', 'meta:old', 'play', 'reset'],
+  );
+  reset.resolve();
+  assert.equal((await old).status, 'superseded');
+  assert.equal((await current).status, 'applied');
+  assert.deepEqual(harness.events.slice(-4), ['setup', 'load:current', 'meta:current', 'play']);
 }
 
 // A watchdog reconnect uses the retained selected format, not an MP3 default.
