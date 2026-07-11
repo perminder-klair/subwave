@@ -25,5 +25,18 @@ assert.equal(availabilityFor('ios', enabled, new Set(['aac'])).aac.reason, 'fail
 assert.equal(resolveFormatPreference('aac', availabilityFor('ios', enabled, new Set())), 'aac');
 assert.equal(resolveFormatPreference('opus', availabilityFor('ios', enabled, new Set())), 'mp3');
 assert.equal(streamPreferenceKey('https://RADIO.test/'), 'subwave.audio-format.v1:https://radio.test');
+const canonicalPreferenceKey = 'subwave.audio-format.v1:https://radio.test';
+for (const base of [
+  'radio.test',
+  ' https://RADIO.test/ ',
+  'https://radio.test/listen/path?source=app#player',
+  'https://listener:secret@radio.test:443/private',
+]) {
+  assert.equal(streamPreferenceKey(base), canonicalPreferenceKey);
+}
+const credentialedKey = streamPreferenceKey('https://listener:secret@radio.test/private');
+assert.equal(credentialedKey.includes('listener'), false);
+assert.equal(credentialedKey.includes('secret'), false);
+assert.equal(credentialedKey.includes('/private'), false);
 assert.equal(streamUrlFor(urls, 'flac'), 'https://radio.test/stream.flac');
 console.log('audio-format tests passed');

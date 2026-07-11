@@ -37,7 +37,12 @@ export function resolveFormatPreference(
   return stored && availability[stored].available ? stored : 'mp3';
 }
 export function streamPreferenceKey(base: string): string {
-  return `subwave.audio-format.v1:${base.trim().replace(/\/+$/, '').toLowerCase()}`;
+  const value = base.trim();
+  const url = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new TypeError(`Unsupported station URL protocol: ${url.protocol}`);
+  }
+  return `subwave.audio-format.v1:${url.origin}`;
 }
 export function streamUrlFor(urls: StreamUrls, format: AudioFormat): string {
   return urls[format];
