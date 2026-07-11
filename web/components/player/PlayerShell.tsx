@@ -57,15 +57,24 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
   const stationSkinRaw = typeof state.ui?.skin === 'string' && state.ui.skin ? state.ui.skin : null;
 
   // localStorage is effect-only (SSR renders the default), so a listener with
-  // an override or a cached non-default station skin sees it one tick after
-  // hydration — same trade the theme override makes.
+  // an override or a cached non-default station skin swaps one tick after
+  // hydration. SKIN_INIT_SCRIPT hides the shell pre-paint in that case
+  // (data-skin-pending on <html>), so the swap shows as a quiet blank
+  // instead of a flash of the default face; `hydrated` lifts the curtain
+  // after the resolved skin is in the tree.
   const [overrideId, setOverrideId] = useState<string | null>(null);
   const [cachedStation, setCachedStation] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
   useEffect(() => {
     if (contained) return; // showcases follow the remote station strictly
     setOverrideId(loadSkinOverride());
     setCachedStation(loadCachedStationSkin());
+    setHydrated(true);
   }, [contained]);
+  useEffect(() => {
+    if (!hydrated || typeof document === 'undefined') return;
+    document.documentElement.removeAttribute('data-skin-pending');
+  }, [hydrated]);
   useEffect(() => {
     if (contained || !stationSkinRaw) return;
     cacheStationSkin(stationSkinRaw);
@@ -128,7 +137,12 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
     <SkinSelectionProvider value={selection}>
       <div
         ref={rootRef}
-        className={cn(contained ? 'absolute' : 'fixed', 'inset-0 overflow-hidden bg-bg text-ink')}
+        className={cn(
+          // sw-player-shell is the pre-paint hide hook (SKIN_INIT_SCRIPT) —
+          // full-page shells only; showcase embeds never set/clear the attr.
+          contained ? 'absolute' : 'sw-player-shell fixed',
+          'inset-0 overflow-hidden bg-bg text-ink',
+        )}
       >
         <audio ref={audioRef} crossOrigin="anonymous" preload="auto" />
         <Skin contained={contained} portalNode={portalNode} />

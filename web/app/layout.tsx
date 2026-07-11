@@ -5,6 +5,7 @@ import { Fraunces, Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
 import { GoogleAnalytics } from '@next/third-parties/google';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { LITE_INIT_SCRIPT } from '@/lib/lite';
+import { SKIN_INIT_SCRIPT } from '@/lib/skin';
 import { SITE_URL } from '@/lib/site';
 import { GA_ID } from '@/lib/ga';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
@@ -127,6 +128,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             so a pinned kiosk never flashes the heavy, blur-heavy build. Static
             constant from lib/lite — no untrusted input. */}
         <script dangerouslySetInnerHTML={{ __html: LITE_INIT_SCRIPT }} />
+
+        {/* Hide the player shell before paint when this browser resolves to a
+            non-default skin, so a reload never flashes the wrong face. Static
+            constant from lib/skin — no untrusted input. */}
+        <script dangerouslySetInnerHTML={{ __html: SKIN_INIT_SCRIPT }} />
 
         {/* Site-wide structured data (WebSite + Organization). */}
         <JsonLd data={SITE_JSONLD} />
