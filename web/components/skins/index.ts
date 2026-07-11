@@ -29,6 +29,14 @@ export const SKINS: SkinManifest[] = [
     load: () => import('./spool/SpoolSkin'),
   },
   {
+    id: 'drift',
+    name: 'Drift',
+    description:
+      'Ninety percent weather, ten percent type — the cover art becomes the room.',
+    skinApiVersion: SKIN_API_VERSION,
+    load: () => import('./drift/DriftSkin'),
+  },
+  {
     id: 'subamp',
     name: 'Subamp',
     description:
