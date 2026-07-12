@@ -22,6 +22,8 @@ import {
   Users,
   Headphones,
   Plug,
+  Coffee,
+  MessageCircle,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -222,6 +224,26 @@ export default function AdminShell({ children }: AdminShellProps) {
             >
               <Smartphone className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
               <span className="nav-label">Android app</span>
+              <span className="pill">↗</span>
+            </Link>
+            <Link
+              href="https://discord.gg/vjVbVKnMBa"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="nav-item"
+            >
+              <MessageCircle className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+              <span className="nav-label">Discord</span>
+              <span className="pill">↗</span>
+            </Link>
+            <Link
+              href="https://ko-fi.com/pklair"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="nav-item"
+            >
+              <Coffee className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+              <span className="nav-label">Support</span>
               <span className="pill">↗</span>
             </Link>
           </div>
