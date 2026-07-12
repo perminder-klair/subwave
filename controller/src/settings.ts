@@ -645,7 +645,7 @@ const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 // Exported for the community-persona install route (routes/personas.ts), which
 // gives a friendly 409 before settings.update() would throw on an oversize roster.
 export const PERSONA_LIMIT = 48;
-const SHOWS_LIMIT = 64;
+export const SHOWS_LIMIT = 64;
 // Guest co-hosts per show. Small on purpose: each guest is a full persona the
 // speaker rotation can hand a segment to, and past ~3 the host stops sounding
 // like the host.
