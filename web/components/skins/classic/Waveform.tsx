@@ -21,6 +21,23 @@ const REST = 0.1;
 // ~33 ms apart are visually indistinguishable, at half (or a quarter) the cost.
 const FRAME_MS = 30;
 
+// How long the analyser may deliver pure silence (every bin zero) before the
+// live loop declares it dead and walks synthetic bars instead. Long enough
+// that a genuinely quiet passage can't trip it — the stream never carries
+// seconds of digital silence (emergency fallback, bed, encoder noise floor).
+const DEAD_MS = 2000;
+
+// One step of the synthetic fallback — same shape as the old span version:
+// heavier motion on the left, easing off toward the right edge. Shared by the
+// no-analyser fallback interval and the dead-analyser watchdog in the live
+// loop.
+function stepWalk(levels: Float32Array): void {
+  for (let i = 0; i < BARS; i++) {
+    const target = Math.pow(Math.random(), 1.4) * (1 - i / (BARS * 2.2));
+    levels[i] = (levels[i] ?? 0) + (target - (levels[i] ?? 0)) * 0.45;
+  }
+}
+
 // Backing-store resolution cap. The band sits at opacity 0.22 behind the
 // stage — 3× phone DPR buys nothing visible and triples the pixels cleared
 // and filled every paint.
@@ -42,10 +59,13 @@ function resolvePalette(el: HTMLElement): Palette {
   return { bar: bar || '#161412', past: past || '#d94b2a' };
 }
 
-// Per-bar [start, end) analyser-bin spans for the log sweep. Each bar averages
-// every bin it covers (a single sampled bin flickers on narrowband content).
-// Cached by the caller — this only changes if the FFT size or context sample
-// rate does.
+// Per-bar [start, end) analyser-bin spans for the log sweep, kept FRACTIONAL.
+// At the low end several bars fit inside one FFT bin — with integer spans they
+// all read that bin and the strip's left edge moved as one block, so narrow
+// spans are sampled by interpolating between neighbouring bins instead (see
+// the drive loop). Wide bars (span ≥ 1 bin) average every bin they cover (a
+// single sampled bin flickers on narrowband content). Cached by the caller —
+// this only changes if the FFT size or context sample rate does.
 function buildBinRanges(binCount: number, sampleRate: number): Array<[number, number]> {
   const nyquist = sampleRate / 2;
   const hi = Math.min(FREQ_HI, nyquist);
@@ -53,9 +73,9 @@ function buildBinRanges(binCount: number, sampleRate: number): Array<[number, nu
   for (let i = 0; i < BARS; i++) {
     const f0 = FREQ_LO * Math.pow(hi / FREQ_LO, i / BARS);
     const f1 = FREQ_LO * Math.pow(hi / FREQ_LO, (i + 1) / BARS);
-    const b0 = Math.min(binCount - 1, Math.max(0, Math.floor((f0 / nyquist) * binCount)));
-    const b1 = Math.min(binCount, Math.max(b0 + 1, Math.ceil((f1 / nyquist) * binCount)));
-    ranges.push([b0, b1]);
+    const p0 = Math.min(binCount - 1, Math.max(0, (f0 / nyquist) * binCount));
+    const p1 = Math.min(binCount, Math.max(p0, (f1 / nyquist) * binCount));
+    ranges.push([p0, p1]);
   }
   return ranges;
 }
@@ -182,7 +202,9 @@ export default memo(function Waveform({ audioRef, tunedIn, trackStartedAt, durat
   // The drive loop, by mode:
   //   calm / not tuned in — one static paint of the resting strip (which is
   //     also what clears stale bar heights after a tune-out);
-  //   real analyser — rAF, throttled to ~33 paints/s, log-folded bins;
+  //   real analyser — rAF, throttled to ~33 paints/s, log-folded bins, with a
+  //     dead-analyser watchdog that walks synthetic bars if every bin stays
+  //     zero (see below);
   //   fallback — pseudo-random walk on a 60 ms interval, for engines where
   //     the analyser can't attach: iOS + some desktop-Safari builds return
   //     only zeros from createMediaElementSource on a live MP3 stream
@@ -194,18 +216,23 @@ export default memo(function Waveform({ audioRef, tunedIn, trackStartedAt, durat
       levels.fill(0);
       draw();
       if (calm || !tunedIn) return;
-      // Fallback walk — same shape as the span version: heavier motion on the
-      // left, easing off toward the right edge.
       return pollWhileVisible(() => {
-        for (let i = 0; i < BARS; i++) {
-          const target = Math.pow(Math.random(), 1.4) * (1 - i / (BARS * 2.2));
-          levels[i] = (levels[i] ?? 0) + (target - (levels[i] ?? 0)) * 0.45;
-        }
+        stepWalk(levels);
         draw();
       }, 60);
     }
     let raf = 0;
     let last = 0;
+    // Dead-analyser watchdog. Desktop Safari wires the graph up but returns
+    // only zeros on a live MP3 mount (#298/#302) — and not always in ways the
+    // hook's one-shot 600 ms probe catches: data can blip past the probe and
+    // then die, or the probe's `playing` trigger can be missed entirely.
+    // Either way the strip would freeze at rest height, so the live loop
+    // checks continuously: silence in every bin for DEAD_MS while playing →
+    // walk synthetic bars (what iOS always shows); keep reading so the strip
+    // snaps back to real data if the analyser ever comes alive.
+    let deadSince: number | null = null;
+    let lastWalk = 0;
     const tick = (now: number) => {
       raf = requestAnimationFrame(tick);
       if (now - last < FRAME_MS) return;
@@ -217,11 +244,42 @@ export default memo(function Waveform({ audioRef, tunedIn, trackStartedAt, durat
         rangesRef.current = { key, ranges: buildBinRanges(bins.length, sampleRate ?? 48000) };
       }
       const ranges = rangesRef.current.ranges;
+      let live = false;
+      for (let b = 0; b < bins.length; b++) {
+        if (bins[b]) { live = true; break; }
+      }
+      if (live) {
+        deadSince = null;
+      } else {
+        if (deadSince == null) deadSince = now;
+        if (now - deadSince >= DEAD_MS) {
+          // Walk at the fallback interval's cadence, not every paint — the
+          // 0.45 lerp is tuned for ~60 ms steps and flickers at 30 ms.
+          if (now - lastWalk >= 60) {
+            lastWalk = now;
+            stepWalk(levels);
+            draw();
+          }
+          return;
+        }
+      }
       for (let i = 0; i < BARS; i++) {
-        const [b0, b1] = ranges[i] ?? [0, 1];
-        let sum = 0;
-        for (let b = b0; b < b1; b++) sum += bins[b] ?? 0;
-        levels[i] = sum / ((b1 - b0) * 255);
+        const [p0, p1] = ranges[i] ?? [0, 1];
+        if (p1 - p0 < 1) {
+          // Narrow bar (low end) — lerp the spectrum at the bar's centre so
+          // adjacent bars straddling the same bin still differ.
+          const c = Math.min(bins.length - 1, (p0 + p1) / 2);
+          const b = Math.floor(c);
+          const v0 = bins[b] ?? 0;
+          const v1 = bins[b + 1] ?? v0;
+          levels[i] = (v0 + (v1 - v0) * (c - b)) / 255;
+        } else {
+          const b0 = Math.floor(p0);
+          const b1 = Math.max(b0 + 1, Math.ceil(p1));
+          let sum = 0;
+          for (let b = b0; b < b1; b++) sum += bins[b] ?? 0;
+          levels[i] = sum / ((b1 - b0) * 255);
+        }
       }
       draw();
     };

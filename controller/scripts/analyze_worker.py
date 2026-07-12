@@ -470,7 +470,11 @@ def analyze_outro(path, librosa, duration_s):
     if not duration_s or duration_s <= OUTRO_SECONDS + 1.0:
         return None  # too short to have a distinct outro
     offset = max(0.0, duration_s - OUTRO_SECONDS)
-    y, sr = librosa.load(path, sr=ANALYZE_SR, mono=True, offset=offset)
+    # Channel-preserving decode for the loudness meter (the tail LUFS must be
+    # comparable to the body's stereo loudness_lufs — issue #998); RMS shape
+    # and the beat grid work off the mono downmix as before.
+    y_src, sr = librosa.load(path, sr=ANALYZE_SR, mono=False, offset=offset)
+    y = librosa.to_mono(y_src) if y_src is not None else None
     # Validation backstop for an unknown completeness: a truncated file either
     # errors here or decodes well short of the requested tail — skip it.
     if y is None or len(y) < ANALYZE_SR * OUTRO_SECONDS * 0.6:
@@ -506,7 +510,7 @@ def analyze_outro(path, librosa, duration_s):
 
     # Tail loudness — comparable to the track's loudness_lufs, so consumers can
     # judge how hot the material under the next intro will actually be.
-    lufs, _peak = measure_loudness(y, sr)
+    lufs, _peak = measure_loudness(y_src, sr)
 
     # Tail tempo + grid (absolute ms) — the truer anchor for bar-aligning the
     # exit than the leading window's tempo (outros drift/ritard).
@@ -717,10 +721,14 @@ def fetch_audio(url):
 
 def measure_loudness(y, sr):
     """Integrated loudness (LUFS, ITU-R BS.1770 / EBU R128) + true-ish peak in
-    dBFS over the decoded window. Best-effort: pyloudnorm is an optional dep, so
-    a missing import or any failure returns (None, None) and the caller simply
-    omits the fields — every consumer treats NULL as "no loudness, behave as
-    today" (same contract as the CLAP embedding)."""
+    dBFS over the decoded window. Accepts mono (n,) or librosa's multichannel
+    (channels, n) — pass the STEREO decode when available: BS.1770 sums the
+    energy of both channels, so the old mono average under-read center-heavy
+    mixes by up to ~3 dB and every gain computed from it aired that much hot
+    (issue #998). Best-effort: pyloudnorm is an optional dep, so a missing
+    import or any failure returns (None, None) and the caller simply omits the
+    fields — every consumer treats NULL as "no loudness, behave as today"
+    (same contract as the CLAP embedding)."""
     import numpy as np
 
     try:
@@ -731,8 +739,11 @@ def measure_loudness(y, sr):
 
     try:
         meter = pyln.Meter(sr)  # BS.1770 meter at the decode sample rate
-        lufs = float(meter.integrated_loudness(y))
-        peak = float(np.max(np.abs(y))) if len(y) else 0.0
+        # pyloudnorm wants (samples,) or (samples, channels); librosa decodes
+        # multichannel as (channels, samples).
+        data = y.T if getattr(y, "ndim", 1) > 1 else y
+        lufs = float(meter.integrated_loudness(data))
+        peak = float(np.max(np.abs(y))) if np.size(y) else 0.0
         peak_db = 20.0 * float(np.log10(peak)) if peak > 0 else None
         # integrated_loudness returns -inf for digital silence; treat as no signal.
         if not np.isfinite(lufs):
@@ -768,7 +779,11 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None)
             log(f"duration probe failed ({e})")
             duration_s = 0.0
 
-        y, sr = librosa.load(path, sr=ANALYZE_SR, mono=True, duration=ANALYZE_SECONDS)
+        # Decode once WITH channels (a mono file still comes back 1-D): the
+        # loudness meter needs real stereo for a correct BS.1770 channel sum
+        # (issue #998); every other feature works off the mono downmix.
+        y_src, sr = librosa.load(path, sr=ANALYZE_SR, mono=False, duration=ANALYZE_SECONDS)
+        y = librosa.to_mono(y_src)
         # CLAP wants 48 kHz mono — decode fresh copies at that rate from the
         # SAME file (still present here, before the finally removes owned
         # temps), windowed across the track (see embed_windows). A model/
@@ -862,9 +877,10 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None)
     pace = estimate_pace(y, sr, librosa)
 
     # Perceptual loudness (LUFS) over the decoded window — feeds per-track gain
-    # normalisation toward a target on the playback side. None when pyloudnorm
-    # is absent or measurement fails.
-    loudness_lufs, peak_db = measure_loudness(y, sr)
+    # normalisation toward a target on the playback side. Measured off the
+    # channel-preserving decode, not the mono downmix (issue #998). None when
+    # pyloudnorm is absent or measurement fails.
+    loudness_lufs, peak_db = measure_loudness(y_src, sr)
 
     # Overall confidence: dominated by how cleanly the key resolved, nudged by
     # whether we got a plausible tempo. Kept conservative on purpose.

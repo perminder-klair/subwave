@@ -11,7 +11,10 @@ import TrackPlayer, {
   State,
   useTrackPlayerEvents,
 } from 'react-native-track-player';
-import { addAudioRouteChangeListener } from '../../modules/airplay-route-picker';
+import {
+  addAudioRouteChangeListener,
+  ROUTE_REASON_OLD_DEVICE_UNAVAILABLE,
+} from '../../modules/airplay-route-picker';
 import { getLastLiveMeta, loadAndPlay, setupPlayer, teardown } from '@/audio/player';
 import type { StationApi } from '@/lib/api';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
@@ -66,17 +69,6 @@ export function usePlayer(
   useEffect(() => { apiRef.current = api; }, [api]);
 
   useEffect(() => { setupPlayer().catch(() => {}); }, []);
-
-  // Log iOS audio-route changes in dev builds — the forensic trail for
-  // AirPlay handoff issues (which reason code fires, what the route becomes,
-  // and how that interleaves with our reconnects).
-  useEffect(() => {
-    if (!__DEV__) return;
-    const sub = addAudioRouteChangeListener((e) => {
-      plog(`route change reason=${e.reason} outputs=${e.outputs}`);
-    });
-    return () => sub?.remove();
-  }, []);
 
   // Apply volume to the player engine whenever it changes.
   useEffect(() => {
@@ -211,6 +203,36 @@ export function usePlayer(
       }
     },
   );
+
+  // iOS audio-route changes. When the device we were playing to goes away
+  // (reason oldDeviceUnavailable: Bluetooth speaker powered off, CarPlay
+  // disconnected, headphones unplugged), treat it as a tune-out (#992). The
+  // longFormAudio session policy that keeps AirPlay routes sticky (see
+  // player.ts) also keeps AVPlayer "playing" to the vanished route — silent
+  // audio with the Icecast socket held open, a phantom listener. Every other
+  // reason is deliberately left alone: newDeviceAvailable / override /
+  // routeConfigurationChange are the AirPlay/HomePod handoffs that must keep
+  // playing (the 0b060a3a behavior). Also the dev-build forensic trail for
+  // route/handoff issues.
+  useEffect(() => {
+    const sub = addAudioRouteChangeListener((e) => {
+      plog(`route change reason=${e.reason} outputs=${e.outputs}`);
+      if (e.reason !== ROUTE_REASON_OLD_DEVICE_UNAVAILABLE || !tunedInRef.current) return;
+      // Same synchronous flip as the RemotePause handler above — the ref must
+      // read false before the trailing Stopped event lands, or the watchdog
+      // "recovers" the stream and the phantom listener is back.
+      clearWatchdog();
+      retryCount.current = 0;
+      tunedInRef.current = false;
+      setTunedIn(false);
+      setStatus('idle');
+      // stop() (not pause) unloads the item, so the stream connection drops
+      // and the listener count clears. lastLiveMeta survives (only teardown
+      // clears it), so a later Play resumes at the live edge via service.ts.
+      TrackPlayer.stop().catch(() => {});
+    });
+    return () => sub?.remove();
+  }, [clearWatchdog]);
 
   // Proactive reconnect: when the device link returns (false → true) while
   // we're tuned in but not already playing, reconnect immediately instead of

@@ -36,11 +36,23 @@ export interface SkillLike {
   cooldownMs?: number;
 }
 
+// Slim persona shape from GET /settings — enough for the DJ assignment
+// checklist. `skills: null` is the "all skills" sentinel (see controller
+// settings.ts:validatePersonasStrict).
+export interface PersonaLite {
+  id: string;
+  name: string;
+  skills: string[] | null;
+}
+
 interface SkillEditModalProps {
   mode: 'create' | 'edit';
   skill?: SkillLike;                 // required in edit mode
+  personas?: PersonaLite[];          // roster for the DJ assignment checklist
+  tagSuggestions?: string[];         // tags already used elsewhere in the catalog
   onClose: () => void;
   onSkillsChange: (skills: SkillLike[]) => void;  // refresh the panel list after any mutation
+  onRosterChange?: () => void;       // re-fetch personas after assignments change
 }
 
 // The shipped defaults for a built-in (read from the image template), used to
@@ -68,6 +80,7 @@ interface SkillFileResponse {
   hasTool?: boolean;
   feed?: string | null;
   feedMaxItems?: number | null;
+  tags?: string[];
   brief?: string;
   defaults?: SkillDefaults | null;
   error?: string;
@@ -75,6 +88,10 @@ interface SkillFileResponse {
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-]{0,48}$/;
 const COOLDOWN_PRESETS = ['15m', '25m', '45m', '1h', '6h'];
+// Mirror the controller's tag rules (skills/loader.ts TAG_RE / limit) so a bad
+// tag fails here instead of on save.
+const TAG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
+const TAGS_MAX = 8;
 
 // The mutable file fields — snapshotted so we can compute "dirty" and revert.
 interface FileFields {
@@ -84,14 +101,16 @@ interface FileFields {
   window: 'any' | 'commute';
   feed: string;
   feedMaxItems: string;
+  tags: string[];
   brief: string;
 }
 
 function emptyFields(): FileFields {
-  return { label: '', cooldown: '', context: [], window: 'any', feed: '', feedMaxItems: '', brief: '' };
+  return { label: '', cooldown: '', context: [], window: 'any', feed: '', feedMaxItems: '', tags: [], brief: '' };
 }
 
-// Order-independent comparison key for the tracked fields.
+// Order-independent comparison key for the tracked fields. Tags keep their
+// order (they're an authored list, not a set) — only context is order-free.
 function fieldsKey(f: FileFields): string {
   return JSON.stringify({ ...f, context: [...f.context].sort() });
 }
@@ -100,7 +119,7 @@ function titleCase(slug: string): string {
   return slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }: SkillEditModalProps) {
+export default function SkillEditModal({ mode, skill, personas, tagSuggestions, onClose, onSkillsChange, onRosterChange }: SkillEditModalProps) {
   const { adminFetch } = useAdminAuth();
 
   const isEdit = mode === 'edit';
@@ -119,6 +138,17 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
 
   const [fields, setFields] = useState<FileFields>(emptyFields());
   const [snapshot, setSnapshot] = useState<string>(fieldsKey(emptyFields()));
+  const [tagDraft, setTagDraft] = useState('');   // the tag input's in-progress text
+
+  // DJ assignment — which personas run this skill. Seeded from the roster at
+  // mount (a `skills: null` persona runs everything); saved via
+  // PUT /dj/skills/:slug/personas alongside (after) the file save.
+  const roster = personas || [];
+  const initialAssigned = () => (skill
+    ? roster.filter(p => p.skills === null || p.skills.includes(skill.name)).map(p => p.id)
+    : []);
+  const [assigned, setAssigned] = useState<string[]>(initialAssigned);
+  const [assignSnapshot, setAssignSnapshot] = useState<string>(() => JSON.stringify([...initialAssigned()].sort()));
 
   const [enabled, setEnabled] = useState(!!skill?.enabled);
   const [busy, setBusy] = useState(false);          // saving / creating
@@ -128,6 +158,26 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
   const [defaults, setDefaults] = useState<SkillDefaults | null>(null); // built-in shipped defaults
 
   const patch = (p: Partial<FileFields>) => setFields(f => ({ ...f, ...p }));
+
+  // Commit the tag input's draft (Enter / comma / blur). Mirrors the
+  // controller's rules so a bad tag fails here, loudly, before save.
+  const addTag = (raw: string) => {
+    const tag = raw.trim().toLowerCase();
+    if (!tag) return;
+    if (!TAG_RE.test(tag)) {
+      notify.err(`"${tag}" isn't a valid tag — lowercase letters, digits, hyphens, max 24 chars`);
+      return;
+    }
+    setFields(f => {
+      if (f.tags.includes(tag)) return f;
+      if (f.tags.length >= TAGS_MAX) {
+        notify.err(`At most ${TAGS_MAX} tags per skill`);
+        return f;
+      }
+      return { ...f, tags: [...f.tags, tag] };
+    });
+    setTagDraft('');
+  };
 
   const flashFor = (msg: string) => {
     setFlash(msg);
@@ -152,6 +202,7 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
           window: j.window === 'commute' ? 'commute' : 'any',
           feed: j.feed || '',
           feedMaxItems: j.feedMaxItems != null ? String(j.feedMaxItems) : '',
+          tags: Array.isArray(j.tags) ? j.tags : [],
           brief: j.brief || '',
         };
         setFields(next);
@@ -182,7 +233,8 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
   // Dialog) — no manual key listener, so the nested delete confirm gets escape
   // first and the page behind stays locked.
 
-  const dirty = loaded && fieldsKey(fields) !== snapshot;
+  const assignDirty = isEdit && JSON.stringify([...assigned].sort()) !== assignSnapshot;
+  const dirty = loaded && (fieldsKey(fields) !== snapshot || assignDirty);
   const nameValid = !isEdit ? SLUG_RE.test(name) : true;
   const canSave = loaded && !!fields.brief.trim() && nameValid && !busy;
 
@@ -198,6 +250,7 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
         label: fields.label.trim() || undefined,
         cooldown: fields.cooldown.trim() || undefined,
         context: fields.context,                 // [] resets to the default profile
+        tags: fields.tags,                       // [] clears the tags line
         brief: fields.brief,
       };
       if (custom) {
@@ -233,6 +286,23 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
         onClose();
       } else {
         setSnapshot(fieldsKey(fields));   // edits are now the saved baseline
+        // DJ assignments save as a separate resource (personas[].skills). The
+        // file save above already stood — a failure here reports on its own.
+        if (assignDirty && skill) {
+          try {
+            const ar = await adminFetch(`/dj/skills/${skill.name}/personas`, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ personaIds: assigned }),
+            });
+            const aj = (await ar.json().catch(() => ({}))) as { error?: string };
+            if (!ar.ok) throw new Error(aj.error || `failed (${ar.status})`);
+            setAssignSnapshot(JSON.stringify([...assigned].sort()));
+            onRosterChange?.();
+          } catch (e) {
+            notify.err(`Skill saved, but updating DJ assignments failed: ${errorMessage(e)}`);
+          }
+        }
         flashFor('SAVED TO BOOTH');
       }
     } catch (e) {
@@ -365,6 +435,7 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
           window: fj.window === 'commute' ? 'commute' : 'any',
           feed: fj.feed || '',
           feedMaxItems: fj.feedMaxItems != null ? String(fj.feedMaxItems) : '',
+          tags: Array.isArray(fj.tags) ? fj.tags : [],
           brief: fj.brief || '',
         };
         setFields(next);
@@ -596,6 +667,80 @@ export default function SkillEditModal({ mode, skill, onClose, onSkillsChange }:
                 Switch on only what&apos;s topical for this segment. A context left dark stays out of the prompt — so the DJ stops working it into every break.
               </div>
             </div>
+
+            {/* Tags — freeform organisation labels for the skill list */}
+            <div className="sw-section">
+              <div style={sectionLabel}>TAGS — ORGANISE THE SKILL LIST</div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginTop: 16 }}>
+                {fields.tags.map(t => (
+                  <button
+                    key={t}
+                    type="button"
+                    title={`Remove tag "${t}"`}
+                    onClick={() => patch({ tags: fields.tags.filter(x => x !== t) })}
+                    style={chipStyle(true)}
+                  >
+                    <span>#{t}</span>
+                    <span aria-hidden>×</span>
+                  </button>
+                ))}
+                <input
+                  value={tagDraft}
+                  onChange={e => setTagDraft(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === ',') {
+                      e.preventDefault();
+                      addTag(tagDraft);
+                    }
+                  }}
+                  onBlur={() => addTag(tagDraft)}
+                  placeholder={fields.tags.length ? 'add tag…' : 'late-night, factual…'}
+                  aria-label="Add tag"
+                  style={{ ...inputBase, width: 160, padding: '9px 12px', fontSize: 13 }}
+                />
+              </div>
+              {(tagSuggestions || []).filter(t => !fields.tags.includes(t)).length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 12 }}>
+                  <span style={{ fontSize: 10, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 600 }}>IN USE</span>
+                  {(tagSuggestions || []).filter(t => !fields.tags.includes(t)).map(t => (
+                    <button key={t} type="button" onClick={() => addTag(t)} style={chipStyle(false)}>
+                      #{t}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12 }}>
+                Freeform — tag by show, mood, type, whatever helps you filter. Tags travel with the skill when exported or shared.
+              </div>
+            </div>
+
+            {/* DJ assignment — which personas run this skill (edit only) */}
+            {isEdit && roster.length > 0 && (
+              <div className="sw-section">
+                <div style={sectionLabel}>WHICH DJS RUN IT</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 16 }}>
+                  {roster.map(p => {
+                    const on = assigned.includes(p.id);
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() => setAssigned(cur => (on ? cur.filter(id => id !== p.id) : [...cur, p.id]))}
+                        style={chipStyle(on)}
+                      >
+                        <span style={markStyle(on)} />
+                        <span>{p.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 14, lineHeight: 1.6, maxWidth: '78ch' }}>
+                  The same assignments as each persona&apos;s Skills card, edited from the skill&apos;s side.
+                  A skill fires only for the ticked DJs — and must be enabled station-wide (the on-air toggle below).
+                </div>
+              </div>
+            )}
 
             {/* Brief */}
             <div className="sw-section">

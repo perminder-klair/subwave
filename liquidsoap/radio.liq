@@ -62,7 +62,9 @@ station_name = ref("SUB/WAVE")
 if file.exists("/var/sub-wave/liquidsoap_jingle_ratio.txt") then
   raw = string.trim(file.contents("/var/sub-wave/liquidsoap_jingle_ratio.txt"))
   v = int_of_string(default=30, raw)
-  if v > 0 then jingle_ratio := v end
+  # 0 is a valid value: jingles OFF (issue #997). Negative/garbage keeps the
+  # default.
+  if v >= 0 then jingle_ratio := v end
 end
 
 if file.exists("/var/sub-wave/liquidsoap_crossfade.txt") then
@@ -962,16 +964,41 @@ music_meta = music
 # indefinitely. An empty jingles.m3u is fine: rotate skips the unavailable
 # source and plays music. music_meta is captured ABOVE this, so jingles never
 # show up in now-playing.
-jingles = playlist(
-  id="jingles",
-  mode="randomize",
-  reload_mode="watch",
-  "/var/sub-wave/jingles.m3u"
-)
-music = rotate(
-  weights=[1, jingle_ratio()],  # 1 jingle for every N music tracks (settings.json)
-  [jingles, music]
-)
+# jingle_ratio 0 = jingles OFF (issue #997): the rotate isn't built at all, so
+# the chain is byte-identical to a station with no jingles. Applied at startup
+# like every other liquidsoap_*.txt setting — changing it needs a mixer restart.
+music =
+  if jingle_ratio() > 0 then
+    jingles = playlist(
+      id="jingles",
+      mode="randomize",
+      reload_mode="watch",
+      "/var/sub-wave/jingles.m3u"
+    )
+    # Announce each jingle to the controller. Jingles are invisible to it (no
+    # on_metadata — music_meta is captured above this rotate) and play outside
+    # its airVoice voice serialiser, so a TTS segment aired at the incoming
+    # track's boundary could talk over the stinger (issue #997). This marker is
+    # written at FEED time — the jingle turns audible ~crossfade_duration later
+    # (the cross buffer) — and the controller holds its voice chain until the
+    # marker's window (start + crossfade + clip length) has passed.
+    jingles.on_metadata(synchronous=false, fun (m) ->
+      file.write(
+        data=json.stringify(compact=true, {
+          filename = m["filename"],
+          startedAt = time()
+        }),
+        atomic=true,
+        "/var/sub-wave/jingle-playing.json"
+      )
+    )
+    rotate(
+      weights=[1, jingle_ratio()],  # 1 jingle for every N music tracks (settings.json)
+      [jingles, music]
+    )
+  else
+    music
+  end
 
 # Per-track loudness normalisation. The controller stamps `liq_amplify` (in the
 # "<n> dB" form, via subsonic.getAnnotatedUri) on any track with a measured LUFS;
@@ -1677,5 +1704,36 @@ server.register(
     log("Skip requested via server command")
     radio.skip()
     "OK"
+  end
+)
+
+# Remove a PENDING request from dj_queue by request id (RID). Whatever is on
+# air — or already pulled out of the queue as the next source — is no longer
+# in .queue(), so it reports NOT_FOUND instead of half-removing; the caller
+# treats that as "too late to cancel". Used by the controller's queue-cancel
+# endpoint (DELETE /dj/queue/:trackId), which resolves the RID via
+# dj_queue.queue + request.metadata first. Operator-only — listeners can't
+# reach this.
+server.register(
+  "dj_queue_remove",
+  description="Remove a pending request from dj_queue by request id",
+  usage="dj_queue_remove <rid>",
+  fun(arg) -> begin
+    rid = string.trim(arg)
+    q = dj_queue.queue()
+    kept = list.filter(fun(r) -> "#{request.id(r)}" != rid, q)
+    if list.length(kept) == list.length(q) then
+      "NOT_FOUND"
+    else
+      dj_queue.set_queue(kept)
+      # Destroy the dropped request so its file/URI is released now instead of
+      # lingering until Liquidsoap flags it as leaked.
+      list.iter(
+        fun(r) -> if "#{request.id(r)}" == rid then request.destroy(r) end,
+        q
+      )
+      log("Removed request #{rid} from dj_queue via server command")
+      "OK"
+    end
   end
 )
