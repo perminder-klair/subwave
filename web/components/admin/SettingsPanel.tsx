@@ -190,7 +190,7 @@ export default function SettingsPanel() {
         reasoning: !!v.llm?.reasoning,
         toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
-        noRepeatWindow: typeof v.llm?.noRepeatWindow === 'number' ? v.llm.noRepeatWindow : 100,
+        noRepeatWindow: String(typeof v.llm?.noRepeatWindow === 'number' ? v.llm.noRepeatWindow : 100),
         requestWebResolve: !!v.llm?.requestWebResolve,
         agentTimeoutMs: typeof v.llm?.agentTimeoutMs === 'number' ? v.llm.agentTimeoutMs : 45000,
         pauseWhenEmpty: !!v.llm?.pauseWhenEmpty,
