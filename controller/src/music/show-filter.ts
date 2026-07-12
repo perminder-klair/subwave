@@ -65,6 +65,18 @@ export function preferGenre<T extends FilterTrack>(tracks: T[], genreNames?: str
   return match.length ? match : tracks;
 }
 
+// Hard genre filter — NO never-starve: off-genre (and untagged) tracks drop
+// even when that empties the list. For call sites that guarantee
+// non-starvation at a WIDER scope than one source: the agent tools starve
+// per-tool and rely on the pool fallback; the pool picker never-starves on the
+// final merged pool. The per-source never-starve in prefer* is what let strict
+// shows leak off-filter tracks whenever a single source had zero matches.
+export function onlyGenre<T extends FilterTrack>(tracks: T[], genreNames?: string[] | null): T[] {
+  const targets = (genreNames ?? []).map(normGenre).filter(Boolean);
+  if (!targets.length) return tracks;
+  return tracks.filter((t) => genreMatches(t, targets));
+}
+
 // ── Era (decade / year windows) ──────────────────────────────────────────────
 
 export type YearRange = { fromYear?: number | null; toYear?: number | null };
@@ -186,4 +198,21 @@ export function preferMood<T extends FilterTrack>(tracks: T[], moods?: string[] 
   const targets = moods.map(m => String(m).toLowerCase());
   const match = tracks.filter((t) => trackMoods(t).some((x) => targets.includes(String(x).toLowerCase())));
   return match.length ? match : tracks;
+}
+
+// Hard mood filter — NO never-starve (see onlyGenre for the scoping contract).
+export function onlyMood<T extends FilterTrack>(tracks: T[], moods?: string[] | null): T[] {
+  if (!moods?.length) return tracks;
+  const targets = moods.map(m => String(m).toLowerCase());
+  return tracks.filter((t) => trackMoods(t).some((x) => targets.includes(String(x).toLowerCase())));
+}
+
+// Hard energy filter — NO never-starve (see onlyGenre). Unknown-energy tracks
+// drop too, same as preferEnergyStrict.
+export function onlyEnergy<T extends FilterTrack>(tracks: T[], energies?: string[] | null): T[] {
+  if (!energies?.length) return tracks;
+  return tracks.filter((t) => {
+    const e = trackEnergy(t);
+    return e != null && energies.includes(e);
+  });
 }

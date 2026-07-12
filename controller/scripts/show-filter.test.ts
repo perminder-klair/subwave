@@ -11,6 +11,7 @@ import {
   normGenre, genreMatches, preferGenre,
   hasEraBound, eraSpan, inYearRange, preferEra,
   preferEnergy, preferEnergyStrict, preferMood,
+  onlyGenre, onlyMood, onlyEnergy,
 } from '../src/music/show-filter.js';
 
 let failures = 0;
@@ -109,6 +110,37 @@ await test('preferMood matches any selected mood, case-insensitive', () => {
 await test('preferMood never-starves: un-tagged pool → full set', () => {
   const pool = [t({ moods: [], audioMoods: [] })];
   assert.deepEqual(preferMood(pool, ['calm']), pool);
+});
+
+console.log('hard filters (only*, NO never-starve — agent-tool locks + final-pool strict):');
+await test('onlyGenre drops off-genre and untagged, even to empty', () => {
+  const rock = t({ genre: 'Hard Rock' });
+  const jazz = t({ genre: 'Jazz' });
+  const untagged = t({ id: null });
+  assert.deepEqual(onlyGenre([rock, jazz, untagged], ['Rock']), [rock]);
+  assert.deepEqual(onlyGenre([jazz], ['Rock']), []);           // no fallback
+  assert.deepEqual(onlyGenre([rock, jazz], []), [rock, jazz]); // no constraint
+});
+await test('onlyMood drops un-tagged, even to empty', () => {
+  const a = t({ moods: ['calm'], audioMoods: [] });
+  const b = t({ moods: [], audioMoods: [] });
+  assert.deepEqual(onlyMood([a, b], ['calm']), [a]);
+  assert.deepEqual(onlyMood([b], ['calm']), []);
+  assert.deepEqual(onlyMood([a, b], []), [a, b]);
+});
+await test('onlyEnergy drops unknowns and off-band, even to empty', () => {
+  const hi = t({ energy: 'high' });
+  const unknown = t({ id: null });
+  assert.deepEqual(onlyEnergy([hi, unknown], ['high']), [hi]);
+  assert.deepEqual(onlyEnergy([hi, unknown], ['low']), []);
+  assert.deepEqual(onlyEnergy([hi, unknown], []), [hi, unknown]);
+});
+await test('inYearRange is the hard era filter: unknown-year drops, empty allowed', () => {
+  const in20s = t({ year: 2022 });
+  const old = t({ year: 1999 });
+  const noYear = t({ year: null });
+  assert.deepEqual(inYearRange([in20s, old, noYear], [{ fromYear: 2020, toYear: 2029 }]), [in20s]);
+  assert.deepEqual(inYearRange([old, noYear], [{ fromYear: 2020, toYear: 2029 }]), []);
 });
 
 if (failures) {

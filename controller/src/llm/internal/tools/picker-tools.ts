@@ -15,7 +15,7 @@ import * as library from '../../../music/library.js';
 import * as embeddings from '../../../music/embeddings.js';
 import * as analyzer from '../../../music/analyzer.js';
 import { filterPickerCandidates, durationSeconds } from '../../../music/recency.js';
-import { preferGenre, preferEra, preferMood, preferEnergyStrict } from '../../../music/show-filter.js';
+import { onlyGenre, inYearRange, onlyMood, onlyEnergy } from '../../../music/show-filter.js';
 import { shuffle } from '../../../util/shuffle.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { identifyTrackFromText } from '../prompts/request.js';
@@ -115,23 +115,22 @@ export function buildPickerTools({
   hardRecentKeys?: Set<string>;    // lowercased "title|artist" — blocks id-less backfilled plays
   // Hard genre constraint for a strict show (show.filtersStrict) — a list of
   // genres, any-of (#929). When set, every tool's candidates are genre-filtered
-  // (preferGenre, never-starve) before recency + cap, so the agent path
-  // enforces the lock in code, not just the prompt — mirroring the pool
-  // picker's strict mode. null/empty = no lock. Deliberately NOT set on the
-  // request path: an explicit listener ask wins.
+  // (onlyGenre — HARD, no per-tool never-starve; see the collect() note) before
+  // recency + cap, so the agent path enforces the lock in code, not just the
+  // prompt. null/empty = no lock. Deliberately NOT set on the request path: an
+  // explicit listener ask wins.
   genreLock?: string[] | null;
   // Hard era constraint — a list of decade/year windows, any-of (#929) —
   // applied only for a strict show (same filtersStrict flag — one toggle
-  // governs every filter). When set, candidates are year-filtered (preferEra,
-  // never-starve) before recency + cap. null/empty = no era lock.
+  // governs every filter). When set, candidates are year-filtered (inYearRange
+  // — HARD, unknown-year tracks drop) before recency + cap. null/empty = no lock.
   eraLock?: { fromYear?: number | null; toYear?: number | null }[] | null;
   // Hard mood constraint for a strict show — any-of list: candidates are
-  // filtered to tracks tagged with any of the show's moods (preferMood,
-  // never-starve). null/empty = no lock.
+  // filtered to tracks tagged with any of the show's moods (onlyMood — HARD).
+  // null/empty = no lock.
   moodLock?: string[] | null;
   // Hard energy-band constraint for a strict show — any-of list: candidates
-  // are filtered to the analysed bands (preferEnergyStrict — unknowns dropped,
-  // never-starve).
+  // are filtered to the analysed bands (onlyEnergy — HARD, unknowns dropped).
   energyLock?: string[] | null;
   // The active sonic journey's current waypoint vector (broadcast/dj-agent.ts).
   // When present, the tracksTowardJourney tool below is registered, closing
@@ -170,14 +169,20 @@ export function buildPickerTools({
   // grows with each tool call regardless.
   const collect = (list: any, cap = 8) => {
     // Strict show: filter candidates BEFORE recency + cap, so the 8 the agent
-    // sees are genre-/era-/mood-/energy-pure. Each lock never-starves (falls
-    // back to the full list when a tool returns no match), so a thin constraint
-    // degrades to off-target rather than dead air — same contract as the pool path.
+    // sees are genre-/era-/mood-/energy-pure. Each lock is HARD — a tool whose
+    // results contain no match contributes nothing (emptyResult steers the
+    // model to another tool), mirroring playlistLock below. The old per-tool
+    // never-starve passed a tool's ENTIRE unfiltered result through on zero
+    // matches; the similarity tools cluster on the (possibly off-filter)
+    // current track, so strict shows leaked off-filter picks constantly.
+    // Dead-air is still guarded at wider scopes: a run with zero candidates
+    // fails into the pool picker (which never-starves on its final pool), and
+    // behind that the auto.m3u coast.
     let pool = shuffle((list || []) as any[]);
-    if (genreLock?.length) pool = preferGenre(pool, genreLock);
-    if (eraLock?.length) pool = preferEra(pool, eraLock);
-    if (moodLock?.length) pool = preferMood(pool, moodLock);
-    if (energyLock?.length) pool = preferEnergyStrict(pool, energyLock);
+    if (genreLock?.length) pool = onlyGenre(pool, genreLock);
+    if (eraLock?.length) pool = inYearRange(pool, eraLock);
+    if (moodLock?.length) pool = onlyMood(pool, moodLock);
+    if (energyLock?.length) pool = onlyEnergy(pool, energyLock);
     // Strict playlist: HARD-intersect with the lock set, with NO never-starve to
     // off-playlist (a playlist is an exact set, so a tool with no overlap simply
     // contributes nothing). The guaranteed in-set source is showPlaylistTracks
@@ -213,10 +218,11 @@ export function buildPickerTools({
   // day). `matched` is the pre-recency-filter count, so the note distinguishes
   // "nothing matches" from "matches exist but were all played recently or
   // already shown this pick" — opposite next moves for the model.
+  const hasStrictLock = !!(genreLock?.length || eraLock?.length || moodLock?.length || energyLock?.length);
   const emptyResult = (matched: number, hint: string) => ({
     tracks: [],
     note: matched > 0
-      ? `${matched} matching track(s) exist but were all played recently or already shown this pick — ${hint}`
+      ? `${matched} matching track(s) exist but were all played recently, already shown this pick${hasStrictLock ? ', or outside this show\'s strict music filters' : ''} — ${hint}`
       : hint,
     rule: 'Never invent a song id — only ids returned by a tool are valid picks.',
   });

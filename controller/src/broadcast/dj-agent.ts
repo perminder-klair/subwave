@@ -252,7 +252,7 @@ export function requestSchema() {
 // queue.onTrackStarted). The persona stays the live one — the outgoing DJ
 // tees the changeover up in their own voice; the on-air mic-pass is
 // runPersonaHandoff's job.
-export function pickSystem(showAt: Date | null = null) {
+export function pickSystem(showAt: Date | null = null, playlistResolved = true) {
   const persona = settings.getEffectivePersona();
   // In DJ mode, lean on the live session history: a working DJ runs threads
   // and calls back to a track or a remark from earlier in the shift. This pairs
@@ -280,8 +280,11 @@ export function pickSystem(showAt: Date | null = null) {
   // come from the pinned playlist (the tools already enforce this in code, but
   // saying so keeps the agent reaching for showPlaylistTracks instead of
   // burning steps on tools that come back empty); soft → strong preference,
-  // occasional steps outside allowed for flow.
-  const playlistLean = activeShow?.playlistIds?.length
+  // occasional steps outside allowed for flow. Gated on playlistResolved: when
+  // the show pins playlists but none resolved (stale ids / Navidrome error),
+  // the showPlaylistTracks tool is NOT registered — telling the model to call
+  // a tool that doesn't exist burns steps and invites fabrication.
+  const playlistLean = activeShow?.playlistIds?.length && playlistResolved
     ? (activeShow.playlistStrict
         ? `\n\nThis show is anchored to a curated playlist: every track you pick MUST come from it. Call showPlaylistTracks first and choose from what it returns.`
         : `\n\nThis show leans on a curated playlist: call showPlaylistTracks first and strongly prefer those tracks; only step outside occasionally when the flow calls for it.`)
@@ -373,7 +376,7 @@ export const pickerAgent = defineAgent({
   // actually rescues these, not more steps on a polluted trail.
   maxSteps: 2,
   timeoutMs: agentDeadline,
-  buildSystem: ({ showAt }: any = {}) => pickSystem(showAt ?? null),
+  buildSystem: ({ showAt, playlistTracks }: any = {}) => pickSystem(showAt ?? null, !!playlistTracks?.length),
   buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, playlistLock, playlistTracks, excludedIds, showAt }) => {
     // Resolve the active show live (a show that just came on air takes effect),
     // at the pick's look-ahead moment when one is threaded through (showAt —
@@ -598,6 +601,14 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   const playlistLock = playlistPool && activeShow?.playlistStrict ? playlistPool.ids : null;
   const playlistTracks = playlistPool?.tracks ?? null;
   const excludedIds = activeShow ? await resolveExcludedPlaylistIds(activeShow) : null;
+  // A pinned anchor that resolves to nothing (deleted/recreated playlist →
+  // stale id, or a Navidrome error — resolveShowPlaylistPool swallows both)
+  // silently un-anchors the show: no lock, no showPlaylistTracks tool. Say so,
+  // loudly — a strict show playing 100% off-playlist with zero log output is
+  // undiagnosable from the operator's side.
+  if (activeShow?.playlistIds?.length && !playlistPool) {
+    queue.log('picker', `show "${activeShow.name}" pins ${activeShow.playlistIds.length} playlist(s) but none resolved to tracks — anchor ignored${activeShow.playlistStrict ? ' (STRICT toggle has no effect)' : ''}. Stale playlist id (deleted/recreated in Navidrome?) or a Navidrome error; re-select the playlists in the show editor.`);
+  }
 
   const run = await pickerAgent.run({
     messages: session.windowMessages(),

@@ -104,6 +104,11 @@ async function refreshAutoPlaylistInner() {
   const hasPlaylist = !!playlistPool?.tracks?.length;
   const strictPlaylist = hasPlaylist && !!show?.playlistStrict;
   const excludedIds = show ? await resolveExcludedPlaylistIds(show) : null;
+  // Pinned anchor resolved to nothing → the fallback playlist is silently
+  // un-anchored too. Surface it (same warning as the pick paths).
+  if (show?.playlistIds?.length && !playlistPool) {
+    queue.log('picker', `show "${show.name}" pins ${show.playlistIds.length} playlist(s) but none resolved to tracks — auto-playlist anchor ignored. Stale playlist id (deleted/recreated in Navidrome?) or a Navidrome error; re-select the playlists in the show editor.`);
+  }
 
   // Resolve the show's free-text genres to the library's exact tags once, up
   // front. Entries that fail to resolve drop out; NONE resolving disables the

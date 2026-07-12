@@ -15,7 +15,7 @@ import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { shuffle } from '../util/shuffle.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
-import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, hasEraBound, eraSpan, type YearRange } from './show-filter.js';
+import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, onlyGenre, onlyMood, onlyEnergy, hasEraBound, eraSpan, type YearRange } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
 
 // A track flowing through the pool builder — a raw Subsonic child, a slimTrack
@@ -466,6 +466,23 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     if (inPl.length) selectionPool = inPl;
   }
 
+  // Strict music filters: enforce on the FINAL merged pool too, same
+  // never-starve scope as the strict-playlist block above. The per-source
+  // lean() alone wasn't enough — any source with zero in-filter matches passed
+  // its whole result through (never-starve per source), so the pool the LLM
+  // saw was routinely half off-filter and "strict" hinged on prompt
+  // compliance (Discord: strict-era show playing pre-era tracks half the
+  // time). Filtering here keeps the pool pure whenever ANY in-filter track
+  // survived; a genuinely starved constraint still degrades to the full pool.
+  if (strict) {
+    let inFilter = selectionPool;
+    if (strictGenres.length) inFilter = onlyGenre(inFilter, strictGenres);
+    inFilter = inYearRange(inFilter, showFilter!.eras);
+    inFilter = onlyMood(inFilter, showFilter!.moods);
+    inFilter = onlyEnergy(inFilter, showFilter!.energies);
+    if (inFilter.length) selectionPool = inFilter;
+  }
+
   // De-dup by id, cap per artist so one name can't dominate the pool (the LLM
   // can only rotate artists across what it's handed), shuffle, cap.
   const MAX_PER_ARTIST = 3;
@@ -587,6 +604,11 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const playlistPool = activeShow ? await resolveShowPlaylistPool(activeShow) : null;
   const playlistStrict = !!activeShow?.playlistStrict;
   const excludedIds = activeShow ? await resolveExcludedPlaylistIds(activeShow) : null;
+  // Pinned anchor resolved to nothing → the show is silently un-anchored.
+  // Surface it (same warning as the agent path in dj-agent.ts).
+  if (activeShow?.playlistIds?.length && !playlistPool) {
+    queue.log('picker', `show "${activeShow.name}" pins ${activeShow.playlistIds.length} playlist(s) but none resolved to tracks — anchor ignored${playlistStrict ? ' (STRICT toggle has no effect)' : ''}. Stale playlist id (deleted/recreated in Navidrome?) or a Navidrome error; re-select the playlists in the show editor.`);
+  }
   const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict);
 
   // Excluded playlists (blocklist): drop any track whose id appears in the
