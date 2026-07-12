@@ -3974,7 +3974,9 @@ html.lite .sw-ripple-circle {
     overflow-x: auto; background: var(--card-bg);
 }
 .admin-root .lib-tab {
-    flex: 0 0 auto; font-family: inherit; background: transparent;
+    /* grow to fill the strip (no dead space after the last tab), but never
+       shrink below content — narrow screens scroll the strip instead */
+    flex: 1 0 auto; font-family: inherit; background: transparent;
     border: 0; border-left: 1px solid var(--ink); cursor: pointer; color: var(--ink);
     padding: 10px 18px; text-align: left; white-space: nowrap;
     display: flex; align-items: center; gap: 10px;
