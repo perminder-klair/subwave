@@ -177,7 +177,14 @@ async function fetchDjQueue(): Promise<DjQueueSnapshot> {
   for (const rid of rids) {
     try {
       const meta = await sendCommand(`request.metadata ${rid}`, 2000);
-      const match = /^subsonic_id="([^"]*)"/m.exec(meta);
+      // A pending request that Liquidsoap hasn't prepared yet is `status=idle`
+      // with no resolved top-level metadata — but its annotate URI is still
+      // there as `initial_uri="annotate:...,subsonic_id=\"…\"..."`. So match the
+      // id anywhere in the blob (tolerating the escaped quotes inside
+      // initial_uri), not just an anchored top-level `subsonic_id=` line — the
+      // furthest-out queued track (the one most likely to be cancelled) is
+      // exactly the one that's still idle. See #? / queue-cancel.
+      const match = /subsonic_id=\\?"([^"\\]+)/.exec(meta);
       if (match && match[1]) {
         ids.add(match[1]);
         if (!ridBySubsonicId.has(match[1])) ridBySubsonicId.set(match[1], rid);
