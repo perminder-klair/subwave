@@ -1439,7 +1439,9 @@ const DEFAULTS = {
 };
 
 const BOUNDS = {
-  jingleRatio: { min: 1, max: 1000, type: 'int' },
+  // 0 = jingles off entirely — radio.liq skips the jingle rotate when the
+  // ratio file reads 0 (issue #997: no way to disable the station stinger).
+  jingleRatio: { min: 0, max: 1000, type: 'int' },
   crossfadeDuration: { min: 0, max: 30, type: 'float' },
   // 0 = off; 36000 s (10h) is a generous ceiling that still leaves room for
   // long-form mix shows without letting a typo set an absurd value.

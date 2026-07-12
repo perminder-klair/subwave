@@ -1743,10 +1743,53 @@ async function airVoice(path: string, wavPath: string, text: string, gainDb = 0)
   const uri = voiceUriWithGain(wavPath, gainDb);
   const turn = _voiceChain
     .catch(() => undefined)
-    .then(() => writeHandoff(path, uri));
+    .then(async () => {
+      // A jingle stinger may be on air (or inside the cross buffer) right now —
+      // it plays outside this serialiser, so wait it out before handing over.
+      await waitForJingleClear();
+      return writeHandoff(path, uri);
+    });
   // Extend the shared lock until this clip has (about) finished playing.
   _voiceChain = turn.then(() => sleep(holdMs)).then(() => {}, () => {});
   return turn;
+}
+
+// --- Jingle collision guard (issue #997) -----------------------------------
+//
+// Jingles rotate into the broadcast inside Liquidsoap (radio.liq's jingle
+// rotate), entirely outside the airVoice serialiser — and because music_meta
+// is captured ABOVE that rotate, the incoming track's on_metadata fires while
+// the stinger is still audible in the crossfade, so a boundary-aired link or
+// ident talked straight over it. radio.liq announces each jingle by writing
+// jingle-playing.json ({filename, startedAt}) the moment it starts feeding;
+// the clip stays audible for up to its own length plus the cross buffer.
+// Before any voice handoff, sleep out whatever remains of that window.
+//
+// The marker is never deleted — a stale one simply computes a window in the
+// past. If the jingle WAV can't be measured (non-WAV upload, path not visible
+// to a native-dev controller), a fixed fallback length keeps the guard useful
+// without wedging the chain.
+
+const JINGLE_FALLBACK_MS = 15_000; // clip length when the WAV can't be parsed
+const JINGLE_TAIL_MS = 1_000;      // fade tail + poll slack
+const JINGLE_WAIT_MAX_MS = 60_000; // never wedge the voice chain on a bad marker
+
+function jingleClearAtMs(): number {
+  try {
+    const m = JSON.parse(readFileSync(config.liquidsoap.jinglePlayingFile, 'utf8'));
+    const startedMs = Number(m?.startedAt) * 1000; // liquidsoap time() is unix seconds
+    if (!Number.isFinite(startedMs) || startedMs <= 0) return 0;
+    const clipMs = (typeof m?.filename === 'string' && wavDurationMs(m.filename)) || JINGLE_FALLBACK_MS;
+    const crossMs = (Number(settings.get()?.crossfadeDuration) || 10) * 1000;
+    return startedMs + clipMs + crossMs + JINGLE_TAIL_MS;
+  } catch {
+    return 0; // no marker (or unreadable) — nothing on air to avoid
+  }
+}
+
+async function waitForJingleClear() {
+  const waitMs = Math.min(JINGLE_WAIT_MAX_MS, jingleClearAtMs() - Date.now());
+  if (waitMs > 0) await sleep(waitMs);
 }
 
 // Wrap a rendered voice-clip path in a Liquidsoap `annotate:` URI carrying a
