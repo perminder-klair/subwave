@@ -192,9 +192,15 @@ const rejectArchive = (arr: any[]) =>
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function search(query, { songCount = 20, songOffset = 0 } = {}) {
+// `includeBlocked` is for the ADMIN search surface only (/dj/search — the
+// library Search tab + studio queue picker): the operator must still be able
+// to find a blocked track to review it, and a manual queue attempt is refused
+// at the queue.push gate anyway. Every airing path (picker tools, request
+// resolution) uses the default and never sees blocked songs.
+export async function search(query, { songCount = 20, songOffset = 0, includeBlocked = false } = {}) {
   const r = await call('search3', { query, songCount, songOffset, artistCount: 5, albumCount: 5 });
-  return rejectArchive(r.searchResult3?.song || []);
+  const songs = (r.searchResult3?.song || []).filter((s) => !isStationArchive(s));
+  return includeBlocked ? songs : blocklist.rejectBlocked(songs);
 }
 
 export async function getRandomSongs({ size = 20, genre, fromYear, toYear }: { size?: number; genre?: string; fromYear?: number; toYear?: number } = {}) {
