@@ -27,6 +27,7 @@ import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
+import NavidromeBanner from './NavidromeBanner';
 import OdometerNumber from '../OdometerNumber';
 import BoothBuddy from '../BoothBuddy';
 import ThemeSwitcher from '../ThemeSwitcher';
@@ -156,6 +157,9 @@ export default function AdminShell({ children }: AdminShellProps) {
   return (
     <div className="admin-root paper">
       <ShellHeader pathname={pathname} signedIn onSignOut={signOut} />
+      {/* Persistent connectivity warning — visible on every admin page whenever
+          the live station can't reach Navidrome. Renders nothing when healthy. */}
+      <NavidromeBanner adminFetch={adminFetch} />
       <div className="shell-body">
         <nav className="shell-nav">
           {NAV_SECTIONS.map(section => (

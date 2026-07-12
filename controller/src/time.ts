@@ -84,3 +84,37 @@ export function zonedISODate(date = new Date()) {
   const { year, month, day } = zonedParts(date);
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
+
+// --- clock display + spoken forms (pure, pinned by scripts/clock-phrase.test.ts) ---
+// The DJ prompt layer speaks whatever clock shape it is shown (issue: DJs
+// saying "thirteen oh five" with the station set to AM/PM), so the prompt
+// clock must be rendered here in the operator's chosen style rather than
+// letting the model convert 24-hour digits itself.
+
+// "13:05" (24h) or "1:05 pm" (12h). hour12 mirrors settings.locale === 'en-US'.
+export function clockDisplay(hour: number, minute: number, hour12: boolean) {
+  const mm = String(minute).padStart(2, '0');
+  if (!hour12) return `${String(hour).padStart(2, '0')}:${mm}`;
+  const h12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${h12}:${mm} ${hour < 12 ? 'am' : 'pm'}`;
+}
+
+const HOUR_WORDS = [
+  'twelve', 'one', 'two', 'three', 'four', 'five',
+  'six', 'seven', 'eight', 'nine', 'ten', 'eleven',
+];
+
+// The hour as a radio DJ would say it: "midnight", "noon", "one in the
+// morning", "two in the afternoon", "eleven at night". Computed in code so
+// the hourly time check never asks the model to convert 24-hour digits —
+// small models get midnight wrong ("00:03" spoken as "one in the morning").
+export function spokenHourPhrase(hour: number) {
+  const h = ((hour % 24) + 24) % 24;
+  if (h === 0) return 'midnight';
+  if (h === 12) return 'noon';
+  const word = HOUR_WORDS[h % 12];
+  if (h < 12) return `${word} in the morning`;
+  if (h < 18) return `${word} in the afternoon`;
+  if (h < 22) return `${word} in the evening`;
+  return `${word} at night`;
+}

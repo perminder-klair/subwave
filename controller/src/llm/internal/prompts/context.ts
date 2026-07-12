@@ -126,7 +126,11 @@ export function buildContextLines(
     // drive-time period label) made the DJ read as a traffic-report station for
     // two hours a day. isCommute still gates commute-window skills and the
     // energy pacing in code (context.ts) — it just isn't prompt fodder anymore.
-    lines.push(`Local time: ${context.clock.hhmm}${tags.length ? ' · ' + tags.join(' · ') : ''}`);
+    // `display` follows the operator's locale (en-US → "1:05 pm") — the model
+    // speaks whatever clock shape it sees, so raw 24-hour hhmm here put
+    // "thirteen oh five" on air for AM/PM stations. hhmm kept as fallback for
+    // callers that build a bare clock object.
+    lines.push(`Local time: ${context.clock.display || context.clock.hhmm}${tags.length ? ' · ' + tags.join(' · ') : ''}`);
   }
   if (on('time') && context?.time) {
     // A show's pinned mood overrides the autonomous mood chain (context.ts),

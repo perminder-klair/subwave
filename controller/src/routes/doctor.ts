@@ -63,6 +63,18 @@ router.get('/doctor/summary', requireAdmin, async (_req, res) => {
   }
 });
 
+// Live-config Navidrome connectivity for the always-on admin banner. Returns
+// { ok, reason?, url } from the same never-throwing ping the Doctor's
+// connectivity finding uses, cached ~20s so polling every admin page doesn't
+// drip Subsonic calls. Cheap and safe to poll.
+router.get('/doctor/navidrome', requireAdmin, async (_req, res) => {
+  try {
+    res.json(await doctor.navidromeConnectivity());
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Body: { report: DoctorReport } — the report the panel already has in hand, so
 // the review reflects exactly what the operator is looking at (no re-run race).
 router.post('/doctor/review', requireAdmin, async (req, res) => {
