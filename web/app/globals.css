@@ -3457,7 +3457,7 @@ html.lite .sw-ripple-circle {
 /* Track row */
 .admin-root .track-row {
     display: grid;
-    grid-template-columns: 24px 1fr 64px 36px 60px;
+    grid-template-columns: 24px 1fr 64px 60px 36px;
     gap: 12px;
     align-items: center;
     padding: 7px 6px;

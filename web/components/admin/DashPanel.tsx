@@ -501,6 +501,13 @@ export default function DashPanel() {
                       ? t.duration
                       : ''}
                   </span>
+                  {t.requestedBy ? (
+                    <span className="text-right text-[9px] font-bold tracking-[0.2em] text-vermilion uppercase">
+                      ↳ {t.requestedBy}
+                    </span>
+                  ) : (
+                    <span></span>
+                  )}
                   <span className="text-right">
                     {typeof t.subsonic_id === 'string' && t.subsonic_id ? (
                       <button
@@ -515,13 +522,6 @@ export default function DashPanel() {
                       </button>
                     ) : null}
                   </span>
-                  {t.requestedBy ? (
-                    <span className="text-right text-[9px] font-bold tracking-[0.2em] text-vermilion uppercase">
-                      ↳ {t.requestedBy}
-                    </span>
-                  ) : (
-                    <span></span>
-                  )}
                 </div>
               ))
             )}
