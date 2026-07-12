@@ -26,7 +26,7 @@
 import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Search, RotateCcw, Sparkles, RefreshCw, ListPlus, ListMusic, X, Pencil,
+  Search, RotateCcw, Sparkles, RefreshCw, ListPlus, ListMusic, X, Pencil, Ban,
 } from 'lucide-react';
 import { useAdminAuth, ADMIN_API_URL } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
@@ -83,6 +83,18 @@ interface BrowseResponse {
 
 interface UntaggedResponse { rows: Track[]; nextCursor: string | null }
 
+// Never-play blocklist entry (GET /library/blocklist) — name/artist/album are
+// display snapshots taken at block time, so no Navidrome re-lookup to render.
+type BlockType = 'track' | 'album' | 'artist';
+interface BlockEntry {
+  type: BlockType;
+  id: string;
+  name: string | null;
+  artist: string | null;
+  album: string | null;
+  addedAt: string;
+}
+
 // Coverage / TaggerState / LibraryStatsLite / Batch / RescanOpts live in
 // LibraryTaggingPanel.tsx alongside the panel that renders them.
 
@@ -96,7 +108,7 @@ interface SettingsResponse {
   budget?: { mode: BudgetMode };
 }
 
-type Tab = 'recent' | 'browse' | 'search' | 'untagged' | 'playlists';
+type Tab = 'recent' | 'browse' | 'search' | 'untagged' | 'playlists' | 'blocked';
 type Sort = 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
 type Energy = 'any' | 'low' | 'medium' | 'high';
 type Vocal = 'any' | 'instrumental' | 'vocal';
@@ -108,7 +120,7 @@ type SearchMode = 'library' | 'sound';
 const PAGE_SIZE = 50;
 const SEARCH_PAGE = 30;
 
-const TABS: Tab[] = ['recent', 'browse', 'search', 'untagged', 'playlists'];
+const TABS: Tab[] = ['recent', 'browse', 'search', 'untagged', 'playlists', 'blocked'];
 const SORTS: Sort[] = ['artist', 'title', 'year', 'taggedAt', 'bpm', 'loudness', 'pace'];
 
 // ---------------------------------------------------------------------------
@@ -227,6 +239,13 @@ export default function LibraryPanel() {
   const [playlists, setPlaylists] = useState<PlaylistSummary[] | null>(null);
   const [playlistsLoading, setPlaylistsLoading] = useState(false);
   const [plBusy, setPlBusy] = useState(false);
+
+  // never-play blocklist state — the entry list for the Blocked tab, plus
+  // which row's block action / which entry's unblock is in flight.
+  const [blockedEntries, setBlockedEntries] = useState<BlockEntry[] | null>(null);
+  const [blockedLoading, setBlockedLoading] = useState(false);
+  const [blocking, setBlocking] = useState<string | null>(null);
+  const [unblocking, setUnblocking] = useState<string | null>(null);
 
   // -----------------------------------------------------------------------
   // URL state — tab, browse filters, and the search query live in the query
@@ -608,6 +627,66 @@ export default function LibraryPanel() {
       notify.err(errorMessage(err));
     } finally {
       setPlBusy(false);
+    }
+  };
+
+  // -----------------------------------------------------------------------
+  // never-play blocklist
+  // -----------------------------------------------------------------------
+  const loadBlocked = useCallback(async () => {
+    if (!ready) return;
+    setBlockedLoading(true);
+    try {
+      const r = await adminFetch('/library/blocklist');
+      if (!r.ok) throw new Error(`blocklist load failed (${r.status})`);
+      const j = await r.json() as { entries?: BlockEntry[] };
+      setBlockedEntries(j.entries || []);
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setBlockedLoading(false);
+    }
+  }, [adminFetch, ready]);
+
+  useEffect(() => {
+    if (tab === 'blocked' && ready) loadBlocked();
+  }, [tab, ready, loadBlocked]);
+
+  const blockTrack = async (track: Track, type: BlockType) => {
+    setBlocking(track.id);
+    try {
+      const r = await adminFetch('/library/blocklist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, trackId: track.id }),
+      });
+      const j = await r.json().catch(() => ({})) as { entry?: BlockEntry; purged?: number; error?: string };
+      if (!r.ok) throw new Error(j.error || `block failed (${r.status})`);
+      const what = type === 'track' ? `“${track.title}”` : type === 'album' ? `album “${track.album}”` : track.artist;
+      notify.ok(`${what} will never air${j.purged ? ` · ${j.purged} dropped from queue` : ''} — manage in the Blocked tab`);
+      setBlockedEntries(prev => (prev && j.entry ? [...prev, j.entry] : prev));
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setBlocking(null);
+    }
+  };
+
+  const unblockEntry = async (e: BlockEntry) => {
+    const key = `${e.type}:${e.id}`;
+    setUnblocking(key);
+    try {
+      const r = await adminFetch(`/library/blocklist/${e.type}/${encodeURIComponent(e.id)}`, { method: 'DELETE' });
+      if (!r.ok && r.status !== 404) {
+        const j = await r.json().catch(() => ({})) as { error?: string };
+        throw new Error(j.error || `unblock failed (${r.status})`);
+      }
+      notify.ok(`“${e.name || e.id}” can play again`);
+      setBlockedEntries(prev => (prev ? prev.filter(x => !(x.type === e.type && x.id === e.id)) : prev));
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setUnblocking(null);
     }
   };
 
@@ -1011,6 +1090,7 @@ export default function LibraryPanel() {
     untagged: remaining,
     recent: recent?.length ?? null,
     playlists: playlists?.length ?? null,
+    blocked: blockedEntries?.length ?? null,
   };
 
   const tableRows: Track[] =
@@ -1147,7 +1227,7 @@ export default function LibraryPanel() {
       )}
 
       {/* add-to-playlist bar — appears when rows are selected on a track tab */}
-      {tab !== 'playlists' && selected.size > 0 && (
+      {tab !== 'playlists' && tab !== 'blocked' && selected.size > 0 && (
         <AddToPlaylistBar
           count={selected.size}
           playlists={playlists}
@@ -1166,8 +1246,18 @@ export default function LibraryPanel() {
         />
       )}
 
+      {tab === 'blocked' && (
+        <BlockedTab
+          entries={blockedEntries}
+          loading={blockedLoading}
+          unblocking={unblocking}
+          onUnblock={unblockEntry}
+          onRefresh={loadBlocked}
+        />
+      )}
+
       {/* track list */}
-      {tab !== 'playlists' && (
+      {tab !== 'playlists' && tab !== 'blocked' && (
       <Card
         title={
           tab === 'browse' ? 'Tracks' :
@@ -1204,6 +1294,8 @@ export default function LibraryPanel() {
           flashId={flashId}
           onQueue={queueTrack}
           onRetag={retagTrack}
+          blocking={blocking}
+          onBlock={blockTrack}
           vocab={vocab}
           editingId={editingId}
           manualBusy={manualBusy}
@@ -1255,7 +1347,7 @@ export default function LibraryPanel() {
 function Tabs({ tab, setTab, counts }: {
   tab: Tab;
   setTab: (t: Tab) => void;
-  counts: { browse: number | null; untagged: number | null; recent: number | null; playlists: number | null };
+  counts: { browse: number | null; untagged: number | null; recent: number | null; playlists: number | null; blocked: number | null };
 }) {
   const items: { id: Tab; name: string; hint: string; badge: number | null }[] = [
     { id: 'recent', name: 'Recently added', hint: 'newest first', badge: counts.recent },
@@ -1263,6 +1355,7 @@ function Tabs({ tab, setTab, counts }: {
     { id: 'search', name: 'Search', hint: 'navidrome', badge: null },
     { id: 'untagged', name: 'Untagged', hint: 'needs tags', badge: counts.untagged },
     { id: 'playlists', name: 'Playlists', hint: 'navidrome', badge: counts.playlists },
+    { id: 'blocked', name: 'Blocked', hint: 'never plays', badge: counts.blocked },
   ];
   return (
     <div className="lib-tabs">
@@ -1458,6 +1551,8 @@ interface TrackTableProps {
   flashId: string | null;
   onQueue: (t: Track) => void;
   onRetag: (t: Track) => void;
+  blocking: string | null;
+  onBlock: (t: Track, type: BlockType) => void;
   vocab: string[];
   editingId: string | null;
   manualBusy: string | null;
@@ -1569,6 +1664,12 @@ function TrackTable(p: TrackTableProps) {
                   ? <><RotateCcw size={11} /> Retag</>
                   : <><Sparkles size={11} /> Tag</>}
               </Btn>
+              <BlockMenu
+                track={t}
+                busy={p.blocking === t.id}
+                disabled={!!p.blocking}
+                onBlock={p.onBlock}
+              />
             </div>
           </div>
           {editing && (
@@ -1584,6 +1685,110 @@ function TrackTable(p: TrackTableProps) {
         );
       })}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BlockMenu — the per-row "Never play" action. A Ban button opening a small
+// scope menu (track / album / artist); the server resolves album/artist ids
+// from the track id, so the row only needs t.id. No confirm dialog — blocking
+// is one-click reversible from the Blocked tab.
+// ---------------------------------------------------------------------------
+function BlockMenu({ track, busy, disabled, onBlock }: {
+  track: Track;
+  busy: boolean;
+  disabled: boolean;
+  onBlock: (t: Track, type: BlockType) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const pick = (type: BlockType) => { setOpen(false); onBlock(track, type); };
+  return (
+    <div className="relative">
+      <Btn sm onClick={() => setOpen(o => !o)} disabled={disabled} title="Never play this on air">
+        {busy ? '…' : <Ban size={12} />}
+      </Btn>
+      {open && (
+        <>
+          {/* click-away backdrop */}
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
+          <div className="absolute top-full right-0 z-50 mt-1 min-w-[200px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('track')}>
+              Never play this track
+            </button>
+            {track.album && (
+              <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('album')}>
+                Never play this album
+              </button>
+            )}
+            {track.artist && (
+              <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('artist')}>
+                Never play this artist
+                <span className="block text-[10px] text-muted">primary credit only — collabs filed under other artists still play</span>
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BlockedTab — the never-play blocklist manager. Lists entries newest-first
+// with a type badge and one-click unblock. The list governs AIRING only:
+// blocked tracks still appear in browse/search (the library browser shows the
+// library), they just never make it to the queue.
+// ---------------------------------------------------------------------------
+function BlockedTab({ entries, loading, unblocking, onUnblock, onRefresh }: {
+  entries: BlockEntry[] | null;
+  loading: boolean;
+  unblocking: string | null;
+  onUnblock: (e: BlockEntry) => void;
+  onRefresh: () => void;
+}) {
+  const rows = (entries || []).slice().sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''));
+  return (
+    <Card
+      title="Never play"
+      sub={entries ? `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'} — these are refused everywhere: DJ picks, requests, even manual queueing` : ''}
+      right={
+        <Btn sm onClick={onRefresh} disabled={loading}>
+          <RefreshCw size={11} /> {loading ? 'Loading…' : 'Refresh'}
+        </Btn>
+      }
+      bodyClass="!p-0"
+    >
+      {rows.length === 0 ? (
+        <div className="px-4 py-10 text-center text-[12px] text-muted italic">
+          {loading ? 'loading…' : (
+            <>nothing blocked — use the <Ban size={11} className="inline align-[-1px]" /> action on any track row to keep a track, album or artist off the air</>
+          )}
+        </div>
+      ) : (
+        <div className={cn(loading && 'opacity-60 transition-opacity')}>
+          {rows.map(e => {
+            const key = `${e.type}:${e.id}`;
+            return (
+              <div key={key} className="flex items-center gap-3 border-b border-dashed border-[var(--separator-strong)] px-4 py-2.5 last:border-b-0">
+                <span className="lib-mtag shrink-0" title={`blocked ${e.type}`}>{e.type}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="lib-title">{e.name || e.id}</div>
+                  {(e.artist || e.album) && e.type !== 'artist' && (
+                    <div className="lib-artist">{e.artist || ''}{e.album && e.type === 'track' ? ` · ${e.album}` : ''}</div>
+                  )}
+                </div>
+                <span className="hidden text-[11px] text-muted sm:block" title="blocked on">
+                  {e.addedAt ? new Date(e.addedAt).toLocaleDateString('en-GB') : ''}
+                </span>
+                <Btn sm onClick={() => onUnblock(e)} disabled={!!unblocking}>
+                  {unblocking === key ? '…' : <><X size={12} /> Unblock</>}
+                </Btn>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
   );
 }
 

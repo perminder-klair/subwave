@@ -49,7 +49,7 @@ Single owner of the file and the in-memory index.
   `trackIds.has(song.id) || (song.albumId && albumIds.has(song.albumId)) || (song.artistId && artistIds.has(song.artistId))`.
 - `isEmpty()` — fast-path so hot filters skip work when nothing is blocked (the common case).
 
-Matching is **id-based only**. No name/fuzzy matching: precise, cheap, and immune to metadata typos. Consequence (documented in UI copy): blocking an artist blocks songs whose primary `artistId` matches — collaborations filed under a different artist id still play.
+Matching is **id-first, with an exact normalised-name fallback for album/artist entries** (artist by name; album by name+artist pair). The fallback exists because library-db rows (mood/vector sources, queue items) carry only name strings — pure id matching would let artist/album blocks leak through those paths. Track entries never name-match (covers/re-recordings share titles). Consequence (documented in UI copy): blocking an artist blocks songs whose primary artist matches — collaborations filed under a different artist still play.
 
 ## Enforcement points
 

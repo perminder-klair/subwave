@@ -10,6 +10,7 @@ import { writeFileAtomic } from '../util/atomic-file.js';
 import * as subsonic from '../music/subsonic.js';
 import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
+import * as blocklist from '../music/blocklist.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
@@ -506,6 +507,15 @@ class Queue {
     // honestly ("already on the way") instead of queuing a second back-to-back
     // play. `allowDuplicate` opts an explicit operator action (the studio
     // queue-track route) out — a deliberate manual queue always fires.
+    // Global never-play gate — the blocklist is absolute (operator's call:
+    // even explicit manual queueing is refused until the entry is unblocked),
+    // so it sits above allowDuplicate. Every playback path funnels through
+    // push() (dj-agent, requests, MCP, studio queue), making this the last
+    // line even for sources that bypass the subsonic/library filters.
+    if (blocklist.isBlocked(track)) {
+      this.log('blocked', `${track?.title} — ${track?.artist} (on the never-play blocklist, refused)`);
+      return -2;
+    }
     if (!allowDuplicate && track?.id) {
       const dominated = this.upcoming.some(i => i.track?.id === track.id)
         || (this.current?.track?.id === track.id);
@@ -532,6 +542,21 @@ class Queue {
     this.persist();
     this.drainToLiquidsoap();  // fire-and-forget
     return this.upcoming.length;
+  }
+
+  // Drop now-blocked tracks from the upcoming queue — called when a blocklist
+  // entry is added. Only undrained items (`!sent`) are removable; anything
+  // already handed to Liquidsoap plays out (we never interrupt), and the
+  // currently playing track is likewise left alone. Returns how many dropped.
+  purgeBlocked(): number {
+    const keep = this.upcoming.filter(i => i.sent || !blocklist.isBlocked(i.track));
+    const dropped = this.upcoming.length - keep.length;
+    if (dropped > 0) {
+      this.upcoming = keep;
+      this.log('blocked', `purged ${dropped} upcoming track${dropped === 1 ? '' : 's'} now on the never-play blocklist`);
+      this.persist();
+    }
+    return dropped;
   }
 
   // Resolve {bpm, key} for a queued track: from the track object if it carries

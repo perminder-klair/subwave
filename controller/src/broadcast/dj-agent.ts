@@ -512,6 +512,13 @@ async function enqueuePick(
     aiPicked: true,
     linkPrev,
   });
+  if (pos === -2) {
+    // Never-play blocklist refused the pick — library-db-sourced candidates
+    // can slip past the subsonic filter. Same "didn't queue" signal as dedup;
+    // the caller's normal no-pick handling covers it.
+    queue.log('ai-pick', `${song.title} — ${song.artist} refused (never-play blocklist)`, { reason, source });
+    return -1;
+  }
   if (pos === -1) return -1;
   queue.log('ai-pick', `${song.title} — ${song.artist}`, { reason, source });
   recordPick({ song, reason, source });
@@ -989,6 +996,10 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       introScript: intro || null,
       introKind: 'dj-speak',
     });
+    // Never-play blocklist refused the pick — throw so the route's stateless
+    // fallback cascade runs; its own resolution is blocklist-filtered, so the
+    // listener gets the standard not-found decline rather than a silent drop.
+    if (pos === -2) throw new Error('pick refused by never-play blocklist');
     // A concurrent request already queued this exact track — push() deduped it
     // (#619). Acknowledge honestly (no second back-to-back play, no false
     // "coming up", no intro to air) and still append the line as the session

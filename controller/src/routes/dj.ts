@@ -827,6 +827,11 @@ router.post('/dj/queue-track', requireAdmin, async (req, res) => {
     // Explicit operator action — bypass the request/AI dedup guard (#619) so a
     // deliberate manual queue always fires, even for an already-queued track.
     const queuePosition = await queue.push({ track, requestedBy: 'studio', allowDuplicate: true });
+    if (queuePosition === -2) {
+      // The never-play blocklist is absolute — even manual queueing is refused
+      // (operator's call). Unblock in admin → Library → Blocked to re-audition.
+      return res.status(409).json({ error: 'track is on the never-play blocklist — unblock it first (Library → Blocked)' });
+    }
     res.json({
       ok: true,
       track: { title: track.title, artist: track.artist || null },

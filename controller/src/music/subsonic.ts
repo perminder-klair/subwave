@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as subLog from './subsonic-log.js';
+import * as blocklist from './blocklist.js';
 
 function buildAuth() {
   const salt = crypto.randomBytes(8).toString('hex');
@@ -179,7 +180,13 @@ export function isStationArchive(song: any): boolean {
   return /^\d{2}-00$/.test(title) && blank(song.artist) && blank(song.album);
 }
 
-const rejectArchive = (arr: any[]) => (arr || []).filter((s) => !isStationArchive(s));
+// The global never-play blocklist rides the same chokepoint: every
+// song-returning function below already filters through rejectArchive, so
+// blocked tracks/albums/artists drop out of search, random, genre, similar,
+// starred, top-songs, album and playlist results — i.e. every picker source,
+// agent tool, and request-resolution path — in one place.
+const rejectArchive = (arr: any[]) =>
+  blocklist.rejectBlocked((arr || []).filter((s) => !isStationArchive(s)));
 
 // ---------------------------------------------------------------------------
 // Public API
