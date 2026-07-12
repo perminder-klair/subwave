@@ -139,6 +139,7 @@ interface LlmCall {
 interface DebugLlm {
   activeModel?: string;
   provider?: string;
+  budget?: DebugBudget;
   recentCalls?: LlmCall[];
   /** Raw-request capture status — drives the toggle + file-path hint. */
   debug?: {
@@ -257,7 +258,6 @@ interface DebugData {
   voiceFiles?: FilesValue;
   config?: Record<string, unknown>;
   mounts?: DebugMounts;
-  budget?: DebugBudget;
   error?: string;
 }
 
@@ -341,7 +341,7 @@ export default function DebugPanel() {
             ● {err ? 'down' : 'live'}
           </Eyebrow>
           <span className="caption">refresh · 2s</span>
-          {data?.budget?.enabled ? <BudgetMeter budget={data.budget} /> : null}
+          {data?.llm?.budget?.enabled ? <BudgetMeter budget={data.llm.budget} /> : null}
           <span className="ml-auto flex gap-2">
             <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
           </span>
@@ -582,7 +582,9 @@ function BudgetMeter({ budget }: { budget: DebugBudget }) {
       <span className="caption">tokens</span>
       <Context maxTokens={cap} usedTokens={used}>
         <ContextTrigger className="h-auto gap-1 rounded-none px-1.5 py-0.5 text-[11px]" />
-        <ContextContent align="start" className="rounded-none border-ink bg-[var(--overlay)]">
+        {/* bg-bg (opaque): --overlay is translucent and lets the strip below
+            bleed through a floating card. */}
+        <ContextContent align="start" className="rounded-none border-ink bg-bg">
           {/* Custom header children: the stock header's Progress bar paints
               bg-muted, which is a text colour in this theme, not a surface. */}
           <ContextContentHeader>

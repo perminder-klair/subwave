@@ -2,7 +2,9 @@
 
 import { cn } from "@/lib/cn";
 import type { MotionProps } from "motion/react";
-import { motion } from "motion/react";
+// `m` (not `motion`): the app root wraps everything in <LazyMotion strict>
+// (components/MotionProvider.tsx), which throws on non-lazy motion.* usage.
+import { m } from "motion/react";
 import type { CSSProperties, ElementType, JSX } from "react";
 import { memo, useMemo } from "react";
 
@@ -17,7 +19,7 @@ const motionComponentCache = new Map<
 const getMotionComponent = (element: keyof JSX.IntrinsicElements) => {
   let component = motionComponentCache.get(element);
   if (!component) {
-    component = motion.create(element);
+    component = m.create(element);
     motionComponentCache.set(element, component);
   }
   return component;

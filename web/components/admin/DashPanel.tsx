@@ -648,14 +648,19 @@ export default function DashPanel() {
         {/* RIGHT */}
         <div className="grid gap-4">
           <Card title="Manual voice DJ" sub="speak now">
-            {/* Canned prompt chips — clicking fills the textarea, never sends. */}
+            {/* Canned prompt chips — clicking fills the textarea, never sends.
+                Chips are directions for the DJ, not verbatim lines, so they
+                also flip the box to Styled (raw would air the instruction). */}
             <div className="mb-2.5">
               <Suggestions className="gap-1.5">
                 {SAY_SUGGESTIONS.map(s => (
                   <Suggestion
                     key={s}
                     suggestion={s}
-                    onClick={setSayText}
+                    onClick={text => {
+                      setSayText(text);
+                      setSayMode('styled');
+                    }}
                     className="h-auto rounded-none border-separator-strong px-2 py-[3px] text-[9px] font-medium tracking-[0.04em] text-muted normal-case hover:bg-[var(--overlay)] hover:text-ink"
                   />
                 ))}
