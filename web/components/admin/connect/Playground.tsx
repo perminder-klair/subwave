@@ -6,6 +6,7 @@ import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { Textarea } from '../../ui/textarea';
 import { notify } from '../../../lib/notify';
+import { V3AlertDialog } from '../../ui/alert-dialog';
 import { CodeBlock, CodeBlockCopyButton } from '../../ai-elements/code-block';
 import { Snippet, SnippetAddon, SnippetCopyButton, SnippetInput } from '../../ai-elements/snippet';
 import {
@@ -96,20 +97,23 @@ export default function Playground({ endpoint, apiBase, adminFetch }: Props) {
   );
   const [result, setResult] = useState<Result | null>(null);
   const [sending, setSending] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const relPath = useMemo(() => buildPath(endpoint.path, pathParams, query), [endpoint.path, pathParams, query]);
   const hasBody = endpoint.method !== 'GET' && endpoint.method !== 'DELETE';
 
-  const send = async () => {
-    // Guard destructive/air-mutating calls behind an explicit confirm — this
-    // hits the LIVE broadcast, not a sandbox.
+  // Guard destructive/air-mutating calls behind an explicit confirm — this
+  // hits the LIVE broadcast, not a sandbox. The dialog's confirm calls
+  // doSend directly.
+  const send = () => {
     if (endpoint.mutatesAir) {
-      const ok = window.confirm(
-        `${endpoint.method} ${endpoint.path} changes the live broadcast (it may speak, queue, or skip on air). Send it now?`,
-      );
-      if (!ok) return;
+      setConfirmOpen(true);
+      return;
     }
+    void doSend();
+  };
 
+  const doSend = async () => {
     let parsedBody: string | undefined;
     if (hasBody && body.trim()) {
       try {
@@ -210,6 +214,17 @@ export default function Playground({ endpoint, apiBase, adminFetch }: Props) {
           <ResultBody status={result.status} body={result.body} />
         </div>
       )}
+
+      <V3AlertDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        danger
+        title="This goes on air"
+        description={`${endpoint.method} ${endpoint.path} changes the live broadcast — it may speak, queue, or skip on air. Send it now?`}
+        confirmLabel={`send ${endpoint.method.toLowerCase()}`}
+        cancelLabel="hold off"
+        onConfirm={() => void doSend()}
+      />
     </div>
   );
 }
