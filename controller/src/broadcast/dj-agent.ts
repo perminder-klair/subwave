@@ -846,7 +846,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null }: { w
     // look-ahead (unknown duration), ban the clock outright.
     const clockClause = wantLink
       ? (showAt && ctx?.clock?.hhmm
-          ? ` The link airs at about ${ctx.clock.hhmm} — if you mention the clock, that is the time to use, never an earlier one.`
+          ? ` The link airs at about ${ctx.clock.display || ctx.clock.hhmm} — if you mention the clock, that is the time to use, never an earlier one.`
           : ` Never state the clock time in the link — you can't know exactly when it airs.`)
       : '';
     const varietyClause = wantLink
