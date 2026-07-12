@@ -336,6 +336,17 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // without the text tower.
   await scoreAudioMoods();
 
+  // The worker degrades silently when Demucs fails to load at runtime (weights
+  // download, OOM): every track analyses "ok" with vocal_ranges omitted, so a
+  // vocal backfill that stored nothing would otherwise look like a clean run —
+  // and re-target the same tracks forever (#996).
+  if (vocalBackfill && analyzed > 0 && vocalAnalyzed === 0) {
+    logEvent(
+      'warning',
+      'Vocal backfill stored no vocal-activity ranges — Demucs likely failed to load at runtime; check the analyzer container logs for "Demucs load failed"',
+    );
+  }
+
   logEvent(
     'success',
     `Audio analysed — ${analyzed.toLocaleString('en-GB')} tracks` +

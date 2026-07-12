@@ -49,6 +49,12 @@ ANALYZE_SECONDS = os.environ.get("ANALYZE_SECONDS", "").strip() or "40"
 # compose files mount a named volume over it so the download survives recreates.
 ANALYZER_HF_HOME = os.environ.get("ANALYZER_HF_HOME", "/opt/analyzer/hf-cache")
 
+# Max bytes of one worker stdout line. asyncio's default StreamReader limit is
+# 64 KiB, which a batch /embed-text response blows straight past (17 mood
+# prompts x 512 floats is ~150 KB on one line) — readline() then raises
+# LimitOverrunError and the endpoint 500s (#996).
+WORKER_STDOUT_LIMIT = 16 * 1024 * 1024
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
@@ -130,6 +136,7 @@ class StdioWorker:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            limit=WORKER_STDOUT_LIMIT,
         )
         # Pump stderr to our log so the operator sees model load progress / fatal
         # errors in the container logs. The task exits when the worker closes

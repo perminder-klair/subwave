@@ -115,6 +115,16 @@ export async function runAudioMoodPass(): Promise<AudioMoodStats> {
   const prompts = SHOW_MOODS.map(moodPrompt);
   const vecs = await analyzer.embedTexts(prompts, { timeoutMs: 10 * 60_000 });
   if (!vecs || vecs.length !== SHOW_MOODS.length) {
+    // A backend that ADVERTISES the text tower but failed the call is a runtime
+    // fault (worker error, oversized-response 500 — #996), not a lean build;
+    // "enable ANALYZER_HEAVY" would send the operator in the wrong direction.
+    if (analyzer.textEmbeddingAvailable() === true) {
+      logEvent(
+        'warning',
+        'Text embedding failed even though the backend reports a CLAP text tower — check the analyzer container logs; skipping audio moods',
+      );
+      return { scored: 0, scope: ids.length, skipped: 'text embedding failed' };
+    }
     logEvent(
       'info',
       'Backend has no CLAP text tower — skipping audio moods (ANALYZER_HEAVY=1 enables it)',
