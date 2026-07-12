@@ -49,6 +49,11 @@ POCKET_TTS_DEFAULT_VOICE = os.environ.get("POCKET_TTS_VOICE", "alba")
 CHATTERBOX_HF_HOME = os.environ.get("CHATTERBOX_HF_HOME", "/opt/chatterbox/hf-cache")
 POCKET_HF_HOME = os.environ.get("POCKET_HF_HOME", "/opt/pocket-tts/hf-cache")
 
+# Max bytes of one worker stdout line. asyncio's default StreamReader limit is
+# 64 KiB; TTS responses are small (a WAV path) but keep this in step with the
+# analyzer sidecar so a future payload can't hit LimitOverrunError (#996).
+WORKER_STDOUT_LIMIT = 16 * 1024 * 1024
+
 # Which engines this sidecar should actually load. BOTH are baked into the
 # image, but loading a PyTorch model costs RAM + a multi-GB first-boot weight
 # download + 30-60s of startup — so an operator who only uses one engine can
@@ -161,6 +166,7 @@ class TtsWorker:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
+            limit=WORKER_STDOUT_LIMIT,
         )
         # Pump stderr to our log so the operator sees the worker's startup
         # output (model load progress, fatal errors, etc.) in tts-heavy's
