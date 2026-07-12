@@ -51,6 +51,12 @@ export default function PlayerShell({ skin, contained = false }: PlayerShellProp
   );
 }
 
+/** True when the keypress landed inside an open modal (see the cycling
+ *  shortcuts below for why the shell stands down there). */
+function targetInsideDialog(e?: KeyboardEvent): boolean {
+  return e?.target instanceof HTMLElement && e.target.closest('[role="dialog"]') != null;
+}
+
 function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boolean }) {
   const { audioRef } = usePlayerAudio();
   const { state } = usePlayerFeed();
@@ -77,7 +83,11 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
   }, [hydrated]);
   useEffect(() => {
     if (contained || !stationSkinRaw) return;
-    cacheStationSkin(stationSkinRaw);
+    // Cache the RESOLVED id, not the raw one: a station skin this build
+    // doesn't ship (newer controller, API-set slug) resolves to the default,
+    // and caching the raw id would make SKIN_INIT_SCRIPT pre-paint-hide the
+    // shell on every future load only to render the default anyway.
+    cacheStationSkin(resolveSkinId(stationSkinRaw, null));
   }, [contained, stationSkinRaw]);
 
   const stationSkinId = stationSkinRaw ?? cachedStation ?? DEFAULT_SKIN_ID;
@@ -103,18 +113,24 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
   // without a visible switcher must never strand the listener): `s` cycles
   // the skin override, `t` cycles the theme override. Toasts name the pick
   // so a rapid cycle stays legible. Bare keys are already suppressed while
-  // a text field has focus (useKeyboardShortcuts).
+  // a text field has focus (useKeyboardShortcuts); on top of that, cycling
+  // stands down while a skin-owned modal (drawer, shortcuts dialog) has
+  // focus — swapping the skin would tear the open modal down mid-use. Radix
+  // traps focus inside role="dialog", so the event target is the tell. The
+  // skin's OWN shortcut maps deliberately keep working inside drawers
+  // (classic switches drawers with 1–4), so this check lives here, not in
+  // useKeyboardShortcuts.
   const themeCtx = useThemeSwitcher();
-  const cycleSkin = useCallback(() => {
-    if (contained) return;
+  const cycleSkin = useCallback((e?: KeyboardEvent) => {
+    if (contained || targetInsideDialog(e)) return;
     const i = SKINS.findIndex(s => s.id === effectiveId);
     const next = SKINS[(i + 1) % SKINS.length];
     if (!next) return;
     setOverride(next.id);
     toast(`Skin: ${next.name}`);
   }, [contained, effectiveId, setOverride]);
-  const cycleTheme = useCallback(() => {
-    if (contained || !themeCtx || themeCtx.themes.length === 0) return;
+  const cycleTheme = useCallback((e?: KeyboardEvent) => {
+    if (contained || targetInsideDialog(e) || !themeCtx || themeCtx.themes.length === 0) return;
     const { themes, effectiveId: themeId, setOverride: setThemeOverride } = themeCtx;
     const i = themes.findIndex(t => t.id === themeId);
     const next = themes[(i + 1) % themes.length];

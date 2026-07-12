@@ -26,7 +26,11 @@ export interface TuneInGate {
 export function useTuneInGate(): TuneInGate {
   const { tunedIn, idleStopped } = usePlayerAudio();
   const { tune } = usePlayerActions();
-  const [showTuneIn, setShowTuneIn] = useState(true);
+  // Seeded from the live tune state, not `true`: the hook remounts on every
+  // skin switch (gate state is per-skin), and a fresh instance while playback
+  // is already running must not paint the gate for a frame before the
+  // tunedIn effect below drops it.
+  const [showTuneIn, setShowTuneIn] = useState(() => !tunedIn);
 
   const tuneInFromOverlay = () => {
     setShowTuneIn(false);

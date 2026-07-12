@@ -8,7 +8,7 @@
 // playing. History is a stack of rewound tapes, the queue head sits on the
 // stack, and requests are a Side B paper slip passed to the booth.
 
-import { useRef, useState } from 'react';
+import { useRef } from 'react';
 import styles from './Spool.module.css';
 import {
   usePlayerActions,
@@ -32,8 +32,8 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
+import { useRequestSlip, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
-import type { RequestResult } from '@/lib/types';
 
 /** Two little tape hubs — the cassette signature, reused on every card. */
 function MiniHubs() {
@@ -71,7 +71,7 @@ export default function SpoolSkin(_props: SkinProps) {
     trackStartedAt, timezone, locale,
   } = usePlayerFeed();
   const { tunedIn, status, volume, muted, offline, signal } = usePlayerAudio();
-  const { toggleMute, setVolume, submitRequest } = usePlayerActions();
+  const { toggleMute } = usePlayerActions();
   const { showTuneIn, tuneInFromOverlay, handleTune } = useTuneInGate();
 
   const elapsed = useElapsed(trackStartedAt);
@@ -96,41 +96,26 @@ export default function SpoolSkin(_props: SkinProps) {
   useDynamicStyle(leftRef, { width: `${leftPx}px`, height: `${leftPx}px` });
   useDynamicStyle(rightRef, { width: `${rightPx}px`, height: `${rightPx}px` });
 
-  const adjustVolume = (delta: number) =>
-    setVolume(v => Math.min(1, Math.max(0, Math.round((v + delta) * 100) / 100)));
+  const adjustVolume = useVolumeNudge();
 
   // Side B request slip.
-  const [reqText, setReqText] = useState('');
-  const [reqName, setReqName] = useState('');
-  const [reqAck, setReqAck] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
+  const slip = useRequestSlip({
+    sent: 'Slip passed to the booth — the DJ has it.',
+    refused: 'The booth waved this one off.',
+    failed: 'The booth line is down — try again in a moment.',
+  });
   const reqInputRef = useRef<HTMLInputElement | null>(null);
-  const sendRequest = async () => {
-    const text = reqText.trim();
-    if (!text || sending) return;
-    setSending(true);
-    try {
-      const res: RequestResult = await submitRequest(text, reqName.trim());
-      setReqAck(res.success ? (res.ack || 'Slip passed to the booth — the DJ has it.') : (res.message || 'The booth waved this one off.'));
-      if (res.success) setReqText('');
-    } catch {
-      setReqAck('The booth line is down — try again in a moment.');
-    } finally {
-      setSending(false);
-    }
-  };
 
-  useKeyboardShortcuts(
-    {
-      space: handleTune,
-      k: handleTune,
-      arrowup: () => adjustVolume(0.05),
-      arrowdown: () => adjustVolume(-0.05),
-      m: toggleMute,
-      r: () => reqInputRef.current?.focus(),
-    },
-    { disabled: showTuneIn },
-  );
+  // Live even while the gate is up so Space/K tune in like every other skin;
+  // only `r` waits — the request input it focuses sits under the gate.
+  useKeyboardShortcuts({
+    space: handleTune,
+    k: handleTune,
+    arrowup: () => adjustVolume(0.05),
+    arrowdown: () => adjustVolume(-0.05),
+    m: toggleMute,
+    r: () => { if (!showTuneIn) reqInputRef.current?.focus(); },
+  });
 
   return (
     <div className="absolute inset-0 flex flex-col overflow-y-auto font-sans text-ink">
@@ -308,15 +293,15 @@ export default function SpoolSkin(_props: SkinProps) {
 
           <form
             className="mt-3 flex flex-col gap-2.5 border border-ink bg-bg p-4"
-            onSubmit={e => { e.preventDefault(); void sendRequest(); }}
+            onSubmit={e => { e.preventDefault(); void slip.send(); }}
           >
             <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">Side B — request slip</div>
-            {reqAck ? (
+            {slip.ack ? (
               <>
-                <div className="text-[13px] leading-relaxed italic">{reqAck}</div>
+                <div className="text-[13px] leading-relaxed italic">{slip.ack}</div>
                 <button
                   type="button"
-                  onClick={() => setReqAck(null)}
+                  onClick={slip.reset}
                   className="v3-focus cursor-pointer self-start border-0 bg-transparent p-0 font-mono text-[11px] font-bold tracking-[0.14em] text-muted uppercase hover:text-ink"
                 >
                   new slip
@@ -327,28 +312,28 @@ export default function SpoolSkin(_props: SkinProps) {
                 <div className="text-[13px] text-muted italic">Dear DJ —</div>
                 <input
                   ref={reqInputRef}
-                  value={reqText}
-                  onChange={e => setReqText(e.target.value)}
+                  value={slip.text}
+                  onChange={e => slip.setText(e.target.value)}
                   placeholder="a song, an artist, a feeling…"
                   className="v3-focus w-full border-0 border-b border-soft-border bg-transparent pb-1 text-[13px] text-ink italic outline-none placeholder:text-muted"
                 />
                 <input
-                  value={reqName}
-                  onChange={e => setReqName(e.target.value)}
+                  value={slip.name}
+                  onChange={e => slip.setName(e.target.value)}
                   placeholder="from (optional)"
                   className="v3-focus w-full border-0 border-b border-soft-border bg-transparent pb-1 text-[13px] text-ink italic outline-none placeholder:text-muted"
                 />
                 <button
                   type="submit"
-                  disabled={sending || !reqText.trim()}
+                  disabled={slip.sending || !slip.text.trim()}
                   className={cn(
                     'v3-focus self-start border-0 bg-transparent p-0 font-mono text-[11px] font-bold tracking-[0.14em] uppercase',
-                    sending || !reqText.trim()
+                    slip.sending || !slip.text.trim()
                       ? 'cursor-default text-muted opacity-60'
                       : 'cursor-pointer text-[var(--accent)] hover:opacity-80',
                   )}
                 >
-                  {sending ? 'passing…' : 'pass it to the booth ↗'}
+                  {slip.sending ? 'passing…' : 'pass it to the booth ↗'}
                 </button>
               </>
             )}

@@ -9,6 +9,7 @@
 // initial HTML, so first paint doesn't wait on a client roundtrip).
 
 import dynamic from 'next/dynamic';
+import { DEFAULT_SKIN_ID, canonicalSkinId } from '@/lib/skin';
 import { SKIN_API_VERSION, type SkinComponent, type SkinManifest } from './types';
 
 export const SKINS: SkinManifest[] = [
@@ -54,18 +55,11 @@ export const SKINS: SkinManifest[] = [
   },
 ];
 
-/** Renamed/retired skin ids — resolved to their successor so an operator's
- *  saved setting keeps working across upgrades. */
-const LEGACY_SKIN_ALIASES: Record<string, string> = {
-  terminal: 'tty',
-};
-
-function canonicalSkinId(id: string | null | undefined): string | null {
-  if (!id) return null;
-  return LEGACY_SKIN_ALIASES[id] ?? id;
-}
-
-export const DEFAULT_SKIN_ID = 'classic';
+// Id facts (default id, legacy aliases) live in lib/skin.ts so the server
+// layout's SKIN_INIT_SCRIPT derives from the same data without importing
+// this registry's next/dynamic wrappers. Re-exported for component-side
+// consumers (admin settings, the shell).
+export { DEFAULT_SKIN_ID };
 
 export function isKnownSkin(id: string | null | undefined): id is string {
   return !!id && SKINS.some(s => s.id === id);

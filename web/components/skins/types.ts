@@ -11,12 +11,21 @@
 //   • useTuneInGate — the first-paint tap-to-tune gate. Every skin MUST
 //     render some tune-in affordance through it: the tap is the browser's
 //     audio-unblock gesture, not decoration.
+//   • shared.ts (pure derivations) and sharedHooks.ts (the request-slip
+//     state machine, volume nudge) — reuse before hand-rolling.
 //   • The theme tokens (--bg, --ink, --muted, --accent, --overlay,
 //     --soft-border, --field) — honor them so operator themes keep working.
 //
 // Skin styles are co-located (Tailwind classes / scoped CSS) — never added
 // to globals.css. Keyboard shortcuts are skin-owned; register them with
 // useKeyboardShortcuts if wanted.
+//
+// Honor lite mode (html.lite — the listener's low-power toggle): the global
+// CSS kill already stops co-located keyframe animations, but anything it
+// can't reach is the skin's job — JS-driven canvas/rAF loops must idle (see
+// subamp/Analyzer.tsx), long transitions should be dropped, and any element
+// that only becomes VISIBLE through its animation needs an html.lite
+// exception (see tty/Tty.module.css's boot log).
 
 import type { ComponentType } from 'react';
 

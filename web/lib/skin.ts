@@ -7,6 +7,28 @@
 const OVERRIDE_KEY = 'subwave-skin-override';
 const STATION_CACHE_KEY = 'subwave-skin-station';
 
+// Skin-id facts shared by the registry (components/skins/index.ts) and the
+// pre-paint script below. They live HERE — plain data, no React — because the
+// server layout inlines SKIN_INIT_SCRIPT and must not drag the registry's
+// next/dynamic wrappers into a server component. The registry re-exports
+// DEFAULT_SKIN_ID for component-side consumers.
+export const DEFAULT_SKIN_ID = 'classic';
+
+/** Renamed/retired skin ids — resolved to their successor so an operator's
+ *  saved setting keeps working across upgrades. */
+export const LEGACY_SKIN_ALIASES: Record<string, string> = {
+  terminal: 'tty',
+};
+
+export function canonicalSkinId(id: string | null | undefined): string | null {
+  if (!id) return null;
+  // Own-key check, not a bare lookup: ids come from localStorage/settings,
+  // and a value like "constructor" must not dredge up Object.prototype.
+  return Object.prototype.hasOwnProperty.call(LEGACY_SKIN_ALIASES, id)
+    ? (LEGACY_SKIN_ALIASES[id] ?? id)
+    : id;
+}
+
 /** The listener's per-browser skin override id, or null when none is set
  *  or storage is unreadable. */
 export function loadSkinOverride(): string | null {
@@ -59,9 +81,10 @@ export const SKIN_INIT_SCRIPT = `
   try {
     var o = localStorage.getItem('${OVERRIDE_KEY}');
     var s = localStorage.getItem('${STATION_CACHE_KEY}');
-    var skin = o || s || 'classic';
-    if (skin === 'terminal') skin = 'tty';
-    if (skin !== 'classic') {
+    var skin = o || s || '${DEFAULT_SKIN_ID}';
+    var aliases = ${JSON.stringify(LEGACY_SKIN_ALIASES)};
+    if (Object.prototype.hasOwnProperty.call(aliases, skin)) skin = aliases[skin];
+    if (skin !== '${DEFAULT_SKIN_ID}') {
       document.documentElement.setAttribute('data-skin-pending', skin);
       var st = document.createElement('style');
       st.textContent = 'html[data-skin-pending] .sw-player-shell{visibility:hidden}';

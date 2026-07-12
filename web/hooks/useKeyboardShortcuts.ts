@@ -42,6 +42,12 @@ export function useKeyboardShortcuts(
       // press, not stutter (a held Space would otherwise toggle tune in/out).
       if (e.repeat) return;
 
+      // Another listener already claimed this press (several shortcut maps
+      // coexist: the shell's cycling keys, the skin's map, a skin's any-key
+      // tune-in gate). First consumer wins; one keypress never does two
+      // things.
+      if (e.defaultPrevented) return;
+
       const mod = e.metaKey || e.ctrlKey;
 
       // Command palette chord — available even inside text fields.

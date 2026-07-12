@@ -29,8 +29,8 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
+import { useRequestSlip, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
-import type { RequestResult } from '@/lib/types';
 
 const PROGRESS_CELLS = 16;
 const VOL_CELLS = 8;
@@ -50,7 +50,7 @@ export default function TtySkin(_props: SkinProps) {
     trackStartedAt, timezone, locale,
   } = usePlayerFeed();
   const { tunedIn, status, volume, muted, offline, signal } = usePlayerAudio();
-  const { toggleMute, setVolume, submitRequest } = usePlayerActions();
+  const { toggleMute } = usePlayerActions();
   const { showTuneIn, tuneInFromOverlay, handleTune } = useTuneInGate();
 
   const elapsed = useElapsed(trackStartedAt);
@@ -66,32 +66,18 @@ export default function TtySkin(_props: SkinProps) {
   const booth = boothLines(session.messages, 5);
   const upNext = state.upcoming?.[0];
 
-  const adjustVolume = (delta: number) =>
-    setVolume(v => Math.min(1, Math.max(0, Math.round((v + delta) * 100) / 100)));
+  const adjustVolume = useVolumeNudge();
 
   // :req prompt + :log depth toggle.
   const [reqOpen, setReqOpen] = useState(false);
-  const [reqText, setReqText] = useState('');
-  const [reqAck, setReqAck] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
   const [logDeep, setLogDeep] = useState(false);
+  const slip = useRequestSlip({
+    sent: 'request received — the DJ is on it.',
+    refused: 'request refused.',
+    failed: 'network error — request not sent.',
+  });
   const reqInputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => { if (reqOpen) reqInputRef.current?.focus(); }, [reqOpen]);
-
-  const sendRequest = async () => {
-    const text = reqText.trim();
-    if (!text || sending) return;
-    setSending(true);
-    try {
-      const res: RequestResult = await submitRequest(text, '');
-      setReqAck(res.success ? (res.ack || 'request received — the DJ is on it.') : (res.message || 'request refused.'));
-      if (res.success) setReqText('');
-    } catch {
-      setReqAck('network error — request not sent.');
-    } finally {
-      setSending(false);
-    }
-  };
 
   useKeyboardShortcuts(
     {
@@ -105,13 +91,19 @@ export default function TtySkin(_props: SkinProps) {
     { disabled: showTuneIn || reqOpen },
   );
 
-  // The gate's contract is "press any key": while it's up, every
-  // non-modifier key tunes in (the shortcut map above is disabled then, so
-  // nothing double-fires).
+  // The gate's contract is "press any key": while it's up, a printable key
+  // (or Enter) tunes in. Deliberately NOT literally any key — Tab keeps
+  // focus traversal (keyboard users must still be able to leave the gate),
+  // and F-keys/Escape/arrows stay with the browser. A press another shortcut
+  // map already claimed (the shell's s/t cycling calls preventDefault) is
+  // ceded to it, and this handler preventDefaults its own accepts, so one
+  // keypress never both tunes in and cycles.
   useEffect(() => {
     if (!showTuneIn || offline) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.defaultPrevented) return;
+      if (e.key.length !== 1 && e.key !== 'Enter') return;
       e.preventDefault();
       tuneInFromOverlay();
     };
@@ -260,13 +252,13 @@ export default function TtySkin(_props: SkinProps) {
         {reqOpen ? (
           <div className="flex flex-none items-baseline gap-3 border border-[var(--accent)] bg-[var(--field)] px-4 py-2.5 text-[12px]">
             <span className="font-bold text-[var(--accent)] select-none">:req ▸</span>
-            {reqAck ? (
+            {slip.ack ? (
               <>
-                <span className="min-w-0 flex-1 truncate">{reqAck}</span>
+                <span className="min-w-0 flex-1 truncate">{slip.ack}</span>
                 <button
                   type="button"
                   className="v3-focus cursor-pointer border-0 bg-transparent p-0 tracking-[0.1em] text-muted uppercase hover:text-ink"
-                  onClick={() => { setReqAck(null); setReqOpen(false); }}
+                  onClick={() => { slip.reset(); setReqOpen(false); }}
                 >
                   [esc] close
                 </button>
@@ -275,17 +267,17 @@ export default function TtySkin(_props: SkinProps) {
               <>
                 <input
                   ref={reqInputRef}
-                  value={reqText}
-                  onChange={e => setReqText(e.target.value)}
+                  value={slip.text}
+                  onChange={e => slip.setText(e.target.value)}
                   onKeyDown={e => {
-                    if (e.key === 'Enter') void sendRequest();
+                    if (e.key === 'Enter') void slip.send();
                     if (e.key === 'Escape') setReqOpen(false);
                   }}
                   placeholder="artist, song, or a vibe… [enter] send · [esc] cancel"
                   className="v3-focus min-w-0 flex-1 border-0 bg-transparent font-mono text-[12px] text-ink outline-none placeholder:text-muted"
                 />
-                <span className={cn('text-muted select-none', sending && 'text-[var(--accent)]')}>
-                  {sending ? 'sending…' : '▊'}
+                <span className={cn('text-muted select-none', slip.sending && 'text-[var(--accent)]')}>
+                  {slip.sending ? 'sending…' : '▊'}
                 </span>
               </>
             )}

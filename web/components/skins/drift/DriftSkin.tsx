@@ -33,8 +33,8 @@ import {
   progressRatio,
   turnClock,
 } from '../shared';
+import { useRequestSlip, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
-import type { RequestResult } from '@/lib/types';
 
 /** Lowercase weekday in the station's zone — "23:09 saturday". */
 function stationWeekday(now: Date, timezone: string | null): string {
@@ -55,7 +55,7 @@ export default function DriftSkin(_props: SkinProps) {
     trackStartedAt, timezone, locale,
   } = usePlayerFeed();
   const { tunedIn, volume, muted, offline, signal } = usePlayerAudio();
-  const { toggleMute, setVolume, submitRequest } = usePlayerActions();
+  const { toggleMute } = usePlayerActions();
   const { showTuneIn, tuneInFromOverlay, handleTune } = useTuneInGate();
 
   const elapsed = useElapsed(trackStartedAt);
@@ -87,30 +87,17 @@ export default function DriftSkin(_props: SkinProps) {
   const fillRef = useRef<HTMLDivElement | null>(null);
   useDynamicStyle(fillRef, { width: `${Math.round((ratio ?? 0) * 100)}%` });
 
-  const adjustVolume = (delta: number) =>
-    setVolume(v => Math.min(1, Math.max(0, Math.round((v + delta) * 100) / 100)));
+  const adjustVolume = useVolumeNudge();
 
   // The ··· chip: request + recent history in one quiet panel.
   const [panelOpen, setPanelOpen] = useState(false);
-  const [reqText, setReqText] = useState('');
-  const [reqAck, setReqAck] = useState<string | null>(null);
-  const [sending, setSending] = useState(false);
+  const slip = useRequestSlip({
+    sent: 'the DJ has it.',
+    refused: 'not this time.',
+    failed: 'the booth line is down.',
+  });
   const reqInputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => { if (panelOpen) reqInputRef.current?.focus(); }, [panelOpen]);
-  const sendRequest = async () => {
-    const text = reqText.trim();
-    if (!text || sending) return;
-    setSending(true);
-    try {
-      const res: RequestResult = await submitRequest(text, '');
-      setReqAck(res.success ? (res.ack || 'the DJ has it.') : (res.message || 'not this time.'));
-      if (res.success) setReqText('');
-    } catch {
-      setReqAck('the booth line is down.');
-    } finally {
-      setSending(false);
-    }
-  };
 
   useKeyboardShortcuts(
     {
@@ -247,14 +234,14 @@ export default function DriftSkin(_props: SkinProps) {
         <div className="absolute bottom-16 left-1/2 flex w-[min(420px,calc(100vw-2rem))] -translate-x-1/2 flex-col gap-3 border border-soft-border bg-[var(--bg)]/90 p-4 backdrop-blur-sm">
           <form
             className="flex items-baseline gap-2.5"
-            onSubmit={e => { e.preventDefault(); void sendRequest(); }}
+            onSubmit={e => { e.preventDefault(); void slip.send(); }}
           >
-            {reqAck ? (
+            {slip.ack ? (
               <>
-                <span className="min-w-0 flex-1 text-[13px] italic">{reqAck}</span>
+                <span className="min-w-0 flex-1 text-[13px] italic">{slip.ack}</span>
                 <button
                   type="button"
-                  onClick={() => setReqAck(null)}
+                  onClick={slip.reset}
                   className="v3-focus cursor-pointer border-0 bg-transparent p-0 font-mono text-[10px] tracking-[0.2em] text-muted uppercase hover:text-ink"
                 >
                   again
@@ -264,23 +251,23 @@ export default function DriftSkin(_props: SkinProps) {
               <>
                 <input
                   ref={reqInputRef}
-                  value={reqText}
-                  onChange={e => setReqText(e.target.value)}
+                  value={slip.text}
+                  onChange={e => slip.setText(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Escape') setPanelOpen(false); }}
                   placeholder="ask the dj for something…"
                   className="v3-focus min-w-0 flex-1 border-0 border-b border-soft-border bg-transparent pb-1 text-[13px] text-ink italic outline-none placeholder:text-muted"
                 />
                 <button
                   type="submit"
-                  disabled={sending || !reqText.trim()}
+                  disabled={slip.sending || !slip.text.trim()}
                   className={cn(
                     'v3-focus border-0 bg-transparent p-0 font-mono text-[10px] tracking-[0.2em] uppercase',
-                    sending || !reqText.trim()
+                    slip.sending || !slip.text.trim()
                       ? 'cursor-default text-muted opacity-60'
                       : 'cursor-pointer text-[var(--accent)] hover:opacity-80',
                   )}
                 >
-                  {sending ? '…' : 'send'}
+                  {slip.sending ? '…' : 'send'}
                 </button>
               </>
             )}

@@ -18,6 +18,15 @@
   will-change: transform;
 }
 
+/* Lite mode (html.lite, globals.css) drops the looping drift keyframes via
+   its global animation kill, but transitions are exempted there ("only fire
+   on interaction") — this one is a 20-second full-viewport gradient repaint
+   at every track change, exactly the continuous cost lite exists to avoid.
+   Colors switch instantly instead. */
+:global(html.lite) .wash {
+  transition: none;
+}
+
 /* A few pixels a minute — the room breathes, nothing dances. */
 @keyframes drift-a {
   to { transform: translate(34px, 22px) scale(1.06); }
