@@ -152,9 +152,15 @@ export async function streamStatus() {
   return /\bon\b/i.test(res);
 }
 
-interface DjQueueCache {
-  timestamp: number;
+interface DjQueueSnapshot {
   ids: Set<string>;
+  // subsonic_id → Liquidsoap request id. First occurrence wins on the off
+  // chance of a duplicate (queue.push dedupes by track id, so there shouldn't
+  // be one).
+  ridBySubsonicId: Map<string, string>;
+}
+interface DjQueueCache extends DjQueueSnapshot {
+  timestamp: number;
 }
 let _djQueueCache: DjQueueCache | null = null;
 let _djQueueInflight: Promise<Set<string>> | null = null;
@@ -162,7 +168,29 @@ let _djQueueInflight: Promise<Set<string>> | null = null;
 // Query Liquidsoap's dj_queue using two telnet hops:
 // 1. dj_queue.queue returns space-separated request IDs.
 // 2. request.metadata <rid> returns metadata for each request ID.
-// Returns a Set of subsonic_ids currently in the queue.
+async function fetchDjQueue(): Promise<DjQueueSnapshot> {
+  const res = await sendCommand('dj_queue.queue', 2000);
+  const rids = res.trim().split(/\s+/).filter(Boolean);
+  const ids = new Set<string>();
+  const ridBySubsonicId = new Map<string, string>();
+
+  for (const rid of rids) {
+    try {
+      const meta = await sendCommand(`request.metadata ${rid}`, 2000);
+      const match = /^subsonic_id="([^"]*)"/m.exec(meta);
+      if (match && match[1]) {
+        ids.add(match[1]);
+        if (!ridBySubsonicId.has(match[1])) ridBySubsonicId.set(match[1], rid);
+      }
+    } catch (ridErr: any) {
+      console.warn(`[liquidsoap] request.metadata ${rid} failed: ${ridErr.message}`);
+    }
+  }
+
+  return { ids, ridBySubsonicId };
+}
+
+// Returns a Set of subsonic_ids currently in the queue (cached ~4s).
 export async function getDjQueueIds(): Promise<Set<string>> {
   if (_djQueueCache && Date.now() - _djQueueCache.timestamp < 4000) {
     return _djQueueCache.ids;
@@ -173,33 +201,33 @@ export async function getDjQueueIds(): Promise<Set<string>> {
 
   _djQueueInflight = (async () => {
     try {
-      const res = await sendCommand('dj_queue.queue', 2000);
-      const rids = res.trim().split(/\s+/).filter(Boolean);
-      const subsonicIds = new Set<string>();
-
-      for (const rid of rids) {
-        try {
-          const meta = await sendCommand(`request.metadata ${rid}`, 2000);
-          const match = /^subsonic_id="([^"]*)"/m.exec(meta);
-          if (match && match[1]) {
-            subsonicIds.add(match[1]);
-          }
-        } catch (ridErr: any) {
-          console.warn(`[liquidsoap] request.metadata ${rid} failed: ${ridErr.message}`);
-        }
-      }
-
-      const ids = subsonicIds;
-      _djQueueCache = {
-        timestamp: Date.now(),
-        ids
-      };
-      return ids;
+      const snap = await fetchDjQueue();
+      _djQueueCache = { timestamp: Date.now(), ...snap };
+      return snap.ids;
     } finally {
       _djQueueInflight = null;
     }
   })();
 
   return _djQueueInflight;
+}
+
+// Resolve the Liquidsoap request id for a queued track. Always a fresh read —
+// cancel decisions can't ride a 4s-stale cache (the track may have gone on
+// air since). Returns null when the track is no longer pending in dj_queue.
+export async function resolveDjQueueRid(subsonicId: string): Promise<string | null> {
+  const snap = await fetchDjQueue();
+  _djQueueCache = { timestamp: Date.now(), ...snap };
+  return snap.ridBySubsonicId.get(subsonicId) ?? null;
+}
+
+// Remove a pending request from dj_queue via the custom "dj_queue_remove"
+// command in radio.liq. Returns false when Liquidsoap replies NOT_FOUND —
+// the request already left the queue (playing or played), so there is
+// nothing left to cancel.
+export async function removeFromDjQueue(rid: string): Promise<boolean> {
+  const res = await sendCommand(`dj_queue_remove ${rid}`, 2000);
+  _djQueueCache = null; // the queue just changed under the cache
+  return res.trim() === 'OK';
 }
 

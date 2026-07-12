@@ -716,6 +716,29 @@ router.post('/dj/skip', requireAdmin, async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// DELETE /dj/queue/:trackId — remove a not-yet-aired track from the upcoming
+// queue (operator override). Refuses with 409 once the track has left
+// Liquidsoap's dj_queue (it's on air or about to be) — that's /dj/skip
+// territory. Listeners can't reach this; there is no listener-facing cancel
+// by design, mirroring skip.
+// ---------------------------------------------------------------------------
+router.delete('/dj/queue/:trackId', requireAdmin, async (req, res) => {
+  try {
+    const result = await queue.removeUpcoming(req.params.trackId);
+    if (!result.ok) {
+      const msg = result.reason === 'already-playing'
+        ? 'too late to cancel — the track already left the queue'
+        : 'track is not in the queue';
+      return res.status(409).json({ error: msg, reason: result.reason });
+    }
+    res.json({ removed: true });
+  } catch (err) {
+    queue.log('error', `/dj/queue remove failed: ${err.message}`);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Shape a Subsonic song into the queue-ready row the admin track tabs render,
 // merging the library index's stored tags AND acoustic-analysis columns so
 // search/recent rows carry the same mood/energy + BPM/key/LUFS badges as

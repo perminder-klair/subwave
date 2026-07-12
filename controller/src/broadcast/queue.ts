@@ -891,6 +891,11 @@ class Queue {
           }
         }
 
+        // An operator cancel (removeUpcoming) may have spliced this item out
+        // while we were awaiting the TTS render above — don't hand a removed
+        // track to Liquidsoap.
+        if (!this.upcoming.includes(item)) continue;
+
         // DJ-mode mixing (features 1 & 2): shape the transition INTO this track
         // from its tempo/harmonic compatibility with the track it follows. The
         // predecessor is the item just ahead of it in the queue, else whatever
@@ -1428,6 +1433,30 @@ class Queue {
     }
   }
 
+  // Remove a not-yet-aired track from the upcoming queue (operator cancel).
+  // Sent items live inside Liquidsoap's dj_queue, so those are pulled back
+  // out over telnet first; the Node-side entry is only spliced once
+  // Liquidsoap confirms, so a failed removal never half-cancels. A track
+  // that already left dj_queue (on air, or being prepared as the next
+  // source) refuses with 'already-playing' — /dj/skip is the tool for that.
+  async removeUpcoming(trackId: string): Promise<{ ok: true } | { ok: false; reason: 'not-queued' | 'already-playing' }> {
+    const item = this.upcoming.find(i => i.track?.id === trackId);
+    if (!item) return { ok: false, reason: 'not-queued' };
+
+    if (item.sent) {
+      const rid = await liquidsoapControl.resolveDjQueueRid(trackId);
+      if (!rid || !(await liquidsoapControl.removeFromDjQueue(rid))) {
+        return { ok: false, reason: 'already-playing' };
+      }
+    }
+
+    const idx = this.upcoming.indexOf(item);
+    if (idx !== -1) this.upcoming.splice(idx, 1);
+    this.log('scheduler', `operator removed from queue: ${item.track.title} — ${item.track.artist}`);
+    this.persist();
+    return { ok: true };
+  }
+
   // Tracks played in the last `hours` hours — used by the picker to block
   // repeats. Returns BOTH ids and `title|artist` keys, because the boot
   // backfill (in recover()) reads from events-*.jsonl which lacks track ids;
@@ -1556,6 +1585,10 @@ class Queue {
 
   snapshot() {
     const mapItem = (i: QueueItem) => ({
+      // Track id rides along so the admin dash can target rows for the
+      // queue-cancel button (DELETE /dj/queue/:trackId); named to match the
+      // subsonic_id already public on /now-playing.
+      subsonic_id: i.track.id,
       title: i.track.title,
       artist: i.track.artist,
       album: i.track.album,

@@ -1679,3 +1679,34 @@ server.register(
     "OK"
   end
 )
+
+# Remove a PENDING request from dj_queue by request id (RID). Whatever is on
+# air — or already pulled out of the queue as the next source — is no longer
+# in .queue(), so it reports NOT_FOUND instead of half-removing; the caller
+# treats that as "too late to cancel". Used by the controller's queue-cancel
+# endpoint (DELETE /dj/queue/:trackId), which resolves the RID via
+# dj_queue.queue + request.metadata first. Operator-only — listeners can't
+# reach this.
+server.register(
+  "dj_queue_remove",
+  description="Remove a pending request from dj_queue by request id",
+  usage="dj_queue_remove <rid>",
+  fun(arg) -> begin
+    rid = string.trim(arg)
+    q = dj_queue.queue()
+    kept = list.filter(fun(r) -> "#{request.id(r)}" != rid, q)
+    if list.length(kept) == list.length(q) then
+      "NOT_FOUND"
+    else
+      dj_queue.set_queue(kept)
+      # Destroy the dropped request so its file/URI is released now instead of
+      # lingering until Liquidsoap flags it as leaked.
+      list.iter(
+        fun(r) -> if "#{request.id(r)}" == rid then request.destroy(r) end,
+        q
+      )
+      log("Removed request #{rid} from dj_queue via server command")
+      "OK"
+    end
+  end
+)
