@@ -3700,6 +3700,11 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     // entire universe; soft just lets it dominate. Empty array = no anchor.
     playlistIds: Array.isArray(show.playlistIds) ? show.playlistIds.filter((v: unknown) => typeof v === 'string') : [],
     playlistStrict: show.playlistStrict === true,
+    // Navidrome playlist blocklist: tracks in these playlists are hard-dropped
+    // from the show's candidate pool (resolveExcludedPlaylistIds reads this off
+    // the RESOLVED show, so omitting it here silently disabled the whole
+    // feature on every pick path — the #779 blocklist no-op).
+    excludedPlaylistIds: Array.isArray(show.excludedPlaylistIds) ? show.excludedPlaylistIds.filter((v: unknown) => typeof v === 'string') : [],
     // Empty string means "fall back to the station-wide default". The route
     // layer is responsible for resolving an empty/stale id against the live
     // theme registry; we just surface what the show declares.

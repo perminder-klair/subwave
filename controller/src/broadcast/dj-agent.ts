@@ -17,6 +17,7 @@ import * as session from './session.js';
 import * as picker from '../music/picker.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
 import * as library from '../music/library.js';
+import * as subsonic from '../music/subsonic.js';
 import * as mix from '../music/mix.js';
 import * as journey from '../music/journey.js';
 import { shuffle } from '../util/shuffle.js';
@@ -252,7 +253,7 @@ export function requestSchema() {
 // queue.onTrackStarted). The persona stays the live one — the outgoing DJ
 // tees the changeover up in their own voice; the on-air mic-pass is
 // runPersonaHandoff's job.
-export function pickSystem(showAt: Date | null = null) {
+export function pickSystem(showAt: Date | null = null, playlistResolved = true) {
   const persona = settings.getEffectivePersona();
   // In DJ mode, lean on the live session history: a working DJ runs threads
   // and calls back to a track or a remark from earlier in the shift. This pairs
@@ -280,8 +281,11 @@ export function pickSystem(showAt: Date | null = null) {
   // come from the pinned playlist (the tools already enforce this in code, but
   // saying so keeps the agent reaching for showPlaylistTracks instead of
   // burning steps on tools that come back empty); soft → strong preference,
-  // occasional steps outside allowed for flow.
-  const playlistLean = activeShow?.playlistIds?.length
+  // occasional steps outside allowed for flow. Gated on playlistResolved: when
+  // the show pins playlists but none resolved (stale ids / Navidrome error),
+  // the showPlaylistTracks tool is NOT registered — telling the model to call
+  // a tool that doesn't exist burns steps and invites fabrication.
+  const playlistLean = activeShow?.playlistIds?.length && playlistResolved
     ? (activeShow.playlistStrict
         ? `\n\nThis show is anchored to a curated playlist: every track you pick MUST come from it. Call showPlaylistTracks first and choose from what it returns.`
         : `\n\nThis show leans on a curated playlist: call showPlaylistTracks first and strongly prefer those tracks; only step outside occasionally when the flow calls for it.`)
@@ -373,26 +377,17 @@ export const pickerAgent = defineAgent({
   // actually rescues these, not more steps on a polluted trail.
   maxSteps: 2,
   timeoutMs: agentDeadline,
-  buildSystem: ({ showAt }: any = {}) => pickSystem(showAt ?? null),
-  buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, playlistLock, playlistTracks, excludedIds, showAt }) => {
-    // Resolve the active show live (a show that just came on air takes effect),
-    // at the pick's look-ahead moment when one is threaded through (showAt —
-    // same clock the system prompt's brief resolved against, so prompt and
-    // locks can't disagree across a boundary): for a strict show
-    // (filtersStrict), EVERY set music filter — genre, era, mood, energy —
-    // becomes a hard lock the discovery tools enforce on candidates, not just
-    // the prompt. Track length is enforced as an on-air cut, NOT a pick filter
-    // (issue #447), so no length cap is passed here.
-    const activeShow = settings.resolveActiveShow(showAt ?? undefined);
-    const strict = !!(activeShow?.filtersStrict);
-    // Each lock is an any-of list (#929): a candidate passes when it matches
-    // ANY entry; the locks AND together across attributes.
-    const genreLock = strict && activeShow?.genres?.length ? activeShow.genres : null;
-    const eraLock = strict && hasEraBound(activeShow?.eras) ? activeShow.eras : null;
-    const moodLock = strict && activeShow?.moods?.length ? activeShow.moods : null;
-    const energyLock = strict && activeShow?.energies?.length ? activeShow.energies : null;
-    // playlistLock / playlistTracks are pre-resolved by pickViaAgent (the
-    // Navidrome fetch is async; buildTools is sync) and threaded through run().
+  buildSystem: ({ showAt, playlistTracks }: any = {}) => pickSystem(showAt ?? null, !!playlistTracks?.length),
+  buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, moodLock, energyLock, playlistLock, playlistTracks, excludedIds }) => {
+    // For a strict show (filtersStrict) EVERY set music filter — genre, era,
+    // mood, energy — becomes a hard lock the discovery tools enforce on
+    // candidates, not just the prompt. The locks are ALL pre-resolved in
+    // pickViaAgent and threaded through run() (async work — genre free text →
+    // library tags, library-coverage gating — that this sync builder can't do),
+    // alongside playlistLock / playlistTracks / excludedIds. Resolving them in
+    // one place off one show snapshot also keeps the prompt's brief and the
+    // tools' locks agreeing across a show boundary. Track length is an on-air
+    // cut, NOT a pick filter (#447), so no length cap is passed here.
     const { tools, seen } = buildPickerTools({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, moodLock, energyLock, playlistLock, playlistTracks, excludedIds });
     return { tools, extras: { seen } };
   },
@@ -540,7 +535,7 @@ async function enqueuePick(
 // the same closing move pickNextTrack already uses. Returns a full pick object
 // (id/reason/say/transition) or null; never throws, so a salvage failure falls
 // through to the caller's pick.rejected path unchanged.
-async function repickFromSeen({ seen, badId, wantLink }: { seen: Map<string, any>; badId: string | null; wantLink: boolean }) {
+async function repickFromSeen({ seen, badId, wantLink, showAt = null, playlistResolved = true }: { seen: Map<string, any>; badId: string | null; wantLink: boolean; showAt?: Date | null; playlistResolved?: boolean }) {
   const ids = [...seen.keys()];
   if (ids.length === 0) return null;
   const schema = modelTolerant(pickSchemaBase().extend({
@@ -548,7 +543,12 @@ async function repickFromSeen({ seen, badId, wantLink }: { seen: Map<string, any
   }));
   try {
     return await djObject({
-      system: pickSystem(),
+      // Same show snapshot as the failed run (showAt) and the same playlist-
+      // resolved gate — a tool-less salvage call must NOT reinstate "call
+      // showPlaylistTracks first / every pick MUST come from the playlist" when
+      // the anchor never resolved (no such tool exists here) or resolve a
+      // different show than the run whose candidates we're re-picking from.
+      system: pickSystem(showAt, playlistResolved),
       prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
         + `\n\nYou explored the library and then answered with ${badId ? `the id "${badId}", which matches none of the tracks your tools returned` : 'no usable track id'}. Only ids from the candidates above are real. Choose the best next track from them.`
         + (wantLink
@@ -599,6 +599,45 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   const playlistTracks = playlistPool?.tracks ?? null;
   const excludedIds = activeShow ? await resolveExcludedPlaylistIds(activeShow) : null;
 
+  // Strict music locks for the discovery tools (filtersStrict). Resolved HERE,
+  // once, off the same show snapshot as the playlist pool — the async work the
+  // sync buildTools can't do — then threaded through run() alongside the
+  // playlist artifacts so prompt-brief and tool-locks agree across a boundary.
+  // Each lock is an any-of list (#929); the locks AND across attributes.
+  const strict = !!activeShow?.filtersStrict;
+  // Genre: resolve free text → the library's exact tags, dropping any that
+  // don't resolve (a misspelled / library-absent genre → no genre lock, not a
+  // starved-to-empty tool). This mirrors the pool path (music/picker.ts) so the
+  // two paths agree; the removed per-tool never-starve used to mask this.
+  let genreLock: string[] | null = null;
+  if (strict && activeShow?.genres?.length) {
+    const resolved: string[] = [];
+    for (const g of activeShow.genres) {
+      try { const r = await subsonic.resolveGenreName(g); if (r) resolved.push(r); } catch {}
+    }
+    genreLock = resolved.length ? resolved : null;
+  }
+  const eraLock = strict && hasEraBound(activeShow?.eras) ? activeShow!.eras : null;
+  // Mood / energy locks only bite when the tagger / analyzer has actually run:
+  // an un-tagged / un-analysed library carries no mood / energy on ANY track,
+  // so a hard lock would empty every tool for the whole show and trip the
+  // breaker with a misleading "model can't handle tools" diagnosis. Gate on
+  // library coverage (byMood / byEnergy vocab) — the same spirit as the genre
+  // drop-out. With coverage, a specific thin value still filters hard; the pool
+  // fallback (never-starve per dimension) is the dead-air backstop behind it.
+  const hasMoodCoverage = Object.keys(stats.byMood ?? {}).length > 0;
+  const hasEnergyCoverage = Object.keys(stats.byEnergy ?? {}).length > 0;
+  const moodLock = strict && activeShow?.moods?.length && hasMoodCoverage ? activeShow.moods : null;
+  const energyLock = strict && activeShow?.energies?.length && hasEnergyCoverage ? activeShow.energies : null;
+  // A pinned anchor that resolves to nothing (deleted/recreated playlist →
+  // stale id, or a Navidrome error — resolveShowPlaylistPool swallows both)
+  // silently un-anchors the show: no lock, no showPlaylistTracks tool. Say so,
+  // loudly — a strict show playing 100% off-playlist with zero log output is
+  // undiagnosable from the operator's side.
+  if (activeShow?.playlistIds?.length && !playlistPool) {
+    queue.log('picker', `show "${activeShow.name}" pins ${activeShow.playlistIds.length} playlist(s) but none resolved to tracks — anchor ignored${activeShow.playlistStrict ? ' (STRICT toggle has no effect)' : ''}. Stale playlist id (deleted/recreated in Navidrome?) or a Navidrome error; re-select the playlists in the show editor.`);
+  }
+
   const run = await pickerAgent.run({
     messages: session.windowMessages(),
     recentIds,
@@ -609,6 +648,10 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
     // over the run's current waypoint, so the agent path drifts the sound the
     // same way the pool path does. The event text tells the agent to use it.
     audioWaypoint,
+    genreLock,
+    eraLock,
+    moodLock,
+    energyLock,
     playlistLock,
     playlistTracks,
     excludedIds,
@@ -641,7 +684,7 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
     }
   }
   if (!song && extras.seen.size) {
-    const repicked = await repickFromSeen({ seen: extras.seen, badId: object?.id ?? null, wantLink });
+    const repicked = await repickFromSeen({ seen: extras.seen, badId: object?.id ?? null, wantLink, showAt, playlistResolved: !!playlistTracks?.length });
     if (repicked) {
       logEvent('pick.repicked', { agent: 'pick', from: object?.id ?? null, to: repicked.id, candidates: extras.seen.size });
       queue.log('picker', `agent returned unknown id "${object?.id}" — re-picked "${repicked.id}" from its own candidates`);

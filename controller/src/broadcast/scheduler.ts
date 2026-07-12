@@ -12,7 +12,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { normGenre, genreMatches, inYearRange, preferEnergy, preferEnergyStrict, preferMood, hasEraBound, eraSpan } from '../music/show-filter.js';
+import { normGenre, genreMatches, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan } from '../music/show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
@@ -104,6 +104,11 @@ async function refreshAutoPlaylistInner() {
   const hasPlaylist = !!playlistPool?.tracks?.length;
   const strictPlaylist = hasPlaylist && !!show?.playlistStrict;
   const excludedIds = show ? await resolveExcludedPlaylistIds(show) : null;
+  // Pinned anchor resolved to nothing → the fallback playlist is silently
+  // un-anchored too. Surface it (same warning as the pick paths).
+  if (show?.playlistIds?.length && !playlistPool) {
+    queue.log('picker', `show "${show.name}" pins ${show.playlistIds.length} playlist(s) but none resolved to tracks — auto-playlist anchor ignored. Stale playlist id (deleted/recreated in Navidrome?) or a Navidrome error; re-select the playlists in the show editor.`);
+  }
 
   // Resolve the show's free-text genres to the library's exact tags once, up
   // front. Entries that fail to resolve drop out; NONE resolving disables the
@@ -320,6 +325,25 @@ async function refreshAutoPlaylistInner() {
   if (strictPlaylist) {
     const inPl = pool.filter((t: any) => t?.id && playlistPool!.ids.has(t.id));
     if (inPl.length) { pool.length = 0; pool.push(...inPl); }
+  }
+
+  // Strict music filters on the FINAL pool. enforce() only ever hard-drops
+  // genre/era per source; mood/energy went through per-source never-starve
+  // (preferMood / preferEnergyStrict), so any source with zero in-mood/energy
+  // matches dumped its whole result into auto.m3u and the coast (LLM down,
+  // budget-hard, zero listeners) aired off-filter tracks with no gatekeeper.
+  // Filter the assembled pool the same way music/picker.ts does — per-dimension
+  // never-starve, so one zero-coverage dimension can't throw away the rest.
+  // Genre/era are already enforce()-pure, so those steps are no-ops here.
+  if (strict) {
+    const filtered = applyStrictLocks(pool, {
+      genres: genreNames,   // resolved library tags ([] → no genre step)
+      eras,
+      moods: showMoods,
+      energies: showEnergies,
+    }, { starve: false });
+    pool.length = 0;
+    pool.push(...filtered);
   }
 
   // Excluded playlists (blocklist): drop every track from a blocklisted
