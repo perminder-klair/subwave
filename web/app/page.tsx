@@ -70,7 +70,10 @@ export const viewport: Viewport = {
   userScalable: false,
 };
 
-export default function HomePage() {
+export default async function HomePage() {
   const mode = (process.env.SUBWAVE_HOMEPAGE || 'player').toLowerCase();
-  return mode === 'landing' ? <Landing stations={getShowcaseStations()} /> : <PlayerApp />;
+  if (mode === 'landing') {
+    return <Landing stations={await getShowcaseStations()} />;
+  }
+  return <PlayerApp />;
 }

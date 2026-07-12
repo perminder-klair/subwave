@@ -2,7 +2,7 @@ import { AnimatedLink } from '@/components/ui/animated-link';
 import CommunityPersonaCard from '@/components/personas/CommunityPersonaCard';
 import { fetchCommunityPersonas } from '@/lib/communityPersonas';
 import { pageMeta } from '@/lib/seo';
-import { REPO_URL } from '@/lib/repo';
+import { personaSubmitUrl } from '@/lib/repo';
 
 export const metadata = pageMeta({
   title: 'SUB/WAVE — Community Personas',
@@ -18,7 +18,7 @@ export const dynamic = 'force-dynamic';
 // Submission opens a GitHub Issue Form (no fork, no YAML). A workflow turns the
 // issue into a one-file pull request automatically — see
 // .github/workflows/persona-submission.yml. Mirrors the /skills share flow.
-const SUBMIT_URL = `${REPO_URL}/issues/new?template=add-persona.yml`;
+const SUBMIT_URL = personaSubmitUrl();
 
 export default async function CommunityPersonasIndex() {
   const personas = await fetchCommunityPersonas();

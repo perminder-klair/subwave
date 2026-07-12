@@ -16,6 +16,7 @@
 // plain swipe only scrolls (see HOLD_MS below).
 import type { ChangeEvent, RefObject, TouchEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Users, Share2 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
@@ -31,10 +32,12 @@ import {
 import { Card, Btn, Pill, Eyebrow, Metric, Toggle } from './ui';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { EditorDialog } from '../ui/editor-dialog';
+import { Modal } from '../ui/modal';
 import { AiFill } from './AiFill';
 import GenreSuggest from './GenreSuggest';
 import { PersonaPicker, GuestPersonaPicker, ThemePicker } from './ShowPickers';
 import { cn } from '../../lib/cn';
+import { showSubmitUrl } from '../../lib/repo';
 
 const NAME_MAX = 60;
 const TOPIC_MAX = 1000;
@@ -124,6 +127,27 @@ interface Show {
 /** One era window (mirrors the controller's EraWindow). Multiple windows let a
  *  show span non-adjacent decades ("90s + 2010s"). */
 interface EraWindow { fromYear: number | null; toYear: number | null }
+
+// One entry in the shipped community show catalog (GET /shows/community). A
+// portable, persona-agnostic show definition: no owner, no schedule — Install
+// drops it in as a fresh unscheduled show owned by the active persona.
+interface CommunityShow {
+  slug: string;
+  name: string;
+  topic: string;
+  moods: string[];
+  genres: string[];
+  eras: EraWindow[];
+  energies: string[];
+  filtersStrict: boolean;
+  banter: boolean;
+  programme: boolean;
+  segmentSkill: string;
+  maxTrackSeconds: number | null;
+  submittedBy?: string;   // GitHub login of the contributor who submitted it
+  dateAdded?: string;     // ISO date (YYYY-MM-DD) it first entered the catalog
+  dateModified?: string;  // ISO date (YYYY-MM-DD) of the last catalog change
+}
 
 // Decade presets for the era chips → one EraWindow each. Empty selection = any era.
 const DECADES: { key: string; label: string; from: number; to: number }[] = [
@@ -309,6 +333,37 @@ function clientMintId() {
   return 's_' + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 
+// Hydrate a raw/partial show (from GET /settings or a community install
+// response) into a fully-defaulted Show. Kept in one place so the initial load
+// and the community install share the exact same legacy-field coercion (#929).
+function hydrateShow(s: Partial<Show>): Show {
+  return {
+    id: s.id ?? clientMintId(),
+    name: s.name ?? '',
+    topic: s.topic ?? '',
+    personaId: s.personaId ?? '',
+    guestPersonaIds: Array.isArray(s.guestPersonaIds) ? s.guestPersonaIds : [],
+    banter: s.banter ?? false,
+    // Plural lists are canonical (#929); a legacy singular field from a stale
+    // response still hydrates as a one-element list.
+    moods: Array.isArray(s.moods) ? s.moods : (s as { mood?: string }).mood ? [(s as { mood?: string }).mood!] : [],
+    themeId: s.themeId ?? '',
+    genres: Array.isArray(s.genres) ? s.genres : (s as { genre?: string }).genre ? [(s as { genre?: string }).genre!] : [],
+    eras: Array.isArray(s.eras) ? s.eras : (() => {
+      const { fromYear = null, toYear = null } = s as { fromYear?: number | null; toYear?: number | null };
+      return fromYear != null || toYear != null ? [{ fromYear, toYear }] : [];
+    })(),
+    energies: Array.isArray(s.energies) ? s.energies : (s as { energy?: string }).energy ? [(s as { energy?: string }).energy!] : [],
+    filtersStrict: s.filtersStrict ?? false,
+    maxTrackSeconds: s.maxTrackSeconds ?? null,
+    playlistIds: Array.isArray(s.playlistIds) ? s.playlistIds : [],
+    playlistStrict: s.playlistStrict ?? false,
+    excludedPlaylistIds: Array.isArray(s.excludedPlaylistIds) ? s.excludedPlaylistIds : [],
+    programme: s.programme ?? false,
+    segmentSkill: s.segmentSkill ?? '',
+  };
+}
+
 function emptyWeek(): Schedule {
   const w: Schedule = {};
   for (let d = 0; d < 7; d++) w[d] = Array(24).fill(null);
@@ -341,6 +396,10 @@ export default function ShowsPanel() {
   const [busy, setBusy] = useState(false);
   const [brush, setBrush] = useState<string | 'erase' | null>(null);
   const [now, setNow] = useState(() => new Date());
+  // Community show catalog + install state (best-effort; null = still loading).
+  const [community, setCommunity] = useState<CommunityShow[] | null>(null);
+  const [communityOpen, setCommunityOpen] = useState(false);          // catalog modal open?
+  const [installing, setInstalling] = useState<string | null>(null);  // community slug installing, or null
 
   // Inline editor: `focusIdx` is the show open in the editor below the list
   // (null = none open). Shows are edited in place — no modal, no draft copy;
@@ -452,31 +511,7 @@ export default function ShowsPanel() {
           const day = (sched as Record<number, (string | null)[] | undefined>)[d];
           if (Array.isArray(day)) for (let h = 0; h < 24; h++) week[d]![h] = day[h] ?? null;
         }
-        const shows: Show[] = (j.values.shows || []).map(s => ({
-          id: s.id ?? clientMintId(),
-          name: s.name ?? '',
-          topic: s.topic ?? '',
-          personaId: s.personaId ?? '',
-          guestPersonaIds: Array.isArray(s.guestPersonaIds) ? s.guestPersonaIds : [],
-          banter: s.banter ?? false,
-          // Plural lists are canonical (#929); a legacy singular field from a
-          // stale response still hydrates as a one-element list.
-          moods: Array.isArray(s.moods) ? s.moods : (s as { mood?: string }).mood ? [(s as { mood?: string }).mood!] : [],
-          themeId: s.themeId ?? '',
-          genres: Array.isArray(s.genres) ? s.genres : (s as { genre?: string }).genre ? [(s as { genre?: string }).genre!] : [],
-          eras: Array.isArray(s.eras) ? s.eras : (() => {
-            const { fromYear = null, toYear = null } = s as { fromYear?: number | null; toYear?: number | null };
-            return fromYear != null || toYear != null ? [{ fromYear, toYear }] : [];
-          })(),
-          energies: Array.isArray(s.energies) ? s.energies : (s as { energy?: string }).energy ? [(s as { energy?: string }).energy!] : [],
-          filtersStrict: s.filtersStrict ?? false,
-          maxTrackSeconds: s.maxTrackSeconds ?? null,
-          playlistIds: Array.isArray(s.playlistIds) ? s.playlistIds : [],
-          playlistStrict: s.playlistStrict ?? false,
-          excludedPlaylistIds: Array.isArray(s.excludedPlaylistIds) ? s.excludedPlaylistIds : [],
-          programme: s.programme ?? false,
-          segmentSkill: s.segmentSkill ?? '',
-        }));
+        const shows: Show[] = (j.values.shows || []).map(hydrateShow);
         setForm({ shows, schedule: week });
         // Arm the first valid show as the brush so the grid is paintable at once.
         const firstValid = shows.find(showValid);
@@ -551,6 +586,25 @@ export default function ShowsPanel() {
     return () => { cancelled = true; };
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Fetch the community show catalog once for the browse-and-install modal.
+  // Best-effort like the other catalogs — any failure just leaves it empty so
+  // the Community button stays enabled and shows the empty state.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await adminFetch('/shows/community');
+        if (!r.ok) throw new Error(`failed (${r.status})`);
+        const j = (await r.json()) as { community?: CommunityShow[] };
+        if (!cancelled) setCommunity(Array.isArray(j.community) ? j.community : []);
+      } catch {
+        if (!cancelled) setCommunity([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const personas: Persona[] = data?.values?.personas || [];
   const moods: string[] = data?.tts?.moods || [];
   const apiBase = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
@@ -615,6 +669,31 @@ export default function ShowsPanel() {
     // Keep the editor focus aligned with the shifted list: close it if the open
     // show was removed, decrement if an earlier one was.
     setFocusIdx(cur => (cur == null ? cur : cur === i ? null : cur > i ? cur - 1 : cur));
+  };
+
+  // Install a community show: the controller appends it to the persisted show
+  // list (unscheduled, owned by the active persona) and returns { shows, show }.
+  // We append the returned show to the local form — mapped through the same
+  // hydrateShow as the initial load — so any unsaved edits to other shows
+  // survive, then arm it as the paint brush and nudge the operator to schedule.
+  const install = async (slug: string) => {
+    setInstalling(slug);
+    try {
+      const r = await adminFetch(`/shows/community/${encodeURIComponent(slug)}/install`, { method: 'POST' });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; shows?: Array<Partial<Show>>; show?: Partial<Show> | null };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const added = j.show ? hydrateShow(j.show) : null;
+      if (added) {
+        setForm(f => f ? { ...f, shows: [...f.shows, added] } : f);
+        // Arm the new show as the brush if nothing is armed yet, so the grid is
+        // paintable at once — same as addShow.
+        setBrush(b => b ?? added.id);
+      }
+      const host = added?.personaId ? personaName(added.personaId) : 'your active DJ';
+      notify.ok(`Installed “${added?.name || slug}” — added unscheduled with ${host} as host. Assign a persona/guests, then paint it into the week.`);
+    } catch (e) {
+      notify.err(`Install failed: ${errorMessage(e)}`);
+    } finally { setInstalling(null); }
   };
 
   // ── grid helpers ─────────────────────────────────────────────────────────
@@ -1005,13 +1084,25 @@ export default function ShowsPanel() {
       {/* ── SHOW DEFINITIONS ─────────────────────────────────────────────── */}
       <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
         <span className="caption">show definitions · {form.shows.length}/{SHOWS_MAX} shows</span>
-        <Btn
-          tone="accent"
-          onClick={addShow}
-          disabled={form.shows.length >= SHOWS_MAX || personas.length === 0}
-        >
-          + Add show
-        </Btn>
+        <div className="flex items-center gap-2">
+          <Btn
+            onClick={() => setCommunityOpen(true)}
+            disabled={!community}
+            title="Browse and install shows shared by other stations"
+          >
+            <Users size={14} /> Community
+            {community && community.length > 0 && (
+              <span className="ml-1 text-vermilion">{community.length}</span>
+            )}
+          </Btn>
+          <Btn
+            tone="accent"
+            onClick={addShow}
+            disabled={form.shows.length >= SHOWS_MAX || personas.length === 0}
+          >
+            + Add show
+          </Btn>
+        </div>
       </div>
       {form.shows.length === 0 && (
         <p className="text-[12px] text-muted">
@@ -1105,6 +1196,111 @@ export default function ShowsPanel() {
         danger
         onConfirm={() => { clearWeek(); setConfirmClearWeek(false); }}
       />
+
+      {/* ── COMMUNITY CATALOG MODAL ──────────────────────────────────────── */}
+      <Modal
+        open={communityOpen}
+        onOpenChange={setCommunityOpen}
+        title="community"
+        sub="shows shared by other stations"
+        width={640}
+        footer={
+          <div className="flex w-full items-center justify-between gap-3">
+            <span className="text-[11px] leading-[1.5] text-muted">
+              Made a show worth sharing? Submit it to the community catalog — a
+              maintainer reviews it, then it ships to every station.
+            </span>
+            <Btn
+              onClick={() => window.open(showSubmitUrl(), '_blank', 'noopener,noreferrer')}
+              title="Open a prefilled community submission on GitHub"
+            >
+              <Share2 size={14} /> Share a show
+            </Btn>
+          </div>
+        }
+      >
+        <div className="text-[12px] leading-[1.65] text-muted">
+          These shows are shared by other stations and ship with SUB/WAVE.
+          <strong> Install</strong> adds one to your show list as your own
+          editable show — it arrives <strong>unscheduled</strong> with your
+          active persona as host, so assign a persona (and any guest co-hosts),
+          then paint it into the weekly grid above.
+        </div>
+        <div className="mt-4 grid gap-3">
+          {community && community.length > 0 ? (
+            community.map(c => {
+              // Shows can't be installed twice — the controller 409s on a name
+              // clash — so flag ones already in your list instead of a button.
+              const inShows = form.shows.some(
+                s => s.name.trim().toLowerCase() === c.name.trim().toLowerCase(),
+              );
+              const tags = [...c.moods, ...c.genres, ...c.energies].slice(0, 6);
+              return (
+                <div key={c.slug} className="grid grid-cols-[1fr_auto] items-center gap-4 border border-ink p-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[13px] font-extrabold">{c.name}</span>
+                      {c.programme && <Pill className="text-[8px]">programme</Pill>}
+                      {c.banter && <Pill className="text-[8px]">banter</Pill>}
+                      {c.filtersStrict && <Pill className="text-[8px]">strict filters</Pill>}
+                    </div>
+                    {c.topic && (
+                      <div className="mt-1 line-clamp-3 text-[12px] leading-[1.6] text-muted">{c.topic}</div>
+                    )}
+                    {tags.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {tags.map((t, i) => (
+                          <Pill key={`${t}-${i}`} className="text-[8px]">{t}</Pill>
+                        ))}
+                      </div>
+                    )}
+                    {(c.submittedBy || c.dateAdded) && (
+                      <div className="mt-1.5 text-[10px] leading-[1.5] text-muted">
+                        {c.submittedBy && (
+                          <>
+                            by{' '}
+                            <a
+                              href={`https://github.com/${c.submittedBy}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+                            >
+                              @{c.submittedBy}
+                            </a>
+                          </>
+                        )}
+                        {c.submittedBy && c.dateAdded && ' · '}
+                        {c.dateAdded && <>added {c.dateAdded}</>}
+                        {c.dateAdded && c.dateModified && c.dateModified !== c.dateAdded && (
+                          <> · updated {c.dateModified}</>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    {inShows ? (
+                      <Pill tone="accent" dot>in your shows</Pill>
+                    ) : (
+                      <Btn
+                        tone="accent"
+                        onClick={() => install(c.slug)}
+                        disabled={installing === c.slug || form.shows.length >= SHOWS_MAX}
+                        title={form.shows.length >= SHOWS_MAX ? 'The show list is full' : undefined}
+                      >
+                        {installing === c.slug ? 'Installing…' : 'Install'}
+                      </Btn>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <div className="py-6 text-center text-[13px] text-muted italic">
+              No community shows yet.
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }

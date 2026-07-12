@@ -243,8 +243,11 @@ most-direct.
 
 ### The community catalog
 
-`/admin/skills` has a **Community** button (next to **New skill**) that lists a
-catalog of skills shipped in the controller image. **Install** copies one into
+`/admin/skills` has a **Community** button (next to **New skill**) that lists the
+[community catalog](community.md) — skills (plus personas and shows) contributed
+by other operators. It's fetched **live** from the
+[`getsubwave/subwave-community`](https://github.com/getsubwave/subwave-community)
+repo, so it isn't tied to your controller version. **Install** copies one into
 `state/skills/` as an ordinary custom skill — **disabled on arrival**, for you to
 read before it airs. The catalog is **prompt-only by contract**: no `tool.mjs` is
 ever shipped or written, so installing from it never runs third-party code.
@@ -252,14 +255,16 @@ ever shipped or written, so installing from it never runs third-party code.
 ### Sharing your own
 
 Any **prompt-only** custom skill (no `tool.mjs`) shows a **Share to community**
-button. It opens a prefilled GitHub Issue Form; a workflow
-(`skill-submission.yml`) validates the slug, reserved names, and context fields,
-then opens a one-file PR adding `controller/src/skills/community/<slug>/SKILL.md`
-— no fork, no code. Once merged it ships in the next image and reaches every
-operator through the normal update path. A skill that carries a `tool.mjs` can't
-be shared this way; use a zip.
+button. It opens a prefilled GitHub Issue Form in the
+[`getsubwave/subwave-community`](https://github.com/getsubwave/subwave-community)
+repo; a bot validates the slug, reserved names, and context fields, then opens a
+one-file PR adding `skills/<slug>/SKILL.md` to the catalog — no fork, no code.
+Once a maintainer merges it, the catalog rebuilds and it goes **live on every
+station shortly after — no release, and no image pull needed**, because every
+station fetches the catalog live (see [`docs/community.md`](community.md)). A skill
+that carries a `tool.mjs` can't be shared this way; use a zip.
 
-The workflow also stamps **provenance** into the frontmatter it writes:
+The bot also stamps **provenance** into the frontmatter it writes:
 `submittedBy` (the GitHub login that filed the issue), `dateAdded` (when it first
 entered the catalog), and `dateModified` (each time the PR is refreshed).
 `dateAdded` is preserved across issue edits — only `dateModified` moves — so an
