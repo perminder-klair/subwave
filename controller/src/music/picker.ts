@@ -15,7 +15,7 @@ import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { shuffle } from '../util/shuffle.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
-import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, onlyGenre, onlyMood, onlyEnergy, hasEraBound, eraSpan, type YearRange } from './show-filter.js';
+import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type YearRange } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
 
 // A track flowing through the pool builder — a raw Subsonic child, a slimTrack
@@ -466,21 +466,23 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     if (inPl.length) selectionPool = inPl;
   }
 
-  // Strict music filters: enforce on the FINAL merged pool too, same
-  // never-starve scope as the strict-playlist block above. The per-source
+  // Strict music filters: enforce on the FINAL merged pool too. The per-source
   // lean() alone wasn't enough — any source with zero in-filter matches passed
   // its whole result through (never-starve per source), so the pool the LLM
   // saw was routinely half off-filter and "strict" hinged on prompt
-  // compliance (Discord: strict-era show playing pre-era tracks half the
-  // time). Filtering here keeps the pool pure whenever ANY in-filter track
-  // survived; a genuinely starved constraint still degrades to the full pool.
+  // compliance (Discord: strict-era show playing pre-era tracks half the time).
+  // applyStrictLocks(starve:false) never-starves PER DIMENSION, so a single
+  // zero-coverage tag class (e.g. a mood on an un-tagged library) can't throw
+  // away the genre/era purity the other dimensions established — the earlier
+  // all-or-nothing joint revert did exactly that. genres pre-resolved to
+  // library tags above (strictGenres); [] there = no genre step.
   if (strict) {
-    let inFilter = selectionPool;
-    if (strictGenres.length) inFilter = onlyGenre(inFilter, strictGenres);
-    inFilter = inYearRange(inFilter, showFilter!.eras);
-    inFilter = onlyMood(inFilter, showFilter!.moods);
-    inFilter = onlyEnergy(inFilter, showFilter!.energies);
-    if (inFilter.length) selectionPool = inFilter;
+    selectionPool = applyStrictLocks(selectionPool, {
+      genres: strictGenres,
+      eras: showFilter!.eras,
+      moods: showFilter!.moods,
+      energies: showFilter!.energies,
+    }, { starve: false });
   }
 
   // De-dup by id, cap per artist so one name can't dominate the pool (the LLM

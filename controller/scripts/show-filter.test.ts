@@ -11,7 +11,7 @@ import {
   normGenre, genreMatches, preferGenre,
   hasEraBound, eraSpan, inYearRange, preferEra,
   preferEnergy, preferEnergyStrict, preferMood,
-  onlyGenre, onlyMood, onlyEnergy,
+  onlyGenre, onlyMood, onlyEnergy, applyStrictLocks,
 } from '../src/music/show-filter.js';
 
 let failures = 0;
@@ -141,6 +141,51 @@ await test('inYearRange is the hard era filter: unknown-year drops, empty allowe
   const noYear = t({ year: null });
   assert.deepEqual(inYearRange([in20s, old, noYear], [{ fromYear: 2020, toYear: 2029 }]), [in20s]);
   assert.deepEqual(inYearRange([old, noYear], [{ fromYear: 2020, toYear: 2029 }]), []);
+});
+await test('inYearRange: null/empty-string year does NOT pass an open-lower-bound window (Number(null)===0 trap)', () => {
+  const in80s = t({ year: 1985 });
+  const nullYear = t({ year: null });
+  const emptyYear = t({ year: '' });
+  const zeroYear = t({ year: 0 });
+  // "1989 and earlier" — the old Number()-coercion let year:null/'' (→ 0) and a
+  // genuine year:0 sail through 0 <= 1989. Only the real 1985 track may pass.
+  assert.deepEqual(
+    inYearRange([in80s, nullYear, emptyYear, zeroYear], [{ fromYear: null, toYear: 1989 }]),
+    [in80s],
+  );
+});
+
+console.log('applyStrictLocks (per-dimension cascade — the shared strict enforcer):');
+await test('starve:true drops every dimension hard, even to empty (agent-tool contract)', () => {
+  const jazz80sCalm = t({ id: '1', genre: 'Jazz', year: 1985, moods: ['calm'], audioMoods: [], energy: 'low' });
+  const rock = t({ id: '2', genre: 'Rock', year: 1985, moods: ['calm'], audioMoods: [], energy: 'low' });
+  const locks = { genres: ['Jazz'], eras: [{ fromYear: 1980, toYear: 1989 }], moods: ['calm'], energies: ['low'] };
+  assert.deepEqual(applyStrictLocks([jazz80sCalm, rock], locks, { starve: true }).map(x => x.id), ['1']);
+  // Un-tagged pool + a mood lock → hard-empties (the wider scope guards dead air).
+  const untagged = t({ id: '3', genre: 'Jazz', year: 1985, moods: [], audioMoods: [], energy: 'low' });
+  assert.deepEqual(applyStrictLocks([untagged], locks, { starve: true }), []);
+});
+await test('starve:false never-starves PER DIMENSION: one zero-coverage class keeps the rest pure', () => {
+  // Genre + era have matches; NO track carries a mood (un-tagged library). The
+  // old all-or-nothing joint revert dumped the whole (off-genre) pool back in;
+  // the cascade must keep the genre/era-pure subset and skip only the mood step.
+  const jazz80s = t({ id: '1', genre: 'Jazz', year: 1985, moods: [], audioMoods: [] });
+  const rock80s = t({ id: '2', genre: 'Rock', year: 1985, moods: [], audioMoods: [] });
+  const jazz90s = t({ id: '3', genre: 'Jazz', year: 1995, moods: [], audioMoods: [] });
+  const locks = { genres: ['Jazz'], eras: [{ fromYear: 1980, toYear: 1989 }], moods: ['calm'], energies: [] };
+  const out = applyStrictLocks([jazz80s, rock80s, jazz90s], locks, { starve: false }).map(x => x.id);
+  assert.deepEqual(out, ['1']); // Jazz + 80s kept; mood step skipped (would empty), NOT reverted to full pool
+});
+await test('starve:false: a dimension WITH coverage still filters hard', () => {
+  const calm = t({ id: '1', genre: 'Jazz', moods: ['calm'], audioMoods: [] });
+  const loud = t({ id: '2', genre: 'Jazz', moods: ['loud'], audioMoods: [] });
+  const out = applyStrictLocks([calm, loud], { genres: ['Jazz'], moods: ['calm'] }, { starve: false }).map(x => x.id);
+  assert.deepEqual(out, ['1']);
+});
+await test('applyStrictLocks: empty locks are a full passthrough (no constraint)', () => {
+  const pool = [t({ id: '1', genre: 'Jazz' }), t({ id: '2', genre: 'Rock' })];
+  assert.deepEqual(applyStrictLocks(pool, { genres: [], eras: [], moods: [], energies: [] }, { starve: true }), pool);
+  assert.deepEqual(applyStrictLocks(pool, {}, { starve: false }), pool);
 });
 
 if (failures) {

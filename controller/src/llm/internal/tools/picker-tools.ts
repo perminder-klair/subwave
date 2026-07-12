@@ -15,7 +15,7 @@ import * as library from '../../../music/library.js';
 import * as embeddings from '../../../music/embeddings.js';
 import * as analyzer from '../../../music/analyzer.js';
 import { filterPickerCandidates, durationSeconds } from '../../../music/recency.js';
-import { onlyGenre, inYearRange, onlyMood, onlyEnergy } from '../../../music/show-filter.js';
+import { applyStrictLocks } from '../../../music/show-filter.js';
 import { shuffle } from '../../../util/shuffle.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { identifyTrackFromText } from '../prompts/request.js';
@@ -169,20 +169,21 @@ export function buildPickerTools({
   // grows with each tool call regardless.
   const collect = (list: any, cap = 8) => {
     // Strict show: filter candidates BEFORE recency + cap, so the 8 the agent
-    // sees are genre-/era-/mood-/energy-pure. Each lock is HARD — a tool whose
-    // results contain no match contributes nothing (emptyResult steers the
-    // model to another tool), mirroring playlistLock below. The old per-tool
-    // never-starve passed a tool's ENTIRE unfiltered result through on zero
-    // matches; the similarity tools cluster on the (possibly off-filter)
+    // sees are genre-/era-/mood-/energy-pure. Each lock is HARD (starve:true) —
+    // a tool whose results contain no match contributes nothing (emptyResult
+    // steers the model to another tool), mirroring playlistLock below. The old
+    // per-tool never-starve passed a tool's ENTIRE unfiltered result through on
+    // zero matches; the similarity tools cluster on the (possibly off-filter)
     // current track, so strict shows leaked off-filter picks constantly.
     // Dead-air is still guarded at wider scopes: a run with zero candidates
     // fails into the pool picker (which never-starves on its final pool), and
-    // behind that the auto.m3u coast.
-    let pool = shuffle((list || []) as any[]);
-    if (genreLock?.length) pool = onlyGenre(pool, genreLock);
-    if (eraLock?.length) pool = inYearRange(pool, eraLock);
-    if (moodLock?.length) pool = onlyMood(pool, moodLock);
-    if (energyLock?.length) pool = onlyEnergy(pool, energyLock);
+    // behind that the auto.m3u coast. The locks are pre-resolved + coverage-
+    // gated in pickViaAgent (genres → library tags, mood/energy dropped when the
+    // library has no such tags) so an un-analysed library can't starve every
+    // tool for the whole show.
+    let pool = applyStrictLocks(shuffle((list || []) as any[]), {
+      genres: genreLock, eras: eraLock, moods: moodLock, energies: energyLock,
+    }, { starve: true });
     // Strict playlist: HARD-intersect with the lock set, with NO never-starve to
     // off-playlist (a playlist is an exact set, so a tool with no overlap simply
     // contributes nothing). The guaranteed in-set source is showPlaylistTracks
@@ -218,11 +219,15 @@ export function buildPickerTools({
   // day). `matched` is the pre-recency-filter count, so the note distinguishes
   // "nothing matches" from "matches exist but were all played recently or
   // already shown this pick" — opposite next moves for the model.
-  const hasStrictLock = !!(genreLock?.length || eraLock?.length || moodLock?.length || energyLock?.length);
+  // A strict lock is anything that can drop a candidate the source DID return:
+  // the music filters, the playlist intersection, and the blocklist. Any of
+  // them makes "matches exist but were filtered" a real cause the note should
+  // name, not just recency (steering the model to switch tools, not retry).
+  const hasStrictLock = !!(genreLock?.length || eraLock?.length || moodLock?.length || energyLock?.length || playlistLock || excludedIds);
   const emptyResult = (matched: number, hint: string) => ({
     tracks: [],
     note: matched > 0
-      ? `${matched} matching track(s) exist but were all played recently, already shown this pick${hasStrictLock ? ', or outside this show\'s strict music filters' : ''} — ${hint}`
+      ? `${matched} matching track(s) exist but were all played recently, already shown this pick${hasStrictLock ? ', or outside this show\'s strict filters' : ''} — ${hint}`
       : hint,
     rule: 'Never invent a song id — only ids returned by a tool are valid picks.',
   });
@@ -545,7 +550,17 @@ export function buildPickerTools({
         description: "Tracks from the show's pinned playlist(s) — the operator's hand-picked selection for this show. Prefer these: call this first and choose from what it returns. Takes no input.",
         inputSchema: z.object({}),
         execute: async () => {
-          try { return collect(playlistTracks, 12); }
+          try {
+            const out = collect(playlistTracks, 12);
+            // The show's mandated source must never return a bare [] — with the
+            // strict music locks also applied here, an un-tagged playlist can
+            // filter to empty, and pickSystem simultaneously tells the model
+            // "every pick MUST come from it". A note-less [] is the documented
+            // fabrication trigger; emptyResult carries the "never invent an id"
+            // rule and explains WHY (recency vs strict filters).
+            if (out.length) return out;
+            return emptyResult(playlistTracks.length, 'the pinned playlist tracks were all filtered out by recency or this show\'s strict music filters — choose from an earlier result, or a later tool call may surface a fresh in-playlist track');
+          }
           catch (err) { return { error: err.message }; }
         },
       }),
