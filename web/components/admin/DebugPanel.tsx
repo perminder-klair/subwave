@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { fmtSize, fmtClock } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -12,6 +12,24 @@ import { Card, Btn, Pill, Eyebrow } from './ui';
 import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '../../lib/cn';
 import type { StationLocale } from '../../lib/types';
+import {
+  Tool,
+  ToolHeader,
+  ToolContent,
+  ToolInput,
+  ToolOutput,
+} from '../ai-elements/tool';
+import { CodeBlock, CodeBlockCopyButton } from '../ai-elements/code-block';
+import { Conversation, ConversationContent } from '../ai-elements/conversation';
+import { Message, MessageContent, MessageResponse } from '../ai-elements/message';
+import {
+  Context,
+  ContextTrigger,
+  ContextContent,
+  ContextContentHeader,
+  ContextContentBody,
+} from '../ai-elements/context';
+import { Terminal, TerminalContent } from '../ai-elements/terminal';
 
 // All admin endpoints return loose JSON; type as unknown then narrow with
 // optional-chaining at call sites. The shapes mirror the controller's
@@ -122,6 +140,7 @@ interface LlmCall {
 interface DebugLlm {
   activeModel?: string;
   provider?: string;
+  budget?: DebugBudget;
   recentCalls?: LlmCall[];
   /** Raw-request capture status — drives the toggle + file-path hint. */
   debug?: {
@@ -209,6 +228,19 @@ interface DebugMounts {
   tuneIn: { entryCount: number; pls: string; m3u: string };
 }
 
+/** Daily token budget snapshot (settings.llm.dailyTokenCap) — mirrors the
+ * controller's budgetMode() tiers: soft mutes optional segments, hard stops
+ * model calls entirely until the UTC day rolls. */
+interface DebugBudget {
+  enabled?: boolean;
+  cap?: number;
+  softPct?: number;
+  exemptRequests?: boolean;
+  usedToday?: number;
+  remaining?: number;
+  mode?: 'normal' | 'soft' | 'hard';
+}
+
 interface DebugData {
   /** Station IANA zone — render DJ-log timestamps in it (issue #418). */
   timezone?: string;
@@ -236,7 +268,6 @@ export default function DebugPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
-  const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
@@ -295,12 +326,6 @@ export default function DebugPanel() {
     };
   }, [paused, needsAuth, hydrated, adminFetch]);
 
-  useEffect(() => {
-    // Radix ScrollArea scrolls on its viewport, not the root element.
-    const vp = logRef.current?.querySelector('[data-radix-scroll-area-viewport]');
-    if (autoScroll && vp) vp.scrollTop = vp.scrollHeight;
-  }, [data?.liquidsoapLog, autoScroll]);
-
   return (
     <div className="grid gap-4">
       {/* ── HEALTH STRIP ────────────────────────────────────────────────── */}
@@ -310,6 +335,7 @@ export default function DebugPanel() {
             ● {err ? 'down' : 'live'}
           </Eyebrow>
           <span className="caption">refresh · 2s</span>
+          {data?.llm?.budget?.enabled ? <BudgetMeter budget={data.llm.budget} /> : null}
           <span className="ml-auto flex gap-2">
             <Btn sm onClick={() => setPaused(!paused)}>{paused ? 'Resume' : 'Pause'}</Btn>
           </span>
@@ -427,9 +453,15 @@ export default function DebugPanel() {
               </Label>
             }
           >
-            <ScrollArea ref={logRef} className="min-h-0 flex-1">
-              <pre className="term">{data.liquidsoapLog || '— no log —'}</pre>
-            </ScrollArea>
+            {/* Terminal owns scrolling + tail-follow; the Card checkbox drives
+                its autoScroll. Square corners to sit flush in the card body. */}
+            <Terminal
+              output={data.liquidsoapLog || '— no log —'}
+              autoScroll={autoScroll}
+              className="min-h-0 flex-1 rounded-none border-separator-strong"
+            >
+              <TerminalContent className="max-h-none min-h-0 flex-1 p-2.5 text-[11px] leading-[1.6]" />
+            </Terminal>
           </Card>
 
           {/* ── ROW 3 ───────────────────────────────────────── */}
@@ -526,6 +558,79 @@ export default function DebugPanel() {
           </Card>
         </>
       )}
+    </div>
+  );
+}
+
+// Daily token budget meter (health-strip header). The ai-elements Context
+// ring shows today's spend against the cap on hover; the Pill mirrors the
+// controller's budgetMode() tier. No modelId/cost — self-hosted models have
+// no USD price. Renders nothing unless the cap is switched on.
+function BudgetMeter({ budget }: { budget: DebugBudget }) {
+  const cap = budget.cap ?? 0;
+  const used = budget.usedToday ?? 0;
+  if (!budget.enabled || cap <= 0) return null;
+  const mode = budget.mode || 'normal';
+  const compact = (n: number) =>
+    new Intl.NumberFormat('en-US', { notation: 'compact' }).format(n);
+  const pct = new Intl.NumberFormat('en-US', {
+    style: 'percent',
+    maximumFractionDigits: 1,
+  }).format(used / cap);
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className="caption">tokens</span>
+      <Context maxTokens={cap} usedTokens={used}>
+        <ContextTrigger className="h-auto gap-1 rounded-none px-1.5 py-0.5 text-[11px]" />
+        {/* bg-bg (opaque): --overlay is translucent and lets the strip below
+            bleed through a floating card. */}
+        <ContextContent align="start" className="rounded-none border-ink bg-bg">
+          {/* Custom header children: the stock header's Progress bar paints
+              bg-muted, which is a text colour in this theme, not a surface. */}
+          <ContextContentHeader>
+            <div className="flex items-center justify-between gap-3 text-xs">
+              <span>{pct} of daily cap</span>
+              <span className="mono-num text-muted">
+                {compact(used)} / {compact(cap)}
+              </span>
+            </div>
+          </ContextContentHeader>
+          <ContextContentBody className="grid gap-1.5">
+            <BudgetRow label="used today" value={used.toLocaleString('en-US')} />
+            <BudgetRow
+              label="remaining"
+              value={(budget.remaining ?? Math.max(0, cap - used)).toLocaleString('en-US')}
+            />
+            <BudgetRow
+              label="soft threshold"
+              value={budget.softPct != null ? `${budget.softPct}%` : '—'}
+            />
+            <BudgetRow label="requests exempt" value={budget.exemptRequests ? 'yes' : 'no'} />
+          </ContextContentBody>
+        </ContextContent>
+      </Context>
+      <Pill
+        tone={mode === 'soft' ? 'accent' : undefined}
+        className={mode === 'hard' ? 'border-[var(--danger)] text-[var(--danger)]' : undefined}
+        title={
+          mode === 'hard'
+            ? 'cap reached — no model calls until the UTC day rolls'
+            : mode === 'soft'
+              ? 'soft threshold reached — cheap picker, optional segments muted'
+              : 'under budget'
+        }
+      >
+        budget {mode}
+      </Pill>
+    </span>
+  );
+}
+
+function BudgetRow({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 text-xs">
+      <span className="caption">{label}</span>
+      <span className="mono-num">{value}</span>
     </div>
   );
 }
@@ -647,11 +752,22 @@ function TtsCallList({ calls }: { calls: TtsCall[] }) {
   );
 }
 
+// Session roles are station-specific (dj / track / segment / listener…) — only
+// user/assistant map straight through; everything else renders as "system"
+// with the original role·kind kept visible as a label chip.
+function mapChatRole(role?: string): 'user' | 'assistant' | 'system' {
+  return role === 'user' ? 'user' : role === 'assistant' ? 'assistant' : 'system';
+}
+
 function SessionChat({ session }: { session: DebugSession }) {
   const msgs = session.messages || [];
   return (
-    <ScrollArea className="max-h-[360px]">
-      <div className="grid gap-1.5">
+    // StickToBottom's inner scroll element is height:100%, so it needs a
+    // definite outer height to scroll — but a fixed 360px box around two
+    // turns is dead space. Short sessions size to content; long ones get the
+    // fixed, latest-turn-pinned scroll region.
+    <Conversation className={cn('w-full', msgs.length > 6 ? 'h-[360px]' : 'h-auto')}>
+      <ConversationContent className="gap-1.5 p-0">
         {session.handoff && (
           <div className="caption italic">
             ↪ continuing from {session.handoff}
@@ -661,35 +777,33 @@ function SessionChat({ session }: { session: DebugSession }) {
           <span className="field-hint italic">no turns yet</span>
         )}
         {msgs.map((m, i) => (
-          <div
-            key={i}
-            className={cn(
-              // Time + role·kind share the first line; text wraps to a full-width
-              // second row below them.
-              'grid grid-cols-[auto_1fr] items-baseline gap-x-2 gap-y-0.5 py-0.5 text-[12px]',
-              i < msgs.length - 1 && 'border-b border-dashed border-separator-strong',
-            )}
-          >
-            <span className="mono-num text-[10px] text-muted">
-              {m.t ? new Date(m.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
+          <Message key={i} from={mapChatRole(m.role)} className="max-w-full gap-0.5">
+            <span className="flex items-baseline gap-2">
+              <span className="mono-num text-[10px] text-muted">
+                {m.t ? new Date(m.t).toLocaleTimeString('en-GB', { hour12: false }) : '—'}
+              </span>
+              <span
+                className={cn(
+                  'text-[9px] tracking-[0.12em] uppercase',
+                  m.role === 'dj' || m.role === 'segment'
+                    ? 'text-vermilion'
+                    : m.role === 'track'
+                      ? 'text-ink'
+                      : 'text-muted',
+                )}
+              >
+                {m.role}{m.kind ? `·${m.kind}` : ''}
+              </span>
             </span>
-            <span
-              className={cn(
-                'text-[9px] tracking-[0.12em] uppercase',
-                m.role === 'dj' || m.role === 'segment'
-                  ? 'text-vermilion'
-                  : m.role === 'track'
-                    ? 'text-ink'
-                    : 'text-muted',
-              )}
-            >
-              {m.role}{m.kind ? `·${m.kind}` : ''}
-            </span>
-            <span className="col-span-2 break-words whitespace-pre-wrap">{m.text}</span>
-          </div>
+            <MessageContent className="rounded-none text-[12px] group-[.is-user]:rounded-none group-[.is-user]:bg-[var(--overlay)] group-[.is-user]:px-2.5 group-[.is-user]:py-1.5 group-[.is-user]:text-ink">
+              {/* Speech scripts — plain text, never markdown (MessageResponse
+                  would eat asterisks and underscores). */}
+              <div className="break-words whitespace-pre-wrap">{m.text}</div>
+            </MessageContent>
+          </Message>
         ))}
-      </div>
-    </ScrollArea>
+      </ConversationContent>
+    </Conversation>
   );
 }
 
@@ -970,13 +1084,27 @@ function prettyMaybeJson(s: string): string {
   }
 }
 
-// Body text for a call section: JSON gets pretty-printed in monospace, prose
-// renders as-is.
+// Dense newsprint-tuned CodeBlock: shiki-highlighted JSON with a copy button.
+// Only ever rendered inside an OPEN CallSection / ToolContent, so collapsed
+// rows never pay the tokenization cost (see CallSection's open-state gate).
+function JsonBlock({ value }: { value: unknown }) {
+  const code = typeof value === 'string' ? value : JSON.stringify(value ?? {}, null, 2);
+  return (
+    <CodeBlock
+      code={code}
+      language="json"
+      className="rounded-none border-separator-strong [&_code]:text-[11px] [&_pre]:p-2.5 [&_pre]:text-[11px]"
+    >
+      <CodeBlockCopyButton className="absolute top-1 right-1 z-10 size-6" />
+    </CodeBlock>
+  );
+}
+
+// Body text for a call section: JSON payloads get a highlighted CodeBlock
+// with copy, prose renders as-is.
 function JsonOrText({ text }: { text: string }) {
   const pretty = prettyMaybeJson(text);
-  return pretty !== text
-    ? <span className="font-mono text-[10.5px]">{pretty}</span>
-    : <>{text}</>;
+  return pretty !== text ? <JsonBlock value={pretty} /> : <>{text}</>;
 }
 
 interface CallSectionProps {
@@ -988,8 +1116,16 @@ interface CallSectionProps {
 }
 
 function CallSection({ label, count, preview, tone, children }: CallSectionProps) {
+  // Children of a closed <details> still MOUNT — and with a 120-entry ring
+  // whose bodies now hold shiki CodeBlocks, eager mounting would tokenize
+  // every collapsed row. Mirror the element's open state and only mount the
+  // body once the section is actually expanded.
+  const [open, setOpen] = useState(false);
   return (
-    <details className="border border-separator-strong bg-bg">
+    <details
+      className="border border-separator-strong bg-bg"
+      onToggle={e => setOpen(e.currentTarget.open)}
+    >
       <summary className="flex cursor-pointer items-baseline gap-2 px-2 py-1">
         <span className={cn('caption flex-none', tone === 'err' && 'text-[var(--danger)]')}>
           {label}{count != null ? ` · ${count}` : ''}
@@ -1006,7 +1142,7 @@ function CallSection({ label, count, preview, tone, children }: CallSectionProps
           tone === 'err' ? 'text-[var(--danger)]' : 'text-ink',
         )}
       >
-        {children}
+        {open ? children : null}
       </div>
     </details>
   );
@@ -1014,60 +1150,69 @@ function CallSection({ label, count, preview, tone, children }: CallSectionProps
 
 function MessageList({ messages }: { messages: Array<{ role?: string; content?: unknown }> }) {
   return (
-    <div className="grid gap-2">
-      {messages.map((m, i) => {
-        const body = typeof m.content === 'string'
-          ? m.content
-          : JSON.stringify(m.content, null, 2);
-        return (
-          <div key={i} className="border-l-2 border-separator-strong pl-2">
+    // Same auto-vs-fixed height dance as SessionChat: short exchanges size to
+    // content, agent runs (~40 turns) get a bounded, bottom-pinned scroll.
+    <Conversation className={cn('w-full', messages.length > 4 ? 'h-80' : 'h-auto')}>
+      <ConversationContent className="gap-2 p-0">
+        {messages.map((m, i) => (
+          <Message key={i} from={mapChatRole(m.role)} className="max-w-full gap-0.5">
             <span
               className={cn(
                 'text-[9px] tracking-[0.12em] uppercase',
                 m.role === 'assistant' ? 'text-vermilion' : 'text-muted',
               )}
             >
-              {m.role}
+              {m.role || 'system'}
             </span>
-            <div className="break-words whitespace-pre-wrap">{body}</div>
-          </div>
-        );
-      })}
-    </div>
+            <MessageContent className="rounded-none text-[11px] group-[.is-user]:rounded-none group-[.is-user]:bg-[var(--overlay)] group-[.is-user]:px-2.5 group-[.is-user]:py-1.5 group-[.is-user]:text-ink">
+              {typeof m.content === 'string' ? (
+                <div className="break-words whitespace-pre-wrap">{m.content}</div>
+              ) : (
+                <JsonBlock value={m.content} />
+              )}
+            </MessageContent>
+          </Message>
+        ))}
+      </ConversationContent>
+    </Conversation>
   );
+}
+
+// The LLM ring stores tool calls only after they've run — there's no per-tool
+// status flag, so a result object carrying an `error` key is the failure
+// signal; everything else completed.
+function toolErrorText(result: unknown): string | undefined {
+  if (result && typeof result === 'object' && !Array.isArray(result) && 'error' in result) {
+    const e = (result as { error?: unknown }).error;
+    if (e != null && e !== false && e !== '') {
+      return typeof e === 'string' ? e : JSON.stringify(e);
+    }
+  }
+  return undefined;
 }
 
 function ToolList({ calls }: { calls: Array<{ name?: string; args?: unknown; result?: unknown }> }) {
   return (
     <div className="grid gap-1">
       {calls.map((t, i) => {
-        const result = t.result == null
-          ? null
-          : (typeof t.result === 'string' ? t.result : JSON.stringify(t.result, null, 2));
+        const err = toolErrorText(t.result);
         return (
-          <details key={i} className="border border-separator-strong bg-[var(--card-bg)]">
-            <summary className="flex cursor-pointer items-baseline gap-2 px-2 py-1">
-              <span className="mono-num text-muted">{i + 1}</span>
-              <span className="font-bold">{t.name}</span>
-              <span className="min-w-0 overflow-hidden text-[11px] text-ellipsis whitespace-nowrap text-muted">
-                {oneLine(t.args ? JSON.stringify(t.args) : '', 90)}
-              </span>
-            </summary>
-            <div className="grid gap-1 px-2.5 pt-1 pb-2 text-[11px]">
-              <span className="caption">args</span>
-              <pre className="m-0 font-[inherit] break-words whitespace-pre-wrap">
-                {JSON.stringify(t.args ?? {}, null, 2)}
-              </pre>
-              {result != null && (
-                <>
-                  <span className="caption">result</span>
-                  <pre className="m-0 font-[inherit] break-words whitespace-pre-wrap">
-                    {result}
-                  </pre>
-                </>
-              )}
-            </div>
-          </details>
+          <Tool
+            key={i}
+            className="mb-0 w-full rounded-none border-separator-strong bg-[var(--card-bg)]"
+          >
+            <ToolHeader
+              // Completed calls from a log: success → output-available,
+              // failure → output-error. ToolUIPart types are `tool-${name}`.
+              type={`tool-${t.name || 'unknown'}` as `tool-${string}`}
+              state={err ? 'output-error' : 'output-available'}
+              className="px-2.5 py-1.5"
+            />
+            <ToolContent className="space-y-2 p-2.5">
+              <ToolInput input={t.args ?? {}} />
+              <ToolOutput output={err ? undefined : t.result} errorText={err} />
+            </ToolContent>
+          </Tool>
         );
       })}
     </div>
@@ -1198,7 +1343,11 @@ function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 )}
                 {c.responseText && (
                   <CallSection label="model said instead" tone="err" preview={oneLine(c.responseText)}>
-                    {c.responseText}
+                    {/* Free text straight from the model — may contain
+                        markdown, so this is the one MessageResponse call. */}
+                    <MessageResponse className="whitespace-normal">
+                      {c.responseText}
+                    </MessageResponse>
                   </CallSection>
                 )}
                 {c.user && (
@@ -1322,7 +1471,7 @@ function SubsonicCalls({ subsonic }: { subsonic: DebugSubsonic | undefined }) {
                       </CallSection>
                     )}
                     <CallSection label="params" preview={oneLine(JSON.stringify(c.params || {}))}>
-                      {JSON.stringify(c.params || {}, null, 2)}
+                      <JsonBlock value={c.params || {}} />
                     </CallSection>
                     {Array.isArray(c.songIds) && c.songIds.length > 0 && (
                       <CallSection

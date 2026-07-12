@@ -12,11 +12,12 @@ import { CB_DEFAULT_VOICE, KOKORO_RE, CHATTERBOX_VOICE_RE, POCKET_TTS_VOICE_RE }
 import { Card, Seg } from '../ui';
 import { EngineSelector } from '../tts/EngineSelector';
 import { VoicePreviewButton } from '../tts/VoicePreviewButton';
+import { VoicePicker, type VoicePickerGroup } from '../tts/VoicePicker';
 import { ENGINES } from '../tts/engineMeta';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
-  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from '../../ui/select';
 import { VoiceMeter } from './VoiceMeter';
 import { cn } from '../../../lib/cn';
@@ -96,24 +97,28 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
           {persona.tts.engine === 'piper' && (() => {
             const piperVoices: string[] = data?.tts?.piperVoices || [];
             const value = persona.tts.voice || CB_DEFAULT_VOICE;
+            // The default entry auditions with voice '' (the engine's built-in);
+            // the sentinel only exists because an empty select value is invalid.
+            const groups: VoicePickerGroup[] = [{
+              voices: [
+                { id: CB_DEFAULT_VOICE, label: 'Built-in default voice', previewVoice: '' },
+                ...piperVoices.map(v => ({ id: v, label: v })),
+                ...(persona.tts.voice && !piperVoices.includes(persona.tts.voice)
+                  ? [{ id: persona.tts.voice, label: persona.tts.voice, hint: 'missing' }]
+                  : []),
+              ],
+            }];
             return (
               <div className="field max-w-[360px]">
                 <Label>Voice</Label>
-                <Select
+                <VoicePicker
                   value={value}
-                  onValueChange={val => updateTts({ voice: val === CB_DEFAULT_VOICE ? '' : val })}
-                >
-                  <SelectTrigger><SelectValue placeholder="Built-in default voice" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value={CB_DEFAULT_VOICE}>Built-in default voice</SelectItem>
-                      {piperVoices.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}
-                      {persona.tts.voice && !piperVoices.includes(persona.tts.voice) && (
-                        <SelectItem value={persona.tts.voice}>{persona.tts.voice} (missing)</SelectItem>
-                      )}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
+                  onChange={val => updateTts({ voice: val === CB_DEFAULT_VOICE ? '' : val })}
+                  groups={groups}
+                  title="Piper voice"
+                  placeholder="Built-in default voice"
+                  preview={{ engine: 'piper', speed: persona.tts.speed, adminFetch }}
+                />
                 <div className="field-hint">
                   Piper is fast, local, and keyless. Drop a voice’s <code>.onnx</code> and its{' '}
                   <code>.onnx.json</code> manifest into <code>state/voices/</code> on the host (the
@@ -158,22 +163,18 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                 </div>
                 <div className="field mt-3">
                   <Label>Voice</Label>
-                  <Select
+                  <VoicePicker
                     value={voice}
-                    onValueChange={val => updateTts({ voice: val })}
-                  >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {!filtered.includes(voice) && (
-                          <SelectItem value={voice}>{fmt(voice)}</SelectItem>
-                        )}
-                        {filtered.map(v => (
-                          <SelectItem key={v} value={v}>{fmt(v)}</SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
+                    onChange={val => updateTts({ voice: val })}
+                    groups={[{
+                      voices: [
+                        ...(!filtered.includes(voice) ? [{ id: voice, label: fmt(voice) }] : []),
+                        ...filtered.map(v => ({ id: v, label: fmt(v) })),
+                      ],
+                    }]}
+                    title="Kokoro voice"
+                    preview={{ engine: 'kokoro', speed: persona.tts.speed, adminFetch }}
+                  />
                 </div>
                 <div className="field-hint">The kokoro-onnx voice id for this persona.</div>
               </div>
@@ -199,21 +200,22 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                   </div>
                 )}
                 <Label>Reference voice</Label>
-                <Select
+                <VoicePicker
                   value={persona.tts.voice || CB_DEFAULT_VOICE}
-                  onValueChange={val => updateTts({ voice: val === CB_DEFAULT_VOICE ? '' : val })}
-                >
-                  <SelectTrigger><SelectValue placeholder="Built-in default voice" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectItem value={CB_DEFAULT_VOICE}>Built-in default voice</SelectItem>
-                      {cbVoices.map(v => <SelectItem key={v} value={v}>{v}</SelectItem>)}
-                      {persona.tts.voice && !cbVoices.includes(persona.tts.voice) && (
-                        <SelectItem value={persona.tts.voice}>{persona.tts.voice} (missing)</SelectItem>
-                      )}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
+                  onChange={val => updateTts({ voice: val === CB_DEFAULT_VOICE ? '' : val })}
+                  groups={[{
+                    voices: [
+                      { id: CB_DEFAULT_VOICE, label: 'Built-in default voice', previewVoice: '' },
+                      ...cbVoices.map(v => ({ id: v, label: v })),
+                      ...(persona.tts.voice && !cbVoices.includes(persona.tts.voice)
+                        ? [{ id: persona.tts.voice, label: persona.tts.voice, hint: 'missing' }]
+                        : []),
+                    ],
+                  }]}
+                  title="Chatterbox reference voice"
+                  placeholder="Built-in default voice"
+                  preview={{ engine: 'chatterbox', speed: persona.tts.speed, adminFetch }}
+                />
                 <div className="field-hint">
                   ~5s of clean speech is enough to clone a voice. Drop WAVs into{' '}
                   <code>{cbDir}</code> on the host and they’ll show up here.
@@ -256,39 +258,30 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                   </div>
                 )}
                 <Label>PocketTTS voice</Label>
-                <Select
+                <VoicePicker
                   value={value}
-                  onValueChange={val => updateTts({ voice: val })}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectLabel>Built-in</SelectLabel>
-                      {pocketTtsVoices.map(v => (
-                        <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>
-                      ))}
-                    </SelectGroup>
-                    {customVoices.length > 0 && (
-                      <SelectGroup>
-                        <SelectLabel>
-                          Custom (cloned){ptCloning === false ? ', cloning unavailable' : ''}
-                        </SelectLabel>
-                        {customVoices.map(v => (
-                          <SelectItem key={v} value={v}>{v}</SelectItem>
-                        ))}
-                      </SelectGroup>
-                    )}
-                    {!isBuiltin && !isCustom && persona.tts.voice && (
-                      // Persona references a voice that isn't currently present —
-                      // keep the value visible so a save round-trips without
-                      // rewriting, but flag it so the operator notices.
-                      <SelectGroup>
-                        <SelectLabel>Unknown</SelectLabel>
-                        <SelectItem value={persona.tts.voice}>{persona.tts.voice} (missing)</SelectItem>
-                      </SelectGroup>
-                    )}
-                  </SelectContent>
-                </Select>
+                  onChange={val => updateTts({ voice: val })}
+                  groups={[
+                    { label: 'Built-in', voices: pocketTtsVoices.map(v => ({ id: v.id, label: v.label })) },
+                    ...(customVoices.length > 0
+                      ? [{
+                        label: `Custom (cloned)${ptCloning === false ? ', cloning unavailable' : ''}`,
+                        voices: customVoices.map(v => ({ id: v, label: v })),
+                      }]
+                      : []),
+                    // Persona references a voice that isn't currently present —
+                    // keep the value visible so a save round-trips without
+                    // rewriting, but flag it so the operator notices.
+                    ...(!isBuiltin && !isCustom && persona.tts.voice
+                      ? [{
+                        label: 'Unknown',
+                        voices: [{ id: persona.tts.voice, label: persona.tts.voice, hint: 'missing' }],
+                      }]
+                      : []),
+                  ]}
+                  title="PocketTTS voice"
+                  preview={{ engine: 'pocket-tts', speed: persona.tts.speed, adminFetch }}
+                />
                 <div className="field-hint">
                   CPU-only, ~6× real-time. Built-in voices cover English, French, German,
                   Italian, Spanish and Portuguese. Drop a ~5s WAV into{' '}
@@ -380,24 +373,28 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                       </>
                     ) : (
                       <>
-                        <Select
+                        <VoicePicker
                           value={isPreset ? voice : '__custom__'}
-                          onValueChange={val => {
+                          onChange={val => {
                             // "Custom voice id…" clears the preset so isPreset flips
                             // false and the free-text input below appears for entry.
                             updateTts({ voice: val === '__custom__' ? '' : val });
                           }}
-                        >
-                          <SelectTrigger><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            <SelectGroup>
-                              {provVoices.map(v => (
-                                <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>
-                              ))}
-                              <SelectItem value="__custom__">Custom voice id…</SelectItem>
-                            </SelectGroup>
-                          </SelectContent>
-                        </Select>
+                          groups={[{
+                            voices: [
+                              ...provVoices.map(v => ({ id: v.id, label: v.label })),
+                              // An action row, not a voice — no preview affordance.
+                              { id: '__custom__', label: 'Custom voice id…', previewVoice: null },
+                            ],
+                          }]}
+                          title="Cloud voice"
+                          preview={{
+                            engine: 'cloud',
+                            cloudProvider: persona.tts.cloudProvider,
+                            speed: persona.tts.speed,
+                            adminFetch,
+                          }}
+                        />
                         {!isPreset && (
                           <Input
                             className={cn('mt-2', voice ? 'border-ink' : 'border-[var(--danger)]')}
