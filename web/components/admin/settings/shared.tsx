@@ -92,7 +92,7 @@ export interface LlmForm {
   reasoning: boolean;
   toolChoice: string;
   pickerAgent: boolean;
-  noRepeatWindow: number;
+  noRepeatWindow: string;
   requestWebResolve: boolean;
   agentTimeoutMs: number;
   pauseWhenEmpty: boolean;
