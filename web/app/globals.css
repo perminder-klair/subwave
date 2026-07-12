@@ -3967,12 +3967,16 @@ html.lite .sw-ripple-circle {
 .admin-root .lib-pass-name { font-size: 12px; font-weight: 700; letter-spacing: 0.02em; display: block; color: var(--ink); }
 .admin-root .lib-pass-hint { font-size: 11px; color: var(--muted); line-height: 1.45; margin-top: 3px; display: block; }
 
-/* tabs */
-.admin-root .lib-tabs { display: flex; border: 1px solid var(--ink); flex-wrap: wrap; background: var(--card-bg); }
+/* tabs — one-line masthead: content-sized cells, horizontal scroll on narrow
+   screens (no ragged wrap). Badges appear only on actionable counts. */
+.admin-root .lib-tabs {
+    display: flex; border: 1px solid var(--ink); flex-wrap: nowrap;
+    overflow-x: auto; background: var(--card-bg);
+}
 .admin-root .lib-tab {
-    flex: 1; min-width: 130px; font-family: inherit; background: transparent;
+    flex: 0 0 auto; font-family: inherit; background: transparent;
     border: 0; border-left: 1px solid var(--ink); cursor: pointer; color: var(--ink);
-    padding: 12px 14px; text-align: left; display: flex; flex-direction: column; gap: 3px;
+    padding: 11px 16px; text-align: left; white-space: nowrap;
     transition: background 0.12s;
 }
 .admin-root .lib-tab:first-child { border-left: 0; }
@@ -3980,15 +3984,8 @@ html.lite .sw-ripple-circle {
 .admin-root .lib-tab.on { background: var(--ink); color: var(--bg); }
 .admin-root .lib-tab-name {
     font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; font-weight: 700;
-    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    display: flex; align-items: center; gap: 8px;
 }
-.admin-root .lib-tab-hint { font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); }
-.admin-root .lib-tab.on .lib-tab-hint { color: color-mix(in oklab, var(--bg) 60%, transparent); }
-.admin-root .lib-tab-badge {
-    font-size: 9px; letter-spacing: 0.06em; font-weight: 700; padding: 1px 6px;
-    border: 1px solid currentColor; opacity: 0.8; font-variant-numeric: tabular-nums;
-}
-.admin-root .lib-tab.on .lib-tab-badge { background: var(--accent); border-color: var(--accent); color: var(--bg); opacity: 1; }
 
 /* filter chips */
 .admin-root .lib-chip {
@@ -4028,8 +4025,11 @@ html.lite .sw-ripple-circle {
 .admin-root .lib-colhead,
 .admin-root .lib-row {
     display: grid;
-    /* leading 16px column: the row-selection checkbox (add-to-playlist flow) */
-    grid-template-columns: 16px 44px minmax(0, 1.5fr) minmax(0, 1.3fr) 1fr auto;
+    /* leading 16px column: the row-selection checkbox (add-to-playlist flow).
+       Trailing actions column is FIXED, not auto: header and rows are sibling
+       grids, so an auto track resolves to 0 in the (empty-celled) header and
+       ~150px in the rows, skewing every fr column between them. */
+    grid-template-columns: 16px 56px minmax(0, 2fr) minmax(0, 1fr) 150px;
     gap: 14px; align-items: center;
 }
 .admin-root .lib-colhead { padding: 9px 16px; border-bottom: 1px solid var(--ink); }
@@ -4041,7 +4041,7 @@ html.lite .sw-ripple-circle {
 @keyframes lib-flash { 0% { background: var(--accent-soft); } 100% { background: transparent; } }
 
 .admin-root .lib-thumb {
-    width: 44px; height: 44px; border: 1px solid var(--ink);
+    width: 56px; height: 56px; border: 1px solid var(--ink);
     display: flex; align-items: center; justify-content: center;
     font-weight: 800; font-size: 15px; flex: none; overflow: hidden;
     background: var(--ink-soft); color: var(--muted);
@@ -4049,7 +4049,8 @@ html.lite .sw-ripple-circle {
 .admin-root .lib-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .admin-root .lib-title { font-size: 13px; font-weight: 500; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .admin-root .lib-artist { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
-.admin-root .lib-album { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* album — third line of the title cell (the standalone column is gone) */
+.admin-root .lib-album { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; font-style: italic; }
 .admin-root .lib-tags { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .admin-root .lib-mtag {
     font-size: 10px; letter-spacing: 0.02em; border: 1px solid var(--separator-strong);
@@ -4063,20 +4064,19 @@ html.lite .sw-ripple-circle {
     border-style: dashed; font-variant-numeric: tabular-nums;
     letter-spacing: 0.04em; font-size: 9px;
 }
+/* "needs tags" marker — icon-only chip (tooltip carries the words) */
 .admin-root .lib-needs {
-    font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700;
+    display: inline-flex; align-items: center;
     color: var(--accent); border: 1px solid color-mix(in oklab, var(--accent) 30%, transparent);
-    background: var(--accent-soft); padding: 3px 8px; white-space: nowrap;
+    background: var(--accent-soft); padding: 3px 5px;
 }
 
 @media (max-width: 860px) {
     .admin-root .lib-row,
-    .admin-root .lib-colhead { grid-template-columns: 16px 40px 1fr auto; gap: 12px; }
+    .admin-root .lib-colhead { grid-template-columns: 16px 48px 1fr 150px; gap: 12px; }
     .admin-root .lib-row .lib-tags,
-    .admin-root .lib-row .lib-album,
-    .admin-root .lib-colhead .h-tags,
-    .admin-root .lib-colhead .h-album { display: none; }
-    .admin-root .lib-tab { min-width: 46%; }
+    .admin-root .lib-colhead .h-tags { display: none; }
+    .admin-root .lib-thumb { width: 48px; height: 48px; }
 }
 @media (prefers-reduced-motion: reduce) {
     .admin-root .lib-livedot::after,

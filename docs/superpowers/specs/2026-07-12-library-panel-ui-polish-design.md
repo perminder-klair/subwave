@@ -15,15 +15,17 @@ Scope: two visual/UX refinements to `/admin/library`, no backend changes.
 
 Keep the boxed broadsheet identity (ink border, uppercase names, solid-ink active cell, accent badge on active). Change:
 
-- **One-line tabs sized to content**: drop `flex: 1` / `min-width: 130px`; cells take natural width (`padding: 10px 16px`). The strip container becomes `overflow-x: auto` + `flex-wrap: nowrap` so narrow screens scroll instead of wrapping.
+- **One-line tabs sized to content**: drop `flex: 1` / `min-width: 130px`; cells take natural width. The strip container becomes `overflow-x: auto` + `flex-wrap: nowrap` so narrow screens scroll instead of wrapping.
 - **Hint line removed** (`lib-tab-hint` and the hint markup go away). The active panel's Card subtitle already explains each view.
 - **Label change**: "Recently added" → "Recent" (the Card title below still reads "Recently added").
-- **Badges only where the count is actionable**:
-  - *Untagged*: warm to-do badge (accent-tinted, not just `currentColor`), shown only when count > 0.
-  - *Blocked*: neutral badge, shown only when count > 0.
-  - *Playlists*: neutral badge, always (when loaded).
-  - *Recent, Browse, Search*: no badge, ever.
-- `Tabs` keeps its current props shape (`counts`), it just renders fewer badges; the `counts.browse`/`counts.recent` fields drop out of the component.
+- **Icon + label only, no counts** (operator's call during review — the old numbers meant four different things; the panel subtitle reports the real ones): Clock3/Recent, LayoutGrid/Browse, Search, Tags/Untagged, ListMusic/Playlists, Ban/Blocked (matching the row action). `Tabs` loses its `counts` prop entirely.
+
+### 1b. Track-table alignment + icon-only row actions (added during review)
+
+- `.lib-colhead` and `.lib-row` are sibling grids sharing one template whose trailing track was `auto` — it resolves to 0 in the (empty-celled) header and ~150px in the rows, skewing every `fr` column between them. The trailing actions track becomes **fixed 150px** in both the desktop and ≤860px templates, so header labels sit exactly over their columns.
+- **Row actions go icon-only** (Queue → ListPlus, Retag/Tag → RotateCcw/Sparkles; Edit and Block already were) with `title` tooltips carrying the verbs.
+- The **"needs tags" pill becomes an icon chip** (Tags icon, same accent-soft treatment, tooltip + aria-label carry the words).
+- **Album folds into the title cell** as an italic third line (title / artist·year·duration / album); the standalone album column and its header cell are removed. Artwork grows 44 → 56px (48px ≤860px) to match the three-line cell.
 
 ### 2. Collapsed analysis section
 
@@ -32,7 +34,7 @@ In `LibraryTaggingPanel.tsx`, wrap the existing three-row analysis block (bpm/ke
 - **Collapsed by default.** The collapsed state renders one summary line in the same caption style as the "View log" toggle:
   `▸ Acoustic analysis — bpm/key 12% · sounds-like 1% · vocal off`
   - Each fragment mirrors the row's current status text logic, compressed: a percentage when the pass has coverage numbers, `off` when disabled, `engine off` when no analysis backend.
-  - Clicking toggles to the full block with a `▾` state; an inline "Hide" affordance is not needed — the same toggle line stays visible above the expanded block.
+  - Clicking toggles to the full block with a `▾` state; an inline "Hide" affordance is not needed — the same toggle line stays visible above the expanded block. The toggle carries `cursor-pointer` so it reads as clickable.
 - **Auto-expand while analysis work is in flight**: when the tagger's last/current run is an analyze/backfill (`lastRun?.mode === 'analyze'` and running), the section forces open so the progress meters and Pause stay visible. Manual collapse wins once the run finishes.
 - **Not persisted** — fresh page load starts collapsed, matching the log drawer's behaviour (`logOpen` component state).
 - The "Embeddings missing" re-embed warning stays OUTSIDE the collapse — it is an alert, not status, and must never be hidden.

@@ -27,6 +27,7 @@ import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search, RotateCcw, Sparkles, RefreshCw, ListPlus, ListMusic, X, Pencil, Ban,
+  Clock3, LayoutGrid, Tags,
 } from 'lucide-react';
 import { useAdminAuth, ADMIN_API_URL } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
@@ -1085,14 +1086,6 @@ export default function LibraryPanel() {
     setSort('artist'); setPage(0);
   };
 
-  const counts = {
-    browse: coverage?.tagged ?? libStats?.total ?? null,
-    untagged: remaining,
-    recent: recent?.length ?? null,
-    playlists: playlists?.length ?? null,
-    blocked: blockedEntries?.length ?? null,
-  };
-
   const tableRows: Track[] =
     tab === 'browse' ? (browse?.rows || []) :
     tab === 'search' ? (searchResults || []) :
@@ -1129,7 +1122,7 @@ export default function LibraryPanel() {
         budgetMode={budgetMode}
       />
 
-      <Tabs tab={tab} setTab={setTab} counts={counts} />
+      <Tabs tab={tab} setTab={setTab} />
 
       {/* contextual controls */}
       {tab === 'browse' && (
@@ -1344,28 +1337,29 @@ export default function LibraryPanel() {
 // ---------------------------------------------------------------------------
 // tabs
 // ---------------------------------------------------------------------------
-function Tabs({ tab, setTab, counts }: {
+// One-line masthead tabs: icon + label only. The old per-tab counts meant four
+// different things (page size / totals / to-dos) — the panel subtitle below
+// reports the real numbers for whichever view is open.
+function Tabs({ tab, setTab }: {
   tab: Tab;
   setTab: (t: Tab) => void;
-  counts: { browse: number | null; untagged: number | null; recent: number | null; playlists: number | null; blocked: number | null };
 }) {
-  const items: { id: Tab; name: string; hint: string; badge: number | null }[] = [
-    { id: 'recent', name: 'Recently added', hint: 'newest first', badge: counts.recent },
-    { id: 'browse', name: 'Browse', hint: 'tagged index', badge: counts.browse },
-    { id: 'search', name: 'Search', hint: 'navidrome', badge: null },
-    { id: 'untagged', name: 'Untagged', hint: 'needs tags', badge: counts.untagged },
-    { id: 'playlists', name: 'Playlists', hint: 'navidrome', badge: counts.playlists },
-    { id: 'blocked', name: 'Blocked', hint: 'never plays', badge: counts.blocked },
+  const items: { id: Tab; name: string; icon: ReactNode }[] = [
+    { id: 'recent', name: 'Recent', icon: <Clock3 size={13} /> },
+    { id: 'browse', name: 'Browse', icon: <LayoutGrid size={13} /> },
+    { id: 'search', name: 'Search', icon: <Search size={13} /> },
+    { id: 'untagged', name: 'Untagged', icon: <Tags size={13} /> },
+    { id: 'playlists', name: 'Playlists', icon: <ListMusic size={13} /> },
+    { id: 'blocked', name: 'Blocked', icon: <Ban size={13} /> },
   ];
   return (
     <div className="lib-tabs">
       {items.map(it => (
         <button key={it.id} type="button" className={cn('lib-tab', tab === it.id && 'on')} onClick={() => setTab(it.id)}>
           <span className="lib-tab-name">
+            {it.icon}
             {it.name}
-            {it.badge != null && <span className="lib-tab-badge">{it.badge.toLocaleString('en-GB')}</span>}
           </span>
-          <span className="lib-tab-hint">{it.hint}</span>
         </button>
       ))}
     </div>
@@ -1597,7 +1591,6 @@ function TrackTable(p: TrackTableProps) {
         <span />
         <span>title</span>
         <span className="h-tags">mood · energy</span>
-        <span className="h-album">album</span>
         <span />
       </div>
       {p.rows.map(t => {
@@ -1617,6 +1610,7 @@ function TrackTable(p: TrackTableProps) {
             <div className="min-w-0">
               <div className="lib-title">{t.title || '—'}</div>
               <div className="lib-artist">{t.artist || '—'}{t.year ? ` · ${t.year}` : ''}{dur ? ` · ${dur}` : ''}</div>
+              {t.album && <div className="lib-album">{t.album}</div>}
             </div>
             <div className="lib-tags">
               {tagged ? (
@@ -1626,7 +1620,9 @@ function TrackTable(p: TrackTableProps) {
                   {t.source === 'manual' && <span className="lib-mtag" title="hand-tagged by an operator">manual</span>}
                 </>
               ) : (
-                <span className="lib-needs">needs tags</span>
+                <span className="lib-needs" title="needs tags — tag it so the DJ can pick it" aria-label="needs tags">
+                  <Tags size={12} />
+                </span>
               )}
               {/* acoustic-analysis badges — independent of mood tagging, shown
                   whenever the analyze pass has filled them in */}
@@ -1638,10 +1634,11 @@ function TrackTable(p: TrackTableProps) {
                   shows where relevance falls off down the list */}
               {t.similarity != null && <span className="lib-mtag lib-atag" title="sound match vs your description">≈ {Math.round(t.similarity * 100)}%</span>}
             </div>
-            <span className="lib-album">{t.album || '—'}</span>
+            {/* icon-only action cluster — tooltips carry the verbs; the fixed
+                150px grid track keeps it aligned under the (empty) header cell */}
             <div className="flex items-center justify-end gap-1.5">
-              <Btn sm onClick={() => p.onQueue(t)} disabled={!!p.queuing}>
-                {p.queuing === t.id ? '…' : <><ListPlus size={12} /> Queue</>}
+              <Btn sm onClick={() => p.onQueue(t)} disabled={!!p.queuing} title="Queue on air">
+                {p.queuing === t.id ? '…' : <ListPlus size={12} />}
               </Btn>
               <Btn
                 sm
@@ -1659,10 +1656,11 @@ function TrackTable(p: TrackTableProps) {
                 tone={p.tab === 'untagged' || !tagged ? 'accent' : 'solid'}
                 onClick={() => p.onRetag(t)}
                 disabled={!!p.retagging}
+                title={tagged ? 'Retag with AI' : 'Tag with AI'}
               >
                 {p.retagging === t.id ? '…' : tagged
-                  ? <><RotateCcw size={11} /> Retag</>
-                  : <><Sparkles size={11} /> Tag</>}
+                  ? <RotateCcw size={11} />
+                  : <Sparkles size={11} />}
               </Btn>
               <BlockMenu
                 track={t}
