@@ -221,7 +221,25 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
             THE DJ&apos;S MIND
           </span>
           <span className="obs-vsep" />
-          <span className="obs-stat t-nums">{total} TRACKS</span>
+          {lib?.mock ? (
+            <span className="obs-stat t-nums">{total} TRACKS</span>
+          ) : (
+            <label className="obs-top-max">
+              <span className="obs-stat">MAP SIZE</span>
+              <select
+                className="obs-maxsel"
+                value={effectiveMax}
+                onChange={(e) => setMax(Number(e.target.value))}
+                aria-label="maximum nodes on the map"
+              >
+                {maxOptions.map((n) => (
+                  <option key={n} value={n}>
+                    {n.toLocaleString()} nodes
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           {lib?.mock && (
             <>
               <span className="obs-vsep" />
@@ -238,6 +256,10 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
               </span>
             </>
           )}
+          <span className="obs-vsep" />
+          <button className="obs-top-reset" onClick={onReset}>
+            RESET DIAL
+          </button>
         </div>
       </header>
 
@@ -327,39 +349,13 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
             </div>
           )}
 
-          {!lib?.mock && (
-            <div className="rail-sec">
-              <div className="rail-label">
-                MAP SIZE
-                {lib?.sampled && <span className="ad-muted"> · SAMPLED OF {lib.stats.total.toLocaleString()}</span>}
-              </div>
-              <div className="obs-maxrow">
-                <select
-                  className="obs-maxsel"
-                  value={effectiveMax}
-                  onChange={(e) => setMax(Number(e.target.value))}
-                  aria-label="maximum nodes on the map"
-                >
-                  {maxOptions.map((n) => (
-                    <option key={n} value={n}>
-                      {n.toLocaleString()} nodes
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="ad-muted t-caption">
-                GALAXY RENDERER · {lib?.soundMap ? 'PLACED BY SOUND' : 'PLACED BY GENRE'}
-              </div>
-            </div>
-          )}
-
           <div className="rail-foot">
             <div className="rail-count">
               <span className="t-nums acc">{matched.length}</span> <span className="ad-muted">/ {total} IN VIEW</span>
             </div>
-            <button className="rail-reset" onClick={onReset}>
-              RESET DIAL
-            </button>
+            <div className="ad-muted t-caption">
+              GALAXY RENDERER · {lib?.soundMap ? 'PLACED BY SOUND' : 'PLACED BY GENRE'}
+            </div>
           </div>
         </aside>
 
