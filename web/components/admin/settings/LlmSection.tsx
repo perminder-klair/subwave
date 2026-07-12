@@ -207,7 +207,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         reasoning: form.llm.reasoning,
         toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
-        noRepeatWindow: form.llm.noRepeatWindow,
+        noRepeatWindow: Math.max(0, parseInt(form.llm.noRepeatWindow, 10) || 0),
         requestWebResolve: form.llm.requestWebResolve,
         agentTimeoutMs: form.llm.agentTimeoutMs,
         pauseWhenEmpty: form.llm.pauseWhenEmpty,
@@ -997,7 +997,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             step={10}
             value={form.llm.noRepeatWindow}
             onChange={(e: ChangeEvent<HTMLInputElement>) =>
-              setForm(f => ({ ...f, llm: { ...f.llm, noRepeatWindow: Math.max(0, Number(e.target.value)) } }))
+              setForm(f => ({ ...f, llm: { ...f.llm, noRepeatWindow: e.target.value } }))
             }
             placeholder="100"
             className="max-w-[200px]"

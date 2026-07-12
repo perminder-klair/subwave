@@ -26,7 +26,8 @@
 import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Search, RotateCcw, Sparkles, RefreshCw, ListPlus, ListMusic, X, Pencil,
+  Search, RotateCcw, Sparkles, RefreshCw, ListPlus, ListMusic, X, Pencil, Ban,
+  Music, LayoutGrid, Tags,
 } from 'lucide-react';
 import { useAdminAuth, ADMIN_API_URL } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
@@ -83,6 +84,18 @@ interface BrowseResponse {
 
 interface UntaggedResponse { rows: Track[]; nextCursor: string | null }
 
+// Never-play blocklist entry (GET /library/blocklist) — name/artist/album are
+// display snapshots taken at block time, so no Navidrome re-lookup to render.
+type BlockType = 'track' | 'album' | 'artist';
+interface BlockEntry {
+  type: BlockType;
+  id: string;
+  name: string | null;
+  artist: string | null;
+  album: string | null;
+  addedAt: string;
+}
+
 // Coverage / TaggerState / LibraryStatsLite / Batch / RescanOpts live in
 // LibraryTaggingPanel.tsx alongside the panel that renders them.
 
@@ -96,7 +109,12 @@ interface SettingsResponse {
   budget?: { mode: BudgetMode };
 }
 
-type Tab = 'recent' | 'browse' | 'search' | 'untagged' | 'playlists';
+type Tab = 'tracks' | 'browse' | 'search' | 'playlists' | 'blocked';
+// The Tracks tab folds the old Recent + Untagged tabs into one view with an
+// All / Needs-tags toggle; TableVariant keeps TrackTable's per-view behaviour
+// (empty-state copy, accent Tag button) keyed on what's actually shown.
+type TrackMode = 'all' | 'needs';
+type TableVariant = 'recent' | 'browse' | 'search' | 'untagged';
 type Sort = 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
 type Energy = 'any' | 'low' | 'medium' | 'high';
 type Vocal = 'any' | 'instrumental' | 'vocal';
@@ -108,7 +126,7 @@ type SearchMode = 'library' | 'sound';
 const PAGE_SIZE = 50;
 const SEARCH_PAGE = 30;
 
-const TABS: Tab[] = ['recent', 'browse', 'search', 'untagged', 'playlists'];
+const TABS: Tab[] = ['tracks', 'browse', 'search', 'playlists', 'blocked'];
 const SORTS: Sort[] = ['artist', 'title', 'year', 'taggedAt', 'bpm', 'loudness', 'pace'];
 
 // ---------------------------------------------------------------------------
@@ -161,7 +179,8 @@ export default function LibraryPanel() {
   const ready = hydrated && !needsAuth;
 
   // shared state
-  const [tab, setTab] = useState<Tab>('recent');
+  const [tab, setTab] = useState<Tab>('tracks');
+  const [trackMode, setTrackMode] = useState<TrackMode>('all');
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [tagger, setTagger] = useState<TaggerState | null>(null);
   const [libStats, setLibStats] = useState<LibraryStatsLite | null>(null);
@@ -228,6 +247,13 @@ export default function LibraryPanel() {
   const [playlistsLoading, setPlaylistsLoading] = useState(false);
   const [plBusy, setPlBusy] = useState(false);
 
+  // never-play blocklist state — the entry list for the Blocked tab, plus
+  // which row's block action / which entry's unblock is in flight.
+  const [blockedEntries, setBlockedEntries] = useState<BlockEntry[] | null>(null);
+  const [blockedLoading, setBlockedLoading] = useState(false);
+  const [blocking, setBlocking] = useState<string | null>(null);
+  const [unblocking, setUnblocking] = useState<string | null>(null);
+
   // -----------------------------------------------------------------------
   // URL state — tab, browse filters, and the search query live in the query
   // string so a reload / back-button / shared link lands on the same view.
@@ -238,7 +264,11 @@ export default function LibraryPanel() {
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
     const t = sp.get('tab');
-    if (t && (TABS as string[]).includes(t)) setTab(t as Tab);
+    // Legacy links: the old Recent and Untagged tabs are now Tracks (+ mode).
+    if (t === 'untagged') { setTab('tracks'); setTrackMode('needs'); }
+    else if (t === 'recent') setTab('tracks');
+    else if (t && (TABS as string[]).includes(t)) setTab(t as Tab);
+    if (sp.get('view') === 'needs') { setTab('tracks'); setTrackMode('needs'); }
     const m = (sp.get('moods') || '').split(',').map(s => s.trim()).filter(Boolean);
     if (m.length) setMoods(m);
     const en = sp.get('energy');
@@ -264,7 +294,8 @@ export default function LibraryPanel() {
   useEffect(() => {
     if (!urlRestored) return;
     const sp = new URLSearchParams();
-    if (tab !== 'recent') sp.set('tab', tab);
+    if (tab !== 'tracks') sp.set('tab', tab);
+    if (tab === 'tracks' && trackMode === 'needs') sp.set('view', 'needs');
     if (moods.length) sp.set('moods', moods.join(','));
     if (energy !== 'any') sp.set('energy', energy);
     if (vocal !== 'any') sp.set('vocal', vocal);
@@ -277,7 +308,7 @@ export default function LibraryPanel() {
     if (searchMode === 'sound') sp.set('smode', 'sound');
     const qs = sp.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`);
-  }, [urlRestored, tab, moods, energy, vocal, genre, yearFrom, yearTo, q, sort, searchQuery, searchMode]);
+  }, [urlRestored, tab, trackMode, moods, energy, vocal, genre, yearFrom, yearTo, q, sort, searchQuery, searchMode]);
 
   // If coverage says the sound search can't serve (lean analyzer, no audio
   // index), drop back to the metadata mode the toggle would otherwise hide.
@@ -500,9 +531,9 @@ export default function LibraryPanel() {
   }, [adminFetch, ready]);
 
   useEffect(() => {
-    if (tab !== 'untagged' || !ready) return;
+    if (tab !== 'tracks' || trackMode !== 'needs' || !ready) return;
     if (untagged.length === 0) loadUntagged(null, false);
-  }, [tab, ready, untagged.length, loadUntagged]);
+  }, [tab, trackMode, ready, untagged.length, loadUntagged]);
 
   // -----------------------------------------------------------------------
   // recent fetch
@@ -524,9 +555,9 @@ export default function LibraryPanel() {
   }, [adminFetch, ready]);
 
   useEffect(() => {
-    if (tab !== 'recent' || !ready) return;
+    if (tab !== 'tracks' || trackMode !== 'all' || !ready) return;
     if (recent === null) loadRecent();
-  }, [tab, ready, recent, loadRecent]);
+  }, [tab, trackMode, ready, recent, loadRecent]);
 
   // -----------------------------------------------------------------------
   // playlists — list fetch, row selection, add-to-playlist
@@ -612,6 +643,66 @@ export default function LibraryPanel() {
   };
 
   // -----------------------------------------------------------------------
+  // never-play blocklist
+  // -----------------------------------------------------------------------
+  const loadBlocked = useCallback(async () => {
+    if (!ready) return;
+    setBlockedLoading(true);
+    try {
+      const r = await adminFetch('/library/blocklist');
+      if (!r.ok) throw new Error(`blocklist load failed (${r.status})`);
+      const j = await r.json() as { entries?: BlockEntry[] };
+      setBlockedEntries(j.entries || []);
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setBlockedLoading(false);
+    }
+  }, [adminFetch, ready]);
+
+  useEffect(() => {
+    if (tab === 'blocked' && ready) loadBlocked();
+  }, [tab, ready, loadBlocked]);
+
+  const blockTrack = async (track: Track, type: BlockType) => {
+    setBlocking(track.id);
+    try {
+      const r = await adminFetch('/library/blocklist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, trackId: track.id }),
+      });
+      const j = await r.json().catch(() => ({})) as { entry?: BlockEntry; purged?: number; error?: string };
+      if (!r.ok) throw new Error(j.error || `block failed (${r.status})`);
+      const what = type === 'track' ? `“${track.title}”` : type === 'album' ? `album “${track.album}”` : track.artist;
+      notify.ok(`${what} will never air${j.purged ? ` · ${j.purged} dropped from queue` : ''} — manage in the Blocked tab`);
+      setBlockedEntries(prev => (prev && j.entry ? [...prev, j.entry] : prev));
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setBlocking(null);
+    }
+  };
+
+  const unblockEntry = async (e: BlockEntry) => {
+    const key = `${e.type}:${e.id}`;
+    setUnblocking(key);
+    try {
+      const r = await adminFetch(`/library/blocklist/${e.type}/${encodeURIComponent(e.id)}`, { method: 'DELETE' });
+      if (!r.ok && r.status !== 404) {
+        const j = await r.json().catch(() => ({})) as { error?: string };
+        throw new Error(j.error || `unblock failed (${r.status})`);
+      }
+      notify.ok(`“${e.name || e.id}” can play again`);
+      setBlockedEntries(prev => (prev ? prev.filter(x => !(x.type === e.type && x.id === e.id)) : prev));
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setUnblocking(null);
+    }
+  };
+
+  // -----------------------------------------------------------------------
   // row actions
   // -----------------------------------------------------------------------
   const queueTrack = async (track: Track) => {
@@ -647,11 +738,11 @@ export default function LibraryPanel() {
       setFlashId(track.id);
       setTimeout(() => setFlashId(curr => (curr === track.id ? null : curr)), 1100);
       if (tab === 'browse') runBrowse();
-      if (tab === 'untagged') setUntagged(prev => prev.filter(t => t.id !== track.id));
+      if (tab === 'tracks' && trackMode === 'needs') setUntagged(prev => prev.filter(t => t.id !== track.id));
       // Search/recent rows aren't refetched — patch the row so the new tags
       // show immediately (the server stamps retagged rows source='llm').
       if (tab === 'search') setSearchResults(prev => patchRows(prev, track, j.moods || [], j.energy ?? null, false, false, 'llm'));
-      if (tab === 'recent') setRecent(prev => patchRows(prev, track, j.moods || [], j.energy ?? null, false, false, 'llm'));
+      if (tab === 'tracks' && trackMode === 'all') setRecent(prev => patchRows(prev, track, j.moods || [], j.energy ?? null, false, false, 'llm'));
       loadCoverage();
     } catch (err) {
       notify.err(errorMessage(err));
@@ -722,7 +813,7 @@ export default function LibraryPanel() {
       setFlashId(track.id);
       setTimeout(() => setFlashId(curr => (curr === track.id ? null : curr)), 1100);
       if (tab === 'browse') runBrowse();
-      else if (tab === 'untagged') {
+      else if (tab === 'tracks' && trackMode === 'needs') {
         // Newly-tagged tracks leave the untagged list; cleared ones stay put.
         if (!cleared) {
           setUntagged(prev => prev.filter(t =>
@@ -730,7 +821,7 @@ export default function LibraryPanel() {
         }
       } else if (tab === 'search') {
         setSearchResults(prev => patchRows(prev, track, moods, energy, cleared, applyToAlbum));
-      } else if (tab === 'recent') {
+      } else if (tab === 'tracks') {
         setRecent(prev => patchRows(prev, track, moods, energy, cleared, applyToAlbum));
       }
       loadCoverage();
@@ -982,7 +1073,7 @@ export default function LibraryPanel() {
       setUntagged([]);
       setUntaggedCursor(null);
       if (tab === 'browse') runBrowse();
-      else if (tab === 'recent') loadRecent();
+      else if (tab === 'tracks' && trackMode === 'all') loadRecent();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -1006,22 +1097,19 @@ export default function LibraryPanel() {
     setSort('artist'); setPage(0);
   };
 
-  const counts = {
-    browse: coverage?.tagged ?? libStats?.total ?? null,
-    untagged: remaining,
-    recent: recent?.length ?? null,
-    playlists: playlists?.length ?? null,
-  };
-
+  // What the merged Tracks tab actually shows right now — drives the table's
+  // rows, empty-state copy, and accent Tag button (TrackTable keys on this).
+  const tableVariant: TableVariant =
+    tab === 'tracks' ? (trackMode === 'needs' ? 'untagged' : 'recent') : (tab as TableVariant);
   const tableRows: Track[] =
-    tab === 'browse' ? (browse?.rows || []) :
-    tab === 'search' ? (searchResults || []) :
-    tab === 'untagged' ? untagged :
+    tableVariant === 'browse' ? (browse?.rows || []) :
+    tableVariant === 'search' ? (searchResults || []) :
+    tableVariant === 'untagged' ? untagged :
     (recent || []);
   const tableLoading =
-    tab === 'browse' ? browseLoading :
-    tab === 'search' ? searching :
-    tab === 'untagged' ? untaggedLoading :
+    tableVariant === 'browse' ? browseLoading :
+    tableVariant === 'search' ? searching :
+    tableVariant === 'untagged' ? untaggedLoading :
     recentLoading;
 
   return (
@@ -1049,7 +1137,7 @@ export default function LibraryPanel() {
         budgetMode={budgetMode}
       />
 
-      <Tabs tab={tab} setTab={setTab} counts={counts} />
+      <Tabs tab={tab} setTab={setTab} />
 
       {/* contextual controls */}
       {tab === 'browse' && (
@@ -1147,7 +1235,7 @@ export default function LibraryPanel() {
       )}
 
       {/* add-to-playlist bar — appears when rows are selected on a track tab */}
-      {tab !== 'playlists' && selected.size > 0 && (
+      {tab !== 'playlists' && tab !== 'blocked' && selected.size > 0 && (
         <AddToPlaylistBar
           count={selected.size}
           playlists={playlists}
@@ -1166,37 +1254,59 @@ export default function LibraryPanel() {
         />
       )}
 
+      {tab === 'blocked' && (
+        <BlockedTab
+          entries={blockedEntries}
+          loading={blockedLoading}
+          unblocking={unblocking}
+          onUnblock={unblockEntry}
+          onRefresh={loadBlocked}
+        />
+      )}
+
       {/* track list */}
-      {tab !== 'playlists' && (
+      {tab !== 'playlists' && tab !== 'blocked' && (
       <Card
         title={
-          tab === 'browse' ? 'Tracks' :
-          tab === 'search' ? 'Search results' :
-          tab === 'untagged' ? 'Untagged' :
+          tableVariant === 'browse' ? 'Tracks' :
+          tableVariant === 'search' ? 'Search results' :
+          tableVariant === 'untagged' ? 'Needs tags' :
           'Recently added'
         }
         sub={
-          tab === 'browse'
+          tableVariant === 'browse'
             ? (browse ? `${num(browse.total)} match${browse.total === 1 ? '' : 'es'}` : '')
-            : tab === 'search' ? (searchResults ? `${searchResults.length} result${searchResults.length === 1 ? '' : 's'}` : 'enter a query')
-            : tab === 'untagged' ? `${untagged.length} loaded${remaining != null ? ` · ${num(remaining)} need tags` : ''}`
+            : tableVariant === 'search' ? (searchResults ? `${searchResults.length} result${searchResults.length === 1 ? '' : 's'}` : 'enter a query')
+            : tableVariant === 'untagged' ? `${untagged.length} loaded${remaining != null ? ` · ${num(remaining)} need tags` : ''}`
             : (recent ? `${recent.length} tracks` : '')
         }
         right={
-          tab === 'untagged' && untagged.length > 0 ? (
-            <Btn sm tone="accent" onClick={() => startTagger()} disabled={tagger?.running || taggerBusy}>
-              <Sparkles size={11} /> Tag all
-            </Btn>
-          ) : tab === 'recent' ? (
-            <Btn sm onClick={loadRecent} disabled={recentLoading}>
-              <RefreshCw size={11} /> {recentLoading ? 'Loading…' : 'Refresh'}
-            </Btn>
+          tab === 'tracks' ? (
+            <span className="flex items-center gap-2.5">
+              <Seg
+                value={trackMode}
+                options={[
+                  { id: 'all', label: 'All' },
+                  { id: 'needs', label: `Needs tags${remaining != null ? ` · ${num(remaining)}` : ''}` },
+                ]}
+                onChange={(v: string) => setTrackMode(v as TrackMode)}
+              />
+              {trackMode === 'needs' && untagged.length > 0 ? (
+                <Btn sm tone="accent" onClick={() => startTagger()} disabled={tagger?.running || taggerBusy}>
+                  <Sparkles size={11} /> Tag all
+                </Btn>
+              ) : trackMode === 'all' ? (
+                <Btn sm onClick={loadRecent} disabled={recentLoading}>
+                  <RefreshCw size={11} /> {recentLoading ? 'Loading…' : 'Refresh'}
+                </Btn>
+              ) : null}
+            </span>
           ) : null
         }
         bodyClass="!p-0"
       >
         <TrackTable
-          tab={tab}
+          tab={tableVariant}
           rows={tableRows}
           loading={tableLoading}
           queuing={queuing}
@@ -1204,6 +1314,8 @@ export default function LibraryPanel() {
           flashId={flashId}
           onQueue={queueTrack}
           onRetag={retagTrack}
+          blocking={blocking}
+          onBlock={blockTrack}
           vocab={vocab}
           editingId={editingId}
           manualBusy={manualBusy}
@@ -1238,7 +1350,7 @@ export default function LibraryPanel() {
         </div>
       )}
 
-      {tab === 'untagged' && untaggedCursor && (
+      {tab === 'tracks' && trackMode === 'needs' && untaggedCursor && (
         <div className="flex justify-center">
           <Btn onClick={() => loadUntagged(untaggedCursor, true)} disabled={untaggedLoading}>
             {untaggedLoading ? 'Loading…' : 'Load more'}
@@ -1252,27 +1364,28 @@ export default function LibraryPanel() {
 // ---------------------------------------------------------------------------
 // tabs
 // ---------------------------------------------------------------------------
-function Tabs({ tab, setTab, counts }: {
+// Masthead tabs: icon left, name + subtitle stacked right. No count badges —
+// the panel subtitle below reports the real numbers for whichever view is open.
+function Tabs({ tab, setTab }: {
   tab: Tab;
   setTab: (t: Tab) => void;
-  counts: { browse: number | null; untagged: number | null; recent: number | null; playlists: number | null };
 }) {
-  const items: { id: Tab; name: string; hint: string; badge: number | null }[] = [
-    { id: 'recent', name: 'Recently added', hint: 'newest first', badge: counts.recent },
-    { id: 'browse', name: 'Browse', hint: 'tagged index', badge: counts.browse },
-    { id: 'search', name: 'Search', hint: 'navidrome', badge: null },
-    { id: 'untagged', name: 'Untagged', hint: 'needs tags', badge: counts.untagged },
-    { id: 'playlists', name: 'Playlists', hint: 'navidrome', badge: counts.playlists },
+  const items: { id: Tab; name: string; sub: string; icon: ReactNode }[] = [
+    { id: 'tracks', name: 'Tracks', sub: 'newest & needs tags', icon: <Music size={17} /> },
+    { id: 'browse', name: 'Browse', sub: 'tagged index', icon: <LayoutGrid size={17} /> },
+    { id: 'search', name: 'Search', sub: 'navidrome', icon: <Search size={17} /> },
+    { id: 'playlists', name: 'Playlists', sub: 'navidrome', icon: <ListMusic size={17} /> },
+    { id: 'blocked', name: 'Blocked', sub: 'never plays', icon: <Ban size={17} /> },
   ];
   return (
     <div className="lib-tabs">
       {items.map(it => (
         <button key={it.id} type="button" className={cn('lib-tab', tab === it.id && 'on')} onClick={() => setTab(it.id)}>
-          <span className="lib-tab-name">
-            {it.name}
-            {it.badge != null && <span className="lib-tab-badge">{it.badge.toLocaleString('en-GB')}</span>}
+          {it.icon}
+          <span className="min-w-0">
+            <span className="lib-tab-name">{it.name}</span>
+            <span className="lib-tab-sub">{it.sub}</span>
           </span>
-          <span className="lib-tab-hint">{it.hint}</span>
         </button>
       ))}
     </div>
@@ -1450,7 +1563,7 @@ function BrowseFilters(p: BrowseFiltersProps) {
 // track table
 // ---------------------------------------------------------------------------
 interface TrackTableProps {
-  tab: Tab;
+  tab: TableVariant;
   rows: Track[];
   loading: boolean;
   queuing: string | null;
@@ -1458,6 +1571,8 @@ interface TrackTableProps {
   flashId: string | null;
   onQueue: (t: Track) => void;
   onRetag: (t: Track) => void;
+  blocking: string | null;
+  onBlock: (t: Track, type: BlockType) => void;
   vocab: string[];
   editingId: string | null;
   manualBusy: string | null;
@@ -1502,7 +1617,6 @@ function TrackTable(p: TrackTableProps) {
         <span />
         <span>title</span>
         <span className="h-tags">mood · energy</span>
-        <span className="h-album">album</span>
         <span />
       </div>
       {p.rows.map(t => {
@@ -1522,6 +1636,7 @@ function TrackTable(p: TrackTableProps) {
             <div className="min-w-0">
               <div className="lib-title">{t.title || '—'}</div>
               <div className="lib-artist">{t.artist || '—'}{t.year ? ` · ${t.year}` : ''}{dur ? ` · ${dur}` : ''}</div>
+              {t.album && <div className="lib-album">{t.album}</div>}
             </div>
             <div className="lib-tags">
               {tagged ? (
@@ -1531,7 +1646,9 @@ function TrackTable(p: TrackTableProps) {
                   {t.source === 'manual' && <span className="lib-mtag" title="hand-tagged by an operator">manual</span>}
                 </>
               ) : (
-                <span className="lib-needs">needs tags</span>
+                <span className="lib-needs" title="needs tags — tag it so the DJ can pick it" aria-label="needs tags">
+                  <Tags size={12} />
+                </span>
               )}
               {/* acoustic-analysis badges — independent of mood tagging, shown
                   whenever the analyze pass has filled them in */}
@@ -1543,10 +1660,11 @@ function TrackTable(p: TrackTableProps) {
                   shows where relevance falls off down the list */}
               {t.similarity != null && <span className="lib-mtag lib-atag" title="sound match vs your description">≈ {Math.round(t.similarity * 100)}%</span>}
             </div>
-            <span className="lib-album">{t.album || '—'}</span>
+            {/* icon-only action cluster — tooltips carry the verbs; the fixed
+                150px grid track keeps it aligned under the (empty) header cell */}
             <div className="flex items-center justify-end gap-1.5">
-              <Btn sm onClick={() => p.onQueue(t)} disabled={!!p.queuing}>
-                {p.queuing === t.id ? '…' : <><ListPlus size={12} /> Queue</>}
+              <Btn sm onClick={() => p.onQueue(t)} disabled={!!p.queuing} title="Queue on air">
+                {p.queuing === t.id ? '…' : <ListPlus size={12} />}
               </Btn>
               <Btn
                 sm
@@ -1564,11 +1682,18 @@ function TrackTable(p: TrackTableProps) {
                 tone={p.tab === 'untagged' || !tagged ? 'accent' : 'solid'}
                 onClick={() => p.onRetag(t)}
                 disabled={!!p.retagging}
+                title={tagged ? 'Retag with AI' : 'Tag with AI'}
               >
                 {p.retagging === t.id ? '…' : tagged
-                  ? <><RotateCcw size={11} /> Retag</>
-                  : <><Sparkles size={11} /> Tag</>}
+                  ? <RotateCcw size={11} />
+                  : <Sparkles size={11} />}
               </Btn>
+              <BlockMenu
+                track={t}
+                busy={p.blocking === t.id}
+                disabled={!!p.blocking}
+                onBlock={p.onBlock}
+              />
             </div>
           </div>
           {editing && (
@@ -1584,6 +1709,110 @@ function TrackTable(p: TrackTableProps) {
         );
       })}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BlockMenu — the per-row "Never play" action. A Ban button opening a small
+// scope menu (track / album / artist); the server resolves album/artist ids
+// from the track id, so the row only needs t.id. No confirm dialog — blocking
+// is one-click reversible from the Blocked tab.
+// ---------------------------------------------------------------------------
+function BlockMenu({ track, busy, disabled, onBlock }: {
+  track: Track;
+  busy: boolean;
+  disabled: boolean;
+  onBlock: (t: Track, type: BlockType) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const pick = (type: BlockType) => { setOpen(false); onBlock(track, type); };
+  return (
+    <div className="relative">
+      <Btn sm onClick={() => setOpen(o => !o)} disabled={disabled} title="Never play this on air">
+        {busy ? '…' : <Ban size={12} />}
+      </Btn>
+      {open && (
+        <>
+          {/* click-away backdrop */}
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
+          <div className="absolute top-full right-0 z-50 mt-1 min-w-[200px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('track')}>
+              Never play this track
+            </button>
+            {track.album && (
+              <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('album')}>
+                Never play this album
+              </button>
+            )}
+            {track.artist && (
+              <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('artist')}>
+                Never play this artist
+                <span className="block text-[10px] text-muted">primary credit only — collabs filed under other artists still play</span>
+              </button>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BlockedTab — the never-play blocklist manager. Lists entries newest-first
+// with a type badge and one-click unblock. The list governs AIRING only:
+// blocked tracks still appear in browse/search (the library browser shows the
+// library), they just never make it to the queue.
+// ---------------------------------------------------------------------------
+function BlockedTab({ entries, loading, unblocking, onUnblock, onRefresh }: {
+  entries: BlockEntry[] | null;
+  loading: boolean;
+  unblocking: string | null;
+  onUnblock: (e: BlockEntry) => void;
+  onRefresh: () => void;
+}) {
+  const rows = (entries || []).slice().sort((a, b) => (b.addedAt || '').localeCompare(a.addedAt || ''));
+  return (
+    <Card
+      title="Never play"
+      sub={entries ? `${rows.length} entr${rows.length === 1 ? 'y' : 'ies'} — these are refused everywhere: DJ picks, requests, even manual queueing` : ''}
+      right={
+        <Btn sm onClick={onRefresh} disabled={loading}>
+          <RefreshCw size={11} /> {loading ? 'Loading…' : 'Refresh'}
+        </Btn>
+      }
+      bodyClass="!p-0"
+    >
+      {rows.length === 0 ? (
+        <div className="px-4 py-10 text-center text-[12px] text-muted italic">
+          {loading ? 'loading…' : (
+            <>nothing blocked — use the <Ban size={11} className="inline align-[-1px]" /> action on any track row to keep a track, album or artist off the air</>
+          )}
+        </div>
+      ) : (
+        <div className={cn(loading && 'opacity-60 transition-opacity')}>
+          {rows.map(e => {
+            const key = `${e.type}:${e.id}`;
+            return (
+              <div key={key} className="flex items-center gap-3 border-b border-dashed border-[var(--separator-strong)] px-4 py-2.5 last:border-b-0">
+                <span className="lib-mtag shrink-0" title={`blocked ${e.type}`}>{e.type}</span>
+                <div className="min-w-0 flex-1">
+                  <div className="lib-title">{e.name || e.id}</div>
+                  {(e.artist || e.album) && e.type !== 'artist' && (
+                    <div className="lib-artist">{e.artist || ''}{e.album && e.type === 'track' ? ` · ${e.album}` : ''}</div>
+                  )}
+                </div>
+                <span className="hidden text-[11px] text-muted sm:block" title="blocked on">
+                  {e.addedAt ? new Date(e.addedAt).toLocaleDateString('en-GB') : ''}
+                </span>
+                <Btn sm onClick={() => onUnblock(e)} disabled={!!unblocking}>
+                  {unblocking === key ? '…' : <><X size={12} /> Unblock</>}
+                </Btn>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
   );
 }
 

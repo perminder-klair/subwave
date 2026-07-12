@@ -125,6 +125,24 @@ function parseContextFields(raw: string | undefined): string[] | undefined {
   return list.length ? list : undefined;
 }
 
+// Freeform organisation tags (`tags: late-night, factual`) — operator vocabulary
+// for filtering the admin skill list. Lowercase slugs, deduped, capped; invalid
+// entries are dropped (lenient, like every other frontmatter field). Exported so
+// the admin routes normalise form input with the exact rules the loader applies.
+export const TAG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
+export const TAGS_PER_SKILL_LIMIT = 8;
+export function parseTags(raw: unknown): string[] {
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+  const out: string[] = [];
+  for (const item of list) {
+    const tag = String(item ?? '').trim().toLowerCase();
+    if (!TAG_RE.test(tag) || out.includes(tag)) continue;
+    out.push(tag);
+    if (out.length >= TAGS_PER_SKILL_LIMIT) break;
+  }
+  return out;
+}
+
 // A shipped built-in template, read on demand by the seeder / reset route /
 // admin "defaults" payload. The template FILES are never kept resident.
 export interface SkillTemplate {
@@ -321,6 +339,8 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     requiresKey,
     // Absent → effectiveContextFields() falls back to the default profile (#471).
     contextFields: parseContextFields(data.context ?? data.contextFields),
+    // Freeform organisation tags for the admin skill list.
+    tags: parseTags(data.tags),
     // The skill's own frontmatter, handed to the tool as its 4th arg so a skill
     // can read its own knobs (e.g. news' feed / feedMaxItems).
     config: data,

@@ -385,6 +385,31 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // for an old controller with no enum → the capability branches simply don't fire.
   const audioStatus = p.coverage?.audioStatus;
   const vocalStatus = p.coverage?.vocalStatus;
+
+  // Acoustic-analysis section disclosure — collapsed by default; forced open
+  // while an analyze/backfill run is in flight (progress + Pause must stay
+  // visible), reverting to the manual choice when the run finishes.
+  const [analysisOpen, setAnalysisOpen] = useState(false);
+  const analysisRunning = !!p.tagger?.running && p.tagger?.mode === 'analyze';
+  const showAnalysis = analysisOpen || analysisRunning;
+  // One-line status so coverage stays glanceable while collapsed. Each fragment
+  // compresses its row's status logic: a percentage when the pass has numbers,
+  // waiting/on/off otherwise; a dead engine collapses the whole line.
+  const analysisSummary = analysisOff
+    ? 'engine off'
+    : [
+        `bpm/key ${apct != null ? `${apct}%` : '…'}`,
+        audioOn && audpct != null
+          ? `sounds-like ${audpct}%`
+          : p.audioEnabled
+            ? (audioStatus === 'pending-heavy' ? 'sounds-like waiting' : 'sounds-like on')
+            : 'sounds-like off',
+        vocalOptedIn
+          ? (vocalOn && vpct != null
+              ? `vocal ${vpct}%`
+              : vocalStatus === 'pending-heavy' ? 'vocal waiting' : 'vocal on')
+          : 'vocal off',
+      ].join(' · ');
   // The library was embedded with a different model than the one now configured,
   // so a tag run would fail on a dim/model mismatch — surface a blocking, one-click
   // re-embed prompt instead of letting the operator hit a cryptic tagger error.
@@ -612,12 +637,32 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         </div>
       </div>
 
-      {/* acoustic & audio coverage — status meter on each row, plus the controls
-          that change it: bpm/key is always-on (engine permitting); sounds-like
-          (CLAP) and vocal (Demucs) are opt-in, so they carry Enable/Disable + a
-          contextual Backfill (shown only while enabled, capable, < 100%, and the
-          library has SOME work done — on a virgin library the primary
-          Start-tagging run is the one entry point). */}
+      {/* acoustic & audio coverage — collapsed by default behind a one-line
+          summary (the three meters + Backfill/Pause rows + explainers dominate
+          the panel while most visits never touch them). Auto-expands while an
+          analyze/backfill run is in flight so progress and Pause stay visible;
+          manual state wins again once the run finishes. Not persisted — a
+          fresh load starts collapsed, same as the log drawer. */}
+      <div className="border-b border-ink px-6 py-3.5">
+        <button
+          type="button"
+          className={cn(
+            'inline-flex cursor-pointer flex-wrap items-center gap-1.5 text-[11px] font-bold',
+            showAnalysis ? 'text-ink' : 'text-muted hover:text-ink',
+          )}
+          aria-expanded={showAnalysis}
+          onClick={() => setAnalysisOpen(!showAnalysis)}
+          disabled={analysisRunning}
+          title={analysisRunning ? 'Analysis is running — shown until it finishes' : undefined}
+        >
+          <Activity size={13} /> Acoustic analysis
+          <span className="caption mono-num font-normal !tracking-[0.04em] text-muted !normal-case">
+            — {analysisSummary}
+          </span>
+          <span aria-hidden>{showAnalysis ? '▾' : '▸'}</span>
+        </button>
+      </div>
+      {showAnalysis && (
       <div className="flex flex-col gap-3 border-b border-ink px-6 py-4">
         <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2">
           <span className="caption flex items-center gap-2">
@@ -831,6 +876,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
           </div>
         ) : null}
       </div>
+      )}
 
       {/* last-run failure banner — idle only; matches the embeddingStale banner's
           danger styling. 'stopped' runs (Stop / restart-kill) show nothing. */}

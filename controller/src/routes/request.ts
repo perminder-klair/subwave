@@ -278,6 +278,13 @@ async function resolveRequest(entry) {
       introKind: 'dj-speak',
     });
     entry.pick = pick;
+    if (pos === -2) {
+      // Never-play blocklist refused the pick (library-db-sourced candidates
+      // can slip past the subsonic filter). Decline with the standard
+      // not-found copy — no leak that the track exists but is blocked.
+      entry.pickSource = `${entry.pickSource}:blocked`;
+      return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
+    }
     if (pos === -1) {
       // A concurrent request already queued this exact track — acknowledge
       // honestly instead of airing a second intro over a phantom replay (#619).
@@ -557,6 +564,12 @@ async function resolveRequest(entry) {
     introKind: 'dj-speak',
   });
   entry.pick = pick;
+  if (pos === -2) {
+    // Never-play blocklist refused the pick — decline with the standard
+    // not-found copy so the block doesn't leak to the listener.
+    entry.pickSource = `${pickSource}:blocked`;
+    return failed(`Sorry ${requester}, nothing in the crates matched that.`);
+  }
   if (pos === -1) {
     const dupAck = queue.dedupAck(pick.id);
     entry.pickSource = `${pickSource}:already-queued`;

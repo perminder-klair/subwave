@@ -25,6 +25,8 @@ import { Card, Btn, Pill, Seg, Toggle } from './ui';
 import {
   Queue,
   QueueItem,
+  QueueItemAction,
+  QueueItemActions,
   QueueItemContent,
   QueueItemDescription,
   QueueItemIndicator,
@@ -52,7 +54,7 @@ import {
 import { Message, MessageContent } from '../ai-elements/message';
 import type { ChatStatus } from 'ai';
 import { ScrollArea, ScrollBar } from '../ui/scroll-area';
-import { AudioLines, Clock3, MessagesSquare, RadioTower, type LucideIcon } from 'lucide-react';
+import { AudioLines, Clock3, MessagesSquare, RadioTower, X, type LucideIcon } from 'lucide-react';
 import StationHeader, { type HealthMetrics } from './StationHeader';
 import { cn } from '../../lib/cn';
 
@@ -440,6 +442,36 @@ export default function DashPanel() {
   // button opens a confirm dialog; this runs only after the operator accepts.
   const doSkip = () => act('skip', '/dj/skip', {}, 'skip track');
 
+  // Cancel a queued track before it airs. One click, no confirm — unlike
+  // skip, nothing on-air changes; worst case is a 409 because the track went
+  // on air first. Optimistically drop the row; the 3s poll confirms.
+  const cancelQueued = async (t: QueueEntry) => {
+    const id = typeof t.subsonic_id === 'string' ? t.subsonic_id : '';
+    if (!id) return;
+    setBusy(`cancel:${id}`);
+    try {
+      const r = await adminFetch(`/dj/queue/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const j = (await r.json().catch(() => ({}))) as ActResponse;
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      notify.ok(`removed from queue: ${t.title || 'track'}`);
+      setStatus(s =>
+        s
+          ? {
+              ...s,
+              queue: {
+                ...(s.queue || {}),
+                upcoming: (s.queue?.upcoming || []).filter(u => u.subsonic_id !== id),
+              },
+            }
+          : s,
+      );
+    } catch (e) {
+      notify.err(`cancel: ${errorMessage(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const np = status?.nowPlaying;
   const ctx = status?.context;
   // Station zone — on-air timestamps render in it so they match what the DJ
@@ -545,6 +577,21 @@ export default function DashPanel() {
                             ? t.duration
                             : ''}
                         </span>
+                        {/* Per-track cancel from develop (#1006), grafted into
+                            the Queue composition's actions slot. */}
+                        {typeof t.subsonic_id === 'string' && t.subsonic_id ? (
+                          <QueueItemActions className="opacity-100">
+                            <QueueItemAction
+                              onClick={() => cancelQueued(t)}
+                              disabled={busy === `cancel:${t.subsonic_id}`}
+                              title="Remove from queue"
+                              aria-label={`Remove ${t.title || 'track'} from queue`}
+                              className="size-5 rounded-none text-muted hover:bg-vermilion/10 hover:text-vermilion"
+                            >
+                              <X className="h-3 w-3" />
+                            </QueueItemAction>
+                          </QueueItemActions>
+                        ) : null}
                       </div>
                       {t.requestedBy ? (
                         <QueueItemDescription className="ml-10 text-[9px] font-bold tracking-[0.2em] text-vermilion uppercase">

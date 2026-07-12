@@ -5,6 +5,7 @@
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import * as library from '../music/library.js';
+import * as blocklist from '../music/blocklist.js';
 import * as db from '../music/library-db.js';
 import * as analyzer from '../music/analyzer.js';
 import * as coverage from '../music/library-coverage.js';
@@ -18,6 +19,7 @@ import { promptVocabHash } from '../music/embeddings.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
 import { tagger, taggerView, startAnalyzer, startReconcile } from '../broadcast/tagger.js';
+import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import * as mapProjection from '../music/map-projection.js';
 
 export const router = express.Router();
@@ -767,6 +769,86 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
     });
   } catch (err) {
     queue.log('error', `/library/manual-tag failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Never-play blocklist — station-level "never let this air" entries at
+// track/album/artist granularity. Backs the Block row action + Blocked tab in
+// /admin/library. Enforcement lives in music/blocklist.ts (subsonic chokepoint,
+// library-db sources, queue.push gate); these routes only manage the list.
+// ---------------------------------------------------------------------------
+
+router.get('/library/blocklist', requireAdmin, (_req, res) => {
+  res.json({ entries: blocklist.list() });
+});
+
+// Body: { type: 'track'|'album'|'artist', trackId } — the UI flow: block from a
+// track row, server resolves the album/artist ids + display snapshots. OR a
+// pre-resolved { type, id, name?, artist?, album? } for direct entries.
+router.post('/library/blocklist', requireAdmin, async (req, res) => {
+  const type = req.body?.type;
+  if (!['track', 'album', 'artist'].includes(type)) {
+    return res.status(400).json({ error: "type must be 'track', 'album' or 'artist'" });
+  }
+  try {
+    let input: { type: blocklist.BlockType; id: string; name?: string | null; artist?: string | null; album?: string | null };
+    const trackId = req.body?.trackId;
+    if (trackId && typeof trackId === 'string') {
+      // Resolve from a track row — Subsonic first (carries albumId/artistId),
+      // library-db fallback so track-blocking works even if Navidrome misses.
+      let song: any = null;
+      try { song = await subsonic.getSong(trackId); } catch {}
+      if (!song) {
+        const row = db.getTrack(trackId);
+        if (row && type === 'track') song = { id: row.id, title: row.title, artist: row.artist, album: row.album };
+      }
+      if (!song) return res.status(404).json({ error: 'track not found' });
+      if (type === 'track') {
+        input = { type, id: song.id, name: song.title ?? null, artist: song.artist ?? null, album: song.album ?? null };
+      } else if (type === 'album') {
+        if (!song.albumId) return res.status(404).json({ error: 'album not resolvable for this track' });
+        input = { type, id: song.albumId, name: song.album ?? null, artist: song.artist ?? null };
+      } else {
+        if (!song.artistId) return res.status(404).json({ error: 'artist not resolvable for this track' });
+        input = { type, id: song.artistId, name: song.artist ?? null };
+      }
+    } else {
+      const id = req.body?.id;
+      if (!id || typeof id !== 'string') return res.status(400).json({ error: 'trackId or id is required' });
+      input = { type, id, name: req.body?.name ?? null, artist: req.body?.artist ?? null, album: req.body?.album ?? null };
+    }
+
+    const entry = await blocklist.add(input);
+    if (!entry) return res.status(409).json({ error: 'already blocked' });
+
+    queue.log('blocked', `${entry.type} "${entry.name ?? entry.id}"${entry.artist && entry.type !== 'artist' ? ` — ${entry.artist}` : ''} added to the never-play blocklist`);
+    // Side-effects: drop now-blocked tracks from the upcoming queue, and
+    // rebuild auto.m3u so the LLM-free fallback stops carrying them (otherwise
+    // a blocked track could still air from it for up to autoQueueRefreshMinutes).
+    const purged = queue.purgeBlocked();
+    refreshAutoPlaylist().catch((err: any) => queue.log('error', `blocklist auto-playlist refresh failed: ${err.message}`));
+
+    res.status(201).json({ entry, purged });
+  } catch (err) {
+    queue.log('error', `/library/blocklist failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/library/blocklist/:type/:id', requireAdmin, async (req, res) => {
+  const { type, id } = req.params;
+  if (!['track', 'album', 'artist'].includes(type)) {
+    return res.status(400).json({ error: "type must be 'track', 'album' or 'artist'" });
+  }
+  try {
+    const removed = await blocklist.remove(type as blocklist.BlockType, id);
+    if (!removed) return res.status(404).json({ error: 'not on the blocklist' });
+    queue.log('blocked', `${type} ${id} removed from the never-play blocklist`);
+    res.status(204).end();
+  } catch (err) {
+    queue.log('error', `/library/blocklist delete failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
