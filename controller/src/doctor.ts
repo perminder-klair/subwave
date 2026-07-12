@@ -472,6 +472,27 @@ async function checkNavidrome(): Promise<Finding[]> {
   return out;
 }
 
+// Cached live-config Navidrome connectivity for the always-on admin banner.
+// The banner polls this from every admin page every ~30s; a short cache keeps
+// that from becoming a steady drip of Subsonic `ping` calls (and shields a
+// flapping Navidrome). Shares subsonic.ping() — the same never-throwing check
+// checkNavidrome() uses — so the banner and the Doctor's connectivity finding
+// can never disagree.
+let navidromeCache: { at: number; result: { ok: boolean; reason?: string } } | null = null;
+const NAVIDROME_TTL_MS = 20_000;
+
+export async function navidromeConnectivity(): Promise<{
+  ok: boolean;
+  reason?: string;
+  url: string;
+}> {
+  const now = Date.now();
+  if (!navidromeCache || now - navidromeCache.at > NAVIDROME_TTL_MS) {
+    navidromeCache = { at: now, result: await subsonic.ping() };
+  }
+  return { ...navidromeCache.result, url: config.navidrome.url };
+}
+
 async function checkBroadcast(): Promise<Finding[]> {
   const out: Finding[] = [];
 

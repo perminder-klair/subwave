@@ -137,6 +137,33 @@ export function gainForLoudness(
   return Math.round(gain * 10) / 10;
 }
 
+// ReplayGain 2.0 reference level (EBU R128). A tag's trackGain is the dB
+// offset that brings the track TO this reference, so the track's own
+// integrated loudness is reference − trackGain.
+export const REPLAYGAIN_REFERENCE_LUFS = -18;
+
+// OpenSubsonic `replayGain` field (Navidrome exposes it on every song Child
+// when the file carries RG tags) → the same {lufs, peakDb} shape the analyzer
+// measures, so gainForLoudness treats both sources identically. Preferred over
+// the analyzer's own measurement when present (issue #998): the tag is a
+// whole-file, stereo R128 scan, while the measured value covers only the
+// leading analysis window. trackPeak is linear (1.0 = FS) → dBFS. Returns null
+// when there's no usable trackGain — untagged files serialise as `{}` or omit
+// the field entirely.
+export function loudnessFromReplayGain(
+  rg: unknown,
+): { lufs: number; peakDb: number | null } | null {
+  if (!rg || typeof rg !== 'object') return null;
+  const gain = (rg as { trackGain?: unknown }).trackGain;
+  if (typeof gain !== 'number' || !Number.isFinite(gain)) return null;
+  const peak = (rg as { trackPeak?: unknown }).trackPeak;
+  const peakDb =
+    typeof peak === 'number' && Number.isFinite(peak) && peak > 0
+      ? Math.round(20 * Math.log10(peak) * 100) / 100
+      : null;
+  return { lufs: Math.round((REPLAYGAIN_REFERENCE_LUFS - gain) * 100) / 100, peakDb };
+}
+
 // True when a track carries at least one measured value. An un-analysed track
 // (both null) makes every consumer below a no-op, so an un-analysed library
 // behaves exactly as before.

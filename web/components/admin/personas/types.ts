@@ -61,6 +61,8 @@ export interface SkillCatalogEntry {
   name: string;
   label?: string;
   description?: string;
+  // Freeform organisation tags from the skill's SKILL.md frontmatter.
+  tags?: string[];
 }
 
 export interface VoiceOption {

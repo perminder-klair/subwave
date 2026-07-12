@@ -6,6 +6,7 @@
 // useStationFeed (the same model the web uses). Lock-screen metadata is pushed
 // from /now-playing polls via updateNowPlayingMetadata (see useNowPlayingInfo).
 
+import { Platform } from 'react-native';
 import TrackPlayer, {
   AppKilledPlaybackBehavior,
   Capability,
@@ -26,12 +27,21 @@ export function setupPlayer(): Promise<void> {
       // but missing from the lib's PlayerOptions type — extend it locally.
       const options: PlayerOptions & { iosCategoryPolicy?: 'longFormAudio' } = {
         autoHandleInterruptions: true,
-        // Do NOT set minBuffer here. Any non-zero preferredForwardBufferDuration
-        // on this infinite live stream silences AVPlayer entirely — its
-        // "safe to play" heuristic never satisfies on a duration-∞ item no
-        // matter how much data is buffered (4s behaved identically to 12s,
-        // with the station's ~11s Icecast burst fully available). Verified on
-        // device via the route-change/event trail, 2026-07-09.
+        // Deep buffering is ANDROID-ONLY. On iOS, minBuffer maps to
+        // preferredForwardBufferDuration, and any non-zero value on this
+        // infinite live stream silences AVPlayer entirely — its "safe to
+        // play" heuristic never satisfies on a duration-∞ item no matter how
+        // much data is buffered (4s behaved identically to 12s, with the
+        // station's Icecast burst fully available). Verified on device via
+        // the route-change/event trail, 2026-07-09. Never set these
+        // unconditionally.
+        // On Android these map to ExoPlayer's LoadControl: the player eagerly
+        // holds up to maxBuffer seconds (the Icecast connect burst fills most
+        // of it instantly), so a cellular dead zone drains the buffer instead
+        // of stalling (#993). playBuffer stays small so tune-in is instant.
+        ...(Platform.OS === 'android'
+          ? { minBuffer: 60, maxBuffer: 120, playBuffer: 2, backBuffer: 0 }
+          : {}),
         // The long-form-audio route-sharing policy (what Apple Music/Podcasts
         // use): iOS remembers the listener's chosen AirPlay device for this
         // app and keeps routing to it through audio-session churn. Without

@@ -5,6 +5,7 @@
 import express from 'express';
 import { config } from './config.js';
 import * as settings from './settings.js';
+import * as blocklist from './music/blocklist.js';
 import * as jingles from './broadcast/jingles.js';
 import * as sfx from './broadcast/sfx.js';
 import { queue } from './broadcast/queue.js';
@@ -173,6 +174,11 @@ app.listen(config.server.port, async () => {
   } catch (err) {
     console.error('[settings] load failed:', err.message);
   }
+
+  // Never-play blocklist — must be in memory before the scheduler's first
+  // auto-playlist build and the first queue push. load() itself never throws
+  // (a corrupt file starts empty), so no try/catch needed.
+  await blocklist.load();
 
   // Start the remote-TTS /health probe loop now that settings are loaded — its
   // URL lives in settings (not env), so it can't self-start at import time the

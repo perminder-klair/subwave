@@ -77,7 +77,7 @@ export function JinglesSection({
         sub="A default station ident is generated on first boot; you can add your own here. The built-in ident can’t be deleted."
         metrics={[
           { n: String(jingles.length), l: 'files' },
-          { n: String(data.values?.jingleRatio), l: 'ratio', accent: true },
+          { n: data.values?.jingleRatio === 0 ? 'off' : String(data.values?.jingleRatio), l: 'ratio', accent: true },
         ]}
       />
 
@@ -91,7 +91,7 @@ export function JinglesSection({
             <Input
               className="mono-num w-24"
               type="number"
-              min={1}
+              min={0}
               max={1000}
               value={form.jingleRatio}
               onChange={(e: ChangeEvent<HTMLInputElement>) =>
@@ -108,7 +108,9 @@ export function JinglesSection({
             </Btn>
           </div>
           <div className="field-hint">
-            1 jingle every N music tracks (current: {data.values?.jingleRatio}). Restart the mixer from the danger zone to apply.
+            1 jingle every N music tracks; 0 turns jingles off entirely
+            (current: {data.values?.jingleRatio === 0 ? 'off' : data.values?.jingleRatio}).
+            Restart the mixer from the danger zone to apply.
           </div>
         </div>
       </Card>

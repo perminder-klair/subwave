@@ -285,6 +285,11 @@ function briefLlmError(err: unknown): string {
 // admin UI tests the key before saving, so the saved setting can't be trusted
 // mid-edit. The UI passes the provider it's editing; absent a hint we fall
 // back to the saved provider, then Tavily (the original sole owner of the key).
+//
+// Probe budget: OpenAI's Responses API (the default path for
+// createOpenAI()(model)) rejects max_output_tokens below 16 — a smaller test
+// budget fails key validation with "integer below minimum value" and blocks
+// saving the key entirely. 32 clears the floor on every provider.
 async function probeKey(
   key: (typeof SECRET_ENV_KEYS)[number],
   value: string,
@@ -299,7 +304,7 @@ async function probeKey(
       try {
         const model = activeModel('anthropic') || 'claude-haiku-4-5-20251001';
         const m = createAnthropic({ apiKey: value })(model);
-        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 32, abortSignal: AbortSignal.timeout(15000) });
         return { ok: true, message: `✓ Anthropic key valid · model responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
@@ -307,7 +312,7 @@ async function probeKey(
       try {
         const model = activeModel('openai') || 'gpt-4o-mini';
         const m = createOpenAI({ apiKey: value })(model);
-        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 32, abortSignal: AbortSignal.timeout(15000) });
         return { ok: true, message: `✓ OpenAI key valid · model responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
@@ -315,7 +320,7 @@ async function probeKey(
       try {
         const model = activeModel('google') || 'gemini-1.5-flash';
         const m = createGoogleGenerativeAI({ apiKey: value })(model);
-        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 32, abortSignal: AbortSignal.timeout(15000) });
         return { ok: true, message: `✓ Google key valid · model responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
@@ -323,7 +328,7 @@ async function probeKey(
       try {
         const model = activeModel('deepseek') || 'deepseek-chat';
         const m = createDeepSeek({ apiKey: value })(model);
-        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 32, abortSignal: AbortSignal.timeout(15000) });
         return { ok: true, message: `✓ DeepSeek key valid · model responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
@@ -331,7 +336,7 @@ async function probeKey(
       try {
         const model = activeModel('openrouter') || 'openai/gpt-4o-mini';
         const m = createOpenRouter({ apiKey: value })(model);
-        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 8, abortSignal: AbortSignal.timeout(15000) });
+        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 32, abortSignal: AbortSignal.timeout(15000) });
         return { ok: true, message: `✓ OpenRouter key valid · model responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
@@ -565,7 +570,7 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
     await generateText({
       model: m,
       prompt: 'Reply with the single word OK.',
-      maxOutputTokens: 8,
+      maxOutputTokens: 32,
       abortSignal: AbortSignal.timeout(15000),
     });
     res.json({ ok: true, message: '✓ Bearer token accepted · model responded', latencyMs: Date.now() - t0 });

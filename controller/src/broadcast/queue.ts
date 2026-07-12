@@ -10,6 +10,7 @@ import { writeFileAtomic } from '../util/atomic-file.js';
 import * as subsonic from '../music/subsonic.js';
 import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
+import * as blocklist from '../music/blocklist.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
@@ -49,6 +50,11 @@ interface Track {
   musicalKey?: string | null;
   loudnessLufs?: number | null;
   peakDb?: number | null;
+  // OpenSubsonic ReplayGain block riding the raw Navidrome song object —
+  // subsonic.ts returns API children unmodified, so tagged files carry it
+  // into the queue for free. applyLoudnessGain prefers it over the measured
+  // LUFS when settings.loudness.source allows (issue #998).
+  replayGain?: { trackGain?: number | null; trackPeak?: number | null } | null;
   introMs?: number | null;
   keyRanges?: TrackKeyRange[] | null;
   outro?: TrackOutro | null;
@@ -506,6 +512,15 @@ class Queue {
     // honestly ("already on the way") instead of queuing a second back-to-back
     // play. `allowDuplicate` opts an explicit operator action (the studio
     // queue-track route) out — a deliberate manual queue always fires.
+    // Global never-play gate — the blocklist is absolute (operator's call:
+    // even explicit manual queueing is refused until the entry is unblocked),
+    // so it sits above allowDuplicate. Every playback path funnels through
+    // push() (dj-agent, requests, MCP, studio queue), making this the last
+    // line even for sources that bypass the subsonic/library filters.
+    if (blocklist.isBlocked(track)) {
+      this.log('blocked', `${track?.title} — ${track?.artist} (on the never-play blocklist, refused)`);
+      return -2;
+    }
     if (!allowDuplicate && track?.id) {
       const dominated = this.upcoming.some(i => i.track?.id === track.id)
         || (this.current?.track?.id === track.id);
@@ -534,6 +549,21 @@ class Queue {
     return this.upcoming.length;
   }
 
+  // Drop now-blocked tracks from the upcoming queue — called when a blocklist
+  // entry is added. Only undrained items (`!sent`) are removable; anything
+  // already handed to Liquidsoap plays out (we never interrupt), and the
+  // currently playing track is likewise left alone. Returns how many dropped.
+  purgeBlocked(): number {
+    const keep = this.upcoming.filter(i => i.sent || !blocklist.isBlocked(i.track));
+    const dropped = this.upcoming.length - keep.length;
+    if (dropped > 0) {
+      this.upcoming = keep;
+      this.log('blocked', `purged ${dropped} upcoming track${dropped === 1 ? '' : 's'} now on the never-play blocklist`);
+      this.persist();
+    }
+    return dropped;
+  }
+
   // Resolve {bpm, key} for a queued track: from the track object if it carries
   // analysis, else a library lookup (queued items hold only id/title/artist).
   mixAnalysisFor(track: Track | null): mix.Analysis {
@@ -560,22 +590,53 @@ class Queue {
     };
   }
 
-  // Resolve a track's integrated loudness + measured peak (track object first,
-  // else a library lookup) and stash a clamped gain offset toward the
-  // operator's loudness target on the track as `gainDb`. The peak lets
-  // gainForLoudness cap the boost by real headroom instead of a blind clamp.
-  // Null measurement → leaves gainDb undefined, so getAnnotatedUri emits no
+  // Resolve a track's integrated loudness + peak and stash a clamped gain
+  // offset toward the operator's loudness target on the track as `gainDb`.
+  // Source ladder is settings.loudness.source: an embedded ReplayGain tag
+  // (whole-file stereo R128 via Navidrome, issue #998) outranks the analyzer's
+  // measured LUFS (leading-window only) unless the operator pins one source.
+  // A track object without the `replayGain` key came through a projection
+  // that dropped it (the agent's slim candidates, a JSON round trip), so a
+  // one-row getSong recovers it — `replayGain: {}`/null means Navidrome was
+  // asked and the file is untagged, no lookup. Measured values resolve track
+  // object first, else a library lookup. The peak lets gainForLoudness cap
+  // the boost by real headroom instead of a blind clamp; a ReplayGain
+  // loudness keeps its own trackPeak (mixing it with the analyzer's window
+  // peak would cap against a different scan). Null loudness from every
+  // allowed source → leaves gainDb undefined, so getAnnotatedUri emits no
   // liq_amplify and the track plays at unity gain.
-  applyLoudnessGain(track: Track | null) {
+  async applyLoudnessGain(track: Track | null) {
     if (!track) return;
-    let lufs = track.loudnessLufs;
-    let peakDb = track.peakDb;
-    if ((lufs == null || peakDb == null) && track.id) {
-      const rec = library.get(track.id);
-      if (lufs == null) lufs = rec?.loudnessLufs ?? null;
-      if (peakDb == null) peakDb = rec?.peakDb ?? null;
-    }
     const loud = settings.get().loudness;
+    const source = loud?.source ?? 'replaygain-then-measured';
+    let lufs: number | null | undefined = null;
+    let peakDb: number | null | undefined = null;
+    if (source !== 'measured') {
+      let rg = mix.loudnessFromReplayGain(track.replayGain);
+      if (!rg && track.replayGain === undefined && track.id) {
+        try {
+          const song = await subsonic.getSong(track.id);
+          track.replayGain = song?.replayGain ?? null; // cache the answer either way
+          rg = mix.loudnessFromReplayGain(song?.replayGain);
+        } catch (err) {
+          // Best-effort — an unreachable Navidrome falls through to measured.
+          this.log('warn', `replayGain lookup failed for ${track.id}: ${(err as Error).message}`);
+        }
+      }
+      if (rg) {
+        lufs = rg.lufs;
+        peakDb = rg.peakDb;
+      }
+    }
+    if (lufs == null && source !== 'replaygain') {
+      lufs = track.loudnessLufs;
+      peakDb = track.peakDb;
+      if ((lufs == null || peakDb == null) && track.id) {
+        const rec = library.get(track.id);
+        if (lufs == null) lufs = rec?.loudnessLufs ?? null;
+        if (peakDb == null) peakDb = rec?.peakDb ?? null;
+      }
+    }
     const gain = mix.gainForLoudness(lufs, {
       peakDb,
       targetLufs: loud?.targetLufs,
@@ -891,6 +952,11 @@ class Queue {
           }
         }
 
+        // An operator cancel (removeUpcoming) may have spliced this item out
+        // while we were awaiting the TTS render above — don't hand a removed
+        // track to Liquidsoap.
+        if (!this.upcoming.includes(item)) continue;
+
         // DJ-mode mixing (features 1 & 2): shape the transition INTO this track
         // from its tempo/harmonic compatibility with the track it follows. The
         // predecessor is the item just ahead of it in the queue, else whatever
@@ -900,11 +966,12 @@ class Queue {
         this.applyMixTransition(item);
 
         // Loudness normalisation (feature: LUFS gain) — applies to EVERY track,
-        // not just DJ mode. Resolve the track's integrated loudness (from the
-        // item or a library lookup) and stash a clamped gain offset toward the
-        // target; subsonic.getAnnotatedUri folds it into liq_amplify. Un-measured
-        // tracks resolve to null → no liq_amplify → unity gain, i.e. today.
-        this.applyLoudnessGain(item.track);
+        // not just DJ mode. Resolve the track's integrated loudness (ReplayGain
+        // tag first by default — see applyLoudnessGain — else the measured
+        // value from the item or a library lookup) and stash a clamped gain
+        // offset toward the target; subsonic.getAnnotatedUri folds it into
+        // liq_amplify. No loudness from any source → no liq_amplify → unity.
+        await this.applyLoudnessGain(item.track);
 
         // Hard length cap (#447 max-track-length): stamp a cue_out so Liquidsoap
         // cuts an over-length autonomous pick mid-air. Explicit listener requests
@@ -1428,6 +1495,30 @@ class Queue {
     }
   }
 
+  // Remove a not-yet-aired track from the upcoming queue (operator cancel).
+  // Sent items live inside Liquidsoap's dj_queue, so those are pulled back
+  // out over telnet first; the Node-side entry is only spliced once
+  // Liquidsoap confirms, so a failed removal never half-cancels. A track
+  // that already left dj_queue (on air, or being prepared as the next
+  // source) refuses with 'already-playing' — /dj/skip is the tool for that.
+  async removeUpcoming(trackId: string): Promise<{ ok: true } | { ok: false; reason: 'not-queued' | 'already-playing' }> {
+    const item = this.upcoming.find(i => i.track?.id === trackId);
+    if (!item) return { ok: false, reason: 'not-queued' };
+
+    if (item.sent) {
+      const rid = await liquidsoapControl.resolveDjQueueRid(trackId);
+      if (!rid || !(await liquidsoapControl.removeFromDjQueue(rid))) {
+        return { ok: false, reason: 'already-playing' };
+      }
+    }
+
+    const idx = this.upcoming.indexOf(item);
+    if (idx !== -1) this.upcoming.splice(idx, 1);
+    this.log('scheduler', `operator removed from queue: ${item.track.title} — ${item.track.artist}`);
+    this.persist();
+    return { ok: true };
+  }
+
   // Tracks played in the last `hours` hours — used by the picker to block
   // repeats. Returns BOTH ids and `title|artist` keys, because the boot
   // backfill (in recover()) reads from events-*.jsonl which lacks track ids;
@@ -1556,6 +1647,10 @@ class Queue {
 
   snapshot() {
     const mapItem = (i: QueueItem) => ({
+      // Track id rides along so the admin dash can target rows for the
+      // queue-cancel button (DELETE /dj/queue/:trackId); named to match the
+      // subsonic_id already public on /now-playing.
+      subsonic_id: i.track.id,
       title: i.track.title,
       artist: i.track.artist,
       album: i.track.album,
@@ -1743,10 +1838,53 @@ async function airVoice(path: string, wavPath: string, text: string, gainDb = 0)
   const uri = voiceUriWithGain(wavPath, gainDb);
   const turn = _voiceChain
     .catch(() => undefined)
-    .then(() => writeHandoff(path, uri));
+    .then(async () => {
+      // A jingle stinger may be on air (or inside the cross buffer) right now —
+      // it plays outside this serialiser, so wait it out before handing over.
+      await waitForJingleClear();
+      return writeHandoff(path, uri);
+    });
   // Extend the shared lock until this clip has (about) finished playing.
   _voiceChain = turn.then(() => sleep(holdMs)).then(() => {}, () => {});
   return turn;
+}
+
+// --- Jingle collision guard (issue #997) -----------------------------------
+//
+// Jingles rotate into the broadcast inside Liquidsoap (radio.liq's jingle
+// rotate), entirely outside the airVoice serialiser — and because music_meta
+// is captured ABOVE that rotate, the incoming track's on_metadata fires while
+// the stinger is still audible in the crossfade, so a boundary-aired link or
+// ident talked straight over it. radio.liq announces each jingle by writing
+// jingle-playing.json ({filename, startedAt}) the moment it starts feeding;
+// the clip stays audible for up to its own length plus the cross buffer.
+// Before any voice handoff, sleep out whatever remains of that window.
+//
+// The marker is never deleted — a stale one simply computes a window in the
+// past. If the jingle WAV can't be measured (non-WAV upload, path not visible
+// to a native-dev controller), a fixed fallback length keeps the guard useful
+// without wedging the chain.
+
+const JINGLE_FALLBACK_MS = 15_000; // clip length when the WAV can't be parsed
+const JINGLE_TAIL_MS = 1_000;      // fade tail + poll slack
+const JINGLE_WAIT_MAX_MS = 60_000; // never wedge the voice chain on a bad marker
+
+function jingleClearAtMs(): number {
+  try {
+    const m = JSON.parse(readFileSync(config.liquidsoap.jinglePlayingFile, 'utf8'));
+    const startedMs = Number(m?.startedAt) * 1000; // liquidsoap time() is unix seconds
+    if (!Number.isFinite(startedMs) || startedMs <= 0) return 0;
+    const clipMs = (typeof m?.filename === 'string' && wavDurationMs(m.filename)) || JINGLE_FALLBACK_MS;
+    const crossMs = (Number(settings.get()?.crossfadeDuration) || 10) * 1000;
+    return startedMs + clipMs + crossMs + JINGLE_TAIL_MS;
+  } catch {
+    return 0; // no marker (or unreadable) — nothing on air to avoid
+  }
+}
+
+async function waitForJingleClear() {
+  const waitMs = Math.min(JINGLE_WAIT_MAX_MS, jingleClearAtMs() - Date.now());
+  if (waitMs > 0) await sleep(waitMs);
 }
 
 // Wrap a rendered voice-clip path in a Liquidsoap `annotate:` URI carrying a

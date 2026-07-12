@@ -88,10 +88,12 @@ export function useAnalyser(
         if (!sourceRef.current) {
           sourceRef.current = ctxRef.current.createMediaElementSource(audioEl);
           analyserRef.current = ctxRef.current.createAnalyser();
-          // 1024-point FFT (512 bins). The Waveform's log-frequency sweep needs
-          // low-end resolution — at 256 the whole bottom two octaves collapsed
-          // into two bins. Reading 512 bins per paint is still trivial.
-          analyserRef.current.fftSize = 1024;
+          // 4096-point FFT (2048 bins). The Waveform's log-frequency sweep
+          // needs low-end resolution — at 1024 the bins were ~47 Hz wide, so
+          // the sweep's bottom octave (a dozen bars) read one bin and moved as
+          // a single block. ~12 Hz bins plus the Waveform's interpolation give
+          // every bar a distinct value; 2048 bins per paint is still trivial.
+          analyserRef.current.fftSize = 4096;
           // Light smoothing only: the old 0.78 stacked on the spans' 60 ms CSS
           // transitions left bars trailing the beat by ~100 ms. The canvas
           // renderer has no second smoothing layer, so this is the whole lag.

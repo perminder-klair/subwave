@@ -186,7 +186,15 @@ export async function generateLink({ previous, current, context, clockIsAirTime 
 
 export async function generateHourlyTime({ recap = null, context = null, recentOpeners = null, persona = null }: any = {}) {
   const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
-  ctxLines.push(`Task: a brief top-of-the-hour time check, in character. ${lengthPhrase('hourly', persona || undefined)}. Say the time in natural spoken words ("two in the afternoon", "just gone eight") — never digits or 24-hour form.`);
+  // The hour is converted to words in code (context.clock.spokenHour) rather
+  // than asking the model to read the clock line itself — small models get
+  // the 24-hour conversion wrong at the edges ("00:03" announced as "one in
+  // the morning"). The fallback keeps the old behaviour for a bare context.
+  const spoken = context?.clock?.spokenHour;
+  const timeClause = spoken
+    ? `The hour to announce is ${spoken} — say exactly that hour, in natural spoken words ("just gone ${spoken}", or similar) — never digits or 24-hour form, never a different hour.`
+    : `Say the time in natural spoken words ("two in the afternoon", "just gone eight") — never digits or 24-hour form.`;
+  ctxLines.push(`Task: a brief top-of-the-hour time check, in character. ${lengthPhrase('hourly', persona || undefined)}. ${timeClause}`);
   return djText({
     system: djSystem(persona || undefined),
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'hourly', recap, recentOpeners }),
