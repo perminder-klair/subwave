@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.41.0](https://github.com/perminder-klair/subwave/compare/v0.40.0...v0.41.0) (2026-07-12)
+
+
+### Features
+
+* **admin:** add Ko-fi and Discord links to the sidebar ([#1020](https://github.com/perminder-klair/subwave/issues/1020)) ([1bf3ea7](https://github.com/perminder-klair/subwave/commit/1bf3ea74c3b3e50a569905362bbb2f257ec1b551))
+* **admin:** adopt AI Elements components across the admin panels ([#1009](https://github.com/perminder-klair/subwave/issues/1009)) ([08a2a43](https://github.com/perminder-klair/subwave/commit/08a2a43594bd2ecb4eab9101a1edb1f4a1ebb41b))
+* **admin:** cancel button for queued tracks on the dash ([#1006](https://github.com/perminder-klair/subwave/issues/1006)) ([0e6a2f9](https://github.com/perminder-klair/subwave/commit/0e6a2f90ea9235deb07f942d79f564a5db2b0c32))
+* **admin:** surface Navidrome-unreachable banner across admin ([#1014](https://github.com/perminder-klair/subwave/issues/1014)) ([978ebf9](https://github.com/perminder-klair/subwave/commit/978ebf92cd430ce01ad1d27b4a24559ecd6910fd))
+* **library:** never-play blocklist + admin library redesign ([#1008](https://github.com/perminder-klair/subwave/issues/1008)) ([f61946a](https://github.com/perminder-klair/subwave/commit/f61946a2f6c00cc3e94382007ac7aac7efe6df22))
+* **loudness:** ReplayGain-first loudness source + stereo BS.1770 measurement ([#998](https://github.com/perminder-klair/subwave/issues/998)) ([#1005](https://github.com/perminder-klair/subwave/issues/1005)) ([a50e49f](https://github.com/perminder-klair/subwave/commit/a50e49f2baab91860ccb98726d0b93c3b005958f))
+* **observatory:** move MAP SIZE and RESET DIAL into the top header ([#1010](https://github.com/perminder-klair/subwave/issues/1010)) ([3a9800d](https://github.com/perminder-klair/subwave/commit/3a9800d9a1d8ad3dd69034d42c239becbb217809))
+* **player:** deeper live-stream buffering to survive poor cellular coverage ([#1001](https://github.com/perminder-klair/subwave/issues/1001)) ([0e42f6f](https://github.com/perminder-klair/subwave/commit/0e42f6f9480bdcab44a78f1bd98eb8f368f3b0f8))
+* **skills:** add Commute check-in community skill ([#1000](https://github.com/perminder-klair/subwave/issues/1000)) ([43c7160](https://github.com/perminder-klair/subwave/commit/43c71601939e5ad37cf8e4b2d243e7188c12d6c3))
+* **skills:** tags, filter/sort, and assign-to-DJs from the skill editor ([#1007](https://github.com/perminder-klair/subwave/issues/1007)) ([42f6190](https://github.com/perminder-klair/subwave/commit/42f61906975ad91196f41a541430bcb7e682f3ae))
+
+
+### Bug Fixes
+
+* **admin:** remove failing/warning count badge from DJ Doc header link ([#1011](https://github.com/perminder-klair/subwave/issues/1011)) ([d0b6204](https://github.com/perminder-klair/subwave/commit/d0b620412b5b3957e59eb508bc75ef76f18b7563))
+* **analyzer:** raise worker stdout line limit so /embed-text batches don't 500 ([#1002](https://github.com/perminder-klair/subwave/issues/1002)) ([fab3301](https://github.com/perminder-klair/subwave/commit/fab330100143115759e00bb76ee8c466c7f186bc)), closes [#996](https://github.com/perminder-klair/subwave/issues/996)
+* **app:** pause + drop stream when iOS output device disappears ([#992](https://github.com/perminder-klair/subwave/issues/992)) ([#1003](https://github.com/perminder-klair/subwave/issues/1003)) ([f47fafb](https://github.com/perminder-klair/subwave/commit/f47fafb8f39ccc79baaea83abcd3c13bc8753c55))
+* **broadcast:** keep jingle stingers from talking over the DJ + allow disabling jingles ([#997](https://github.com/perminder-klair/subwave/issues/997)) ([#1004](https://github.com/perminder-klair/subwave/issues/1004)) ([eee300b](https://github.com/perminder-klair/subwave/commit/eee300b29e147ba7449c6fe815b2ddbde54c70cc))
+* **dj:** locale-aware spoken clock + deterministic hourly time phrase ([#1016](https://github.com/perminder-klair/subwave/issues/1016)) ([121dada](https://github.com/perminder-klair/subwave/commit/121dadae9ad2e462a7b1694acf7434a9002914cf))
+* **llm:** raise connection-test token budget above OpenAI Responses API minimum ([#1015](https://github.com/perminder-klair/subwave/issues/1015)) ([b1da909](https://github.com/perminder-klair/subwave/commit/b1da9097e56a07aa015596ee5ca13b304b35f6ca))
+* **shows:** wire excluded playlists into pick paths + make strict filters actually strict ([#1018](https://github.com/perminder-klair/subwave/issues/1018)) ([02ec7d5](https://github.com/perminder-klair/subwave/commit/02ec7d526ad35ad4486ddb5a6f0b08ea8dd7f9ec))
+* **web:** visualiser — distinct low-end bars, and a Safari dead-analyser watchdog ([#988](https://github.com/perminder-klair/subwave/issues/988)) ([4d82da2](https://github.com/perminder-klair/subwave/commit/4d82da28f67b699356e622df7a7301698a2d2b7b))
+
+
+### Documentation
+
+* **manual:** fact-check and expand the How the DJ Works page ([#989](https://github.com/perminder-klair/subwave/issues/989)) ([1f3a2e5](https://github.com/perminder-klair/subwave/commit/1f3a2e5b1cbea31022cb7e354e952c5134b05a15))
+
 ## [0.40.0](https://github.com/perminder-klair/subwave/compare/v0.39.0...v0.40.0) (2026-07-10)
 
 
