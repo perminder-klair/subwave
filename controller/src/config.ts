@@ -257,7 +257,7 @@ export const config = {
   community: {
     catalogUrl:
       process.env.COMMUNITY_CATALOG_URL ||
-      'https://cdn.jsdelivr.net/gh/perminder-klair/subwave-community@main/catalog.json',
+      'https://cdn.jsdelivr.net/gh/getsubwave/subwave-community@main/catalog.json',
     // In-memory TTL before a browse triggers a refetch. 30 min mirrors the
     // weather / web-search memos; a manual refresh (POST /community/refresh)
     // busts it immediately.
