@@ -160,7 +160,10 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
           'inset-0 overflow-hidden bg-bg text-ink',
         )}
       >
-        <audio ref={audioRef} crossOrigin="anonymous" preload="auto" />
+        {/* crossOrigin is owned by usePlayer (set before every src assignment):
+            'anonymous' for untainted Web Audio, demoted once to a plain
+            no-CORS request if a cross-origin station's stream lacks ACAO. */}
+        <audio ref={audioRef} preload="auto" />
         <Skin contained={contained} portalNode={portalNode} />
         {!contained && <Toaster />}
       </div>

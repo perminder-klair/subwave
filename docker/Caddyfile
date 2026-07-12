@@ -52,6 +52,15 @@
 	# through automatically.
 	@streams path /stream.mp3 /stream.opus /stream.flac /stream.aac
 	handle @streams {
+		# CORS on the mounts — the web player requests the stream with
+		# crossorigin=anonymous so Web Audio visualisers (Subamp's analyzer,
+		# the classic waveform) get untainted samples, and external players
+		# (the skin dev kit, other stations' landing showcases) can tune in
+		# cross-origin. Icecast already emits this header (icecast.xml.template
+		# <http-headers>); `?` sets it only when the upstream didn't, so a
+		# customised icecast.xml can't silently break CORS and we never emit
+		# a duplicate (two ACAO headers fail CORS entirely).
+		header ?Access-Control-Allow-Origin "*"
 		reverse_proxy broadcast:7702 {
 			flush_interval -1
 			transport http {

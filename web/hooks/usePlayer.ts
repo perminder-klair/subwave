@@ -30,6 +30,16 @@ const RECONNECT_MAX_MS = 60_000;
 const IDLE_TUNE_OUT_MS = 8 * 60 * 60 * 1000;
 const IDLE_CHECK_INTERVAL_MS = 60_000;
 
+// A relative mount URL ('/stream.mp3') is same-origin by construction; a
+// remote station's absolute URL is compared against the page origin.
+function isCrossOrigin(url: string): boolean {
+  try {
+    return new URL(url, window.location.href).origin !== window.location.origin;
+  } catch {
+    return false;
+  }
+}
+
 export type PlayerStatus = 'idle' | 'connecting' | 'playing';
 
 export interface Player {
@@ -100,6 +110,18 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
   // watchdog stops retrying a dead Opus URL (e.g. an operator who disabled the
   // server-side Opus encoder, so /stream.opus 404s).
   const opusFailedRef = useRef(false);
+  // The engine owns the element's crossOrigin attribute (set before every src
+  // assignment, not in the shell's JSX). It starts as 'anonymous' so the Web
+  // Audio analysers get untainted samples — the bundled stack serves ACAO on
+  // the stream mounts. But crossorigin=anonymous makes a missing ACAO header
+  // a HARD load failure, so a cross-origin station without the header (a
+  // stripped-down BYO proxy) would never play at all. When a cross-origin
+  // load errors before ever reaching 'playing' (the CORS-failure signature —
+  // transient hiccups happen after playback starts), we demote to a no-CORS
+  // request once: playback works, and the analysers detect the tainted graph
+  // and fall back to their idle visuals.
+  const corsBlockedRef = useRef(false);
+  const playedSinceConnectRef = useRef(false);
   useEffect(() => { tunedInRef.current = tunedIn; }, [tunedIn]);
   useEffect(() => { streamUrlRef.current = streamUrl; }, [streamUrl]);
   useEffect(() => { streamsRef.current = streams; }, [streams]);
@@ -186,6 +208,8 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
       if (!tunedInRef.current || !audioRef.current) return;
       const audio = audioRef.current;
       const myGen = ++gen.current;
+      audio.crossOrigin = corsBlockedRef.current ? null : 'anonymous';
+      playedSinceConnectRef.current = false;
       audio.src = `${streamUrlRef.current}?t=${Date.now()}`;
       audio.volume = volumeRef.current;
       setStatus('connecting');
@@ -208,6 +232,7 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
     const onPlaying = () => {
       clearWatchdog();
       retryCount.current = 0;
+      playedSinceConnectRef.current = true;
       setStatus('playing');
     };
     const onWaiting = () => {
@@ -224,6 +249,14 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
         opusFailedRef.current = true;
         streamUrlRef.current = mp3;
         setStreamUrl(mp3);
+      } else if (
+        !corsBlockedRef.current &&
+        !playedSinceConnectRef.current &&
+        isCrossOrigin(streamUrlRef.current)
+      ) {
+        // See corsBlockedRef — a cross-origin load that dies before first
+        // 'playing' is the CORS-blocked signature; retry without CORS.
+        corsBlockedRef.current = true;
       }
       const delay = Math.min(RECONNECT_BASE_MS * 2 ** retryCount.current, RECONNECT_MAX_MS);
       retryCount.current += 1;
@@ -310,6 +343,8 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
     lastActivityAt.current = Date.now();
     setIdleStopped(false);
     retryCount.current = 0;
+    el.crossOrigin = corsBlockedRef.current ? null : 'anonymous';
+    playedSinceConnectRef.current = false;
     el.src = `${streamUrl}?t=${Date.now()}`;
     el.volume = volume;
     setTunedIn(true);
