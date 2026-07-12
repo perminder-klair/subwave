@@ -24,6 +24,7 @@ import {
   SectionHeader, ELEVENLABS_VS_DEFAULTS,
   type FormState, type FormUpdater, type SettingsData, type SaveSettings,
   type SfxData, type SfxForm, type JingleImportFailure, type JingleImportResult,
+  type LoudnessSource,
 } from './settings/shared';
 import { TtsSection } from './settings/TtsSection';
 import { LlmSection } from './settings/LlmSection';
@@ -125,6 +126,7 @@ export default function SettingsPanel() {
       loudness: {
         targetLufs: String(v.loudness?.targetLufs ?? -14),
         maxBoostDb: String(v.loudness?.maxBoostDb ?? 6),
+        source: v.loudness?.source ?? 'replaygain-then-measured',
       },
       station: v.station ?? '',
       timezone: v.timezone ?? '',
@@ -809,6 +811,40 @@ export default function SettingsPanel() {
               <Card title="Loudness levelling" sub="per-track volume normalisation">
                 <div className="grid gap-3">
                   <div className="field">
+                    <Label>Loudness source</Label>
+                    <Select
+                      value={form.loudness.source}
+                      onValueChange={v =>
+                        setForm(f =>
+                          f
+                            ? {
+                                ...f,
+                                loudness: { ...f.loudness, source: v as LoudnessSource },
+                              }
+                            : f,
+                        )
+                      }
+                    >
+                      <SelectTrigger className="w-64">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="replaygain-then-measured">
+                          ReplayGain tags, then measured
+                        </SelectItem>
+                        <SelectItem value="replaygain">ReplayGain tags only</SelectItem>
+                        <SelectItem value="measured">Measured (acoustic analysis)</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <div className="field-hint">
+                      Where each track&rsquo;s loudness figure comes from. ReplayGain tags (read
+                      via Navidrome) are a whole-file stereo measurement — the most accurate when
+                      your library carries them. Measured values come from this station&rsquo;s
+                      acoustic analysis, which scans only the opening of each track. The default
+                      prefers the tag and falls back to the measurement for untagged files.
+                    </div>
+                  </div>
+                  <div className="field">
                     <Label>Target loudness</Label>
                     <div className="flex items-center gap-2">
                       <Input
@@ -857,6 +893,7 @@ export default function SettingsPanel() {
                             loudness: {
                               targetLufs: parseFloat(form.loudness.targetLufs),
                               maxBoostDb: parseFloat(form.loudness.maxBoostDb),
+                              source: form.loudness.source,
                             },
                           })
                         }

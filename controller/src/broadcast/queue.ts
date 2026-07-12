@@ -49,6 +49,11 @@ interface Track {
   musicalKey?: string | null;
   loudnessLufs?: number | null;
   peakDb?: number | null;
+  // OpenSubsonic ReplayGain block riding the raw Navidrome song object —
+  // subsonic.ts returns API children unmodified, so tagged files carry it
+  // into the queue for free. applyLoudnessGain prefers it over the measured
+  // LUFS when settings.loudness.source allows (issue #998).
+  replayGain?: { trackGain?: number | null; trackPeak?: number | null } | null;
   introMs?: number | null;
   keyRanges?: TrackKeyRange[] | null;
   outro?: TrackOutro | null;
@@ -560,22 +565,53 @@ class Queue {
     };
   }
 
-  // Resolve a track's integrated loudness + measured peak (track object first,
-  // else a library lookup) and stash a clamped gain offset toward the
-  // operator's loudness target on the track as `gainDb`. The peak lets
-  // gainForLoudness cap the boost by real headroom instead of a blind clamp.
-  // Null measurement → leaves gainDb undefined, so getAnnotatedUri emits no
+  // Resolve a track's integrated loudness + peak and stash a clamped gain
+  // offset toward the operator's loudness target on the track as `gainDb`.
+  // Source ladder is settings.loudness.source: an embedded ReplayGain tag
+  // (whole-file stereo R128 via Navidrome, issue #998) outranks the analyzer's
+  // measured LUFS (leading-window only) unless the operator pins one source.
+  // A track object without the `replayGain` key came through a projection
+  // that dropped it (the agent's slim candidates, a JSON round trip), so a
+  // one-row getSong recovers it — `replayGain: {}`/null means Navidrome was
+  // asked and the file is untagged, no lookup. Measured values resolve track
+  // object first, else a library lookup. The peak lets gainForLoudness cap
+  // the boost by real headroom instead of a blind clamp; a ReplayGain
+  // loudness keeps its own trackPeak (mixing it with the analyzer's window
+  // peak would cap against a different scan). Null loudness from every
+  // allowed source → leaves gainDb undefined, so getAnnotatedUri emits no
   // liq_amplify and the track plays at unity gain.
-  applyLoudnessGain(track: Track | null) {
+  async applyLoudnessGain(track: Track | null) {
     if (!track) return;
-    let lufs = track.loudnessLufs;
-    let peakDb = track.peakDb;
-    if ((lufs == null || peakDb == null) && track.id) {
-      const rec = library.get(track.id);
-      if (lufs == null) lufs = rec?.loudnessLufs ?? null;
-      if (peakDb == null) peakDb = rec?.peakDb ?? null;
-    }
     const loud = settings.get().loudness;
+    const source = loud?.source ?? 'replaygain-then-measured';
+    let lufs: number | null | undefined = null;
+    let peakDb: number | null | undefined = null;
+    if (source !== 'measured') {
+      let rg = mix.loudnessFromReplayGain(track.replayGain);
+      if (!rg && track.replayGain === undefined && track.id) {
+        try {
+          const song = await subsonic.getSong(track.id);
+          track.replayGain = song?.replayGain ?? null; // cache the answer either way
+          rg = mix.loudnessFromReplayGain(song?.replayGain);
+        } catch (err) {
+          // Best-effort — an unreachable Navidrome falls through to measured.
+          this.log('warn', `replayGain lookup failed for ${track.id}: ${(err as Error).message}`);
+        }
+      }
+      if (rg) {
+        lufs = rg.lufs;
+        peakDb = rg.peakDb;
+      }
+    }
+    if (lufs == null && source !== 'replaygain') {
+      lufs = track.loudnessLufs;
+      peakDb = track.peakDb;
+      if ((lufs == null || peakDb == null) && track.id) {
+        const rec = library.get(track.id);
+        if (lufs == null) lufs = rec?.loudnessLufs ?? null;
+        if (peakDb == null) peakDb = rec?.peakDb ?? null;
+      }
+    }
     const gain = mix.gainForLoudness(lufs, {
       peakDb,
       targetLufs: loud?.targetLufs,
@@ -900,11 +936,12 @@ class Queue {
         this.applyMixTransition(item);
 
         // Loudness normalisation (feature: LUFS gain) — applies to EVERY track,
-        // not just DJ mode. Resolve the track's integrated loudness (from the
-        // item or a library lookup) and stash a clamped gain offset toward the
-        // target; subsonic.getAnnotatedUri folds it into liq_amplify. Un-measured
-        // tracks resolve to null → no liq_amplify → unity gain, i.e. today.
-        this.applyLoudnessGain(item.track);
+        // not just DJ mode. Resolve the track's integrated loudness (ReplayGain
+        // tag first by default — see applyLoudnessGain — else the measured
+        // value from the item or a library lookup) and stash a clamped gain
+        // offset toward the target; subsonic.getAnnotatedUri folds it into
+        // liq_amplify. No loudness from any source → no liq_amplify → unity.
+        await this.applyLoudnessGain(item.track);
 
         // Hard length cap (#447 max-track-length): stamp a cue_out so Liquidsoap
         // cuts an over-length autonomous pick mid-air. Explicit listener requests

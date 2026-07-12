@@ -1006,6 +1006,12 @@ export const MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 export const OPUS_BITRATES = [96, 128, 192, 256, 320] as const;
 export const AAC_BITRATES = [128, 192, 256] as const;
 
+// Where per-track loudness comes from (queue.applyLoudnessGain, issue #998):
+// an embedded ReplayGain tag (Navidrome's OpenSubsonic replayGain field),
+// the analyzer's measured LUFS, or tag-with-measured-fallback (the default).
+export const LOUDNESS_SOURCES = ['replaygain-then-measured', 'replaygain', 'measured'] as const;
+export type LoudnessSource = (typeof LOUDNESS_SOURCES)[number];
+
 const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
   crossfadeDuration: 10.0, // seconds
@@ -1043,10 +1049,15 @@ const DEFAULTS = {
   // direction only — cuts have a fixed wide clamp, and the boost is further
   // limited by the track's own measured peak headroom, so widening this on a
   // dynamic library won't slam the broadcast limiter. Read live per track at
-  // annotate time; no mixer restart.
+  // annotate time; no mixer restart. `source` picks where the loudness figure
+  // comes from (issue #998): embedded ReplayGain tags (whole-file stereo R128,
+  // via Navidrome's OpenSubsonic replayGain field) vs the analyzer's measured
+  // LUFS (leading window only). The default prefers the tag and falls back to
+  // the measurement, so untagged libraries behave exactly as before.
   loudness: {
     targetLufs: -14,
     maxBoostDb: 6,
+    source: 'replaygain-then-measured' as LoudnessSource,
   },
   weather: { lat: 30.7333, lng: 76.7794, locationName: 'Punjab', units: 'metric' as 'metric' | 'imperial' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
@@ -1839,6 +1850,9 @@ export async function load() {
         stored.loudness.maxBoostDb <= BOUNDS.loudnessMaxBoostDb.max
           ? stored.loudness.maxBoostDb
           : DEFAULTS.loudness.maxBoostDb,
+      source: LOUDNESS_SOURCES.includes(stored.loudness?.source)
+        ? (stored.loudness.source as LoudnessSource)
+        : DEFAULTS.loudness.source,
     },
     weather: {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
@@ -2976,6 +2990,12 @@ export async function update(patch) {
         throw new Error(`loudness.maxBoostDb must be number in [${b.min}, ${b.max}]`);
       }
       next.loudness.maxBoostDb = v;
+    }
+    if (lo.source !== undefined) {
+      if (!LOUDNESS_SOURCES.includes(lo.source)) {
+        throw new Error(`loudness.source must be one of: ${LOUDNESS_SOURCES.join(', ')}`);
+      }
+      next.loudness.source = lo.source;
     }
   }
   if ('weather' in patch) {

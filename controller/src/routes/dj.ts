@@ -50,6 +50,7 @@ interface AdminSong {
   genre?: string | null;
   duration?: number | null;
   path?: string | null;
+  replayGain?: { trackGain?: number | null; trackPeak?: number | null } | null;
 }
 
 const SAY_TEXT_MAX = 500;
@@ -734,6 +735,12 @@ function toAdminRow(s: AdminSong) {
     // path lets getLocalPath() use the on-disk file when MUSIC_LIBRARY_PATH
     // is mounted, matching how listener-requested tracks are queued.
     path: s.path ?? null,
+    // Rides back through POST /dj/queue-track so a manually queued track gets
+    // the same ReplayGain-first loudness resolution as picker/request tracks.
+    // Deliberately NOT `?? null`: an absent key drops out of the JSON round
+    // trip and stays undefined, which tells applyLoudnessGain to re-fetch the
+    // song rather than trusting that the tag is really missing.
+    replayGain: s.replayGain,
     moods: tag?.moods ?? [],
     energy: tag?.energy ?? null,
     source: tag?.source ?? null,

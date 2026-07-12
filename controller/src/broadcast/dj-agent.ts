@@ -443,6 +443,10 @@ function trackFields(song) {
     // source: Subsonic `duration`, the picker tools' slim projection (what the
     // agent's `seen` map stores) `duration_sec`, library rows `durationSec`.
     duration: song.duration ?? song.duration_sec ?? song.durationSec ?? null,
+    // ReplayGain rides raw Subsonic songs (pool picks) but not the slim
+    // projection agent picks resolve from — stays undefined there, which
+    // tells queue.applyLoudnessGain to recover it with a getSong lookup.
+    replayGain: song.replayGain,
   };
 }
 
