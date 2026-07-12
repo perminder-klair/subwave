@@ -1,7 +1,7 @@
 'use client';
 
 import type { ReactNode } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { fmtSize, fmtClock } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -29,6 +29,7 @@ import {
   ContextContentHeader,
   ContextContentBody,
 } from '../ai-elements/context';
+import { Terminal, TerminalContent } from '../ai-elements/terminal';
 
 // All admin endpoints return loose JSON; type as unknown then narrow with
 // optional-chaining at call sites. The shapes mirror the controller's
@@ -267,7 +268,6 @@ export default function DebugPanel() {
   const [err, setErr] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
-  const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!hydrated || needsAuth) return;
@@ -325,12 +325,6 @@ export default function DebugPanel() {
       document.removeEventListener('visibilitychange', onVisible);
     };
   }, [paused, needsAuth, hydrated, adminFetch]);
-
-  useEffect(() => {
-    // Radix ScrollArea scrolls on its viewport, not the root element.
-    const vp = logRef.current?.querySelector('[data-radix-scroll-area-viewport]');
-    if (autoScroll && vp) vp.scrollTop = vp.scrollHeight;
-  }, [data?.liquidsoapLog, autoScroll]);
 
   return (
     <div className="grid gap-4">
@@ -459,9 +453,15 @@ export default function DebugPanel() {
               </Label>
             }
           >
-            <ScrollArea ref={logRef} className="min-h-0 flex-1">
-              <pre className="term">{data.liquidsoapLog || '— no log —'}</pre>
-            </ScrollArea>
+            {/* Terminal owns scrolling + tail-follow; the Card checkbox drives
+                its autoScroll. Square corners to sit flush in the card body. */}
+            <Terminal
+              output={data.liquidsoapLog || '— no log —'}
+              autoScroll={autoScroll}
+              className="min-h-0 flex-1 rounded-none border-separator-strong"
+            >
+              <TerminalContent className="max-h-none min-h-0 flex-1 p-2.5 text-[11px] leading-[1.6]" />
+            </Terminal>
           </Card>
 
           {/* ── ROW 3 ───────────────────────────────────────── */}
