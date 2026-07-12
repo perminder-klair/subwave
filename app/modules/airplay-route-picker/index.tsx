@@ -26,10 +26,17 @@ export default function AirplayButton(props: AirplayButtonProps) {
   return <NativeView {...props} />;
 }
 
+/** AVAudioSession.RouteChangeReason.oldDeviceUnavailable — the output device
+ *  the session was playing to went away (Bluetooth speaker powered off,
+ *  CarPlay disconnected, headphones unplugged). The one route-change reason
+ *  that means "pause"; every other reason is a handoff or reconfiguration to
+ *  keep playing through. */
+export const ROUTE_REASON_OLD_DEVICE_UNAVAILABLE = 2;
+
 export interface AudioRouteChange {
-  /** AVAudioSession.RouteChangeReason raw value — 3 = newDeviceAvailable,
-   *  2 = oldDeviceUnavailable, 4 = categoryChange, 6 = wakeFromSleep,
-   *  8 = routeConfigurationChange. */
+  /** AVAudioSession.RouteChangeReason raw value — 1 = newDeviceAvailable,
+   *  2 = oldDeviceUnavailable, 3 = categoryChange, 4 = override,
+   *  6 = wakeFromSleep, 8 = routeConfigurationChange. */
   reason: number;
   /** Current outputs, e.g. "AirPlay:HomePod" or "Speaker:iPad Speakers". */
   outputs: string;
