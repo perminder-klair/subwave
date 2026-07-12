@@ -59,7 +59,7 @@ import * as sfx from '../broadcast/sfx.js';
 // skillCatalog, the admin toggles — iterates THIS, so a dropped skill lights up
 // the whole chain. Non-seeded (operator) caps are gated more conservatively
 // (disabled until enabled). Read live so a rescan takes effect at once.
-function allCapabilities(): any[] {
+function allCapabilities() {
   return loadedCapabilities();
 }
 
@@ -72,11 +72,11 @@ const DEFAULT_SEGMENT_CONTEXT = (CONTEXT_FIELDS as readonly string[]).filter(f =
 // cap.contextFields may be an array (built-ins) or a comma-string (custom
 // skills / built-in overrides, straight from SKILL.md frontmatter). Absent or
 // empty → the default profile (no weather).
-export function effectiveContextFields(cap: any): string[] {
+export function effectiveContextFields(cap: { contextFields?: unknown } | null | undefined): string[] {
   const raw = cap?.contextFields;
   if (raw == null) return DEFAULT_SEGMENT_CONTEXT;
   const list = Array.isArray(raw)
-    ? raw.map((s: any) => String(s).trim()).filter(Boolean)
+    ? raw.map((s: unknown) => String(s).trim()).filter(Boolean)
     : String(raw).split(',').map(s => s.trim()).filter(Boolean);
   return list.length ? list : DEFAULT_SEGMENT_CONTEXT;
 }
@@ -86,7 +86,7 @@ export function effectiveContextFields(cap: any): string[] {
 // field if ANY offered capability wants it: when the weather skill is
 // off-cooldown weather shows up, but on the (many) ticks it isn't eligible the
 // director never sees weather and can't tempt a news/curiosity line into it.
-function unionContextFields(caps: any[]): string[] {
+function unionContextFields(caps): string[] {
   const out = new Set<string>();
   for (const c of caps) for (const f of effectiveContextFields(c)) out.add(f);
   return [...out];
@@ -158,9 +158,9 @@ export function forcedSchema() {
 // The optional sound-effects block appended to the agent's system prompt.
 // Returns '' when the library is empty — the feature stays invisible to the
 // agent and nothing in the schema can be satisfied.
-function sfxBlock(sfxCatalog: any) {
+function sfxBlock(sfxCatalog) {
   if (!sfxCatalog || !sfxCatalog.length) return '';
-  const list = sfxCatalog.map((s: any) => {
+  const list = sfxCatalog.map((s) => {
     const dur = s.durationSec ? ` (~${s.durationSec}s)` : '';
     return `- ${s.name}${dur}: ${s.description}`;
   }).join('\n');
@@ -176,7 +176,14 @@ const lastFired = new Map<string, number>(); // kind → ms timestamp of last ai
 // Dedup memory carried across ticks — passed straight into the segment tools.
 // Curiosity dedup is NOT here anymore: it lives in the durable ledger in
 // skills/curiosity.js (issue #577) so it survives a controller restart.
-const segmentState: any = {
+interface SegmentState {
+  seenHeadlines: Set<string>;
+  lastWeatherCondition: string | null;
+  lastSearchedArtist: string | null;
+  lastAnySegment: number;
+}
+
+const segmentState: SegmentState = {
   seenHeadlines: new Set<string>(),
   lastWeatherCondition: null,
   lastSearchedArtist: null,
@@ -196,11 +203,11 @@ function frequencyFloorMs(freq: string) {
 
 // Capabilities on offer this tick: enabled, owned by the on-air persona,
 // off-cooldown, and in-window.
-function availableCapabilities(ctx: any, now: Date) {
+function availableCapabilities(ctx, now: Date) {
   const s = settings.get();
   const enabled = s.skills?.enabled || {};
   const persona = settings.getEffectivePersona(now);
-  const out: any[] = [];
+  const out: ReturnType<typeof allCapabilities> = [];
   for (const cap of allCapabilities()) {
     // Seeded built-ins are enabled unless explicitly turned off; operator skills
     // are DISCOVERED-BUT-DISABLED — they must be explicitly enabled before they
@@ -225,8 +232,8 @@ function availableCapabilities(ctx: any, now: Date) {
 // channels: the segment-tools.js tool descriptions, the schema field
 // descriptions on segmentSchema above, the done-tool description in sdk.js,
 // and the buildSituation() user message. Same principle as pickSystem.
-function directorSystem(persona: any, caps: any[], freq: string, sfxCatalog: any) {
-  const capList = caps.map((c: any) => `- ${c.kind}: ${c.desc}`).join('\n');
+function directorSystem(persona, caps, freq: string, sfxCatalog) {
+  const capList = caps.map((c) => `- ${c.kind}: ${c.desc}`).join('\n');
   const tone = stationTone(freq);
 
   return `${settings.agentPersonaPreamble(persona)}
@@ -285,7 +292,7 @@ export const directorAgent = defineAgent({
 // The concrete situation handed to the agent as its single user turn. Built
 // from what is on air and queue.getDjRecap() (what actually aired recently) —
 // NOT the track-pick session history, which derails small models.
-export function buildSituation(ctx: any, { forced = false, contextFields, recentCuriosity }: { forced?: boolean; contextFields?: string[]; recentCuriosity?: string[] } = {}) {
+export function buildSituation(ctx, { forced = false, contextFields, recentCuriosity }: { forced?: boolean; contextFields?: string[]; recentCuriosity?: string[] } = {}) {
   const lines = ['The current moment:'];
   const ctxLines = buildContextLines(ctx, { contextFields });
   if (ctxLines.length) lines.push(...ctxLines);
@@ -340,7 +347,7 @@ export function buildSituation(ctx: any, { forced = false, contextFields, recent
 // judge that staleness, code has to. Otherwise the least-recently-aired
 // capability, random among ties, so the rotation spreads across the catalogue
 // instead of hammering whatever sorts first.
-export function chooseCapability(caps: any[], ctx: any) {
+export function chooseCapability(caps, ctx) {
   const condition = ctx.weather?.condition || null;
   const weatherChanged = !!condition && condition !== segmentState.lastWeatherCondition;
   const pool = caps.filter(c => c.kind !== 'weather' || weatherChanged);
@@ -349,7 +356,7 @@ export function chooseCapability(caps: any[], ctx: any) {
     const weather = pool.find(c => c.kind === 'weather');
     if (weather) return weather;
   }
-  let best: any[] = [];
+  let best: ReturnType<typeof allCapabilities> = [];
   let bestAt = Infinity;
   for (const c of pool) {
     const at = lastFired.get(c.kind) || 0;
@@ -361,7 +368,7 @@ export function chooseCapability(caps: any[], ctx: any) {
 
 // The fetched tool data, rendered into the prompt. Compact but readable;
 // capped so a fat feed can't crowd the system prompt out of a small context.
-export function dataBlock(data: any) {
+export function dataBlock(data: unknown) {
   if (data == null) return '';
   let body: string;
   try { body = JSON.stringify(data, null, 1); } catch { body = String(data); }
@@ -381,7 +388,7 @@ export function simpleSegmentSchema() {
   }));
 }
 
-export function simpleSystem(persona: any, cap: any, freq: string, sfxCatalog: any) {
+export function simpleSystem(persona, cap, freq: string, sfxCatalog) {
   return `${settings.agentPersonaPreamble(persona)}
 
 Your job: decide whether to air ONE between-track "${cap.kind}" segment, or stay silent. You are NOT choosing music. ${stationTone(freq)}
@@ -397,7 +404,7 @@ ${cap.desc}${sfxBlock(sfxCatalog)}${settings.agentLanguageReminder(persona, 'the
 // 8000 tokens on attempt 1 before the prompt-embedded retry rescued it in
 // seconds. The abort turns that into a bounded failure; the tick already
 // treats a throw as silence.
-async function deadlinedSegmentObject(args: any) {
+async function deadlinedSegmentObject(args: Record<string, unknown>) {
   const ac = new AbortController();
   const timer = setTimeout(
     () => ac.abort(new Error(`segment call exceeded ${segmentDeadline()}ms deadline`)),
@@ -414,7 +421,7 @@ async function deadlinedSegmentObject(args: any) {
 // Returns { seg, reason } in the same shape agenticTick consumes from the
 // agent — seg is null for silence. A failed data fetch is silence without a
 // model call: the model can't say anything true about data it never got.
-async function runSimpleDirector(ctx: any, { caps, speaker, freq, sfxCatalog }: any) {
+async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
   const cap = chooseCapability(caps, ctx);
   if (!cap) return { seg: null, reason: 'nothing fresh to say' };
   const data = await fetchSegmentData(cap, ctx, segmentState);
@@ -477,7 +484,7 @@ export async function agenticTick(ctx) {
     // Empty catalogue when SFX are disabled — the agent is never offered effects.
     const sfxCatalog = settings.get().sfx?.enabled === false ? [] : await sfx.catalog();
 
-    let seg: any = null;
+    let seg: { kind: string; text: string; sfx: string | null } | null = null;
     let silentReason: string | undefined;
     if (!settings.get().llm?.pickerAgent) {
       // Pool mode: the operator's model isn't trusted with tool loops, so the
@@ -625,15 +632,17 @@ export const forcedDirectorAgent = defineAgent({
 // speaker — voice, prompt seat, and session attribution move together, same
 // rule as every other rotated segment). Returns the spoken text; throws on an
 // unknown/unready capability or empty output.
-export async function runCapability(which, ctx, { brief = null, persona = null }: any = {}) {
+export async function runCapability(which, ctx, { brief = null, persona = null }: { brief?: string | null; persona?: { id?: string; name?: string; skills?: string[]; tts?: unknown } | null } = {}) {
   const cap = allCapabilities().find(c => c.kind === which || c.skill === which);
   if (!cap) throw new Error(`unknown skill: ${which}`);
   if (cap.ready && !cap.ready()) {
     // Hint at the missing key when the capability is keyed. web-search is the
-    // only such capability today, and only when Tavily is the active provider.
+    // only such capability today, and only when a keyed provider is active.
     let hint = '';
-    if (cap.kind === 'web-search' && settings.get().search?.provider === 'tavily') {
-      hint = ' — set SEARCH_API_KEY or paste a Tavily key into the admin UI';
+    const searchProvider = settings.get().search?.provider;
+    if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave')) {
+      const name = searchProvider === 'brave' ? 'Brave Search' : 'Tavily';
+      hint = ` — set SEARCH_API_KEY or paste a ${name} key into the admin UI`;
     } else if (cap.requiresKey) {
       hint = ` — set ${cap.requiresKey}`;
     }
@@ -647,7 +656,7 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
   const situation = buildSituation(ctx, { forced: true, contextFields: effectiveContextFields(cap), recentCuriosity })
     + (brief ? `\n\n${brief}` : '');
 
-  let object: any;
+  let object: { text?: string; sfx?: string | null } | undefined;
   if (!settings.get().llm?.pickerAgent) {
     // Pool mode: fetch the capability's data directly and make one structured
     // call (same swap as the autonomous tick). The operator demanded a
@@ -711,8 +720,9 @@ export function skillCatalog() {
   const searchProvider = s.search?.provider || 'duckduckgo';
   return allCapabilities().map(c => {
     // web-search's key requirement depends on the active search provider:
-    // Tavily needs SEARCH_API_KEY, DuckDuckGo needs nothing. Other capabilities
-    // carry their requiresKey/keyUrl statically in CAPABILITIES (none today).
+    // Tavily/Brave need SEARCH_API_KEY, DuckDuckGo needs nothing. Other
+    // capabilities carry their requiresKey/keyUrl statically in CAPABILITIES
+    // (none today).
     let requiresKey = c.requiresKey || null;
     let keyUrl = c.keyUrl || null;
     let hint: string | null = null;
@@ -720,6 +730,9 @@ export function skillCatalog() {
       if (searchProvider === 'tavily') {
         requiresKey = 'SEARCH_API_KEY';
         keyUrl = 'https://app.tavily.com/home';
+      } else if (searchProvider === 'brave') {
+        requiresKey = 'SEARCH_API_KEY';
+        keyUrl = 'https://api-dashboard.search.brave.com/app/keys';
       } else if (searchProvider === 'searxng') {
         requiresKey = null;
         keyUrl = null;
@@ -756,6 +769,9 @@ export function skillCatalog() {
       // #471). Resolved to the default profile (no weather) when unset, so the
       // admin UI can render the current tick-box selection without guessing.
       contextFields: effectiveContextFields(c),
+      // Freeform organisation tags from SKILL.md frontmatter — filter fodder
+      // for the admin skill list.
+      tags: c.tags || [],
     };
   });
 }

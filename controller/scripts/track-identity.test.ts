@@ -148,7 +148,7 @@ async function dbTests() {
       assert.equal(rec!.musicalKey, '8A');
       assert.equal(rec!.introMs, 9000);
       assert.ok(db.hasVector('new-1'));
-      assert.ok(db.hasAudioVector('new-1'));
+      assert.ok(db.getAudioVector('new-1'));
       assert.equal(db.getTrack('old-1'), null);
       assert.equal(db.getTrack('gone-1'), null);
       assert.deepEqual(db.getTrack('keep-1')!.moods, ['sunny']);

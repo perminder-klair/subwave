@@ -8,7 +8,7 @@
 // THEME_INIT_SCRIPT so there's no flash. Once /themes responds, the fresh
 // token map is applied + cached for the next visit.
 
-export const THEME_TOKEN_KEYS = [
+const THEME_TOKEN_KEYS = [
   '--bg',
   '--ink',
   '--muted',
@@ -17,7 +17,6 @@ export const THEME_TOKEN_KEYS = [
   '--soft-border',
   '--field',
 ] as const;
-export type ThemeTokenKey = (typeof THEME_TOKEN_KEYS)[number];
 
 const TOKEN_KEY_SET = new Set<string>(THEME_TOKEN_KEYS);
 const TOKEN_CACHE_KEY = 'subwave-theme-tokens';
@@ -55,28 +54,6 @@ export function cacheTheme(theme: Theme): void {
   try {
     window.localStorage.setItem(TOKEN_CACHE_KEY, JSON.stringify(theme));
   } catch { /* private mode / quota — non-fatal */ }
-}
-
-/** Best-effort read of the cached theme. Returns null if nothing is cached
- *  or the cache is unreadable. Used by callers that want to compare against
- *  a fresh active id before refetching the registry. */
-export function loadCachedTheme(): Theme | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = window.localStorage.getItem(TOKEN_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<Theme>;
-    if (
-      typeof parsed?.id !== 'string'
-      || typeof parsed?.mode !== 'string'
-      || !parsed.tokens
-    ) {
-      return null;
-    }
-    return parsed as Theme;
-  } catch {
-    return null;
-  }
 }
 
 /** Read the listener's per-browser theme override id. When set, the

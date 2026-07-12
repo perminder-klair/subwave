@@ -26,6 +26,8 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as session from './session.js';
+import type { SessionContext } from './session.js';
+import type { QueueApi } from './queue.js';
 import * as dj from '../llm/dj.js';
 import { runCapability, skillCatalog } from '../skills/_agent.js';
 import { djCallsAllowed } from './listeners.js';
@@ -59,7 +61,7 @@ export function dueBeat(now = new Date()): 'feature' | 'outro' | null {
 // into it — beats must never fire against the PREVIOUS session's state, so
 // everything below keys off session identity, not the wall clock alone.
 function activeEpisode(now = new Date()) {
-  const show: any = settings.resolveActiveShow(now);
+  const show = settings.resolveActiveShow(now);
   if (!show?.programme) return null;
   const sess = session.getSession();
   if (!sess || sess.key !== `show:${show.id}`) return null;
@@ -92,8 +94,11 @@ async function previousAngle(showId: string): Promise<string | null> {
     const stamped = await Promise.all(files.map(async f => {
       try { return { f, t: (await stat(`${config.session.dir}/${f}`)).mtimeMs }; } catch { return null; }
     }));
-    const newest = stamped.filter(Boolean).sort((a: any, b: any) => b.t - a.t).slice(0, 12);
-    for (const entry of newest as any[]) {
+    const newest = stamped
+      .filter((x): x is { f: string; t: number } => Boolean(x))
+      .sort((a, b) => b.t - a.t)
+      .slice(0, 12);
+    for (const entry of newest) {
       try {
         const s = JSON.parse(await readFile(`${config.session.dir}/${entry.f}`, 'utf8'));
         if (s?.show?.id === showId && s?.programme?.plan?.angle) return String(s.programme.plan.angle);
@@ -105,12 +110,12 @@ async function previousAngle(showId: string): Promise<string | null> {
 
 // The capability menu the producer may build features from: enabled, ready,
 // and owned by the host persona — the same offer the segment director makes.
-function featureKindMenu(host: any): { kind: string; desc: string }[] {
+function featureKindMenu(host: { skills?: string[] } | null | undefined): { kind: string; desc: string }[] {
   try {
     return skillCatalog()
-      .filter((c: any) => c.enabled && c.ready)
-      .filter((c: any) => !host?.skills || host.skills.includes(c.name))
-      .map((c: any) => ({ kind: c.kind, desc: c.description || c.label }));
+      .filter((c) => c.enabled && c.ready)
+      .filter((c) => !host?.skills || host.skills.includes(c.name))
+      .map((c) => ({ kind: c.kind, desc: c.description || c.label }));
   } catch {
     return [];
   }
@@ -121,7 +126,7 @@ function featureKindMenu(host: any): { kind: string; desc: string }[] {
 // gate leaves the plan `pending` (a later tick retries once budget frees up);
 // a real generation failure marks it `fallback` for the episode (beats then
 // run brief-only — one failed producer call shouldn't burn a retry per tick).
-export async function ensurePlan(ctx: any, now = new Date()): Promise<void> {
+export async function ensurePlan(ctx: SessionContext, now = new Date()): Promise<void> {
   const ep = activeEpisode(now);
   if (!ep) return;
   let prog = session.getProgramme();
@@ -156,10 +161,10 @@ export async function ensurePlan(ctx: any, now = new Date()): Promise<void> {
     prog.plan = plan;
     session.attachProgramme(prog);
     logEvent('programme.plan', { show: ep.show.name, angle: plan?.angle || null });
-  } catch (err: any) {
+  } catch (err) {
     prog.status = 'fallback';
     session.attachProgramme(prog);
-    logEvent('programme.plan', { show: ep.show.name, error: err.message });
+    logEvent('programme.plan', { show: ep.show.name, error: (err as Error).message });
   }
 }
 
@@ -173,7 +178,7 @@ export async function ensurePlan(ctx: any, now = new Date()): Promise<void> {
 // half of the mic-pass already opened the show (with the episode angle woven
 // in — see dj-agent), so the standalone intro is skipped and just marked.
 // Returns true when it aired a standalone intro now.
-export async function maybeRunIntro(queue: any, ctx: any, now = new Date()): Promise<boolean> {
+export async function maybeRunIntro(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<boolean> {
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
   if (!prog || prog.beats?.intro) return false;
@@ -204,8 +209,8 @@ export function markIntroAired() {
 
 // Gate-free intro core — also the manual /dj/segment runner (via scheduler's
 // wrapper, which re-marks the beat so the autonomous path never repeats it).
-export async function runIntro(queue: any, ctx: any, now = new Date()): Promise<string> {
-  const show: any = settings.resolveActiveShow(now);
+export async function runIntro(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<string> {
+  const show = settings.resolveActiveShow(now);
   if (!show?.programme) throw new Error('no programme show is on air');
   const prog = session.getProgramme();
   const plan = prog?.plan || null;
@@ -219,10 +224,10 @@ export async function runIntro(queue: any, ctx: any, now = new Date()): Promise<
       try {
         const lines = await dj.generateProgrammeExchange({ beat: 'intro', host: roster.host, guests: roster.guests, ...common });
         if (lines && await queue.announceExchange(lines, 'programme-intro')) {
-          return lines.map((l: any) => `${l.persona.name}: ${l.text}`).join('\n');
+          return lines.map((l: { persona: { name: string }; text: string }) => `${l.persona.name}: ${l.text}`).join('\n');
         }
-      } catch (err: any) {
-        queue.log('error', `Programme intro exchange failed, falling back solo: ${err.message}`);
+      } catch (err) {
+        queue.log('error', `Programme intro exchange failed, falling back solo: ${(err as Error).message}`);
       }
     }
     const script = await dj.generateProgrammeIntro({ persona: roster.host, ...common });
@@ -234,7 +239,7 @@ export async function runIntro(queue: any, ctx: any, now = new Date()): Promise<
 }
 
 // Feature — the planned mid-hour segment. Cron-driven at :35 each show hour.
-export async function featureTick(queue: any, ctx: any, now = new Date()): Promise<void> {
+export async function featureTick(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<void> {
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
   if (!prog) return;
@@ -247,8 +252,8 @@ export async function featureTick(queue: any, ctx: any, now = new Date()): Promi
   session.markProgrammeBeat(beat);
   try {
     await runFeature(queue, ctx, { hourIndex: span.index, now });
-  } catch (err: any) {
-    queue.log('error', `Programme feature failed: ${err.message}`);
+  } catch (err) {
+    queue.log('error', `Programme feature failed: ${(err as Error).message}`);
   }
 }
 
@@ -257,8 +262,8 @@ export async function featureTick(queue: any, ctx: any, now = new Date()): Promi
 // segment director with the feature topic injected as the brief (real data:
 // headlines, weather, search). Any miss (no kind, stale kind, director
 // failure) falls to the straight-talk floor so the beat still airs.
-export async function runFeature(queue: any, ctx: any, { hourIndex = null, now = new Date() }: any = {}): Promise<string> {
-  const show: any = settings.resolveActiveShow(now);
+export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourIndex = null, now = new Date() }: { hourIndex?: number | null; now?: Date } = {}): Promise<string> {
+  const show = settings.resolveActiveShow(now);
   if (!show?.programme) throw new Error('no programme show is on air');
   const prog = session.getProgramme();
   const plan = prog?.plan || null;
@@ -276,8 +281,8 @@ export async function runFeature(queue: any, ctx: any, { hourIndex = null, now =
           brief: `This segment is the planned feature of the programme "${show.name}". Today's feature: ${topic}${plan?.angle ? ` (episode angle: ${plan.angle})` : ''}. Build the segment around it.`,
           persona: speaker,
         });
-      } catch (err: any) {
-        queue.log('error', `Programme feature capability "${kind}" failed (${err.message}) — airing straight talk instead`);
+      } catch (err) {
+        queue.log('error', `Programme feature capability "${kind}" failed (${(err as Error).message}) — airing straight talk instead`);
       }
     }
     const script = await dj.generateProgrammeFeature({
@@ -292,7 +297,7 @@ export async function runFeature(queue: any, ctx: any, { hourIndex = null, now =
 }
 
 // Outro — the sign-off. Cron-driven at :55 of the show's FINAL hour.
-export async function outroTick(queue: any, ctx: any, now = new Date()): Promise<void> {
+export async function outroTick(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<void> {
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
   if (!prog || prog.beats?.outro) return;
@@ -303,20 +308,20 @@ export async function outroTick(queue: any, ctx: any, now = new Date()): Promise
   session.markProgrammeBeat('outro');
   try {
     await runOutro(queue, ctx, now);
-  } catch (err: any) {
-    queue.log('error', `Programme outro failed: ${err.message}`);
+  } catch (err) {
+    queue.log('error', `Programme outro failed: ${(err as Error).message}`);
   }
 }
 
 // Gate-free outro core.
-export async function runOutro(queue: any, ctx: any, now = new Date()): Promise<string> {
-  const show: any = settings.resolveActiveShow(now);
+export async function runOutro(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<string> {
+  const show = settings.resolveActiveShow(now);
   if (!show?.programme) throw new Error('no programme show is on air');
   const prog = session.getProgramme();
   const plan = prog?.plan || null;
   // Tease whatever the grid says follows this show (another show's name, or
   // nothing when the station goes back to autonomous hours).
-  const next: any = settings.resolveActiveShow(new Date(now.getTime() + 60 * 60 * 1000));
+  const next = settings.resolveActiveShow(new Date(now.getTime() + 60 * 60 * 1000));
   const nextShowName = next && next.id !== show.id ? next.name : null;
   return withTrace({ kind: 'programme-outro', show: show.name }, async () => {
     const roster = settings.getOnAirRoster(now);
@@ -328,10 +333,10 @@ export async function runOutro(queue: any, ctx: any, now = new Date()): Promise<
       try {
         const lines = await dj.generateProgrammeExchange({ beat: 'outro', host: roster.host, guests: roster.guests, ...common });
         if (lines && await queue.announceExchange(lines, 'programme-outro')) {
-          return lines.map((l: any) => `${l.persona.name}: ${l.text}`).join('\n');
+          return lines.map((l: { persona: { name: string }; text: string }) => `${l.persona.name}: ${l.text}`).join('\n');
         }
-      } catch (err: any) {
-        queue.log('error', `Programme outro exchange failed, falling back solo: ${err.message}`);
+      } catch (err) {
+        queue.log('error', `Programme outro exchange failed, falling back solo: ${(err as Error).message}`);
       }
     }
     const script = await dj.generateProgrammeOutro({ persona: roster.host, ...common });
@@ -346,7 +351,7 @@ export async function runOutro(queue: any, ctx: any, now = new Date()): Promise<
 // runPersonaHandoff: attach + plan the episode, then air the intro if it's
 // still pending. Returns true when a standalone intro aired just now (the
 // hourly cron uses this to skip the generic time check).
-export async function onSessionSettled(queue: any, ctx: any, now = new Date()): Promise<boolean> {
+export async function onSessionSettled(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<boolean> {
   if (!activeEpisode(now)) return false;
   await ensurePlan(ctx, now);
   return maybeRunIntro(queue, ctx, now);

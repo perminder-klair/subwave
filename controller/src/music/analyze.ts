@@ -169,7 +169,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       console.log(`[analyze] audio backfill: +${ids.length - bpmIds.length} already-analysed tracks missing an audio vector`);
     }
   } else if (audioWanted && !reAnalyzeScope) {
-    console.log('[analyze] audio backfill skipped — backend has no CLAP (set ANALYZER_HEAVY=1 to enable sounds-like vectors)');
+    console.log('[analyze] audio backfill skipped — backend has no CLAP (switch to the heavy analyzer/AIO image to enable sounds-like vectors)');
   }
 
   // Vocal backfill: same idea for tracks missing vocal-activity ranges. The
@@ -341,6 +341,17 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // No-ops in seconds when there's nothing new and skips cleanly on backends
   // without the text tower.
   await scoreAudioMoods();
+
+  // The worker degrades silently when Demucs fails to load at runtime (weights
+  // download, OOM): every track analyses "ok" with vocal_ranges omitted, so a
+  // vocal backfill that stored nothing would otherwise look like a clean run —
+  // and re-target the same tracks forever (#996).
+  if (vocalBackfill && analyzed > 0 && vocalAnalyzed === 0) {
+    logEvent(
+      'warning',
+      'Vocal backfill stored no vocal-activity ranges — Demucs likely failed to load at runtime; check the analyzer container logs for "Demucs load failed"',
+    );
+  }
 
   logEvent(
     'success',

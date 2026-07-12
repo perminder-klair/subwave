@@ -19,6 +19,7 @@ import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/sh
 import * as library from '../music/library.js';
 import * as mix from '../music/mix.js';
 import * as journey from '../music/journey.js';
+import { shuffle } from '../util/shuffle.js';
 import * as dj from '../llm/dj.js';
 import { energyForDaypart } from '../context.js';
 import { defineAgent } from '../llm/agent.js';
@@ -99,10 +100,6 @@ function maybeAttachJourney(rs: RunState, current: any, totalSteps: number): voi
   } catch {
     // Journey is a best-effort enhancement — never let it break a pick.
   }
-}
-
-function shuffle<T>(arr: T[]): T[] {
-  return [...arr].sort(() => Math.random() - 0.5);
 }
 
 // Resolve {bpm, key} for a track via the library DB (queued/agent picks carry
@@ -446,6 +443,10 @@ function trackFields(song) {
     // source: Subsonic `duration`, the picker tools' slim projection (what the
     // agent's `seen` map stores) `duration_sec`, library rows `durationSec`.
     duration: song.duration ?? song.duration_sec ?? song.durationSec ?? null,
+    // ReplayGain rides raw Subsonic songs (pool picks) but not the slim
+    // projection agent picks resolve from — stays undefined there, which
+    // tells queue.applyLoudnessGain to recover it with a getSong lookup.
+    replayGain: song.replayGain,
   };
 }
 
@@ -464,7 +465,8 @@ function trimLinkToIntro(text: string | null | undefined, song: any): string | n
   const raw = (text || '').trim();
   if (!raw) return null;
   if (!settings.getEffectivePersona()?.djMode) return raw;
-  const spoken = normalizeForSpeech(stripThinking(raw));
+  // Same corrections as speak() so the word count matches the aired text.
+  const spoken = normalizeForSpeech(stripThinking(raw), settings.get().tts?.corrections);
   return dj.enforceIntroBudget(spoken, introMsOf(song), speechPaceScale('link')) || null;
 }
 
@@ -514,6 +516,13 @@ async function enqueuePick(
     aiPicked: true,
     linkPrev,
   });
+  if (pos === -2) {
+    // Never-play blocklist refused the pick — library-db-sourced candidates
+    // can slip past the subsonic filter. Same "didn't queue" signal as dedup;
+    // the caller's normal no-pick handling covers it.
+    queue.log('ai-pick', `${song.title} — ${song.artist} refused (never-play blocklist)`, { reason, source });
+    return -1;
+  }
   if (pos === -1) return -1;
   queue.log('ai-pick', `${song.title} — ${song.artist}`, { reason, source });
   recordPick({ song, reason, source });
@@ -991,6 +1000,10 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       introScript: intro || null,
       introKind: 'dj-speak',
     });
+    // Never-play blocklist refused the pick — throw so the route's stateless
+    // fallback cascade runs; its own resolution is blocklist-filtered, so the
+    // listener gets the standard not-found decline rather than a silent drop.
+    if (pos === -2) throw new Error('pick refused by never-play blocklist');
     // A concurrent request already queued this exact track — push() deduped it
     // (#619). Acknowledge honestly (no second back-to-back play, no false
     // "coming up", no intro to air) and still append the line as the session

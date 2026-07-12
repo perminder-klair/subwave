@@ -26,6 +26,8 @@ Mark each box per platform. Note the device + OS version you tested on.
 ## Resilience & connectivity
 
 - [ ] **iOS** / [ ] **Android** — **Headphone / Bluetooth unplug** pauses playback; pressing play (or replugging) **resumes at the LIVE edge**, not a stale buffered segment. _(validates A3 — `service.ts` RemotePlay re-load)_
+- [ ] **iOS** — **Output device disappears** (Bluetooth speaker powered off, or CarPlay: car turned off / cable pulled): app pauses instead of "playing" silently, and the **admin listener count decrements** within a few seconds (no phantom Icecast session). _(validates #992 — `usePlayer` route-change tune-out on `oldDeviceUnavailable`)_
+- [ ] **iOS** — **AirPlay regression guard**: pick a HomePod from the in-app AirPlay button, let a crossfade pass, pick the phone back — playback keeps running on the chosen device throughout, never snapping to the built-in speaker or pausing. _(the #992 pause must fire ONLY on `oldDeviceUnavailable`, not on handoffs — 0b060a3a behavior)_
 - [ ] **iOS** / [ ] **Android** — **Phone-call interruption**: audio ducks/pauses for the call and resumes after. _(validates `autoHandleInterruptions: true`)_
 - [ ] **iOS** / [ ] **Android** — **Wi-Fi → cellular switch** while tuned in: the **`CONNECTING…` / `NO CONNECTION` banner** appears and playback **reconnects within a beat** (not the full ~6s watchdog wait). _(validates A1 — `useConnectivity` proactive reconnect)_
 - [ ] **iOS** / [ ] **Android** — **Airplane-mode cold start**: launch with no network → app reaches the player with a **`NO CONNECTION` banner**, **no stuck splash**, no crash. Turn network back on → banner clears, can tune in.

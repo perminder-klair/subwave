@@ -123,13 +123,26 @@ export ICECAST_SOURCE_PASSWORD ICECAST_ADMIN_PASSWORD ICECAST_RELAY_PASSWORD
 export ICECAST_HOST=localhost
 
 # ---- Render icecast.xml -----------------------------------------------------
-# Plain sed is enough for three placeholders; the secrets are hex so there's
-# no escaping risk. Using `|` as the sed delimiter keeps slashes safe.
+# Plain sed is enough for four placeholders; the secrets are hex and the
+# listener cap numeric, so there's no escaping risk. Using `|` as the sed
+# delimiter keeps slashes safe.
+
+# Concurrent-listener ceiling (<limits><clients>). Empty/unset → the stock 100.
+# A non-numeric value would render invalid XML and fail icecast at boot, so
+# fall back to the default with a warning instead of taking the stream down.
+ICECAST_MAX_CLIENTS="${ICECAST_MAX_CLIENTS:-100}"
+case "$ICECAST_MAX_CLIENTS" in
+    *[!0-9]*|'')
+        echo "broadcast: ICECAST_MAX_CLIENTS='$ICECAST_MAX_CLIENTS' is not a number — using 100" >&2
+        ICECAST_MAX_CLIENTS=100
+        ;;
+esac
 
 sed \
     -e "s|\${ICECAST_SOURCE_PASSWORD}|$ICECAST_SOURCE_PASSWORD|g" \
     -e "s|\${ICECAST_ADMIN_PASSWORD}|$ICECAST_ADMIN_PASSWORD|g" \
     -e "s|\${ICECAST_RELAY_PASSWORD}|$ICECAST_RELAY_PASSWORD|g" \
+    -e "s|\${ICECAST_MAX_CLIENTS}|$ICECAST_MAX_CLIENTS|g" \
     "$TEMPLATE" > "$RENDERED"
 chown icecast2 "$RENDERED" 2>/dev/null || true
 

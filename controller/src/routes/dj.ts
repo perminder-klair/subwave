@@ -15,7 +15,7 @@ import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, runBanter, runProgrammeIntro, runProgrammeFeature, runProgrammeOutro, refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
 import * as sfxLib from '../broadcast/sfx.js';
-import { loadSkills, parseFrontmatter, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
+import { loadSkills, parseFrontmatter, parseTags, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, TAG_RE, TAGS_PER_SKILL_LIMIT, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
 import { writeSkillFile, msToCooldownStr, resetBuiltinSkill } from '../skills/scaffold.js';
 import { mapPool } from '../util/async-pool.js';
 import { readFile, rm, stat, mkdir, writeFile } from 'node:fs/promises';
@@ -25,6 +25,54 @@ import { skipTrack } from '../broadcast/liquidsoap-control.js';
 import { getFullContext } from '../context.js';
 
 export const router = express.Router();
+
+// Prompt-only skill fields shared by the create/edit routes — structurally the
+// SkillFileFields that writeSkillFile (skills/scaffold.ts) consumes.
+interface SkillFields {
+  kind: string;
+  label?: string;
+  cooldown?: string;
+  contextFields?: string[];
+  window?: 'any' | 'commute';
+  requiresKey?: string;
+  feed?: string;
+  feedMaxItems?: number;
+  tags?: string[];
+  brief?: string;
+}
+
+// Normalise a tags form value (array or comma string) with LOUD validation — a
+// bad tag 400s here instead of silently vanishing (the loader's lenient
+// parseTags is for hand-edited files; the form should fail fast).
+function buildTags(raw: unknown): string[] | undefined {
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+  const out: string[] = [];
+  for (const item of list) {
+    const tag = String(item ?? '').trim().toLowerCase();
+    if (!tag) continue;
+    if (!TAG_RE.test(tag)) {
+      throw new Error(`invalid tag "${tag}" — lowercase slugs (a-z, 0-9, hyphens), max 24 chars`);
+    }
+    if (!out.includes(tag)) out.push(tag);
+  }
+  if (out.length > TAGS_PER_SKILL_LIMIT) {
+    throw new Error(`at most ${TAGS_PER_SKILL_LIMIT} tags per skill`);
+  }
+  return out.length ? out : undefined;
+}
+
+// The subset of a Subsonic song toAdminRow reads to build a queue-ready row.
+interface AdminSong {
+  id: string;
+  title?: string | null;
+  artist?: string | null;
+  album?: string | null;
+  year?: number | null;
+  genre?: string | null;
+  duration?: number | null;
+  path?: string | null;
+  replayGain?: { trackGain?: number | null; trackPeak?: number | null } | null;
+}
 
 const SAY_TEXT_MAX = 500;
 // Duck level: 'dj-speak' → say.txt (heavy duck, solo DJ moment);
@@ -47,7 +95,7 @@ router.post('/dj/skills/rescan', requireAdmin, async (req, res) => {
   try {
     const caps = await loadSkills();
     queue.log('scheduler', `[skills] rescanned — ${caps.length} skill(s) loaded`);
-    res.json({ skills: skillCatalog(), custom: caps.filter((c: any) => !c.seeded).length });
+    res.json({ skills: skillCatalog(), custom: caps.filter((c) => !c.seeded).length });
   } catch (err) {
     queue.log('error', `/dj/skills/rescan failed: ${err.message}`);
     res.status(500).json({ error: err.message });
@@ -70,7 +118,7 @@ router.get('/dj/skills/community', requireAdmin, async (req, res) => {
       reserved: RESERVED_KINDS.has(c.slug),
     })));
     res.json({ community: annotated });
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `/dj/skills/community failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
@@ -101,7 +149,7 @@ router.post('/dj/skills/community/:slug/install', requireAdmin, async (req, res)
     return res.status(404).json({ error: `no such community skill: ${slug}` });
   }
 
-  let fields: any;
+  let fields: SkillFields;
   try {
     // Normalize through the same builder the create/edit routes use, so a bad
     // catalog entry (unknown context field, malformed cooldown) fails loudly
@@ -113,7 +161,7 @@ router.post('/dj/skills/community/:slug/install', requireAdmin, async (req, res)
       context: cs.context,
       window: cs.window,
     });
-  } catch (err: any) {
+  } catch (err) {
     return res.status(400).json({ error: `community skill "${slug}" is malformed: ${err.message}` });
   }
 
@@ -122,7 +170,7 @@ router.post('/dj/skills/community/:slug/install', requireAdmin, async (req, res)
     await loadSkills();
     queue.log('scheduler', `[skills] community "${slug}" installed via admin UI (disabled)`);
     res.json({ skills: skillCatalog() });
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `POST /dj/skills/community/${slug}/install failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
@@ -147,7 +195,7 @@ router.get('/dj/skills/:slug/export', requireAdmin, async (req, res) => {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', `attachment; filename="${slug}-skill.zip"`);
     res.send(zip.toBuffer());
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `GET /dj/skills/${slug}/export failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
@@ -172,7 +220,7 @@ function isSafeZipEntry(entryName: string): boolean {
 // "this runs code" warning. Rejects reserved names and re-imports (409).
 // ---------------------------------------------------------------------------
 router.post('/dj/skills/import', requireAdmin, zipUpload('file'), async (req, res) => {
-  const file = (req as any).file as { buffer?: Buffer } | undefined;
+  const file = (req as { file?: { buffer?: Buffer } }).file;
   if (!file?.buffer?.length) return res.status(400).json({ error: 'expected a .zip file in the "file" field' });
 
   let zip: AdmZip;
@@ -185,8 +233,8 @@ router.post('/dj/skills/import', requireAdmin, zipUpload('file'), async (req, re
   if (totalRaw > 8 * 1024 * 1024) return res.status(400).json({ error: 'skill bundle is too large uncompressed' });
 
   // Accept only SKILL.md + tool.mjs (by basename), anywhere safe in the archive.
-  let skillMdEntry: any = null;
-  let toolEntry: any = null;
+  let skillMdEntry: AdmZip.IZipEntry | null = null;
+  let toolEntry: AdmZip.IZipEntry | null = null;
   for (const e of entries) {
     if (e.isDirectory) continue;
     if (!isSafeZipEntry(e.entryName)) return res.status(400).json({ error: `unsafe path in zip: ${e.entryName}` });
@@ -213,7 +261,7 @@ router.post('/dj/skills/import', requireAdmin, zipUpload('file'), async (req, re
     await loadSkills();
     queue.log('scheduler', `[skills] imported "${slug}" from zip${hasTool ? ' (with tool.mjs)' : ''} via admin UI (disabled)`);
     res.json({ skills: skillCatalog(), slug, hasTool });
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `POST /dj/skills/import failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
@@ -245,7 +293,7 @@ async function skillHasTool(slug: string): Promise<boolean> {
 // SkillFileFields object for writeSkillFile. Throws Error(message) on the first
 // invalid field; callers map that to a 400. The slug is the immutable identity,
 // passed in (from the URL on edit, from the body on create).
-function buildCustomSkillFields(slug: string, b: any): any {
+function buildCustomSkillFields(slug: string, b: Record<string, unknown>): SkillFields {
   const brief = typeof b.brief === 'string' ? b.brief.trim() : '';
   if (!brief) throw new Error('brief is required');
 
@@ -255,14 +303,14 @@ function buildCustomSkillFields(slug: string, b: any): any {
   }
 
   const label = typeof b.label === 'string' && b.label.trim() ? b.label.trim() : undefined;
-  const fields: any = { kind: slug, label, cooldown: cooldown || undefined, brief };
+  const fields: SkillFields = { kind: slug, label, cooldown: cooldown || undefined, brief };
 
   // Context fields — the "right now" lines this segment may weave in (#471).
   // Accept a comma string or an array; validate every token so a typo fails
   // loudly here. An empty selection resets the skill to the default profile.
   if (b.context !== undefined) {
     const raw = Array.isArray(b.context) ? b.context : String(b.context).split(',');
-    const toks = raw.map((s: any) => String(s).trim().toLowerCase()).filter(Boolean);
+    const toks = raw.map((s: unknown) => String(s).trim().toLowerCase()).filter(Boolean);
     const known = new Set<string>(dj.CONTEXT_FIELDS as readonly string[]);
     const bad = toks.filter((t: string) => !known.has(t));
     if (bad.length) {
@@ -282,6 +330,8 @@ function buildCustomSkillFields(slug: string, b: any): any {
     if (!ENV_KEY_RE.test(key)) throw new Error('requiresKey must be an env var name (UPPER_SNAKE_CASE)');
     fields.requiresKey = key;
   }
+
+  if (b.tags !== undefined) fields.tags = buildTags(b.tags);
 
   return fields;
 }
@@ -306,6 +356,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       label: tpl.data.label || kind,
       cooldown: tpl.data.cooldown || '60m',
       context: (effectiveContextFields({ contextFields: tpl.data.context ?? tpl.data.contextFields }) || []).join(', '),
+      tags: parseTags(tpl.data.tags),
       brief: tpl.body || '',
       ...(kind === 'news' ? { feed: config.news.feedUrl, feedMaxItems: config.news.maxItems } : {}),
     } : null;
@@ -327,6 +378,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         knownContextFields: [...dj.CONTEXT_FIELDS],
         feed: data.feed || cat?.feed || null,
         feedMaxItems: data.feedMaxItems ? parseInt(data.feedMaxItems, 10) : (cat?.feedMaxItems || null),
+        tags: parseTags(data.tags),
         brief: body || cat?.description || '',
         // Built-ins now carry an editable tool.mjs in state too (seeded on first
         // boot), so the edit form shows the same "edit on disk + Rescan" hint as
@@ -347,6 +399,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         knownContextFields: [...dj.CONTEXT_FIELDS],
         feed: cat?.feed || null,
         feedMaxItems: cat?.feedMaxItems || null,
+        tags: cat?.tags || [],
         brief: cat?.description || '',
         hasTool: await skillHasTool(kind),
         defaults,
@@ -372,6 +425,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       knownContextFields: [...dj.CONTEXT_FIELDS],
       window: data.window === 'commute' ? 'commute' : 'any',
       requiresKey: data.requiresKey || '',
+      tags: parseTags(data.tags),
       hasTool: await skillHasTool(kind),
       brief: body || '',
     });
@@ -399,10 +453,10 @@ router.post('/dj/skills', requireAdmin, async (req, res) => {
     return res.status(409).json({ error: `a skill named "${name}" already exists` });
   }
 
-  let fields: any;
+  let fields: SkillFields;
   try {
     fields = buildCustomSkillFields(name, b);
-  } catch (err: any) {
+  } catch (err) {
     return res.status(400).json({ error: err.message });
   }
 
@@ -411,7 +465,7 @@ router.post('/dj/skills', requireAdmin, async (req, res) => {
     await loadSkills();
     queue.log('scheduler', `[skills] custom "${name}" created via admin UI`);
     res.json({ skills: skillCatalog() });
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `POST /dj/skills (${name}) failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
@@ -434,10 +488,10 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
     if (!(await skillFileExists(kind))) {
       return res.status(404).json({ error: `no such custom skill: ${kind} — create it first` });
     }
-    let fields: any;
+    let fields: SkillFields;
     try {
       fields = buildCustomSkillFields(kind, b);
-    } catch (err: any) {
+    } catch (err) {
       return res.status(400).json({ error: err.message });
     }
     try {
@@ -445,7 +499,7 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       await loadSkills();
       queue.log('scheduler', `[skills] custom "${kind}" edited via admin UI`);
       return res.json({ skills: skillCatalog() });
-    } catch (err: any) {
+    } catch (err) {
       queue.log('error', `PUT /dj/skills/${kind}/file failed: ${err.message}`);
       return res.status(500).json({ error: err.message });
     }
@@ -461,7 +515,7 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   }
 
   const label = typeof b.label === 'string' && b.label.trim() ? b.label.trim() : undefined;
-  const fields: any = { kind, label, cooldown: cooldown || undefined, brief };
+  const fields: SkillFields = { kind, label, cooldown: cooldown || undefined, brief };
 
   // Context fields — the "right now" lines this segment may weave in (#471).
   // Accept a comma string or an array; validate every token against the known
@@ -469,13 +523,21 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
   // block. An empty selection resets the skill to the default profile.
   if (b.context !== undefined) {
     const raw = Array.isArray(b.context) ? b.context : String(b.context).split(',');
-    const toks = raw.map((s: any) => String(s).trim().toLowerCase()).filter(Boolean);
+    const toks = raw.map((s: unknown) => String(s).trim().toLowerCase()).filter(Boolean);
     const known = new Set<string>(dj.CONTEXT_FIELDS as readonly string[]);
     const bad = toks.filter((t: string) => !known.has(t));
     if (bad.length) {
       return res.status(400).json({ error: `unknown context field(s): ${bad.join(', ')} — valid: ${[...known].join(', ')}` });
     }
     if (toks.length) fields.contextFields = toks;
+  }
+
+  if (b.tags !== undefined) {
+    try {
+      fields.tags = buildTags(b.tags);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
   }
 
   // Feed is news-only. Validate it parses as an http(s) URL.
@@ -499,8 +561,66 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
     await loadSkills();
     queue.log('scheduler', `[skills] built-in "${kind}" edited via admin UI`);
     res.json({ skills: skillCatalog() });
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `PUT /dj/skills/${kind}/file failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PUT /dj/skills/:slug/personas — reverse assignment: set exactly which DJs run
+// this skill, from the skill's own editor (instead of persona-by-persona in
+// PersonaSkillsCard — both write the same personas[].skills field).
+// Body: { personaIds: string[] } — the personas that SHOULD have the skill.
+// The read-modify-write happens server-side so the null sentinel ("all skills")
+// is interpreted in exactly one place: null + assigned → stays null (already
+// covered); null + unassigned → materialises the full current catalog minus
+// this skill (what un-ticking the first box in PersonaSkillsCard does too).
+// ---------------------------------------------------------------------------
+router.put('/dj/skills/:slug/personas', requireAdmin, async (req, res) => {
+  const slug = req.params.slug;
+  const catalog = skillCatalog();
+  if (!catalog.some((sk) => sk.name === slug)) {
+    return res.status(404).json({ error: `no such skill: ${slug}` });
+  }
+
+  const raw = req.body?.personaIds;
+  if (!Array.isArray(raw) || raw.some((id) => typeof id !== 'string')) {
+    return res.status(400).json({ error: 'personaIds must be an array of persona ids' });
+  }
+  const want = new Set<string>(raw);
+  const s = settings.get();
+  const known = new Set(s.personas.map((p) => p.id));
+  const unknown = [...want].filter((id) => !known.has(id));
+  if (unknown.length) {
+    return res.status(400).json({ error: `unknown persona id(s): ${unknown.join(', ')}` });
+  }
+
+  const allSlugs = catalog.map((sk) => sk.name);
+  let changed = false;
+  const personas = s.personas.map((p) => {
+    const has = p.skills === null || p.skills.includes(slug);
+    const should = want.has(p.id);
+    if (has === should) return p;
+    changed = true;
+    // `should && !has` implies p.skills is an array (null would mean has=true).
+    if (should) return { ...p, skills: [...p.skills, slug] };
+    const base = p.skills === null ? allSlugs : p.skills;
+    return { ...p, skills: base.filter((sl) => sl !== slug) };
+  });
+
+  try {
+    if (changed) await settings.update({ personas });
+    queue.log('scheduler', `[skills] "${slug}" DJ assignments updated via admin UI`);
+    res.json({
+      personas: personas.map((p) => ({
+        id: p.id,
+        name: p.name,
+        hasSkill: p.skills === null || p.skills.includes(slug),
+      })),
+    });
+  } catch (err) {
+    queue.log('error', `PUT /dj/skills/${slug}/personas failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -522,7 +642,7 @@ router.post('/dj/skills/:kind/reset', requireAdmin, async (req, res) => {
     await loadSkills();
     queue.log('scheduler', `[skills] built-in "${kind}" reset to default via admin UI`);
     res.json({ skills: skillCatalog() });
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `POST /dj/skills/${kind}/reset failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
@@ -549,7 +669,7 @@ router.delete('/dj/skills/:slug', requireAdmin, async (req, res) => {
     await loadSkills();
     queue.log('scheduler', `[skills] custom "${slug}" deleted via admin UI`);
     res.json({ skills: skillCatalog() });
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `DELETE /dj/skills/${slug} failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
@@ -690,12 +810,35 @@ router.post('/dj/skip', requireAdmin, async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// DELETE /dj/queue/:trackId — remove a not-yet-aired track from the upcoming
+// queue (operator override). Refuses with 409 once the track has left
+// Liquidsoap's dj_queue (it's on air or about to be) — that's /dj/skip
+// territory. Listeners can't reach this; there is no listener-facing cancel
+// by design, mirroring skip.
+// ---------------------------------------------------------------------------
+router.delete('/dj/queue/:trackId', requireAdmin, async (req, res) => {
+  try {
+    const result = await queue.removeUpcoming(req.params.trackId);
+    if (!result.ok) {
+      const msg = result.reason === 'already-playing'
+        ? 'too late to cancel — the track already left the queue'
+        : 'track is not in the queue';
+      return res.status(409).json({ error: msg, reason: result.reason });
+    }
+    res.json({ removed: true });
+  } catch (err) {
+    queue.log('error', `/dj/queue remove failed: ${err.message}`);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 // Shape a Subsonic song into the queue-ready row the admin track tabs render,
 // merging the library index's stored tags AND acoustic-analysis columns so
 // search/recent rows carry the same mood/energy + BPM/key/LUFS badges as
 // browse rows (the index is the only source of either — Subsonic metadata
 // carries none).
-function toAdminRow(s: any) {
+function toAdminRow(s: AdminSong) {
   const tag = library.get(s.id);
   return {
     id: s.id,
@@ -708,6 +851,12 @@ function toAdminRow(s: any) {
     // path lets getLocalPath() use the on-disk file when MUSIC_LIBRARY_PATH
     // is mounted, matching how listener-requested tracks are queued.
     path: s.path ?? null,
+    // Rides back through POST /dj/queue-track so a manually queued track gets
+    // the same ReplayGain-first loudness resolution as picker/request tracks.
+    // Deliberately NOT `?? null`: an absent key drops out of the JSON round
+    // trip and stays undefined, which tells applyLoudnessGain to re-fetch the
+    // song rather than trusting that the tag is really missing.
+    replayGain: s.replayGain,
     moods: tag?.moods ?? [],
     energy: tag?.energy ?? null,
     source: tag?.source ?? null,
@@ -732,7 +881,9 @@ router.get('/dj/search', requireAdmin, async (req, res) => {
   const offset = Math.max(parseInt(String(req.query?.offset || ''), 10) || 0, 0);
   try {
     await library.load();
-    const songs = await source.search(q, { songCount: limit, songOffset: offset });
+    // includeBlocked: the operator must still find never-play tracks here to
+    // review them; queueing one is refused at the queue gate with a clear 409.
+    const songs = await source.search(q, { songCount: limit, songOffset: offset, includeBlocked: true });
     const results = songs.map(toAdminRow);
     // A full page means there may be more — the UI shows Load more on this
     // rather than a total (search3 doesn't return one).
@@ -776,7 +927,7 @@ router.get('/dj/recent', requireAdmin, async (req, res) => {
     // (~21 parallel Navidrome calls at the default limit), which tipped a
     // slow/loaded Navidrome into failures (#786). 5-wide keeps it snappy
     // without the thundering herd.
-    const songLists = await mapPool(albums, 5, (a: any) =>
+    const songLists = await mapPool(albums, 5, (a: { id: string }) =>
       source.getAlbum(a.id).catch(() => []),
     );
     const results = songLists.flat().slice(0, limit).map(toAdminRow);
@@ -801,6 +952,11 @@ router.post('/dj/queue-track', requireAdmin, async (req, res) => {
     // Explicit operator action — bypass the request/AI dedup guard (#619) so a
     // deliberate manual queue always fires, even for an already-queued track.
     const queuePosition = await queue.push({ track, requestedBy: 'studio', allowDuplicate: true });
+    if (queuePosition === -2) {
+      // The never-play blocklist is absolute — even manual queueing is refused
+      // (operator's call). Unblock in admin → Library → Blocked to re-audition.
+      return res.status(409).json({ error: 'track is on the never-play blocklist — unblock it first (Library → Blocked)' });
+    }
     res.json({
       ok: true,
       track: { title: track.title, artist: track.artist || null },

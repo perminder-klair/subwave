@@ -13,9 +13,42 @@ import { nearestId } from '../llm/sdk.js';
 import { logEvent } from '../observability/events.js';
 import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
+import { shuffle } from '../util/shuffle.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
 import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, hasEraBound, eraSpan, type YearRange } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
+
+// A track flowing through the pool builder — a raw Subsonic child, a slimTrack
+// library row, or a Last.fm-derived stub, tagged with the internal _source /
+// _similarity the pool stamps on. Every field is optional because each source
+// carries a different subset; the picker reads only these. Structurally a
+// superset of show-filter's FilterTrack and recency's CandidateLike, so it
+// flows into both without a cast.
+interface Candidate {
+  id?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  year?: number | string | null;
+  genre?: string | null;
+  duration?: number | null;
+  moods?: string[] | null;
+  energy?: string | null;
+  paceMean?: number | null;
+  bpm?: number | null;
+  key?: string | null;
+  structure?: unknown[] | null;
+  _source?: string | null;
+  _similarity?: number | null;
+}
+
+// A play-history entry as summariseRecent reads it — the live queue wraps each
+// track in `{ track }`. `track` is required here so the recent-summary mapper
+// can read title/artist/id without re-guarding what the `current`/`history`
+// guards already established.
+interface QueueEntry {
+  track: Candidate;
+}
 
 const CANDIDATE_CAP = 18;
 const HISTORY_DEPTH = 4;
@@ -58,10 +91,6 @@ async function memo(key, ttl, fn) {
   return val;
 }
 
-function shuffle<T>(arr: T[]): T[] {
-  return [...arr].sort(() => Math.random() - 0.5);
-}
-
 // --- Tempo / harmonic compatibility (Stage B, soft re-rank only) -----------
 // These bias the pool ordering toward smoother transitions; they are NEVER a
 // hard filter, and a track with NULL bpm/key contributes a 0 bonus (so it
@@ -72,7 +101,7 @@ function shuffle<T>(arr: T[]): T[] {
 // analyzer's numbers over the candidate's own fields (a Subsonic candidate's
 // bpm is Navidrome's ID3-derived value, 0 on un-tagged files; #862). Also
 // carries the boundary keys (keyStart/keyEnd, feature: key ranges).
-function analysisFor(t: any): { bpm: number | null; key: string | null; keyStart?: string | null; keyEnd?: string | null } {
+function analysisFor(t: Candidate): { bpm: number | null; key: string | null; keyStart?: string | null; keyEnd?: string | null } {
   return library.bpmKeyFor(t);
 }
 
@@ -85,10 +114,10 @@ function analysisFor(t: any): { bpm: number | null; key: string | null; keyStart
 // the pair the transition actually meets — the anchor's ENDING key against
 // each candidate's OPENING key (feature: key ranges) — falling back to the
 // dominant keys (a mini-run rankTarget carries only a dominant key).
-function softRankByCompat(pool: any[], current: { bpm: number | null; key: string | null; keyEnd?: string | null }): any[] {
+function softRankByCompat(pool: Candidate[], current: { bpm: number | null; key: string | null; keyEnd?: string | null }): Candidate[] {
   if (current.bpm == null && current.key == null) return shuffle(pool);
   return pool
-    .map((t: any) => {
+    .map((t) => {
       const a = analysisFor(t);
       const bonus = 0.4 * bpmCompat(current.bpm, a.bpm) + 0.3 * keyCompat(current.keyEnd ?? current.key, a.keyStart ?? a.key);
       return { t, score: Math.random() + bonus };
@@ -125,17 +154,17 @@ function hasMusicFilter(f: ShowFilter): boolean {
 // year window (the in-range-or-full pattern below).
 
 function notRecent(recentIds: Set<string>) {
-  return (t: any) => t && t.id && !recentIds.has(t.id);
+  return (t: Candidate) => t && t.id && !recentIds.has(t.id);
 }
 
-function sampleWithRecentFallback(items: any[], recentIds: Set<string>, cap: number) {
+function sampleWithRecentFallback(items: Candidate[], recentIds: Set<string>, cap: number): Candidate[] {
   const fresh = items.filter(notRecent(recentIds));
   return (fresh.length > 0 ? fresh : items).slice(0, cap);
 }
 
 // Walk a list of albums and return up to `perAlbum` tracks from each, capped.
-async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
-  const out: any[] = [];
+async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max: number) {
+  const out: Candidate[] = [];
   for (const a of albums) {
     if (out.length >= max) break;
     try {
@@ -146,13 +175,13 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: any, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false) {
   await library.load();
-  const pool: any[] = [];
+  const pool: Candidate[] = [];
   const sources: Record<string, number> = {};
-  const add = (label: string, items: any[]) => {
+  const add = (label: string, items: Candidate[]) => {
     if (!items?.length) return;
-    pool.push(...items.map((t: any) => ({ ...t, _source: label })));
+    pool.push(...items.map((t) => ({ ...t, _source: label })));
     sources[label] = (sources[label] || 0) + items.length;
   };
   // A non-empty playlist anchor on this show: the union of its tracks. Strict
@@ -189,7 +218,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // Hard-prefer every set filter on a discovery source in strict mode; a no-op
   // otherwise. Each prefer* falls back to the full set when nothing in the
   // source matches, so leaning a source can only tighten, never starve it.
-  const lean = (items: any[]) => {
+  const lean = (items: Candidate[]): Candidate[] => {
     if (!strict) return items;
     let out = items;
     if (strictGenres.length) out = preferGenre(out, strictGenres);
@@ -281,7 +310,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
         }
       }
       const span = eraSpan(showFilter!.eras);
-      const collected: any[] = [];
+      const collected: Candidate[] = [];
       const randomSize = strict ? 60 : 40;
       const genreSetSize = strict ? 100 : 60;
       for (const genreName of genreNames.length ? genreNames : [undefined]) {
@@ -323,7 +352,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   const poolMoods = showFilter?.moods.length ? showFilter.moods : (mood ? [mood] : []);
   if (poolMoods.length) {
     const seenMoodIds = new Set<string>();
-    const moodPool: any[] = [];
+    const moodPool: Candidate[] = [];
     for (const m of poolMoods) {
       for (const t of library.songsByMood(m)) {
         if (t?.id && seenMoodIds.has(t.id)) continue;
@@ -343,9 +372,10 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   if (poolMoods.length && !hasPlaylist) {
     try {
       const playlists = await memo('playlists', CACHE_TTL_MS, () => source.getPlaylists());
-      const matched = playlists.filter((p: any) =>
+      const matched = playlists.filter((p: { name?: string | null }) =>
+
         poolMoods.some(m => p.name?.toLowerCase().includes(m.toLowerCase())));
-      const plTracks: any[] = [];
+      const plTracks: Candidate[] = [];
       for (const pl of matched.slice(0, 2)) {
         try {
           const songs = await memo(`playlist:${pl.id}`, CACHE_TTL_MS, () =>
@@ -387,7 +417,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
         `similar-artist:${currentTrack.artist}`,
         CACHE_TTL_MS,
         async () => {
-          const matches = await source.searchArtists(currentTrack.artist, {
+          const matches = await source.searchArtists(currentTrack.artist!, {
             artistCount: 1,
           });
           if (matches.length === 0) return [];
@@ -395,7 +425,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
             count: 5,
           });
           const similars = (info?.similarArtist || []).slice(0, 2);
-          const collected: any[] = [];
+          const collected: Candidate[] = [];
           for (const sa of similars) {
             try {
               const top = await source.getTopSongs(sa.name, { count: 5 });
@@ -433,7 +463,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   let selectionPool = pool;
   let playlistInfo: { names: string[]; matched: number; total: number } | null = null;
   if (strictPlaylist) {
-    const inPl = pool.filter((t: any) => t?.id && playlistPool!.ids.has(t.id));
+    const inPl = pool.filter((t) => t?.id && playlistPool!.ids.has(t.id));
     if (inPl.length) selectionPool = inPl;
   }
 
@@ -471,7 +501,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     strictInfo = {
       requested: showFilter.genres.join(', '),
       resolved: strictGenres.length ? strictGenres.join(', ') : null,
-      matched: targets.length ? final.filter((t: any) => genreMatches(t, targets)).length : 0,
+      matched: targets.length ? final.filter((t) => genreMatches(t, targets)).length : 0,
       total: final.length,
     };
   }
@@ -482,7 +512,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   if (hasPlaylist) {
     playlistInfo = {
       names: playlistPool!.names,
-      matched: final.filter((t: any) => t?.id && playlistPool!.ids.has(t.id)).length,
+      matched: final.filter((t) => t?.id && playlistPool!.ids.has(t.id)).length,
       total: final.length,
     };
   }
@@ -490,13 +520,13 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   return { candidates: final, sources, strictInfo, playlistInfo };
 }
 
-function summariseRecent(queue: any) {
-  const items: any[] = [];
+function summariseRecent(queue: { current?: QueueEntry | null; history: QueueEntry[] }) {
+  const items: QueueEntry[] = [];
   if (queue.current) items.push(queue.current);
   items.push(...queue.history.slice(0, HISTORY_DEPTH));
   return items
-    .filter((i: any) => i?.track?.title)
-    .map((i: any) => {
+    .filter((i) => i?.track?.title)
+    .map((i) => {
       const tags = i.track.id ? library.get(i.track.id) : null;
       // Empty fields are omitted, not nulled — `"moods": [], "energy": null`
       // on every un-tagged entry was pure token spend (the payload is compact
@@ -513,7 +543,7 @@ function summariseRecent(queue: any) {
 // The album line only earns its tokens when it says something the title
 // doesn't — "Aja - Single" next to the title "Aja" is noise on every single
 // release in the pool.
-function slimAlbum(album: any, title: any): string | undefined {
+function slimAlbum(album: string | null | undefined, title: string | null | undefined): string | undefined {
   if (!album) return undefined;
   const stripped = String(album).replace(/\s*-\s*(Single|EP)$/i, '').trim();
   return stripped.toLowerCase() === String(title || '').trim().toLowerCase() ? undefined : album;
@@ -564,7 +594,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // show's excluded playlist union. Applied after buildCandidates so the full
   // pool is built first; no never-starve fallback — the blocklist is hard.
   const candidates = excludedIds
-    ? rawCandidates.filter((t: any) => t?.id && !excludedIds.has(t.id))
+    ? rawCandidates.filter((t) => t?.id && !excludedIds.has(t.id))
     : rawCandidates;
 
   if (candidates.length === 0) {
@@ -712,7 +742,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // candidate is that candidate mistranscribed, not a different pick. Free —
   // no model call — and only runs when the exact match above already missed.
   if (!chosen && pickRaw?.id) {
-    const fixed = nearestId(pickRaw.id, candidates.map(c => c.id).filter(Boolean));
+    const fixed = nearestId(pickRaw.id, candidates.map(c => c.id).filter((id): id is string => Boolean(id)));
     if (fixed) {
       logEvent('pick.repaired', { agent: 'pool', from: pickRaw.id, to: fixed });
       queue.log('picker', `pool pick id "${pickRaw.id}" repaired to near-miss match "${fixed}"`);

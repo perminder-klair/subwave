@@ -30,7 +30,7 @@ export const activeCapabilities = () => capabilitiesFor(activeSourceId());
 export function ping(): Promise<{ ok: boolean; reason?: string }> {
   return activeSource().ping();
 }
-export function search(query: string, opts?: { songCount?: number; songOffset?: number }): Promise<Song[]> {
+export function search(query: string, opts?: { songCount?: number; songOffset?: number; includeBlocked?: boolean }): Promise<Song[]> {
   return activeSource().search(query, opts);
 }
 export function getSong(id: string): Promise<Song | null> {

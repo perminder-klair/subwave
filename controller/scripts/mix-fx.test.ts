@@ -9,10 +9,12 @@ import {
   washoutDelayFor,
   effectAllowedFor,
   gainForLoudness,
+  loudnessFromReplayGain,
   WASHOUT_CROSS_TARGET_SECONDS,
   CROSS_MAX_SECONDS,
   LOUDNESS_MAX_BOOST_DB,
   LOUDNESS_CUT_CLAMP_DB,
+  REPLAYGAIN_REFERENCE_LUFS,
 } from '../src/music/mix.js';
 
 let failures = 0;
@@ -169,6 +171,42 @@ async function main() {
   await test('rounded to 0.1 dB', () => {
     assert.equal(gainForLoudness(-15.55), 1.6);
     assert.equal(gainForLoudness(-13.333), -0.7);
+  });
+
+  console.log('loudnessFromReplayGain (OpenSubsonic tag → measured-equivalent shape):');
+
+  await test('trackGain inverts around the −18 LUFS reference', () => {
+    assert.equal(REPLAYGAIN_REFERENCE_LUFS, -18);
+    // The issue-#998 track: RG trackGain −9.8 dB → the file really sits at −8.2 LUFS.
+    assert.deepEqual(loudnessFromReplayGain({ trackGain: -9.8 }), { lufs: -8.2, peakDb: null });
+    // A quiet master: +4 of gain needed → −22 LUFS.
+    assert.deepEqual(loudnessFromReplayGain({ trackGain: 4 }), { lufs: -22, peakDb: null });
+    // Exactly at reference.
+    assert.deepEqual(loudnessFromReplayGain({ trackGain: 0 }), { lufs: -18, peakDb: null });
+  });
+
+  await test('linear trackPeak converts to dBFS', () => {
+    assert.deepEqual(loudnessFromReplayGain({ trackGain: -9.8, trackPeak: 1.0 }), { lufs: -8.2, peakDb: 0 });
+    assert.equal(loudnessFromReplayGain({ trackGain: 0, trackPeak: 0.5 })!.peakDb, -6.02);
+    // Junk peak (0, negative, non-number) → null peak, gain still usable.
+    assert.equal(loudnessFromReplayGain({ trackGain: 0, trackPeak: 0 })!.peakDb, null);
+    assert.equal(loudnessFromReplayGain({ trackGain: 0, trackPeak: 'x' })!.peakDb, null);
+  });
+
+  await test('untagged / malformed shapes → null (fall through to measured)', () => {
+    assert.equal(loudnessFromReplayGain(null), null);
+    assert.equal(loudnessFromReplayGain(undefined), null);
+    assert.equal(loudnessFromReplayGain({}), null); // Navidrome's empty block for untagged files
+    assert.equal(loudnessFromReplayGain({ trackGain: NaN }), null);
+    assert.equal(loudnessFromReplayGain({ trackGain: '−9.8' }), null);
+    assert.equal(loudnessFromReplayGain('replaygain'), null);
+  });
+
+  await test('feeds gainForLoudness like a measurement (end-to-end for #998)', () => {
+    // Target −18: the −8.2 LUFS track gets the full −9.8 cut (within the 12 dB clamp)
+    // instead of the −4.3 the mis-measured −13.7 produced.
+    const rg = loudnessFromReplayGain({ trackGain: -9.8 })!;
+    assert.equal(gainForLoudness(rg.lufs, { targetLufs: -18 }), -9.8);
   });
 
   if (failures > 0) {

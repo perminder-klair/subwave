@@ -62,7 +62,10 @@ export interface MusicSource {
 
   // ── CORE — a source is unusable without these ───────────────────────────
   ping(): Promise<{ ok: boolean; reason?: string }>;
-  search(query: string, opts?: { songCount?: number; songOffset?: number }): Promise<Song[]>;
+  // `includeBlocked` is honoured only by sources that enforce the never-play
+  // blocklist at the source level (Subsonic); others ignore it. Used by the
+  // admin search surface so the operator can still find blocked tracks.
+  search(query: string, opts?: { songCount?: number; songOffset?: number; includeBlocked?: boolean }): Promise<Song[]>;
   getSong(id: string): Promise<Song | null>;
   getAlbum(id: string): Promise<Song[]>;
   getArtist(id: string): Promise<Artist | null>;

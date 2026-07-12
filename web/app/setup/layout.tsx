@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import SetupShell from "@/components/setup/SetupShell";
+import DocShell from '@/components/docs/DocShell';
+import { SETUP_PAGES } from '@/components/setup/pages';
 
 export const metadata: Metadata = {
   title: 'SUB/WAVE — Setup',
@@ -9,5 +10,9 @@ export const metadata: Metadata = {
 };
 
 export default function SetupLayout({ children }: { children: ReactNode }) {
-  return <SetupShell>{children}</SetupShell>;
+  return (
+    <DocShell pages={SETUP_PAGES} eyebrow="THE SETUP GUIDE" ariaLabel="Setup guide contents">
+      {children}
+    </DocShell>
+  );
 }

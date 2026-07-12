@@ -208,6 +208,11 @@ export const config = {
     sfxFile: `${STATE_DIR}/sfx.txt`,
     autoPlaylist: `${STATE_DIR}/auto.m3u`,
     nowPlayingFile: `${STATE_DIR}/now-playing.json`,
+    // Written by radio.liq when a jingle starts feeding the jingle rotate
+    // (issue #997). Jingles play outside the controller's voice serialiser,
+    // so airVoice reads this to hold spoken segments until the stinger has
+    // cleared the air.
+    jinglePlayingFile: `${STATE_DIR}/jingle-playing.json`,
   },
   session: {
     // The live DJ session — a chat-history JSON the controller rewrites as

@@ -5,6 +5,7 @@
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import * as library from '../music/library.js';
+import * as blocklist from '../music/blocklist.js';
 import * as db from '../music/library-db.js';
 import * as analyzer from '../music/analyzer.js';
 import * as coverage from '../music/library-coverage.js';
@@ -19,9 +20,23 @@ import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
 import { tagger, taggerView, startAnalyzer, startReconcile } from '../broadcast/tagger.js';
 import * as localScanner from '../music/sources/local/scanner.js';
+import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import * as mapProjection from '../music/map-projection.js';
 
 export const router = express.Router();
+
+// The subset of a song/track row these routes read and shape — from Subsonic
+// (untyped), a library-db TrackRecord, or an inbound request body.
+interface LibrarySong {
+  id: string;
+  albumId?: string;
+  title?: string | null;
+  artist?: string | null;
+  album?: string | null;
+  year?: number | string | null;
+  genre?: string | null;
+  duration?: number | null;
+}
 
 // ---------------------------------------------------------------------------
 // GET /library/browse — filter the tagged index.
@@ -72,7 +87,7 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
         updatedAt: stats.updatedAt,
       },
     });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -106,7 +121,7 @@ router.get('/library/search-sound', requireAdmin, async (req, res) => {
     const results = hits
       .filter((t: any) => !source.isStationArchive(t))
       .slice(0, limit)
-      .map((t: any) => ({
+      .map((t) => ({
         id: t.id,
         title: t.title ?? null,
         artist: t.artist ?? null,
@@ -124,7 +139,7 @@ router.get('/library/search-sound', requireAdmin, async (req, res) => {
         similarity: typeof t._similarity === 'number' ? t._similarity : null,
       }));
     res.json({ results });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -149,7 +164,7 @@ router.get('/library/genres', requireAdmin, async (req, res) => {
       .map(([value, songCount]) => ({ value, songCount }))
       .sort((a, b) => b.songCount - a.songCount);
     res.json({ genres: list });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -165,7 +180,7 @@ router.get('/library/genres/related', requireAdmin, async (_req, res) => {
   try {
     await library.load();
     res.json(buildGenreSuggest());
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -282,7 +297,7 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
         updatedAt: stats.updatedAt,
       },
     });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -307,7 +322,7 @@ router.get('/library/observatory/track/:id', requireAdmin, async (req, res) => {
     const audioVec = db.getAudioVector(id);
     const mixNext = library
       .tracksLikeThis(id, 8)
-      .map((n: any) => ({
+      .map((n) => ({
         id: n.id,
         title: n.title,
         artist: n.artist,
@@ -365,7 +380,7 @@ router.get('/library/observatory/track/:id', requireAdmin, async (req, res) => {
       audioEmbedding: audioVec ? Array.from(audioVec) : null,
       mixNext,
     });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -381,7 +396,7 @@ router.post('/library/observatory/project', requireAdmin, async (_req, res) => {
     await library.load();
     const started = mapProjection.startProjection();
     res.status(started ? 202 : 409).json({ started, status: mapProjection.projectionStatus() });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -399,7 +414,7 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
   const startAlbumOffset = cursor.albumOffset;
   const startSongIndex = cursor.songIndex;
 
-  const rows: any[] = [];
+  const rows: LibrarySong[] = [];
   let nextCursor: string | null = null;
   let visited = 0;
   const SCAN_BUDGET = 5000; // avoid pathological full-library walks per request
@@ -413,7 +428,7 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
       if (albums.length === 0) break;
       for (let i = 0; i < albums.length; i++) {
         const album = albums[i];
-        let songs: any[] = [];
+        let songs: LibrarySong[] = [];
         try { songs = await source.getAlbum(album.id); } catch { songs = []; }
         for (let j = (i === 0 ? songIndex : 0); j < songs.length; j++) {
           const s = songs[j];
@@ -443,7 +458,7 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
       songIndex = 0;
     }
     res.json({ rows, nextCursor });
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -458,7 +473,7 @@ router.get('/library/coverage', requireAdmin, async (req, res) => {
   try {
     if (req.query?.refresh === '1') coverage.refresh();
     res.json(await coverage.get());
-  } catch (err: any) {
+  } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
@@ -541,7 +556,7 @@ router.post('/library/reset', requireAdmin, async (_req, res) => {
     coverage.refresh();
     queue.log('warn', 'library reset: wiped all tagging data (tags, embeddings, acoustics, enrichment)');
     res.json({ ok: true });
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `/library/reset failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
@@ -568,7 +583,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
   if (!id || typeof id !== 'string') return res.status(400).json({ error: 'id is required' });
   try {
     await library.load();
-    let song: any = req.body || {};
+    let song = req.body || {};
     if (!song.title || !song.artist) {
       // Reach back to Subsonic to fill metadata when the caller only sent an id.
       const found = await source.search(`${song.title || ''} ${song.artist || ''}`.trim() || id, { songCount: 25 });
@@ -577,7 +592,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     }
     if (!song.title) return res.status(404).json({ error: 'track metadata not found' });
 
-    const embedCfg: any = (settings.get() as any).embedding ?? {};
+    const embedCfg = settings.get().embedding ?? {};
     const enrichCfg = embedCfg.enrichment ?? {};
     // Tri-state gate, shared with tag-library.phaseEnrich via lastfmEnrichEnabled:
     // explicit `true` always enriches; explicit `false` never does; the default
@@ -606,7 +621,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
         // else Navidrome's getArtistInfo2 — the same source the bulk tagger uses,
         // so single-track retag surfaces the same tags it would (issue #532).
         lastfmTags = await lastfm.getArtistTags(song.artist, { count: 10 });
-      } catch (err: any) {
+      } catch (err) {
         queue.log('warn', `/library/retag enrich(lastfm) ${id}: ${err.message}`);
       }
     }
@@ -614,7 +629,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       try {
         const raw = await source.getLyrics(id);
         if (typeof raw === 'string' && raw.trim()) lyricExcerpt = raw.trim();
-      } catch (err: any) {
+      } catch (err) {
         queue.log('warn', `/library/retag enrich(lyrics) ${id}: ${err.message}`);
       }
     }
@@ -646,7 +661,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
         );
         const [vec] = await embeddings.embedDocTexts([text], textMode);
         if (vec) db.upsertTrackVector(id, vec);
-      } catch (err: any) {
+      } catch (err) {
         queue.log('warn', `/library/retag embed ${id}: ${err.message}`);
       }
     }
@@ -668,7 +683,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     await library.save();
     const tagged = library.get(id);
     res.json({ id, moods, energy, taggedAt: tagged?.taggedAt });
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `/library/retag failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
@@ -690,7 +705,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
   const id = req.body?.id;
   if (!id || typeof id !== 'string') return res.status(400).json({ error: 'id is required' });
   const moods = req.body?.moods;
-  if (!Array.isArray(moods) || moods.some((m: any) => typeof m !== 'string')) {
+  if (!Array.isArray(moods) || moods.some((m) => typeof m !== 'string')) {
     return res.status(400).json({ error: 'moods must be an array of strings' });
   }
   if (moods.length > 3) return res.status(400).json({ error: 'at most 3 moods per track' });
@@ -710,7 +725,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
 
     // Resolve the seed track — Subsonic first (carries albumId), library-db
     // row as fallback so already-indexed tracks work even if Navidrome misses.
-    let song: any = null;
+    let song: LibrarySong | null = null;
     try { song = await source.getSong(id); } catch {}
     if (!song) {
       const row = db.getTrack(id);
@@ -718,7 +733,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
     }
     if (!song) return res.status(404).json({ error: 'track not found' });
 
-    let targets: any[] = [song];
+    let targets: LibrarySong[] = [song];
     if (applyToAlbum) {
       if (!song.albumId) return res.status(404).json({ error: 'album not resolvable for this track' });
       targets = await source.getAlbum(song.albumId);
@@ -767,8 +782,88 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
         energy: clearing ? null : energy,
       })),
     });
-  } catch (err: any) {
+  } catch (err) {
     queue.log('error', `/library/manual-tag failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Never-play blocklist — station-level "never let this air" entries at
+// track/album/artist granularity. Backs the Block row action + Blocked tab in
+// /admin/library. Enforcement lives in music/blocklist.ts (subsonic chokepoint,
+// library-db sources, queue.push gate); these routes only manage the list.
+// ---------------------------------------------------------------------------
+
+router.get('/library/blocklist', requireAdmin, (_req, res) => {
+  res.json({ entries: blocklist.list() });
+});
+
+// Body: { type: 'track'|'album'|'artist', trackId } — the UI flow: block from a
+// track row, server resolves the album/artist ids + display snapshots. OR a
+// pre-resolved { type, id, name?, artist?, album? } for direct entries.
+router.post('/library/blocklist', requireAdmin, async (req, res) => {
+  const type = req.body?.type;
+  if (!['track', 'album', 'artist'].includes(type)) {
+    return res.status(400).json({ error: "type must be 'track', 'album' or 'artist'" });
+  }
+  try {
+    let input: { type: blocklist.BlockType; id: string; name?: string | null; artist?: string | null; album?: string | null };
+    const trackId = req.body?.trackId;
+    if (trackId && typeof trackId === 'string') {
+      // Resolve from a track row — Subsonic first (carries albumId/artistId),
+      // library-db fallback so track-blocking works even if Navidrome misses.
+      let song: any = null;
+      try { song = await source.getSong(trackId); } catch {}
+      if (!song) {
+        const row = db.getTrack(trackId);
+        if (row && type === 'track') song = { id: row.id, title: row.title, artist: row.artist, album: row.album };
+      }
+      if (!song) return res.status(404).json({ error: 'track not found' });
+      if (type === 'track') {
+        input = { type, id: song.id, name: song.title ?? null, artist: song.artist ?? null, album: song.album ?? null };
+      } else if (type === 'album') {
+        if (!song.albumId) return res.status(404).json({ error: 'album not resolvable for this track' });
+        input = { type, id: song.albumId, name: song.album ?? null, artist: song.artist ?? null };
+      } else {
+        if (!song.artistId) return res.status(404).json({ error: 'artist not resolvable for this track' });
+        input = { type, id: song.artistId, name: song.artist ?? null };
+      }
+    } else {
+      const id = req.body?.id;
+      if (!id || typeof id !== 'string') return res.status(400).json({ error: 'trackId or id is required' });
+      input = { type, id, name: req.body?.name ?? null, artist: req.body?.artist ?? null, album: req.body?.album ?? null };
+    }
+
+    const entry = await blocklist.add(input);
+    if (!entry) return res.status(409).json({ error: 'already blocked' });
+
+    queue.log('blocked', `${entry.type} "${entry.name ?? entry.id}"${entry.artist && entry.type !== 'artist' ? ` — ${entry.artist}` : ''} added to the never-play blocklist`);
+    // Side-effects: drop now-blocked tracks from the upcoming queue, and
+    // rebuild auto.m3u so the LLM-free fallback stops carrying them (otherwise
+    // a blocked track could still air from it for up to autoQueueRefreshMinutes).
+    const purged = queue.purgeBlocked();
+    refreshAutoPlaylist().catch((err: any) => queue.log('error', `blocklist auto-playlist refresh failed: ${err.message}`));
+
+    res.status(201).json({ entry, purged });
+  } catch (err) {
+    queue.log('error', `/library/blocklist failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/library/blocklist/:type/:id', requireAdmin, async (req, res) => {
+  const { type, id } = req.params;
+  if (!['track', 'album', 'artist'].includes(type)) {
+    return res.status(400).json({ error: "type must be 'track', 'album' or 'artist'" });
+  }
+  try {
+    const removed = await blocklist.remove(type as blocklist.BlockType, id);
+    if (!removed) return res.status(404).json({ error: 'not on the blocklist' });
+    queue.log('blocked', `${type} ${id} removed from the never-play blocklist`);
+    res.status(204).end();
+  } catch (err) {
+    queue.log('error', `/library/blocklist delete failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -776,13 +871,13 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-function parseList(v: any): string[] {
-  if (Array.isArray(v)) return v.flatMap((x: any) => parseList(x));
+function parseList(v: unknown): string[] {
+  if (Array.isArray(v)) return v.flatMap((x) => parseList(x));
   if (typeof v === 'string') return v.split(',').map(s => s.trim()).filter(Boolean);
   return [];
 }
 
-function parseIntSafe<T extends number | null>(v: any, dflt: T): number | T {
+function parseIntSafe<T extends number | null>(v: unknown, dflt: T): number | T {
   if (v == null || v === '') return dflt;
   const n = parseInt(String(v), 10);
   return Number.isFinite(n) ? n : dflt;

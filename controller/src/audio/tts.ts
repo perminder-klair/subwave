@@ -267,7 +267,7 @@ export async function synthesizeSample(
 ): Promise<string> {
   if (!ENGINES.includes(engine)) throw new Error(`Unknown engine: ${engine}`);
   const raw = (typeof text === 'string' && text.trim()) ? text.trim() : DEFAULT_PREVIEW_TEXT;
-  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX));
+  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), settings.get().tts?.corrections);
   const scale = settings.clampTtsSpeed(speed);
   // Clamp the audition voice_settings to ElevenLabs' [0,1] the same way
   // settings.update() does for the saved values, so a hand-crafted preview
@@ -310,8 +310,10 @@ export async function speak(
   // <think>/harmony token INTO a structured say/intro field (djObject/djAgent
   // native path) reaches TTS unscrubbed otherwise. No-op on clean text — those
   // literals never appear in a real script — so every non-LLM caller (jingles,
-  // idents, request intros) is unaffected.
-  const speakText = normalizeForSpeech(stripThinking(text));
+  // idents, request intros) is unaffected. Operator speech corrections
+  // (settings.tts.corrections) ride along — read live, so a saved rule
+  // applies to the very next spoken line, no restart.
+  const speakText = normalizeForSpeech(stripThinking(text), settings.get().tts?.corrections);
   // `persona` overrides the clock-driven effective persona so the persona-handoff
   // mic-pass can voice the outgoing DJ (engine, voice, language, soul, speed)
   // after the hour has flipped. Absent → getEffectivePersona(), i.e. today.

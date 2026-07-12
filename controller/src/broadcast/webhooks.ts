@@ -14,6 +14,7 @@
 // webhooksPolicy.trackPlayListenerGated is on; notify() does not gate events.
 
 import * as settings from '../settings.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 export const WEBHOOK_EVENTS = [
   'track.play',          // a track started playing
@@ -35,27 +36,23 @@ interface WebhookConfig {
 const TIMEOUT_MS = 5000;
 
 async function postOne(hook: WebhookConfig, body: string) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'User-Agent': 'sub-wave/webhook',
     };
     if (hook.authHeader) headers['Authorization'] = hook.authHeader;
-    const r = await fetch(hook.url, {
+    const r = await fetchWithTimeout(hook.url, {
       method: 'POST',
       headers,
       body,
-      signal: ctrl.signal,
+      timeoutMs: TIMEOUT_MS,
     });
     if (!r.ok) {
       console.warn(`[webhook] ${hook.url} → ${r.status}`);
     }
   } catch (err: any) {
     console.warn(`[webhook] ${hook.url} failed: ${err.message}`);
-  } finally {
-    clearTimeout(timer);
   }
 }
 

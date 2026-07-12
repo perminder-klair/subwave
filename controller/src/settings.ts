@@ -87,7 +87,7 @@ const TONE_DIAL_PHRASES: Record<string, { low: string; high: string }> = {
 
 // Clamp any input to an integer 0-10, defaulting to neutral when unparseable.
 // The single chokepoint used by both normalizePersona and the seed roster.
-export function normalizeDial(v: any): number {
+export function normalizeDial(v: unknown): number {
   const n = Math.round(Number(v));
   return Number.isFinite(n) ? Math.min(10, Math.max(0, n)) : DIAL_NEUTRAL;
 }
@@ -95,11 +95,12 @@ export function normalizeDial(v: any): number {
 // Pure: persona in, prompt fragment out. Returns '' when every dial sits in the
 // neutral band, so renderDjPrompt appends nothing and the default prompt is
 // unchanged. Unit-pinned in controller/scripts/llm-pure.test.ts.
-export function personaToneDirectives(persona: any): string {
+export function personaToneDirectives(persona: unknown): string {
   if (!persona || typeof persona !== 'object') return '';
   const lines: string[] = [];
+  const p = persona as Record<string, unknown>;
   for (const key of TONE_DIALS) {
-    const v = Number((persona as any)[key]);
+    const v = Number(p[key]);
     if (!Number.isFinite(v)) continue;
     if (v <= 3) lines.push(TONE_DIAL_PHRASES[key].low);
     else if (v >= 7) lines.push(TONE_DIAL_PHRASES[key].high);
@@ -116,9 +117,10 @@ export function personaToneDirectives(persona: any): string {
 // (skills/_agent.ts), and auto-link spacing (broadcast/queue.ts). A persona
 // with djMode off returns its base frequency unchanged, so a default station
 // behaves exactly as before.
-export function effectiveFrequency(persona: any = getEffectivePersona()) {
-  const base = FREQUENCIES.includes(persona?.frequency) ? persona.frequency : 'moderate';
-  if (!persona?.djMode) return base;
+export function effectiveFrequency(persona: unknown = getEffectivePersona()) {
+  const p = persona as { frequency?: unknown; djMode?: unknown } | null | undefined;
+  const base = FREQUENCIES.includes(p?.frequency as string) ? (p?.frequency as string) : 'moderate';
+  if (!p?.djMode) return base;
   // 'silent' is an explicit operator promise — DJ mode never bumps out of it.
   if (base === 'silent') return base;
   const i = FREQUENCIES.indexOf(base);
@@ -130,8 +132,8 @@ export function effectiveFrequency(persona: any = getEffectivePersona()) {
 // schema/prompt builders use this to decide whether to offer the DJ the
 // `transition` choice; when off, the guidance is never shown and nothing is
 // applied.
-export function effectsActive(persona: any = getEffectivePersona()): boolean {
-  return !!persona?.djMode;
+export function effectsActive(persona: unknown = getEffectivePersona()): boolean {
+  return !!(persona as { djMode?: unknown } | null | undefined)?.djMode;
 }
 
 // TTS engines. Every spoken segment is voiced by the on-air persona's own
@@ -164,7 +166,7 @@ export const TTS_GAIN_CLAMP_DB = 12;
 // Coerce any value to a clean gain: finite number, clamped to ±TTS_GAIN_CLAMP_DB,
 // rounded to 0.1 dB (finer is inaudible and just bloats the annotate string).
 // Garbage / non-finite → 0 (unity, i.e. today's behaviour).
-export function clampTtsGain(v: any): number {
+export function clampTtsGain(v: unknown): number {
   const n = Number(v);
   if (!Number.isFinite(n)) return 0;
   const c = Math.max(-TTS_GAIN_CLAMP_DB, Math.min(TTS_GAIN_CLAMP_DB, n));
@@ -174,9 +176,10 @@ export function clampTtsGain(v: any): number {
 // Normalise a per-engine gain map to exactly one clean gain per known engine
 // (default 0). Drops unknown keys so a hand-edited settings.json can't smuggle
 // arbitrary keys into the annotate path.
-function normalizeTtsGainMap(raw: any): Record<string, number> {
+function normalizeTtsGainMap(raw: unknown): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const e of TTS_ENGINES) out[e] = clampTtsGain(raw?.[e]);
+  const src = raw as Record<string, unknown> | null | undefined;
+  for (const e of TTS_ENGINES) out[e] = clampTtsGain(src?.[e]);
   return out;
 }
 
@@ -196,7 +199,7 @@ export const TTS_SPEED_DEFAULT = 1.0;
 // Coerce any value to a clean speed multiplier: finite number, clamped to
 // [TTS_SPEED_MIN, TTS_SPEED_MAX], rounded to 0.05. Garbage / non-finite →
 // 1.0 (unity, i.e. today's behaviour).
-export function clampTtsSpeed(v: any): number {
+export function clampTtsSpeed(v: unknown): number {
   // Treat unset (null/undefined/'') as unity, NOT as 0 — unlike gain, 0 is not
   // this dial's default and would clamp to the 0.5 floor instead of no-change.
   if (v === null || v === undefined || v === '') return TTS_SPEED_DEFAULT;
@@ -208,10 +211,63 @@ export function clampTtsSpeed(v: any): number {
 
 // Normalise a per-engine speed map to exactly one clean multiplier per known
 // engine (default 1.0). Drops unknown keys, mirroring normalizeTtsGainMap.
-function normalizeTtsSpeedMap(raw: any): Record<string, number> {
+function normalizeTtsSpeedMap(raw: unknown): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const e of TTS_ENGINES) out[e] = clampTtsSpeed(raw?.[e]);
+  const src = raw as Record<string, unknown> | null | undefined;
+  for (const e of TTS_ENGINES) out[e] = clampTtsSpeed(src?.[e]);
   return out;
+}
+
+// Operator speech corrections (tts.corrections) — find→replace pairs applied
+// to every booth-bound line in audio/speech-text.ts before the engines see it
+// (the operator-extensible sibling of the built-in SUB/WAVE → "Subwave" rule).
+// `from` is a literal phrase (regex-escaped at apply time), `to` its spoken
+// form ('' = drop the phrase entirely).
+export const TTS_CORRECTIONS_LIMIT = 100;
+const TTS_CORRECTION_FROM_MAX = 80;
+const TTS_CORRECTION_TO_MAX = 160;
+
+// Lenient on-load pass: never throws, drops malformed entries so a
+// hand-edited settings.json can't wedge boot.
+function normalizeTtsCorrections(raw: any): Array<{ from: string; to: string }> {
+  if (!Array.isArray(raw)) return [];
+  const out: Array<{ from: string; to: string }> = [];
+  for (const item of raw) {
+    if (out.length >= TTS_CORRECTIONS_LIMIT) break;
+    if (!item || typeof item !== 'object') continue;
+    const from = typeof item.from === 'string'
+      ? item.from.trim().slice(0, TTS_CORRECTION_FROM_MAX)
+      : '';
+    if (!from) continue;
+    const to = typeof item.to === 'string'
+      ? item.to.trim().slice(0, TTS_CORRECTION_TO_MAX)
+      : '';
+    out.push({ from, to });
+  }
+  return out;
+}
+
+// Strict update() validator — whole-array replace, indexed throws, rebuilt
+// objects so unknown keys are stripped (the validateFestivalsStrict shape).
+function validateTtsCorrectionsStrict(raw: any): Array<{ from: string; to: string }> {
+  if (!Array.isArray(raw)) throw new Error('tts.corrections must be an array');
+  if (raw.length > TTS_CORRECTIONS_LIMIT) {
+    throw new Error(`tts.corrections must be at most ${TTS_CORRECTIONS_LIMIT} entries`);
+  }
+  return raw.map((item, i) => {
+    if (!item || typeof item !== 'object') {
+      throw new Error(`tts.corrections[${i}] must be an object`);
+    }
+    const from = String(item.from ?? '').trim();
+    if (from.length < 1 || from.length > TTS_CORRECTION_FROM_MAX) {
+      throw new Error(`tts.corrections[${i}].from must be 1-${TTS_CORRECTION_FROM_MAX} chars`);
+    }
+    const to = String(item.to ?? '').trim();
+    if (to.length > TTS_CORRECTION_TO_MAX) {
+      throw new Error(`tts.corrections[${i}].to must be at most ${TTS_CORRECTION_TO_MAX} chars`);
+    }
+    return { from, to };
+  });
 }
 
 // LLM provider abstraction. `ollama` is the homelab default; the cloud
@@ -270,7 +326,7 @@ export const MUSIC_SOURCES = [
 // default); any other number is clamped to a sane [2048, 131072] band and
 // floored to an integer. Non-numeric/NaN falls back to `def`. Shared by the
 // primary and fallback LLM legs so the rule can't drift between them.
-function clampNumCtx(raw: any, def: number): number {
+function clampNumCtx(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   if (raw <= 0) return 0;
   return Math.min(131072, Math.max(2048, Math.floor(raw)));
@@ -279,9 +335,9 @@ function clampNumCtx(raw: any, def: number): number {
 // repeat_penalty for local openai-compatible / locca servers. Clamped to
 // [1.0, 2.0]: 1.0 is OFF (a no-op, never injected), and >2.0 mangles output.
 // Non-numeric/NaN falls back to `def`. See appliedRepeatPenalty() in
-// capabilities.ts — Ollama reads its own value via providerOptions and ignores
-// this field.
-function clampRepeatPenalty(raw: any, def: number): number {
+// capabilities.ts — Ollama ignores this field (ai-sdk-ollama v4 has no
+// per-call repeat_penalty channel at all; restoration is a tracked follow-up).
+function clampRepeatPenalty(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.min(2.0, Math.max(1.0, raw));
 }
@@ -290,7 +346,7 @@ function clampRepeatPenalty(raw: any, def: number): number {
 // to an integer; non-numeric/NaN falls back to `def`. The lower bound keeps a
 // fat-fingered save from making every agent pick fail instantly; the upper
 // bound keeps a stalling model from tying up an inference slot for minutes.
-function clampAgentTimeout(raw: any, def: number): number {
+function clampAgentTimeout(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.min(180_000, Math.max(5_000, Math.floor(raw)));
 }
@@ -299,7 +355,7 @@ function clampAgentTimeout(raw: any, def: number): number {
 // otherwise floored to a non-negative integer. No upper bound: a cloud quota
 // can legitimately be in the tens of millions of tokens/day. Non-numeric/NaN
 // falls back to `def`.
-function clampDailyTokenCap(raw: any, def: number): number {
+function clampDailyTokenCap(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.max(0, Math.floor(raw));
 }
@@ -307,7 +363,7 @@ function clampDailyTokenCap(raw: any, def: number): number {
 // Soft-tier threshold as a percent of the cap. Clamped to [0, 100]; 0 or 100
 // disables the soft tier (straight to hard at the cap). Non-numeric/NaN falls
 // back to `def`.
-function clampBudgetSoftPct(raw: any, def: number): number {
+function clampBudgetSoftPct(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.min(100, Math.max(0, Math.floor(raw)));
 }
@@ -318,7 +374,7 @@ function clampBudgetSoftPct(raw: any, def: number): number {
 // MAX_OUTPUT_TOKENS_MAX]; non-numeric/NaN falls back to `def`.
 export const MAX_OUTPUT_TOKENS_MIN = 500;
 export const MAX_OUTPUT_TOKENS_MAX = 8000;
-export function clampMaxOutputTokens(raw: any, def: number): number {
+export function clampMaxOutputTokens(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   const n = Math.floor(raw);
   if (n <= 0) return 0;
@@ -339,7 +395,7 @@ export function resolveMaxOutputTokens(fallback: number): number {
 // cap so the requested window is never silently truncated by a too-short
 // sidecar. Library-size clamping happens separately at use time
 // (effectiveNoRepeatWindow). Non-numeric/NaN falls back to `def`.
-function clampNoRepeatWindow(raw: any, def: number): number {
+function clampNoRepeatWindow(raw: unknown, def: number): number {
   if (typeof raw !== 'number' || !Number.isFinite(raw)) return def;
   return Math.min(290, Math.max(0, Math.floor(raw)));
 }
@@ -351,10 +407,10 @@ function clampNoRepeatWindow(raw: any, def: number): number {
 // "openai-compatible needs baseUrl" rule is left to the caller — the fallback
 // only enforces it when enabled. Station-level toggles (pickerAgent,
 // pauseWhenEmpty) are primary-only and handled at the call site.
-function applyLlmLegPatch(target: any, patch: any, label: string): void {
-  const l = patch || {};
+function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown, label: string): void {
+  const l = (patch ?? {}) as Record<string, unknown>;
   if (l.provider !== undefined) {
-    if (!LLM_PROVIDERS.includes(l.provider)) {
+    if (!LLM_PROVIDERS.includes(l.provider as string)) {
       throw new Error(`${label}.provider must be one of: ${LLM_PROVIDERS.join(', ')}`);
     }
     target.provider = l.provider;
@@ -388,10 +444,10 @@ function applyLlmLegPatch(target: any, patch: any, label: string): void {
     target.reasoning = !!l.reasoning;
   }
   if (l.numCtx !== undefined) {
-    target.numCtx = clampNumCtx(Number(l.numCtx), target.numCtx);
+    target.numCtx = clampNumCtx(Number(l.numCtx), target.numCtx as number);
   }
   if (l.repeatPenalty !== undefined) {
-    target.repeatPenalty = clampRepeatPenalty(Number(l.repeatPenalty), target.repeatPenalty);
+    target.repeatPenalty = clampRepeatPenalty(Number(l.repeatPenalty), target.repeatPenalty as number);
   }
   // Forced-tool tool_choice: 'required' (default) or 'auto'. Only those two are
   // legal; anything else is a config error. See forcedToolChoice() / issue #570.
@@ -409,7 +465,7 @@ function applyLlmLegPatch(target: any, patch: any, label: string): void {
 // lands under the identity it belongs to and can never shadow another
 // provider's key after a switch. '' clears that provider's entry; 'set' (the
 // getRedacted() sentinel) and undefined leave it untouched.
-function applyInlineKey(llmHost: any, provider: string, rawApiKey: any): void {
+function applyInlineKey(llmHost: { keys?: Record<string, string> }, provider: string, rawApiKey: unknown): void {
   if (rawApiKey === undefined || rawApiKey === 'set') return;
   const v = String(rawApiKey);
   if (v.length > 1000) throw new Error('llm.apiKey must be 0-1000 chars');
@@ -427,24 +483,31 @@ function applyInlineKey(llmHost: any, provider: string, rawApiKey: any): void {
 // shared slot (issue #657) — attribute it to its true owner (openai-compatible)
 // rather than the current provider, which both preserves the real key and keeps
 // the env-var provider's slot empty so it resolves from secrets.env again.
-function normalizeLlmKeys(storedLlm: any): Record<string, string> {
+function normalizeLlmKeys(storedLlm: unknown): Record<string, string> {
   const out: Record<string, string> = {};
-  const raw = storedLlm?.keys;
+  const sl = storedLlm as {
+    keys?: unknown;
+    apiKey?: unknown;
+    provider?: unknown;
+    fallback?: { apiKey?: unknown; provider?: unknown };
+  } | null | undefined;
+  const raw = sl?.keys;
   if (raw && typeof raw === 'object') {
-    for (const p of Object.keys(raw)) {
-      if (LLM_PROVIDERS.includes(p) && typeof raw[p] === 'string' && raw[p]) out[p] = raw[p];
+    const rec = raw as Record<string, unknown>;
+    for (const p of Object.keys(rec)) {
+      if (LLM_PROVIDERS.includes(p) && typeof rec[p] === 'string' && rec[p]) out[p] = rec[p] as string;
     }
   }
-  const ownerFor = (prov: any) =>
-    prov === 'openai-compatible' || prov === 'locca' ? prov : 'openai-compatible';
-  const legacyPrimary = typeof storedLlm?.apiKey === 'string' ? storedLlm.apiKey : '';
+  const ownerFor = (prov: unknown): string =>
+    prov === 'openai-compatible' || prov === 'locca' ? (prov as string) : 'openai-compatible';
+  const legacyPrimary = typeof sl?.apiKey === 'string' ? sl.apiKey : '';
   if (legacyPrimary) {
-    const owner = ownerFor(storedLlm?.provider);
+    const owner = ownerFor(sl?.provider);
     if (!out[owner]) out[owner] = legacyPrimary;
   }
-  const legacyFallback = typeof storedLlm?.fallback?.apiKey === 'string' ? storedLlm.fallback.apiKey : '';
+  const legacyFallback = typeof sl?.fallback?.apiKey === 'string' ? sl.fallback.apiKey : '';
   if (legacyFallback) {
-    const owner = ownerFor(storedLlm?.fallback?.provider);
+    const owner = ownerFor(sl?.fallback?.provider);
     if (!out[owner]) out[owner] = legacyFallback;
   }
   return out;
@@ -461,8 +524,10 @@ export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs', 'openai-compatible']
 // and keyless, returns useful results only for entity / definition queries, and
 // silence otherwise (which the segment director already treats as a valid
 // outcome). `tavily` is the paid option for operators who want richer web
-// results; it reads its key from SEARCH_API_KEY.
-export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'searxng'] as const;
+// results; `brave` is Brave's Search API (metered, $5/mo free credits) — both
+// read their key from SEARCH_API_KEY. `searxng` is keyless self-hosted
+// meta-search via settings.search.baseUrl.
+export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'brave', 'searxng'] as const;
 
 // Canonical mood vocabulary. Shared by the library tagger (music/tag-library.js
 // imports this as MOOD_VOCAB) and the Shows scheduler — a show's `moods` (lead
@@ -584,7 +649,6 @@ const ID_RE = /^[a-z0-9_]{3,32}$/;
 // reuses ID_RE's shape so an avatar field can never reference a basename
 // outside the persona-avatars directory. Empty is also valid (no avatar set).
 export const AVATAR_FILENAME_RE = /^[a-z0-9_]{3,32}\.(png|jpe?g|webp)$/;
-export const AVATAR_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'] as const;
 // Skill slugs (e.g. 'weather', 'random-facts'). The skills registry is the
 // source of truth for which slugs exist; settings only checks the shape.
 const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
@@ -603,7 +667,10 @@ const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
 // attribute the values OR together at pick time; across attributes they AND —
 // so past a handful the filter stops meaning anything.
 const SHOW_FILTER_VALUES_MAX = 6;
-const SKILLS_PER_PERSONA_LIMIT = 20;
+// Must comfortably exceed a realistic skill library: unticking one skill on an
+// "all skills" (null) persona materialises the FULL catalog minus one, so a cap
+// near the library size would make that first untick fail (#skill-organization).
+const SKILLS_PER_PERSONA_LIMIT = 64;
 const WEBHOOKS_LIMIT = 16;
 // Prompt-template library (djPrompts). Text bounds match the historical
 // single-djPrompt rule — keep them in lockstep with PROMPT_MIN/PROMPT_MAX in
@@ -621,7 +688,7 @@ const DJ_PROMPT_TEXT_MAX = 4000;
 // A show's guest co-hosts: persona ids other than the host, resolved against
 // the live persona list. Order preserved (it's the operator's billing order);
 // dupes, the host itself, and dangling ids are dropped.
-function coerceGuestPersonaIds(raw: any, hostId: string, personaIds: string[]): string[] {
+function coerceGuestPersonaIds(raw: unknown, hostId: string, personaIds: string[]): string[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
   const out: string[] = [];
@@ -636,7 +703,7 @@ function coerceGuestPersonaIds(raw: any, hostId: string, personaIds: string[]): 
   return out;
 }
 
-function coercePlaylistIds(raw: any): string[] {
+function coercePlaylistIds(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
   const out: string[] = [];
@@ -664,10 +731,52 @@ function coercePlaylistIds(raw: any): string[] {
 // non-adjacent decades ("90s + 2010s") — inexpressible as a single range.
 export type EraWindow = { fromYear: number | null; toYear: number | null };
 
-function coerceEraWindow(raw: any): EraWindow | null {
+// One outbound-webhook entry (settings.webhooks). Shared by the DEFAULTS seed,
+// the lenient load-time normalizer, and the strict update() validator.
+export interface Webhook {
+  id: string;
+  url: string;
+  events: string[];
+  enabled: boolean;
+  authHeader: string;
+}
+
+// One saved DJ prompt-template library entry (settings.djPrompts).
+export interface DjPromptEntry {
+  id: string;
+  name: string;
+  text: string;
+}
+
+// A show as produced by the lenient load-time normalizer (normalizeShows).
+// The plural music-filter lists are canonical; legacy singular fields have
+// already been migrated by the coercers below.
+export interface NormalizedShow {
+  id: string;
+  name: string;
+  topic: string;
+  personaId: string;
+  guestPersonaIds: string[];
+  banter: boolean;
+  programme: boolean;
+  segmentSkill: string;
+  moods: string[];
+  themeId: string;
+  genres: string[];
+  eras: EraWindow[];
+  energies: string[];
+  filtersStrict: boolean;
+  maxTrackSeconds: number | null;
+  playlistIds: string[];
+  playlistStrict: boolean;
+  excludedPlaylistIds: string[];
+}
+
+function coerceEraWindow(raw: unknown): EraWindow | null {
   if (!raw || typeof raw !== 'object') return null;
-  const fromYear = Number.isFinite(raw.fromYear) ? Math.trunc(raw.fromYear) : null;
-  const toYear = Number.isFinite(raw.toYear) ? Math.trunc(raw.toYear) : null;
+  const r = raw as { fromYear?: unknown; toYear?: unknown };
+  const fromYear = Number.isFinite(r.fromYear) ? Math.trunc(r.fromYear as number) : null;
+  const toYear = Number.isFinite(r.toYear) ? Math.trunc(r.toYear as number) : null;
   if (fromYear == null && toYear == null) return null;
   if (fromYear != null && toYear != null && fromYear > toYear) return null;
   return { fromYear, toYear };
@@ -676,13 +785,14 @@ function coerceEraWindow(raw: any): EraWindow | null {
 // Plural-first: `item[plural]` wins when it's an array; otherwise the legacy
 // singular value (if any) becomes a one-element list. Dedup + cap.
 function coerceShowList<T>(
-  item: any,
+  item: unknown,
   plural: string,
   singular: string,
-  coerceOne: (v: any) => T | null,
+  coerceOne: (v: unknown) => T | null,
   keyOf: (v: T) => string,
 ): T[] {
-  const raw = Array.isArray(item?.[plural]) ? item[plural] : [item?.[singular]];
+  const rec = item as Record<string, unknown> | null | undefined;
+  const raw: unknown[] = Array.isArray(rec?.[plural]) ? (rec?.[plural] as unknown[]) : [rec?.[singular]];
   const seen = new Set<string>();
   const out: T[] = [];
   for (const v of raw) {
@@ -697,38 +807,40 @@ function coerceShowList<T>(
   return out;
 }
 
-function coerceShowMoods(item: any): string[] {
+function coerceShowMoods(item: unknown): string[] {
   return coerceShowList(item, 'moods', 'mood',
     (v) => (typeof v === 'string' && SHOW_MOODS.includes(v) ? v : null),
     (v) => v);
 }
 
-function coerceShowGenres(item: any): string[] {
+function coerceShowGenres(item: unknown): string[] {
   // Legacy singular `genre` was one free-text field and operators crammed
   // multiple genres into it comma-separated ("funk, soul, jazz-funk") — which
   // never resolved against the library as one tag. Split it on migration so
   // each becomes a real, individually-resolvable entry. Plural-array entries
   // are taken as-is (the UI adds them one at a time).
-  const raw = Array.isArray(item?.genres)
-    ? item.genres
-    : typeof item?.genre === 'string' ? item.genre.split(',') : [];
+  const rec = (item ?? {}) as Record<string, unknown>;
+  const raw = Array.isArray(rec.genres)
+    ? rec.genres
+    : typeof rec.genre === 'string' ? rec.genre.split(',') : [];
   return coerceShowList({ genres: raw }, 'genres', 'genre',
     (v) => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 64) : null),
     (v) => v.toLowerCase());
 }
 
-function coerceShowEnergies(item: any): string[] {
+function coerceShowEnergies(item: unknown): string[] {
   return coerceShowList(item, 'energies', 'energy',
     (v) => (typeof v === 'string' && SHOW_ENERGY.includes(v) ? v : null),
     (v) => v);
 }
 
-function coerceShowEras(item: any): EraWindow[] {
+function coerceShowEras(item: unknown): EraWindow[] {
   // Legacy singular is a pair of top-level keys, not one value — synthesize
   // the window before handing off to the shared list coercer.
-  const raw = Array.isArray(item?.eras)
-    ? item.eras
-    : [{ fromYear: item?.fromYear, toYear: item?.toYear }];
+  const rec = (item ?? {}) as Record<string, unknown>;
+  const raw = Array.isArray(rec.eras)
+    ? rec.eras
+    : [{ fromYear: rec.fromYear, toYear: rec.toYear }];
   return coerceShowList({ eras: raw }, 'eras', 'era', coerceEraWindow,
     (e) => `${e.fromYear ?? ''}:${e.toYear ?? ''}`);
 }
@@ -736,7 +848,7 @@ function coerceShowEras(item: any): EraWindow[] {
 // A show can exclude tracks from one or more Navidrome playlists: any track
 // that appears in these playlists is dropped from the candidate pool at pick
 // time. Same shape/rules as coercePlaylistIds. Empty = no exclusions.
-function coerceExcludedPlaylistIds(raw: any): string[] {
+function coerceExcludedPlaylistIds(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
   const out: string[] = [];
@@ -775,12 +887,18 @@ function clamp01(n: number): number {
 // voice's own VoiceLab-saved settings, instead of forcing these literals onto
 // every call (issue #915 review). Compared against DEFAULTS so there's a single
 // source of truth for the default values.
-export function cloudVoiceSettingsAreDefault(c: any): boolean {
+export function cloudVoiceSettingsAreDefault(c: unknown): boolean {
   const d = DEFAULTS.tts.cloud;
-  return c?.voiceStability === d.voiceStability
-    && c?.voiceStyle === d.voiceStyle
-    && c?.voiceSimilarityBoost === d.voiceSimilarityBoost
-    && c?.voiceUseSpeakerBoost === d.voiceUseSpeakerBoost;
+  const cc = c as {
+    voiceStability?: unknown;
+    voiceStyle?: unknown;
+    voiceSimilarityBoost?: unknown;
+    voiceUseSpeakerBoost?: unknown;
+  } | null | undefined;
+  return cc?.voiceStability === d.voiceStability
+    && cc?.voiceStyle === d.voiceStyle
+    && cc?.voiceSimilarityBoost === d.voiceSimilarityBoost
+    && cc?.voiceUseSpeakerBoost === d.voiceUseSpeakerBoost;
 }
 
 // Coerce a stored/per-show max-track-length to a clean integer SECOND count.
@@ -788,7 +906,7 @@ export function cloudVoiceSettingsAreDefault(c: any): boolean {
 // state (missing → 0 = off), whereas a per-show value uses null to mean "inherit
 // the station default" (vs 0 = "unlimited override"). Out-of-band values clamp
 // into [0, max] rather than throw — load() stays lenient.
-function coerceMaxTrackSeconds(raw: any, allowNull: boolean): number | null {
+function coerceMaxTrackSeconds(raw: unknown, allowNull: boolean): number | null {
   if (raw == null || raw === '') return allowNull ? null : 0;
   const n = Math.round(Number(raw));
   if (!Number.isFinite(n)) return allowNull ? null : 0;
@@ -800,11 +918,12 @@ function coerceMaxTrackSeconds(raw: any, allowNull: boolean): number | null {
 // minutes value ×60 so an existing settings.json / show and any stale client keep
 // working. Returns the raw seconds value (leaving null/''/undefined untouched) for
 // coerceMaxTrackSeconds to clamp.
-function rawMaxTrackSec(o: any): any {
+function rawMaxTrackSec(o: unknown): unknown {
   if (o == null) return o;
-  if (o.maxTrackSeconds != null && o.maxTrackSeconds !== '') return o.maxTrackSeconds;
-  if (o.maxTrackMinutes != null && o.maxTrackMinutes !== '') return Number(o.maxTrackMinutes) * 60;
-  return o.maxTrackSeconds;
+  const rec = o as Record<string, unknown>;
+  if (rec.maxTrackSeconds != null && rec.maxTrackSeconds !== '') return rec.maxTrackSeconds;
+  if (rec.maxTrackMinutes != null && rec.maxTrackMinutes !== '') return Number(rec.maxTrackMinutes) * 60;
+  return rec.maxTrackSeconds;
 }
 
 // Effective track-length cap in SECONDS for the moment a pick is made, or null
@@ -813,8 +932,8 @@ function rawMaxTrackSec(o: any): any {
 // resolver both picker paths and the auto-playlist call so the precedence rule
 // lives in exactly one place.
 export function effectiveMaxTrackSec(
-  show: any = resolveActiveShow(),
-  s: any = get(),
+  show: { maxTrackSeconds?: unknown } | null | undefined = resolveActiveShow(),
+  s: { maxTrackSeconds?: unknown } | null | undefined = get(),
 ): number | null {
   const station = coerceMaxTrackSeconds(s?.maxTrackSeconds, false) ?? 0;
   const showSec = show && show.maxTrackSeconds != null
@@ -830,7 +949,7 @@ export function effectiveMaxTrackSec(
 // degenerate and below 2× leaves the track no solo airtime. 0 (= unlimited) is
 // always allowed — this is only the floor for a POSITIVE cap. Surfaced to the UI
 // via /settings.values.minTrackSeconds so client and server share one rule.
-export function minTrackSeconds(s: any = get()): number {
+export function minTrackSeconds(s: { crossfadeDuration?: unknown } | null | undefined = get()): number {
   const xf = Number(s?.crossfadeDuration);
   const cross = Number.isFinite(xf) && xf > 0 ? xf : DEFAULTS.crossfadeDuration;
   return Math.max(30, Math.ceil(2 * cross));
@@ -901,6 +1020,12 @@ export const MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
 export const OPUS_BITRATES = [96, 128, 192, 256, 320] as const;
 export const AAC_BITRATES = [128, 192, 256] as const;
 
+// Where per-track loudness comes from (queue.applyLoudnessGain, issue #998):
+// an embedded ReplayGain tag (Navidrome's OpenSubsonic replayGain field),
+// the analyzer's measured LUFS, or tag-with-measured-fallback (the default).
+export const LOUDNESS_SOURCES = ['replaygain-then-measured', 'replaygain', 'measured'] as const;
+export type LoudnessSource = (typeof LOUDNESS_SOURCES)[number];
+
 const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
   crossfadeDuration: 10.0, // seconds
@@ -938,10 +1063,15 @@ const DEFAULTS = {
   // direction only — cuts have a fixed wide clamp, and the boost is further
   // limited by the track's own measured peak headroom, so widening this on a
   // dynamic library won't slam the broadcast limiter. Read live per track at
-  // annotate time; no mixer restart.
+  // annotate time; no mixer restart. `source` picks where the loudness figure
+  // comes from (issue #998): embedded ReplayGain tags (whole-file stereo R128,
+  // via Navidrome's OpenSubsonic replayGain field) vs the analyzer's measured
+  // LUFS (leading window only). The default prefers the tag and falls back to
+  // the measurement, so untagged libraries behave exactly as before.
   loudness: {
     targetLufs: -14,
     maxBoostDb: 6,
+    source: 'replaygain-then-measured' as LoudnessSource,
   },
   weather: { lat: 30.7333, lng: 76.7794, locationName: 'Punjab', units: 'metric' as 'metric' | 'imperial' },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
@@ -1050,6 +1180,10 @@ const DEFAULTS = {
     // audio/tts.ts:speak(). Only Piper/Kokoro/cloud honour it; chatterbox/
     // pocket-tts/remote ignore speed so their entries are inert. See clampTtsSpeed().
     speed: { piper: 1, kokoro: 1, chatterbox: 1, 'pocket-tts': 1, cloud: 1, remote: 1 },
+    // Operator speech corrections — find→replace pairs applied to every
+    // booth-bound line before any TTS engine sees it (audio/speech-text.ts).
+    // Each entry: { from: 'GHz', to: 'gigahertz' }. Empty by default.
+    corrections: [],
   },
   // Active music source. Only `source` lives here — per-source connection config
   // stays where it already is (Navidrome creds in config.navidrome / setup
@@ -1110,7 +1244,7 @@ const DEFAULTS = {
     // model still loops, or set 1.0 to disable (e.g. a vLLM server that rejects
     // the `repeat_penalty` body field). Injected into the request body — the AI
     // SDK's openai provider has no field for it. Ignored by every other provider
-    // (Ollama reads its own value via providerOptions).
+    // (incl. Ollama: ai-sdk-ollama v4 has no per-call repeat_penalty channel).
     repeatPenalty: 1.15,
     // When on, the session DJ agent drives track-picking, links and listener
     // requests as a tool-loop over the session chat history (broadcast/
@@ -1266,9 +1400,9 @@ const DEFAULTS = {
     },
   },
   // Web-search backend for the segment director's web-search capability.
-  // Default `duckduckgo` works out of the box with no key; `tavily` reads its
-  // key from SEARCH_API_KEY (or the optional override below). `apiKey` is
-  // only meaningful for Tavily.
+  // Default `duckduckgo` works out of the box with no key; `tavily` and
+  // `brave` read their key from SEARCH_API_KEY (or the optional override
+  // below). `apiKey` is only meaningful for the keyed providers.
   search: {
     provider: 'duckduckgo',
     apiKey: '',
@@ -1305,7 +1439,7 @@ const DEFAULTS = {
   // call. `track.play` can be listener-gated via webhooksPolicy (off by
   // default — see broadcast/queue.ts). Empty by default — operators add hooks
   // via the admin UI.
-  webhooks: [] as any[],
+  webhooks: [] as Webhook[],
   webhooksPolicy: {
     // When true, track.play POSTs only when listener count > 0 (fail-closed on
     // null/unknown/non-finite, like scrobble). Default false = always send.
@@ -1336,7 +1470,9 @@ const DEFAULTS = {
 };
 
 const BOUNDS = {
-  jingleRatio: { min: 1, max: 1000, type: 'int' },
+  // 0 = jingles off entirely — radio.liq skips the jingle rotate when the
+  // ratio file reads 0 (issue #997: no way to disable the station stinger).
+  jingleRatio: { min: 0, max: 1000, type: 'int' },
   crossfadeDuration: { min: 0, max: 30, type: 'float' },
   // 0 = off; 36000 s (10h) is a generous ceiling that still leaves room for
   // long-form mix shows without letting a typo set an absurd value.
@@ -1369,7 +1505,7 @@ let cache: any = null;
 const SKILL_RENAMES: Record<string, string> = {
   'random-facts': 'curiosity',
 };
-function normalizeSkills(raw: any) {
+function normalizeSkills(raw: unknown) {
   if (!Array.isArray(raw)) return null;
   const seen = new Set<string>();
   const out: string[] = [];
@@ -1384,13 +1520,14 @@ function normalizeSkills(raw: any) {
   return out;
 }
 
-function normalizeTts(raw: any) {
-  const engine = TTS_ENGINES.includes(raw?.engine) ? raw.engine : 'piper';
-  const cloudProvider = TTS_CLOUD_PROVIDERS.includes(raw?.cloudProvider)
-    ? raw.cloudProvider
+function normalizeTts(raw: unknown) {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const engine = TTS_ENGINES.includes(r.engine as string) ? (r.engine as string) : 'piper';
+  const cloudProvider = TTS_CLOUD_PROVIDERS.includes(r.cloudProvider as string)
+    ? (r.cloudProvider as string)
     : 'openai';
   let voice =
-    typeof raw?.voice === 'string' && raw.voice.trim() ? raw.voice.trim().slice(0, 100) : '';
+    typeof r.voice === 'string' && r.voice.trim() ? r.voice.trim().slice(0, 100) : '';
   if (engine === 'kokoro' && !KOKORO_VOICE_RE.test(voice)) voice = 'bf_isabella';
   // Chatterbox voices are reference-WAV filenames in config.chatterbox.voiceDir.
   // Empty is legitimate ("use built-in default"), invalid filenames get reset
@@ -1423,41 +1560,42 @@ function normalizeTts(raw: any) {
   // Subwave-side default.
   if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
   if (!voice && engine !== 'cloud' && engine !== 'chatterbox' && engine !== 'piper' && engine !== 'remote') voice = 'bf_isabella';
-  return { engine, cloudProvider, voice, gainDb: clampTtsGain(raw?.gainDb), speed: clampTtsSpeed(raw?.speed) };
+  return { engine, cloudProvider, voice, gainDb: clampTtsGain(r.gainDb), speed: clampTtsSpeed(r.speed) };
 }
 
-function normalizePersona(raw: any) {
+function normalizePersona(raw: unknown) {
   if (!raw || typeof raw !== 'object') return null;
-  const name = typeof raw.name === 'string' ? raw.name.trim().slice(0, 40) : '';
-  const soul = typeof raw.soul === 'string' ? raw.soul.trim().slice(0, 1000) : '';
+  const r = raw as Record<string, unknown>;
+  const name = typeof r.name === 'string' ? r.name.trim().slice(0, 40) : '';
+  const soul = typeof r.soul === 'string' ? r.soul.trim().slice(0, 1000) : '';
   if (!name || !soul) return null;
   // Avatar — stored as a bare basename. Reset to '' if the persisted value
   // doesn't match the strict basename shape, so a hand-edited settings.json
   // can never point /persona-avatar/:id at an arbitrary path.
-  const rawAvatar = typeof raw.avatar === 'string' ? raw.avatar.trim() : '';
+  const rawAvatar = typeof r.avatar === 'string' ? r.avatar.trim() : '';
   const avatar = rawAvatar && AVATAR_FILENAME_RE.test(rawAvatar) ? rawAvatar : '';
   return {
-    id: typeof raw.id === 'string' && ID_RE.test(raw.id) ? raw.id : mintId('p_'),
+    id: typeof r.id === 'string' && ID_RE.test(r.id) ? r.id : mintId('p_'),
     name,
-    tagline: typeof raw.tagline === 'string' ? raw.tagline.trim().slice(0, 80) : '',
-    frequency: FREQUENCIES.includes(raw.frequency) ? raw.frequency : 'moderate',
-    scriptLength: SCRIPT_LENGTHS.includes(raw.scriptLength) ? raw.scriptLength : 'concise',
-    djMode: raw.djMode === true,
-    humour: normalizeDial(raw.humour),
-    localColour: normalizeDial(raw.localColour),
-    warmth: normalizeDial(raw.warmth),
+    tagline: typeof r.tagline === 'string' ? r.tagline.trim().slice(0, 80) : '',
+    frequency: FREQUENCIES.includes(r.frequency as string) ? (r.frequency as string) : 'moderate',
+    scriptLength: SCRIPT_LENGTHS.includes(r.scriptLength as string) ? (r.scriptLength as string) : 'concise',
+    djMode: r.djMode === true,
+    humour: normalizeDial(r.humour),
+    localColour: normalizeDial(r.localColour),
+    warmth: normalizeDial(r.warmth),
     soul,
-    language: typeof raw.language === 'string' ? raw.language.trim().slice(0, 60) : '',
+    language: typeof r.language === 'string' ? r.language.trim().slice(0, 60) : '',
     avatar,
-    tts: normalizeTts(raw.tts),
-    skills: normalizeSkills(raw.skills),
+    tts: normalizeTts(r.tts),
+    skills: normalizeSkills(r.skills),
   };
 }
 
-function normalizePersonaArray(raw: any) {
+function normalizePersonaArray(raw: unknown) {
   if (!Array.isArray(raw)) return null;
   const seen = new Set<string>();
-  const out: any[] = [];
+  const out: NonNullable<ReturnType<typeof normalizePersona>>[] = [];
   for (const item of raw) {
     const p = normalizePersona(item);
     if (!p) continue;
@@ -1473,10 +1611,10 @@ function normalizePersonaArray(raw: any) {
 // can't render (bad text) rather than failing the whole settings load. A
 // missing/duplicate name degrades to "Prompt N" instead of dropping the entry —
 // the text is the part the operator can't afford to lose.
-function normalizeDjPrompts(raw: any) {
+function normalizeDjPrompts(raw: unknown): DjPromptEntry[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
-  const out: any[] = [];
+  const out: DjPromptEntry[] = [];
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue;
     const text = typeof item.text === 'string' ? item.text.trim() : '';
@@ -1494,10 +1632,10 @@ function normalizeDjPrompts(raw: any) {
   return out;
 }
 
-function normalizeShows(raw: any, personaIds: string[]) {
+function normalizeShows(raw: unknown, personaIds: string[]): NormalizedShow[] {
   if (!Array.isArray(raw)) return [];
   const seen = new Set<string>();
-  const out: any[] = [];
+  const out: NormalizedShow[] = [];
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue;
     const name = typeof item.name === 'string' ? item.name.trim().slice(0, 60) : '';
@@ -1588,11 +1726,12 @@ function normalizeShows(raw: any, personaIds: string[]) {
   return out;
 }
 
-function normalizeSchedule(raw: any, showIds: string[]) {
+function normalizeSchedule(raw: unknown, showIds: string[]) {
   const week = emptyWeek();
   if (!raw || typeof raw !== 'object') return week;
+  const r = raw as Record<number, unknown>;
   for (let d = 0; d < 7; d++) {
-    const day = raw[d];
+    const day = r[d];
     if (!Array.isArray(day)) continue;
     for (let h = 0; h < 24; h++) {
       const v = day[h];
@@ -1733,6 +1872,9 @@ export async function load() {
         stored.loudness.maxBoostDb <= BOUNDS.loudnessMaxBoostDb.max
           ? stored.loudness.maxBoostDb
           : DEFAULTS.loudness.maxBoostDb,
+      source: LOUDNESS_SOURCES.includes(stored.loudness?.source)
+        ? (stored.loudness.source as LoudnessSource)
+        : DEFAULTS.loudness.source,
     },
     weather: {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
@@ -1877,6 +2019,9 @@ export async function load() {
       // Per-engine speed map — one clean multiplier per known engine, missing
       // keys → 1.0, unknown keys dropped. An older save (no speed) loads at unity.
       speed: normalizeTtsSpeedMap(stored.tts?.speed),
+      // Operator speech corrections — malformed entries dropped, list capped.
+      // An older save (no corrections) loads as [].
+      corrections: normalizeTtsCorrections(stored.tts?.corrections),
     },
     music: {
       source: MUSIC_SOURCES.includes(stored.music?.source)
@@ -2109,16 +2254,16 @@ export async function load() {
 
 // Lenient normalizer — used by load(). Drops invalid entries silently rather
 // than failing the whole boot.
-function normalizeWebhooks(raw: any) {
+function normalizeWebhooks(raw: unknown): Webhook[] {
   if (!Array.isArray(raw)) return [];
-  const out: any[] = [];
+  const out: Webhook[] = [];
   const seen = new Set<string>();
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue;
     const url = typeof item.url === 'string' ? item.url.trim() : '';
     if (!/^https?:\/\//.test(url) || url.length > 500) continue;
     const events = Array.isArray(item.events)
-      ? item.events.filter((e: any) => WEBHOOK_EVENTS.includes(e))
+      ? item.events.filter((e: string) => WEBHOOK_EVENTS.includes(e))
       : [];
     if (!events.length) continue;
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('wh_');
@@ -2496,8 +2641,8 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
     const eras: EraWindow[] = [];
     for (const [j, w] of rawEras.entries()) {
       if (!w || typeof w !== 'object') throw new Error(`shows[${i}].eras[${j}] must be an object`);
-      const fromYear = parseYear((w as any).fromYear, `eras[${j}].fromYear`);
-      const toYear = parseYear((w as any).toYear, `eras[${j}].toYear`);
+      const fromYear = parseYear((w as Record<string, unknown>).fromYear, `eras[${j}].fromYear`);
+      const toYear = parseYear((w as Record<string, unknown>).toYear, `eras[${j}].toYear`);
       if (fromYear == null && toYear == null) continue;
       if (fromYear != null && toYear != null && fromYear > toYear) {
         throw new Error(`shows[${i}].eras[${j}].fromYear must be <= toYear`);
@@ -2624,12 +2769,12 @@ function validateScheduleStrict(raw, shows) {
 // Strict validator — used by update(). `existing` is the current list, so
 // the operator can keep a previously-set authHeader by sending the redacted
 // sentinel back unchanged.
-function validateWebhooksStrict(raw: any, existing: any[] = []) {
+function validateWebhooksStrict(raw: unknown, existing: Webhook[] = []) {
   if (!Array.isArray(raw)) throw new Error('webhooks must be an array');
   if (raw.length > WEBHOOKS_LIMIT) {
     throw new Error(`webhooks must be at most ${WEBHOOKS_LIMIT} entries`);
   }
-  const byId = new Map(existing.map((h: any) => [h.id, h]));
+  const byId = new Map(existing.map((h) => [h.id, h] as const));
   const seen = new Set<string>();
   return raw.map((item, i) => {
     if (!item || typeof item !== 'object') throw new Error(`webhooks[${i}] must be an object`);
@@ -2742,7 +2887,7 @@ export async function update(patch) {
     }
   }
   if ('maxTrackSeconds' in patch || 'maxTrackMinutes' in patch) {
-    const v = parseInt(rawMaxTrackSec(patch), 10);
+    const v = parseInt(rawMaxTrackSec(patch) as string, 10);
     if (!Number.isFinite(v) || v < BOUNDS.maxTrackSeconds.min || v > BOUNDS.maxTrackSeconds.max) {
       throw new Error(
         `maxTrackSeconds must be int in [${BOUNDS.maxTrackSeconds.min}, ${BOUNDS.maxTrackSeconds.max}]`,
@@ -2873,6 +3018,12 @@ export async function update(patch) {
       }
       next.loudness.maxBoostDb = v;
     }
+    if (lo.source !== undefined) {
+      if (!LOUDNESS_SOURCES.includes(lo.source)) {
+        throw new Error(`loudness.source must be one of: ${LOUDNESS_SOURCES.join(', ')}`);
+      }
+      next.loudness.source = lo.source;
+    }
   }
   if ('weather' in patch) {
     const w = patch.weather || {};
@@ -2959,7 +3110,7 @@ export async function update(patch) {
       if (!v.includes('{name}')) {
         throw new Error('djPrompt must contain the {name} placeholder');
       }
-      let entry = next.djPrompts.find((p: any) => p.text === v);
+      let entry = next.djPrompts.find((p: DjPromptEntry) => p.text === v);
       if (!entry) {
         if (next.djPrompts.length >= DJ_PROMPT_LIMIT) {
           throw new Error(`the prompt library is full (${DJ_PROMPT_LIMIT} entries)`);
@@ -2973,7 +3124,7 @@ export async function update(patch) {
   if ('djPrompts' in patch || 'activeDjPromptId' in patch || 'djPrompt' in patch) {
     if (
       next.activeDjPromptId &&
-      !next.djPrompts.some((p: any) => p.id === next.activeDjPromptId)
+      !next.djPrompts.some((p: DjPromptEntry) => p.id === next.activeDjPromptId)
     ) {
       if ('activeDjPromptId' in patch || 'djPrompt' in patch) {
         throw new Error('activeDjPromptId must be "" or the id of a djPrompts entry');
@@ -2984,7 +3135,7 @@ export async function update(patch) {
     }
     // djPrompt stays the resolved active text — the single field readers use.
     next.djPrompt =
-      next.djPrompts.find((p: any) => p.id === next.activeDjPromptId)?.text ?? '';
+      next.djPrompts.find((p: DjPromptEntry) => p.id === next.activeDjPromptId)?.text ?? '';
   }
   if ('personas' in patch) {
     next.personas = validatePersonasStrict(patch.personas);
@@ -3176,6 +3327,11 @@ export async function update(patch) {
         }
         next.tts.speed[key] = clampTtsSpeed(t.speed[key]);
       }
+    }
+    // Whole-array replace, like festivals — the admin UI always sends the
+    // full edited list. No restart: read live on every speak() call.
+    if (t.corrections !== undefined) {
+      next.tts.corrections = validateTtsCorrectionsStrict(t.corrections);
     }
   }
   if ('music' in patch) {
@@ -3490,7 +3646,7 @@ export async function update(patch) {
     // effort — a missing directory or a vanished file is fine, this just
     // keeps the on-disk state from accumulating dead images.
     const removedIds = (cur.personas || [])
-      .map((p: any) => p.id)
+      .map((p: { id: string }) => p.id)
       .filter((id: string) => !personaIds.includes(id));
     if (removedIds.length) {
       try {
@@ -3573,7 +3729,7 @@ export function resolveActiveShow(date = new Date(), s = get()) {
     // Navidrome playlist anchor: the union of these playlists becomes the show's
     // candidate pool (music/show-playlist.ts). playlistStrict makes it the show's
     // entire universe; soft just lets it dominate. Empty array = no anchor.
-    playlistIds: Array.isArray(show.playlistIds) ? show.playlistIds.filter((v: any) => typeof v === 'string') : [],
+    playlistIds: Array.isArray(show.playlistIds) ? show.playlistIds.filter((v: unknown) => typeof v === 'string') : [],
     playlistStrict: show.playlistStrict === true,
     // Empty string means "fall back to the station-wide default". The route
     // layer is responsible for resolving an empty/stale id against the live
@@ -3600,10 +3756,10 @@ export function resolveActiveShow(date = new Date(), s = get()) {
 // The persona that should be on air right now: the current show's owner if a
 // show is scheduled, otherwise the admin-selected active persona.
 export function getEffectivePersona(date: Date = new Date()) {
-  const s: any = get();
-  const show: any = resolveActiveShow(date, s);
+  const s = get();
+  const show = resolveActiveShow(date, s);
   if (show?.persona?.id) {
-    const p = s.personas?.find((x: any) => x.id === show.persona!.id);
+    const p = s.personas?.find((x: { id: string }) => x.id === show.persona!.id);
     if (p) return p;
   }
   return getActivePersona();
@@ -3614,12 +3770,12 @@ export function getEffectivePersona(date: Date = new Date()) {
 // needs their tts config, not just names). Outside a show, or on a show with
 // no guests, `guests` is empty and the roster degenerates to today's solo DJ.
 export function getOnAirRoster(date: Date = new Date()) {
-  const s: any = get();
+  const s = get();
   const host = getEffectivePersona(date);
-  const show: any = resolveActiveShow(date, s);
+  const show = resolveActiveShow(date, s);
   const guests = (show?.guests || [])
-    .map((g: any) => s.personas?.find((p: any) => p.id === g.id))
-    .filter((p: any) => p && p.id !== host?.id);
+    .map((g: { id: string }) => s.personas?.find((p: { id: string }) => p.id === g.id))
+    .filter((p: { id?: string } | null | undefined) => p && p.id !== host?.id);
   return { host, guests, show };
 }
 
@@ -3645,8 +3801,8 @@ export function pickOnAirSpeaker(date: Date = new Date()) {
 // language (the default) returns '' so prompts stay byte-identical to the
 // pre-language behaviour. The proper-nouns clause stops a Turkish host from
 // translating "Bohemian Rhapsody" or the station name (issue #349).
-export function languageDirective(persona: any) {
-  const lang = String(persona?.language || '').trim();
+export function languageDirective(persona: unknown) {
+  const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim();
   if (!lang) return '';
   return `\n\nIMPORTANT: You speak and write exclusively in ${lang}. Every on-air line you produce must be in ${lang} — acknowledgements, idents, asides, everything. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them.`;
 }
@@ -3664,8 +3820,8 @@ export function languageDirective(persona: any) {
 // personas so those prompts stay byte-identical. `fields` is a human phrase
 // naming the spoken field(s), e.g. 'the "say" link' or 'the "ack" and "intro"
 // lines'.
-export function agentLanguageReminder(persona: any, fields: string) {
-  const lang = String(persona?.language || '').trim();
+export function agentLanguageReminder(persona: unknown, fields: string) {
+  const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim();
   if (!lang) return '';
   return `\n\nLANGUAGE — this overrides the field descriptions below: you speak ${lang}. Write ${fields} entirely in ${lang}; that is the text the listener hears on air. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them. Internal fields (ids, reasons, kinds) stay in English.`;
 }
@@ -3676,19 +3832,21 @@ export function agentLanguageReminder(persona: any, fields: string) {
 // A custom template with a {language} placeholder owns the wording (the
 // language NAME is substituted, defaulting to English); otherwise a non-empty
 // persona language appends the stock directive.
-export function renderDjPrompt(persona: any, ctx: any = {}) {
-  const station = ctx.station || cache?.station || DEFAULTS.station;
-  const location = ctx.location || (cache?.weather?.locationName ?? DEFAULTS.weather.locationName);
+export function renderDjPrompt(persona: unknown, ctx: unknown = {}) {
+  const c = (ctx ?? {}) as { station?: unknown; location?: unknown };
+  const p = persona as { name?: unknown; soul?: unknown; language?: unknown } | null | undefined;
+  const station = c.station || cache?.station || DEFAULTS.station;
+  const location = c.location || (cache?.weather?.locationName ?? DEFAULTS.weather.locationName);
   const tpl =
     cache?.djPrompt && cache.djPrompt.trim() ? cache.djPrompt : DEFAULT_DJ_PROMPT_TEMPLATE;
   const rendered = tpl
-    .replaceAll('{name}', persona?.name || 'your host')
-    .replaceAll('{soul}', persona?.soul || DJ_SOULS[0])
+    .replaceAll('{name}', (p?.name as string) || 'your host')
+    .replaceAll('{soul}', (p?.soul as string) || DJ_SOULS[0])
     .replaceAll('{station}', station)
     .replaceAll('{location}', location);
   const tone = personaToneDirectives(persona);
   if (tpl.includes('{language}')) {
-    const lang = String(persona?.language || '').trim();
+    const lang = String(p?.language || '').trim();
     return rendered.replaceAll('{language}', lang || 'English') + tone;
   }
   return rendered + languageDirective(persona) + tone;
@@ -3725,17 +3883,18 @@ export function agentPersonaPreamble(persona) {
 // djSystem, and agentPersonaPreamble for the pick/segment agents. The "never
 // invent quotes" rule matters: only genuinely aired turns reach the session
 // history, so any other words attributed to a co-host would be fabricated.
-export function onAirRosterClause(persona: any, date: Date = new Date()): string {
-  if (!persona?.id) return '';
+export function onAirRosterClause(persona: unknown, date: Date = new Date()): string {
+  const p = persona as { id?: unknown } | null | undefined;
+  if (!p?.id) return '';
   const { host, guests, show } = getOnAirRoster(date);
   if (!guests.length || !host) return '';
   const showName = show?.name ? ` on "${show.name}"` : '';
-  if (persona.id === host.id) {
-    const names = guests.map((g: any) => g.name).join(' and ');
+  if (p.id === host.id) {
+    const names = guests.map((g: { name?: unknown }) => g.name).join(' and ');
     return `\n\nYou are hosting${showName} with ${names} in the studio as your co-host${guests.length > 1 ? 's' : ''}. They take some of the talk breaks. When it fits, refer to them naturally — react to something they said on air, tee them up, share the room — but never invent quotes or opinions for them; only riff on what they actually said.`;
   }
-  if (guests.some((g: any) => g.id === persona.id)) {
-    const others = guests.filter((g: any) => g.id !== persona.id).map((g: any) => g.name);
+  if (guests.some((g: { id?: unknown }) => g.id === p.id)) {
+    const others = guests.filter((g: { id?: unknown }) => g.id !== p.id).map((g: { name?: unknown }) => g.name);
     const othersClause = others.length ? ` ${others.join(' and ')} ${others.length > 1 ? 'are' : 'is'} also in the studio.` : '';
     return `\n\nYou are a guest co-host${showName}; ${host.name} is the host and carries the show.${othersClause} Speak as yourself, in your own voice — you're a visitor with a seat at the desk, not the station's main DJ. React to the host and the music naturally, but never invent quotes or opinions for the others; only riff on what they actually said.`;
   }

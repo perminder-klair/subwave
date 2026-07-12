@@ -8,6 +8,7 @@ import cron from 'node-cron';
 import { config } from '../config.js';
 import * as source from '../music/source.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
+import { shuffle } from '../util/shuffle.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
@@ -46,10 +47,6 @@ const SHOW_GENRE_STRICT_WEIGHT = 24; // strict: this source carries most of the 
 const SHOW_PLAYLIST_WEIGHT = 14;        // dedicated show-playlist source (soft)
 const SHOW_PLAYLIST_STRICT_WEIGHT = 24; // strict: this source carries the pool
 const SHOW_NARROW_FACTOR = 0.5;      // shrink mood/playlist/recent/etc. for shows
-
-function shuffle<T>(arr: T[]): T[] {
-  return [...arr].sort(() => Math.random() - 0.5);
-}
 
 async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
   const out: any[] = [];

@@ -16,6 +16,7 @@ import * as embeddings from '../../../music/embeddings.js';
 import * as analyzer from '../../../music/analyzer.js';
 import { filterPickerCandidates, durationSeconds } from '../../../music/recency.js';
 import { preferGenre, preferEra, preferMood, preferEnergyStrict } from '../../../music/show-filter.js';
+import { shuffle } from '../../../util/shuffle.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { identifyTrackFromText } from '../prompts/request.js';
 
@@ -78,9 +79,6 @@ function slim(s: any) {
 // play count. With `cap=8` the agent sees the same handful no matter how many
 // times it asks. Shuffling here turns each call into a fresh sample — the same
 // fix `music/picker.js` already applies at pool-build time.
-function shuffle<T>(arr: T[]): T[] {
-  return [...arr].sort(() => Math.random() - 0.5);
-}
 
 // Builds a fresh tool set scoped to one pick. `recentIds`/`recentKeys`
 // (recently-played track ids + "title|artist" keys) are filtered out inside

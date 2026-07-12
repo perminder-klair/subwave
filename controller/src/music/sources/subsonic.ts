@@ -4,6 +4,7 @@
 import crypto from 'node:crypto';
 import { config } from '../../config.js';
 import * as subLog from '../subsonic-log.js';
+import * as blocklist from '../blocklist.js';
 import { isStationArchive } from './station-archive.js';
 import type { MusicSource, CoverArt, AnalyzableRef } from './types.js';
 
@@ -160,15 +161,28 @@ export async function ping(): Promise<{ ok: boolean; reason?: string }> {
 // The station-archive guard (issue #273) lives in sources/station-archive.js —
 // it's source-agnostic and shared with the local-folder source. `call()` logging
 // is untouched, so /debug still shows the raw Subsonic responses.
-const rejectArchive = (arr: any[]) => (arr || []).filter((s) => !isStationArchive(s));
+//
+// The global never-play blocklist rides the same chokepoint: every
+// song-returning function below already filters through rejectArchive, so
+// blocked tracks/albums/artists drop out of search, random, genre, similar,
+// starred, top-songs, album and playlist results — i.e. every picker source,
+// agent tool, and request-resolution path — in one place.
+const rejectArchive = (arr: any[]) =>
+  blocklist.rejectBlocked((arr || []).filter((s) => !isStationArchive(s)));
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function search(query, { songCount = 20, songOffset = 0 } = {}) {
+// `includeBlocked` is for the ADMIN search surface only (/dj/search — the
+// library Search tab + studio queue picker): the operator must still be able
+// to find a blocked track to review it, and a manual queue attempt is refused
+// at the queue.push gate anyway. Every airing path (picker tools, request
+// resolution) uses the default and never sees blocked songs.
+export async function search(query, { songCount = 20, songOffset = 0, includeBlocked = false } = {}) {
   const r = await call('search3', { query, songCount, songOffset, artistCount: 5, albumCount: 5 });
-  return rejectArchive(r.searchResult3?.song || []);
+  const songs = (r.searchResult3?.song || []).filter((s) => !isStationArchive(s));
+  return includeBlocked ? songs : blocklist.rejectBlocked(songs);
 }
 
 export async function getRandomSongs({ size = 20, genre, fromYear, toYear }: { size?: number; genre?: string; fromYear?: number; toYear?: number } = {}) {

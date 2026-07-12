@@ -5,11 +5,15 @@
 import express from 'express';
 import { config } from './config.js';
 import * as settings from './settings.js';
+import * as blocklist from './music/blocklist.js';
 import * as jingles from './broadcast/jingles.js';
 import * as sfx from './broadcast/sfx.js';
 import { queue } from './broadcast/queue.js';
 import * as session from './broadcast/session.js';
 import * as remoteTts from './audio/remoteTts.js';
+import * as kokoro from './audio/kokoro.js';
+import * as chatterbox from './audio/chatterbox.js';
+import * as pocketTts from './audio/pocketTts.js';
 import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
 import { startScheduler } from './broadcast/scheduler.js';
@@ -64,7 +68,18 @@ let shuttingDown = false;
 function shutdown(signal: string): void {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`[shutdown] ${signal} — closing library DB`);
+  console.log(`[shutdown] ${signal} — reaping TTS workers + closing library DB`);
+  // Reap resident Python TTS workers so they don't outlive a bare-process
+  // shutdown (npm start / dev). Docker reaps the container's process group, so
+  // there this is belt-and-suspenders. Each guarded so a dead worker never
+  // blocks the rest of shutdown.
+  for (const stopWorker of [kokoro.stop, chatterbox.stop, pocketTts.stop]) {
+    try {
+      stopWorker();
+    } catch (err) {
+      console.error('[shutdown] TTS worker stop failed:', err instanceof Error ? err.message : err);
+    }
+  }
   try {
     library.shutdown();
   } catch (err: any) {
@@ -159,6 +174,11 @@ app.listen(config.server.port, async () => {
   } catch (err) {
     console.error('[settings] load failed:', err.message);
   }
+
+  // Never-play blocklist — must be in memory before the scheduler's first
+  // auto-playlist build and the first queue push. load() itself never throws
+  // (a corrupt file starts empty), so no try/catch needed.
+  await blocklist.load();
 
   // Start the remote-TTS /health probe loop now that settings are loaded — its
   // URL lives in settings (not env), so it can't self-start at import time the

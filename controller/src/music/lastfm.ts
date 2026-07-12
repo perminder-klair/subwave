@@ -13,11 +13,11 @@
 // so the caller can fall back; no retry (project convention — Last.fm's read
 // API is generous and the tagger loop is already sequential + per-artist cached).
 
-import * as settings from '../settings.js';
 import * as source from './source.js';
+import { LASTFM_API, resolveLastfmApiKey } from './lastfm-shared.js';
+import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 const TIMEOUT_MS = 5000;
-const LASTFM_API = 'https://ws.audioscrobbler.com/2.0/';
 
 // artist.getTopTags returns a normalised popularity `count` (0–100, top tag at
 // 100). A count of 0 means essentially nobody applied the tag after
@@ -30,8 +30,7 @@ const MIN_TAG_COUNT = 1;
 // Note: unlike scrobbling, tag fetching does NOT require scrobble.enabled — the
 // key alone is enough to read public tags.
 function resolveKey(): string {
-  const s: any = settings.get()?.scrobble?.lastfm || {};
-  return process.env.LASTFM_API_KEY || s.apiKey || '';
+  return resolveLastfmApiKey();
 }
 
 export function hasLastfmKey(): boolean {
@@ -68,13 +67,12 @@ export async function getArtistTopTags(
     format: 'json',
   });
 
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
   try {
-    const r = await fetch(`${LASTFM_API}?${params.toString()}`, {
+    const r = await fetchWithTimeout(`${LASTFM_API}?${params.toString()}`, {
       method: 'GET',
       headers: { 'User-Agent': 'sub-wave/tags' },
-      signal: ctrl.signal,
+      timeoutMs: TIMEOUT_MS,
+      bodyDeadline: true,
     });
     if (!r.ok) {
       console.warn(`[lastfm] artist.getTopTags → ${r.status} for "${artist}"`);
@@ -98,8 +96,6 @@ export async function getArtistTopTags(
   } catch (err: any) {
     console.warn(`[lastfm] artist.getTopTags failed for "${artist}": ${err?.message || err}`);
     return [];
-  } finally {
-    clearTimeout(timer);
   }
 }
 

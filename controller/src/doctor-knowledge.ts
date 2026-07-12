@@ -97,8 +97,10 @@ aren't matched by feel. If coverage is zero/low, recommend running the tagger.
 
 ## Web search (settings.search)
 Backs the DJ's artist-news segments. 'duckduckgo' is the keyless default; 'tavily'
-gives richer results but needs a key (SEARCH_API_KEY). If Tavily is selected without
-a key, news segments can't fetch — tell them to add the key or switch to DuckDuckGo.
+and 'brave' give richer results but need a key (SEARCH_API_KEY — Brave is metered
+with $5/mo free credits and requires a card on file); 'searxng' is keyless but needs
+a self-hosted instance URL. If a keyed provider is selected without a key, news
+segments can't fetch — tell them to add the key or switch to DuckDuckGo/SearXNG.
 
 ## Backups
 There is a Backup feature (Admin → Backup) that exports settings, personas, custom
@@ -148,10 +150,24 @@ regular cadence — it's cheap insurance.
 
 ## Audio analysis features vs analyzer flavour (settings.audio.embeddings / vocalActivity)
 - "Sounds-like" audio embeddings need the **heavy analyzer** (CLAP); vocal-range /
-  talk-timing needs the heavy analyzer (Demucs). The default LEAN analyzer image
-  can't do either, so these toggles **silently no-op** on it. If the report flags
-  this, tell the operator to set \`ANALYZER_HEAVY=1\` in .env and re-pull/rebuild the
-  analyzer, or turn the setting off (it's costing nothing but false expectations).
+  talk-timing needs the heavy analyzer (Demucs). A LEAN build can't do either, so
+  these toggles **silently no-op** on it. The snapshot's \`analyzer\` line states the
+  measured capability: \`(heavy: CLAP yes)\`, \`(lean: no CLAP)\`, or \`(CLAP unknown)\`.
+  ONLY claim the operator is on a lean build when it says \`lean\` or the report's
+  Tuning section flagged it — never infer lean from \`analyzer local\` or from the
+  toggles alone; \`unknown\` means the capability hasn't been probed yet, say so.
+- The upgrade path depends on the deployment shape:
+  - **Split stack** (\`analyzer sidecar\`): with docker compose, \`ANALYZER_HEAVY=1\`
+    in .env + re-pull; on non-compose installs (Unraid, Portainer, plain
+    \`docker run\`) change the analyzer container's image to
+    \`ghcr.io/perminder-klair/subwave-analyzer-heavy\`. \`ANALYZER_HEAVY\` is a compose
+    interpolation variable, so setting it on a container does nothing.
+  - **All-in-one image** (\`analyzer local\` — the AIO bundles the analyzer
+    in-process): switch the single container's image to
+    \`ghcr.io/perminder-klair/subwave-aio-heavy\`. Do NOT point an AIO install at
+    \`subwave-analyzer-heavy\` — that's the bare analyzer micro-service, and swapping
+    the AIO container to it replaces the whole station with just an analyzer.
+  - Or turn the setting off (it's costing nothing but false expectations).
 
 ## Listener-request web-resolve (settings.llm.requestWebResolve)
 - Lets the request agent resolve *described* tracks ("that song from the advert")

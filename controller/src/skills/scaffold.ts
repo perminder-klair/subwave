@@ -44,6 +44,7 @@ interface SkillFileFields {
   requiresKey?: string;       // custom skills only — env var the skill needs
   feed?: string;        // news only
   feedMaxItems?: number; // news only
+  tags?: string[];      // freeform organisation tags
   brief?: string;
 }
 
@@ -65,6 +66,7 @@ export async function writeSkillFile(fields: SkillFileFields): Promise<void> {
   if (fields.requiresKey) lines.push(`requiresKey: ${fields.requiresKey}`);
   if (fields.feed) lines.push(`feed: ${fields.feed}`);
   if (fields.feedMaxItems) lines.push(`feedMaxItems: ${fields.feedMaxItems}`);
+  if (fields.tags && fields.tags.length) lines.push(`tags: ${fields.tags.join(', ')}`);
   lines.push('---', (fields.brief || '').trim(), '');
   const dir = join(SKILLS_DIR, kind);
   await mkdir(dir, { recursive: true });

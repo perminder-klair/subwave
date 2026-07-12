@@ -16,6 +16,7 @@
 import * as source from './source.js';
 import * as db from './library-db.js';
 import { SHOW_MOODS } from '../settings.js';
+import { shuffle } from '../util/shuffle.js';
 
 export interface SeedSelection {
   seeds: string[];                          // ids to LLM-tag
@@ -161,7 +162,7 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
     } else {
       // No embeddings — shuffle and take. Deterministic seed for testability
       // is left as an implementation-time detail; default is Math.random.
-      const shuffled = shuffle([...candidatePool]).slice(0, remaining);
+      const shuffled = shuffle(candidatePool).slice(0, remaining);
       for (const id of shuffled) take('kmeans', id);
     }
   }
@@ -263,12 +264,4 @@ function minSqDist(v: number[], centroids: number[][]): number {
     if (d < best) best = d;
   }
   return best;
-}
-
-function shuffle<T>(arr: T[]): T[] {
-  for (let i = arr.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [arr[i], arr[j]] = [arr[j], arr[i]];
-  }
-  return arr;
 }
