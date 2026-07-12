@@ -656,7 +656,10 @@ const EXCLUDED_PLAYLISTS_PER_SHOW = 10;
 // attribute the values OR together at pick time; across attributes they AND —
 // so past a handful the filter stops meaning anything.
 const SHOW_FILTER_VALUES_MAX = 6;
-const SKILLS_PER_PERSONA_LIMIT = 20;
+// Must comfortably exceed a realistic skill library: unticking one skill on an
+// "all skills" (null) persona materialises the FULL catalog minus one, so a cap
+// near the library size would make that first untick fail (#skill-organization).
+const SKILLS_PER_PERSONA_LIMIT = 64;
 const WEBHOOKS_LIMIT = 16;
 // Prompt-template library (djPrompts). Text bounds match the historical
 // single-djPrompt rule — keep them in lockstep with PROMPT_MIN/PROMPT_MAX in

@@ -769,6 +769,9 @@ export function skillCatalog() {
       // #471). Resolved to the default profile (no weather) when unset, so the
       // admin UI can render the current tick-box selection without guessing.
       contextFields: effectiveContextFields(c),
+      // Freeform organisation tags from SKILL.md frontmatter — filter fodder
+      // for the admin skill list.
+      tags: c.tags || [],
     };
   });
 }

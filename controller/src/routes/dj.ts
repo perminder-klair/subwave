@@ -15,7 +15,7 @@ import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, runBanter, runProgrammeIntro, runProgrammeFeature, runProgrammeOutro, refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import { skillCatalog, runCapability, effectiveContextFields } from '../skills/_agent.js';
 import * as sfxLib from '../broadcast/sfx.js';
-import { loadSkills, parseFrontmatter, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
+import { loadSkills, parseFrontmatter, parseTags, SEEDED_KINDS, RESERVED_KINDS, SLUG_RE, TAG_RE, TAGS_PER_SKILL_LIMIT, readTemplate, listCommunitySkills, readCommunitySkill } from '../skills/loader.js';
 import { writeSkillFile, msToCooldownStr, resetBuiltinSkill } from '../skills/scaffold.js';
 import { mapPool } from '../util/async-pool.js';
 import { readFile, rm, stat, mkdir, writeFile } from 'node:fs/promises';
@@ -37,7 +37,28 @@ interface SkillFields {
   requiresKey?: string;
   feed?: string;
   feedMaxItems?: number;
+  tags?: string[];
   brief?: string;
+}
+
+// Normalise a tags form value (array or comma string) with LOUD validation — a
+// bad tag 400s here instead of silently vanishing (the loader's lenient
+// parseTags is for hand-edited files; the form should fail fast).
+function buildTags(raw: unknown): string[] | undefined {
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+  const out: string[] = [];
+  for (const item of list) {
+    const tag = String(item ?? '').trim().toLowerCase();
+    if (!tag) continue;
+    if (!TAG_RE.test(tag)) {
+      throw new Error(`invalid tag "${tag}" — lowercase slugs (a-z, 0-9, hyphens), max 24 chars`);
+    }
+    if (!out.includes(tag)) out.push(tag);
+  }
+  if (out.length > TAGS_PER_SKILL_LIMIT) {
+    throw new Error(`at most ${TAGS_PER_SKILL_LIMIT} tags per skill`);
+  }
+  return out.length ? out : undefined;
 }
 
 // The subset of a Subsonic song toAdminRow reads to build a queue-ready row.
@@ -309,6 +330,8 @@ function buildCustomSkillFields(slug: string, b: Record<string, unknown>): Skill
     fields.requiresKey = key;
   }
 
+  if (b.tags !== undefined) fields.tags = buildTags(b.tags);
+
   return fields;
 }
 
@@ -332,6 +355,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       label: tpl.data.label || kind,
       cooldown: tpl.data.cooldown || '60m',
       context: (effectiveContextFields({ contextFields: tpl.data.context ?? tpl.data.contextFields }) || []).join(', '),
+      tags: parseTags(tpl.data.tags),
       brief: tpl.body || '',
       ...(kind === 'news' ? { feed: config.news.feedUrl, feedMaxItems: config.news.maxItems } : {}),
     } : null;
@@ -353,6 +377,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         knownContextFields: [...dj.CONTEXT_FIELDS],
         feed: data.feed || cat?.feed || null,
         feedMaxItems: data.feedMaxItems ? parseInt(data.feedMaxItems, 10) : (cat?.feedMaxItems || null),
+        tags: parseTags(data.tags),
         brief: body || cat?.description || '',
         // Built-ins now carry an editable tool.mjs in state too (seeded on first
         // boot), so the edit form shows the same "edit on disk + Rescan" hint as
@@ -373,6 +398,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         knownContextFields: [...dj.CONTEXT_FIELDS],
         feed: cat?.feed || null,
         feedMaxItems: cat?.feedMaxItems || null,
+        tags: cat?.tags || [],
         brief: cat?.description || '',
         hasTool: await skillHasTool(kind),
         defaults,
@@ -398,6 +424,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       knownContextFields: [...dj.CONTEXT_FIELDS],
       window: data.window === 'commute' ? 'commute' : 'any',
       requiresKey: data.requiresKey || '',
+      tags: parseTags(data.tags),
       hasTool: await skillHasTool(kind),
       brief: body || '',
     });
@@ -504,6 +531,14 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
     if (toks.length) fields.contextFields = toks;
   }
 
+  if (b.tags !== undefined) {
+    try {
+      fields.tags = buildTags(b.tags);
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+  }
+
   // Feed is news-only. Validate it parses as an http(s) URL.
   if (kind === 'news') {
     const feed = typeof b.feed === 'string' ? b.feed.trim() : '';
@@ -527,6 +562,64 @@ router.put('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
     res.json({ skills: skillCatalog() });
   } catch (err) {
     queue.log('error', `PUT /dj/skills/${kind}/file failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PUT /dj/skills/:slug/personas — reverse assignment: set exactly which DJs run
+// this skill, from the skill's own editor (instead of persona-by-persona in
+// PersonaSkillsCard — both write the same personas[].skills field).
+// Body: { personaIds: string[] } — the personas that SHOULD have the skill.
+// The read-modify-write happens server-side so the null sentinel ("all skills")
+// is interpreted in exactly one place: null + assigned → stays null (already
+// covered); null + unassigned → materialises the full current catalog minus
+// this skill (what un-ticking the first box in PersonaSkillsCard does too).
+// ---------------------------------------------------------------------------
+router.put('/dj/skills/:slug/personas', requireAdmin, async (req, res) => {
+  const slug = req.params.slug;
+  const catalog = skillCatalog();
+  if (!catalog.some((sk) => sk.name === slug)) {
+    return res.status(404).json({ error: `no such skill: ${slug}` });
+  }
+
+  const raw = req.body?.personaIds;
+  if (!Array.isArray(raw) || raw.some((id) => typeof id !== 'string')) {
+    return res.status(400).json({ error: 'personaIds must be an array of persona ids' });
+  }
+  const want = new Set<string>(raw);
+  const s = settings.get();
+  const known = new Set(s.personas.map((p) => p.id));
+  const unknown = [...want].filter((id) => !known.has(id));
+  if (unknown.length) {
+    return res.status(400).json({ error: `unknown persona id(s): ${unknown.join(', ')}` });
+  }
+
+  const allSlugs = catalog.map((sk) => sk.name);
+  let changed = false;
+  const personas = s.personas.map((p) => {
+    const has = p.skills === null || p.skills.includes(slug);
+    const should = want.has(p.id);
+    if (has === should) return p;
+    changed = true;
+    // `should && !has` implies p.skills is an array (null would mean has=true).
+    if (should) return { ...p, skills: [...p.skills, slug] };
+    const base = p.skills === null ? allSlugs : p.skills;
+    return { ...p, skills: base.filter((sl) => sl !== slug) };
+  });
+
+  try {
+    if (changed) await settings.update({ personas });
+    queue.log('scheduler', `[skills] "${slug}" DJ assignments updated via admin UI`);
+    res.json({
+      personas: personas.map((p) => ({
+        id: p.id,
+        name: p.name,
+        hasSkill: p.skills === null || p.skills.includes(slug),
+      })),
+    });
+  } catch (err) {
+    queue.log('error', `PUT /dj/skills/${slug}/personas failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

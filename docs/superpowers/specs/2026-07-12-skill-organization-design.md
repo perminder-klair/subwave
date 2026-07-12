@@ -1,7 +1,7 @@
 # Skill organization: tags, filter/sort, and assign-from-skill
 
 **Date:** 2026-07-12
-**Status:** Draft — awaiting review
+**Status:** Implemented
 **Origin:** Discord community request — libraries past ~15–20 skills with 8+ personas make the who-has-what matrix unwieldy. Three asks: (1) filter/sort, especially "filter by which DJ/Show has it enabled", (2) freeform tags, (3) assign a skill to DJs from the skill itself instead of DJ-by-DJ.
 
 ## Problem
