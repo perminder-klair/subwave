@@ -27,7 +27,7 @@ import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search, RotateCcw, Sparkles, RefreshCw, ListPlus, ListMusic, X, Pencil, Ban,
-  Clock3, LayoutGrid, Tags,
+  Music, LayoutGrid, Tags,
 } from 'lucide-react';
 import { useAdminAuth, ADMIN_API_URL } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
@@ -109,7 +109,12 @@ interface SettingsResponse {
   budget?: { mode: BudgetMode };
 }
 
-type Tab = 'recent' | 'browse' | 'search' | 'untagged' | 'playlists' | 'blocked';
+type Tab = 'tracks' | 'browse' | 'search' | 'playlists' | 'blocked';
+// The Tracks tab folds the old Recent + Untagged tabs into one view with an
+// All / Needs-tags toggle; TableVariant keeps TrackTable's per-view behaviour
+// (empty-state copy, accent Tag button) keyed on what's actually shown.
+type TrackMode = 'all' | 'needs';
+type TableVariant = 'recent' | 'browse' | 'search' | 'untagged';
 type Sort = 'artist' | 'title' | 'year' | 'taggedAt' | 'bpm' | 'loudness' | 'pace';
 type Energy = 'any' | 'low' | 'medium' | 'high';
 type Vocal = 'any' | 'instrumental' | 'vocal';
@@ -121,7 +126,7 @@ type SearchMode = 'library' | 'sound';
 const PAGE_SIZE = 50;
 const SEARCH_PAGE = 30;
 
-const TABS: Tab[] = ['recent', 'browse', 'search', 'untagged', 'playlists', 'blocked'];
+const TABS: Tab[] = ['tracks', 'browse', 'search', 'playlists', 'blocked'];
 const SORTS: Sort[] = ['artist', 'title', 'year', 'taggedAt', 'bpm', 'loudness', 'pace'];
 
 // ---------------------------------------------------------------------------
@@ -174,7 +179,8 @@ export default function LibraryPanel() {
   const ready = hydrated && !needsAuth;
 
   // shared state
-  const [tab, setTab] = useState<Tab>('recent');
+  const [tab, setTab] = useState<Tab>('tracks');
+  const [trackMode, setTrackMode] = useState<TrackMode>('all');
   const [coverage, setCoverage] = useState<Coverage | null>(null);
   const [tagger, setTagger] = useState<TaggerState | null>(null);
   const [libStats, setLibStats] = useState<LibraryStatsLite | null>(null);
@@ -258,7 +264,11 @@ export default function LibraryPanel() {
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
     const t = sp.get('tab');
-    if (t && (TABS as string[]).includes(t)) setTab(t as Tab);
+    // Legacy links: the old Recent and Untagged tabs are now Tracks (+ mode).
+    if (t === 'untagged') { setTab('tracks'); setTrackMode('needs'); }
+    else if (t === 'recent') setTab('tracks');
+    else if (t && (TABS as string[]).includes(t)) setTab(t as Tab);
+    if (sp.get('view') === 'needs') { setTab('tracks'); setTrackMode('needs'); }
     const m = (sp.get('moods') || '').split(',').map(s => s.trim()).filter(Boolean);
     if (m.length) setMoods(m);
     const en = sp.get('energy');
@@ -284,7 +294,8 @@ export default function LibraryPanel() {
   useEffect(() => {
     if (!urlRestored) return;
     const sp = new URLSearchParams();
-    if (tab !== 'recent') sp.set('tab', tab);
+    if (tab !== 'tracks') sp.set('tab', tab);
+    if (tab === 'tracks' && trackMode === 'needs') sp.set('view', 'needs');
     if (moods.length) sp.set('moods', moods.join(','));
     if (energy !== 'any') sp.set('energy', energy);
     if (vocal !== 'any') sp.set('vocal', vocal);
@@ -297,7 +308,7 @@ export default function LibraryPanel() {
     if (searchMode === 'sound') sp.set('smode', 'sound');
     const qs = sp.toString();
     window.history.replaceState(null, '', `${window.location.pathname}${qs ? `?${qs}` : ''}${window.location.hash}`);
-  }, [urlRestored, tab, moods, energy, vocal, genre, yearFrom, yearTo, q, sort, searchQuery, searchMode]);
+  }, [urlRestored, tab, trackMode, moods, energy, vocal, genre, yearFrom, yearTo, q, sort, searchQuery, searchMode]);
 
   // If coverage says the sound search can't serve (lean analyzer, no audio
   // index), drop back to the metadata mode the toggle would otherwise hide.
@@ -520,9 +531,9 @@ export default function LibraryPanel() {
   }, [adminFetch, ready]);
 
   useEffect(() => {
-    if (tab !== 'untagged' || !ready) return;
+    if (tab !== 'tracks' || trackMode !== 'needs' || !ready) return;
     if (untagged.length === 0) loadUntagged(null, false);
-  }, [tab, ready, untagged.length, loadUntagged]);
+  }, [tab, trackMode, ready, untagged.length, loadUntagged]);
 
   // -----------------------------------------------------------------------
   // recent fetch
@@ -544,9 +555,9 @@ export default function LibraryPanel() {
   }, [adminFetch, ready]);
 
   useEffect(() => {
-    if (tab !== 'recent' || !ready) return;
+    if (tab !== 'tracks' || trackMode !== 'all' || !ready) return;
     if (recent === null) loadRecent();
-  }, [tab, ready, recent, loadRecent]);
+  }, [tab, trackMode, ready, recent, loadRecent]);
 
   // -----------------------------------------------------------------------
   // playlists — list fetch, row selection, add-to-playlist
@@ -727,11 +738,11 @@ export default function LibraryPanel() {
       setFlashId(track.id);
       setTimeout(() => setFlashId(curr => (curr === track.id ? null : curr)), 1100);
       if (tab === 'browse') runBrowse();
-      if (tab === 'untagged') setUntagged(prev => prev.filter(t => t.id !== track.id));
+      if (tab === 'tracks' && trackMode === 'needs') setUntagged(prev => prev.filter(t => t.id !== track.id));
       // Search/recent rows aren't refetched — patch the row so the new tags
       // show immediately (the server stamps retagged rows source='llm').
       if (tab === 'search') setSearchResults(prev => patchRows(prev, track, j.moods || [], j.energy ?? null, false, false, 'llm'));
-      if (tab === 'recent') setRecent(prev => patchRows(prev, track, j.moods || [], j.energy ?? null, false, false, 'llm'));
+      if (tab === 'tracks' && trackMode === 'all') setRecent(prev => patchRows(prev, track, j.moods || [], j.energy ?? null, false, false, 'llm'));
       loadCoverage();
     } catch (err) {
       notify.err(errorMessage(err));
@@ -802,7 +813,7 @@ export default function LibraryPanel() {
       setFlashId(track.id);
       setTimeout(() => setFlashId(curr => (curr === track.id ? null : curr)), 1100);
       if (tab === 'browse') runBrowse();
-      else if (tab === 'untagged') {
+      else if (tab === 'tracks' && trackMode === 'needs') {
         // Newly-tagged tracks leave the untagged list; cleared ones stay put.
         if (!cleared) {
           setUntagged(prev => prev.filter(t =>
@@ -810,7 +821,7 @@ export default function LibraryPanel() {
         }
       } else if (tab === 'search') {
         setSearchResults(prev => patchRows(prev, track, moods, energy, cleared, applyToAlbum));
-      } else if (tab === 'recent') {
+      } else if (tab === 'tracks') {
         setRecent(prev => patchRows(prev, track, moods, energy, cleared, applyToAlbum));
       }
       loadCoverage();
@@ -1062,7 +1073,7 @@ export default function LibraryPanel() {
       setUntagged([]);
       setUntaggedCursor(null);
       if (tab === 'browse') runBrowse();
-      else if (tab === 'recent') loadRecent();
+      else if (tab === 'tracks' && trackMode === 'all') loadRecent();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
@@ -1086,15 +1097,19 @@ export default function LibraryPanel() {
     setSort('artist'); setPage(0);
   };
 
+  // What the merged Tracks tab actually shows right now — drives the table's
+  // rows, empty-state copy, and accent Tag button (TrackTable keys on this).
+  const tableVariant: TableVariant =
+    tab === 'tracks' ? (trackMode === 'needs' ? 'untagged' : 'recent') : (tab as TableVariant);
   const tableRows: Track[] =
-    tab === 'browse' ? (browse?.rows || []) :
-    tab === 'search' ? (searchResults || []) :
-    tab === 'untagged' ? untagged :
+    tableVariant === 'browse' ? (browse?.rows || []) :
+    tableVariant === 'search' ? (searchResults || []) :
+    tableVariant === 'untagged' ? untagged :
     (recent || []);
   const tableLoading =
-    tab === 'browse' ? browseLoading :
-    tab === 'search' ? searching :
-    tab === 'untagged' ? untaggedLoading :
+    tableVariant === 'browse' ? browseLoading :
+    tableVariant === 'search' ? searching :
+    tableVariant === 'untagged' ? untaggedLoading :
     recentLoading;
 
   return (
@@ -1253,33 +1268,45 @@ export default function LibraryPanel() {
       {tab !== 'playlists' && tab !== 'blocked' && (
       <Card
         title={
-          tab === 'browse' ? 'Tracks' :
-          tab === 'search' ? 'Search results' :
-          tab === 'untagged' ? 'Untagged' :
+          tableVariant === 'browse' ? 'Tracks' :
+          tableVariant === 'search' ? 'Search results' :
+          tableVariant === 'untagged' ? 'Needs tags' :
           'Recently added'
         }
         sub={
-          tab === 'browse'
+          tableVariant === 'browse'
             ? (browse ? `${num(browse.total)} match${browse.total === 1 ? '' : 'es'}` : '')
-            : tab === 'search' ? (searchResults ? `${searchResults.length} result${searchResults.length === 1 ? '' : 's'}` : 'enter a query')
-            : tab === 'untagged' ? `${untagged.length} loaded${remaining != null ? ` · ${num(remaining)} need tags` : ''}`
+            : tableVariant === 'search' ? (searchResults ? `${searchResults.length} result${searchResults.length === 1 ? '' : 's'}` : 'enter a query')
+            : tableVariant === 'untagged' ? `${untagged.length} loaded${remaining != null ? ` · ${num(remaining)} need tags` : ''}`
             : (recent ? `${recent.length} tracks` : '')
         }
         right={
-          tab === 'untagged' && untagged.length > 0 ? (
-            <Btn sm tone="accent" onClick={() => startTagger()} disabled={tagger?.running || taggerBusy}>
-              <Sparkles size={11} /> Tag all
-            </Btn>
-          ) : tab === 'recent' ? (
-            <Btn sm onClick={loadRecent} disabled={recentLoading}>
-              <RefreshCw size={11} /> {recentLoading ? 'Loading…' : 'Refresh'}
-            </Btn>
+          tab === 'tracks' ? (
+            <span className="flex items-center gap-2.5">
+              <Seg
+                value={trackMode}
+                options={[
+                  { id: 'all', label: 'All' },
+                  { id: 'needs', label: `Needs tags${remaining != null ? ` · ${num(remaining)}` : ''}` },
+                ]}
+                onChange={(v: string) => setTrackMode(v as TrackMode)}
+              />
+              {trackMode === 'needs' && untagged.length > 0 ? (
+                <Btn sm tone="accent" onClick={() => startTagger()} disabled={tagger?.running || taggerBusy}>
+                  <Sparkles size={11} /> Tag all
+                </Btn>
+              ) : trackMode === 'all' ? (
+                <Btn sm onClick={loadRecent} disabled={recentLoading}>
+                  <RefreshCw size={11} /> {recentLoading ? 'Loading…' : 'Refresh'}
+                </Btn>
+              ) : null}
+            </span>
           ) : null
         }
         bodyClass="!p-0"
       >
         <TrackTable
-          tab={tab}
+          tab={tableVariant}
           rows={tableRows}
           loading={tableLoading}
           queuing={queuing}
@@ -1323,7 +1350,7 @@ export default function LibraryPanel() {
         </div>
       )}
 
-      {tab === 'untagged' && untaggedCursor && (
+      {tab === 'tracks' && trackMode === 'needs' && untaggedCursor && (
         <div className="flex justify-center">
           <Btn onClick={() => loadUntagged(untaggedCursor, true)} disabled={untaggedLoading}>
             {untaggedLoading ? 'Loading…' : 'Load more'}
@@ -1337,28 +1364,27 @@ export default function LibraryPanel() {
 // ---------------------------------------------------------------------------
 // tabs
 // ---------------------------------------------------------------------------
-// One-line masthead tabs: icon + label only. The old per-tab counts meant four
-// different things (page size / totals / to-dos) — the panel subtitle below
-// reports the real numbers for whichever view is open.
+// Masthead tabs: icon left, name + subtitle stacked right. No count badges —
+// the panel subtitle below reports the real numbers for whichever view is open.
 function Tabs({ tab, setTab }: {
   tab: Tab;
   setTab: (t: Tab) => void;
 }) {
-  const items: { id: Tab; name: string; icon: ReactNode }[] = [
-    { id: 'recent', name: 'Recent', icon: <Clock3 size={13} /> },
-    { id: 'browse', name: 'Browse', icon: <LayoutGrid size={13} /> },
-    { id: 'search', name: 'Search', icon: <Search size={13} /> },
-    { id: 'untagged', name: 'Untagged', icon: <Tags size={13} /> },
-    { id: 'playlists', name: 'Playlists', icon: <ListMusic size={13} /> },
-    { id: 'blocked', name: 'Blocked', icon: <Ban size={13} /> },
+  const items: { id: Tab; name: string; sub: string; icon: ReactNode }[] = [
+    { id: 'tracks', name: 'Tracks', sub: 'newest & needs tags', icon: <Music size={17} /> },
+    { id: 'browse', name: 'Browse', sub: 'tagged index', icon: <LayoutGrid size={17} /> },
+    { id: 'search', name: 'Search', sub: 'navidrome', icon: <Search size={17} /> },
+    { id: 'playlists', name: 'Playlists', sub: 'navidrome', icon: <ListMusic size={17} /> },
+    { id: 'blocked', name: 'Blocked', sub: 'never plays', icon: <Ban size={17} /> },
   ];
   return (
     <div className="lib-tabs">
       {items.map(it => (
         <button key={it.id} type="button" className={cn('lib-tab', tab === it.id && 'on')} onClick={() => setTab(it.id)}>
-          <span className="lib-tab-name">
-            {it.icon}
-            {it.name}
+          {it.icon}
+          <span className="min-w-0">
+            <span className="lib-tab-name">{it.name}</span>
+            <span className="lib-tab-sub">{it.sub}</span>
           </span>
         </button>
       ))}
@@ -1537,7 +1563,7 @@ function BrowseFilters(p: BrowseFiltersProps) {
 // track table
 // ---------------------------------------------------------------------------
 interface TrackTableProps {
-  tab: Tab;
+  tab: TableVariant;
   rows: Track[];
   loading: boolean;
   queuing: string | null;

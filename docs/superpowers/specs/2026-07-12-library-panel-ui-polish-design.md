@@ -18,7 +18,8 @@ Keep the boxed broadsheet identity (ink border, uppercase names, solid-ink activ
 - **One-line tabs sized to content**: drop `flex: 1` / `min-width: 130px`; cells take natural width. The strip container becomes `overflow-x: auto` + `flex-wrap: nowrap` so narrow screens scroll instead of wrapping.
 - **Hint line removed** (`lib-tab-hint` and the hint markup go away). The active panel's Card subtitle already explains each view.
 - **Label change**: "Recently added" → "Recent" (the Card title below still reads "Recently added").
-- **Icon + label only, no counts** (operator's call during review — the old numbers meant four different things; the panel subtitle reports the real ones): Clock3/Recent, LayoutGrid/Browse, Search, Tags/Untagged, ListMusic/Playlists, Ban/Blocked (matching the row action). `Tabs` loses its `counts` prop entirely.
+- **Icon + label + subtitle, no counts** (operator's calls during review): each tab is a 17px icon beside a stacked name/subtitle block — Music/Tracks ("newest & needs tags"), LayoutGrid/Browse ("tagged index"), Search ("navidrome"), ListMusic/Playlists ("navidrome"), Ban/Blocked ("never plays"). `Tabs` loses its `counts` prop entirely.
+- **Recent and Untagged merge into one "Tracks" tab** (operator's call): an All / Needs-tags `Seg` toggle in the track-list Card header switches between the newest-first view (with Refresh) and the paginated untagged backlog (with Tag all; the Needs-tags segment label carries the live remaining count). A `TableVariant` derived from tab+mode keeps TrackTable's per-view behaviour (empty-state copy, accent Tag button). Legacy URLs map: `?tab=recent` → Tracks, `?tab=untagged` → Tracks + needs mode (written back as `?view=needs`).
 
 ### 1b. Track-table alignment + icon-only row actions (added during review)
 

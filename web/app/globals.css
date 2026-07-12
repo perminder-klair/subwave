@@ -3976,16 +3976,23 @@ html.lite .sw-ripple-circle {
 .admin-root .lib-tab {
     flex: 0 0 auto; font-family: inherit; background: transparent;
     border: 0; border-left: 1px solid var(--ink); cursor: pointer; color: var(--ink);
-    padding: 11px 16px; text-align: left; white-space: nowrap;
+    padding: 10px 18px; text-align: left; white-space: nowrap;
+    display: flex; align-items: center; gap: 10px;
     transition: background 0.12s;
 }
 .admin-root .lib-tab:first-child { border-left: 0; }
 .admin-root .lib-tab:hover { background: var(--ink-soft); }
 .admin-root .lib-tab.on { background: var(--ink); color: var(--bg); }
+.admin-root .lib-tab svg { flex: none; }
 .admin-root .lib-tab-name {
     font-size: 12px; letter-spacing: 0.04em; text-transform: uppercase; font-weight: 700;
-    display: flex; align-items: center; gap: 8px;
+    display: block;
 }
+.admin-root .lib-tab-sub {
+    font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+    display: block; margin-top: 2px;
+}
+.admin-root .lib-tab.on .lib-tab-sub { color: color-mix(in oklab, var(--bg) 60%, transparent); }
 
 /* filter chips */
 .admin-root .lib-chip {
