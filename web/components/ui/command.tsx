@@ -123,6 +123,27 @@ export const CommandGroup = forwardRef<
 ));
 CommandGroup.displayName = 'CommandGroup';
 
+export const CommandSeparator = forwardRef<
+  ComponentRef<typeof CommandPrimitive.Separator>,
+  ComponentPropsWithoutRef<typeof CommandPrimitive.Separator>
+>(({ className, ...props }, ref) => (
+  <CommandPrimitive.Separator
+    ref={ref}
+    className={cn('h-px bg-[color:var(--separator-strong)]', className)}
+    {...props}
+  />
+));
+CommandSeparator.displayName = 'CommandSeparator';
+
+export function CommandShortcut({ className, ...props }: ComponentPropsWithoutRef<'span'>) {
+  return (
+    <span
+      className={cn('ml-auto text-[10px] tracking-[0.14em] text-muted uppercase', className)}
+      {...props}
+    />
+  );
+}
+
 export const CommandItem = forwardRef<
   ComponentRef<typeof CommandPrimitive.Item>,
   ComponentPropsWithoutRef<typeof CommandPrimitive.Item>

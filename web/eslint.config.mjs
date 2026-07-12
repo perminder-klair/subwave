@@ -244,6 +244,22 @@ export default defineConfig([
     },
   },
 
+  // Exemption for vendored AI Elements components (Vercel's shadcn-style
+  // registry, `npx ai-elements add …`). Kept close to upstream so future
+  // re-pulls diff cleanly. Inline styles there are intrinsically dynamic
+  // (shiki token colours, media-chrome theming vars, shimmer gradient
+  // spread); is-user/is-assistant/not-prose are upstream group-marker
+  // classes; shimmer's motion-component factory is module-cached, which
+  // the static-components rule can't see.
+  {
+    files: ['components/ai-elements/**/*.{ts,tsx}'],
+    rules: {
+      'react/forbid-dom-props': 'off',
+      'better-tailwindcss/no-unknown-classes': 'off',
+      'react-hooks/static-components': 'off',
+    },
+  },
+
   {
     rules: {
       // Prose noise — JSX renders apostrophes/quotes fine.
