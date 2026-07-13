@@ -137,7 +137,7 @@ export default function SpoolSkin(_props: SkinProps) {
         </div>
       </div>
 
-      <div className="mx-auto grid w-full max-w-[1280px] flex-1 grid-cols-1 gap-8 p-5 sm:p-9 lg:grid-cols-[240px_1fr_240px]">
+      <div className="grid w-full flex-1 grid-cols-1 gap-8 p-5 sm:p-9 lg:grid-cols-[280px_1fr_280px]">
         {/* recently rewound */}
         <div className="order-3 flex flex-col gap-3 lg:order-1">
           <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">Recently rewound</div>
@@ -157,7 +157,7 @@ export default function SpoolSkin(_props: SkinProps) {
         </div>
 
         {/* the deck */}
-        <div className="order-1 flex min-w-0 flex-col gap-4 lg:order-2">
+        <div className="order-1 flex min-w-0 flex-col gap-4 lg:order-2 lg:justify-center">
           <div className="flex flex-col gap-4 border border-ink bg-[var(--field)] p-4 sm:p-5">
             {/* cassette label */}
             <div className="border border-ink bg-bg">
