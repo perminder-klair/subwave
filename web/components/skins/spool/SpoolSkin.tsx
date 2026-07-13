@@ -85,7 +85,7 @@ export default function SpoolSkin(_props: SkinProps) {
   const ratio = progressRatio(elapsed, nowPlaying?.duration) ?? 0.5;
   const voice = lastVoiceLine(session.messages);
   const upNext = state.upcoming?.[0];
-  const history = (state.history ?? []).slice(0, 3);
+  const history = (state.history ?? []).slice(0, 2);
   const playing = tunedIn && status === 'playing' && !offline;
 
   // Supply reel empties into the take-up reel across the runtime.
@@ -138,40 +138,34 @@ export default function SpoolSkin(_props: SkinProps) {
         </div>
       </div>
 
-      <div className="grid w-full flex-1 grid-cols-1 gap-8 p-5 sm:p-9 lg:grid-cols-[280px_1fr_280px]">
-        {/* recently rewound */}
-        <div className="order-3 flex flex-col gap-3 lg:order-1">
-          <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">Recently rewound</div>
-          {history.length === 0 && (
-            <div className="font-mono text-[11px] text-muted">nothing on the shelf yet</div>
-          )}
-          {history.map((h, i) => (
-            <div key={`${h.t ?? i}-${h.title ?? i}`} className="flex flex-col gap-1.5 border border-soft-border bg-[var(--field)] px-3.5 py-3">
-              <MiniHubs />
-              <div className="flex items-baseline justify-between gap-2">
-                <span className="min-w-0 truncate text-[13px] font-bold">{h.title ?? '?'}</span>
-                <span className="flex-none font-mono text-[10px] text-muted">{turnClock(entryTime(h), timezone, stationLocale)}</span>
-              </div>
-              {h.artist && <div className="truncate text-[11px] text-muted">{h.artist}</div>}
-            </div>
-          ))}
-        </div>
-
-        {/* the deck */}
-        <div className="order-1 flex min-w-0 flex-col gap-4 lg:order-2 lg:justify-center">
+      <div className="grid w-full flex-1 grid-cols-1 gap-8 p-5 sm:p-9 lg:grid-cols-[1fr_300px]">
+        {/* the deck — top-aligned, horizontally centred in its column */}
+        <div className="order-1 flex min-w-0 flex-col gap-4 lg:mx-auto lg:w-full lg:max-w-[640px]">
           <div className="flex flex-col gap-4 border border-ink bg-[var(--field)] p-4 sm:p-5">
-            {/* cassette label */}
-            <div className="border border-ink bg-bg">
-              <div className="h-2 bg-[var(--accent)]" />
-              <div className="flex gap-5 p-4 sm:p-5">
-                <div className="hidden h-[118px] w-[118px] flex-none border border-ink sm:block">
+            {/* cassette label — the cover art tints the whole panel (its shade),
+                and the crisp thumbnail now shows on every screen, mobile too */}
+            <div className="relative overflow-hidden border border-ink bg-bg">
+              {nowPlaying?.subsonic_id && !offline && (
+                <>
+                  <img
+                    src={client.coverUrl(nowPlaying.subsonic_id)}
+                    alt=""
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 h-full w-full scale-110 object-cover opacity-60 blur-2xl saturate-150"
+                  />
+                  <div className="pointer-events-none absolute inset-0 bg-bg/40" aria-hidden="true" />
+                </>
+              )}
+              <div className="relative h-2 bg-[var(--accent)]" />
+              <div className="relative flex gap-4 p-4 sm:gap-5 sm:p-5">
+                <div className="h-20 w-20 flex-none border border-ink sm:h-[118px] sm:w-[118px]">
                   {nowPlaying?.subsonic_id && !offline ? (
                     <img src={client.coverUrl(nowPlaying.subsonic_id)} alt="" className="h-full w-full object-cover" />
                   ) : (
                     <div className="grid h-full w-full place-items-center font-mono text-[9px] text-muted">no art</div>
                   )}
                 </div>
-                <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                   <div className="flex items-center justify-between gap-3">
                     <span className="min-w-0 truncate font-mono text-[10px] tracking-[0.2em] text-muted uppercase">
                       {stationName} · Side A{showName ? ` — ${showName}` : ''}
@@ -193,12 +187,26 @@ export default function SpoolSkin(_props: SkinProps) {
               </div>
             </div>
 
-            {/* spool window */}
-            <div className="relative flex h-32 items-center justify-around bg-ink">
-              <div className="absolute right-6 bottom-4 left-6 h-0.5 bg-[var(--muted)]" aria-hidden="true" />
-              <Spool playing={playing} sizeRef={leftRef} />
-              <Spool playing={playing} fast sizeRef={rightRef} />
-              <div className="pointer-events-none absolute inset-0 bg-[var(--overlay)]" aria-hidden="true" />
+            {/* the cassette — a dark smoky reel window over a ribbed lower
+                shell. Fixed dark in every theme (the themed ink inverts to a
+                light slab in dark mode); the window keeps its glass sheen and
+                the shell gives the deck a little more length. */}
+            <div className="bg-[#1a1613]">
+              {/* reel window */}
+              <div className="relative flex h-40 items-center justify-around">
+                <div className="absolute right-6 bottom-4 left-6 h-0.5 bg-[var(--muted)]" aria-hidden="true" />
+                <Spool playing={playing} sizeRef={leftRef} />
+                <Spool playing={playing} fast sizeRef={rightRef} />
+                <div className="pointer-events-none absolute inset-0 bg-linear-to-b from-white/10 via-transparent to-black/30" aria-hidden="true" />
+              </div>
+              {/* ribbed lower shell — hub screws either side of a textured band */}
+              <div className="flex items-center gap-3 border-t border-white/10 px-4 py-4">
+                <span className="size-2 rounded-full border border-white/20 bg-black/40" aria-hidden="true" />
+                <span className="h-3.5 flex-1 bg-[repeating-linear-gradient(90deg,transparent_0_4px,rgba(255,255,255,0.06)_4px_6px)]" aria-hidden="true" />
+                <span className="flex-none font-mono text-[9px] tracking-[0.24em] text-white/35 uppercase">Side A · 90 · Dolby B</span>
+                <span className="h-3.5 flex-1 bg-[repeating-linear-gradient(90deg,transparent_0_4px,rgba(255,255,255,0.06)_4px_6px)]" aria-hidden="true" />
+                <span className="size-2 rounded-full border border-white/20 bg-black/40" aria-hidden="true" />
+              </div>
             </div>
 
             {(meta.facts.length > 0 || meta.moods.length > 0) && !offline && (
@@ -213,8 +221,23 @@ export default function SpoolSkin(_props: SkinProps) {
             )}
           </div>
 
-          {/* transport */}
-          <div className="flex flex-wrap items-center gap-3.5">
+          {/* transport — mounted on a vintage deck faceplate */}
+          <div className="relative overflow-hidden border border-ink bg-[#1a1613] px-3 pt-2.5 pb-3 sm:px-4">
+            <div className="pointer-events-none absolute inset-0 bg-linear-to-b from-white/8 via-transparent to-black/25" aria-hidden="true" />
+            <span className="pointer-events-none absolute top-2 left-2 size-1.5 rounded-full border border-white/20 bg-black/40" aria-hidden="true" />
+            <span className="pointer-events-none absolute top-2 right-2 size-1.5 rounded-full border border-white/20 bg-black/40" aria-hidden="true" />
+            <span className="pointer-events-none absolute bottom-2 left-2 size-1.5 rounded-full border border-white/20 bg-black/40" aria-hidden="true" />
+            <span className="pointer-events-none absolute right-2 bottom-2 size-1.5 rounded-full border border-white/20 bg-black/40" aria-hidden="true" />
+            {/* faceplate strip */}
+            <div className="relative mb-2.5 flex items-center justify-between border-b border-white/10 px-1 pb-2">
+              <span className="font-mono text-[8px] font-bold tracking-[0.3em] text-white/45 uppercase">Stereo Cassette Deck</span>
+              <span className="flex items-center gap-1.5 font-mono text-[8px] tracking-[0.22em] text-white/45 uppercase">
+                <span className={cn('size-1.5 rounded-full', playing ? 'bg-[var(--accent)]' : 'bg-white/30')} aria-hidden="true" />
+                {playing ? 'play' : 'pause'}
+              </span>
+            </div>
+            {/* controls */}
+            <div className="relative flex flex-wrap items-center gap-3">
             <div className="flex items-baseline gap-2 border border-ink bg-[var(--field)] px-4 py-2.5">
               <span className="font-mono text-[22px] font-bold">{fmtTime(elapsed)}</span>
               <span className="font-mono text-[13px] text-muted">
@@ -254,7 +277,7 @@ export default function SpoolSkin(_props: SkinProps) {
               <button type="button" aria-label="Volume up" onClick={() => adjustVolume(0.05)}
                 className="v3-focus cursor-pointer border-0 bg-transparent px-1 font-mono text-[13px] text-muted hover:text-ink">+</button>
             </div>
-            <div className="ml-auto font-mono text-[10px] tracking-[0.14em] whitespace-nowrap text-muted uppercase">
+            <div className="ml-auto font-mono text-[10px] tracking-[0.14em] whitespace-nowrap text-white/55 uppercase">
               {offline
                 ? 'off air'
                 : [
@@ -263,37 +286,25 @@ export default function SpoolSkin(_props: SkinProps) {
                     signal.latencyMs != null && tunedIn ? `${signal.latencyMs} ms` : '',
                   ].filter(Boolean).join(' · ')}
             </div>
+            </div>
           </div>
 
-          {/* booth line */}
+          {/* booth line — speaker tag on top, quote beneath */}
           {voice && (
-            <div className="flex items-baseline gap-3.5 border border-ink bg-bg px-4 py-3.5">
-              <span className="flex-none font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--accent)] uppercase">
+            <div className="flex flex-col gap-2 border border-ink bg-bg px-4 py-3.5">
+              <span className="font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--accent)] uppercase">
                 ● on air — {djName}
               </span>
-              <span className="min-w-0 text-[15px] leading-relaxed italic">“{voice.text}”</span>
+              <span className="text-[15px] leading-relaxed italic">“{voice.text}”</span>
             </div>
           )}
         </div>
 
-        {/* next + request slip */}
-        <div className="order-2 flex flex-col gap-3 lg:order-3">
-          <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">Next on the stack</div>
-          {upNext?.title ? (
-            <div className="flex flex-col gap-2 overflow-hidden border border-ink bg-[var(--field)] p-3.5">
-              <div className="-mx-3.5 -mt-3.5 mb-1 h-[5px] bg-[var(--accent)]" />
-              <MiniHubs />
-              <div className="truncate text-[14px] font-bold">{upNext.title}</div>
-              {upNext.artist && <div className="truncate text-[12px] text-muted">{upNext.artist}</div>}
-            </div>
-          ) : (
-            <div className="border border-soft-border bg-[var(--field)] p-3.5 font-mono text-[11px] text-muted">
-              stack empty — {djName} decides at the wire
-            </div>
-          )}
-
+        {/* side rail — request slip on top, then recent tapes, then what's next */}
+        <div className="order-2 flex flex-col gap-7">
+          {/* side b request slip */}
           <form
-            className="mt-3 flex flex-col gap-2.5 border border-ink bg-bg p-4"
+            className="flex flex-col gap-2.5 border border-ink bg-bg p-4"
             onSubmit={e => { e.preventDefault(); void slip.send(); }}
           >
             <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">Side B — request slip</div>
@@ -339,6 +350,41 @@ export default function SpoolSkin(_props: SkinProps) {
               </>
             )}
           </form>
+
+          {/* recently rewound */}
+          <div className="flex flex-col gap-3">
+            <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">Recently rewound</div>
+            {history.length === 0 && (
+              <div className="font-mono text-[11px] text-muted">nothing on the shelf yet</div>
+            )}
+            {history.map((h, i) => (
+              <div key={`${h.t ?? i}-${h.title ?? i}`} className="flex flex-col gap-1.5 border border-soft-border bg-[var(--field)] px-3.5 py-3">
+                <MiniHubs />
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="min-w-0 truncate text-[13px] font-bold">{h.title ?? '?'}</span>
+                  <span className="flex-none font-mono text-[10px] text-muted">{turnClock(entryTime(h), timezone, stationLocale)}</span>
+                </div>
+                {h.artist && <div className="truncate text-[11px] text-muted">{h.artist}</div>}
+              </div>
+            ))}
+          </div>
+
+          {/* next on the stack */}
+          <div className="flex flex-col gap-3">
+            <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">Next on the stack</div>
+          {upNext?.title ? (
+            <div className="flex flex-col gap-2 overflow-hidden border border-ink bg-[var(--field)] p-3.5">
+              <div className="-mx-3.5 -mt-3.5 mb-1 h-[5px] bg-[var(--accent)]" />
+              <MiniHubs />
+              <div className="truncate text-[14px] font-bold">{upNext.title}</div>
+              {upNext.artist && <div className="truncate text-[12px] text-muted">{upNext.artist}</div>}
+            </div>
+          ) : (
+            <div className="border border-soft-border bg-[var(--field)] p-3.5 font-mono text-[11px] text-muted">
+              stack empty — {djName} decides at the wire
+            </div>
+          )}
+          </div>
         </div>
       </div>
 
@@ -361,7 +407,7 @@ export default function SpoolSkin(_props: SkinProps) {
                   </span>
                 </span>
               </span>
-              <span className="mt-3 flex items-center justify-around bg-ink py-5">
+              <span className="mt-3 flex items-center justify-around bg-[#1a1613] py-5">
                 <span className="grid h-16 w-16 place-items-center rounded-full bg-[var(--muted)]">
                   <span className="box-border block h-[38px] w-[38px] rounded-full border-4 border-dashed border-ink bg-bg" />
                 </span>
