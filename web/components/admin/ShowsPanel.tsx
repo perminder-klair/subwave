@@ -654,21 +654,39 @@ export default function ShowsPanel() {
     notify.ok('New show added — give it a name and a persona, then Save schedule.');
   };
 
-  const removeShow = (i: number) => {
+  const removeShow = async (i: number) => {
+    if (!form) return;
+    const target = form.shows[i];
+    if (!target) return;
+    // Persist the delete immediately — on its own, not waiting for Save schedule.
+    // The server removes the show and unschedules it from the grid in one update.
+    // A 404 means it's a locally-added show never saved server-side, so the local
+    // splice below is all that's needed.
+    try {
+      const r = await adminFetch(`/shows/${encodeURIComponent(target.id)}`, { method: 'DELETE' });
+      if (!r.ok && r.status !== 404) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `failed (${r.status})`);
+      }
+    } catch (e) {
+      notify.err(`Delete failed: ${errorMessage(e)}`);
+      return;
+    }
+    // Remove locally + clear the show from the grid, preserving any unsaved edits
+    // to other shows. Splice by id (not index) since the await may have elapsed.
     setForm(f => {
       if (!f) return f;
-      const target = f.shows[i];
-      if (!target) return f;
       const week: Schedule = JSON.parse(JSON.stringify(f.schedule));
       for (let d = 0; d < 7; d++)
         for (let h = 0; h < 24; h++)
           if (week[d]![h] === target.id) week[d]![h] = null;
-      if (brush === target.id) setBrush(null);
-      return { ...f, shows: f.shows.filter((_, idx) => idx !== i), schedule: week };
+      return { ...f, shows: f.shows.filter(sh => sh.id !== target.id), schedule: week };
     });
+    if (brush === target.id) setBrush(null);
     // Keep the editor focus aligned with the shifted list: close it if the open
     // show was removed, decrement if an earlier one was.
     setFocusIdx(cur => (cur == null ? cur : cur === i ? null : cur > i ? cur - 1 : cur));
+    notify.ok(`Deleted “${target.name.trim() || 'show'}”.`);
   };
 
   // Install a community show: the controller appends it to the persisted show
@@ -1167,8 +1185,8 @@ export default function ShowsPanel() {
           <>
             Remove{' '}
             <b>{confirmDeleteIdx !== null ? (form.shows[confirmDeleteIdx]?.name.trim() || 'this show') : 'this show'}</b>
-            ? It&apos;s also cleared from any scheduled hours. Nothing is permanent
-            until you Save schedule.
+            ? This deletes it right away and clears it from any scheduled hours.
+            You don&apos;t need to Save schedule.
           </>
         }
         confirmLabel="Delete"

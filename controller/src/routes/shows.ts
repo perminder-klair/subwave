@@ -82,3 +82,42 @@ router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => 
     res.status(400).json({ error: err.message });
   }
 });
+
+// ---------------------------------------------------------------------------
+// DELETE /shows/:id — remove one show and persist immediately, so a delete
+// takes effect on its own action instead of waiting for a "Save schedule" that
+// also commits every other pending edit. The deleted show is also unscheduled
+// from every weekly grid slot in the SAME update — validateScheduleStrict
+// rejects a slot that references an unknown show, so shows + a cleaned schedule
+// must persist together. Operates on the server's persisted state, so it works
+// regardless of any unsaved edits the admin panel is holding locally.
+// ---------------------------------------------------------------------------
+router.delete('/shows/:id', requireAdmin, async (req, res) => {
+  const id = String(req.params.id);
+
+  await settings.load();
+  const s = settings.get();
+  const existing = s.shows || [];
+  const shows = existing.filter((sh: any) => sh.id !== id);
+  if (shows.length === existing.length) {
+    return res.status(404).json({ error: `no such show: ${id}` });
+  }
+
+  // Null out every slot that pointed at the deleted show; leave the rest intact.
+  const week = s.schedule || {};
+  const schedule: Record<number, Array<string | null>> = {};
+  for (let d = 0; d < 7; d++) {
+    const day = Array.isArray(week[d]) ? week[d] : [];
+    schedule[d] = Array.from({ length: 24 }, (_, h) => (day[h] === id ? null : (day[h] ?? null)));
+  }
+
+  try {
+    await settings.update({ shows, schedule });
+    const next = settings.get();
+    queue.log('scheduler', `[shows] "${id}" deleted via admin UI`);
+    res.json({ shows: next.shows, schedule: next.schedule });
+  } catch (err: any) {
+    queue.log('error', `DELETE /shows/${id} failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
