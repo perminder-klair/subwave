@@ -1,5 +1,5 @@
 // Admin-gated diagnostics + manual refresh for the live community catalog
-// (skills / personas / shows / stations) fetched from the `subwave-community`
+// (skills / personas / shows / stations) fetched from the `community`
 // repo — see community/registry.ts. The browse + install routes live with their
 // domains (routes/dj.ts for skills, routes/personas.ts, routes/shows.ts); this
 // module is only the catalog's own health/control surface for the admin UI.

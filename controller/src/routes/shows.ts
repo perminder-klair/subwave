@@ -1,6 +1,6 @@
 // Admin-gated install of a community SHOW template into the station's show list.
 //
-// A shared show (subwave-community, fetched via community/registry.ts) carries
+// A shared show (community, fetched via community/registry.ts) carries
 // only portable substance — a brief (topic) + music-steering filters + mode
 // flags. Everything install-specific is re-bound HERE: the host persona defaults
 // to the station's active persona, there are no guests, no theme override, no

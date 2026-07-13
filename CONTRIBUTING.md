@@ -7,7 +7,7 @@ bug reports, and ideas are all welcome.
 
 Community-contributed **DJ skills, personas, shows, and the public station
 directory** don't live in this repo. They live in a separate content repo,
-**[`getsubwave/subwave-community`](https://github.com/getsubwave/subwave-community)**,
+**[`getsubwave/community`](https://github.com/getsubwave/community)**,
 which every running station fetches **live** — so a merged entry reaches every
 station without a software release. To share a skill, persona, or show, or to add
 your station to the map, open the matching no-fork issue form there. See

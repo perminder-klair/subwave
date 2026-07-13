@@ -45,7 +45,7 @@ import { buildStationServices } from '../llm/internal/tools/station-services.js'
 // (scaffold.js). Exported so those can resolve template files.
 export const BUILTINS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), 'builtins');
 // The COMMUNITY skill catalog is no longer shipped in the image — it's fetched
-// live from the `subwave-community` repo. listCommunitySkills / readCommunitySkill
+// live from the `community` repo. listCommunitySkills / readCommunitySkill
 // (re-exported below) delegate to community/registry.ts; every route + admin-UI
 // consumer is unchanged.
 const SKILLS_DIR = resolve(STATE_DIR, 'skills');
@@ -165,7 +165,7 @@ export async function readTemplate(kind: string): Promise<SkillTemplate | null> 
   return { kind, skillMd, data, body, toolPath };
 }
 
-// The community skill catalog now lives in the `subwave-community` repo and is
+// The community skill catalog now lives in the `community` repo and is
 // fetched live (community/registry.ts). `CommunitySkill` + the list/read
 // accessors are re-exported here unchanged so routes/dj.ts + routes/public.ts +
 // the admin UI keep importing them from this module.

@@ -1,5 +1,5 @@
 // Community stations directory loader. Sources the per-station entries from the
-// community catalog index (catalog.json, published by the subwave-community
+// community catalog index (catalog.json, published by the community
 // repo) rather than local files — the directory now lives in that repo alongside
 // the skills/personas/shows catalogs. Runs server-side; the catalog fetch is
 // ISR-revalidated (see communityCatalog.ts), so the directory refreshes without

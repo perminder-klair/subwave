@@ -246,7 +246,7 @@ most-direct.
 `/admin/skills` has a **Community** button (next to **New skill**) that lists the
 [community catalog](community.md) — skills (plus personas and shows) contributed
 by other operators. It's fetched **live** from the
-[`getsubwave/subwave-community`](https://github.com/getsubwave/subwave-community)
+[`getsubwave/community`](https://github.com/getsubwave/community)
 repo, so it isn't tied to your controller version. **Install** copies one into
 `state/skills/` as an ordinary custom skill — **disabled on arrival**, for you to
 read before it airs. The catalog is **prompt-only by contract**: no `tool.mjs` is
@@ -256,7 +256,7 @@ ever shipped or written, so installing from it never runs third-party code.
 
 Any **prompt-only** custom skill (no `tool.mjs`) shows a **Share to community**
 button. It opens a prefilled GitHub Issue Form in the
-[`getsubwave/subwave-community`](https://github.com/getsubwave/subwave-community)
+[`getsubwave/community`](https://github.com/getsubwave/community)
 repo; a bot validates the slug, reserved names, and context fields, then opens a
 one-file PR adding `skills/<slug>/SKILL.md` to the catalog — no fork, no code.
 Once a maintainer merges it, the catalog rebuilds and it goes **live on every

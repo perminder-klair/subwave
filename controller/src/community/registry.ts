@@ -1,7 +1,7 @@
 // Realtime community catalog — the single fetch seam for the community
 // skills / personas / shows / stations catalog.
 //
-// The catalog is a JSON index published by the `subwave-community` repo (CI-built
+// The catalog is a JSON index published by the `community` repo (CI-built
 // from per-entry markdown/JSON — see that repo's scripts/build-catalog.mjs). It
 // SUPERSEDES the image-baked controller/src/skills/community + personas/community
 // dirs: a station fetches the live index, so a newly-merged persona/skill/show

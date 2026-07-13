@@ -1,4 +1,4 @@
-// The community DJ-persona catalog now lives in the `subwave-community` repo and
+// The community DJ-persona catalog now lives in the `community` repo and
 // is fetched live (community/registry.ts) — it is no longer a dir COPYd into the
 // controller image. This module re-exports the CommunityPersona type + the
 // list/read accessors so routes/personas.ts, routes/public.ts, and the admin UI

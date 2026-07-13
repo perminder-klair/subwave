@@ -1,5 +1,5 @@
 // Build-/render-time loader for the community catalog index (catalog.json)
-// published by the subwave-community repo. The public station directory
+// published by the community repo. The public station directory
 // (/stations + /stations.json) sources its data from here instead of the old
 // local web/content/stations files, so the community station list refreshes
 // without a web redeploy.
@@ -10,11 +10,11 @@
 // so the build/page never breaks on a network blip — same posture as the old
 // "no content dir → empty" fallback.
 //
-// Override the source with COMMUNITY_CATALOG_URL (build env); the default is the
-// jsDelivr mirror of the community repo, CDN-cached and rate-limit-free.
+// Override the source with COMMUNITY_CATALOG_URL (build env); the default is raw
+// GitHub (Fastly-fronted, ~5-min cache) — reliable and fresh, no build step.
 const CATALOG_URL =
   process.env.COMMUNITY_CATALOG_URL ||
-  'https://cdn.jsdelivr.net/gh/getsubwave/subwave-community@main/catalog.json';
+  'https://raw.githubusercontent.com/getsubwave/community/main/catalog.json';
 
 export interface CommunityCatalog {
   skills: Record<string, unknown>[];

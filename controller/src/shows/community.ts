@@ -1,4 +1,4 @@
-// The community SHOW catalog lives in the `subwave-community` repo and is fetched
+// The community SHOW catalog lives in the `community` repo and is fetched
 // live (community/registry.ts). A shareable show carries only portable substance
 // — a brief (topic) + music-steering filters (moods/genres/eras/energy) + mode
 // flags (programme/banter/segmentSkill). Every install-specific field (host

@@ -1,18 +1,18 @@
 # This repo is for SUB/WAVE code — bugs, features, questions (open a blank
 # issue). Community content (skills, personas, shows, stations) lives in a
-# separate repo now (getsubwave/subwave-community) and is fetched live by every
+# separate repo now (getsubwave/community) and is fetched live by every
 # station; the links below send contributors straight to its no-fork issue forms.
 blank_issues_enabled: true
 contact_links:
   - name: 🎛️ Share a DJ skill
-    url: https://github.com/getsubwave/subwave-community/issues/new?template=add-skill.yml
+    url: https://github.com/getsubwave/community/issues/new?template=add-skill.yml
     about: Contribute a between-track segment to the community catalog.
   - name: 🎙️ Share a DJ persona
-    url: https://github.com/getsubwave/subwave-community/issues/new?template=add-persona.yml
+    url: https://github.com/getsubwave/community/issues/new?template=add-persona.yml
     about: Contribute a DJ character to the community catalog.
   - name: 🎬 Share a show
-    url: https://github.com/getsubwave/subwave-community/issues/new?template=add-show.yml
+    url: https://github.com/getsubwave/community/issues/new?template=add-show.yml
     about: Contribute a show template to the community catalog.
   - name: 📻 Add your station
-    url: https://github.com/getsubwave/subwave-community/issues/new?template=add-station.yml
+    url: https://github.com/getsubwave/community/issues/new?template=add-station.yml
     about: Add your station to the public directory on getsubwave.com/stations.

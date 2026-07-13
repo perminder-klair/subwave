@@ -511,7 +511,7 @@ router.get('/personas/community', async (req, res) => {
 
 // ---------------------------------------------------------------------------
 // GET /shows/community — the community SHOW catalog (produced-show templates
-// contributed via the subwave-community submission flow, fetched live). Same
+// contributed via the community submission flow, fetched live). Same
 // posture as /skills/community + /personas/community: browse-only public
 // reference powering the public /shows showcase AND the admin Shows → Community
 // modal. Never throws — an empty/unreachable catalog returns []. No admin gate:

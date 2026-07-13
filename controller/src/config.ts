@@ -250,14 +250,14 @@ export const config = {
     apiKey: process.env.SEARCH_API_KEY || '',
   },
   // Community catalog (skills / personas / shows / stations) fetched live from
-  // the `subwave-community` repo — see community/registry.ts. Default is the
-  // jsDelivr CDN mirror of the repo's CI-built catalog.json (CDN-cached, no
-  // GitHub API rate limit); override with COMMUNITY_CATALOG_URL to point at a
-  // fork, a raw.githubusercontent.com URL, or a self-hosted mirror.
+  // the `community` repo — see community/registry.ts. Default is raw GitHub
+  // (Fastly-fronted, ~5-min cache, no build step — reliable and fresh). Override
+  // with COMMUNITY_CATALOG_URL to point at a fork, a self-hosted mirror, or the
+  // jsDelivr CDN (`https://cdn.jsdelivr.net/gh/getsubwave/community@main/catalog.json`).
   community: {
     catalogUrl:
       process.env.COMMUNITY_CATALOG_URL ||
-      'https://cdn.jsdelivr.net/gh/getsubwave/subwave-community@main/catalog.json',
+      'https://raw.githubusercontent.com/getsubwave/community/main/catalog.json',
     // In-memory TTL before a browse triggers a refetch. 30 min mirrors the
     // weather / web-search memos; a manual refresh (POST /community/refresh)
     // busts it immediately.

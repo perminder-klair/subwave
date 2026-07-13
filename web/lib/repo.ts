@@ -9,7 +9,7 @@ export const REPO_URL = 'https://github.com/perminder-klair/subwave';
 // code repo so contributions review + publish on their own cadence (the running
 // station fetches the catalog live). Override the fetch URL per station with
 // COMMUNITY_CATALOG_URL; this constant is only the human-facing GitHub link.
-export const COMMUNITY_REPO_URL = 'https://github.com/getsubwave/subwave-community';
+export const COMMUNITY_REPO_URL = 'https://github.com/getsubwave/community';
 
 // Build a prefilled community submission link — opens a GitHub Issue Form (no
 // fork, no YAML). A workflow in the community repo turns the issue into a

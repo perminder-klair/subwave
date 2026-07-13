@@ -3,7 +3,7 @@
 SUB/WAVE has a **community catalog** — a shared exchange of DJ **skills**,
 **personas**, **shows**, and a public **station directory** that any operator can
 contribute to and install from. It lives in its own repo,
-**[`getsubwave/subwave-community`](https://github.com/getsubwave/subwave-community)**,
+**[`getsubwave/community`](https://github.com/getsubwave/community)**,
 separate from the code. Every running station fetches it **live**, so anything
 merged into the catalog shows up in every station's admin panel within the hour —
 no software release, no image pull, no redeploy.
@@ -31,11 +31,16 @@ digit, then letters/digits/hyphens, up to 49 characters
 ## How stations consume it
 
 A CI job in the community repo compiles every entry into one **`catalog.json`**
-at the repo root on each push to `main`, and jsDelivr serves it from the CDN:
+at the repo root on each push to `main`. Stations fetch it from raw GitHub by
+default (Fastly-fronted, ~5-minute cache):
 
 ```
-https://cdn.jsdelivr.net/gh/getsubwave/subwave-community@main/catalog.json
+https://raw.githubusercontent.com/getsubwave/community/main/catalog.json
 ```
+
+Point a station at a fork, a self-hosted mirror, or the jsDelivr CDN
+(`https://cdn.jsdelivr.net/gh/getsubwave/community@main/catalog.json`) with the
+`COMMUNITY_CATALOG_URL` env var.
 
 Inside the controller, `controller/src/community/registry.ts` is the single fetch
 path. It:
@@ -61,17 +66,17 @@ The easy path needs **no fork and no YAML by hand**. Open one of the issue forms
 in the community repo, fill in the fields, and a bot turns your answers into a
 one-file pull request for a maintainer to review:
 
-- [Add a skill](https://github.com/getsubwave/subwave-community/issues/new?template=add-skill.yml)
-- [Add a persona](https://github.com/getsubwave/subwave-community/issues/new?template=add-persona.yml)
-- [Add a show](https://github.com/getsubwave/subwave-community/issues/new?template=add-show.yml)
-- [Add your station](https://github.com/getsubwave/subwave-community/issues/new?template=add-station.yml)
+- [Add a skill](https://github.com/getsubwave/community/issues/new?template=add-skill.yml)
+- [Add a persona](https://github.com/getsubwave/community/issues/new?template=add-persona.yml)
+- [Add a show](https://github.com/getsubwave/community/issues/new?template=add-show.yml)
+- [Add your station](https://github.com/getsubwave/community/issues/new?template=add-station.yml)
 
 Prefer to open the PR yourself? Fork the community repo, drop your one file or
 folder into the right directory, run `node scripts/build-catalog.mjs --check` to
 validate it, and open a PR against `main`. Either way a maintainer reviews it and
 `catalog.json` rebuilds automatically on merge. Full schemas and validation rules
 live in the community repo's
-[`CONTRIBUTING.md`](https://github.com/getsubwave/subwave-community/blob/main/CONTRIBUTING.md);
+[`CONTRIBUTING.md`](https://github.com/getsubwave/community/blob/main/CONTRIBUTING.md);
 the summary below tracks it.
 
 **Provenance is stamped for you.** The submission bot fills in `submittedBy` (the
