@@ -119,7 +119,7 @@ export default function TtySkin(_props: SkinProps) {
 
   return (
     <div className="absolute inset-0 overflow-y-auto p-4 font-mono text-[13px] leading-relaxed text-ink sm:p-7">
-      <div className="mx-auto flex min-h-full max-w-[1200px] flex-col gap-3.5">
+      <div className="flex min-h-full w-full flex-col gap-3.5">
 
         {/* header bar */}
         <div className="flex flex-none flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border border-soft-border px-4 py-2.5">
