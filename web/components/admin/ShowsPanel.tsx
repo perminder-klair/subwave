@@ -388,6 +388,38 @@ function hasAnyMusicFilter(s: Show): boolean {
   return !!(s.moods.length || s.genres.length || s.energies.length || s.eras.length);
 }
 
+// The wire shape for one show — trimmed + the "only-means-something-with"
+// conditionals the server also enforces. Shared by the editor's Save show
+// (POST /shows) and the community install path so they stay identical.
+function showPayload(s: Show) {
+  return {
+    id: s.id,
+    name: s.name.trim(),
+    topic: s.topic.trim(),
+    personaId: s.personaId,
+    // The host can be switched after guests were picked; the server rejects a
+    // guest that duplicates the host, so filter it here too.
+    guestPersonaIds: (s.guestPersonaIds || []).filter(id => id !== s.personaId),
+    // Banter only means something with guests in the studio.
+    banter: (s.guestPersonaIds?.length ?? 0) > 0 && s.banter,
+    moods: s.moods,
+    themeId: s.themeId || '',
+    genres: s.genres.map(g => g.trim()).filter(Boolean),
+    eras: s.eras,
+    energies: s.energies,
+    // Strict only means something with at least one music filter set.
+    filtersStrict: hasAnyMusicFilter(s) && s.filtersStrict,
+    maxTrackSeconds: s.maxTrackSeconds,
+    playlistIds: s.playlistIds || [],
+    // Strict only means something with at least one playlist pinned.
+    playlistStrict: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict,
+    excludedPlaylistIds: s.excludedPlaylistIds || [],
+    programme: s.programme ?? false,
+    // A skill pin only means something in programme mode.
+    segmentSkill: s.programme ? (s.segmentSkill || '') : '',
+  };
+}
+
 export default function ShowsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [data, setData] = useState<SettingsResponse | null>(null);
@@ -403,7 +435,7 @@ export default function ShowsPanel() {
 
   // Inline editor: `focusIdx` is the show open in the editor below the list
   // (null = none open). Shows are edited in place — no modal, no draft copy;
-  // edits land straight on `form.shows[focusIdx]` and persist on Save schedule.
+  // edits land straight on `form.shows[focusIdx]` and persist on Save show.
   const [focusIdx, setFocusIdx] = useState<number | null>(null);
   // id of a freshly-added show — the AI-draft field shows only while creating.
   const [creatingId, setCreatingId] = useState<string | null>(null);
@@ -618,7 +650,7 @@ export default function ShowsPanel() {
 
   // ── inline show editor ─────────────────────────────────────────────────
   // Edits land straight on the show in form state (no draft) — same live-edit
-  // model as PersonasPanel. Trimming/cleaning happens once, at Save schedule.
+  // model as PersonasPanel. Trimming/cleaning happens once, at Save show.
   const setShow = (i: number, patch: Partial<Show>) =>
     setForm(f => f ? ({ ...f, shows: f.shows.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) }) : f);
 
@@ -651,7 +683,7 @@ export default function ShowsPanel() {
     scrollToEditorRef.current = true;
     setCreatingId(id);
     setFocusIdx(newIdx);
-    notify.ok('New show added — give it a name and a persona, then Save schedule.');
+    notify.ok('New show added — give it a name and a persona, then Save show.');
   };
 
   const removeShow = async (i: number) => {
@@ -842,8 +874,6 @@ export default function ShowsPanel() {
   }, []);
 
   // ── validation ───────────────────────────────────────────────────────────
-  const allShowsOk = form ? form.shows.every(showValid) : false;
-  const canSave = !!form && allShowsOk;
   const scheduledHours = form
     ? Object.values(form.schedule).flat().filter(Boolean).length : 0;
   const countHours = (id: string): number => form
@@ -862,45 +892,50 @@ export default function ShowsPanel() {
     return { day: d, hour: h, showId: form?.schedule?.[d]?.[h] ?? null };
   };
 
-  const save = async (): Promise<boolean> => {
-    if (!canSave || !form) return false;
+  // Persist ONE show (add or edit) via POST /shows — independent of any other
+  // unsaved / half-finished show in the panel. Only requires THIS show to be
+  // valid. On success we swap the local entry for the server's normalized copy
+  // (same id — a client-minted s_ id is kept server-side), so unsaved edits to
+  // other shows survive.
+  const saveShow = async (s: Show): Promise<boolean> => {
+    if (!showValid(s)) return false;
     setBusy(true);
     try {
-      const r = await adminFetch('/settings', {
+      const r = await adminFetch('/shows', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          shows: form.shows.map(s => ({
-            id: s.id, name: s.name.trim(), topic: s.topic.trim(),
-            personaId: s.personaId,
-            // Belt-and-suspenders: the host can be switched after guests were
-            // picked, and the server rejects a guest that duplicates the host.
-            guestPersonaIds: (s.guestPersonaIds || []).filter(id => id !== s.personaId),
-            // Banter only means something with guests in the studio.
-            banter: (s.guestPersonaIds?.length ?? 0) > 0 && s.banter,
-            moods: s.moods,
-            themeId: s.themeId || '',
-            genres: s.genres.map(g => g.trim()).filter(Boolean),
-            eras: s.eras,
-            energies: s.energies,
-            // Strict only means something with at least one music filter set.
-            filtersStrict: hasAnyMusicFilter(s) && s.filtersStrict,
-            maxTrackSeconds: s.maxTrackSeconds,
-            playlistIds: s.playlistIds || [],
-            // Strict only means something with at least one playlist pinned.
-            playlistStrict: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict,
-            excludedPlaylistIds: s.excludedPlaylistIds || [],
-            programme: s.programme ?? false,
-            // A skill pin only means something in programme mode.
-            segmentSkill: s.programme ? (s.segmentSkill || '') : '',
-          })),
-          schedule: form.schedule,
-        }),
+        body: JSON.stringify({ show: showPayload(s) }),
       });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      const j = (await r.json().catch(() => ({}))) as { error?: string; show?: Partial<Show> | null };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      notify.ok('schedule saved, the current hour applies on the next pick');
-      await load();
+      const saved = j.show ? hydrateShow(j.show) : null;
+      if (saved) setForm(f => f ? { ...f, shows: f.shows.map(x => (x.id === s.id ? saved : x)) } : f);
+      notify.ok('Show saved.');
+      return true;
+    } catch (e) {
+      notify.err(errorMessage(e));
+      return false;
+    } finally { setBusy(false); }
+  };
+
+  // Persist ONLY the weekly grid via PUT /schedule — the "Save schedule" button
+  // writes the schedule and nothing else. Slots pointing at a show that isn't
+  // saved yet are dropped server-side (reported as `dropped`), so a half-defined
+  // show never blocks saving the schedule.
+  const saveSchedule = async (): Promise<boolean> => {
+    if (!form) return false;
+    setBusy(true);
+    try {
+      const r = await adminFetch('/schedule', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schedule: form.schedule }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; dropped?: number };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      notify.ok(j.dropped
+        ? `Schedule saved — ${j.dropped} slot(s) skipped (unsaved shows). The current hour applies on the next pick.`
+        : 'Schedule saved — the current hour applies on the next pick.');
       return true;
     } catch (e) {
       notify.err(errorMessage(e));
@@ -995,7 +1030,7 @@ export default function ShowsPanel() {
         sub="Mon–Sun · 24h"
         right={
           <span className="flex gap-2">
-            <Btn sm tone="accent" onClick={save} disabled={busy || !canSave}>
+            <Btn sm tone="accent" onClick={saveSchedule} disabled={busy || !form}>
               {busy ? 'saving…' : 'Save schedule'}
             </Btn>
             <Btn sm onClick={() => setConfirmClearWeek(true)}>Clear week</Btn>
@@ -1165,12 +1200,10 @@ export default function ShowsPanel() {
           apiBase={apiBase}
           adminFetch={adminFetch}
           minTrackSeconds={data?.values?.minTrackSeconds}
-          allShowsOk={allShowsOk}
-          canSave={canSave}
           busy={busy}
           isNew={focused.id === creatingId}
           update={(patch) => setShow(focusIdx, patch)}
-          onSave={async () => { if (await save()) setFocusIdx(null); }}
+          onSave={async () => { if (focused && await saveShow(focused)) setFocusIdx(null); }}
           onClose={() => setFocusIdx(null)}
           onRemove={() => setConfirmDeleteIdx(focusIdx)}
         />
@@ -1341,23 +1374,20 @@ interface ShowEditorProps {
   apiBase: string;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   minTrackSeconds?: number;
-  // Whole-form save state — one Save persists every show + the weekly grid, so
-  // the bar reflects the form, not just this show.
-  allShowsOk: boolean;
-  canSave: boolean;
   busy: boolean;
   isNew: boolean;       // show the AI-draft field only while creating
   update: (patch: Partial<Show>) => void;
-  onSave: () => void;
+  onSave: () => void;   // Save show — persists just this show (POST /shows)
   onClose: () => void;
   onRemove: () => void;
 }
 
 function ShowEditor({
   show, editorRef, personas, moods, themes, skills, activeThemeId, genres, playlists, apiBase,
-  adminFetch, minTrackSeconds, allShowsOk, canSave, busy, isNew,
+  adminFetch, minTrackSeconds, busy, isNew,
   update, onSave, onClose, onRemove,
 }: ShowEditorProps) {
+  // Save show gates on THIS show only — other unsaved shows don't block it.
   const valid = showValid(show);
   // Free-text genre being typed before it's added as a chip. The editor is
   // remounted per show (keyed at the call site), so this resets on switch.
@@ -1384,18 +1414,16 @@ function ShowEditor({
             <span
               className={cn(
                 'size-1.5 flex-none rounded-full',
-                canSave ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
+                valid ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
               )}
             />
             <span className="text-[11px] text-muted">
               {!valid
                 ? <span className="text-[var(--danger)]">this show needs a name and a persona</span>
-                : !allShowsOk
-                  ? <span className="text-[var(--danger)]">another show in the list is incomplete</span>
-                  : 'saves all shows + the weekly grid · applies live on the next pick'}
+                : 'saves this show · schedule it on the grid, then Save schedule'}
             </span>
             <Btn lg onClick={onClose}>Close</Btn>
-            <Btn lg tone="accent" onClick={onSave} disabled={busy || !canSave}>
+            <Btn lg tone="accent" onClick={onSave} disabled={busy || !valid}>
               {busy ? 'Saving…' : 'Save show'}
             </Btn>
           </span>

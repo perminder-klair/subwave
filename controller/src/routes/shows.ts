@@ -121,3 +121,84 @@ router.delete('/shows/:id', requireAdmin, async (req, res) => {
     res.status(400).json({ error: err.message });
   }
 });
+
+// ---------------------------------------------------------------------------
+// POST /shows — upsert ONE show (add or edit), so the editor's "Save show"
+// persists just that show, independent of any other unsaved/half-finished show
+// the panel is holding. Merges the incoming show into the server's persisted
+// list (replace when the id matches, else append), then settings.update()
+// re-validates the whole array — the other persisted shows are already valid, so
+// only the incoming one can fail. The schedule is untouched (a new show isn't
+// referenced yet; an edited show keeps its id). A client-minted `s_` id survives
+// validateShowsStrict, so grid slots that already point at the show stay valid.
+// ---------------------------------------------------------------------------
+router.post('/shows', requireAdmin, async (req, res) => {
+  const incoming = req.body?.show;
+  if (!incoming || typeof incoming !== 'object') {
+    return res.status(400).json({ error: 'missing show' });
+  }
+
+  await settings.load();
+  const existing = settings.get().shows || [];
+  const id = typeof incoming.id === 'string' ? incoming.id : '';
+  const idx = id ? existing.findIndex((s: any) => s.id === id) : -1;
+
+  let merged: any[];
+  if (idx >= 0) {
+    merged = existing.map((s: any, i: number) => (i === idx ? incoming : s));
+  } else {
+    if (existing.length >= settings.SHOWS_LIMIT) {
+      return res.status(409).json({ error: `the show list is full (${settings.SHOWS_LIMIT} shows max) — remove one first` });
+    }
+    merged = [...existing, incoming];
+  }
+
+  try {
+    await settings.update({ shows: merged });
+    const next = settings.get().shows || [];
+    const saved = (id && next.find((s: any) => s.id === id)) || next[next.length - 1] || null;
+    queue.log('scheduler', `[shows] "${saved?.id || id}" ${idx >= 0 ? 'edited' : 'added'} via admin editor`);
+    res.json({ shows: next, show: saved });
+  } catch (err: any) {
+    queue.log('error', `POST /shows failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PUT /schedule — save ONLY the weekly grid, so "Save schedule" writes the
+// schedule and nothing else (show definitions persist via POST /shows / the
+// delete route). Any slot pointing at a show that isn't persisted (a locally
+// added show the operator hasn't saved yet, or one just removed) is dropped
+// rather than rejected — validateScheduleStrict would otherwise throw on an
+// unknown show. `dropped` tells the client how many slots were skipped.
+// ---------------------------------------------------------------------------
+router.put('/schedule', requireAdmin, async (req, res) => {
+  await settings.load();
+  const ids = new Set((settings.get().shows || []).map((s: any) => s.id));
+  const raw = (req.body?.schedule ?? req.body) || {};
+
+  const schedule: Record<number, Array<string | null>> = {};
+  let dropped = 0;
+  for (let d = 0; d < 7; d++) {
+    const day = Array.isArray(raw[d]) ? raw[d] : [];
+    schedule[d] = Array.from({ length: 24 }, (_, h) => {
+      const v = day[h];
+      if (typeof v === 'string' && v) {
+        if (ids.has(v)) return v;
+        dropped++;
+        return null;
+      }
+      return null;
+    });
+  }
+
+  try {
+    await settings.update({ schedule });
+    queue.log('scheduler', `[shows] schedule saved via admin editor${dropped ? ` (${dropped} orphan slot(s) dropped)` : ''}`);
+    res.json({ schedule: settings.get().schedule, dropped });
+  } catch (err: any) {
+    queue.log('error', `PUT /schedule failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
