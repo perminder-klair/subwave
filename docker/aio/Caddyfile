@@ -12,9 +12,12 @@
 }
 
 :80 {
-	# /stream.mp3 + /stream.opus — Icecast (served by liquidsoap → icecast on
-	# 7702). flush_interval -1 keeps the never-ending audio body live.
-	@streams path /stream.mp3 /stream.opus
+	# /stream.mp3 + /stream.opus + /stream.flac + /stream.aac — Icecast (served by
+	# liquidsoap → icecast on 7702). Opus/FLAC/AAC are opt-in and off by default,
+	# but they must still be listed here or they fall through to the Next.js
+	# catch-all below and 404. flush_interval -1 keeps the never-ending audio
+	# body live.
+	@streams path /stream.mp3 /stream.opus /stream.flac /stream.aac
 	handle @streams {
 		reverse_proxy 127.0.0.1:7702 {
 			flush_interval -1
@@ -31,13 +34,22 @@
 		reverse_proxy 127.0.0.1:7701
 	}
 
+	# /listen.pls + /listen.m3u — one-paste tune-in files (VLC, Sonos, hardware).
+	# Served by the controller at its root (NOT under /api), so use a plain handle
+	# with no path stripping. Without this they fall through to the catch-all
+	# below and 404.
+	@listen path /listen.pls /listen.m3u
+	handle @listen {
+		reverse_proxy 127.0.0.1:7701
+	}
+
 	# Everything else → Next.js web UI.
 	handle {
 		reverse_proxy 127.0.0.1:7700
 	}
 
 	# Don't gzip the already-compressed live audio mounts.
-	@compressible not path /stream.mp3 /stream.opus
+	@compressible not path /stream.mp3 /stream.opus /stream.flac /stream.aac
 	encode @compressible gzip zstd
 
 	log {
