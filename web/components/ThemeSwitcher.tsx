@@ -1,6 +1,7 @@
 'use client';
 
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
 import { LayoutTemplate, Palette, Zap } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useDynamicStyle } from '../hooks/useDynamicStyle';
@@ -26,16 +27,26 @@ function Swatch({ color }: SwatchProps) {
   return <span ref={ref} className="h-4 w-4 sm:h-5 sm:w-5" aria-hidden="true" />;
 }
 
+function SectionLabel({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <span className={cn('v3-eyebrow border-b border-soft-border px-1 pb-1 text-[10px] tracking-[0.3em]', className)}>
+      {children}
+    </span>
+  );
+}
+
 export interface ThemeSwitcherProps {
   /** Visual variant — player chrome (TopBar) or admin header. Controls the
    *  trigger button's text styling so it picks up the right cluster's font. */
   variant?: 'player' | 'admin';
 }
 
-// Per-listener theme override switcher. Drops into a header as an icon button
-// and opens a small dropdown listing every theme the controller exposes. The
-// listener's pick is persisted in localStorage and beats the station-wide
-// default until they hit "Use station default".
+// Per-listener theme + skin switcher. Drops into a header as a palette icon
+// and opens a centered modal listing every theme the controller exposes, the
+// player skins, and the lite-mode toggle. The listener's picks are persisted
+// in localStorage and beat the station-wide defaults until reset. Modal (not a
+// dropdown) so it reads the same on every skin regardless of where the icon
+// sits — an anchored popover collided with each skin's own chrome.
 //
 // The component renders nothing while the theme registry is still loading or
 // is empty — there's nothing useful to show, and bouncing a button in and out
@@ -48,42 +59,12 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
   const skinCtx = useSkinSelection();
   const showSkins = skinCtx != null && skinCtx.skins.length > 1;
   const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
-  const popoverId = useId();
   const { lite, setLite } = useLiteMode();
 
-  // Close on outside click and Escape. mousedown beats click so the popover
-  // doesn't flicker when a listener clicks a different control elsewhere in
-  // the header.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node | null;
-      if (!t) return;
-      if (triggerRef.current?.contains(t)) return;
-      if (popoverRef.current?.contains(t)) return;
-      setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setOpen(false);
-        triggerRef.current?.focus();
-      }
-    };
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
-
-  const onPick = useCallback(
+  const onPickTheme = useCallback(
     (id: string | null) => {
       ctx?.setOverride(id);
       setOpen(false);
-      triggerRef.current?.focus();
     },
     [ctx],
   );
@@ -95,200 +76,189 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
   const { themes, stationActiveId, overrideId, effectiveId } = ctx;
 
   return (
-    <span className="relative inline-flex">
-      <button
-        ref={triggerRef}
-        type="button"
-        onClick={() => setOpen(v => !v)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={popoverId}
-        aria-label="Choose theme"
-        title="Choose theme"
-        className={cn(
-          'v3-focus inline-flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none',
-          variant === 'admin' ? 'caption text-muted' : 'text-muted hover:text-ink',
-        )}
-      >
-        <Palette className="h-4 w-4" aria-hidden="true" />
-      </button>
-
-      {open && (
-        <div
-          ref={popoverRef}
-          id={popoverId}
-          role="menu"
-          aria-label="Themes"
+    <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Trigger asChild>
+        <button
+          type="button"
+          aria-label="Appearance — theme and skin"
+          title="Appearance"
           className={cn(
-            // bg-[var(--field)] (not bg-bg) lifts the panel off the page: the
-            // page background is exactly --bg, so a bg-bg panel reads as
-            // transparent — content and chrome show across it. --field is the
-            // per-theme "raised surface" nudge, so the menu stays opaque and
-            // distinct in every theme. A real drop shadow + ring seal the edge.
-            'absolute z-50 mt-1 grid w-[min(280px,calc(100vw-2rem))] gap-1 border border-ink bg-[var(--field)] p-2',
-            'shadow-[0_16px_44px_-12px_rgba(0,0,0,0.7)] ring-1 ring-black/10',
-            // Anchor the popover to the trigger; pull it left so the right
-            // edge lines up with the icon — keeps the panel inside the
-            // viewport when the trigger sits flush with the right gutter.
-            'top-full right-0',
+            'v3-focus inline-flex shrink-0 cursor-pointer items-center justify-center border-0 bg-transparent p-0 leading-none',
+            variant === 'admin' ? 'caption text-muted' : 'text-muted hover:text-ink',
           )}
         >
-          <span className="v3-eyebrow border-b border-soft-border px-1 pb-1 text-[10px] tracking-[0.3em]">
-            Theme
-          </span>
-          {themes.map(t => {
-            const isActive = t.id === effectiveId;
-            return (
-              <button
-                key={t.id}
-                type="button"
-                role="menuitemradio"
-                aria-checked={isActive}
-                onClick={() => onPick(t.id)}
-                className={cn(
-                  'flex w-full items-center gap-2 border px-2 py-1.5 text-left',
-                  isActive
-                    ? 'border-vermilion bg-[var(--ink-softer)]'
-                    : 'border-soft-border bg-bg hover:bg-[var(--overlay)]',
-                )}
-              >
-                <span className="inline-flex shrink-0 border border-ink" aria-hidden="true">
-                  {SWATCH_KEYS.map(k => (
-                    <Swatch key={k} color={t.tokens[k]} />
-                  ))}
-                </span>
-                <span className="grid min-w-0 flex-1 gap-0.5">
-                  <span className="truncate text-[11px] font-bold tracking-[0.12em] uppercase">
-                    {t.name}
-                  </span>
-                  <span className="truncate text-[10px] leading-[1.3] text-muted">
-                    {t.description || (t.mode === 'dark' ? 'Dark palette' : 'Light palette')}
-                  </span>
-                </span>
-              </button>
-            );
-          })}
+          <Palette className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </Dialog.Trigger>
 
-          {/* Reset row — only meaningful when an override is in effect; muted
-              when there's nothing to clear so it doesn't draw the eye. */}
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => onPick(null)}
-            disabled={!overrideId}
-            className={cn(
-              'mt-1 w-full border-0 bg-transparent px-2 py-1 text-left text-[10px] tracking-[0.2em] text-muted uppercase',
-              overrideId ? 'cursor-pointer hover:text-ink' : 'cursor-default opacity-60',
-            )}
-          >
-            ↺ Use station default
-            {stationActiveId && (
-              <span className="ml-1 normal-case opacity-70">
-                ({themes.find(t => t.id === stationActiveId)?.name ?? stationActiveId})
-              </span>
-            )}
-          </button>
-
-          {/* Player-skin picker — a different face for the whole player, not
-              just a palette. Mirrors the theme rows: listener pick beats the
-              station default until reset. */}
-          {showSkins && skinCtx && (
-            <>
-              <span className="v3-eyebrow mt-2 border-b border-soft-border px-1 pb-1 text-[10px] tracking-[0.3em]">
-                Player skin
-              </span>
-              {skinCtx.skins.map(s => {
-                const isActive = s.id === skinCtx.effectiveId;
-                return (
-                  <button
-                    key={s.id}
-                    type="button"
-                    role="menuitemradio"
-                    aria-checked={isActive}
-                    onClick={() => {
-                      skinCtx.setOverride(s.id);
-                      setOpen(false);
-                      triggerRef.current?.focus();
-                    }}
-                    className={cn(
-                      'flex w-full items-center gap-2 border px-2 py-1.5 text-left',
-                      isActive
-                        ? 'border-vermilion bg-[var(--ink-softer)]'
-                        : 'border-soft-border bg-bg hover:bg-[var(--overlay)]',
-                    )}
-                  >
-                    <LayoutTemplate className="h-4 w-4 shrink-0" aria-hidden="true" />
-                    <span className="grid min-w-0 flex-1 gap-0.5">
-                      <span className="truncate text-[11px] font-bold tracking-[0.12em] uppercase">
-                        {s.name}
-                      </span>
-                      <span className="truncate text-[10px] leading-[1.3] text-muted">
-                        {s.description}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  skinCtx.setOverride(null);
-                  setOpen(false);
-                  triggerRef.current?.focus();
-                }}
-                disabled={!skinCtx.overrideId}
-                className={cn(
-                  'mt-1 w-full border-0 bg-transparent px-2 py-1 text-left text-[10px] tracking-[0.2em] text-muted uppercase',
-                  skinCtx.overrideId ? 'cursor-pointer hover:text-ink' : 'cursor-default opacity-60',
-                )}
-              >
-                ↺ Use station skin
-                <span className="ml-1 normal-case opacity-70">
-                  ({skinCtx.skins.find(s => s.id === skinCtx.stationSkinId)?.name ?? skinCtx.stationSkinId})
-                </span>
-              </button>
-            </>
+      <Dialog.Portal>
+        <Dialog.Overlay className="v3-drawer-overlay fixed inset-0 z-40 bg-overlay [backdrop-filter:blur(6px)] [-webkit-backdrop-filter:blur(6px)]" />
+        <Dialog.Content
+          aria-describedby={undefined}
+          className={cn(
+            'v3-modal-pop fixed top-1/2 left-1/2 z-50 flex flex-col border border-ink bg-bg text-ink shadow-drawer outline-none',
+            '-translate-x-1/2 -translate-y-1/2',
+            'max-h-[calc(100vh-3rem)] w-[min(360px,calc(100vw-2rem))]',
           )}
-
-          {/* Low-power toggle. Drops backdrop blur + animations so weak GPUs
-              (kiosks, Raspberry Pi) stop re-compositing frosted layers every
-              frame. Persists per-browser; a kiosk can also pin it with ?lite=1
-              in its start URL. A top margin sets it off from the theme rows —
-              no section title, by request. */}
-          <button
-            type="button"
-            role="menuitemcheckbox"
-            aria-checked={lite}
-            onClick={() => setLite(!lite)}
-            className={cn(
-              'mt-2 flex w-full items-center gap-2 border px-2 py-1.5 text-left',
-              lite
-                ? 'border-vermilion bg-[var(--ink-softer)]'
-                : 'border-soft-border bg-bg hover:bg-[var(--overlay)]',
-            )}
-          >
-            <Zap className="h-4 w-4 shrink-0" aria-hidden="true" />
-            <span className="grid min-w-0 flex-1 gap-0.5">
-              <span className="truncate text-[11px] font-bold tracking-[0.12em] uppercase">
-                Lite mode
-              </span>
-              <span className="truncate text-[10px] leading-[1.3] text-muted">
-                Improves performance on low-power screens
-              </span>
-            </span>
-            <span
-              className={cn(
-                'shrink-0 text-[10px] font-bold tracking-[0.2em] uppercase',
-                lite ? 'text-vermilion' : 'text-muted',
-              )}
-              aria-hidden="true"
+        >
+          <div className="flex items-baseline justify-between gap-3 border-b border-ink px-5 py-3.5">
+            <Dialog.Title className="v3-eyebrow m-0 text-[12px] tracking-[0.3em]">
+              Appearance
+            </Dialog.Title>
+            <Dialog.Close
+              className="v3-focus cursor-pointer border-0 bg-transparent text-xl leading-none text-muted hover:text-ink"
+              aria-label="Close"
             >
-              {lite ? 'On' : 'Off'}
-            </span>
-          </button>
-        </div>
-      )}
-    </span>
+              ×
+            </Dialog.Close>
+          </div>
+
+          <div className="v3-scroll grid flex-1 gap-1 overflow-auto px-3 py-3">
+            <SectionLabel>Theme</SectionLabel>
+            {themes.map(t => {
+              const isActive = t.id === effectiveId;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  aria-pressed={isActive}
+                  onClick={() => onPickTheme(t.id)}
+                  className={cn(
+                    'v3-focus flex w-full cursor-pointer items-center gap-2 border px-2 py-1.5 text-left',
+                    isActive
+                      ? 'border-vermilion bg-[var(--ink-softer)]'
+                      : 'border-soft-border bg-bg hover:bg-[var(--overlay)]',
+                  )}
+                >
+                  <span className="inline-flex shrink-0 border border-ink" aria-hidden="true">
+                    {SWATCH_KEYS.map(k => (
+                      <Swatch key={k} color={t.tokens[k]} />
+                    ))}
+                  </span>
+                  <span className="grid min-w-0 flex-1 gap-0.5">
+                    <span className="truncate text-[11px] font-bold tracking-[0.12em] uppercase">
+                      {t.name}
+                    </span>
+                    <span className="truncate text-[10px] leading-[1.3] text-muted">
+                      {t.description || (t.mode === 'dark' ? 'Dark palette' : 'Light palette')}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+
+            {/* Reset row — only meaningful when an override is in effect; muted
+                when there's nothing to clear so it doesn't draw the eye. */}
+            <button
+              type="button"
+              onClick={() => onPickTheme(null)}
+              disabled={!overrideId}
+              className={cn(
+                'mt-1 w-full border-0 bg-transparent px-2 py-1 text-left text-[10px] tracking-[0.2em] text-muted uppercase',
+                overrideId ? 'v3-focus cursor-pointer hover:text-ink' : 'cursor-default opacity-60',
+              )}
+            >
+              ↺ Use station default
+              {stationActiveId && (
+                <span className="ml-1 normal-case opacity-70">
+                  ({themes.find(t => t.id === stationActiveId)?.name ?? stationActiveId})
+                </span>
+              )}
+            </button>
+
+            {/* Player-skin picker — a different face for the whole player, not
+                just a palette. Mirrors the theme rows: listener pick beats the
+                station default until reset. */}
+            {showSkins && skinCtx && (
+              <>
+                <SectionLabel className="mt-2">Player skin</SectionLabel>
+                {skinCtx.skins.map(s => {
+                  const isActive = s.id === skinCtx.effectiveId;
+                  return (
+                    <button
+                      key={s.id}
+                      type="button"
+                      aria-pressed={isActive}
+                      onClick={() => {
+                        skinCtx.setOverride(s.id);
+                        setOpen(false);
+                      }}
+                      className={cn(
+                        'v3-focus flex w-full cursor-pointer items-center gap-2 border px-2 py-1.5 text-left',
+                        isActive
+                          ? 'border-vermilion bg-[var(--ink-softer)]'
+                          : 'border-soft-border bg-bg hover:bg-[var(--overlay)]',
+                      )}
+                    >
+                      <LayoutTemplate className="h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span className="grid min-w-0 flex-1 gap-0.5">
+                        <span className="truncate text-[11px] font-bold tracking-[0.12em] uppercase">
+                          {s.name}
+                        </span>
+                        <span className="truncate text-[10px] leading-[1.3] text-muted">
+                          {s.description}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => {
+                    skinCtx.setOverride(null);
+                    setOpen(false);
+                  }}
+                  disabled={!skinCtx.overrideId}
+                  className={cn(
+                    'mt-1 w-full border-0 bg-transparent px-2 py-1 text-left text-[10px] tracking-[0.2em] text-muted uppercase',
+                    skinCtx.overrideId ? 'v3-focus cursor-pointer hover:text-ink' : 'cursor-default opacity-60',
+                  )}
+                >
+                  ↺ Use station skin
+                  <span className="ml-1 normal-case opacity-70">
+                    ({skinCtx.skins.find(s => s.id === skinCtx.stationSkinId)?.name ?? skinCtx.stationSkinId})
+                  </span>
+                </button>
+              </>
+            )}
+
+            {/* Low-power toggle. Drops backdrop blur + animations so weak GPUs
+                (kiosks, Raspberry Pi) stop re-compositing frosted layers every
+                frame. Persists per-browser; a kiosk can also pin it with ?lite=1
+                in its start URL. Stays open on toggle so the effect is visible. */}
+            <button
+              type="button"
+              aria-pressed={lite}
+              onClick={() => setLite(!lite)}
+              className={cn(
+                'v3-focus mt-2 flex w-full cursor-pointer items-center gap-2 border px-2 py-1.5 text-left',
+                lite
+                  ? 'border-vermilion bg-[var(--ink-softer)]'
+                  : 'border-soft-border bg-bg hover:bg-[var(--overlay)]',
+              )}
+            >
+              <Zap className="h-4 w-4 shrink-0" aria-hidden="true" />
+              <span className="grid min-w-0 flex-1 gap-0.5">
+                <span className="truncate text-[11px] font-bold tracking-[0.12em] uppercase">
+                  Lite mode
+                </span>
+                <span className="truncate text-[10px] leading-[1.3] text-muted">
+                  Improves performance on low-power screens
+                </span>
+              </span>
+              <span
+                className={cn(
+                  'shrink-0 text-[10px] font-bold tracking-[0.2em] uppercase',
+                  lite ? 'text-vermilion' : 'text-muted',
+                )}
+                aria-hidden="true"
+              >
+                {lite ? 'On' : 'Off'}
+              </span>
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
