@@ -253,7 +253,7 @@ export default function SpoolSkin(_props: SkinProps) {
               <button type="button" aria-label="Volume up" onClick={() => adjustVolume(0.05)}
                 className="v3-focus cursor-pointer border-0 bg-transparent px-1 font-mono text-[13px] text-muted hover:text-ink">+</button>
             </div>
-            <div className="ml-auto font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
+            <div className="ml-auto font-mono text-[10px] tracking-[0.14em] whitespace-nowrap text-muted uppercase">
               {offline
                 ? 'off air'
                 : [
