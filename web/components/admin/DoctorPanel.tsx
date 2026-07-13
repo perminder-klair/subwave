@@ -3,12 +3,19 @@
 // Doctor — /admin/doctor. Runs the controller-side health assessment, offers a
 // one-click fix where a safe action exists, asks the buddy (the LLM) to review
 // the report in plain English, and copies the whole thing as GitHub-ready
-// Markdown. Mirrors DashPanel's adminFetch + act() pattern; primitives from ./ui.
+// Markdown. Mirrors DashPanel's adminFetch + act() pattern; primitives from ./ui,
+// streaming/LLM presentation from ../ai-elements (Task, Shimmer, Reasoning,
+// MessageResponse) restyled to the newsprint look at the call sites.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { Card, Btn, Pill } from './ui';
 import BoothBuddy, { type BuddyMood } from '../BoothBuddy';
+import { ChevronDownIcon } from 'lucide-react';
+import { Task, TaskContent, TaskItem, TaskTrigger } from '../ai-elements/task';
+import { Shimmer } from '../ai-elements/shimmer';
+import { Reasoning, ReasoningContent, ReasoningTrigger } from '../ai-elements/reasoning';
+import { MessageResponse } from '../ai-elements/message';
 
 // --- shapes (mirror controller/src/doctor.ts) ------------------------------
 
@@ -78,6 +85,24 @@ const HQ_ISSUES_NEW = 'https://github.com/perminder-klair/subwave/issues/new';
 // Past ~8KB the request 414s / silently truncates; stay well under and fall
 // back to the clipboard when the report is too big to prefill safely.
 const HQ_URL_LIMIT = 7000;
+
+// The controller runs its checks in this fixed order (SECTION_CHECKS in
+// controller/src/doctor.ts) and streams each section as it finishes, so names
+// not yet received are the ones still on the bench. Only the in-flight shimmer
+// rows key off this list — a drifted controller just shimmers the wrong names
+// for a few seconds; the finished report renders whatever actually arrived.
+const EXPECTED_SECTIONS = [
+  'LLM',
+  'Navidrome & library',
+  'Broadcast',
+  'Voice (TTS)',
+  'Capabilities',
+  'Content',
+  'Resources',
+  'Tuning',
+  'Storage',
+  'Setup',
+];
 
 function tallyCounts(sections: DoctorSection[]): DoctorReport['counts'] {
   const c = { ok: 0, warn: 0, fail: 0, skip: 0 };
@@ -154,6 +179,13 @@ export default function DoctorPanel() {
     );
     return m;
   }, [report]);
+
+  // Sections the live run hasn't delivered yet — painted as shimmering
+  // in-flight rows under the completed Tasks so the stream visibly moves.
+  const pendingSections =
+    running && report
+      ? EXPECTED_SECTIONS.filter((n) => !report.sections.some((s) => s.name === n))
+      : [];
 
   // One-shot batch run — the fallback when SSE streaming isn't available.
   const runBatch = async (): Promise<DoctorReport | null> => {
@@ -435,10 +467,16 @@ export default function DoctorPanel() {
                   what&apos;s muddy, and the one thing to fix first. On a local model this can take
                   20–60s — hang tight.
                 </p>
-                <div className="mt-4 flex flex-col gap-2.5" aria-hidden="true">
-                  <div className="sw-pulse h-3 w-[90%] rounded bg-[color:var(--separator-strong)]" />
-                  <div className="sw-pulse h-3 w-[76%] rounded bg-[color:var(--separator-strong)]" />
-                  <div className="sw-pulse h-3 w-[60%] rounded bg-[color:var(--separator-strong)]" />
+                <div className="mt-4 flex flex-col gap-1.5" aria-hidden="true">
+                  <Shimmer className="text-[13px] leading-[1.55]" duration={2}>
+                    Spinning the report back like a rough mix…
+                  </Shimmer>
+                  <Shimmer className="text-[13px] leading-[1.55]" duration={2.4}>
+                    Listening for mud in the low end…
+                  </Shimmer>
+                  <Shimmer className="text-[13px] leading-[1.55]" duration={2.8}>
+                    Writing the verdict up straight. No fluff.
+                  </Shimmer>
                 </div>
               </div>
             </div>
@@ -463,7 +501,10 @@ export default function DoctorPanel() {
             <div className="flex items-start gap-4">
               <BoothBuddy mood={buddyMood} size={40} />
               <div className="min-w-0 flex-1">
-                <p className="text-[15px] leading-[1.65]">{review.summary}</p>
+                {/* The LLM may hand back markdown — render it, don't print it. */}
+                {review.summary && (
+                  <MessageResponse className="text-[15px] leading-[1.65]">{review.summary}</MessageResponse>
+                )}
                 {review.priorities && review.priorities.length > 0 && (
                   <ul className="mt-4 flex flex-col gap-3">
                     {review.priorities.map((p, i) => {
@@ -472,7 +513,7 @@ export default function DoctorPanel() {
                       const fix = p.fixId ? fixById.get(p.fixId) : undefined;
                       return (
                         <li key={i} className="border-l-2 border-[color:var(--separator-strong)] pl-3">
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <Pill
                               tone={p.severity === 'low' ? 'ink' : 'accent'}
                               className={
@@ -484,18 +525,28 @@ export default function DoctorPanel() {
                               {p.severity}
                             </Pill>
                             <span className="text-[14px] font-bold">{p.title}</span>
+                            {fix && (
+                              <span className="ml-auto">
+                                <Btn sm onClick={() => runFix(fix)} disabled={busyFix === fix.id}>
+                                  {busyFix === fix.id ? '…' : fix.label}
+                                </Btn>
+                              </span>
+                            )}
                           </div>
-                          <p className="mt-1 text-[13px] leading-[1.55] text-muted">{p.why}</p>
-                          <p className="mt-1 text-[13px] leading-[1.55]">
-                            <span className="font-bold">Fix:</span> {p.suggestedFix}
-                          </p>
-                          {fix && (
-                            <div className="mt-2">
-                              <Btn sm onClick={() => runFix(fix)} disabled={busyFix === fix.id}>
-                                {busyFix === fix.id ? '…' : fix.label}
-                              </Btn>
-                            </div>
-                          )}
+                          {/* Folded by default so the list scans tight; the why
+                              and the fix expand on demand as one markdown body. */}
+                          <Reasoning defaultOpen={false} className="mt-1.5 mb-0">
+                            <ReasoningTrigger className="group w-fit cursor-pointer text-[10px] font-bold tracking-[0.18em] text-muted uppercase hover:text-ink">
+                              <span>The why &amp; the fix</span>
+                              <ChevronDownIcon
+                                className="size-3.5 transition-transform group-data-[state=open]:rotate-180"
+                                aria-hidden="true"
+                              />
+                            </ReasoningTrigger>
+                            <ReasoningContent className="mt-2 text-[13px] leading-[1.55]">
+                              {`${p.why}\n\n**Fix:** ${p.suggestedFix}`}
+                            </ReasoningContent>
+                          </Reasoning>
                         </li>
                       );
                     })}
@@ -512,28 +563,69 @@ export default function DoctorPanel() {
         </Card>
       ) : null}
 
-      {/* Findings by section */}
-      {report?.sections.map((sec) => (
-        <Card key={sec.name} className="mt-6" title={sec.name}>
-          <ul className="flex flex-col divide-y divide-[color:var(--separator-strong)]">
-            {sec.findings.map((f, i) => (
-              <li key={`${sec.name}-${f.label}-${i}`} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5 first:pt-0 last:pb-0">
-                <StatusPill status={f.status} />
-                <span className="text-[14px] font-bold">{f.label}</span>
-                {f.detail && <span className="font-mono text-[12px] text-muted">{f.detail}</span>}
-                {f.fix && (
-                  <span className="ml-auto">
-                    <Btn sm onClick={() => runFix(f.fix as FixAction)} disabled={busyFix === f.fix.id}>
-                      {busyFix === f.fix.id ? '…' : f.fix.label}
-                    </Btn>
-                  </span>
-                )}
-                {f.hint && <p className="w-full text-[12px] leading-[1.5] text-muted">{f.hint}</p>}
-              </li>
+      {/* Findings — one Card of collapsible section Tasks. Completed sections
+          land as they stream in; the ones still on the bench shimmer below so
+          the live run visibly moves through the rundown. */}
+      {report && (report.sections.length > 0 || running) && (
+        <Card className="mt-6" title="The rundown" sub={running ? 'running the levels…' : 'section by section'}>
+          <div className="flex flex-col divide-y divide-[color:var(--separator-strong)]">
+            {report.sections.map((sec) => {
+              const fails = sec.findings.filter((f) => f.status === 'fail').length;
+              const warns = sec.findings.filter((f) => f.status === 'warn').length;
+              return (
+                <Task key={sec.name} defaultOpen className="py-2.5 first:pt-0 last:pb-0">
+                  <TaskTrigger title={sec.name}>
+                    <div className="flex w-full cursor-pointer items-center gap-2">
+                      <span className="text-[11px] font-bold tracking-[0.18em] text-ink uppercase">{sec.name}</span>
+                      {fails > 0 && (
+                        <Pill tone="accent" className="border-[var(--accent)] bg-[var(--accent)] text-white">
+                          {fails} fail
+                        </Pill>
+                      )}
+                      {warns > 0 && <Pill tone="accent">{warns} warn</Pill>}
+                      <ChevronDownIcon
+                        className="ml-auto size-3.5 text-muted transition-transform group-data-[state=open]:rotate-180"
+                        aria-hidden="true"
+                      />
+                    </div>
+                  </TaskTrigger>
+                  <TaskContent>
+                    {sec.findings.map((f, i) => (
+                      <TaskItem
+                        key={`${sec.name}-${f.label}-${i}`}
+                        className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[14px] text-ink"
+                      >
+                        <StatusPill status={f.status} />
+                        <span className="font-bold">{f.label}</span>
+                        {f.detail && <span className="font-mono text-[12px] text-muted">{f.detail}</span>}
+                        {f.fix && (
+                          <span className="ml-auto">
+                            <Btn sm onClick={() => runFix(f.fix as FixAction)} disabled={busyFix === f.fix.id}>
+                              {busyFix === f.fix.id ? '…' : f.fix.label}
+                            </Btn>
+                          </span>
+                        )}
+                        {f.hint && <p className="w-full text-[12px] leading-[1.5] text-muted">{f.hint}</p>}
+                      </TaskItem>
+                    ))}
+                  </TaskContent>
+                </Task>
+              );
+            })}
+            {pendingSections.map((name, i) => (
+              <div key={name} className="flex items-center py-2.5 last:pb-0">
+                <Shimmer
+                  as="span"
+                  duration={1.6}
+                  className="text-[11px] font-bold tracking-[0.18em] uppercase"
+                >
+                  {i === 0 ? `${name} — on the meter now…` : name}
+                </Shimmer>
+              </div>
             ))}
-          </ul>
+          </div>
         </Card>
-      ))}
+      )}
     </div>
   );
 }

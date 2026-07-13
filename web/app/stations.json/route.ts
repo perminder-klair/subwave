@@ -8,13 +8,13 @@
 import { NextResponse } from 'next/server';
 import { getAllStations } from '@/lib/stations';
 
-// Mirrors the statically-generated /stations page: the data only changes when a
-// content file lands (i.e. at build/deploy time), so there's nothing to compute
-// per request.
+// The directory is sourced from the community catalog (ISR-revalidated in
+// stations.ts), so this feed re-generates on that cadence rather than only at
+// deploy time. force-static keeps it a cached static asset between revalidations.
 export const dynamic = 'force-static';
 
-export function GET() {
-  return NextResponse.json(getAllStations(), {
+export async function GET() {
+  return NextResponse.json(await getAllStations(), {
     headers: {
       'Cache-Control': 'public, max-age=300',
       // RN fetch ignores CORS, but this lets a browser client reuse the feed too.

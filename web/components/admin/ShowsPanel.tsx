@@ -16,6 +16,7 @@
 // plain swipe only scrolls (see HOLD_MS below).
 import type { ChangeEvent, RefObject, TouchEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Users, Share2 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
@@ -28,13 +29,15 @@ import { Field } from '../ui/field';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from '../ui/select';
-import { Card, Btn, Pill, Eyebrow, Metric, Toggle } from './ui';
+import { Card, Btn, Pill, Eyebrow, Metric, MetaChip, Toggle } from './ui';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { EditorDialog } from '../ui/editor-dialog';
+import { Modal } from '../ui/modal';
 import { AiFill } from './AiFill';
 import GenreSuggest from './GenreSuggest';
 import { PersonaPicker, GuestPersonaPicker, ThemePicker } from './ShowPickers';
 import { cn } from '../../lib/cn';
+import { showSubmitUrl } from '../../lib/repo';
 
 const NAME_MAX = 60;
 const TOPIC_MAX = 1000;
@@ -124,6 +127,27 @@ interface Show {
 /** One era window (mirrors the controller's EraWindow). Multiple windows let a
  *  show span non-adjacent decades ("90s + 2010s"). */
 interface EraWindow { fromYear: number | null; toYear: number | null }
+
+// One entry in the shipped community show catalog (GET /shows/community). A
+// portable, persona-agnostic show definition: no owner, no schedule — Install
+// drops it in as a fresh unscheduled show owned by the active persona.
+interface CommunityShow {
+  slug: string;
+  name: string;
+  topic: string;
+  moods: string[];
+  genres: string[];
+  eras: EraWindow[];
+  energies: string[];
+  filtersStrict: boolean;
+  banter: boolean;
+  programme: boolean;
+  segmentSkill: string;
+  maxTrackSeconds: number | null;
+  submittedBy?: string;   // GitHub login of the contributor who submitted it
+  dateAdded?: string;     // ISO date (YYYY-MM-DD) it first entered the catalog
+  dateModified?: string;  // ISO date (YYYY-MM-DD) of the last catalog change
+}
 
 // Decade presets for the era chips → one EraWindow each. Empty selection = any era.
 const DECADES: { key: string; label: string; from: number; to: number }[] = [
@@ -309,6 +333,37 @@ function clientMintId() {
   return 's_' + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 
+// Hydrate a raw/partial show (from GET /settings or a community install
+// response) into a fully-defaulted Show. Kept in one place so the initial load
+// and the community install share the exact same legacy-field coercion (#929).
+function hydrateShow(s: Partial<Show>): Show {
+  return {
+    id: s.id ?? clientMintId(),
+    name: s.name ?? '',
+    topic: s.topic ?? '',
+    personaId: s.personaId ?? '',
+    guestPersonaIds: Array.isArray(s.guestPersonaIds) ? s.guestPersonaIds : [],
+    banter: s.banter ?? false,
+    // Plural lists are canonical (#929); a legacy singular field from a stale
+    // response still hydrates as a one-element list.
+    moods: Array.isArray(s.moods) ? s.moods : (s as { mood?: string }).mood ? [(s as { mood?: string }).mood!] : [],
+    themeId: s.themeId ?? '',
+    genres: Array.isArray(s.genres) ? s.genres : (s as { genre?: string }).genre ? [(s as { genre?: string }).genre!] : [],
+    eras: Array.isArray(s.eras) ? s.eras : (() => {
+      const { fromYear = null, toYear = null } = s as { fromYear?: number | null; toYear?: number | null };
+      return fromYear != null || toYear != null ? [{ fromYear, toYear }] : [];
+    })(),
+    energies: Array.isArray(s.energies) ? s.energies : (s as { energy?: string }).energy ? [(s as { energy?: string }).energy!] : [],
+    filtersStrict: s.filtersStrict ?? false,
+    maxTrackSeconds: s.maxTrackSeconds ?? null,
+    playlistIds: Array.isArray(s.playlistIds) ? s.playlistIds : [],
+    playlistStrict: s.playlistStrict ?? false,
+    excludedPlaylistIds: Array.isArray(s.excludedPlaylistIds) ? s.excludedPlaylistIds : [],
+    programme: s.programme ?? false,
+    segmentSkill: s.segmentSkill ?? '',
+  };
+}
+
 function emptyWeek(): Schedule {
   const w: Schedule = {};
   for (let d = 0; d < 7; d++) w[d] = Array(24).fill(null);
@@ -333,6 +388,38 @@ function hasAnyMusicFilter(s: Show): boolean {
   return !!(s.moods.length || s.genres.length || s.energies.length || s.eras.length);
 }
 
+// The wire shape for one show — trimmed + the "only-means-something-with"
+// conditionals the server also enforces. Shared by the editor's Save show
+// (POST /shows) and the community install path so they stay identical.
+function showPayload(s: Show) {
+  return {
+    id: s.id,
+    name: s.name.trim(),
+    topic: s.topic.trim(),
+    personaId: s.personaId,
+    // The host can be switched after guests were picked; the server rejects a
+    // guest that duplicates the host, so filter it here too.
+    guestPersonaIds: (s.guestPersonaIds || []).filter(id => id !== s.personaId),
+    // Banter only means something with guests in the studio.
+    banter: (s.guestPersonaIds?.length ?? 0) > 0 && s.banter,
+    moods: s.moods,
+    themeId: s.themeId || '',
+    genres: s.genres.map(g => g.trim()).filter(Boolean),
+    eras: s.eras,
+    energies: s.energies,
+    // Strict only means something with at least one music filter set.
+    filtersStrict: hasAnyMusicFilter(s) && s.filtersStrict,
+    maxTrackSeconds: s.maxTrackSeconds,
+    playlistIds: s.playlistIds || [],
+    // Strict only means something with at least one playlist pinned.
+    playlistStrict: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict,
+    excludedPlaylistIds: s.excludedPlaylistIds || [],
+    programme: s.programme ?? false,
+    // A skill pin only means something in programme mode.
+    segmentSkill: s.programme ? (s.segmentSkill || '') : '',
+  };
+}
+
 export default function ShowsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [data, setData] = useState<SettingsResponse | null>(null);
@@ -341,10 +428,14 @@ export default function ShowsPanel() {
   const [busy, setBusy] = useState(false);
   const [brush, setBrush] = useState<string | 'erase' | null>(null);
   const [now, setNow] = useState(() => new Date());
+  // Community show catalog + install state (best-effort; null = still loading).
+  const [community, setCommunity] = useState<CommunityShow[] | null>(null);
+  const [communityOpen, setCommunityOpen] = useState(false);          // catalog modal open?
+  const [installing, setInstalling] = useState<string | null>(null);  // community slug installing, or null
 
   // Inline editor: `focusIdx` is the show open in the editor below the list
   // (null = none open). Shows are edited in place — no modal, no draft copy;
-  // edits land straight on `form.shows[focusIdx]` and persist on Save schedule.
+  // edits land straight on `form.shows[focusIdx]` and persist on Save show.
   const [focusIdx, setFocusIdx] = useState<number | null>(null);
   // id of a freshly-added show — the AI-draft field shows only while creating.
   const [creatingId, setCreatingId] = useState<string | null>(null);
@@ -452,31 +543,7 @@ export default function ShowsPanel() {
           const day = (sched as Record<number, (string | null)[] | undefined>)[d];
           if (Array.isArray(day)) for (let h = 0; h < 24; h++) week[d]![h] = day[h] ?? null;
         }
-        const shows: Show[] = (j.values.shows || []).map(s => ({
-          id: s.id ?? clientMintId(),
-          name: s.name ?? '',
-          topic: s.topic ?? '',
-          personaId: s.personaId ?? '',
-          guestPersonaIds: Array.isArray(s.guestPersonaIds) ? s.guestPersonaIds : [],
-          banter: s.banter ?? false,
-          // Plural lists are canonical (#929); a legacy singular field from a
-          // stale response still hydrates as a one-element list.
-          moods: Array.isArray(s.moods) ? s.moods : (s as { mood?: string }).mood ? [(s as { mood?: string }).mood!] : [],
-          themeId: s.themeId ?? '',
-          genres: Array.isArray(s.genres) ? s.genres : (s as { genre?: string }).genre ? [(s as { genre?: string }).genre!] : [],
-          eras: Array.isArray(s.eras) ? s.eras : (() => {
-            const { fromYear = null, toYear = null } = s as { fromYear?: number | null; toYear?: number | null };
-            return fromYear != null || toYear != null ? [{ fromYear, toYear }] : [];
-          })(),
-          energies: Array.isArray(s.energies) ? s.energies : (s as { energy?: string }).energy ? [(s as { energy?: string }).energy!] : [],
-          filtersStrict: s.filtersStrict ?? false,
-          maxTrackSeconds: s.maxTrackSeconds ?? null,
-          playlistIds: Array.isArray(s.playlistIds) ? s.playlistIds : [],
-          playlistStrict: s.playlistStrict ?? false,
-          excludedPlaylistIds: Array.isArray(s.excludedPlaylistIds) ? s.excludedPlaylistIds : [],
-          programme: s.programme ?? false,
-          segmentSkill: s.segmentSkill ?? '',
-        }));
+        const shows: Show[] = (j.values.shows || []).map(hydrateShow);
         setForm({ shows, schedule: week });
         // Arm the first valid show as the brush so the grid is paintable at once.
         const firstValid = shows.find(showValid);
@@ -551,6 +618,25 @@ export default function ShowsPanel() {
     return () => { cancelled = true; };
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Fetch the community show catalog once for the browse-and-install modal.
+  // Best-effort like the other catalogs — any failure just leaves it empty so
+  // the Community button stays enabled and shows the empty state.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await adminFetch('/shows/community');
+        if (!r.ok) throw new Error(`failed (${r.status})`);
+        const j = (await r.json()) as { community?: CommunityShow[] };
+        if (!cancelled) setCommunity(Array.isArray(j.community) ? j.community : []);
+      } catch {
+        if (!cancelled) setCommunity([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const personas: Persona[] = data?.values?.personas || [];
   const moods: string[] = data?.tts?.moods || [];
   const apiBase = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
@@ -564,7 +650,7 @@ export default function ShowsPanel() {
 
   // ── inline show editor ─────────────────────────────────────────────────
   // Edits land straight on the show in form state (no draft) — same live-edit
-  // model as PersonasPanel. Trimming/cleaning happens once, at Save schedule.
+  // model as PersonasPanel. Trimming/cleaning happens once, at Save show.
   const setShow = (i: number, patch: Partial<Show>) =>
     setForm(f => f ? ({ ...f, shows: f.shows.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) }) : f);
 
@@ -597,24 +683,67 @@ export default function ShowsPanel() {
     scrollToEditorRef.current = true;
     setCreatingId(id);
     setFocusIdx(newIdx);
-    notify.ok('New show added — give it a name and a persona, then Save schedule.');
+    notify.ok('New show added — give it a name and a persona, then Save show.');
   };
 
-  const removeShow = (i: number) => {
+  const removeShow = async (i: number) => {
+    if (!form) return;
+    const target = form.shows[i];
+    if (!target) return;
+    // Persist the delete immediately — on its own, not waiting for Save schedule.
+    // The server removes the show and unschedules it from the grid in one update.
+    // A 404 means it's a locally-added show never saved server-side, so the local
+    // splice below is all that's needed.
+    try {
+      const r = await adminFetch(`/shows/${encodeURIComponent(target.id)}`, { method: 'DELETE' });
+      if (!r.ok && r.status !== 404) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `failed (${r.status})`);
+      }
+    } catch (e) {
+      notify.err(`Delete failed: ${errorMessage(e)}`);
+      return;
+    }
+    // Remove locally + clear the show from the grid, preserving any unsaved edits
+    // to other shows. Splice by id (not index) since the await may have elapsed.
     setForm(f => {
       if (!f) return f;
-      const target = f.shows[i];
-      if (!target) return f;
       const week: Schedule = JSON.parse(JSON.stringify(f.schedule));
       for (let d = 0; d < 7; d++)
         for (let h = 0; h < 24; h++)
           if (week[d]![h] === target.id) week[d]![h] = null;
-      if (brush === target.id) setBrush(null);
-      return { ...f, shows: f.shows.filter((_, idx) => idx !== i), schedule: week };
+      return { ...f, shows: f.shows.filter(sh => sh.id !== target.id), schedule: week };
     });
+    if (brush === target.id) setBrush(null);
     // Keep the editor focus aligned with the shifted list: close it if the open
     // show was removed, decrement if an earlier one was.
     setFocusIdx(cur => (cur == null ? cur : cur === i ? null : cur > i ? cur - 1 : cur));
+    notify.ok(`Deleted “${target.name.trim() || 'show'}”.`);
+  };
+
+  // Install a community show: the controller appends it to the persisted show
+  // list (unscheduled, owned by the active persona) and returns { shows, show }.
+  // We append the returned show to the local form — mapped through the same
+  // hydrateShow as the initial load — so any unsaved edits to other shows
+  // survive, then arm it as the paint brush and nudge the operator to schedule.
+  const install = async (slug: string) => {
+    setInstalling(slug);
+    try {
+      const r = await adminFetch(`/shows/community/${encodeURIComponent(slug)}/install`, { method: 'POST' });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; shows?: Array<Partial<Show>>; show?: Partial<Show> | null };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const added = j.show ? hydrateShow(j.show) : null;
+      if (added) {
+        setForm(f => f ? { ...f, shows: [...f.shows, added] } : f);
+        // Arm the new show as the brush if nothing is armed yet, so the grid is
+        // paintable at once — same as addShow.
+        setBrush(b => b ?? added.id);
+      }
+      const host = added?.personaId ? personaName(added.personaId) : 'your active DJ';
+      notify.ok(`Installed “${added?.name || slug}” — added unscheduled with ${host} as host. Assign a persona/guests, then paint it into the week.`);
+    } catch (e) {
+      notify.err(`Install failed: ${errorMessage(e)}`);
+    } finally { setInstalling(null); }
   };
 
   // ── grid helpers ─────────────────────────────────────────────────────────
@@ -745,8 +874,6 @@ export default function ShowsPanel() {
   }, []);
 
   // ── validation ───────────────────────────────────────────────────────────
-  const allShowsOk = form ? form.shows.every(showValid) : false;
-  const canSave = !!form && allShowsOk;
   const scheduledHours = form
     ? Object.values(form.schedule).flat().filter(Boolean).length : 0;
   const countHours = (id: string): number => form
@@ -765,45 +892,50 @@ export default function ShowsPanel() {
     return { day: d, hour: h, showId: form?.schedule?.[d]?.[h] ?? null };
   };
 
-  const save = async (): Promise<boolean> => {
-    if (!canSave || !form) return false;
+  // Persist ONE show (add or edit) via POST /shows — independent of any other
+  // unsaved / half-finished show in the panel. Only requires THIS show to be
+  // valid. On success we swap the local entry for the server's normalized copy
+  // (same id — a client-minted s_ id is kept server-side), so unsaved edits to
+  // other shows survive.
+  const saveShow = async (s: Show): Promise<boolean> => {
+    if (!showValid(s)) return false;
     setBusy(true);
     try {
-      const r = await adminFetch('/settings', {
+      const r = await adminFetch('/shows', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          shows: form.shows.map(s => ({
-            id: s.id, name: s.name.trim(), topic: s.topic.trim(),
-            personaId: s.personaId,
-            // Belt-and-suspenders: the host can be switched after guests were
-            // picked, and the server rejects a guest that duplicates the host.
-            guestPersonaIds: (s.guestPersonaIds || []).filter(id => id !== s.personaId),
-            // Banter only means something with guests in the studio.
-            banter: (s.guestPersonaIds?.length ?? 0) > 0 && s.banter,
-            moods: s.moods,
-            themeId: s.themeId || '',
-            genres: s.genres.map(g => g.trim()).filter(Boolean),
-            eras: s.eras,
-            energies: s.energies,
-            // Strict only means something with at least one music filter set.
-            filtersStrict: hasAnyMusicFilter(s) && s.filtersStrict,
-            maxTrackSeconds: s.maxTrackSeconds,
-            playlistIds: s.playlistIds || [],
-            // Strict only means something with at least one playlist pinned.
-            playlistStrict: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict,
-            excludedPlaylistIds: s.excludedPlaylistIds || [],
-            programme: s.programme ?? false,
-            // A skill pin only means something in programme mode.
-            segmentSkill: s.programme ? (s.segmentSkill || '') : '',
-          })),
-          schedule: form.schedule,
-        }),
+        body: JSON.stringify({ show: showPayload(s) }),
       });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      const j = (await r.json().catch(() => ({}))) as { error?: string; show?: Partial<Show> | null };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      notify.ok('schedule saved, the current hour applies on the next pick');
-      await load();
+      const saved = j.show ? hydrateShow(j.show) : null;
+      if (saved) setForm(f => f ? { ...f, shows: f.shows.map(x => (x.id === s.id ? saved : x)) } : f);
+      notify.ok('Show saved.');
+      return true;
+    } catch (e) {
+      notify.err(errorMessage(e));
+      return false;
+    } finally { setBusy(false); }
+  };
+
+  // Persist ONLY the weekly grid via PUT /schedule — the "Save schedule" button
+  // writes the schedule and nothing else. Slots pointing at a show that isn't
+  // saved yet are dropped server-side (reported as `dropped`), so a half-defined
+  // show never blocks saving the schedule.
+  const saveSchedule = async (): Promise<boolean> => {
+    if (!form) return false;
+    setBusy(true);
+    try {
+      const r = await adminFetch('/schedule', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ schedule: form.schedule }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; dropped?: number };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      notify.ok(j.dropped
+        ? `Schedule saved — ${j.dropped} slot(s) skipped (unsaved shows). The current hour applies on the next pick.`
+        : 'Schedule saved — the current hour applies on the next pick.');
       return true;
     } catch (e) {
       notify.err(errorMessage(e));
@@ -898,7 +1030,7 @@ export default function ShowsPanel() {
         sub="Mon–Sun · 24h"
         right={
           <span className="flex gap-2">
-            <Btn sm tone="accent" onClick={save} disabled={busy || !canSave}>
+            <Btn sm tone="accent" onClick={saveSchedule} disabled={busy || !form}>
               {busy ? 'saving…' : 'Save schedule'}
             </Btn>
             <Btn sm onClick={() => setConfirmClearWeek(true)}>Clear week</Btn>
@@ -1005,13 +1137,25 @@ export default function ShowsPanel() {
       {/* ── SHOW DEFINITIONS ─────────────────────────────────────────────── */}
       <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
         <span className="caption">show definitions · {form.shows.length}/{SHOWS_MAX} shows</span>
-        <Btn
-          tone="accent"
-          onClick={addShow}
-          disabled={form.shows.length >= SHOWS_MAX || personas.length === 0}
-        >
-          + Add show
-        </Btn>
+        <div className="flex items-center gap-2">
+          <Btn
+            onClick={() => setCommunityOpen(true)}
+            disabled={!community}
+            title="Browse and install shows shared by other stations"
+          >
+            <Users size={14} /> Community
+            {community && community.length > 0 && (
+              <span className="ml-1 text-vermilion">{community.length}</span>
+            )}
+          </Btn>
+          <Btn
+            tone="accent"
+            onClick={addShow}
+            disabled={form.shows.length >= SHOWS_MAX || personas.length === 0}
+          >
+            + Add show
+          </Btn>
+        </div>
       </div>
       {form.shows.length === 0 && (
         <p className="text-[12px] text-muted">
@@ -1022,6 +1166,10 @@ export default function ShowsPanel() {
       {form.shows.map((s, i) => {
         const ok = showValid(s);
         const hrs = countHours(s.id);
+        const host = personas.find(p => p.id === s.personaId) ?? null;
+        const guests = (s.guestPersonaIds || [])
+          .map(id => personas.find(p => p.id === id))
+          .filter((p): p is Persona => Boolean(p));
         return (
           <ShowDefRow
             key={s.id}
@@ -1029,12 +1177,9 @@ export default function ShowsPanel() {
             index={i}
             ok={ok}
             hrs={hrs}
-            personaLabel={
-              personaName(s.personaId)
-              + ((s.guestPersonaIds?.length ?? 0) > 0
-                ? ` · with ${s.guestPersonaIds.map(personaName).join(' & ')}`
-                : '')
-            }
+            host={host}
+            guests={guests}
+            apiBase={apiBase}
             onEdit={() => focusShow(i)}
           />
         );
@@ -1056,12 +1201,10 @@ export default function ShowsPanel() {
           apiBase={apiBase}
           adminFetch={adminFetch}
           minTrackSeconds={data?.values?.minTrackSeconds}
-          allShowsOk={allShowsOk}
-          canSave={canSave}
           busy={busy}
           isNew={focused.id === creatingId}
           update={(patch) => setShow(focusIdx, patch)}
-          onSave={async () => { if (await save()) setFocusIdx(null); }}
+          onSave={async () => { if (focused && await saveShow(focused)) setFocusIdx(null); }}
           onClose={() => setFocusIdx(null)}
           onRemove={() => setConfirmDeleteIdx(focusIdx)}
         />
@@ -1076,8 +1219,8 @@ export default function ShowsPanel() {
           <>
             Remove{' '}
             <b>{confirmDeleteIdx !== null ? (form.shows[confirmDeleteIdx]?.name.trim() || 'this show') : 'this show'}</b>
-            ? It&apos;s also cleared from any scheduled hours. Nothing is permanent
-            until you Save schedule.
+            ? This deletes it right away and clears it from any scheduled hours.
+            You don&apos;t need to Save schedule.
           </>
         }
         confirmLabel="Delete"
@@ -1105,6 +1248,111 @@ export default function ShowsPanel() {
         danger
         onConfirm={() => { clearWeek(); setConfirmClearWeek(false); }}
       />
+
+      {/* ── COMMUNITY CATALOG MODAL ──────────────────────────────────────── */}
+      <Modal
+        open={communityOpen}
+        onOpenChange={setCommunityOpen}
+        title="community"
+        sub="shows shared by other stations"
+        width={640}
+        footer={
+          <div className="flex w-full items-center justify-between gap-3">
+            <span className="text-[11px] leading-[1.5] text-muted">
+              Made a show worth sharing? Submit it to the community catalog — a
+              maintainer reviews it, then it ships to every station.
+            </span>
+            <Btn
+              onClick={() => window.open(showSubmitUrl(), '_blank', 'noopener,noreferrer')}
+              title="Open a prefilled community submission on GitHub"
+            >
+              <Share2 size={14} /> Share a show
+            </Btn>
+          </div>
+        }
+      >
+        <div className="text-[12px] leading-[1.65] text-muted">
+          These shows are shared by other stations and ship with SUB/WAVE.
+          <strong> Install</strong> adds one to your show list as your own
+          editable show — it arrives <strong>unscheduled</strong> with your
+          active persona as host, so assign a persona (and any guest co-hosts),
+          then paint it into the weekly grid above.
+        </div>
+        <div className="mt-4 grid gap-3">
+          {community && community.length > 0 ? (
+            community.map(c => {
+              // Shows can't be installed twice — the controller 409s on a name
+              // clash — so flag ones already in your list instead of a button.
+              const inShows = form.shows.some(
+                s => s.name.trim().toLowerCase() === c.name.trim().toLowerCase(),
+              );
+              const tags = [...c.moods, ...c.genres, ...c.energies].slice(0, 6);
+              return (
+                <div key={c.slug} className="grid grid-cols-[1fr_auto] items-center gap-4 border border-ink p-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[13px] font-extrabold">{c.name}</span>
+                      {c.programme && <Pill className="text-[8px]">programme</Pill>}
+                      {c.banter && <Pill className="text-[8px]">banter</Pill>}
+                      {c.filtersStrict && <Pill className="text-[8px]">strict filters</Pill>}
+                    </div>
+                    {c.topic && (
+                      <div className="mt-1 line-clamp-3 text-[12px] leading-[1.6] text-muted">{c.topic}</div>
+                    )}
+                    {tags.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-1">
+                        {tags.map((t, i) => (
+                          <Pill key={`${t}-${i}`} className="text-[8px]">{t}</Pill>
+                        ))}
+                      </div>
+                    )}
+                    {(c.submittedBy || c.dateAdded) && (
+                      <div className="mt-1.5 text-[10px] leading-[1.5] text-muted">
+                        {c.submittedBy && (
+                          <>
+                            by{' '}
+                            <a
+                              href={`https://github.com/${c.submittedBy}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+                            >
+                              @{c.submittedBy}
+                            </a>
+                          </>
+                        )}
+                        {c.submittedBy && c.dateAdded && ' · '}
+                        {c.dateAdded && <>added {c.dateAdded}</>}
+                        {c.dateAdded && c.dateModified && c.dateModified !== c.dateAdded && (
+                          <> · updated {c.dateModified}</>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    {inShows ? (
+                      <Pill tone="accent" dot>in your shows</Pill>
+                    ) : (
+                      <Btn
+                        tone="accent"
+                        onClick={() => install(c.slug)}
+                        disabled={installing === c.slug || form.shows.length >= SHOWS_MAX}
+                        title={form.shows.length >= SHOWS_MAX ? 'The show list is full' : undefined}
+                      >
+                        {installing === c.slug ? 'Installing…' : 'Install'}
+                      </Btn>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <div className="py-6 text-center text-[13px] text-muted italic">
+              No community shows yet.
+            </div>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }
@@ -1127,23 +1375,20 @@ interface ShowEditorProps {
   apiBase: string;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   minTrackSeconds?: number;
-  // Whole-form save state — one Save persists every show + the weekly grid, so
-  // the bar reflects the form, not just this show.
-  allShowsOk: boolean;
-  canSave: boolean;
   busy: boolean;
   isNew: boolean;       // show the AI-draft field only while creating
   update: (patch: Partial<Show>) => void;
-  onSave: () => void;
+  onSave: () => void;   // Save show — persists just this show (POST /shows)
   onClose: () => void;
   onRemove: () => void;
 }
 
 function ShowEditor({
   show, editorRef, personas, moods, themes, skills, activeThemeId, genres, playlists, apiBase,
-  adminFetch, minTrackSeconds, allShowsOk, canSave, busy, isNew,
+  adminFetch, minTrackSeconds, busy, isNew,
   update, onSave, onClose, onRemove,
 }: ShowEditorProps) {
+  // Save show gates on THIS show only — other unsaved shows don't block it.
   const valid = showValid(show);
   // Free-text genre being typed before it's added as a chip. The editor is
   // remounted per show (keyed at the call site), so this resets on switch.
@@ -1170,18 +1415,16 @@ function ShowEditor({
             <span
               className={cn(
                 'size-1.5 flex-none rounded-full',
-                canSave ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
+                valid ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
               )}
             />
             <span className="text-[11px] text-muted">
               {!valid
                 ? <span className="text-[var(--danger)]">this show needs a name and a persona</span>
-                : !allShowsOk
-                  ? <span className="text-[var(--danger)]">another show in the list is incomplete</span>
-                  : 'saves all shows + the weekly grid · applies live on the next pick'}
+                : 'saves this show · schedule it on the grid, then Save schedule'}
             </span>
             <Btn lg onClick={onClose}>Close</Btn>
-            <Btn lg tone="accent" onClick={onSave} disabled={busy || !canSave}>
+            <Btn lg tone="accent" onClick={onSave} disabled={busy || !valid}>
               {busy ? 'Saving…' : 'Save show'}
             </Btn>
           </span>
@@ -1819,51 +2062,190 @@ function GridCell({
   );
 }
 
+// A persona avatar — the initials-behind-<img> pattern shared with the show
+// pickers (a broken/absent avatar falls back to readable initials). Two sizes:
+// 'lg' anchors the host; 'sm' builds the overlapping guest cluster.
+function ShowAvatar({
+  persona, apiBase, size, className,
+}: {
+  persona: Persona | null;
+  apiBase: string;
+  size: 'lg' | 'sm';
+  className?: string;
+}) {
+  const src = persona?.avatar
+    ? `${apiBase}/persona-avatar/${encodeURIComponent(persona.id)}`
+    : null;
+  const name = persona?.name?.trim();
+  return (
+    <span
+      className={cn(
+        'relative grid flex-none place-items-center overflow-hidden border border-ink bg-[var(--ink-softer)]',
+        size === 'lg' ? 'size-12' : 'size-6',
+        className,
+      )}
+    >
+      <span className={cn('font-extrabold text-muted', size === 'lg' ? 'text-[13px]' : 'text-[8px]')}>
+        {name ? abbrev(name) : '—'}
+      </span>
+      {src && (
+        <img
+          src={src}
+          alt=""
+          className="absolute inset-0 h-full w-full object-cover"
+          onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }}
+        />
+      )}
+    </span>
+  );
+}
+
+// Grammatical name join: "Kai", "Kai & Rae", "Kai, Rae & Sol".
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? '';
+  return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
+}
+
 interface ShowDefRowProps {
   show: Show;
   index: number;
   ok: boolean;
   hrs: number;
-  personaLabel: string;
+  host: Persona | null;
+  guests: Persona[];
+  apiBase: string;
   onEdit: () => void;
 }
 
-// One show as a full-width card, matching the skills list: a colour dot + name
-// with status pills on the right, a persona/mood/topic summary on the left, and
-// an Edit action on the right (Remove lives inside the editor).
-function ShowDefRow({ show: s, index: i, ok, hrs, personaLabel, onEdit }: ShowDefRowProps) {
-  const dotRef = useRef<HTMLSpanElement>(null);
-  useDynamicStyle(dotRef, { background: SHOW_COLORS[i % SHOW_COLORS.length] ?? '#000' });
+// One show as a "broadcast slate": a colour spine keyed to the weekly grid, the
+// host — and any guest co-hosts overlapping beneath — as faces, mode kickers
+// (Programme / Banter), the weekly airtime as a metric, and a scannable row of
+// music facets over the DJ brief. The whole card is the edit target (the
+// personas "click a show to open it" pattern); Remove lives inside the editor.
+function ShowDefRow({ show: s, index: i, ok, hrs, host, guests, apiBase, onEdit }: ShowDefRowProps) {
+  const spineRef = useRef<HTMLSpanElement>(null);
+  useDynamicStyle(spineRef, { background: SHOW_COLORS[i % SHOW_COLORS.length] ?? '#000' });
+
+  const hostName = host?.name?.trim() || (s.personaId ? 'Unnamed' : '');
+  const guestNames = guests.map(g => g.name?.trim() || 'Unnamed');
+  const skillPin = s.programme && s.segmentSkill ? s.segmentSkill : '';
+
+  // "What it plays" facets — moods, genres, eras, energies as chips, plus the
+  // hard-lock / playlist / length flags. The visual counterpart to the text
+  // showFilterSummary() the strip cards still use.
+  const facets: { key: string; label: string; accent?: boolean }[] = [];
+  if (s.moods.length) s.moods.forEach(m => facets.push({ key: `mood-${m}`, label: m }));
+  else facets.push({ key: 'mood-any', label: 'any mood' });
+  s.genres.forEach(g => facets.push({ key: `genre-${g}`, label: g }));
+  s.eras.forEach((e, idx) => facets.push({ key: `era-${idx}`, label: eraLabelOf(e) }));
+  s.energies.forEach(en => facets.push({ key: `energy-${en}`, label: en }));
+  if (s.filtersStrict && hasAnyMusicFilter(s)) facets.push({ key: 'strict', label: 'strict', accent: true });
+  const nPl = s.playlistIds?.length ?? 0;
+  if (nPl) facets.push({ key: 'playlists', label: `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' · strict' : ''}` });
+  const nEx = s.excludedPlaylistIds?.length ?? 0;
+  if (nEx) facets.push({ key: 'excluded', label: `${nEx} excluded` });
+  if (s.maxTrackSeconds != null) {
+    facets.push({ key: 'length', label: s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s` });
+  }
+
   return (
-    <Card
-      title={
-        <span className="inline-flex items-center gap-2">
-          <span ref={dotRef} className="size-2.5 flex-none rounded-full" />
-          {s.name.trim() || 'untitled'}
-        </span>
-      }
-      right={
-        <>
-          {!ok && <Pill tone="accent">incomplete</Pill>}
-          {hrs > 0 ? <Pill tone="ink">{hrs}h / week</Pill> : <Pill>unscheduled</Pill>}
-        </>
-      }
+    <article
+      role="button"
+      tabIndex={0}
+      aria-label={`Edit ${s.name.trim() || 'untitled show'}`}
+      onClick={onEdit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onEdit(); }
+      }}
+      className={cn(
+        'group card relative cursor-pointer transition-colors hover:bg-[var(--ink-softer)]',
+        'focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)]',
+      )}
     >
-      <div className="grid grid-cols-[1fr_auto] items-center gap-4">
-        <div className="min-w-0">
-          <div className="text-[12px] leading-[1.6] text-muted">
-            persona · {personaLabel} · mood · {s.moods.length ? s.moods.join(', ') : 'any'}{showFilterSummary(s)}
-          </div>
-          {s.topic.trim() && (
-            <div className="mt-1 line-clamp-2 text-[12px] leading-[1.6] text-muted italic">
-              {s.topic.trim()}
+      {/* colour spine — the same per-show colour the weekly grid paints with */}
+      <span
+        ref={spineRef}
+        aria-hidden="true"
+        className="absolute inset-y-0 left-0 w-1 transition-[width] group-hover:w-1.5"
+      />
+
+      <div className="card-body flex gap-3.5">
+        {/* faces — host, then any guest co-hosts overlapping beneath, centred */}
+        <div className="flex flex-none flex-col items-center">
+          <ShowAvatar persona={host} apiBase={apiBase} size="lg" />
+          {guests.length > 0 && (
+            <div className="mt-1 flex">
+              {guests.map((g, gi) => (
+                <ShowAvatar
+                  key={g.id}
+                  persona={g}
+                  apiBase={apiBase}
+                  size="sm"
+                  className={cn('ring-2 ring-[var(--card-bg)]', gi > 0 && '-ml-2')}
+                />
+              ))}
             </div>
           )}
         </div>
-        <div className="flex flex-col gap-2">
-          <Btn className="min-w-[92px]" onClick={onEdit}>Edit</Btn>
+
+        {/* body */}
+        <div className="grid min-w-0 flex-1 gap-2.5">
+          <div className="flex items-start gap-3">
+            {/* name + roster */}
+            <div className="min-w-0 flex-1">
+              {(s.programme || (s.banter && guests.length > 0)) && (
+                <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                  {s.programme && (
+                    <Pill tone="solid" dot>
+                      Programme{skillPin ? ` · ${skillPin}` : ''}
+                    </Pill>
+                  )}
+                  {s.banter && guests.length > 0 && <Pill>Banter</Pill>}
+                </div>
+              )}
+              <div className="truncate text-[17px] font-extrabold tracking-[-0.01em] text-ink">
+                {s.name.trim() || 'untitled'}
+              </div>
+              <div className="mt-0.5 truncate text-[12px] text-muted">
+                {host
+                  ? <>host · <span className="font-semibold text-ink">{hostName}</span></>
+                  : <span className="text-[var(--danger)]">no persona set</span>}
+                {guests.length > 0 && <> · with {joinNames(guestNames)}</>}
+              </div>
+            </div>
+
+            {/* right rail — status, weekly airtime, edit affordance */}
+            <div className="flex flex-none flex-col items-end gap-1.5 text-right">
+              {!ok && <Pill tone="accent">incomplete</Pill>}
+              {hrs > 0 ? (
+                <div className="leading-none">
+                  <span className="mono-num text-[20px] font-extrabold text-ink">{hrs}</span>
+                  <span className="caption ml-1">h / wk</span>
+                </div>
+              ) : (
+                <span className="caption">unscheduled</span>
+              )}
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-[0.16em] text-muted uppercase transition-colors group-hover:text-vermilion">
+                Edit <span aria-hidden="true">→</span>
+              </span>
+            </div>
+          </div>
+
+          {/* facets — what this show plays */}
+          <div className="flex flex-wrap gap-1">
+            {facets.map(f => (
+              <MetaChip key={f.key} accent={f.accent}>{f.label}</MetaChip>
+            ))}
+          </div>
+
+          {/* brief */}
+          {s.topic.trim() && (
+            <p className="line-clamp-2 text-[12px] leading-[1.55] text-muted italic">
+              {s.topic.trim()}
+            </p>
+          )}
         </div>
       </div>
-    </Card>
+    </article>
   );
 }

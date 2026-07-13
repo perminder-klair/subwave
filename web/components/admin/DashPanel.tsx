@@ -3,12 +3,13 @@
 // DJ command center — /admin/dash. Lets the operator step into the autonomous
 // booth: speak custom text on-air, fire any voice segment on demand,
 // flip the autonomous toggles, and watch live on-air status + the booth log.
-import type { ChangeEvent, ReactNode } from 'react';
-import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
+import { useEffect, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { eventTurnSummary, turnClass, turnKey, turnText } from '../../lib/sessionFeed';
 import { fmtClock } from '../../lib/format';
+import { clientLabel, fmtConnected, type ListenerConnection } from '../../lib/clientLabel';
 import type { SessionTurn } from '../../lib/types';
 import type {
   NowPlayingTrack,
@@ -21,8 +22,38 @@ import type {
 } from '../../lib/types';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { V3Alert } from '../ui/alert';
-import { Textarea } from '../ui/textarea';
 import { Card, Btn, Pill, Seg, Toggle } from './ui';
+import {
+  Queue,
+  QueueItem,
+  QueueItemAction,
+  QueueItemActions,
+  QueueItemContent,
+  QueueItemDescription,
+  QueueItemIndicator,
+  QueueList,
+  QueueSection,
+  QueueSectionContent,
+  QueueSectionLabel,
+  QueueSectionTrigger,
+} from '../ai-elements/queue';
+import {
+  PromptInput,
+  PromptInputBody,
+  PromptInputFooter,
+  PromptInputSubmit,
+  PromptInputTextarea,
+  PromptInputTools,
+  type PromptInputMessage,
+} from '../ai-elements/prompt-input';
+import { Suggestion, Suggestions } from '../ai-elements/suggestion';
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from '../ai-elements/conversation';
+import { Message, MessageContent } from '../ai-elements/message';
+import type { ChatStatus } from 'ai';
 import { ScrollArea, ScrollBar } from '../ui/scroll-area';
 import { AudioLines, Clock3, MessagesSquare, RadioTower, X, type LucideIcon } from 'lucide-react';
 import StationHeader, { type HealthMetrics } from './StationHeader';
@@ -35,6 +66,19 @@ const SAY_KINDS = [
 const SAY_MODES = [
   { id: 'raw', label: 'Raw' },
   { id: 'styled', label: 'Styled' },
+];
+
+// Canned prompts for the manual voice box, in station voice. Written as
+// instructions (they shine with mode=styled — the DJ rewrites them in persona,
+// though raw works too). Clicking one FILLS the textarea; nothing goes to air
+// until the operator hits send.
+const SAY_SUGGESTIONS = [
+  'Tease the weather like it’s a rumour you can’t quite confirm.',
+  'Do a station ID like you suspect nobody’s listening — and you’re fine with it.',
+  'Salute the graveyard shift: night drivers, dish pits, the deliberately awake.',
+  'Tease the next track without giving up the title.',
+  'Remind everyone the request line exists and judges no one.',
+  'Announce the time like it’s classified information.',
 ];
 
 type SegmentType = 'station-id' | 'hourly' | 'link' | 'banter';
@@ -50,6 +94,7 @@ const BANTER_SEGMENT: { type: SegmentType; label: string; icon: LucideIcon } =
 
 interface QueueState {
   upcoming?: QueueEntry[];
+  history?: QueueEntry[];
   autoPick?: boolean;
   autoLink?: boolean;
   pickerBusy?: boolean;
@@ -84,16 +129,6 @@ interface ActResponse {
   error?: string;
 }
 
-interface ListenerConnection {
-  ip: string;
-  mount: string;
-  userAgent: string;
-  connectedSeconds: number;
-  // Raw sockets folded into this row. Safari opens 2 per client (counts as one
-  // listener); >1 surfaces as a ×N badge. Absent/1 for normal single-socket clients.
-  connections?: number;
-}
-
 interface ConnectionsState {
   count: number;
   connections: ListenerConnection[];
@@ -123,17 +158,6 @@ interface RequestEntry {
   message?: string | null;
 }
 
-// connectedSeconds → short human string. Listeners rarely sit for days, so
-// hours is the coarsest unit we bother with.
-function fmtConnected(s: number): string {
-  if (!Number.isFinite(s) || s < 0) return '—';
-  if (s < 60) return `${Math.round(s)}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
-
 // Hide the host portion of an IP so a glance at the screen doesn't expose a
 // listener's full address. IPv4 drops the last octet, IPv6 keeps the first two
 // groups (the routing prefix) and masks the rest. The raw IP is still in the
@@ -147,46 +171,6 @@ function maskIp(ip: string): string {
     return groups.length > 2 ? `${groups[0]}:${groups[1]}:×` : ip;
   }
   return ip;
-}
-
-// Collapse a raw user-agent into a short "Device · App" label. Best-effort and
-// deliberately shallow — the full UA stays in the title attribute. Order
-// matters: check the specific players (Sonos, VLC) before the generic browser
-// families, since some embed "Mozilla" boilerplate.
-function clientLabel(ua: string): string {
-  if (!ua) return 'unknown';
-  const u = ua.toLowerCase();
-  if (u.includes('sonos')) return 'Sonos';
-  if (u.includes('vlc')) return 'VLC';
-  if (u.includes('itunes') || u.includes('applecoremedia')) return 'iTunes / Music';
-  if (u.includes('winamp')) return 'Winamp';
-  if (u.includes('foobar')) return 'foobar2000';
-  const device = u.includes('iphone')
-    ? 'iPhone'
-    : u.includes('ipad')
-      ? 'iPad'
-      : u.includes('android')
-        ? 'Android'
-        : u.includes('macintosh') || u.includes('mac os')
-          ? 'Mac'
-          : u.includes('windows')
-            ? 'Windows'
-            : u.includes('linux')
-              ? 'Linux'
-              : '';
-  const browser = u.includes('firefox')
-    ? 'Firefox'
-    : u.includes('edg')
-      ? 'Edge'
-      : u.includes('chrome') || u.includes('chromium')
-        ? 'Chrome'
-        : u.includes('safari')
-          ? 'Safari'
-          : '';
-  const label = [device, browser].filter(Boolean).join(' · ');
-  // Nothing recognised — show the first token of the raw UA rather than a
-  // useless "unknown" (helps with hardware radios / odd clients).
-  return label || ua.split(/[\s/]/)[0] || 'unknown';
 }
 
 type SortKey = 'ip' | 'mount' | 'connectedSeconds' | 'client';
@@ -220,6 +204,9 @@ export default function DashPanel() {
   const [sayText, setSayText] = useState('');
   const [sayMode, setSayMode] = useState('raw');
   const [sayKind, setSayKind] = useState('dj-speak');
+  // POST lifecycle for the PromptInputSubmit glyph: ready → submitted while
+  // the /dj/say call is in flight → a brief error flash on failure → ready.
+  const [sayStatus, setSayStatus] = useState<ChatStatus>('ready');
   const [confirmSkip, setConfirmSkip] = useState(false);
 
   const [conns, setConns] = useState<ConnectionsState | null>(null);
@@ -230,8 +217,6 @@ export default function DashPanel() {
   // Longest-connected first by default — the most stable listeners on top.
   const [sort, setSort] = useState<SortState>({ key: 'connectedSeconds', dir: 'desc' });
   const [revealIps, setRevealIps] = useState(false);
-
-  const logRef = useRef<HTMLDivElement>(null);
 
   // Live status — poll /now-playing + /state together every 3s.
   useEffect(() => {
@@ -345,12 +330,6 @@ export default function DashPanel() {
     };
   }, [hydrated, needsAuth, adminFetch]);
 
-  useEffect(() => {
-    // Radix ScrollArea scrolls on its viewport, not the root element.
-    const vp = logRef.current?.querySelector('[data-radix-scroll-area-viewport]');
-    if (vp) vp.scrollTop = 0;
-  }, [status?.sessionMessages?.length]);
-
   // Generic POST helper — drives the busy state; result goes to the toast.
   const act = async (
     key: string,
@@ -377,11 +356,26 @@ export default function DashPanel() {
     }
   };
 
-  const sendVoice = async () => {
-    const text = sayText.trim();
-    if (!text) return;
+  const sendVoice = async (text: string) => {
+    setSayStatus('submitted');
     const j = await act('say', '/dj/say', { text, mode: sayMode, kind: sayKind }, 'manual voice');
-    if (j?.ok) setSayText('');
+    if (j?.ok) {
+      setSayText('');
+      setSayStatus('ready');
+    } else {
+      // Brief error flash on the submit glyph, then back to ready. The toast
+      // from act() carries the actual message; the text stays for a retry.
+      setSayStatus('error');
+      window.setTimeout(() => setSayStatus('ready'), 1500);
+    }
+  };
+
+  // PromptInput hands us { text, files }; only text matters here. Guard empty
+  // text and double-submits (Enter while a send is already in flight).
+  const onSaySubmit = (message: PromptInputMessage) => {
+    const text = message.text.trim();
+    if (!text || busy) return;
+    void sendVoice(text);
   };
 
   // Skip is disruptive — it cuts the track for every listener — so the Skip
@@ -428,9 +422,12 @@ export default function DashPanel() {
   const listenersValue = status?.listeners;
   const listenersObj = listenersValue && typeof listenersValue === 'object' ? listenersValue : null;
   const upcoming = q.upcoming || [];
-  // Booth log is the live DJ session, newest first. (The controller's djLog
-  // ring buffer is operator diagnostics — it lives on /admin/debug only.)
-  const booth = [...(status?.sessionMessages || [])].reverse();
+  const history = q.history || [];
+  // Booth log is the live DJ session in air order — oldest first, newest at
+  // the bottom, where the Conversation's stick-to-bottom tail holds the view.
+  // (The controller's djLog ring buffer is operator diagnostics — it lives on
+  // /admin/debug only.)
+  const booth = status?.sessionMessages || [];
 
   const showName = status?.activeShow?.name || ctx?.time?.show || '—';
   const weatherText = ctx?.weather?.condition
@@ -486,45 +483,100 @@ export default function DashPanel() {
       <div className="stack-mobile grid grid-cols-[1.4fr_1fr] gap-4">
         {/* LEFT */}
         <div className="grid grid-rows-[auto_1fr] gap-4">
-          <Card title="Queue" sub={`${upcoming.length} upcoming`} bodyClass="px-3.5 py-1">
-            {upcoming.length === 0 ? (
-              <div className="py-2.5 text-muted italic">queue empty, auto-playlist fallback</div>
-            ) : (
-              upcoming.slice(0, 8).map((t, i) => (
-                <div className="track-row" key={i}>
-                  <span className="idx">{(i + 1).toString().padStart(2, '0')}</span>
-                  <span className="title">
-                    {t.title} <span className="artist">— {t.artist}</span>
-                  </span>
-                  <span className="dur">
-                    {typeof t.duration === 'number' || typeof t.duration === 'string'
-                      ? t.duration
-                      : ''}
-                  </span>
-                  {t.requestedBy ? (
-                    <span className="text-right text-[9px] font-bold tracking-[0.2em] text-vermilion uppercase">
-                      ↳ {t.requestedBy}
-                    </span>
-                  ) : (
-                    <span></span>
-                  )}
-                  <span className="text-right">
-                    {typeof t.subsonic_id === 'string' && t.subsonic_id ? (
-                      <button
-                        type="button"
-                        onClick={() => cancelQueued(t)}
-                        disabled={busy === `cancel:${t.subsonic_id}`}
-                        title="Remove from queue"
-                        aria-label={`Remove ${t.title || 'track'} from queue`}
-                        className="inline-flex h-5 w-5 items-center justify-center rounded text-muted transition-colors hover:bg-vermilion/10 hover:text-vermilion disabled:pointer-events-none disabled:opacity-40"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    ) : null}
-                  </span>
-                </div>
-              ))
-            )}
+          <Card title="Queue" sub={`${upcoming.length} upcoming`} bodyClass="px-3.5 py-1.5">
+            {/* The Card supplies the newsprint chrome; the Queue's own border/
+                radius/shadow are stripped so it reads as the card body. */}
+            <Queue className="rounded-none border-0 bg-transparent p-0 shadow-none">
+              {upcoming.length === 0 ? (
+                <div className="py-1 text-muted italic">queue empty, auto-playlist fallback</div>
+              ) : (
+                // --queue-max-h lifts the vendored max-h-40 so all 8 rows show.
+                <QueueList className="mt-0 -mb-0 [--queue-max-h:26rem]">
+                  {upcoming.slice(0, 8).map((t, i) => (
+                    <QueueItem
+                      key={`${t.subsonic_id ?? ''}:${i}`}
+                      className="rounded-none border-b border-dashed border-separator-strong px-1.5 py-1.5 last:border-b-0 hover:bg-[var(--overlay)]"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <QueueItemIndicator
+                          className={cn(
+                            'mt-0 rounded-none',
+                            t.requestedBy
+                              ? 'border-vermilion bg-vermilion'
+                              : 'border-ink/40 bg-transparent',
+                          )}
+                        />
+                        <span className="mono-num text-[10px] text-muted">
+                          {(i + 1).toString().padStart(2, '0')}
+                        </span>
+                        <QueueItemContent className="text-[12px] text-ink">
+                          {t.title} <span className="text-muted">— {t.artist}</span>
+                        </QueueItemContent>
+                        <span className="mono-num text-[10px] whitespace-nowrap text-muted">
+                          {typeof t.duration === 'number' || typeof t.duration === 'string'
+                            ? t.duration
+                            : ''}
+                        </span>
+                        {/* Per-track cancel from develop (#1006), grafted into
+                            the Queue composition's actions slot. */}
+                        {typeof t.subsonic_id === 'string' && t.subsonic_id ? (
+                          <QueueItemActions className="opacity-100">
+                            <QueueItemAction
+                              onClick={() => cancelQueued(t)}
+                              disabled={busy === `cancel:${t.subsonic_id}`}
+                              title="Remove from queue"
+                              aria-label={`Remove ${t.title || 'track'} from queue`}
+                              className="size-5 rounded-none text-muted hover:bg-vermilion/10 hover:text-vermilion"
+                            >
+                              <X className="h-3 w-3" />
+                            </QueueItemAction>
+                          </QueueItemActions>
+                        ) : null}
+                      </div>
+                      {t.requestedBy ? (
+                        <QueueItemDescription className="ml-10 text-[9px] font-bold tracking-[0.2em] text-vermilion uppercase">
+                          ↳ {t.requestedBy}
+                        </QueueItemDescription>
+                      ) : null}
+                    </QueueItem>
+                  ))}
+                </QueueList>
+              )}
+
+              {/* Recently played — collapsed by default; a review surface,
+                  not part of the live queue read. */}
+              {history.length > 0 && (
+                <QueueSection defaultOpen={false} className="border-t border-separator-strong">
+                  <QueueSectionTrigger className="rounded-none bg-transparent px-1.5 py-2 text-[9px] font-bold tracking-[0.2em] text-muted uppercase hover:bg-[var(--overlay)] hover:text-ink">
+                    <QueueSectionLabel
+                      count={history.length}
+                      label="recently played"
+                      className="[&_svg]:size-3"
+                    />
+                  </QueueSectionTrigger>
+                  <QueueSectionContent>
+                    <QueueList className="mt-0">
+                      {history.slice(0, 8).map((t, i) => (
+                        <QueueItem
+                          key={`${t.subsonic_id ?? ''}:${t.t ?? ''}:${i}`}
+                          className="rounded-none px-1.5 py-1 hover:bg-[var(--overlay)]"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <QueueItemIndicator completed className="mt-0 rounded-none" />
+                            <QueueItemContent completed className="text-[12px] no-underline">
+                              {t.title} <span className="text-muted">— {t.artist}</span>
+                            </QueueItemContent>
+                            <span className="mono-num text-[10px] whitespace-nowrap text-muted">
+                              {fmtClock(t.t, tz, locale)}
+                            </span>
+                          </div>
+                        </QueueItem>
+                      ))}
+                    </QueueList>
+                  </QueueSectionContent>
+                </QueueSection>
+              )}
+            </Queue>
           </Card>
 
           <Card
@@ -536,25 +588,44 @@ export default function DashPanel() {
             {booth.length === 0 ? (
               <div className="text-muted italic">no session turns yet</div>
             ) : (
-              <div ref={logRef} className="relative min-h-[220px] flex-1">
+              <div className="relative min-h-[220px] flex-1">
                 {/* The absolute-inset wrapper keeps the log's content out of
                     the card's intrinsic height, so the card tracks the right
-                    column instead of growing to fit every session turn. It
-                    must be a separate div: Radix's ScrollArea root pins
-                    position:relative via inline style, so `absolute` on the
-                    ScrollArea itself silently loses. */}
+                    column instead of growing to fit every session turn. The
+                    Conversation (stick-to-bottom) owns the scroll region and
+                    holds the view pinned to the newest turn — a live tail. */}
                 <div className="absolute inset-0">
-                  <ScrollArea className="h-full">
-                    {booth.map((turn, i) => (
-                      <div key={turnKey(turn, i)} className={`log ${classTone(turnClass(turn))}`}>
-                        <span className="t">
-                          {fmtClock(turn.t, tz, locale)}
-                        </span>
-                        <span className="k">[{turn.kind}]</span>
-                        <BoothTurnText turn={turn} />
-                      </div>
-                    ))}
-                  </ScrollArea>
+                  <Conversation className="h-full">
+                    <ConversationContent className="gap-2 p-0 pr-2">
+                      {booth.map((turn, i) => (
+                        <Message
+                          key={turnKey(turn, i)}
+                          from="assistant"
+                          className="max-w-full gap-0.5"
+                        >
+                          <MessageContent className="gap-0.5 text-[11px] leading-relaxed">
+                            <div className="flex flex-wrap items-baseline gap-2">
+                              <span className="mono-num text-[10px] text-muted">
+                                {fmtClock(turn.t, tz, locale)}
+                              </span>
+                              <span
+                                className={cn(
+                                  'border px-1 py-px text-[8px] font-bold tracking-[0.18em] uppercase',
+                                  classTone(turnClass(turn)) === 'accent'
+                                    ? 'border-vermilion text-vermilion'
+                                    : 'border-separator-strong text-muted',
+                                )}
+                              >
+                                {turn.kind}
+                              </span>
+                            </div>
+                            <BoothTurnText turn={turn} />
+                          </MessageContent>
+                        </Message>
+                      ))}
+                    </ConversationContent>
+                    <ConversationScrollButton className="rounded-none border-ink" />
+                  </Conversation>
                 </div>
               </div>
             )}
@@ -564,35 +635,62 @@ export default function DashPanel() {
         {/* RIGHT */}
         <div className="grid gap-4">
           <Card title="Manual voice DJ" sub="speak now">
-            <Textarea
-              className="min-h-[88px]"
-              value={sayText}
-              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setSayText(e.target.value)}
-              maxLength={500}
-              placeholder={
-                sayMode === 'raw'
-                  ? 'Exact words the DJ will speak, verbatim…'
-                  : 'An instruction or topic. The DJ writes it in persona…'
-              }
-            />
-            <div className="mt-2.5 flex flex-wrap items-center gap-3.5">
-              <div className="flex items-center gap-1.5">
-                <span className="caption">mode</span>
-                <Seg value={sayMode} options={SAY_MODES} onChange={setSayMode} />
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="caption">duck</span>
-                <Seg value={sayKind} options={SAY_KINDS} onChange={setSayKind} />
-              </div>
-              <Btn
-                tone="accent"
-                className="ml-auto"
-                disabled={!!busy || !sayText.trim()}
-                onClick={sendVoice}
-              >
-                {busy === 'say' ? 'sending…' : 'Send to air →'}
-              </Btn>
+            {/* Canned prompt chips — clicking fills the textarea, never sends.
+                Chips are directions for the DJ, not verbatim lines, so they
+                also flip the box to Styled (raw would air the instruction). */}
+            <div className="mb-2.5">
+              <Suggestions className="gap-1.5">
+                {SAY_SUGGESTIONS.map(s => (
+                  <Suggestion
+                    key={s}
+                    suggestion={s}
+                    onClick={text => {
+                      setSayText(text);
+                      setSayMode('styled');
+                    }}
+                    className="h-auto rounded-none border-separator-strong px-2 py-[3px] text-[9px] font-medium tracking-[0.04em] text-muted normal-case hover:bg-[var(--overlay)] hover:text-ink"
+                  />
+                ))}
+              </Suggestions>
             </div>
+            <PromptInput onSubmit={onSaySubmit}>
+              <PromptInputBody>
+                <PromptInputTextarea
+                  className="min-h-[88px] text-[13px]"
+                  value={sayText}
+                  onChange={e => setSayText(e.target.value)}
+                  maxLength={500}
+                  placeholder={
+                    sayMode === 'raw'
+                      ? 'Exact words the DJ will speak, verbatim…'
+                      : 'An instruction or topic. The DJ writes it in persona…'
+                  }
+                />
+              </PromptInputBody>
+              <PromptInputFooter className="flex-wrap gap-3.5">
+                <PromptInputTools className="flex-wrap gap-3.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="caption">mode</span>
+                    <Seg value={sayMode} options={SAY_MODES} onChange={setSayMode} />
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="caption">duck</span>
+                    <Seg value={sayKind} options={SAY_KINDS} onChange={setSayKind} />
+                  </div>
+                </PromptInputTools>
+                <PromptInputSubmit
+                  status={sayStatus}
+                  variant="accent"
+                  size="sm"
+                  disabled={!!busy || !sayText.trim()}
+                  className="ml-auto rounded-none px-3"
+                >
+                  {/* No children while in flight / erroring so the status
+                      glyphs (spinner / ✕) take over from the label. */}
+                  {sayStatus === 'ready' ? 'Send to air →' : undefined}
+                </PromptInputSubmit>
+              </PromptInputFooter>
+            </PromptInput>
           </Card>
 
           <Card title="DJ segments" sub="fire on demand">
@@ -839,7 +937,9 @@ function classTone(cls: string): string {
 // agent — link/clock/transition coaching) render as a one-line summary; the
 // raw prompt never shows here (it's in the session JSON if ever needed).
 function BoothTurnText({ turn }: { turn: SessionTurn }) {
-  return <span className="msg">{eventTurnSummary(turn) ?? turnText(turn)}</span>;
+  // Plain text, deliberately not markdown-rendered — booth turns are speech
+  // scripts, not documents.
+  return <span className="break-words text-ink">{eventTurnSummary(turn) ?? turnText(turn)}</span>;
 }
 
 // Collapse whitespace + truncate, for the one-line request preview in a summary.

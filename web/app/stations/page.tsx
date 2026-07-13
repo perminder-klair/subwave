@@ -2,6 +2,7 @@ import { AnimatedLink } from '@/components/ui/animated-link';
 import StationCard from '@/components/stations/StationCard';
 import StationMap from '@/components/stations/StationMap';
 import { getAllStations, getStationStats } from '@/lib/stations';
+import { stationSubmitUrl, reportStationUrl, COMMUNITY_REPO_URL } from '@/lib/repo';
 import { pageMeta } from '@/lib/seo';
 
 export const metadata = pageMeta({
@@ -11,20 +12,17 @@ export const metadata = pageMeta({
   path: '/stations',
 });
 
-const REPO = 'https://github.com/perminder-klair/subwave';
-
-// Submission opens a GitHub Issue Form (no fork, no JSON). A workflow turns the
-// issue into a one-file pull request automatically — see
-// .github/workflows/station-submission.yml. The old new-file editor link forced
-// non-collaborators to fork the repo (discussion #296), so we route through an
-// issue instead: anyone with a GitHub account can submit in one click.
-const SUBMIT_URL = `${REPO}/issues/new?template=add-station.yml`;
+// Submission opens a GitHub Issue Form in the community catalog repo (no fork, no
+// JSON). A workflow there turns the issue into a one-file PR. The old new-file
+// editor link forced non-collaborators to fork the repo (discussion #296), so we
+// route through an issue: anyone with a GitHub account can submit in one click.
+const SUBMIT_URL = stationSubmitUrl();
 // Report / takedown for a listed station — opens the report-station issue form.
-const REPORT_URL = `${REPO}/issues/new?template=report-station.yml`;
+const REPORT_URL = reportStationUrl();
 
-export default function StationsIndex() {
-  const stations = getAllStations();
-  const { count, countries } = getStationStats();
+export default async function StationsIndex() {
+  const stations = await getAllStations();
+  const { count, countries } = await getStationStats();
 
   return (
     <article>
@@ -61,7 +59,7 @@ export default function StationsIndex() {
           Add your station
         </AnimatedLink>
         <AnimatedLink
-          href={`${REPO}/blob/main/web/content/stations/README.md`}
+          href={`${COMMUNITY_REPO_URL}/blob/main/stations/README.md`}
           className="bs-station-cta-help"
         >
           How it works

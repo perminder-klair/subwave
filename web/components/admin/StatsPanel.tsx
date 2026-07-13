@@ -20,6 +20,12 @@ import { V3Alert } from '../ui/alert';
 import { Card, Btn, Pill, Eyebrow, Seg } from './ui';
 import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '../../lib/cn';
+import { fmtConnected, type ListenerConnection } from '../../lib/clientLabel';
+import {
+  bucketSamplesByHour,
+  groupConnectionsByDevice,
+  type HourBucket,
+} from '../../lib/audienceStats';
 
 // --- types --------------------------------------------------------------
 
@@ -168,6 +174,16 @@ interface AudienceResponse {
   referrers?: { source: string; count: number }[];
   countries?: { country: string; count: number }[];
   paths?: { path: string; count: number }[];
+  error?: string;
+}
+
+// GET /listeners/connections — live per-listener detail from Icecast's admin
+// feed (already deduped one-row-per-listener by the server). `error` is set on
+// a 502 (Icecast admin unreachable) so the UI distinguishes "nobody connected"
+// (empty list) from "couldn't read the live detail".
+interface ConnectionsResponse {
+  count?: number;
+  connections?: ListenerConnection[];
   error?: string;
 }
 
@@ -447,6 +463,62 @@ function ListenerChart({ samples }: { samples: ListenerSample[] }) {
   );
 }
 
+// --- hour-of-day histogram ---------------------------------------------
+
+// One vertical bar in the hour-of-day chart. Height is dynamic (per-hour), so
+// it goes through useDynamicStyle rather than an inline style prop (see the
+// hook — the strict lint rule forbids `style={…}`).
+function HourColumn({ frac, title }: { frac: number; title: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  useDynamicStyle(ref, { height: `${Math.max(2, Math.round(frac * 100))}%` });
+  return (
+    <span className="flex h-full flex-1 items-end" title={title}>
+      <span ref={ref} className="block min-h-[2px] w-full rounded-[2px] bg-vermilion" />
+    </span>
+  );
+}
+
+// 24-bar histogram of average listeners by local hour-of-day — "when is the
+// station busiest?". Bars are anchored to the busiest hour's average. Same
+// no-dependency house style as ListenerChart; the axis labels a few anchor
+// hours rather than all 24 to stay legible.
+function HourOfDayChart({ buckets }: { buckets: HourBucket[] }) {
+  const hasData = buckets.some(b => b.samples > 0);
+  if (!hasData) {
+    return (
+      <div className="flex h-[110px] items-center justify-center">
+        <span className="field-hint italic">collecting hourly history…</span>
+      </div>
+    );
+  }
+  const maxAvg = Math.max(...buckets.map(b => b.avg), 0);
+  const pad = (h: number) => String(h).padStart(2, '0');
+  return (
+    <div>
+      <div className="flex h-[110px] items-end gap-[3px]">
+        {buckets.map(b => (
+          <HourColumn
+            key={b.hour}
+            frac={maxAvg ? b.avg / maxAvg : 0}
+            title={
+              b.samples
+                ? `${pad(b.hour)}:00 · avg ${(Math.round(b.avg * 10) / 10)} · peak ${b.peak}`
+                : `${pad(b.hour)}:00 · no data`
+            }
+          />
+        ))}
+      </div>
+      <div className="caption mt-1 flex justify-between text-muted">
+        <span>00</span>
+        <span>06</span>
+        <span>12</span>
+        <span>18</span>
+        <span>23</span>
+      </div>
+    </div>
+  );
+}
+
 const RANGE_OPTIONS = [
   { id: '1440', label: '24h' },
   { id: '10080', label: '7d' },
@@ -461,6 +533,7 @@ export default function StatsPanel() {
   const [paused, setPaused] = useState(false);
   const [listeners, setListeners] = useState<ListenersResponse | null>(null);
   const [audience, setAudience] = useState<AudienceResponse | null>(null);
+  const [connections, setConnections] = useState<ConnectionsResponse | null>(null);
   const [systemRes, setSystemRes] = useState<SystemResponse | null>(null);
   const [range, setRange] = useState('1440'); // minutes — 24h default
 
@@ -543,6 +616,34 @@ export default function StatsPanel() {
     return () => { cancelled = true; clearInterval(id); };
   }, [paused, needsAuth, hydrated, adminFetch, range]);
 
+  // /listeners/connections — live per-listener device + connected-for detail
+  // from Icecast's admin feed, 30s. Range-independent ("connected right now").
+  // A 502 (Icecast admin unreachable) is stored as an error rather than dropped,
+  // so the card can say "live detail unavailable" instead of silently blanking.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    const tick = async () => {
+      if (paused) return;
+      try {
+        const r = await adminFetch('/listeners/connections');
+        if (r.status === 401) {
+          if (!cancelled) setConnections(null);
+          return;
+        }
+        const j = (await r.json()) as ConnectionsResponse;
+        if (!cancelled) {
+          setConnections(r.ok ? j : { error: j?.error || 'live connection detail unavailable' });
+        }
+      } catch {
+        /* leave last reading in place */
+      }
+    };
+    tick();
+    const id = setInterval(tick, 30000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [paused, needsAuth, hydrated, adminFetch]);
+
   // /system — per-container CPU/memory, 30s (it samples the Docker stats stream
   // for ~1s per container, so it's heavier than /stats). Soft-fails like the
   // others. Range-independent — always "right now".
@@ -582,10 +683,23 @@ export default function StatsPanel() {
   const lAvg = counts.length ? counts.reduce((a, b) => a + b, 0) / counts.length : null;
   const rangeLabel = range === '10080' ? '7d' : '24h';
 
+  // Hour-of-day histogram, derived from the same listener series as the trend
+  // chart (respects the 24h/7d range toggle). Local time — labeled as such.
+  const hourBuckets = bucketSamplesByHour(samples);
+
   // Audience-source rollup (referrers / countries / distinct sessions).
   const audSessions = audience?.sessions ?? null;
   const audReferrers = audience?.referrers ?? [];
   const audCountries = audience?.countries ?? [];
+
+  // Live "connected now" device breakdown, from the Icecast admin feed.
+  const connErr = connections?.error ?? null;
+  const connList = connections?.connections ?? [];
+  const connCount = connections?.count ?? connList.length;
+  const deviceGroups = groupConnectionsByDevice(connList);
+  const connAvgSeconds = connList.length
+    ? connList.reduce((a, c) => a + (c.connectedSeconds > 0 ? c.connectedSeconds : 0), 0) / connList.length
+    : 0;
 
   // System resources (container CPU/mem + host totals).
   const sysHost = systemRes?.host ?? null;
@@ -633,6 +747,19 @@ export default function StatsPanel() {
               <ListenerChart samples={samples} />
             )}
           </div>
+          <div className="border-t border-separator-soft p-3.5">
+            <div className="caption mb-2">
+              busiest hours
+              <span className="text-muted"> · avg listeners by hour · your local time</span>
+            </div>
+            {listeners == null ? (
+              <div className="flex h-[110px] items-center justify-center">
+                <span className="field-hint italic">loading…</span>
+              </div>
+            ) : (
+              <HourOfDayChart buckets={hourBuckets} />
+            )}
+          </div>
         </div>
       </Card>
 
@@ -641,51 +768,97 @@ export default function StatsPanel() {
         title="Audience sources"
         sub={`where listeners came from · last ${rangeLabel}`}
       >
-        {audience == null ? (
-          <span className="field-hint italic">loading…</span>
-        ) : (audSessions ?? 0) === 0 ? (
-          <span className="field-hint italic">
-            no sessions recorded yet, sources appear as listeners arrive
-          </span>
-        ) : (
-          <div className="grid gap-0">
-            <MetricStrip>
-              <StatCell label="Sessions" value={fmtInt(audSessions)} accent
-                sub={`distinct, last ${rangeLabel}`} />
-              <StatCell label="Sources" value={fmtInt(audReferrers.length)} />
-              <StatCell label="Countries" value={fmtInt(audCountries.length)} last />
-            </MetricStrip>
-
-            <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-0">
-              <div className="border-r border-separator-soft p-3.5">
-                <div className="caption mb-2">top referrers</div>
-                {audReferrers.length ? (
-                  <ScrollBox>
-                    <BarList
-                      rows={audReferrers.map(r => ({ label: r.source, count: r.count }))}
-                      max={audReferrers[0]?.count || 1}
-                    />
-                  </ScrollBox>
-                ) : (
-                  <span className="field-hint italic">none</span>
-                )}
-              </div>
-              <div className="p-3.5">
-                <div className="caption mb-2">top countries</div>
-                {audCountries.length ? (
-                  <ScrollBox>
-                    <BarList
-                      rows={audCountries.map(c => ({ label: c.country, count: c.count }))}
-                      max={audCountries[0]?.count || 1}
-                    />
-                  </ScrollBox>
-                ) : (
-                  <span className="field-hint italic">none</span>
-                )}
-              </div>
+        <div className="grid gap-0">
+          {/* Connected now — live device + listen time from Icecast's admin
+              feed. Rendered independently of the durable beacon rollup below, so
+              it still shows on a fresh boot with zero recorded beacon sessions.
+              No IPs here (unlike the Dash) — device class + counts + durations
+              only. */}
+          <div className="border-b border-separator-strong p-3.5">
+            <div className="mb-2 flex items-center justify-between gap-3">
+              <span className="caption">connected now · by device</span>
+              <span className="caption text-muted">
+                {connErr
+                  ? 'live detail unavailable'
+                  : connections == null
+                    ? 'loading…'
+                    : `${fmtInt(connCount)} listening${
+                        connList.length ? ` · avg ${fmtConnected(connAvgSeconds)}` : ''
+                      }`}
+              </span>
             </div>
+            {connErr ? (
+              <span className="field-hint italic">{connErr}</span>
+            ) : connections == null ? (
+              <span className="field-hint italic">loading…</span>
+            ) : deviceGroups.length === 0 ? (
+              <span className="field-hint italic">nobody connected right now</span>
+            ) : (
+              <BarList
+                max={deviceGroups[0]?.count || 1}
+                rows={deviceGroups.map(g => ({
+                  label: g.device,
+                  count: g.count,
+                  trailing: `${g.count} · ${fmtConnected(g.avgSeconds)}${
+                    g.count > 1 ? ` · up to ${fmtConnected(g.maxSeconds)}` : ''
+                  }`,
+                }))}
+              />
+            )}
           </div>
-        )}
+
+          {/* Durable referral / geo rollup from the first-load beacon, over the
+              selected range. */}
+          {audience == null ? (
+            <div className="p-3.5">
+              <span className="field-hint italic">loading…</span>
+            </div>
+          ) : (audSessions ?? 0) === 0 ? (
+            <div className="p-3.5">
+              <span className="field-hint italic">
+                no sessions recorded yet, sources appear as listeners arrive
+              </span>
+            </div>
+          ) : (
+            <>
+              <MetricStrip>
+                <StatCell label="Sessions" value={fmtInt(audSessions)} accent
+                  sub={`distinct, last ${rangeLabel}`} />
+                <StatCell label="Sources" value={fmtInt(audReferrers.length)} />
+                <StatCell label="Countries" value={fmtInt(audCountries.length)} last />
+              </MetricStrip>
+
+              <div className="stack-mobile grid grid-cols-[1fr_1fr] gap-0">
+                <div className="border-r border-separator-soft p-3.5">
+                  <div className="caption mb-2">top referrers</div>
+                  {audReferrers.length ? (
+                    <ScrollBox>
+                      <BarList
+                        rows={audReferrers.map(r => ({ label: r.source, count: r.count }))}
+                        max={audReferrers[0]?.count || 1}
+                      />
+                    </ScrollBox>
+                  ) : (
+                    <span className="field-hint italic">none</span>
+                  )}
+                </div>
+                <div className="p-3.5">
+                  <div className="caption mb-2">top countries</div>
+                  {audCountries.length ? (
+                    <ScrollBox>
+                      <BarList
+                        rows={audCountries.map(c => ({ label: c.country, count: c.count }))}
+                        max={audCountries[0]?.count || 1}
+                      />
+                    </ScrollBox>
+                  ) : (
+                    <span className="field-hint italic">none</span>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
       </Card>
 
       {!data && !err && (

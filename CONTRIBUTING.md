@@ -3,6 +3,19 @@
 Thanks for your interest in SUB/WAVE. It's a small project — contributions,
 bug reports, and ideas are all welcome.
 
+## Community content — skills, personas, shows, stations
+
+Community-contributed **DJ skills, personas, shows, and the public station
+directory** don't live in this repo. They live in a separate content repo,
+**[`getsubwave/community`](https://github.com/getsubwave/community)**,
+which every running station fetches **live** — so a merged entry reaches every
+station without a software release. To share a skill, persona, or show, or to add
+your station to the map, open the matching no-fork issue form there. See
+[`docs/community.md`](docs/community.md) for the artifact schemas and the install
+flow.
+
+The rest of this guide is for contributing **code** to this (the main) repo.
+
 ## Getting set up
 
 See [`README.md`](README.md) for the architecture and [`DEPLOY.md`](DEPLOY.md)

@@ -15,6 +15,6 @@ export const viewport = {
   userScalable: false,
 };
 
-export default function LandingPreviewPage() {
-  return <Landing stations={getShowcaseStations()} />;
+export default async function LandingPreviewPage() {
+  return <Landing stations={await getShowcaseStations()} />;
 }

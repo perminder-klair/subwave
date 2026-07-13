@@ -1,6 +1,7 @@
 import { AnimatedLink } from '@/components/ui/animated-link';
 import CommunitySkillCard from '@/components/skills/CommunitySkillCard';
 import { fetchCommunitySkills } from '@/lib/communitySkills';
+import { skillSubmitUrl } from '@/lib/repo';
 import { pageMeta } from '@/lib/seo';
 
 export const metadata = pageMeta({
@@ -15,10 +16,10 @@ export const metadata = pageMeta({
 export const dynamic = 'force-dynamic';
 
 const REPO = 'https://github.com/perminder-klair/subwave';
-// Submission opens a GitHub Issue Form (no fork, no YAML). A workflow turns the
-// issue into a one-file pull request automatically — see
-// .github/workflows/skill-submission.yml. Mirrors the /stations add flow.
-const SUBMIT_URL = `${REPO}/issues/new?template=add-skill.yml`;
+// Submission opens a GitHub Issue Form in the community catalog repo (no fork, no
+// YAML). A workflow there turns the issue into a one-file PR; the catalog
+// rebuilds on merge. Mirrors the /stations add flow.
+const SUBMIT_URL = skillSubmitUrl();
 const DOCS_URL = `${REPO}/blob/main/docs/custom-skills.md`;
 
 export default async function CommunitySkillsIndex() {

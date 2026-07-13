@@ -42,6 +42,14 @@ const BACK_PAGES = [
     cta: 'Meet the personas',
     href: '/personas',
   },
+  {
+    no: '05',
+    tag: 'The Programme Guide',
+    title: 'Community Shows',
+    teaser: 'Produced slots operators built — put one on your grid.',
+    cta: 'Browse the shows',
+    href: '/shows',
+  },
 ] as const;
 
 export default function StationFooter({ djName }: { djName?: string }) {
@@ -51,14 +59,14 @@ export default function StationFooter({ djName }: { djName?: string }) {
 
       <div className="flex items-baseline justify-between gap-4 py-[7px] text-[10px] tracking-[0.3em] text-muted uppercase">
         <span className="font-bold text-ink">The Back Pages</span>
-        <span className="hidden sm:inline">Reader services · §§ 01–04</span>
+        <span className="hidden sm:inline">Reader services · §§ 01–05</span>
       </div>
 
       <div className="bs-rule" />
 
       <nav
         aria-label="Back pages"
-        className="grid divide-y divide-ink/20 lg:grid-cols-4 lg:divide-x lg:divide-y-0"
+        className="grid divide-y divide-ink/20 lg:grid-cols-5 lg:divide-x lg:divide-y-0"
       >
         {BACK_PAGES.map((page) => (
           <Link

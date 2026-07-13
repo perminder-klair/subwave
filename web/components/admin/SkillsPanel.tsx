@@ -16,8 +16,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
 import { notify, errorMessage } from '../../lib/notify';
 import { useAdminAuth } from '../../lib/adminAuth';
-import { RefreshCw, Plus, Users, Upload, Search, X } from 'lucide-react';
-import { Card, Btn, Pill, Eyebrow, Toggle } from './ui';
+import {
+  RefreshCw, Plus, Users, Upload, Search, X,
+  CloudSun, Newspaper, TrafficCone, Lightbulb, Cake, Disc3, Globe, Sparkles,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import { Card, Btn, Pill, Eyebrow, MetaChip, Toggle } from './ui';
 import { V3Alert } from '../ui/alert';
 import { Modal } from '../ui/modal';
 import { Input } from '../ui/input';
@@ -103,6 +107,19 @@ function cooldownLabel(ms?: number): string {
   const h = Math.round(min / 6) / 10;
   return `${h} h cooldown`;
 }
+
+// A glyph for each of the seven built-in segment kinds — fills the slate card's
+// "face" slot where personas/shows have an avatar. Custom skills (and any
+// unmapped kind) fall back to Sparkles, so this is not a maintenance trap.
+const KIND_ICONS: Record<string, LucideIcon> = {
+  weather: CloudSun,
+  news: Newspaper,
+  traffic: TrafficCone,
+  curiosity: Lightbulb,
+  'album-anniversary': Cake,
+  'library-deep-cut': Disc3,
+  'web-search': Globe,
+};
 
 interface SkillDescriptionProps {
   text?: string;
@@ -562,81 +579,133 @@ export default function SkillsPanel() {
           </div>
         </Card>
       )}
-      {visible.map(s => (
-        <Card
-          key={s.name}
-          title={s.label || s.name}
-          right={
-            <>
-              {s.custom && <Pill>custom</Pill>}
-              <Pill tone={s.enabled ? 'accent' : 'default'} dot={s.enabled}>
-                {s.enabled ? 'enabled' : 'disabled'}
-              </Pill>
-              <Toggle
-                on={s.enabled}
-                disabled={busy === s.name}
-                onClick={() => toggle(s.name, !s.enabled)}
-              />
-            </>
-          }
-        >
-          {s.ready === false && (
-            <div className="mb-3">
-              <V3Alert tone="error" title="API key not set">
-                This skill needs the <code>{s.requiresKey || 'required API key'}</code> environment
-                variable set in <code>.env</code>. Until then it stays inert and never
-                fires autonomously, even when enabled.
-                {s.keyUrl && (
-                  <>
-                    {' '}
-                    <a
-                      href={s.keyUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
-                    >
-                      Get a key here
-                    </a>.
-                  </>
+      {visible.map(s => {
+        const Icon = KIND_ICONS[s.kind || s.name] ?? Sparkles;
+        // Spine keyed to enabled state — the same signal the toggle carries.
+        const spine = s.enabled ? 'bg-[var(--accent)]' : 'bg-separator-strong';
+        const assign = assignmentLabel(s);
+        const pinned = who.startsWith('s:')
+          && shows.find(x => x.id === who.slice(2))?.segmentSkill === s.name;
+        return (
+          // The whole card opens the edit sheet; the Toggle, Run now, and the
+          // API-key link stopPropagation so they act in place. The onKeyDown
+          // guard (target === currentTarget) keeps a keyboard press on those
+          // inner controls from bubbling up and also opening the editor.
+          <article
+            key={s.name}
+            role="button"
+            tabIndex={0}
+            aria-label={`Edit ${s.label || s.name}`}
+            onClick={() => setModal({ mode: 'edit', skill: s })}
+            onKeyDown={(e) => {
+              if (e.target !== e.currentTarget) return;
+              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setModal({ mode: 'edit', skill: s }); }
+            }}
+            className={cn(
+              'group card relative cursor-pointer transition-colors hover:bg-[var(--ink-softer)]',
+              'focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-[var(--accent)]',
+            )}
+          >
+            {/* enabled/disabled spine */}
+            <span
+              aria-hidden="true"
+              className={cn('absolute inset-y-0 left-0 w-1 transition-[width] group-hover:w-1.5', spine)}
+            />
+
+            <div className="card-body flex gap-3.5">
+              {/* kind glyph — the face slot */}
+              <span
+                className={cn(
+                  'grid size-12 flex-none place-items-center border border-ink bg-[var(--ink-softer)]',
+                  s.enabled ? 'text-ink' : 'text-muted',
                 )}
-              </V3Alert>
-            </div>
-          )}
-          <div className="grid grid-cols-[1fr_auto] items-center gap-4">
-            <div>
-              <div className="line-clamp-2 text-[12px] leading-[1.6] text-muted">
-                <SkillDescription text={s.description} keyUrl={s.keyUrl} />
-              </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <Pill className="text-[8px]">{cooldownLabel(s.cooldownMs)}</Pill>
-                {assignmentLabel(s) && <Pill className="text-[8px]">{assignmentLabel(s)}</Pill>}
-                {who.startsWith('s:') && shows.find(x => x.id === who.slice(2))?.segmentSkill === s.name && (
-                  <Pill tone="accent" className="text-[8px]">pinned feature</Pill>
-                )}
-                {(s.tags || []).map(t => (
-                  <Pill key={t} className="text-[8px]">#{t}</Pill>
-                ))}
-              </div>
-            </div>
-            <div className="flex flex-col gap-2">
-              {/* Same cart-pad language as the dash DJ segment pads, slimmed
-                  to one line — LED arms on hover, blinks while running. */}
-              <button
-                type="button"
-                onClick={() => runNow(s.name)}
-                disabled={busy === s.name}
-                className={cn('seg-pad seg-pad--slim', busy === s.name && 'is-firing')}
               >
-                <span className="seg-led" aria-hidden />
-                <span className="seg-label">{busy === s.name ? 'Working…' : 'Run now'}</span>
-              </button>
-              {/* Edit opens the segment-sheet modal for both built-in and custom
-                  skills; Run now / Delete live inside the sheet. */}
-              <Btn onClick={() => setModal({ mode: 'edit', skill: s })}>Edit</Btn>
+                <Icon size={20} strokeWidth={1.75} aria-hidden />
+              </span>
+
+              {/* body */}
+              <div className="grid min-w-0 flex-1 gap-2.5">
+                <div className="flex items-start gap-3">
+                  {/* name + custom flag */}
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    <span className="truncate text-[17px] font-extrabold tracking-[-0.01em] text-ink">
+                      {s.label || s.name}
+                    </span>
+                    {s.custom && <Pill className="text-[8px]">custom</Pill>}
+                  </div>
+
+                  {/* right rail — the toggle + its state */}
+                  <div className="flex flex-none flex-col items-end gap-1 text-right">
+                    <span onClick={e => e.stopPropagation()}>
+                      <Toggle
+                        on={s.enabled}
+                        disabled={busy === s.name}
+                        onClick={() => toggle(s.name, !s.enabled)}
+                      />
+                    </span>
+                    <span className="caption">{s.enabled ? 'enabled' : 'disabled'}</span>
+                  </div>
+                </div>
+
+                {s.ready === false && (
+                  <V3Alert tone="error" title="API key not set">
+                    This skill needs the <code>{s.requiresKey || 'required API key'}</code> environment
+                    variable set in <code>.env</code>. Until then it stays inert and never
+                    fires autonomously, even when enabled.
+                    {s.keyUrl && (
+                      <>
+                        {' '}
+                        <a
+                          href={s.keyUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={e => e.stopPropagation()}
+                          className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+                        >
+                          Get a key here
+                        </a>.
+                      </>
+                    )}
+                  </V3Alert>
+                )}
+
+                {/* brief */}
+                <p className="line-clamp-2 text-[12px] leading-[1.55] text-muted italic">
+                  <SkillDescription text={s.description} keyUrl={s.keyUrl} />
+                </p>
+
+                {/* facets — cadence, reach, tags */}
+                <div className="flex flex-wrap gap-1">
+                  <MetaChip>{cooldownLabel(s.cooldownMs)}</MetaChip>
+                  {assign && <MetaChip>{assign}</MetaChip>}
+                  {pinned && <MetaChip accent>pinned feature</MetaChip>}
+                  {(s.tags || []).map(t => (
+                    <MetaChip key={t}>#{t}</MetaChip>
+                  ))}
+                </div>
+
+                {/* actions — Run now on the left, Edit affordance on the right.
+                    Same cart-pad language as the dash DJ segment pads, slimmed
+                    to one line — LED arms on hover, blinks while running. */}
+                <div className="flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); runNow(s.name); }}
+                    disabled={busy === s.name}
+                    className={cn('seg-pad seg-pad--slim', busy === s.name && 'is-firing')}
+                  >
+                    <span className="seg-led" aria-hidden />
+                    <span className="seg-label">{busy === s.name ? 'Working…' : 'Run now'}</span>
+                  </button>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-[0.16em] text-muted uppercase transition-colors group-hover:text-vermilion">
+                    Edit <span aria-hidden="true">→</span>
+                  </span>
+                </div>
+              </div>
             </div>
-          </div>
-        </Card>
-      ))}
+          </article>
+        );
+      })}
 
       {/* ── COMMUNITY CATALOG MODAL ──────────────────────────────────────── */}
       <Modal

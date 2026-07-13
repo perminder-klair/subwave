@@ -171,7 +171,9 @@ router.post('/onboarding/test-llm', requireAdmin, async (req, res) => {
     const out = await generateText({
       model: m,
       prompt: 'Reply with the single word OK.',
-      maxOutputTokens: 8,
+      // OpenAI's Responses API (the default path for createOpenAI()(model))
+      // rejects max_output_tokens below 16, so the probe budget must clear it.
+      maxOutputTokens: 32,
       // A test must always answer. Without a bound an unreachable/stalled model
       // hangs this handler forever, the wizard's fetch never resolves, and the
       // button is stuck on "Asking…" with no feedback (issue #682). maxRetries:0

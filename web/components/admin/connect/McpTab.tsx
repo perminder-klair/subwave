@@ -1,8 +1,25 @@
 'use client';
 
 import { Card, Pill } from '../ui';
-import CodeBlock from '../../CodeBlock';
+import { CodeBlock, CodeBlockCopyButton } from '../../ai-elements/code-block';
+import { Snippet, SnippetAddon, SnippetCopyButton, SnippetInput } from '../../ai-elements/snippet';
 import type { Catalog } from './types';
+import type { BundledLanguage } from 'shiki';
+
+// Shared shell/json block: shiki-highlighted with a floating copy button,
+// squared off to sit inside the newsprint Cards (same treatment as the
+// Debug panel's JsonBlock).
+function CommandBlock({ code, language }: { code: string; language: BundledLanguage }) {
+  return (
+    <CodeBlock
+      code={code}
+      language={language}
+      className="rounded-none border-separator-strong [&_code]:text-[12px] [&_pre]:p-3 [&_pre]:text-[12px]"
+    >
+      <CodeBlockCopyButton className="absolute top-1 right-1 z-10 size-6" />
+    </CodeBlock>
+  );
+}
 
 interface Props {
   catalog: Catalog;
@@ -49,26 +66,35 @@ export default function McpTab({ catalog }: Props) {
         sub="Let an AI agent (Claude Code, Claude Desktop, any MCP client) drive the station with typed tools instead of raw HTTP."
       >
         <div className="text-[12px] leading-[1.6] text-muted">
-          The station serves MCP over HTTP at <code>{mcpUrl}</code> — no clone, no local process. The endpoint
+          The station serves MCP over HTTP — no clone, no local process. The endpoint
           mirrors the REST API: read tools work for anyone, DJ-control tools need this station&rsquo;s admin
           credentials passed as an <code>Authorization</code> header. Prefer the HTTP setup below; the stdio
           server is only for local-only use.
         </div>
+        <Snippet
+          code={mcpUrl}
+          className="mt-2.5 h-8 rounded-none border-separator-strong bg-bg"
+        >
+          <SnippetInput className="text-[12px]" aria-label="MCP endpoint URL" />
+          <SnippetAddon align="inline-end">
+            <SnippetCopyButton />
+          </SnippetAddon>
+        </Snippet>
       </Card>
 
       <Card title="Claude Code (HTTP)" sub="Recommended — connect with a URL">
-        <CodeBlock lang="sh">{httpCmd}</CodeBlock>
+        <CommandBlock code={httpCmd} language="bash" />
       </Card>
 
       <Card title="Claude Desktop (HTTP)" sub="Add to claude_desktop_config.json">
-        <CodeBlock lang="json">{httpJson}</CodeBlock>
+        <CommandBlock code={httpJson} language="json" />
       </Card>
 
       <Card title="Local stdio server" sub="Alternative — runs from a repo clone, no HTTP port exposed">
         <div className="mb-2 text-[11px] leading-[1.6] text-muted">
           Runs the standalone server via <code>tsx</code> straight from the clone (no build step).
         </div>
-        <CodeBlock lang="sh">{stdioCmd}</CodeBlock>
+        <CommandBlock code={stdioCmd} language="bash" />
       </Card>
 
       <Card title={`Tools (${catalog.mcpTools.length})`}>
