@@ -38,7 +38,7 @@ import { ScrobbleSection } from './settings/ScrobbleSection';
 
 const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
-  { id: 'theme',    label: 'Theme', hint: 'station-wide palette', icon: Palette },
+  { id: 'theme',    label: 'Skin & Themes', hint: 'player skin · palette', icon: Palette },
   { id: 'festivals', label: 'Festivals', hint: 'calendar · mood', icon: CalendarDays },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine', icon: Mic },

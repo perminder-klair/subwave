@@ -11,6 +11,8 @@ import { Label } from '../../ui/label';
 import { Card, Btn, Pill, Seg } from '../ui';
 import { AiFill } from '../AiFill';
 import { cn } from '../../../lib/cn';
+import { SkinGallery } from './SkinGallery';
+import { DEFAULT_SKIN_ID, SKINS } from '../../skins';
 import {
   SectionHeader,
   type SettingsData, type SaveSettings,
@@ -178,6 +180,15 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
   const activeId = data.values?.theme?.active;
   const PUBLIC_API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
 
+  // Skin = the player's full-screen layout (ui.skin); distinct from the theme,
+  // which is the palette. Both live in this section now. Save through the same
+  // settings flow — the player picks it up on its next /state poll.
+  const activeSkinId = SKINS.some(s => s.id === data.values?.ui?.skin)
+    ? (data.values?.ui?.skin as string)
+    : DEFAULT_SKIN_ID;
+  const activeSkinName = SKINS.find(s => s.id === activeSkinId)?.name ?? 'Classic';
+  const chooseSkin = (id: string) => { if (!busy) saveSettings({ ui: { skin: id } }); };
+
   // Theme list is public — fetch through the unauthenticated /themes endpoint
   // so a signed-out admin still sees swatches while signing in.
   useEffect(() => {
@@ -242,18 +253,27 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
   return (
     <>
       <SectionHeader
-        eyebrow="theme"
-        title="Station-wide visual theme."
-        sub={<>Every listener and the admin UI render with this palette. Built-ins ship with the controller; drop custom JSONs in <code>state/themes/</code> and hit <em>Refresh</em>.</>}
+        eyebrow="skin & themes"
+        title="The player’s layout and the station-wide palette."
+        sub={<>The <strong>skin</strong> is the full-screen layout every listener sees; the <strong>theme</strong> is the palette it — and the admin UI — render in. Built-in themes ship with the controller; drop custom JSONs in <code>state/themes/</code> and hit <em>Refresh</em>.</>}
         metrics={[
-          {
-            n: themes ? String(themes.length) : '—',
-            l: 'themes',
-            accent: true,
-          },
+          { n: activeSkinName, l: 'skin', accent: true },
+          { n: themes ? String(themes.length) : '—', l: 'themes' },
         ]}
         manualHref="/manual/themes"
       />
+
+      <Card title="Player skin" sub="the face every listener sees">
+        <div className="grid gap-3">
+          <SkinGallery activeSkinId={activeSkinId} busy={busy} onChoose={chooseSkin} />
+          <div className="field-hint">
+            Each skin is a different full-screen layout built on the same live
+            data. This sets the station default; a listener can still pick a
+            different skin for their own browser from the player’s palette menu.
+            Applies live on the next poll, no restart.
+          </div>
+        </div>
+      </Card>
 
       <Card title="Create theme" sub="state/themes/*.json">
         <div className="grid gap-3">

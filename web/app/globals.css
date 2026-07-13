@@ -490,6 +490,16 @@ body::after {
     animation: v3-connecting-pulse 1s ease-in-out infinite;
 }
 
+/* Skin-gallery preview motion (admin → Settings → Skin & Themes). Only the
+   @keyframes live here; the skin cards drive them through Tailwind arbitrary
+   `animate-[…]` utilities and gate play-state on `group-hover` / active, so a
+   card idles as a still contact-sheet print until it is the live station skin
+   or under the cursor. */
+@keyframes skin-eq    { 0%, 100% { transform: scaleY(0.28); } 50% { transform: scaleY(1); } }
+@keyframes skin-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@keyframes skin-reel  { to { transform: rotate(360deg); } }
+@keyframes skin-scan  { 0% { transform: translateY(-130%); } 100% { transform: translateY(360%); } }
+
 /* Sonner toast styling — sharp ink-bordered cream cards. */
 .v3-toast {
     background: var(--bg);

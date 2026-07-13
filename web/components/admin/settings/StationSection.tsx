@@ -10,7 +10,6 @@ import {
 } from '../../ui/select';
 import { Card, Btn, Seg } from '../ui';
 import { LocationPicker, type GeocodeResult } from '../../LocationPicker';
-import { DEFAULT_SKIN_ID, SKINS } from '../../skins';
 import {
   SectionHeader, SaveBar,
   type SectionProps,
@@ -260,29 +259,6 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
             reacting to what the DJ is doing — on-air, picking, or idle — and tap it
             for a reaction. When off, the line falls back to the classic ♪/◇ marker.
             Applies live, no restart.
-          </div>
-        </div>
-      </Card>
-
-      <Card title="Player skin" sub="the face every listener sees">
-        <div className="field">
-          <Label>Station skin</Label>
-          <div className="flex items-center gap-2">
-            <Seg
-              options={SKINS.map(s => ({ id: s.id, label: s.name }))}
-              value={
-                SKINS.some(s => s.id === data?.values?.ui?.skin)
-                  ? (data?.values?.ui?.skin as string)
-                  : DEFAULT_SKIN_ID
-              }
-              onChange={id => { if (!busy) saveSettings({ ui: { skin: id } }); }}
-            />
-          </div>
-          <div className="field-hint">
-            The face every listener sees — each skin is a different full-screen
-            layout built on the same live data. Listeners can still pick a
-            different skin for their own browser from the player&apos;s palette
-            menu. Applies live on the next poll, no restart.
           </div>
         </div>
       </Card>
