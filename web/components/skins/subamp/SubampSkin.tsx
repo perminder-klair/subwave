@@ -288,7 +288,8 @@ export default function SubampSkin(_props: SkinProps) {
           className="flex min-h-0 flex-1 flex-col lg:block lg:flex-none"
         >
           <ScrollArea className="min-h-0 flex-1 lg:max-h-[200px]">
-            <div className="flex flex-col gap-1.5 px-4 py-2.5">
+            {/* pr-5 leaves a gutter so the times clear the overlaid scrollbar */}
+            <div className="flex flex-col gap-1.5 py-2.5 pr-5 pl-4">
               {history.map((h, i) => (
                 <div key={`${h.t ?? i}-${h.title ?? i}`} className="flex gap-2.5 text-[11px] tracking-[0.06em] text-muted uppercase">
                   <span>{i + 1}.</span>
@@ -298,7 +299,7 @@ export default function SubampSkin(_props: SkinProps) {
                   <span>{turnClock(entryTime(h), timezone, stationLocale)}</span>
                 </div>
               ))}
-              <div className="-mx-2 flex gap-2.5 bg-[var(--field)] px-2 py-0.5 text-[11px] font-bold tracking-[0.06em] text-[var(--accent)] uppercase">
+              <div className="-ml-4 flex gap-2.5 bg-[var(--field)] py-0.5 pl-4 text-[11px] font-bold tracking-[0.06em] text-[var(--accent)] uppercase">
                 <span>{history.length + 1}.</span>
                 <span className="min-w-0 flex-1 truncate">
                   ▶ {offline ? '— off air —' : (nowPlaying?.title ?? 'scanning…')}

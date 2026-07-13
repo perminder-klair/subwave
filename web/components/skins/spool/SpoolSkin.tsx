@@ -119,18 +119,19 @@ export default function SpoolSkin(_props: SkinProps) {
 
   return (
     <div className="absolute inset-0 flex flex-col overflow-y-auto font-sans text-ink">
-      {/* masthead */}
-      <div className="flex flex-none flex-wrap items-center justify-between gap-x-6 gap-y-1 border-b border-soft-border px-5 py-3 sm:px-8">
+      {/* masthead — one row: station line truncates, context is desktop-only,
+          theme icon pinned top-right (never wraps below) */}
+      <div className="flex flex-none items-center justify-between gap-x-6 border-b border-soft-border px-5 py-3 sm:px-8">
         <div className="flex min-w-0 items-center gap-3">
           <span className={cn('h-2.5 w-2.5 flex-none rounded-full', offline ? 'bg-[var(--muted)]' : 'bg-[var(--accent)]')} />
-          <span className="text-[15px] font-extrabold tracking-[0.12em]">{stationName.toUpperCase()}</span>
+          <span className="flex-none text-[15px] font-extrabold tracking-[0.12em]">{stationName.toUpperCase()}</span>
           {showName && (
             <span className="hidden truncate font-mono text-[11px] tracking-[0.18em] uppercase sm:inline">▸ {showName}</span>
           )}
           <span className="truncate font-mono text-[11px] tracking-[0.18em] text-[var(--accent)] uppercase">with {djName}</span>
         </div>
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="truncate font-mono text-[11px] tracking-[0.16em] text-muted uppercase">
+        <div className="flex shrink-0 items-center gap-3">
+          <span className="hidden max-w-[40vw] truncate font-mono text-[11px] tracking-[0.16em] text-muted uppercase sm:inline">
             {contextLine(context)}
           </span>
           <ThemeSwitcher />
