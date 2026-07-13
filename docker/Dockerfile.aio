@@ -61,6 +61,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 #  - sudo: lets the supervisor drop privileges to icecast2 / liquidsoap
 #  - openssl: first-boot icecast secret generation
 #  - curl/ca-certificates: liquidsoap's HTTPS Subsonic fetch + health probes
+#  - iputils-ping: `ping` for in-container network debugging (self-host request)
 #  - espeak-ng/libsndfile1: Kokoro phonemisation + audio I/O
 #  - ffmpeg: jingle/SFX transcode on import (audio/audio-import.ts)
 #  - python3/python3-venv: the Kokoro worker venv
@@ -69,6 +70,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update -qq \
  && apt-get install -y --no-install-recommends \
         icecast2 sudo openssl curl ca-certificates \
+        iputils-ping \
         espeak-ng libsndfile1 ffmpeg \
         python3 python3-venv \
         wget tar xz-utils gnupg \
