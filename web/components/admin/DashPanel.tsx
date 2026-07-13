@@ -9,6 +9,7 @@ import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { eventTurnSummary, turnClass, turnKey, turnText } from '../../lib/sessionFeed';
 import { fmtClock } from '../../lib/format';
+import { clientLabel, fmtConnected, type ListenerConnection } from '../../lib/clientLabel';
 import type { SessionTurn } from '../../lib/types';
 import type {
   NowPlayingTrack,
@@ -128,16 +129,6 @@ interface ActResponse {
   error?: string;
 }
 
-interface ListenerConnection {
-  ip: string;
-  mount: string;
-  userAgent: string;
-  connectedSeconds: number;
-  // Raw sockets folded into this row. Safari opens 2 per client (counts as one
-  // listener); >1 surfaces as a ×N badge. Absent/1 for normal single-socket clients.
-  connections?: number;
-}
-
 interface ConnectionsState {
   count: number;
   connections: ListenerConnection[];
@@ -167,17 +158,6 @@ interface RequestEntry {
   message?: string | null;
 }
 
-// connectedSeconds → short human string. Listeners rarely sit for days, so
-// hours is the coarsest unit we bother with.
-function fmtConnected(s: number): string {
-  if (!Number.isFinite(s) || s < 0) return '—';
-  if (s < 60) return `${Math.round(s)}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
-}
-
 // Hide the host portion of an IP so a glance at the screen doesn't expose a
 // listener's full address. IPv4 drops the last octet, IPv6 keeps the first two
 // groups (the routing prefix) and masks the rest. The raw IP is still in the
@@ -191,46 +171,6 @@ function maskIp(ip: string): string {
     return groups.length > 2 ? `${groups[0]}:${groups[1]}:×` : ip;
   }
   return ip;
-}
-
-// Collapse a raw user-agent into a short "Device · App" label. Best-effort and
-// deliberately shallow — the full UA stays in the title attribute. Order
-// matters: check the specific players (Sonos, VLC) before the generic browser
-// families, since some embed "Mozilla" boilerplate.
-function clientLabel(ua: string): string {
-  if (!ua) return 'unknown';
-  const u = ua.toLowerCase();
-  if (u.includes('sonos')) return 'Sonos';
-  if (u.includes('vlc')) return 'VLC';
-  if (u.includes('itunes') || u.includes('applecoremedia')) return 'iTunes / Music';
-  if (u.includes('winamp')) return 'Winamp';
-  if (u.includes('foobar')) return 'foobar2000';
-  const device = u.includes('iphone')
-    ? 'iPhone'
-    : u.includes('ipad')
-      ? 'iPad'
-      : u.includes('android')
-        ? 'Android'
-        : u.includes('macintosh') || u.includes('mac os')
-          ? 'Mac'
-          : u.includes('windows')
-            ? 'Windows'
-            : u.includes('linux')
-              ? 'Linux'
-              : '';
-  const browser = u.includes('firefox')
-    ? 'Firefox'
-    : u.includes('edg')
-      ? 'Edge'
-      : u.includes('chrome') || u.includes('chromium')
-        ? 'Chrome'
-        : u.includes('safari')
-          ? 'Safari'
-          : '';
-  const label = [device, browser].filter(Boolean).join(' · ');
-  // Nothing recognised — show the first token of the raw UA rather than a
-  // useless "unknown" (helps with hardware radios / odd clients).
-  return label || ua.split(/[\s/]/)[0] || 'unknown';
 }
 
 type SortKey = 'ip' | 'mount' | 'connectedSeconds' | 'client';
