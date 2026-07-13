@@ -3,7 +3,7 @@ title: Put your station on the map
 date: 2026-06-04
 category: Feature
 author: The SUB/WAVE desk
-excerpt: The new /stations page is a live directory of SUB/WAVE stations around the world. Add yours with one pull request and it shows what it is playing the moment it merges.
+excerpt: The new /stations page is a live directory of SUB/WAVE stations around the world. Add yours with a short form and it shows what it is playing the moment it merges.
 ---
 
 SUB/WAVE is self-hosted, so anyone can run their own station. Until now there was no way to find out who else did. The new /stations page is a directory of stations around the world, with a map and a grid that shows who is on the air right now.
@@ -20,13 +20,7 @@ Each card checks its station's public now-playing feed straight from your browse
 
 ## How to use it
 
-Adding your station is one file and one pull request. On the page, click "Add your station". It opens a pre-filled GitHub editor for a new file under:
-
-```
-web/content/stations/<slug>.json
-```
-
-Fill in the name, public URL, location, latitude and longitude, genre, and a one-line description, then open the PR. Every field is documented in web/content/stations/README.md. Once it merges, your card appears on the map and starts showing its live now-playing, as long as your controller is reachable. Cross-origin requests are already open, so there is nothing to configure on your end.
+Adding your station takes a minute and needs no fork. On the page, click "Add your station". It opens a short GitHub form where you fill in the name, public URL, location, latitude and longitude, genre, and a one-line description. Submit it and a bot opens the pull request for you in the community catalog, and a maintainer reviews and merges it. Your card then appears on the map and starts showing its live now-playing, as long as your controller is reachable. Cross-origin requests are already open, so there is nothing to configure on your end.
 
 ## Why it helps
 

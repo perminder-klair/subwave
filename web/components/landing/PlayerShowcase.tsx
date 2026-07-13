@@ -17,7 +17,7 @@ import type { ShowcaseStation } from '@/lib/stations';
 // drawers/dialogs portal into the frame too.
 //
 // The frame carries a browser-tab strip fed from the stations directory
-// (web/content/stations) — the demo isn't a screenshot of one station, it's a
+// (the community catalog, via lib/stations) — the demo isn't a screenshot of one station, it's a
 // live tuner across the network. Picking a tab swaps the StationOrigin the
 // player tree reads its API + stream URLs from and remounts PlayerApp (key)
 // so feed state, the <audio> element, and the tune-in gate all reset cleanly

@@ -15,9 +15,9 @@ export const metadata = pageMeta({
 // read it live from the local controller at request time rather than at build.
 export const dynamic = 'force-dynamic';
 
-// Submission opens a GitHub Issue Form (no fork, no YAML). A workflow turns the
-// issue into a one-file pull request automatically — see
-// .github/workflows/persona-submission.yml. Mirrors the /skills share flow.
+// Submission opens a GitHub Issue Form in the community catalog repo (no fork, no
+// YAML). A workflow there turns the issue into a one-file PR. Mirrors the /skills
+// share flow.
 const SUBMIT_URL = personaSubmitUrl();
 
 export default async function CommunityPersonasIndex() {
