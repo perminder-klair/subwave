@@ -79,8 +79,8 @@ export default function DriftSkin(_props: SkinProps) {
   const washCRef = useRef<HTMLDivElement | null>(null);
   const c1 = colors.vibrant ?? 'var(--accent)';
   const c2 = colors.average ?? 'var(--muted)';
-  useDynamicStyle(washARef, { '--sw-drift-c': `color-mix(in oklab, ${c1} 22%, transparent)` });
-  useDynamicStyle(washBRef, { '--sw-drift-c': `color-mix(in oklab, ${c2} 26%, transparent)` });
+  useDynamicStyle(washARef, { '--sw-drift-c': `color-mix(in oklab, ${c1} 29%, transparent)` });
+  useDynamicStyle(washBRef, { '--sw-drift-c': `color-mix(in oklab, ${c2} 34%, transparent)` });
   useDynamicStyle(washCRef, { '--sw-drift-c': 'color-mix(in oklab, var(--accent) 10%, transparent)' });
 
   // Progress hairline fill.
@@ -170,11 +170,14 @@ export default function DriftSkin(_props: SkinProps) {
           className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">+</button>
       </div>
 
-      {/* the ten percent of type */}
+      {/* the ten percent of type. pointer-events-none so this full-screen
+          centering layer doesn't sit over the corner controls (ThemeSwitcher,
+          volume) and eat their clicks — the one interactive child (the title,
+          which tunes in) re-enables events on itself. */}
       {!showTuneIn && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 text-center">
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 text-center">
           {coverSrc && !offline && (
-            <div className="h-[88px] w-[88px] border border-soft-border">
+            <div className="h-[128px] w-[128px] border border-soft-border sm:h-[152px] sm:w-[152px]">
               <img src={coverSrc} alt="" className="h-full w-full object-cover" />
             </div>
           )}
@@ -185,7 +188,7 @@ export default function DriftSkin(_props: SkinProps) {
             <button
               type="button"
               onClick={handleTune}
-              className="v3-focus max-w-full cursor-pointer border-0 bg-transparent p-0 font-display text-[clamp(26px,5vw,46px)] leading-[1.1] font-semibold text-ink"
+              className="v3-focus pointer-events-auto max-w-full cursor-pointer border-0 bg-transparent p-0 font-display text-[clamp(26px,5vw,46px)] leading-[1.1] font-semibold text-ink"
             >
               {nowPlaying?.title ?? 'somewhere on the dial'}
             </button>
