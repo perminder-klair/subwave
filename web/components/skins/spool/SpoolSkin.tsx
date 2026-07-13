@@ -119,25 +119,26 @@ export default function SpoolSkin(_props: SkinProps) {
 
   return (
     <div className="absolute inset-0 flex flex-col overflow-y-auto font-sans text-ink">
-      {/* masthead */}
-      <div className="flex flex-none flex-wrap items-center justify-between gap-x-6 gap-y-1 border-b border-soft-border px-5 py-3 sm:px-8">
+      {/* masthead — one row: station line truncates, context is desktop-only,
+          theme icon pinned top-right (never wraps below) */}
+      <div className="flex flex-none items-center justify-between gap-x-6 border-b border-soft-border px-5 py-3 sm:px-8">
         <div className="flex min-w-0 items-center gap-3">
           <span className={cn('h-2.5 w-2.5 flex-none rounded-full', offline ? 'bg-[var(--muted)]' : 'bg-[var(--accent)]')} />
-          <span className="text-[15px] font-extrabold tracking-[0.12em]">{stationName.toUpperCase()}</span>
+          <span className="flex-none text-[15px] font-extrabold tracking-[0.12em]">{stationName.toUpperCase()}</span>
           {showName && (
             <span className="hidden truncate font-mono text-[11px] tracking-[0.18em] uppercase sm:inline">▸ {showName}</span>
           )}
           <span className="truncate font-mono text-[11px] tracking-[0.18em] text-[var(--accent)] uppercase">with {djName}</span>
         </div>
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="truncate font-mono text-[11px] tracking-[0.16em] text-muted uppercase">
+        <div className="flex shrink-0 items-center gap-3">
+          <span className="hidden max-w-[40vw] truncate font-mono text-[11px] tracking-[0.16em] text-muted uppercase sm:inline">
             {contextLine(context)}
           </span>
           <ThemeSwitcher />
         </div>
       </div>
 
-      <div className="mx-auto grid w-full max-w-[1280px] flex-1 grid-cols-1 gap-8 p-5 sm:p-9 lg:grid-cols-[240px_1fr_240px]">
+      <div className="grid w-full flex-1 grid-cols-1 gap-8 p-5 sm:p-9 lg:grid-cols-[280px_1fr_280px]">
         {/* recently rewound */}
         <div className="order-3 flex flex-col gap-3 lg:order-1">
           <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">Recently rewound</div>
@@ -157,7 +158,7 @@ export default function SpoolSkin(_props: SkinProps) {
         </div>
 
         {/* the deck */}
-        <div className="order-1 flex min-w-0 flex-col gap-4 lg:order-2">
+        <div className="order-1 flex min-w-0 flex-col gap-4 lg:order-2 lg:justify-center">
           <div className="flex flex-col gap-4 border border-ink bg-[var(--field)] p-4 sm:p-5">
             {/* cassette label */}
             <div className="border border-ink bg-bg">
@@ -253,7 +254,7 @@ export default function SpoolSkin(_props: SkinProps) {
               <button type="button" aria-label="Volume up" onClick={() => adjustVolume(0.05)}
                 className="v3-focus cursor-pointer border-0 bg-transparent px-1 font-mono text-[13px] text-muted hover:text-ink">+</button>
             </div>
-            <div className="ml-auto font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
+            <div className="ml-auto font-mono text-[10px] tracking-[0.14em] whitespace-nowrap text-muted uppercase">
               {offline
                 ? 'off air'
                 : [

@@ -20,6 +20,7 @@ import ThemeSwitcher from '@/components/ThemeSwitcher';
 import { cn } from '@/lib/cn';
 import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import { useStationClient } from '@/lib/stationClient';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   boothLines,
   contextLine,
@@ -63,7 +64,7 @@ export default function TtySkin(_props: SkinProps) {
   const showName = activeShow?.name;
   const meta = trackMeta(nowPlaying);
   const ratio = progressRatio(elapsed, nowPlaying?.duration);
-  const booth = boothLines(session.messages, 5);
+  const booth = boothLines(session.messages, 24);
   const upNext = state.upcoming?.[0];
 
   const adjustVolume = useVolumeNudge();
@@ -112,25 +113,26 @@ export default function TtySkin(_props: SkinProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showTuneIn, offline]);
 
-  const history = (state.history ?? []).slice(0, logDeep ? 10 : 3);
+  const history = (state.history ?? []).slice(0, logDeep ? 40 : 12);
   const filled = ratio == null ? 0 : Math.round(ratio * PROGRESS_CELLS);
   const volFilled = Math.round(volume * VOL_CELLS);
   const coverId = nowPlaying?.subsonic_id;
 
   return (
-    <div className="absolute inset-0 overflow-y-auto p-4 font-mono text-[13px] leading-relaxed text-ink sm:p-7">
-      <div className="mx-auto flex min-h-full max-w-[1200px] flex-col gap-3.5">
+    <div className="absolute inset-0 overflow-hidden p-4 font-mono text-[13px] leading-relaxed text-ink sm:p-7">
+      <div className="flex h-full w-full flex-col gap-3.5">
 
-        {/* header bar */}
-        <div className="flex flex-none flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border border-soft-border px-4 py-2.5">
+        {/* header bar — station line truncates; context is desktop-only so
+            mobile stays one clean row with the theme icon pinned right */}
+        <div className="flex flex-none items-center justify-between gap-x-4 border border-soft-border px-4 py-2.5">
           <div className="min-w-0 truncate text-[13px] tracking-[0.1em]">
             <span className={cn(offline ? 'text-muted' : 'text-[var(--accent)]')}>●</span>{' '}
             <span className="font-bold">{stationName.toUpperCase()}</span>
             {showName ? <> ▸ {showName.toUpperCase()}</> : null}
             <span className="text-[var(--accent)]"> — WITH {djName.toUpperCase()}</span>
           </div>
-          <div className="flex min-w-0 items-center gap-3">
-            <span className="truncate text-[12px] tracking-[0.1em] text-muted uppercase">
+          <div className="flex shrink-0 items-center gap-3">
+            <span className="hidden max-w-[40vw] truncate text-[12px] tracking-[0.1em] text-muted uppercase sm:inline">
               {[contextLine(context), clock ? turnClock(clock.getTime(), timezone, stationLocale) : '']
                 .filter(Boolean).join(' · ')}
             </span>
@@ -138,11 +140,12 @@ export default function TtySkin(_props: SkinProps) {
           </div>
         </div>
 
-        {/* now playing + booth */}
-        <div className="grid flex-1 grid-cols-1 gap-3.5 lg:grid-cols-[1fr_380px]">
-          <section className="flex min-w-0 flex-col gap-4 border border-soft-border px-5 py-5 sm:px-7">
+        {/* now playing + booth — fills most of the middle; stacked on mobile
+            (now-playing auto, booth fills + scrolls), side-by-side on lg */}
+        <div className="grid min-h-0 flex-[2] grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-3.5 lg:grid-cols-[1fr_380px] lg:grid-rows-1">
+          <section className="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto border border-soft-border px-5 py-5 sm:px-7">
             <Rule>NOW PLAYING</Rule>
-            <div className="flex min-w-0 flex-col-reverse items-start gap-6 sm:flex-row">
+            <div className="flex min-w-0 flex-row items-start gap-4 sm:gap-6">
               <div className="flex min-w-0 flex-1 flex-col gap-3">
                 <div className="text-[clamp(22px,4vw,46px)] leading-[1.05] font-extrabold tracking-[0.06em] uppercase">
                   {offline ? <span className="text-muted">— OFF AIR —</span> : (nowPlaying?.title ?? 'SCANNING…')}
@@ -195,31 +198,36 @@ export default function TtySkin(_props: SkinProps) {
             </div>
           </section>
 
-          <section className="flex min-w-0 flex-col gap-3 border border-soft-border px-5 py-4">
+          <section className="flex min-h-0 min-w-0 flex-col gap-3 border border-soft-border px-5 py-4">
             <Rule>BOOTH · tail -f</Rule>
-            {booth.length === 0 && (
-              <div className="text-[12px] text-muted">▸ waiting for the booth…</div>
-            )}
-            {booth.map((line, i) => (
-              <div key={`${line.t ?? i}-${i}`} className="text-[12px] leading-relaxed break-words">
-                <span className="text-muted">{turnClock(line.t, timezone, stationLocale)}</span>{' '}
-                {line.kind === 'voice' ? (
-                  <>
-                    <span className="font-bold text-[var(--accent)]">{djName.toUpperCase()} ●</span>{' '}
-                    <span>“{line.text}”</span>
-                  </>
-                ) : (
-                  <span className="text-muted">{line.kind === 'dj' ? 'dj' : 'sys'} ▸ {line.text}</span>
+            <ScrollArea className="-mx-5 min-h-0 flex-1">
+              <div className="flex flex-col gap-3 px-5">
+                {booth.length === 0 && (
+                  <div className="text-[12px] text-muted">▸ waiting for the booth…</div>
                 )}
+                {booth.map((line, i) => (
+                  <div key={`${line.t ?? i}-${i}`} className="text-[12px] leading-relaxed break-words">
+                    <span className="text-muted">{turnClock(line.t, timezone, stationLocale)}</span>{' '}
+                    {line.kind === 'voice' ? (
+                      <>
+                        <span className="font-bold text-[var(--accent)]">{djName.toUpperCase()} ●</span>{' '}
+                        <span>“{line.text}”</span>
+                      </>
+                    ) : (
+                      <span className="text-muted">{line.kind === 'dj' ? 'dj' : 'sys'} ▸ {line.text}</span>
+                    )}
+                  </div>
+                ))}
               </div>
-            ))}
+            </ScrollArea>
             <div className={cn('text-[12px] text-muted', styles.cursor)}>▊</div>
           </section>
         </div>
 
-        {/* up next + last */}
-        <div className="grid flex-none grid-cols-1 gap-3.5 sm:grid-cols-2">
-          <section className="flex min-w-0 flex-col gap-2.5 border border-soft-border px-5 py-4">
+        {/* up next + last — last fills + scrolls; stacked on mobile,
+            side-by-side from sm */}
+        <div className="grid min-h-0 flex-[1] grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-3.5 sm:grid-cols-2 sm:grid-rows-1">
+          <section className="flex min-h-0 min-w-0 flex-col gap-2.5 border border-soft-border px-5 py-4">
             <Rule>UP NEXT</Rule>
             {upNext?.title ? (
               <>
@@ -235,16 +243,20 @@ export default function TtySkin(_props: SkinProps) {
               <div className="text-[12px] text-muted">queue empty — the DJ decides at the wire</div>
             )}
           </section>
-          <section className="flex min-w-0 flex-col gap-2 border border-soft-border px-5 py-4">
+          <section className="flex min-h-0 min-w-0 flex-col gap-2 border border-soft-border px-5 py-4">
             <Rule>LAST</Rule>
-            {history.length === 0 && <div className="text-[12px] text-muted">nothing yet this session</div>}
-            {history.map((h, i) => (
-              <div key={`${h.t ?? i}-${h.title ?? i}`} className="truncate text-[12px] uppercase">
-                <span className="text-muted">{turnClock(entryTime(h), timezone, stationLocale)}</span>{' '}
-                {h.title ?? '?'}
-                {h.artist && <span className="text-muted"> — {h.artist}</span>}
+            <ScrollArea className="-mx-5 min-h-0 flex-1">
+              <div className="flex flex-col gap-2 px-5">
+                {history.length === 0 && <div className="text-[12px] text-muted">nothing yet this session</div>}
+                {history.map((h, i) => (
+                  <div key={`${h.t ?? i}-${h.title ?? i}`} className="truncate text-[12px] uppercase">
+                    <span className="text-muted">{turnClock(entryTime(h), timezone, stationLocale)}</span>{' '}
+                    {h.title ?? '?'}
+                    {h.artist && <span className="text-muted"> — {h.artist}</span>}
+                  </div>
+                ))}
               </div>
-            ))}
+            </ScrollArea>
           </section>
         </div>
 
@@ -295,17 +307,6 @@ export default function TtySkin(_props: SkinProps) {
             >
               {offline ? 'OFF AIR' : tunedIn ? (status === 'playing' ? 'TUNED ●' : 'TUNING…') : '▶ TUNE IN'}
             </button>
-            <span className="inline-flex items-baseline gap-1.5">
-              <button type="button" aria-label="Volume down" onClick={() => adjustVolume(-0.125)}
-                className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">−</button>
-              <span aria-label={`Volume ${Math.round(volume * 100)}%`}>
-                VOL <span className="text-ink">{'█'.repeat(volFilled)}</span>
-                <span className="text-muted">{'░'.repeat(VOL_CELLS - volFilled)}</span>{' '}
-                {Math.round(volume * 100)}
-              </span>
-              <button type="button" aria-label="Volume up" onClick={() => adjustVolume(0.125)}
-                className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">+</button>
-            </span>
             <button
               type="button"
               onClick={toggleMute}
@@ -318,15 +319,15 @@ export default function TtySkin(_props: SkinProps) {
               {muted ? 'MUTED' : 'MUTE'}
             </button>
             {signal.latencyMs != null && tunedIn && (
-              <span className="text-muted uppercase">SIG {signal.latencyMs} MS · {signal.quality}</span>
+              <span className="hidden text-muted uppercase sm:inline">SIG {signal.latencyMs} MS · {signal.quality}</span>
             )}
             {listenerCount != null && (
-              <span className="text-muted uppercase">{listenerCount} LISTENING</span>
+              <span className="hidden text-muted uppercase sm:inline">{listenerCount} LISTENING</span>
             )}
             <button
               type="button"
               onClick={() => setReqOpen(true)}
-              className="v3-focus ml-auto cursor-pointer border-0 bg-transparent p-0 font-bold text-[var(--accent)] uppercase"
+              className="v3-focus cursor-pointer border-0 bg-transparent p-0 font-bold text-[var(--accent)] uppercase"
             >
               :req SEND A REQUEST
             </button>
@@ -337,6 +338,18 @@ export default function TtySkin(_props: SkinProps) {
             >
               :log {logDeep ? 'SHORT LOG' : 'FULL LOG'}
             </button>
+            {/* volume floats to the right end of the status line */}
+            <span className="ml-auto inline-flex items-baseline gap-1.5">
+              <button type="button" aria-label="Volume down" onClick={() => adjustVolume(-0.125)}
+                className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">−</button>
+              <span aria-label={`Volume ${Math.round(volume * 100)}%`}>
+                VOL <span className="text-ink">{'█'.repeat(volFilled)}</span>
+                <span className="text-muted">{'░'.repeat(VOL_CELLS - volFilled)}</span>{' '}
+                {Math.round(volume * 100)}
+              </span>
+              <button type="button" aria-label="Volume up" onClick={() => adjustVolume(0.125)}
+                className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">+</button>
+            </span>
           </div>
         )}
       </div>

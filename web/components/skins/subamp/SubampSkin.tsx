@@ -11,6 +11,7 @@
 import { useRef, useState, type ReactNode } from 'react';
 import styles from './Subamp.module.css';
 import Analyzer from './Analyzer';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   usePlayerActions,
   usePlayerAudio,
@@ -46,13 +47,13 @@ function Grip() {
 
 /** A Subamp window: dotted-grip titlebar, faux buttons, roll-up on
  *  double-click (or the ▁ button). */
-function Window({ title, children }: { title: ReactNode; children: ReactNode }) {
+function Window({ title, children, className }: { title: ReactNode; children: ReactNode; className?: string }) {
   const [open, setOpen] = useState(true);
   return (
-    <div className="border border-soft-border bg-bg">
+    <div className={cn('border border-soft-border bg-bg', className)}>
       <div
         onDoubleClick={() => setOpen(o => !o)}
-        className="flex items-center gap-2.5 border-b border-soft-border bg-[var(--field)] px-2.5 py-1 select-none"
+        className="flex shrink-0 items-center gap-2.5 border-b border-soft-border bg-[var(--field)] px-2.5 py-1 select-none"
       >
         <Grip />
         <span className="truncate text-[9px] font-bold tracking-[0.24em] uppercase">{title}</span>
@@ -91,9 +92,9 @@ export default function SubampSkin(_props: SkinProps) {
     activeShow?.persona?.name || (typeof dj?.name === 'string' ? dj.name : '') || 'the DJ';
   const showName = activeShow?.name || context?.time?.show || '';
   const meta = trackMeta(nowPlaying);
-  const booth = boothLines(session.messages, 3);
+  const booth = boothLines(session.messages, 24);
   const upNext = state.upcoming?.[0];
-  const history = (state.history ?? []).slice(0, 3).reverse(); // oldest first
+  const history = (state.history ?? []).slice(0, 24).reverse(); // oldest first
   const playing = tunedIn && status === 'playing' && !offline;
 
   const adjustVolume = useVolumeNudge();
@@ -130,7 +131,7 @@ export default function SubampSkin(_props: SkinProps) {
   const digits = showTuneIn || offline ? '--:--' : fmtTime(elapsed);
 
   return (
-    <div className="absolute inset-0 overflow-y-auto font-mono text-ink">
+    <div className="absolute inset-0 overflow-hidden font-mono text-ink lg:overflow-y-auto">
       <div
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_70%_at_50%_42%,color-mix(in_oklab,var(--accent)_5%,transparent),transparent)]"
         aria-hidden="true"
@@ -140,27 +141,16 @@ export default function SubampSkin(_props: SkinProps) {
       <div className="absolute top-7 left-9 hidden text-[10px] tracking-[0.24em] text-muted uppercase lg:block">
         {stationName} — {showName ? `${showName} with ${djName}` : `with ${djName}`}
       </div>
-      <div className="absolute top-6 right-4 z-10 flex items-center gap-3 lg:top-7 lg:right-9">
+      <div className="absolute top-3 right-3 z-10 flex items-center gap-3 lg:top-7 lg:right-9">
         <span className="hidden text-[10px] tracking-[0.24em] text-muted uppercase lg:inline">
           {[clock ? turnClock(clock.getTime(), timezone, stationLocale) : '', contextLine(context)]
             .filter(Boolean).join(' · ')}
         </span>
         <ThemeSwitcher />
       </div>
-      <div className="absolute bottom-7 left-9 hidden text-[10px] tracking-[0.18em] text-muted uppercase lg:block">
-        {offline
-          ? 'off air'
-          : tunedIn
-            ? ['tuned', signal.latencyMs != null ? `sig ${signal.quality} · ${signal.latencyMs} ms` : ''].filter(Boolean).join(' ▪ ')
-            : 'standing by'}
-      </div>
-      <div className="absolute right-9 bottom-7 hidden text-[10px] tracking-[0.18em] text-muted uppercase lg:block">
-        double-click a titlebar to roll it up
-      </div>
-
-      <div className="relative mx-auto flex min-h-full w-full max-w-[580px] flex-col justify-center gap-2 px-3 py-14">
+      <div className="relative mx-auto flex h-full w-full max-w-[580px] flex-col gap-2 px-3 pt-9 pb-3 lg:h-auto lg:min-h-full lg:justify-center lg:py-14">
         {/* ── deck ─────────────────────────────────────────── */}
-        <Window title={<>SUBAMP ▪ LIVE BROADCAST DECK</>}>
+        <Window title={<>SUBAMP ▪ LIVE BROADCAST DECK</>} className="flex-none">
           <div className="flex flex-col gap-3 px-4 py-3.5">
             <div className="flex items-stretch gap-3.5">
               <div className="flex flex-col justify-center gap-1">
@@ -267,66 +257,73 @@ export default function SubampSkin(_props: SkinProps) {
         </Window>
 
         {/* ── booth ────────────────────────────────────────── */}
-        <Window title={<>BOOTH FEED ▪ {djName.toUpperCase()}</>}>
-          <div className="flex flex-col gap-2 px-4 py-3">
-            {booth.length === 0 && (
-              <div className="text-[11px] text-muted">waiting for the booth…</div>
-            )}
-            {booth.map((line, i) => (
-              <div key={`${line.t ?? i}-${i}`} className="text-[12px] leading-relaxed break-words">
-                {line.kind === 'voice' ? (
-                  <>
-                    <span className="text-muted">{turnClock(line.t, timezone, stationLocale)}</span>{' '}
-                    <span className="font-bold text-[var(--accent)]">{djName.toUpperCase()} ●</span>{' '}
-                    “{line.text}”
-                  </>
-                ) : (
-                  <span className="text-[11px] text-muted">
-                    {turnClock(line.t, timezone, stationLocale)} {line.kind === 'dj' ? 'dj' : 'sys'} ▸ {line.text}
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
+        <Window title={<>BOOTH FEED ▪ {djName.toUpperCase()}</>} className="flex min-h-0 flex-1 flex-col lg:block lg:flex-none">
+          <ScrollArea className="min-h-0 flex-1 lg:max-h-[240px]">
+            <div className="flex flex-col gap-2 px-4 py-3">
+              {booth.length === 0 && (
+                <div className="text-[11px] text-muted">waiting for the booth…</div>
+              )}
+              {booth.map((line, i) => (
+                <div key={`${line.t ?? i}-${i}`} className="text-[12px] leading-relaxed break-words">
+                  {line.kind === 'voice' ? (
+                    <>
+                      <span className="text-muted">{turnClock(line.t, timezone, stationLocale)}</span>{' '}
+                      <span className="font-bold text-[var(--accent)]">{djName.toUpperCase()} ●</span>{' '}
+                      “{line.text}”
+                    </>
+                  ) : (
+                    <span className="text-[11px] text-muted">
+                      {turnClock(line.t, timezone, stationLocale)} {line.kind === 'dj' ? 'dj' : 'sys'} ▸ {line.text}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </ScrollArea>
         </Window>
 
         {/* ── station log ──────────────────────────────────── */}
         <Window
           title={<>STATION LOG{listenerCount != null ? ` ▪ ${listenerCount} LISTENING` : ''}</>}
+          className="flex min-h-0 flex-1 flex-col lg:block lg:flex-none"
         >
-          <div className="flex flex-col gap-1.5 px-4 py-2.5">
-            {history.map((h, i) => (
-              <div key={`${h.t ?? i}-${h.title ?? i}`} className="flex gap-2.5 text-[11px] tracking-[0.06em] text-muted uppercase">
-                <span>{i + 1}.</span>
+          <ScrollArea className="min-h-0 flex-1 lg:max-h-[200px]">
+            {/* pr-5 leaves a gutter so the times clear the overlaid scrollbar */}
+            <div className="flex flex-col gap-1.5 py-2.5 pr-5 pl-4">
+              {history.map((h, i) => (
+                <div key={`${h.t ?? i}-${h.title ?? i}`} className="flex gap-2.5 text-[11px] tracking-[0.06em] text-muted uppercase">
+                  <span>{i + 1}.</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {h.title ?? '?'}{h.artist ? ` — ${h.artist}` : ''}
+                  </span>
+                  <span>{turnClock(entryTime(h), timezone, stationLocale)}</span>
+                </div>
+              ))}
+              <div className="-ml-4 flex gap-2.5 bg-[var(--field)] py-0.5 pl-4 text-[11px] font-bold tracking-[0.06em] text-[var(--accent)] uppercase">
+                <span>{history.length + 1}.</span>
                 <span className="min-w-0 flex-1 truncate">
-                  {h.title ?? '?'}{h.artist ? ` — ${h.artist}` : ''}
+                  ▶ {offline ? '— off air —' : (nowPlaying?.title ?? 'scanning…')}
+                  {!offline && nowPlaying?.artist ? ` — ${nowPlaying.artist}` : ''}
                 </span>
-                <span>{turnClock(entryTime(h), timezone, stationLocale)}</span>
+                <span>{fmtTime(elapsed)}</span>
               </div>
-            ))}
-            <div className="-mx-2 flex gap-2.5 bg-[var(--field)] px-2 py-0.5 text-[11px] font-bold tracking-[0.06em] text-[var(--accent)] uppercase">
-              <span>{history.length + 1}.</span>
-              <span className="min-w-0 flex-1 truncate">
-                ▶ {offline ? '— off air —' : (nowPlaying?.title ?? 'scanning…')}
-                {!offline && nowPlaying?.artist ? ` — ${nowPlaying.artist}` : ''}
-              </span>
-              <span>{fmtTime(elapsed)}</span>
+              {upNext?.title && (
+                <div className="flex gap-2.5 text-[11px] tracking-[0.06em] text-muted uppercase">
+                  <span>{history.length + 2}.</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {upNext.title}{upNext.artist ? ` — ${upNext.artist}` : ''}
+                  </span>
+                  <span>queued</span>
+                </div>
+              )}
             </div>
-            {upNext?.title && (
-              <div className="flex gap-2.5 text-[11px] tracking-[0.06em] text-muted uppercase">
-                <span>{history.length + 2}.</span>
-                <span className="min-w-0 flex-1 truncate">
-                  {upNext.title}{upNext.artist ? ` — ${upNext.artist}` : ''}
-                </span>
-                <span>queued</span>
-              </div>
-            )}
+          </ScrollArea>
 
-            {/* request line */}
-            <form
-              className="mt-1 flex items-baseline gap-2.5 border-t border-soft-border pt-2"
-              onSubmit={e => { e.preventDefault(); void slip.send(); }}
-            >
+          {/* request line — pinned below the scrolling log */}
+          <form
+            className="mx-4 mb-3 flex shrink-0 items-baseline gap-2.5 border-t border-soft-border pt-2"
+            onSubmit={e => { e.preventDefault(); void slip.send(); }}
+          >
               <span className="flex-none text-[10px] tracking-[0.14em] text-muted select-none">DEAR DJ —</span>
               {slip.ack ? (
                 <>
@@ -363,7 +360,6 @@ export default function SubampSkin(_props: SkinProps) {
                 </>
               )}
             </form>
-          </div>
         </Window>
       </div>
     </div>
