@@ -1466,74 +1466,76 @@ function BrowseFilters(p: BrowseFiltersProps) {
         </div>
       </div>
 
-      {/* facet filters on the left, ordering on the right — each side wraps as a
-          unit (justify-between) so the sort control never strands alone on a row */}
-      <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-4 p-4">
-        <div className="flex flex-wrap items-end gap-x-4 gap-y-4">
-          <div className="flex flex-col gap-2">
-            <div className="caption">energy</div>
-            <div className="flex flex-wrap border border-ink">
-              {energyOpts.map((o, i) => (
-                <button
-                  key={o.id}
-                  type="button"
-                  onClick={() => p.setEnergy(o.id)}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
-                    i > 0 && 'border-l border-ink',
-                    p.energy === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
-                  )}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
+      {/* quick facets — the energy + vocal toggle groups sit on their own row,
+          divided from the dropdown-style refinements below. */}
+      <div className="flex flex-wrap items-end gap-x-4 gap-y-4 border-b border-dashed border-separator-strong p-4">
+        <div className="flex flex-col gap-2">
+          <div className="caption">energy</div>
+          <div className="flex flex-wrap border border-ink">
+            {energyOpts.map((o, i) => (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => p.setEnergy(o.id)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
+                  i > 0 && 'border-l border-ink',
+                  p.energy === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
+                )}
+              >
+                {o.label}
+              </button>
+            ))}
           </div>
+        </div>
 
-          <div className="flex flex-col gap-2">
-            <div className="caption">vocal</div>
-            <div className="flex flex-wrap border border-ink">
-              {vocalOpts.map((o, i) => (
-                <button
-                  key={o.id}
-                  type="button"
-                  onClick={() => p.setVocal(o.id)}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
-                    i > 0 && 'border-l border-ink',
-                    p.vocal === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
-                  )}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
+        <div className="flex flex-col gap-2">
+          <div className="caption">vocal</div>
+          <div className="flex flex-wrap border border-ink">
+            {vocalOpts.map((o, i) => (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => p.setVocal(o.id)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
+                  i > 0 && 'border-l border-ink',
+                  p.vocal === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
+                )}
+              >
+                {o.label}
+              </button>
+            ))}
           </div>
+        </div>
+      </div>
 
-          <div className="flex flex-col gap-2">
-            <Field>
-              <FieldLabel htmlFor="genre">genre</FieldLabel>
-              <Select value={p.genre || '__any'} onValueChange={v => p.setGenre(v === '__any' ? '' : v)}>
-                <SelectTrigger id="genre" className="min-w-[120px]"><SelectValue placeholder="Any genre" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__any">Any genre</SelectItem>
-                  {p.genreList.slice(0, 80).map(g => (
-                    <SelectItem key={g.value} value={g.value}>
-                      {g.value}{g.songCount ? ` · ${g.songCount}` : ''}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-          </div>
+      {/* refine — genre, year and sort share a single row. They wrap together as
+          a group on very narrow widths, but none ever strands on its own line. */}
+      <div className="flex flex-wrap items-end gap-x-4 gap-y-4 p-4">
+        <div className="flex flex-col gap-2">
+          <Field>
+            <FieldLabel htmlFor="genre">genre</FieldLabel>
+            <Select value={p.genre || '__any'} onValueChange={v => p.setGenre(v === '__any' ? '' : v)}>
+              <SelectTrigger id="genre" className="min-w-[150px]"><SelectValue placeholder="Any genre" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__any">Any genre</SelectItem>
+                {p.genreList.slice(0, 80).map(g => (
+                  <SelectItem key={g.value} value={g.value}>
+                    {g.value}{g.songCount ? ` · ${g.songCount}` : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        </div>
 
-          <div className="flex flex-col gap-2">
-            <div className="caption">year</div>
-            <div className="flex items-center gap-2">
-              <Input type="number" inputMode="numeric" placeholder="from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
-              <span className="text-[10px] text-muted">–</span>
-              <Input type="number" inputMode="numeric" placeholder="to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
-            </div>
+        <div className="flex flex-col gap-2">
+          <div className="caption">year</div>
+          <div className="flex items-center gap-2">
+            <Input type="number" inputMode="numeric" placeholder="from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
+            <span className="text-[10px] text-muted">–</span>
+            <Input type="number" inputMode="numeric" placeholder="to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
           </div>
         </div>
 
