@@ -14,7 +14,7 @@
 // cells; click a day label or hour header to fill a whole row/column. On
 // touch, a tap toggles one cell and a long-press arms drag-painting — a
 // plain swipe only scrolls (see HOLD_MS below).
-import type { ChangeEvent, ReactNode, RefObject, TouchEvent } from 'react';
+import type { ChangeEvent, RefObject, TouchEvent } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Users, Share2 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -29,7 +29,7 @@ import { Field } from '../ui/field';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from '../ui/select';
-import { Card, Btn, Pill, Eyebrow, Metric, Toggle } from './ui';
+import { Card, Btn, Pill, Eyebrow, Metric, MetaChip, Toggle } from './ui';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { EditorDialog } from '../ui/editor-dialog';
 import { Modal } from '../ui/modal';
@@ -2096,23 +2096,6 @@ function ShowAvatar({
           onError={(e) => { e.currentTarget.style.visibility = 'hidden'; }}
         />
       )}
-    </span>
-  );
-}
-
-// Read-only facet chip for the show card's "what it plays" row — hairline by
-// default, accent when it flags a hard lock (strict filters).
-function MetaChip({ children, accent }: { children: ReactNode; accent?: boolean }) {
-  return (
-    <span
-      className={cn(
-        'inline-flex items-center border px-1.5 py-[3px] text-[10px] font-semibold tracking-[0.02em]',
-        accent
-          ? 'border-[var(--accent)] text-vermilion'
-          : 'border-separator-strong text-muted',
-      )}
-    >
-      {children}
     </span>
   );
 }
