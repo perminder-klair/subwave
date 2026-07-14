@@ -131,12 +131,14 @@ export default function DriftSkin(_props: SkinProps) {
         aria-hidden="true"
       />
 
-      {/* corners */}
-      <div className="absolute top-7 left-8 max-w-[45%] truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase">
+      {/* corners — on a phone the clock/context text is dropped so the station
+          line and the theme icon can't collide in the middle; it returns from
+          sm up where there's room for both halves. */}
+      <div className="absolute top-7 left-8 max-w-[70%] truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase sm:max-w-[45%]">
         {stationName} — {showName ? `${showName} with ${djName}` : `small hours with ${djName}`}
       </div>
       <div className="absolute top-7 right-8 flex max-w-[45%] items-center gap-3">
-        <span className="min-w-0 truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase">
+        <span className="hidden min-w-0 truncate font-mono text-[10px] tracking-[0.24em] text-muted uppercase sm:block">
           {clock
             ? [
                 `${turnClock(clock.getTime(), timezone, stationLocale)} ${stationWeekday(clock, timezone)}`,
