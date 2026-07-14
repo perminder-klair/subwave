@@ -52,7 +52,7 @@ function Deck({
   artist: string;
 }) {
   return (
-    <div className="[container-type:inline-size] relative aspect-square w-[min(56vw,30vh,220px)] lg:w-[min(42vw,72vh,520px)]">
+    <div className="[container-type:inline-size] relative aspect-square w-[min(70vw,32vh,270px)] lg:w-[min(42vw,72vh,520px)]">
       {/* pitch strobe rim */}
       <div
         className={cn(
@@ -206,12 +206,18 @@ export default function PlatterSkin(_props: SkinProps) {
       {/* body — turntable on the left, metadata column on the right */}
       <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
         {/* ===== the plinth ===== */}
-        <div className="relative flex flex-1 flex-col items-center justify-center gap-6 border-b border-ink bg-linear-to-br from-[var(--field)] to-[color-mix(in_oklab,var(--field)_82%,var(--bg))] px-6 py-6 lg:w-[46%] lg:max-w-[680px] lg:flex-1 lg:flex-row lg:gap-0 lg:border-r lg:border-b-0 lg:py-10">
+        <div className="relative flex flex-1 flex-col items-center gap-4 border-b border-ink bg-linear-to-br from-[var(--field)] to-[color-mix(in_oklab,var(--field)_82%,var(--bg))] px-6 py-4 lg:w-[46%] lg:max-w-[680px] lg:flex-1 lg:flex-row lg:justify-center lg:gap-0 lg:border-r lg:border-b-0 lg:py-10">
           <span className="absolute top-5 left-6 font-mono text-[9px] tracking-[0.24em] text-muted uppercase">
             direct drive · quartz lock
           </span>
 
-          <Deck playing={playing} stationName={stationName} title={title} artist={artist} />
+          {/* deck-area: on phones this flex-1 wrapper centres the platter in the
+              space above the controls (breathing room above it, not stuck to
+              the top); on lg it collapses (display:contents) so the deck centres
+              in the whole plinth. */}
+          <div className="flex w-full flex-1 items-center justify-center lg:contents">
+            <Deck playing={playing} stationName={stationName} title={title} artist={artist} />
+          </div>
 
           {/* the deck IS the control surface: START/STOP drops or lifts the
               needle, MUTE sits beside it, and the fader is the volume. Laid out
