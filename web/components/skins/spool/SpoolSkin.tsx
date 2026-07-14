@@ -3,9 +3,9 @@
 // Spool — a tape deck; the whole station rides on one cassette.
 // Tactile · warm · mechanical. Design ref: Skins Canvas 1a.
 //
-// Desktop is a three-column console: Recently rewound (history) on the left,
-// the deck + cassette hero in the middle, up-next and the Side-B request slip
-// on the right. Mobile collapses to a single screen with a bottom tab bar
+// Desktop is a two-column console — the deck + cassette hero on the left, up-next
+// and the Side-B request slip on the right — over a full-width Recently rewound
+// shelf spanning the bottom. Mobile collapses to a single screen with a bottom tab bar
 // (Deck / Rewound / Stack / Slip) so nothing scrolls off. Both reels spin
 // while playing; the supply reel's wound tape thins as the take-up reel
 // fattens across the runtime (dynamic diameters), a slow sheen crosses the
@@ -24,6 +24,7 @@ import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useElapsed } from '@/hooks/useElapsed';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import ThemeSwitcher from '@/components/ThemeSwitcher';
+import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/cn';
 import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import {
@@ -286,6 +287,29 @@ export default function SpoolSkin(_props: SkinProps) {
     </>
   );
 
+  // Horizontal variant of historyList for the desktop bottom shelf — tapes lined
+  // up on a shelf (fixed-width cards, right-ruled) that scroll sideways.
+  const historyShelf = (
+    <>
+      {history.length === 0 && (
+        <div className="p-4 font-mono text-[11px] text-muted">nothing on the shelf yet</div>
+      )}
+      {history.map((h, i) => (
+        <div
+          key={`${h.t ?? i}-${h.title ?? i}`}
+          className="flex w-[210px] flex-none items-center gap-3 border-r border-soft-border px-4 py-3 last:border-r-0"
+        >
+          <span className="size-2 flex-none rounded-full border-2 border-[var(--muted)]" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13px] font-bold">{h.title ?? '?'}</div>
+            {h.artist && <div className="truncate text-[11px] text-muted">{h.artist}</div>}
+          </div>
+          <span className="flex-none font-mono text-[10px] text-muted">{turnClock(entryTime(h), timezone, stationLocale)}</span>
+        </div>
+      ))}
+    </>
+  );
+
   const onAirQuote = (extra?: string) =>
     voice && (
       <div className={cn('flex flex-col gap-2 border border-ink bg-bg px-4 py-3.5', extra)}>
@@ -321,20 +345,8 @@ export default function SpoolSkin(_props: SkinProps) {
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col">
-        {/* ===================== desktop: three-column console ===================== */}
-        <div className="hidden min-h-0 flex-1 grid-cols-[288px_1fr_288px] gap-7 p-7 lg:grid">
-          {/* left — recently rewound */}
-          <section className="flex min-h-0 flex-col gap-3">
-            <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">Recently rewound</div>
-            <div className="flex min-h-0 flex-1 flex-col border border-ink bg-[var(--field)]">
-              <div className="min-h-0 flex-1 overflow-y-auto">{historyList}</div>
-              <div className="flex flex-none items-center justify-between border-t border-soft-border px-4 py-3 font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
-                <span>{history.length} rewound</span>
-                {listenerCount != null && <span className="font-bold text-[var(--accent)]">{listenerCount} listening</span>}
-              </div>
-            </div>
-          </section>
-
+        {/* ============ desktop: two-column console over a full-width rewound shelf ============ */}
+        <div className="hidden min-h-0 flex-1 grid-cols-[1fr_288px] grid-rows-[1fr_auto] gap-7 p-7 lg:grid">
           {/* center — the deck */}
           <section className="flex min-h-0 flex-col gap-4">
             <div className="flex min-h-0 flex-1 flex-col border border-ink bg-[var(--field)]">
@@ -480,6 +492,21 @@ export default function SpoolSkin(_props: SkinProps) {
               <div className="flex-none border-b border-soft-border px-3.5 py-3 font-mono text-[10px] font-bold tracking-[0.2em] uppercase">Side B — request slip</div>
               <div className="flex min-h-0 flex-1 flex-col p-4">{requestForm(reqDeckRef)}</div>
             </div>
+          </section>
+
+          {/* bottom — recently rewound, a full-width shelf of tapes */}
+          <section className="col-span-2 flex min-h-0 flex-col gap-3">
+            <div className="flex items-baseline justify-between">
+              <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">Recently rewound</div>
+              <div className="flex items-center gap-3 font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
+                <span>{history.length} rewound</span>
+                {listenerCount != null && <span className="font-bold text-[var(--accent)]">{listenerCount} listening</span>}
+              </div>
+            </div>
+            <ScrollArea className="border border-ink bg-[var(--field)]">
+              <div className="flex w-max">{historyShelf}</div>
+              <ScrollBar orientation="horizontal" />
+            </ScrollArea>
           </section>
         </div>
 
