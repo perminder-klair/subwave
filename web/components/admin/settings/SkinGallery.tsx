@@ -175,12 +175,39 @@ function TtyPreview() {
   );
 }
 
+// ── Platter: a reference turntable — the record spins, the arm tracks ─────────
+function PlatterPreview() {
+  return (
+    <div className="flex h-full w-full items-center gap-2 bg-field p-2.5">
+      {/* plinth + spinning record + diagonal tonearm */}
+      <div className="relative grid aspect-square h-full place-items-center border border-ink bg-bg">
+        <span className={cn('relative grid aspect-square h-[74%] place-items-center rounded-full border border-ink bg-ink', REEL)}>
+          <span className="grid aspect-square h-[42%] place-items-center rounded-full border border-bg/70 bg-field">
+            <span className="size-[3px] rounded-full bg-vermilion" />
+          </span>
+        </span>
+        <span className="absolute top-1 right-1 h-[2px] w-[58%] origin-right -rotate-[28deg] bg-ink" />
+        <span className="absolute top-1 right-1 size-[5px] translate-x-1/2 -translate-y-1/2 rounded-full border border-ink bg-field" />
+      </div>
+      {/* metadata stub */}
+      <div className="grid flex-1 content-start gap-1.5">
+        <span className="h-[3px] w-1/3 bg-vermilion" />
+        <span className="h-[4px] w-4/5 bg-ink" />
+        <span className="h-[3px] w-1/2 bg-muted" />
+        <span className="mt-1 h-[3px] w-full bg-soft-border" />
+        <EqRow className="mt-1 h-4 justify-start" />
+      </div>
+    </div>
+  );
+}
+
 const PREVIEWS: Record<string, () => ReactNode> = {
   classic: ClassicPreview,
   spool: SpoolPreview,
   drift: DriftPreview,
   subamp: SubampPreview,
   tty: TtyPreview,
+  platter: PlatterPreview,
 };
 
 // A neutral wireframe for any skin without a bespoke poster (community skins).

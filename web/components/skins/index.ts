@@ -53,6 +53,14 @@ export const SKINS: SkinManifest[] = [
     skinApiVersion: SKIN_API_VERSION,
     load: () => import('./tty/TtySkin'),
   },
+  {
+    id: 'platter',
+    name: 'Platter',
+    description:
+      'The flagship vinyl face — a reference turntable is the interface, needle and all.',
+    skinApiVersion: SKIN_API_VERSION,
+    load: () => import('./platter/PlatterSkin'),
+  },
 ];
 
 // Id facts (default id, legacy aliases) live in lib/skin.ts so the server
