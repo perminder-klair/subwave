@@ -24,6 +24,7 @@ import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useElapsed } from '@/hooks/useElapsed';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import ThemeSwitcher from '@/components/ThemeSwitcher';
+import { ScrollArea, ScrollBar } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/cn';
 import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import {
@@ -502,9 +503,10 @@ export default function SpoolSkin(_props: SkinProps) {
                 {listenerCount != null && <span className="font-bold text-[var(--accent)]">{listenerCount} listening</span>}
               </div>
             </div>
-            <div className="flex min-h-0 border border-ink bg-[var(--field)]">
-              <div className="flex min-h-0 flex-1 overflow-x-auto">{historyShelf}</div>
-            </div>
+            <ScrollArea className="border border-ink bg-[var(--field)]">
+              <div className="flex w-max">{historyShelf}</div>
+              <ScrollBar orientation="horizontal" />
+            </ScrollArea>
           </section>
         </div>
 
