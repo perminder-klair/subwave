@@ -107,11 +107,13 @@ export function PersonaRoster({
                 )}
               </span>
 
-              {/* body */}
-              <div className="grid min-w-0 flex-1 gap-2.5">
-                <div className="flex items-start gap-3">
+              {/* body — text stack + right rail as siblings, so the taller rail
+                  never inflates the name row and pushes the facets down */}
+              <div className="flex min-w-0 flex-1 items-start gap-3">
+                {/* text stack — kicker + name, facets, brief stack tightly */}
+                <div className="grid min-w-0 flex-1 gap-2.5">
                   {/* kicker + name */}
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0">
                     {(isOnAir || isDefault) && (
                       <div className="mb-1 flex flex-wrap items-center gap-1.5">
                         {isOnAir && <Pill tone="accent" dot>on air</Pill>}
@@ -123,35 +125,35 @@ export function PersonaRoster({
                     </div>
                   </div>
 
-                  {/* right rail — status, skill count, edit affordance */}
-                  <div className="flex flex-none flex-col items-end gap-1.5 text-right">
-                    {!valid && (
-                      <Pill className="border-[var(--danger)] text-[var(--danger)]">incomplete</Pill>
+                  {/* facets — how this persona sounds */}
+                  <div className="flex flex-wrap gap-1">
+                    <MetaChip>{p.frequency}</MetaChip>
+                    {p.scriptLength !== 'concise' && <MetaChip>{p.scriptLength}</MetaChip>}
+                    <MetaChip>{p.tts.engine}</MetaChip>
+                    {p.tts.engine !== 'piper' && p.tts.voice.trim() && (
+                      <MetaChip className="max-w-[140px] truncate">{p.tts.voice.trim()}</MetaChip>
                     )}
-                    <div className="leading-none">
-                      <span className="mono-num text-[20px] font-extrabold text-ink">{nSkills}</span>
-                      <span className="caption ml-1">skill{nSkills === 1 ? '' : 's'}</span>
-                    </div>
-                    <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-[0.16em] text-muted uppercase transition-colors group-hover:text-vermilion">
-                      Edit <span aria-hidden="true">→</span>
-                    </span>
                   </div>
+
+                  {/* brief */}
+                  <p className="line-clamp-2 text-[12px] leading-[1.55] text-muted italic">
+                    {p.tagline.trim() || 'no tagline'}
+                  </p>
                 </div>
 
-                {/* facets — how this persona sounds */}
-                <div className="flex flex-wrap gap-1">
-                  <MetaChip>{p.frequency}</MetaChip>
-                  {p.scriptLength !== 'concise' && <MetaChip>{p.scriptLength}</MetaChip>}
-                  <MetaChip>{p.tts.engine}</MetaChip>
-                  {p.tts.engine !== 'piper' && p.tts.voice.trim() && (
-                    <MetaChip className="max-w-[140px] truncate">{p.tts.voice.trim()}</MetaChip>
+                {/* right rail — status, skill count, edit affordance */}
+                <div className="flex flex-none flex-col items-end gap-1.5 text-right">
+                  {!valid && (
+                    <Pill className="border-[var(--danger)] text-[var(--danger)]">incomplete</Pill>
                   )}
+                  <div className="leading-none">
+                    <span className="mono-num text-[20px] font-extrabold text-ink">{nSkills}</span>
+                    <span className="caption ml-1">skill{nSkills === 1 ? '' : 's'}</span>
+                  </div>
+                  <span className="inline-flex items-center gap-1 text-[10px] font-bold tracking-[0.16em] text-muted uppercase transition-colors group-hover:text-vermilion">
+                    Edit <span aria-hidden="true">→</span>
+                  </span>
                 </div>
-
-                {/* brief */}
-                <p className="line-clamp-2 text-[12px] leading-[1.55] text-muted italic">
-                  {p.tagline.trim() || 'no tagline'}
-                </p>
               </div>
             </div>
           </article>
