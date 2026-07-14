@@ -234,6 +234,15 @@ export default function SubampSkin(_props: SkinProps) {
               >
                 MUTE
               </button>
+              <button
+                type="button"
+                onClick={() => reqInputRef.current?.focus()}
+                className="v3-focus grid h-[34px] w-11 cursor-pointer place-items-center border border-[var(--accent)] text-[9px] font-bold tracking-[0.1em] text-[var(--accent)] hover:bg-[var(--overlay)]"
+              >
+                REQ
+              </button>
+              {/* VOL is last so it (not REQ) is the flex item that reflows to a
+                  full-width second line when the deck is too narrow for one row */}
               <div className="ml-2 flex min-w-[120px] flex-1 items-center gap-2">
                 <span className="text-[9px] font-bold tracking-[0.16em] text-muted">VOL</span>
                 <input
@@ -247,13 +256,6 @@ export default function SubampSkin(_props: SkinProps) {
                 />
                 <span className="w-6 text-right text-[10px]">{Math.round(volume * 100)}</span>
               </div>
-              <button
-                type="button"
-                onClick={() => reqInputRef.current?.focus()}
-                className="v3-focus grid h-[34px] w-11 cursor-pointer place-items-center border border-[var(--accent)] text-[9px] font-bold tracking-[0.1em] text-[var(--accent)] hover:bg-[var(--overlay)]"
-              >
-                REQ
-              </button>
             </div>
           </div>
         </Window>
