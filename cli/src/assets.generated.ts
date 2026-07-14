@@ -1201,4 +1201,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version`).
-export const CLI_VERSION = `0.41.0`; // x-release-please-version
+export const CLI_VERSION = `0.42.0`; // x-release-please-version

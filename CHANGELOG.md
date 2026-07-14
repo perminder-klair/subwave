@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.42.0](https://github.com/perminder-klair/subwave/compare/v0.41.0...v0.42.0) (2026-07-14)
+
+
+### Features
+
+* **admin:** audience time-of-day chart + live device/listen-time breakdown on Stats ([#1030](https://github.com/perminder-klair/subwave/issues/1030)) ([a83a607](https://github.com/perminder-klair/subwave/commit/a83a607a0d8a78726845a435f42aea77ee4a0f41))
+* **admin:** redesign show cards with host/guest faces + mode kickers ([#1025](https://github.com/perminder-klair/subwave/issues/1025)) ([312343d](https://github.com/perminder-klair/subwave/commit/312343d1062ea8ba5381165c12b497408ecb897f))
+* **admin:** slate cards for /admin/skills and /admin/personas ([#1026](https://github.com/perminder-klair/subwave/issues/1026)) ([2830ebd](https://github.com/perminder-klair/subwave/commit/2830ebdb9d8c22d899525c662945bc1aded72ff4))
+* **community:** live catalog fetch + shows type + subwave-community ([#1019](https://github.com/perminder-klair/subwave/issues/1019)) ([df9b995](https://github.com/perminder-klair/subwave/commit/df9b995d1dd9b0277f721fb063ac503c9f7a275a))
+* **web:** modular player — shell + skin architecture, five skins, live switching ([#995](https://github.com/perminder-klair/subwave/issues/995)) ([3881227](https://github.com/perminder-klair/subwave/commit/3881227919e75016db9a22bc3121d952cc88cc84))
+* **web:** Platter skin (new) + Spool redesign + tune-in overlay toggle ([#1036](https://github.com/perminder-klair/subwave/issues/1036)) ([cd4ecc5](https://github.com/perminder-klair/subwave/commit/cd4ecc5789242ba48b24d70ce0d5baca4b2e4b10))
+
+
+### Bug Fixes
+
+* **admin:** keep library browse genre/year/sort filters on one row ([#1024](https://github.com/perminder-klair/subwave/issues/1024)) ([ddec4ac](https://github.com/perminder-klair/subwave/commit/ddec4ac4727730a879cc5845238ed8573b906f74))
+* **admin:** prominent pending-restart banner with one-click apply ([#1029](https://github.com/perminder-klair/subwave/issues/1029)) ([01d1afb](https://github.com/perminder-klair/subwave/commit/01d1afb089c738dbb0dbc43f92da86cd841ad754))
+* **admin:** remove name→tags gap on persona & skill cards ([#1040](https://github.com/perminder-klair/subwave/issues/1040)) ([d94555d](https://github.com/perminder-klair/subwave/commit/d94555dedb4c57f3d012bdbb31eb24083e69ac3a))
+* **caddy:** route /stream.flac, /stream.aac, /listen.* in the AIO edge ([#1027](https://github.com/perminder-klair/subwave/issues/1027)) ([0552945](https://github.com/perminder-klair/subwave/commit/0552945cd69222f7c5538c65c7055480f4f2325b))
+* **controller:** clip over-length programme plan fields instead of discarding the whole plan ([#1035](https://github.com/perminder-klair/subwave/issues/1035)) ([11ecd71](https://github.com/perminder-klair/subwave/commit/11ecd71e2de2eb8011108983976cde9190161a30))
+* **web:** mobile skin polish — Drift, Subamp, TTY, Platter ([#1037](https://github.com/perminder-klair/subwave/issues/1037)) ([9e36e1d](https://github.com/perminder-klair/subwave/commit/9e36e1d814d933c49c1c0ae7f33b24db26be1be6))
+* **web:** Platter — desktop track history + mobile controls/chips polish ([#1041](https://github.com/perminder-klair/subwave/issues/1041)) ([f1321cb](https://github.com/perminder-klair/subwave/commit/f1321cbd2dce50b5de218e00647b163a9dc49038))
+* **web:** Spool desktop — 2-row layout, Recently rewound to bottom shelf ([#1039](https://github.com/perminder-klair/subwave/issues/1039)) ([595504d](https://github.com/perminder-klair/subwave/commit/595504d83911267e23cddb3ebb3450b66c43e07b))
+
 ## [0.41.0](https://github.com/perminder-klair/subwave/compare/v0.40.0...v0.41.0) (2026-07-12)
 
 
