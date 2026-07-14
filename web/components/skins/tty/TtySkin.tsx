@@ -183,7 +183,7 @@ export default function TtySkin(_props: SkinProps) {
                   </div>
                 )}
               </div>
-              <div className="flex flex-none flex-col gap-1.5">
+              <div className="hidden flex-none flex-col gap-1.5 sm:flex">
                 <div className="grid h-[120px] w-[120px] place-items-center border border-soft-border sm:h-[148px] sm:w-[148px]">
                   {coverId && !offline ? (
                     <img src={client.coverUrl(coverId)} alt="" className="h-full w-full object-cover" />
@@ -224,7 +224,7 @@ export default function TtySkin(_props: SkinProps) {
 
         {/* up next + last — last fills + scrolls; stacked on mobile,
             side-by-side from sm */}
-        <div className="grid min-h-0 flex-[1] grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-3.5 sm:grid-cols-2 sm:grid-rows-1">
+        <div className="grid min-h-0 flex-none grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-3.5 sm:flex-[1] sm:grid-cols-2 sm:grid-rows-1">
           <section className="flex min-h-0 min-w-0 flex-col gap-2.5 border border-soft-border px-5 py-4">
             <Rule>UP NEXT</Rule>
             {upNext?.title ? (
@@ -241,7 +241,7 @@ export default function TtySkin(_props: SkinProps) {
               <div className="text-[12px] text-muted">queue empty — the DJ decides at the wire</div>
             )}
           </section>
-          <section className="flex min-h-0 min-w-0 flex-col gap-2 border border-soft-border px-5 py-4">
+          <section className="hidden min-h-0 min-w-0 flex-col gap-2 border border-soft-border px-5 py-4 sm:flex">
             <Rule>LAST</Rule>
             <ScrollArea className="-mx-5 min-h-0 flex-1">
               <div className="flex flex-col gap-2 px-5">
