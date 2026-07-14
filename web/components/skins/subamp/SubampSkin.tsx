@@ -11,7 +11,11 @@
 import { useRef, useState, type ReactNode } from 'react';
 import styles from './Subamp.module.css';
 import Analyzer from './Analyzer';
-import { ScrollArea } from '@/components/ui/scroll-area';
+import {
+  Conversation,
+  ConversationContent,
+  ConversationScrollButton,
+} from '@/components/ai-elements/conversation';
 import {
   usePlayerActions,
   usePlayerAudio,
@@ -258,8 +262,12 @@ export default function SubampSkin(_props: SkinProps) {
 
         {/* ── booth ────────────────────────────────────────── */}
         <Window title={<>BOOTH FEED ▪ {djName.toUpperCase()}</>} className="flex min-h-0 flex-1 flex-col lg:block lg:flex-none">
-          <ScrollArea className="min-h-0 flex-1 lg:max-h-[240px]">
-            <div className="flex flex-col gap-2 px-4 py-3">
+          {/* stick-to-bottom booth tail — the live view holds the newest DJ
+              line at the bottom (same ai-elements Conversation as the admin
+              dash Booth log). Needs a definite height for the scroll region,
+              hence lg:h-[240px] rather than a content-driven max-height. */}
+          <Conversation className="min-h-0 flex-1 lg:h-[240px]">
+            <ConversationContent className="flex flex-col gap-2 px-4 py-3">
               {booth.length === 0 && (
                 <div className="text-[11px] text-muted">waiting for the booth…</div>
               )}
@@ -278,8 +286,9 @@ export default function SubampSkin(_props: SkinProps) {
                   )}
                 </div>
               ))}
-            </div>
-          </ScrollArea>
+            </ConversationContent>
+            <ConversationScrollButton className="bottom-2 size-7 rounded-none border-soft-border bg-[var(--field)] text-ink hover:bg-[var(--overlay)]" />
+          </Conversation>
         </Window>
 
         {/* ── station log ──────────────────────────────────── */}
@@ -287,9 +296,11 @@ export default function SubampSkin(_props: SkinProps) {
           title={<>STATION LOG{listenerCount != null ? ` ▪ ${listenerCount} LISTENING` : ''}</>}
           className="flex min-h-0 flex-1 flex-col lg:block lg:flex-none"
         >
-          <ScrollArea className="min-h-0 flex-1 lg:max-h-[200px]">
-            {/* pr-5 leaves a gutter so the times clear the overlaid scrollbar */}
-            <div className="flex flex-col gap-1.5 py-2.5 pr-5 pl-4">
+          {/* stick-to-bottom log tail — pins the view to the ▶ now-playing /
+              queued lines at the bottom (ai-elements Conversation, like the
+              booth above). Definite height so the scroll region resolves. */}
+          <Conversation className="min-h-0 flex-1 lg:h-[200px]">
+            <ConversationContent className="flex flex-col gap-1.5 py-2.5 pr-5 pl-4">
               {history.map((h, i) => (
                 <div key={`${h.t ?? i}-${h.title ?? i}`} className="flex gap-2.5 text-[11px] tracking-[0.06em] text-muted uppercase">
                   <span>{i + 1}.</span>
@@ -316,8 +327,9 @@ export default function SubampSkin(_props: SkinProps) {
                   <span>queued</span>
                 </div>
               )}
-            </div>
-          </ScrollArea>
+            </ConversationContent>
+            <ConversationScrollButton className="bottom-2 size-7 rounded-none border-soft-border bg-[var(--field)] text-ink hover:bg-[var(--overlay)]" />
+          </Conversation>
 
           {/* request line — pinned below the scrolling log */}
           <form
