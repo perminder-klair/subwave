@@ -12,7 +12,7 @@
 // window, and the VU needle rides. Everything that moves is a co-located
 // keyframe (Spool.module.css) so it never re-renders React.
 
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useRef, useState, type RefObject } from 'react';
 import styles from './Spool.module.css';
 import {
   usePlayerActions,
@@ -149,7 +149,11 @@ export default function SpoolSkin(_props: SkinProps) {
     refused: 'The booth waved this one off.',
     failed: 'The booth line is down — try again in a moment.',
   });
-  const reqInputRef = useRef<HTMLInputElement | null>(null);
+  // Desktop and mobile each render their own copy of the request slip (both
+  // in the DOM, one hidden per breakpoint), so each input gets its own ref;
+  // the `r` shortcut focuses whichever slip is actually on screen.
+  const reqDeckRef = useRef<HTMLInputElement | null>(null);
+  const reqSlipRef = useRef<HTMLInputElement | null>(null);
 
   const playIn = () => { if (!tunedIn) handleTune(); };
   const stopOut = () => { if (tunedIn) stop(); };
@@ -160,7 +164,14 @@ export default function SpoolSkin(_props: SkinProps) {
     arrowup: () => adjustVolume(0.05),
     arrowdown: () => adjustVolume(-0.05),
     m: toggleMute,
-    r: () => { if (!showTuneIn) { setTab('slip'); reqInputRef.current?.focus(); } },
+    r: () => {
+      if (showTuneIn) return;
+      const deck = reqDeckRef.current;
+      // offsetParent === null ⇒ that layout is display:none for this breakpoint.
+      if (deck && deck.offsetParent !== null) { deck.focus(); return; }
+      setTab('slip');
+      requestAnimationFrame(() => reqSlipRef.current?.focus());
+    },
   });
 
   // ── shared control atoms ────────────────────────────────────────────────
@@ -207,7 +218,7 @@ export default function SpoolSkin(_props: SkinProps) {
     </button>
   );
 
-  const requestForm = (
+  const requestForm = (ref: RefObject<HTMLInputElement | null>) => (
     <form
       className="flex min-h-0 flex-1 flex-col gap-3"
       onSubmit={e => { e.preventDefault(); void slip.send(); }}
@@ -227,7 +238,7 @@ export default function SpoolSkin(_props: SkinProps) {
         <>
           <div className="text-[13px] text-muted italic">Dear DJ —</div>
           <input
-            ref={reqInputRef}
+            ref={ref}
             value={slip.text}
             onChange={e => slip.setText(e.target.value)}
             placeholder="a song, an artist, a feeling…"
@@ -469,7 +480,7 @@ export default function SpoolSkin(_props: SkinProps) {
             </div>
             <div className="flex min-h-0 flex-1 flex-col border border-ink bg-bg">
               <div className="flex-none border-b border-soft-border px-3.5 py-3 font-mono text-[10px] font-bold tracking-[0.2em] uppercase">Side B — request slip</div>
-              <div className="flex min-h-0 flex-1 flex-col p-4">{requestForm}</div>
+              <div className="flex min-h-0 flex-1 flex-col p-4">{requestForm(reqDeckRef)}</div>
             </div>
           </section>
         </div>
@@ -558,7 +569,7 @@ export default function SpoolSkin(_props: SkinProps) {
             {tab === 'slip' && (
               <div className="flex h-full flex-col p-4">
                 <div className="mb-3 font-mono text-[10px] font-bold tracking-[0.2em] uppercase">Side B — request slip</div>
-                <div className="flex min-h-0 flex-1 flex-col border border-ink bg-bg p-4">{requestForm}</div>
+                <div className="flex min-h-0 flex-1 flex-col border border-ink bg-bg p-4">{requestForm(reqSlipRef)}</div>
               </div>
             )}
           </div>
