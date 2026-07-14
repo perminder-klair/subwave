@@ -807,3 +807,31 @@ export function schemaHint(schema: z.ZodTypeAny): string | null {
     return null;
   }
 }
+
+// ---------------------------------------------------------------------------
+// Lenient text caps for model-generated free-text fields
+// ---------------------------------------------------------------------------
+
+// Trim `s` to at most `max` characters, on a word boundary where that keeps
+// most of the budget (else a hard char cut, so a single very long token can't
+// defeat the cap). Non-strings pass through untouched — the caller's schema
+// decides how to treat them.
+//
+// The point: a `.max(N)` cap on a model-generated free-text field is a NUDGE,
+// not a hard contract — LLMs can't count characters and no provider enforces
+// `maxLength` via decoding, so a one-sentence field landing a few chars over
+// must not throw and discard the whole structured object (a 207-char programme
+// `angle` vs a 200 cap sank the entire episode plan). Keep the `.max(N)` in the
+// schema (it still advertises brevity to the model on every path) and CLIP the
+// overflow before validation with a TOP-LEVEL z.preprocess over the plain
+// object — the same object-level placement modelTolerant uses, and for the same
+// reason: a per-field preprocess/`.catch()` silently drops the field from the
+// parent's `required` array under io:'input' (see coerceModelPayload's note;
+// pinned in llm-pure.test.ts). Callers walk their own known text fields and
+// apply this in that preprocess.
+export function clipText(s: unknown, max: number): unknown {
+  if (typeof s !== 'string' || s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const onWord = cut.replace(/\s+\S*$/, '');
+  return (onWord.length >= max * 0.6 ? onWord : cut).trim();
+}

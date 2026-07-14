@@ -14,6 +14,7 @@ import { djText } from '../strategy/text.js';
 import { djObject } from '../strategy/object.js';
 import { djSystem, lengthPhrase } from './system.js';
 import { buildContextLines, decoratePrompt, randomSeed } from './context.js';
+import { clipText } from '../core/pure.js';
 
 // Same field set as the free-text script generators (scripts.ts): ambient
 // weather stays out (issue #471); the dedicated weather skill owns that beat.
@@ -27,21 +28,52 @@ const MAX_FEATURES = 8;
 // PRODUCER PLAN — one djObject call per episode
 // ---------------------------------------------------------------------------
 
-const planSchema = (maxFeatures: number) => z.object({
-  angle: z.string().min(1).max(200)
+// Character caps for the plan's free-text fields. Kept as data so the wire
+// schema (the plain z.object below) and the pre-validation clip stay in sync.
+// The producer writes at temperature 0.9, and a "one sentence" angle routinely
+// lands a handful of chars over its cap — that overflow must NOT throw away the
+// whole plan and drop the episode to brief-only fallback (a 207-char angle vs
+// the 200 cap did exactly that). So the caps stay advertised to the model but
+// are enforced by clipping, not rejection.
+const ANGLE_MAX = 200;
+const NOTE_MAX = 240;
+const TOPIC_MAX = 240;
+
+// Clip every over-length text field on the raw payload BEFORE validation. This
+// runs as a TOP-LEVEL preprocess over the plain object (see clipText's note):
+// the inner z.object stays the untouched wire contract — every field intact in
+// `required` under io:'input', maxLength still advertised — whereas a per-field
+// clip would silently drop the field from `required` on the forced-tool path.
+function clipPlanText(raw: unknown): unknown {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return raw;
+  const out = { ...(raw as Record<string, unknown>) };
+  out.angle = clipText(out.angle, ANGLE_MAX);
+  out.introNote = clipText(out.introNote, NOTE_MAX);
+  out.outroNote = clipText(out.outroNote, NOTE_MAX);
+  if (Array.isArray(out.features)) {
+    out.features = out.features.map((f) =>
+      f && typeof f === 'object' && !Array.isArray(f)
+        ? { ...(f as Record<string, unknown>), topic: clipText((f as Record<string, unknown>).topic, TOPIC_MAX) }
+        : f);
+  }
+  return out;
+}
+
+export const planSchema = (maxFeatures: number) => z.preprocess(clipPlanText, z.object({
+  angle: z.string().min(1).max(ANGLE_MAX)
     .describe("today's editorial line for the episode — the specific take on the show's brief this airing runs with. One sentence."),
-  introNote: z.string().min(1).max(240)
+  introNote: z.string().min(1).max(NOTE_MAX)
     .describe('what the opening establishes and teases (including a nod to the feature) — a note to the host, not the spoken line itself'),
   features: z.array(z.object({
-    topic: z.string().min(1).max(240)
+    topic: z.string().min(1).max(TOPIC_MAX)
       .describe('what this feature segment covers — concrete and specific, not a category'),
     kind: z.string().nullable()
       .describe('the segment capability kind to build it with, from the kinds offered in the prompt — or null to let the host talk it straight'),
   })).min(1).max(maxFeatures)
     .describe('one feature segment per scheduled hour of the show, in air order'),
-  outroNote: z.string().min(1).max(240)
+  outroNote: z.string().min(1).max(NOTE_MAX)
     .describe('how the sign-off wraps the episode — call back to the angle or the feature; a note to the host'),
-});
+}));
 
 // The producer only picks WHICH capability builds each feature; the full
 // SKILL.md brief is applied by the segment director when the beat actually
