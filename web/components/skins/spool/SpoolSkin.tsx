@@ -72,7 +72,7 @@ export default function SpoolSkin(_props: SkinProps) {
   } = usePlayerFeed();
   const { tunedIn, status, volume, muted, offline, signal } = usePlayerAudio();
   const { toggleMute } = usePlayerActions();
-  const { showTuneIn, tuneInFromOverlay, handleTune } = useTuneInGate();
+  const { showTuneIn, showOverlay, tuneInFromOverlay, handleTune } = useTuneInGate();
 
   const elapsed = useElapsed(trackStartedAt);
   const stationLocale = normalizeStationLocale(locale);
@@ -390,7 +390,7 @@ export default function SpoolSkin(_props: SkinProps) {
 
       {/* tune-in gate — the deck sits with its door open; one tap clunks it
           shut and the spools start. */}
-      {showTuneIn && !offline && (
+      {showOverlay && !offline && (
         <button
           type="button"
           onClick={tuneInFromOverlay}

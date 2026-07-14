@@ -9,6 +9,7 @@
 // chip; everything else is corners.
 
 import { useEffect, useRef, useState } from 'react';
+import { Headphones } from 'lucide-react';
 import styles from './Drift.module.css';
 import {
   usePlayerActions,
@@ -56,7 +57,7 @@ export default function DriftSkin(_props: SkinProps) {
   } = usePlayerFeed();
   const { tunedIn, volume, muted, offline, signal } = usePlayerAudio();
   const { toggleMute } = usePlayerActions();
-  const { showTuneIn, tuneInFromOverlay, handleTune } = useTuneInGate();
+  const { showOverlay, tuneInFromOverlay, handleTune } = useTuneInGate();
 
   const elapsed = useElapsed(trackStartedAt);
   const clock = useClock();
@@ -151,11 +152,17 @@ export default function DriftSkin(_props: SkinProps) {
         {upNext?.title ? `up next · ${[upNext.title, upNext.artist].filter(Boolean).join(' — ')}` : ''}
       </div>
       <div className="absolute right-8 bottom-7 flex items-baseline gap-2 font-mono text-[10px] tracking-[0.18em] text-muted uppercase">
-        <span className="hidden sm:inline">
-          {[
-            listenerCount != null ? `${listenerCount} listening` : '',
-            signal.latencyMs != null && tunedIn ? `${signal.latencyMs} ms` : '',
-          ].filter(Boolean).join(' · ')}
+        <span className="hidden items-center gap-1.5 sm:inline-flex">
+          {listenerCount != null && (
+            <span className="inline-flex items-center gap-1" aria-label={`${listenerCount} listening`}>
+              <Headphones aria-hidden className="size-3" strokeWidth={1.5} />
+              {listenerCount}
+            </span>
+          )}
+          {listenerCount != null && signal.latencyMs != null && tunedIn && (
+            <span aria-hidden>·</span>
+          )}
+          {signal.latencyMs != null && tunedIn && <span>{signal.latencyMs} ms</span>}
         </span>
         <button type="button" aria-label="Volume down" onClick={() => adjustVolume(-0.05)}
           className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">−</button>
@@ -170,11 +177,14 @@ export default function DriftSkin(_props: SkinProps) {
           className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">+</button>
       </div>
 
-      {/* the ten percent of type. pointer-events-none so this full-screen
-          centering layer doesn't sit over the corner controls (ThemeSwitcher,
-          volume) and eat their clicks — the one interactive child (the title,
-          which tunes in) re-enables events on itself. */}
-      {!showTuneIn && (
+      {/* the ten percent of type. Shown whenever the full-bleed gate isn't
+          covering the screen (!showOverlay) — so when the operator disables the
+          tune-in overlay, this layer is drift's tune affordance: the label reads
+          "tap to listen" and the title tunes in. pointer-events-none so this
+          full-screen centering layer doesn't sit over the corner controls
+          (ThemeSwitcher, volume) and eat their clicks — the one interactive
+          child (the title, which tunes in) re-enables events on itself. */}
+      {!showOverlay && (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 text-center">
           {coverSrc && !offline && (
             <div className="h-[128px] w-[128px] border border-soft-border sm:h-[152px] sm:w-[152px]">
@@ -220,13 +230,13 @@ export default function DriftSkin(_props: SkinProps) {
         </div>
       )}
 
-      {/* the ··· chip */}
-      {!showTuneIn && (
+      {/* the ··· chip — available whenever the poster is up (gate not covering) */}
+      {!showOverlay && (
         <button
           type="button"
           onClick={() => setPanelOpen(o => !o)}
           aria-expanded={panelOpen}
-          className="v3-focus absolute bottom-6 left-1/2 -translate-x-1/2 cursor-pointer border border-soft-border bg-[var(--field)] px-4 py-1 font-mono text-[12px] tracking-[0.3em] text-muted hover:text-ink"
+          className="v3-focus absolute bottom-6 left-1/2 -translate-x-1/2 cursor-pointer border border-soft-border/50 bg-[var(--field)]/25 px-4 py-1 font-mono text-[12px] tracking-[0.3em] text-muted backdrop-blur-md hover:bg-[var(--field)]/45 hover:text-ink"
         >
           ···
         </button>
@@ -291,7 +301,7 @@ export default function DriftSkin(_props: SkinProps) {
       )}
 
       {/* the gate: just the wash and one lowercase word */}
-      {showTuneIn && !offline && (
+      {showOverlay && !offline && (
         <button
           type="button"
           onClick={tuneInFromOverlay}

@@ -405,7 +405,11 @@ router.get('/state', (req, res) => {
     // Listener-player UI settings ride along with /state like the theme does,
     // so the player can flip them live on the next poll. Defaults off if
     // unset; `skin` defaults to the classic face.
-    ui: { boothBuddy: s?.ui?.boothBuddy ?? false, skin: s?.ui?.skin || 'classic' },
+    ui: {
+      boothBuddy: s?.ui?.boothBuddy ?? false,
+      skin: s?.ui?.skin || 'classic',
+      tuneInOverlay: s?.ui?.tuneInOverlay ?? true,
+    },
     // Station zone for rendering djLog timestamps in station-local time (#418).
     timezone: getStationTimezone(),
     locale: s.locale,

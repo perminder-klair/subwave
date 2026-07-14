@@ -181,8 +181,9 @@ export interface StationState {
   timezone?: string;
   locale?: StationLocale;
   /** Station-wide listener-player UI settings (from GET /state). `skin` is
-   *  the operator's player-skin pick (see components/skins). */
-  ui?: { boothBuddy?: boolean; skin?: string };
+   *  the operator's player-skin pick (see components/skins); `tuneInOverlay`
+   *  gates the full-bleed tap-to-tune gate (default on). */
+  ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
 }
 
 /** A single turn in the live DJ session — `voice` (spoken on-air), `dj` (the

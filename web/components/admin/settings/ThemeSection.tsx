@@ -275,6 +275,50 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
         </div>
       </Card>
 
+      <Card title="Tune-in overlay" sub="the full-bleed “tap to tune in” gate">
+        <div className="field">
+          <Label>Show the tune-in overlay</Label>
+          <div className="flex items-center gap-2">
+            <Seg
+              options={[
+                { id: 'on', label: 'On' },
+                { id: 'off', label: 'Off' },
+              ]}
+              value={data?.values?.ui?.tuneInOverlay !== false ? 'on' : 'off'}
+              onChange={id => { if (!busy) saveSettings({ ui: { tuneInOverlay: id === 'on' } }); }}
+            />
+          </div>
+          <div className="field-hint">
+            The full-screen “Tap to tune in” gate a new listener lands on. When
+            off, the player loads paused with no takeover and listeners start the
+            stream from the skin’s own play button — browsers can’t autoplay, so a
+            tap is always needed somewhere. Applies live, no restart.
+          </div>
+        </div>
+      </Card>
+
+      <Card title="Booth Buddy" sub="the DJ-line mascot on the player">
+        <div className="field">
+          <Label>Show the Booth Sprite</Label>
+          <div className="flex items-center gap-2">
+            <Seg
+              options={[
+                { id: 'on', label: 'On' },
+                { id: 'off', label: 'Off' },
+              ]}
+              value={data?.values?.ui?.boothBuddy === true ? 'on' : 'off'}
+              onChange={id => { if (!busy) saveSettings({ ui: { boothBuddy: id === 'on' } }); }}
+            />
+          </div>
+          <div className="field-hint">
+            A small animated mascot that leads the DJ line on the listener player,
+            reacting to what the DJ is doing — on-air, picking, or idle — and tap it
+            for a reaction. When off, the line falls back to the classic ♪/◇ marker.
+            Applies live, no restart.
+          </div>
+        </div>
+      </Card>
+
       <Card title="Create theme" sub="state/themes/*.json">
         <div className="grid gap-3">
           <div className="flex flex-wrap items-start justify-between gap-3">

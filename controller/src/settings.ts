@@ -1094,7 +1094,10 @@ const DEFAULTS = {
   // `skin` is the station-wide player-skin id — the web app owns the skin
   // registry and falls back to its default on an unknown id, so the
   // controller only stores a slug, never validates against a list.
-  ui: { boothBuddy: false, skin: 'classic' },
+  // `tuneInOverlay` gates the full-bleed "Tap to tune in" gate — ON by default;
+  // OFF drops the takeover and listeners start via the skin's own play button
+  // (browsers still can't autoplay, so a tap is always required somewhere).
+  ui: { boothBuddy: false, skin: 'classic', tuneInOverlay: true },
   // Global DJ prompt template. '' means "use DEFAULT_DJ_PROMPT_TEMPLATE".
   // Always the RESOLVED text of the active djPrompts entry — kept so
   // renderDjPrompt() (and an older controller sharing the same settings.json)
@@ -1911,6 +1914,10 @@ export async function load() {
         typeof stored.ui?.skin === 'string' && stored.ui.skin.trim()
           ? stored.ui.skin.trim()
           : DEFAULTS.ui.skin,
+      tuneInOverlay:
+        typeof stored.ui?.tuneInOverlay === 'boolean'
+          ? stored.ui.tuneInOverlay
+          : DEFAULTS.ui.tuneInOverlay,
     },
     personas,
     activePersonaId,
@@ -3551,6 +3558,9 @@ export async function update(patch) {
       if (/^[a-z0-9][a-z0-9-]{0,31}$/.test(slug)) {
         next.ui.skin = slug;
       }
+    }
+    if (ui.tuneInOverlay !== undefined) {
+      next.ui.tuneInOverlay = !!ui.tuneInOverlay;
     }
   }
   if ('webhooks' in patch) {

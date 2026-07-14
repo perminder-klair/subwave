@@ -59,7 +59,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
   const { audioRef, tunedIn, status, volume, muted, offline, signal } = usePlayerAudio();
   const { tune, toggleMute, setVolume, submitRequest: coreSubmitRequest, pollRequest } =
     usePlayerActions();
-  const { showTuneIn, tuneInFromOverlay, handleTune } = useTuneInGate();
+  const { showOverlay, tuneInFromOverlay, handleTune } = useTuneInGate();
 
   // Listener count now lives in the footer's signal readout (not the header) —
   // normalise the feed's number | { current } | null shape to a plain count.
@@ -260,7 +260,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
       </Sheet>
 
       <AnimatePresence>
-        {showTuneIn && !offline && (
+        {showOverlay && !offline && (
           <TuneInOverlay key="tune-in" onTune={tuneInFromOverlay} nowPlaying={nowPlaying} />
         )}
       </AnimatePresence>

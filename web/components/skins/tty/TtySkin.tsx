@@ -52,7 +52,7 @@ export default function TtySkin(_props: SkinProps) {
   } = usePlayerFeed();
   const { tunedIn, status, volume, muted, offline, signal } = usePlayerAudio();
   const { toggleMute } = usePlayerActions();
-  const { showTuneIn, tuneInFromOverlay, handleTune } = useTuneInGate();
+  const { showTuneIn, showOverlay, tuneInFromOverlay, handleTune } = useTuneInGate();
 
   const elapsed = useElapsed(trackStartedAt);
   const clock = useClock();
@@ -356,7 +356,7 @@ export default function TtySkin(_props: SkinProps) {
 
       {/* boot-log gate — halts at "press any key". The tap/keypress is the
           browser's audio-unblock gesture. */}
-      {showTuneIn && !offline && (
+      {showOverlay && !offline && (
         <button
           type="button"
           onClick={tuneInFromOverlay}
