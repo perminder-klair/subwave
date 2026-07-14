@@ -31,6 +31,7 @@ import {
   lastVoiceLine,
   listenerCountOf,
   progressRatio,
+  stationIdentity,
   trackMeta,
 } from '../shared';
 import { useRequestSlip, useVolumeNudge } from '../sharedHooks';
@@ -138,10 +139,7 @@ export default function PlatterSkin(_props: SkinProps) {
 
   const elapsed = useElapsed(trackStartedAt);
   const listenerCount = listenerCountOf(listeners);
-  const stationName = (typeof dj?.station === 'string' && dj.station) || 'SUB/WAVE';
-  const djName =
-    activeShow?.persona?.name || (typeof dj?.name === 'string' ? dj.name : '') || 'the DJ';
-  const showName = activeShow?.name || context?.time?.show || '';
+  const { stationName, djName, showName } = stationIdentity(dj, activeShow, context);
   const meta = trackMeta(nowPlaying);
   const ratio = progressRatio(elapsed, nowPlaying?.duration);
   const voice = lastVoiceLine(session.messages);

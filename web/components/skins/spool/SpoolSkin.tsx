@@ -32,6 +32,7 @@ import {
   lastVoiceLine,
   listenerCountOf,
   progressRatio,
+  stationIdentity,
   trackMeta,
   turnClock,
 } from '../shared';
@@ -103,10 +104,7 @@ export default function SpoolSkin(_props: SkinProps) {
   const elapsed = useElapsed(trackStartedAt);
   const stationLocale = normalizeStationLocale(locale);
   const listenerCount = listenerCountOf(listeners);
-  const stationName = (typeof dj?.station === 'string' && dj.station) || 'SUB/WAVE';
-  const djName =
-    activeShow?.persona?.name || (typeof dj?.name === 'string' ? dj.name : '') || 'the DJ';
-  const showName = activeShow?.name || context?.time?.show || '';
+  const { stationName, djName, showName } = stationIdentity(dj, activeShow, context);
   const meta = trackMeta(nowPlaying);
   const ratio = progressRatio(elapsed, nowPlaying?.duration);
   const ratioSafe = ratio ?? 0.5;

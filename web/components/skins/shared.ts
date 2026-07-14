@@ -12,7 +12,7 @@ import {
 } from '@/lib/sessionFeed';
 import { fmtClockMinute } from '@/lib/format';
 import type { StationLocale } from '@/lib/format';
-import type { ListenerCount, SessionTurn, StationContext } from '@/lib/types';
+import type { ActiveShow, DjState, ListenerCount, SessionTurn, StationContext } from '@/lib/types';
 
 /** Normalise the feed's `number | { current } | null` listener shape. */
 export function listenerCountOf(
@@ -21,6 +21,35 @@ export function listenerCountOf(
   if (listeners == null) return null;
   if (typeof listeners === 'number') return listeners;
   return listeners.current ?? null;
+}
+
+export interface StationIdentity {
+  /** Broadcaster name — the masthead brand. */
+  stationName: string;
+  /** On-air DJ name — the show's persona if one is airing, else the global DJ. */
+  djName: string;
+  /** Current show title, or the time-of-day period when no show is scheduled. */
+  showName: string;
+}
+
+/** The three masthead facts every skin derives — centralised here so they
+ *  can't drift between skins. DJ name prefers the on-air show's persona (a
+ *  scheduled show can hand the hour to a guest); show name falls back to the
+ *  time-of-day period; both fall back to sensible defaults so a fresh install
+ *  still reads cleanly. */
+export function stationIdentity(
+  dj: DjState | null,
+  activeShow: ActiveShow | null,
+  context: StationContext | null,
+): StationIdentity {
+  return {
+    stationName: (typeof dj?.station === 'string' && dj.station) || 'SUB/WAVE',
+    djName:
+      activeShow?.persona?.name ||
+      (typeof dj?.name === 'string' ? dj.name : '') ||
+      'the DJ',
+    showName: activeShow?.name || context?.time?.show || '',
+  };
 }
 
 export interface BoothLine {

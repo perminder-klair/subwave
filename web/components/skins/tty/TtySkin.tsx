@@ -27,6 +27,7 @@ import {
   entryTime,
   listenerCountOf,
   progressRatio,
+  stationIdentity,
   trackMeta,
   turnClock,
 } from '../shared';
@@ -58,10 +59,7 @@ export default function TtySkin(_props: SkinProps) {
   const clock = useClock();
   const stationLocale = normalizeStationLocale(locale);
   const listenerCount = listenerCountOf(listeners);
-  const stationName = (typeof dj?.station === 'string' && dj.station) || 'SUB/WAVE';
-  const djName =
-    activeShow?.persona?.name || (typeof dj?.name === 'string' ? dj.name : '') || 'DJ';
-  const showName = activeShow?.name;
+  const { stationName, djName, showName } = stationIdentity(dj, activeShow, context);
   const meta = trackMeta(nowPlaying);
   const ratio = progressRatio(elapsed, nowPlaying?.duration);
   const booth = boothLines(session.messages, 24);

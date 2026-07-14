@@ -34,6 +34,7 @@ import {
   contextLine,
   entryTime,
   listenerCountOf,
+  stationIdentity,
   trackMeta,
   turnClock,
 } from '../shared';
@@ -91,10 +92,7 @@ export default function SubampSkin(_props: SkinProps) {
   const clock = useClock();
   const stationLocale = normalizeStationLocale(locale);
   const listenerCount = listenerCountOf(listeners);
-  const stationName = (typeof dj?.station === 'string' && dj.station) || 'SUB/WAVE';
-  const djName =
-    activeShow?.persona?.name || (typeof dj?.name === 'string' ? dj.name : '') || 'the DJ';
-  const showName = activeShow?.name || context?.time?.show || '';
+  const { stationName, djName, showName } = stationIdentity(dj, activeShow, context);
   const meta = trackMeta(nowPlaying);
   const booth = boothLines(session.messages, 24);
   const upNext = state.upcoming?.[0];
