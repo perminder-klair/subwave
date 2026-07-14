@@ -74,3 +74,10 @@
    bottom to the thumb; the thumb rides at (1 - vf) from the top. */
 .faderFill { top: calc((1 - var(--vf, 0)) * 100%); }
 .faderThumb { top: calc((1 - var(--vf, 0)) * 100%); }
+
+/* Metadata chips — a single horizontal lane on phones. The row scrolls rather
+   than wrapping or clipping a chip mid-word (so "92 BPM" never breaks to two
+   lines); the scrollbar is hidden so it reads as a clean strip. In the wide
+   two-column layout it wraps freely (lg:flex-wrap) and this never applies. */
+.chipRow { scrollbar-width: none; }
+.chipRow::-webkit-scrollbar { display: none; }

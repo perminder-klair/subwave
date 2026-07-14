@@ -23,16 +23,19 @@ import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { useElapsed } from '@/hooks/useElapsed';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import ThemeSwitcher from '@/components/ThemeSwitcher';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { cn } from '@/lib/cn';
-import { fmtTime } from '@/lib/format';
+import { fmtTime, normalizeStationLocale } from '@/lib/format';
 import { useStationClient } from '@/lib/stationClient';
 import {
   contextLine,
+  entryTime,
   lastVoiceLine,
   listenerCountOf,
   progressRatio,
   stationIdentity,
   trackMeta,
+  turnClock,
 } from '../shared';
 import { useRequestSlip, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
@@ -131,7 +134,7 @@ export default function PlatterSkin(_props: SkinProps) {
   const client = useStationClient();
   const {
     nowPlaying, context, dj, activeShow, listeners, state, session,
-    trackStartedAt,
+    trackStartedAt, timezone, locale,
   } = usePlayerFeed();
   const { tunedIn, status, volume, muted, offline, signal } = usePlayerAudio();
   const { toggleMute, setVolume } = usePlayerActions();
@@ -144,6 +147,8 @@ export default function PlatterSkin(_props: SkinProps) {
   const ratio = progressRatio(elapsed, nowPlaying?.duration);
   const voice = lastVoiceLine(session.messages);
   const upNext = (state.upcoming ?? []).slice(0, 2);
+  const history = (state.history ?? []).slice(0, 24);
+  const stationLocale = normalizeStationLocale(locale);
   const playing = tunedIn && status === 'playing' && !offline;
 
   const title = offline ? '— off air —' : (nowPlaying?.title ?? 'Scanning the dial…');
@@ -225,7 +230,7 @@ export default function PlatterSkin(_props: SkinProps) {
               as a row beneath the deck on phones (clear of the vinyl); mounted
               in the plinth corners from lg up (the wrapper goes display:contents
               so each cluster positions itself absolutely). */}
-          <div className="flex w-full items-end justify-center gap-8 lg:contents">
+          <div className="flex w-full items-end justify-between gap-4 lg:contents">
             <div className="flex items-end gap-3 lg:absolute lg:bottom-6 lg:left-6">
               <button
                 type="button"
@@ -283,7 +288,7 @@ export default function PlatterSkin(_props: SkinProps) {
         </div>
 
         {/* ===== metadata column ===== */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-hidden p-4 lg:gap-4 lg:overflow-y-auto lg:p-6">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-hidden p-4 lg:gap-4 lg:overflow-hidden lg:p-6">
           {/* now playing */}
           <div className="flex items-start gap-5">
             <div className="size-[84px] flex-none border border-ink bg-[var(--field)] sm:size-[104px]">
@@ -313,12 +318,12 @@ export default function PlatterSkin(_props: SkinProps) {
 
           {/* chips */}
           {(meta.facts.length > 0 || meta.moods.length > 0) && !offline && (
-            <div className="flex flex-nowrap gap-[7px] overflow-hidden lg:flex-wrap">
+            <div className={cn('flex gap-[7px] overflow-x-auto lg:flex-wrap lg:overflow-visible', styles.chipRow)}>
               {meta.facts.map(f => (
-                <span key={f} className="border border-ink px-2.5 py-1 font-mono text-[10px] tracking-[0.1em]">{f}</span>
+                <span key={f} className="shrink-0 border border-ink px-2.5 py-1 font-mono text-[10px] tracking-[0.1em] whitespace-nowrap">{f}</span>
               ))}
               {meta.moods.map(m => (
-                <span key={m} className="border border-[var(--accent)] px-2.5 py-1 font-mono text-[10px] tracking-[0.1em] text-[var(--accent)] uppercase">
+                <span key={m} className="shrink-0 border border-[var(--accent)] px-2.5 py-1 font-mono text-[10px] tracking-[0.1em] whitespace-nowrap text-[var(--accent)] uppercase">
                   {m}
                 </span>
               ))}
@@ -374,7 +379,7 @@ export default function PlatterSkin(_props: SkinProps) {
               narrow) layout so the deck fits one screen without scrolling; it
               returns in the two-column layout (lg) where the column scrolls. */}
           {voice && (
-            <div className="hidden flex-1 flex-col gap-2 border border-ink bg-bg px-4 py-3.5 lg:flex">
+            <div className="hidden flex-none flex-col gap-2 border border-ink bg-bg px-4 py-3.5 lg:flex">
               <span className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.18em] text-[var(--accent)] uppercase">
                 <span className={cn('size-[7px] rounded-full bg-[var(--accent)]', styles.pulse, playing && styles.playing)} />
                 on air — {djName}
@@ -382,6 +387,41 @@ export default function PlatterSkin(_props: SkinProps) {
               <span className="text-[15px] leading-relaxed italic">“{voice.text}”</span>
             </div>
           )}
+
+          {/* recently spun — the flip side of the up-next stack, and what fills
+              the tall right column. Desktop only: the phone layout drops it (as
+              the booth quote is) so the deck + metadata fit one screen. The panel
+              takes the leftover height (flex-1) and ONLY its list scrolls (shadcn
+              ScrollArea) — the surrounding column never scrolls (lg:overflow-hidden),
+              so the deck, transport and request slip stay put. */}
+          <div className="hidden min-h-0 flex-1 flex-col border border-ink bg-[var(--field)] lg:flex">
+            <div className="flex-none border-b border-soft-border px-3.5 py-2.5 font-mono text-[9px] font-bold tracking-[0.22em] text-muted uppercase">
+              recently spun
+            </div>
+            <ScrollArea type="auto" className="min-h-0 flex-1">
+              {history.length > 0 ? (
+                history.map((h, i) => (
+                  <div
+                    key={`${entryTime(h) ?? ''}-${h.title ?? i}`}
+                    className="flex items-center gap-3 border-b border-soft-border px-3.5 py-2 last:border-b-0"
+                  >
+                    <span className="size-1.5 flex-none rounded-full border border-[var(--muted)]" aria-hidden="true" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-[14px] font-bold">{h.title ?? '—'}</div>
+                      {h.artist && <div className="truncate text-[11px] text-muted">{h.artist}</div>}
+                    </div>
+                    <span className="flex-none font-mono text-[10px] text-muted tabular-nums">
+                      {turnClock(entryTime(h), timezone, stationLocale)}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="px-3.5 py-2.5 font-mono text-[11px] text-muted">
+                  the platter's been quiet — nothing spun yet this session
+                </div>
+              )}
+            </ScrollArea>
+          </div>
 
           {/* request slip */}
           <form
