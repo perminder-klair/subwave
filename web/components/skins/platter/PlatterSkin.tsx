@@ -52,7 +52,7 @@ function Deck({
   artist: string;
 }) {
   return (
-    <div className="[container-type:inline-size] relative aspect-square w-[min(56vw,30vh,220px)] lg:w-[min(42vw,72vh,520px)]">
+    <div className="[container-type:inline-size] relative aspect-square w-[min(52vw,29vh,210px)] lg:w-[min(42vw,72vh,520px)]">
       {/* pitch strobe rim */}
       <div
         className={cn(
@@ -203,22 +203,29 @@ export default function PlatterSkin(_props: SkinProps) {
         </div>
       </div>
 
-      {/* body — turntable on the left, metadata column on the right */}
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+      {/* body — turntable over metadata on phones (the body scrolls if the
+          content is taller than the screen); two side-by-side columns on lg. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
         {/* ===== the plinth ===== */}
-        <div className="relative flex flex-1 flex-col items-center justify-center gap-6 border-b border-ink bg-linear-to-br from-[var(--field)] to-[color-mix(in_oklab,var(--field)_82%,var(--bg))] px-6 py-6 lg:w-[46%] lg:max-w-[680px] lg:flex-1 lg:flex-row lg:gap-0 lg:border-r lg:border-b-0 lg:py-10">
+        <div className="relative flex flex-none flex-col items-center gap-3 border-b border-ink bg-linear-to-br from-[var(--field)] to-[color-mix(in_oklab,var(--field)_82%,var(--bg))] px-6 py-3 lg:w-[46%] lg:max-w-[680px] lg:flex-1 lg:flex-row lg:justify-center lg:gap-0 lg:border-r lg:border-b-0 lg:py-10">
           <span className="absolute top-5 left-6 font-mono text-[9px] tracking-[0.24em] text-muted uppercase">
             direct drive · quartz lock
           </span>
 
-          <Deck playing={playing} stationName={stationName} title={title} artist={artist} />
+          {/* deck-area: on phones this flex-1 wrapper centres the platter in the
+              space above the controls (breathing room above it, not stuck to
+              the top); on lg it collapses (display:contents) so the deck centres
+              in the whole plinth. */}
+          <div className="flex w-full items-center justify-center pt-8 lg:contents">
+            <Deck playing={playing} stationName={stationName} title={title} artist={artist} />
+          </div>
 
           {/* the deck IS the control surface: START/STOP drops or lifts the
               needle, MUTE sits beside it, and the fader is the volume. Laid out
               as a row beneath the deck on phones (clear of the vinyl); mounted
               in the plinth corners from lg up (the wrapper goes display:contents
               so each cluster positions itself absolutely). */}
-          <div className="flex w-full max-w-[320px] items-end justify-between gap-4 lg:contents">
+          <div className="flex w-full items-end justify-center gap-8 lg:contents">
             <div className="flex items-end gap-3 lg:absolute lg:bottom-6 lg:left-6">
               <button
                 type="button"
@@ -262,7 +269,7 @@ export default function PlatterSkin(_props: SkinProps) {
                   if (e.key === 'ArrowUp') { e.preventDefault(); adjustVolume(0.05); }
                   else if (e.key === 'ArrowDown') { e.preventDefault(); adjustVolume(-0.05); }
                 }}
-                className="v3-focus relative h-20 w-7 cursor-pointer touch-none border border-ink bg-bg lg:h-36"
+                className="v3-focus relative h-16 w-7 cursor-pointer touch-none border border-ink bg-bg lg:h-36"
               >
                 <span className="pointer-events-none absolute top-2 bottom-2 left-1/2 w-px -translate-x-1/2 bg-soft-border" aria-hidden="true" />
                 <span className="pointer-events-none absolute top-2 left-1 h-px w-[3px] bg-[var(--accent)]" aria-hidden="true" />
@@ -276,7 +283,7 @@ export default function PlatterSkin(_props: SkinProps) {
         </div>
 
         {/* ===== metadata column ===== */}
-        <div className="flex min-h-0 min-w-0 flex-none flex-col gap-3 overflow-hidden p-4 lg:flex-1 lg:gap-4 lg:overflow-y-auto lg:p-6">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-hidden p-4 lg:gap-4 lg:overflow-y-auto lg:p-6">
           {/* now playing */}
           <div className="flex items-start gap-5">
             <div className="size-[84px] flex-none border border-ink bg-[var(--field)] sm:size-[104px]">
