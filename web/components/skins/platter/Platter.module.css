@@ -54,12 +54,13 @@
 }
 
 /* Tonearm — an SVG overlay drawn at its tracking (needle-down) position, then
-   rotated as a whole around the pivot (84% 15% of the square deck) so the
-   headshell always stays welded to the tube end and the stylus stays on the
-   groove. A one-shot transition (not a loop) swings it up off the record when
-   the listener tunes out; the parked angle holds even under html.lite. */
+   rotated as a whole around the rear-right pivot (86% 19% of the square deck)
+   so the headshell always stays welded to the tube end and the stylus stays on
+   the groove. A one-shot transition (not a loop) swings it up and out off the
+   record when the listener tunes out; the parked angle holds even under
+   html.lite. Origin MUST match the pivot circle in PlatterSkin.tsx. */
 .arm {
-  transform-origin: 84% 15%;
+  transform-origin: 86% 19%;
   transition: transform 1.1s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .armRest { transform: rotate(-16deg); }

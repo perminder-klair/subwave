@@ -103,7 +103,10 @@ function Deck({
 
       {/* tonearm — one SVG in the deck's own coordinate space, so the headshell
           stays welded to the tube end and the stylus lands on the groove. The
-          whole arm swings up off the record when tuned out (see .arm). */}
+          pivot sits rear-right (86% 19%) like a real deck; the arm reaches down
+          onto the RIGHT-hand grooves (never crossing the label) so the record's
+          clockwise spin draws the stylus along the groove instead of shoving it.
+          The whole arm swings up off the record when tuned out (see .arm). */}
       <svg
         viewBox="0 0 100 100"
         className={cn(
@@ -114,17 +117,17 @@ function Deck({
         aria-hidden="true"
       >
         {/* arm tube — dark outline under a light-metal core */}
-        <line x1="84" y1="15" x2="30" y2="33" strokeWidth={2.3} strokeLinecap="round" className="stroke-ink" />
-        <line x1="84" y1="15" x2="30" y2="33" strokeWidth={1.1} strokeLinecap="round" className="stroke-[#e6e0d2]" />
+        <line x1="86" y1="19" x2="72.8" y2="58.5" strokeWidth={2.3} strokeLinecap="round" className="stroke-ink" />
+        <line x1="86" y1="19" x2="72.8" y2="58.5" strokeWidth={1.1} strokeLinecap="round" className="stroke-[#e6e0d2]" />
         {/* counterweight past the pivot */}
-        <rect x="85.5" y="11" width="9" height="5" rx="1" strokeWidth={0.6} className="fill-[#22201d] stroke-ink" />
+        <rect x="83.1" y="11.8" width="9" height="5" rx="1" strokeWidth={0.6} transform="rotate(108.4 87.6 14.3)" className="fill-[#22201d] stroke-ink" />
         {/* pivot mount */}
-        <circle cx="84" cy="15" r="3.6" strokeWidth={0.8} className="fill-[#d9d2c4] stroke-ink" />
-        <circle cx="84" cy="15" r="1.2" className="fill-ink" />
+        <circle cx="86" cy="19" r="3.6" strokeWidth={0.8} className="fill-[#d9d2c4] stroke-ink" />
+        <circle cx="86" cy="19" r="1.2" className="fill-ink" />
         {/* headshell + cartridge at the tip */}
-        <rect x="26" y="30" width="8" height="5.4" rx="0.8" strokeWidth={0.6} transform="rotate(18 30 32.7)" className="fill-[#22201d] stroke-ink" />
+        <rect x="67.3" y="60.5" width="8" height="5.4" rx="0.8" strokeWidth={0.6} transform="rotate(130.4 71.3 63.2)" className="fill-[#22201d] stroke-ink" />
         {/* stylus dropped onto the groove */}
-        <line x1="28.6" y1="35" x2="27.6" y2="37.8" strokeWidth={1.1} strokeLinecap="round" className="stroke-[var(--accent)]" />
+        <line x1="70" y1="67" x2="69.4" y2="69.7" strokeWidth={1.1} strokeLinecap="round" className="stroke-[var(--accent)]" />
       </svg>
     </div>
   );
@@ -238,7 +241,7 @@ export default function PlatterSkin(_props: SkinProps) {
                 aria-label={tunedIn ? 'Tune out' : 'Tune in'}
                 className={cn(
                   'v3-focus flex size-20 cursor-pointer flex-col items-center justify-center gap-0.5 rounded-full border border-ink',
-                  tunedIn ? 'bg-[var(--accent)] text-bg' : 'bg-bg text-ink hover:bg-[var(--overlay)]',
+                  tunedIn ? 'bg-[var(--accent)] text-bg' : 'bg-bg text-ink hover:bg-[var(--field)]',
                 )}
               >
                 <span className="text-[30px] leading-none">{tunedIn ? '■' : '▶'}</span>
@@ -251,7 +254,7 @@ export default function PlatterSkin(_props: SkinProps) {
                 aria-label={muted ? 'Unmute' : 'Mute'}
                 className={cn(
                   'v3-focus grid size-14 cursor-pointer place-items-center rounded-full border border-ink font-mono text-[9px] font-bold tracking-[0.1em]',
-                  muted ? 'bg-ink text-bg' : 'bg-bg hover:bg-[var(--overlay)]',
+                  muted ? 'bg-ink text-bg' : 'bg-bg hover:bg-[var(--field)]',
                 )}
               >
                 {muted ? 'MUTED' : 'MUTE'}
