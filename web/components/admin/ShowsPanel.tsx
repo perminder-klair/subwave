@@ -1776,7 +1776,7 @@ function ShowEditor({
               <div className="grid gap-0.5">
                 <Label>Playlist only (strict)</Label>
                 <span className="field-hint">
-                  Play ONLY tracks from the pinned playlist(s) — off-playlist
+                  On: play ONLY tracks from the pinned playlist(s) — off-playlist
                   tracks air only as a last resort to avoid silence. Off: the
                   playlist dominates but the DJ can still wander for variety.
                   Listener requests are always allowed through, either way.
