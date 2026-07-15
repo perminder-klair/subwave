@@ -22,6 +22,7 @@ import { djObject } from '../llm/sdk.js';
 import {
   mergePools,
   capPool,
+  capPerArtist,
   orderByIds,
   fitToCount,
   pickDeterministic,
@@ -279,6 +280,18 @@ export async function buildCandidatePool(
     for (const t of pool) if (t.energy && want.has(t.energy)) t.score = (t.score ?? 0) + 0.15;
     const filteredEnergy = pool.filter((t) => !t.energy || want.has(t.energy));
     pool = revertIfStarved(filteredEnergy, pool, knobs, reasons, 'energy');
+  }
+
+  // Artist-diversity cap: keep the candidate list varied so one prolific artist
+  // / a freshly-imported album can't dominate what the model (and the fallback)
+  // sees. Skipped when the operator INTENTIONALLY narrows to an artist or seed
+  // tracks — that focus is the point.
+  const artistSeeded = Boolean(input.seedArtist?.trim() || input.seedTrackIds?.length);
+  if (!artistSeeded) {
+    const target = clampCount(knobs.targetCount ?? DEFAULT_COUNT);
+    // Allow a few per artist but never let one artist exceed ~a third of a
+    // target-sized set.
+    pool = capPerArtist(pool, Math.max(4, Math.ceil(target / 3)));
   }
 
   return { pool: capPool(pool, POOL_CAP), reasons };

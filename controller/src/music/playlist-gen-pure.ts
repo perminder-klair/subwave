@@ -96,6 +96,59 @@ export function capPool(tracks: PoolTrack[], cap: number): PoolTrack[] {
     .map((x) => x.t);
 }
 
+const artistKey = (t: PoolTrack) => (t.artist || '').trim().toLowerCase();
+
+// Keep at most `maxPerArtist` of any one artist (highest-scoring first), so a
+// single prolific artist / a freshly-imported album can't flood the pool and
+// starve the candidate list handed to the model (and the fallback). Blank
+// artists are never capped. Preserves input order for kept rows.
+export function capPerArtist(tracks: PoolTrack[], maxPerArtist: number): PoolTrack[] {
+  if (maxPerArtist <= 0) return [...tracks];
+  // Rank each track within its artist by score (desc, stable by index); keep the
+  // top `maxPerArtist`.
+  const order = tracks
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => (b.t.score ?? 0) - (a.t.score ?? 0) || a.i - b.i);
+  const counts = new Map<string, number>();
+  const keep = new Set<number>();
+  for (const { t, i } of order) {
+    const k = artistKey(t);
+    if (k === '') { keep.add(i); continue; }
+    const c = counts.get(k) ?? 0;
+    if (c < maxPerArtist) { keep.add(i); counts.set(k, c + 1); }
+  }
+  return tracks.filter((_, i) => keep.has(i));
+}
+
+// Select `targetCount` tracks from a scored pool, favouring score but keeping
+// the same artist at least `minGap` apart DURING selection (not just reordering
+// after). Walks the score-sorted pool; at each slot takes the highest-scoring
+// remaining track whose artist is outside the recent window, relaxing only when
+// every remaining candidate clashes. This is what stops the deterministic
+// fallback from returning a single-artist run when one artist owns the top
+// scores.
+export function selectByScoreWithSpacing(
+  pool: PoolTrack[],
+  targetCount: number,
+  minGap: number,
+): PoolTrack[] {
+  const sorted = pool
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => (b.t.score ?? 0) - (a.t.score ?? 0) || a.i - b.i)
+    .map((x) => x.t);
+  if (minGap <= 0) return sorted.slice(0, Math.max(0, targetCount));
+  const remaining = [...sorted];
+  const picked: PoolTrack[] = [];
+  const limit = Math.max(0, targetCount);
+  while (picked.length < limit && remaining.length) {
+    const recent = new Set(picked.slice(-minGap).map(artistKey));
+    let idx = remaining.findIndex((t) => !recent.has(artistKey(t)) || artistKey(t) === '');
+    if (idx === -1) idx = 0; // every remaining candidate clashes — relax
+    picked.push(remaining.splice(idx, 1)[0]!);
+  }
+  return picked;
+}
+
 // Order a set to trace an energy arc. `flat` keeps the incoming (relevance)
 // order untouched; the others sort by energy. peak-then-cool builds a mountain:
 // lowest energy at both ends, highest in the middle.
@@ -128,7 +181,6 @@ export function spaceArtists(tracks: PoolTrack[], minGap: number): PoolTrack[] {
   if (minGap <= 0 || tracks.length < 2) return [...tracks];
   const pending = [...tracks];
   const result: PoolTrack[] = [];
-  const artistKey = (t: PoolTrack) => (t.artist || '').trim().toLowerCase();
   while (pending.length) {
     const recent = new Set(result.slice(-minGap).map(artistKey));
     let idx = pending.findIndex((t) => !recent.has(artistKey(t)) || artistKey(t) === '');
@@ -145,8 +197,11 @@ export function pickDeterministic(
   pool: PoolTrack[],
   opts: { targetCount: number; energyArc: ArcShape; artistSpacing: number },
 ): PoolTrack[] {
-  const top = capPool(pool, Math.max(1, opts.targetCount));
-  const arced = arrangeArc(top, opts.energyArc);
+  // Select with artist-diversity awareness FIRST (so one score-dominant artist
+  // can't fill the whole set), THEN arrange the arc, THEN a final spacing pass
+  // to clean up any adjacency the arc re-introduced.
+  const chosen = selectByScoreWithSpacing(pool, Math.max(1, opts.targetCount), opts.artistSpacing);
+  const arced = arrangeArc(chosen, opts.energyArc);
   return spaceArtists(arced, opts.artistSpacing);
 }
 

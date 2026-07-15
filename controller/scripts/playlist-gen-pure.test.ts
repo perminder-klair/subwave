@@ -11,6 +11,8 @@ import {
   dedupeById,
   mergePools,
   capPool,
+  capPerArtist,
+  selectByScoreWithSpacing,
   arrangeArc,
   spaceArtists,
   pickDeterministic,
@@ -132,6 +134,42 @@ function t(id: string, over: Partial<PoolTrack> = {}): PoolTrack {
   assert.equal(spaceArtists(rows, 2).length, 2);
 }
 
+// ── capPerArtist ─────────────────────────────────────────────────────────────
+{
+  const rows = [
+    t('a1', { artist: 'A', score: 0.9 }),
+    t('a2', { artist: 'A', score: 0.8 }),
+    t('a3', { artist: 'A', score: 0.7 }),
+    t('b1', { artist: 'B', score: 0.6 }),
+  ];
+  const capped = capPerArtist(rows, 2);
+  assert.equal(capped.filter((x) => x.artist === 'A').length, 2, 'keeps only top-2 of artist A');
+  assert.deepEqual(capped.filter((x) => x.artist === 'A').map((x) => x.id), ['a1', 'a2'], 'keeps highest-scoring of the artist');
+  assert.ok(capped.some((x) => x.id === 'b1'), 'other artists untouched');
+  // blank artists never capped
+  const blanks = capPerArtist([t('x', { artist: '' }), t('y', { artist: '' })], 1);
+  assert.equal(blanks.length, 2);
+}
+
+// ── selectByScoreWithSpacing ─────────────────────────────────────────────────
+{
+  // Artist A owns the top scores; selection must still interleave B/C.
+  const pool = [
+    t('a1', { artist: 'A', score: 0.99 }),
+    t('a2', { artist: 'A', score: 0.98 }),
+    t('a3', { artist: 'A', score: 0.97 }),
+    t('b1', { artist: 'B', score: 0.50 }),
+    t('c1', { artist: 'C', score: 0.40 }),
+  ];
+  const picked = selectByScoreWithSpacing(pool, 4, 2);
+  assert.equal(picked.length, 4);
+  assert.equal(picked[0]!.artist, 'A', 'still leads with the top score');
+  // no same-artist within the gap where spacers existed
+  assert.notEqual(picked[1]!.artist, 'A', 'second pick is a different artist despite lower score');
+  // minGap 0 → pure score order
+  assert.deepEqual(selectByScoreWithSpacing(pool, 3, 0).map((x) => x.id), ['a1', 'a2', 'a3']);
+}
+
 // ── pickDeterministic (never-empty invariant) ────────────────────────────────
 {
   const pool = [
@@ -148,6 +186,19 @@ function t(id: string, over: Partial<PoolTrack> = {}): PoolTrack {
   assert.equal(all.length, 4);
   // empty pool → empty (no throw)
   assert.deepEqual(pickDeterministic([], { targetCount: 5, energyArc: 'flat', artistSpacing: 2 }), []);
+
+  // diversity: one artist owning the top scores must NOT fill the whole set
+  // (the live-test regression — 11 Snoop Dogg tracks in a row).
+  const flooded = [
+    ...Array.from({ length: 8 }, (_, i) => t(`z${i}`, { artist: 'Z', score: 0.9 - i * 0.01, energy: 'medium' })),
+    t('m1', { artist: 'M', score: 0.4, energy: 'low' }),
+    t('n1', { artist: 'N', score: 0.35, energy: 'high' }),
+    t('o1', { artist: 'O', score: 0.3, energy: 'medium' }),
+  ];
+  const div = pickDeterministic(flooded, { targetCount: 6, energyArc: 'flat', artistSpacing: 2 });
+  const zCount = div.filter((x) => x.artist === 'Z').length;
+  assert.ok(zCount < 6, `dominant artist should not fill the set (got ${zCount}/6)`);
+  assert.ok(new Set(div.map((x) => x.artist)).size >= 3, 'set draws from multiple artists');
 }
 
 // ── orderByIds ───────────────────────────────────────────────────────────────
