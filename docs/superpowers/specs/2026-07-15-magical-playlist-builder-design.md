@@ -46,6 +46,21 @@ these together into one screen.
 - An MCP/agent tool for generation (operator UI only for v1).
 - Scheduling a show directly from the builder (link out to `/admin/shows`).
 
+## Follow-on specs (out of scope for v1, from Kate's feedback)
+
+These are captured here so v1 leaves clean seams, but are **not built now**:
+
+- **Phase 2 — Folder-based dynamic (smart) playlists + source weighting.** A
+  rule-based source (`{ type:'folder', path, weight }`) that resolves *live* from
+  the library (auto-updates as files are added/removed) and contributes to the
+  **show pool** by weight. Distinct subsystem: Navidrome playlists are static
+  song-id lists, so this is a SUB/WAVE-side smart-source model resolved against
+  `library-db` paths, and it extends the show pool weighting — not just the
+  builder. Its own spec.
+- **Phase 3 — "New track spotlight" DJ skill.** A between-track `skills/` segment
+  that announces recently-added tracks on air ("here's a new track we just
+  added…"). Belongs with the segment/skill system, separate from the builder.
+
 ## Decisions (locked)
 
 | Decision | Choice |
@@ -90,9 +105,18 @@ DraftTrack = {
    - `getSimilarSongs(seedId)` + audio-KNN for each seed track/artist.
    - `library.songsByMood(mood)` / `getSongsByGenre(genre)` for knob moods/genres.
    - `starred` + `recentlyAdded` as filler when the pool is thin.
+   - **Recently-added as a first-class source** (Kate #2a): when
+     `sources.recentlyAdded` is on, seed the pool primarily from
+     `getRecentlyAddedAlbums` → their tracks, so the operator can build a "just
+     landed" set. Standalone: with no prompt/seeds and this toggle on, the whole
+     pool is recent arrivals.
    Then filters `isStationArchive`, applies **hard** filters (era / genre / energy /
-   exclude-artist), and caps. Returns `{ degraded, reasons }` alongside so the UI
-   can say which search modes were unavailable.
+   exclude-artist), and — when `knobs.instrumentalOnly` (Kate #3) — keeps only
+   **instrumental** tracks: prefer analyzer vocal-range data (low/no vocal
+   presence) where present, else fall back to genre/mood tags
+   (`instrumental` / `ambient` / `score` / `classical`). Caps the result. Returns
+   `{ degraded, reasons }` so the UI can say which search modes / instrumental
+   signal were unavailable.
 
 2. `curatePlaylist(pool, { prompt, knobs }): Promise<CuratedResult>`
    **One `djObject` call** (Zod-validated, mirroring the pool picker in
@@ -114,8 +138,8 @@ the unit-test seam AND the degradation fallback:
 
 **Extend: `controller/src/routes/playlists.ts`**
 - `POST /playlists/generate` (`requireAdmin`) — body `{ prompt?, seedTrackIds?,
-  seedArtist?, knobs, excludeTrackIds? }` → `{ tracks: DraftTrack[], name?,
-  description?, degraded, reasons }`. **Unsaved.** `excludeTrackIds` powers
+  seedArtist?, knobs, sources?, excludeTrackIds? }` → `{ tracks: DraftTrack[],
+  name?, description?, degraded, reasons }`. **Unsaved.** `excludeTrackIds` powers
   "Regenerate" / "Add more" by re-running with the current set excluded.
 - Save/update reuse the **existing** `POST /playlists` (create) and mutation
   routes.
@@ -136,7 +160,11 @@ knobs = {
   energyArc?: 'flat'|'build'|'peak-then-cool'|'wind-down',   // default 'flat'
   eras?: string[], genres?: string[], moods?: string[], energies?: string[],
   artistSpacing?: number,      // min tracks between same artist, default 2
-  excludeRecentlyPlayed?: boolean
+  excludeRecentlyPlayed?: boolean,
+  instrumentalOnly?: boolean   // Kate #3 — vocal-range data, fallback genre/mood tags
+}
+sources = {
+  recentlyAdded?: boolean      // Kate #2a — seed pool from new arrivals
 }
 ```
 
@@ -146,8 +174,23 @@ knobs = {
 `web/components/admin/PlaylistBuilderPanel.tsx` (`'use client'`, uses
 `useAdminAuth().adminFetch`, primitives from `components/admin/ui.tsx`).
 
+**UI/UX direction (must feel crafted, not a templated admin form).** The screen
+is the marquee feature — treat it like a mini studio, not a settings page. Guiding
+ideas (final look decided during build with the `frontend-design` skill):
+- A **"prompt console"** as the hero — a large, inviting vibe input with the seed
+  chips and knobs arranged like a tactile control surface (think the studio feel of
+  the existing skins), not a stack of form rows.
+- **Generation as a moment** — a satisfying pending state (the pool assembling /
+  curating), then the ordered list animating in. The energy arc shown as a small
+  **sparkline/curve** over the track list so "warms up halfway" is visible.
+- The track list reads like a **deck/tracklist**: cover thumbs, drag handles,
+  running time + count as a live "tape counter," dupe/instrumental badges.
+- Honors the admin theme tokens; co-located styles; responsive; accessible
+  (keyboard reorder + labels), never a horizontal-scrolling body.
+
 Layout:
 - **Generator panel** — prompt textarea; seed search (reuse `/dj/search`) + chips;
+  a **"Recently added" source toggle** and an **"instrumental only"** knob;
   knobs (count/minutes, energy arc, era/genre/mood/energy multiselects, artist
   spacing, exclude-recent toggle); **Generate**. Plus "New empty playlist" and
   "Open existing" (loads a Navidrome playlist into the draft to edit).
