@@ -7,8 +7,22 @@ import { requireAdmin } from '../middleware/auth.js';
 import * as subsonic from '../music/subsonic.js';
 import { queue } from '../broadcast/queue.js';
 import { generatePlaylist, type GenerateInput } from '../music/playlist-gen.js';
+import * as recipes from '../music/playlist-recipes.js';
+import { syncRecipe } from '../music/playlist-sync.js';
 
 export const router = express.Router();
+
+// A recipe body accompanies a "keep in sync" save — the same shape /generate
+// takes, minus excludeTrackIds.
+function readRecipe(body: any) {
+  return {
+    prompt: typeof body?.prompt === 'string' ? body.prompt : undefined,
+    seedTrackIds: parseIds(body?.seedTrackIds),
+    seedArtist: typeof body?.seedArtist === 'string' ? body.seedArtist : undefined,
+    knobs: body?.knobs && typeof body.knobs === 'object' ? body.knobs : {},
+    sources: body?.sources && typeof body.sources === 'object' ? body.sources : {},
+  };
+}
 
 function parseIds(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -20,14 +34,19 @@ router.get('/playlists', requireAdmin, async (_req, res) => {
   try {
     const playlists = await subsonic.getPlaylists();
     res.json({
-      playlists: (Array.isArray(playlists) ? playlists : []).map((p: any) => ({
-        id: p.id,
-        name: p.name,
-        songCount: p.songCount ?? 0,
-        durationSec: p.duration ?? 0,
-        owner: p.owner || '',
-        public: !!p.public,
-      })),
+      playlists: (Array.isArray(playlists) ? playlists : []).map((p: any) => {
+        const rec = recipes.get(p.id);
+        return {
+          id: p.id,
+          name: p.name,
+          songCount: p.songCount ?? 0,
+          durationSec: p.duration ?? 0,
+          owner: p.owner || '',
+          public: !!p.public,
+          synced: !!rec,
+          lastSyncedAt: rec?.lastSyncedAt ?? null,
+        };
+      }),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -64,15 +83,38 @@ router.post('/playlists', requireAdmin, async (req, res) => {
   const playlistId = typeof req.body?.playlistId === 'string' && req.body.playlistId.trim()
     ? req.body.playlistId.trim()
     : undefined;
+  const keepInSync = req.body?.keepInSync === true;
   try {
     const playlist = await subsonic.createPlaylist(name, songIds, { playlistId });
     // A wholesale overwrite via createPlaylist doesn't touch the name, so patch
     // it separately in case the operator renamed while saving over.
     if (playlistId) await subsonic.updatePlaylistMeta(playlistId, { name, public: true });
-    queue.log('info', `playlist "${name}" ${playlistId ? 'overwritten' : 'created'} (${songIds.length} tracks)`);
+    // Recipe upsert/remove for sync (append-only). `keepInSync` needs the recipe
+    // body; toggling it off drops the entry.
+    const id = playlist?.id || playlistId;
+    if (id) {
+      if (keepInSync) recipes.upsert({ playlistId: id, name, recipe: readRecipe(req.body?.recipe || {}) });
+      else recipes.remove(id);
+    }
+    queue.log('info', `playlist "${name}" ${playlistId ? 'overwritten' : 'created'} (${songIds.length} tracks)${keepInSync ? ' [synced]' : ''}`);
     res.json({ playlist: playlist || null, added: songIds.length });
   } catch (err: any) {
     queue.log('error', `playlist ${playlistId ? 'overwrite' : 'create'} failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /playlists/:id/sync — manual "Sync now" for a recipe-backed playlist.
+router.post('/playlists/:id/sync', requireAdmin, async (req, res) => {
+  const entry = recipes.get(req.params.id);
+  if (!entry) return res.status(404).json({ error: 'this playlist is not sync-enabled' });
+  try {
+    const r = await syncRecipe(entry);
+    if (r.prunedMissing) { recipes.remove(req.params.id); return res.status(404).json({ error: 'playlist no longer exists in Navidrome' }); }
+    queue.log('info', `playlist "${entry.name}" synced (+${r.added})`);
+    res.json({ added: r.added });
+  } catch (err: any) {
+    queue.log('error', `playlist sync failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -166,6 +208,7 @@ router.delete('/playlists/:id/tracks', requireAdmin, async (req, res) => {
 router.delete('/playlists/:id', requireAdmin, async (req, res) => {
   try {
     await subsonic.deletePlaylist(req.params.id);
+    recipes.remove(req.params.id);
     queue.log('info', `playlist ${req.params.id} deleted`);
     res.json({ ok: true });
   } catch (err: any) {

@@ -57,7 +57,7 @@ interface DraftTrack {
   instrumental?: boolean | null;
 }
 interface SeedChip { id: string; title: string; artist: string }
-interface PlaylistSummary { id: string; name: string; songCount: number }
+interface PlaylistSummary { id: string; name: string; songCount: number; synced?: boolean; lastSyncedAt?: string | null }
 
 // Loose shape for /dj/search rows and /playlists/:id entries — the controller
 // returns Subsonic-derived fields with varying key names across endpoints.
@@ -140,6 +140,9 @@ export default function PlaylistBuilderPanel() {
   const [name, setName] = useState('');
   const [tracks, setTracks] = useState<DraftTrack[]>([]);
   const [existingId, setExistingId] = useState<string | undefined>();
+  const [keepInSync, setKeepInSync] = useState(false);
+  const [syncInfo, setSyncInfo] = useState<{ lastSyncedAt: string | null } | null>(null);
+  const [syncing, setSyncing] = useState(false);
   const [reasons, setReasons] = useState<string[]>([]);
   const [usedFallback, setUsedFallback] = useState(false);
 
@@ -302,6 +305,8 @@ export default function PlaylistBuilderPanel() {
       })));
       setName(p.name);
       setExistingId(p.id);
+      setKeepInSync(!!p.synced);
+      setSyncInfo(p.synced ? { lastSyncedAt: p.lastSyncedAt ?? null } : null);
       setReasons([]);
       setPickerOpen(false);
       flash('ok', `loaded "${p.name}"`);
@@ -310,6 +315,7 @@ export default function PlaylistBuilderPanel() {
 
   const newEmpty = () => {
     setTracks([]); setName(''); setExistingId(undefined); setReasons([]); setSavedId(null);
+    setKeepInSync(false); setSyncInfo(null);
   };
 
   const save = useCallback(async () => {
@@ -320,20 +326,52 @@ export default function PlaylistBuilderPanel() {
       const r = await adminFetch('/playlists', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), songIds: tracks.map(t => t.id), playlistId: existingId }),
+        body: JSON.stringify({
+          name: name.trim(),
+          songIds: tracks.map(t => t.id),
+          playlistId: existingId,
+          keepInSync,
+          recipe: keepInSync ? buildBody() : undefined,
+        }),
       });
       const j = await r.json();
       if (!r.ok) { flash('err', j.error || 'save failed'); return; }
       const id = j.playlist?.id || existingId || null;
       setExistingId(id || undefined);
       setSavedId(id);
-      flash('ok', existingId ? 'playlist updated' : 'playlist saved to Navidrome');
+      if (keepInSync && !syncInfo) setSyncInfo({ lastSyncedAt: null });
+      if (!keepInSync) setSyncInfo(null);
+      flash('ok', (existingId ? 'playlist updated' : 'playlist saved to Navidrome') + (keepInSync ? ' · sync on' : ''));
     } catch (err) {
       flash('err', err instanceof Error ? err.message : 'save failed');
     } finally {
       setSaving(false);
     }
-  }, [name, tracks, existingId, adminFetch, flash]);
+  }, [name, tracks, existingId, keepInSync, syncInfo, buildBody, adminFetch, flash]);
+
+  const syncNow = useCallback(async () => {
+    if (!existingId || syncing) return;
+    setSyncing(true);
+    try {
+      const r = await adminFetch(`/playlists/${encodeURIComponent(existingId)}/sync`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok) { flash('err', j.error || 'sync failed'); return; }
+      setSyncInfo({ lastSyncedAt: new Date().toISOString() });
+      flash('ok', j.added ? `synced · added ${j.added} new track${j.added === 1 ? '' : 's'}` : 'synced · nothing new');
+      // Reload the deck so appended tracks show.
+      if (j.added) {
+        const pr = await adminFetch(`/playlists/${encodeURIComponent(existingId)}`);
+        const pj = await pr.json();
+        if (pr.ok) setTracks((pj.entries || []).map((e: RawTrackRow) => ({
+          id: e.id, title: e.title || '', artist: e.artist || '', album: e.album, durationSec: e.durationSec ?? 0, year: e.year,
+        })));
+      }
+    } catch (err) {
+      flash('err', err instanceof Error ? err.message : 'sync failed');
+    } finally {
+      setSyncing(false);
+    }
+  }, [existingId, syncing, adminFetch, flash]);
 
   return (
     <div className="admin-root mx-auto max-w-[1180px] px-4 pt-6 pb-24 sm:px-6">
@@ -668,6 +706,30 @@ export default function PlaylistBuilderPanel() {
             )}
           </div>
 
+          {/* Keep-in-sync row */}
+          <div className="flex items-center justify-between gap-2 border-t border-separator-strong bg-bg px-3 py-2">
+            <KnobSwitch
+              icon={<RefreshCw className="size-3.5" />}
+              label="Keep in sync"
+              hint="auto-add new library songs that match this recipe"
+              on={keepInSync}
+              onToggle={() => setKeepInSync(v => !v)}
+            />
+            {existingId && (keepInSync || syncInfo) && (
+              <div className="flex shrink-0 items-center gap-2">
+                {syncInfo && (
+                  <span className="text-[10px] text-muted">
+                    {syncInfo.lastSyncedAt ? `synced ${new Date(syncInfo.lastSyncedAt).toLocaleDateString()}` : 'not synced yet'}
+                  </span>
+                )}
+                <Btn sm onClick={syncNow} disabled={syncing} title="check the library for new matches now">
+                  <RefreshCw className={cn('mr-1 size-3.5', syncing && 'animate-spin')} />
+                  {syncing ? 'Syncing…' : 'Sync now'}
+                </Btn>
+              </div>
+            )}
+          </div>
+
           {/* Save toolbar */}
           <div className="flex items-center gap-2 border-t border-ink bg-bg px-3 py-2.5">
             <button
@@ -706,8 +768,11 @@ export default function PlaylistBuilderPanel() {
                 <div className="px-3 py-8 text-center text-sm text-muted">No playlists yet.</div>
               ) : playlists.map(p => (
                 <button key={p.id} type="button" onClick={() => loadPlaylist(p)}
-                  className="flex w-full items-center justify-between border-b border-separator-strong px-3 py-2 text-left hover:bg-ink-soft">
-                  <span className="truncate text-sm font-semibold text-ink">{p.name}</span>
+                  className="flex w-full items-center justify-between gap-2 border-b border-separator-strong px-3 py-2 text-left hover:bg-ink-soft">
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-sm font-semibold text-ink">{p.name}</span>
+                    {p.synced && <MetaChip accent>synced</MetaChip>}
+                  </span>
                   <span className="mono-num shrink-0 text-xs text-muted">{p.songCount}</span>
                 </button>
               ))}

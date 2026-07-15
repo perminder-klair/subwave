@@ -29,8 +29,13 @@ export interface PoolTrack {
   // Relevance/similarity in [0..1]-ish; higher is better. Deterministic ranking
   // and cap keep the highest-scoring rows.
   score?: number;
-  // Which sources contributed this row (debug/telemetry only).
+  // Which sources contributed this row — also drives sync's "vibe-matched" gate
+  // (a candidate counts as vibe-matched only if it came from theme/sound/seed).
   sources?: string[];
+  // ISO date the track entered the library (library `taggedAt`), or null when
+  // unknown (Subsonic-only rows). Populated by the sync engine, not by normal
+  // generation. Drives the "new since last sync" gate.
+  addedAt?: string | null;
 }
 
 // The lean shape returned to the builder UI.
@@ -239,4 +244,33 @@ export function fitToCount(
 // Running total in seconds — drives the builder's live "tape counter".
 export function totalDurationSec(tracks: Array<{ durationSec?: number | null }>): number {
   return tracks.reduce((sum, t) => sum + (t.durationSec ?? 0), 0);
+}
+
+const VIBE_SOURCES = new Set(['theme', 'sound', 'seed', 'seed-similar']);
+
+// Append-only sync selection: from a freshly-built recipe pool, pick the tracks
+// to ADD to a synced playlist. A candidate qualifies iff it is:
+//   • not already a member (excludeIds),
+//   • NEW to the library since the cutoff — its addedAt is a valid date strictly
+//     after `sinceIso`; unknown/absent addedAt never qualifies (we only append
+//     tracks we can confirm are new),
+//   • vibe-matched when the recipe has a prompt (requireVibe) — it came from a
+//     vibe source (theme/sound/seed); with no prompt this gate is skipped and
+//     the knob filters already applied upstream are enough.
+// Returns the highest-scoring `cap` qualifiers.
+export function selectAppendable(
+  pool: PoolTrack[],
+  opts: { sinceIso: string | null; requireVibe: boolean; cap: number; excludeIds?: Set<string> },
+): PoolTrack[] {
+  const exclude = opts.excludeIds ?? new Set<string>();
+  const since = opts.sinceIso ? Date.parse(opts.sinceIso) : NaN;
+  const kept = pool.filter((t) => {
+    if (!t.id || exclude.has(t.id)) return false;
+    const added = t.addedAt ? Date.parse(t.addedAt) : NaN;
+    if (!Number.isFinite(added)) return false;               // unknown add-date → never blind-append
+    if (Number.isFinite(since) && added <= since) return false; // not new since the cutoff
+    if (opts.requireVibe && !(t.sources || []).some((s) => VIBE_SOURCES.has(s))) return false;
+    return true;
+  });
+  return capPool(kept, Math.max(0, opts.cap));
 }

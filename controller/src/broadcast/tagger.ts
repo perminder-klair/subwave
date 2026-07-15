@@ -5,6 +5,7 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import { queue } from './queue.js';
 import * as coverage from '../music/library-coverage.js';
+import { syncAllAfterTag } from '../music/playlist-sync.js';
 import { PROGRESS_PREFIX, EVENT_PREFIX, type TaggerProgress, type TaggerEvent } from '../music/tagger-progress.js';
 import { writePidfile, clearPidfile, readPidfile, isPidAlive, MANAGED_ENV } from '../music/tagger-lock.js';
 
@@ -299,6 +300,10 @@ function spawnChild(mode: TaggerMode, args: string[], detail: string) {
     // 6h-TTL total is now the stalest number on the page — refresh it in the
     // background (fire-and-forget) so the hero meter reflects the fresh count.
     coverage.refresh().catch(() => {});
+    // A clean tagging/reconcile run may have added new library songs — top up any
+    // sync-enabled playlists (append-only, no-op when none exist). Fire-and-forget
+    // so a sync error never touches the tagger's own path.
+    if (outcome === 'ok') syncAllAfterTag().catch(() => {});
     queue.log('scheduler', `${label} finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
   });
   queue.log('scheduler', `${label} started${detail ? ` (${detail})` : ''}`);

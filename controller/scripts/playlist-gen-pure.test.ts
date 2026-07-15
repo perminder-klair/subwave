@@ -13,6 +13,7 @@ import {
   capPool,
   capPerArtist,
   selectByScoreWithSpacing,
+  selectAppendable,
   arrangeArc,
   spaceArtists,
   pickDeterministic,
@@ -220,6 +221,37 @@ function t(id: string, over: Partial<PoolTrack> = {}): PoolTrack {
   // too many → trims to target
   const down = fitToCount(pool, pool, 2);
   assert.deepEqual(down.map((x) => x.id), ['a', 'b']);
+}
+
+// ── selectAppendable (sync engine) ───────────────────────────────────────────
+{
+  const cut = '2026-07-10T00:00:00.000Z';
+  const older = t('old', { addedAt: '2026-07-01T00:00:00.000Z', sources: ['theme'], score: 0.9 });
+  const newVibe = t('newv', { addedAt: '2026-07-12T00:00:00.000Z', sources: ['theme'], score: 0.8 });
+  const newKnob = t('newk', { addedAt: '2026-07-12T00:00:00.000Z', sources: ['mood:calm'], score: 0.7 });
+  const noDate = t('nod', { addedAt: null, sources: ['theme'], score: 0.95 });
+  const member = t('mem', { addedAt: '2026-07-12T00:00:00.000Z', sources: ['theme'], score: 0.99 });
+  const pool = [older, newVibe, newKnob, noDate, member];
+
+  // With a prompt (requireVibe): only NEW + vibe-sourced + not-member qualify.
+  const withVibe = selectAppendable(pool, { sinceIso: cut, requireVibe: true, cap: 10, excludeIds: new Set(['mem']) });
+  const ids = withVibe.map((x) => x.id);
+  assert.ok(ids.includes('newv'), 'new vibe-sourced track appended');
+  assert.ok(!ids.includes('old'), 'track older than cutoff excluded');
+  assert.ok(!ids.includes('newk'), 'new but non-vibe track excluded when a prompt requires vibe');
+  assert.ok(!ids.includes('nod'), 'unknown add-date never blind-appended');
+  assert.ok(!ids.includes('mem'), 'existing member excluded');
+
+  // Without a prompt (requireVibe false): knob-sourced new tracks qualify too.
+  const noVibe = selectAppendable(pool, { sinceIso: cut, requireVibe: false, cap: 10 });
+  const ids2 = noVibe.map((x) => x.id);
+  assert.ok(ids2.includes('newv') && ids2.includes('newk'), 'both new tracks qualify without vibe gate');
+  assert.ok(!ids2.includes('old') && !ids2.includes('nod'), 'old + undated still excluded');
+
+  // cap caps by score (excluding the high-score member)
+  const capped = selectAppendable(pool, { sinceIso: cut, requireVibe: false, cap: 1, excludeIds: new Set(['mem']) });
+  assert.equal(capped.length, 1);
+  assert.equal(capped[0]!.id, 'newv', 'cap keeps highest score');
 }
 
 // ── totalDurationSec ─────────────────────────────────────────────────────────
