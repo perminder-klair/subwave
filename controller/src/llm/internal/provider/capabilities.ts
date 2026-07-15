@@ -141,9 +141,10 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // "Thinking budget is not supported for this model" (issue #1044). Omit the
     // param for Gemma so upstream sends no thinkingConfig at all — matching what
     // v0.39.0's model-gated thinkingBlock did (it fell through to {} for Gemma).
+    // The gemma- test mirrors @ai-sdk/google's own guard (startsWith('gemma-')).
     // forceNoThink not factored — Gemini permits forced tools while reasoning.
     reasoningLevel: ({ modelId, reasoning }) =>
-      (reasoning || /gemma/i.test(modelId) ? undefined : 'none'),
+      (reasoning || /(^|\/)gemma-/i.test(modelId) ? undefined : 'none'),
   },
   deepseek: {
     objectStrategy: 'native',
@@ -192,7 +193,7 @@ const CAPS: Record<string, ProviderCapabilities> = {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
     reasoningLevel: ({ modelId, reasoning, forceNoThink }) =>
-      ((reasoning && !forceNoThink) || /gemma/i.test(modelId) ? undefined : 'none'),
+      ((reasoning && !forceNoThink) || /(^|\/)gemma-/i.test(modelId) ? undefined : 'none'),
   },
 };
 
