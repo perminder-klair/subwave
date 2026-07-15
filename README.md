@@ -11,7 +11,7 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 
 ## Showreel
 
-https://github.com/user-attachments/assets/fac7b723-c54f-438d-8440-bad1e0471e85
+https://github.com/user-attachments/assets/0a2ba78a-eda3-44c1-adce-bfa78ae992cd
 
 ## Live demo
 
