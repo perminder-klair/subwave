@@ -67,6 +67,7 @@ export async function runSelfUpdateCommand(args: { version?: string } = {}): Pro
 
   console.log();
   muted('The running process is still the old binary — next invocation picks up the new one.');
+  muted('Then run `subwave sync` if your compose files are behind the new binary, and `subwave update`.');
   await pauseForEnter();
 }
 

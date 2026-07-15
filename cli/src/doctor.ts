@@ -13,8 +13,10 @@ import { resolve } from 'node:path';
 import { detectCompose, isProdEnv, streamUrlFor, webBaseFor, type ComposeStatus } from './compose.ts';
 import { dockerDaemonOk, composeExec } from './docker.ts';
 import { makeClient, checkNeedsSetup } from './api.ts';
-import { getLegacyControllerEnv, getRootEnv, parseEnvFile, getStateDir, fetchErrorReason } from './util.ts';
+import { getLegacyControllerEnv, getRootEnv, parseEnvFile, getStateDir, getSubwaveHome, fetchErrorReason } from './util.ts';
 import { whoHolds7700, readWebDevPid, getWebDevLog, isWebDevCommand } from './web-dev.ts';
+import { isCloneMode } from './home.ts';
+import { resolveInstallMode, detectDrift, hasDrift } from './compose-sync.ts';
 
 export type Status = 'ok' | 'warn' | 'fail' | 'skip';
 
@@ -87,6 +89,13 @@ function checkHost(): Finding[] {
 
 function checkCompose(compose: ComposeStatus): Finding[] {
   const out: Finding[] = [];
+
+  // Compose freshness runs regardless of up/down — the files live on disk
+  // whether or not the stack is running, and a standalone install can drift
+  // behind the binary's embedded copies (see #1043).
+  const freshness = composeFreshnessFinding();
+  if (freshness) out.push(freshness);
+
   if (compose.env === 'down') {
     out.push({
       label: 'stack',
@@ -123,6 +132,29 @@ function checkCompose(compose: ComposeStatus): Finding[] {
     out.push({ label: `service · ${svc}`, status, detail: state });
   }
   return out;
+}
+
+// Are the on-disk compose files + .env.example still what this CLI would
+// write? Only `subwave sync` re-materialises them, so an install scaffolded
+// before a service was added stays behind until the operator syncs (#1043).
+// Clone/dev installs (git-owned compose) and undeterminable shapes are skipped.
+function composeFreshnessFinding(): Finding | null {
+  const home = getSubwaveHome();
+  if (isCloneMode(home)) return null;
+  const mode = resolveInstallMode(home);
+  if (!mode) return null;
+
+  const drift = detectDrift(home, mode);
+  if (!hasDrift(drift)) {
+    return { label: 'freshness', status: 'ok', detail: 'compose files match this CLI' };
+  }
+  const n = drift.filter((e) => e.status !== 'fresh').length;
+  return {
+    label: 'freshness',
+    status: 'warn',
+    detail: `${n} compose file${n === 1 ? '' : 's'} behind this CLI`,
+    hint: 'Run `subwave sync` to refresh them (backs up current files first).',
+  };
 }
 
 async function checkController(compose: ComposeStatus): Promise<Finding[]> {

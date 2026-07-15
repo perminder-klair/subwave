@@ -6,7 +6,7 @@
 
 import { detectCompose } from './compose.ts';
 import { setMenuMode, MENU_BACK, banner, header, ok, warn, muted, exitIfCancelled, p, pc } from './ui.ts';
-import { whoHolds7700 } from './web-dev.ts';
+import { whoHolds7700, isWebDevCommand } from './web-dev.ts';
 import { runStatusCommand } from './commands/status.ts';
 import { runDoctorCommand } from './commands/doctor.ts';
 import { runStartCommand } from './commands/start.ts';
@@ -15,6 +15,10 @@ import { runRestartCommand } from './commands/restart.ts';
 import { runLogsCommand } from './commands/logs.ts';
 import { runOpenWebCommand } from './commands/open-web.ts';
 import { runSetupCommand } from './commands/setup.ts';
+import { runSyncCommand } from './commands/sync.ts';
+import { getSubwaveHome } from './util.ts';
+import { isCloneMode } from './home.ts';
+import { resolveInstallMode, detectDrift, hasDrift } from './compose-sync.ts';
 
 export async function runMenu(): Promise<void> {
   setMenuMode(true);
@@ -35,7 +39,9 @@ export async function runMenu(): Promise<void> {
     if (compose.env === 'dev') {
       const holder = whoHolds7700();
       total += 1;
-      if (holder?.command === 'node') running += 1;
+      // `next dev` reports as `next-server` on Linux, `node` on macOS — match
+      // both (isWebDevCommand), else the banner undercounts on Linux.
+      if (holder && isWebDevCommand(holder.command)) running += 1;
     }
     ok(`stack up · env=${pc.bold(compose.env)} · ${running}/${total} running`);
   }
@@ -58,6 +64,11 @@ export async function runMenu(): Promise<void> {
     options.push({ value: 'stop', label: 'stop', hint: 'docker compose down' });
   }
   options.push({ value: 'setup', label: 'setup', hint: 're-run the install wizard' });
+  // Surface `sync` only when the on-disk compose has fallen behind the binary
+  // — so the operator sees it exactly when it matters (see #1043).
+  if (composeFilesDrifted()) {
+    options.push({ value: 'sync', label: 'sync', hint: pc.yellow('compose files behind this CLI — refresh them') });
+  }
   options.push({ value: 'quit', label: pc.dim('quit') });
 
   let choice: string;
@@ -98,6 +109,7 @@ async function dispatch(choice: string): Promise<void> {
     case 'stop':    return runStopCommand();
     case 'restart': return runRestartCommand();
     case 'logs':    return runLogsCommand();
+    case 'sync':    return runSyncCommand();
     case 'setup': {
       // The setup wizard owns its own Clack lifecycle. Temporarily disable
       // menu-mode so its Esc handling works normally; restore after.
@@ -110,5 +122,19 @@ async function dispatch(choice: string): Promise<void> {
       header('Unknown choice');
       muted(`'${choice}' is not a known command.`);
       return;
+  }
+}
+
+// Cheap on-disk drift probe for the menu (a few readFileSync — no docker/HTTP).
+// Standalone installs only; any resolution error → no hint (never blocks the
+// menu render).
+function composeFilesDrifted(): boolean {
+  try {
+    const home = getSubwaveHome();
+    if (isCloneMode(home)) return false;
+    const mode = resolveInstallMode(home);
+    return mode ? hasDrift(detectDrift(home, mode)) : false;
+  } catch {
+    return false;
   }
 }

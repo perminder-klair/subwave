@@ -30,6 +30,7 @@ Usage:
   subwave restart [svc]    rebuild / restart a service (dev adds \`web-dev\`)
   subwave logs [svc|all]   tail docker compose logs (dev adds \`web-dev\`)
   subwave update           pull new images + recreate changed services
+  subwave sync             refresh compose files that are behind this CLI (--check to dry-run)
   subwave listen [dev|prod] open the web player in a browser
   subwave admin [dev|prod] open the admin console in a browser
   subwave self-update      replace the installed binary with the latest release
@@ -208,6 +209,11 @@ async function main(): Promise<void> {
     case 'update': {
       const { runUpdateCommand } = await import('./commands/update.ts');
       await runUpdateCommand();
+      return;
+    }
+    case 'sync': {
+      const { runSyncCommand } = await import('./commands/sync.ts');
+      await runSyncCommand({ check: rest.includes('--check') });
       return;
     }
     case 'listen':

@@ -83,7 +83,7 @@ export async function runInitCommand(opts: InitOptions = {}): Promise<void> {
       console.log();
       muted('Next:');
       muted('  subwave start          # docker compose up -d');
-      muted('  subwave setup          # configure Navidrome / LLM / TTS / DJ (and change install dir / mode)');
+      muted('  subwave setup          # configure Navidrome / LLM / TTS / DJ');
     }
     return;
   }

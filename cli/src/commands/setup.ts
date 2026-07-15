@@ -68,8 +68,11 @@ import { p, pc, accent, exitIfCancelled, banner, header, ok, warn, err, info, mu
 
 // LLM providers — kept in step with the controller's LLM_PROVIDERS list
 // (controller/src/settings.ts) and the admin Settings UI provider picker.
+// `locca` (first-class local llama.cpp) shares the openai-compatible transport
+// but has a default host base URL and needs no API key, so it's grouped with
+// the keyless local providers here rather than the cloud set.
 type CloudProvider = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'openrouter' | 'requesty' | 'gateway';
-type LlmProvider = 'ollama' | 'openai-compatible' | CloudProvider;
+type LlmProvider = 'ollama' | 'openai-compatible' | 'locca' | CloudProvider;
 
 // Cloud providers whose API key the AI SDK reads from a process.env var.
 // openai-compatible is deliberately absent — it has no canonical env var, so
@@ -386,11 +389,12 @@ async function detectOllamaUrl(): Promise<string | null> {
   return null;
 }
 
-// The provider picker — same eight providers the admin Settings UI offers,
-// in the same order, plus an explicit "configure later" escape hatch.
+// The provider picker — the providers the admin Settings UI offers, plus an
+// explicit "configure later" escape hatch.
 const LLM_PROVIDER_OPTIONS: Array<{ value: LlmProvider | 'later'; label: string; hint: string }> = [
   { value: 'ollama',            label: 'Ollama — local homelab',          hint: 'no API key — point at your homelab box' },
   { value: 'openai-compatible', label: 'OpenAI-compatible — self-hosted',  hint: 'llama.cpp, vLLM, LM Studio — your own server URL' },
+  { value: 'locca',             label: 'locca — local llama.cpp',          hint: 'no API key — defaults to the host locca server' },
   { value: 'anthropic',         label: 'Anthropic — Claude',               hint: 'needs ANTHROPIC_API_KEY' },
   { value: 'openai',            label: 'OpenAI — GPT',                     hint: 'needs OPENAI_API_KEY' },
   { value: 'google',            label: 'Google — Gemini',                  hint: 'needs GOOGLE_GENERATIVE_AI_API_KEY' },
@@ -404,10 +408,11 @@ const LLM_PROVIDER_OPTIONS: Array<{ value: LlmProvider | 'later'; label: string;
 // Example model ids — placeholder hints only, not defaults.
 const EXAMPLE_MODEL: Record<Exclude<LlmProvider, 'ollama'>, string> = {
   'openai-compatible': 'qwen3',
+  locca: 'qwen3',
   anthropic: 'claude-sonnet-4-5',
   openai: 'gpt-4o-mini',
   google: 'gemini-2.5-flash',
-  deepseek: 'deepseek-v4-flash',
+  deepseek: 'deepseek-chat',
   openrouter: 'anthropic/claude-sonnet-4-5',
   requesty: 'openai/gpt-4o-mini',
   gateway: 'anthropic/claude-sonnet-4-5',
@@ -467,6 +472,27 @@ async function collectLlm(): Promise<LlmChoice> {
       mask: '*',
     }), { backOnCancel: false });
     return { provider: 'openai-compatible', baseUrl, model, apiKey: apiKey || undefined };
+  }
+
+  if (choice === 'locca') {
+    // First-class locca: an openai-compatible llama.cpp server with a sane
+    // default (the host locca box, reachable from the container via
+    // host.docker.internal:8080). Collect a host-perspective URL and loopback-
+    // swap it for the container, mirroring the Ollama flow; blank keeps the
+    // controller's built-in default. No API key — it's local.
+    let url = exitIfCancelled(await p.text({
+      message: 'locca server URL (blank = controller default, host :8080/v1)',
+      initialValue: 'http://localhost:8080/v1',
+      placeholder: 'http://localhost:8080/v1',
+      validate: (v: string) => (v && !/^https?:\/\//.test(v) ? 'must start with http(s)://' : undefined),
+    }), { backOnCancel: false });
+    const model = exitIfCancelled(await p.text({
+      message: 'locca model id',
+      placeholder: EXAMPLE_MODEL.locca,
+      validate: (v: string) => (!v ? 'required' : undefined),
+    }), { backOnCancel: false });
+    if (url) url = await maybeSwapLoopbackForContainer(url, 'locca');
+    return { provider: 'locca', baseUrl: url || undefined, model };
   }
 
   // Cloud branch — choice is now narrowed to CloudProvider.
@@ -671,9 +697,10 @@ async function pushOnboardingSave(
     if (llm.provider === 'ollama') {
       if (llm.ollamaUrl) llmPatch.ollamaUrl = llm.ollamaUrl;
       if (llm.ollamaModel) llmPatch.model = llm.ollamaModel;
-    } else if (llm.provider === 'openai-compatible') {
-      // No canonical env var for this provider — server URL and (optional)
-      // key both live in settings.llm.
+    } else if (llm.provider === 'openai-compatible' || llm.provider === 'locca') {
+      // No canonical env var for these — server URL and (optional) key both
+      // live in settings.llm. locca's baseUrl is optional (blank → the
+      // controller's host default) and it carries no key.
       if (llm.baseUrl) llmPatch.baseUrl = llm.baseUrl;
       if (llm.model) llmPatch.model = llm.model;
       if (llm.apiKey) llmPatch.apiKey = llm.apiKey;

@@ -52,7 +52,7 @@ export async function runOpenWebCommand(
   if (!openUrl(url)) {
     warn('could not launch a browser — open the URL above yourself.');
   } else if (env === 'dev') {
-    muted('dev: if the page does not load, start the web UI with `npm run dev:web`.');
+    muted('dev: if the page does not load, start the web UI with `npm --prefix web run dev`.');
   }
   await pauseForEnter();
 }
