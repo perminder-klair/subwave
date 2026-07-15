@@ -359,8 +359,8 @@ export default function SpoolSkin(_props: SkinProps) {
               </div>
 
               {/* cassette hero */}
-              <div className="flex min-h-0 flex-1 items-center justify-center p-5">
-                <div className="relative flex aspect-[512/320] w-full max-w-[512px] flex-col border border-ink bg-bg shadow-[inset_0_0_0_8px_var(--field),inset_0_0_40px_rgba(0,0,0,0.06)]">
+              <div className={cn(styles.hero, 'flex min-h-0 flex-1 items-center justify-center p-5')}>
+                <div className={cn(styles.cassette, 'relative flex aspect-[512/320] flex-col border border-ink bg-bg shadow-[inset_0_0_0_8px_var(--field),inset_0_0_40px_rgba(0,0,0,0.06)]')}>
                   <span className="absolute top-4 left-4 size-[7px] rounded-full border border-muted" aria-hidden="true" />
                   <span className="absolute top-4 right-4 size-[7px] rounded-full border border-muted" aria-hidden="true" />
                   <span className="absolute bottom-4 left-4 size-[7px] rounded-full border border-muted" aria-hidden="true" />

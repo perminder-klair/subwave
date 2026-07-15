@@ -52,3 +52,18 @@
 /* Dynamic fills — progress + volume, driven by --pf / --vf on the skin root. */
 .progFill { width: calc(var(--pf, 0) * 100%); }
 .volFill { width: calc(var(--vf, 0) * 100%); }
+
+/* Cassette hero fit-to-box. The cassette holds its 512/320 ratio but must scale
+   to the SMALLER of the deck's width and height — short viewports (iPad Mini
+   landscape ≈ 1024×768) are height-bound, and a width-only rule (w-full/max-w)
+   let the aspect-locked box overflow the deck vertically. The hero is a size
+   container (its w/h are grid/flex-driven, independent of contents — safe for
+   `size`); cqw/cqh are its padded content box. */
+.hero { container-type: size; }
+.cassette {
+  /* Fallback for engines without container-query units: prior width behaviour. */
+  width: 100%;
+  max-width: 512px;
+  /* width that keeps height (= w·320/512) within the container: w ≤ cqh·512/320. */
+  width: min(100cqw, 512px, calc(100cqh * 512 / 320));
+}
