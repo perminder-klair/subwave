@@ -364,6 +364,13 @@ async function main() {
     assert.equal(reasoningFor({ provider: 'google', model: 'gemini-2.5-flash', reasoning: false }), 'none');
     assert.equal(reasoningFor({ provider: 'google', model: 'gemini-3.5-flash', reasoning: true }), undefined);
   });
+  await test('google: Gemma has no thinking mode — omit the param (upstream would 400 on thinkingBudget:0, issue #1044)', () => {
+    // @ai-sdk/google routes any non-gemini-3 id through the gemini-2.5 path, so
+    // 'none' becomes thinkingBudget:0 — which Gemma rejects. Must stay undefined.
+    assert.equal(reasoningFor({ provider: 'google', model: 'gemma-4-31b-it', reasoning: false }), undefined);
+    assert.equal(reasoningFor({ provider: 'google', model: 'gemma-4-31b-it', reasoning: true }), undefined);
+    assert.equal(reasoningFor({ provider: 'google', model: 'gemma-2-27b-it', reasoning: false }), undefined);
+  });
   await test('openai: effort level only on o-series/gpt-5 (sent verbatim as reasoning_effort — gpt-4-class 400s on it)', () => {
     assert.equal(reasoningFor({ provider: 'openai', model: 'o3', reasoning: false }), 'minimal');
     assert.equal(reasoningFor({ provider: 'openai', model: 'o3', reasoning: true }), 'medium');
@@ -379,6 +386,12 @@ async function main() {
     assert.equal(reasoningFor({ provider: 'gateway', model: 'anthropic/claude-haiku-4.5', reasoning: true }), undefined);
     assert.equal(reasoningFor({ provider: 'gateway', model: 'anthropic/claude-haiku-4.5', reasoning: false }), 'none');
     assert.equal(reasoningFor({ provider: 'gateway', model: 'deepseek/deepseek-v4', reasoning: true }, { forceNoThink: true }), 'none');
+  });
+  await test('gateway: Gemma downstream (google/gemma-*) omits the param — no thinkingConfig to a non-thinking model (issue #1044)', () => {
+    assert.equal(reasoningFor({ provider: 'gateway', model: 'google/gemma-4-31b-it', reasoning: false }), undefined);
+    assert.equal(reasoningFor({ provider: 'gateway', model: 'google/gemma-4-31b-it', reasoning: true }, { forceNoThink: true }), undefined);
+    // Non-Gemma google downstreams still get suppressed as before.
+    assert.equal(reasoningFor({ provider: 'gateway', model: 'google/gemini-2.5-flash', reasoning: false }), 'none');
   });
   await test('openrouter: always undefined — reasoning is fixed at model construction (extraBody in the registry)', () => {
     assert.equal(reasoningFor({ provider: 'openrouter', model: 'xiaomi/mimo-v2.5', reasoning: false }), undefined);
