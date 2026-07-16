@@ -233,7 +233,7 @@ export default function SpoolSkin(_props: SkinProps) {
         )}
       >
         {like.liked ? '♥' : '♡'}
-        {like.count > 0 && <span className="text-[9px] tabular-nums">{like.count}</span>}
+        {like.count > 0 && <span className="text-[0.7em] tabular-nums">{like.count}</span>}
       </button>
     );
 
@@ -424,9 +424,9 @@ export default function SpoolSkin(_props: SkinProps) {
                       <span className={cn('h-8 w-0.5 bg-[var(--accent)]', styles.vu, playing && styles.playing)} />
                     </div>
                     {playKey('flex-[1.6] text-[16px]')}
-                    {stopKey('flex-1 text-[12px]')}
-                    {muteKey('flex-1 text-[9px]')}
-                    {likeKey('flex-1 text-[13px]')}
+                    {stopKey('flex-1 text-[15px]')}
+                    {muteKey('flex-1 text-[11px]')}
+                    {likeKey('flex-1 text-[16px]')}
                   </div>
                 </div>
                 {/* volume — the deck's output fader (keyboard ↑/↓ also work) */}
@@ -566,9 +566,9 @@ export default function SpoolSkin(_props: SkinProps) {
 
                 <div className="flex h-14 flex-none gap-2">
                   {playKey('flex-[2] text-[18px]')}
-                  {stopKey('flex-1 text-[13px]')}
-                  {muteKey('flex-1 text-[11px]')}
-                  {likeKey('flex-1 text-[15px]')}
+                  {stopKey('flex-1 text-[16px]')}
+                  {muteKey('flex-1 text-[12px]')}
+                  {likeKey('flex-1 text-[18px]')}
                 </div>
 
                 {upNext[0]?.title && (
