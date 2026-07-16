@@ -1386,6 +1386,12 @@ const DEFAULTS = {
       // vanilla-Navidrome installs.
       lastfmTags: null as boolean | null,
       lyrics: true,       // fetch + include lyric excerpt in embed text
+      // Resolve original release years for compilation-album tracks via
+      // MusicBrainz (issue #842) — a compilation's `year` tag is the
+      // compilation's own release date, so era-bounded shows both mis-include
+      // and miss its tracks until each song's true year is known. Keyless API
+      // (1 req/s, throttled in music/musicbrainz.ts), so default-on.
+      originalYear: true,
     },
   },
   // Web-search backend for the segment director's web-search capability.
@@ -2169,6 +2175,10 @@ export async function load() {
           typeof stored.embedding?.enrichment?.lyrics === 'boolean'
             ? stored.embedding.enrichment.lyrics
             : DEFAULTS.embedding.enrichment.lyrics,
+        originalYear:
+          typeof stored.embedding?.enrichment?.originalYear === 'boolean'
+            ? stored.embedding.enrichment.originalYear
+            : DEFAULTS.embedding.enrichment.originalYear,
       },
     },
     skills: {
@@ -3514,6 +3524,9 @@ export async function update(patch) {
       }
       if (en.lyrics !== undefined) {
         next.embedding.enrichment.lyrics = !!en.lyrics;
+      }
+      if (en.originalYear !== undefined) {
+        next.embedding.enrichment.originalYear = !!en.originalYear;
       }
     }
   }
