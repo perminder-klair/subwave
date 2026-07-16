@@ -11,6 +11,7 @@ import { getFullContext, geocodePlace } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
+import { isIdle } from '../broadcast/stream-idle.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
 import { getStationTimezone } from '../time.js';
 import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
@@ -401,6 +402,9 @@ router.get('/state', (req, res) => {
   res.json({
     ...snap,
     needsSetup: getSetupStatusSync().needsSetup,
+    // True while the idle gate has the programme paused (zero listeners) —
+    // lets clients tell "silence because the room is empty" from "broken".
+    streamIdle: isIdle(),
     theme: { active: activeThemeId },
     // Listener-player UI settings ride along with /state like the theme does,
     // so the player can flip them live on the next poll. Defaults off if

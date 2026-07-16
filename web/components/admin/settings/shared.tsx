@@ -163,6 +163,8 @@ export interface StreamForm {
   aacEnabled: boolean;
   aacBitrate: string;
   bitrate: string;
+  idleWhenEmpty: boolean;
+  idleAfterMinutes: string;
 }
 
 export type LoudnessSource = 'replaygain-then-measured' | 'replaygain' | 'measured';
@@ -229,6 +231,8 @@ export interface SettingsData {
       aacEnabled?: boolean;
       aacBitrate?: number;
       bitrate?: number;
+      idleWhenEmpty?: boolean;
+      idleAfterMinutes?: number;
     };
     loudness?: { targetLufs?: number; maxBoostDb?: number; source?: LoudnessSource };
     station?: string;

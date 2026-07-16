@@ -1046,6 +1046,15 @@ const DEFAULTS = {
     aacEnabled: false,
     aacBitrate: 192,
     bitrate: 192,
+    // Idle pause (broadcast/stream-idle.ts). When on, the controller flips
+    // radio.liq's idle gate after idleAfterMinutes with zero Icecast
+    // listeners: the mounts keep serving (silence), but the music chain
+    // stops being pulled — no track decode, no Navidrome downloads — and
+    // resumes mid-track within seconds of anyone connecting. Off by default:
+    // a radio that plays to an empty room is the product's default fiction,
+    // so going dark while unobserved is an explicit operator choice.
+    idleWhenEmpty: false,
+    idleAfterMinutes: 10,
   },
   // Per-track loudness normalisation (music/mix.ts gainForLoudness). targetLufs
   // is what every measured track is pulled toward; maxBoostDb caps the upward
@@ -1847,6 +1856,16 @@ export async function load() {
         typeof stored.stream?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.stream.bitrate)
           ? stored.stream.bitrate
           : DEFAULTS.stream.bitrate,
+      idleWhenEmpty:
+        typeof stored.stream?.idleWhenEmpty === 'boolean'
+          ? stored.stream.idleWhenEmpty
+          : DEFAULTS.stream.idleWhenEmpty,
+      idleAfterMinutes:
+        Number.isInteger(stored.stream?.idleAfterMinutes) &&
+        stored.stream.idleAfterMinutes >= 1 &&
+        stored.stream.idleAfterMinutes <= 1440
+          ? stored.stream.idleAfterMinutes
+          : DEFAULTS.stream.idleAfterMinutes,
     },
     loudness: {
       targetLufs:
@@ -2988,6 +3007,20 @@ export async function update(patch) {
         next.stream.bitrate = v;
         restart = true;
       }
+    }
+    // Idle pause is enforced controller-side over telnet (broadcast/
+    // stream-idle.ts) — no Liquidsoap boot file, no mixer restart. Turning it
+    // off mid-idle is handled by the monitor's next tick, which resumes the
+    // programme.
+    if (st.idleWhenEmpty !== undefined) {
+      next.stream.idleWhenEmpty = !!st.idleWhenEmpty;
+    }
+    if (st.idleAfterMinutes !== undefined) {
+      const v = parseInt(st.idleAfterMinutes, 10);
+      if (!Number.isInteger(v) || v < 1 || v > 1440) {
+        throw new Error('stream.idleAfterMinutes must be an integer between 1 and 1440');
+      }
+      next.stream.idleAfterMinutes = v;
     }
   }
   if ('loudness' in patch) {

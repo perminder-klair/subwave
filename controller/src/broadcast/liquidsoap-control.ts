@@ -152,6 +152,25 @@ export async function streamStatus() {
   return /\bon\b/i.test(res);
 }
 
+// Pause / resume / query the idle gate (radio.liq `idle_gate`). Unlike
+// stream_off, the Icecast mounts stay up serving silence — new listeners
+// connect normally, which is what lets the stream-idle monitor wake the
+// programme when someone tunes in. Both commands are idempotent, so the
+// monitor can re-assert the desired state after a mixer restart.
+export async function idleOn() {
+  return sendCommand('idle_on', 2000);
+}
+
+export async function idleOff() {
+  return sendCommand('idle_off', 2000);
+}
+
+// Returns true when the idle gate is active. `idle_status` replies "on"/"off".
+export async function idleStatus() {
+  const res = await sendCommand('idle_status', 2000);
+  return /\bon\b/i.test(res);
+}
+
 interface DjQueueSnapshot {
   ids: Set<string>;
   // subsonic_id → Liquidsoap request id. First occurrence wins on the off

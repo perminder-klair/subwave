@@ -18,6 +18,7 @@ import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
 import { startScheduler } from './broadcast/scheduler.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
+import { startStreamIdleMonitor } from './broadcast/stream-idle.js';
 import { startAudienceMonitor } from './broadcast/audience.js';
 import { cors } from './middleware/cors.js';
 import { assertAdminConfigured } from './middleware/auth.js';
@@ -272,6 +273,7 @@ app.listen(config.server.port, async () => {
 
   queue.startWatcher();
   startListenerMonitor();
+  startStreamIdleMonitor();
   startAudienceMonitor().catch(err => console.error('[audience] init failed:', err.message));
   startScheduler();
   jingles

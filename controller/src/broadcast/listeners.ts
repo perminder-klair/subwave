@@ -202,11 +202,29 @@ export async function refresh() {
   return fetchCount();
 }
 
+// Set by broadcast/stream-idle.ts (via setStreamIdle) while the programme is
+// idle-paused — a flag pushed in rather than imported out, so listeners.ts
+// and stream-idle.ts don't form an import cycle.
+let streamIdle = false;
+
+export function setStreamIdle(v: boolean) {
+  streamIdle = v;
+}
+
+export function isStreamIdle() {
+  return streamIdle;
+}
+
 // True when autonomous DJ LLM work is allowed right now. When the pause toggle
 // is off, always true. When on, allowed only if at least one listener is
 // counted — an unknown count (Icecast unreachable) is treated as occupied so a
 // stats outage can never take the DJ off the air.
+//
+// An idle-paused stream blocks DJ calls regardless of the LLM toggle: the
+// voice queues aren't being pulled while the idle gate is up, so any WAV
+// written to say.txt/intro.txt would pile up and play back-to-back on resume.
 export function djCallsAllowed() {
+  if (streamIdle) return false;
   if (!settings.get()?.llm?.pauseWhenEmpty) return true;
   if (lastCount === null) return true;
   return lastCount > 0;
