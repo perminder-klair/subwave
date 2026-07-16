@@ -25,6 +25,21 @@ export function showSpan(schedule: any, day: number, hour: number): { index: num
   return { index: before, total: before + 1 + after };
 }
 
+// Episode span for a timed takeover (#930). A pinned show usually isn't in the
+// grid at the pinned hours, so showSpan can't see it — the override window
+// itself is the episode: total = the window rounded up to whole hours, index =
+// whole hours elapsed since the pin (clamped inside the window, so a tick
+// arriving fractionally past expiry can't index off the end).
+export function overrideSpan(
+  ov: { startedAt: number; expiresAt: number },
+  nowMs: number,
+): { index: number; total: number } {
+  const HOUR = 3_600_000;
+  const total = Math.max(1, Math.ceil((ov.expiresAt - ov.startedAt) / HOUR));
+  const index = Math.min(total - 1, Math.max(0, Math.floor((nowMs - ov.startedAt) / HOUR)));
+  return { index, total };
+}
+
 // Which beat a STATION-ZONE minute belongs to. The arc's placement is a
 // station-clock fact (":55 of the final hour" must be the show's closing
 // minutes), but crons fire on fixed process-local minutes — and station zones

@@ -372,6 +372,9 @@ router.get('/schedule', async (req, res) => {
       personas,
       shows,
       schedule: s.schedule,
+      // Timed takeover (#930): the pin currently in force, or null. Expired /
+      // dangling overrides report as null even before the janitor sweeps them.
+      override: settings.getScheduleOverride(),
       // The grid is interpreted in the station's timezone (settings.timezone,
       // falling back to the container TZ) — the browser's local DOW/hour may
       // not match, so pass back the zone the schedule is painted in. The UI
