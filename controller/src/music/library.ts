@@ -188,6 +188,15 @@ export function getPlaybackMeta(songId: string): db.TrackLite | null {
   return loaded ? db.getTrackLite(songId) : null;
 }
 
+// When a track entered the library (its `taggedAt` ISO string), or null if it's
+// not in the tagged index. The playlist sync engine keys "new since last sync"
+// off this — a Subsonic-only track (not in the DB) reads null and is never
+// blind-appended.
+export function taggedAtOf(songId: string): string | null {
+  if (!loaded) return null;
+  return db.getTrack(songId)?.taggedAt ?? null;
+}
+
 // Musically-adjacent moods. The LLM tagger is told to tag by how a track
 // FEELS, so it rarely assigns time-of-day moods — `morning` ends up with 0
 // tracks, `evening` with 1 — which leaves the picker's mood source dark for

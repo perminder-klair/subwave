@@ -569,10 +569,23 @@ function chunk<T>(items: T[], size: number): T[][] {
 // Creates a playlist and returns it. Extra ids beyond the first chunk are
 // appended via updatePlaylist; playlists are made public so the operator's
 // own Navidrome login sees them, not just the SUB/WAVE service account.
-export async function createPlaylist(name: string, songIds: string[] = []) {
+//
+// Pass `opts.playlistId` to OVERWRITE an existing playlist's song list wholesale
+// (Subsonic `createPlaylist` with a playlistId replaces the songs) — this is how
+// the builder's "save over" does a clean full-replace instead of index-based
+// remove churn. When overwriting, the first chunk replaces; the rest append.
+export async function createPlaylist(
+  name: string,
+  songIds: string[] = [],
+  opts: { playlistId?: string } = {},
+) {
   const [first = [], ...rest] = chunk(songIds, PLAYLIST_CHUNK);
-  const r = await call('createPlaylist', { name, songId: first });
-  const playlist = r.playlist;
+  const base = opts.playlistId
+    ? { playlistId: opts.playlistId, name, songId: first }
+    : { name, songId: first };
+  const r = await call('createPlaylist', base);
+  // On overwrite Navidrome may not echo the playlist body — fall back to the id.
+  const playlist = r.playlist || (opts.playlistId ? { id: opts.playlistId, name } : null);
   if (playlist?.id) {
     for (const ids of rest) {
       await call('updatePlaylist', { playlistId: playlist.id, songIdToAdd: ids });

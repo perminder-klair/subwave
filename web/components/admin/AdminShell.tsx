@@ -15,7 +15,6 @@ import {
   Sparkles,
   SlidersHorizontal,
   Terminal,
-  Telescope,
   BookOpen,
   Apple,
   Smartphone,
@@ -64,8 +63,9 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: 'Programming',
     items: [
+      // Playlists (/admin/playlists) and the Observatory (/observatory) are
+      // reached from doorways inside Library — not top-level nav items.
       { href: '/admin/library', id: 'library', label: 'Library', icon: Disc3 },
-      { href: '/observatory', id: 'observatory', label: 'Observatory', icon: Telescope },
       { href: '/admin/shows', id: 'shows', label: 'Shows', icon: CalendarClock },
       { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
       { href: '/admin/skills', id: 'skills', label: 'Skills', icon: Sparkles },
@@ -168,7 +168,10 @@ export default function AdminShell({ children }: AdminShellProps) {
             <div key={section.label} className="nav-section">
               <span className="nav-section-label">{section.label}</span>
               {section.items.map(n => {
-                const active = pathname?.startsWith(n.href);
+                // Playlists lives under Library's wing now — keep Library lit there.
+                const active =
+                  pathname?.startsWith(n.href) ||
+                  (n.id === 'library' && pathname?.startsWith('/admin/playlists'));
                 const Icon = n.icon;
                 return (
                   <Link key={n.id} href={n.href} className={`nav-item ${active ? 'active' : ''}`}>
@@ -291,11 +294,14 @@ interface ShellHeaderProps {
 
 // Header — wordmark, breadcrumb, and (when signed in) the live station strip.
 function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
-  // DJ Doc isn't in the sidebar nav (it's reached from the header strip), so the
-  // nav lookup can't resolve its breadcrumb label — special-case it.
+  // DJ Doc and Playlists aren't in the sidebar nav (DJ Doc is reached from the
+  // header strip, Playlists from Library's doorway), so the nav lookup can't
+  // resolve their breadcrumb labels — special-case them.
   const current =
     NAV.find(n => pathname?.startsWith(n.href))?.label ||
-    (pathname?.startsWith('/admin/doctor') ? 'DJ Doc' : 'Admin');
+    (pathname?.startsWith('/admin/doctor') ? 'DJ Doc'
+      : pathname?.startsWith('/admin/playlists') ? 'Playlists'
+        : 'Admin');
   const { nowPlaying, listeners } = useStationFeed();
   const onAir = !!nowPlaying?.title;
   const listenersObj =

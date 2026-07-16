@@ -3865,15 +3865,12 @@ html.lite .sw-ripple-circle {
     letter-spacing: -0.025em;
     line-height: 1.06;
     margin-top: 10px;
-    max-width: 24ch;
-    text-wrap: balance;
 }
 .admin-root .lib-hero-title .pct { color: var(--accent); }
 .admin-root .lib-hero-sub {
     font-size: 12.5px;
     line-height: 1.6;
     color: var(--muted);
-    max-width: 64ch;
     margin-top: 10px;
 }
 .admin-root .lib-hero-sub b { color: var(--ink); font-weight: 700; }

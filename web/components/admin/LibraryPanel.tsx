@@ -27,7 +27,7 @@ import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search, RotateCcw, Sparkles, RefreshCw, ListPlus, ListMusic, X, Pencil, Ban,
-  Music, LayoutGrid, Tags,
+  Music, LayoutGrid, Tags, Telescope, ArrowRight,
 } from 'lucide-react';
 import { useAdminAuth, ADMIN_API_URL } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
@@ -41,7 +41,6 @@ import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
 import { cn } from '../../lib/cn';
 import TaggingPanel, { num } from './LibraryTaggingPanel';
 import type { Coverage, TaggerState, LibraryStatsLite, Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
-import LibraryPlaylistsTab from './LibraryPlaylistsTab';
 import type { PlaylistSummary } from './LibraryPlaylistsTab';
 
 // ---------------------------------------------------------------------------
@@ -109,7 +108,7 @@ interface SettingsResponse {
   budget?: { mode: BudgetMode };
 }
 
-type Tab = 'tracks' | 'browse' | 'search' | 'playlists' | 'blocked';
+type Tab = 'tracks' | 'browse' | 'search' | 'blocked';
 // The Tracks tab folds the old Recent + Untagged tabs into one view with an
 // All / Needs-tags toggle; TableVariant keeps TrackTable's per-view behaviour
 // (empty-state copy, accent Tag button) keyed on what's actually shown.
@@ -126,7 +125,7 @@ type SearchMode = 'library' | 'sound';
 const PAGE_SIZE = 50;
 const SEARCH_PAGE = 30;
 
-const TABS: Tab[] = ['tracks', 'browse', 'search', 'playlists', 'blocked'];
+const TABS: Tab[] = ['tracks', 'browse', 'search', 'blocked'];
 const SORTS: Sort[] = ['artist', 'title', 'year', 'taggedAt', 'bpm', 'loudness', 'pace'];
 
 // ---------------------------------------------------------------------------
@@ -244,7 +243,6 @@ export default function LibraryPanel() {
   // list shared by the add-to-playlist bar and the Playlists tab.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [playlists, setPlaylists] = useState<PlaylistSummary[] | null>(null);
-  const [playlistsLoading, setPlaylistsLoading] = useState(false);
   const [plBusy, setPlBusy] = useState(false);
 
   // never-play blocklist state — the entry list for the Blocked tab, plus
@@ -264,9 +262,11 @@ export default function LibraryPanel() {
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
     const t = sp.get('tab');
-    // Legacy links: the old Recent and Untagged tabs are now Tracks (+ mode).
+    // Legacy links: the old Recent and Untagged tabs are now Tracks (+ mode);
+    // the old Playlists tab is the dedicated builder screen.
     if (t === 'untagged') { setTab('tracks'); setTrackMode('needs'); }
     else if (t === 'recent') setTab('tracks');
+    else if (t === 'playlists') { window.location.replace('/admin/playlists'); return; }
     else if (t && (TABS as string[]).includes(t)) setTab(t as Tab);
     if (sp.get('view') === 'needs') { setTab('tracks'); setTrackMode('needs'); }
     const m = (sp.get('moods') || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -564,7 +564,6 @@ export default function LibraryPanel() {
   // -----------------------------------------------------------------------
   const loadPlaylists = useCallback(async () => {
     if (!ready) return;
-    setPlaylistsLoading(true);
     try {
       const r = await adminFetch('/playlists');
       const j = await r.json().catch(() => ({})) as { playlists?: PlaylistSummary[]; error?: string };
@@ -573,18 +572,12 @@ export default function LibraryPanel() {
     } catch (err) {
       notify.err(errorMessage(err));
       setPlaylists([]);
-    } finally {
-      setPlaylistsLoading(false);
     }
   }, [adminFetch, ready]);
 
   // Selection is per-view: switching tabs drops it (ids from another tab would
   // be invisible, and "Add 12" with 9 off-screen rows is a foot-gun).
   useEffect(() => { setSelected(new Set()); }, [tab]);
-
-  useEffect(() => {
-    if (tab === 'playlists' && ready) loadPlaylists();
-  }, [tab, ready, loadPlaylists]);
 
   // The add-bar's dropdown needs the playlist list the first time a selection
   // appears on a track tab — fetch lazily, once.
@@ -1114,6 +1107,41 @@ export default function LibraryPanel() {
 
   return (
     <div className="grid gap-5">
+      {/* Doorways — Playlists and the Observatory live inside Library now
+          (pulled out of the sidebar); these are their front doors. */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <a
+          href="/admin/playlists"
+          className="group flex items-center gap-3.5 border border-ink bg-bg p-3.5 transition-colors hover:bg-ink-soft"
+        >
+          <span className="grid size-9 flex-none place-items-center border border-ink bg-[var(--accent)] text-white">
+            <ListMusic size={18} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-bold text-ink">Playlist Builder</span>
+            <span className="block truncate font-mono text-[10px] text-muted">
+              describe a vibe → an ordered set · edit by hand · save to Navidrome
+            </span>
+          </span>
+          <ArrowRight className="size-4 flex-none text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-ink" />
+        </a>
+        <a
+          href="/observatory"
+          className="group flex items-center gap-3.5 border border-ink bg-bg p-3.5 transition-colors hover:bg-ink-soft"
+        >
+          <span className="grid size-9 flex-none place-items-center border border-ink bg-ink text-bg">
+            <Telescope size={18} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-bold text-ink">Observatory</span>
+            <span className="block truncate font-mono text-[10px] text-muted">
+              fly the library as a starfield — moods, clusters, outliers
+            </span>
+          </span>
+          <ArrowRight className="size-4 flex-none text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-ink" />
+        </a>
+      </div>
+
       <TaggingPanel
         coverage={coverage}
         libStats={libStats}
@@ -1235,22 +1263,13 @@ export default function LibraryPanel() {
       )}
 
       {/* add-to-playlist bar — appears when rows are selected on a track tab */}
-      {tab !== 'playlists' && tab !== 'blocked' && selected.size > 0 && (
+      {tab !== 'blocked' && selected.size > 0 && (
         <AddToPlaylistBar
           count={selected.size}
           playlists={playlists}
           busy={plBusy}
           onAdd={addSelectedToPlaylist}
           onClear={() => setSelected(new Set())}
-        />
-      )}
-
-      {tab === 'playlists' && (
-        <LibraryPlaylistsTab
-          playlists={playlists}
-          loading={playlistsLoading}
-          onRefresh={loadPlaylists}
-          adminFetch={adminFetch}
         />
       )}
 
@@ -1265,7 +1284,7 @@ export default function LibraryPanel() {
       )}
 
       {/* track list */}
-      {tab !== 'playlists' && tab !== 'blocked' && (
+      {tab !== 'blocked' && (
       <Card
         title={
           tableVariant === 'browse' ? 'Tracks' :
@@ -1374,7 +1393,6 @@ function Tabs({ tab, setTab }: {
     { id: 'tracks', name: 'Tracks', sub: 'newest & needs tags', icon: <Music size={17} /> },
     { id: 'browse', name: 'Browse', sub: 'tagged index', icon: <LayoutGrid size={17} /> },
     { id: 'search', name: 'Search', sub: 'navidrome', icon: <Search size={17} /> },
-    { id: 'playlists', name: 'Playlists', sub: 'navidrome', icon: <ListMusic size={17} /> },
     { id: 'blocked', name: 'Blocked', sub: 'never plays', icon: <Ban size={17} /> },
   ];
   return (
