@@ -75,6 +75,14 @@ export interface TrackRecord {
   artist: string | null;
   album: string | null;
   year: number | null;
+  // Original-release-year surface (issue #842): the track's TRUE first-release
+  // year when it differs from the file's `year` tag (reissues, compilation
+  // albums). null = unresolved; era filtering falls back to `year` (except on
+  // compilations, whose plain year is the compilation's own date — untrusted).
+  originalYear: number | null;
+  originalYearSource: string | null;      // 'album-tag' | 'musicbrainz'
+  originalYearCheckedAt: string | null;   // last lookup attempt, hit or miss
+  isCompilation: boolean | null;          // Navidrome album flag; null = unknown
   genre: string | null;
   durationSec: number | null;
   lastfmTags: string[] | null;
@@ -165,6 +173,10 @@ interface TrackRow {
   artist: string | null;
   album: string | null;
   year: number | null;
+  original_year: number | null;
+  original_year_source: string | null;
+  original_year_checked_at: string | null;
+  is_compilation: number | null;
   genre: string | null;
   duration_sec: number | null;
   lastfm_tags: string | null;
@@ -204,6 +216,13 @@ export interface TrackMeta {
   year?: number | string | null;
   genre?: string | null;
   duration?: number | null;
+  // Walk-time original-year surface (issue #842). `originalYear` here is the
+  // ALBUM's originalReleaseDate.year (source 'album-tag'); the walk passes it
+  // only for non-compilation albums (a compilation's original date is the
+  // compilation's own, not its songs'). Never overwrites a per-track
+  // 'musicbrainz' resolution — see upsertTrackMeta.
+  originalYear?: number | null;
+  isCompilation?: boolean | null;
 }
 
 export interface TrackEnrichment {
@@ -574,6 +593,26 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     d.pragma('user_version = 13');
   }
 
+  if (userVersion < 14) {
+    // Original-release-year surface (issue #842). Compilation albums carry the
+    // COMPILATION's release date, not each song's, so era-bounded shows both
+    // mis-include and miss their tracks. `original_year` is the resolved
+    // per-track original year (source: 'album-tag' — the album's own
+    // originalReleaseDate captured at walk time — or 'musicbrainz' from the
+    // enrichment lookup). `original_year_checked_at` stamps every lookup
+    // attempt, hit or miss, so a resumed enrichment pass never re-queries
+    // MusicBrainz for a known miss. `is_compilation` mirrors Navidrome's
+    // album-level flag (1/0; NULL = not yet walked since this migration) —
+    // era filtering treats a compilation's plain `year` as untrusted.
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN original_year            INTEGER;
+      ALTER TABLE tracks ADD COLUMN original_year_source     TEXT;
+      ALTER TABLE tracks ADD COLUMN original_year_checked_at TEXT;
+      ALTER TABLE tracks ADD COLUMN is_compilation           INTEGER;
+    `);
+    d.pragma('user_version = 14');
+  }
+
   // Reconcile the requested embedding dim against what physically exists.
   //
   // The vec0 table's `FLOAT[N]` schema is the authority for what inserts accept —
@@ -846,6 +885,10 @@ export interface TrackLite {
   moods: string[];
   energy: string | null;
   year: number | null;
+  // Era-year surface (issue #842) — lets show-filter resolve a track's true
+  // era without the full getTrack() blob parse. null = unresolved / unknown.
+  originalYear: number | null;
+  isCompilation: boolean | null;
   durationSec: number | null;
 }
 
@@ -858,8 +901,8 @@ export interface TrackLite {
 // concurrent HTTP response, making the whole UI sluggish (#723).
 export function getTrackLite(id: string): TrackLite | null {
   const row = requireDb()
-    .prepare(`SELECT genre, bpm, musical_key, moods, energy, year, duration_sec FROM tracks WHERE id = ?`)
-    .get(id) as Pick<TrackRow, 'genre' | 'bpm' | 'musical_key' | 'moods' | 'energy' | 'year' | 'duration_sec'> | undefined;
+    .prepare(`SELECT genre, bpm, musical_key, moods, energy, year, original_year, is_compilation, duration_sec FROM tracks WHERE id = ?`)
+    .get(id) as Pick<TrackRow, 'genre' | 'bpm' | 'musical_key' | 'moods' | 'energy' | 'year' | 'original_year' | 'is_compilation' | 'duration_sec'> | undefined;
   if (!row) return null;
   return {
     genre: row.genre ?? null,
@@ -868,6 +911,8 @@ export function getTrackLite(id: string): TrackLite | null {
     moods: row.moods ? safeParseArray(row.moods) : [],
     energy: row.energy ?? null,
     year: row.year ?? null,
+    originalYear: row.original_year ?? null,
+    isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
     durationSec: row.duration_sec ?? null,
   };
 }
@@ -901,13 +946,22 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
   requireDb()
     .prepare(
       `
-      INSERT INTO tracks (id, title, artist, album, year, genre, duration_sec)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tracks (id, title, artist, album, year, original_year, original_year_source, is_compilation, genre, duration_sec)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
         album        = COALESCE(excluded.album, tracks.album),
         year         = COALESCE(excluded.year, tracks.year),
+        -- Walk-time 'album-tag' years never clobber a per-track 'musicbrainz'
+        -- resolution — the MB lookup is the more specific signal (issue #842).
+        original_year = CASE WHEN tracks.original_year_source = 'musicbrainz'
+                             THEN tracks.original_year
+                             ELSE COALESCE(excluded.original_year, tracks.original_year) END,
+        original_year_source = CASE WHEN tracks.original_year_source = 'musicbrainz'
+                                    THEN tracks.original_year_source
+                                    ELSE COALESCE(excluded.original_year_source, tracks.original_year_source) END,
+        is_compilation = COALESCE(excluded.is_compilation, tracks.is_compilation),
         genre        = COALESCE(excluded.genre, tracks.genre),
         duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec)
     `,
@@ -918,9 +972,44 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
       meta.artist ?? null,
       meta.album ?? null,
       normaliseYear(meta.year),
+      normaliseYear(meta.originalYear),
+      normaliseYear(meta.originalYear) != null ? 'album-tag' : null,
+      meta.isCompilation == null ? null : meta.isCompilation ? 1 : 0,
       meta.genre ?? null,
       Number.isFinite(meta.duration as number) ? (meta.duration as number) : null,
     );
+}
+
+// Tracks still owed an original-year lookup (issue #842): compilation-album
+// tracks with no resolved year. Deliberately NOT scoped to the tagger's
+// untagged/enriched sets — the column landed after most libraries were tagged,
+// so the backfill must see the whole catalogue. `retryMisses` widens to tracks
+// already checked-but-missed (--re-enrich).
+export function idsNeedingOriginalYear(retryMisses = false): string[] {
+  const extra = retryMisses ? '' : 'AND original_year_checked_at IS NULL';
+  return (
+    requireDb()
+      .prepare(
+        `SELECT id FROM tracks WHERE is_compilation = 1 AND original_year IS NULL ${extra}`,
+      )
+      .all() as Array<{ id: string }>
+  ).map((r) => r.id);
+}
+
+// Record the result of a per-track original-year lookup (issue #842).
+// `checked_at` is stamped on hit AND miss so a resumed enrichment pass skips
+// tracks it already asked MusicBrainz about; a miss leaves original_year NULL
+// (era filtering then treats a compilation track's year as unknown).
+export function setOriginalYear(id: string, year: number | null): void {
+  requireDb()
+    .prepare(
+      `UPDATE tracks SET
+         original_year            = COALESCE(?, original_year),
+         original_year_source     = CASE WHEN ? IS NOT NULL THEN 'musicbrainz' ELSE original_year_source END,
+         original_year_checked_at = ?
+       WHERE id = ?`,
+    )
+    .run(year, year, new Date().toISOString(), id);
 }
 
 export function upsertTrackEnrichment(id: string, enrich: TrackEnrichment): void {
@@ -1587,7 +1676,7 @@ export function embeddedIds(): string[] {
 export function trackIdsByGenreDecade(): Map<string, string[]> {
   const rows = requireDb()
     .prepare(
-      `SELECT id, COALESCE(genre, '') AS g, (COALESCE(year, 0) / 10) * 10 AS decade
+      `SELECT id, COALESCE(genre, '') AS g, (COALESCE(original_year, year, 0) / 10) * 10 AS decade
        FROM tracks WHERE moods IS NULL`,
     )
     .all() as Array<{ id: string; g: string; decade: number }>;
@@ -1675,8 +1764,13 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   } else if (vocal === 'vocal') {
     where.push('vocal_ranges_json IS NOT NULL AND json_array_length(vocal_ranges_json) > 0');
   }
-  if (yearFrom != null) { where.push('year IS NOT NULL AND year >= ?'); params.push(yearFrom); }
-  if (yearTo != null) { where.push('year IS NOT NULL AND year <= ?'); params.push(yearTo); }
+  // Era-year semantics (issue #842): the resolved original year wins; a plain
+  // `year` only counts when the track is NOT on a compilation album, whose
+  // year is the compilation's own release date. Mirrors show-filter's
+  // trackEraYear so SQL-side and JS-side era filtering agree.
+  const ERA_YEAR_SQL = `COALESCE(original_year, CASE WHEN is_compilation = 1 THEN NULL ELSE year END)`;
+  if (yearFrom != null) { where.push(`${ERA_YEAR_SQL} >= ?`); params.push(yearFrom); }
+  if (yearTo != null) { where.push(`${ERA_YEAR_SQL} <= ?`); params.push(yearTo); }
   if (q) {
     where.push(
       `(LOWER(COALESCE(title,'')) LIKE ? OR LOWER(COALESCE(artist,'')) LIKE ? OR LOWER(COALESCE(album,'')) LIKE ?)`,
@@ -1950,6 +2044,10 @@ function rowToTrack(row: TrackRow): TrackRecord {
     artist: row.artist,
     album: row.album,
     year: row.year,
+    originalYear: row.original_year ?? null,
+    originalYearSource: row.original_year_source ?? null,
+    originalYearCheckedAt: row.original_year_checked_at ?? null,
+    isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
     genre: row.genre,
     durationSec: row.duration_sec,
     lastfmTags: row.lastfm_tags ? safeParseArray(row.lastfm_tags) : null,

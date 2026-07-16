@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import {
   normGenre, genreMatches, preferGenre,
   hasEraBound, eraSpan, inYearRange, preferEra,
+  resolveEraYear, trackEraYear,
   preferEnergy, preferEnergyStrict, preferMood,
   onlyGenre, onlyMood, onlyEnergy, applyStrictLocks,
 } from '../src/music/show-filter.js';
@@ -82,6 +83,44 @@ await test('eraSpan: bounded windows → min/max envelope; any open bound opens 
     { fromYear: null, toYear: 2029 },
   );
   assert.deepEqual(eraSpan([]), { fromYear: null, toYear: null });
+});
+
+console.log('era year resolution (#842 — original year, compilation distrust):');
+await test('resolveEraYear: originalYear wins over year; junk originalYear falls through', () => {
+  assert.equal(resolveEraYear(2013, 1976, true), 1976);   // comp track, resolved
+  assert.equal(resolveEraYear(2013, 1976, false), 1976);  // reissue, album-tag year
+  assert.equal(resolveEraYear(1995, null, false), 1995);  // plain track
+  assert.equal(resolveEraYear(1995, 0, false), 1995);     // TYER=0000-style junk original
+});
+await test("resolveEraYear: a compilation's plain year is untrusted (unknown)", () => {
+  assert.equal(resolveEraYear(2013, null, true), null);
+  // Unknown compilation status (null) keeps trusting the year — only a
+  // positive flag distrusts it.
+  assert.equal(resolveEraYear(2013, null, null), 2013);
+});
+await test('resolveEraYear: junk years read as unknown', () => {
+  assert.equal(resolveEraYear(0, null, false), null);
+  assert.equal(resolveEraYear('', null, false), null);
+  assert.equal(resolveEraYear(null, null, false), null);
+});
+await test('trackEraYear: own fields short-circuit (no library lookup when either is present)', () => {
+  assert.equal(trackEraYear(t({ year: 2013, originalYear: 1976, isCompilation: true })), 1976);
+  assert.equal(trackEraYear(t({ year: 2013, originalYear: null, isCompilation: true })), null);
+  assert.equal(trackEraYear(t({ year: 1995, originalYear: null, isCompilation: false })), 1995);
+  // Bare Subsonic child (no era fields, library not loaded here) → plain year.
+  assert.equal(trackEraYear(t({ year: 1995 })), 1995);
+});
+await test('inYearRange places a compilation track by its ORIGINAL year (#842)', () => {
+  const seventies = [{ fromYear: 1970, toYear: 1979 }];
+  const tens = [{ fromYear: 2010, toYear: 2019 }];
+  const compResolved = t({ year: 2013, originalYear: 1976, isCompilation: true });
+  const compUnresolved = t({ year: 2013, originalYear: null, isCompilation: true });
+  // Resolved: lands in the 70s window, NOT the 2010s one.
+  assert.deepEqual(inYearRange([compResolved], seventies), [compResolved]);
+  assert.deepEqual(inYearRange([compResolved], tens), []);
+  // Unresolved: year is the compilation's own date — untrusted, drops everywhere.
+  assert.deepEqual(inYearRange([compUnresolved], tens), []);
+  assert.deepEqual(inYearRange([compUnresolved], seventies), []);
 });
 
 console.log('energy (any-of bands):');

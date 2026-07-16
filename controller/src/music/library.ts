@@ -81,6 +81,10 @@ export function get(songId: string): any {
     artist: t.artist,
     album: t.album,
     year: t.year,
+    // Era-year surface (issue #842) — show-filter.resolveEraYear precedence:
+    // originalYear wins; a compilation's plain year is untrusted.
+    originalYear: t.originalYear,
+    isCompilation: t.isCompilation,
     genre: t.genre,
     moods: t.moods,
     audioMoods: t.audioMoods,
@@ -284,6 +288,10 @@ function slimTrack(r: db.TrackRecord) {
     artist: r.artist,
     album: r.album,
     year: r.year,
+    // Era-year surface (issue #842) — carried inline so show-filter's era
+    // checks on library-sourced pools never need a per-track DB lookup.
+    originalYear: r.originalYear,
+    isCompilation: r.isCompilation,
     genre: r.genre,
     moods: r.moods,
     // Zero-shot audio moods (sound-derived; music/audio-moods.ts). [] until

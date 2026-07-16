@@ -11,6 +11,7 @@ import * as analyzer from '../music/analyzer.js';
 import * as coverage from '../music/library-coverage.js';
 import * as subsonic from '../music/subsonic.js';
 import * as lastfm from '../music/lastfm.js';
+import * as musicbrainz from '../music/musicbrainz.js';
 import * as settings from '../settings.js';
 import * as embeddings from '../music/embeddings.js';
 import { buildGenreSuggest } from '../music/genre-suggest.js';
@@ -623,6 +624,27 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
         lastfmTags: lastfmTags && lastfmTags.length ? lastfmTags : null,
         lyricExcerpt,
       });
+    }
+
+    // 2b. Refresh the original-year resolution (best-effort, issue #842) —
+    // same scope predicate as the bulk pass (compilation tracks without a
+    // resolved year; retag counts as an explicit refresh, so a prior miss is
+    // retried). The song object from Subsonic carries the recording MBID for
+    // an exact MusicBrainz lookup when the file is tagged with one.
+    if (enrichCfg.originalYear !== false) {
+      try {
+        const t = db.getTrack(id);
+        if (t && musicbrainz.needsOriginalYearLookup(t, true)) {
+          const year = await musicbrainz.lookupOriginalYear({
+            title: song.title,
+            artist: song.artist,
+            mbid: song.musicBrainzId || null,
+          });
+          db.setOriginalYear(id, year);
+        }
+      } catch (err) {
+        queue.log('warn', `/library/retag enrich(originalYear) ${id}: ${err.message}`);
+      }
     }
 
     // 3. Re-embed (best-effort — if embeddings are off or fail, fall through).
