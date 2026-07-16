@@ -445,7 +445,10 @@ function trackFields(song) {
     artist: song.artist,
     album: song.album,
     year: song.year,
-    genre: song.genre,
+    // All genre tags, comma-joined — the slim projection already carries the
+    // joined string in `genre` (songGenres passes it through unchanged), raw
+    // Subsonic children get their multi-value array flattened here.
+    genre: subsonic.songGenres(song).join(', ') || null,
     // Seconds. The queue needs it to spot picks that will hit the
     // max-track-length cap (its liq_cue_out) so it can auto-arm a washout on
     // the forced mid-song exit — see applyMixTransition. Field name varies by

@@ -171,7 +171,11 @@ router.get('/now-playing', async (req, res) => {
       // per-listener 5s poll never parses the heavy acoustic *_json blobs (#723).
       const rec = library.getPlaybackMeta(nowPlaying.subsonic_id);
       if (rec) {
-        nowPlaying.genre = rec.genre ?? null;
+        // Full tag set for consumers that want it, plus the comma-joined
+        // string in the legacy `genre` field the metadata strip renders —
+        // same shape the annotate metadata now carries ("Hip-Hop, Rap").
+        nowPlaying.genres = rec.genres ?? [];
+        nowPlaying.genre = rec.genres?.length ? rec.genres.join(', ') : rec.genre ?? null;
         nowPlaying.bpm = rec.bpm ?? null;
         nowPlaying.musicalKey = rec.musicalKey ?? null;
         nowPlaying.moods = Array.isArray(rec.moods) ? rec.moods : [];
@@ -372,6 +376,9 @@ router.get('/schedule', async (req, res) => {
       personas,
       shows,
       schedule: s.schedule,
+      // Timed takeover (#930): the pin currently in force, or null. Expired /
+      // dangling overrides report as null even before the janitor sweeps them.
+      override: settings.getScheduleOverride(),
       // The grid is interpreted in the station's timezone (settings.timezone,
       // falling back to the container TZ) — the browser's local DOW/hour may
       // not match, so pass back the zone the schedule is painted in. The UI

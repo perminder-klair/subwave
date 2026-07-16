@@ -23,7 +23,7 @@ import { createDeepSeek } from '@ai-sdk/deepseek';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 
 import { requireAdmin } from '../middleware/auth.js';
-import { DEFAULT_LOCCA_BASE_URL, DEFAULT_REQUESTY_BASE_URL, noThinkFetch } from '../llm/provider.js';
+import { DEFAULT_LOCCA_BASE_URL, DEFAULT_REQUESTY_BASE_URL, OPENROUTER_APP_HEADERS, noThinkFetch } from '../llm/provider.js';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
@@ -152,7 +152,7 @@ router.post('/onboarding/test-llm', requireAdmin, async (req, res) => {
         m = createDeepSeek(apiKey ? { apiKey } : {})(model);
         break;
       case 'openrouter':
-        m = createOpenRouter(apiKey ? { apiKey } : {})(model);
+        m = createOpenRouter({ headers: OPENROUTER_APP_HEADERS, ...(apiKey ? { apiKey } : {}) })(model);
         break;
       case 'requesty':
         // Requesty is an OpenAI-compatible gateway at a fixed base URL; the test

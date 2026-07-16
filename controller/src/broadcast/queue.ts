@@ -1296,12 +1296,33 @@ class Queue {
       meta: { source: this.current.source, requestedBy: this.current.requestedBy || null },
     });
 
+    // The show on air right now — stamped onto the durable play record (and the
+    // event log) so history can answer "what show was this on" without
+    // correlating session archives after the fact.
+    const onAirShow = session.getSession()?.show || null;
+
     // Milestone on the unified timeline — the anchor each pick trace hangs off.
     logEvent('track.play', {
       title: this.current.track.title,
       artist: this.current.track.artist || null,
       source: this.current.source,
       requestedBy: this.current.requestedBy || null,
+      show: onAirShow?.name || null,
+    });
+
+    // Durable play history (library.db `plays`) — backs the admin Library
+    // History tab. Fire-and-forget: a failed insert must never stall the
+    // watcher tick, and the facade already swallows DB-not-open races.
+    void library.recordPlay({
+      trackId: this.current.track.id || null,
+      title: this.current.track.title || null,
+      artist: this.current.track.artist || null,
+      album: this.current.track.album || null,
+      playedAt: this.current.startedAt || new Date().toISOString(),
+      source: this.current.source || null,
+      requestedBy: this.current.requestedBy || null,
+      showId: onAirShow?.id || null,
+      showName: onAirShow?.name || null,
     });
 
     const trackPayload = {

@@ -720,7 +720,9 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           // the model nothing.
           album: slimAlbum(c.album, c.title),
           year: c.year || undefined,
-          genre: c.genre || undefined,
+          // All genre tags, comma-joined ("Hip-Hop, Rap") — the model sees the
+          // full picture, not just the primary tag (OpenSubsonic multi-genre).
+          genre: subsonic.songGenres(c).join(', ') || undefined,
           moods: moods.length ? moods : undefined,
           energy: c.energy || rec?.energy || undefined,
           // Track length in seconds — lets the pick weigh a 9-minute epic

@@ -1,7 +1,9 @@
 // Library tagger orchestrator (embedding-propagated).
 //
 // Pipeline (each phase short-circuits cleanly so partial runs make progress):
-//   Phase 0  — ENRICH        fetch Last.fm tags + lyric excerpts, cache in DB
+//   Phase 0  — ENRICH        fetch Last.fm tags + lyric excerpts, cache in DB;
+//                            resolve compilation tracks' original release
+//                            years via MusicBrainz (issue #842)
 //   Phase 1  — EMBED         text-embed every track that needs it
 //   Phase 2  — SEED          LLM-tag a small, well-chosen seed set
 //   Phase 3  — PROPAGATE     KNN-vote moods/energy onto every untagged track
@@ -35,6 +37,7 @@
 
 import * as subsonic from './subsonic.js';
 import * as lastfm from './lastfm.js';
+import * as musicbrainz from './musicbrainz.js';
 import * as db from './library-db.js';
 import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
@@ -165,7 +168,13 @@ async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }
       artist: song.artist,
       album: song.album,
       year: song.year,
-      genre: song.genre,
+      // Album-level era signals (issue #842). The album's originalReleaseDate
+      // is each track's original year ONLY on a non-compilation album — a
+      // compilation's original date is the compilation's own, so its tracks
+      // stay unresolved here and phase-0 asks MusicBrainz per track instead.
+      originalYear: song.albumIsCompilation ? null : song.albumOriginalYear ?? null,
+      isCompilation: song.albumIsCompilation ?? null,
+      genres: subsonic.songGenres(song),
       duration: song.duration,
     });
     liveIds.add(song.id);
@@ -821,7 +830,6 @@ function finish(
 // ---------------------------------------------------------------------------
 
 async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
-  if (ids.length === 0) return;
   const enrichCfg = (settings.get() as any).embedding?.enrichment ?? {};
   // A configured Last.fm api_key (LASTFM_API_KEY / scrobble.lastfm.apiKey) lets
   // us hit the Last.fm API directly (music/lastfm.ts), which actually returns
@@ -831,8 +839,18 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
   const hasKey = lastfm.hasLastfmKey();
   const lastfmEnabled = lastfm.lastfmEnrichEnabled(enrichCfg.lastfmTags, hasKey);
   const lyricsEnabled = enrichCfg.lyrics !== false;
-  if (!lastfmEnabled && !lyricsEnabled) {
-    console.log('[tag] phase-0 skipped: both lastfmTags and lyrics disabled in settings.embedding.enrichment');
+  // Original-year resolution for compilation-album tracks (issue #842) —
+  // keyless MusicBrainz, so default-on; disable via
+  // settings.embedding.enrichment.originalYear = false.
+  const originalYearEnabled = enrichCfg.originalYear !== false;
+  // The original-year backfill scopes itself in SQL (compilation tracks with
+  // no resolved year), NOT by the tagger's untagged/enriched id set — the
+  // column landed after most libraries were tagged, and gating on the enrich
+  // scope (or enrichedAt) would never backfill an already-tagged library.
+  const yearIds = originalYearEnabled ? db.idsNeedingOriginalYear(reEnrich) : [];
+  if (ids.length === 0 && yearIds.length === 0) return;
+  if (!lastfmEnabled && !lyricsEnabled && yearIds.length === 0) {
+    console.log('[tag] phase-0 skipped: lastfmTags and lyrics disabled, no original-year lookups pending');
     return;
   }
   if (lastfmEnabled) {
@@ -853,6 +871,7 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
   let enrichedTracks = 0;
   let enrichedLyrics = 0;
   let enrichedTags = 0;
+  let enrichedYears = 0;
 
   // Enrichment is I/O-bound (Last.fm + Navidrome lyrics fetches), so a serial
   // await-per-track loop spends almost all its time blocked on the network — on a
@@ -867,7 +886,11 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
     Math.min(32, parseInt(process.env.TAG_ENRICH_CONCURRENCY || '', 10) || 6),
   );
 
-  await mapPool(ids, concurrency, async (id) => {
+  // Skip the per-track Last.fm/lyrics loop entirely when both are disabled —
+  // running it anyway would stamp enrichedAt with empty rows and mask a later
+  // re-enable. The original-year loop below has its own scope + skip stamp.
+  const metaIds = lastfmEnabled || lyricsEnabled ? ids : [];
+  await mapPool(metaIds, concurrency, async (id) => {
     const t = db.getTrack(id);
     if (!t) return;
     if (!reEnrich && t.enrichedAt) return;
@@ -894,16 +917,47 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
     if (lyricExcerpt) enrichedLyrics += 1;
     if (enrichedTracks % 100 === 0) {
       console.log(
-        `[tag] enriched ${enrichedTracks}/${ids.length} (lastfm: ${enrichedTags}, lyrics: ${enrichedLyrics})`,
+        `[tag] enriched ${enrichedTracks}/${metaIds.length} (lastfm: ${enrichedTags}, lyrics: ${enrichedLyrics})`,
       );
-      reportProgress({ phase: 'enrich', label: 'Enriching metadata', done: enrichedTracks, total: ids.length });
+      reportProgress({ phase: 'enrich', label: 'Enriching metadata', done: enrichedTracks, total: metaIds.length });
     }
   });
+
+  // Original-year backfill (issue #842): compilation-album tracks whose plain
+  // `year` is the compilation's own release date. Resolved via MusicBrainz
+  // (music/musicbrainz.ts — earliest first-release-date across matching
+  // recordings, exact-MBID first). Effectively serial regardless of pool width
+  // (the client's 1 req/s throttle), so a big compilation-heavy library takes
+  // a while on the first pass — hence the per-track checked_at stamp (hit OR
+  // miss) that makes every later pass skip straight past it. The per-song
+  // Navidrome fetch just recovers the recording MBID (not stored in
+  // library.db); it's dwarfed by the MB throttle.
+  if (yearIds.length) {
+    console.log(`[tag] phase-0 original years: ${yearIds.length} compilation tracks to resolve via MusicBrainz (~1/s)`);
+    reportProgress({ phase: 'enrich', label: 'Resolving original years', done: 0, total: yearIds.length });
+    let checkedYears = 0;
+    await mapPool(yearIds, Math.min(concurrency, 4), async (id) => {
+      const t = db.getTrack(id);
+      if (!t || !musicbrainz.needsOriginalYearLookup(t, reEnrich)) return;
+      let mbid: string | null = null;
+      try {
+        mbid = (await subsonic.getSong(id))?.musicBrainzId || null;
+      } catch { /* MBID is optional — the search path covers it */ }
+      const year = await musicbrainz.lookupOriginalYear({ title: t.title, artist: t.artist, mbid, year: t.year });
+      db.setOriginalYear(id, year);
+      if (year != null) enrichedYears += 1;
+      checkedYears += 1;
+      if (checkedYears % 25 === 0) {
+        console.log(`[tag] original years ${checkedYears}/${yearIds.length} (${enrichedYears} resolved)`);
+        reportProgress({ phase: 'enrich', label: 'Resolving original years', done: checkedYears, total: yearIds.length });
+      }
+    });
+  }
 
   logEvent(
     'info',
     `Metadata fetched for ${enrichedTracks.toLocaleString('en-GB')} tracks ` +
-      `(${enrichedTags} Last.fm, ${enrichedLyrics} lyrics)`,
+      `(${enrichedTags} Last.fm, ${enrichedLyrics} lyrics, ${enrichedYears} original years)`,
   );
 }
 
@@ -944,7 +998,7 @@ async function phaseEmbed(
     const songs = batch.map(id => db.getTrack(id)).filter((t): t is db.TrackRecord => !!t);
     const texts = songs.map(t =>
       embeddings.formatTrackText(
-        { title: t.title, artist: t.artist, album: t.album, year: t.year, genre: t.genre },
+        { title: t.title, artist: t.artist, album: t.album, year: t.year, genres: t.genres },
         { lastfmTags: t.lastfmTags, lyricExcerpt: t.lyricExcerpt },
       ),
     );
@@ -1015,7 +1069,7 @@ async function processBatch(
     artist: t.artist ?? undefined,
     album: t.album ?? undefined,
     year: t.year ?? undefined,
-    genre: t.genre ?? undefined,
+    genres: t.genres,
   }));
   const opts = consumer.pin ? { leg: consumer.pin } : {};
 

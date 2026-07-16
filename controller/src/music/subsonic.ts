@@ -143,15 +143,33 @@ async function call(endpoint, params = {}) {
 // Lightweight connectivity + auth check for the admin Doctor. Hits the cheapest
 // Subsonic endpoint (`ping`) with the controller's own salt+token creds — mirrors
 // the CLI wizard's probeSubsonic but against config.navidrome. Never throws.
+//
+// A failure that lands instantly gets ONE retry: Node's pooled fetch sockets go
+// stale between the controller's bursty Subsonic calls, so a one-off
+// ECONNRESET / "fetch failed" on connection reuse is routine, not an outage —
+// and since the admin NavidromeBanner alarms on a single failed ping (cached
+// 20s), an un-retried blip reads as "Navidrome is down" to the operator. Slow
+// failures (the 30s timeout) don't retry: a second wait wouldn't change the
+// answer, just pin the caller for another timeoutMs.
+const PING_RETRY_IF_FASTER_THAN_MS = 2_000;
+
 export async function ping(): Promise<{ ok: boolean; reason?: string }> {
   if (!config.navidrome.url || !config.navidrome.user || !config.navidrome.password) {
     return { ok: false, reason: 'Navidrome URL / username / password not configured' };
   }
-  try {
-    await call('ping');
-    return { ok: true };
-  } catch (err: any) {
-    return { ok: false, reason: err?.message || 'unreachable' };
+  for (let attempt = 0; ; attempt++) {
+    const started = Date.now();
+    try {
+      await call('ping');
+      return { ok: true };
+    } catch (err: any) {
+      const failedFast = Date.now() - started < PING_RETRY_IF_FASTER_THAN_MS;
+      if (attempt === 0 && failedFast) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        continue;
+      }
+      return { ok: false, reason: err?.message || 'unreachable' };
+    }
   }
 }
 
@@ -211,6 +229,26 @@ export async function getRandomSongs({ size = 20, genre, fromYear, toYear }: { s
 export async function getSongsByGenre(genre, { count = 20 } = {}) {
   const r = await call('getSongsByGenre', { genre, count });
   return rejectArchive(r.songsByGenre?.song || []);
+}
+
+// Every genre tag on a song, deduped. OpenSubsonic servers (Navidrome ≥0.54)
+// send the multi-value `genres: [{name}]` array alongside the legacy scalar
+// `genre`; older Subsonic servers send only the scalar. The array is
+// authoritative (its first entry is normally the scalar); the scalar is the
+// fallback so a plain-Subsonic backend still yields a one-element array.
+// The single normaliser for per-track genre ingest — everything downstream
+// (library-db genres column, picker/show filters, annotate) goes through it.
+export function songGenres(song: { genres?: unknown; genre?: unknown } | null | undefined): string[] {
+  const out: string[] = [];
+  const push = (v: unknown) => {
+    const s = String(v ?? '').trim();
+    if (s && !out.some((x) => x.toLowerCase() === s.toLowerCase())) out.push(s);
+  };
+  if (Array.isArray(song?.genres)) {
+    for (const g of song.genres) push(typeof g === 'string' ? g : (g as { name?: unknown })?.name);
+  }
+  push(song?.genre);
+  return out;
 }
 
 // All genre tags present in the library, each with { value, songCount,
@@ -535,6 +573,13 @@ export async function getLyrics(songId) {
 }
 
 // Async iterator over every song in the library. Walks albums in batches.
+// Each yielded song is annotated with the album-level era signals Navidrome
+// only exposes on the album record (issue #842): `albumIsCompilation`
+// (OpenSubsonic isCompilation) and `albumOriginalYear` (originalReleaseDate
+// .year — the album's TRUE first-release year on reissues, absent on most
+// rips). The walk (tag-library.walkNavidrome) turns these into per-track
+// original-year/compilation columns; the raw fields ride here so policy stays
+// out of the client.
 export async function* iterateAllSongs() {
   let offset = 0;
   const BATCH = 500;
@@ -543,9 +588,14 @@ export async function* iterateAllSongs() {
     if (albums.length === 0) break;
     for (const album of albums) {
       try {
-        // getAlbum already drops station-archive recordings (issue #273).
-        const songs = await getAlbum(album.id);
-        for (const s of songs) yield s;
+        const r = await call('getAlbum', { id: album.id });
+        const isCompilation = typeof r.album?.isCompilation === 'boolean' ? r.album.isCompilation : null;
+        const ord = r.album?.originalReleaseDate?.year;
+        const originalYear = Number.isFinite(ord) && ord > 0 ? ord : null;
+        // Same station-archive drop as getAlbum() (issue #273).
+        for (const s of rejectArchive(r.album?.song || [])) {
+          yield { ...s, albumIsCompilation: isCompilation, albumOriginalYear: originalYear };
+        }
       } catch (err) {
         console.error(`[subsonic] getAlbum(${album.id}) failed: ${err.message}`);
       }
@@ -689,7 +739,8 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } =
     `subsonic_id="${escAnnotate(song.id)}"`,
   ];
   if (song.year) fields.push(`year="${escAnnotate(song.year)}"`);
-  if (song.genre) fields.push(`genre="${escAnnotate(song.genre)}"`);
+  const genres = songGenres(song);
+  if (genres.length) fields.push(`genre="${escAnnotate(genres.join(', '))}"`);
   // DJ-mode adaptive blend: the queue stashes a per-transition crossfade length
   // (seconds) on the track when the persona is in DJ mode and both tracks are
   // analysed. Liquidsoap's `cross` honours `liq_cross_duration` to size the

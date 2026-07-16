@@ -209,6 +209,27 @@ interface Schedule {
   [day: number]: (string | null)[];
 }
 
+/** Timed takeover (#930): one show pinned over the weekly grid until
+ *  `expiresAt` (epoch ms), then normal programming resumes on its own. */
+interface ScheduleOverride {
+  showId: string;
+  startedAt: number;
+  expiresAt: number;
+}
+
+// Mirrors the controller's OVERRIDE_MIN/MAX_MINUTES (settings.ts).
+const PIN_MIN_MINUTES = 15;
+const PIN_MAX_MINUTES = 720;
+const PIN_PRESETS = [
+  { minutes: 60, label: '1h' },
+  { minutes: 120, label: '2h' },
+  { minutes: 180, label: '3h' },
+];
+
+function fmtDuration(minutes: number): string {
+  return minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`;
+}
+
 interface FormState {
   shows: Show[];
   schedule: Schedule;
@@ -461,6 +482,13 @@ export default function ShowsPanel() {
   // Navidrome playlists for the per-show playlist-anchor picker. Admin-gated;
   // failures are silent (the picker just shows no options to choose from).
   const [playlists, setPlaylists] = useState<{ id: string; name: string; songCount: number | null }[]>([]);
+  // Timed takeover (#930): the pin currently in force (null = none), plus the
+  // pin form's own state. `override` comes from GET /schedule and is refreshed
+  // by the pin/cancel actions.
+  const [override, setOverride] = useState<ScheduleOverride | null>(null);
+  const [pinShowId, setPinShowId] = useState('');
+  const [pinMinutes, setPinMinutes] = useState(60);
+  const [pinBusy, setPinBusy] = useState(false);
 
   // Drag-paint stroke: { active, value } — value is the showId/null painted
   // for the whole stroke, decided on mousedown so a drag doesn't flicker.
@@ -550,6 +578,22 @@ export default function ShowsPanel() {
         if (firstValid) setBrush(b => b ?? firstValid.id);
       }
     })();
+  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch the live takeover once after sign-in (GET /schedule is public but
+  // adminFetch keeps the base-URL handling consistent). Expired/absent → null.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await adminFetch('/schedule');
+        if (!r.ok || cancelled) return;
+        const j = (await r.json()) as { override?: ScheduleOverride | null };
+        if (j.override) setOverride(j.override);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch the skill catalogue once for the programme feature-segment pin.
@@ -943,6 +987,42 @@ export default function ShowsPanel() {
     } finally { setBusy(false); }
   };
 
+  // Pin a show over the weekly grid for `pinMinutes` (#930). The controller
+  // persists the window, airs the handoff in the background, and reverts on
+  // its own when the timer lapses — nothing here to undo later.
+  const pinShow = async () => {
+    if (!pinShowId) return;
+    setPinBusy(true);
+    try {
+      const r = await adminFetch('/schedule/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ showId: pinShowId, minutes: pinMinutes }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; override?: ScheduleOverride };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      setOverride(j.override ?? null);
+      const name = showById(pinShowId)?.name?.trim() || 'show';
+      notify.ok(`“${name}” takes over for ${fmtDuration(pinMinutes)} — the switch airs on the next track.`);
+    } catch (e) {
+      notify.err(errorMessage(e));
+    } finally { setPinBusy(false); }
+  };
+
+  // Cancel a takeover early — the weekly schedule resumes on the next roll.
+  const cancelPin = async () => {
+    setPinBusy(true);
+    try {
+      const r = await adminFetch('/schedule/override', { method: 'DELETE' });
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      setOverride(null);
+      notify.ok('Takeover cancelled — back to the weekly schedule.');
+    } catch (e) {
+      notify.err(errorMessage(e));
+    } finally { setPinBusy(false); }
+  };
+
   // ── error / loading shells ───────────────────────────────────────────────
   if (err) {
     return (
@@ -964,7 +1044,12 @@ export default function ShowsPanel() {
   }
 
   const validBrushes = form.shows.filter(showValid);
-  const nowShow = showById(form.schedule[nowDay]?.[nowHour] ?? null);
+  // A live takeover outranks the grid on the On-air card — mirror the
+  // controller's resolveActiveShow. `now` ticks every second, so an expiring
+  // pin drops off the card by itself; a pin of a since-deleted show is void.
+  const liveOverride = override && override.expiresAt > now.getTime() ? override : null;
+  const pinnedShow = liveOverride ? showById(liveOverride.showId) : null;
+  const nowShow = pinnedShow ?? showById(form.schedule[nowDay]?.[nowHour] ?? null);
   const upNext = slotAhead(1);
   const after = slotAhead(2);
   const upNextShow = upNext.showId ? showById(upNext.showId) : null;
@@ -1004,8 +1089,8 @@ export default function ShowsPanel() {
 
         {/* Now / Up next / After that strip */}
         <div className="stack-mobile grid grid-cols-3 border-b border-separator-strong">
-          <NowCard label="On air" accent slotHour={nowHour} show={nowShow}
-            color={colorOf(form.schedule[nowDay]?.[nowHour])}
+          <NowCard label={pinnedShow ? 'On air · takeover' : 'On air'} accent slotHour={nowHour} show={nowShow}
+            color={colorOf(pinnedShow ? pinnedShow.id : form.schedule[nowDay]?.[nowHour])}
             personaLabel={nowShow ? personaName(nowShow.personaId) : ''} />
           <NowCard label="Up next" slotHour={upNext.hour} show={upNextShow}
             color={colorOf(upNext.showId)}
@@ -1013,6 +1098,80 @@ export default function ShowsPanel() {
           <NowCard label="After that" slotHour={after.hour} show={afterShow}
             color={colorOf(after.showId)}
             personaLabel={afterShow ? personaName(afterShow.personaId) : ''} />
+        </div>
+
+        {/* Takeover — pin a show over the grid for a while (#930). The switch
+            airs at the next roll; expiry reverts to the schedule on its own. */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-separator-strong p-3.5">
+          <Eyebrow className={liveOverride ? 'text-vermilion' : 'text-muted'}>takeover</Eyebrow>
+          {liveOverride && pinnedShow ? (
+            <>
+              <span className="text-[13px] font-bold text-ink">
+                {pinnedShow.name.trim() || 'untitled'}
+              </span>
+              <span className="text-[12px] text-muted">
+                ends {fmtClock(liveOverride.expiresAt, stationTz, stationLocale)}
+                {' · '}
+                {Math.max(1, Math.ceil((liveOverride.expiresAt - now.getTime()) / 60_000))} min left
+              </span>
+              <Btn sm onClick={cancelPin} disabled={pinBusy}>
+                {pinBusy ? 'cancelling…' : 'Cancel takeover'}
+              </Btn>
+            </>
+          ) : (
+            <>
+              <Select value={pinShowId} onValueChange={setPinShowId}>
+                <SelectTrigger className="h-8 w-52 text-[13px]">
+                  <SelectValue placeholder="pin a show…" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {validBrushes.map(s => (
+                      <SelectItem key={s.id} value={s.id}>{s.name.trim() || 'untitled'}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              {PIN_PRESETS.map(p => (
+                <button
+                  key={p.minutes}
+                  type="button"
+                  aria-pressed={pinMinutes === p.minutes}
+                  onClick={() => setPinMinutes(p.minutes)}
+                  className={cn(
+                    'border border-ink px-2 py-0.5 text-[12px]',
+                    pinMinutes === p.minutes ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
+                  )}
+                >
+                  {p.label}
+                </button>
+              ))}
+              <Input
+                type="number"
+                min={PIN_MIN_MINUTES}
+                max={PIN_MAX_MINUTES}
+                value={pinMinutes}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) setPinMinutes(Math.round(v));
+                }}
+                className="h-8 w-20 text-[13px]"
+                aria-label="takeover minutes"
+              />
+              <span className="caption">min</span>
+              <Btn
+                sm
+                tone="accent"
+                onClick={pinShow}
+                disabled={pinBusy || !pinShowId || pinMinutes < PIN_MIN_MINUTES || pinMinutes > PIN_MAX_MINUTES}
+              >
+                {pinBusy ? 'pinning…' : 'Pin show'}
+              </Btn>
+              {validBrushes.length === 0 && (
+                <span className="text-[11px] text-muted italic">add a show first</span>
+              )}
+            </>
+          )}
         </div>
       </section>
 

@@ -43,8 +43,18 @@ const INTRO_SUPPRESSES_HOURLY_MS = 45 * 60 * 1000;
 
 // Pure arc helpers live in programme-pure.ts (dependency-free, so the unit
 // test doesn't drag in the queue/settings graph) — re-exported for callers.
-import { showSpan, planFeature, beatWindow } from './programme-pure.js';
-export { showSpan, planFeature, beatWindow };
+import { showSpan, overrideSpan, planFeature, beatWindow } from './programme-pure.js';
+export { showSpan, overrideSpan, planFeature, beatWindow };
+
+// The episode's position/length at `now`. A live takeover (#930) IS the
+// episode — its window drives the arc, since the pinned show usually isn't in
+// the grid at these hours and showSpan can't see it. Otherwise the grid run.
+function episodeSpan(now: Date): { index: number; total: number } {
+  const ov = settings.getScheduleOverride(now.getTime());
+  if (ov) return overrideSpan(ov, now.getTime());
+  const { dow, hour } = zonedParts(now);
+  return showSpan(settings.get().schedule, dow, hour);
+}
 
 // The beat due at this moment on the STATION clock, for the scheduler's
 // 5-minute programme tick (see beatWindow for why crons can't fire on fixed
@@ -137,8 +147,7 @@ export async function ensurePlan(ctx: SessionContext, now = new Date()): Promise
   if (prog.status !== 'pending') return;
   if (!optionalSegmentsAllowed()) return;  // over budget — stay pending, retry later
 
-  const { dow, hour } = zonedParts(now);
-  const span = showSpan(settings.get().schedule, dow, hour);
+  const span = episodeSpan(now);
   // Span is measured from the show's FIRST hour: if the session rolled late
   // (controller boot mid-show), the remaining hours are what the plan covers.
   const hoursLeft = Math.max(1, span.total - span.index);
@@ -243,8 +252,7 @@ export async function featureTick(queue: QueueApi, ctx: SessionContext, now = ne
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
   if (!prog) return;
-  const { dow, hour } = zonedParts(now);
-  const span = showSpan(settings.get().schedule, dow, hour);
+  const span = episodeSpan(now);
   const beat = `feature:${span.index}`;
   if (prog.beats?.[beat]) return;
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return;
@@ -267,8 +275,7 @@ export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourInd
   if (!show?.programme) throw new Error('no programme show is on air');
   const prog = session.getProgramme();
   const plan = prog?.plan || null;
-  const { dow, hour } = zonedParts(now);
-  const idx = hourIndex ?? showSpan(settings.get().schedule, dow, hour).index;
+  const idx = hourIndex ?? episodeSpan(now).index;
   const feature = planFeature(plan, idx);
   const topic = feature?.topic || show.topic || `the heart of "${show.name}"`;
   const kind = String(show.segmentSkill || '').trim() || feature?.kind || null;
@@ -301,8 +308,7 @@ export async function outroTick(queue: QueueApi, ctx: SessionContext, now = new 
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
   if (!prog || prog.beats?.outro) return;
-  const { dow, hour } = zonedParts(now);
-  const span = showSpan(settings.get().schedule, dow, hour);
+  const span = episodeSpan(now);
   if (span.index !== span.total - 1) return;  // not the final hour yet
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return;
   session.markProgrammeBeat('outro');
