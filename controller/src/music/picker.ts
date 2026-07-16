@@ -17,6 +17,7 @@ import { shuffle } from '../util/shuffle.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
 import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type YearRange } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
+import * as likes from '../broadcast/likes.js';
 
 // A track flowing through the pool builder — a raw Subsonic child, a slimTrack
 // library row, or a Last.fm-derived stub, tagged with the internal _source /
@@ -63,6 +64,7 @@ const CAP_SIMILAR_ARTIST = 4;
 const CAP_EMBEDDING_SIMILAR = 4;
 const CAP_SONIC_SIMILAR = 4;
 const CAP_AUDIO_SIMILAR = 4;
+const CAP_LIKED = 4;
 // When a show pins a genre/decade, its dedicated source is the dominant pool
 // contributor (soft lean) and the unrelated discovery sources shrink by this
 // factor so the genre/era actually shows up in the LLM's candidate list.
@@ -287,6 +289,23 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       const knn = library.tracksLikeThisAudio(currentTrack.id, 15);
       add('audio-similar', sampleWithRecentFallback(lean(knn), recentIds, nz(CAP_AUDIO_SIMILAR)));
     } catch {}
+  }
+
+  // 1d-bis. Listener favourites (#991) — tracks liked via the player heart, only
+  // when the operator opts in (likes.influenceDj). A weighted preference
+  // signal, never a lock: capped like every other source so the crowd can
+  // steer the pool without taking it over. The store returns [] before its
+  // boot-time load resolves, so this is always a silent no-op when cold.
+  {
+    const likeCfg = settings.get()?.likes;
+    if (likeCfg?.enabled && likeCfg?.influenceDj) {
+      try {
+        const favs = likes
+          .topLiked({ windowDays: likeCfg.windowDays, limit: likeCfg.maxTracks })
+          .map((f) => f.track);
+        add('listener-liked', sampleWithRecentFallback(lean(shuffle(favs)), recentIds, nz(CAP_LIKED)));
+      } catch {}
+    }
   }
 
   // 1e. Show genres / decades — the soft-dominant source when a show pins

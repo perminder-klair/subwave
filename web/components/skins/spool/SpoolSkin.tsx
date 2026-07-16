@@ -37,7 +37,7 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
-import { useRequestSlip, useVolumeNudge } from '../sharedHooks';
+import { useRequestSlip, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
 /** One reel — a dark wound-tape disc (diameter rides --reel-l/--reel-r) with a
@@ -143,6 +143,7 @@ export default function SpoolSkin(_props: SkinProps) {
     [setVolume],
   );
 
+  const like = useTrackLike();
   const slip = useRequestSlip({
     sent: 'Slip passed to the booth — the DJ has it.',
     refused: 'The booth waved this one off.',
@@ -216,6 +217,25 @@ export default function SpoolSkin(_props: SkinProps) {
       {muted ? 'MUTED' : 'MUTE'}
     </button>
   );
+  const likeKey = (extra: string) =>
+    like.available && (
+      <button
+        type="button"
+        onClick={() => void like.like()}
+        disabled={like.pending || like.liked}
+        aria-pressed={like.liked}
+        aria-label={like.liked ? 'Liked' : 'Like this track'}
+        className={cn(
+          'v3-focus flex items-center justify-center gap-1 border border-ink font-mono font-bold tracking-[0.1em]',
+          like.liked ? 'bg-[var(--accent)] text-bg' : 'cursor-pointer bg-bg hover:bg-[var(--overlay)]',
+          like.pending && 'opacity-60',
+          extra,
+        )}
+      >
+        {like.liked ? '♥' : '♡'}
+        {like.count > 0 && <span className="text-[0.7em] tabular-nums">{like.count}</span>}
+      </button>
+    );
 
   const requestForm = (ref: RefObject<HTMLInputElement | null>) => (
     <form
@@ -404,8 +424,9 @@ export default function SpoolSkin(_props: SkinProps) {
                       <span className={cn('h-8 w-0.5 bg-[var(--accent)]', styles.vu, playing && styles.playing)} />
                     </div>
                     {playKey('flex-[1.6] text-[16px]')}
-                    {stopKey('flex-1 text-[12px]')}
-                    {muteKey('flex-1 text-[9px]')}
+                    {stopKey('flex-1 text-[15px]')}
+                    {muteKey('flex-1 text-[11px]')}
+                    {likeKey('flex-1 text-[16px]')}
                   </div>
                 </div>
                 {/* volume — the deck's output fader (keyboard ↑/↓ also work) */}
@@ -545,8 +566,9 @@ export default function SpoolSkin(_props: SkinProps) {
 
                 <div className="flex h-14 flex-none gap-2">
                   {playKey('flex-[2] text-[18px]')}
-                  {stopKey('flex-1 text-[13px]')}
-                  {muteKey('flex-1 text-[11px]')}
+                  {stopKey('flex-1 text-[16px]')}
+                  {muteKey('flex-1 text-[12px]')}
+                  {likeKey('flex-1 text-[18px]')}
                 </div>
 
                 {upNext[0]?.title && (

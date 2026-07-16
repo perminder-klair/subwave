@@ -110,6 +110,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         llm: s.llm,
         search: s.search,
         embedding: s.embedding,
+        likes: s.likes,
         audio: s.audio,
         sfx: s.sfx,
         ui: s.ui,

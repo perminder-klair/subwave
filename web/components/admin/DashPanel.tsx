@@ -163,6 +163,27 @@ interface RequestEntry {
   message?: string | null;
 }
 
+// Listener likes (#991), as returned by GET /likes — the heart button's
+// admin review surface.
+interface LikeTopEntry {
+  track?: { id?: string; title?: string; artist?: string } | null;
+  count?: number;
+  lastLikedAt?: string;
+}
+interface LikeRecentEntry {
+  songId?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  likedAt?: string;
+  listener?: string;
+}
+interface LikesPayload {
+  totals?: { total?: number; songs?: number };
+  top?: LikeTopEntry[];
+  recent?: LikeRecentEntry[];
+}
+
 // Hide the host portion of an IP so a glance at the screen doesn't expose a
 // listener's full address. IPv4 drops the last octet, IPv6 keeps the first two
 // groups (the routing prefix) and masks the rest. The raw IP is still in the
@@ -225,6 +246,8 @@ export default function DashPanel() {
   const [stats, setStats] = useState<HealthStats | null>(null);
   const [requests, setRequests] = useState<RequestEntry[] | null>(null);
   const [reqErr, setReqErr] = useState<string | null>(null);
+  const [likes, setLikes] = useState<LikesPayload | null>(null);
+  const [likesErr, setLikesErr] = useState<string | null>(null);
   // Longest-connected first by default — the most stable listeners on top.
   const [sort, setSort] = useState<SortState>({ key: 'connectedSeconds', dir: 'desc' });
   const [revealIps, setRevealIps] = useState(false);
@@ -335,6 +358,30 @@ export default function DashPanel() {
     };
     tick();
     const id = setInterval(tick, 10000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [hydrated, needsAuth, adminFetch]);
+
+  // Listener likes (#991) — same review-surface cadence as requests.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await adminFetch('/likes');
+        const j = (await r.json().catch(() => null)) as (LikesPayload & { error?: string }) | null;
+        if (cancelled) return;
+        if (!r.ok) throw new Error(j?.error || `failed (${r.status})`);
+        setLikes(j);
+        setLikesErr(null);
+      } catch (e) {
+        if (!cancelled) setLikesErr(e instanceof Error ? e.message : String(e));
+      }
+    };
+    tick();
+    const id = setInterval(tick, 15000);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -889,6 +936,9 @@ export default function DashPanel() {
       {/* ── REQUESTS ───────────────────────────────────────────────────── */}
       <RequestsCard requests={requests} err={reqErr} tz={tz} locale={locale} />
 
+      {/* ── LIKES ──────────────────────────────────────────────────────── */}
+      <LikesCard likes={likes} err={likesErr} tz={tz} locale={locale} />
+
       {!status && !err && <div className="text-muted italic">connecting…</div>}
 
       <V3AlertDialog
@@ -1051,6 +1101,94 @@ function RequestsCard({
             ))}
           </div>
         </ScrollArea>
+      )}
+    </Card>
+  );
+}
+
+// The Likes card (#991) — what the heart button collected: the most-liked
+// tracks in the configured window, then the recent taps. Listener column is
+// the truncated HMAC handle from the controller — never an IP.
+function LikesCard({
+  likes,
+  err,
+  tz,
+  locale,
+}: {
+  likes: LikesPayload | null;
+  err: string | null;
+  tz?: string;
+  locale?: StationLocale;
+}) {
+  const top = likes?.top ?? [];
+  const recent = likes?.recent ?? [];
+  return (
+    <Card
+      title="Likes"
+      sub={
+        err
+          ? 'unavailable'
+          : likes
+            ? `${likes.totals?.total ?? 0} likes across ${likes.totals?.songs ?? 0} tracks`
+            : 'loading…'
+      }
+    >
+      {err ? (
+        <div className="text-muted italic">can’t load likes: {err}</div>
+      ) : !likes ? (
+        <div className="text-muted italic">loading…</div>
+      ) : recent.length === 0 ? (
+        <div className="text-muted italic">
+          no likes yet — the heart button on the player feeds this
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          {top.length > 0 && (
+            <div className="grid gap-1.5">
+              <div className="caption text-[10px]">most liked</div>
+              {top.slice(0, 8).map((t, i) => (
+                <div
+                  key={`${t.track?.id ?? ''}:${i}`}
+                  className="grid grid-cols-[auto_1fr_auto] items-center gap-2.5 text-[12px]"
+                >
+                  <span className="mono-num text-[10px] text-muted">{i + 1}.</span>
+                  <span className="min-w-0 truncate">
+                    <span className="font-bold">{t.track?.title || '—'}</span>
+                    {t.track?.artist && <span className="text-muted"> — {t.track.artist}</span>}
+                  </span>
+                  <span className="mono-num text-[11px] text-vermilion">
+                    ♥ {t.count ?? 0}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="grid gap-1.5">
+            <div className="caption text-[10px]">recent</div>
+            <ScrollArea className="max-h-[280px]">
+              <div className="grid gap-1.5">
+                {recent.map((l, i) => (
+                  <div
+                    key={`${l.likedAt ?? ''}:${i}`}
+                    className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2.5 text-[12px]"
+                  >
+                    <span className="font-bold text-vermilion">♥</span>
+                    <span className="min-w-0 truncate">
+                      {l.title || '—'}
+                      {l.artist && <span className="text-muted"> — {l.artist}</span>}
+                    </span>
+                    <span className="caption text-[10px]" title="anonymous listener handle">
+                      {l.listener || ''}
+                    </span>
+                    <span className="mono-num text-[10px] text-muted">
+                      {fmtClock(l.likedAt, tz, locale) || '—'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
+        </div>
       )}
     </Card>
   );

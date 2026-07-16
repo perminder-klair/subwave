@@ -420,6 +420,17 @@ export async function getStarred() {
   return rejectArchive(r.starred2?.song || []);
 }
 
+// Star write-back for the listener like feature (#991): mirrors the player
+// heart into Navidrome so any Subsonic client (Feishin, Symfonium, DSub, …)
+// sees the track under Starred immediately. Both are idempotent server-side.
+export async function star(id) {
+  await call('star', { id });
+}
+
+export async function unstar(id) {
+  await call('unstar', { id });
+}
+
 export async function getAlbumList(offset = 0, size = 500) {
   const r = await call('getAlbumList2', { type: 'alphabeticalByName', size, offset });
   return r.albumList2?.album || [];

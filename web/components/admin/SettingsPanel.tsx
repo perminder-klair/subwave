@@ -18,7 +18,7 @@ import BackupPanel from './BackupPanel';
 import FestivalsSection from './FestivalsSection';
 import {
   Radio, Palette, Cpu, Mic, Library, Search, Music, AudioLines,
-  Activity, Archive, Save, AlertTriangle, CalendarDays,
+  Activity, Archive, Save, AlertTriangle, CalendarDays, Heart,
 } from 'lucide-react';
 import {
   SectionHeader, ELEVENLABS_VS_DEFAULTS,
@@ -35,6 +35,7 @@ import { ThemeSection } from './settings/ThemeSection';
 import { JinglesSection } from './settings/JinglesSection';
 import { SfxSection } from './settings/SfxSection';
 import { ScrobbleSection } from './settings/ScrobbleSection';
+import { LikesSection } from './settings/LikesSection';
 
 const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
@@ -47,6 +48,7 @@ const SECTIONS = [
   { id: 'jingles',  label: 'Jingles', hint: 'stingers', icon: Music },
   { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers', icon: AudioLines },
   { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz', icon: Activity },
+  { id: 'likes',    label: 'Likes', hint: 'heart button · navidrome stars', icon: Heart },
   { id: 'archives', label: 'Archives', hint: 'hourly recordings', icon: Archive },
   { id: 'backup',   label: 'Backup', hint: 'export · restore', icon: Save },
   { id: 'danger',   label: 'Danger zone', hint: 'broadcast control', icon: AlertTriangle },
@@ -249,6 +251,13 @@ export default function SettingsPanel() {
           username: v.scrobble?.listenbrainz?.username ?? '',
           baseUrl: v.scrobble?.listenbrainz?.baseUrl ?? '',
         },
+      },
+      likes: {
+        enabled: v.likes?.enabled ?? true,
+        starInNavidrome: v.likes?.starInNavidrome ?? true,
+        influenceDj: !!v.likes?.influenceDj,
+        maxTracks: String(v.likes?.maxTracks ?? 10),
+        windowDays: String(v.likes?.windowDays ?? 30),
       },
     });
   }, [data, form]);
@@ -577,6 +586,12 @@ export default function SettingsPanel() {
               <ScrobbleSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh}
+              />
+            )}
+            {activeSection === 'likes' && (
+              <LikesSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveSettings={saveSettings}
               />
             )}
           </>

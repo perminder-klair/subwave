@@ -38,7 +38,7 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
-import { useRequestSlip, useVolumeNudge } from '../sharedHooks';
+import { useRequestSlip, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
 function Grip() {
@@ -100,6 +100,7 @@ export default function SubampSkin(_props: SkinProps) {
   const playing = tunedIn && status === 'playing' && !offline;
 
   const adjustVolume = useVolumeNudge();
+  const like = useTrackLike();
 
   // Request line (station log window).
   const slip = useRequestSlip({
@@ -234,6 +235,24 @@ export default function SubampSkin(_props: SkinProps) {
               >
                 MUTE
               </button>
+              {like.available && (
+                <button
+                  type="button"
+                  onClick={() => void like.like()}
+                  disabled={like.pending || like.liked}
+                  aria-pressed={like.liked}
+                  aria-label={like.liked ? 'Liked' : 'Like this track'}
+                  className={cn(
+                    'v3-focus grid h-[34px] w-11 place-items-center border text-[13px]',
+                    like.liked
+                      ? 'border-[var(--accent)] text-[var(--accent)]'
+                      : 'cursor-pointer border-soft-border hover:bg-[var(--overlay)]',
+                    like.pending && 'opacity-60',
+                  )}
+                >
+                  {like.liked ? '♥' : '♡'}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => reqInputRef.current?.focus()}

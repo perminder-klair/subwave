@@ -9,7 +9,7 @@
 // chip; everything else is corners.
 
 import { useEffect, useRef, useState } from 'react';
-import { Headphones } from 'lucide-react';
+import { Headphones, Heart } from 'lucide-react';
 import styles from './Drift.module.css';
 import {
   usePlayerActions,
@@ -35,7 +35,7 @@ import {
   stationIdentity,
   turnClock,
 } from '../shared';
-import { useRequestSlip, useVolumeNudge } from '../sharedHooks';
+import { useRequestSlip, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
 /** Lowercase weekday in the station's zone — "23:09 saturday". */
@@ -87,6 +87,7 @@ export default function DriftSkin(_props: SkinProps) {
   useDynamicStyle(fillRef, { width: `${Math.round((ratio ?? 0) * 100)}%` });
 
   const adjustVolume = useVolumeNudge();
+  const like = useTrackLike();
 
   // The ··· chip: request + recent history in one quiet panel.
   const [panelOpen, setPanelOpen] = useState(false);
@@ -164,6 +165,23 @@ export default function DriftSkin(_props: SkinProps) {
           )}
           {signal.latencyMs != null && tunedIn && <span>{signal.latencyMs} ms</span>}
         </span>
+        {like.available && (
+          <button
+            type="button"
+            onClick={() => void like.like()}
+            disabled={like.pending || like.liked}
+            aria-pressed={like.liked}
+            aria-label={like.liked ? 'Liked' : 'Like this track'}
+            className={cn(
+              'v3-focus inline-flex items-center gap-1 border-0 bg-transparent p-0',
+              like.liked ? 'text-[var(--accent)]' : 'cursor-pointer text-muted hover:text-ink',
+              like.pending && 'opacity-60',
+            )}
+          >
+            <Heart aria-hidden className={cn('size-3', like.liked && 'fill-current')} strokeWidth={1.5} />
+            {like.count > 0 && like.count}
+          </button>
+        )}
         <button type="button" aria-label="Volume down" onClick={() => adjustVolume(-0.05)}
           className="v3-focus cursor-pointer border-0 bg-transparent p-0 text-muted hover:text-ink">−</button>
         <button

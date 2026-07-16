@@ -31,7 +31,7 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
-import { useRequestSlip, useVolumeNudge } from '../sharedHooks';
+import { useRequestSlip, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
 const PROGRESS_CELLS = 16;
@@ -66,6 +66,7 @@ export default function TtySkin(_props: SkinProps) {
   const upNext = state.upcoming?.[0];
 
   const adjustVolume = useVolumeNudge();
+  const like = useTrackLike();
 
   // :req prompt + :log depth toggle.
   const [reqOpen, setReqOpen] = useState(false);
@@ -316,6 +317,22 @@ export default function TtySkin(_props: SkinProps) {
             >
               {muted ? 'MUTED' : 'MUTE'}
             </button>
+            {like.available && (
+              <button
+                type="button"
+                onClick={() => void like.like()}
+                disabled={like.pending || like.liked}
+                aria-pressed={like.liked}
+                aria-label={like.liked ? 'Liked' : 'Like this track'}
+                className={cn(
+                  'v3-focus border-0 bg-transparent p-0 uppercase',
+                  like.liked ? 'font-bold text-[var(--accent)]' : 'cursor-pointer text-muted hover:text-ink',
+                  like.pending && 'opacity-60',
+                )}
+              >
+                {like.liked ? '[♥ LIKED]' : '[♥ LIKE]'}{like.count > 0 ? ` ${like.count}` : ''}
+              </button>
+            )}
             {signal.latencyMs != null && tunedIn && (
               <span className="hidden text-muted uppercase sm:inline">SIG {signal.latencyMs} MS · {signal.quality}</span>
             )}

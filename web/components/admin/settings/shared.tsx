@@ -150,6 +150,15 @@ export interface ScrobbleForm {
   listenbrainz: ScrobbleListenbrainzForm;
 }
 
+/** Listener likes (#991) — heart button + Navidrome star + DJ influence. */
+export interface LikesForm {
+  enabled: boolean;
+  starInNavidrome: boolean;
+  influenceDj: boolean;
+  maxTracks: string;
+  windowDays: string;
+}
+
 export interface ArchiveForm {
   enabled: boolean;
   bitrate: string;
@@ -190,6 +199,7 @@ export interface FormState {
   search: SearchForm;
   embedding: EmbeddingForm;
   scrobble: ScrobbleForm;
+  likes: LikesForm;
 }
 
 export interface JingleEntry {
@@ -269,6 +279,13 @@ export interface SettingsData {
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;
       listenbrainz?: Partial<ScrobbleListenbrainzForm>;
+    };
+    likes?: {
+      enabled?: boolean;
+      starInNavidrome?: boolean;
+      influenceDj?: boolean;
+      maxTracks?: number;
+      windowDays?: number;
     };
   };
   tts?: {
