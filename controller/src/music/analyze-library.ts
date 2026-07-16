@@ -132,7 +132,7 @@ async function main() {
         artist: song.artist,
         album: song.album,
         year: song.year,
-        genre: song.genre,
+        genres: subsonic.songGenres(song),
         duration: song.duration,
       });
       liveIds.add(song.id);

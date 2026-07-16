@@ -213,6 +213,26 @@ export async function getSongsByGenre(genre, { count = 20 } = {}) {
   return rejectArchive(r.songsByGenre?.song || []);
 }
 
+// Every genre tag on a song, deduped. OpenSubsonic servers (Navidrome ≥0.54)
+// send the multi-value `genres: [{name}]` array alongside the legacy scalar
+// `genre`; older Subsonic servers send only the scalar. The array is
+// authoritative (its first entry is normally the scalar); the scalar is the
+// fallback so a plain-Subsonic backend still yields a one-element array.
+// The single normaliser for per-track genre ingest — everything downstream
+// (library-db genres column, picker/show filters, annotate) goes through it.
+export function songGenres(song: { genres?: unknown; genre?: unknown } | null | undefined): string[] {
+  const out: string[] = [];
+  const push = (v: unknown) => {
+    const s = String(v ?? '').trim();
+    if (s && !out.some((x) => x.toLowerCase() === s.toLowerCase())) out.push(s);
+  };
+  if (Array.isArray(song?.genres)) {
+    for (const g of song.genres) push(typeof g === 'string' ? g : (g as { name?: unknown })?.name);
+  }
+  push(song?.genre);
+  return out;
+}
+
 // All genre tags present in the library, each with { value, songCount,
 // albumCount }. Used to resolve a listener's free-text genre ("hip hop") to
 // the exact tag the library actually carries ("Hip-Hop").
@@ -690,7 +710,8 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } =
     `subsonic_id="${escAnnotate(song.id)}"`,
   ];
   if (song.year) fields.push(`year="${escAnnotate(song.year)}"`);
-  if (song.genre) fields.push(`genre="${escAnnotate(song.genre)}"`);
+  const genres = songGenres(song);
+  if (genres.length) fields.push(`genre="${escAnnotate(genres.join(', '))}"`);
   // DJ-mode adaptive blend: the queue stashes a per-transition crossfade length
   // (seconds) on the track when the persona is in DJ mode and both tracks are
   // analysed. Liquidsoap's `cross` honours `liq_cross_duration` to size the

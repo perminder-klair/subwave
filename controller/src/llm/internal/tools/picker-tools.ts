@@ -27,7 +27,10 @@ function slim(s: any) {
     artist: s.artist,
     album: s.album || null,
     year: s.year || null,
-    genre: s.genre || null,
+    // Every genre tag, comma-joined ("Hip-Hop, Rap") — one compact field the
+    // model reads as-is, whether the source is a raw Subsonic child (genres
+    // [{name}] + scalar) or a library slimTrack row (genres string[]).
+    genre: subsonic.songGenres(s).join(', ') || null,
   };
   // Surface the editorial tags + measured acoustic facts when known — merged
   // per field from the song itself (library sources, via slimTrack) and a

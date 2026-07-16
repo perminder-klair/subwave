@@ -174,7 +174,7 @@ async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }
       // stay unresolved here and phase-0 asks MusicBrainz per track instead.
       originalYear: song.albumIsCompilation ? null : song.albumOriginalYear ?? null,
       isCompilation: song.albumIsCompilation ?? null,
-      genre: song.genre,
+      genres: subsonic.songGenres(song),
       duration: song.duration,
     });
     liveIds.add(song.id);
@@ -998,7 +998,7 @@ async function phaseEmbed(
     const songs = batch.map(id => db.getTrack(id)).filter((t): t is db.TrackRecord => !!t);
     const texts = songs.map(t =>
       embeddings.formatTrackText(
-        { title: t.title, artist: t.artist, album: t.album, year: t.year, genre: t.genre },
+        { title: t.title, artist: t.artist, album: t.album, year: t.year, genres: t.genres },
         { lastfmTags: t.lastfmTags, lyricExcerpt: t.lyricExcerpt },
       ),
     );
@@ -1069,7 +1069,7 @@ async function processBatch(
     artist: t.artist ?? undefined,
     album: t.album ?? undefined,
     year: t.year ?? undefined,
-    genre: t.genre ?? undefined,
+    genres: t.genres,
   }));
   const opts = consumer.pin ? { leg: consumer.pin } : {};
 
