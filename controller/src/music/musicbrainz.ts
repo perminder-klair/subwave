@@ -80,15 +80,22 @@ function creditNames(r: MbRecording): string[] {
 
 // Earliest plausible original year across the recordings that genuinely match
 // title+artist. `trusted: true` (MBID lookup — the id IS the match) skips the
-// score/title/artist gate and only sanity-checks the year. Returns null when
-// nothing usable matches — the caller records a checked-but-missed.
+// score/title/artist gate and only sanity-checks the year. `maxYear` is the
+// track's own file year when known — a hard upper bound, since the song
+// evidently existed by then: without it, a 2022 song on a DJ-mix compilation
+// resolved to 2025 because a later mix release carries a recording with the
+// exact suffixed title. Returns null when nothing usable matches — the caller
+// records a checked-but-missed.
 export function earliestOriginalYear(
   recordings: MbRecording[],
-  match: { title: string; artist: string; trusted?: boolean },
+  match: { title: string; artist: string; trusted?: boolean; maxYear?: number | null },
 ): number | null {
   const wantTitle = norm(match.title);
   const wantArtist = norm(match.artist);
-  const maxYear = new Date().getUTCFullYear() + 1;
+  const absMax = new Date().getUTCFullYear() + 1;
+  const maxYear = Number.isFinite(match.maxYear as number) && (match.maxYear as number) > 0
+    ? Math.min(match.maxYear as number, absMax)
+    : absMax;
   let earliest: number | null = null;
   for (const r of recordings ?? []) {
     if (!match.trusted) {
@@ -150,28 +157,69 @@ function phrase(s: string): string {
   return `"${s.replace(/[\\"]/g, '\\$&')}"`;
 }
 
+// Strip trailing parenthetical/bracket noise from a compilation track title —
+// "(Mixed)", "[feat. Doja Cat] [Mixed]", "(Remix)", etc. The search query is a
+// Lucene PHRASE, so "Super Gremlin (Mixed)" matches nothing even though MB has
+// "Super Gremlin" — DJ-mix albums missed wholesale until the retry searched
+// the stripped title. Loops so stacked suffixes all come off; never strips a
+// title down to nothing.
+export function stripTitleNoise(title: string): string {
+  let t = (title ?? '').trim();
+  for (;;) {
+    const next = t.replace(/\s*[([][^()[\]]*[)\]]$/, '').trim();
+    if (next === t || !next) break;
+    t = next;
+  }
+  return t;
+}
+
+// First credited artist — "DJ Khaled feat. Future & Lil Baby" → "DJ Khaled".
+// Used only for the retry QUERY; the candidate matcher still compares against
+// the full artist string (its normalised-containment check handles joint
+// credits like "Future & Gunna" against MB's split artist-credit).
+export function primaryArtist(artist: string): string {
+  const cut = (artist ?? '').split(/\s+(?:feat\.?|ft\.?|featuring|with)\s+|\s*[,&]\s*|\s+x\s+/i)[0];
+  return (cut || artist || '').trim();
+}
+
 // Resolve the original release year for one track. MBID first (exact), then a
-// title+artist search. Returns null on no confident match or any request
-// failure — never throws.
+// title+artist phrase search, then — because compilation titles carry noise
+// the phrase search can't see past — a retry with suffixes stripped and the
+// primary artist only. `year` (the file's own year, when known) caps every
+// candidate: the original can't post-date the release the file came from.
+// Returns null on no confident match or any request failure — never throws.
 export async function lookupOriginalYear(track: {
   title?: string | null;
   artist?: string | null;
   mbid?: string | null;
+  year?: number | null;
 }): Promise<number | null> {
   const title = (track.title ?? '').trim();
   const artist = (track.artist ?? '').trim();
   const mbid = (track.mbid ?? '').trim();
+  const maxYear = track.year ?? null;
   try {
     if (mbid) {
       const recs = await throttled(() => searchRecordings(`rid:${mbid}`));
-      const y = earliestOriginalYear(recs, { title, artist, trusted: true });
+      const y = earliestOriginalYear(recs, { title, artist, trusted: true, maxYear });
       if (y != null) return y;
     }
     if (!title || !artist) return null;
-    const recs = await throttled(() =>
-      searchRecordings(`recording:${phrase(title)} AND artist:${phrase(artist)}`),
-    );
-    return earliestOriginalYear(recs, { title, artist });
+    const attempts: Array<{ t: string; a: string }> = [{ t: title, a: artist }];
+    const stripped = stripTitleNoise(title);
+    const primary = primaryArtist(artist);
+    if (stripped !== title || primary !== artist) attempts.push({ t: stripped, a: primary });
+    for (const at of attempts) {
+      const recs = await throttled(() =>
+        searchRecordings(`recording:${phrase(at.t)} AND artist:${phrase(at.a)}`),
+      );
+      // Match against the ATTEMPT's title (the stripped retry must compare
+      // stripped-to-stripped) but always the full artist string — the
+      // containment check handles joint credits either way.
+      const y = earliestOriginalYear(recs, { title: at.t, artist, maxYear });
+      if (y != null) return y;
+    }
+    return null;
   } catch {
     return null;
   }

@@ -10,6 +10,8 @@ import assert from 'node:assert/strict';
 import {
   earliestOriginalYear,
   needsOriginalYearLookup,
+  stripTitleNoise,
+  primaryArtist,
   type MbRecording,
 } from '../src/music/musicbrainz.js';
 
@@ -69,6 +71,39 @@ await test('trusted (MBID) lookups skip the score/title/artist gate but keep the
 });
 await test('empty / no-match input resolves null (caller records a checked miss)', () => {
   assert.equal(earliestOriginalYear([], { title: 'Dancing Queen', artist: 'ABBA' }), null);
+});
+await test('maxYear (the file year) caps candidates — a later mix release cannot win', () => {
+  // Real case: "BREAK MY SOUL" (2022) resolved to 2025 via a 2025 DJ-mix
+  // recording before the cap existed.
+  const recs = [
+    rec({ title: 'BREAK MY SOUL', 'first-release-date': '2025-01-10' }),
+    rec({ title: 'BREAK MY SOUL', 'first-release-date': '2022-06-20' }),
+  ];
+  assert.equal(
+    earliestOriginalYear(recs, { title: 'BREAK MY SOUL', artist: 'ABBA', maxYear: 2022 }),
+    2022,
+  );
+  assert.equal(
+    earliestOriginalYear([recs[0]], { title: 'BREAK MY SOUL', artist: 'ABBA', maxYear: 2022 }),
+    null,
+  );
+});
+
+console.log('compilation title/artist noise stripping (retry query):');
+await test('stripTitleNoise removes stacked trailing (…)/[…] groups, never to empty', () => {
+  assert.equal(stripTitleNoise('Super Gremlin (Mixed)'), 'Super Gremlin');
+  assert.equal(stripTitleNoise('I Like You (A Happier Song) [feat. Doja Cat] [Mixed]'), 'I Like You');
+  assert.equal(stripTitleNoise('Big Energy (feat. DJ Khaled) [Remix] [Mixed]'), 'Big Energy');
+  assert.equal(stripTitleNoise('Plain Title'), 'Plain Title');
+  assert.equal(stripTitleNoise('(Everything I Do) I Do It for You'), '(Everything I Do) I Do It for You');
+  assert.equal(stripTitleNoise('(Untitled)'), '(Untitled)'); // never strip to nothing
+});
+await test('primaryArtist takes the first credit before feat./ft./&/,/x', () => {
+  assert.equal(primaryArtist('DJ Khaled feat. Future & Lil Baby'), 'DJ Khaled');
+  assert.equal(primaryArtist('Future & Gunna'), 'Future');
+  assert.equal(primaryArtist('Latto & Mariah Carey'), 'Latto');
+  assert.equal(primaryArtist('KAROL G, Becky G'), 'KAROL G');
+  assert.equal(primaryArtist('Taylor Swift'), 'Taylor Swift');
 });
 
 console.log('needsOriginalYearLookup (enrichment scope, shared with retag):');

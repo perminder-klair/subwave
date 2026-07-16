@@ -943,7 +943,7 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
       try {
         mbid = (await subsonic.getSong(id))?.musicBrainzId || null;
       } catch { /* MBID is optional — the search path covers it */ }
-      const year = await musicbrainz.lookupOriginalYear({ title: t.title, artist: t.artist, mbid });
+      const year = await musicbrainz.lookupOriginalYear({ title: t.title, artist: t.artist, mbid, year: t.year });
       db.setOriginalYear(id, year);
       if (year != null) enrichedYears += 1;
       checkedYears += 1;

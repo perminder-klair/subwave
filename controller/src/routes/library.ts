@@ -639,6 +639,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
             title: song.title,
             artist: song.artist,
             mbid: song.musicBrainzId || null,
+            year: Number(song.year) || null,
           });
           db.setOriginalYear(id, year);
         }
