@@ -1327,6 +1327,15 @@ export function audioVectorIds(): string[] {
   return rows.map(r => r.id);
 }
 
+// Whether a single track already carries a CLAP audio vector — the per-track
+// twin of unanalysedAudioIds, for the on-pick analysis needs check.
+export function hasAudioVector(id: string): boolean {
+  const row = requireDb()
+    .prepare(`SELECT 1 FROM track_audio_vectors WHERE id = ?`)
+    .get(id);
+  return row != null;
+}
+
 // Ids with an audio vector but no audio moods yet — the incremental scope for
 // an unchanged vocabulary (newly analysed tracks since the last scoring pass).
 export function idsNeedingAudioMoods(): string[] {

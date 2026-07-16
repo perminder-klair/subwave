@@ -102,7 +102,7 @@ interface SettingsResponse {
   tagger?: TaggerState;
   libraryStats?: LibraryStatsLite;
   // Only the slice this panel needs from the full settings payload.
-  values?: { audio?: { embeddings?: boolean; vocalActivity?: boolean } };
+  values?: { audio?: { embeddings?: boolean; vocalActivity?: boolean; analyzeOnPick?: boolean } };
   // Daily-token-budget tier — drives the "budget nearly/already used" warning in
   // the Tagging modal. Absent on an old controller → treated as 'normal'.
   budget?: { mode: BudgetMode };
@@ -189,6 +189,8 @@ export default function LibraryPanel() {
   const [audioEnabled, setAudioEnabled] = useState<boolean | null>(null);
   // settings.audio.vocalActivity — null until the first /settings poll lands.
   const [vocalEnabled, setVocalEnabled] = useState<boolean | null>(null);
+  // settings.audio.analyzeOnPick — just-in-time analysis of queued tracks (#1032).
+  const [onPickEnabled, setOnPickEnabled] = useState<boolean | null>(null);
   // Daily-token-budget tier from /settings — null until the first slow poll lands.
   const [budgetMode, setBudgetMode] = useState<BudgetMode | null>(null);
   const [logOpen, setLogOpen] = useState(false);
@@ -356,6 +358,7 @@ export default function LibraryPanel() {
       if (j.values?.audio) {
         setAudioEnabled(!!j.values.audio.embeddings);
         setVocalEnabled(!!j.values.audio.vocalActivity);
+        setOnPickEnabled(!!j.values.audio.analyzeOnPick);
       }
       if (j.budget) setBudgetMode(j.budget.mode);
     } catch { /* transient */ }
@@ -1019,6 +1022,29 @@ export default function LibraryPanel() {
     }
   };
 
+  // Flip settings.audio.analyzeOnPick — just-in-time analysis of queued tracks
+  // (#1032). Mirrors toggleVocal, minus the coverage refresh (no meter row).
+  const toggleOnPick = async () => {
+    if (onPickEnabled == null) return;
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio: { analyzeOnPick: !onPickEnabled } }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
+      setOnPickEnabled(!onPickEnabled);
+      notify.ok(!onPickEnabled ? 'analyse-on-pick enabled' : 'analyse-on-pick disabled');
+      void loadSettingsData();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
   // Backfill Demucs vocal ranges on tracks that lack them — POST with vocal:true
   // so the analyze pass forces the vocal scope (#646).
   const vocalBackfill = async () => {
@@ -1162,6 +1188,8 @@ export default function LibraryPanel() {
         vocalEnabled={vocalEnabled}
         onToggleVocal={toggleVocal}
         onVocalBackfill={vocalBackfill}
+        onPickEnabled={onPickEnabled}
+        onToggleOnPick={toggleOnPick}
         budgetMode={budgetMode}
       />
 

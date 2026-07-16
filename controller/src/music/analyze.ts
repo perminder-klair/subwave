@@ -16,6 +16,7 @@ import * as settings from '../settings.js';
 import { config } from '../config.js';
 import { runAudioMoodPass } from './audio-moods.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
+import { readPidfile, isPidAlive } from './tagger-lock.js';
 
 // Structured status events for the panel, mirrored to the terse `[analyze] …`
 // console line. Shared by the tagger's analyze phase and the standalone CLI.
@@ -107,6 +108,54 @@ async function scoreAudioMoods(): Promise<void> {
   } catch (err: any) {
     console.error(`[audio-moods] pass failed (non-fatal): ${err?.message || err}`);
   }
+}
+
+// Analyse one track and persist everything the backend returned: bpm/key/etc
+// via upsertTrackAnalysis, plus the CLAP audio vector (stamping the provenance
+// row once per process) when the backend carried one. Shared by the bulk-pass
+// loop and the on-pick path so the store logic lives in exactly one place.
+let audioMetaStamped = false;
+async function analyzeAndStore(
+  id: string,
+  opts: { embed?: boolean; vocal?: boolean; localPath?: string | null; localComplete?: boolean },
+): Promise<{ audioStored: boolean; vocalStored: boolean }> {
+  const { embed, vocal, localPath, localComplete } = opts;
+  const a = localPath
+    ? await analyzer.analyzePath(localPath, { embed, vocal, complete: localComplete })
+    : await analyzer.analyze(id, { embed, vocal });
+  db.upsertTrackAnalysis(id, {
+    bpm: a.bpm,
+    musicalKey: a.musicalKey,
+    introMs: a.introMs,
+    confidence: a.confidence,
+    loudnessLufs: a.loudnessLufs,
+    peakDb: a.peakDb,
+    sections: a.sections,
+    pace: a.paceCurve,
+    beats: a.beats,
+    bars: a.bars,
+    keyRanges: a.keyRanges,
+    vocalRanges: a.vocalRanges,
+    outro: a.outro,
+  });
+  // Opportunistically store the CLAP audio vector whenever the backend carried
+  // one. Independent of the bpm/key write above: a track analysed before CLAP
+  // was enabled simply gets its vector on a later pass. The first vector
+  // written this process stamps the audio-embedding provenance row.
+  let audioStored = false;
+  if (a.audioEmbedding && a.audioEmbedding.length === db.AUDIO_EMBEDDING_DIM) {
+    try {
+      db.upsertTrackAudioVector(id, a.audioEmbedding);
+      if (!audioMetaStamped) {
+        db.setAudioEmbeddingMeta(AUDIO_MODEL_LABEL, db.AUDIO_EMBEDDING_DIM);
+        audioMetaStamped = true;
+      }
+      audioStored = true;
+    } catch (err: any) {
+      console.error(`[analyze] ${id} audio-vector write failed: ${err?.message || err}`);
+    }
+  }
+  return { audioStored, vocalStored: a.vocalRanges != null };
 }
 
 export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {
@@ -216,10 +265,6 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   let failed = 0;
   let audioEmbedded = 0;
   let vocalAnalyzed = 0;
-  // Stamp the audio-embedding provenance row once, on the first vector written
-  // this run. Cheap idempotent guard so we don't touch the meta table per track.
-  let audioMetaStamped = false;
-  const audioModelLabel = AUDIO_MODEL_LABEL;
 
   // One-ahead prefetch pipeline: the controller downloads track i+1's audio
   // (network) while the backend computes track i (CPU), so the two overlap.
@@ -269,42 +314,14 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       // vocal:true forces the Demucs pass for this track (admin/backfill path),
       // mirroring embed; omitted when vocal activity is off.
       const vocal = vocalBackfill ? true : undefined;
-      const a = localPath
-        ? await analyzer.analyzePath(localPath, { embed, vocal, complete: localComplete })
-        : await analyzer.analyze(id, { embed, vocal });
-      db.upsertTrackAnalysis(id, {
-        bpm: a.bpm,
-        musicalKey: a.musicalKey,
-        introMs: a.introMs,
-        confidence: a.confidence,
-        loudnessLufs: a.loudnessLufs,
-        peakDb: a.peakDb,
-        sections: a.sections,
-        pace: a.paceCurve,
-        beats: a.beats,
-        bars: a.bars,
-        keyRanges: a.keyRanges,
-        vocalRanges: a.vocalRanges,
-        outro: a.outro,
+      const { audioStored, vocalStored } = await analyzeAndStore(id, {
+        embed,
+        vocal,
+        localPath,
+        localComplete,
       });
-      if (a.vocalRanges != null) vocalAnalyzed += 1;
-      // Opportunistically store the CLAP audio vector whenever the backend
-      // carried one. Independent of the bpm/key write above: a track analysed
-      // before CLAP was enabled simply gets its vector on the next pass once
-      // unanalysedAudioIds re-targets it. The first vector written stamps the
-      // audio-embedding provenance row.
-      if (a.audioEmbedding && a.audioEmbedding.length === db.AUDIO_EMBEDDING_DIM) {
-        try {
-          db.upsertTrackAudioVector(id, a.audioEmbedding);
-          if (!audioMetaStamped) {
-            db.setAudioEmbeddingMeta(audioModelLabel, db.AUDIO_EMBEDDING_DIM);
-            audioMetaStamped = true;
-          }
-          audioEmbedded += 1;
-        } catch (err: any) {
-          console.error(`[analyze] ${id} audio-vector write failed: ${err?.message || err}`);
-        }
-      }
+      if (vocalStored) vocalAnalyzed += 1;
+      if (audioStored) audioEmbedded += 1;
       analyzed += 1;
     } catch (err: any) {
       failed += 1;
@@ -355,4 +372,117 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       (failed > 0 ? ` · ${failed.toLocaleString('en-GB')} failed` : ''),
   );
   return { available: true, backend, analyzed, failed, scope: ids.length, audioEmbedded, vocalAnalyzed };
+}
+
+// ---------------------------------------------------------------------------
+// On-pick ("a la carte") analysis — discussion #1032. When the DJ picks a
+// track that still needs analysis, analyse just that one right before the
+// queue hands it to Liquidsoap, so the upcoming transition (ending-aware
+// crossfade, loudness gain, vocal-aware talk timing) already sees the fresh
+// data — and the library backfills organically with what actually airs.
+//
+// Gated on settings.audio.analyzeOnPick (default off). The queue awaits this
+// with a deadline: past ON_PICK_TIMEOUT_MS the hand-off proceeds with whatever
+// data exists (exactly today's behaviour) while the analysis keeps running in
+// the background and still caches its result for the next spin.
+
+export const ON_PICK_TIMEOUT_MS = 60_000;
+
+export function analyzeOnPickEnabled(): boolean {
+  try {
+    return settings.get()?.audio?.analyzeOnPick === true;
+  } catch {
+    return false;
+  }
+}
+
+export type OnPickOutcome =
+  | 'current'   // nothing missing — no analysis needed
+  | 'analyzed'  // fresh analysis stored within the deadline
+  | 'pending'   // still running past the deadline; caches when it finishes
+  | 'skipped'   // not in library.db / bulk run owns the backend / no backend
+  | 'failed';
+
+// Single-flight per id: a request and a pick racing to the same song share one
+// analysis instead of hitting the backend twice.
+const onPickInflight = new Map<string, Promise<boolean>>();
+
+export async function analyzeOnPick(
+  id: string | null | undefined,
+  opts: { timeoutMs?: number } = {},
+): Promise<OnPickOutcome> {
+  if (!id || !db.isOpen()) return 'skipped';
+  // upsertTrackAnalysis is an UPDATE on an existing row — a track the library
+  // sync hasn't ingested yet has nowhere to store results, so skip it.
+  const rec = db.getTrack(id);
+  if (!rec) return 'skipped';
+
+  // Per-track twin of the bulk pass's scoping: base analysis when the version
+  // is missing/stale, plus each opt-in dimension only when it's wanted
+  // (env/admin toggle) AND the backend can actually produce it.
+  const needsBase = rec.analysisVersion == null || rec.analysisVersion < db.ANALYSIS_VERSION;
+  const embed = audioBackfillDefault() && analyzer.audioEmbeddingAvailable() !== false;
+  const vocal = vocalBackfillDefault() && analyzer.vocalActivityAvailable() !== false;
+  const needsAudio = embed && !db.hasAudioVector(id);
+  const needsVocal = vocal && rec.vocalRanges == null;
+  if (!needsBase && !needsAudio && !needsVocal) return 'current';
+
+  // A running bulk tagger/analyzer owns the backend (and will reach this track
+  // anyway) — don't double-hit it from the queue path.
+  const bulk = readPidfile();
+  if (bulk && isPidAlive(bulk.pid)) return 'skipped';
+  if (!(await analyzer.isAvailable())) return 'skipped';
+
+  let job = onPickInflight.get(id);
+  if (!job) {
+    job = analyzeOnPickJob(id, {
+      embed: embed ? true : undefined,
+      vocal: vocal ? true : undefined,
+    }).finally(() => {
+      onPickInflight.delete(id);
+    });
+    onPickInflight.set(id, job);
+  }
+
+  const timeoutMs = opts.timeoutMs ?? ON_PICK_TIMEOUT_MS;
+  const deadline = new Promise<'pending'>((resolve) => {
+    const t = setTimeout(() => resolve('pending'), timeoutMs);
+    t.unref?.();
+  });
+  return Promise.race([job.then((ok): OnPickOutcome => (ok ? 'analyzed' : 'failed')), deadline]);
+}
+
+// The actual work: download (byte-capped, so a skipped outro rides the same
+// completeness flag as the bulk pass), analyse, store — mirroring one
+// iteration of runAnalysisPass's loop, minus the prefetch pipeline.
+async function analyzeOnPickJob(
+  id: string,
+  flags: { embed?: boolean; vocal?: boolean },
+): Promise<boolean> {
+  let localPath: string | null = null;
+  let localComplete: boolean | undefined;
+  try {
+    try {
+      const dl = await analyzer.downloadCapped(id);
+      localPath = dl.path;
+      localComplete = dl.complete;
+    } catch (err: any) {
+      // A non-audio response (stale library entry — file missing on disk) is
+      // not retryable via the url path; surface the real reason.
+      if (err instanceof analyzer.NonAudioResponseError) throw err;
+      console.error(`[analyze] on-pick ${id} prefetch failed (${err?.message || err}); using url path`);
+    }
+    const { audioStored } = await analyzeAndStore(id, { ...flags, localPath, localComplete });
+    // Zero-shot audio moods for the vector this analysis just wrote (plus any
+    // unscored stragglers) — best-effort, never blocks the caller.
+    if (audioStored) void scoreAudioMoods();
+    console.log(`[analyze] on-pick analysed ${id}`);
+    return true;
+  } catch (err: any) {
+    // Leave the row NULL so a later pass retries it; don't stamp a version.
+    console.error(`[analyze] on-pick ${id} failed: ${err?.message || err}`);
+    return false;
+  } finally {
+    if (localPath) await rm(localPath, { force: true }).catch(() => {});
+  }
 }

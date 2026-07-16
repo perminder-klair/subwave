@@ -210,6 +210,11 @@ interface TaggingPanelProps {
   // settings poll lands. Drives the "build WITH_DEMUCS=1" warning when on but
   // the backend can't produce vocal ranges.
   vocalEnabled: boolean | null;
+  // On-pick ("a la carte") analysis — analyse a track the moment the DJ queues
+  // it, so its first spin already mixes with fresh data (#1032). Null until the
+  // first settings poll lands.
+  onPickEnabled: boolean | null;
+  onToggleOnPick: () => void;
   // Daily-token-budget tier from /settings — null until the first slow poll lands.
   // Forwarded to the modal for its pre-run spend warning.
   budgetMode: BudgetMode | null;
@@ -852,6 +857,44 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             )}
           </div>
         )}
+        {/* On-pick (a la carte) analysis — analyse a track the moment the DJ
+            queues it for air, so its first spin already mixes with fresh data
+            and the library backfills itself with what actually plays (#1032). */}
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3">
+          <span className="caption flex items-center gap-2">
+            <Activity size={13} /> Analyse on pick · just-in-time
+          </span>
+          <span className="lib-opt-tag">optional</span>
+          <span className="caption mono-num !tracking-[0.04em]">
+            {p.onPickEnabled == null
+              ? '…'
+              : p.onPickEnabled
+                ? analysisOff
+                  ? 'on · waiting for the analysis engine'
+                  : 'on'
+                : 'off'}
+          </span>
+          <span className="ml-auto">
+            <Btn
+              sm
+              onClick={p.onToggleOnPick}
+              disabled={p.busy || p.onPickEnabled == null}
+              title={
+                p.onPickEnabled
+                  ? 'Stop just-in-time analysis of queued tracks. Already-cached data stays and keeps being used.'
+                  : 'Analyse each track the moment the DJ queues it (can hold the hand-off up to ~60s) so its first spin already mixes with fresh data.'
+              }
+            >
+              {p.onPickEnabled ? 'Pause' : 'Enable'}
+            </Btn>
+          </span>
+          <span className="caption basis-full !tracking-[0.04em] !normal-case">
+            Analyses each track as it&rsquo;s queued for air — the library backfills itself with
+            what actually plays, no bulk run needed. Uses the same engine and opt-ins
+            (sounds-like, vocal) as the rows above; anything still missing at air time simply
+            plays as today and caches for next time.
+          </span>
+        </div>
         {audioStatus === 'pending-heavy' && p.audioEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
             <b>Sounds-like is enabled — fingerprinting starts once your analyzer can do it.</b> The
