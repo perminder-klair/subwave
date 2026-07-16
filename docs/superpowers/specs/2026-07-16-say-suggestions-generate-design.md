@@ -43,8 +43,11 @@ through the `llm/dj.ts` barrel alongside `generatePersona`/`generateShow`/
 generateSaySuggestions(): Promise<string[]>   // kind: 'generateSaySuggestions'
 ```
 
-- **Schema:** `z.object({ suggestions: z.array(z.string()).min(3).max(8) })` —
-  singular, flat, kind to weak local models.
+- **Schema:** six NAMED string slots (`s1`–`s6`, each `.catch('')`), not an
+  array — verified during implementation: given an array field, a 4B local
+  model reliably emitted one item and stopped; six required fields make it
+  fill six. Same "singular is kinder to weak local models" reasoning as
+  `SHOW_SCHEMA`.
 - **Prompt inputs:**
   - The six canonical example lines (moved to this module as
     `SAY_SUGGESTION_EXAMPLES` — the controller-side canonical copy) as few-shot
@@ -62,10 +65,13 @@ generateSaySuggestions(): Promise<string[]>   // kind: 'generateSaySuggestions'
 `POST /generate/say-suggestions` in `controller/src/routes/generate.ts`
 (admin-gated like its siblings; no body):
 
-- Calls `dj.generateSaySuggestions()`.
-- **Soft-normalises** the batch (same spirit as `generate/show`): trim, strip
-  wrapping quotes/bullets, drop empties, dupes, and lines > 120 chars. If
-  fewer than 3 survive → treat as failure (500), keep the old cache.
+- Calls `dj.generateSaySuggestions()` — up to twice, MERGING the batches: a
+  small local model routinely under-delivers, and two half-batches at
+  temperature 0.9 usually add up. Bounded at 2 calls (explicit operator
+  click; the configured model may be slow).
+- **Soft-normalises** the merged batch (same spirit as `generate/show`): trim,
+  strip wrapping quotes/bullets, drop empties, dupes, and lines > 120 chars.
+  If fewer than 3 survive → treat as failure (500), keep the old cache.
 - On success stores the batch in a **module-level in-memory cache**
   `{ suggestions, generatedAt }` and returns
   `{ ok: true, suggestions, generatedAt }`.
