@@ -5,7 +5,8 @@
 //
 // The record spins at 33⅓ while a light-catch sheen sweeps on its own slower
 // cycle and the strobe rim ticks; the tonearm swings from its rest onto the
-// lead-in when the listener drops the needle (tunes in). The plinth holds the
+// lead-in when the listener drops the needle (tunes in), then rides the groove
+// inward with the track's progress. The plinth holds the
 // transport (START = tune in/out), while the sleeve, metadata, up-next stack,
 // booth quote and request slip live in the right-hand column. Everything that
 // moves is a co-located keyframe (Platter.module.css) so playback churn never
@@ -106,7 +107,9 @@ function Deck({
           pivot sits rear-right (86% 19%) like a real deck; the arm reaches down
           onto the RIGHT-hand grooves (never crossing the label) so the record's
           clockwise spin draws the stylus along the groove instead of shoving it.
-          The whole arm swings up off the record when tuned out (see .arm). */}
+          While playing, .armLive sweeps the arm across the groove band with the
+          track's progress (the shared --pf var); the whole arm swings up off
+          the record when tuned out (see .arm). */}
       <svg
         viewBox="0 0 100 100"
         className={cn(

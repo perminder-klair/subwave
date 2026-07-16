@@ -58,13 +58,20 @@
    so the headshell always stays welded to the tube end and the stylus stays on
    the groove. A one-shot transition (not a loop) swings it up and out off the
    record when the listener tunes out; the parked angle holds even under
-   html.lite. Origin MUST match the pivot circle in PlatterSkin.tsx. */
+   html.lite. Origin MUST match the pivot circle in PlatterSkin.tsx.
+
+   While live the arm tracks the song: --pf (0..1, same var as the progress
+   bar) sweeps it from the lead-in groove (-14deg, stylus near the outer edge)
+   to the run-out (+8deg, just shy of the label). --pf ticks once a second, so
+   the 1.1s eased transition below is what turns the steps into a creep. The
+   parked angle sits past the platter edge so the tune-in drop stays a
+   readable swing even when a track has just started. */
 .arm {
   transform-origin: 86% 19%;
   transition: transform 1.1s cubic-bezier(0.22, 1, 0.36, 1);
 }
-.armRest { transform: rotate(-16deg); }
-.armLive { transform: rotate(0deg); }
+.armRest { transform: rotate(-24deg); }
+.armLive { transform: rotate(calc(-14deg + var(--pf, 0) * 22deg)); }
 
 /* Progress fill — driven by --pf (0..1) set on the skin root via
    useDynamicStyle, so no inline style attribute. */
