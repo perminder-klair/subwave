@@ -143,15 +143,33 @@ async function call(endpoint, params = {}) {
 // Lightweight connectivity + auth check for the admin Doctor. Hits the cheapest
 // Subsonic endpoint (`ping`) with the controller's own salt+token creds — mirrors
 // the CLI wizard's probeSubsonic but against config.navidrome. Never throws.
+//
+// A failure that lands instantly gets ONE retry: Node's pooled fetch sockets go
+// stale between the controller's bursty Subsonic calls, so a one-off
+// ECONNRESET / "fetch failed" on connection reuse is routine, not an outage —
+// and since the admin NavidromeBanner alarms on a single failed ping (cached
+// 20s), an un-retried blip reads as "Navidrome is down" to the operator. Slow
+// failures (the 30s timeout) don't retry: a second wait wouldn't change the
+// answer, just pin the caller for another timeoutMs.
+const PING_RETRY_IF_FASTER_THAN_MS = 2_000;
+
 export async function ping(): Promise<{ ok: boolean; reason?: string }> {
   if (!config.navidrome.url || !config.navidrome.user || !config.navidrome.password) {
     return { ok: false, reason: 'Navidrome URL / username / password not configured' };
   }
-  try {
-    await call('ping');
-    return { ok: true };
-  } catch (err: any) {
-    return { ok: false, reason: err?.message || 'unreachable' };
+  for (let attempt = 0; ; attempt++) {
+    const started = Date.now();
+    try {
+      await call('ping');
+      return { ok: true };
+    } catch (err: any) {
+      const failedFast = Date.now() - started < PING_RETRY_IF_FASTER_THAN_MS;
+      if (attempt === 0 && failedFast) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        continue;
+      }
+      return { ok: false, reason: err?.message || 'unreachable' };
+    }
   }
 }
 
