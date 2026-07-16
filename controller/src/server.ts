@@ -8,6 +8,7 @@ import * as settings from './settings.js';
 import * as blocklist from './music/blocklist.js';
 import * as jingles from './broadcast/jingles.js';
 import * as sfx from './broadcast/sfx.js';
+import * as beds from './broadcast/beds.js';
 import { queue } from './broadcast/queue.js';
 import * as session from './broadcast/session.js';
 import * as remoteTts from './audio/remoteTts.js';
@@ -27,6 +28,7 @@ import { router as requestRoutes } from './routes/request.js';
 import { router as settingsRoutes } from './routes/settings.js';
 import { router as jingleRoutes } from './routes/jingles.js';
 import { router as sfxRoutes } from './routes/sfx.js';
+import { router as bedsRoutes } from './routes/beds.js';
 import { router as debugRoutes } from './routes/debug.js';
 import { router as statsRoutes } from './routes/stats.js';
 import { router as djRoutes } from './routes/dj.js';
@@ -107,6 +109,7 @@ app.use(requestRoutes);
 app.use(settingsRoutes);
 app.use(jingleRoutes);
 app.use(sfxRoutes);
+app.use(bedsRoutes);
 app.use(debugRoutes);
 app.use(statsRoutes);
 app.use(djRoutes);
@@ -284,6 +287,7 @@ app.listen(config.server.port, async () => {
     .ensureDefaultIdent()
     .catch(err => console.error('[jingles] ident generation failed:', err.message));
   sfx.ensureDefaults().catch(err => console.error('[sfx] default generation failed:', err.message));
+  beds.ensureDefaults().catch(err => console.error('[beds] default install failed:', err.message));
 
   // Kick the Observatory sound-map projection when it's stale (library grew
   // since the last one, or never ran). Spawns a child — never blocks this loop.

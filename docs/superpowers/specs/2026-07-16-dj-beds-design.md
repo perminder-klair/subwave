@@ -206,6 +206,9 @@ beds: {
 }
 ```
 
+Both numerics are BOUNDS-validated in the patch handler like `crossfadeDuration`
+(`bedsThresholdSec` 0–60, `bedsCrossSec` 0–15) rather than silently coerced.
+
 **No `liquidsoap_*.txt` file, therefore no mixer restart to toggle.** The
 controller decides everything; the `on_meta` branch is unconditional and
 harmless when no bed is ever pushed. This is a real property worth preserving —
@@ -269,7 +272,7 @@ routing change is needed.
 | `controller/src/server.ts` | mount route; scaffold default beds on first boot |
 | `web/components/admin/settings/BedsSection.tsx` | **new** |
 | `web/components/admin/SettingsPanel.tsx` | wire the section |
-| `sounds/beds/` | 2–3 shipped CC0 beds, scaffold-copied to `state/beds/` |
+| — | no new audio asset: the bundled default reuses the committed `sounds/bed.mp3` (see Resolved) |
 
 ## Testing
 
@@ -313,11 +316,22 @@ No test runner; follow the house pattern.
    progress and will run its arm past the end. v1 accepts this; a "DJ talking"
    station state is a follow-up, not a blocker.
 
-## Open decision
+## Resolved during implementation
 
-**Where the shipped beds come from.** They can't be TTS-generated. Options: 2–3
-CC0 ambient files committed to `sounds/beds/`; or generate purpose-made neutral
-pads offline (an ElevenLabs music model) and commit those. Recommend the latter
-— purpose-made tonally-neutral pads sized ≥60s, which sidesteps both the licence
-question and the key-clash problem in one move. `sounds/bed.mp3` already exists
-but is the asset that got the studio bed disabled; do not reuse it.
+**Where the shipped beds come from.** The spec originally said to commit
+purpose-made pads and explicitly *not* to reuse `sounds/bed.mp3`, on the grounds
+that it's the asset the studio bed was disabled over. That call was reversed
+after measuring it: it is a **71s ambient loop**, already committed, already
+baked into both the controller and broadcast images, and long enough to carry
+any script the generators produce (a 45s link needs 49.5s).
+
+The reasoning that ruled it out doesn't survive scrutiny. The studio bed failed
+as *continuous* playback — a drone running forever underneath both the music and
+the voice. As a link bed it plays alone for one link and stops. That's a
+different exposure, and no new asset, licence question, or image weight is worth
+spending before hearing whether the existing one works in the new context.
+
+It ships as the one bundled default, and it is **deletable** — which is why bed
+defaults don't use sfx's undeletable-`builtin` semantics. `beds.json.retired`
+records the deletion so `ensureDefaults` doesn't resurrect it on the next boot.
+If it grates, it goes, and the operator uploads their own.

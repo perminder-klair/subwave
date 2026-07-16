@@ -15,6 +15,8 @@ import { speak, voiceGainDb } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import * as sfx from './sfx.js';
+import * as beds from './beds.js';
+import * as bedPolicy from './bed-policy.js';
 import * as session from './session.js';
 import type { TurnMeta } from './session.js';
 import { getFullContext, energyForDaypart } from '../context.js';
@@ -88,6 +90,11 @@ interface QueueItem {
   linkPrev?: { id: string | null; title: string | null; artist: string | null } | null;
   introWav?: string | null;
   introAired?: boolean;
+  // Set at drain time when a bed was pushed into dj_queue immediately ahead of
+  // this item, meaning its link airs over the BED rather than over this track
+  // (broadcast/bed-policy.ts). The bed's own start is what fires airIntro — see
+  // onBedStarted — so this is how that event finds the item it belongs to.
+  bedded?: boolean;
   queuedAt?: string;
   sent?: boolean;
   confirmedInLiquidsoap?: boolean;
@@ -211,6 +218,8 @@ class Queue {
   autoLink = true;             // toggle: random DJ links between auto tracks
   tracksUntilLink = pickLinkInterval();
   _transitionsSinceSfx = 999;  // DJ-mode transition-FX spacing counter (see drainToLiquidsoap)
+  _lastBed: string | null = null;      // last bed aired — anti-repeat for bed-policy.pickBed
+  _lastBedStartedAt = 0;               // bed-playing.json's last-seen startedAt — the edge onBedStarted fires on
   _recentEffects: string[] = [];  // the model's last few transition CHOICES — anti-streak guard + fed back into the pick event turn
   _persistTimer: NodeJS.Timeout | null = null; // debounce for the queue.json snapshot
   _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
@@ -681,6 +690,63 @@ class Queue {
   // persona is in DJ mode. Stashes a per-transition crossfade length on the
   // track (read by subsonic.getAnnotatedUri → liq_cross_duration) and, on a
   // notable upward tempo jump, fires a rate-limited riser across the blend.
+  // Beds — push an instrumental bed into dj_queue ahead of `item` when its link
+  // would outlast the song's own intro, so the DJ talks over the bed instead of
+  // over the song. Sets item.bedded, which is how the bed's start event (see
+  // onBedStarted) finds the item whose link it should air.
+  //
+  // Everything this needs already exists at this point in the drain: the link's
+  // WAV was rendered a few lines up, so its real length is readable NOW, before
+  // the track URI is written. That ordering is what makes the whole feature a
+  // controller-side change rather than a mixer one.
+  //
+  // Silent no-op on every path that isn't a bedded link — beds off, a request
+  // intro (heavy duck by design, see the design doc), no script, a script that
+  // fits the intro, or no bed long enough. All of them leave today's behaviour
+  // untouched.
+  async maybePushBed(item: QueueItem) {
+    const cfg = settings.get()?.beds;
+    if (!cfg?.enabled) return;
+    // v1 is links only. Request intros ride the HEAVY duck by design, and a bed
+    // under a heavy duck is inaudible — bedding them means reworking the duck
+    // routing, which is its own change.
+    if (item.introKind !== 'link') return;
+    if (!item.introWav || !item.introScript || item.introAired) return;
+
+    try {
+      const voiceMs = speechDurationMs(item.introWav, item.introScript);
+      // The ramp budget is a property of the INCOMING track: how long may the
+      // DJ talk before trampling its vocal? Analysis rides the track object when
+      // present, else the library row (queued items hold only id/title/artist).
+      const rec = item.track?.id ? library.get(item.track.id) : null;
+      const budgetMs = bedPolicy.rampBudgetMs({
+        introMs: item.track?.introMs ?? rec?.introMs ?? null,
+        vocalRanges: item.track?.vocalRanges ?? rec?.vocalRanges ?? null,
+      });
+      if (!bedPolicy.bedWanted(voiceMs, budgetMs, cfg)) return;
+
+      const { bedSec, crossSec } = bedPolicy.bedLengthFor(voiceMs, cfg);
+      const pick = bedPolicy.pickBed(await beds.catalog(), bedSec, this._lastBed, Math.random());
+      if (!pick) {
+        this.log('beds', `no bed long enough for a ${bedSec}s link — talking over "${item.track?.title}" instead`);
+        return;
+      }
+      const path = await beds.getPath(pick.name);
+      if (!path) return;
+
+      await writeHandoff(config.liquidsoap.queueFile, beds.bedUri(path, { bedSec, crossSec }));
+      item.bedded = true;
+      this._lastBed = pick.name;
+      const why = budgetMs == null ? `no vocal onset, over ${cfg.thresholdSec}s`
+        : budgetMs === Infinity ? 'instrumental'
+          : `vocals at ${Math.round(budgetMs / 1000)}s`;
+      this.log('beds', `bed "${pick.name}" ${bedSec}s → ${crossSec}s ramp into "${item.track?.title}" (${Math.round(voiceMs / 1000)}s link, ${why})`);
+    } catch (err) {
+      // A bed is a garnish — never let it cost the station a track.
+      this.log('error', `Bed push failed: ${(err as Error).message}`);
+    }
+  }
+
   applyMixTransition(item: QueueItem) {
     const persona: Persona | null = settings.getEffectivePersona();
     if (!item?.track) return;
@@ -977,6 +1043,15 @@ class Queue {
         // cuts an over-length autonomous pick mid-air. Explicit listener requests
         // (requestedBy set) stay exempt — a requested long mix plays in full,
         // mirroring the request path's selection-cap exemption in picker-tools.
+        // Beds: if this item's link would outlast the song's own intro, push an
+        // instrumental bed into dj_queue AHEAD of the track. The DJ then talks
+        // over the bed and the track ramps in under the closing words, instead
+        // of the link being talked over the song it's introducing.
+        //
+        // Order matters and dj_queue is FIFO, so the bed must be handed over
+        // before the track URI below.
+        await this.maybePushBed(item);
+
         const maxDurationSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
         const uri = subsonic.getAnnotatedUri(item.track, { maxDurationSec });
         await writeHandoff(config.liquidsoap.queueFile, uri);
@@ -1652,6 +1727,37 @@ class Queue {
     return out;
   }
 
+  // A bed started feeding the music chain — air the link it was pushed for.
+  //
+  // Unlike waitForJingleClear (which computes a deadline on demand and sleeps
+  // it out), this genuinely has to be an event: the bed is pushed minutes
+  // before it airs, and the link must land ON it. radio.liq writes
+  // bed-playing.json the moment the bed's metadata fires; a new startedAt is
+  // the edge. Dedupe on that value, exactly as onTrackStarted dedupes on the
+  // track key — the file is never deleted, so a stale marker must not re-fire.
+  //
+  // Song B's own onTrackStarted will also call airIntro for the same item a bed
+  // later; airIntro sets introAired before any await, so the double-call is
+  // already idempotent and no guard is needed here.
+  onBedStarted() {
+    let startedAt = 0;
+    try {
+      const m = JSON.parse(readFileSync(config.liquidsoap.bedPlayingFile, 'utf8'));
+      startedAt = Number(m?.startedAt) || 0;
+    } catch {
+      return; // no marker — nothing has ever bedded
+    }
+    if (!startedAt || startedAt === this._lastBedStartedAt) return;
+    this._lastBedStartedAt = startedAt;
+
+    // The bed is pushed immediately ahead of its item, so the item it belongs
+    // to is the first bedded one still waiting to speak.
+    const item = this.upcoming.find(i => i.bedded && i.sent && !i.introAired);
+    if (!item) return;
+    this.log('beds', `bed on air → airing the link for "${item.track?.title}"`);
+    void this.airIntro(item, this.current?.track || null);
+  }
+
   // Poll now-playing.json every 1.5s and dispatch track changes. Each tick
   // also refreshes the in-memory copy getNowPlaying() serves, so the
   // per-listener /now-playing poll never has to touch the disk.
@@ -1660,6 +1766,10 @@ class Queue {
       this._nowPlaying = await this.readNowPlayingFromDisk();
       this._nowPlayingFresh = true;
       this.onTrackStarted(this._nowPlaying);
+      // Beds ride the same tick rather than a poller of their own — a bed's
+      // start is a track-boundary event like any other, and the 1.5s cadence is
+      // already inside the head budget bed-policy sizes the bed with.
+      this.onBedStarted();
     };
     void tick();
     setInterval(tick, 1500);

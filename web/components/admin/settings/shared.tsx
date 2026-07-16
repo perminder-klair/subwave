@@ -225,6 +225,19 @@ export interface SfxData {
   generatorReady?: boolean;
 }
 
+export interface BedEntry {
+  name: string;
+  description?: string;
+  size?: number;
+  durationSec?: number | null;
+  source?: string;
+}
+
+export interface BedsData {
+  beds?: BedEntry[];
+  minDurationSec?: number;
+}
+
 export interface SettingsData {
   values?: {
     jingleRatio?: number;
@@ -275,6 +288,7 @@ export interface SettingsData {
       enrichment?: Partial<EmbeddingEnrichmentForm>;
     };
     sfx?: { enabled?: boolean };
+    beds?: { enabled?: boolean; thresholdSec?: number; crossSec?: number };
     ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;

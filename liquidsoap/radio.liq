@@ -1346,7 +1346,28 @@ def on_meta(m) =
   album = m["album"]
   filename = m["filename"]
   subsonic_id = m["subsonic_id"]
-  if title != "" or artist != "" then
+  # BEDS — an instrumental bed the controller pushed into dj_queue for the DJ to
+  # talk over between two songs (broadcast/beds.ts). It rides the music chain
+  # like any other request, but it is NOT a song: it must never reach
+  # now-playing.json (the UI would announce it) and must never push an ICY title
+  # (hardware radios would show it). It carries no title/artist, so the gate
+  # below would drop it silently anyway — and that silence is the problem, since
+  # the controller learns "the bed is on air, air the link now" only from this
+  # marker. So branch BEFORE the gate and announce it on its own channel.
+  #
+  # Same shape and rationale as jingle-playing.json (#997): liquidsoap telling
+  # the controller that a non-track thing started.
+  if m["subwave_kind"] == "bed" then
+    log("on_meta: bed started (#{filename})")
+    file.write(
+      data=json.stringify(compact=true, {
+        filename = filename,
+        startedAt = time()
+      }),
+      atomic=true,
+      "/var/sub-wave/bed-playing.json"
+    )
+  elsif title != "" or artist != "" then
     log("on_meta: title=#{title} | artist=#{artist} | album=#{album} | id=#{subsonic_id}")
     ts = int_of_float(time())
     # Build via json.stringify so values with embedded quotes/backslashes

@@ -728,7 +728,10 @@ export function getPlayableUri(song) {
 
 // Liquidsoap `annotate:` URI — embeds metadata up front so on_track_change
 // reports real artist/title/album rather than waiting on stream-level ID3.
-function escAnnotate(s) {
+// Exported for broadcast/beds.ts, which builds its own annotate: URI for a bed
+// (a bed is a local file, not a Subsonic song, so it can't go through
+// getAnnotatedUri — but it must escape identically).
+export function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } = {}) {

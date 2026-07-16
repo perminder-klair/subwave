@@ -1446,6 +1446,24 @@ const DEFAULTS = {
   sfx: {
     enabled: true,
   },
+  // Beds — an instrumental bed between two songs for the DJ to talk over, so a
+  // long link isn't talked over the song it's introducing (broadcast/beds.ts +
+  // broadcast/bed-policy.ts). Off by default: it needs a bed the operator is
+  // happy to hear regularly, and a bed on EVERY link is morning-zoo radio.
+  //
+  // Controller-side only — no liquidsoap_*.txt, so toggling costs no mixer
+  // restart, unlike jingleRatio.
+  beds: {
+    enabled: false,
+    // Bed when the DJ's clip runs longer than this. Consulted ONLY where the
+    // incoming track's vocal onset is unknown; where the analyzer measured
+    // vocal ranges, the real onset wins and this is ignored. See
+    // bed-policy.rampBudgetMs.
+    thresholdSec: 12,
+    // The bed's own exit crossfade — how long the next song takes to ramp in
+    // under the DJ's closing words.
+    crossSec: 6,
+  },
   // Outbound webhooks. Each entry POSTs station events (see broadcast/
   // webhooks.ts for the event list) to `url` with a fire-and-forget HTTP
   // call. `track.play` can be listener-gated via webhooksPolicy (off by
@@ -1499,6 +1517,13 @@ const BOUNDS = {
   // ratio file reads 0 (issue #997: no way to disable the station stinger).
   jingleRatio: { min: 0, max: 1000, type: 'int' },
   crossfadeDuration: { min: 0, max: 30, type: 'float' },
+  // 0 = bed every link whose incoming vocal onset is unknown. The ceiling is
+  // deliberately low: past ~60s the DJ has outlasted any script the generators
+  // produce, so a higher value is indistinguishable from beds being off.
+  bedsThresholdSec: { min: 0, max: 60, type: 'float' },
+  // The bed's ramp into the next song. bed-policy clamps this against the bed's
+  // own length too, so a long ramp on a short link can't invert the arithmetic.
+  bedsCrossSec: { min: 0, max: 15, type: 'float' },
   // 0 = off; 36000 s (10h) is a generous ceiling that still leaves room for
   // long-form mix shows without letting a typo set an absurd value.
   maxTrackSeconds: { min: 0, max: 36000, type: 'int' },
@@ -2247,6 +2272,11 @@ export async function load() {
     },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
+    },
+    beds: {
+      enabled: typeof stored.beds?.enabled === 'boolean' ? stored.beds.enabled : DEFAULTS.beds.enabled,
+      thresholdSec: Number.isFinite(stored.beds?.thresholdSec) ? stored.beds.thresholdSec : DEFAULTS.beds.thresholdSec,
+      crossSec: Number.isFinite(stored.beds?.crossSec) ? stored.beds.crossSec : DEFAULTS.beds.crossSec,
     },
     webhooks: normalizeWebhooks(stored.webhooks),
     webhooksPolicy: {
@@ -3655,6 +3685,30 @@ export async function update(patch) {
     const sx = patch.sfx || {};
     if (sx.enabled !== undefined) {
       next.sfx.enabled = !!sx.enabled;
+    }
+  }
+  if ('beds' in patch) {
+    const bd = patch.beds || {};
+    if (bd.enabled !== undefined) {
+      next.beds.enabled = !!bd.enabled;
+    }
+    if (bd.thresholdSec !== undefined) {
+      const v = parseFloat(bd.thresholdSec);
+      if (!Number.isFinite(v) || v < BOUNDS.bedsThresholdSec.min || v > BOUNDS.bedsThresholdSec.max) {
+        throw new Error(
+          `beds.thresholdSec must be number in [${BOUNDS.bedsThresholdSec.min}, ${BOUNDS.bedsThresholdSec.max}]`,
+        );
+      }
+      next.beds.thresholdSec = v;
+    }
+    if (bd.crossSec !== undefined) {
+      const v = parseFloat(bd.crossSec);
+      if (!Number.isFinite(v) || v < BOUNDS.bedsCrossSec.min || v > BOUNDS.bedsCrossSec.max) {
+        throw new Error(
+          `beds.crossSec must be number in [${BOUNDS.bedsCrossSec.min}, ${BOUNDS.bedsCrossSec.max}]`,
+        );
+      }
+      next.beds.crossSec = v;
     }
   }
   if ('ui' in patch) {

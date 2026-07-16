@@ -18,12 +18,12 @@ import BackupPanel from './BackupPanel';
 import FestivalsSection from './FestivalsSection';
 import {
   Radio, Palette, Cpu, Mic, Library, Search, Music, AudioLines,
-  Activity, Archive, Save, AlertTriangle, CalendarDays, Heart,
+  Activity, Archive, Save, AlertTriangle, CalendarDays, Heart, Waves,
 } from 'lucide-react';
 import {
   SectionHeader, ELEVENLABS_VS_DEFAULTS,
   type FormState, type FormUpdater, type SettingsData, type SaveSettings,
-  type SfxData, type SfxForm, type JingleImportFailure, type JingleImportResult,
+  type SfxData, type SfxForm, type BedsData, type JingleImportFailure, type JingleImportResult,
   type LoudnessSource,
 } from './settings/shared';
 import { TtsSection } from './settings/TtsSection';
@@ -34,6 +34,7 @@ import { StationSection } from './settings/StationSection';
 import { ThemeSection } from './settings/ThemeSection';
 import { JinglesSection } from './settings/JinglesSection';
 import { SfxSection } from './settings/SfxSection';
+import { BedsSection } from './settings/BedsSection';
 import { ScrobbleSection } from './settings/ScrobbleSection';
 import { LikesSection } from './settings/LikesSection';
 
@@ -47,6 +48,7 @@ const SECTIONS = [
   { id: 'search',   label: 'Web search', hint: 'live-facts backend', icon: Search },
   { id: 'jingles',  label: 'Jingles', hint: 'stingers', icon: Music },
   { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers', icon: AudioLines },
+  { id: 'beds',     label: 'Beds', hint: 'talk-over instrumentals', icon: Waves },
   { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz', icon: Activity },
   { id: 'likes',    label: 'Likes', hint: 'heart button · navidrome stars', icon: Heart },
   { id: 'archives', label: 'Archives', hint: 'hourly recordings', icon: Archive },
@@ -78,6 +80,8 @@ export default function SettingsPanel() {
   const [sfxData, setSfxData] = useState<SfxData | null>(null);
   const [sfxForm, setSfxForm] = useState<SfxForm>({ name: '', description: '', prompt: '', durationSec: '' });
   const [confirmDeleteSfx, setConfirmDeleteSfx] = useState<string | null>(null);
+  const [bedsData, setBedsData] = useState<BedsData | null>(null);
+  const [confirmDeleteBed, setConfirmDeleteBed] = useState<string | null>(null);
 
   const refresh = async () => {
     try {
@@ -93,6 +97,14 @@ export default function SettingsPanel() {
       const r = await adminFetch('/sfx');
       if (!r.ok) return;
       setSfxData((await r.json()) as SfxData);
+    } catch { /* non-fatal */ }
+  };
+
+  const refreshBeds = async () => {
+    try {
+      const r = await adminFetch('/beds');
+      if (!r.ok) return;
+      setBedsData((await r.json()) as BedsData);
     } catch { /* non-fatal */ }
   };
 
@@ -266,7 +278,8 @@ export default function SettingsPanel() {
     if (!hydrated || needsAuth) return;
     refresh();
     refreshSfx();
-    const id = setInterval(() => { refresh(); refreshSfx(); }, 3000);
+    refreshBeds();
+    const id = setInterval(() => { refresh(); refreshSfx(); refreshBeds(); }, 3000);
     return () => clearInterval(id);
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -461,6 +474,37 @@ export default function SettingsPanel() {
     finally { setBusy(false); }
   };
 
+  const uploadBed = async (file: File, name: string, description: string): Promise<boolean> => {
+    if (busy) return false;
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('name', name.trim());
+      if (description.trim()) fd.append('description', description.trim());
+      const r = await adminFetch('/beds/upload', { method: 'POST', body: fd });
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await refreshBeds();
+      notify.ok('bed imported');
+      return true;
+    } catch (e) { notify.err(`Bed import failed: ${errorMessage(e)}`); return false; }
+    finally { setBusy(false); }
+  };
+
+  const deleteBed = async (name: string) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const r = await adminFetch(`/beds/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await refreshBeds();
+      notify.ok('bed deleted');
+    } catch (e) { notify.err(`Bed delete failed: ${errorMessage(e)}`); }
+    finally { setBusy(false); }
+  };
+
   return (
     <div className="stack-mobile grid grid-cols-[240px_1fr] items-start gap-6">
       {/* Section rail */}
@@ -488,7 +532,9 @@ export default function SettingsPanel() {
                     ? `${data.jingles?.length ?? 0} file${(data.jingles?.length ?? 0) === 1 ? '' : 's'}`
                     : s.id === 'sfx' && sfxData
                       ? `${sfxData.sfx?.length ?? 0} effect${(sfxData.sfx?.length ?? 0) === 1 ? '' : 's'}`
-                      : s.hint}
+                      : s.id === 'beds' && bedsData
+                        ? `${bedsData.beds?.length ?? 0} bed${(bedsData.beds?.length ?? 0) === 1 ? '' : 's'}`
+                        : s.hint}
                 </span>
               </span>
             </button>
@@ -597,6 +643,13 @@ export default function SettingsPanel() {
           </>
           );
         })()}
+        {activeSection === 'beds' && (
+          <BedsSection
+            bedsData={bedsData} busy={busy} uploadBed={uploadBed}
+            onDelete={setConfirmDeleteBed}
+            data={data} saveSettings={saveSettings} adminFetch={adminFetch}
+          />
+        )}
         {activeSection === 'sfx' && (
           <SfxSection
             sfxData={sfxData} sfxForm={sfxForm} setSfxForm={setSfxForm}
@@ -1283,6 +1336,15 @@ export default function SettingsPanel() {
         confirmLabel="delete"
         danger
         onConfirm={() => { if (confirmDeleteSfx) deleteSfx(confirmDeleteSfx); setConfirmDeleteSfx(null); }}
+      />
+      <V3AlertDialog
+        open={confirmDeleteBed != null}
+        onOpenChange={(o) => { if (!o) setConfirmDeleteBed(null); }}
+        title="Delete bed"
+        description={confirmDeleteBed ? `Delete the bed "${confirmDeleteBed}"? This removes the audio file permanently. A bundled bed stays deleted — it won't come back on the next restart.` : ''}
+        confirmLabel="delete"
+        danger
+        onConfirm={() => { if (confirmDeleteBed) deleteBed(confirmDeleteBed); setConfirmDeleteBed(null); }}
       />
     </div>
   );
