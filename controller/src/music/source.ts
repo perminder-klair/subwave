@@ -278,6 +278,27 @@ export async function getRecentSongsByArtist(
   return songs.slice(0, count);
 }
 
+// Every genre tag on a song, deduped. OpenSubsonic servers (Navidrome ≥0.54)
+// send the multi-value `genres: [{name}]` array alongside the legacy scalar
+// `genre`; older Subsonic servers send only the scalar (and the local/Plex
+// sources fill the same shapes). The array is authoritative (its first entry
+// is normally the scalar); the scalar is the fallback so a scalar-only source
+// still yields a one-element array. The single normaliser for per-track genre
+// ingest — everything downstream (library-db genres column, picker/show
+// filters, annotate) goes through it.
+export function songGenres(song: { genres?: unknown; genre?: unknown } | null | undefined): string[] {
+  const out: string[] = [];
+  const push = (v: unknown) => {
+    const s = String(v ?? '').trim();
+    if (s && !out.some((x) => x.toLowerCase() === s.toLowerCase())) out.push(s);
+  };
+  if (Array.isArray(song?.genres)) {
+    for (const g of song.genres) push(typeof g === 'string' ? g : (g as { name?: unknown })?.name);
+  }
+  push(song?.genre);
+  return out;
+}
+
 // Liquidsoap `annotate:` URI — embeds metadata up front so on_track_change
 // reports real artist/title/album rather than waiting on stream-level ID3.
 // The `subsonic_id` field is a frozen wire name (radio.liq now-playing writer,
@@ -294,7 +315,8 @@ export function getAnnotatedUri(song: Song, opts: { maxDurationSec?: number | nu
     `subsonic_id="${escAnnotate(song.id)}"`,
   ];
   if (song.year) fields.push(`year="${escAnnotate(song.year)}"`);
-  if (song.genre) fields.push(`genre="${escAnnotate(song.genre)}"`);
+  const genres = songGenres(song);
+  if (genres.length) fields.push(`genre="${escAnnotate(genres.join(', '))}"`);
   // DJ-mode adaptive blend: the queue stashes a per-transition crossfade length
   // (seconds) on the track when the persona is in DJ mode and both tracks are
   // analysed. Liquidsoap's `cross` honours `liq_cross_duration` to size the
@@ -333,6 +355,13 @@ export function getAnnotatedUri(song: Song, opts: { maxDurationSec?: number | nu
   // OUTGOING track's metadata. Absent → normal cross.
   if (song.washout) fields.push('liq_washout="true"');
   if (song.washoutDelay != null) fields.push(`liq_washout_delay="${escAnnotate(song.washoutDelay)}"`);
+  // DJ exit loop: rides the ENDING track like the washout — its last bar is
+  // caught in a comb-cascade loop as the dry is hard-cut, repeating in
+  // tempo under whatever follows. liq_loop_bar is one bar of THIS track's
+  // own tempo (mix.loopBarFor); the canvas rides liq_cross_duration exactly
+  // like the washout's. radio.liq reads both off the OUTGOING track.
+  if (song.loop) fields.push('liq_loop="true"');
+  if (song.loopBar != null) fields.push(`liq_loop_bar="${escAnnotate(song.loopBar)}"`);
   // DJ blend (spectral handover): validated same-lane picks trade the spectrum
   // with their predecessor across the cross — dj_transition reads liq_blend on
   // the INCOMING track, like the sweep.

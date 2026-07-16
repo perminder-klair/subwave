@@ -146,15 +146,33 @@ async function call(endpoint, params = {}) {
 // Lightweight connectivity + auth check for the admin Doctor. Hits the cheapest
 // Subsonic endpoint (`ping`) with the controller's own salt+token creds — mirrors
 // the CLI wizard's probeSubsonic but against config.navidrome. Never throws.
+//
+// A failure that lands instantly gets ONE retry: Node's pooled fetch sockets go
+// stale between the controller's bursty Subsonic calls, so a one-off
+// ECONNRESET / "fetch failed" on connection reuse is routine, not an outage —
+// and since the admin NavidromeBanner alarms on a single failed ping (cached
+// 20s), an un-retried blip reads as "Navidrome is down" to the operator. Slow
+// failures (the 30s timeout) don't retry: a second wait wouldn't change the
+// answer, just pin the caller for another timeoutMs.
+const PING_RETRY_IF_FASTER_THAN_MS = 2_000;
+
 export async function ping(): Promise<{ ok: boolean; reason?: string }> {
   if (!config.navidrome.url || !config.navidrome.user || !config.navidrome.password) {
     return { ok: false, reason: 'Navidrome URL / username / password not configured' };
   }
-  try {
-    await call('ping');
-    return { ok: true };
-  } catch (err: any) {
-    return { ok: false, reason: err?.message || 'unreachable' };
+  for (let attempt = 0; ; attempt++) {
+    const started = Date.now();
+    try {
+      await call('ping');
+      return { ok: true };
+    } catch (err: any) {
+      const failedFast = Date.now() - started < PING_RETRY_IF_FASTER_THAN_MS;
+      if (attempt === 0 && failedFast) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+        continue;
+      }
+      return { ok: false, reason: err?.message || 'unreachable' };
+    }
   }
 }
 
@@ -248,6 +266,17 @@ export async function getSonicSimilarTracks(id, { count = 20 } = {}) {
 export async function getStarred() {
   const r = await call('getStarred2');
   return rejectArchive(r.starred2?.song || []);
+}
+
+// Star write-back for the listener like feature (#991): mirrors the player
+// heart into Navidrome so any Subsonic client (Feishin, Symfonium, DSub, …)
+// sees the track under Starred immediately. Both are idempotent server-side.
+export async function star(id) {
+  await call('star', { id });
+}
+
+export async function unstar(id) {
+  await call('unstar', { id });
 }
 
 export async function getAlbumList(offset = 0, size = 500) {
@@ -351,6 +380,13 @@ export async function getLyrics(songId) {
 }
 
 // Async iterator over every song in the library. Walks albums in batches.
+// Each yielded song is annotated with the album-level era signals Navidrome
+// only exposes on the album record (issue #842): `albumIsCompilation`
+// (OpenSubsonic isCompilation) and `albumOriginalYear` (originalReleaseDate
+// .year — the album's TRUE first-release year on reissues, absent on most
+// rips). The walk (tag-library.walkNavidrome) turns these into per-track
+// original-year/compilation columns; the raw fields ride here so policy stays
+// out of the client.
 export async function* iterateAllSongs() {
   let offset = 0;
   const BATCH = 500;
@@ -359,9 +395,14 @@ export async function* iterateAllSongs() {
     if (albums.length === 0) break;
     for (const album of albums) {
       try {
-        // getAlbum already drops station-archive recordings (issue #273).
-        const songs = await getAlbum(album.id);
-        for (const s of songs) yield s;
+        const r = await call('getAlbum', { id: album.id });
+        const isCompilation = typeof r.album?.isCompilation === 'boolean' ? r.album.isCompilation : null;
+        const ord = r.album?.originalReleaseDate?.year;
+        const originalYear = Number.isFinite(ord) && ord > 0 ? ord : null;
+        // Same station-archive drop as getAlbum() (issue #273).
+        for (const s of rejectArchive(r.album?.song || [])) {
+          yield { ...s, albumIsCompilation: isCompilation, albumOriginalYear: originalYear };
+        }
       } catch (err) {
         console.error(`[subsonic] getAlbum(${album.id}) failed: ${err.message}`);
       }
@@ -396,10 +437,23 @@ function chunk<T>(items: T[], size: number): T[][] {
 // Creates a playlist and returns it. Extra ids beyond the first chunk are
 // appended via updatePlaylist; playlists are made public so the operator's
 // own Navidrome login sees them, not just the SUB/WAVE service account.
-export async function createPlaylist(name: string, songIds: string[] = []) {
+//
+// Pass `opts.playlistId` to OVERWRITE an existing playlist's song list wholesale
+// (Subsonic `createPlaylist` with a playlistId replaces the songs) — this is how
+// the builder's "save over" does a clean full-replace instead of index-based
+// remove churn. When overwriting, the first chunk replaces; the rest append.
+export async function createPlaylist(
+  name: string,
+  songIds: string[] = [],
+  opts: { playlistId?: string } = {},
+) {
   const [first = [], ...rest] = chunk(songIds, PLAYLIST_CHUNK);
-  const r = await call('createPlaylist', { name, songId: first });
-  const playlist = r.playlist;
+  const base = opts.playlistId
+    ? { playlistId: opts.playlistId, name, songId: first }
+    : { name, songId: first };
+  const r = await call('createPlaylist', base);
+  // On overwrite Navidrome may not echo the playlist body — fall back to the id.
+  const playlist = r.playlist || (opts.playlistId ? { id: opts.playlistId, name } : null);
   if (playlist?.id) {
     for (const ids of rest) {
       await call('updatePlaylist', { playlistId: playlist.id, songIdToAdd: ids });

@@ -76,6 +76,18 @@ export interface TrackRecord {
   artist: string | null;
   album: string | null;
   year: number | null;
+  // Original-release-year surface (issue #842): the track's TRUE first-release
+  // year when it differs from the file's `year` tag (reissues, compilation
+  // albums). null = unresolved; era filtering falls back to `year` (except on
+  // compilations, whose plain year is the compilation's own date — untrusted).
+  originalYear: number | null;
+  originalYearSource: string | null;      // 'album-tag' | 'musicbrainz'
+  originalYearCheckedAt: string | null;   // last lookup attempt, hit or miss
+  isCompilation: boolean | null;          // Navidrome album flag; null = unknown
+  // Every genre tag on the file (OpenSubsonic multi-value genres). The single
+  // source of truth — `genre` below is a generated column over genres[0]
+  // (the "primary" tag), kept for the scalar consumers and indexes.
+  genres: string[];
   genre: string | null;
   durationSec: number | null;
   lastfmTags: string[] | null;
@@ -166,6 +178,11 @@ interface TrackRow {
   artist: string | null;
   album: string | null;
   year: number | null;
+  original_year: number | null;
+  original_year_source: string | null;
+  original_year_checked_at: string | null;
+  is_compilation: number | null;
+  genres: string | null; // JSON array; `genre` is generated from genres[0]
   genre: string | null;
   duration_sec: number | null;
   lastfm_tags: string | null;
@@ -203,8 +220,15 @@ export interface TrackMeta {
   artist?: string | null;
   album?: string | null;
   year?: number | string | null;
-  genre?: string | null;
+  genres?: string[] | null;
   duration?: number | null;
+  // Walk-time original-year surface (issue #842). `originalYear` here is the
+  // ALBUM's originalReleaseDate.year (source 'album-tag'); the walk passes it
+  // only for non-compilation albums (a compilation's original date is the
+  // compilation's own, not its songs'). Never overwrites a per-track
+  // 'musicbrainz' resolution — see upsertTrackMeta.
+  originalYear?: number | null;
+  isCompilation?: boolean | null;
 }
 
 export interface TrackEnrichment {
@@ -575,6 +599,139 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     d.pragma('user_version = 13');
   }
 
+  if (userVersion < 14) {
+    // Original-release-year surface (issue #842). Compilation albums carry the
+    // COMPILATION's release date, not each song's, so era-bounded shows both
+    // mis-include and miss their tracks. `original_year` is the resolved
+    // per-track original year (source: 'album-tag' — the album's own
+    // originalReleaseDate captured at walk time — or 'musicbrainz' from the
+    // enrichment lookup). `original_year_checked_at` stamps every lookup
+    // attempt, hit or miss, so a resumed enrichment pass never re-queries
+    // MusicBrainz for a known miss. `is_compilation` mirrors Navidrome's
+    // album-level flag (1/0; NULL = not yet walked since this migration) —
+    // era filtering treats a compilation's plain `year` as untrusted.
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN original_year            INTEGER;
+      ALTER TABLE tracks ADD COLUMN original_year_source     TEXT;
+      ALTER TABLE tracks ADD COLUMN original_year_checked_at TEXT;
+      ALTER TABLE tracks ADD COLUMN is_compilation           INTEGER;
+    `);
+    d.pragma('user_version = 14');
+  }
+
+  if (userVersion < 15) {
+    // Durable play history — one row per track the station airs, stamped with
+    // the show that was on when it played. Deliberately NOT keyed to `tracks`
+    // (no FK): auto-playlist plays can predate tagging, and a track deleted
+    // from Navidrome should keep its history. Title/artist/album are display
+    // snapshots taken at air time, same rationale as the blocklist. Rows are
+    // tiny (~150 B) and unpruned — a busy station writes ~10 MB/decade.
+    runDdl(d, `
+      CREATE TABLE IF NOT EXISTS plays (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        track_id     TEXT,
+        title        TEXT,
+        artist       TEXT,
+        album        TEXT,
+        played_at    TEXT NOT NULL,
+        source       TEXT,
+        requested_by TEXT,
+        show_id      TEXT,
+        show_name    TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_plays_played_at ON plays(played_at);
+      CREATE INDEX IF NOT EXISTS idx_plays_track     ON plays(track_id);
+    `);
+    d.pragma('user_version = 15');
+  }
+
+  if (userVersion < 16) {
+    // Multi-genre tags. Storage moves to `genres` — a JSON array of every
+    // genre tag the file carries (OpenSubsonic multi-value genres) — and the
+    // old scalar `genre` becomes a GENERATED column over genres[0], so every
+    // existing single-genre query (GROUP BY genre, PARTITION BY genre,
+    // idx_tracks_genre, filter genre = ?) keeps working against the primary
+    // tag with nothing to keep in sync. Generated columns can't replace an
+    // existing physical column via ALTER, so this is the standard SQLite
+    // table rebuild; existing scalar values backfill as one-element arrays.
+    runDdl(d, `
+      BEGIN;
+      ALTER TABLE tracks RENAME TO tracks_v15;
+      CREATE TABLE tracks (
+        id              TEXT PRIMARY KEY,
+        title           TEXT,
+        artist          TEXT,
+        album           TEXT,
+        year            INTEGER,
+        original_year            INTEGER,
+        original_year_source     TEXT,
+        original_year_checked_at TEXT,
+        is_compilation           INTEGER,
+        genres          TEXT,
+        genre           TEXT GENERATED ALWAYS AS (json_extract(genres, '$[0]')) VIRTUAL,
+        duration_sec    INTEGER,
+        lastfm_tags     TEXT,
+        lyric_excerpt   TEXT,
+        enriched_at     TEXT,
+        moods           TEXT,
+        energy          TEXT CHECK (energy IN ('low','medium','high') OR energy IS NULL),
+        source          TEXT,
+        confidence      REAL,
+        tagger_version  INTEGER,
+        prompt_hash     TEXT,
+        model           TEXT,
+        tagged_at       TEXT,
+        bpm                 REAL,
+        musical_key         TEXT,
+        intro_ms            INTEGER,
+        analysis_confidence REAL,
+        analysis_version    INTEGER,
+        loudness_lufs REAL,
+        peak_db       REAL,
+        structure_json TEXT,
+        vocal_ranges_json TEXT,
+        pace_json TEXT,
+        beats_json TEXT,
+        bars_json  TEXT,
+        key_ranges_json TEXT,
+        audio_moods            TEXT,
+        audio_mood_scores_json TEXT,
+        outro_json TEXT,
+        map_x REAL,
+        map_y REAL
+      );
+      INSERT INTO tracks (
+        id, title, artist, album, year, original_year, original_year_source,
+        original_year_checked_at, is_compilation, genres, duration_sec,
+        lastfm_tags, lyric_excerpt, enriched_at, moods, energy, source,
+        confidence, tagger_version, prompt_hash, model, tagged_at, bpm,
+        musical_key, intro_ms, analysis_confidence, analysis_version,
+        loudness_lufs, peak_db, structure_json, vocal_ranges_json, pace_json,
+        beats_json, bars_json, key_ranges_json, audio_moods,
+        audio_mood_scores_json, outro_json, map_x, map_y
+      )
+      SELECT
+        id, title, artist, album, year, original_year, original_year_source,
+        original_year_checked_at, is_compilation,
+        CASE WHEN genre IS NULL OR TRIM(genre) = '' THEN NULL ELSE json_array(genre) END,
+        duration_sec,
+        lastfm_tags, lyric_excerpt, enriched_at, moods, energy, source,
+        confidence, tagger_version, prompt_hash, model, tagged_at, bpm,
+        musical_key, intro_ms, analysis_confidence, analysis_version,
+        loudness_lufs, peak_db, structure_json, vocal_ranges_json, pace_json,
+        beats_json, bars_json, key_ranges_json, audio_moods,
+        audio_mood_scores_json, outro_json, map_x, map_y
+      FROM tracks_v15;
+      DROP TABLE tracks_v15;
+      CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
+      CREATE INDEX IF NOT EXISTS idx_tracks_genre  ON tracks(genre);
+      CREATE INDEX IF NOT EXISTS idx_tracks_tagged ON tracks(tagger_version, prompt_hash, model);
+      CREATE INDEX IF NOT EXISTS idx_tracks_analysis ON tracks(analysis_version);
+      COMMIT;
+    `);
+    d.pragma('user_version = 16');
+  }
+
   // Reconcile the requested embedding dim against what physically exists.
   //
   // The vec0 table's `FLOAT[N]` schema is the authority for what inserts accept —
@@ -733,7 +890,7 @@ async function maybeMigrateFromMoodsJson(): Promise<void> {
 
   const insert = d.prepare(`
     INSERT OR IGNORE INTO tracks (
-      id, title, artist, album, year, genre, duration_sec,
+      id, title, artist, album, year, genres, duration_sec,
       moods, energy, source, tagger_version, tagged_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
@@ -745,7 +902,7 @@ async function maybeMigrateFromMoodsJson(): Promise<void> {
         t.artist ?? null,
         t.album ?? null,
         normaliseYear(t.year),
-        t.genre ?? null,
+        t.genre ? JSON.stringify([t.genre]) : null,
         Number.isFinite(t.duration) ? t.duration : null,
         Array.isArray(t.moods) ? JSON.stringify(t.moods) : '[]',
         ['low', 'medium', 'high'].includes(t.energy!) ? t.energy : null,
@@ -841,12 +998,17 @@ export function getTrack(id: string): TrackRecord | null {
 }
 
 export interface TrackLite {
+  genres: string[];
   genre: string | null;
   bpm: number | null;
   musicalKey: string | null;
   moods: string[];
   energy: string | null;
   year: number | null;
+  // Era-year surface (issue #842) — lets show-filter resolve a track's true
+  // era without the full getTrack() blob parse. null = unresolved / unknown.
+  originalYear: number | null;
+  isCompilation: boolean | null;
   durationSec: number | null;
 }
 
@@ -859,16 +1021,19 @@ export interface TrackLite {
 // concurrent HTTP response, making the whole UI sluggish (#723).
 export function getTrackLite(id: string): TrackLite | null {
   const row = requireDb()
-    .prepare(`SELECT genre, bpm, musical_key, moods, energy, year, duration_sec FROM tracks WHERE id = ?`)
-    .get(id) as Pick<TrackRow, 'genre' | 'bpm' | 'musical_key' | 'moods' | 'energy' | 'year' | 'duration_sec'> | undefined;
+    .prepare(`SELECT genres, genre, bpm, musical_key, moods, energy, year, original_year, is_compilation, duration_sec FROM tracks WHERE id = ?`)
+    .get(id) as Pick<TrackRow, 'genres' | 'genre' | 'bpm' | 'musical_key' | 'moods' | 'energy' | 'year' | 'original_year' | 'is_compilation' | 'duration_sec'> | undefined;
   if (!row) return null;
   return {
+    genres: row.genres ? safeParseArray(row.genres) : [],
     genre: row.genre ?? null,
     bpm: row.bpm ?? null,
     musicalKey: row.musical_key ?? null,
     moods: row.moods ? safeParseArray(row.moods) : [],
     energy: row.energy ?? null,
     year: row.year ?? null,
+    originalYear: row.original_year ?? null,
+    isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
     durationSec: row.duration_sec ?? null,
   };
 }
@@ -902,14 +1067,23 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
   requireDb()
     .prepare(
       `
-      INSERT INTO tracks (id, title, artist, album, year, genre, duration_sec)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tracks (id, title, artist, album, year, original_year, original_year_source, is_compilation, genres, duration_sec)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
         album        = COALESCE(excluded.album, tracks.album),
         year         = COALESCE(excluded.year, tracks.year),
-        genre        = COALESCE(excluded.genre, tracks.genre),
+        -- Walk-time 'album-tag' years never clobber a per-track 'musicbrainz'
+        -- resolution — the MB lookup is the more specific signal (issue #842).
+        original_year = CASE WHEN tracks.original_year_source = 'musicbrainz'
+                             THEN tracks.original_year
+                             ELSE COALESCE(excluded.original_year, tracks.original_year) END,
+        original_year_source = CASE WHEN tracks.original_year_source = 'musicbrainz'
+                                    THEN tracks.original_year_source
+                                    ELSE COALESCE(excluded.original_year_source, tracks.original_year_source) END,
+        is_compilation = COALESCE(excluded.is_compilation, tracks.is_compilation),
+        genres       = COALESCE(excluded.genres, tracks.genres),
         duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec)
     `,
     )
@@ -919,9 +1093,44 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
       meta.artist ?? null,
       meta.album ?? null,
       normaliseYear(meta.year),
-      meta.genre ?? null,
+      normaliseYear(meta.originalYear),
+      normaliseYear(meta.originalYear) != null ? 'album-tag' : null,
+      meta.isCompilation == null ? null : meta.isCompilation ? 1 : 0,
+      meta.genres?.length ? JSON.stringify(meta.genres) : null,
       Number.isFinite(meta.duration as number) ? (meta.duration as number) : null,
     );
+}
+
+// Tracks still owed an original-year lookup (issue #842): compilation-album
+// tracks with no resolved year. Deliberately NOT scoped to the tagger's
+// untagged/enriched sets — the column landed after most libraries were tagged,
+// so the backfill must see the whole catalogue. `retryMisses` widens to tracks
+// already checked-but-missed (--re-enrich).
+export function idsNeedingOriginalYear(retryMisses = false): string[] {
+  const extra = retryMisses ? '' : 'AND original_year_checked_at IS NULL';
+  return (
+    requireDb()
+      .prepare(
+        `SELECT id FROM tracks WHERE is_compilation = 1 AND original_year IS NULL ${extra}`,
+      )
+      .all() as Array<{ id: string }>
+  ).map((r) => r.id);
+}
+
+// Record the result of a per-track original-year lookup (issue #842).
+// `checked_at` is stamped on hit AND miss so a resumed enrichment pass skips
+// tracks it already asked MusicBrainz about; a miss leaves original_year NULL
+// (era filtering then treats a compilation track's year as unknown).
+export function setOriginalYear(id: string, year: number | null): void {
+  requireDb()
+    .prepare(
+      `UPDATE tracks SET
+         original_year            = COALESCE(?, original_year),
+         original_year_source     = CASE WHEN ? IS NOT NULL THEN 'musicbrainz' ELSE original_year_source END,
+         original_year_checked_at = ?
+       WHERE id = ?`,
+    )
+    .run(year, year, new Date().toISOString(), id);
 }
 
 export function upsertTrackEnrichment(id: string, enrich: TrackEnrichment): void {
@@ -1670,7 +1879,7 @@ export function embeddedIds(): string[] {
 export function trackIdsByGenreDecade(): Map<string, string[]> {
   const rows = requireDb()
     .prepare(
-      `SELECT id, COALESCE(genre, '') AS g, (COALESCE(year, 0) / 10) * 10 AS decade
+      `SELECT id, COALESCE(genre, '') AS g, (COALESCE(original_year, year, 0) / 10) * 10 AS decade
        FROM tracks WHERE moods IS NULL`,
     )
     .all() as Array<{ id: string; g: string; decade: number }>;
@@ -1693,10 +1902,14 @@ export function trackIdsByGenreDecade(): Map<string, string[]> {
 // at once.
 // ---------------------------------------------------------------------------
 export function genreCentroids(): Array<{ genre: string; count: number; centroid: Float32Array }> {
+  // json_each over the multi-genre array: a Hip-Hop + Rap track contributes
+  // its vector to BOTH centroids — each genre's centroid should reflect every
+  // track that carries the tag, not just those where it happens to be primary.
   const stmt = requireDb().prepare(
-    `SELECT t.genre AS genre, v.embedding AS embedding
-       FROM tracks t JOIN track_vectors v ON v.id = t.id
-      WHERE t.genre IS NOT NULL AND TRIM(t.genre) != ''`,
+    `SELECT je.value AS genre, v.embedding AS embedding
+       FROM tracks t
+       JOIN track_vectors v ON v.id = t.id, json_each(t.genres) je
+      WHERE je.value IS NOT NULL AND TRIM(je.value) != ''`,
   );
   const sums = new Map<string, { sum: Float64Array; count: number }>();
   let dim = 0;
@@ -1752,14 +1965,24 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     params.push(...moods);
   }
   if (energy) { where.push('energy = ?'); params.push(energy); }
-  if (genre) { where.push('genre = ?'); params.push(genre); }
+  // Any-of over the multi-genre array, so a track tagged Hip-Hop + Rap shows
+  // under either filter — matching the show-filter/picker semantics.
+  if (genre) {
+    where.push(`EXISTS (SELECT 1 FROM json_each(tracks.genres) WHERE value = ?)`);
+    params.push(genre);
+  }
   if (vocal === 'instrumental') {
     where.push('vocal_ranges_json IS NOT NULL AND json_array_length(vocal_ranges_json) = 0');
   } else if (vocal === 'vocal') {
     where.push('vocal_ranges_json IS NOT NULL AND json_array_length(vocal_ranges_json) > 0');
   }
-  if (yearFrom != null) { where.push('year IS NOT NULL AND year >= ?'); params.push(yearFrom); }
-  if (yearTo != null) { where.push('year IS NOT NULL AND year <= ?'); params.push(yearTo); }
+  // Era-year semantics (issue #842): the resolved original year wins; a plain
+  // `year` only counts when the track is NOT on a compilation album, whose
+  // year is the compilation's own release date. Mirrors show-filter's
+  // trackEraYear so SQL-side and JS-side era filtering agree.
+  const ERA_YEAR_SQL = `COALESCE(original_year, CASE WHEN is_compilation = 1 THEN NULL ELSE year END)`;
+  if (yearFrom != null) { where.push(`${ERA_YEAR_SQL} >= ?`); params.push(yearFrom); }
+  if (yearTo != null) { where.push(`${ERA_YEAR_SQL} <= ?`); params.push(yearTo); }
   if (q) {
     where.push(
       `(LOWER(COALESCE(title,'')) LIKE ? OR LOWER(COALESCE(artist,'')) LIKE ? OR LOWER(COALESCE(album,'')) LIKE ?)`,
@@ -1809,6 +2032,7 @@ export interface ObservatoryTrackRow {
   artist: string | null;
   album: string | null;
   year: number | null;
+  genres: string[];
   genre: string | null;
   durationSec: number | null;
   moods: string[];
@@ -1825,7 +2049,7 @@ export interface ObservatoryTrackRow {
   mapY: number | null;
 }
 
-const OBSERVATORY_COLS = `id, title, artist, album, year, genre, duration_sec,
+const OBSERVATORY_COLS = `id, title, artist, album, year, genres, genre, duration_sec,
   moods, energy, source, confidence, bpm, musical_key, analysis_confidence,
   loudness_lufs, pace_json, vocal_ranges_json, map_x, map_y`;
 
@@ -1843,6 +2067,7 @@ function rowToObservatory(row: TrackRow): ObservatoryTrackRow {
     artist: row.artist,
     album: row.album,
     year: row.year,
+    genres: row.genres ? safeParseArray(row.genres) : [],
     genre: row.genre,
     durationSec: row.duration_sec,
     moods: row.moods ? safeParseArray(row.moods) : [],
@@ -1908,6 +2133,62 @@ export function allTaggedSampled(max: number, totalTagged: number): ObservatoryT
     ORDER BY id
   `;
   return (requireDb().prepare(sql).all(m, total) as TrackRow[]).map(rowToObservatory);
+}
+
+// ---------------------------------------------------------------------------
+// Play history
+// ---------------------------------------------------------------------------
+
+export interface PlayRecord {
+  id: number;
+  trackId: string | null;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  playedAt: string;
+  source: string | null;       // 'ai' | 'request' | 'auto' at write time
+  requestedBy: string | null;
+  showId: string | null;
+  showName: string | null;
+}
+
+export type PlayWrite = Omit<PlayRecord, 'id'>;
+
+export function recordPlay(p: PlayWrite): void {
+  requireDb().prepare(`
+    INSERT INTO plays (track_id, title, artist, album, played_at, source, requested_by, show_id, show_name)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    p.trackId, p.title, p.artist, p.album, p.playedAt,
+    p.source, p.requestedBy, p.showId, p.showName,
+  );
+}
+
+export function listPlays(opts: { limit?: number; offset?: number } = {}): { total: number; rows: PlayRecord[] } {
+  const d = requireDb();
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const total = (d.prepare('SELECT COUNT(*) AS n FROM plays').get() as { n: number }).n;
+  const rows = (d.prepare(`
+    SELECT id, track_id, title, artist, album, played_at, source, requested_by, show_id, show_name
+    FROM plays ORDER BY id DESC LIMIT ? OFFSET ?
+  `).all(limit, offset) as Array<{
+    id: number; track_id: string | null; title: string | null; artist: string | null;
+    album: string | null; played_at: string; source: string | null;
+    requested_by: string | null; show_id: string | null; show_name: string | null;
+  }>).map((r) => ({
+    id: r.id,
+    trackId: r.track_id,
+    title: r.title,
+    artist: r.artist,
+    album: r.album,
+    playedAt: r.played_at,
+    source: r.source,
+    requestedBy: r.requested_by,
+    showId: r.show_id,
+    showName: r.show_name,
+  }));
+  return { total, rows };
 }
 
 // ---------------------------------------------------------------------------
@@ -1991,10 +2272,14 @@ function computeStats(): LibraryStats {
     .all() as Array<{ energy: string; n: number }>) {
     byEnergy[r.energy] = r.n;
   }
+  // json_each over the multi-genre array: a track tagged Hip-Hop + Rap counts
+  // toward both tallies (so the sum can exceed `total` — these are per-tag
+  // counts for filter dropdowns/suggestions, not a partition of the library).
   const byGenre: Record<string, number> = {};
   for (const r of d
     .prepare(
-      `SELECT genre, COUNT(*) AS n FROM tracks WHERE genre IS NOT NULL GROUP BY genre`,
+      `SELECT value AS genre, COUNT(*) AS n FROM tracks, json_each(tracks.genres)
+       WHERE tracks.genres IS NOT NULL GROUP BY value`,
     )
     .all() as Array<{ genre: string; n: number }>) {
     byGenre[r.genre] = r.n;
@@ -2033,6 +2318,11 @@ function rowToTrack(row: TrackRow): TrackRecord {
     artist: row.artist,
     album: row.album,
     year: row.year,
+    originalYear: row.original_year ?? null,
+    originalYearSource: row.original_year_source ?? null,
+    originalYearCheckedAt: row.original_year_checked_at ?? null,
+    isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
+    genres: row.genres ? safeParseArray(row.genres) : [],
     genre: row.genre,
     durationSec: row.duration_sec,
     lastfmTags: row.lastfm_tags ? safeParseArray(row.lastfm_tags) : null,

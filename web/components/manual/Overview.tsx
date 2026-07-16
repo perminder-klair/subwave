@@ -44,8 +44,8 @@ const GUIDE = [
   },
   {
     href: '/manual/themes',
-    label: 'Themes',
-    blurb: 'Pick the station-wide palette every listener sees, override it per show, or drop in your own.',
+    label: 'Skins & Themes',
+    blurb: 'Swap the player face between six built-in skins, pick the station-wide palette, or fork the reference player entirely.',
   },
   {
     href: '/manual/cli',

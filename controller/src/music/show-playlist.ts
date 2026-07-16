@@ -72,7 +72,14 @@ export async function resolveShowPlaylistPool(show: any): Promise<PlaylistPool |
       lists.push(songs || []);
       const meta = index.find((p: any) => p.id === id);
       if (meta?.name) names.push(meta.name);
-    } catch {}
+    } catch (err) {
+      // Still degrade (never strand the stream on one bad anchor), but say so:
+      // a stale id (playlist deleted/recreated in Navidrome) failing silently
+      // here is what turned a "playlist only (strict)" show into an unanchored
+      // one with no trace. The pick paths log the operator-facing warning when
+      // the whole pool comes back null.
+      console.warn(`[show-playlist] anchor playlist ${id} failed to resolve: ${(err as Error)?.message}`);
+    }
   }
 
   const tracks = mergePlaylistTracks(lists);
@@ -98,7 +105,9 @@ export async function resolveExcludedPlaylistIds(show: any): Promise<Set<string>
       for (const t of songs || []) {
         if (t?.id) blocked.add(t.id);
       }
-    } catch {}
+    } catch (err) {
+      console.warn(`[show-playlist] excluded playlist ${id} failed to resolve: ${(err as Error)?.message}`);
+    }
   }
   return blocked.size ? blocked : null;
 }

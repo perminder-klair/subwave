@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { z } from 'zod';
 import { generateText, APICallError } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
-import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, snapV3Stability, modelTolerant, schemaHint } from '../src/llm/internal/core/pure.js';
+import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsOf, budgetMode, isUnreachable, isTransient, isQuotaOrAuthError, isUpstreamOverloaded, isRateLimited, errReason, nearestId, isElevenLabsV3, snapV3Stability, modelTolerant, schemaHint, clipText } from '../src/llm/internal/core/pure.js';
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { reasoningFor, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
@@ -20,6 +20,7 @@ import { DEFAULT_LOCCA_EMBED_BASE_URL, openAICompatibleFetch } from '../src/llm/
 import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStrict, clampTtsSpeed, TTS_SPEED_DEFAULT, clampMaxOutputTokens, resolveMaxOutputTokens, MAX_OUTPUT_TOKENS_MIN, MAX_OUTPUT_TOKENS_MAX, effectiveFrequency, SCRIPT_LENGTHS } from '../src/settings.js';
 import { lengthMode, lengthPhrase } from '../src/llm/internal/prompts/system.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
+import { planSchema } from '../src/llm/internal/prompts/programme.js';
 import { resolveCloudModel } from '../src/llm/internal/speech/cloud-speech.js';
 
 let failures = 0;
@@ -363,6 +364,13 @@ async function main() {
     assert.equal(reasoningFor({ provider: 'google', model: 'gemini-2.5-flash', reasoning: false }), 'none');
     assert.equal(reasoningFor({ provider: 'google', model: 'gemini-3.5-flash', reasoning: true }), undefined);
   });
+  await test('google: Gemma has no thinking mode — omit the param (upstream would 400 on thinkingBudget:0, issue #1044)', () => {
+    // @ai-sdk/google routes any non-gemini-3 id through the gemini-2.5 path, so
+    // 'none' becomes thinkingBudget:0 — which Gemma rejects. Must stay undefined.
+    assert.equal(reasoningFor({ provider: 'google', model: 'gemma-4-31b-it', reasoning: false }), undefined);
+    assert.equal(reasoningFor({ provider: 'google', model: 'gemma-4-31b-it', reasoning: true }), undefined);
+    assert.equal(reasoningFor({ provider: 'google', model: 'gemma-2-27b-it', reasoning: false }), undefined);
+  });
   await test('openai: effort level only on o-series/gpt-5 (sent verbatim as reasoning_effort — gpt-4-class 400s on it)', () => {
     assert.equal(reasoningFor({ provider: 'openai', model: 'o3', reasoning: false }), 'minimal');
     assert.equal(reasoningFor({ provider: 'openai', model: 'o3', reasoning: true }), 'medium');
@@ -378,6 +386,12 @@ async function main() {
     assert.equal(reasoningFor({ provider: 'gateway', model: 'anthropic/claude-haiku-4.5', reasoning: true }), undefined);
     assert.equal(reasoningFor({ provider: 'gateway', model: 'anthropic/claude-haiku-4.5', reasoning: false }), 'none');
     assert.equal(reasoningFor({ provider: 'gateway', model: 'deepseek/deepseek-v4', reasoning: true }, { forceNoThink: true }), 'none');
+  });
+  await test('gateway: Gemma downstream (google/gemma-*) omits the param — no thinkingConfig to a non-thinking model (issue #1044)', () => {
+    assert.equal(reasoningFor({ provider: 'gateway', model: 'google/gemma-4-31b-it', reasoning: false }), undefined);
+    assert.equal(reasoningFor({ provider: 'gateway', model: 'google/gemma-4-31b-it', reasoning: true }, { forceNoThink: true }), undefined);
+    // Non-Gemma google downstreams still get suppressed as before.
+    assert.equal(reasoningFor({ provider: 'gateway', model: 'google/gemini-2.5-flash', reasoning: false }), 'none');
   });
   await test('openrouter: always undefined — reasoning is fixed at model construction (extraBody in the registry)', () => {
     assert.equal(reasoningFor({ provider: 'openrouter', model: 'xiaomi/mimo-v2.5', reasoning: false }), undefined);
@@ -1169,6 +1183,59 @@ async function main() {
     assert.equal(hint.includes(longDescription), false);
     assert.equal(hint.includes('the exact id'), false);
     assert.equal(hint.includes('"description"'), false);
+  });
+
+  console.log('clipText (soft length caps for model free-text):');
+  await test('clips over-length text on a word boundary', () => {
+    const s = 'one two three four five six seven eight nine ten';
+    const out = clipText(s, 20) as string;
+    assert.ok(out.length <= 20, `len ${out.length} <= 20`);
+    assert.equal(out, 'one two three four', 'trimmed to a whole word, no dangling partial');
+  });
+  await test('passes through text at or under the cap untouched', () => {
+    assert.equal(clipText('short', 20), 'short');
+    assert.equal(clipText('exactly-twenty-chars', 20), 'exactly-twenty-chars');
+  });
+  await test('hard-cuts when no early word boundary exists (one very long token)', () => {
+    const out = clipText('x'.repeat(50), 20) as string;
+    assert.equal(out.length, 20, 'a single long token still gets capped');
+  });
+  await test('leaves non-strings for the schema to reject', () => {
+    assert.equal(clipText(undefined, 20), undefined);
+    assert.equal(clipText(42, 20), 42);
+    assert.equal(clipText(null, 20), null);
+  });
+
+  console.log('programme planSchema (the 207-char angle regression — a soft cap, clipped not rejected):');
+  await test('clips an over-length angle/topic instead of throwing away the whole plan', () => {
+    const overLongAngle = 'contractual malice '.repeat(20).trim(); // ~380 chars
+    const overLongTopic = 'read the memo aloud '.repeat(20).trim();
+    const plan: any = planSchema(1).parse({
+      angle: overLongAngle,
+      introNote: 'set the tone',
+      features: [{ topic: overLongTopic, kind: 'memo-from-upstairs' }],
+      outroNote: 'walk out',
+    });
+    assert.ok(plan.angle.length <= 200, `angle clipped to <=200 (was ${overLongAngle.length})`);
+    assert.ok(plan.features[0].topic.length <= 240, 'topic clipped to <=240');
+    assert.equal(plan.features[0].kind, 'memo-from-upstairs', 'the rest of the plan survives intact');
+  });
+  await test('leaves a within-cap plan untouched', () => {
+    const plan: any = planSchema(1).parse({
+      angle: 'a tight editorial line',
+      introNote: 'open warm',
+      features: [{ topic: 'the b-side story', kind: null }],
+      outroNote: 'sign off',
+    });
+    assert.equal(plan.angle, 'a tight editorial line');
+    assert.equal(plan.features[0].kind, null);
+  });
+  await test('wire schema keeps the full `required` array under io:\'input\' — clip stays object-level, never per-field', () => {
+    const rendered: any = z.toJSONSchema(planSchema(1), { target: 'draft-7', io: 'input' });
+    assert.deepEqual(rendered.required.sort(), ['angle', 'features', 'introNote', 'outroNote']);
+    assert.deepEqual(rendered.properties.features.items.required.sort(), ['kind', 'topic']);
+    // maxLength is still advertised to the model — the cap is a nudge, kept.
+    assert.equal(rendered.properties.angle.maxLength, 200);
   });
 
   console.log(failures === 0 ? '\nAll llm-pure tests passed.' : `\n${failures} test(s) FAILED.`);

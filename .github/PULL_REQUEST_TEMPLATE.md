@@ -9,9 +9,9 @@ Thanks for the PR! Keep this short — the description is for reviewers, not
 for the changelog (release-please builds that from your Conventional Commit
 messages, e.g. `feat: …`, `fix(ui): …`).
 
-Adding your station to the directory? You only need a single
-`web/content/stations/<slug>.json` file — see
-`web/content/stations/README.md`. You can delete this template and just say so.
+Adding your station to the directory, or sharing a skill/persona/show? Those
+live in the community catalog repo now — open the matching form at
+https://github.com/getsubwave/community/issues/new/choose (no PR needed here).
 -->
 
 ## What

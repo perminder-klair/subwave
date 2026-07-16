@@ -1490,6 +1490,15 @@ def make_stream_outputs() =
         opus_enc,
         id="stream_opus",
         fallible=true,
+        # Force ICY metadata ON. output.icecast leaves send_icy_metadata null by
+        # default, which GUESSES it off for any Ogg-container format and relies on
+        # in-band Ogg header re-emission (a new chained logical stream per track)
+        # instead. Many radio clients — Ferrosonic, Google Cast receivers, Symfonium
+        # — read the Ogg Vorbis comment only once at connect and never re-parse on a
+        # chained boundary, so they freeze on the first track's title (issue #1052).
+        # Icecast relays ICY StreamTitle out-of-band for Ogg mounts too, so enabling
+        # it gives those clients the same reliable per-track updates MP3/AAC get.
+        send_icy_metadata=true,
         host=environment.get(default="icecast", "ICECAST_HOST"),
         port=7702,
         password=environment.get("ICECAST_SOURCE_PASSWORD"),
@@ -1522,6 +1531,10 @@ def make_stream_outputs() =
         ),
         id="stream_flac",
         fallible=true,
+        # Force ICY metadata ON — see the /stream.opus note above. Ogg-FLAC clients
+        # (Ferrosonic and other internet-radio players) otherwise stay stuck on the
+        # connect-time track because they ignore in-band chained-Ogg metadata (#1052).
+        send_icy_metadata=true,
         host=environment.get(default="icecast", "ICECAST_HOST"),
         port=7702,
         password=environment.get("ICECAST_SOURCE_PASSWORD"),

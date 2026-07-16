@@ -1,0 +1,69 @@
+/* Spool — a tape-deck face. Everything that moves is a co-located keyframe so
+   playback churn never re-renders React; each spinner idles at `paused` and
+   only runs when `.playing` is also applied (music actually airing), which
+   keeps a tuned-out deck still and lets html.lite's global keyframe kill stop
+   the whole deck for free. Reel diameters ride --reel-l/--reel-r (the wound
+   tape thins on the supply reel and fattens on the take-up reel across the
+   runtime). Design ref: Skins Canvas 1a. */
+
+@keyframes spool-spin { to { transform: rotate(360deg); } }
+@keyframes spool-sheen { 0%, 100% { opacity: 0; } 50% { opacity: 0.45; } }
+@keyframes spool-vu {
+  0% { transform: rotate(-20deg); }
+  30% { transform: rotate(24deg); }
+  55% { transform: rotate(4deg); }
+  80% { transform: rotate(18deg); }
+  100% { transform: rotate(-20deg); }
+}
+
+.hub,
+.sheen,
+.vu { animation-play-state: paused; }
+.playing { animation-play-state: running; }
+
+/* Toothed reel hub — a sprocket that turns while playing. */
+.hub {
+  background: repeating-conic-gradient(var(--bg) 0 20deg, #cfc9bb 20deg 30deg);
+  animation: spool-spin 4.2s linear infinite;
+}
+
+/* Wound tape — the dark grooved disc around the hub. Off-token (tape is dark
+   in any theme, like the record on the Platter skin); diameter set as a % of
+   the tape window via --reel-l / --reel-r so it scales with the deck. */
+.wound {
+  background: repeating-radial-gradient(circle, #211e1b 0 2px, #33302b 2px 4px);
+  border: 1px solid #444038;
+}
+.reelL { width: var(--reel-l, 42%); }
+.reelR { width: var(--reel-r, 32%); }
+
+/* Light sheen crossing the tape window. */
+.sheen {
+  background: linear-gradient(115deg, transparent 40%, rgba(243, 239, 230, 0.18) 50%, transparent 60%);
+  animation: spool-sheen 5.5s ease-in-out infinite;
+}
+
+/* VU needle — swings while playing (decorative level, not a real analyser). */
+.vu {
+  transform-origin: bottom center;
+  animation: spool-vu 1.3s ease-in-out infinite;
+}
+
+/* Dynamic fills — progress + volume, driven by --pf / --vf on the skin root. */
+.progFill { width: calc(var(--pf, 0) * 100%); }
+.volFill { width: calc(var(--vf, 0) * 100%); }
+
+/* Cassette hero fit-to-box. The cassette holds its 512/320 ratio but must scale
+   to the SMALLER of the deck's width and height — short viewports (iPad Mini
+   landscape ≈ 1024×768) are height-bound, and a width-only rule (w-full/max-w)
+   let the aspect-locked box overflow the deck vertically. The hero is a size
+   container (its w/h are grid/flex-driven, independent of contents — safe for
+   `size`); cqw/cqh are its padded content box. */
+.hero { container-type: size; }
+.cassette {
+  /* Fallback for engines without container-query units: prior width behaviour. */
+  width: 100%;
+  max-width: 512px;
+  /* width that keeps height (= w·320/512) within the container: w ≤ cqh·512/320. */
+  width: min(100cqw, 512px, calc(100cqh * 512 / 320));
+}

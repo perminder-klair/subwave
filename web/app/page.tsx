@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import PlayerApp from '@/components/PlayerApp';
+import PlayerPageEffects from '@/components/player/PlayerPageEffects';
 import Landing from '@/components/Landing';
 import { absoluteUrl } from '@/lib/seo';
 import { fetchStationIdentity } from '@/lib/station';
@@ -70,7 +71,15 @@ export const viewport: Viewport = {
   userScalable: false,
 };
 
-export default function HomePage() {
+export default async function HomePage() {
   const mode = (process.env.SUBWAVE_HOMEPAGE || 'player').toLowerCase();
-  return mode === 'landing' ? <Landing stations={getShowcaseStations()} /> : <PlayerApp />;
+  if (mode === 'landing') {
+    return <Landing stations={await getShowcaseStations()} />;
+  }
+  return (
+    <>
+      <PlayerPageEffects />
+      <PlayerApp />
+    </>
+  );
 }

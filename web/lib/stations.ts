@@ -1,14 +1,10 @@
-// Community stations directory loader. Reads the per-station JSON files under
-// web/content/stations, one file per station, and exposes the list + a couple
-// of summary stats. Everything here runs server-side at render time (the
-// /stations route is statically generated), so the filesystem read never
-// happens at request time in the standalone image.
-//
-// One file per station — NOT a single shared array — is deliberate: community
-// submissions arrive as pull requests, and a file each means PRs never collide
-// and are trivial to review or revert. Mirrors the content/news pattern.
-import fs from 'node:fs';
-import path from 'node:path';
+// Community stations directory loader. Sources the per-station entries from the
+// community catalog index (catalog.json, published by the community
+// repo) rather than local files — the directory now lives in that repo alongside
+// the skills/personas/shows catalogs. Runs server-side; the catalog fetch is
+// ISR-revalidated (see communityCatalog.ts), so the directory refreshes without
+// a web redeploy. Degrades to an empty list when the catalog is unreachable.
+import { fetchCommunityCatalog } from './communityCatalog';
 import { SITE_URL } from './site';
 
 export interface Station {
@@ -37,12 +33,6 @@ export interface Station {
   submitted?: string;
 }
 
-const STATIONS_DIR = path.join(process.cwd(), 'content', 'stations');
-
-function fileToSlug(file: string): string {
-  return file.replace(/\.json$/i, '');
-}
-
 // `url` must be the bare site origin — StationCard probes `‹url›/api/now-playing`
 // and originForStation appends `/api` + `/stream.mp3`, so a submitted path like
 // `https://radio.example.com/listen` would 404 every consumer (#925 follow-up).
@@ -54,16 +44,11 @@ function toOrigin(url: string): string {
   }
 }
 
-// Coerce whatever the JSON carries into a clean Station. Unknown/missing fields
+// Coerce a catalog station entry into a clean Station. Unknown/missing fields
 // fall back to undefined so a sparse submission (just name + url + location)
-// still renders. lat/lon are only kept when both parse to finite numbers.
-function parseStation(slug: string, raw: string): Station | null {
-  let data: Record<string, unknown>;
-  try {
-    data = JSON.parse(raw) as Record<string, unknown>;
-  } catch {
-    return null; // a malformed file is skipped, not fatal — the page still renders
-  }
+// still renders. lat/lon are only kept when both parse to finite numbers. The
+// slug is stamped onto each entry by the catalog builder (from the filename).
+function parseStation(data: Record<string, unknown>): Station | null {
   const name = String(data.name ?? '').trim();
   const url = String(data.url ?? '').trim();
   if (!name || !url) return null; // name + url are the floor
@@ -73,7 +58,7 @@ function parseStation(slug: string, raw: string): Station | null {
   const hasCoords = Number.isFinite(lat) && Number.isFinite(lon);
 
   return {
-    slug: (typeof data.slug === 'string' && data.slug) || slug,
+    slug: (typeof data.slug === 'string' && data.slug) || name.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
     name,
     url: toOrigin(url),
     location: data.location ? String(data.location) : undefined,
@@ -87,26 +72,16 @@ function parseStation(slug: string, raw: string): Station | null {
   };
 }
 
-let _cache: Station[] | null = null;
-
-/** Every station. Featured first, then alphabetical by name. Memoised. */
-export function getAllStations(): Station[] {
-  if (_cache) return _cache;
-  let files: string[];
-  try {
-    files = fs.readdirSync(STATIONS_DIR);
-  } catch {
-    return []; // no content dir yet → empty wire, page still renders
-  }
-  _cache = files
-    .filter((f) => f.toLowerCase().endsWith('.json'))
-    .map((f) => parseStation(fileToSlug(f), fs.readFileSync(path.join(STATIONS_DIR, f), 'utf8')))
+/** Every station. Featured first, then alphabetical by name. */
+export async function getAllStations(): Promise<Station[]> {
+  const { stations } = await fetchCommunityCatalog();
+  return stations
+    .map((s) => parseStation(s))
     .filter((s): s is Station => s !== null)
     .sort((a, b) => {
       if (a.featured !== b.featured) return a.featured ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
-  return _cache;
 }
 
 // ── Landing showcase tabs ────────────────────────────────────────────────
@@ -138,9 +113,9 @@ function hostOf(url: string): string {
  *  (the flagship, on getsubwave.com); when none matches — a self-hosted or
  *  dev deployment — a synthetic "This station" tab is prepended so the demo
  *  still opens on the operator's own broadcast. */
-export function getShowcaseStations(): ShowcaseStation[] {
+export async function getShowcaseStations(): Promise<ShowcaseStation[]> {
   const siteHost = hostOf(SITE_URL);
-  const all = getAllStations().map<ShowcaseStation>((s) => ({
+  const all = (await getAllStations()).map<ShowcaseStation>((s) => ({
     slug: s.slug,
     name: s.name,
     url: s.url,
@@ -155,8 +130,8 @@ export function getShowcaseStations(): ShowcaseStation[] {
 }
 
 /** Header tallies: total stations + distinct countries. */
-export function getStationStats(): { count: number; countries: number } {
-  const all = getAllStations();
+export async function getStationStats(): Promise<{ count: number; countries: number }> {
+  const all = await getAllStations();
   const countries = new Set(
     all.map((s) => (s.country || s.location || '').trim().toLowerCase()).filter(Boolean),
   );

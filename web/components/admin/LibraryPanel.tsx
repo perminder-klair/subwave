@@ -27,7 +27,7 @@ import type { ChangeEvent, FormEvent, ReactNode } from 'react';
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Search, RotateCcw, Sparkles, RefreshCw, ListPlus, ListMusic, X, Pencil, Ban,
-  Music, LayoutGrid, Tags,
+  Music, LayoutGrid, Tags, Telescope, ArrowRight, History,
 } from 'lucide-react';
 import { useAdminAuth, ADMIN_API_URL } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
@@ -41,7 +41,6 @@ import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
 import { cn } from '../../lib/cn';
 import TaggingPanel, { num } from './LibraryTaggingPanel';
 import type { Coverage, TaggerState, LibraryStatsLite, Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
-import LibraryPlaylistsTab from './LibraryPlaylistsTab';
 import type { PlaylistSummary } from './LibraryPlaylistsTab';
 
 // ---------------------------------------------------------------------------
@@ -96,6 +95,21 @@ interface BlockEntry {
   addedAt: string;
 }
 
+// One aired track from the durable play history (GET /library/history).
+// Title/artist/album are air-time snapshots; showName is the show that was on.
+interface PlayEntry {
+  id: number;
+  trackId: string | null;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  playedAt: string;
+  source: string | null;       // 'ai' | 'request' | 'auto'
+  requestedBy: string | null;
+  showId: string | null;
+  showName: string | null;
+}
+
 // Coverage / TaggerState / LibraryStatsLite / Batch / RescanOpts live in
 // LibraryTaggingPanel.tsx alongside the panel that renders them.
 
@@ -109,7 +123,7 @@ interface SettingsResponse {
   budget?: { mode: BudgetMode };
 }
 
-type Tab = 'tracks' | 'browse' | 'search' | 'playlists' | 'blocked';
+type Tab = 'tracks' | 'browse' | 'search' | 'history' | 'blocked';
 // The Tracks tab folds the old Recent + Untagged tabs into one view with an
 // All / Needs-tags toggle; TableVariant keeps TrackTable's per-view behaviour
 // (empty-state copy, accent Tag button) keyed on what's actually shown.
@@ -126,7 +140,7 @@ type SearchMode = 'library' | 'sound';
 const PAGE_SIZE = 50;
 const SEARCH_PAGE = 30;
 
-const TABS: Tab[] = ['tracks', 'browse', 'search', 'playlists', 'blocked'];
+const TABS: Tab[] = ['tracks', 'browse', 'search', 'history', 'blocked'];
 const SORTS: Sort[] = ['artist', 'title', 'year', 'taggedAt', 'bpm', 'loudness', 'pace'];
 
 // ---------------------------------------------------------------------------
@@ -244,8 +258,13 @@ export default function LibraryPanel() {
   // list shared by the add-to-playlist bar and the Playlists tab.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [playlists, setPlaylists] = useState<PlaylistSummary[] | null>(null);
-  const [playlistsLoading, setPlaylistsLoading] = useState(false);
   const [plBusy, setPlBusy] = useState(false);
+
+  // play-history state — the paged entry list for the History tab.
+  const [historyRows, setHistoryRows] = useState<PlayEntry[] | null>(null);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   // never-play blocklist state — the entry list for the Blocked tab, plus
   // which row's block action / which entry's unblock is in flight.
@@ -264,9 +283,11 @@ export default function LibraryPanel() {
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
     const t = sp.get('tab');
-    // Legacy links: the old Recent and Untagged tabs are now Tracks (+ mode).
+    // Legacy links: the old Recent and Untagged tabs are now Tracks (+ mode);
+    // the old Playlists tab is the dedicated builder screen.
     if (t === 'untagged') { setTab('tracks'); setTrackMode('needs'); }
     else if (t === 'recent') setTab('tracks');
+    else if (t === 'playlists') { window.location.replace('/admin/playlists'); return; }
     else if (t && (TABS as string[]).includes(t)) setTab(t as Tab);
     if (sp.get('view') === 'needs') { setTab('tracks'); setTrackMode('needs'); }
     const m = (sp.get('moods') || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -564,7 +585,6 @@ export default function LibraryPanel() {
   // -----------------------------------------------------------------------
   const loadPlaylists = useCallback(async () => {
     if (!ready) return;
-    setPlaylistsLoading(true);
     try {
       const r = await adminFetch('/playlists');
       const j = await r.json().catch(() => ({})) as { playlists?: PlaylistSummary[]; error?: string };
@@ -573,18 +593,12 @@ export default function LibraryPanel() {
     } catch (err) {
       notify.err(errorMessage(err));
       setPlaylists([]);
-    } finally {
-      setPlaylistsLoading(false);
     }
   }, [adminFetch, ready]);
 
   // Selection is per-view: switching tabs drops it (ids from another tab would
   // be invisible, and "Add 12" with 9 off-screen rows is a foot-gun).
   useEffect(() => { setSelected(new Set()); }, [tab]);
-
-  useEffect(() => {
-    if (tab === 'playlists' && ready) loadPlaylists();
-  }, [tab, ready, loadPlaylists]);
 
   // The add-bar's dropdown needs the playlist list the first time a selection
   // appears on a track tab — fetch lazily, once.
@@ -641,6 +655,29 @@ export default function LibraryPanel() {
       setPlBusy(false);
     }
   };
+
+  // -----------------------------------------------------------------------
+  // play history
+  // -----------------------------------------------------------------------
+  const loadHistory = useCallback(async (page: number) => {
+    if (!ready) return;
+    setHistoryLoading(true);
+    try {
+      const r = await adminFetch(`/library/history?limit=${PAGE_SIZE}&offset=${page * PAGE_SIZE}`);
+      if (!r.ok) throw new Error(`history load failed (${r.status})`);
+      const j = await r.json() as { total?: number; rows?: PlayEntry[] };
+      setHistoryRows(j.rows || []);
+      setHistoryTotal(j.total || 0);
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [adminFetch, ready]);
+
+  useEffect(() => {
+    if (tab === 'history' && ready) loadHistory(historyPage);
+  }, [tab, ready, historyPage, loadHistory]);
 
   // -----------------------------------------------------------------------
   // never-play blocklist
@@ -1114,6 +1151,41 @@ export default function LibraryPanel() {
 
   return (
     <div className="grid gap-5">
+      {/* Doorways — Playlists and the Observatory live inside Library now
+          (pulled out of the sidebar); these are their front doors. */}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <a
+          href="/admin/playlists"
+          className="group flex items-center gap-3.5 border border-ink bg-bg p-3.5 transition-colors hover:bg-ink-soft"
+        >
+          <span className="grid size-9 flex-none place-items-center border border-ink bg-[var(--accent)] text-white">
+            <ListMusic size={18} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-bold text-ink">Playlist Builder</span>
+            <span className="block truncate font-mono text-[10px] text-muted">
+              describe a vibe → an ordered set · edit by hand · save to Navidrome
+            </span>
+          </span>
+          <ArrowRight className="size-4 flex-none text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-ink" />
+        </a>
+        <a
+          href="/observatory"
+          className="group flex items-center gap-3.5 border border-ink bg-bg p-3.5 transition-colors hover:bg-ink-soft"
+        >
+          <span className="grid size-9 flex-none place-items-center border border-ink bg-ink text-bg">
+            <Telescope size={18} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-bold text-ink">Observatory</span>
+            <span className="block truncate font-mono text-[10px] text-muted">
+              fly the library as a starfield — moods, clusters, outliers
+            </span>
+          </span>
+          <ArrowRight className="size-4 flex-none text-muted transition-transform group-hover:translate-x-0.5 group-hover:text-ink" />
+        </a>
+      </div>
+
       <TaggingPanel
         coverage={coverage}
         libStats={libStats}
@@ -1235,22 +1307,13 @@ export default function LibraryPanel() {
       )}
 
       {/* add-to-playlist bar — appears when rows are selected on a track tab */}
-      {tab !== 'playlists' && tab !== 'blocked' && selected.size > 0 && (
+      {tab !== 'blocked' && tab !== 'history' && selected.size > 0 && (
         <AddToPlaylistBar
           count={selected.size}
           playlists={playlists}
           busy={plBusy}
           onAdd={addSelectedToPlaylist}
           onClear={() => setSelected(new Set())}
-        />
-      )}
-
-      {tab === 'playlists' && (
-        <LibraryPlaylistsTab
-          playlists={playlists}
-          loading={playlistsLoading}
-          onRefresh={loadPlaylists}
-          adminFetch={adminFetch}
         />
       )}
 
@@ -1264,8 +1327,21 @@ export default function LibraryPanel() {
         />
       )}
 
+      {tab === 'history' && (
+        <HistoryTab
+          rows={historyRows}
+          total={historyTotal}
+          page={historyPage}
+          setPage={setHistoryPage}
+          loading={historyLoading}
+          queuing={queuing}
+          onQueue={queueTrack}
+          onRefresh={() => loadHistory(historyPage)}
+        />
+      )}
+
       {/* track list */}
-      {tab !== 'playlists' && tab !== 'blocked' && (
+      {tab !== 'blocked' && tab !== 'history' && (
       <Card
         title={
           tableVariant === 'browse' ? 'Tracks' :
@@ -1374,7 +1450,7 @@ function Tabs({ tab, setTab }: {
     { id: 'tracks', name: 'Tracks', sub: 'newest & needs tags', icon: <Music size={17} /> },
     { id: 'browse', name: 'Browse', sub: 'tagged index', icon: <LayoutGrid size={17} /> },
     { id: 'search', name: 'Search', sub: 'navidrome', icon: <Search size={17} /> },
-    { id: 'playlists', name: 'Playlists', sub: 'navidrome', icon: <ListMusic size={17} /> },
+    { id: 'history', name: 'History', sub: 'what aired', icon: <History size={17} /> },
     { id: 'blocked', name: 'Blocked', sub: 'never plays', icon: <Ban size={17} /> },
   ];
   return (
@@ -1466,74 +1542,76 @@ function BrowseFilters(p: BrowseFiltersProps) {
         </div>
       </div>
 
-      {/* facet filters on the left, ordering on the right — each side wraps as a
-          unit (justify-between) so the sort control never strands alone on a row */}
-      <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-4 p-4">
-        <div className="flex flex-wrap items-end gap-x-4 gap-y-4">
-          <div className="flex flex-col gap-2">
-            <div className="caption">energy</div>
-            <div className="flex flex-wrap border border-ink">
-              {energyOpts.map((o, i) => (
-                <button
-                  key={o.id}
-                  type="button"
-                  onClick={() => p.setEnergy(o.id)}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
-                    i > 0 && 'border-l border-ink',
-                    p.energy === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
-                  )}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
+      {/* quick facets — the energy + vocal toggle groups sit on their own row,
+          divided from the dropdown-style refinements below. */}
+      <div className="flex flex-wrap items-end gap-x-4 gap-y-4 border-b border-dashed border-separator-strong p-4">
+        <div className="flex flex-col gap-2">
+          <div className="caption">energy</div>
+          <div className="flex flex-wrap border border-ink">
+            {energyOpts.map((o, i) => (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => p.setEnergy(o.id)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
+                  i > 0 && 'border-l border-ink',
+                  p.energy === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
+                )}
+              >
+                {o.label}
+              </button>
+            ))}
           </div>
+        </div>
 
-          <div className="flex flex-col gap-2">
-            <div className="caption">vocal</div>
-            <div className="flex flex-wrap border border-ink">
-              {vocalOpts.map((o, i) => (
-                <button
-                  key={o.id}
-                  type="button"
-                  onClick={() => p.setVocal(o.id)}
-                  className={cn(
-                    'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
-                    i > 0 && 'border-l border-ink',
-                    p.vocal === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
-                  )}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
+        <div className="flex flex-col gap-2">
+          <div className="caption">vocal</div>
+          <div className="flex flex-wrap border border-ink">
+            {vocalOpts.map((o, i) => (
+              <button
+                key={o.id}
+                type="button"
+                onClick={() => p.setVocal(o.id)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 px-3 py-2 text-[10px] font-bold tracking-[0.12em] uppercase',
+                  i > 0 && 'border-l border-ink',
+                  p.vocal === o.id ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
+                )}
+              >
+                {o.label}
+              </button>
+            ))}
           </div>
+        </div>
+      </div>
 
-          <div className="flex flex-col gap-2">
-            <Field>
-              <FieldLabel htmlFor="genre">genre</FieldLabel>
-              <Select value={p.genre || '__any'} onValueChange={v => p.setGenre(v === '__any' ? '' : v)}>
-                <SelectTrigger id="genre" className="min-w-[120px]"><SelectValue placeholder="Any genre" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__any">Any genre</SelectItem>
-                  {p.genreList.slice(0, 80).map(g => (
-                    <SelectItem key={g.value} value={g.value}>
-                      {g.value}{g.songCount ? ` · ${g.songCount}` : ''}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-          </div>
+      {/* refine — genre, year and sort share a single row. They wrap together as
+          a group on very narrow widths, but none ever strands on its own line. */}
+      <div className="flex flex-wrap items-end gap-x-4 gap-y-4 p-4">
+        <div className="flex flex-col gap-2">
+          <Field>
+            <FieldLabel htmlFor="genre">genre</FieldLabel>
+            <Select value={p.genre || '__any'} onValueChange={v => p.setGenre(v === '__any' ? '' : v)}>
+              <SelectTrigger id="genre" className="min-w-[150px]"><SelectValue placeholder="Any genre" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__any">Any genre</SelectItem>
+                {p.genreList.slice(0, 80).map(g => (
+                  <SelectItem key={g.value} value={g.value}>
+                    {g.value}{g.songCount ? ` · ${g.songCount}` : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+        </div>
 
-          <div className="flex flex-col gap-2">
-            <div className="caption">year</div>
-            <div className="flex items-center gap-2">
-              <Input type="number" inputMode="numeric" placeholder="from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
-              <span className="text-[10px] text-muted">–</span>
-              <Input type="number" inputMode="numeric" placeholder="to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
-            </div>
+        <div className="flex flex-col gap-2">
+          <div className="caption">year</div>
+          <div className="flex items-center gap-2">
+            <Input type="number" inputMode="numeric" placeholder="from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
+            <span className="text-[10px] text-muted">–</span>
+            <Input type="number" inputMode="numeric" placeholder="to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
           </div>
         </div>
 
@@ -1813,6 +1891,116 @@ function BlockedTab({ entries, loading, unblocking, onUnblock, onRefresh }: {
         </div>
       )}
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// HistoryTab — the durable play log (GET /library/history), newest first.
+// Every aired track with when it played, how it was picked (DJ / request /
+// auto playlist), and which show was on air. Rows with a track id can be
+// re-queued straight from here. Grouped by day so a scan of "what aired last
+// night" doesn't need to parse timestamps.
+// ---------------------------------------------------------------------------
+function playDayLabel(iso: string): string {
+  const d = new Date(iso);
+  const today = new Date();
+  const yesterday = new Date(today.getTime() - 86400000);
+  if (d.toDateString() === today.toDateString()) return 'Today';
+  if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
+function playSourceLabel(p: PlayEntry): string {
+  if (p.source === 'request') return p.requestedBy ? `request · ${p.requestedBy}` : 'request';
+  if (p.source === 'ai') return 'DJ pick';
+  return 'auto';
+}
+
+function HistoryTab({ rows, total, page, setPage, loading, queuing, onQueue, onRefresh }: {
+  rows: PlayEntry[] | null;
+  total: number;
+  page: number;
+  setPage: (fn: (p: number) => number) => void;
+  loading: boolean;
+  queuing: string | null;
+  onQueue: (t: Track) => void;
+  onRefresh: () => void;
+}) {
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  return (
+    <>
+      <Card
+        title="Play history"
+        sub={rows ? `${num(total)} play${total === 1 ? '' : 's'} on record — every aired track, with how it was picked and what show was on` : ''}
+        right={
+          <Btn sm onClick={onRefresh} disabled={loading}>
+            <RefreshCw size={11} /> {loading ? 'Loading…' : 'Refresh'}
+          </Btn>
+        }
+        bodyClass="!p-0"
+      >
+        {!rows || rows.length === 0 ? (
+          <div className="px-4 py-10 text-center text-[12px] text-muted italic">
+            {loading || !rows
+              ? 'loading…'
+              : 'nothing on record yet — plays are logged from the moment this version starts airing tracks'}
+          </div>
+        ) : (
+          <div className={cn(loading && 'opacity-60 transition-opacity')}>
+            {rows.map((p, i) => {
+              const day = playDayLabel(p.playedAt);
+              const prev = i > 0 ? rows[i - 1] : null;
+              const prevDay = prev ? playDayLabel(prev.playedAt) : null;
+              const time = new Date(p.playedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+              return (
+                <Fragment key={p.id}>
+                  {day !== prevDay && (
+                    <div className="caption border-b border-dashed border-[var(--separator-strong)] px-4 py-1.5 text-muted">{day}</div>
+                  )}
+                  <div className="flex items-center gap-3 border-b border-dashed border-[var(--separator-strong)] px-4 py-2.5 last:border-b-0">
+                    <span className="mono-num w-11 shrink-0 text-[11px] text-muted" title={new Date(p.playedAt).toLocaleString('en-GB')}>
+                      {time}
+                    </span>
+                    <Thumb track={{ id: p.trackId || '', title: p.title || undefined, artist: p.artist || undefined, album: p.album || undefined }} />
+                    <div className="min-w-0 flex-1">
+                      <div className="lib-title">{p.title || 'unknown'}</div>
+                      <div className="lib-artist">{p.artist || ''}{p.album ? ` · ${p.album}` : ''}</div>
+                    </div>
+                    {p.showName && (
+                      <span className="lib-mtag hidden shrink-0 md:inline-block" title="show on air">{p.showName}</span>
+                    )}
+                    <span className="hidden w-24 shrink-0 text-right text-[11px] text-muted sm:block" title="how it was picked">
+                      {playSourceLabel(p)}
+                    </span>
+                    <Btn
+                      sm
+                      onClick={() => onQueue({ id: p.trackId!, title: p.title || undefined, artist: p.artist || undefined, album: p.album || undefined })}
+                      disabled={!p.trackId || !!queuing}
+                      title={p.trackId ? 'queue this track again' : 'no track id recorded for this play'}
+                    >
+                      {queuing && queuing === p.trackId ? '…' : <><ListPlus size={12} /> Queue</>}
+                    </Btn>
+                  </div>
+                </Fragment>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+
+      {total > PAGE_SIZE && (
+        <div className="flex items-center justify-between text-[11px] text-muted">
+          <span className="mono-num">
+            {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {num(total)}
+          </span>
+          <span className="flex items-center gap-2">
+            <Btn sm disabled={page === 0} onClick={() => setPage(p => Math.max(0, p - 1))}>‹ prev</Btn>
+            <span className="mono-num">page {page + 1} of {totalPages}</span>
+            <Btn sm disabled={page + 1 >= totalPages} onClick={() => setPage(p => p + 1)}>next ›</Btn>
+          </span>
+        </div>
+      )}
+    </>
   );
 }
 

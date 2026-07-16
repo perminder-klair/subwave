@@ -7,7 +7,7 @@
 // node:assert-via-tsx style, matching scripts/auto-pool.test.ts.
 
 import assert from 'node:assert/strict';
-import { showSpan, planFeature, beatWindow } from '../src/broadcast/programme-pure.js';
+import { showSpan, overrideSpan, planFeature, beatWindow } from '../src/broadcast/programme-pure.js';
 
 // A 7×24 grid with every slot null.
 function emptyWeek(): Record<number, (string | null)[]> {
@@ -131,6 +131,30 @@ function emptyWeek(): Record<number, (string | null)[]> {
       assert.equal(hits.length, 1, `offset ${offset}: exactly one */5 tick lands in the ${kind} window`);
     }
   }
+}
+
+// ── overrideSpan ─────────────────────────────────────────────────────────────
+// A timed takeover's window IS the episode: total = whole hours (rounded up),
+// index = hours elapsed since the pin, clamped inside the window.
+{
+  const HOUR = 3_600_000;
+  const t0 = 1_752_000_000_000;
+  const oneHour = { startedAt: t0, expiresAt: t0 + HOUR };
+  assert.deepEqual(overrideSpan(oneHour, t0), { index: 0, total: 1 }, '1h pin, at the start');
+  assert.deepEqual(overrideSpan(oneHour, t0 + HOUR - 1), { index: 0, total: 1 }, '1h pin, final minute');
+
+  const threeHours = { startedAt: t0, expiresAt: t0 + 3 * HOUR };
+  assert.deepEqual(overrideSpan(threeHours, t0 + HOUR / 2), { index: 0, total: 3 }, '3h pin, first hour');
+  assert.deepEqual(overrideSpan(threeHours, t0 + HOUR), { index: 1, total: 3 }, '3h pin, second hour');
+  assert.deepEqual(overrideSpan(threeHours, t0 + 3 * HOUR - 1), { index: 2, total: 3 }, '3h pin, final hour');
+
+  const ninetyMin = { startedAt: t0, expiresAt: t0 + 1.5 * HOUR };
+  assert.deepEqual(overrideSpan(ninetyMin, t0), { index: 0, total: 2 }, 'partial hours round the total up');
+  assert.deepEqual(overrideSpan(ninetyMin, t0 + 1.4 * HOUR), { index: 1, total: 2 }, '90min pin, past the hour mark');
+
+  // Ticks fractionally outside the window clamp instead of indexing off the end.
+  assert.deepEqual(overrideSpan(oneHour, t0 + HOUR + 1), { index: 0, total: 1 }, 'just past expiry clamps');
+  assert.deepEqual(overrideSpan(oneHour, t0 - 1), { index: 0, total: 1 }, 'just before start clamps');
 }
 
 console.log('programme.test.ts: all assertions passed');

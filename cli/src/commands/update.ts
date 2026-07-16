@@ -17,6 +17,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { detectCompose } from '../compose.ts';
+import { resolveInstallMode, detectDrift, hasDrift } from '../compose-sync.ts';
 import { getSubwaveHome } from '../util.ts';
 import { isCloneMode } from '../home.ts';
 import { cliImageTag, movePinInEnv } from '../version.ts';
@@ -104,6 +105,20 @@ export async function runUpdateCommand(): Promise<void> {
   if (!cloneMode) {
     muted('  `subwave self-update` to refresh the CLI binary itself.');
   }
+
+  // Compose topology (new services, changed env wiring) doesn't ride an image
+  // bump — only `subwave sync` re-materialises it. Flag drift so an install
+  // scaffolded before a service was added (e.g. the analyzer sidecar) doesn't
+  // silently stay behind. See #1043. Clone installs track git, not the binary.
+  if (!cloneMode) {
+    const mode = resolveInstallMode(home);
+    if (mode && hasDrift(detectDrift(home, mode))) {
+      console.log();
+      warn('your compose files are behind this CLI — new services / settings are missing.');
+      muted('  → run `subwave sync` to refresh them (backs up your current files first).');
+    }
+  }
+
   await pauseForEnter();
 }
 

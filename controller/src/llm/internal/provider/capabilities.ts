@@ -135,8 +135,16 @@ const CAPS: Record<string, ProviderCapabilities> = {
     // 'none' suppresses (the provider maps it per model family: gemini-3.x →
     // thinkingLevel:'minimal', gemini-2.5 → thinkingBudget:0 — the same blocks
     // the old thinkingBlock emitted, but the model regexes live upstream now).
+    // Gemma is the exception: it has NO thinking mode, yet @ai-sdk/google's
+    // resolveThinkingConfig routes every non-gemini-3 id (Gemma included) through
+    // the gemini-2.5 path, so 'none' becomes thinkingBudget:0 and the API 400s
+    // "Thinking budget is not supported for this model" (issue #1044). Omit the
+    // param for Gemma so upstream sends no thinkingConfig at all — matching what
+    // v0.39.0's model-gated thinkingBlock did (it fell through to {} for Gemma).
+    // The gemma- test mirrors @ai-sdk/google's own guard (startsWith('gemma-')).
     // forceNoThink not factored — Gemini permits forced tools while reasoning.
-    reasoningLevel: ({ reasoning }) => (reasoning ? undefined : 'none'),
+    reasoningLevel: ({ modelId, reasoning }) =>
+      (reasoning || /(^|\/)gemma-/i.test(modelId) ? undefined : 'none'),
   },
   deepseek: {
     objectStrategy: 'native',
@@ -177,12 +185,15 @@ const CAPS: Record<string, ProviderCapabilities> = {
   // reasoning level — to the downstream provider, so 'none' suppresses whatever
   // vendor the `provider/model` id resolves to. (The old shape emitted disable
   // blocks for anthropic + deepseek only; this covers google/openai/xai/zai
-  // downstreams too.)
+  // downstreams too.) Gemma downstreams (google/gemma-*) are the exception: they
+  // have no thinking mode and 400 on any thinkingConfig ("Thinking budget is not
+  // supported for this model", issue #1044), so omit the param for them — the
+  // gateway model id carries the `google/gemma-…` prefix, matched here.
   gateway: {
     objectStrategy: 'native',
     repeatPenaltyApplies: false,
-    reasoningLevel: ({ reasoning, forceNoThink }) =>
-      (reasoning && !forceNoThink ? undefined : 'none'),
+    reasoningLevel: ({ modelId, reasoning, forceNoThink }) =>
+      ((reasoning && !forceNoThink) || /(^|\/)gemma-/i.test(modelId) ? undefined : 'none'),
   },
 };
 

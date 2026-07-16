@@ -271,6 +271,20 @@ export const config = {
     // Tavily API key for the web-search skill. Blank → the skill stays inert.
     apiKey: process.env.SEARCH_API_KEY || '',
   },
+  // Community catalog (skills / personas / shows / stations) fetched live from
+  // the `community` repo — see community/registry.ts. Default is raw GitHub
+  // (Fastly-fronted, ~5-min cache, no build step — reliable and fresh). Override
+  // with COMMUNITY_CATALOG_URL to point at a fork, a self-hosted mirror, or the
+  // jsDelivr CDN (`https://cdn.jsdelivr.net/gh/getsubwave/community@main/catalog.json`).
+  community: {
+    catalogUrl:
+      process.env.COMMUNITY_CATALOG_URL ||
+      'https://raw.githubusercontent.com/getsubwave/community/main/catalog.json',
+    // In-memory TTL before a browse triggers a refetch. 30 min mirrors the
+    // weather / web-search memos; a manual refresh (POST /community/refresh)
+    // busts it immediately.
+    ttlMs: parseInt(process.env.COMMUNITY_CATALOG_TTL_MS || '', 10) || 30 * 60 * 1000,
+  },
   server: {
     port: parseInt(process.env.PORT || '7701', 10),
   },

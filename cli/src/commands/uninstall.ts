@@ -15,7 +15,7 @@
 // (clone-mode home) we never delete files — that's the operator's source
 // tree, not a scaffolded install; we only bring the stack down.
 
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { basename, resolve } from 'node:path';
 
 import { resolveSubwaveHome, isCloneMode, HOME_CONFIG_PATH } from '../home.ts';
@@ -32,11 +32,12 @@ export interface UninstallOptions {
 }
 
 // Generated install artifacts `init` writes into the home. Removed on a
-// default uninstall; state/ is deliberately NOT in this list.
+// default uninstall; state/ is deliberately NOT in this list. Keep this in
+// lockstep with init.ts:scaffold() (all three compose files + .env/.env.example).
 const GENERATED_FILES = [
   'docker-compose.yml',
   'docker-compose.byo.yml',
-  'docker-compose.dev.yml',
+  'docker-compose.tts-heavy-gpu.yml',
   '.env',
   '.env.example',
 ];
@@ -124,6 +125,10 @@ export async function runUninstallCommand(opts: UninstallOptions = {}): Promise<
       for (const f of GENERATED_FILES) {
         const p2 = resolve(home, f);
         if (existsSync(p2)) rmSync(p2, { force: true });
+      }
+      // Sweep any `docker-compose*.bak-*` backups `subwave sync` left behind.
+      for (const f of readdirSync(home)) {
+        if (/^docker-compose.*\.bak-/.test(f)) rmSync(resolve(home, f), { force: true });
       }
       ok(`removed compose files + .env (kept ${resolve(home, 'state')})`);
     }

@@ -1,0 +1,52 @@
+/* Drift skin — the washes. Each wash is a radial gradient whose color rides
+   a registered custom property, so a track change crossfades the whole room
+   over 20 seconds (the type waits; the color arrives first). Browsers
+   without @property support just switch instantly — acceptable. */
+
+@property --sw-drift-c {
+  syntax: '<color>';
+  inherits: false;
+  initial-value: transparent;
+}
+
+.wash {
+  position: absolute;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, var(--sw-drift-c), transparent);
+  transition: --sw-drift-c 20s linear;
+  pointer-events: none;
+  will-change: transform;
+}
+
+/* Lite mode (html.lite, globals.css) drops the looping drift keyframes via
+   its global animation kill, but transitions are exempted there ("only fire
+   on interaction") — this one is a 20-second full-viewport gradient repaint
+   at every track change, exactly the continuous cost lite exists to avoid.
+   Colors switch instantly instead. */
+:global(html.lite) .wash {
+  transition: none;
+}
+
+/* A few pixels a minute — the room breathes, nothing dances. */
+@keyframes drift-a {
+  to { transform: translate(34px, 22px) scale(1.06); }
+}
+@keyframes drift-b {
+  to { transform: translate(-28px, -30px) scale(1.04); }
+}
+@keyframes drift-c {
+  to { transform: translate(20px, -18px) scale(1.08); }
+}
+
+.washA { animation: drift-a 90s ease-in-out infinite alternate; }
+.washB { animation: drift-b 110s ease-in-out infinite alternate; }
+.washC { animation: drift-c 130s ease-in-out infinite alternate; }
+
+@keyframes drift-breathe {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
+.breathe {
+  animation: drift-breathe 6s ease-in-out infinite;
+}

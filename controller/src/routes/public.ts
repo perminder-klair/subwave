@@ -16,6 +16,7 @@ import { getStationTimezone } from '../time.js';
 import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
 import { listCommunitySkills } from '../skills/loader.js';
 import { listCommunityPersonas } from '../personas/community.js';
+import { listCommunityShows } from '../shows/community.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
@@ -180,7 +181,11 @@ router.get('/now-playing', async (req, res) => {
       // per-listener 5s poll never parses the heavy acoustic *_json blobs (#723).
       const rec = library.getPlaybackMeta(nowPlaying.subsonic_id);
       if (rec) {
-        nowPlaying.genre = rec.genre ?? null;
+        // Full tag set for consumers that want it, plus the comma-joined
+        // string in the legacy `genre` field the metadata strip renders —
+        // same shape the annotate metadata now carries ("Hip-Hop, Rap").
+        nowPlaying.genres = rec.genres ?? [];
+        nowPlaying.genre = rec.genres?.length ? rec.genres.join(', ') : rec.genre ?? null;
         nowPlaying.bpm = rec.bpm ?? null;
         nowPlaying.musicalKey = rec.musicalKey ?? null;
         nowPlaying.moods = Array.isArray(rec.moods) ? rec.moods : [];
@@ -381,6 +386,9 @@ router.get('/schedule', async (req, res) => {
       personas,
       shows,
       schedule: s.schedule,
+      // Timed takeover (#930): the pin currently in force, or null. Expired /
+      // dangling overrides report as null even before the janitor sweeps them.
+      override: settings.getScheduleOverride(),
       // The grid is interpreted in the station's timezone (settings.timezone,
       // falling back to the container TZ) — the browser's local DOW/hour may
       // not match, so pass back the zone the schedule is painted in. The UI
@@ -411,9 +419,14 @@ router.get('/state', (req, res) => {
     ...snap,
     needsSetup: getSetupStatusSync().needsSetup,
     theme: { active: activeThemeId },
-    // Listener-player UI toggles ride along with /state like the theme does, so
-    // the player can flip them live on the next poll. Defaults off if unset.
-    ui: { boothBuddy: s?.ui?.boothBuddy ?? false },
+    // Listener-player UI settings ride along with /state like the theme does,
+    // so the player can flip them live on the next poll. Defaults off if
+    // unset; `skin` defaults to the classic face.
+    ui: {
+      boothBuddy: s?.ui?.boothBuddy ?? false,
+      skin: s?.ui?.skin || 'classic',
+      tuneInOverlay: s?.ui?.tuneInOverlay ?? true,
+    },
     // Station zone for rendering djLog timestamps in station-local time (#418).
     timezone: getStationTimezone(),
     locale: s.locale,
@@ -514,6 +527,24 @@ router.get('/personas/community', async (req, res) => {
     res.json({ community });
   } catch (err) {
     queue.log('error', `/personas/community failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /shows/community — the community SHOW catalog (produced-show templates
+// contributed via the community submission flow, fetched live). Same
+// posture as /skills/community + /personas/community: browse-only public
+// reference powering the public /shows showcase AND the admin Shows → Community
+// modal. Never throws — an empty/unreachable catalog returns []. No admin gate:
+// public reference data, install requires admin (routes/shows.ts).
+// ---------------------------------------------------------------------------
+router.get('/shows/community', async (req, res) => {
+  try {
+    const community = await listCommunityShows();
+    res.json({ community });
+  } catch (err) {
+    queue.log('error', `/shows/community failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

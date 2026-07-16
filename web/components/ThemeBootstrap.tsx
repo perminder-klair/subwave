@@ -16,13 +16,10 @@ import {
   saveThemeOverride,
   type Theme,
 } from '@/lib/theme';
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
-
-interface ThemesPayload {
-  active: string;
-  themes: Theme[];
-}
+// Install-level concern: the theme registry belongs to *this* deployment, so
+// this always goes through the same-origin default client — never a showcase
+// station's origin.
+import { defaultStationClient } from '@/lib/stationClient';
 
 interface ThemeContextValue {
   /** Every theme the controller knows about (built-ins + state/themes/*.json). */
@@ -102,9 +99,7 @@ export default function ThemeBootstrap({ children }: { children?: ReactNode }) {
 
     const refresh = async () => {
       try {
-        const r = await fetch(`${API_URL}/themes`);
-        if (!r.ok || cancelled) return;
-        const j = (await r.json()) as ThemesPayload;
+        const j = await defaultStationClient.themes();
         if (cancelled) return;
         setThemes(j.themes);
         setStationActiveId(j.active);

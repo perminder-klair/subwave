@@ -82,6 +82,32 @@ export function Pill({ children, tone, dot, className, onClick, title }: PillPro
   );
 }
 
+export interface MetaChipProps {
+  children?: ReactNode;
+  accent?: boolean;
+  className?: string;
+}
+
+/* Read-only facet chip for the "broadcast slate" cards (shows / skills /
+   personas) — a hairline "what this is" tag, smaller and quieter than a Pill.
+   `accent` flags a hard lock (strict filters, pinned feature). `className`
+   lets a caller cap/truncate a long value (e.g. a cloned-voice filename). */
+export function MetaChip({ children, accent, className }: MetaChipProps) {
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center border px-1.5 py-[3px] text-[10px] font-semibold tracking-[0.02em]',
+        accent
+          ? 'border-[var(--accent)] text-vermilion'
+          : 'border-separator-strong text-muted',
+        className,
+      )}
+    >
+      {children}
+    </span>
+  );
+}
+
 /* Legacy `tone` → shadcn Button `variant`. `danger` maps to `destructive`. */
 type BtnTone = 'solid' | 'accent' | 'danger';
 

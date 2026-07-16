@@ -9,6 +9,7 @@ import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { eventTurnSummary, turnClass, turnKey, turnText } from '../../lib/sessionFeed';
 import { fmtClock } from '../../lib/format';
+import { clientLabel, fmtConnected, type ListenerConnection } from '../../lib/clientLabel';
 import type { SessionTurn } from '../../lib/types';
 import type {
   NowPlayingTrack,
@@ -54,7 +55,7 @@ import {
 import { Message, MessageContent } from '../ai-elements/message';
 import type { ChatStatus } from 'ai';
 import { ScrollArea, ScrollBar } from '../ui/scroll-area';
-import { AudioLines, Clock3, MessagesSquare, RadioTower, X, type LucideIcon } from 'lucide-react';
+import { AudioLines, Clock3, MessagesSquare, RadioTower, RefreshCw, X, type LucideIcon } from 'lucide-react';
 import StationHeader, { type HealthMetrics } from './StationHeader';
 import { cn } from '../../lib/cn';
 
@@ -70,7 +71,12 @@ const SAY_MODES = [
 // Canned prompts for the manual voice box, in station voice. Written as
 // instructions (they shine with mode=styled — the DJ rewrites them in persona,
 // though raw works too). Clicking one FILLS the textarea; nothing goes to air
-// until the operator hits send.
+// until the operator hits send. This set is the zero-latency initial render
+// and the fallback when the controller has no generated batch — the ↻ button
+// swaps in fresh LLM-written ones via /generate/say-suggestions. The
+// controller keeps the canonical copy of these six as the generator's style
+// anchors (llm/internal/prompts/generate.ts SAY_SUGGESTION_EXAMPLES); keep
+// the two lists in step.
 const SAY_SUGGESTIONS = [
   'Tease the weather like it’s a rumour you can’t quite confirm.',
   'Do a station ID like you suspect nobody’s listening — and you’re fine with it.',
@@ -128,16 +134,6 @@ interface ActResponse {
   error?: string;
 }
 
-interface ListenerConnection {
-  ip: string;
-  mount: string;
-  userAgent: string;
-  connectedSeconds: number;
-  // Raw sockets folded into this row. Safari opens 2 per client (counts as one
-  // listener); >1 surfaces as a ×N badge. Absent/1 for normal single-socket clients.
-  connections?: number;
-}
-
 interface ConnectionsState {
   count: number;
   connections: ListenerConnection[];
@@ -167,15 +163,25 @@ interface RequestEntry {
   message?: string | null;
 }
 
-// connectedSeconds → short human string. Listeners rarely sit for days, so
-// hours is the coarsest unit we bother with.
-function fmtConnected(s: number): string {
-  if (!Number.isFinite(s) || s < 0) return '—';
-  if (s < 60) return `${Math.round(s)}s`;
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return `${h}h ${m % 60}m`;
+// Listener likes (#991), as returned by GET /likes — the heart button's
+// admin review surface.
+interface LikeTopEntry {
+  track?: { id?: string; title?: string; artist?: string } | null;
+  count?: number;
+  lastLikedAt?: string;
+}
+interface LikeRecentEntry {
+  songId?: string;
+  title?: string;
+  artist?: string;
+  album?: string;
+  likedAt?: string;
+  listener?: string;
+}
+interface LikesPayload {
+  totals?: { total?: number; songs?: number };
+  top?: LikeTopEntry[];
+  recent?: LikeRecentEntry[];
 }
 
 // Hide the host portion of an IP so a glance at the screen doesn't expose a
@@ -191,46 +197,6 @@ function maskIp(ip: string): string {
     return groups.length > 2 ? `${groups[0]}:${groups[1]}:×` : ip;
   }
   return ip;
-}
-
-// Collapse a raw user-agent into a short "Device · App" label. Best-effort and
-// deliberately shallow — the full UA stays in the title attribute. Order
-// matters: check the specific players (Sonos, VLC) before the generic browser
-// families, since some embed "Mozilla" boilerplate.
-function clientLabel(ua: string): string {
-  if (!ua) return 'unknown';
-  const u = ua.toLowerCase();
-  if (u.includes('sonos')) return 'Sonos';
-  if (u.includes('vlc')) return 'VLC';
-  if (u.includes('itunes') || u.includes('applecoremedia')) return 'iTunes / Music';
-  if (u.includes('winamp')) return 'Winamp';
-  if (u.includes('foobar')) return 'foobar2000';
-  const device = u.includes('iphone')
-    ? 'iPhone'
-    : u.includes('ipad')
-      ? 'iPad'
-      : u.includes('android')
-        ? 'Android'
-        : u.includes('macintosh') || u.includes('mac os')
-          ? 'Mac'
-          : u.includes('windows')
-            ? 'Windows'
-            : u.includes('linux')
-              ? 'Linux'
-              : '';
-  const browser = u.includes('firefox')
-    ? 'Firefox'
-    : u.includes('edg')
-      ? 'Edge'
-      : u.includes('chrome') || u.includes('chromium')
-        ? 'Chrome'
-        : u.includes('safari')
-          ? 'Safari'
-          : '';
-  const label = [device, browser].filter(Boolean).join(' · ');
-  // Nothing recognised — show the first token of the raw UA rather than a
-  // useless "unknown" (helps with hardware radios / odd clients).
-  return label || ua.split(/[\s/]/)[0] || 'unknown';
 }
 
 type SortKey = 'ip' | 'mount' | 'connectedSeconds' | 'client';
@@ -269,11 +235,19 @@ export default function DashPanel() {
   const [sayStatus, setSayStatus] = useState<ChatStatus>('ready');
   const [confirmSkip, setConfirmSkip] = useState(false);
 
+  // Chip row for the manual voice box: hardcoded set until the controller has
+  // a generated batch (fetched on mount, cheap — the GET never calls a model),
+  // refreshed on demand via the ↻ button (the POST does).
+  const [saySuggestions, setSaySuggestions] = useState<string[]>(SAY_SUGGESTIONS);
+  const [sayGenBusy, setSayGenBusy] = useState(false);
+
   const [conns, setConns] = useState<ConnectionsState | null>(null);
   const [connErr, setConnErr] = useState<string | null>(null);
   const [stats, setStats] = useState<HealthStats | null>(null);
   const [requests, setRequests] = useState<RequestEntry[] | null>(null);
   const [reqErr, setReqErr] = useState<string | null>(null);
+  const [likes, setLikes] = useState<LikesPayload | null>(null);
+  const [likesErr, setLikesErr] = useState<string | null>(null);
   // Longest-connected first by default — the most stable listeners on top.
   const [sort, setSort] = useState<SortState>({ key: 'connectedSeconds', dir: 'desc' });
   const [revealIps, setRevealIps] = useState(false);
@@ -389,6 +363,71 @@ export default function DashPanel() {
       clearInterval(id);
     };
   }, [hydrated, needsAuth, adminFetch]);
+
+  // Listener likes (#991) — same review-surface cadence as requests.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const r = await adminFetch('/likes');
+        const j = (await r.json().catch(() => null)) as (LikesPayload & { error?: string }) | null;
+        if (cancelled) return;
+        if (!r.ok) throw new Error(j?.error || `failed (${r.status})`);
+        setLikes(j);
+        setLikesErr(null);
+      } catch (e) {
+        if (!cancelled) setLikesErr(e instanceof Error ? e.message : String(e));
+      }
+    };
+    tick();
+    const id = setInterval(tick, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [hydrated, needsAuth, adminFetch]);
+
+  // Last generated suggestion batch, once on mount. Soft-fails: any miss
+  // (controller down, nothing generated since boot) leaves the hardcoded set.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await adminFetch('/generate/say-suggestions');
+        const j = (await r.json().catch(() => null)) as { suggestions?: string[] | null } | null;
+        if (!cancelled && r.ok && Array.isArray(j?.suggestions) && j.suggestions.length) {
+          setSaySuggestions(j.suggestions);
+        }
+      } catch {
+        /* hardcoded set stays */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hydrated, needsAuth, adminFetch]);
+
+  // ↻ on the chip row — ask the station LLM for a fresh batch. Explicit
+  // operator action; failure toasts and leaves the current chips in place.
+  const refreshSuggestions = async () => {
+    setSayGenBusy(true);
+    try {
+      const r = await adminFetch('/generate/say-suggestions', { method: 'POST' });
+      const j = (await r.json().catch(() => null)) as
+        | { suggestions?: string[]; error?: string }
+        | null;
+      if (!r.ok) throw new Error(j?.error || `failed (${r.status})`);
+      if (Array.isArray(j?.suggestions) && j.suggestions.length) {
+        setSaySuggestions(j.suggestions);
+      }
+    } catch (e) {
+      notify.err(`new prompts: ${errorMessage(e)}`);
+    } finally {
+      setSayGenBusy(false);
+    }
+  };
 
   // Generic POST helper — drives the busy state; result goes to the toast.
   const act = async (
@@ -695,23 +734,36 @@ export default function DashPanel() {
         {/* RIGHT */}
         <div className="grid gap-4">
           <Card title="Manual voice DJ" sub="speak now">
-            {/* Canned prompt chips — clicking fills the textarea, never sends.
+            {/* Prompt chips — clicking fills the textarea, never sends.
                 Chips are directions for the DJ, not verbatim lines, so they
-                also flip the box to Styled (raw would air the instruction). */}
-            <div className="mb-2.5">
-              <Suggestions className="gap-1.5">
-                {SAY_SUGGESTIONS.map(s => (
-                  <Suggestion
-                    key={s}
-                    suggestion={s}
-                    onClick={text => {
-                      setSayText(text);
-                      setSayMode('styled');
-                    }}
-                    className="h-auto rounded-none border-separator-strong px-2 py-[3px] text-[9px] font-medium tracking-[0.04em] text-muted normal-case hover:bg-[var(--overlay)] hover:text-ink"
-                  />
-                ))}
-              </Suggestions>
+                also flip the box to Styled (raw would air the instruction).
+                ↻ asks the station LLM for a fresh batch keyed to right now. */}
+            <div className="mb-2.5 flex items-center gap-1.5">
+              <div className="min-w-0 flex-1">
+                <Suggestions className="gap-1.5">
+                  {saySuggestions.map(s => (
+                    <Suggestion
+                      key={s}
+                      suggestion={s}
+                      onClick={text => {
+                        setSayText(text);
+                        setSayMode('styled');
+                      }}
+                      className="h-auto rounded-none border-separator-strong px-2 py-[3px] text-[9px] font-medium tracking-[0.04em] text-muted normal-case hover:bg-[var(--overlay)] hover:text-ink"
+                    />
+                  ))}
+                </Suggestions>
+              </div>
+              <button
+                type="button"
+                onClick={refreshSuggestions}
+                disabled={sayGenBusy}
+                title="New prompts — written by the station LLM for right now"
+                aria-label="Generate new prompts"
+                className="shrink-0 border border-separator-strong p-[5px] text-muted transition-colors hover:bg-[var(--overlay)] hover:text-ink disabled:pointer-events-none disabled:opacity-60"
+              >
+                <RefreshCw className={cn('h-3 w-3', sayGenBusy && 'animate-spin')} />
+              </button>
             </div>
             <PromptInput onSubmit={onSaySubmit}>
               <PromptInputBody>
@@ -884,6 +936,9 @@ export default function DashPanel() {
       {/* ── REQUESTS ───────────────────────────────────────────────────── */}
       <RequestsCard requests={requests} err={reqErr} tz={tz} locale={locale} />
 
+      {/* ── LIKES ──────────────────────────────────────────────────────── */}
+      <LikesCard likes={likes} err={likesErr} tz={tz} locale={locale} />
+
       {!status && !err && <div className="text-muted italic">connecting…</div>}
 
       <V3AlertDialog
@@ -1046,6 +1101,94 @@ function RequestsCard({
             ))}
           </div>
         </ScrollArea>
+      )}
+    </Card>
+  );
+}
+
+// The Likes card (#991) — what the heart button collected: the most-liked
+// tracks in the configured window, then the recent taps. Listener column is
+// the truncated HMAC handle from the controller — never an IP.
+function LikesCard({
+  likes,
+  err,
+  tz,
+  locale,
+}: {
+  likes: LikesPayload | null;
+  err: string | null;
+  tz?: string;
+  locale?: StationLocale;
+}) {
+  const top = likes?.top ?? [];
+  const recent = likes?.recent ?? [];
+  return (
+    <Card
+      title="Likes"
+      sub={
+        err
+          ? 'unavailable'
+          : likes
+            ? `${likes.totals?.total ?? 0} likes across ${likes.totals?.songs ?? 0} tracks`
+            : 'loading…'
+      }
+    >
+      {err ? (
+        <div className="text-muted italic">can’t load likes: {err}</div>
+      ) : !likes ? (
+        <div className="text-muted italic">loading…</div>
+      ) : recent.length === 0 ? (
+        <div className="text-muted italic">
+          no likes yet — the heart button on the player feeds this
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          {top.length > 0 && (
+            <div className="grid gap-1.5">
+              <div className="caption text-[10px]">most liked</div>
+              {top.slice(0, 8).map((t, i) => (
+                <div
+                  key={`${t.track?.id ?? ''}:${i}`}
+                  className="grid grid-cols-[auto_1fr_auto] items-center gap-2.5 text-[12px]"
+                >
+                  <span className="mono-num text-[10px] text-muted">{i + 1}.</span>
+                  <span className="min-w-0 truncate">
+                    <span className="font-bold">{t.track?.title || '—'}</span>
+                    {t.track?.artist && <span className="text-muted"> — {t.track.artist}</span>}
+                  </span>
+                  <span className="mono-num text-[11px] text-vermilion">
+                    ♥ {t.count ?? 0}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="grid gap-1.5">
+            <div className="caption text-[10px]">recent</div>
+            <ScrollArea className="max-h-[280px]">
+              <div className="grid gap-1.5">
+                {recent.map((l, i) => (
+                  <div
+                    key={`${l.likedAt ?? ''}:${i}`}
+                    className="grid grid-cols-[auto_1fr_auto_auto] items-center gap-2.5 text-[12px]"
+                  >
+                    <span className="font-bold text-vermilion">♥</span>
+                    <span className="min-w-0 truncate">
+                      {l.title || '—'}
+                      {l.artist && <span className="text-muted"> — {l.artist}</span>}
+                    </span>
+                    <span className="caption text-[10px]" title="anonymous listener handle">
+                      {l.listener || ''}
+                    </span>
+                    <span className="mono-num text-[10px] text-muted">
+                      {fmtClock(l.likedAt, tz, locale) || '—'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+          </div>
+        </div>
       )}
     </Card>
   );

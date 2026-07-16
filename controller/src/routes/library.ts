@@ -11,6 +11,7 @@ import * as analyzer from '../music/analyzer.js';
 import * as coverage from '../music/library-coverage.js';
 import * as source from '../music/source.js';
 import * as lastfm from '../music/lastfm.js';
+import * as musicbrainz from '../music/musicbrainz.js';
 import * as settings from '../settings.js';
 import * as embeddings from '../music/embeddings.js';
 import { buildGenreSuggest } from '../music/genre-suggest.js';
@@ -87,6 +88,24 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
         updatedAt: stats.updatedAt,
       },
     });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /library/history — durable play history, newest first. One row per
+// aired track (library-db `plays`), stamped at air time with the source
+// (ai/request/auto), the requester, and the show that was on. Backs the
+// admin Library History tab. Query: limit=50 offset=0.
+// ---------------------------------------------------------------------------
+router.get('/library/history', requireAdmin, async (req, res) => {
+  try {
+    await library.load();
+    const limit = Math.min(Math.max(parseIntSafe(req.query?.limit, 50), 1), 200);
+    const offset = Math.max(parseIntSafe(req.query?.offset, 0), 0);
+    const { total, rows } = db.listPlays({ limit, offset });
+    res.json({ total, rows });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -609,7 +628,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       artist: song.artist,
       album: song.album,
       year: song.year ?? null,
-      genre: song.genre ?? null,
+      genres: source.songGenres(song),
     });
 
     // 2. Refresh enrichment (best-effort).
@@ -640,6 +659,28 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       });
     }
 
+    // 2b. Refresh the original-year resolution (best-effort, issue #842) —
+    // same scope predicate as the bulk pass (compilation tracks without a
+    // resolved year; retag counts as an explicit refresh, so a prior miss is
+    // retried). The song object from Subsonic carries the recording MBID for
+    // an exact MusicBrainz lookup when the file is tagged with one.
+    if (enrichCfg.originalYear !== false) {
+      try {
+        const t = db.getTrack(id);
+        if (t && musicbrainz.needsOriginalYearLookup(t, true)) {
+          const year = await musicbrainz.lookupOriginalYear({
+            title: song.title,
+            artist: song.artist,
+            mbid: song.musicBrainzId || null,
+            year: Number(song.year) || null,
+          });
+          db.setOriginalYear(id, year);
+        }
+      } catch (err) {
+        queue.log('warn', `/library/retag enrich(originalYear) ${id}: ${err.message}`);
+      }
+    }
+
     // 3. Re-embed (best-effort — if embeddings are off or fail, fall through).
     if (embedCfg.enabled !== false && embeddings.isAvailable()) {
       try {
@@ -649,7 +690,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
             artist: song.artist,
             album: song.album,
             year: song.year ?? null,
-            genre: song.genre ?? null,
+            genres: source.songGenres(song),
           },
           { lastfmTags, lyricExcerpt },
         );
@@ -673,7 +714,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       artist: song.artist,
       album: song.album,
       year: song.year,
-      genre: song.genre,
+      genres: source.songGenres(song),
       moods,
       energy,
       source: 'llm',
@@ -748,7 +789,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
         artist: t.artist,
         album: t.album,
         year: t.year ?? null,
-        genre: t.genre ?? null,
+        genres: source.songGenres(t),
         duration: t.duration ?? null,
       });
       if (clearing) {

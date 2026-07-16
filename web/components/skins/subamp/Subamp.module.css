@@ -1,0 +1,49 @@
+/* Subamp skin — marquee keyframes and the volume range control. Everything
+   else is Tailwind against the theme tokens. */
+
+@keyframes subamp-marquee {
+  to { transform: translateX(-50%); }
+}
+
+.marqueeTrack {
+  display: inline-flex;
+  white-space: nowrap;
+  animation: subamp-marquee 16s linear infinite;
+  will-change: transform;
+}
+
+/* Native range input drawn as the design's slim track + block thumb. */
+.range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  width: 100%;
+  background: transparent;
+  cursor: pointer;
+}
+.range::-webkit-slider-runnable-track {
+  height: 4px;
+  background: var(--field);
+  border: 1px solid var(--soft-border);
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 14px;
+  border-radius: 0;
+  background: var(--ink);
+  margin-top: -6px;
+}
+.range::-moz-range-track {
+  height: 4px;
+  background: var(--field);
+  border: 1px solid var(--soft-border);
+}
+.range::-moz-range-thumb {
+  width: 10px;
+  height: 14px;
+  border: 0;
+  border-radius: 0;
+  background: var(--ink);
+}

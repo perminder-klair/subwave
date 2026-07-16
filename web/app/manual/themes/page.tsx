@@ -2,9 +2,9 @@ import Themes from '../../../components/manual/Themes';
 import { pageMeta } from '@/lib/seo';
 
 export const metadata = pageMeta({
-  title: 'SUB/WAVE — Manual · Themes',
+  title: 'SUB/WAVE — Manual · Skins & Themes',
   description:
-    'Theming SUB/WAVE — switch palettes and tailor the look of the player and the broadsheet to your station.',
+    'Skinning and theming SUB/WAVE — swap the player face between six built-in skins, switch palettes, and fork the reference player when you want to go further.',
   path: '/manual/themes',
 });
 

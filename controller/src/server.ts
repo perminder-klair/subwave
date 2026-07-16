@@ -19,6 +19,7 @@ import { loadCuriosityLedger } from './skills/curiosity.js';
 import { startScheduler } from './broadcast/scheduler.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
 import { startAudienceMonitor } from './broadcast/audience.js';
+import * as likes from './broadcast/likes.js';
 import { cors } from './middleware/cors.js';
 import { assertAdminConfigured } from './middleware/auth.js';
 import { router as publicRoutes } from './routes/public.js';
@@ -36,7 +37,10 @@ import { router as archivesRoutes } from './routes/archives.js';
 import { router as listenersRoutes } from './routes/listeners.js';
 import { router as webhooksRoutes } from './routes/webhooks.js';
 import { router as scrobbleRoutes } from './routes/scrobble.js';
+import { router as likesRoutes } from './routes/likes.js';
 import { router as personasRoutes } from './routes/personas.js';
+import { router as showsRoutes } from './routes/shows.js';
+import { router as communityRoutes } from './routes/community.js';
 import { router as backupRoutes } from './routes/backup.js';
 import { router as audienceRoutes } from './routes/audience.js';
 import { router as systemRoutes } from './routes/system.js';
@@ -113,7 +117,10 @@ app.use(archivesRoutes);
 app.use(listenersRoutes);
 app.use(webhooksRoutes);
 app.use(scrobbleRoutes);
+app.use(likesRoutes);
 app.use(personasRoutes);
+app.use(showsRoutes);
+app.use(communityRoutes);
 app.use(backupRoutes);
 app.use(audienceRoutes);
 app.use(systemRoutes);
@@ -287,6 +294,9 @@ app.listen(config.server.port, async () => {
   queue.startWatcher();
   startListenerMonitor();
   startAudienceMonitor().catch(err => console.error('[audience] init failed:', err.message));
+  // Load likes up front so the sync readers (pickSystem's favourites lean, the
+  // pool picker's listener-liked source) see data from the first pick.
+  likes.load().catch(err => console.error('[likes] init failed:', err.message));
   startScheduler();
   jingles
     .ensureDefaultIdent()

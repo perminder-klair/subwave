@@ -7,6 +7,7 @@
 import { z } from 'zod';
 import { SHOW_MOODS as MOOD_VOCAB } from '../settings.js';
 import { djObject } from '../llm/sdk.js';
+import { songGenres } from './source.js';
 
 export const TagSchema = z.object({
   moods: z.array(z.string()).default([]),
@@ -60,6 +61,9 @@ export interface TaggableSong {
   artist?: string;
   album?: string;
   year?: number | string | null;
+  // OpenSubsonic multi-value genres ([{name}] on raw children) alongside the
+  // legacy scalar — genreLine() renders whichever is present.
+  genres?: Array<string | { name?: string }> | null;
   genre?: string | null;
 }
 
@@ -86,7 +90,7 @@ function formatSong(song: TaggableSong): string {
     `Artist: ${song.artist || '?'} | ` +
     `Album: ${song.album || '?'} | ` +
     `Year: ${song.year || '?'} | ` +
-    `Genre: ${song.genre || '?'}`
+    `Genre: ${songGenres(song).join(', ') || '?'}`
   );
 }
 
@@ -103,7 +107,7 @@ export async function tagOne(song: TaggableSong, opts: TagOpts = {}): Promise<Ta
     `Artist: ${song.artist || '?'}\n` +
     `Album: ${song.album || '?'}\n` +
     `Year: ${song.year || '?'}\n` +
-    `Genre: ${song.genre || '?'}`;
+    `Genre: ${songGenres(song).join(', ') || '?'}`;
 
   const parsed = await djObject({
     system: TAGGER_SYSTEM,

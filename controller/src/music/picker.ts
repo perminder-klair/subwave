@@ -15,8 +15,9 @@ import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { shuffle } from '../util/shuffle.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
-import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, hasEraBound, eraSpan, type YearRange } from './show-filter.js';
+import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type YearRange } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
+import * as likes from '../broadcast/likes.js';
 
 // A track flowing through the pool builder — a raw Subsonic child, a slimTrack
 // library row, or a Last.fm-derived stub, tagged with the internal _source /
@@ -63,6 +64,7 @@ const CAP_SIMILAR_ARTIST = 4;
 const CAP_EMBEDDING_SIMILAR = 4;
 const CAP_SONIC_SIMILAR = 4;
 const CAP_AUDIO_SIMILAR = 4;
+const CAP_LIKED = 4;
 // When a show pins a genre/decade, its dedicated source is the dominant pool
 // contributor (soft lean) and the unrelated discovery sources shrink by this
 // factor so the genre/era actually shows up in the LLM's candidate list.
@@ -289,6 +291,23 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     } catch {}
   }
 
+  // 1d-bis. Listener favourites (#991) — tracks liked via the player heart, only
+  // when the operator opts in (likes.influenceDj). A weighted preference
+  // signal, never a lock: capped like every other source so the crowd can
+  // steer the pool without taking it over. The store returns [] before its
+  // boot-time load resolves, so this is always a silent no-op when cold.
+  {
+    const likeCfg = settings.get()?.likes;
+    if (likeCfg?.enabled && likeCfg?.influenceDj) {
+      try {
+        const favs = likes
+          .topLiked({ windowDays: likeCfg.windowDays, limit: likeCfg.maxTracks })
+          .map((f) => f.track);
+        add('listener-liked', sampleWithRecentFallback(lean(shuffle(favs)), recentIds, nz(CAP_LIKED)));
+      } catch {}
+    }
+  }
+
   // 1e. Show genres / decades — the soft-dominant source when a show pins
   // genres or year windows. getRandomSongs takes ONE genre + ONE contiguous
   // year range natively, so with multiple values we call per genre (splitting
@@ -467,6 +486,25 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     if (inPl.length) selectionPool = inPl;
   }
 
+  // Strict music filters: enforce on the FINAL merged pool too. The per-source
+  // lean() alone wasn't enough — any source with zero in-filter matches passed
+  // its whole result through (never-starve per source), so the pool the LLM
+  // saw was routinely half off-filter and "strict" hinged on prompt
+  // compliance (Discord: strict-era show playing pre-era tracks half the time).
+  // applyStrictLocks(starve:false) never-starves PER DIMENSION, so a single
+  // zero-coverage tag class (e.g. a mood on an un-tagged library) can't throw
+  // away the genre/era purity the other dimensions established — the earlier
+  // all-or-nothing joint revert did exactly that. genres pre-resolved to
+  // library tags above (strictGenres); [] there = no genre step.
+  if (strict) {
+    selectionPool = applyStrictLocks(selectionPool, {
+      genres: strictGenres,
+      eras: showFilter!.eras,
+      moods: showFilter!.moods,
+      energies: showFilter!.energies,
+    }, { starve: false });
+  }
+
   // De-dup by id, cap per artist so one name can't dominate the pool (the LLM
   // can only rotate artists across what it's handed), shuffle, cap.
   const MAX_PER_ARTIST = 3;
@@ -588,6 +626,11 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const playlistPool = activeShow ? await resolveShowPlaylistPool(activeShow) : null;
   const playlistStrict = !!activeShow?.playlistStrict;
   const excludedIds = activeShow ? await resolveExcludedPlaylistIds(activeShow) : null;
+  // Pinned anchor resolved to nothing → the show is silently un-anchored.
+  // Surface it (same warning as the agent path in dj-agent.ts).
+  if (activeShow?.playlistIds?.length && !playlistPool) {
+    queue.log('picker', `show "${activeShow.name}" pins ${activeShow.playlistIds.length} playlist(s) but none resolved to tracks — anchor ignored${playlistStrict ? ' (STRICT toggle has no effect)' : ''}. Stale playlist id (deleted/recreated in Navidrome?) or a Navidrome error; re-select the playlists in the show editor.`);
+  }
   const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict);
 
   // Excluded playlists (blocklist): drop any track whose id appears in the
@@ -678,7 +721,9 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           // the model nothing.
           album: slimAlbum(c.album, c.title),
           year: c.year || undefined,
-          genre: c.genre || undefined,
+          // All genre tags, comma-joined ("Hip-Hop, Rap") — the model sees the
+          // full picture, not just the primary tag (OpenSubsonic multi-genre).
+          genre: source.songGenres(c).join(', ') || undefined,
           moods: moods.length ? moods : undefined,
           energy: c.energy || rec?.energy || undefined,
           // Track length in seconds — lets the pick weigh a 9-minute epic

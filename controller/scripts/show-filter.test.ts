@@ -10,7 +10,9 @@ import assert from 'node:assert/strict';
 import {
   normGenre, genreMatches, preferGenre,
   hasEraBound, eraSpan, inYearRange, preferEra,
+  resolveEraYear, trackEraYear,
   preferEnergy, preferEnergyStrict, preferMood,
+  onlyGenre, onlyMood, onlyEnergy, applyStrictLocks,
 } from '../src/music/show-filter.js';
 
 let failures = 0;
@@ -83,6 +85,44 @@ await test('eraSpan: bounded windows → min/max envelope; any open bound opens 
   assert.deepEqual(eraSpan([]), { fromYear: null, toYear: null });
 });
 
+console.log('era year resolution (#842 — original year, compilation distrust):');
+await test('resolveEraYear: originalYear wins over year; junk originalYear falls through', () => {
+  assert.equal(resolveEraYear(2013, 1976, true), 1976);   // comp track, resolved
+  assert.equal(resolveEraYear(2013, 1976, false), 1976);  // reissue, album-tag year
+  assert.equal(resolveEraYear(1995, null, false), 1995);  // plain track
+  assert.equal(resolveEraYear(1995, 0, false), 1995);     // TYER=0000-style junk original
+});
+await test("resolveEraYear: a compilation's plain year is untrusted (unknown)", () => {
+  assert.equal(resolveEraYear(2013, null, true), null);
+  // Unknown compilation status (null) keeps trusting the year — only a
+  // positive flag distrusts it.
+  assert.equal(resolveEraYear(2013, null, null), 2013);
+});
+await test('resolveEraYear: junk years read as unknown', () => {
+  assert.equal(resolveEraYear(0, null, false), null);
+  assert.equal(resolveEraYear('', null, false), null);
+  assert.equal(resolveEraYear(null, null, false), null);
+});
+await test('trackEraYear: own fields short-circuit (no library lookup when either is present)', () => {
+  assert.equal(trackEraYear(t({ year: 2013, originalYear: 1976, isCompilation: true })), 1976);
+  assert.equal(trackEraYear(t({ year: 2013, originalYear: null, isCompilation: true })), null);
+  assert.equal(trackEraYear(t({ year: 1995, originalYear: null, isCompilation: false })), 1995);
+  // Bare Subsonic child (no era fields, library not loaded here) → plain year.
+  assert.equal(trackEraYear(t({ year: 1995 })), 1995);
+});
+await test('inYearRange places a compilation track by its ORIGINAL year (#842)', () => {
+  const seventies = [{ fromYear: 1970, toYear: 1979 }];
+  const tens = [{ fromYear: 2010, toYear: 2019 }];
+  const compResolved = t({ year: 2013, originalYear: 1976, isCompilation: true });
+  const compUnresolved = t({ year: 2013, originalYear: null, isCompilation: true });
+  // Resolved: lands in the 70s window, NOT the 2010s one.
+  assert.deepEqual(inYearRange([compResolved], seventies), [compResolved]);
+  assert.deepEqual(inYearRange([compResolved], tens), []);
+  // Unresolved: year is the compilation's own date — untrusted, drops everywhere.
+  assert.deepEqual(inYearRange([compUnresolved], tens), []);
+  assert.deepEqual(inYearRange([compUnresolved], seventies), []);
+});
+
 console.log('energy (any-of bands):');
 await test('preferEnergy: unknown-energy tracks stay eligible; any band matches', () => {
   const hi = t({ energy: 'high' });
@@ -109,6 +149,82 @@ await test('preferMood matches any selected mood, case-insensitive', () => {
 await test('preferMood never-starves: un-tagged pool → full set', () => {
   const pool = [t({ moods: [], audioMoods: [] })];
   assert.deepEqual(preferMood(pool, ['calm']), pool);
+});
+
+console.log('hard filters (only*, NO never-starve — agent-tool locks + final-pool strict):');
+await test('onlyGenre drops off-genre and untagged, even to empty', () => {
+  const rock = t({ genre: 'Hard Rock' });
+  const jazz = t({ genre: 'Jazz' });
+  const untagged = t({ id: null });
+  assert.deepEqual(onlyGenre([rock, jazz, untagged], ['Rock']), [rock]);
+  assert.deepEqual(onlyGenre([jazz], ['Rock']), []);           // no fallback
+  assert.deepEqual(onlyGenre([rock, jazz], []), [rock, jazz]); // no constraint
+});
+await test('onlyMood drops un-tagged, even to empty', () => {
+  const a = t({ moods: ['calm'], audioMoods: [] });
+  const b = t({ moods: [], audioMoods: [] });
+  assert.deepEqual(onlyMood([a, b], ['calm']), [a]);
+  assert.deepEqual(onlyMood([b], ['calm']), []);
+  assert.deepEqual(onlyMood([a, b], []), [a, b]);
+});
+await test('onlyEnergy drops unknowns and off-band, even to empty', () => {
+  const hi = t({ energy: 'high' });
+  const unknown = t({ id: null });
+  assert.deepEqual(onlyEnergy([hi, unknown], ['high']), [hi]);
+  assert.deepEqual(onlyEnergy([hi, unknown], ['low']), []);
+  assert.deepEqual(onlyEnergy([hi, unknown], []), [hi, unknown]);
+});
+await test('inYearRange is the hard era filter: unknown-year drops, empty allowed', () => {
+  const in20s = t({ year: 2022 });
+  const old = t({ year: 1999 });
+  const noYear = t({ year: null });
+  assert.deepEqual(inYearRange([in20s, old, noYear], [{ fromYear: 2020, toYear: 2029 }]), [in20s]);
+  assert.deepEqual(inYearRange([old, noYear], [{ fromYear: 2020, toYear: 2029 }]), []);
+});
+await test('inYearRange: null/empty-string year does NOT pass an open-lower-bound window (Number(null)===0 trap)', () => {
+  const in80s = t({ year: 1985 });
+  const nullYear = t({ year: null });
+  const emptyYear = t({ year: '' });
+  const zeroYear = t({ year: 0 });
+  // "1989 and earlier" — the old Number()-coercion let year:null/'' (→ 0) and a
+  // genuine year:0 sail through 0 <= 1989. Only the real 1985 track may pass.
+  assert.deepEqual(
+    inYearRange([in80s, nullYear, emptyYear, zeroYear], [{ fromYear: null, toYear: 1989 }]),
+    [in80s],
+  );
+});
+
+console.log('applyStrictLocks (per-dimension cascade — the shared strict enforcer):');
+await test('starve:true drops every dimension hard, even to empty (agent-tool contract)', () => {
+  const jazz80sCalm = t({ id: '1', genre: 'Jazz', year: 1985, moods: ['calm'], audioMoods: [], energy: 'low' });
+  const rock = t({ id: '2', genre: 'Rock', year: 1985, moods: ['calm'], audioMoods: [], energy: 'low' });
+  const locks = { genres: ['Jazz'], eras: [{ fromYear: 1980, toYear: 1989 }], moods: ['calm'], energies: ['low'] };
+  assert.deepEqual(applyStrictLocks([jazz80sCalm, rock], locks, { starve: true }).map(x => x.id), ['1']);
+  // Un-tagged pool + a mood lock → hard-empties (the wider scope guards dead air).
+  const untagged = t({ id: '3', genre: 'Jazz', year: 1985, moods: [], audioMoods: [], energy: 'low' });
+  assert.deepEqual(applyStrictLocks([untagged], locks, { starve: true }), []);
+});
+await test('starve:false never-starves PER DIMENSION: one zero-coverage class keeps the rest pure', () => {
+  // Genre + era have matches; NO track carries a mood (un-tagged library). The
+  // old all-or-nothing joint revert dumped the whole (off-genre) pool back in;
+  // the cascade must keep the genre/era-pure subset and skip only the mood step.
+  const jazz80s = t({ id: '1', genre: 'Jazz', year: 1985, moods: [], audioMoods: [] });
+  const rock80s = t({ id: '2', genre: 'Rock', year: 1985, moods: [], audioMoods: [] });
+  const jazz90s = t({ id: '3', genre: 'Jazz', year: 1995, moods: [], audioMoods: [] });
+  const locks = { genres: ['Jazz'], eras: [{ fromYear: 1980, toYear: 1989 }], moods: ['calm'], energies: [] };
+  const out = applyStrictLocks([jazz80s, rock80s, jazz90s], locks, { starve: false }).map(x => x.id);
+  assert.deepEqual(out, ['1']); // Jazz + 80s kept; mood step skipped (would empty), NOT reverted to full pool
+});
+await test('starve:false: a dimension WITH coverage still filters hard', () => {
+  const calm = t({ id: '1', genre: 'Jazz', moods: ['calm'], audioMoods: [] });
+  const loud = t({ id: '2', genre: 'Jazz', moods: ['loud'], audioMoods: [] });
+  const out = applyStrictLocks([calm, loud], { genres: ['Jazz'], moods: ['calm'] }, { starve: false }).map(x => x.id);
+  assert.deepEqual(out, ['1']);
+});
+await test('applyStrictLocks: empty locks are a full passthrough (no constraint)', () => {
+  const pool = [t({ id: '1', genre: 'Jazz' }), t({ id: '2', genre: 'Rock' })];
+  assert.deepEqual(applyStrictLocks(pool, { genres: [], eras: [], moods: [], energies: [] }, { starve: true }), pool);
+  assert.deepEqual(applyStrictLocks(pool, {}, { starve: false }), pool);
 });
 
 if (failures) {
