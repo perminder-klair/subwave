@@ -19,6 +19,7 @@ import { requireAdmin } from '../middleware/auth.js';
 import { readCommunityShow } from '../shows/community.js';
 import { SLUG_RE } from '../skills/loader.js';
 import { queue } from '../broadcast/queue.js';
+import { rollSessionNow } from '../broadcast/scheduler.js';
 
 export const router = express.Router();
 
@@ -161,6 +162,66 @@ router.post('/shows', requireAdmin, async (req, res) => {
     res.json({ shows: next, show: saved });
   } catch (err: any) {
     queue.log('error', `POST /shows failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /schedule/override — pin a show for N minutes (#930): a timed takeover
+// that outranks the weekly grid in resolveActiveShow, then lapses back to
+// normal programming on its own. Re-POSTing while one is live replaces it
+// (switch show or extend the window). The session roll is fire-and-forget —
+// the response returns as soon as the override is persisted; the on-air
+// handoff (LLM + TTS) airs in the background, and the switch fully lands at
+// the next track boundary like any show change.
+// ---------------------------------------------------------------------------
+router.post('/schedule/override', requireAdmin, async (req, res) => {
+  const showId = String(req.body?.showId || '');
+  const minutes = Number(req.body?.minutes);
+  if (
+    !Number.isInteger(minutes) ||
+    minutes < settings.OVERRIDE_MIN_MINUTES ||
+    minutes > settings.OVERRIDE_MAX_MINUTES
+  ) {
+    return res.status(400).json({
+      error: `minutes must be an integer between ${settings.OVERRIDE_MIN_MINUTES} and ${settings.OVERRIDE_MAX_MINUTES}`,
+    });
+  }
+
+  await settings.load();
+  const show = (settings.get().shows || []).find((s: any) => s.id === showId);
+  if (!show) return res.status(404).json({ error: `no such show: ${showId}` });
+
+  const startedAt = Date.now();
+  const override = { showId, startedAt, expiresAt: startedAt + minutes * 60_000 };
+  try {
+    await settings.update({ scheduleOverride: override });
+    queue.log('scheduler', `[takeover] "${show.name}" pinned for ${minutes} min via admin UI`);
+    void rollSessionNow();
+    res.json({ override });
+  } catch (err: any) {
+    queue.log('error', `POST /schedule/override failed: ${err.message}`);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// DELETE /schedule/override — cancel a takeover early and resume the weekly
+// schedule. Idempotent: clearing an already-clear override succeeds without
+// airing anything.
+// ---------------------------------------------------------------------------
+router.delete('/schedule/override', requireAdmin, async (req, res) => {
+  await settings.load();
+  const existing = settings.get().scheduleOverride;
+  try {
+    await settings.update({ scheduleOverride: null });
+    if (existing) {
+      queue.log('scheduler', '[takeover] cancelled via admin UI — back to the weekly schedule');
+      void rollSessionNow();
+    }
+    res.json({ override: null });
+  } catch (err: any) {
+    queue.log('error', `DELETE /schedule/override failed: ${err.message}`);
     res.status(400).json({ error: err.message });
   }
 });

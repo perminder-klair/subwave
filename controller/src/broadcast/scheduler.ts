@@ -431,12 +431,14 @@ export async function runHourlyCheck() {
   });
 }
 
-async function hourlyCheck() {
-  // The top of the hour is the natural show boundary — roll the session here
-  // so a scheduled show starting/ending opens a fresh chat history even if no
-  // track happens to start right on the hour. getFullContext() stays inside the
-  // try — node-cron doesn't catch async throws, so an escape here would be an
-  // unhandled rejection.
+// Roll the DJ session against fresh context and run the boundary hooks —
+// episode plan, persona mic-pass, programme intro. This is the shared
+// boundary sequence: the hourly cron runs it at :00, and the schedule-override
+// routes (routes/shows.ts) fire it in the background so a takeover / early
+// cancel / expiry airs promptly instead of waiting for the next track or hour.
+// Every step traps its own errors — node-cron doesn't catch async throws, and
+// the route callers are fire-and-forget.
+export async function rollSessionNow() {
   let ctx: Awaited<ReturnType<typeof getFullContext>> | null = null;
   try {
     ctx = await getFullContext();
@@ -446,34 +448,42 @@ async function hourlyCheck() {
   }
   // If that roll crossed a persona boundary, air the two-voice mic-pass. It
   // does its own listener/budget gating and marks itself aired, so it's safe to
-  // call unconditionally here (whichever of this cron or a track-start rolls the
-  // session first drives it — the other no-ops). No ctx → the roll above didn't
-  // happen either; leave the handoff pending for the next call site.
-  if (ctx) {
-    // Plan the episode BEFORE the mic-pass so a persona handoff into a
-    // programme show can weave the episode angle into the greeting (the
-    // greeting doubles as the show's intro on a persona-change boundary).
-    try {
-      await programme.ensurePlan(ctx);
-    } catch (err) {
-      queue.log('error', `Programme plan failed: ${err.message}`);
-    }
-    try {
-      await djAgent.runPersonaHandoff(queue, ctx);
-    } catch (err) {
-      queue.log('error', `Persona handoff failed: ${err.message}`);
-    }
-    // Programme shows: open the episode. The intro owns the top of the show's
-    // first hour, so when it airs (now, or minutes ago via the track-start
-    // call site, or as the handoff greeting above) the generic time check
-    // stands down — the same one-talker-per-slot rule as issue #310.
-    try {
-      const introAired = await programme.onSessionSettled(queue, ctx);
-      if (introAired || programme.suppressHourly()) return;
-    } catch (err) {
-      queue.log('error', `Programme episode hook failed: ${err.message}`);
-    }
+  // call unconditionally here (whichever call site rolls the session first
+  // drives it — the others no-op). No ctx → the roll above didn't happen
+  // either; leave the handoff pending for the next call site.
+  if (!ctx) return { ctx: null, introAired: false };
+  // Plan the episode BEFORE the mic-pass so a persona handoff into a
+  // programme show can weave the episode angle into the greeting (the
+  // greeting doubles as the show's intro on a persona-change boundary).
+  try {
+    await programme.ensurePlan(ctx);
+  } catch (err) {
+    queue.log('error', `Programme plan failed: ${err.message}`);
   }
+  try {
+    await djAgent.runPersonaHandoff(queue, ctx);
+  } catch (err) {
+    queue.log('error', `Persona handoff failed: ${err.message}`);
+  }
+  // Programme shows: open the episode. The intro owns the top of the show's
+  // first hour, so when it airs (now, or minutes ago via the track-start
+  // call site, or as the handoff greeting above) the generic time check
+  // stands down — the same one-talker-per-slot rule as issue #310.
+  let introAired = false;
+  try {
+    introAired = await programme.onSessionSettled(queue, ctx);
+  } catch (err) {
+    queue.log('error', `Programme episode hook failed: ${err.message}`);
+  }
+  return { ctx, introAired };
+}
+
+async function hourlyCheck() {
+  // The top of the hour is the natural show boundary — roll the session here
+  // so a scheduled show starting/ending opens a fresh chat history even if no
+  // track happens to start right on the hour.
+  const rolled = await rollSessionNow();
+  if (rolled.ctx && (rolled.introAired || programme.suppressHourly())) return;
   if (!shouldFire('hourly')) return;
   if (!djCallsAllowed()) return;  // nobody listening — stay on the auto playlist
   if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
@@ -740,6 +750,25 @@ async function nightlyDoctor() {
 }
 
 // ---------------------------------------------------------------------------
+// Takeover janitor — resolveActiveShow already ignores an expired schedule
+// override (lazy, date-aware), so correctness never depends on this tick. Its
+// job is promptness + hygiene: clear the persisted override and roll the
+// session so the on-air revert lands within minutes even if no track boundary
+// or hourly cron happens to fire first.
+// ---------------------------------------------------------------------------
+async function overrideJanitor() {
+  try {
+    const ov = settings.get()?.scheduleOverride;
+    if (!ov || Date.now() < ov.expiresAt) return;
+    await settings.update({ scheduleOverride: null });
+    queue.log('scheduler', '[takeover] override expired — back to the weekly schedule');
+    await rollSessionNow();
+  } catch (err) {
+    queue.log('error', `Takeover janitor failed: ${err.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // START
 // ---------------------------------------------------------------------------
 
@@ -771,6 +800,9 @@ export function startScheduler() {
   // show's last hour — dispatched on STATION-zone minute windows (see
   // programmeTick). No-ops outside a programme episode.
   cron.schedule('*/5 * * * *', programmeTick);
+
+  // Takeover expiry sweep — cheap (no LLM unless an expiry actually reverts).
+  cron.schedule('*/5 * * * *', overrideJanitor);
 
   // Cleanup every hour
   cron.schedule('0 * * * *', cleanup);
