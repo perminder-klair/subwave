@@ -50,6 +50,7 @@ export interface Knobs {
   artistSpacing?: number;
   excludeRecentlyPlayed?: boolean;
   instrumentalOnly?: boolean;
+  minTrackSeconds?: number;   // only include tracks this long or longer (0/undefined = no floor)
   maxTrackSeconds?: number;   // only include tracks this long or shorter (0/undefined = no cap)
 }
 
@@ -283,12 +284,16 @@ export async function buildCandidatePool(
     pool = revertIfStarved(filteredEnergy, pool, knobs, reasons, 'energy');
   }
 
-  // Max track length: drop tracks whose KNOWN duration exceeds the cap; keep
-  // unknown-duration rows (can't tell) so a partly-un-analysed library still
-  // fills. Soft — relaxes rather than starving.
-  if (knobs.maxTrackSeconds && knobs.maxTrackSeconds > 0) {
-    const cap = knobs.maxTrackSeconds;
-    const withinLen = pool.filter((t) => t.durationSec == null || t.durationSec <= cap);
+  // Track-length band: drop tracks whose KNOWN duration falls outside the
+  // min/max anchors; keep unknown-duration rows (can't tell) so a partly
+  // un-analysed library still fills. Soft — relaxes rather than starving.
+  const minLen = knobs.minTrackSeconds && knobs.minTrackSeconds > 0 ? knobs.minTrackSeconds : 0;
+  const maxLen = knobs.maxTrackSeconds && knobs.maxTrackSeconds > 0 ? knobs.maxTrackSeconds : 0;
+  if (minLen || maxLen) {
+    const withinLen = pool.filter((t) =>
+      t.durationSec == null ||
+      ((!minLen || t.durationSec >= minLen) && (!maxLen || t.durationSec <= maxLen)),
+    );
     pool = revertIfStarved(withinLen, pool, knobs, reasons, 'track-length');
   }
 

@@ -39,6 +39,10 @@ const ARCS: { id: ArcShape; label: string; hint: string }[] = [
   { id: 'peak-then-cool', label: 'Peak', hint: 'rise, then cool down' },
   { id: 'wind-down', label: 'Wind down', hint: 'high → mellow' },
 ];
+// Track-length band domain: 0 → 10:00 in 15s notches.
+const LEN_MAX = 600;
+const LEN_STEP = 15;
+
 const DECADES: { label: string; fromYear: number; toYear: number }[] = [
   { label: '60s', fromYear: 1960, toYear: 1969 },
   { label: '70s', fromYear: 1970, toYear: 1979 },
@@ -201,6 +205,45 @@ function Chip({ accent, onRemove, children }: { accent?: boolean; onRemove?: () 
   );
 }
 
+// ── Dual-anchor range — two overlaid native sliders sharing one track, with an
+// accent band between the anchors. No dependency; thumbs stay keyboardable.
+function DualRange({ min, max, step, lo, hi, disabled, onLo, onHi, loLabel, hiLabel }: {
+  min: number; max: number; step: number; lo: number; hi: number; disabled?: boolean;
+  onLo: (v: number) => void; onHi: (v: number) => void; loLabel: string; hiLabel: string;
+}) {
+  const bandRef = useRef<HTMLDivElement>(null);
+  const span = max - min || 1;
+  const loPct = ((lo - min) / span) * 100;
+  const hiPct = ((hi - min) / span) * 100;
+  useDynamicStyle(bandRef, { left: `${loPct}%`, width: `${Math.max(0, hiPct - loPct)}%` });
+  const thumb =
+    'pointer-events-none absolute inset-0 h-5 w-full appearance-none bg-transparent outline-none ' +
+    '[&::-webkit-slider-runnable-track]:bg-transparent [&::-webkit-slider-thumb]:pointer-events-auto ' +
+    '[&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none ' +
+    '[&::-webkit-slider-thumb]:border [&::-webkit-slider-thumb]:border-ink [&::-webkit-slider-thumb]:bg-[var(--accent)] ' +
+    '[&::-moz-range-track]:bg-transparent [&::-moz-range-thumb]:pointer-events-auto [&::-moz-range-thumb]:size-3.5 ' +
+    '[&::-moz-range-thumb]:rounded-none [&::-moz-range-thumb]:border [&::-moz-range-thumb]:border-ink [&::-moz-range-thumb]:bg-[var(--accent)]';
+  return (
+    <div className={cn('relative h-5', disabled && 'opacity-40')}>
+      <div className="absolute top-1/2 right-0 left-0 h-[3px] -translate-y-1/2 bg-separator-strong" />
+      <div ref={bandRef} className="absolute top-1/2 h-[3px] -translate-y-1/2 bg-[var(--accent)]" />
+      <input
+        type="range" min={min} max={max} step={step} value={lo} disabled={disabled}
+        onChange={e => onLo(Math.min(+e.target.value, hi))}
+        aria-label={loLabel}
+        // When both anchors crowd the right end, lift the lo thumb so it stays grabbable.
+        className={cn(thumb, lo > max - step * 4 && 'z-10')}
+      />
+      <input
+        type="range" min={min} max={max} step={step} value={hi} disabled={disabled}
+        onChange={e => onHi(Math.max(+e.target.value, lo))}
+        aria-label={hiLabel}
+        className={thumb}
+      />
+    </div>
+  );
+}
+
 function SwitchRow({ label, hint, on, onToggle, mutedLabel }: {
   label: string; hint: string; on: boolean; onToggle: (v: boolean) => void; mutedLabel?: boolean;
 }) {
@@ -324,7 +367,9 @@ export default function PlaylistBuilderPanel() {
   const [count, setCount] = useState(25);
   const [artistSpacing, setArtistSpacing] = useState(2);
   const [capOn, setCapOn] = useState(false);
-  const [capMin, setCapMin] = useState(6); // minutes, 1–10; only applied when capOn
+  // Track-length band anchors (seconds). min at 0 = no floor; max at LEN_MAX = no cap.
+  const [minSec, setMinSec] = useState(0);
+  const [maxSec, setMaxSec] = useState(LEN_MAX);
   const [excludeRecent, setExcludeRecent] = useState(false);
   const [instrumentalOnly, setInstrumentalOnly] = useState(false);
   const [recentlyAdded, setRecentlyAdded] = useState(false);
@@ -460,11 +505,12 @@ export default function PlaylistBuilderPanel() {
       artistSpacing,
       excludeRecentlyPlayed: excludeRecent,
       instrumentalOnly,
-      maxTrackSeconds: capOn ? capMin * 60 : undefined,
+      minTrackSeconds: capOn && minSec > 0 ? minSec : undefined,
+      maxTrackSeconds: capOn && maxSec < LEN_MAX ? maxSec : undefined,
     },
     sources: { recentlyAdded },
     excludeTrackIds,
-  }), [prompt, seeds, seedArtist, count, arc, moods, genres, energies, decades, artistSpacing, excludeRecent, instrumentalOnly, capOn, capMin, recentlyAdded]);
+  }), [prompt, seeds, seedArtist, count, arc, moods, genres, energies, decades, artistSpacing, excludeRecent, instrumentalOnly, capOn, minSec, maxSec, recentlyAdded]);
 
   const hasIntent = Boolean(
     prompt.trim() || seeds.length || seedArtist || recentlyAdded || moods.length ||
@@ -828,20 +874,32 @@ export default function PlaylistBuilderPanel() {
               <input type="range" min={0} max={5} value={artistSpacing} onChange={e => setArtistSpacing(+e.target.value)} className="w-full accent-[var(--accent)]" />
             </div>
 
-            {/* cap track length */}
+            {/* track-length band — min/max anchors on one track */}
             <div className="mb-5">
               <div className="mb-[9px] flex items-center justify-between">
-                <Eyeb muted={!capOn}>Cap track length</Eyeb>
-                <Switch checked={capOn} onCheckedChange={setCapOn} />
+                <Eyeb muted={!capOn}>Track length</Eyeb>
+                <div className="flex items-center gap-2.5">
+                  {capOn && (
+                    <span className="font-mono text-[11px] font-bold text-vermilion">
+                      {minSec > 0 && maxSec < LEN_MAX ? `${fmtDur(minSec)} – ${fmtDur(maxSec)}`
+                        : minSec > 0 ? `≥ ${fmtDur(minSec)}`
+                          : maxSec < LEN_MAX ? `≤ ${fmtDur(maxSec)}`
+                            : 'any'}
+                    </span>
+                  )}
+                  <Switch checked={capOn} onCheckedChange={setCapOn} />
+                </div>
               </div>
-              <input
-                type="range" min={1} max={10} value={capMin} disabled={!capOn}
-                onChange={e => setCapMin(+e.target.value)}
-                className="w-full accent-[var(--accent)] disabled:opacity-40"
-                aria-label="maximum track length in minutes"
+              <DualRange
+                min={0} max={LEN_MAX} step={LEN_STEP}
+                lo={minSec} hi={maxSec} disabled={!capOn}
+                onLo={setMinSec} onHi={setMaxSec}
+                loLabel="minimum track length in seconds"
+                hiLabel="maximum track length in seconds"
               />
-              <div className="mt-[5px] font-mono text-[9px] text-muted">
-                {capOn ? `only tracks ${capMin}:00 or shorter` : 'off — no limit'}
+              <div className="mt-[5px] flex justify-between font-mono text-[9px] text-muted">
+                <span>{capOn && minSec > 0 ? `min ${fmtDur(minSec)}` : 'no min'}</span>
+                <span>{capOn && maxSec < LEN_MAX ? `max ${fmtDur(maxSec)}` : 'no max'}</span>
               </div>
             </div>
 
