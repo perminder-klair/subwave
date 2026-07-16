@@ -5,6 +5,7 @@
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import * as subsonic from '../music/subsonic.js';
+import * as library from '../music/library.js';
 import { queue } from '../broadcast/queue.js';
 import { generatePlaylist, type GenerateInput } from '../music/playlist-gen.js';
 import * as recipes from '../music/playlist-recipes.js';
@@ -58,15 +59,24 @@ router.get('/playlists', requireAdmin, async (_req, res) => {
 router.get('/playlists/:id', requireAdmin, async (req, res) => {
   try {
     const entries = await subsonic.getPlaylist(req.params.id);
+    // Merge library tags (same pattern as /dj/search's toAdminRow) so the
+    // builder's energy graph / mood chips work on loaded playlists too.
+    await library.load();
     res.json({
-      entries: entries.map((s: any) => ({
-        id: s.id,
-        title: s.title,
-        artist: s.artist,
-        album: s.album,
-        year: s.year,
-        durationSec: s.duration ?? 0,
-      })),
+      entries: entries.map((s: any) => {
+        const tag = library.get(s.id);
+        return {
+          id: s.id,
+          title: s.title,
+          artist: s.artist,
+          album: s.album,
+          year: s.year,
+          durationSec: s.duration ?? 0,
+          genre: s.genre ?? tag?.genre ?? null,
+          moods: tag?.moods ?? [],
+          energy: tag?.energy ?? null,
+        };
+      }),
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
