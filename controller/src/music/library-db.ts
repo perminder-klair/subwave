@@ -75,6 +75,10 @@ export interface TrackRecord {
   artist: string | null;
   album: string | null;
   year: number | null;
+  // Every genre tag on the file (OpenSubsonic multi-value genres). The single
+  // source of truth — `genre` below is a generated column over genres[0]
+  // (the "primary" tag), kept for the scalar consumers and indexes.
+  genres: string[];
   genre: string | null;
   durationSec: number | null;
   lastfmTags: string[] | null;
@@ -165,6 +169,7 @@ interface TrackRow {
   artist: string | null;
   album: string | null;
   year: number | null;
+  genres: string | null; // JSON array; `genre` is generated from genres[0]
   genre: string | null;
   duration_sec: number | null;
   lastfm_tags: string | null;
@@ -202,7 +207,7 @@ export interface TrackMeta {
   artist?: string | null;
   album?: string | null;
   year?: number | string | null;
-  genre?: string | null;
+  genres?: string[] | null;
   duration?: number | null;
 }
 
@@ -574,6 +579,87 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     d.pragma('user_version = 13');
   }
 
+  if (userVersion < 14) {
+    // Multi-genre tags. Storage moves to `genres` — a JSON array of every
+    // genre tag the file carries (OpenSubsonic multi-value genres) — and the
+    // old scalar `genre` becomes a GENERATED column over genres[0], so every
+    // existing single-genre query (GROUP BY genre, PARTITION BY genre,
+    // idx_tracks_genre, filter genre = ?) keeps working against the primary
+    // tag with nothing to keep in sync. Generated columns can't replace an
+    // existing physical column via ALTER, so this is the standard SQLite
+    // table rebuild; existing scalar values backfill as one-element arrays.
+    runDdl(d, `
+      BEGIN;
+      ALTER TABLE tracks RENAME TO tracks_v13;
+      CREATE TABLE tracks (
+        id              TEXT PRIMARY KEY,
+        title           TEXT,
+        artist          TEXT,
+        album           TEXT,
+        year            INTEGER,
+        genres          TEXT,
+        genre           TEXT GENERATED ALWAYS AS (json_extract(genres, '$[0]')) VIRTUAL,
+        duration_sec    INTEGER,
+        lastfm_tags     TEXT,
+        lyric_excerpt   TEXT,
+        enriched_at     TEXT,
+        moods           TEXT,
+        energy          TEXT CHECK (energy IN ('low','medium','high') OR energy IS NULL),
+        source          TEXT,
+        confidence      REAL,
+        tagger_version  INTEGER,
+        prompt_hash     TEXT,
+        model           TEXT,
+        tagged_at       TEXT,
+        bpm                 REAL,
+        musical_key         TEXT,
+        intro_ms            INTEGER,
+        analysis_confidence REAL,
+        analysis_version    INTEGER,
+        loudness_lufs REAL,
+        peak_db       REAL,
+        structure_json TEXT,
+        vocal_ranges_json TEXT,
+        pace_json TEXT,
+        beats_json TEXT,
+        bars_json  TEXT,
+        key_ranges_json TEXT,
+        audio_moods            TEXT,
+        audio_mood_scores_json TEXT,
+        outro_json TEXT,
+        map_x REAL,
+        map_y REAL
+      );
+      INSERT INTO tracks (
+        id, title, artist, album, year, genres, duration_sec, lastfm_tags,
+        lyric_excerpt, enriched_at, moods, energy, source, confidence,
+        tagger_version, prompt_hash, model, tagged_at, bpm, musical_key,
+        intro_ms, analysis_confidence, analysis_version, loudness_lufs,
+        peak_db, structure_json, vocal_ranges_json, pace_json, beats_json,
+        bars_json, key_ranges_json, audio_moods, audio_mood_scores_json,
+        outro_json, map_x, map_y
+      )
+      SELECT
+        id, title, artist, album, year,
+        CASE WHEN genre IS NULL OR TRIM(genre) = '' THEN NULL ELSE json_array(genre) END,
+        duration_sec, lastfm_tags,
+        lyric_excerpt, enriched_at, moods, energy, source, confidence,
+        tagger_version, prompt_hash, model, tagged_at, bpm, musical_key,
+        intro_ms, analysis_confidence, analysis_version, loudness_lufs,
+        peak_db, structure_json, vocal_ranges_json, pace_json, beats_json,
+        bars_json, key_ranges_json, audio_moods, audio_mood_scores_json,
+        outro_json, map_x, map_y
+      FROM tracks_v13;
+      DROP TABLE tracks_v13;
+      CREATE INDEX IF NOT EXISTS idx_tracks_artist ON tracks(artist);
+      CREATE INDEX IF NOT EXISTS idx_tracks_genre  ON tracks(genre);
+      CREATE INDEX IF NOT EXISTS idx_tracks_tagged ON tracks(tagger_version, prompt_hash, model);
+      CREATE INDEX IF NOT EXISTS idx_tracks_analysis ON tracks(analysis_version);
+      COMMIT;
+    `);
+    d.pragma('user_version = 14');
+  }
+
   // Reconcile the requested embedding dim against what physically exists.
   //
   // The vec0 table's `FLOAT[N]` schema is the authority for what inserts accept —
@@ -732,7 +818,7 @@ async function maybeMigrateFromMoodsJson(): Promise<void> {
 
   const insert = d.prepare(`
     INSERT OR IGNORE INTO tracks (
-      id, title, artist, album, year, genre, duration_sec,
+      id, title, artist, album, year, genres, duration_sec,
       moods, energy, source, tagger_version, tagged_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
@@ -744,7 +830,7 @@ async function maybeMigrateFromMoodsJson(): Promise<void> {
         t.artist ?? null,
         t.album ?? null,
         normaliseYear(t.year),
-        t.genre ?? null,
+        t.genre ? JSON.stringify([t.genre]) : null,
         Number.isFinite(t.duration) ? t.duration : null,
         Array.isArray(t.moods) ? JSON.stringify(t.moods) : '[]',
         ['low', 'medium', 'high'].includes(t.energy!) ? t.energy : null,
@@ -840,6 +926,7 @@ export function getTrack(id: string): TrackRecord | null {
 }
 
 export interface TrackLite {
+  genres: string[];
   genre: string | null;
   bpm: number | null;
   musicalKey: string | null;
@@ -858,10 +945,11 @@ export interface TrackLite {
 // concurrent HTTP response, making the whole UI sluggish (#723).
 export function getTrackLite(id: string): TrackLite | null {
   const row = requireDb()
-    .prepare(`SELECT genre, bpm, musical_key, moods, energy, year, duration_sec FROM tracks WHERE id = ?`)
-    .get(id) as Pick<TrackRow, 'genre' | 'bpm' | 'musical_key' | 'moods' | 'energy' | 'year' | 'duration_sec'> | undefined;
+    .prepare(`SELECT genres, genre, bpm, musical_key, moods, energy, year, duration_sec FROM tracks WHERE id = ?`)
+    .get(id) as Pick<TrackRow, 'genres' | 'genre' | 'bpm' | 'musical_key' | 'moods' | 'energy' | 'year' | 'duration_sec'> | undefined;
   if (!row) return null;
   return {
+    genres: row.genres ? safeParseArray(row.genres) : [],
     genre: row.genre ?? null,
     bpm: row.bpm ?? null,
     musicalKey: row.musical_key ?? null,
@@ -901,14 +989,14 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
   requireDb()
     .prepare(
       `
-      INSERT INTO tracks (id, title, artist, album, year, genre, duration_sec)
+      INSERT INTO tracks (id, title, artist, album, year, genres, duration_sec)
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
         album        = COALESCE(excluded.album, tracks.album),
         year         = COALESCE(excluded.year, tracks.year),
-        genre        = COALESCE(excluded.genre, tracks.genre),
+        genres       = COALESCE(excluded.genres, tracks.genres),
         duration_sec = COALESCE(excluded.duration_sec, tracks.duration_sec)
     `,
     )
@@ -918,7 +1006,7 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
       meta.artist ?? null,
       meta.album ?? null,
       normaliseYear(meta.year),
-      meta.genre ?? null,
+      meta.genres?.length ? JSON.stringify(meta.genres) : null,
       Number.isFinite(meta.duration as number) ? (meta.duration as number) : null,
     );
 }
@@ -1610,10 +1698,14 @@ export function trackIdsByGenreDecade(): Map<string, string[]> {
 // at once.
 // ---------------------------------------------------------------------------
 export function genreCentroids(): Array<{ genre: string; count: number; centroid: Float32Array }> {
+  // json_each over the multi-genre array: a Hip-Hop + Rap track contributes
+  // its vector to BOTH centroids — each genre's centroid should reflect every
+  // track that carries the tag, not just those where it happens to be primary.
   const stmt = requireDb().prepare(
-    `SELECT t.genre AS genre, v.embedding AS embedding
-       FROM tracks t JOIN track_vectors v ON v.id = t.id
-      WHERE t.genre IS NOT NULL AND TRIM(t.genre) != ''`,
+    `SELECT je.value AS genre, v.embedding AS embedding
+       FROM tracks t
+       JOIN track_vectors v ON v.id = t.id, json_each(t.genres) je
+      WHERE je.value IS NOT NULL AND TRIM(je.value) != ''`,
   );
   const sums = new Map<string, { sum: Float64Array; count: number }>();
   let dim = 0;
@@ -1669,7 +1761,12 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
     params.push(...moods);
   }
   if (energy) { where.push('energy = ?'); params.push(energy); }
-  if (genre) { where.push('genre = ?'); params.push(genre); }
+  // Any-of over the multi-genre array, so a track tagged Hip-Hop + Rap shows
+  // under either filter — matching the show-filter/picker semantics.
+  if (genre) {
+    where.push(`EXISTS (SELECT 1 FROM json_each(tracks.genres) WHERE value = ?)`);
+    params.push(genre);
+  }
   if (vocal === 'instrumental') {
     where.push('vocal_ranges_json IS NOT NULL AND json_array_length(vocal_ranges_json) = 0');
   } else if (vocal === 'vocal') {
@@ -1726,6 +1823,7 @@ export interface ObservatoryTrackRow {
   artist: string | null;
   album: string | null;
   year: number | null;
+  genres: string[];
   genre: string | null;
   durationSec: number | null;
   moods: string[];
@@ -1742,7 +1840,7 @@ export interface ObservatoryTrackRow {
   mapY: number | null;
 }
 
-const OBSERVATORY_COLS = `id, title, artist, album, year, genre, duration_sec,
+const OBSERVATORY_COLS = `id, title, artist, album, year, genres, genre, duration_sec,
   moods, energy, source, confidence, bpm, musical_key, analysis_confidence,
   loudness_lufs, pace_json, vocal_ranges_json, map_x, map_y`;
 
@@ -1760,6 +1858,7 @@ function rowToObservatory(row: TrackRow): ObservatoryTrackRow {
     artist: row.artist,
     album: row.album,
     year: row.year,
+    genres: row.genres ? safeParseArray(row.genres) : [],
     genre: row.genre,
     durationSec: row.duration_sec,
     moods: row.moods ? safeParseArray(row.moods) : [],
@@ -1908,10 +2007,14 @@ function computeStats(): LibraryStats {
     .all() as Array<{ energy: string; n: number }>) {
     byEnergy[r.energy] = r.n;
   }
+  // json_each over the multi-genre array: a track tagged Hip-Hop + Rap counts
+  // toward both tallies (so the sum can exceed `total` — these are per-tag
+  // counts for filter dropdowns/suggestions, not a partition of the library).
   const byGenre: Record<string, number> = {};
   for (const r of d
     .prepare(
-      `SELECT genre, COUNT(*) AS n FROM tracks WHERE genre IS NOT NULL GROUP BY genre`,
+      `SELECT value AS genre, COUNT(*) AS n FROM tracks, json_each(tracks.genres)
+       WHERE tracks.genres IS NOT NULL GROUP BY value`,
     )
     .all() as Array<{ genre: string; n: number }>) {
     byGenre[r.genre] = r.n;
@@ -1950,6 +2053,7 @@ function rowToTrack(row: TrackRow): TrackRecord {
     artist: row.artist,
     album: row.album,
     year: row.year,
+    genres: row.genres ? safeParseArray(row.genres) : [],
     genre: row.genre,
     durationSec: row.duration_sec,
     lastfmTags: row.lastfm_tags ? safeParseArray(row.lastfm_tags) : null,

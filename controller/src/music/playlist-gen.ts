@@ -111,7 +111,7 @@ function norm(r: any, source: string, baseScore: number): PoolTrack {
     albumId: r.albumId ?? null,
     durationSec: r.durationSec ?? r.duration ?? null,
     year: Number.isFinite(yearNum) ? yearNum : null,
-    genre: r.genre ?? null,
+    genre: subsonic.songGenres(r).join(', ') || null,
     moods: Array.isArray(r.moods) ? r.moods : [],
     energy: r.energy ?? null,
     bpm: typeof r.bpm === 'number' && r.bpm > 0 ? r.bpm : null,

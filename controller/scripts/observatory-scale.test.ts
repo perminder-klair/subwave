@@ -217,7 +217,7 @@ async function main() {
   {
     const rng = mulberry32(0x0b5e55);
     const stmt = raw.prepare(`
-      INSERT INTO tracks (id, title, artist, album, year, genre, duration_sec,
+      INSERT INTO tracks (id, title, artist, album, year, genres, duration_sec,
         moods, energy, source, confidence, tagger_version, tagged_at,
         bpm, musical_key, analysis_confidence, analysis_version, loudness_lufs,
         pace_json, vocal_ranges_json, structure_json, beats_json, bars_json, key_ranges_json,
@@ -227,7 +227,7 @@ async function main() {
     const insertChunk = raw.transaction((rows: SeedRow[]) => {
       for (const r of rows) {
         stmt.run(
-          r.id, r.title, r.artist, r.album, r.year, r.genre, r.durationSec,
+          r.id, r.title, r.artist, r.album, r.year, r.genre ? JSON.stringify([r.genre]) : null, r.durationSec,
           JSON.stringify(r.moods), r.energy, r.source, r.confidence, '2026-01-01T00:00:00Z',
           r.bpm, r.musicalKey, r.analysisConfidence, r.analysed ? 1 : null, r.loudnessLufs,
           r.paceJson, r.vocalRangesJson, r.structureJson, r.beatsJson, r.barsJson, r.keyRangesJson,

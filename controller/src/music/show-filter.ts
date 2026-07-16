@@ -18,6 +18,7 @@ import * as library from './library.js';
 // they return the caller's own element type unchanged.
 export interface FilterTrack {
   id?: string;
+  genres?: string[] | null;
   genre?: string | null;
   year?: number | string | null;
   energy?: string | null;
@@ -33,24 +34,30 @@ export function normGenre(s: unknown): string {
   return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-// Per-track genre — from the track itself (Subsonic + slimTrack library sources
-// both carry it) or a library lookup. null when the track has no genre tag.
-export function trackGenre(t: FilterTrack | null | undefined): string | null {
-  if (t?.genre) return t.genre;
+// Per-track genre tags — every tag the track carries, from the track itself
+// (Subsonic children and slimTrack library rows both carry `genres`; older
+// callers may carry only the scalar `genre`) or a library lookup. Empty when
+// the track has no genre tag.
+export function trackGenres(t: FilterTrack | null | undefined): string[] {
+  if (Array.isArray(t?.genres) && t.genres.length) return t.genres;
+  if (t?.genre) return [t.genre];
   const rec = t?.id ? library.get(t.id) : null;
-  return rec?.genre ?? null;
+  if (Array.isArray(rec?.genres) && rec.genres.length) return rec.genres;
+  return rec?.genre ? [rec.genre] : [];
 }
 
-// True when a track's genre matches ANY of the (already normalised) target
-// genres. Exact-normalised match, or substring either way — same shape as
-// subsonic.resolveGenreName, so "Hip-Hop" matches a "Hip Hop" tag etc.
+// True when ANY of a track's genre tags matches ANY of the (already
+// normalised) target genres. Exact-normalised match, or substring either way —
+// same shape as subsonic.resolveGenreName, so "Hip-Hop" matches a "Hip Hop"
+// tag etc. Multi-genre (#OpenSubsonic): a track tagged Hip-Hop + Rap is
+// in-genre for a Rap show even when Rap isn't its primary tag.
 export function genreMatches(t: FilterTrack | null | undefined, targetNorms: string[]): boolean {
   if (!targetNorms.length) return false;
-  const g = trackGenre(t);
-  if (!g) return false;
-  const gn = normGenre(g);
-  if (!gn) return false;
-  return targetNorms.some(target => !!target && (gn === target || gn.includes(target) || target.includes(gn)));
+  const genreNorms = trackGenres(t).map(normGenre).filter(Boolean);
+  if (!genreNorms.length) return false;
+  return genreNorms.some(gn =>
+    targetNorms.some(target => !!target && (gn === target || gn.includes(target) || target.includes(gn))),
+  );
 }
 
 // Hard-prefer tracks matching ANY of the show's genres (strict mode). Unlike

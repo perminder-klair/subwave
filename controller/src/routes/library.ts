@@ -594,7 +594,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       artist: song.artist,
       album: song.album,
       year: song.year ?? null,
-      genre: song.genre ?? null,
+      genres: subsonic.songGenres(song),
     });
 
     // 2. Refresh enrichment (best-effort).
@@ -634,7 +634,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
             artist: song.artist,
             album: song.album,
             year: song.year ?? null,
-            genre: song.genre ?? null,
+            genres: subsonic.songGenres(song),
           },
           { lastfmTags, lyricExcerpt },
         );
@@ -658,7 +658,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       artist: song.artist,
       album: song.album,
       year: song.year,
-      genre: song.genre,
+      genres: subsonic.songGenres(song),
       moods,
       energy,
       source: 'llm',
@@ -733,7 +733,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
         artist: t.artist,
         album: t.album,
         year: t.year ?? null,
-        genre: t.genre ?? null,
+        genres: subsonic.songGenres(t),
         duration: t.duration ?? null,
       });
       if (clearing) {

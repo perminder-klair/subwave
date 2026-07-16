@@ -81,6 +81,7 @@ export function get(songId: string): any {
     artist: t.artist,
     album: t.album,
     year: t.year,
+    genres: t.genres,
     genre: t.genre,
     moods: t.moods,
     audioMoods: t.audioMoods,
@@ -150,7 +151,9 @@ export function set(songId: string, data: any) {
     artist: data.artist,
     album: data.album,
     year: data.year,
-    genre: data.genre,
+    genres: Array.isArray(data.genres) && data.genres.length
+      ? data.genres
+      : data.genre ? [data.genre] : null,
     duration: data.duration ?? null,
   });
   if (Array.isArray(data.moods) || data.energy !== undefined) {
@@ -234,6 +237,7 @@ export function songsByMood(mood: string | null | undefined): any[] {
       artist: r.artist,
       album: r.album,
       year: r.year,
+      genres: r.genres,
       genre: r.genre,
       moods: r.moods,
       energy: r.energy,
@@ -284,6 +288,7 @@ function slimTrack(r: db.TrackRecord) {
     artist: r.artist,
     album: r.album,
     year: r.year,
+    genres: r.genres,
     genre: r.genre,
     moods: r.moods,
     // Zero-shot audio moods (sound-derived; music/audio-moods.ts). [] until
@@ -468,6 +473,7 @@ export interface FilteredRow {
   artist?: string | null;
   album?: string | null;
   year?: number | string | null;
+  genres?: string[];
   genre?: string | null;
   duration?: number | null;
   moods: string[];
@@ -495,6 +501,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRo
       artist: r.artist,
       album: r.album,
       year: r.year,
+      genres: r.genres,
       genre: r.genre,
       duration: r.durationSec,
       moods: r.moods,
