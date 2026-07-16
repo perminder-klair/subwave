@@ -2,8 +2,9 @@
 
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
-import { Coins } from 'lucide-react';
+import { Coins, Heart } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { useTrackLike } from '@/components/skins/sharedHooks';
 import { fmtTime } from '@/lib/format';
 import { useDynamicStyle } from '@/hooks/useDynamicStyle';
 import { useElapsed } from '@/hooks/useElapsed';
@@ -46,6 +47,32 @@ function buildMoodPhrase(t: NowPlayingTrack | null): string {
   if (Array.isArray(t.moods)) parts.push(...t.moods.slice(0, 2));
   if (t.energy) parts.push(`${t.energy} energy`);
   return parts.join(SEP);
+}
+
+/** The like heart (#991) — one tap stars the on-air track for everyone
+ *  listening (and, when the operator enables it, into Navidrome). Renders
+ *  nothing when likes are disabled or nothing likeable is on air. */
+function LikeHeart() {
+  const { available, liked, pending, count, like } = useTrackLike();
+  if (!available) return null;
+  return (
+    <button
+      type="button"
+      onClick={like}
+      disabled={pending || liked}
+      aria-pressed={liked}
+      aria-label={liked ? 'Liked' : 'Like this track'}
+      title={liked ? 'Liked — saved to the station favourites' : 'Like this track'}
+      className={cn(
+        'v3-focus ml-[10px] inline-flex cursor-pointer items-center gap-[4px] border-0 bg-transparent p-0 align-middle transition-colors',
+        liked ? 'text-vermilion' : 'text-muted hover:text-ink',
+        pending && 'opacity-60',
+      )}
+    >
+      <Heart size={15} strokeWidth={1.75} fill={liked ? 'currentColor' : 'none'} aria-hidden="true" />
+      {count > 0 && <span className="v3-tab-num text-[11px]">{count}</span>}
+    </button>
+  );
 }
 
 export interface CenterStageProps {
@@ -280,6 +307,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                     <span className="text-ink">{nowPlaying?.artist || 'Unknown artist'}</span>
                     {nowPlaying?.album && <span> · {nowPlaying.album}</span>}
                     {nowPlaying?.year && <span> · {nowPlaying.year}</span>}
+                    <LikeHeart />
                   </div>
                   {hasMeta && (
                     <div className="v3-caption mt-[10px] text-muted">

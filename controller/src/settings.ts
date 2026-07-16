@@ -1456,6 +1456,19 @@ const DEFAULTS = {
       baseUrl: '',
     },
   },
+
+  // Listener likes (#991) — the player heart button. `starInNavidrome` mirrors
+  // each first like of a song into Navidrome via Subsonic star (any Subsonic
+  // client sees it under Starred). `influenceDj` feeds the most-liked tracks
+  // back to BOTH pick paths (agent prompt lean + pool picker source) as a
+  // weighted preference signal — never a lock. Window/limit bound that signal.
+  likes: {
+    enabled: true,
+    starInNavidrome: true,
+    influenceDj: false,
+    maxTracks: 10,
+    windowDays: 30, // 0 = all time
+  },
 };
 
 const BOUNDS = {
@@ -2235,6 +2248,26 @@ export async function load() {
             ? stored.scrobble.listenbrainz.baseUrl.trim().slice(0, 500)
             : '',
       },
+    },
+    likes: {
+      enabled:
+        typeof stored.likes?.enabled === 'boolean'
+          ? stored.likes.enabled
+          : DEFAULTS.likes.enabled,
+      starInNavidrome:
+        typeof stored.likes?.starInNavidrome === 'boolean'
+          ? stored.likes.starInNavidrome
+          : DEFAULTS.likes.starInNavidrome,
+      influenceDj:
+        typeof stored.likes?.influenceDj === 'boolean'
+          ? stored.likes.influenceDj
+          : DEFAULTS.likes.influenceDj,
+      maxTracks: Number.isFinite(Number(stored.likes?.maxTracks))
+        ? Math.min(25, Math.max(1, Math.round(Number(stored.likes.maxTracks))))
+        : DEFAULTS.likes.maxTracks,
+      windowDays: Number.isFinite(Number(stored.likes?.windowDays))
+        ? Math.min(365, Math.max(0, Math.round(Number(stored.likes.windowDays))))
+        : DEFAULTS.likes.windowDays,
     },
   };
   if (typeof stored.timezone === 'string' && stored.timezone.trim() && !cache.timezone) {
@@ -3613,6 +3646,24 @@ export async function update(patch) {
         }
         next.scrobble.listenbrainz.baseUrl = trimmed;
       }
+    }
+  }
+  if ('likes' in patch) {
+    const lk = patch.likes || {};
+    if (lk.enabled !== undefined) next.likes.enabled = !!lk.enabled;
+    if (lk.starInNavidrome !== undefined) next.likes.starInNavidrome = !!lk.starInNavidrome;
+    if (lk.influenceDj !== undefined) next.likes.influenceDj = !!lk.influenceDj;
+    if (lk.maxTracks !== undefined) {
+      const n = Math.round(Number(lk.maxTracks));
+      if (!Number.isFinite(n) || n < 1 || n > 25) throw new Error('likes.maxTracks must be 1-25');
+      next.likes.maxTracks = n;
+    }
+    if (lk.windowDays !== undefined) {
+      const n = Math.round(Number(lk.windowDays));
+      if (!Number.isFinite(n) || n < 0 || n > 365) {
+        throw new Error('likes.windowDays must be 0-365 (0 = all time)');
+      }
+      next.likes.windowDays = n;
     }
   }
 

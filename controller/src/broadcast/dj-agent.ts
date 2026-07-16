@@ -34,6 +34,7 @@ import { withTrace, logEvent } from '../observability/events.js';
 import { recencyWindowsForLibrary, effectiveNoRepeatWindow } from '../music/recency.js';
 import { hasEraBound } from '../music/show-filter.js';
 import { djCallsAllowed } from './listeners.js';
+import * as likes from './likes.js';
 
 // --- Feature 4: DJ-mode mini-runs ------------------------------------------
 // A short, deliberate tempo/key journey across 2-3 consecutive picks. While a
@@ -290,9 +291,22 @@ export function pickSystem(showAt: Date | null = null, playlistResolved = true) 
         ? `\n\nThis show is anchored to a curated playlist: every track you pick MUST come from it. Call showPlaylistTracks first and choose from what it returns.`
         : `\n\nThis show leans on a curated playlist: call showPlaylistTracks first and strongly prefer those tracks; only step outside occasionally when the flow calls for it.`)
     : '';
+  // Listener favourites (#991): when the operator opts in, every pick sees the
+  // heart-button leaderboard as a standing preference signal — mirrored in the
+  // pool picker's listener-liked source so both paths lean the same way. A
+  // lean, never a lock: the criteria's VARIETY rule still applies on top.
+  const likeCfg = settings.get()?.likes;
+  const favs = likeCfg?.enabled && likeCfg?.influenceDj
+    ? likes.topLiked({ windowDays: likeCfg.windowDays, limit: likeCfg.maxTracks })
+    : [];
+  const favLine = favs.length
+    ? `\n\nListener favourites — the most-liked tracks on this station recently: ${favs
+        .map((f) => `"${f.track.title}" by ${f.track.artist || 'unknown'} (${f.count})`)
+        .join('; ')}. Treat these as a strong preference signal: favour them and similar artists, genres and moods when they fit the moment — but keep variety, never loop the same favourites back-to-back.`
+    : '';
   return `${settings.agentPersonaPreamble(persona)}
 
-You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}${musicLean}${playlistLean}
+You run the station as one continuous shift. The messages above are the live session.${djModeLine}${showLine}${musicLean}${playlistLean}${favLine}
 
 ${dj.PICKER_CRITERIA}
 
