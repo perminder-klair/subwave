@@ -335,7 +335,7 @@ async function probeKey(
     case 'OPENROUTER_API_KEY': {
       try {
         const model = activeModel('openrouter') || 'openai/gpt-4o-mini';
-        const m = createOpenRouter({ apiKey: value })(model);
+        const m = createOpenRouter({ apiKey: value, headers: llmProvider.OPENROUTER_APP_HEADERS })(model);
         await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 32, abortSignal: AbortSignal.timeout(15000) });
         return { ok: true, message: `✓ OpenRouter key valid · model responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
