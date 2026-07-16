@@ -72,6 +72,19 @@ export function shutdown(): void {
   loaded = false;
 }
 
+// Record one aired track into the durable play-history table. Called fire-and-
+// forget from the queue's now-playing watcher, so it must never throw and must
+// tolerate the DB not being open yet (first plays can beat the picker's lazy
+// load() on a fresh boot).
+export async function recordPlay(p: db.PlayWrite): Promise<void> {
+  try {
+    await load();
+    db.recordPlay(p);
+  } catch (err) {
+    console.log(`[library] recordPlay failed: ${(err as Error).message}`);
+  }
+}
+
 export function get(songId: string): any {
   if (!loaded) return null;
   const t = db.getTrack(songId);

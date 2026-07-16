@@ -574,6 +574,32 @@ async function migrate(embeddingDim: number, reseed = false, adoptStoredDim = fa
     d.pragma('user_version = 13');
   }
 
+  if (userVersion < 14) {
+    // Durable play history — one row per track the station airs, stamped with
+    // the show that was on when it played. Deliberately NOT keyed to `tracks`
+    // (no FK): auto-playlist plays can predate tagging, and a track deleted
+    // from Navidrome should keep its history. Title/artist/album are display
+    // snapshots taken at air time, same rationale as the blocklist. Rows are
+    // tiny (~150 B) and unpruned — a busy station writes ~10 MB/decade.
+    runDdl(d, `
+      CREATE TABLE IF NOT EXISTS plays (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        track_id     TEXT,
+        title        TEXT,
+        artist       TEXT,
+        album        TEXT,
+        played_at    TEXT NOT NULL,
+        source       TEXT,
+        requested_by TEXT,
+        show_id      TEXT,
+        show_name    TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_plays_played_at ON plays(played_at);
+      CREATE INDEX IF NOT EXISTS idx_plays_track     ON plays(track_id);
+    `);
+    d.pragma('user_version = 14');
+  }
+
   // Reconcile the requested embedding dim against what physically exists.
   //
   // The vec0 table's `FLOAT[N]` schema is the authority for what inserts accept —
@@ -1825,6 +1851,62 @@ export function allTaggedSampled(max: number, totalTagged: number): ObservatoryT
     ORDER BY id
   `;
   return (requireDb().prepare(sql).all(m, total) as TrackRow[]).map(rowToObservatory);
+}
+
+// ---------------------------------------------------------------------------
+// Play history
+// ---------------------------------------------------------------------------
+
+export interface PlayRecord {
+  id: number;
+  trackId: string | null;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  playedAt: string;
+  source: string | null;       // 'ai' | 'request' | 'auto' at write time
+  requestedBy: string | null;
+  showId: string | null;
+  showName: string | null;
+}
+
+export type PlayWrite = Omit<PlayRecord, 'id'>;
+
+export function recordPlay(p: PlayWrite): void {
+  requireDb().prepare(`
+    INSERT INTO plays (track_id, title, artist, album, played_at, source, requested_by, show_id, show_name)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    p.trackId, p.title, p.artist, p.album, p.playedAt,
+    p.source, p.requestedBy, p.showId, p.showName,
+  );
+}
+
+export function listPlays(opts: { limit?: number; offset?: number } = {}): { total: number; rows: PlayRecord[] } {
+  const d = requireDb();
+  const limit = Math.min(Math.max(opts.limit ?? 50, 1), 200);
+  const offset = Math.max(opts.offset ?? 0, 0);
+  const total = (d.prepare('SELECT COUNT(*) AS n FROM plays').get() as { n: number }).n;
+  const rows = (d.prepare(`
+    SELECT id, track_id, title, artist, album, played_at, source, requested_by, show_id, show_name
+    FROM plays ORDER BY id DESC LIMIT ? OFFSET ?
+  `).all(limit, offset) as Array<{
+    id: number; track_id: string | null; title: string | null; artist: string | null;
+    album: string | null; played_at: string; source: string | null;
+    requested_by: string | null; show_id: string | null; show_name: string | null;
+  }>).map((r) => ({
+    id: r.id,
+    trackId: r.track_id,
+    title: r.title,
+    artist: r.artist,
+    album: r.album,
+    playedAt: r.played_at,
+    source: r.source,
+    requestedBy: r.requested_by,
+    showId: r.show_id,
+    showName: r.show_name,
+  }));
+  return { total, rows };
 }
 
 // ---------------------------------------------------------------------------

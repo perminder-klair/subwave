@@ -92,6 +92,24 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /library/history — durable play history, newest first. One row per
+// aired track (library-db `plays`), stamped at air time with the source
+// (ai/request/auto), the requester, and the show that was on. Backs the
+// admin Library History tab. Query: limit=50 offset=0.
+// ---------------------------------------------------------------------------
+router.get('/library/history', requireAdmin, async (req, res) => {
+  try {
+    await library.load();
+    const limit = Math.min(Math.max(parseIntSafe(req.query?.limit, 50), 1), 200);
+    const offset = Math.max(parseIntSafe(req.query?.offset, 0), 0);
+    const { total, rows } = db.listPlays({ limit, offset });
+    res.json({ total, rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /library/search-sound?q=<description>&limit=N — natural-language
 // "sounds like" search for the admin Search tab. Embeds the description
 // through the CLAP text tower (analyzer /embed-text) and KNNs it against the
