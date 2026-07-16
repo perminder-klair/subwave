@@ -117,7 +117,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                   groups={groups}
                   title="Piper voice"
                   placeholder="Built-in default voice"
-                  preview={{ engine: 'piper', speed: persona.tts.speed, adminFetch }}
+                  preview={{ engine: 'piper', speed: persona.tts.speed, language: persona.language, adminFetch }}
                 />
                 <div className="field-hint">
                   Piper is fast, local, and keyless. Drop a voice’s <code>.onnx</code> and its{' '}
@@ -173,7 +173,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                       ],
                     }]}
                     title="Kokoro voice"
-                    preview={{ engine: 'kokoro', speed: persona.tts.speed, adminFetch }}
+                    preview={{ engine: 'kokoro', speed: persona.tts.speed, language: persona.language, adminFetch }}
                   />
                 </div>
                 <div className="field-hint">The kokoro-onnx voice id for this persona.</div>
@@ -214,7 +214,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                   }]}
                   title="Chatterbox reference voice"
                   placeholder="Built-in default voice"
-                  preview={{ engine: 'chatterbox', speed: persona.tts.speed, adminFetch }}
+                  preview={{ engine: 'chatterbox', speed: persona.tts.speed, language: persona.language, adminFetch }}
                 />
                 <div className="field-hint">
                   ~5s of clean speech is enough to clone a voice. Drop WAVs into{' '}
@@ -280,7 +280,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                       : []),
                   ]}
                   title="PocketTTS voice"
-                  preview={{ engine: 'pocket-tts', speed: persona.tts.speed, adminFetch }}
+                  preview={{ engine: 'pocket-tts', speed: persona.tts.speed, language: persona.language, adminFetch }}
                 />
                 <div className="field-hint">
                   CPU-only, ~6× real-time. Built-in voices cover English, French, German,
@@ -423,11 +423,13 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
               voice={persona.tts.voice}
               cloudProvider={persona.tts.cloudProvider}
               speed={persona.tts.speed}
+              language={persona.language}
               adminFetch={adminFetch}
             />
             <div className="field-hint mt-1.5">
-              Plays a short sample in this persona&apos;s voice. Reflects the voice
-              and speed; the dB trim is applied later, on air.
+              Plays a short sample in this persona&apos;s voice — and language,
+              when one is set. Reflects the voice and speed; the dB trim is
+              applied later, on air.
             </div>
           </div>
         </div>

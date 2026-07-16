@@ -16,6 +16,11 @@ export interface PreviewParams {
   speed?: number;
   // Kokoro phonemizer language override (e.g. "en-gb", "ja").
   lang?: string;
+  // Persona's free-text on-air language ("Turkish", "Türkçe"). When set, the
+  // server renders the sample sentence in that language (falling back to the
+  // English line if it doesn't recognize it), so the audition matches what
+  // the persona sounds like on air.
+  language?: string;
   // Unsaved ElevenLabs voice_settings sliders (issue #696) — sent so the
   // sample auditions the CURRENT slider positions, not the last-saved values.
   voiceSettings?: {
