@@ -33,6 +33,7 @@ import {
 import { SkinSelectionProvider, type SkinSelection } from '@/components/skins/SkinContext';
 import type { SkinComponent } from '@/components/skins/types';
 import { PlayerCoreProvider, usePlayerAudio, usePlayerFeed } from './PlayerCore';
+import { PrivateStationScreen, StreamAuthOverlay } from './StationGate';
 
 export interface PlayerShellProps {
   /** Explicit skin — bypasses registry resolution (previews, tests). */
@@ -160,8 +161,20 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
           'inset-0 overflow-hidden bg-bg text-ink',
         )}
       >
-        <audio ref={audioRef} crossOrigin="anonymous" preload="auto" />
-        <Skin contained={contained} portalNode={portalNode} />
+        {state.privacy?.privatePlayer ? (
+          // Private station (#478): the whole face stands down — no skin, no
+          // audio element, just the "this is private" card. Live-flipped by
+          // the /state poll like themes/skins.
+          <PrivateStationScreen />
+        ) : (
+          <>
+            <audio ref={audioRef} crossOrigin="anonymous" preload="auto" />
+            <Skin contained={contained} portalNode={portalNode} />
+            {/* Password prompt when the stream mounts demand listener auth —
+                shell-level so every skin gets it without changes. */}
+            <StreamAuthOverlay />
+          </>
+        )}
         {!contained && <Toaster />}
       </div>
     </SkinSelectionProvider>

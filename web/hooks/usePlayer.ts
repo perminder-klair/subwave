@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { isIOSDevice } from '@/lib/platform';
 import { useStationOrigin } from '@/lib/stationOrigin';
+import { withStreamAuth } from '@/lib/streamAuth';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
 // We pick MP3 vs Ogg-Opus on the client via canPlayType — Opus is roughly
@@ -186,7 +187,7 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
       if (!tunedInRef.current || !audioRef.current) return;
       const audio = audioRef.current;
       const myGen = ++gen.current;
-      audio.src = `${streamUrlRef.current}?t=${Date.now()}`;
+      audio.src = withStreamAuth(`${streamUrlRef.current}?t=${Date.now()}`);
       audio.volume = volumeRef.current;
       setStatus('connecting');
       const p = audio.play();
@@ -310,7 +311,7 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
     lastActivityAt.current = Date.now();
     setIdleStopped(false);
     retryCount.current = 0;
-    el.src = `${streamUrl}?t=${Date.now()}`;
+    el.src = withStreamAuth(`${streamUrl}?t=${Date.now()}`);
     el.volume = volume;
     setTunedIn(true);
     setStatus('connecting');

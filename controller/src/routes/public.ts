@@ -19,6 +19,7 @@ import { listCommunityPersonas } from '../personas/community.js';
 import { listCommunityShows } from '../shows/community.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { listenerAuthDecision } from '../util/listener-auth.js';
 
 export const router = express.Router();
 
@@ -295,7 +296,17 @@ function listenMounts(req: express.Request) {
   return { station, entries };
 }
 
+// When listener auth is on, the tune-in files would hand out credential-less
+// URLs that Icecast rejects — refuse instead; operators share credentialed
+// URLs (user:pass@ or ?auth=) by hand.
+function tuneInFilesBlocked(res: express.Response): boolean {
+  if (settings.get()?.privacy?.listenerAuth !== true) return false;
+  res.status(403).send('This station is private.\n');
+  return true;
+}
+
 router.get('/listen.pls', (req, res) => {
+  if (tuneInFilesBlocked(res)) return;
   const { entries } = listenMounts(req);
   const lines = ['[playlist]', `NumberOfEntries=${entries.length}`];
   entries.forEach((e, i) => {
@@ -309,6 +320,7 @@ router.get('/listen.pls', (req, res) => {
 });
 
 router.get('/listen.m3u', (req, res) => {
+  if (tuneInFilesBlocked(res)) return;
   const { entries } = listenMounts(req);
   const lines = ['#EXTM3U'];
   for (const e of entries) lines.push(`#EXTINF:-1,${e.title}`, e.url);
@@ -413,8 +425,46 @@ router.get('/state', (req, res) => {
     // Station zone for rendering djLog timestamps in station-local time (#418).
     timezone: getStationTimezone(),
     locale: s.locale,
+    // Private-station flags (#478) — booleans only, never the password. The
+    // player uses these to render the private screen / stream-auth prompt.
+    privacy: {
+      privatePlayer: s?.privacy?.privatePlayer === true,
+      listenerAuth: s?.privacy?.listenerAuth === true,
+    },
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /listener-auth — Icecast URL-auth callback (#478). Icecast (the
+// broadcast container) POSTs a form body here on every listener connect when
+// privacy.listenerAuth is on; `icecast-auth-user: 1` + 200 admits the
+// listener, 401 rejects. The web player reuses the same endpoint to validate
+// a typed password (it checks res.ok). Deliberately NOT rate-limited per IP:
+// the caller is always Icecast, so per-IP limiting would throttle every
+// listener through one bucket. The password never gets logged.
+// ---------------------------------------------------------------------------
+router.post(
+  '/listener-auth',
+  express.urlencoded({ extended: false, limit: '10kb' }),
+  async (req, res) => {
+    await settings.load();
+    const s = settings.get();
+    const allow = listenerAuthDecision({
+      enabled: s?.privacy?.listenerAuth === true,
+      password: s?.privacy?.listenerPassword || '',
+      action: typeof req.body?.action === 'string' ? req.body.action : '',
+      pass: typeof req.body?.pass === 'string' ? req.body.pass : '',
+      mount: typeof req.body?.mount === 'string' ? req.body.mount : '',
+    });
+    if (allow) {
+      res.setHeader('icecast-auth-user', '1');
+      res.status(200).send('ok\n');
+    } else {
+      res.setHeader('icecast-auth-message', 'invalid listener credentials');
+      res.status(401).send('denied\n');
+    }
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /themes — public theme registry. Returns the active theme id plus the

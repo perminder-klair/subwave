@@ -173,6 +173,13 @@ export interface LoudnessForm {
   source: LoudnessSource;
 }
 
+export interface PrivacyForm {
+  privatePlayer: boolean;
+  listenerAuth: boolean;
+  /** Round-trips the 'set' redaction sentinel when saved and untouched. */
+  listenerPassword: string;
+}
+
 export interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
@@ -190,6 +197,7 @@ export interface FormState {
   search: SearchForm;
   embedding: EmbeddingForm;
   scrobble: ScrobbleForm;
+  privacy: PrivacyForm;
 }
 
 export interface JingleEntry {
@@ -266,6 +274,7 @@ export interface SettingsData {
     };
     sfx?: { enabled?: boolean };
     ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
+    privacy?: { privatePlayer?: boolean; listenerAuth?: boolean; listenerPassword?: string };
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;
       listenbrainz?: Partial<ScrobbleListenbrainzForm>;

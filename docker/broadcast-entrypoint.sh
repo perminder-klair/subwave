@@ -136,11 +136,43 @@ case "$ICECAST_MAX_CLIENTS" in
         ;;
 esac
 
+# Listener auth (#478). The controller writes state/icecast_listener_auth.txt
+# ('true'/'false') from settings.privacy.listenerAuth; only the literal value
+# "true" enables (mirroring the archive_enabled pattern — missing/garbled file
+# means public). When enabled, every stream mount gets an
+# <authentication type="url"> block: icecast POSTs each listener connect to
+# the controller, which admits it with an `icecast-auth-user: 1` header. The
+# password itself lives ONLY in the controller's settings.json — password
+# changes apply live, and this render only matters when the toggle flips
+# (which the admin UI routes through the existing restart-mixer flow).
+LISTENER_AUTH_FLAG=/var/sub-wave/icecast_listener_auth.txt
+LISTENER_AUTH_URL="${LISTENER_AUTH_URL:-http://controller:7701/listener-auth}"
+MOUNTS_XML=/etc/icecast2/listener-auth-mounts.xml
+: > "$MOUNTS_XML"
+if [ "$(cat "$LISTENER_AUTH_FLAG" 2>/dev/null | tr -d '[:space:]')" = "true" ]; then
+    echo "broadcast: listener auth ON — mounts require credentials via $LISTENER_AUTH_URL" >&2
+    for MOUNT in /stream.mp3 /stream.opus /stream.flac /stream.aac; do
+        cat >> "$MOUNTS_XML" <<EOF
+    <mount type="normal">
+        <mount-name>$MOUNT</mount-name>
+        <authentication type="url">
+            <option name="listener_add" value="$LISTENER_AUTH_URL"/>
+            <option name="auth_header" value="icecast-auth-user: 1"/>
+        </authentication>
+    </mount>
+EOF
+    done
+fi
+
+# `r` splices the generated mount blocks (empty file = nothing) where the
+# marker sits, then the marker line itself is deleted.
 sed \
     -e "s|\${ICECAST_SOURCE_PASSWORD}|$ICECAST_SOURCE_PASSWORD|g" \
     -e "s|\${ICECAST_ADMIN_PASSWORD}|$ICECAST_ADMIN_PASSWORD|g" \
     -e "s|\${ICECAST_RELAY_PASSWORD}|$ICECAST_RELAY_PASSWORD|g" \
     -e "s|\${ICECAST_MAX_CLIENTS}|$ICECAST_MAX_CLIENTS|g" \
+    -e "/<!--@LISTENER_AUTH_MOUNTS@-->/r $MOUNTS_XML" \
+    -e "/<!--@LISTENER_AUTH_MOUNTS@-->/d" \
     "$TEMPLATE" > "$RENDERED"
 chown icecast2 "$RENDERED" 2>/dev/null || true
 

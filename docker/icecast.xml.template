@@ -41,6 +41,14 @@
 
     <fileserve>1</fileserve>
 
+    <!-- Listener auth (#478): when state/icecast_listener_auth.txt is 'true',
+         the entrypoint replaces the marker below with one <mount> block per
+         stream mount, each carrying <authentication type="url"> pointing at
+         the controller's POST /listener-auth. Otherwise the marker is simply
+         dropped and every mount stays public. -->
+    <!--@LISTENER_AUTH_MOUNTS@-->
+
+
     <paths>
         <basedir>/usr/share/icecast2</basedir>
         <logdir>/var/log/icecast2</logdir>

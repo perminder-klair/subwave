@@ -1098,6 +1098,15 @@ const DEFAULTS = {
   // OFF drops the takeover and listeners start via the skin's own play button
   // (browsers still can't autoplay, so a tap is always required somewhere).
   ui: { boothBuddy: false, skin: 'classic', tuneInOverlay: true },
+  // Private-station controls (issue #478). `privatePlayer` hides the public
+  // web pages (player/landing) behind a "this station is private" screen —
+  // UI-level only, applies live. `listenerAuth` puts Icecast listener auth on
+  // every stream mount via URL auth calling back into POST /listener-auth;
+  // one shared password, no per-user accounts (Icecast can only do basic
+  // auth). Toggling listenerAuth re-renders icecast.xml, so it needs a mixer
+  // restart; password changes apply live (the controller validates every
+  // connect).
+  privacy: { privatePlayer: false, listenerAuth: false, listenerPassword: '' },
   // Global DJ prompt template. '' means "use DEFAULT_DJ_PROMPT_TEMPLATE".
   // Always the RESOLVED text of the active djPrompts entry — kept so
   // renderDjPrompt() (and an older controller sharing the same settings.json)
@@ -1919,6 +1928,20 @@ export async function load() {
           ? stored.ui.tuneInOverlay
           : DEFAULTS.ui.tuneInOverlay,
     },
+    privacy: {
+      privatePlayer:
+        typeof stored.privacy?.privatePlayer === 'boolean'
+          ? stored.privacy.privatePlayer
+          : DEFAULTS.privacy.privatePlayer,
+      listenerAuth:
+        typeof stored.privacy?.listenerAuth === 'boolean'
+          ? stored.privacy.listenerAuth
+          : DEFAULTS.privacy.listenerAuth,
+      listenerPassword:
+        typeof stored.privacy?.listenerPassword === 'string'
+          ? stored.privacy.listenerPassword
+          : DEFAULTS.privacy.listenerPassword,
+    },
     personas,
     activePersonaId,
     shows,
@@ -2323,6 +2346,9 @@ export function getRedacted() {
   }
   if (clone.scrobble?.listenbrainz) {
     clone.scrobble.listenbrainz.userToken = s.scrobble?.listenbrainz?.userToken ? 'set' : '';
+  }
+  if (clone.privacy) {
+    clone.privacy.listenerPassword = s.privacy?.listenerPassword ? 'set' : '';
   }
   return clone;
 }
@@ -3563,6 +3589,45 @@ export async function update(patch) {
       next.ui.tuneInOverlay = !!ui.tuneInOverlay;
     }
   }
+  if ('privacy' in patch) {
+    const pv = patch.privacy || {};
+    if (pv.privatePlayer !== undefined) {
+      next.privacy.privatePlayer = !!pv.privatePlayer;
+    }
+    // 'set' is the redaction sentinel from getRedacted() — ignore it so a
+    // round-tripped form doesn't overwrite the stored secret.
+    if (pv.listenerPassword !== undefined && pv.listenerPassword !== 'set') {
+      const v = String(pv.listenerPassword ?? '').trim();
+      if (v.length > 128) {
+        throw new Error('privacy.listenerPassword must be 0-128 chars');
+      }
+      // The password travels in basic-auth userinfo and ?auth= query strings;
+      // whitespace/control chars only cause client-side grief there.
+      if (/[\s]/.test(v)) {
+        throw new Error('privacy.listenerPassword must not contain whitespace');
+      }
+      next.privacy.listenerPassword = v;
+    }
+    if (pv.listenerAuth !== undefined) {
+      const v = !!pv.listenerAuth;
+      if (v && !next.privacy.listenerPassword) {
+        throw new Error('set a listener password before enabling stream auth');
+      }
+      if (v !== cur.privacy.listenerAuth) {
+        // Flipping the toggle adds/removes the <mount> auth blocks in
+        // icecast.xml, which only re-render on a broadcast restart. Password
+        // changes don't need this — URL auth validates live.
+        next.privacy.listenerAuth = v;
+        restart = true;
+      }
+    }
+    // Whatever combination the patch produced, never persist "auth on with no
+    // password" — the /listener-auth endpoint fails closed on that state and
+    // every listener would be locked out.
+    if (next.privacy.listenerAuth && !next.privacy.listenerPassword) {
+      throw new Error('set a listener password before enabling stream auth');
+    }
+  }
   if ('webhooks' in patch) {
     next.webhooks = validateWebhooksStrict(patch.webhooks, next.webhooks || []);
   }
@@ -3912,6 +3977,11 @@ const LIQ_AAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_aac_enabled.txt`;
 const LIQ_AAC_BITRATE_PATH = `${STATE_DIR}/liquidsoap_aac_bitrate.txt`;
 const LIQ_STREAM_BITRATE_PATH = `${STATE_DIR}/liquidsoap_stream_bitrate.txt`;
 const LIQ_STATION_NAME_PATH = `${STATE_DIR}/liquidsoap_station_name.txt`;
+// Read by the BROADCAST ENTRYPOINT (docker/broadcast-entrypoint.sh + the AIO
+// supervisor), not liquidsoap: only the literal value 'true' makes the
+// entrypoint render the per-mount <authentication type="url"> blocks into
+// icecast.xml on the next broadcast restart.
+const ICECAST_LISTENER_AUTH_PATH = `${STATE_DIR}/icecast_listener_auth.txt`;
 
 export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_JINGLE_RATIO_PATH, String(s.jingleRatio));
@@ -3925,6 +3995,10 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_AAC_BITRATE_PATH, String(s.stream.aacBitrate));
   await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));
   await writeFile(LIQ_STATION_NAME_PATH, s.station || DEFAULTS.station);
+  await writeFile(
+    ICECAST_LISTENER_AUTH_PATH,
+    s.privacy?.listenerAuth ? 'true' : 'false',
+  );
 }
 
 // Called from server.js startup so the files exist before Liquidsoap reads
@@ -3937,7 +4011,8 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(LIQ_ARCHIVE_ENABLED_PATH) ||
     !existsSync(LIQ_ARCHIVE_BITRATE_PATH) ||
     !existsSync(LIQ_OPUS_ENABLED_PATH) ||
-    !existsSync(LIQ_STREAM_BITRATE_PATH)
+    !existsSync(LIQ_STREAM_BITRATE_PATH) ||
+    !existsSync(ICECAST_LISTENER_AUTH_PATH)
   ) {
     await writeLiquidsoapSettings(s);
   }
