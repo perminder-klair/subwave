@@ -39,19 +39,14 @@ const ARCS: { id: ArcShape; label: string; hint: string }[] = [
   { id: 'peak-then-cool', label: 'Peak', hint: 'rise, then cool down' },
   { id: 'wind-down', label: 'Wind down', hint: 'high → mellow' },
 ];
-// Track-length band domain: 0 → 10:00 in 15s notches.
-const LEN_MAX = 600;
+// Band domains. Anchors parked at the extremes mean "unbounded" on that end.
+const LEN_MAX = 600;                              // track length: 0 → 10:00, 15s notches
 const LEN_STEP = 15;
-
-const DECADES: { label: string; fromYear: number; toYear: number }[] = [
-  { label: '60s', fromYear: 1960, toYear: 1969 },
-  { label: '70s', fromYear: 1970, toYear: 1979 },
-  { label: '80s', fromYear: 1980, toYear: 1989 },
-  { label: '90s', fromYear: 1990, toYear: 1999 },
-  { label: '00s', fromYear: 2000, toYear: 2009 },
-  { label: '10s', fromYear: 2010, toYear: 2019 },
-  { label: '20s', fromYear: 2020, toYear: 2029 },
-];
+const BPM_MIN = 60;                               // tempo: 60 → 200 bpm, 5 bpm notches
+const BPM_MAX = 200;
+const BPM_STEP = 5;
+const YEAR_MIN = 1950;                            // release year: 1950 → current year
+const YEAR_MAX = new Date().getFullYear();
 
 // Bar palette for the energy graph — theme-aware mixes rather than the mock's
 // light-theme hexes, so dark mode keeps the same low/med/high contrast. Raw
@@ -362,7 +357,12 @@ export default function PlaylistBuilderPanel() {
   const [genres, setGenres] = useState<string[]>([]);
   const [genreInput, setGenreInput] = useState('');
   const [energies, setEnergies] = useState<string[]>([]);
-  const [decades, setDecades] = useState<string[]>([]);
+  const [yearFrom, setYearFrom] = useState(YEAR_MIN);
+  const [yearTo, setYearTo] = useState(YEAR_MAX);
+  const [bpmOn, setBpmOn] = useState(false);
+  const [minBpm, setMinBpm] = useState(BPM_MIN);
+  const [maxBpm, setMaxBpm] = useState(BPM_MAX);
+  const [artists, setArtists] = useState<string[]>([]);
   const [arc, setArc] = useState<ArcShape>('flat');
   const [count, setCount] = useState(25);
   const [artistSpacing, setArtistSpacing] = useState(2);
@@ -419,6 +419,9 @@ export default function PlaylistBuilderPanel() {
   const [seedResults, setSeedResults] = useState<RawTrackRow[] | null>(null);
   const [addQuery, setAddQuery] = useState('');
   const [addResults, setAddResults] = useState<RawTrackRow[] | null>(null);
+  const [artistQuery, setArtistQuery] = useState('');
+  const [artistResults, setArtistResults] = useState<string[] | null>(null);
+  const [genreList, setGenreList] = useState<{ value: string; songCount: number }[] | null>(null);
 
   const dragIndex = useRef<number | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -501,20 +504,27 @@ export default function PlaylistBuilderPanel() {
       moods,
       genres,
       energies,
-      eras: DECADES.filter(d => decades.includes(d.label)).map(d => ({ fromYear: d.fromYear, toYear: d.toYear })),
+      artists,
+      eras: yearFrom > YEAR_MIN || yearTo < YEAR_MAX
+        ? [{ fromYear: yearFrom > YEAR_MIN ? yearFrom : null, toYear: yearTo < YEAR_MAX ? yearTo : null }]
+        : [],
       artistSpacing,
       excludeRecentlyPlayed: excludeRecent,
       instrumentalOnly,
       minTrackSeconds: capOn && minSec > 0 ? minSec : undefined,
       maxTrackSeconds: capOn && maxSec < LEN_MAX ? maxSec : undefined,
+      minBpm: bpmOn && minBpm > BPM_MIN ? minBpm : undefined,
+      maxBpm: bpmOn && maxBpm < BPM_MAX ? maxBpm : undefined,
     },
     sources: { recentlyAdded },
     excludeTrackIds,
-  }), [prompt, seeds, seedArtist, count, arc, moods, genres, energies, decades, artistSpacing, excludeRecent, instrumentalOnly, capOn, minSec, maxSec, recentlyAdded]);
+  }), [prompt, seeds, seedArtist, count, arc, moods, genres, energies, artists, yearFrom, yearTo, artistSpacing, excludeRecent, instrumentalOnly, capOn, minSec, maxSec, bpmOn, minBpm, maxBpm, recentlyAdded]);
 
   const hasIntent = Boolean(
     prompt.trim() || seeds.length || seedArtist || recentlyAdded || moods.length ||
-    genres.length || energies.length || decades.length || instrumentalOnly,
+    genres.length || artists.length || energies.length || instrumentalOnly ||
+    yearFrom > YEAR_MIN || yearTo < YEAR_MAX ||
+    (bpmOn && (minBpm > BPM_MIN || maxBpm < BPM_MAX)),
   );
 
   const generating = view === 'generating';
@@ -598,6 +608,47 @@ export default function PlaylistBuilderPanel() {
     }, 250);
     return () => { stale = true; window.clearTimeout(h); };
   }, [addQuery, adminFetch]);
+
+  // Genre vocabulary — fetched once on first focus; suggestions filter locally.
+  const loadGenres = useCallback(async () => {
+    if (genreList) return;
+    try {
+      const r = await adminFetch('/library/genres');
+      const j = await r.json();
+      setGenreList(j.genres || []);
+    } catch { setGenreList([]); }
+  }, [adminFetch, genreList]);
+
+  const genreSuggestions = useMemo(() => {
+    if (!genreList) return null;
+    const q = genreInput.trim().toLowerCase();
+    if (!q) return null;
+    const chosen = new Set(genres.map(g => g.toLowerCase()));
+    const hits = genreList.filter(g => g.value.toLowerCase().includes(q) && !chosen.has(g.value.toLowerCase()));
+    return hits.slice(0, 8);
+  }, [genreList, genreInput, genres]);
+
+  // Artist-filter search (debounced) — suggests distinct artist credits.
+  useEffect(() => {
+    const q = artistQuery.trim();
+    if (q.length < 2) { setArtistResults(null); return; }
+    let stale = false;
+    const h = window.setTimeout(async () => {
+      try {
+        const r = await adminFetch(`/dj/search?q=${encodeURIComponent(q)}&limit=20`);
+        const j = await r.json();
+        const seen = new Set(artists.map(a => a.toLowerCase()));
+        const names: string[] = [];
+        for (const row of (j.results || []) as RawTrackRow[]) {
+          const a = (row.artist || '').trim();
+          if (a && !seen.has(a.toLowerCase())) { seen.add(a.toLowerCase()); names.push(a); }
+          if (names.length >= 6) break;
+        }
+        if (!stale) setArtistResults(names);
+      } catch { if (!stale) setArtistResults([]); }
+    }, 250);
+    return () => { stale = true; window.clearTimeout(h); };
+  }, [artistQuery, adminFetch, artists]);
 
   // Distinct artists in the seed results — the "seed the artist" rows.
   const seedArtists = useMemo(() => {
@@ -903,6 +954,35 @@ export default function PlaylistBuilderPanel() {
               </div>
             </div>
 
+            {/* bpm band — analyzer tempo */}
+            <div className="mb-5">
+              <div className="mb-[9px] flex items-center justify-between">
+                <Eyeb muted={!bpmOn}>Tempo</Eyeb>
+                <div className="flex items-center gap-2.5">
+                  {bpmOn && (
+                    <span className="font-mono text-[11px] font-bold text-vermilion">
+                      {minBpm > BPM_MIN && maxBpm < BPM_MAX ? `${minBpm} – ${maxBpm} bpm`
+                        : minBpm > BPM_MIN ? `≥ ${minBpm} bpm`
+                          : maxBpm < BPM_MAX ? `≤ ${maxBpm} bpm`
+                            : 'any bpm'}
+                    </span>
+                  )}
+                  <Switch checked={bpmOn} onCheckedChange={setBpmOn} />
+                </div>
+              </div>
+              <DualRange
+                min={BPM_MIN} max={BPM_MAX} step={BPM_STEP}
+                lo={minBpm} hi={maxBpm} disabled={!bpmOn}
+                onLo={setMinBpm} onHi={setMaxBpm}
+                loLabel="minimum tempo in bpm"
+                hiLabel="maximum tempo in bpm"
+              />
+              <div className="mt-[5px] flex justify-between font-mono text-[9px] text-muted">
+                <span>{BPM_MIN}</span>
+                <span>{BPM_MAX} bpm</span>
+              </div>
+            </div>
+
             <div className="mb-5 h-px bg-separator-strong" />
 
             {/* energy arc */}
@@ -937,31 +1017,115 @@ export default function PlaylistBuilderPanel() {
               </div>
             </div>
 
-            {/* era */}
+            {/* release year band */}
             <div className="mb-5">
-              <div className="mb-[9px]"><Eyeb>Era</Eyeb></div>
-              <div className="flex flex-wrap gap-1.5">
-                {DECADES.map(d => (
-                  <Tog key={d.label} on={decades.includes(d.label)} onClick={() => toggle(decades, setDecades, d.label)}>{d.label}</Tog>
-                ))}
+              <div className="mb-[9px] flex items-center justify-between">
+                <Eyeb>Release year</Eyeb>
+                <span className={cn(
+                  'font-mono text-[11px]',
+                  yearFrom > YEAR_MIN || yearTo < YEAR_MAX ? 'font-bold text-vermilion' : 'text-muted',
+                )}>
+                  {yearFrom > YEAR_MIN && yearTo < YEAR_MAX ? `${yearFrom} – ${yearTo}`
+                    : yearFrom > YEAR_MIN ? `since ${yearFrom}`
+                      : yearTo < YEAR_MAX ? `until ${yearTo}`
+                        : 'any year'}
+                </span>
+              </div>
+              <DualRange
+                min={YEAR_MIN} max={YEAR_MAX} step={1}
+                lo={yearFrom} hi={yearTo}
+                onLo={setYearFrom} onHi={setYearTo}
+                loLabel="earliest release year"
+                hiLabel="latest release year"
+              />
+              <div className="mt-[5px] flex justify-between font-mono text-[9px] text-muted">
+                <span>{YEAR_MIN}</span>
+                <span>{YEAR_MAX}</span>
               </div>
             </div>
 
             {/* genres */}
             <div className="mb-5">
               <div className="mb-[9px]"><Eyeb>Genres</Eyeb></div>
-              <input
-                value={genreInput}
-                onChange={e => setGenreInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addGenre(); } }}
-                onBlur={() => { if (genreInput.trim()) addGenre(); }}
-                placeholder="Add a genre…"
-                className={searchInputClass}
-              />
+              <div className="relative">
+                <input
+                  value={genreInput}
+                  onChange={e => setGenreInput(e.target.value)}
+                  onFocus={loadGenres}
+                  onKeyDown={e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addGenre(); } }}
+                  onBlur={() => { if (genreInput.trim()) addGenre(); }}
+                  placeholder="Add a genre…"
+                  className={searchInputClass}
+                />
+                {genreSuggestions && genreSuggestions.length > 0 && (
+                  <div className="absolute z-20 max-h-56 w-full overflow-auto border border-t-0 border-ink bg-bg">
+                    {genreSuggestions.map(g => (
+                      <button
+                        key={g.value}
+                        type="button"
+                        // preventDefault on mousedown so the input's onBlur (which
+                        // commits raw text) doesn't fire before this click lands.
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => {
+                          setGenres(prev => prev.some(x => x.toLowerCase() === g.value.toLowerCase()) ? prev : [...prev, g.value]);
+                          setGenreInput('');
+                        }}
+                        className="flex w-full items-center justify-between gap-2 border-b border-separator-soft px-[11px] py-2 text-left last:border-b-0 hover:bg-ink-soft"
+                      >
+                        <span className="truncate text-[13px]">{g.value}</span>
+                        <span className="flex flex-none items-center gap-2 font-mono text-[10px] text-muted">
+                          {g.songCount} tracks <Plus className="size-3.5" />
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
               {genres.length > 0 && (
                 <div className="mt-2.5 flex flex-wrap gap-[7px]">
                   {genres.map(g => (
                     <Chip key={g} onRemove={() => setGenres(genres.filter(x => x !== g))}>{g}</Chip>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* artists — allow-list filter */}
+            <div className="mb-5">
+              <div className="mb-[9px] flex items-center justify-between">
+                <Eyeb>Artists</Eyeb>
+                <span className="font-mono text-[10px] text-muted">only these artists</span>
+              </div>
+              <div className="relative">
+                <input
+                  value={artistQuery}
+                  onChange={e => setArtistQuery(e.target.value)}
+                  placeholder="Add an artist…"
+                  className={searchInputClass}
+                />
+                {artistResults && artistResults.length > 0 && (
+                  <div className="absolute z-20 max-h-56 w-full overflow-auto border border-t-0 border-ink bg-bg">
+                    {artistResults.map(a => (
+                      <button
+                        key={a}
+                        type="button"
+                        onClick={() => {
+                          if (!artists.some(x => x.toLowerCase() === a.toLowerCase())) setArtists([...artists, a]);
+                          setArtistQuery(''); setArtistResults(null);
+                        }}
+                        className="flex w-full items-center justify-between gap-2 border-b border-separator-soft px-[11px] py-2 text-left last:border-b-0 hover:bg-ink-soft"
+                      >
+                        <span className="truncate text-[13px]">{a}</span>
+                        <Plus className="size-3.5 flex-none text-muted" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+              {artists.length > 0 && (
+                <div className="mt-2.5 flex flex-wrap gap-[7px]">
+                  {artists.map(a => (
+                    <Chip key={a} onRemove={() => setArtists(artists.filter(x => x !== a))}>{a}</Chip>
                   ))}
                 </div>
               )}

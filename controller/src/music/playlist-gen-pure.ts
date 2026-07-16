@@ -25,6 +25,7 @@ export interface PoolTrack {
   genre?: string | null;
   moods?: string[];
   energy?: string | null;            // 'low' | 'medium' | 'high' | null
+  bpm?: number | null;               // analyzer tempo; null = un-analysed
   instrumental?: boolean | null;     // true = no vocals, false = vocals, null = un-analysed
   // Relevance/similarity in [0..1]-ish; higher is better. Deterministic ranking
   // and cap keep the highest-scoring rows.

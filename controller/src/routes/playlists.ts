@@ -149,8 +149,11 @@ router.post('/playlists/generate', requireAdmin, async (req, res) => {
     input.sources?.recentlyAdded ||
     input.knobs?.moods?.length ||
     input.knobs?.genres?.length ||
+    input.knobs?.artists?.length ||
     input.knobs?.energies?.length ||
     input.knobs?.eras?.length ||
+    input.knobs?.minBpm ||
+    input.knobs?.maxBpm ||
     input.knobs?.instrumentalOnly,
   );
   if (!hasIntent) {

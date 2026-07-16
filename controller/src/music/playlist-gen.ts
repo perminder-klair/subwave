@@ -47,11 +47,14 @@ export interface Knobs {
   genres?: string[];
   moods?: string[];
   energies?: string[];
+  artists?: string[];         // allow-list: only tracks credited to these artists
   artistSpacing?: number;
   excludeRecentlyPlayed?: boolean;
   instrumentalOnly?: boolean;
   minTrackSeconds?: number;   // only include tracks this long or longer (0/undefined = no floor)
   maxTrackSeconds?: number;   // only include tracks this long or shorter (0/undefined = no cap)
+  minBpm?: number;            // analyzer tempo band (0/undefined = unbounded end)
+  maxBpm?: number;
 }
 
 export interface Sources {
@@ -109,6 +112,7 @@ function norm(r: any, source: string, baseScore: number): PoolTrack {
     genre: r.genre ?? null,
     moods: Array.isArray(r.moods) ? r.moods : [],
     energy: r.energy ?? null,
+    bpm: typeof r.bpm === 'number' && r.bpm > 0 ? r.bpm : null,
     instrumental,
     score: typeof r._similarity === 'number' ? r._similarity : baseScore,
     sources: [source],
@@ -208,6 +212,18 @@ export async function buildCandidatePool(
     } catch { /* ignore */ }
   }
 
+  // Knob artists → their catalogue (top songs + a name search) so an
+  // artists-only recipe has something to choose from; the allow-list filter
+  // below trims the search noise back to actual credits.
+  for (const artist of (knobs.artists || []).slice(0, 6)) {
+    try {
+      pools.push(normMany(await subsonic.getTopSongs(artist, { count: 40 }), `artist:${artist}`, 0.65));
+    } catch { /* ignore */ }
+    try {
+      pools.push(normMany(await subsonic.search(artist, { songCount: 40 }), `artist-search:${artist}`, 0.45));
+    } catch { /* ignore */ }
+  }
+
   // Local library filter — the strongest source for instrumental + energy/era,
   // and it carries the instrumental flag the semantic rows don't.
   {
@@ -247,9 +263,35 @@ export async function buildCandidatePool(
     pool = mergePools(pools);
   }
 
+  // Fill gaps from the library store: Subsonic rows never carry bpm (and can
+  // miss duration/tags) — the analyzer/tagger data lives in library.db, and
+  // the soft filters below are only as good as the fields they can see.
+  for (const t of pool) {
+    if (t.bpm == null || t.durationSec == null || t.energy == null || !t.moods?.length) {
+      const tag = library.get(t.id);
+      if (!tag) continue;
+      if (t.bpm == null && typeof tag.bpm === 'number' && tag.bpm > 0) t.bpm = tag.bpm;
+      if (t.durationSec == null && typeof tag.durationSec === 'number' && tag.durationSec > 0) t.durationSec = tag.durationSec;
+      if (t.energy == null && tag.energy) t.energy = tag.energy;
+      if (!t.moods?.length && Array.isArray(tag.moods) && tag.moods.length) t.moods = tag.moods;
+    }
+  }
+
   // ── Hard/soft filters ──
   const excluded = new Set([...(input.excludeTrackIds || []), ...(knobs.excludeRecentlyPlayed ? (input.recentPlayIds || []) : [])]);
   if (excluded.size) pool = pool.filter((t) => !excluded.has(t.id));
+
+  // Artist allow-list: keep only tracks whose artist credit mentions one of
+  // the chosen names ("A & B", "A feat. C" all count). Soft — reverts with a
+  // reason if the library barely knows these artists.
+  if (knobs.artists?.length) {
+    const wanted = knobs.artists.map((a) => a.trim().toLowerCase()).filter(Boolean);
+    const matches = pool.filter((t) => {
+      const credit = (t.artist || '').toLowerCase();
+      return credit !== '' && wanted.some((w) => credit.includes(w));
+    });
+    pool = revertIfStarved(matches, pool, knobs, reasons, 'artist');
+  }
 
   // Instrumental-only (Kate #3): drop known-vocal; keep instrumental + unknown.
   if (knobs.instrumentalOnly) {
@@ -297,11 +339,27 @@ export async function buildCandidatePool(
     pool = revertIfStarved(withinLen, pool, knobs, reasons, 'track-length');
   }
 
+  // BPM band (analyzer tempo): same soft semantics — known out-of-band drops,
+  // un-analysed stays. Flag when coverage is too thin for the band to bite.
+  const minBpm = knobs.minBpm && knobs.minBpm > 0 ? knobs.minBpm : 0;
+  const maxBpm = knobs.maxBpm && knobs.maxBpm > 0 ? knobs.maxBpm : 0;
+  if (minBpm || maxBpm) {
+    const known = pool.filter((t) => typeof t.bpm === 'number' && t.bpm > 0).length;
+    if (known < Math.min(clampCount(knobs.targetCount ?? DEFAULT_COUNT), 12)) {
+      reasons.push('bpm filter is best-effort — few tracks have tempo analysis (run the analyzer pass in Library)');
+    }
+    const withinBpm = pool.filter((t) =>
+      !(typeof t.bpm === 'number' && t.bpm > 0) ||
+      ((!minBpm || t.bpm >= minBpm) && (!maxBpm || t.bpm <= maxBpm)),
+    );
+    pool = revertIfStarved(withinBpm, pool, knobs, reasons, 'bpm');
+  }
+
   // Artist-diversity cap: keep the candidate list varied so one prolific artist
   // / a freshly-imported album can't dominate what the model (and the fallback)
   // sees. Skipped when the operator INTENTIONALLY narrows to an artist or seed
   // tracks — that focus is the point.
-  const artistSeeded = Boolean(input.seedArtist?.trim() || input.seedTrackIds?.length);
+  const artistSeeded = Boolean(input.seedArtist?.trim() || input.seedTrackIds?.length || knobs.artists?.length);
   if (!artistSeeded) {
     const target = clampCount(knobs.targetCount ?? DEFAULT_COUNT);
     // Allow a few per artist but never let one artist exceed ~a third of a
