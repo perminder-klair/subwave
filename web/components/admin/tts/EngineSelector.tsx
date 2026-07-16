@@ -7,7 +7,7 @@
 // RadioOption pattern. Tailwind-only
 // (no inline styles — issue #50).
 import { cn } from '../../../lib/cn';
-import { ENGINE_META, engineStatus, engineEnableHint, type EngineAvailability } from './engineMeta';
+import { ENGINE_META, engineStatus, type EngineAvailability } from './engineMeta';
 
 interface EngineSelectorProps {
   // Currently selected engine id.
@@ -21,7 +21,7 @@ interface EngineSelectorProps {
 }
 
 export function EngineSelector({ value, engineIds, available, onChange, className }: EngineSelectorProps) {
-  const hint = engineEnableHint(value, available);
+  const hint = engineStatus(value, available).hint;
   return (
     <div className={cn('grid gap-2.5', className)}>
       <div
@@ -33,7 +33,7 @@ export function EngineSelector({ value, engineIds, available, onChange, classNam
           const meta = ENGINE_META[id];
           const status = engineStatus(id, available);
           const active = value === id;
-          const isUnavailable = available?.[id] === false && status.label !== 'starting…';
+          const muted = status.state === 'off';
           return (
             <button
               key={id}
@@ -43,7 +43,7 @@ export function EngineSelector({ value, engineIds, available, onChange, classNam
               onClick={() => onChange(id)}
               className={cn(
                 'grid cursor-pointer content-start gap-1.5 border p-3 text-left font-[inherit]',
-                isUnavailable && !active && 'opacity-60',
+                muted && !active && 'opacity-60',
                 active
                   ? 'border-[var(--accent)] bg-[var(--accent-soft)]'
                   : 'border-ink bg-transparent hover:bg-[var(--ink-softer)]',
@@ -88,12 +88,23 @@ export function EngineSelector({ value, engineIds, available, onChange, classNam
           );
         })}
       </div>
-      {hint && (
-        <p role="status" className="border border-[var(--separator-strong)] bg-[var(--ink-softer)] px-3 py-2 text-[11px] leading-[1.55] text-muted">
-          {hint.reason}.
-          {hint.action && <> Next step: <code>{hint.action}</code>.</>}
-        </p>
-      )}
+      {/* Enable hint for the selected engine. The live region stays mounted
+          (content toggles) so screen readers reliably announce it — a region
+          inserted on demand can miss its first announcement. */}
+      <p
+        role="status"
+        className={cn(
+          'text-[11px] leading-[1.55] text-muted',
+          hint && 'border border-[var(--separator-strong)] bg-[var(--ink-softer)] px-3 py-2',
+        )}
+      >
+        {hint && (
+          <>
+            {hint.reason}.
+            {hint.action && <> Next step: <code>{hint.action}</code>.</>}
+          </>
+        )}
+      </p>
     </div>
   );
 }
