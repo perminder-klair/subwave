@@ -544,6 +544,13 @@ export async function getLyrics(songId) {
 }
 
 // Async iterator over every song in the library. Walks albums in batches.
+// Each yielded song is annotated with the album-level era signals Navidrome
+// only exposes on the album record (issue #842): `albumIsCompilation`
+// (OpenSubsonic isCompilation) and `albumOriginalYear` (originalReleaseDate
+// .year — the album's TRUE first-release year on reissues, absent on most
+// rips). The walk (tag-library.walkNavidrome) turns these into per-track
+// original-year/compilation columns; the raw fields ride here so policy stays
+// out of the client.
 export async function* iterateAllSongs() {
   let offset = 0;
   const BATCH = 500;
@@ -552,9 +559,14 @@ export async function* iterateAllSongs() {
     if (albums.length === 0) break;
     for (const album of albums) {
       try {
-        // getAlbum already drops station-archive recordings (issue #273).
-        const songs = await getAlbum(album.id);
-        for (const s of songs) yield s;
+        const r = await call('getAlbum', { id: album.id });
+        const isCompilation = typeof r.album?.isCompilation === 'boolean' ? r.album.isCompilation : null;
+        const ord = r.album?.originalReleaseDate?.year;
+        const originalYear = Number.isFinite(ord) && ord > 0 ? ord : null;
+        // Same station-archive drop as getAlbum() (issue #273).
+        for (const s of rejectArchive(r.album?.song || [])) {
+          yield { ...s, albumIsCompilation: isCompilation, albumOriginalYear: originalYear };
+        }
       } catch (err) {
         console.error(`[subsonic] getAlbum(${album.id}) failed: ${err.message}`);
       }

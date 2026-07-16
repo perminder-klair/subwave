@@ -231,6 +231,15 @@ export function loccaEmbedBaseUrl(cfg: any): string {
 // goes through createOpenAI with this base, keyed by REQUESTY_API_KEY.
 export const DEFAULT_REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
 
+// OpenRouter app attribution (openrouter.ai/docs/app-attribution): HTTP-Referer
+// is the app's identity in OpenRouter's rankings (required for an app page),
+// X-Title its display name. Sent on every OpenRouter request — chat, embeddings,
+// and the key-validation probes — so usage shows up as SUB/WAVE, not anonymous.
+export const OPENROUTER_APP_HEADERS = {
+  'HTTP-Referer': 'https://getsubwave.com',
+  'X-Title': 'SUB/WAVE',
+} as const;
+
 // Build a LanguageModel for any self-hosted OpenAI-compatible server (llama.cpp,
 // vLLM, LM Studio, locca). `.chat()` pins /v1/chat/completions — these servers
 // don't implement the Responses API the default `provider(id)` would target.
@@ -319,7 +328,7 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       break;
     }
     case 'openrouter': {
-      const provider = createOpenRouter({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
+      const provider = createOpenRouter({ fetch: debugFetch, headers: OPENROUTER_APP_HEADERS, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       // OpenRouter reads `reasoning` from construction settings, not per-call
       // providerOptions — so the toggle must be wired HERE or it's dead (we used
       // to pass nothing → models reasoned by default). We MINIMISE rather than

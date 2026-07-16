@@ -12,6 +12,7 @@ import * as pocketTts from './pocketTts.js';
 import { heavyEnabledEngines } from './ttsHeavyClient.js';
 import * as remoteTts from './remoteTts.js';
 import { normalizeForSpeech } from './speech-text.js';
+import { localizedPreviewText } from './preview-text.js';
 import * as cloud from '../llm/speech.js';
 import { stripThinking } from '../llm/sdk.js';
 import * as settings from '../settings.js';
@@ -247,12 +248,17 @@ const PREVIEW_TEXT_MAX = 200;
 const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
 
 export async function synthesizeSample(
-  { engine, voice = '', cloudProvider = 'openai', speed, lang, text, voiceSettings }: {
+  { engine, voice = '', cloudProvider = 'openai', speed, lang, language, text, voiceSettings }: {
     engine: string;
     voice?: string;
     cloudProvider?: string;
     speed?: number;
     lang?: string;
+    // Persona's free-text on-air language ("Turkish", "Türkçe"). When set and
+    // no explicit `text` is given, the sample sentence is looked up in that
+    // language (preview-text.ts) so the audition matches what the persona
+    // sounds like on air; unrecognized/empty falls back to the English line.
+    language?: string;
     text?: string;
     // Unsaved ElevenLabs voice_settings sliders to audition (issue #696) —
     // same field names as settings.tts.cloud so they merge straight into the
@@ -266,7 +272,9 @@ export async function synthesizeSample(
   },
 ): Promise<string> {
   if (!ENGINES.includes(engine)) throw new Error(`Unknown engine: ${engine}`);
-  const raw = (typeof text === 'string' && text.trim()) ? text.trim() : DEFAULT_PREVIEW_TEXT;
+  const raw = (typeof text === 'string' && text.trim())
+    ? text.trim()
+    : (localizedPreviewText(language) ?? DEFAULT_PREVIEW_TEXT);
   const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), settings.get().tts?.corrections);
   const scale = settings.clampTtsSpeed(speed);
   // Clamp the audition voice_settings to ElevenLabs' [0,1] the same way

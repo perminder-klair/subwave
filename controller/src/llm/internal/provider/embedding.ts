@@ -18,7 +18,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOllama } from 'ai-sdk-ollama';
 import * as settings from '../../../settings.js';
-import { llmCfg, ollamaBaseUrl, loccaEmbedBaseUrl } from './registry.js';
+import { llmCfg, ollamaBaseUrl, loccaEmbedBaseUrl, OPENROUTER_APP_HEADERS } from './registry.js';
 
 // Separate from the registry's language-model cache — the signature is prefixed
 // `embed|` so there's no key overlap, and keeping it local avoids exporting a
@@ -226,6 +226,7 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
         baseURL: 'https://openrouter.ai/api/v1',
         apiKey: cfg.apiKey || process.env.OPENROUTER_API_KEY || 'unused',
         name: 'openrouter',
+        headers: OPENROUTER_APP_HEADERS,
       });
       return provider.textEmbeddingModel(id);
     }
