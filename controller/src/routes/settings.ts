@@ -113,6 +113,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         likes: s.likes,
         audio: s.audio,
         sfx: s.sfx,
+        beds: s.beds,
         ui: s.ui,
         scrobble: s.scrobble,
       },
