@@ -56,8 +56,9 @@ interface LibrarySectionProps extends SectionProps {
 export function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: LibrarySectionProps) {
   const e = form.embedding;
   const [embeddingKeyInput, setEmbeddingKeyInput] = useState('');
+  const [compatEmbedKeyInput, setCompatEmbedKeyInput] = useState('');
 
-  useEffect(() => { setEmbeddingKeyInput(''); }, [form.embedding.provider]);
+  useEffect(() => { setEmbeddingKeyInput(''); setCompatEmbedKeyInput(''); }, [form.embedding.provider]);
 
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
@@ -102,8 +103,16 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           lastfmTags: e.enrichment.lastfmTags,
           lyrics: e.enrichment.lyrics,
         },
+        // openai-compatible bearer token — write only when typed, 'set' sentinel
+        // from getRedacted() is ignored server-side so it never overwrites the key.
+        ...(effectiveProvider === 'openai-compatible' && compatEmbedKeyInput.trim()
+          ? { apiKey: compatEmbedKeyInput.trim() }
+          : {}),
       },
     });
+    if (effectiveProvider === 'openai-compatible' && compatEmbedKeyInput.trim()) {
+      notify.ok('Bearer token saved'); setCompatEmbedKeyInput(''); refresh();
+    }
     // Save embedding API key override if typed (cloud embedding providers only —
     // embedKeyVar is set only for providers that use a conventional key).
     if (embedKeyVar && embeddingKeyInput.trim()) {
@@ -175,6 +184,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
     if (e.model) p.set('model', e.model);
     if (e.baseUrl) p.set('baseUrl', e.baseUrl);
     if (e.ollamaUrl) p.set('ollamaUrl', e.ollamaUrl);
+    if (compatEmbedKeyInput.trim()) p.set('apiKey', compatEmbedKeyInput.trim());
     return p.toString();
   };
 
@@ -492,6 +502,28 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 {' '}Must be reachable from the controller container. Use the host
                 LAN/Tailscale IP or <code>host.docker.internal</code>, not{' '}
                 <code>127.0.0.1</code>.
+              </div>
+            </div>
+          )}
+
+          {effectiveProvider === 'openai-compatible' && (
+            <div className="field">
+              <Label>Bearer token</Label>
+              <Input
+                type="password"
+                value={compatEmbedKeyInput}
+                onChange={(ev: ChangeEvent<HTMLInputElement>) => setCompatEmbedKeyInput(ev.target.value)}
+                placeholder={
+                  (data.values?.embedding as { apiKey?: string })?.apiKey === 'set'
+                    ? '•••••• (on file)'
+                    : 'Bearer token (optional)'
+                }
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">
+                Optional — only needed when the embedding server requires bearer
+                authentication. Saved to <code>settings.json</code>, takes effect
+                on next save.
               </div>
             </div>
           )}

@@ -811,7 +811,7 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/settings/embedding/probe', requireAdmin, async (req, res) => {
   const overrides: Record<string, string> = {};
-  for (const k of ['provider', 'model', 'baseUrl', 'ollamaUrl']) {
+  for (const k of ['provider', 'model', 'baseUrl', 'ollamaUrl', 'apiKey']) {
     const v = req.query[k];
     if (typeof v === 'string' && v.trim()) overrides[k] = v.trim();
   }
