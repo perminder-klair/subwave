@@ -586,15 +586,12 @@ class VocalActivityDetector:
         if "vocals" not in self.sources:
             raise RuntimeError(f"demucs model {DEMUCS_MODEL} has no 'vocals' stem")
 
-    def detect(self, stereo, sr, librosa, min_loud=0.0):
-        """stereo: float32 array shaped (2, N) at DEMUCS_SR. Returns a list of
-        {startMs,endMs} where the isolated vocal stem is active — possibly empty
-        (an instrumental). Raises on failure; the caller degrades to None.
-        `min_loud` is an absolute RMS floor on the stem's loud reference: the
-        relative threshold below self-scales, so a window that is pure
-        separation bleed (a vocal-free fading outro) would otherwise emit
-        artefact ranges — the floor turns those into a clean []. 0.0 = off
-        (the head window keeps its historical behaviour)."""
+    def separate(self, stereo):
+        """stereo: float32 array shaped (2, N) at DEMUCS_SR. One apply_model
+        pass → {stem_name: float32 ndarray (channels, N)} for all model stems
+        (drums/bass/other/vocals for htdemucs). The single separation is
+        shared by vocal-activity detection AND the stem cache (feature:
+        stem-blend transitions) — never run Demucs twice on one window."""
         import numpy as np
         import torch
 
@@ -605,7 +602,27 @@ class VocalActivityDetector:
 
         with torch.no_grad():
             est = apply_model(self.model, wav.unsqueeze(0), device="cpu")[0]
-        vocals = est[self.sources.index("vocals")].mean(dim=0).cpu().numpy()
+        return {
+            name: est[i].cpu().numpy()
+            for i, name in enumerate(self.sources)
+        }
+
+    def detect(self, stereo, sr, librosa, min_loud=0.0, stems=None):
+        """stereo: float32 array shaped (2, N) at DEMUCS_SR. Returns a list of
+        {startMs,endMs} where the isolated vocal stem is active — possibly empty
+        (an instrumental). Raises on failure; the caller degrades to None.
+        `min_loud` is an absolute RMS floor on the stem's loud reference: the
+        relative threshold below self-scales, so a window that is pure
+        separation bleed (a vocal-free fading outro) would otherwise emit
+        artefact ranges — the floor turns those into a clean []. 0.0 = off
+        (the head window keeps its historical behaviour).
+        `stems` (optional): a pre-computed separate() result for this window,
+        so a caller that also caches stems pays for one separation, not two."""
+        import numpy as np
+
+        if stems is None:
+            stems = self.separate(stereo)
+        vocals = stems["vocals"].mean(axis=0)
 
         # RMS envelope of the vocal stem, thresholded against its own loud level
         # (40th-pct of the loud half) — robust to overall mix level. Frames where
@@ -700,6 +717,22 @@ def get_vocal_detector(force=False):
     return _vocal_detector
 
 
+def write_stems(stems, window, dest_dir):
+    """Persist a separate() result as 16-bit FLAC at DEMUCS_SR into dest_dir
+    as <window>-<stem>.flac (feature: stem-blend transitions — the cache that
+    makes transition renders a fast mix instead of a fresh separation).
+    tmp+rename per file so a crashed write never leaves a truncated stem for
+    the render op to trust. Raises on failure; callers degrade."""
+    import soundfile as sf
+
+    os.makedirs(dest_dir, exist_ok=True)
+    for name, data in stems.items():
+        path = os.path.join(dest_dir, f"{window}-{name}.flac")
+        tmp = path + ".tmp"
+        sf.write(tmp, data.T, DEMUCS_SR, subtype="PCM_16", format="FLAC")
+        os.replace(tmp, path)
+
+
 def fetch_audio(url):
     """Download (capped) to a temp file. Returns (path, complete) — `complete`
     is False when the byte cap truncated the download, which vetoes outro
@@ -759,7 +792,7 @@ def measure_loudness(y, sr):
         return None, None
 
 
-def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None):
+def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None, stems_dir=None):
     import numpy as np
 
     # A controller-provided path is pre-fetched onto the shared volume and
@@ -818,14 +851,26 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None)
         # successful run with no detected vocals emits [] — the distinct "empty"
         # value tells the controller this track WAS analysed (an instrumental),
         # so the backfill scope doesn't keep re-targeting it.
-        detector = None if vocal is False else get_vocal_detector(force=vocal is True)
+        # A stems_dir request implies separation even when vocal detection
+        # wasn't asked for — the stem cache and vocal ranges share one
+        # apply_model pass per window. Explicit vocal=False still wins.
+        detector = None if vocal is False else get_vocal_detector(force=vocal is True or bool(stems_dir))
+        stems_cached = None
         if detector is not None:
             try:
                 ys, _srs = librosa.load(
                     path, sr=DEMUCS_SR, mono=False, duration=ANALYZE_SECONDS
                 )
                 if ys is not None and np.size(ys) > 0:
-                    vocal_ranges = detector.detect(ys, DEMUCS_SR, librosa)
+                    head_stems = detector.separate(ys)
+                    vocal_ranges = detector.detect(ys, DEMUCS_SR, librosa, stems=head_stems)
+                    if stems_dir:
+                        try:
+                            write_stems(head_stems, "head", stems_dir)
+                            stems_cached = True
+                        except Exception as e:  # noqa: BLE001 — cache is best-effort
+                            log(f"stem cache write (head) failed: {e}")
+                            stems_cached = False
             except Exception as e:  # noqa: BLE001 — vocal activity is best-effort
                 log(f"vocal activity failed: {e}")
                 vocal_ranges = None
@@ -847,9 +892,15 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None)
                     offset=tail_offset, duration=OUTRO_SECONDS,
                 )
                 if y_tail is not None and np.size(y_tail) > 0:
+                    tail_stems = detector.separate(y_tail)
                     tail_vocals = detector.detect(
-                        y_tail, DEMUCS_SR, librosa, min_loud=0.01
+                        y_tail, DEMUCS_SR, librosa, min_loud=0.01, stems=tail_stems
                     )
+                    if stems_dir:
+                        try:
+                            write_stems(tail_stems, "tail", stems_dir)
+                        except Exception as e:  # noqa: BLE001 — cache is best-effort
+                            log(f"stem cache write (tail) failed: {e}")
                     shift_ms = tail_offset * 1000.0
                     outro["vocalRanges"] = [
                         {
@@ -961,6 +1012,10 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None)
     # how every downstream consumer knows to behave as today.
     if audio_embedding is not None:
         result["audio_embedding"] = audio_embedding
+    # Stem-cache outcome (only when a stems_dir was requested): True = head
+    # stems written (tail rides along when the outro was computable).
+    if stems_cached is not None:
+        result["stems_cached"] = stems_cached
     return result
 
 
@@ -1065,7 +1120,7 @@ def main():
             result = analyze(
                 librosa, url=url, path=path,
                 embed=req.get("embed"), vocal=req.get("vocal"),
-                complete=req.get("complete"),
+                complete=req.get("complete"), stems_dir=req.get("stems_dir"),
             )
             emit({"id": rid, "ok": True, **result})
         except Exception as e:

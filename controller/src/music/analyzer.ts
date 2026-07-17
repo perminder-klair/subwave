@@ -83,6 +83,10 @@ export interface AnalysisResult {
   // not computed (truncated download, short track, decode failure); consumers
   // treat null as "no outro signal, behave as today".
   outro: OutroInfo | null;
+  // Stem-cache outcome — true when the head stems were written to the
+  // requested stems_dir (tail rides along when the outro was computable).
+  // null = no stems_dir requested / backend predates the feature.
+  stemsCached: boolean | null;
 }
 
 // The outgoing track's measured ending — what actually decides whether a
@@ -263,6 +267,7 @@ interface WorkerMessage {
   key_ranges?: unknown;
   audio_embedding?: unknown;
   outro?: unknown;
+  stems_cached?: boolean;
   text_embeddings?: unknown;
 }
 
@@ -352,6 +357,11 @@ export interface AnalyzeRequestOpts {
   // knows). false vetoes outro analysis — a truncated file's "tail" is
   // mid-song audio. Omitted on the url path: the backend's own fetch decides.
   complete?: boolean;
+  // Stem-cache target dir (feature: stem-blend transitions) — wire-named:
+  // both backends spread opts verbatim into the worker request. When set the
+  // worker persists its Demucs stems (head + tail) as FLAC into this dir on
+  // the shared volume; implies the separation even without `vocal`.
+  stems_dir?: string;
 }
 
 // Write a request to the local stdio worker and resolve its response. The
@@ -380,6 +390,7 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           keyRanges: parseKeyRanges(msg.key_ranges),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
           outro: parseOutro(msg.outro),
+          stemsCached: typeof msg.stems_cached === 'boolean' ? msg.stems_cached : null,
         }),
       reject,
       timer,
@@ -527,6 +538,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     keyRanges: parseKeyRanges(resBody.key_ranges),
     audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
     outro: parseOutro(resBody.outro),
+    stemsCached: typeof resBody.stems_cached === 'boolean' ? resBody.stems_cached : null,
   };
 }
 

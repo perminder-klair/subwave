@@ -284,6 +284,11 @@ class AnalyzeRequest(BaseModel):
     # knows). False vetoes outro analysis — a truncated file's "tail" is
     # mid-song audio. None = unknown; the worker's decode-length check guards.
     complete: bool | None = None
+    # Stem-cache target dir on the shared volume (feature: stem-blend
+    # transitions). When set, the worker persists the Demucs stems it already
+    # computes (head + tail windows) as FLAC into this dir. Implies the
+    # separation pass even when `vocal` wasn't requested.
+    stems_dir: str | None = None
 
 
 @app.post("/analyze")
@@ -300,6 +305,8 @@ async def analyze(req: AnalyzeRequest):
         payload["vocal"] = req.vocal
     if req.complete is not None:
         payload["complete"] = req.complete
+    if req.stems_dir is not None:
+        payload["stems_dir"] = req.stems_dir
     msg = await analyzer_worker.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")
@@ -315,7 +322,7 @@ async def analyze(req: AnalyzeRequest):
     # them to null.
     for k in (
         "loudness_lufs", "peak_db", "sections", "vocal_ranges",
-        "pace_curve", "beats", "bars", "key_ranges", "outro",
+        "pace_curve", "beats", "bars", "key_ranges", "outro", "stems_cached",
     ):
         if k in msg:
             out[k] = msg[k]

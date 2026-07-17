@@ -12,6 +12,7 @@
 import { rm } from 'node:fs/promises';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
+import * as stemCacheStore from './stem-cache.js';
 import * as settings from '../settings.js';
 import { config } from '../config.js';
 import { runAudioMoodPass } from './audio-moods.js';
@@ -123,6 +124,12 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // produce it (a sidecar without Demucs reports vocalActivityAvailable===false).
   const vocalWanted = opts.vocalBackfill ?? vocalBackfillDefault();
   const vocalBackfill = vocalWanted && analyzer.vocalActivityAvailable() !== false;
+  // Stem cache (feature: stem-blend transitions): when the operator opted in
+  // and the backend has Demucs, every analysed track also persists its head/
+  // tail stems (the worker shares one separation with vocal detection, so
+  // this is near-free compute — the spend is disk, LRU-swept below).
+  const stemCache = settings.get()?.audio?.stemCache === true
+    && analyzer.vocalActivityAvailable() !== false;
 
   // A re-scan re-analyse is scoped to the tracks that were ALREADY analysed —
   // snapshot them before the clear wipes the bpm marker. A raw --re-analyze
@@ -274,9 +281,13 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       // vocal:true forces the Demucs pass for this track (admin/backfill path),
       // mirroring embed; omitted when vocal activity is off.
       const vocal = vocalBackfill ? true : undefined;
+      // stems_dir asks the worker to persist the stems it separates anyway —
+      // wire-named (spread verbatim into the worker request). Implies the
+      // separation even when the vocal toggle is off.
+      const stems_dir = stemCache ? stemCacheStore.dirFor(id) : undefined;
       const a = localPath
-        ? await analyzer.analyzePath(localPath, { embed, vocal, complete: localComplete })
-        : await analyzer.analyze(id, { embed, vocal });
+        ? await analyzer.analyzePath(localPath, { embed, vocal, complete: localComplete, stems_dir })
+        : await analyzer.analyze(id, { embed, vocal, stems_dir });
       db.upsertTrackAnalysis(id, {
         bpm: a.bpm,
         musicalKey: a.musicalKey,
@@ -346,6 +357,16 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // Best-effort sweep of the staging dir in case a prefetch left an orphan
   // (e.g. a download that resolved after its analyze slot already errored).
   await rm(`${config.stateDir}/analyze-tmp`, { recursive: true, force: true }).catch(() => {});
+
+  // Keep the stem cache inside the operator's byte budget after a pass that
+  // may have written hundreds of new stem dirs (LRU by dir mtime; the hourly
+  // cleanup cron sweeps too, this just settles the bill promptly).
+  if (stemCache) {
+    const swept = await stemCacheStore.sweep().catch(() => null);
+    if (swept && swept.removed > 0) {
+      console.log(`[analyze] stem cache sweep: evicted ${swept.removed} track dirs (${Math.round(swept.freedBytes / 1024 ** 2)} MB)`);
+    }
+  }
 
   // Zero-shot audio moods over the vectors this pass (and past passes) wrote —
   // one CLAP text-tower round-trip + in-process cosines (music/audio-moods.ts).

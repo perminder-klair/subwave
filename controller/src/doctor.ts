@@ -111,7 +111,8 @@ interface StationSettings {
   };
   tts?: { defaultEngine?: string; byKind?: Record<string, string | undefined> };
   search?: { provider?: string };
-  audio?: { embeddings?: boolean; vocalActivity?: boolean };
+  audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean };
+  transitions?: { pairDrain?: boolean; stemBlends?: boolean };
   stream?: { opusEnabled?: boolean; flacEnabled?: boolean; aacEnabled?: boolean };
   archive?: { enabled?: boolean };
   crossfadeDuration?: number;
@@ -825,6 +826,29 @@ async function checkTuning(s: StationSettings | null): Promise<Finding[]> {
           hint: `Vocal-range / talk-timing analysis needs the heavy analyzer (Demucs). The lean build can’t, so this setting no-ops. ${upgradeHint} Or turn the setting off.`,
         });
       }
+    }
+    // Stem cache / stem blends need the same Demucs stack.
+    const wantStems = !!s?.audio?.stemCache || !!s?.transitions?.stemBlends;
+    if (wantStems && analyzer.vocalActivityAvailable() === false) {
+      const upgradeHint = analyzer.backendLabel() === 'local'
+        ? 'On the all-in-one image, switch to ghcr.io/perminder-klair/subwave-aio-heavy; on a dev venv, install the heavy Python deps.'
+        : 'Set ANALYZER_HEAVY=1 in .env and re-pull, or switch the analyzer container to ghcr.io/perminder-klair/subwave-analyzer-heavy.';
+      out.push({
+        label: 'stem transitions',
+        status: 'warn',
+        detail: 'enabled, but the analyzer can’t separate stems',
+        hint: `The stem cache and stem-blend transitions need the heavy analyzer (Demucs). The lean build can’t separate, so these settings silently no-op. ${upgradeHint} Or turn them off.`,
+      });
+    }
+    // Stem blends ride the pair-drain scheduling — without it no seam is ever
+    // pair-annotated and a blend can never be inserted.
+    if (s?.transitions?.stemBlends && s?.transitions?.pairDrain === false) {
+      out.push({
+        label: 'stem transitions',
+        status: 'warn',
+        detail: 'stem blends are on but pair-drain scheduling is off',
+        hint: 'transitions.stemBlends needs transitions.pairDrain — a blend can only be inserted at a pair-aware drain. Re-enable pairDrain or turn stem blends off.',
+      });
     }
   } catch { /* analyzer unavailable — skip */ }
 
