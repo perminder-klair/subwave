@@ -269,6 +269,11 @@ interface WorkerMessage {
   outro?: unknown;
   stems_cached?: boolean;
   text_embeddings?: unknown;
+  // render_transition op fields
+  path?: string;
+  blend_start_sec?: number;
+  in_cue_sec?: number;
+  clip_sec?: number;
 }
 
 type Pending = { resolve: (m: WorkerMessage) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
@@ -697,6 +702,96 @@ export async function embedTexts(
   } catch {
     return null;
   }
+}
+
+// --- Transition render (feature: stem-blend transitions) --------------------
+
+// What the render op needs to align and mix — straight from library.db, the
+// worker never re-detects. Wire-shaped (snake keys pass through verbatim).
+export interface RenderTransitionPayload {
+  out: {
+    stems_dir: string;
+    duration_s: number;
+    outro: { start_ms: number; bars: number[]; lufs?: number | null };
+    lufs?: number | null;
+  };
+  in: {
+    stems_dir: string;
+    bars: number[];
+    lufs?: number | null;
+  };
+  out_dir: string;
+  clip_name: string;
+  target_lufs?: number | null;
+}
+
+export interface RenderTransitionResult {
+  path: string;
+  blendStartSec: number; // absolute in the OUTGOING track — its liq_cue_out
+  inCueSec: number;      // absolute in the INCOMING track — its liq_cue_in
+  clipSec: number;
+}
+
+// Mix a pre-rendered transition WAV from two tracks' cached stems. Returns
+// null on ANY miss or failure (stems absent, degenerate grids, old sidecar
+// without the endpoint, timeout) — the caller falls back to a plain
+// pair-aware crossfade; the worker's own log carries the reason. Note the
+// render itself needs only numpy+soundfile, so it works on the LEAN image
+// too as long as the stems were cached by a heavy backend earlier.
+export async function renderTransition(
+  payload: RenderTransitionPayload,
+  opts: { timeoutMs?: number } = {},
+): Promise<RenderTransitionResult | null> {
+  const timeoutMs = opts.timeoutMs ?? config.analyzer.renderTimeoutMs;
+  const backend = await resolveBackend();
+  if (!backend) return null;
+  if (backend === 'sidecar') {
+    try {
+      const res = await fetchWithTimeout(`${_sidecarBase}/render-transition`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        timeoutMs,
+        bodyDeadline: true,
+      });
+      if (!res.ok) return null; // 404 = pre-render sidecar — silently no blend
+      const body = (await res.json()) as WorkerMessage & { ok?: boolean };
+      return coerceRenderResult(body);
+    } catch {
+      return null;
+    }
+  }
+  try {
+    if (!ready) await startWorker();
+    return await localRenderTransition(payload, timeoutMs);
+  } catch {
+    return null;
+  }
+}
+
+function coerceRenderResult(msg: WorkerMessage & { ok?: boolean }): RenderTransitionResult | null {
+  if (!msg?.ok || typeof msg.path !== 'string') return null;
+  const blendStartSec = parseFinite(msg.blend_start_sec);
+  const inCueSec = parseFinite(msg.in_cue_sec);
+  const clipSec = parseFinite(msg.clip_sec);
+  if (blendStartSec == null || inCueSec == null || clipSec == null) return null;
+  return { path: msg.path, blendStartSec, inCueSec, clipSec };
+}
+
+function localRenderTransition(payload: RenderTransitionPayload, timeoutMs: number): Promise<RenderTransitionResult | null> {
+  const id = `a${++reqSeq}`;
+  return new Promise<RenderTransitionResult | null>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error('render-transition request timed out'));
+    }, timeoutMs);
+    pending.set(id, {
+      resolve: (msg: WorkerMessage) => resolve(coerceRenderResult({ ...msg, ok: true })),
+      reject, // a worker {ok:false} rejects here — caller maps to null
+      timer,
+    });
+    proc?.stdin.write(JSON.stringify({ id, op: 'render_transition', ...payload }) + '\n');
+  });
 }
 
 // Analyse one track by id. Throws on failure — the caller (analyze pass) logs

@@ -731,7 +731,7 @@ export function getPlayableUri(song) {
 function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
-export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } = {}) {
+export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null } = {}) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
@@ -803,8 +803,40 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } =
   // (autonomous picks in queue.drainToLiquidsoap + the auto.m3u fallback);
   // explicit listener requests pass null and play in full. A cue_out past a
   // shorter track's end is a Liquidsoap no-op, so sub-cap tracks play untouched.
-  if (opts.maxDurationSec != null && opts.maxDurationSec > 0) {
-    fields.push(`liq_cue_out="${escAnnotate(opts.maxDurationSec)}"`);
+  // Stem-blend cue points (feature: stem-blend transitions): an explicit
+  // cueOutSec (the blend start in the OUTGOING track) folds with the length
+  // cap — whichever cuts earlier wins, so a blend can never resurrect audio
+  // past the operator's cap. cueInSec skips the INCOMING track past the head
+  // its rendered clip already played. Liquidsoap 2.4 honours both labels
+  // natively at request resolution; no radio.liq change.
+  const cueOut = [opts.maxDurationSec, opts.cueOutSec]
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+  if (cueOut.length) {
+    fields.push(`liq_cue_out="${escAnnotate(Math.min(...cueOut))}"`);
+  }
+  if (opts.cueInSec != null && opts.cueInSec > 0) {
+    fields.push(`liq_cue_in="${escAnnotate(opts.cueInSec)}"`);
   }
   return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
+}
+
+// Annotate URI for a pre-rendered transition CLIP (stem-blend transitions).
+// The clip carries the INCOMING track's identity so now-playing flips to it
+// the moment the blend begins — a real DJ mix announces the next record as
+// it comes in — and the controller's lastSeenKey dedup swallows the second,
+// identical metadata fire when the real track takes over at its cue-in.
+// `subwave_clip="1"` marks the dj_queue entry so the telnet rid helpers
+// (liquidsoap-control.ts) never mistake the clip for the track itself.
+export function getClipUri(song, clipPath: string, crossSec: number) {
+  const fields = [
+    `title="${escAnnotate(song.title)}"`,
+    `artist="${escAnnotate(song.artist)}"`,
+    `album="${escAnnotate(song.album)}"`,
+    `subsonic_id="${escAnnotate(song.id)}"`,
+    'subwave_clip="1"',
+    `liq_cross_duration="${escAnnotate(crossSec)}"`,
+  ];
+  // No liq_amplify: the render already gain-matched both sources toward the
+  // station target — an amplify stamp here would double-apply.
+  return `annotate:${fields.join(',')}:${clipPath}`;
 }

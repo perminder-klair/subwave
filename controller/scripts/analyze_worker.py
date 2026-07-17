@@ -733,6 +733,164 @@ def write_stems(stems, window, dest_dir):
         os.replace(tmp, path)
 
 
+def render_transition(req):
+    """Pre-rendered stem-blend transition (feature: stem-blend transitions —
+    docs/stem-transitions-research.md Option B). Mixes the OUTGOING track's
+    cached tail stems with the INCOMING track's cached head stems into one
+    WAV that airs between them: [out cue_out at blend_start] → clip → [in
+    cue_in at in_cue]. CACHE-HIT-ONLY by design — this runs inside the drain
+    deadline window, so it must be a fast mix, never a fresh separation; any
+    missing stem file is a clean {ok:false} and the controller falls back to
+    a plain pair-aware crossfade.
+
+    v1 preset — "beat carry": the outgoing track's last full-energy bar of
+    drums (chosen from its measured tail bar grid, before the wind-down)
+    keeps looping under the incoming track's opening bars, retriggered on
+    the INCOMING grid so the borrowed groove locks to the new tempo; the
+    incoming drums drop in hard on a downbeat; two full-mix bars later the
+    clip hands off to the real track. blend_start lands on the END of the
+    loop source bar, so the loop audibly continues the bar the listener
+    just heard — the cut reads as a DJ move, not an edit."""
+    import numpy as np
+    import soundfile as sf
+
+    out_spec = req.get("out") or {}
+    in_spec = req.get("in") or {}
+    out_dir = req.get("out_dir")
+    clip_name = req.get("clip_name") or "transition.wav"
+    target_lufs = req.get("target_lufs")
+    if not out_dir or not out_spec.get("stems_dir") or not in_spec.get("stems_dir"):
+        return {"ok": False, "error": "missing out/in stems_dir or out_dir"}
+
+    stem_names = ("drums", "bass", "other", "vocals")
+
+    def load_window(stems_dir, window):
+        stems = {}
+        for name in stem_names:
+            p = os.path.join(stems_dir, f"{window}-{name}.flac")
+            if not os.path.exists(p):
+                return None
+            data, sr_f = sf.read(p, dtype="float32", always_2d=True)  # (N, ch)
+            if sr_f != DEMUCS_SR or data.shape[0] == 0:
+                return None
+            stems[name] = data
+        return stems
+
+    tail = load_window(out_spec["stems_dir"], "tail")
+    head = load_window(in_spec["stems_dir"], "head")
+    if tail is None or head is None:
+        return {"ok": False, "error": "stems-missing"}
+
+    sr = DEMUCS_SR
+    dur_s = float(out_spec.get("duration_s") or 0.0)
+    if dur_s <= OUTRO_SECONDS + 1.0:
+        return {"ok": False, "error": "out-track-too-short"}
+    tail_start_s = max(0.0, dur_s - OUTRO_SECONDS)
+
+    def to_stereo(x, n):
+        """First n samples as (n, 2) float32, zero-padded if short."""
+        a = x[:n]
+        if a.shape[1] == 1:
+            a = np.repeat(a, 2, axis=1)
+        a = a[:, :2]
+        if a.shape[0] < n:
+            a = np.vstack([a, np.zeros((n - a.shape[0], 2), np.float32)])
+        return a
+
+    # --- Outgoing side: the drum-loop source bar + the blend start --------
+    outro = out_spec.get("outro") or {}
+    out_bars = [b / 1000.0 for b in (outro.get("bars") or [])]
+    wind_down_s = float(outro.get("start_ms") or (dur_s - 10.0) * 1000.0) / 1000.0
+    usable = [
+        (b1, b2)
+        for b1, b2 in zip(out_bars, out_bars[1:])
+        if b1 >= tail_start_s + 0.05 and b2 <= min(wind_down_s, dur_s) and 0.4 < (b2 - b1) < 4.0
+    ]
+    if not usable:
+        return {"ok": False, "error": "no-usable-out-bar"}
+    loop_b1, loop_b2 = usable[-1]  # last full-energy bar before the wind-down
+    blend_start_s = loop_b2        # out cue_out lands on this bar boundary
+    i1 = int((loop_b1 - tail_start_s) * sr)
+    i2 = int((loop_b2 - tail_start_s) * sr)
+    drum_loop = to_stereo(tail["drums"], tail["drums"].shape[0])[i1:i2]
+    if drum_loop.shape[0] < sr // 8:
+        return {"ok": False, "error": "loop-too-short"}
+
+    # --- Incoming side: bar grid, carry region, hand-off point ------------
+    CARRY_BARS = 4       # bars of borrowed groove under the new intro
+    TAIL_FULL_BARS = 2   # full-mix bars after the drop before the decoder hand-off
+    in_bars = [b / 1000.0 for b in (in_spec.get("bars") or []) if 0.0 <= b / 1000.0 <= ANALYZE_SECONDS - 1.0]
+    if len(in_bars) < CARRY_BARS + TAIL_FULL_BARS + 1:
+        return {"ok": False, "error": "no-in-grid"}
+    carry_end_s = in_bars[CARRY_BARS]
+    in_cue_s = in_bars[CARRY_BARS + TAIL_FULL_BARS]
+    head_len_s = min(h.shape[0] for h in head.values()) / sr
+    if in_cue_s > head_len_s - 0.25:
+        return {"ok": False, "error": "cue-past-window"}
+
+    n = int(in_cue_s * sr)
+    if n <= sr:  # a sub-second clip means the grids are degenerate
+        return {"ok": False, "error": "clip-too-short"}
+
+    # --- Per-source gains toward the station target (before summing, so the
+    # borrowed loop and the new track each land at their own corrected level;
+    # the brick-wall limiter upstream only ever sees sane material) ---------
+    def gain_toward(lufs):
+        if target_lufs is None or not isinstance(lufs, (int, float)):
+            return 1.0
+        g = 10.0 ** ((float(target_lufs) - float(lufs)) / 20.0)
+        return float(min(4.0, max(0.25, g)))  # ±12 dB sanity clamp
+
+    g_in = gain_toward(in_spec.get("lufs"))
+    g_out = gain_toward(out_spec.get("lufs")) * (10.0 ** (-3.0 / 20.0))  # loop sits under the new track
+
+    # --- Mix ---------------------------------------------------------------
+    mix_buf = np.zeros((n, 2), dtype=np.float32)
+    for name in ("bass", "other", "vocals"):
+        mix_buf += to_stereo(head[name], n) * g_in
+    dstart = int(carry_end_s * sr)
+    head_drums = to_stereo(head["drums"], n) * g_in
+    mix_buf[dstart:] += head_drums[dstart:]  # incoming beat drops on the downbeat
+
+    loop_len = drum_loop.shape[0]
+    for k in range(CARRY_BARS):
+        b1 = int(in_bars[k] * sr)
+        b2 = min(int(in_bars[k + 1] * sr), n)
+        m = b2 - b1
+        if m <= 0:
+            continue
+        reps = int(np.ceil(m / loop_len))
+        piece = np.tile(drum_loop, (reps, 1))[:m] * g_out  # wrap, never a gap
+        if k == CARRY_BARS - 1:  # ride out over the last carry bar
+            piece = piece * np.linspace(1.0, 0.0, m, dtype=np.float32)[:, None]
+        mix_buf[b1:b2] += piece
+
+    # Peak safety toward the bus limiter's comfort zone, then 10ms edge
+    # declicks (the clip meets its neighbours through ~0.3s crossfades, but a
+    # hard first/last sample still clicks through them).
+    peak = float(np.max(np.abs(mix_buf)))
+    ceiling = 10.0 ** (-1.0 / 20.0)
+    if peak > ceiling:
+        mix_buf *= ceiling / peak
+    e = max(1, int(0.01 * sr))
+    ramp = np.linspace(0.0, 1.0, e, dtype=np.float32)[:, None]
+    mix_buf[:e] *= ramp
+    mix_buf[-e:] *= ramp[::-1]
+
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, os.path.basename(clip_name))
+    tmp = out_path + ".tmp"
+    sf.write(tmp, mix_buf, sr, subtype="PCM_16", format="WAV")
+    os.replace(tmp, out_path)
+    return {
+        "ok": True,
+        "path": out_path,
+        "blend_start_sec": round(blend_start_s, 3),
+        "in_cue_sec": round(in_cue_s, 3),
+        "clip_sec": round(n / sr, 3),
+    }
+
+
 def fetch_audio(url):
     """Download (capped) to a temp file. Returns (path, complete) — `complete`
     is False when the byte cap truncated the download, which vetoes outro
@@ -1087,6 +1245,14 @@ def main():
             emit({"id": None, "ok": False, "error": f"bad json: {e}"})
             continue
         rid = req.get("id")
+        # Transition render (feature: stem-blend transitions) — dispatched by
+        # op key; a pure mix of cached stems, seconds of CPU, no model.
+        if req.get("op") == "render_transition":
+            try:
+                emit({"id": rid, **render_transition(req)})
+            except Exception as e:  # noqa: BLE001 — one bad render never kills the worker
+                emit({"id": rid, "ok": False, "error": str(e)})
+            continue
         # Text-embedding request — {"texts": ["...", ...]} instead of url/path.
         # An explicit text request force-loads CLAP like embed:true does (the
         # caller asked for the shared audio-text space; env default irrelevant).

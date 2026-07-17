@@ -86,6 +86,13 @@ export const config = {
     // and docker/analyzer/server.py.
     seconds: parseFloat(process.env.ANALYZE_SECONDS || '40'),
     requestTimeoutMs: parseInt(process.env.ANALYZE_REQUEST_TIMEOUT_MS || '120000', 10),
+    // Transition renders (stem-blend transitions) get their own, shorter
+    // deadline: they run inside the pair-drain window and must lose the race
+    // to the drain's hard fallback — a render past this is abandoned and the
+    // seam falls back to a plain pair-aware crossfade. Also what absorbs a
+    // render queued behind a long bulk-analyze item on the single-flight
+    // worker.
+    renderTimeoutMs: parseInt(process.env.ANALYZE_RENDER_TIMEOUT_MS || '60000', 10),
   },
   kokoro: {
     python: process.env.KOKORO_PYTHON || '/opt/kokoro/venv/bin/python',

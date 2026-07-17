@@ -177,6 +177,13 @@ interface DjQueueSnapshot {
   // chance of a duplicate (queue.push dedupes by track id, so there shouldn't
   // be one).
   ridBySubsonicId: Map<string, string>;
+  // Pre-rendered transition clips (stem-blend transitions): a clip carries
+  // the INCOMING track's subsonic_id AND sits earlier in dj_queue, so
+  // without this split the first-occurrence rule would bind that id to the
+  // CLIP's rid — an operator cancel would then remove the clip and leave the
+  // real track playing untracked. Clips are keyed here instead and excluded
+  // from ids/ridBySubsonicId entirely.
+  clipRidBySubsonicId: Map<string, string>;
 }
 interface DjQueueCache extends DjQueueSnapshot {
   timestamp: number;
@@ -192,6 +199,7 @@ async function fetchDjQueue(): Promise<DjQueueSnapshot> {
   const rids = res.trim().split(/\s+/).filter(Boolean);
   const ids = new Set<string>();
   const ridBySubsonicId = new Map<string, string>();
+  const clipRidBySubsonicId = new Map<string, string>();
 
   for (const rid of rids) {
     try {
@@ -205,15 +213,21 @@ async function fetchDjQueue(): Promise<DjQueueSnapshot> {
       // exactly the one that's still idle. See #? / queue-cancel.
       const match = /subsonic_id=\\?"([^"\\]+)/.exec(meta);
       if (match && match[1]) {
-        ids.add(match[1]);
-        if (!ridBySubsonicId.has(match[1])) ridBySubsonicId.set(match[1], rid);
+        // Transition clips masquerade as their incoming track (same
+        // subsonic_id) — route them to the clip map, never the track maps.
+        if (/subwave_clip=\\?"1/.test(meta)) {
+          if (!clipRidBySubsonicId.has(match[1])) clipRidBySubsonicId.set(match[1], rid);
+        } else {
+          ids.add(match[1]);
+          if (!ridBySubsonicId.has(match[1])) ridBySubsonicId.set(match[1], rid);
+        }
       }
     } catch (ridErr: any) {
       console.warn(`[liquidsoap] request.metadata ${rid} failed: ${ridErr.message}`);
     }
   }
 
-  return { ids, ridBySubsonicId };
+  return { ids, ridBySubsonicId, clipRidBySubsonicId };
 }
 
 // Returns a Set of subsonic_ids currently in the queue (cached ~4s).
@@ -245,6 +259,15 @@ export async function resolveDjQueueRid(subsonicId: string): Promise<string | nu
   const snap = await fetchDjQueue();
   _djQueueCache = { timestamp: Date.now(), ...snap };
   return snap.ridBySubsonicId.get(subsonicId) ?? null;
+}
+
+// Resolve the rid of a pending transition CLIP rendered for the given
+// incoming track (stem-blend transitions). Fresh read like resolveDjQueueRid;
+// null when no clip is pending for that id.
+export async function resolveClipRid(subsonicId: string): Promise<string | null> {
+  const snap = await fetchDjQueue();
+  _djQueueCache = { timestamp: Date.now(), ...snap };
+  return snap.clipRidBySubsonicId.get(subsonicId) ?? null;
 }
 
 // Remove a pending request from dj_queue via the custom "dj_queue_remove"

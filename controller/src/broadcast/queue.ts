@@ -25,6 +25,7 @@ import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
 import * as liquidsoapControl from './liquidsoap-control.js';
 import { drainAction, remainingSec, shouldDeadlinePick } from './drain-policy.js';
+import * as stemBlend from './stem-blend.js';
 import type { TrackOutro, TrackKeyRange } from '../music/library-db.js';
 
 // A persona as it flows through the queue's voice path — only `id`/`name`/
@@ -101,6 +102,14 @@ interface QueueItem {
   // uses min(duration, cueOutSec): a capped track ends at its cue, minutes
   // before its tagged duration.
   cueOutSec?: number;
+  // Stem-blend seam (feature: stem-blend transitions). `stemBlend` rides the
+  // OUTGOING item: a rendered clip airs after it (written to next.txt right
+  // behind its own URI). `stemSeam`/`stemCueInSec` ride the INCOMING item:
+  // its entry-side effects are stripped at its own drain (the seam INTO it
+  // is pre-rendered) and it cues in past the head the clip already played.
+  stemBlend?: { clipPath: string; blendStartSec: number; inCueSec: number } | null;
+  stemSeam?: boolean;
+  stemCueInSec?: number;
 }
 
 // One row in the rolling recent-plays sidecar (the picker's repeat window).
@@ -787,6 +796,20 @@ class Queue {
       }
     }
 
+    // Stem-blend seam (feature: stem-blend transitions): when the seam INTO
+    // this pick is a pre-rendered clip, entry-side effects would garnish a
+    // transition that no longer happens live — strip them before validation.
+    // Exit-side gestures (washout/loop) stay: they shape THIS pick's own end,
+    // which is still a live seam.
+    if (item.stemSeam) {
+      for (const k of ['sweep', 'blend', 'dissolve', 'chop'] as const) {
+        if (item.track[k]) {
+          delete item.track[k];
+          this.log('mix', `${k} dropped (the seam into this pick is a rendered stem blend)`);
+        }
+      }
+    }
+
     // The two flags are independent boundaries — sweep shapes this pick's
     // ENTRY, washout its EXIT — so both can ride one pick; validate and stamp
     // them separately. No cooldown by design: pacing is the DJ's call (the
@@ -978,7 +1001,7 @@ class Queue {
   // draining around a held item). The watcher tick re-runs this as the clock
   // advances; past the hard deadline the item drains with track-intrinsic
   // stamps only. transitions.pairDrain off → eager drain, today's behaviour.
-  async drainToLiquidsoap() {
+  async drainToLiquidsoap(force = false) {
     if (this.senderBusy) return;
     this.senderBusy = true;
     try {
@@ -987,11 +1010,16 @@ class Queue {
         if (!item) break;
 
         const idx = this.upcoming.indexOf(item);
-        const action = drainAction({
-          pairDrain: settings.get().transitions?.pairDrain !== false,
-          hasSuccessor: idx >= 0 && idx + 1 < this.upcoming.length,
-          remainingSec: this.remainingSecOnAir(),
-        });
+        const hasSuccessor = idx >= 0 && idx + 1 < this.upcoming.length;
+        // `force` is the clip-as-track recovery path (onTrackStarted's guard):
+        // never hold, but a known successor still earns its pair stamps.
+        const action = force
+          ? (hasSuccessor ? 'send-pair' : 'send-intrinsic')
+          : drainAction({
+              pairDrain: settings.get().transitions?.pairDrain !== false,
+              hasSuccessor,
+              remainingSec: this.remainingSecOnAir(),
+            });
         if (action === 'hold') break;
 
         // Render the track's intro/link WAV ahead of time but DON'T air it here
@@ -1027,6 +1055,14 @@ class Queue {
         // liq_amplify. No loudness from any source → no liq_amplify → unity.
         await this.applyLoudnessGain(item.track);
 
+        // Hard length cap (#447 max-track-length): stamp a cue_out so Liquidsoap
+        // cuts an over-length autonomous pick mid-air. Explicit listener requests
+        // (requestedBy set) stay exempt — a requested long mix plays in full,
+        // mirroring the request path's selection-cap exemption in picker-tools.
+        const maxDurationSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
+        const itemDurSec = Number(item.track.duration) || 0;
+        const cappedExit = !!(maxDurationSec && itemDurSec > maxDurationSec);
+
         // Pair stamps for THIS item's own exit (the seam into its successor)
         // — only when the successor is known at annotate time. Resolved fresh
         // after the awaits above: an operator cancel during the TTS render
@@ -1034,20 +1070,62 @@ class Queue {
         // with its intrinsic stamps.
         if (action === 'send-pair') {
           const successor = this.upcoming[this.upcoming.indexOf(item) + 1] ?? null;
-          if (successor) this.applyPairStamps(item, successor);
+          if (successor) {
+            this.applyPairStamps(item, successor);
+            // Stem-blend seam (feature: stem-blend transitions): with the
+            // pair known, try to upgrade this seam to a pre-rendered blend.
+            // Cache-hit-only + deadline-raced inside; null → the plain
+            // pair-aware crossfade just stamped above.
+            try {
+              const blend = await stemBlend.maybeRenderBlend(
+                item.track, successor.track, this.remainingSecOnAir(), { outCapped: cappedExit },
+              );
+              if (blend && this.upcoming.includes(item) && this.upcoming.includes(successor)) {
+                // The rendered seam owns this ending: strip exit gestures
+                // (their canvases would fight the clip) and cut tight into
+                // the clip. Entry-side flags on ITEM are untouched — they
+                // garnish the seam INTO it, which already aired its stamps.
+                delete item.track.washout;
+                delete item.track.washoutAuto;
+                delete item.track.washoutDelay;
+                delete item.track.loop;
+                delete item.track.loopBar;
+                item.track.crossSec = stemBlend.CLIP_SEAM_CROSS_SEC;
+                item.stemBlend = blend;
+                item.cueOutSec = blend.blendStartSec;
+                successor.stemSeam = true;
+                successor.stemCueInSec = blend.inCueSec;
+                this.log('mix', `stem blend armed: ${item.track.title} ✕ ${successor.track.title} (cut ${blend.blendStartSec}s, cue-in ${blend.inCueSec}s, clip ${blend.clipSec}s)`);
+              }
+            } catch (err) {
+              this.log('error', `Stem blend failed (falling back to plain crossfade): ${(err as Error).message}`);
+            }
+          }
         }
 
-        // Hard length cap (#447 max-track-length): stamp a cue_out so Liquidsoap
-        // cuts an over-length autonomous pick mid-air. Explicit listener requests
-        // (requestedBy set) stay exempt — a requested long mix plays in full,
-        // mirroring the request path's selection-cap exemption in picker-tools.
-        const maxDurationSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
         // Record the effective early end for the pair-drain deadline math —
         // rides into `current` when the item airs (onTrackStarted spreads it).
-        const itemDurSec = Number(item.track.duration) || 0;
-        if (maxDurationSec && itemDurSec > maxDurationSec) item.cueOutSec = maxDurationSec;
-        const uri = subsonic.getAnnotatedUri(item.track, { maxDurationSec });
-        await writeHandoff(config.liquidsoap.queueFile, uri);
+        if (cappedExit) item.cueOutSec = Math.min(item.cueOutSec ?? Infinity, maxDurationSec!);
+        // Stem-seam cue points: the blend's cut on the way out, the clip's
+        // hand-off on the way in (stamped when the INCOMING item drains).
+        const uri = subsonic.getAnnotatedUri(item.track, {
+          maxDurationSec,
+          cueOutSec: item.stemBlend?.blendStartSec ?? null,
+          cueInSec: item.stemSeam ? item.stemCueInSec ?? null : null,
+        });
+        // Queue-file writes wait longer than the default 1.5s: with a clip
+        // following, two back-to-back writes are the norm and one missed
+        // 1.0s poll must not overwrite an unconsumed handoff.
+        await writeHandoff(config.liquidsoap.queueFile, uri, { maxWaitMs: 5000 });
+        if (item.stemBlend) {
+          // The clip rides right behind its outgoing track, annotated as the
+          // INCOMING track so now-playing flips when the blend begins.
+          const successor = this.upcoming[this.upcoming.indexOf(item) + 1] ?? null;
+          if (successor) {
+            const clipUri = subsonic.getClipUri(successor.track, item.stemBlend.clipPath, stemBlend.CLIP_SEAM_CROSS_SEC);
+            await writeHandoff(config.liquidsoap.queueFile, clipUri, { maxWaitMs: 5000 });
+          }
+        }
         item.sent = true;
         this.persist();  // record the sent flag — these are now live in dj_queue
 
@@ -1254,6 +1332,21 @@ class Queue {
     if (!np || !np.title) return;
     const key = `${np.subsonic_id || ''}|${np.title}|${np.artist || ''}`;
     if (key === this.lastSeenKey) return;
+
+    // Stem-blend safety guard: metadata matching a NOT-YET-SENT upcoming item
+    // means a rendered clip annotated as that track is airing while the track
+    // itself was never handed to Liquidsoap (controller restart between the
+    // pair drain and the clip airing, or a missed deadline). Consuming it as
+    // "played" here would orphan it — the clip would finish and Liquidsoap
+    // would fall to auto.m3u; the track the clip just introduced would never
+    // air. Force-drain it NOW (bypassing the pair hold) and leave this fire
+    // unprocessed — lastSeenKey stays unset, so the track's REAL fire (same
+    // key) re-enters and the normal consume path takes over.
+    if (np.subsonic_id && this.upcoming.some(u => !u.sent && u.track.id === np.subsonic_id)) {
+      this.log('scheduler', `"${np.title}" fired while its queue item was still unsent — force-draining it (clip-as-track guard)`);
+      void this.drainToLiquidsoap(true);
+      return;
+    }
     this.lastSeenKey = key;
 
     // A fresh track boundary — air any boundary-deferred segment (station
@@ -1661,6 +1754,22 @@ class Queue {
       if (!rid || !(await liquidsoapControl.removeFromDjQueue(rid))) {
         return { ok: false, reason: 'already-playing' };
       }
+    }
+
+    // Stem-blend cascade: a rendered clip queued for this track carries its
+    // identity and would otherwise still air (the incoming half of a seam
+    // whose track was just cancelled). Remove it too — best-effort: a clip
+    // already being prepared can't be pulled, and the predecessor's early
+    // cue_out then airs as an abrupt-but-crossfaded exit (accepted, logged).
+    if (item.stemSeam && item.track?.id) {
+      try {
+        const clipRid = await liquidsoapControl.resolveClipRid(item.track.id);
+        if (clipRid && await liquidsoapControl.removeFromDjQueue(clipRid)) {
+          this.log('scheduler', `removed the rendered transition clip for ${item.track.title} along with it`);
+        } else {
+          this.log('scheduler', `transition clip for ${item.track.title} could not be removed — its predecessor will exit early into the clip`);
+        }
+      } catch { /* best-effort */ }
     }
 
     const idx = this.upcoming.indexOf(item);

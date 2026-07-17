@@ -32,7 +32,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Acoustic analysis (bpm/key/intro) — its own librosa venv, driven by the same
 # stdio worker the offline CLI uses (controller/scripts/analyze_worker.py).
@@ -331,6 +331,51 @@ async def analyze(req: AnalyzeRequest):
     if "audio_embedding" in msg:
         out["audio_embedding"] = msg["audio_embedding"]
     return out
+
+
+class RenderTransitionRequest(BaseModel):
+    # Stem-blend transition render (feature: stem-blend transitions). The
+    # controller supplies per-track alignment data straight from library.db —
+    # the worker never re-detects. Cache-hit-only: missing stems → ok=false.
+    out: dict[str, Any]
+    in_: dict[str, Any] = Field(alias="in")
+    out_dir: str
+    clip_name: str | None = None
+    target_lufs: float | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+@app.post("/render-transition")
+async def render_transition(req: RenderTransitionRequest):
+    """Mix a pre-rendered transition WAV from two tracks' cached stems onto
+    the shared volume. Fast (a mix, not a separation) but still serialized
+    behind the single worker lock — the controller's own render deadline
+    handles a render stuck behind a bulk analyze item."""
+    payload: dict[str, Any] = {
+        "id": "1",
+        "op": "render_transition",
+        "out": req.out,
+        "in": req.in_,
+        "out_dir": req.out_dir,
+    }
+    if req.clip_name is not None:
+        payload["clip_name"] = req.clip_name
+    if req.target_lufs is not None:
+        payload["target_lufs"] = req.target_lufs
+    msg = await analyzer_worker.request(payload)
+    if not msg.get("ok"):
+        # A clean miss (stems absent, degenerate grids) is an expected
+        # outcome, not a server fault — pass the reason through as 200 so the
+        # controller can distinguish fallback from failure.
+        return {"ok": False, "error": msg.get("error") or "render failed"}
+    return {
+        "ok": True,
+        "path": msg.get("path"),
+        "blend_start_sec": msg.get("blend_start_sec"),
+        "in_cue_sec": msg.get("in_cue_sec"),
+        "clip_sec": msg.get("clip_sec"),
+    }
 
 
 class EmbedTextRequest(BaseModel):
