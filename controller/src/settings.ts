@@ -563,19 +563,6 @@ function normalizeLlmProviderBaseUrls(
   return out;
 }
 
-// Resolve the effective baseUrl for a provider leg. Reads from providerBaseUrls[provider];
-// the result replaces `baseUrl` at runtime so all downstream code is unchanged.
-function resolveProviderBaseUrl(target: Record<string, unknown>): void {
-  const urls = target.providerBaseUrls as Record<string, string> | undefined;
-  const provider = target.provider as string | undefined;
-  if (urls && provider && urls[provider]) {
-    target.baseUrl = urls[provider];
-  } else if (!urls || !provider || !urls[provider]) {
-    // Keep existing baseUrl if providerBaseUrls has no entry for this provider
-    // (e.g. ollama, which never uses baseUrl).
-  }
-}
-
 // Cloud TTS vendors usable by the `cloud` engine. `openai-compatible` targets
 // any self-hosted OpenAI-compatible speech server (Chatterbox, Qwen3 TTS,
 // VibeVoice, etc.) via the operator-supplied `tts.cloud.baseUrl` — mirrors the
@@ -1299,12 +1286,12 @@ const DEFAULTS = {
     // Per-provider server base URLs. Keyed by provider id so switching providers
     // never overwrites another provider's saved URL (issue #1082). Replaces the
     // legacy single `baseUrl` field; at runtime `baseUrl` is derived from this map
-    // via resolveProviderBaseUrl(). The legacy field is kept as a migration source
+    // in load()/applyLlmLegPatch(). The legacy field is kept as a migration source
     // on load only — it is never written after the first save with the new schema.
     providerBaseUrls: {} as Record<string, string>,
     // Deprecated single slot — kept so an old settings.json migrates cleanly.
-    // Always '' after load(); resolution reads `providerBaseUrls`. See
-    // resolveProviderBaseUrl() / normalizeLlmProviderBaseUrls().
+    // Always derived from `providerBaseUrls` after load(). See
+    // normalizeLlmProviderBaseUrls().
     baseUrl: '',
     // Whether to let reasoning ("thinking") models emit a chain-of-thought
     // before the answer. Off by default: the DJ writes short scripts and
