@@ -903,40 +903,54 @@ export default function LibraryPanel() {
     }
   };
 
-  // Flip settings.audio.embeddings — the "sounds-like" (CLAP) opt-in. The
-  // toggle only persists the setting; vectors appear after an analysis run.
-  const toggleAudio = async () => {
-    if (audioEnabled == null) return;
+  // Shared save path for the settings.audio boolean opt-ins (sounds-like,
+  // vocal activity, analyse-on-pick): POST the flipped flag, mirror it into
+  // local state, toast, refresh the slow /settings loop. One implementation so
+  // the per-toggle copies can't drift.
+  const saveAudioToggle = async (
+    key: 'embeddings' | 'vocalActivity' | 'analyzeOnPick',
+    current: boolean | null,
+    apply: (next: boolean) => void,
+    okMessage: (next: boolean) => string,
+    afterSave?: () => void,
+  ) => {
+    if (current == null) return;
     setTaggerBusy(true);
     try {
       const r = await adminFetch('/settings', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ audio: { embeddings: !audioEnabled } }),
+        body: JSON.stringify({ audio: { [key]: !current } }),
       });
       const j = await r.json().catch(() => ({})) as { error?: string };
       if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
-      setAudioEnabled(!audioEnabled);
-      // When the analyzer can't fingerprint yet (lean image), frame enabling as
-      // pending rather than done — the incapable banner below explains the upgrade.
-      const audioPending =
-        coverage?.analysisAvailable !== false && coverage?.audioAnalysisAvailable === false;
-      notify.ok(
-        !audioEnabled
-          ? audioPending
-            ? 'sounds-like enabled — starts once the heavy analyzer is up'
-            : 'sounds-like analysis enabled'
-          : 'sounds-like analysis disabled',
-      );
-      // The toggle lives on the slow /settings loop — refresh it now so a manual
-      // re-open / status recompute doesn't wait up to 30s to reflect the flip.
+      apply(!current);
+      notify.ok(okMessage(!current));
+      // The toggles live on the slow /settings loop — refresh it now so a
+      // manual re-open / status recompute doesn't wait up to 30s for the flip.
       void loadSettingsData();
+      afterSave?.();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
       setTaggerBusy(false);
     }
   };
+
+  // Flip settings.audio.embeddings — the "sounds-like" (CLAP) opt-in. The
+  // toggle only persists the setting; vectors appear after an analysis run.
+  // When the analyzer can't fingerprint yet (lean image), frame enabling as
+  // pending rather than done — the incapable banner below explains the upgrade.
+  const toggleAudio = () =>
+    saveAudioToggle('embeddings', audioEnabled, setAudioEnabled, (next) => {
+      const audioPending =
+        coverage?.analysisAvailable !== false && coverage?.audioAnalysisAvailable === false;
+      return next
+        ? audioPending
+          ? 'sounds-like enabled — starts once the heavy analyzer is up'
+          : 'sounds-like analysis enabled'
+        : 'sounds-like analysis disabled';
+    });
 
   // Reconcile with Navidrome — walk the catalogue and prune library entries
   // for tracks that no longer exist (deleted files, or IDs re-minted by a full
@@ -987,63 +1001,32 @@ export default function LibraryPanel() {
   };
 
   // Flip settings.audio.vocalActivity — the Demucs vocal-activity opt-in (#646).
-  // Mirrors toggleAudio; env ANALYZE_VOCAL_ACTIVITY still wins "on".
-  const toggleVocal = async () => {
-    if (vocalEnabled == null) return;
-    setTaggerBusy(true);
-    try {
-      const r = await adminFetch('/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ audio: { vocalActivity: !vocalEnabled } }),
-      });
-      const j = await r.json().catch(() => ({})) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
-      setVocalEnabled(!vocalEnabled);
-      // Mirrors toggleAudio: enabling on a lean analyzer is "armed", not active.
-      const vocalPending =
-        coverage?.analysisAvailable !== false && coverage?.vocalAnalysisAvailable === false;
-      notify.ok(
-        !vocalEnabled
+  // Mirrors toggleAudio; env ANALYZE_VOCAL_ACTIVITY still wins "on". Also
+  // refreshes coverage so the coverage-driven bits (vocalStatus, the vocal
+  // meter row) catch up without waiting out the 60s poll.
+  const toggleVocal = () =>
+    saveAudioToggle(
+      'vocalActivity',
+      vocalEnabled,
+      setVocalEnabled,
+      (next) => {
+        const vocalPending =
+          coverage?.analysisAvailable !== false && coverage?.vocalAnalysisAvailable === false;
+        return next
           ? vocalPending
             ? 'vocal-activity enabled — starts once the heavy analyzer is up'
             : 'vocal-activity analysis enabled'
-          : 'vocal-activity analysis disabled',
-      );
-      // Refresh the slow settings-derived state now rather than waiting for its
-      // tick — and coverage too, so the coverage-driven bits (vocalStatus, the
-      // vocal meter row) catch up without waiting out the 60s poll.
-      void loadSettingsData();
-      void loadCoverage();
-    } catch (err) {
-      notify.err(errorMessage(err));
-    } finally {
-      setTaggerBusy(false);
-    }
-  };
+          : 'vocal-activity analysis disabled';
+      },
+      () => void loadCoverage(),
+    );
 
   // Flip settings.audio.analyzeOnPick — just-in-time analysis of queued tracks
   // (#1032). Mirrors toggleVocal, minus the coverage refresh (no meter row).
-  const toggleOnPick = async () => {
-    if (onPickEnabled == null) return;
-    setTaggerBusy(true);
-    try {
-      const r = await adminFetch('/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ audio: { analyzeOnPick: !onPickEnabled } }),
-      });
-      const j = await r.json().catch(() => ({})) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
-      setOnPickEnabled(!onPickEnabled);
-      notify.ok(!onPickEnabled ? 'analyse-on-pick enabled' : 'analyse-on-pick disabled');
-      void loadSettingsData();
-    } catch (err) {
-      notify.err(errorMessage(err));
-    } finally {
-      setTaggerBusy(false);
-    }
-  };
+  const toggleOnPick = () =>
+    saveAudioToggle('analyzeOnPick', onPickEnabled, setOnPickEnabled, (next) =>
+      next ? 'analyse-on-pick enabled' : 'analyse-on-pick disabled',
+    );
 
   // Backfill Demucs vocal ranges on tracks that lack them — POST with vocal:true
   // so the analyze pass forces the vocal scope (#646).

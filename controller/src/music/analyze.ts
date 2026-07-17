@@ -102,12 +102,25 @@ const AUDIO_MODEL_LABEL = process.env.CLAP_MODEL || 'laion-clap';
 
 // Best-effort wrapper — a mood-scoring failure must never fail (or re-run) the
 // analysis pass itself; the next pass simply retries the un-scored remainder.
-async function scoreAudioMoods(): Promise<void> {
-  try {
-    await runAudioMoodPass();
-  } catch (err: any) {
-    console.error(`[audio-moods] pass failed (non-fatal): ${err?.message || err}`);
-  }
+// Single-flight: the on-pick path fires this after every vector-storing
+// analysis, and runAudioMoodPass has no concurrency guard of its own — two
+// overlapping passes would each pay the CLAP text-tower round-trip and write
+// identical scores. A caller that joins a running pass may miss the vector
+// written just after that pass scoped its ids; idsNeedingAudioMoods() picks
+// the straggler up on the next pass, so nothing is lost, only deferred.
+let moodsPassInflight: Promise<void> | null = null;
+function scoreAudioMoods(): Promise<void> {
+  if (moodsPassInflight) return moodsPassInflight;
+  moodsPassInflight = (async () => {
+    try {
+      await runAudioMoodPass();
+    } catch (err: any) {
+      console.error(`[audio-moods] pass failed (non-fatal): ${err?.message || err}`);
+    } finally {
+      moodsPassInflight = null;
+    }
+  })();
+  return moodsPassInflight;
 }
 
 // Analyse one track and persist everything the backend returned: bpm/key/etc
@@ -118,7 +131,7 @@ let audioMetaStamped = false;
 async function analyzeAndStore(
   id: string,
   opts: { embed?: boolean; vocal?: boolean; localPath?: string | null; localComplete?: boolean },
-): Promise<{ audioStored: boolean; vocalStored: boolean }> {
+): Promise<{ audioStored: boolean; vocalStored: boolean; audioReturned: boolean }> {
   const { embed, vocal, localPath, localComplete } = opts;
   const a = localPath
     ? await analyzer.analyzePath(localPath, { embed, vocal, complete: localComplete })
@@ -155,7 +168,10 @@ async function analyzeAndStore(
       console.error(`[analyze] ${id} audio-vector write failed: ${err?.message || err}`);
     }
   }
-  return { audioStored, vocalStored: a.vocalRanges != null };
+  // audioReturned tells the on-pick path apart: "backend produced no vector"
+  // (runtime-degraded CLAP — stop asking) vs "vector arrived but the write
+  // failed" (transient — worth retrying).
+  return { audioStored, vocalStored: a.vocalRanges != null, audioReturned: a.audioEmbedding != null };
 }
 
 export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {
@@ -400,12 +416,37 @@ export type OnPickOutcome =
   | 'current'   // nothing missing — no analysis needed
   | 'analyzed'  // fresh analysis stored within the deadline
   | 'pending'   // still running past the deadline; caches when it finishes
-  | 'skipped'   // not in library.db / bulk run owns the backend / no backend
+  | 'skipped'   // not in library.db / bulk run owns the backend / no backend / failure cooling down
   | 'failed';
 
 // Single-flight per id: a request and a pick racing to the same song share one
 // analysis instead of hitting the backend twice.
 const onPickInflight = new Map<string, Promise<boolean>>();
+
+// Failure cooldown — a track whose analysis just failed (stale library entry,
+// backend hiccup) must not re-pay a full download+analysis on every future
+// spin. In-memory on purpose: a restart retries, and the bulk pass (which has
+// its own once-per-run scoping) is unaffected.
+const ON_PICK_FAILURE_COOLDOWN_MS = 60 * 60 * 1000;
+const onPickFailedAt = new Map<string, number>();
+function inFailureCooldown(id: string): boolean {
+  const at = onPickFailedAt.get(id);
+  if (at == null) return false;
+  if (Date.now() - at < ON_PICK_FAILURE_COOLDOWN_MS) return true;
+  onPickFailedAt.delete(id);
+  return false;
+}
+
+// Runtime-degraded opt-in dimensions. The worker's capability flags are static
+// find_spec probes — a sidecar built WITH_DEMUCS=1 keeps advertising vocal
+// activity even when Demucs fails to load at runtime (#996), analysing every
+// track "ok" with the ranges omitted. Without this latch, needsVocal/needsAudio
+// would never clear and every spin of every track would re-run the failing
+// pass. A requested dimension coming back absent from an otherwise-successful
+// analysis is that exact signature, so we stop requesting it for the rest of
+// the process (a restart re-probes; the bulk pass keeps its own handling).
+let vocalRuntimeDegraded = false;
+let audioRuntimeDegraded = false;
 
 export async function analyzeOnPick(
   id: string | null | undefined,
@@ -414,24 +455,31 @@ export async function analyzeOnPick(
   if (!id || !db.isOpen()) return 'skipped';
   // upsertTrackAnalysis is an UPDATE on an existing row — a track the library
   // sync hasn't ingested yet has nowhere to store results, so skip it.
-  const rec = db.getTrack(id);
-  if (!rec) return 'skipped';
+  const status = db.getTrackAnalysisStatus(id);
+  if (!status) return 'skipped';
 
   // Per-track twin of the bulk pass's scoping: base analysis when the version
   // is missing/stale, plus each opt-in dimension only when it's wanted
-  // (env/admin toggle) AND the backend can actually produce it.
-  const needsBase = rec.analysisVersion == null || rec.analysisVersion < db.ANALYSIS_VERSION;
-  const embed = audioBackfillDefault() && analyzer.audioEmbeddingAvailable() !== false;
-  const vocal = vocalBackfillDefault() && analyzer.vocalActivityAvailable() !== false;
-  const needsAudio = embed && !db.hasAudioVector(id);
-  const needsVocal = vocal && rec.vocalRanges == null;
-  if (!needsBase && !needsAudio && !needsVocal) return 'current';
+  // (env/admin toggle) and not runtime-degraded. Capability is checked AFTER
+  // the isAvailable() probe below — reading it here would see null on a cold
+  // controller and force an unfulfillable embed/vocal on a lean backend.
+  const needsBase = status.analysisVersion == null || status.analysisVersion < db.ANALYSIS_VERSION;
+  const wantAudio = audioBackfillDefault() && !audioRuntimeDegraded && !db.hasAudioVector(id);
+  const wantVocal = vocalBackfillDefault() && !vocalRuntimeDegraded && !status.hasVocalRanges;
+  if (!needsBase && !wantAudio && !wantVocal) return 'current';
+  if (inFailureCooldown(id)) return 'skipped';
 
   // A running bulk tagger/analyzer owns the backend (and will reach this track
   // anyway) — don't double-hit it from the queue path.
   const bulk = readPidfile();
   if (bulk && isPidAlive(bulk.pid)) return 'skipped';
   if (!(await analyzer.isAvailable())) return 'skipped';
+  // Backend resolved by the probe above — capability answers are real now
+  // (`null` only for an old sidecar whose /health omits the flag; treat that
+  // as maybe-capable, same as the bulk pass).
+  const embed = wantAudio && analyzer.audioEmbeddingAvailable() !== false;
+  const vocal = wantVocal && analyzer.vocalActivityAvailable() !== false;
+  if (!needsBase && !embed && !vocal) return 'current';
 
   let job = onPickInflight.get(id);
   if (!job) {
@@ -445,16 +493,26 @@ export async function analyzeOnPick(
   }
 
   const timeoutMs = opts.timeoutMs ?? ON_PICK_TIMEOUT_MS;
+  let deadlineTimer: NodeJS.Timeout | undefined;
   const deadline = new Promise<'pending'>((resolve) => {
-    const t = setTimeout(() => resolve('pending'), timeoutMs);
-    t.unref?.();
+    deadlineTimer = setTimeout(() => resolve('pending'), timeoutMs);
+    deadlineTimer.unref?.();
   });
-  return Promise.race([job.then((ok): OnPickOutcome => (ok ? 'analyzed' : 'failed')), deadline]);
+  try {
+    return await Promise.race([job.then((ok): OnPickOutcome => (ok ? 'analyzed' : 'failed')), deadline]);
+  } finally {
+    clearTimeout(deadlineTimer);
+  }
 }
 
 // The actual work: download (byte-capped, so a skipped outro rides the same
 // completeness flag as the bulk pass), analyse, store — mirroring one
-// iteration of runAnalysisPass's loop, minus the prefetch pipeline.
+// iteration of runAnalysisPass's loop, minus the prefetch pipeline. Downloads
+// stage in ANALYZE_PICK_TMP_DIR, NOT the bulk pass's analyze-tmp: a bulk run
+// started after this job began would otherwise write the same fixed
+// `<id>.audio` path (interleaved writes → corrupt analysis) and its end-of-run
+// `rm -rf analyze-tmp` would delete the file out from under the sidecar's
+// in-flight read.
 async function analyzeOnPickJob(
   id: string,
   flags: { embed?: boolean; vocal?: boolean },
@@ -463,7 +521,7 @@ async function analyzeOnPickJob(
   let localComplete: boolean | undefined;
   try {
     try {
-      const dl = await analyzer.downloadCapped(id);
+      const dl = await analyzer.downloadCapped(id, analyzer.ANALYZE_PICK_TMP_DIR);
       localPath = dl.path;
       localComplete = dl.complete;
     } catch (err: any) {
@@ -472,14 +530,29 @@ async function analyzeOnPickJob(
       if (err instanceof analyzer.NonAudioResponseError) throw err;
       console.error(`[analyze] on-pick ${id} prefetch failed (${err?.message || err}); using url path`);
     }
-    const { audioStored } = await analyzeAndStore(id, { ...flags, localPath, localComplete });
+    const { audioStored, vocalStored, audioReturned } = await analyzeAndStore(id, { ...flags, localPath, localComplete });
+    // A requested dimension coming back absent from a successful analysis is
+    // the runtime-degraded-worker signature (#996) — latch it so the needs
+    // check stops forcing a pass the backend can never fulfil.
+    if (flags.vocal && !vocalStored && !vocalRuntimeDegraded) {
+      vocalRuntimeDegraded = true;
+      console.warn(`[analyze] on-pick: backend advertises vocal activity but returned none — pausing on-pick vocal requests until restart`);
+    }
+    if (flags.embed && !audioReturned && !audioRuntimeDegraded) {
+      audioRuntimeDegraded = true;
+      console.warn(`[analyze] on-pick: backend advertises audio embeddings but returned none — pausing on-pick embed requests until restart`);
+    }
     // Zero-shot audio moods for the vector this analysis just wrote (plus any
     // unscored stragglers) — best-effort, never blocks the caller.
     if (audioStored) void scoreAudioMoods();
     console.log(`[analyze] on-pick analysed ${id}`);
     return true;
   } catch (err: any) {
-    // Leave the row NULL so a later pass retries it; don't stamp a version.
+    // Leave the row NULL so a later pass retries it; don't stamp a version —
+    // but remember the failure so the next spins of this track don't re-pay a
+    // full download+analysis for the same outcome (the cooldown expires, and a
+    // bulk run or restart retries sooner).
+    onPickFailedAt.set(id, Date.now());
     console.error(`[analyze] on-pick ${id} failed: ${err?.message || err}`);
     return false;
   } finally {
