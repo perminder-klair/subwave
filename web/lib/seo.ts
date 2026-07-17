@@ -15,6 +15,14 @@ export function absoluteUrl(path = '/'): string {
 // Next does not deep-merge nested objects like `openGraph` across the
 // layout→page chain, so we restate siteName/title here rather than relying on
 // inheritance from the root layout.
+//
+// - `title` is passed pre-branded ("SUB/WAVE — …"), so it opts out of the root
+//   layout's `%s · SUB/WAVE` template via `absolute` — otherwise every page
+//   renders a doubled "SUB/WAVE — X · SUB/WAVE".
+// - `twitter` is restated because X prefers twitter:title/description over the
+//   og:* tags, and without it every subpage inherits the root layout's
+//   sitewide twitter card. twitter:image stays global (hand-written in the
+//   root layout <head>).
 export function pageMeta({
   title,
   description,
@@ -28,7 +36,7 @@ export function pageMeta({
 }): Metadata {
   const url = absoluteUrl(path);
   return {
-    title,
+    title: { absolute: title },
     ...(description ? { description } : {}),
     alternates: { canonical: url },
     openGraph: {
@@ -37,6 +45,11 @@ export function pageMeta({
       url,
       siteName: 'SUB/WAVE',
       type,
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title,
+      ...(description ? { description } : {}),
     },
   };
 }

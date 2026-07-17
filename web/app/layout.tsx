@@ -139,8 +139,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
         {/* Absolute share-card image tags — see the metadata comment above for
             why these bypass the Metadata API. Per-page canonical + og:url are
-            set via lib/seo's pageMeta(). SITE_URL is baked at build time from
-            the Docker build arg. */}
+            set via lib/seo's pageMeta(). SITE_URL is resolved from the runtime
+            container env — the public pages render per-request (see
+            lib/site.ts), so these tags always carry the operator's domain. */}
         <meta property="og:image" content={`${SITE_URL}/og`} />
         <meta property="og:image:type" content="image/png" />
         <meta property="og:image:width" content="1200" />

@@ -194,8 +194,8 @@ services:
       context: .
       dockerfile: web/Dockerfile
       args:
-        # Needed at BUILD time for statically-rendered routes (robots, sitemap,
-        # /listen, /landing) — Next bakes their metadata at build.
+        # Belt-and-suspenders for source builds only — every route that emits
+        # absolute URLs renders per-request off the RUNTIME env below.
         - SITE_URL=${SITE_URL:-}
         # NEXT_PUBLIC_* is inlined into the client bundle at BUILD time.
         - NEXT_PUBLIC_GA_ID=${NEXT_PUBLIC_GA_ID:-}
@@ -215,9 +215,10 @@ services:
     environment:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=${SUBWAVE_HOMEPAGE:-player}
-      # Also needed at RUNTIME: the homepage (/) is force-dynamic, so its
-      # share-card tags render per-request. Define SITE_URL once in .env and
-      # both build-arg and runtime env pick it up.
+      # The RUNTIME source of truth for absolute URLs: canonicals, og:url,
+      # robots.txt, and sitemap.xml all render per-request from this env, so
+      # the generic published image serves the operator's real domain. Define
+      # SITE_URL once in .env.
       - SITE_URL=${SITE_URL:-}
       # Google Analytics Measurement ID at RUNTIME (web/lib/ga.ts). Plumbs the
       # operator's NEXT_PUBLIC_GA_ID from .env into a runtime var, so analytics
