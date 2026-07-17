@@ -24,6 +24,7 @@ import { djCallsAllowed, presentListeners } from './listeners.js';
 import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
 import * as liquidsoapControl from './liquidsoap-control.js';
+import { drainAction, remainingSec, shouldDeadlinePick } from './drain-policy.js';
 import type { TrackOutro, TrackKeyRange } from '../music/library-db.js';
 
 // A persona as it flows through the queue's voice path — only `id`/`name`/
@@ -95,6 +96,11 @@ interface QueueItem {
   startedAt?: string;
   endedAt?: string;
   source?: string;
+  // Effective early end (seconds) stamped at drain time — the length cap's
+  // liq_cue_out today, a stem-blend cue later. The pair-drain deadline math
+  // uses min(duration, cueOutSec): a capped track ends at its cue, minutes
+  // before its tagged duration.
+  cueOutSec?: number;
 }
 
 // One row in the rolling recent-plays sidecar (the picker's repeat window).
@@ -706,35 +712,17 @@ class Queue {
     const cur = this.mixAnalysisFor(prevTrack);
     const next = this.mixAnalysisFor(item.track);
 
-    // Feature 1 — adaptive blend length, with a subtle daypart nudge and a
-    // structure-aware cap so the incoming fade-in finishes before the song's
-    // vocals (the incoming track's instrumental intro, resolved like analysis).
-    let energyDelta = 0;
-    try { energyDelta = energyForDaypart().speed - 1; } catch {}
-    let nextIntroMs = item.track.introMs;
-    if (nextIntroMs == null && item.track.id) nextIntroMs = library.get(item.track.id)?.introMs ?? null;
-    // Cap the adaptive blend at the operator's configured crossfade length so the
-    // admin slider acts as a real ceiling on DJ-mode transitions too.
+    // Feature 1 — the pair-sized adaptive blend — is NOT computed here. It
+    // was #749's wall for years: liq_cross_duration governs the crossfade at
+    // the STAMPED track's OWN end, but at this point in the FIFO drain the
+    // predecessor is already annotated and gone, so the value could never be
+    // attached to the right track. The pair-drain hold (drain-policy.ts)
+    // dissolved the wall: applyPairStamps() sizes the blend for the seam OUT
+    // of an item once its successor is known at drain time — the direction
+    // the old comment prescribed. This function keeps only the
+    // track-intrinsic work: ending-aware exit canvas + effect gating below.
+    // The operator crossfade ceiling still caps every canvas stamped here.
     const maxSec = settings.get()?.crossfadeDuration ?? null;
-    const secs = mix.crossSecondsFor(cur, next, { energyDelta, nextIntroMs, maxSec });
-    // NOT stamped onto item.track.crossSec (#749 — off-by-one, confirmed still
-    // live on inspection despite the issue being closed with no fix commit).
-    // liq_cross_duration governs the crossfade at the STAMPED track's OWN end
-    // (radio.liq's dj_transition reads it off `a`, the outgoing branch) — but
-    // `secs` here is sized for the transition INTO item (prevTrack → item).
-    // The only track that could correctly carry this value is prevTrack, and
-    // drainToLiquidsoap drains strictly FIFO, marking each item sent before
-    // the next is even looked at — so prevTrack has invariably already been
-    // annotated and handed to Liquidsoap by the time this runs. Stamping it
-    // on item instead silently governs item's OWN exit (item → next), sized
-    // by the wrong pair's compatibility and intro cap, one hop later than
-    // intended — and that error compounds every transition for the rest of
-    // the session. Left un-applied (logged only) until there's a real fix: a
-    // buffer-time override channel Liquidsoap re-reads dynamically, not a
-    // static per-track annotation baked in ahead of the pair being known.
-    if (secs != null) {
-      this.log('mix', `blend would be ${secs}s for ${prevTrack.title || '?'} → ${item.track.title} (not applied — #749)`);
-    }
 
     // DJ transition effects (sweep/washout) — the agent proposes, the data
     // disposes. A rejected flag is stripped so getAnnotatedUri never stamps it. On success the
@@ -934,8 +922,62 @@ class Queue {
     }
   }
 
+  // Seconds before the on-air track's EFFECTIVE end (min of tagged duration
+  // and any cue_out stamped at its drain), or null when unknowable — boot,
+  // recover, untracked auto plays. Null degrades every consumer to today's
+  // eager behaviour (drain-policy.ts).
+  remainingSecOnAir(): number | null {
+    const cur = this.current;
+    if (!cur?.startedAt) return null;
+    const startedMs = Date.parse(cur.startedAt);
+    let durSec = Number(cur.track?.duration) || 0;
+    if (!durSec && cur.track?.id) durSec = Number(library.get(cur.track.id)?.durationSec) || 0;
+    return remainingSec(
+      Date.now(),
+      Number.isFinite(startedMs) ? startedMs : null,
+      durSec > 0 ? durSec : null,
+      cur.cueOutSec ?? null,
+    );
+  }
+
+  // Pair-sized exit blend (feature 1 — the #749 fix, applied at last): with
+  // the successor known at drain time, size THIS track's own exit crossfade
+  // for the actual pair — compatibility curve, daypart nudge, bar-snap,
+  // capped to the successor's instrumental intro. Precedence: washout/loop
+  // own their canvases outright (their physics stamped them); the
+  // ending-aware canvas from applyMixTransition is narrowed, never widened —
+  // the pair value wins only when SHORTER, so a cold ending's tight cut
+  // survives a clash's long wash and a measured fade never doubles under a
+  // locked pair's 4s blend.
+  applyPairStamps(item: QueueItem, successor: QueueItem) {
+    if (!settings.getEffectivePersona()?.djMode) return;
+    if (item.track.washout || item.track.loop) return;
+    const cur = this.mixAnalysisFor(item.track);
+    const next = this.mixAnalysisFor(successor.track);
+    let energyDelta = 0;
+    try { energyDelta = energyForDaypart().speed - 1; } catch { /* context optional */ }
+    let nextIntroMs = successor.track.introMs;
+    if (nextIntroMs == null && successor.track.id) nextIntroMs = library.get(successor.track.id)?.introMs ?? null;
+    const maxSec = settings.get()?.crossfadeDuration ?? null;
+    const secs = mix.crossSecondsFor(cur, next, { energyDelta, nextIntroMs, maxSec });
+    if (secs == null) return;
+    const existing = item.track.crossSec;
+    item.track.crossSec = existing != null ? Math.min(existing, secs) : secs;
+    this.log('mix', `pair blend ${item.track.crossSec}s: ${item.track.title} → ${successor.track.title}`
+      + (existing != null && existing < secs ? ' (ending canvas kept)' : ''));
+  }
+
   // Walk the upcoming queue and feed unsent items to Liquidsoap one at a time,
   // spaced out so the 1s file-poll doesn't miss any.
+  //
+  // Pair-aware hold (feature: pair-aware transitions — the #749 fix, see
+  // drain-policy.ts): a track's annotate stamps control the transition at its
+  // OWN end, so the tail item is held unsent until its successor is queued
+  // behind it (any successor — an agent pick or a listener request equally: a
+  // request arriving IS the successor arriving, so FIFO is never inverted by
+  // draining around a held item). The watcher tick re-runs this as the clock
+  // advances; past the hard deadline the item drains with track-intrinsic
+  // stamps only. transitions.pairDrain off → eager drain, today's behaviour.
   async drainToLiquidsoap() {
     if (this.senderBusy) return;
     this.senderBusy = true;
@@ -943,6 +985,14 @@ class Queue {
       while (true) {
         const item = this.upcoming.find(i => !i.sent);
         if (!item) break;
+
+        const idx = this.upcoming.indexOf(item);
+        const action = drainAction({
+          pairDrain: settings.get().transitions?.pairDrain !== false,
+          hasSuccessor: idx >= 0 && idx + 1 < this.upcoming.length,
+          remainingSec: this.remainingSecOnAir(),
+        });
+        if (action === 'hold') break;
 
         // Render the track's intro/link WAV ahead of time but DON'T air it here
         // — airing now would play it over whatever's currently on-air, one (or
@@ -977,11 +1027,25 @@ class Queue {
         // liq_amplify. No loudness from any source → no liq_amplify → unity.
         await this.applyLoudnessGain(item.track);
 
+        // Pair stamps for THIS item's own exit (the seam into its successor)
+        // — only when the successor is known at annotate time. Resolved fresh
+        // after the awaits above: an operator cancel during the TTS render
+        // may have removed the successor, in which case the item just drains
+        // with its intrinsic stamps.
+        if (action === 'send-pair') {
+          const successor = this.upcoming[this.upcoming.indexOf(item) + 1] ?? null;
+          if (successor) this.applyPairStamps(item, successor);
+        }
+
         // Hard length cap (#447 max-track-length): stamp a cue_out so Liquidsoap
         // cuts an over-length autonomous pick mid-air. Explicit listener requests
         // (requestedBy set) stay exempt — a requested long mix plays in full,
         // mirroring the request path's selection-cap exemption in picker-tools.
         const maxDurationSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
+        // Record the effective early end for the pair-drain deadline math —
+        // rides into `current` when the item airs (onTrackStarted spreads it).
+        const itemDurSec = Number(item.track.duration) || 0;
+        if (maxDurationSec && itemDurSec > maxDurationSec) item.cueOutSec = maxDurationSec;
         const uri = subsonic.getAnnotatedUri(item.track, { maxDurationSec });
         await writeHandoff(config.liquidsoap.queueFile, uri);
         item.sent = true;
@@ -1385,66 +1449,128 @@ class Queue {
     // first transition after a listener returns re-enters this block.
     const isAutonomous = this.current.source === 'auto' || this.current.source === 'ai';
     if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy && djCallsAllowed()) {
-      let wantLink = false;
-      if (this.autoLink && isAutonomous && this.history[0]) {
-        this.tracksUntilLink--;
-        if (this.tracksUntilLink <= 0) {
-          this.tracksUntilLink = pickLinkInterval();
-          wantLink = true;
-        }
-      }
-      this.pickerBusy = true;
-      (async () => {
-        try {
-          const ctx = await getFullContext();
-          await session.maybeRoll(ctx);
-          // Plan a programme episode BEFORE the mic-pass so a handoff into a
-          // programme show can weave the episode angle into its greeting.
-          try {
-            await programme.ensurePlan(ctx);
-          } catch (err) {
-            this.log('error', `Programme plan failed: ${(err as Error).message}`);
-          }
-          // If that roll crossed a persona boundary, air the mic-pass first
-          // (sign-off + greeting) so it plays before the incoming DJ's first
-          // pick. Guarded so a handoff failure never blocks the next track.
-          try {
-            await djAgent.runPersonaHandoff(this, ctx);
-          } catch (err) {
-            this.log('error', `Persona handoff failed: ${(err as Error).message}`);
-          }
-          // Programme shows: open the episode if the hourly cron hasn't
-          // already (whichever call site settles the session first wins; the
-          // beat flag makes the other a no-op).
-          try {
-            await programme.onSessionSettled(this, ctx);
-          } catch (err) {
-            this.log('error', `Programme episode hook failed: ${(err as Error).message}`);
-          }
-          // The pick made now airs when the track that just started ends — so
-          // near a show boundary the rules to pick by are the NEXT show's, not
-          // this one's (a pick queued minutes before the boundary used to
-          // follow the outgoing show's brief, handing the incoming DJ an
-          // off-format opener). Probe a little past the pick's expected start
-          // so a pick that begins just shy of the boundary — and plays mostly
-          // inside the new show — also counts as the new show's. The session
-          // roll and handoff above stay on the live clock: only the pick
-          // looks ahead. Unknown duration → no look-ahead, today's behaviour.
-          const durSec = Number(this.current?.track?.duration);
-          let pickCtx = ctx;
-          let showAt: Date | null = null;
-          if (Number.isFinite(durSec) && durSec > 0) {
-            showAt = new Date(Date.now() + (durSec + PICK_SHOW_LOOKAHEAD_SEC) * 1000);
-            pickCtx = await getFullContext(showAt);
-          }
-          await djAgent.runTrackEvent(this, pickCtx, { wantLink, showAt });
-        } catch (err) {
-          this.log('error', `DJ track event failed: ${(err as Error).message}`);
-        } finally {
-          this.pickerBusy = false;
-        }
-      })();
+      this.runPickCycle({ isAutonomous });
     }
+  }
+
+  // One full DJ pick cycle — session roll, programme plan, persona handoff,
+  // link cadence, and the pick itself. Extracted from onTrackStarted so the
+  // pair-drain deadline (maybeDeadlinePick) can fire the same cycle with the
+  // pick's PREDECESSOR overridden to the held item it will follow —
+  // queue.current at deadline time is one track too early for the event
+  // text, the mini-run anchor, and the link's back-announce target.
+  // Fire-and-forget like the original block; pickerBusy is the reentry guard.
+  runPickCycle({ isAutonomous, predecessorItem = null }: { isAutonomous: boolean; predecessorItem?: QueueItem | null }) {
+    let wantLink = false;
+    if (this.autoLink && isAutonomous && this.history[0]) {
+      this.tracksUntilLink--;
+      if (this.tracksUntilLink <= 0) {
+        this.tracksUntilLink = pickLinkInterval();
+        wantLink = true;
+      }
+    }
+    this.pickerBusy = true;
+    (async () => {
+      try {
+        const ctx = await getFullContext();
+        await session.maybeRoll(ctx);
+        // Plan a programme episode BEFORE the mic-pass so a handoff into a
+        // programme show can weave the episode angle into its greeting.
+        try {
+          await programme.ensurePlan(ctx);
+        } catch (err) {
+          this.log('error', `Programme plan failed: ${(err as Error).message}`);
+        }
+        // If that roll crossed a persona boundary, air the mic-pass first
+        // (sign-off + greeting) so it plays before the incoming DJ's first
+        // pick. Guarded so a handoff failure never blocks the next track.
+        // (Under pair-drain the cycle fires near the on-air track's END, so
+        // the mic-pass lands over its outro into the transition — a working
+        // DJ's hand-off spot; deliberate, see stem-transitions research.)
+        try {
+          await djAgent.runPersonaHandoff(this, ctx);
+        } catch (err) {
+          this.log('error', `Persona handoff failed: ${(err as Error).message}`);
+        }
+        // Programme shows: open the episode if the hourly cron hasn't
+        // already (whichever call site settles the session first wins; the
+        // beat flag makes the other a no-op).
+        try {
+          await programme.onSessionSettled(this, ctx);
+        } catch (err) {
+          this.log('error', `Programme episode hook failed: ${(err as Error).message}`);
+        }
+        // The pick airs when the track it FOLLOWS ends — so near a show
+        // boundary the rules to pick by are the NEXT show's, not this one's
+        // (a pick queued minutes before the boundary used to follow the
+        // outgoing show's brief, handing the incoming DJ an off-format
+        // opener). Probe a little past the pick's expected start so a pick
+        // that begins just shy of the boundary — and plays mostly inside the
+        // new show — also counts as the new show's. Without a held
+        // predecessor the pick follows the on-air track (its full duration
+        // from now); with one (deadline path) it follows the HELD track, so
+        // the lead is on-air remaining + the held track's length. The
+        // session roll and handoff above stay on the live clock: only the
+        // pick looks ahead. Unknown clock → no look-ahead, today's behaviour.
+        let leadSec: number | null = null;
+        if (predecessorItem) {
+          const rem = this.remainingSecOnAir();
+          const heldDur = Number(predecessorItem.track?.duration) || 0;
+          if (rem != null && heldDur > 0) leadSec = rem + heldDur;
+        } else {
+          const durSec = Number(this.current?.track?.duration);
+          if (Number.isFinite(durSec) && durSec > 0) leadSec = durSec;
+        }
+        let pickCtx = ctx;
+        let showAt: Date | null = null;
+        if (leadSec != null) {
+          showAt = new Date(Date.now() + (leadSec + PICK_SHOW_LOOKAHEAD_SEC) * 1000);
+          pickCtx = await getFullContext(showAt);
+        }
+        await djAgent.runTrackEvent(this, pickCtx, {
+          wantLink,
+          showAt,
+          predecessor: predecessorItem?.track ?? null,
+          prior: predecessorItem ? (this.current?.track ?? null) : null,
+        });
+      } catch (err) {
+        this.log('error', `DJ track event failed: ${(err as Error).message}`);
+      } finally {
+        this.pickerBusy = false;
+      }
+    })();
+  }
+
+  // Pair-drain deadline routine (feature: pair-aware transitions), run every
+  // watcher tick. When the on-air track nears its end and the NEXT track to
+  // air is still held without a successor, fire the pick cycle for that
+  // successor — the push() it ends in re-runs the drain loop, which then
+  // sends the held item pair-aware. Fires only for the item that airs
+  // immediately after the on-air track (head of `upcoming` unsent, and the
+  // only unsent item): once its successor lands, the fresh pick becomes the
+  // new held tail whose own deadline is a full track away — without the
+  // head-only condition every tick would pick another track and run the
+  // pipeline ahead unbounded. Past the hard deadline the pick window closes
+  // and drainToLiquidsoap's intrinsic path owns the endgame.
+  maybeDeadlinePick() {
+    if (!this.autoPick || this.pickerBusy || !djCallsAllowed()) return;
+    if (settings.get().transitions?.pairDrain === false) return;
+    const rem = this.remainingSecOnAir();
+    if (!shouldDeadlinePick(rem)) return;
+    if (this.upcoming.length === 0) {
+      // Nothing queued at all this close to the end — the track-start pick
+      // failed or never fired. Same backstop pick as onTrackStarted's.
+      const isAutonomous = this.current?.source === 'auto' || this.current?.source === 'ai';
+      this.runPickCycle({ isAutonomous });
+      return;
+    }
+    const head = this.upcoming[0];
+    const unsent = this.upcoming.filter(i => !i.sent);
+    if (head.sent || unsent.length !== 1 || unsent[0] !== head) return;
+    // The held head needs a successor: pick what follows it. Links only ride
+    // autonomous seams — a request brings its own intro, mirroring the
+    // track-start path's source check.
+    this.runPickCycle({ isAutonomous: !head.requestedBy, predecessorItem: head });
   }
 
   // Reconcile Node's upcoming queue with Liquidsoap's actual dj_queue.
@@ -1664,6 +1790,12 @@ class Queue {
       this._nowPlaying = await this.readNowPlayingFromDisk();
       this._nowPlayingFresh = true;
       this.onTrackStarted(this._nowPlaying);
+      // Pair-aware transitions: the deadline pick + a drain re-run every
+      // tick. Drain holds are time-gated, and push() only fires the drain on
+      // mutation — the clock advancing past a deadline has to re-trigger it
+      // from here (cheap: senderBusy + an immediate hold-break otherwise).
+      this.maybeDeadlinePick();
+      void this.drainToLiquidsoap();
     };
     void tick();
     setInterval(tick, 1500);
