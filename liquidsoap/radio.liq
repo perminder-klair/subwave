@@ -948,6 +948,16 @@ end
 # one song behind until the next crossfade.
 music_meta = music
 
+# BEDS ↔ JINGLES — true from a bed's first metadata until the next real song's
+# (both set in on_meta, defined further down). The jingle rotate below counts
+# every music-chain track and a bed IS a track, so without a gate the rotate
+# can insert a stinger BETWEEN the bed and the song it ramps into — the bed's
+# exit cross then lands on a jingle, right after the DJ's closing words. While
+# this flag is up the jingles source reads as unavailable, so the rotate skips
+# it (exactly as it does for an empty jingles.m3u) and the jingle defers to
+# the next real track boundary.
+bed_on_air = ref(false)
+
 # JINGLES & STATION ID — rotate a jingle in every N tracks.
 #
 # CRITICAL: this rotate MUST sit here, on the raw pre-cross / pre-duck music
@@ -992,6 +1002,9 @@ music =
         "/var/sub-wave/jingle-playing.json"
       )
     )
+    # A bed on air makes jingles unavailable (see bed_on_air above) so the
+    # rotate can't split a bed from the song it ramps into.
+    jingles = source.available(jingles, {not bed_on_air()})
     rotate(
       weights=[1, jingle_ratio()],  # 1 jingle for every N music tracks (settings.json)
       [jingles, music]
@@ -1359,6 +1372,7 @@ def on_meta(m) =
   # the controller that a non-track thing started.
   if m["subwave_kind"] == "bed" then
     log("on_meta: bed started (#{filename})")
+    bed_on_air := true
     file.write(
       data=json.stringify(compact=true, {
         filename = filename,
@@ -1368,6 +1382,7 @@ def on_meta(m) =
       "/var/sub-wave/bed-playing.json"
     )
   elsif title != "" or artist != "" then
+    bed_on_air := false
     log("on_meta: title=#{title} | artist=#{artist} | album=#{album} | id=#{subsonic_id}")
     ts = int_of_float(time())
     # Build via json.stringify so values with embedded quotes/backslashes

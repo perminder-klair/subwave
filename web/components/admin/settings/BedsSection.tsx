@@ -28,6 +28,11 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importName, setImportName] = useState('');
   const [importDesc, setImportDesc] = useState('');
+  // In-progress edits of the numeric fields. null = show the saved value, so
+  // the inputs stay controlled (an out-of-range entry snaps back on blur
+  // instead of lingering in the DOM as a number that was never persisted).
+  const [thresholdEdit, setThresholdEdit] = useState<string | null>(null);
+  const [crossEdit, setCrossEdit] = useState<string | null>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const doImport = async () => {
     if (!importFile || !importName.trim()) return;
@@ -49,6 +54,19 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
   const beds = data?.values?.beds;
   const enabled = beds?.enabled === true;
   const thresholdSec = beds?.thresholdSec ?? 12;
+  const crossSec = beds?.crossSec ?? 6;
+
+  const saveNumber = async (
+    raw: string, current: number, max: number,
+    patch: (v: number) => Record<string, unknown>,
+    reset: (v: string | null) => void,
+  ) => {
+    const v = parseFloat(raw);
+    if (Number.isFinite(v) && v >= 0 && v <= max && v !== current) {
+      await saveSettings(patch(v)); // refreshes `data`, so clearing shows the new value
+    }
+    reset(null);
+  };
 
   return (
     <>
@@ -111,13 +129,40 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
               step={1}
               min={0}
               max={60}
-              defaultValue={String(thresholdSec)}
+              value={thresholdEdit ?? String(thresholdSec)}
               disabled={busy}
-              onBlur={(e: ChangeEvent<HTMLInputElement>) => {
-                const v = parseFloat(e.target.value);
-                if (Number.isFinite(v) && v >= 0 && v <= 60 && v !== thresholdSec) {
-                  saveSettings({ beds: { thresholdSec: v } });
-                }
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setThresholdEdit(e.target.value)}
+              onBlur={() => {
+                if (thresholdEdit == null) return;
+                void saveNumber(thresholdEdit, thresholdSec, 60,
+                  v => ({ beds: { thresholdSec: v } }), setThresholdEdit);
+              }}
+            />
+            <span className="text-[12px] text-muted">sec</span>
+          </div>
+        </div>
+        <div className="mt-4 flex items-start justify-between gap-4 border-t border-dashed border-separator-strong pt-4">
+          <div className="max-w-[480px]">
+            <div className="text-[13px] font-bold">Ramp into the next song</div>
+            <div className="mt-0.5 text-[11px] leading-[1.5] text-muted">
+              How long the next song takes to fade in under the DJ's closing words at the end
+              of the bed. Longer is smoother; shorter is punchier. 0 is a hard cut.
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Input
+              className="mono-num w-20"
+              type="number"
+              step={1}
+              min={0}
+              max={15}
+              value={crossEdit ?? String(crossSec)}
+              disabled={busy}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setCrossEdit(e.target.value)}
+              onBlur={() => {
+                if (crossEdit == null) return;
+                void saveNumber(crossEdit, crossSec, 15,
+                  v => ({ beds: { crossSec: v } }), setCrossEdit);
               }}
             />
             <span className="text-[12px] text-muted">sec</span>

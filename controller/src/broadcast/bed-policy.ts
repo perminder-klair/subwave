@@ -17,7 +17,8 @@ export interface BedOpts {
   crossSec: number;
 }
 
-// Bed alone before the DJ's clip lands. This is LATENCY, not a preference: the
+// Bed alone before the DJ's clip lands, ON TOP of the entry cross (see
+// bedLengthFor's entryCrossSec). This is LATENCY, not a preference: the
 // controller sees the bed start on its 1.5s now-playing tick, writes intro.txt,
 // and Liquidsoap picks it up on a 0.5s poll. 2.5s covers the worst case. If the
 // voice lands later than this anyway, the tail spills into the next song — i.e.
@@ -33,27 +34,30 @@ export const BED_TAIL_SEC = 2.0;
 // semantics library-db documents on `vocalRanges` — [] is instrumental, null is
 // not-computed, non-empty means the analyzer measured real vocals.
 //
-//   non-empty vocalRanges → introMs IS the vocal onset. analyze_worker.py
-//                           overwrites the energy estimate with the first vocal
-//                           range's start when Demucs ran, so introMs is
-//                           trustworthy exactly when vocalRanges proves it is.
+//   non-empty vocalRanges → the earliest range's startMs IS the vocal onset.
 //   [] (instrumental)     → nothing to trample. Infinity — never bed.
 //   null (not computed)   → unknown. Caller falls back to the threshold.
 //
-// Deliberately NOT introMs on its own. Without vocal ranges, introMs is a pure
-// energy heuristic ("where the track comes in after a quiet count-in") whose own
-// docstring calls it "a soft budget, never a gate" — and for this question it
-// measures the wrong thing: a track opening full-band with vocals at 0:15 reads
-// introMs ≈ 0, which would fire a bed exactly where the ramp is longest.
+// Deliberately NOT introMs, not even as a shortcut when ranges exist. introMs
+// only equals the vocal onset when Demucs ran in the SAME analysis pass; a
+// heavy-then-lean history desyncs the columns (clearAnalysis({keepVocal:true})
+// NULLs intro_ms while COALESCE preserves vocal_ranges_json, and the lean pass
+// rewrites intro_ms from the energy heuristic — ~0 for a full-band opener). The
+// ranges themselves are the measurement, so read the onset off them directly.
+// Without ranges, introMs is a pure energy heuristic ("where the track comes in
+// after a quiet count-in") whose own docstring calls it "a soft budget, never a
+// gate" — and for this question it measures the wrong thing: a track opening
+// full-band with vocals at 0:15 reads introMs ≈ 0, which would fire a bed
+// exactly where the ramp is longest.
 export function rampBudgetMs(
-  track: { introMs?: number | null; vocalRanges?: { startMs: number }[] | null } | null,
+  track: { vocalRanges?: { startMs: number }[] | null } | null,
 ): number | null {
   if (!track) return null;
   const ranges = track.vocalRanges;
   if (ranges == null) return null;              // not computed → unknown
   if (ranges.length === 0) return Infinity;     // instrumental → never bed
-  const onset = track.introMs;
-  return typeof onset === 'number' && onset >= 0 ? onset : null;
+  const onset = Math.min(...ranges.map(r => (typeof r?.startMs === 'number' ? r.startMs : NaN)));
+  return Number.isFinite(onset) && onset >= 0 ? onset : null;
 }
 
 // Should this spoken clip ride a bed? `voiceMs` is the rendered clip's real
@@ -71,18 +75,29 @@ export function bedWanted(voiceMs: number, budgetMs: number | null, opts: BedOpt
 
 // How long the bed plays, and how long its exit cross is.
 //
-//   bedSec = head + voice + tail
+//   bedSec = entryCross + head + voice + tail
+//
+// `entryCrossSec` is the PREDECESSOR's exit canvas — the cross the bed fades in
+// under. The bed's clock (cue_out, and the marker the controller keys the link
+// off) starts when the bed enters that cross buffer, not when it is dominant,
+// so the entry cross is dead time the bed must carry on top of the head/voice/
+// tail budget. Without it, the DJ's opening words land over the outgoing song's
+// fade rather than over the solo bed.
 //
 // The bed's liq_cross_duration means the next song starts fading in at
-// (bedSec - crossSec) = (voiceSec - 1.5) with the defaults — landing ~4s before
-// the DJ's clip ends. That overlap IS the ramp: the DJ's closing words play over
-// the song's fade-in, the way a presenter talks up to the vocal.
+// (bedSec - crossSec), landing ~4s before the DJ's clip ends with the defaults.
+// That overlap IS the ramp: the DJ's closing words play over the song's
+// fade-in, the way a presenter talks up to the vocal.
 //
 // The clamp keeps the arithmetic total rather than trusting the policy to stay
 // honest: the ramp must never start before the bed does. Only reachable on a
 // sub-2s script, which bedWanted() prevents today.
-export function bedLengthFor(voiceMs: number, opts: BedOpts): { bedSec: number; crossSec: number } {
-  const bedSec = BED_HEAD_SEC + voiceMs / 1000 + BED_TAIL_SEC;
+export function bedLengthFor(
+  voiceMs: number,
+  opts: BedOpts,
+  entryCrossSec = 0,
+): { bedSec: number; crossSec: number } {
+  const bedSec = Math.max(0, entryCrossSec) + BED_HEAD_SEC + voiceMs / 1000 + BED_TAIL_SEC;
   const crossSec = Math.min(Math.max(0, opts.crossSec), bedSec - 1);
   return { bedSec: round2(bedSec), crossSec: round2(crossSec) };
 }

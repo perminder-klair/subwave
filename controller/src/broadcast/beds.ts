@@ -21,6 +21,8 @@ import { readFile, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/prom
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
 import { transcodeAudio, hasFfmpeg, extOf, isAcceptedAudio, probeDurationSec } from '../audio/audio-import.js';
 import { escAnnotate } from '../music/subsonic.js';
+import { writeFileAtomic } from '../util/atomic-file.js';
+import { slugify } from '../util/slug.js';
 
 // Floor on any bed's length. A bed is only ever cut SHORTER (liq_cue_out) and
 // never looped, so it has to outlast the script it carries — bed-policy filters
@@ -49,14 +51,6 @@ const DEFAULT_BEDS = [
   },
 ];
 
-function slugify(name: string) {
-  return String(name || '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
 async function loadMeta(): Promise<any> {
   try {
     const m = JSON.parse(await readFile(META, 'utf8'));
@@ -67,7 +61,10 @@ async function loadMeta(): Promise<any> {
 }
 
 async function saveMeta(meta: any) {
-  await writeFile(META, JSON.stringify(meta, null, 2));
+  // Atomic: the drain path reads this sidecar at track transitions (catalog/
+  // getPath in queue.maybePushBed), concurrently with admin upload/delete
+  // saves — a torn write would momentarily read as an empty library.
+  await writeFileAtomic(META, JSON.stringify(meta, null, 2));
 }
 
 async function statOrNull(p: string) {
@@ -215,6 +212,17 @@ export async function ensureDefaults() {
       const file = `${def.name}.mp3`;
       await copyFile(def.bundled, `${DIR}/${file}`);
       const measured = await probeDurationSec(`${DIR}/${file}`);
+      // Same gate as importAudio: a bed with no measured length can never be
+      // selected (pickBed only trusts real numbers), so installing it would
+      // show a bed in the library that never airs. Skip instead — the item is
+      // never written, so the next boot retries once ffprobe is available.
+      if (measured == null || measured < MIN_DURATION_SEC) {
+        await unlink(`${DIR}/${file}`).catch(() => {});
+        console.warn(`[beds] default "${def.name}" skipped — ${
+          measured == null ? 'duration unmeasurable (is ffprobe installed?)' : `only ${Math.round(measured)}s`
+        }; will retry next boot`);
+        continue;
+      }
       meta.items[def.name] = {
         name: def.name,
         description: def.description,

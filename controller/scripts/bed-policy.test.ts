@@ -17,23 +17,35 @@ import {
 
 const OPTS = { thresholdSec: 12, crossSec: 6 };
 
+// The constants ARE the contract: 2.5s of head is the latency budget (1.5s
+// watcher tick + 0.5s intro.txt poll + slack) and every formula-shaped
+// assertion below would still pass if they drifted — so pin the literals.
+assert.equal(BED_HEAD_SEC, 2.5);
+assert.equal(BED_TAIL_SEC, 2.0);
+
 // ── rampBudgetMs — the three-state vocal read ────────────────────────────────
 
 // Not computed (null) → unknown, so the caller falls back to the threshold.
-assert.equal(rampBudgetMs({ introMs: 4200, vocalRanges: null }), null);
+assert.equal(rampBudgetMs({ vocalRanges: null }), null);
 
 // Instrumental ([]) → nothing to trample, so the budget is unbounded.
-assert.equal(rampBudgetMs({ introMs: 0, vocalRanges: [] }), Infinity);
+assert.equal(rampBudgetMs({ vocalRanges: [] }), Infinity);
 
-// Vocals measured → introMs IS the onset (analyze_worker overwrites the energy
-// estimate when Demucs ran), so it's trustworthy here and only here.
-assert.equal(rampBudgetMs({ introMs: 15_000, vocalRanges: [{ startMs: 15_000 }] }), 15_000);
+// Vocals measured → the earliest range's start IS the onset. Read off the
+// ranges themselves, never intro_ms: a heavy-then-lean analysis history
+// rewrites intro_ms from the energy heuristic while COALESCE keeps the old
+// ranges, so the two columns can disagree — the ranges are the measurement.
+assert.equal(rampBudgetMs({ vocalRanges: [{ startMs: 15_000 }] }), 15_000);
 
-// Vocals measured but introMs missing → unknown rather than a wrong number.
-assert.equal(rampBudgetMs({ introMs: null, vocalRanges: [{ startMs: 9_000 }] }), null);
+// Ranges aren't guaranteed sorted — the earliest wins.
+assert.equal(rampBudgetMs({ vocalRanges: [{ startMs: 42_000 }, { startMs: 9_000 }] }), 9_000);
 
-// A negative onset is nonsense — treat as unknown, don't propagate it.
-assert.equal(rampBudgetMs({ introMs: -1, vocalRanges: [{ startMs: 0 }] }), null);
+// Vocals from the first beat → zero budget (any script outlasts it → bed).
+assert.equal(rampBudgetMs({ vocalRanges: [{ startMs: 0 }] }), 0);
+assert.equal(bedWanted(3_000, 0, OPTS), true);
+
+// A negative/garbage onset is nonsense — treat as unknown, don't propagate it.
+assert.equal(rampBudgetMs({ vocalRanges: [{ startMs: -1 }] }), null);
 
 // No track at all.
 assert.equal(rampBudgetMs(null), null);
@@ -79,7 +91,7 @@ assert.equal(bedWanted(NaN, null, OPTS), false);
 
 {
   const { bedSec, crossSec } = bedLengthFor(20_000, OPTS);
-  assert.equal(bedSec, BED_HEAD_SEC + 20 + BED_TAIL_SEC);   // 24.5
+  assert.equal(bedSec, 24.5);   // literal, not the formula — see the pins above
   assert.equal(crossSec, 6);
 
   // The load-bearing property: the next song's fade-in starts ~4s before the
@@ -87,6 +99,18 @@ assert.equal(bedWanted(NaN, null, OPTS), false);
   const rampStartsAt = bedSec - crossSec;      // 18.5
   const djEndsAt = BED_HEAD_SEC + 20;          // 22.5
   assert.equal(round2(djEndsAt - rampStartsAt), 4);
+}
+
+// The entry cross (the predecessor's exit canvas the bed fades in under) is
+// dead time the bed carries on top: the marker and cue_out clock start at
+// cross-FEED time, a full canvas before the bed is dominant.
+{
+  const { bedSec, crossSec } = bedLengthFor(20_000, OPTS, 10);
+  assert.equal(bedSec, 34.5);   // 10 entry + 2.5 head + 20 voice + 2 tail
+  assert.equal(crossSec, 6);
+  // The DJ now lands at entry+head and still ends ~4s into the ramp.
+  const djEndsAt = 10 + BED_HEAD_SEC + 20;     // 32.5
+  assert.equal(round2(djEndsAt - (bedSec - crossSec)), 4);
 }
 
 // The 4s ramp holds at any script length — it's a property of the constants,
