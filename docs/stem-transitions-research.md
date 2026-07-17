@@ -1,9 +1,11 @@
 # Stem-aware transitions — research & feasibility (Neural Mix study)
 
-*Research notes, July 2026. Status: **proposal / not implemented.** This doc
-captures what Algoriddim's Neural Mix actually is under the hood, what SUB/WAVE
-already has that maps onto it, and ranked options for building a radio-grade
-equivalent. Written to be the starting point when we pick this up.*
+*Research notes, July 2026. Status: **Option A implemented** (vocal-aware
+transitions — tail vocal ranges, sung-ending exit shaping, chop-over-voice
+veto, never-talk-over-a-singer link gating); **Option B still a proposal.**
+This doc captures what Algoriddim's Neural Mix actually is under the hood,
+what SUB/WAVE already has that maps onto it, and ranked options for building a
+radio-grade equivalent.*
 
 ---
 
@@ -146,23 +148,35 @@ facts:
 
 ## Part 3 — Options, ranked
 
-### Option A — Vocal-aware transitions (ship first)
+### Option A — Vocal-aware transitions (SHIPPED)
 
-Extend vocal detection to the **outro window**: the tail is already downloaded
-and decoded for `analyze_outro`; run the existing Demucs vocals pass on it too
-(a few seconds of extra compute per track, heavy tier only). Store tail vocal
-ranges alongside `outro_json`. Then:
+Extends vocal detection to the **outro window**: the tail is already downloaded
+and decoded for `analyze_outro`; the existing Demucs pass runs on it too
+(~+50% separation time per track, heavy tier only). Tail vocal ranges are
+stored inside `outro_json` (`outro.vocalRanges`, absolute ms, `[]` = measured
+instrumental tail). As implemented:
 
-1. **Avoid vocal-over-vocal clashes** — in `mix.ts`, when the outgoing tail has
-   vocals *and* the incoming intro has vocals (intro `vocal_ranges` already
-   exist), tighten or shift the crossfade window.
-2. **Gate DJ talk-over links** — `announce({kind:'link'})` → `intro.txt` rides
-   *over the incoming track's intro*; hold or shorten links when the intro is
-   vocal, using the stored `vocal_ranges`.
+1. **Sung-ending exit shaping** — `mixAnalysisFor` derives `Analysis.vocalTail`
+   (any tail vocal span overlapping the measured wind-down); a sung fade pulls
+   `endingCrossSecondsFor`'s canvas to its 8s floor instead of riding the full
+   wind-down under the next track.
+2. **Chop-over-voice veto** — `effectAllowedFor` vetoes the chop effect over a
+   sung ending (stuttering a voice mid-word), alongside the existing
+   chop-over-fade veto.
+3. **Never talk over a singer** — `enforceIntroBudget` drops a DJ link outright
+   when the incoming track's *measured* first vocal entry is under 2.5s (the
+   old lenient guard existed only because the energy heuristic is noise down
+   there); `introBudgetPhrase` tells the model to skip the line up front. The
+   pool-picker candidate projection also gained the `instrumental` hint the
+   agent path already had.
+4. **Backfill** — `needsVocalIds` widens to head-analysed/tail-missing tracks,
+   gated on the backend's `tail_vocal` capability flag (a stale analyzer image
+   never causes churn). No ANALYSIS_VERSION bump.
 
-Cheap, reuses every existing pipe, and fixes the most audible amateur-DJ
-artifact — which is most of what Automix AI's live EQ moves are protecting
-against.
+Note the pair-level piece stays constrained by #749 (a pair-sized crossfade
+can't be stamped at annotate time): vocal awareness enters via track-intrinsic
+shaping, effect vetoes, and pick steering. Option B dissolves that constraint
+properly.
 
 ### Option B — Pre-rendered stem transitions (the flagship)
 

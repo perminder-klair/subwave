@@ -125,6 +125,11 @@ export function get(songId: string): any {
     structure: t.structure,
     vocalRanges: t.vocalRanges, // [] = instrumental, null = not computed
     paceMean: paceMeanOf(t.pace),
+    // Boundary keys (key ranges) — bpmKeyFor and queue.mixAnalysisFor read
+    // rec?.keyRanges through this projection; before this line the field was
+    // silently dropped, so library-lookup consumers never resolved a track's
+    // opening/ending key.
+    keyRanges: t.keyRanges,
     // Measured ending (fade vs cold, tail loudness/tempo/grid) — feeds the
     // queue's ending-aware exit canvas + effect gating. null = no signal.
     outro: t.outro,

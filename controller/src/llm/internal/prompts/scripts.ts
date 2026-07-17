@@ -7,7 +7,7 @@ import * as settings from '../../../settings.js';
 import { djText } from '../strategy/text.js';
 import { djSystem, lengthPhrase } from './system.js';
 import { buildContextLines, decoratePrompt, randomSeed } from './context.js';
-import { introBudgetPhrase, introMsFor, bpmKeyFor } from './intro-budget.js';
+import { introBudgetPhrase, introMsFor, firstVocalMsFor, bpmKeyFor } from './intro-budget.js';
 
 // Real-world context the generic between-track generators are allowed to weave
 // in. Weather is deliberately EXCLUDED (issue #471): ambient weather stapled to
@@ -173,7 +173,10 @@ export async function generateLink({ previous, current, context, clockIsAirTime 
     ? ` You may nod to the mix if it feels natural — e.g. easing into something a touch faster or slower, or how it sits in key — but never say raw numbers.`
     : '';
   // Talk-within-the-intro budget for the track now starting (current = the pick).
-  const budget = introBudgetPhrase(introMsFor(current));
+  // The measured first-vocal entry (when the track has one) upgrades the
+  // phrase to "skip the spoken intro" on vocals-immediate tracks — the
+  // deterministic backstop would drop the line anyway; better not to write it.
+  const budget = introBudgetPhrase(introMsFor(current), firstVocalMsFor(current));
   const prompt = `Write a short DJ link to carry into the track now starting — set it up, capture its feel, weave in the moment.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhrase('link', speaker)}, conversational. Vary how you open — don't default to "here's", "this is", "coming up", or "that was"; find a different way in each time. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.${clockClause}\n\n${ctxLines.join('\n')}`;
 
   return djText({

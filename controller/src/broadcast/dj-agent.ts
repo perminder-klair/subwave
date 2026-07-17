@@ -478,8 +478,11 @@ function trimLinkToIntro(text: string | null | undefined, song: any): string | n
   if (!raw) return null;
   if (!settings.getEffectivePersona()?.djMode) return raw;
   // Same corrections as speak() so the word count matches the aired text.
+  // firstVocalMsFor arms the never-talk-over-a-singer drop: a MEASURED vocal
+  // entry under 2.5s drops the line outright (the <2500 leniency only exists
+  // because the energy heuristic is noise down there).
   const spoken = normalizeForSpeech(stripThinking(raw), settings.get().tts?.corrections);
-  return dj.enforceIntroBudget(spoken, introMsOf(song), speechPaceScale('link')) || null;
+  return dj.enforceIntroBudget(spoken, introMsOf(song), speechPaceScale('link'), dj.firstVocalMsFor(song)) || null;
 }
 
 // `link`, when present, is the between-track line to speak as this pick starts

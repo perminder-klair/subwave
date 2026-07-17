@@ -708,6 +708,30 @@ async function main() {
     // Garbage pace values fall back to the historical 1.0 assumption.
     assert.equal(enforceIntroBudget('Short line.', 5000, NaN), 'Short line.');
   });
+  await test('enforceIntroBudget: measured first-vocal entry (vocal-aware transitions)', () => {
+    // A MEASURED vocal start under 2.5s drops the line outright — the <2500
+    // leniency only exists because the energy heuristic is noise down there.
+    assert.equal(enforceIntroBudget('Short line.', 1000, 1, 1000), '');
+    assert.equal(enforceIntroBudget('Short line.', null, 1, 800), '');
+    // Un-measured (null/undefined — analysed instrumentals included) keeps the
+    // historical leniency byte-for-byte.
+    assert.equal(enforceIntroBudget('Short line.', 1000, 1, null), 'Short line.');
+    assert.equal(enforceIntroBudget('Short line.', 1000), 'Short line.');
+    // A measured entry ≥2500 IS the runway — it budgets like intro_ms.
+    assert.equal(enforceIntroBudget('Short line.', null, 1, 5000), 'Short line.');
+    const long = 'One two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen';
+    assert.equal(enforceIntroBudget(long, null, 1, 4000), '');            // over 10-word ceiling, no boundary → drop
+    // A measured ≥18s runway stays lenient (any line fits).
+    assert.equal(enforceIntroBudget(long, null, 1, 20000), long);
+  });
+  await test('introBudgetPhrase: vocals-immediate variant', () => {
+    // Measured vocal start under 2.5s → tell the model to skip the line.
+    assert.match(introBudgetPhrase(1000, 900), /skip the spoken intro/i);
+    assert.match(introBudgetPhrase(null, 2000), /skip the spoken intro/i);
+    // Un-measured keeps the historical phrases.
+    assert.equal(introBudgetPhrase(1000, null), '');
+    assert.match(introBudgetPhrase(4000, 4000), /4s/);
+  });
 
   // ---- persona tone dials (humour / local colour / warmth) ----
   console.log('personaToneDirectives / normalizeDial:');

@@ -587,6 +587,9 @@ class Queue {
       keyStart: mix.openingKeyFrom(keyRanges, base.key),
       keyEnd: mix.endingKeyFrom(keyRanges, durMs, base.key),
       ending,
+      // Sung ending (tail vocal ranges vs the wind-down) — feeds the
+      // vocal-tail exit shaping + the chop-over-voice veto.
+      vocalTail: mix.vocalTailFor(outro?.vocalRanges, outro?.startMs),
     };
   }
 
@@ -786,11 +789,12 @@ class Queue {
         const exitSecs = mix.endingCrossSecondsFor(
           { bpm: outro.bpm ?? next.bpm, key: next.key, ending: outro.ending },
           windDownSec,
-          { maxSec, tailLufs: outro.lufs ?? null, bodyLufs },
+          { maxSec, tailLufs: outro.lufs ?? null, bodyLufs, vocalTail: next.vocalTail },
         );
         if (exitSecs != null) {
           item.track.crossSec = exitSecs;
-          this.log('mix', `exit canvas ${exitSecs}s (${outro.ending} ending) → ${item.track.title}`);
+          const sung = next.vocalTail === true ? ', vocal tail' : '';
+          this.log('mix', `exit canvas ${exitSecs}s (${outro.ending} ending${sung}) → ${item.track.title}`);
         }
       }
     }

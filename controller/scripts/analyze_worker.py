@@ -586,10 +586,15 @@ class VocalActivityDetector:
         if "vocals" not in self.sources:
             raise RuntimeError(f"demucs model {DEMUCS_MODEL} has no 'vocals' stem")
 
-    def detect(self, stereo, sr, librosa):
+    def detect(self, stereo, sr, librosa, min_loud=0.0):
         """stereo: float32 array shaped (2, N) at DEMUCS_SR. Returns a list of
         {startMs,endMs} where the isolated vocal stem is active — possibly empty
-        (an instrumental). Raises on failure; the caller degrades to None."""
+        (an instrumental). Raises on failure; the caller degrades to None.
+        `min_loud` is an absolute RMS floor on the stem's loud reference: the
+        relative threshold below self-scales, so a window that is pure
+        separation bleed (a vocal-free fading outro) would otherwise emit
+        artefact ranges — the floor turns those into a clean []. 0.0 = off
+        (the head window keeps its historical behaviour)."""
         import numpy as np
         import torch
 
@@ -611,7 +616,7 @@ class VocalActivityDetector:
         if rms.size == 0:
             return []
         loud = float(np.percentile(rms, 90))
-        if loud <= 0:
+        if loud <= min_loud:
             return []
         thr = 0.15 * loud
         times = librosa.frames_to_time(np.arange(rms.size), sr=sr, hop_length=hop)
@@ -824,6 +829,37 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None)
             except Exception as e:  # noqa: BLE001 — vocal activity is best-effort
                 log(f"vocal activity failed: {e}")
                 vocal_ranges = None
+        # Tail vocal activity (feature: vocal-aware transitions) — the outro
+        # window gets its own Demucs pass so transitions know whether the
+        # ENDING is sung (the head pass above never sees the last 20s of a
+        # normal-length track). Gated on the same detector AND a computed
+        # outro: outro non-None already proves the file is complete and long
+        # enough for a distinct tail. Spans are shifted to ABSOLUTE ms like
+        # the outro's beat grid; [] = analysed instrumental tail, mirroring
+        # the head semantics. The RMS floor guards against separation bleed
+        # on a fading outro reading as artefact "vocals" (~-40 dBFS: genuine
+        # sung tails sit well above it, bleed well below).
+        if detector is not None and outro is not None:
+            try:
+                tail_offset = max(0.0, duration_s - OUTRO_SECONDS)
+                y_tail, _srt = librosa.load(
+                    path, sr=DEMUCS_SR, mono=False,
+                    offset=tail_offset, duration=OUTRO_SECONDS,
+                )
+                if y_tail is not None and np.size(y_tail) > 0:
+                    tail_vocals = detector.detect(
+                        y_tail, DEMUCS_SR, librosa, min_loud=0.01
+                    )
+                    shift_ms = tail_offset * 1000.0
+                    outro["vocalRanges"] = [
+                        {
+                            "startMs": int(round(r["startMs"] + shift_ms)),
+                            "endMs": int(round(r["endMs"] + shift_ms)),
+                        }
+                        for r in tail_vocals
+                    ]
+            except Exception as e:  # noqa: BLE001 — tail vocals are best-effort
+                log(f"tail vocal activity failed: {e}")
     finally:
         if owned:
             try:
@@ -978,6 +1014,11 @@ def main():
         "ready": True,
         "audio_embedding_capable": audio_capable,
         "vocal_activity_capable": vocal_capable,
+        # Version signal as much as a capability: only workers that compute
+        # tail vocal ranges (outro.vocalRanges) emit this key at all, so the
+        # controller can gate the tail-vocal backfill widening on `=== true`
+        # and a stale sidecar image never causes re-analysis churn.
+        "tail_vocal_capable": vocal_capable,
         "text_embedding_capable": text_capable,
     })
 

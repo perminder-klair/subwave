@@ -94,6 +94,12 @@ export interface OutroInfo {
   bpm: number | null;          // tail tempo (outros drift/ritard vs the lead)
   beats: number[] | null;      // tail beat grid, absolute ms
   bars: number[] | null;       // tail downbeat (bar) grid, absolute ms
+  // Tail vocal-activity spans (Demucs over the outro window), absolute ms.
+  // [] = analysed instrumental tail (meaningful); ABSENT = not computed —
+  // the key must be omitted (not null) when detection didn't run, because
+  // outro_json is the JSON.stringify of this object and the vocal backfill
+  // probes the raw text for '"vocalRanges"' to find tail-missing tracks.
+  vocalRanges?: Section[];
 }
 
 // Coerce a worker numeric field to a finite number or null. The worker omits
@@ -178,6 +184,11 @@ function parseOutro(v: unknown): OutroInfo | null {
   const startMs = parseFinite(o?.startMs);
   const ending = o?.ending;
   if (startMs == null || startMs < 0 || (ending !== 'fade' && ending !== 'cold')) return null;
+  // Same []-vs-absent distinction as the head ranges: preserve a present-but-
+  // empty array (analysed instrumental tail); OMIT the key when the worker
+  // didn't compute it, so the stringified outro_json never carries a bare
+  // "vocalRanges" key for the backfill probe to misread.
+  const vocalRanges = parseVocalRanges(o?.vocalRanges);
   return {
     startMs: Math.round(startMs),
     ending,
@@ -185,6 +196,7 @@ function parseOutro(v: unknown): OutroInfo | null {
     bpm: parseFinite(o?.bpm),
     beats: parseMsList(o?.beats),
     bars: parseMsList(o?.bars),
+    ...(vocalRanges !== null ? { vocalRanges } : {}),
   };
 }
 
@@ -235,6 +247,7 @@ interface WorkerMessage {
   // no model load). The sidecar surfaces the same fields via /health.
   audio_embedding_capable?: boolean;
   vocal_activity_capable?: boolean;
+  tail_vocal_capable?: boolean;
   text_embedding_capable?: boolean;
   bpm?: number | null;
   key?: string | null;
@@ -270,6 +283,7 @@ const pending = new Map<string, Pending>();
 // — issue #966's false "you're on the lean image" warning on subwave-aio-heavy.
 let _localAudioCapable: boolean | null = null;
 let _localVocalCapable: boolean | null = null;
+let _localTailVocalCapable: boolean | null = null;
 let _localTextCapable: boolean | null = null;
 
 function startWorker(): Promise<void> {
@@ -297,6 +311,7 @@ function startWorker(): Promise<void> {
           // can't see, so it always overwrites.
           if (typeof msg.audio_embedding_capable === 'boolean') _localAudioCapable = msg.audio_embedding_capable;
           if (typeof msg.vocal_activity_capable === 'boolean') _localVocalCapable = msg.vocal_activity_capable;
+          if (typeof msg.tail_vocal_capable === 'boolean') _localTailVocalCapable = msg.tail_vocal_capable;
           if (typeof msg.text_embedding_capable === 'boolean') _localTextCapable = msg.text_embedding_capable;
           clearTimeout(readyTimer);
           resolve();
@@ -404,6 +419,9 @@ function probeLocalCapabilities(): Promise<void> {
         const caps = JSON.parse(out.trim()) as { audio?: boolean; vocal?: boolean; text?: boolean };
         if (_localAudioCapable === null && typeof caps.audio === 'boolean') _localAudioCapable = caps.audio;
         if (_localVocalCapable === null && typeof caps.vocal === 'boolean') _localVocalCapable = caps.vocal;
+        // The local worker script ships with the controller (same repo/image),
+        // so tail-vocal support is version-matched: capable iff vocal is.
+        if (_localTailVocalCapable === null && typeof caps.vocal === 'boolean') _localTailVocalCapable = caps.vocal;
         if (_localTextCapable === null && typeof caps.text === 'boolean') _localTextCapable = caps.text;
       } catch {
         _localProbe = null; // bad/empty output — stay unknown, allow retry
@@ -433,6 +451,10 @@ async function analyzeViaLocalPath(path: string, opts: AnalyzeRequestOpts = {}):
 let _sidecarAudioCapable: boolean | null = null;
 // Same, for vocal-activity (Demucs) support — null until probed/absent field.
 let _sidecarVocalCapable: boolean | null = null;
+// Same, for tail vocal ranges (outro.vocalRanges) — doubles as a worker-version
+// signal: sidecars predating the feature never emit the field, so this stays
+// null there and the backfill widening (which requires === true) can't churn.
+let _sidecarTailVocalCapable: boolean | null = null;
 // Same, for the CLAP TEXT tower (embed-text) — null until probed/absent field.
 let _sidecarTextCapable: boolean | null = null;
 // The candidate base URL that last reported the 'analyze' engine — the one
@@ -450,6 +472,7 @@ async function probeSidecar(url: string): Promise<boolean> {
       engines?: string[];
       analyze_audio_capable?: boolean | null;
       analyze_vocal_capable?: boolean | null;
+      analyze_tail_vocal_capable?: boolean | null;
       analyze_text_capable?: boolean | null;
     };
     const reachable = !!body.ok && Array.isArray(body.engines) && body.engines.includes('analyze');
@@ -457,6 +480,7 @@ async function probeSidecar(url: string): Promise<boolean> {
       _sidecarBase = url;
       _sidecarAudioCapable = typeof body.analyze_audio_capable === 'boolean' ? body.analyze_audio_capable : null;
       _sidecarVocalCapable = typeof body.analyze_vocal_capable === 'boolean' ? body.analyze_vocal_capable : null;
+      _sidecarTailVocalCapable = typeof body.analyze_tail_vocal_capable === 'boolean' ? body.analyze_tail_vocal_capable : null;
       _sidecarTextCapable = typeof body.analyze_text_capable === 'boolean' ? body.analyze_text_capable : null;
     }
     return reachable;
@@ -555,6 +579,16 @@ export function audioEmbeddingAvailable(): boolean | null {
 export function vocalActivityAvailable(): boolean | null {
   if (_backend === 'sidecar') return _sidecarVocalCapable;
   if (_backend === 'local') return _localVocalCapable;
+  return null;
+}
+
+// Whether the active backend computes TAIL vocal ranges (outro.vocalRanges).
+// Doubles as a worker-version signal: backends predating the feature never
+// report it, so consumers must treat only `=== true` as capable — the vocal
+// backfill widening keys off exactly that, keeping stale sidecars churn-free.
+export function tailVocalAvailable(): boolean | null {
+  if (_backend === 'sidecar') return _sidecarTailVocalCapable;
+  if (_backend === 'local') return _localTailVocalCapable;
   return null;
 }
 

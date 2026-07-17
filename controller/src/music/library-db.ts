@@ -140,6 +140,13 @@ export interface TrackOutro {
   bpm: number | null;        // tail tempo (outros drift/ritard vs the lead)
   beats: number[] | null;    // tail beat grid (ms)
   bars: number[] | null;     // tail downbeat grid (ms)
+  // Tail vocal-activity spans (Demucs over the outro window), absolute ms.
+  // [] = analysed instrumental tail (meaningful, distinct from null/absent =
+  // not computed) — the same tri-state as the head vocal_ranges_json column.
+  // Optional so the analyzer's write shape (which OMITS the key when not
+  // computed — the backfill probes outro_json's raw text for it) assigns
+  // cleanly; parseOutroJson always materialises it (null) on the read side.
+  vocalRanges?: Array<{ startMs: number; endMs: number }> | null;
 }
 
 // A key over a time range: tonic note (sharps) + mode.
@@ -1612,9 +1619,24 @@ export function unanalysedAudioIds(limit?: number): string[] {
 // "[]" instrumental counts as done and is skipped). Independent of the bpm/key
 // scope, like unanalysedAudioIds, so the (expensive, opt-in) Demucs backfill
 // runs on its own cadence. Ordered for stable resumption.
-export function needsVocalIds(limit?: number): string[] {
+//
+// `includeTailMissing` (feature: vocal-aware transitions) widens the scope to
+// tracks whose outro was measured BEFORE tail vocal detection existed —
+// head-analysed but tail-missing. The probe is textual on the raw outro_json:
+// the worker/transport omit the vocalRanges key entirely when not computed
+// (never write null), so its absence in the JSON.stringify output is exact.
+// Tracks with outro_json NULL (short/truncated files) are excluded — they can
+// never gain tail data, so including them would churn. Callers must only pass
+// true when the backend advertises tail_vocal (analyzer.tailVocalAvailable()
+// === true), or a stale sidecar re-analyses these tracks forever for a
+// guaranteed no-op.
+export function needsVocalIds(limit?: number, includeTailMissing = false): string[] {
+  const where = includeTailMissing
+    ? `vocal_ranges_json IS NULL
+       OR (outro_json IS NOT NULL AND outro_json NOT LIKE '%"vocalRanges"%')`
+    : `vocal_ranges_json IS NULL`;
   const q =
-    `SELECT id FROM tracks WHERE vocal_ranges_json IS NULL ORDER BY id` +
+    `SELECT id FROM tracks WHERE ${where} ORDER BY id` +
     (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
   const rows = requireDb().prepare(q).all() as Array<{ id: string }>;
   return rows.map(r => r.id);
@@ -2285,6 +2307,20 @@ function parseOutroJson(s: string): TrackOutro | null {
     if (ending !== 'fade' && ending !== 'cold') return null;
     const msList = (x: unknown): number[] | null =>
       Array.isArray(x) && x.length ? x.filter((n): n is number => Number.isFinite(n)) : null;
+    // Tail vocal spans: gate on KEY PRESENCE so absent stays null (not
+    // computed) while a present-but-empty array survives as [] (analysed
+    // instrumental tail). Malformed entries are dropped span-by-span — a
+    // wholesale []-on-malformed would fake the "measured instrumental"
+    // meaning and permanently satisfy the backfill's tail-missing probe.
+    let vocalRanges: Array<{ startMs: number; endMs: number }> | null = null;
+    if (Array.isArray(v?.vocalRanges)) {
+      vocalRanges = [];
+      for (const r of v.vocalRanges as Record<string, unknown>[]) {
+        const s = Number(r?.startMs);
+        const e = Number(r?.endMs);
+        if (Number.isFinite(s) && Number.isFinite(e) && e > s) vocalRanges.push({ startMs: s, endMs: e });
+      }
+    }
     return {
       startMs: Math.round(startMs),
       ending,
@@ -2292,6 +2328,7 @@ function parseOutroJson(s: string): TrackOutro | null {
       bpm: Number.isFinite(v?.bpm) ? v.bpm : null,
       beats: msList(v?.beats),
       bars: msList(v?.bars),
+      vocalRanges,
     };
   } catch {
     return null;

@@ -187,9 +187,14 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // Widening is suppressed under a fixed re-scan scope for the same reason as
   // audio above; the per-track vocal:true flag below still re-runs Demucs for the
   // in-scope tracks, so vocal ranges are rebuilt without dragging in the remainder.
+  // Tail widening (feature: vocal-aware transitions): also re-target tracks
+  // whose outro predates tail vocal detection — ONLY when the backend
+  // advertises the capability (=== true). Old sidecars never report the flag,
+  // so a stale image keeps the original head-only scope and can't churn.
+  const includeTailMissing = analyzer.tailVocalAvailable() === true;
   if (vocalBackfill && !reAnalyzeScope) {
     const seen = new Set(ids);
-    const vocalIds = db.needsVocalIds(cap).filter(id => !seen.has(id));
+    const vocalIds = db.needsVocalIds(cap, includeTailMissing).filter(id => !seen.has(id));
     const before = ids.length;
     ids = cap ? [...ids, ...vocalIds].slice(0, cap) : [...ids, ...vocalIds];
     if (ids.length > before) {
@@ -288,6 +293,18 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         outro: a.outro,
       });
       if (a.vocalRanges != null) vocalAnalyzed += 1;
+      // Stuck-case telemetry (vocal-aware transitions): a vocal pass that
+      // produced head ranges but NO outro (incomplete download — the file
+      // grew past ANALYZE_MAX_BYTES since its outro was stored) can't write
+      // tail vocal data, and the upsert's COALESCE keeps the old tail-missing
+      // outro — so the widened backfill will re-target this track every pass.
+      // Say so instead of churning silently.
+      if (vocal && a.vocalRanges != null && a.outro == null) {
+        const prior = db.getTrack(id);
+        if (prior?.outro && prior.outro.vocalRanges == null) {
+          console.log(`[analyze] ${id}: tail vocals not computable (incomplete download; stored outro predates tail detection) — stays in the vocal backfill scope`);
+        }
+      }
       // Opportunistically store the CLAP audio vector whenever the backend
       // carried one. Independent of the bpm/key write above: a track analysed
       // before CLAP was enabled simply gets its vector on the next pass once

@@ -250,6 +250,14 @@ async def health():
         "analyze_vocal_capable": (
             analyzer_worker.ready_meta.get("vocal_activity_capable") if analyzer_worker.ready else None
         ),
+        # Tail vocal ranges (outro.vocalRanges) — a worker-version signal as
+        # much as a capability: workers predating the feature never emit the
+        # key, so this stays None on stale images and the controller's
+        # backfill widening (which requires === true) can't churn against
+        # them. None until ready.
+        "analyze_tail_vocal_capable": (
+            analyzer_worker.ready_meta.get("tail_vocal_capable") if analyzer_worker.ready else None
+        ),
         # Whether the worker can embed TEXT through the CLAP text tower (same
         # 512-d space as the audio vectors) — powers "sounds like ..." search
         # and zero-shot mood scoring. Needs torch, so lean images report false.
