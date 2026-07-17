@@ -421,13 +421,42 @@ function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown, label
     }
     target.ollamaUrl = v.replace(/\/+$/, ''); // strip trailing slashes
   }
+  if (l.providerBaseUrls !== undefined && typeof l.providerBaseUrls === 'object') {
+    const incoming = l.providerBaseUrls as Record<string, unknown>;
+    const existing = (target.providerBaseUrls as Record<string, string> | undefined) ?? {};
+    const merged: Record<string, string> = { ...existing };
+    for (const p of Object.keys(incoming)) {
+      if (!LLM_PROVIDERS.includes(p)) continue;
+      const v = String(incoming[p] ?? '').trim();
+      if (v.length > 200) throw new Error(`${label}.providerBaseUrls.${p} must be 0-200 chars`);
+      if (v && !/^https?:\/\//i.test(v)) {
+        throw new Error(`${label}.providerBaseUrls.${p} must start with http:// or https://`);
+      }
+      const clean = v.replace(/\/+$/, '');
+      if (clean) merged[p] = clean; else delete merged[p];
+    }
+    target.providerBaseUrls = merged;
+    // Derive baseUrl for the current provider so all runtime consumers are unaffected.
+    const prov = (target.provider ?? l.provider) as string | undefined;
+    target.baseUrl = (prov && merged[prov]) ? merged[prov] : '';
+  }
   if (l.baseUrl !== undefined) {
+    // Legacy path — honour a plain baseUrl in the patch by writing it into the
+    // current provider's slot as well as the flat field.
     const v = String(l.baseUrl).trim();
     if (v.length > 200) throw new Error(`${label}.baseUrl must be 0-200 chars`);
     if (v && !/^https?:\/\//i.test(v)) {
       throw new Error(`${label}.baseUrl must start with http:// or https://`);
     }
-    target.baseUrl = v.replace(/\/+$/, ''); // strip trailing slashes
+    const clean = v.replace(/\/+$/, '');
+    target.baseUrl = clean;
+    // Also seed providerBaseUrls so legacy POSTs are immediately migrated.
+    const prov = (target.provider ?? l.provider) as string | undefined;
+    if (prov && LLM_PROVIDERS.includes(prov)) {
+      const urls = (target.providerBaseUrls as Record<string, string> | undefined) ?? {};
+      if (clean) urls[prov] = clean; else delete urls[prov];
+      target.providerBaseUrls = urls;
+    }
   }
   if (l.reasoning !== undefined) {
     target.reasoning = !!l.reasoning;
@@ -500,6 +529,51 @@ function normalizeLlmKeys(storedLlm: unknown): Record<string, string> {
     if (!out[owner]) out[owner] = legacyFallback;
   }
   return out;
+}
+
+// Build the per-provider base-URL map from a stored settings.llm blob (issue #1082).
+// Sanitises any persisted `providerBaseUrls` and migrates the legacy single `baseUrl`
+// into the current provider's slot so no saved URL is lost on upgrade.
+function normalizeLlmProviderBaseUrls(
+  storedLeg: unknown,
+  providers: readonly string[],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const sl = storedLeg as {
+    providerBaseUrls?: unknown;
+    baseUrl?: unknown;
+    provider?: unknown;
+  } | null | undefined;
+  const raw = sl?.providerBaseUrls;
+  if (raw && typeof raw === 'object') {
+    const rec = raw as Record<string, unknown>;
+    for (const p of Object.keys(rec)) {
+      if (providers.includes(p) && typeof rec[p] === 'string' && rec[p]) {
+        out[p] = (rec[p] as string).trim().replace(/\/+$/, '');
+      }
+    }
+  }
+  // Migrate legacy single baseUrl into the current provider's slot when no
+  // per-provider entry already covers that provider.
+  const legacyUrl = typeof sl?.baseUrl === 'string' ? sl.baseUrl.trim().replace(/\/+$/, '') : '';
+  const currentProvider = typeof sl?.provider === 'string' ? sl.provider : '';
+  if (legacyUrl && currentProvider && !out[currentProvider]) {
+    out[currentProvider] = legacyUrl;
+  }
+  return out;
+}
+
+// Resolve the effective baseUrl for a provider leg. Reads from providerBaseUrls[provider];
+// the result replaces `baseUrl` at runtime so all downstream code is unchanged.
+function resolveProviderBaseUrl(target: Record<string, unknown>): void {
+  const urls = target.providerBaseUrls as Record<string, string> | undefined;
+  const provider = target.provider as string | undefined;
+  if (urls && provider && urls[provider]) {
+    target.baseUrl = urls[provider];
+  } else if (!urls || !provider || !urls[provider]) {
+    // Keep existing baseUrl if providerBaseUrls has no entry for this provider
+    // (e.g. ollama, which never uses baseUrl).
+  }
 }
 
 // Cloud TTS vendors usable by the `cloud` engine. `openai-compatible` targets
@@ -1222,9 +1296,15 @@ const DEFAULTS = {
     // Ollama server URL. Empty → fall back to config.ollama.url. Only used
     // when provider === 'ollama'.
     ollamaUrl: '',
-    // OpenAI-compatible server base URL, including the /v1 suffix
-    // (e.g. http://192.168.1.101:8080/v1). Required — and only used —
-    // when provider === 'openai-compatible'.
+    // Per-provider server base URLs. Keyed by provider id so switching providers
+    // never overwrites another provider's saved URL (issue #1082). Replaces the
+    // legacy single `baseUrl` field; at runtime `baseUrl` is derived from this map
+    // via resolveProviderBaseUrl(). The legacy field is kept as a migration source
+    // on load only — it is never written after the first save with the new schema.
+    providerBaseUrls: {} as Record<string, string>,
+    // Deprecated single slot — kept so an old settings.json migrates cleanly.
+    // Always '' after load(); resolution reads `providerBaseUrls`. See
+    // resolveProviderBaseUrl() / normalizeLlmProviderBaseUrls().
     baseUrl: '',
     // Whether to let reasoning ("thinking") models emit a chain-of-thought
     // before the answer. Off by default: the DJ writes short scripts and
@@ -1345,6 +1425,7 @@ const DEFAULTS = {
       model: '',
       apiKey: '',
       ollamaUrl: '',
+      providerBaseUrls: {} as Record<string, string>,
       baseUrl: '',
       reasoning: false,
       toolChoice: 'required',
@@ -1372,7 +1453,8 @@ const DEFAULTS = {
     // embedding server runs on its own port. Empty → inherit settings.llm's
     // baseUrl / ollamaUrl (fine only when the chat server also does embeddings,
     // e.g. Ollama). See issue #405.
-    baseUrl: '',          // openai-compatible / locca embedding server URL (with /v1)
+    providerBaseUrls: {} as Record<string, string>, // per-provider embedding server URLs (issue #1082)
+    baseUrl: '',          // deprecated single slot — migration source only, never written after first save
     ollamaUrl: '',        // Ollama embedding server URL (ollama provider)
     apiKey: '',           // empty -> inherit settings.llm.apiKey
     seedCount: 0,         // 0 → auto (see autoSeedCount in tag-library.ts: ~4% of
@@ -2109,8 +2191,13 @@ export async function load() {
         typeof stored.llm?.ollamaUrl === 'string'
           ? stored.llm.ollamaUrl.trim()
           : DEFAULTS.llm.ollamaUrl,
-      baseUrl:
-        typeof stored.llm?.baseUrl === 'string' ? stored.llm.baseUrl.trim() : DEFAULTS.llm.baseUrl,
+      providerBaseUrls: normalizeLlmProviderBaseUrls(stored.llm, LLM_PROVIDERS),
+      baseUrl: (() => {
+        const urls = normalizeLlmProviderBaseUrls(stored.llm, LLM_PROVIDERS);
+        const prov = LLM_PROVIDERS.includes(stored.llm?.provider) ? stored.llm.provider : DEFAULTS.llm.provider;
+        return (prov && urls[prov]) ? urls[prov]
+          : (typeof stored.llm?.baseUrl === 'string' ? stored.llm.baseUrl.trim() : DEFAULTS.llm.baseUrl);
+      })(),
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
       // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
@@ -2166,8 +2253,19 @@ export async function load() {
           apiKey: '',
           ollamaUrl:
             typeof fb.ollamaUrl === 'string' ? fb.ollamaUrl.trim() : DEFAULTS.llm.fallback.ollamaUrl,
-          baseUrl:
-            typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl,
+          providerBaseUrls: normalizeLlmProviderBaseUrls(
+            { ...fb, provider: LLM_PROVIDERS.includes(fb.provider) ? fb.provider : DEFAULTS.llm.fallback.provider },
+            LLM_PROVIDERS,
+          ),
+          baseUrl: (() => {
+            const urls = normalizeLlmProviderBaseUrls(
+              { ...fb, provider: LLM_PROVIDERS.includes(fb.provider) ? fb.provider : DEFAULTS.llm.fallback.provider },
+              LLM_PROVIDERS,
+            );
+            const prov = LLM_PROVIDERS.includes(fb.provider) ? fb.provider : DEFAULTS.llm.fallback.provider;
+            return (prov && urls[prov]) ? urls[prov]
+              : (typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl);
+          })(),
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
@@ -2195,10 +2293,19 @@ export async function load() {
         typeof stored.embedding?.model === 'string'
           ? stored.embedding.model.trim()
           : DEFAULTS.embedding.model,
-      baseUrl:
-        typeof stored.embedding?.baseUrl === 'string'
-          ? stored.embedding.baseUrl.trim()
-          : DEFAULTS.embedding.baseUrl,
+      providerBaseUrls: normalizeLlmProviderBaseUrls(
+        { ...stored.embedding, provider: stored.embedding?.provider || '' },
+        LLM_PROVIDERS,
+      ),
+      baseUrl: (() => {
+        const urls = normalizeLlmProviderBaseUrls(
+          { ...stored.embedding, provider: stored.embedding?.provider || '' },
+          LLM_PROVIDERS,
+        );
+        const prov = stored.embedding?.provider || '';
+        return (prov && urls[prov]) ? urls[prov]
+          : (typeof stored.embedding?.baseUrl === 'string' ? stored.embedding.baseUrl.trim() : DEFAULTS.embedding.baseUrl);
+      })(),
       ollamaUrl:
         typeof stored.embedding?.ollamaUrl === 'string'
           ? stored.embedding.ollamaUrl.trim()
@@ -3575,13 +3682,40 @@ export async function update(patch) {
       next.embedding.model = v;
     }
     // Dedicated embedding endpoint (issue #405). Empty → inherit settings.llm.
+    // New path: providerBaseUrls map keyed by provider id (issue #1082).
+    if (e.providerBaseUrls !== undefined && typeof e.providerBaseUrls === 'object') {
+      const incoming = e.providerBaseUrls as Record<string, unknown>;
+      const existing = (next.embedding.providerBaseUrls as Record<string, string> | undefined) ?? {};
+      const merged: Record<string, string> = { ...existing };
+      for (const p of Object.keys(incoming)) {
+        if (!LLM_PROVIDERS.includes(p)) continue;
+        const v = String(incoming[p] ?? '').trim();
+        if (v.length > 200) throw new Error(`embedding.providerBaseUrls.${p} must be 0-200 chars`);
+        if (v && !/^https?:\/\//i.test(v)) {
+          throw new Error(`embedding.providerBaseUrls.${p} must start with http:// or https://`);
+        }
+        const clean = v.replace(/\/+$/, '');
+        if (clean) merged[p] = clean; else delete merged[p];
+      }
+      next.embedding.providerBaseUrls = merged;
+      const prov = next.embedding.provider || '';
+      next.embedding.baseUrl = (prov && merged[prov]) ? merged[prov] : '';
+    }
+    // Legacy single baseUrl — honour it and also seed providerBaseUrls.
     if (e.baseUrl !== undefined) {
       const v = String(e.baseUrl).trim();
       if (v.length > 200) throw new Error('embedding.baseUrl must be 0-200 chars');
       if (v && !/^https?:\/\//i.test(v)) {
         throw new Error('embedding.baseUrl must start with http:// or https://');
       }
-      next.embedding.baseUrl = v.replace(/\/+$/, ''); // strip trailing slashes
+      const clean = v.replace(/\/+$/, '');
+      next.embedding.baseUrl = clean;
+      const prov = next.embedding.provider || '';
+      if (prov && LLM_PROVIDERS.includes(prov)) {
+        const urls = (next.embedding.providerBaseUrls as Record<string, string> | undefined) ?? {};
+        if (clean) urls[prov] = clean; else delete urls[prov];
+        next.embedding.providerBaseUrls = urls;
+      }
     }
     if (e.ollamaUrl !== undefined) {
       const v = String(e.ollamaUrl).trim();

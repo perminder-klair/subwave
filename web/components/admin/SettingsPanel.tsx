@@ -24,7 +24,7 @@ import {
   SectionHeader, ELEVENLABS_VS_DEFAULTS,
   type FormState, type FormUpdater, type SettingsData, type SaveSettings,
   type SfxData, type SfxForm, type JingleImportFailure, type JingleImportResult,
-  type LoudnessSource,
+  type LoudnessSource, type LlmForm, type LlmFallbackForm,
 } from './settings/shared';
 import { TtsSection } from './settings/TtsSection';
 import { LlmSection } from './settings/LlmSection';
@@ -190,7 +190,17 @@ export default function SettingsPanel() {
         ollamaUrl: v.llm?.ollamaUrl ?? '',
         numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
         repeatPenalty: typeof v.llm?.repeatPenalty === 'number' ? v.llm.repeatPenalty : 1.15,
-        baseUrl: v.llm?.baseUrl ?? '',
+        // Per-provider base URLs. Migrate from legacy single baseUrl on first load:
+        // if the server has already stored providerBaseUrls use that; otherwise seed
+        // the current provider's slot from the old baseUrl field so no URL is lost.
+        providerBaseUrls: (() => {
+          const llmAny = v.llm as (Partial<LlmForm> & { baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
+          const stored = llmAny?.providerBaseUrls;
+          if (stored && typeof stored === 'object') return { ...stored };
+          const legacy = llmAny?.baseUrl ?? '';
+          const prov = llmAny?.provider ?? 'ollama';
+          return legacy ? { [prov]: legacy } : {};
+        })(),
         reasoning: !!v.llm?.reasoning,
         toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
@@ -209,7 +219,14 @@ export default function SettingsPanel() {
           ollamaUrl: v.llm?.fallback?.ollamaUrl ?? '',
           numCtx: typeof v.llm?.fallback?.numCtx === 'number' ? v.llm.fallback.numCtx : 16384,
           repeatPenalty: typeof v.llm?.fallback?.repeatPenalty === 'number' ? v.llm.fallback.repeatPenalty : 1.15,
-          baseUrl: v.llm?.fallback?.baseUrl ?? '',
+          providerBaseUrls: (() => {
+            const fbAny = v.llm?.fallback as (LlmFallbackForm & { baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
+            const stored = fbAny?.providerBaseUrls;
+            if (stored && typeof stored === 'object') return { ...stored };
+            const legacy = fbAny?.baseUrl ?? '';
+            const prov = fbAny?.provider ?? 'ollama';
+            return legacy ? { [prov]: legacy } : {};
+          })(),
           reasoning: !!v.llm?.fallback?.reasoning,
         },
       },
@@ -224,7 +241,13 @@ export default function SettingsPanel() {
         enabled: v.embedding?.enabled ?? true,
         provider: v.embedding?.provider ?? '',
         model: v.embedding?.model ?? '',
-        baseUrl: v.embedding?.baseUrl ?? '',
+        providerBaseUrls: (() => {
+          const stored = (v.embedding as { providerBaseUrls?: Record<string, string> })?.providerBaseUrls;
+          if (stored && typeof stored === 'object') return { ...stored };
+          const legacy = v.embedding?.baseUrl ?? '';
+          const prov = v.embedding?.provider ?? '';
+          return legacy && prov ? { [prov]: legacy } : {};
+        })(),
         ollamaUrl: v.embedding?.ollamaUrl ?? '',
         seedCount: String(v.embedding?.seedCount ?? 0),
         knnNeighbours: String(v.embedding?.knnNeighbours ?? 10),

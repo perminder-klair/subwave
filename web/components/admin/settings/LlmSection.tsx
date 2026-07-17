@@ -82,16 +82,18 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   const primaryKeyVar = LLM_ENV_VARS[form.llm.provider];
   const primaryKeySet = !!(primaryKeyVar && data.env?.[primaryKeyVar]);
 
+  const primaryBaseUrl = form.llm.providerBaseUrls[form.llm.provider] ?? '';
+
   const primaryDiscoveryEnabled =
     form.llm.provider === 'ollama'
     || form.llm.provider === 'locca'
-    || (form.llm.provider === 'openai-compatible' && !!form.llm.baseUrl.trim())
+    || (form.llm.provider === 'openai-compatible' && !!primaryBaseUrl.trim())
     || (form.llm.provider === 'openrouter')
     || (!!primaryKeyVar && primaryKeySet);
 
   const primaryDiscovery = useModelDiscovery({
     provider: form.llm.provider,
-    baseUrl: form.llm.baseUrl,
+    baseUrl: primaryBaseUrl,
     ollamaUrl: form.llm.ollamaUrl,
     enabled: primaryDiscoveryEnabled,
     adminFetch,
@@ -100,18 +102,20 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   const fallbackKeyVar = LLM_ENV_VARS[form.llm.fallback.provider];
   const fallbackKeySet = !!(fallbackKeyVar && data.env?.[fallbackKeyVar]);
 
+  const fallbackBaseUrl = form.llm.fallback.providerBaseUrls[form.llm.fallback.provider] ?? '';
+
   const fallbackDiscoveryEnabled =
     form.llm.fallback.enabled && (
       form.llm.fallback.provider === 'ollama'
       || form.llm.fallback.provider === 'locca'
-      || (form.llm.fallback.provider === 'openai-compatible' && !!form.llm.fallback.baseUrl.trim())
+      || (form.llm.fallback.provider === 'openai-compatible' && !!fallbackBaseUrl.trim())
       || (form.llm.fallback.provider === 'openrouter')
       || (!!fallbackKeyVar && fallbackKeySet)
     );
 
   const fallbackDiscovery = useModelDiscovery({
     provider: form.llm.fallback.provider,
-    baseUrl: form.llm.fallback.baseUrl,
+    baseUrl: fallbackBaseUrl,
     ollamaUrl: form.llm.fallback.ollamaUrl,
     enabled: fallbackDiscoveryEnabled,
     adminFetch,
@@ -196,14 +200,17 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   };
 
   const save = async () => {
+    const activeProvider = form.llm.provider;
+    const activeFallbackProvider = form.llm.fallback.provider;
+    const inlineKeyProviders = ['openai-compatible', 'locca'];
     await saveSettings({
       llm: {
-        provider: form.llm.provider,
+        provider: activeProvider,
         model: form.llm.model,
         ollamaUrl: form.llm.ollamaUrl,
         numCtx: form.llm.numCtx,
         repeatPenalty: form.llm.repeatPenalty,
-        baseUrl: form.llm.baseUrl,
+        providerBaseUrls: form.llm.providerBaseUrls,
         reasoning: form.llm.reasoning,
         toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
@@ -215,39 +222,39 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         budgetSoftPct: form.llm.budgetSoftPct,
         exemptRequests: form.llm.exemptRequests,
         maxOutputTokens: form.llm.maxOutputTokens,
-        ...(form.llm.provider === 'openai-compatible' && compatKeyInput.trim()
+        ...(inlineKeyProviders.includes(activeProvider) && compatKeyInput.trim()
           ? { apiKey: compatKeyInput.trim() }
           : {}),
         fallback: {
           enabled: form.llm.fallback.enabled,
-          provider: form.llm.fallback.provider,
+          provider: activeFallbackProvider,
           model: form.llm.fallback.model,
           ollamaUrl: form.llm.fallback.ollamaUrl,
           numCtx: form.llm.fallback.numCtx,
           repeatPenalty: form.llm.fallback.repeatPenalty,
-          baseUrl: form.llm.fallback.baseUrl,
+          providerBaseUrls: form.llm.fallback.providerBaseUrls,
           reasoning: form.llm.fallback.reasoning,
-          ...(form.llm.fallback.provider === 'openai-compatible' && compatFallbackKeyInput.trim()
+          ...(inlineKeyProviders.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()
             ? { apiKey: compatFallbackKeyInput.trim() }
             : {}),
         },
       },
     });
     // Save API keys if typed — these go to secrets.env, not settings.json
-    const primaryKeyVar = LLM_ENV_VARS[form.llm.provider];
+    const primaryKeyVar = LLM_ENV_VARS[activeProvider];
     if (primaryKeyVar && primaryKeyInput.trim()) {
       const ok = await saveKey(primaryKeyVar, primaryKeyInput);
       if (ok) { notify.ok('API key saved'); setPrimaryKeyInput(''); refresh(); }
     }
-    const fallbackKeyVar = LLM_ENV_VARS[form.llm.fallback.provider];
+    const fallbackKeyVar = LLM_ENV_VARS[activeFallbackProvider];
     if (fallbackKeyVar && fallbackKeyInput.trim()) {
       const ok = await saveKey(fallbackKeyVar, fallbackKeyInput);
       if (ok) { notify.ok('API key saved'); setFallbackKeyInput(''); refresh(); }
     }
-    if (form.llm.provider === 'openai-compatible' && compatKeyInput.trim()) {
+    if (inlineKeyProviders.includes(activeProvider) && compatKeyInput.trim()) {
       setCompatKeyInput('');
     }
-    if (form.llm.fallback.provider === 'openai-compatible' && compatFallbackKeyInput.trim()) {
+    if (inlineKeyProviders.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()) {
       setCompatFallbackKeyInput('');
     }
   };
@@ -352,9 +359,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             <div className="field">
               <Label>Server base URL</Label>
               <Input
-                value={form.llm.baseUrl}
+                value={form.llm.providerBaseUrls['openai-compatible'] ?? ''}
                 onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, llm: { ...f.llm, baseUrl: e.target.value } }))
+                  setForm(f => ({ ...f, llm: { ...f.llm, providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': e.target.value } } }))
                 }
                 placeholder="http://192.168.1.101:8080/v1"
                 className="max-w-[360px]"
@@ -384,13 +391,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                     onClick={() =>
                       testCompatKey(
                         compatKeyInput || '',
-                        form.llm.baseUrl,
+                        primaryBaseUrl,
                         form.llm.model,
                         setCompatKeyTesting,
                         setCompatKeyTest,
                       )
                     }
-                    disabled={compatKeyTesting || !form.llm.baseUrl.trim()}
+                    disabled={compatKeyTesting || !primaryBaseUrl.trim()}
                   >
                     {compatKeyTesting ? 'Testing…' : 'Test connection'}
                   </Btn>
@@ -408,9 +415,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             <div className="field">
               <Label>locca server base URL</Label>
               <Input
-                value={form.llm.baseUrl}
+                value={form.llm.providerBaseUrls['locca'] ?? ''}
                 onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, llm: { ...f.llm, baseUrl: e.target.value } }))
+                  setForm(f => ({ ...f, llm: { ...f.llm, providerBaseUrls: { ...f.llm.providerBaseUrls, locca: e.target.value } } }))
                 }
                 placeholder="http://host.docker.internal:8080/v1"
                 className="max-w-[360px]"
@@ -678,9 +685,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <div className="field">
                   <Label>Backup server base URL</Label>
                   <Input
-                    value={form.llm.fallback.baseUrl}
+                    value={form.llm.fallback.providerBaseUrls['openai-compatible'] ?? ''}
                     onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, baseUrl: e.target.value } } }))
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, providerBaseUrls: { ...f.llm.fallback.providerBaseUrls, 'openai-compatible': e.target.value } } } }))
                     }
                     placeholder="http://192.168.1.101:8080/v1"
                     className="max-w-[360px]"
@@ -688,6 +695,25 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                   <div className="field-hint">
                     OpenAI-compatible server URL including the <code>/v1</code>
                     suffix, required for this provider.
+                  </div>
+                </div>
+              )}
+
+              {form.llm.fallback.provider === 'locca' && (
+                <div className="field">
+                  <Label>Backup locca server base URL</Label>
+                  <Input
+                    value={form.llm.fallback.providerBaseUrls['locca'] ?? ''}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, providerBaseUrls: { ...f.llm.fallback.providerBaseUrls, locca: e.target.value } } } }))
+                    }
+                    placeholder="http://host.docker.internal:8080/v1"
+                    className="max-w-[360px]"
+                  />
+                  <div className="field-hint">
+                    Leave blank to use the locca server on the host
+                    (<code>http://host.docker.internal:8080/v1</code>). Override only
+                    for a non-default port or a remote host.
                   </div>
                 </div>
               )}
@@ -708,13 +734,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                         onClick={() =>
                           testCompatKey(
                             compatFallbackKeyInput || '',
-                            form.llm.fallback.baseUrl,
+                            fallbackBaseUrl,
                             form.llm.fallback.model,
                             setCompatFallbackKeyTesting,
                             setCompatFallbackKeyTest,
                           )
                         }
-                        disabled={compatFallbackKeyTesting || !form.llm.fallback.baseUrl.trim()}
+                        disabled={compatFallbackKeyTesting || !fallbackBaseUrl.trim()}
                       >
                         {compatFallbackKeyTesting ? 'Testing…' : 'Test connection'}
                       </Btn>

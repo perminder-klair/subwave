@@ -85,7 +85,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         enabled: e.enabled,
         provider: e.provider,
         model: e.model,
-        baseUrl: e.baseUrl,
+        providerBaseUrls: e.providerBaseUrls,
         ollamaUrl: e.ollamaUrl,
         seedCount: parseInt(e.seedCount, 10) || 0,
         knnNeighbours: parseInt(e.knnNeighbours, 10) || 10,
@@ -153,16 +153,20 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
   // it cries "missing" for a provider whose key is already set for the DJ.
   const embedKeyPresent = embedKeySet || !!data.env?.['EMBEDDING_API_KEY'];
 
+  const embedBaseUrl = e.providerBaseUrls[effectiveProvider]
+    ?? form.llm.providerBaseUrls[effectiveProvider]
+    ?? '';
+
   const embedDiscoveryEnabled =
     effectiveProvider === 'ollama'
     || effectiveProvider === 'locca'
-    || (effectiveProvider === 'openai-compatible' && !!(e.baseUrl || form.llm.baseUrl).trim())
+    || (effectiveProvider === 'openai-compatible' && !!embedBaseUrl.trim())
     || (effectiveProvider === 'openrouter')
     || (!!embedKeyVar && embedKeySet);
 
   const embedDiscovery = useModelDiscovery({
     provider: effectiveProvider,
-    baseUrl: e.baseUrl || form.llm.baseUrl,
+    baseUrl: embedBaseUrl,
     ollamaUrl: e.ollamaUrl || form.llm.ollamaUrl,
     scope: 'embedding',
     enabled: embedDiscoveryEnabled,
@@ -173,7 +177,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
     const p = new URLSearchParams();
     if (e.provider) p.set('provider', e.provider);
     if (e.model) p.set('model', e.model);
-    if (e.baseUrl) p.set('baseUrl', e.baseUrl);
+    if (embedBaseUrl) p.set('baseUrl', embedBaseUrl);
     if (e.ollamaUrl) p.set('ollamaUrl', e.ollamaUrl);
     return p.toString();
   };
@@ -211,7 +215,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
       const j = await (await adminFetch(`/settings/embedding/probe?${p.toString()}`)).json();
       setProbe(j);
       if (j.ok) {
-        setForm(f => ({ ...f, embedding: { ...f.embedding, provider: 'locca', baseUrl: url, model } }));
+        setForm(f => ({ ...f, embedding: { ...f.embedding, provider: 'locca', providerBaseUrls: { ...f.embedding.providerBaseUrls, locca: url }, model } }));
       }
     } catch (err) {
       setProbe({ ok: false, dim: null, code: 'unknown', message: errorMessage(err) });
@@ -463,9 +467,9 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             <div className="field">
               <Label>Embedding server base URL</Label>
               <Input
-                value={e.baseUrl}
+                value={e.providerBaseUrls[effectiveProvider] ?? ''}
                 onChange={(ev: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, embedding: { ...f.embedding, baseUrl: ev.target.value } }))
+                  setForm(f => ({ ...f, embedding: { ...f.embedding, providerBaseUrls: { ...f.embedding.providerBaseUrls, [effectiveProvider]: ev.target.value } } }))
                 }
                 placeholder="http://host.docker.internal:8090/v1"
                 className="max-w-[360px]"

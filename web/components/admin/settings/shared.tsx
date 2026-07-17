@@ -78,7 +78,7 @@ export interface LlmFallbackForm {
   ollamaUrl: string;
   numCtx: number;
   repeatPenalty: number;
-  baseUrl: string;
+  providerBaseUrls: Record<string, string>;
   reasoning: boolean;
 }
 
@@ -88,7 +88,7 @@ export interface LlmForm {
   ollamaUrl: string;
   numCtx: number;
   repeatPenalty: number;
-  baseUrl: string;
+  providerBaseUrls: Record<string, string>;
   reasoning: boolean;
   toolChoice: string;
   pickerAgent: boolean;
@@ -118,7 +118,7 @@ export interface EmbeddingForm {
   enabled: boolean;
   provider: string;          // empty → follow llm.provider
   model: string;             // empty → sensible default per provider
-  baseUrl: string;           // dedicated embedding server URL (openai-compatible / locca); empty → inherit llm
+  providerBaseUrls: Record<string, string>; // per-provider embedding server URLs; empty → inherit llm
   ollamaUrl: string;         // dedicated embedding server URL (ollama); empty → inherit llm
   seedCount: string;         // '0' = auto
   knnNeighbours: string;
