@@ -13,10 +13,12 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY web/ ./
 ENV NEXT_TELEMETRY_DISABLED=1
-# Public site origin, baked into the OG/Twitter cards, canonical URLs, robots
-# and sitemap. Next freezes metadata at build time, so this has to be present
-# *here*, not as a runtime container env var. Passed through from compose
-# (docker-compose.yml → web.build.args). Unset → localhost fallback.
+# Public site origin. The routes that emit absolute URLs (canonicals, og:url,
+# robots, sitemap) all render per-request now and read the RUNTIME container
+# env — a published image can't know the operator's domain at build time (see
+# web/lib/site.ts). This build arg remains only as belt-and-suspenders for
+# source builds; leaving it unset is fine as long as SITE_URL is set on the
+# running container (docker-compose.yml → web.environment).
 ARG SITE_URL
 ENV SITE_URL=${SITE_URL}
 # Google Analytics Measurement ID. This build arg bakes it into the client
@@ -51,6 +53,9 @@ COPY --from=build --chown=next:next /app/.next/static ./.next/static
 # `public/` is *not* included by the standalone trace — copy it explicitly so
 # the service worker (/sw.js) and any other static assets are served at root.
 COPY --from=build --chown=next:next /app/public ./public
+# The /news routes (and the sitemap) render per-request, so the dispatch
+# markdown is read at runtime — the standalone trace doesn't include it.
+COPY --from=build --chown=next:next /app/content ./content
 
 USER next
 EXPOSE 7700

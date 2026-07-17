@@ -12,6 +12,11 @@ export const metadata = pageMeta({
   path: '/stations',
 });
 
+// Render per-request so the canonical/og:url pick up the runtime SITE_URL.
+// The directory fetch keeps its own ISR revalidate window (explicit per-fetch
+// options win over the force-dynamic no-store default).
+export const dynamic = 'force-dynamic';
+
 // Submission opens a GitHub Issue Form in the community catalog repo (no fork, no
 // JSON). A workflow there turns the issue into a one-file PR. The old new-file
 // editor link forced non-collaborators to fork the repo (discussion #296), so we

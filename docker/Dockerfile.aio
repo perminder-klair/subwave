@@ -32,10 +32,10 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci
 COPY web/ ./
 ENV NEXT_TELEMETRY_DISABLED=1
-# SITE_URL is frozen into statically-rendered routes (robots, sitemap, OG cards)
-# at build time. For the AIO it's unknown until the operator sets it, so we bake
-# the localhost fallback; the force-dynamic homepage still reads the runtime
-# SITE_URL env for live share-card tags.
+# The routes that emit absolute URLs (robots, sitemap, canonicals, OG cards)
+# all render per-request and read the RUNTIME SITE_URL env (inherited by the
+# web server via the supervisor), so a generic image works for any domain.
+# This build arg is belt-and-suspenders for source builds only.
 ARG SITE_URL
 ENV SITE_URL=${SITE_URL}
 # Admin-console footer version, inlined into the web bundle at build time. See
@@ -205,6 +205,9 @@ COPY controller/scripts ./scripts
 COPY --from=webbuild /web/.next/standalone /web
 COPY --from=webbuild /web/.next/static /web/.next/static
 COPY --from=webbuild /web/public /web/public
+# The /news routes (and the sitemap) render per-request, so the dispatch
+# markdown is read at runtime — the standalone trace doesn't include it.
+COPY --from=webbuild /web/content /web/content
 
 # --- Broadcast + edge config + bundled audio --------------------------------
 COPY docker/icecast.xml.template /etc/icecast2/icecast.xml.template

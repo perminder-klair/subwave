@@ -1,7 +1,9 @@
 // News / "Dispatches" loader. Reads the markdown files under web/content/news,
-// parses their frontmatter, and renders the bodies to HTML. Everything here
-// runs server-side at build time (the /news routes are statically generated),
-// so the filesystem read never happens at request time in the standalone image.
+// parses their frontmatter, and renders the bodies to HTML. Server-side only.
+// The /news routes render per-request (see app/news/layout.tsx), so this read
+// happens at request time — the Docker runner stages copy content/ next to the
+// standalone bundle (web/Dockerfile, docker/Dockerfile.aio) to make the
+// markdown available at runtime.
 import fs from 'node:fs';
 import path from 'node:path';
 import matter from 'gray-matter';
