@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.43.0](https://github.com/perminder-klair/subwave/compare/v0.42.1...v0.43.0) (2026-07-17)
+
+
+### Features
+
+* **admin:** fold Playlists + Observatory into Library doorways ([5de5b17](https://github.com/perminder-klair/subwave/commit/5de5b17671063bb11a086790d5fcc4b6c87d6a81))
+* **admin:** LLM-generated manual-voice prompt suggestions ([#1063](https://github.com/perminder-klair/subwave/issues/1063)) ([be8cd40](https://github.com/perminder-klair/subwave/commit/be8cd40726831a4d6a58ce1d6d124b3d9c754e93))
+* **admin:** speak the persona's language in the voice Play sample ([#1064](https://github.com/perminder-klair/subwave/issues/1064)) ([708da37](https://github.com/perminder-klair/subwave/commit/708da374cb3f10bbdc734087b8407021f57c9c81))
+* **broadcast:** idle-pause the programme when nobody is listening ([#1066](https://github.com/perminder-klair/subwave/issues/1066)) ([704541f](https://github.com/perminder-klair/subwave/commit/704541fff490f95f26e7a0764c4f00c7f1c5dc2f))
+* **library:** durable play history with show context + admin History tab ([#1065](https://github.com/perminder-klair/subwave/issues/1065)) ([3694be4](https://github.com/perminder-klair/subwave/commit/3694be4c62132ee273daf76f8f336f951d8e4424))
+* **library:** multi-genre tags via OpenSubsonic genres array ([#1068](https://github.com/perminder-klair/subwave/issues/1068)) ([d303cfb](https://github.com/perminder-klair/subwave/commit/d303cfbb6db2a53189eeaf52f37579eb4892b902))
+* **likes:** listener heart button with Navidrome star sync + AI DJ influence ([#1060](https://github.com/perminder-klair/subwave/issues/1060)) ([83aca5e](https://github.com/perminder-klair/subwave/commit/83aca5e7002c3510f186ce273d6afc49827814ba))
+* **llm:** send OpenRouter app-attribution headers on every request ([#1062](https://github.com/perminder-klair/subwave/issues/1062)) ([b1bb6c8](https://github.com/perminder-klair/subwave/commit/b1bb6c81d271b7616f0f4de51d1d8e5b71861a01))
+* **observatory:** production polish — honest legends, projection status, queue-on-air, search fly-to, deep links, keyboard + mobile ([#1076](https://github.com/perminder-klair/subwave/issues/1076)) ([cdc2eeb](https://github.com/perminder-klair/subwave/commit/cdc2eeb1387e139086ffeef83f24bf15d423f50c))
+* **playlist-builder:** open full-height studio — list-first deck redesign ([1eea1fe](https://github.com/perminder-klair/subwave/commit/1eea1fe7efadc8feff41ef53cfe4a0c6ed048bba))
+* **playlist-gen:** artists / tempo / release-year filters + genre typeahead ([29fc33c](https://github.com/perminder-klair/subwave/commit/29fc33c2d32fd3a563d9a7a14c2a37db0c18e5f5))
+* **playlist-gen:** track-length band — min/max anchors ([0cfec07](https://github.com/perminder-klair/subwave/commit/0cfec078d435228cf7c754c8dd19c8c83d293b4a))
+* **shows:** timed schedule override — pin a show for N hours ([#1067](https://github.com/perminder-klair/subwave/issues/1067)) ([a525ace](https://github.com/perminder-klair/subwave/commit/a525ace771535f72f5541a53355e14c4c6088423))
+* **web:** add X and Reddit links to landing footer ([#1074](https://github.com/perminder-klair/subwave/issues/1074)) ([76da695](https://github.com/perminder-klair/subwave/commit/76da69537a4efa766acf91004ce722c1712b7ec2))
+* **web:** magical playlist builder — /admin/playlists ([9e26957](https://github.com/perminder-klair/subwave/commit/9e269574ee48c0162efd66bb0e8252fe8bd0cb08))
+* **web:** platter tonearm rides the groove with track progress ([#1070](https://github.com/perminder-klair/subwave/issues/1070)) ([ce53aa0](https://github.com/perminder-klair/subwave/commit/ce53aa0d696b9470f5df63b3d1e6b799346d0e89))
+* **web:** surface TTS engine availability before selection ([#585](https://github.com/perminder-klair/subwave/issues/585)) ([#1061](https://github.com/perminder-klair/subwave/issues/1061)) ([18fa0f0](https://github.com/perminder-klair/subwave/commit/18fa0f06708962451ce09ba64b432dc895860d91))
+
+
+### Bug Fixes
+
+* **admin:** let the Library hero title + subtitle run one line ([2415ae8](https://github.com/perminder-klair/subwave/commit/2415ae8aff00f4ce5f1e2b5bcea8d90c66c45270))
+* **broadcast:** update track metadata on Ogg FLAC/Opus streams ([#1052](https://github.com/perminder-klair/subwave/issues/1052)) ([#1056](https://github.com/perminder-klair/subwave/issues/1056)) ([0569bf8](https://github.com/perminder-klair/subwave/commit/0569bf80548e5c0bfddc32470d7208b231a4586a))
+* **doctor:** retry fast-failing Navidrome ping before alarming the admin banner ([#1069](https://github.com/perminder-klair/subwave/issues/1069)) ([1f85c6e](https://github.com/perminder-klair/subwave/commit/1f85c6e2afb5a8a80ab07a498a103d8235c52d82))
+* **picker:** judge era by original release year, not compilation date ([#842](https://github.com/perminder-klair/subwave/issues/842)) ([#1059](https://github.com/perminder-klair/subwave/issues/1059)) ([c6421d4](https://github.com/perminder-klair/subwave/commit/c6421d4f8dfd6c5fead0854a63405b2a48ad3b85))
+* **playlists:** merge library tags into GET /playlists/:id entries ([5f19db6](https://github.com/perminder-klair/subwave/commit/5f19db61af65c63a73a3861637f083e27bd6fad1))
+* **web:** resolve SEO/share metadata from runtime SITE_URL, fix titles and twitter cards ([#1077](https://github.com/perminder-klair/subwave/issues/1077)) ([50bdcf0](https://github.com/perminder-klair/subwave/commit/50bdcf09e3b40d5e3259b6cc36a494b89f064df2))
+
+
+### Documentation
+
+* remove shipped design specs ([7e41d7a](https://github.com/perminder-klair/subwave/commit/7e41d7a9b41ff3600da8d3176b11335c05a30986))
+
 ## [0.42.1](https://github.com/perminder-klair/subwave/compare/v0.42.0...v0.42.1) (2026-07-15)
 
 
