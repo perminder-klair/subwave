@@ -57,7 +57,13 @@ export default function Observatory() {
         <p>
           <strong>Mix Next</strong> lists the closest tracks in vector space, the same similarity the DJ
           leans on when it reaches for what to play next. Those neighbours are wired back onto the map in
-          vermilion so you can see where they sit.
+          vermilion so you can see where they sit; picking one flies the camera to it.
+        </p>
+        <p>
+          The dossier isn't just a viewer: <strong>QUEUE ON AIR</strong> pushes the open track straight to
+          the broadcast queue, the same operator pick as the admin console's Search tab. And a selected
+          track rides the URL, so you can bookmark or share a link that opens the Observatory on that exact
+          star.
         </p>
       </section>
 

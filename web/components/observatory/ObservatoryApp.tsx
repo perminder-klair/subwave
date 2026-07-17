@@ -6,13 +6,20 @@
    ============================================================================ */
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
 import { useObservatory, useTrackDetail } from '../../lib/observatory';
 import { StatsView, Dossier } from './panels';
 import Tooltip, { type TipState } from './Tooltip';
-import { nearest, sourceStyle, tally, type ColorBy, type ObsTrack } from './data';
+import {
+  nearest,
+  sourceStyle,
+  tally,
+  type ColorBy,
+  type MapProjectionStatus,
+  type ObsTrack,
+} from './data';
 
 // The galaxy renderer pulls in three.js + the bloom pipeline — client-only and
 // heavy, so it's split out and never server-rendered.
@@ -77,6 +84,25 @@ const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 25000, 50000, 100000, 200000
 const DEFAULT_MAX = 25000;
 const MAX_STORAGE_KEY = 'subwave_obs_max';
 
+const COLOR_MODES: [ColorBy, string][] = [
+  ['energy', 'ENERGY'],
+  ['confidence', 'CONF'],
+  ['source', 'SOURCE'],
+  ['analysis', 'ANALYSIS'],
+  ['loudness', 'LOUDNESS'],
+  ['pace', 'PACE'],
+  ['vocal', 'VOICE'],
+];
+const COLOR_IDS = new Set(COLOR_MODES.map(([k]) => k));
+
+// Genre chips shown before the +N MORE toggle expands the full list — a real
+// library can carry hundreds of genres, which otherwise wall off the rail.
+const GENRE_CHIP_CAP = 24;
+
+// A projection needs at least this many audio vectors to be worth offering —
+// mirrors MIN_VECTORS in the controller's map-projection.ts.
+const PROJECTION_MIN_VECTORS = 50;
+
 export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch }) {
   // Persisted node cap (MAP SIZE control). Read once from localStorage; null
   // means "follow the server default" — useObservatory then omits ?max=.
@@ -85,7 +111,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     const stored = Number(window.localStorage.getItem(MAX_STORAGE_KEY));
     return Number.isFinite(stored) && stored > 0 ? stored : null;
   });
-  const { data: lib, loading, error } = useObservatory(adminFetch, true, maxNodes);
+  const { data: lib, loading, error, reload } = useObservatory(adminFetch, true, maxNodes);
   const { detail, loadingId, fetchDetail } = useTrackDetail(adminFetch);
 
   const [q, setQ] = useState('');
@@ -101,14 +127,33 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     const id = setTimeout(() => setQDebounced(q), 150);
     return () => clearTimeout(id);
   }, [q]);
-  const [colorBy, setColorBy] = useState<ColorBy>('energy');
+  // Colour-by is deep-linkable (?color=); the page only mounts after admin
+  // auth hydrates, so reading the URL in the initializer never runs on SSR.
+  const [colorBy, setColorBy] = useState<ColorBy>(() => {
+    if (typeof window === 'undefined') return 'energy';
+    const c = new URLSearchParams(window.location.search).get('color') as ColorBy | null;
+    return c && COLOR_IDS.has(c) ? c : 'energy';
+  });
   const [energy, setEnergy] = useState<Set<string>>(new Set());
   const [moods, setMoods] = useState<Set<string>>(new Set());
   const [genres, setGenres] = useState<Set<string>>(new Set());
+  const [genresExpanded, setGenresExpanded] = useState(false);
   const [sources, setSources] = useState<Set<string>>(new Set());
   const [analysedOnly, setAnalysedOnly] = useState(false);
   const [selected, setSelected] = useState<ObsTrack | null>(null);
   const [tip, setTip] = useState<TipState | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // Fly-to requests for the galaxy camera: bumped by search picks, MIX NEXT
+  // picks and deep links — never by plain map clicks (the node is already
+  // under the cursor there).
+  const focusNonce = useRef(0);
+  const [focusOn, setFocusOn] = useState<{ t: ObsTrack; n: number } | null>(null);
+  const jumpTo = useCallback((t: ObsTrack) => {
+    setSelected(t);
+    focusNonce.current += 1;
+    setFocusOn({ t, n: focusNonce.current });
+  }, []);
 
   const setMax = (n: number) => {
     setMaxNodes(n);
@@ -139,6 +184,16 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const genreOptions = useMemo(() => (lib ? lib.genres.filter((g) => g !== '—') : []), [lib]);
   const sourceOptions = useMemo(() => (lib ? Object.keys(lib.stats.bySource || {}) : []), [lib]);
 
+  // Genre chips: top-N by population (lib.genres is already sorted), plus any
+  // selected genre that would otherwise be hidden, plus a +N MORE toggle.
+  const visibleGenres = useMemo(() => {
+    if (genresExpanded || genreOptions.length <= GENRE_CHIP_CAP) return genreOptions;
+    const top = genreOptions.slice(0, GENRE_CHIP_CAP);
+    const topSet = new Set(top);
+    for (const g of genres) if (!topSet.has(g) && genreOptions.includes(g)) top.push(g);
+    return top;
+  }, [genreOptions, genresExpanded, genres]);
+
   const matched = useMemo(() => {
     if (!lib) return [];
     const qq = qDebounced.trim().toLowerCase();
@@ -156,6 +211,32 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const matchSet = useMemo(() => new Set(matched.map((t) => t.idx)), [matched]);
 
   const byId = useMemo(() => new Map((lib?.tracks || []).map((t) => [t.id, t])), [lib]);
+
+  // A reload (retry button, post-projection refresh) rebuilds every ObsTrack —
+  // re-point the selection at the new object so the highlight ring and wiring
+  // don't sit on stale coordinates (or on a mock node after recovery).
+  useEffect(() => {
+    setSelected((cur) => (cur ? (byId.get(cur.id) ?? null) : cur));
+  }, [byId]);
+
+  // Top search hits for the jump-to dropdown: title matches first, then any
+  // other field match, single pass with an early exit so a keystroke never
+  // pays more than one O(n) scan even at the 500k cap.
+  const searchHits = useMemo(() => {
+    const qq = qDebounced.trim().toLowerCase();
+    if (!qq) return [];
+    const primary: ObsTrack[] = [];
+    const secondary: ObsTrack[] = [];
+    for (const t of matched) {
+      if ((t.title || '').toLowerCase().includes(qq)) {
+        primary.push(t);
+        if (primary.length >= 8) break;
+      } else if (secondary.length < 8) {
+        secondary.push(t);
+      }
+    }
+    return primary.concat(secondary).slice(0, 8);
+  }, [matched, qDebounced]);
 
   // Mix-next nodes (for both the map wiring and the dossier list). Prefer the
   // server's real KNN neighbours; fall back to spatial nearest until the detail
@@ -179,6 +260,117 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     setAnalysedOnly(false);
   };
 
+  // ---- deep links: ?track=<id> applied once the real library arrives --------
+  // Captured ONCE at mount: the URL-sync effect below rewrites the query string
+  // from the (initially empty) selection before the library has loaded, so by
+  // the time tracks exist the live URL no longer carries the param.
+  const initialTrack = useRef<string | null>(
+    typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('track'),
+  );
+  const deepLinked = useRef(false);
+  useEffect(() => {
+    if (!lib || lib.mock || deepLinked.current) return;
+    deepLinked.current = true;
+    const id = initialTrack.current;
+    if (!id) return;
+    const t = byId.get(id);
+    if (t) jumpTo(t);
+  }, [lib, byId, jumpTo]);
+
+  // …and kept in sync (replaceState — no navigation, no history spam).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const sp = new URLSearchParams(window.location.search);
+    if (selected && !lib?.mock) sp.set('track', selected.id);
+    else sp.delete('track');
+    if (colorBy !== 'energy') sp.set('color', colorBy);
+    else sp.delete('color');
+    const qs = sp.toString();
+    const next = window.location.pathname + (qs ? `?${qs}` : '');
+    if (next !== window.location.pathname + window.location.search) {
+      window.history.replaceState(null, '', next);
+    }
+  }, [selected, colorBy, lib]);
+
+  // ---- Escape backs out: dossier first, then the search query ---------------
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (selected) setSelected(null);
+      else if (q) setQ('');
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, q]);
+
+  // ---- sound-map projection: status + manual trigger ------------------------
+  // Adopt the status that rode the bulk load, then poll the lightweight status
+  // endpoint while a run is live; when it finishes, reload the map so the new
+  // coordinates (and the entrance animation they deserve) come in.
+  const [proj, setProj] = useState<MapProjectionStatus | null>(null);
+  const [projBusy, setProjBusy] = useState(false);
+  useEffect(() => {
+    setProj(lib?.mapProjection ?? null);
+  }, [lib]);
+  useEffect(() => {
+    if (!proj?.running) return;
+    let cancelled = false;
+    const id = setInterval(async () => {
+      try {
+        const res = await adminFetch('/library/observatory/projection');
+        if (!res.ok || cancelled) return;
+        const body = (await res.json()) as MapProjectionStatus;
+        if (cancelled) return;
+        setProj(body);
+        if (!body.running) reload();
+      } catch {
+        /* transient — keep polling */
+      }
+    }, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [proj?.running, adminFetch, reload]);
+  const startProjection = useCallback(async () => {
+    setProjBusy(true);
+    try {
+      const res = await adminFetch('/library/observatory/project', { method: 'POST' });
+      const body = await res.json().catch(() => null);
+      if (body?.status) setProj(body.status as MapProjectionStatus);
+    } catch {
+      /* button stays; operator can retry */
+    } finally {
+      setProjBusy(false);
+    }
+  }, [adminFetch]);
+
+  // ---- queue a track on air (the dossier's QUEUE button) ---------------------
+  const queueTrack = useCallback(
+    async (t: ObsTrack): Promise<{ ok: boolean; message: string }> => {
+      try {
+        const res = await adminFetch('/dj/queue-track', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id: t.id,
+            title: t.title || 'Untitled',
+            artist: t.artist,
+            album: t.album,
+            year: t.year,
+            genre: t.genre,
+          }),
+        });
+        const body = await res.json().catch(() => null);
+        if (!res.ok) return { ok: false, message: body?.error || `queue failed (${res.status})` };
+        return { ok: true, message: 'queued' };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : 'queue failed' };
+      }
+    },
+    [adminFetch],
+  );
+
   // Stable identities so the galaxy's attribute-refresh effects don't re-run
   // on the parent re-render a hover (tip state) triggers.
   const onHover = useCallback((t: ObsTrack | null, e?: React.MouseEvent) => {
@@ -199,6 +391,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const maxOptions = Array.from(new Set([...MAX_LADDER.filter((n) => n <= hardMax), effectiveMax])).sort(
     (a, b) => a - b,
   );
+
+  const projLastLine = proj?.lastLog?.length ? proj.lastLog[proj.lastLog.length - 1] : null;
 
   return (
     <div className="observatory-root">
@@ -263,28 +457,74 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
         </div>
       </header>
 
+      {/* load failures never blank the view (the sample map fills in) — but
+          they must not masquerade as a fresh install either */}
+      {error && (
+        <div className="obs-error" role="alert">
+          <span>
+            COULDN&apos;T LOAD THE LIBRARY ({error})
+            {lib?.mock ? ' — SHOWING SAMPLE DATA' : ' — SHOWING THE LAST GOOD MAP'}
+          </span>
+          <button onClick={reload} disabled={loading}>
+            {loading ? 'RETRYING…' : 'RETRY'}
+          </button>
+        </div>
+      )}
+
       <div className="obs-main">
         {/* filter rail */}
         <aside className="obs-rail">
-          <div className="rail-search">
-            <span className="rail-search-ico">♪</span>
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="scanning the dial…" />
+          <div className="rail-search-wrap">
+            <div className="rail-search">
+              <span className="rail-search-ico">♪</span>
+              <input
+                value={q}
+                onChange={(e) => {
+                  setQ(e.target.value);
+                  setSearchOpen(true); // typing reopens after a pick closed it
+                }}
+                onFocus={() => setSearchOpen(true)}
+                onBlur={() => setSearchOpen(false)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && searchHits.length) {
+                    jumpTo(searchHits[0]!);
+                    (e.target as HTMLInputElement).blur();
+                  }
+                }}
+                placeholder="scanning the dial…"
+                aria-label="search the library"
+              />
+            </div>
+            {searchOpen && searchHits.length > 0 && (
+              <div className="rail-search-results" role="listbox">
+                {searchHits.map((t) => (
+                  <button
+                    key={t.idx}
+                    className="rail-search-hit"
+                    role="option"
+                    aria-selected={selected?.idx === t.idx}
+                    // mousedown, not click — it must beat the input's blur
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      jumpTo(t);
+                      setSearchOpen(false);
+                    }}
+                  >
+                    <span className="hit-title">{t.title || 'Untitled'}</span>
+                    <span className="hit-artist">
+                      {t.artist || 'Unknown'}
+                      {t.genre ? ` · ${t.genre}` : ''}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="rail-sec">
             <div className="rail-label">COLOUR BY</div>
             <div className="flt-grid2">
-              {(
-                [
-                  ['energy', 'ENERGY'],
-                  ['confidence', 'CONF'],
-                  ['source', 'SOURCE'],
-                  ['analysis', 'ANALYSIS'],
-                  ['loudness', 'LOUDNESS'],
-                  ['pace', 'PACE'],
-                  ['vocal', 'VOICE'],
-                ] as [ColorBy, string][]
-              ).map(([k, l]) => (
+              {COLOR_MODES.map(([k, l]) => (
                 <button key={k} className={'flt-tog' + (colorBy === k ? ' on' : '')} onClick={() => setColorBy(k)}>
                   {l}
                 </button>
@@ -307,11 +547,16 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
             <div className="rail-sec">
               <div className="rail-label">SCENE</div>
               <div className="flt-chips">
-                {genreOptions.map((g) => (
+                {visibleGenres.map((g) => (
                   <button key={g} className={'flt-chip' + (genres.has(g) ? ' on' : '')} onClick={() => toggleIn(setGenres)(g)}>
                     {g}
                   </button>
                 ))}
+                {genreOptions.length > GENRE_CHIP_CAP && (
+                  <button className="flt-chip flt-chip-more" onClick={() => setGenresExpanded((v) => !v)}>
+                    {genresExpanded ? '− less' : `+ ${genreOptions.length - GENRE_CHIP_CAP} more`}
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -356,6 +601,27 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
             <div className="ad-muted t-caption">
               GALAXY RENDERER · {lib?.soundMap ? 'PLACED BY SOUND' : 'PLACED BY GENRE'}
             </div>
+            {!lib?.mock &&
+              proj &&
+              (proj.running ? (
+                <div className="rail-proj">
+                  <span className="rail-proj-live t-caption">
+                    <span className="obs-live-dot" /> PROJECTING SOUND MAP…
+                  </span>
+                  {projLastLine && <span className="ad-muted t-caption rail-proj-log">{projLastLine}</span>}
+                </div>
+              ) : proj.audioVectors >= PROJECTION_MIN_VECTORS ? (
+                <div className="rail-proj">
+                  {proj.stale && (
+                    <span className="t-caption" style={{ color: 'var(--accent)' }}>
+                      SOUND MAP OUT OF DATE
+                    </span>
+                  )}
+                  <button className="flt-tog wide" onClick={startProjection} disabled={projBusy}>
+                    {projBusy ? 'STARTING…' : proj.meta ? 'RE-PROJECT SOUND MAP' : 'PROJECT SOUND MAP'}
+                  </button>
+                </div>
+              ) : null)}
           </div>
         </aside>
 
@@ -376,6 +642,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
               selected={selected}
               neighbours={mixNodes}
               hovered={tip ? tip.track : null}
+              focus={focusOn}
               onHover={onHover}
               onSelect={onSelect}
             />
@@ -395,8 +662,9 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
                 detail={detail && detail.track.id === selected.id ? detail : null}
                 loading={loadingId === selected.id}
                 mixNodes={mixNodes}
-                onSelect={setSelected}
+                onSelect={jumpTo}
                 onClose={() => setSelected(null)}
+                onQueue={lib.mock ? undefined : queueTrack}
               />
             ) : (
               <StatsView stats={lib.stats} list={matched} filtered={matched.length !== lib.tracks.length} />

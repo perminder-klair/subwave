@@ -5,6 +5,7 @@ import {
   layoutTracks,
   buildMockLibrary,
   type LibraryData,
+  type MapProjectionStatus,
   type RawTrack,
   type ObservatoryStats,
   type TrackDetail,
@@ -16,6 +17,7 @@ interface ObservatoryResult {
   data: LibraryData | null;
   loading: boolean;
   error: string | null;
+  reload: () => void;
 }
 
 interface BulkResponse {
@@ -24,6 +26,7 @@ interface BulkResponse {
   sampled?: boolean;
   max: number;
   hardMax?: number;
+  mapProjection?: MapProjectionStatus;
   moodVocab: string[];
   stats: ObservatoryStats;
 }
@@ -34,17 +37,22 @@ interface BulkResponse {
 // Changing `max` (the MAP SIZE control) refetches with a higher/lower cap;
 // `max: null` sends no cap so the server's own default (OBSERVATORY_MAX)
 // applies — the response's `max` reports what was used.
+// On a fetch error the mock only fills an EMPTY view (never a dead screen, but
+// never clobbering a map a previous load produced) and `error` stays set so
+// the UI can say the controller was unreachable; `reload()` refetches in place
+// (the retry button, and the refresh after a projection run completes).
 export function useObservatory(adminFetch: AdminFetch, enabled: boolean, max: number | null): ObservatoryResult {
   const [data, setData] = useState<LibraryData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [nonce, setNonce] = useState(0);
+  const reload = useCallback(() => setNonce((n) => n + 1), []);
 
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
     (async () => {
       setLoading(true);
-      setError(null);
       try {
         const res = await adminFetch(
           max == null ? '/library/observatory' : `/library/observatory?max=${encodeURIComponent(max)}`,
@@ -52,6 +60,7 @@ export function useObservatory(adminFetch: AdminFetch, enabled: boolean, max: nu
         if (!res.ok) throw new Error(`controller error (${res.status})`);
         const body = (await res.json()) as BulkResponse;
         if (cancelled) return;
+        setError(null);
         if (!body.tracks || body.tracks.length === 0) {
           setData(buildMockLibrary());
         } else {
@@ -67,14 +76,14 @@ export function useObservatory(adminFetch: AdminFetch, enabled: boolean, max: nu
             sampled: !!body.sampled,
             max: body.max ?? null,
             hardMax: body.hardMax ?? 50000,
+            mapProjection: body.mapProjection ?? null,
             mock: false,
           });
         }
       } catch (err) {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : 'failed to load library');
-        // Still render something useful rather than a dead screen.
-        setData(buildMockLibrary());
+        setData((cur) => cur ?? buildMockLibrary());
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -82,9 +91,9 @@ export function useObservatory(adminFetch: AdminFetch, enabled: boolean, max: nu
     return () => {
       cancelled = true;
     };
-  }, [adminFetch, enabled, max]);
+  }, [adminFetch, enabled, max, nonce]);
 
-  return { data, loading, error };
+  return { data, loading, error, reload };
 }
 
 // Lazily fetches the rich per-track dossier (full record + embeddings +

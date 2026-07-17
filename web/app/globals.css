@@ -5014,6 +5014,52 @@ html.lite .sw-ripple-circle {
 @keyframes obs-glabel-in { from { opacity: 0; } }
 @keyframes obs-tlabel-in { from { opacity: 0; } }
 
+/* ---- load-error banner — the map still renders (sample / last good data),
+   but a failed load must never masquerade as a fresh install ---- */
+.observatory-root .obs-error { display: flex; align-items: center; gap: 14px; padding: 8px 22px; border-bottom: 1px solid var(--accent); background: color-mix(in oklab, var(--accent) 9%, var(--bg)); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; flex: none; z-index: 4; }
+.observatory-root .obs-error button { margin-left: auto; flex: none; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; padding: 4px 10px; cursor: pointer; transition: background 0.12s, color 0.12s; }
+.observatory-root .obs-error button:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.observatory-root .obs-error button:disabled { cursor: default; opacity: 0.6; }
+
+/* ---- search jump-to dropdown ---- */
+.observatory-root .rail-search-wrap { position: relative; }
+.observatory-root .rail-search-results { position: absolute; top: 100%; left: 0; right: 0; z-index: 30; border: 1px solid var(--ink); border-top: 0; background: var(--bg); max-height: 300px; overflow-y: auto; box-shadow: 4px 4px 0 var(--separator-strong); }
+.observatory-root .rail-search-hit { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; padding: 8px 10px; background: transparent; border: 0; border-bottom: 1px dashed var(--separator-strong); cursor: pointer; transition: background 0.12s; }
+.observatory-root .rail-search-hit:last-child { border-bottom: 0; }
+.observatory-root .rail-search-hit:hover { background: var(--ink-soft); }
+.observatory-root .hit-title { font-size: 11px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.observatory-root .hit-artist { font-size: 9px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- sound-map projection status (rail footer) ---- */
+.observatory-root .rail-proj { display: flex; flex-direction: column; gap: 6px; }
+.observatory-root .rail-proj-live { display: flex; align-items: center; gap: 8px; color: var(--accent); font-weight: 700; }
+.observatory-root .rail-proj-log { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-transform: none; letter-spacing: 0.04em; }
+
+/* ---- dossier queue-on-air ---- */
+.observatory-root .dossier-queue { margin-top: 12px; width: 100%; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 700; padding: 9px 0; cursor: pointer; transition: background 0.12s, color 0.12s; }
+.observatory-root .dossier-queue:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.observatory-root .dossier-queue:disabled { cursor: default; }
+.observatory-root .dossier-queue.done { background: var(--accent); color: #fff; opacity: 0.85; }
+.observatory-root .dossier-queue-err { margin-top: 6px; color: var(--accent); text-transform: none; letter-spacing: 0.04em; }
+
+/* keyboard focus on the map (tabIndex=0 — arrows pan, +/- zoom) */
+.observatory-root .cmap-galaxy:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ---- small screens: stack header → map → filters → panels and let the page
+   scroll. Scoped away from the landing-page embed, which has its own two-row
+   phone layout. ---- */
+@media (max-width: 900px) {
+    .observatory-root:not(.obs-embed) { height: auto; min-height: 100vh; min-height: 100dvh; overflow: visible; }
+    .observatory-root:not(.obs-embed) .obs-top { flex-wrap: wrap; row-gap: 8px; }
+    .observatory-root:not(.obs-embed) .obs-top-r { margin-left: 0; flex-wrap: wrap; row-gap: 8px; }
+    .observatory-root:not(.obs-embed) .obs-main { display: flex; flex-direction: column; min-height: 0; }
+    .observatory-root:not(.obs-embed) .obs-stage { order: -1; min-height: 62vh; border-bottom: 1px solid var(--ink); }
+    .observatory-root:not(.obs-embed) .obs-rail { border-right: 0; border-bottom: 1px solid var(--ink); overflow-y: visible; }
+    .observatory-root:not(.obs-embed) .obs-side { border-left: 0; overflow-y: visible; }
+    .observatory-root:not(.obs-embed) .rail-foot { margin-top: 0; }
+    .observatory-root:not(.obs-embed) .stage-hint { display: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .observatory-root .obs-disc,
     .observatory-root .obs-live-dot::after,
