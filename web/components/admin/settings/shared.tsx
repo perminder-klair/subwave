@@ -184,10 +184,17 @@ export interface LoudnessForm {
   source: LoudnessSource;
 }
 
+export interface TransitionsForm {
+  pairDrain: boolean;   // hold picks until the successor is known (#749 fix)
+  stemBlends: boolean;  // pre-rendered stem-blend seams (needs pairDrain + stem cache)
+  stemCache: boolean;   // settings.audio.stemCache — persist Demucs stems during analysis
+}
+
 export interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
   maxTrackSeconds: string;
+  transitions: TransitionsForm;
   archive: ArchiveForm;
   stream: StreamForm;
   loudness: LoudnessForm;
@@ -234,6 +241,8 @@ export interface SettingsData {
     maxTrackSeconds?: number;
     minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number; retentionDays?: number };
+    transitions?: { pairDrain?: boolean; stemBlends?: boolean };
+    audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean; stemCacheGb?: number };
     stream?: {
       opusEnabled?: boolean;
       opusBitrate?: number;

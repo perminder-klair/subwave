@@ -1,11 +1,13 @@
 # Stem-aware transitions — research & feasibility (Neural Mix study)
 
-*Research notes, July 2026. Status: **Option A implemented** (vocal-aware
-transitions — tail vocal ranges, sung-ending exit shaping, chop-over-voice
-veto, never-talk-over-a-singer link gating); **Option B still a proposal.**
-This doc captures what Algoriddim's Neural Mix actually is under the hood,
-what SUB/WAVE already has that maps onto it, and ranked options for building a
-radio-grade equivalent.*
+*Research notes, July 2026. Status: **Options A and B implemented.** A =
+vocal-aware transitions (tail vocal ranges, sung-ending exit shaping,
+chop-over-voice veto, never-talk-over-a-singer link gating). B = pair-aware
+drain scheduling (`transitions.pairDrain`, the #749 fix), the stem cache
+(`audio.stemCache`), and pre-rendered stem-blend seams
+(`transitions.stemBlends`, v1 "beat carry" preset). This doc captures what
+Algoriddim's Neural Mix actually is under the hood, what SUB/WAVE has that
+maps onto it, and the design that was built.*
 
 ---
 
@@ -222,15 +224,20 @@ Why this shape is right:
   the heavy analyzer's capability flag + DJ mode + an admin toggle (the
   `archive_enabled` opt-in pattern).
 
-Open design points when implementing:
+Design points as RESOLVED in the implementation:
 
-- `liq_cue_in` support in `radio.liq`'s `cue_cut` (currently only
-  `liq_cue_out`).
-- Whether rendered *clips* (as opposed to stems) are worth caching at all —
-  they're pair+preset-specific, so hits are rare; probably delete after air
-  like TTS WAVs.
-- Preset selection: let the pick agent propose (like `transition:` today),
-  data disposes (`effectAllowedFor`-style gate on tempo/key/vocal facts).
+- `liq_cue_in` needed **no radio.liq change** — Liquidsoap 2.4.x reads both
+  cue labels natively from `annotate:` at request resolution (an earlier
+  draft of this doc wrongly assumed a `cue_cut` edit was required).
+- Rendered *clips* are single-use seam artifacts — not cached; swept after
+  an hour like TTS WAVs (`broadcast/stem-blend.ts cleanupOldClips`).
+- Preset selection is v1-deterministic (data-gated "beat carry" only); the
+  agent-proposed `transition:`-style choice is a future increment.
+- The enabling architecture is the **pair-aware drain** (`transitions.pairDrain`,
+  `broadcast/drain-policy.ts`): picks are held unsent until their successor
+  is known (deadline-picked ~120s before the on-air track's effective end,
+  hard fallback at ~45s), which is also what finally applies the pair-sized
+  `crossSecondsFor` — closing #749 for every DJ-mode seam, blended or not.
 
 ### The stem cache (analyzer change)
 
