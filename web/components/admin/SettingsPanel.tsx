@@ -140,6 +140,7 @@ export default function SettingsPanel() {
         lat: String(v.weather?.lat ?? ''),
         lng: String(v.weather?.lng ?? ''),
         locationName: v.weather?.locationName ?? '',
+        onAirLocation: v.weather?.onAirLocation ?? '',
         units: v.weather?.units === 'imperial' ? 'imperial' : 'metric',
       },
       tts: {

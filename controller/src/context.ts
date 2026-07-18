@@ -56,6 +56,20 @@ export function invalidateWeatherCache() {
   weatherCache = { data: null, fetchedAt: 0 };
 }
 
+// The place the weather readout is ATTRIBUTED to — the broad on-air location,
+// not the precise point the forecast was actually fetched for. Every downstream
+// consumer reads this one field, so resolving it here covers all of them at
+// once: the spoken "Weather in X" line, the weather skill's tool result, GET
+// /now-playing's public context blob, and the listener-facing schedule drawer.
+// Keeping the precise locationName out of it is what stops a station's public
+// URL from naming its operator's town.
+//
+// Mirrors settings.resolveOnAirLocation(), which this module can't call — it
+// reads config.weather.*, never settings.get(). Keep the two in step.
+function attributedLocation() {
+  return config.weather.onAirLocation || config.weather.locationName;
+}
+
 export async function getWeather() {
   if (weatherCache.data && Date.now() - weatherCache.fetchedAt < WEATHER_TTL_MS) {
     return weatherCache.data;
@@ -75,12 +89,12 @@ export async function getWeather() {
       temp: Math.round(data.current.temperature_2m),
       tempUnit,
       isDay: data.current.is_day === 1,
-      location: config.weather.locationName,
+      location: attributedLocation(),
     };
     weatherCache = { data: result, fetchedAt: Date.now() };
     return result;
   } catch {
-    return { condition: 'unknown', mood: null, temp: null, tempUnit, location: config.weather.locationName };
+    return { condition: 'unknown', mood: null, temp: null, tempUnit, location: attributedLocation() };
   }
 }
 

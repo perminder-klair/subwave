@@ -339,7 +339,10 @@ router.get('/dj', async (req, res) => {
       djMode: persona?.djMode === true,
       avatar: avatarUrlFor(persona?.id),
       station: s.station,
-      location: s.weather?.locationName || '',
+      // Unauthenticated: publish the broad on-air location, never the precise
+      // weather label. Pairing a station name with an exact town here is the
+      // doxxing vector this field exists to close.
+      location: settings.resolveOnAirLocation(s),
       locale: s.locale,
     });
   } catch (err) {

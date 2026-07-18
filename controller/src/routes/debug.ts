@@ -285,7 +285,15 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
   out.config = {
     navidromeUrl: config.navidrome.url,
     navidromeUser: config.navidrome.user,
+    // Admin-only, so both are safe to show — and showing both is the operator's
+    // proof the split is live: `location` drives the forecast, `onAirLocation`
+    // is what the DJ says and what the public endpoints publish.
     location: settingsSnapshot?.weather?.locationName || config.weather.locationName,
+    onAirLocation:
+      settingsSnapshot?.weather?.onAirLocation ||
+      config.weather.onAirLocation ||
+      settingsSnapshot?.weather?.locationName ||
+      config.weather.locationName,
     port: config.server.port,
   };
 

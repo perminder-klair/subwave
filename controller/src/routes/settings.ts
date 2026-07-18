@@ -197,11 +197,16 @@ router.post('/settings', requireAdmin, async (req, res) => {
       config.weather.lat = result.saved.weather.lat;
       config.weather.lng = result.saved.weather.lng;
       config.weather.locationName = result.saved.weather.locationName;
+      config.weather.onAirLocation = result.saved.weather.onAirLocation;
       config.weather.units = result.saved.weather.units;
+      // Not optional for onAirLocation: getWeather() bakes the attributed
+      // location into its cached result, so without this the DJ keeps naming
+      // the old place — and /now-playing keeps publishing it — for a full
+      // cache TTL after the operator changes it.
       invalidateWeatherCache();
       queue.log(
         'scheduler',
-        `weather location → ${result.saved.weather.locationName} (${result.saved.weather.units})`,
+        `weather location → ${result.saved.weather.locationName} (${result.saved.weather.units}) · on air → ${settings.resolveOnAirLocation(result.saved)}`,
       );
     }
     if (result.requiresRestart) {

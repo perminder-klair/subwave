@@ -1084,7 +1084,24 @@ const DEFAULTS = {
     maxBoostDb: 6,
     source: 'replaygain-then-measured' as LoudnessSource,
   },
-  weather: { lat: 30.7333, lng: 76.7794, locationName: 'Punjab', units: 'metric' as 'metric' | 'imperial' },
+  weather: {
+    // Precise point. The ONLY thing Open-Meteo sees, and the only location
+    // data that never reaches a prompt, a listener, or a public response.
+    lat: 30.7333,
+    lng: 76.7794,
+    // Operator-facing label for those coordinates — admin UI, /debug, CLI
+    // status. Never spoken on air, never published. onAirLocation is what
+    // listeners and the LLM get.
+    locationName: 'Punjab',
+    // The place the station CLAIMS to broadcast from: the DJ prompt's
+    // {location}, and the `location` in GET /dj + GET /now-playing. Blank
+    // falls back to locationName, so installs that never set it are
+    // unchanged. Lets an operator name a broad area ("the Peak District")
+    // while the weather still reads their exact coordinates — a station's
+    // public URL shouldn't be able to dox its operator.
+    onAirLocation: '',
+    units: 'metric' as 'metric' | 'imperial',
+  },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is
   // still called SUB/WAVE — this is what the operator's station running on it
@@ -1944,6 +1961,9 @@ export async function load() {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
       lng: stored.weather?.lng ?? DEFAULTS.weather.lng,
       locationName: stored.weather?.locationName ?? DEFAULTS.weather.locationName,
+      // Absent key → '' → falls back to locationName at read time, so an
+      // install predating this field behaves exactly as it did before.
+      onAirLocation: stored.weather?.onAirLocation ?? DEFAULTS.weather.onAirLocation,
       units:
         stored.weather?.units === 'imperial' || stored.weather?.units === 'metric'
           ? stored.weather.units
@@ -3170,6 +3190,12 @@ export async function update(patch) {
     if (typeof w.locationName === 'string' && w.locationName.trim()) {
       next.weather.locationName = w.locationName.trim().slice(0, 80);
     }
+    // Deliberately NOT the guard above: locationName ignores empty strings so
+    // the weather label can never be blanked, but blanking onAirLocation is
+    // exactly how an operator resets to the locationName fallback. Accept ''.
+    if (typeof w.onAirLocation === 'string') {
+      next.weather.onAirLocation = w.onAirLocation.trim().slice(0, 80);
+    }
     if (w.units !== undefined) {
       if (w.units !== 'metric' && w.units !== 'imperial') {
         throw new Error("weather.units must be 'metric' or 'imperial'");
@@ -4023,6 +4049,23 @@ export function agentLanguageReminder(persona: unknown, fields: string) {
   return `\n\nLANGUAGE — this overrides the field descriptions below: you speak ${lang}. Write ${fields} entirely in ${lang}; that is the text the listener hears on air. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them. Internal fields (ids, reasons, kinds) stay in English.`;
 }
 
+// The place the station claims to broadcast from — what the DJ says on air and
+// what the public endpoints publish. Falls back to the weather label so an
+// install that never sets it is unchanged. weather.locationName stays the
+// operator-facing label for the coordinates and is never spoken or published;
+// weather.lat/lng never leave the Open-Meteo call.
+//
+// context.ts can't use this — it reads config.weather.*, not settings.get(), so
+// it applies the same fallback inline against config. Keep the two in step.
+export function resolveOnAirLocation(s: unknown = cache) {
+  const w = (s as { weather?: { onAirLocation?: unknown; locationName?: unknown } } | null | undefined)?.weather;
+  return (
+    String(w?.onAirLocation ?? '').trim() ||
+    (w?.locationName as string) ||
+    DEFAULTS.weather.locationName
+  );
+}
+
 // Render the DJ system prompt by substituting {name}, {soul}, {station},
 // {location}, {language}. {name}/{soul} come from the supplied persona; the
 // template is the global djPrompt (falling back to DEFAULT_DJ_PROMPT_TEMPLATE).
@@ -4033,7 +4076,7 @@ export function renderDjPrompt(persona: unknown, ctx: unknown = {}) {
   const c = (ctx ?? {}) as { station?: unknown; location?: unknown };
   const p = persona as { name?: unknown; soul?: unknown; language?: unknown } | null | undefined;
   const station = c.station || cache?.station || DEFAULTS.station;
-  const location = c.location || (cache?.weather?.locationName ?? DEFAULTS.weather.locationName);
+  const location = c.location || resolveOnAirLocation();
   const tpl =
     cache?.djPrompt && cache.djPrompt.trim() ? cache.djPrompt : DEFAULT_DJ_PROMPT_TEMPLATE;
   const rendered = tpl

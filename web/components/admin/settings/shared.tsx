@@ -23,6 +23,10 @@ export interface WeatherCfg {
   lat: string;
   lng: string;
   locationName: string;
+  /** Broad place the DJ names on air, e.g. "the Peak District". Empty = fall
+   *  back to locationName. Kept separate so the forecast can read an exact
+   *  point without the station broadcasting it. */
+  onAirLocation: string;
   units: 'metric' | 'imperial';
 }
 
@@ -249,7 +253,13 @@ export interface SettingsData {
     timezone?: string;
     locale?: StationLocale;
     theme?: { active?: string };
-    weather?: { lat?: number; lng?: number; locationName?: string; units?: 'metric' | 'imperial' };
+    weather?: {
+      lat?: number;
+      lng?: number;
+      locationName?: string;
+      onAirLocation?: string;
+      units?: 'metric' | 'imperial';
+    };
     tts?: {
       defaultEngine?: string;
       kokoro?: { voice?: string; lang?: string };
