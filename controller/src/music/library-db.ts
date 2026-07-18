@@ -1536,6 +1536,33 @@ export function audioVectorIds(): string[] {
   return rows.map(r => r.id);
 }
 
+// Whether a single track already carries a CLAP audio vector — the per-track
+// twin of unanalysedAudioIds, for the on-pick analysis needs check.
+export function hasAudioVector(id: string): boolean {
+  const row = requireDb()
+    .prepare(`SELECT 1 FROM track_audio_vectors WHERE id = ?`)
+    .get(id);
+  return row != null;
+}
+
+// Per-track analysis status for the on-pick needs check — the single-row twin
+// of the bulk pass's scoping queries, kept beside them so the predicates can't
+// drift: `analysisVersion` mirrors needsAnalysisIds' version gate,
+// `hasVocalRanges` mirrors needsVocalIds' `vocal_ranges_json IS NULL`. A
+// targeted two-column read instead of getTrack()'s full-row JSON-blob parse —
+// this runs on every queue hand-off when analyse-on-pick is enabled (#723
+// taught us what per-poll blob parsing costs). Returns null when the track
+// isn't ingested (upsertTrackAnalysis is an UPDATE — nowhere to store results).
+export function getTrackAnalysisStatus(
+  id: string,
+): { analysisVersion: number | null; hasVocalRanges: boolean } | null {
+  const row = requireDb()
+    .prepare(`SELECT analysis_version, vocal_ranges_json IS NOT NULL AS has_vocal FROM tracks WHERE id = ?`)
+    .get(id) as { analysis_version: number | null; has_vocal: number } | undefined;
+  if (!row) return null;
+  return { analysisVersion: row.analysis_version ?? null, hasVocalRanges: !!row.has_vocal };
+}
+
 // Ids with an audio vector but no audio moods yet — the incremental scope for
 // an unchanged vocabulary (newly analysed tracks since the last scoring pass).
 export function idsNeedingAudioMoods(): string[] {

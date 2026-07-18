@@ -1448,6 +1448,14 @@ const DEFAULTS = {
     // request is a clean no-op. ANALYZE_VOCAL_ACTIVITY=1 also enables it
     // regardless of this toggle (env wins on, never off). Expensive — opt-in.
     vocalActivity: false,
+    // On-pick ("a la carte") analysis — when the DJ picks a track that hasn't
+    // been analysed yet (or is missing an opted-in dimension: CLAP vector,
+    // vocal ranges), analyse just that track right before it's handed to
+    // Liquidsoap, so the upcoming transition can already use the fresh data
+    // and the library backfills organically with what actually gets airplay
+    // (discussion #1032). Off by default: it can delay the queue hand-off by
+    // up to the analysis timeout, so it's an explicit operator choice.
+    analyzeOnPick: false,
   },
   // Sound-effects library. When disabled, the segment-director agent is never
   // shown the effect catalogue, so it stops garnishing spoken breaks with
@@ -2263,6 +2271,7 @@ export async function load() {
     audio: {
       embeddings: typeof stored.audio?.embeddings === 'boolean' ? stored.audio.embeddings : DEFAULTS.audio.embeddings,
       vocalActivity: typeof stored.audio?.vocalActivity === 'boolean' ? stored.audio.vocalActivity : DEFAULTS.audio.vocalActivity,
+      analyzeOnPick: typeof stored.audio?.analyzeOnPick === 'boolean' ? stored.audio.analyzeOnPick : DEFAULTS.audio.analyzeOnPick,
     },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
@@ -3682,6 +3691,9 @@ export async function update(patch) {
     }
     if (au.vocalActivity !== undefined) {
       next.audio.vocalActivity = !!au.vocalActivity;
+    }
+    if (au.analyzeOnPick !== undefined) {
+      next.audio.analyzeOnPick = !!au.analyzeOnPick;
     }
   }
   if ('sfx' in patch) {

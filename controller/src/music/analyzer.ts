@@ -16,6 +16,7 @@
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, createWriteStream, readFileSync } from 'node:fs';
+import { rm as fsRm } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
 import * as subsonic from './subsonic.js';
@@ -210,6 +211,12 @@ const ANALYZE_MAX_BYTES = parseInt(process.env.ANALYZE_MAX_BYTES || String(12 * 
 // the tts-heavy sidecar), so the path string the controller writes resolves to
 // the same file inside the sidecar — that's what makes the path handoff work.
 const ANALYZE_TMP_DIR = `${config.stateDir}/analyze-tmp`;
+// Separate staging dir for the on-pick (a la carte) path. The bulk pass owns
+// analyze-tmp — including an end-of-run `rm -rf` that reaps its orphans — so
+// on-pick files live in a sibling dir a concurrently-finishing bulk run can
+// never delete out from under an in-flight sidecar read. Also under the
+// shared state dir for the same cross-container path-handoff reason.
+export const ANALYZE_PICK_TMP_DIR = `${config.stateDir}/analyze-tmp-pick`;
 
 // ---------------------------------------------------------------------------
 // Local Python worker (persistent over stdio)
@@ -701,9 +708,10 @@ function subsonicErrorMessage(body: string): string {
 // falls back to the url path for that one track.
 export async function downloadCapped(
   songId: string,
+  destDir: string = ANALYZE_TMP_DIR,
 ): Promise<{ path: string; complete: boolean }> {
-  mkdirSync(ANALYZE_TMP_DIR, { recursive: true });
-  const dest = `${ANALYZE_TMP_DIR}/${encodeURIComponent(songId)}.audio`;
+  mkdirSync(destDir, { recursive: true });
+  const dest = `${destDir}/${encodeURIComponent(songId)}.audio`;
   const url = subsonic.getRawStreamUrl(songId);
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), config.analyzer.requestTimeoutMs);
@@ -760,6 +768,12 @@ export async function downloadCapped(
     // exactly cap bytes is flagged incomplete too; erring that way only skips
     // outro analysis, never mis-measures it.)
     return { path: dest, complete: read < ANALYZE_MAX_BYTES };
+  } catch (err) {
+    // A failed download must not leave its partial file behind: the caller
+    // only cleans up paths it was handed, so an orphan here would accumulate
+    // (the on-pick dir has no bulk-style end-of-run sweep to reap it).
+    await fsRm(dest, { force: true }).catch(() => {});
+    throw err;
   } finally {
     clearTimeout(t);
   }

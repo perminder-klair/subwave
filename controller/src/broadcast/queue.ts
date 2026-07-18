@@ -11,6 +11,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
 import * as blocklist from '../music/blocklist.js';
+import { analyzeOnPick, analyzeOnPickEnabled } from '../music/analyze.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
@@ -956,6 +957,54 @@ class Queue {
         // while we were awaiting the TTS render above — don't hand a removed
         // track to Liquidsoap.
         if (!this.upcoming.includes(item)) continue;
+
+        // On-pick "a la carte" analysis (discussion #1032): when enabled and
+        // this track still needs analysis, analyse it NOW — before the mix
+        // transition below reads the library record — so this very hand-off
+        // gets the fresh bpm/key/outro/vocal/loudness data. Bounded by the
+        // deadline inside analyzeOnPick: past it the item drains with whatever
+        // data exists (today's behaviour) and the analysis keeps running in
+        // the background, caching its result for the next spin.
+        //
+        // Awaited ONLY when this is the sole pending hand-off. The drain loop
+        // holds the senderBusy mutex — the single path every hand-off takes,
+        // listener requests included — so blocking here with more items
+        // waiting would serialize them all behind one track's analysis
+        // (N×deadline in the worst case) and could leave dj_queue empty past
+        // the current track's end. With others waiting, the analysis is
+        // kicked off in the background instead: this item drains with
+        // existing data and the result caches for its next spin.
+        if (analyzeOnPickEnabled() && item.track?.id) {
+          const othersWaiting = this.upcoming.some(i => i !== item && !i.sent);
+          if (othersWaiting) {
+            const title = item.track.title;
+            analyzeOnPick(item.track.id)
+              .then((got) => {
+                // 'current'/'skipped' mean nothing ran — stay quiet in the
+                // steady state; only an actual analysis earns a log line.
+                if (got !== 'current' && got !== 'skipped') {
+                  this.log('mix', `on-pick analysis backgrounded (more hand-offs waiting) — ${title} aired with existing data; result caches for next spin`);
+                }
+              })
+              .catch(() => {});
+          } else {
+            try {
+              const got = await analyzeOnPick(item.track.id);
+              if (got === 'analyzed') {
+                this.log('mix', `on-pick analysis cached → ${item.track.title}`);
+              } else if (got === 'pending') {
+                this.log('mix', `on-pick analysis still running — ${item.track.title} airs with existing data; result caches for next time`);
+              }
+            } catch (err) {
+              // Same containment as the TTS await above: a transient library-db
+              // throw must not reject the fire-and-forget drain promise.
+              this.log('error', `On-pick analysis failed: ${(err as Error).message}`);
+            }
+            // Same guard as after the TTS await: an operator cancel may have
+            // spliced this item out while we were analysing.
+            if (!this.upcoming.includes(item)) continue;
+          }
+        }
 
         // DJ-mode mixing (features 1 & 2): shape the transition INTO this track
         // from its tempo/harmonic compatibility with the track it follows. The

@@ -124,6 +124,11 @@ export function get(songId: string): any {
     durationSec: t.durationSec,
     structure: t.structure,
     vocalRanges: t.vocalRanges, // [] = instrumental, null = not computed
+    // Per-region key ranges (feature: boundary keys). Without this the
+    // `rec?.keyRanges` fallbacks in bpmKeyFor and queue.mixAnalysisFor were
+    // structurally dead — getTrack parses key_ranges_json, but the projection
+    // dropped it, so opening/ending keys always degraded to the dominant key.
+    keyRanges: t.keyRanges,
     paceMean: paceMeanOf(t.pace),
     // Measured ending (fade vs cold, tail loudness/tempo/grid) — feeds the
     // queue's ending-aware exit canvas + effect gating. null = no signal.
