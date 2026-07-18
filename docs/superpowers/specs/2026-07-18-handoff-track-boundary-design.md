@@ -409,6 +409,56 @@ Lint is the merge gate: `npm run lint` in `controller/` (`eslint . && tsc --noEm
   `getFullContext()` call is dropped when a duration is known, so this is one call
   fewer on the common path.
 
+## Implementation notes
+
+Three things changed between this design and the shipped code.
+
+**1. Identity looks ahead; the clock does not.** The design said to drive the
+whole boundary sequence off `showAt`. That is right for *identity* (which show
+and persona are on) but wrong for the *clock*: `SCRIPT_CONTEXT_FIELDS` in
+`llm/internal/prompts/scripts.ts` includes `clock`, so the handoff prompts would
+have been handed a time up to a track-length plus the look-ahead margin ahead of
+when the mic-pass actually airs — the DJ misstating the time on air, which is the
+failure issue #864 fixed for links. The queue call site now passes the handoff a
+merged context: `show`/`mood`/`festival` from the look-ahead (the show being
+handed *to*), `date`/`clock`/`time` from the live moment. Built only when a
+handoff is pending, so it costs nothing per track.
+
+**2. `session.onAirPersona()` replaced `getEffectivePersona(showAt)`.** Threading
+a date through every speaker lookup would have meant every call site
+re-deriving the same answer and being able to get it wrong. Since the roll has
+already happened by the time anything writes a line, the session *is* the answer:
+one exported helper in `session.ts` resolves the live session's persona and falls
+back to the grid. Used by `pickSystem`, `requestSystem`, the pool-pick link, and
+all four `introPersona` stamps.
+
+**3. `pickOnAirSpeaker()` call sites were left alone, deliberately.** The three
+no-argument sites in `scheduler.ts` are the hourly check (`:420`), the manual link
+runner (`:505`) and the station ID (`:669`). Idents fire at `:15/:30/:45` and the
+hourly at `:00`, none of which fall inside the ~2-minute window where the session
+leads the grid, so only the manual link route can disagree — a rare operator
+action whose fallback is simply the outgoing DJ speaking once more. Adding a
+session-aware speaker variant for that case is scope the fix doesn't need.
+
+Also shipped beyond the file list: `routes/request.ts` gained `introPersona` on
+its two stateless-fallback pushes (`:276`, `:559`), which have the same
+render-later/air-later split as the agent path.
+
+### Verification performed
+
+Beyond `npm test` (37 files) and `npm run lint` (0 errors), the Change 0 chain was
+exercised against the real modules with a seeded state dir — two adjacent shows
+on the hour with different personas:
+
+- **Positive:** a roll on a context stamped for `10:05`, executed at wall-clock
+  `09:58`, produced a session whose persona was the *incoming* DJ and a
+  `pendingHandoff()` armed from the *outgoing* one, with `at` stamped.
+- **Counter-proof:** the same roll with the `at` stamp stripped rolled the *show*
+  to "Mid Morning" but left the *persona* on the outgoing DJ — so
+  `stampRolledFrom` saw no change and `pendingHandoff()` was `null`. This is the
+  suppression this design predicted, reproduced on demand, confirming Change 0
+  is load-bearing rather than defensive.
+
 ## Out of scope
 
 - Generalizing `announceAtNextTrack` into a multi-slot queue. Not needed — the
