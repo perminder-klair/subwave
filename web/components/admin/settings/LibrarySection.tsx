@@ -110,8 +110,11 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           : {}),
       },
     });
+    // No separate toast/refresh — saveSettings already notifies and refreshes
+    // for the whole embedding patch (and toasting ok here would lie when the
+    // save itself failed). Mirrors the LlmSection compat-key flow.
     if (effectiveProvider === 'openai-compatible' && compatEmbedKeyInput.trim()) {
-      notify.ok('Bearer token saved'); setCompatEmbedKeyInput(''); refresh();
+      setCompatEmbedKeyInput('');
     }
     // Save embedding API key override if typed (cloud embedding providers only —
     // embedKeyVar is set only for providers that use a conventional key).
@@ -178,21 +181,27 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
     adminFetch,
   });
 
-  const probeQuery = () => {
-    const p = new URLSearchParams();
-    if (e.provider) p.set('provider', e.provider);
-    if (e.model) p.set('model', e.model);
-    if (e.baseUrl) p.set('baseUrl', e.baseUrl);
-    if (e.ollamaUrl) p.set('ollamaUrl', e.ollamaUrl);
-    if (compatEmbedKeyInput.trim()) p.set('apiKey', compatEmbedKeyInput.trim());
-    return p.toString();
+  // POST body, not query params — the unsaved bearer token must never ride a
+  // URL that reverse-proxy access logs capture.
+  const probeBody = () => {
+    const b: Record<string, string> = {};
+    if (e.provider) b.provider = e.provider;
+    if (e.model) b.model = e.model;
+    if (e.baseUrl) b.baseUrl = e.baseUrl;
+    if (e.ollamaUrl) b.ollamaUrl = e.ollamaUrl;
+    if (compatEmbedKeyInput.trim()) b.apiKey = compatEmbedKeyInput.trim();
+    return b;
   };
 
   const runProbe = async () => {
     setProbing(true);
     setProbe(null);
     try {
-      const r = await adminFetch(`/settings/embedding/probe?${probeQuery()}`);
+      const r = await adminFetch('/settings/embedding/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(probeBody()),
+      });
       setProbe(await r.json());
     } catch (err) {
       setProbe({ ok: false, dim: null, code: 'unknown', message: errorMessage(err) });
@@ -217,8 +226,12 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
       } catch {
         /* discovery is best-effort — fall through and probe with the default model */
       }
-      const p = new URLSearchParams({ provider: 'locca', baseUrl: url, model });
-      const j = await (await adminFetch(`/settings/embedding/probe?${p.toString()}`)).json();
+      const r = await adminFetch('/settings/embedding/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'locca', baseUrl: url, model }),
+      });
+      const j = await r.json();
       setProbe(j);
       if (j.ok) {
         setForm(f => ({ ...f, embedding: { ...f.embedding, provider: 'locca', baseUrl: url, model } }));

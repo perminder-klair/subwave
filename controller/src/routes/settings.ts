@@ -801,18 +801,21 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// GET /settings/embedding/probe — test whether the configured (or supplied)
+// POST /settings/embedding/probe — test whether the configured (or supplied)
 // embedding endpoint can actually produce embeddings, surfacing the result
 // in the admin UI BEFORE a long tagging run instead of failing mid-job.
-// Optional query overrides (provider/model/baseUrl/ollamaUrl) test the unsaved
-// form values; omitted fields fall back to saved settings.embedding → llm.
+// Optional body overrides (provider/model/baseUrl/ollamaUrl/apiKey) test the
+// unsaved form values; omitted fields fall back to saved settings.embedding →
+// llm. POST body rather than query params so the bearer token never rides a
+// URL that reverse-proxy access logs capture — same shape as
+// /settings/llm/probe-compat.
 // Always 200s with { ok, dim, code, message } — a chat-model / unreachable
 // server is a normal, actionable answer, not an error.
 // ---------------------------------------------------------------------------
-router.get('/settings/embedding/probe', requireAdmin, async (req, res) => {
+router.post('/settings/embedding/probe', requireAdmin, async (req, res) => {
   const overrides: Record<string, string> = {};
   for (const k of ['provider', 'model', 'baseUrl', 'ollamaUrl', 'apiKey']) {
-    const v = req.query[k];
+    const v = (req.body || {})[k];
     if (typeof v === 'string' && v.trim()) overrides[k] = v.trim();
   }
   try {
