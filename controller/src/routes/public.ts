@@ -339,6 +339,10 @@ router.get('/dj', async (req, res) => {
       djMode: persona?.djMode === true,
       avatar: avatarUrlFor(persona?.id),
       station: s.station,
+      // Station-level share-card blurb. Persona-independent by design, so a
+      // shared link reads the same whoever is on air (issue #1086). '' = unset;
+      // the web app falls back to the persona tagline.
+      stationDescription: s.stationDescription || '',
       location: s.weather?.locationName || '',
       locale: s.locale,
     });

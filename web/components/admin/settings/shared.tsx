@@ -192,6 +192,7 @@ export interface FormState {
   stream: StreamForm;
   loudness: LoudnessForm;
   station: string;
+  stationDescription: string;
   timezone: string;
   locale: StationLocale;
   kokoroLang: string;
@@ -246,6 +247,7 @@ export interface SettingsData {
     };
     loudness?: { targetLufs?: number; maxBoostDb?: number; source?: LoudnessSource };
     station?: string;
+    stationDescription?: string;
     timezone?: string;
     locale?: StationLocale;
     theme?: { active?: string };

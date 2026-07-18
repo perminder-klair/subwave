@@ -133,6 +133,7 @@ export default function SettingsPanel() {
         source: v.loudness?.source ?? 'replaygain-then-measured',
       },
       station: v.station ?? '',
+      stationDescription: v.stationDescription ?? '',
       timezone: v.timezone ?? '',
       locale: normalizeStationLocale(v.locale),
       kokoroLang: v.tts?.kokoro?.lang ?? '',

@@ -1090,6 +1090,13 @@ const DEFAULTS = {
   // still called SUB/WAVE — this is what the operator's station running on it
   // is called (e.g. "Frequency 88", "Late Shift Radio").
   station: 'SUB/WAVE',
+  // Station-level blurb for link previews (og:description, twitter:description,
+  // meta description). Deliberately NOT the on-air persona's tagline: that
+  // changes with whoever is on air, so a shared station link would describe
+  // itself differently depending on the hour (issue #1086). Empty = unset, and
+  // the web app falls back to the persona tagline, preserving the behaviour of
+  // installs that predate this field. Never enters the DJ prompt.
+  stationDescription: '',
   // Station clock — IANA zone driving everything with local-time semantics
   // (time-of-day moods, schedule slots, hourly time checks, festival dates).
   // Empty = Auto: the container's own TZ, so existing installs are untouched.
@@ -1956,6 +1963,10 @@ export async function load() {
       typeof stored.station === 'string' && stored.station.trim()
         ? stored.station.trim().slice(0, 80)
         : DEFAULTS.station,
+    stationDescription:
+      typeof stored.stationDescription === 'string'
+        ? stored.stationDescription.trim().slice(0, 200)
+        : DEFAULTS.stationDescription,
     // Invalid stored zone (hand-edited file) falls back to Auto — the
     // station must never crash on a bad zone.
     timezone:
@@ -3185,6 +3196,15 @@ export async function update(patch) {
       restart = true;
     }
     next.station = resolved;
+  }
+  if ('stationDescription' in patch) {
+    const v = String(patch.stationDescription ?? '').trim();
+    if (v.length > 200) {
+      throw new Error('station description must be 200 chars or fewer');
+    }
+    // No `restart` — this never reaches the DJ prompt or a liquidsoap_*.txt
+    // file; it is read per-request by the web app's generateMetadata().
+    next.stationDescription = v;
   }
   if ('timezone' in patch) {
     const v = String(patch.timezone ?? '').trim();
