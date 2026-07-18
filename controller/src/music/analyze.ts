@@ -131,7 +131,7 @@ let audioMetaStamped = false;
 async function analyzeAndStore(
   id: string,
   opts: { embed?: boolean; vocal?: boolean; localPath?: string | null; localComplete?: boolean },
-): Promise<{ audioStored: boolean; vocalStored: boolean; audioReturned: boolean }> {
+): Promise<{ audioStored: boolean; vocalStored: boolean; audioDim: number | null }> {
   const { embed, vocal, localPath, localComplete } = opts;
   const a = localPath
     ? await analyzer.analyzePath(localPath, { embed, vocal, complete: localComplete })
@@ -168,10 +168,12 @@ async function analyzeAndStore(
       console.error(`[analyze] ${id} audio-vector write failed: ${err?.message || err}`);
     }
   }
-  // audioReturned tells the on-pick path apart: "backend produced no vector"
-  // (runtime-degraded CLAP — stop asking) vs "vector arrived but the write
-  // failed" (transient — worth retrying).
-  return { audioStored, vocalStored: a.vocalRanges != null, audioReturned: a.audioEmbedding != null };
+  // audioDim lets the on-pick path tell three cases apart: null = "backend
+  // produced no vector" (runtime-degraded CLAP — stop asking); wrong dim =
+  // "backend runs a different CLAP model than the DB was stamped with"
+  // (persistent — stop asking); right dim with audioStored false = "vector
+  // arrived but the write failed" (transient — worth retrying).
+  return { audioStored, vocalStored: a.vocalRanges != null, audioDim: a.audioEmbedding?.length ?? null };
 }
 
 export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {
@@ -416,12 +418,25 @@ export type OnPickOutcome =
   | 'current'   // nothing missing — no analysis needed
   | 'analyzed'  // fresh analysis stored within the deadline
   | 'pending'   // still running past the deadline; caches when it finishes
-  | 'skipped'   // not in library.db / bulk run owns the backend / no backend / failure cooling down
+  | 'skipped'   // not in library.db / bulk run owns the backend / no backend / failure cooling down / another track's analysis inflight
   | 'failed';
 
 // Single-flight per id: a request and a pick racing to the same song share one
 // analysis instead of hitting the backend twice.
 const onPickInflight = new Map<string, Promise<boolean>>();
+
+// Crash-orphan sweep — each job's finally removes its own staging file, but a
+// controller crash mid-analysis leaves the file behind, and unlike the bulk
+// pass's analyze-tmp this dir has no end-of-run rm -rf to reap it. Sweep the
+// whole dir once per process, before the first download stages into it; every
+// job awaits the same promise, so the sweep can never race a live file.
+let pickStagingSwept: Promise<void> | null = null;
+function sweepPickStaging(): Promise<void> {
+  if (!pickStagingSwept) {
+    pickStagingSwept = rm(analyzer.ANALYZE_PICK_TMP_DIR, { recursive: true, force: true }).catch(() => {});
+  }
+  return pickStagingSwept;
+}
 
 // Failure cooldown — a track whose analysis just failed (stale library entry,
 // backend hiccup) must not re-pay a full download+analysis on every future
@@ -483,6 +498,14 @@ export async function analyzeOnPick(
 
   let job = onPickInflight.get(id);
   if (!job) {
+    // Global gate: one on-pick analysis at a time, matching the bulk pass's
+    // serial temperament toward the backend. Without it, a boot-recovery
+    // re-drain of several unsent items would background one analysis per item
+    // — parallel downloads plus parallel librosa/CLAP jobs on a backend sized
+    // for one. A gated-out track airs with existing data and retries on a
+    // later spin, like every other skip. (Synchronous between the get above
+    // and the set below, so the check can't race another caller.)
+    if (onPickInflight.size > 0) return 'skipped';
     job = analyzeOnPickJob(id, {
       embed: embed ? true : undefined,
       vocal: vocal ? true : undefined,
@@ -521,6 +544,7 @@ async function analyzeOnPickJob(
   let localComplete: boolean | undefined;
   try {
     try {
+      await sweepPickStaging();
       const dl = await analyzer.downloadCapped(id, analyzer.ANALYZE_PICK_TMP_DIR);
       localPath = dl.path;
       localComplete = dl.complete;
@@ -530,7 +554,7 @@ async function analyzeOnPickJob(
       if (err instanceof analyzer.NonAudioResponseError) throw err;
       console.error(`[analyze] on-pick ${id} prefetch failed (${err?.message || err}); using url path`);
     }
-    const { audioStored, vocalStored, audioReturned } = await analyzeAndStore(id, { ...flags, localPath, localComplete });
+    const { audioStored, vocalStored, audioDim } = await analyzeAndStore(id, { ...flags, localPath, localComplete });
     // A requested dimension coming back absent from a successful analysis is
     // the runtime-degraded-worker signature (#996) — latch it so the needs
     // check stops forcing a pass the backend can never fulfil.
@@ -538,9 +562,19 @@ async function analyzeOnPickJob(
       vocalRuntimeDegraded = true;
       console.warn(`[analyze] on-pick: backend advertises vocal activity but returned none — pausing on-pick vocal requests until restart`);
     }
-    if (flags.embed && !audioReturned && !audioRuntimeDegraded) {
+    if (flags.embed && audioDim == null && !audioRuntimeDegraded) {
       audioRuntimeDegraded = true;
       console.warn(`[analyze] on-pick: backend advertises audio embeddings but returned none — pausing on-pick embed requests until restart`);
+    }
+    // A vector with the wrong dimensionality is just as persistent: the
+    // backend is running a different CLAP model than the DB was stamped with,
+    // so every retry returns the same unusable vector — without this latch,
+    // every spin of every vector-less track would re-pay a full
+    // download+analysis. A bulk re-analyse (or fixing the backend) is the
+    // operator's path out.
+    if (flags.embed && audioDim != null && audioDim !== db.AUDIO_EMBEDDING_DIM && !audioRuntimeDegraded) {
+      audioRuntimeDegraded = true;
+      console.warn(`[analyze] on-pick: backend returned ${audioDim}-d audio vectors (expected ${db.AUDIO_EMBEDDING_DIM}) — pausing on-pick embed requests until restart`);
     }
     // Zero-shot audio moods for the vector this analysis just wrote (plus any
     // unscored stragglers) — best-effort, never blocks the caller.
