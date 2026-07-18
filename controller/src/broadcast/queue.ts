@@ -1011,6 +1011,24 @@ class Queue {
 
         const idx = this.upcoming.indexOf(item);
         const hasSuccessor = idx >= 0 && idx + 1 < this.upcoming.length;
+        // The clock that governs THIS item's drain is the end of the track it
+        // will FOLLOW — the on-air track only when nothing sent sits ahead of
+        // it. With sent-but-unaired items in between, add their effective
+        // lengths; an unknown length ahead makes the deadline unknowable
+        // (null → intrinsic drain, the safe direction). Without this, the
+        // freshly-picked next-NEXT item drained at every track boundary (the
+        // on-air clock hit zero) and every other seam lost its pair stamps —
+        // caught live in the first on-air smoke test.
+        let remaining = this.remainingSecOnAir();
+        if (remaining != null && idx > 0) {
+          for (const ahead of this.upcoming.slice(0, idx)) {
+            if (!ahead.sent) continue; // unsent ahead items drain first anyway
+            let d = Number(ahead.track?.duration) || 0;
+            if (!d && ahead.track?.id) d = Number(library.get(ahead.track.id)?.durationSec) || 0;
+            if (!d) { remaining = null; break; }
+            remaining += ahead.cueOutSec != null ? Math.min(d, ahead.cueOutSec) : d;
+          }
+        }
         // `force` is the clip-as-track recovery path (onTrackStarted's guard):
         // never hold, but a known successor still earns its pair stamps.
         const action = force
@@ -1018,7 +1036,7 @@ class Queue {
           : drainAction({
               pairDrain: settings.get().transitions?.pairDrain !== false,
               hasSuccessor,
-              remainingSec: this.remainingSecOnAir(),
+              remainingSec: remaining,
             });
         if (action === 'hold') break;
 
@@ -1077,8 +1095,10 @@ class Queue {
             // Cache-hit-only + deadline-raced inside; null → the plain
             // pair-aware crossfade just stamped above.
             try {
+              // `remaining` is the ahead-extended clock (time until THIS
+              // item's predecessor ends) — the window the render truly has.
               const blend = await stemBlend.maybeRenderBlend(
-                item.track, successor.track, this.remainingSecOnAir(), { outCapped: cappedExit },
+                item.track, successor.track, remaining, { outCapped: cappedExit },
               );
               if (blend && this.upcoming.includes(item) && this.upcoming.includes(successor)) {
                 // The rendered seam owns this ending: strip exit gestures
