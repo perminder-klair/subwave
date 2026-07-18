@@ -23,6 +23,14 @@ import {
 // in ./llm/providerMeta (imported above) — shared with the ProviderSelector card
 // grid and, later, the onboarding wizard. Don't redefine them here.
 
+// Providers whose bearer token is typed inline (routed into settings.llm.keys
+// per provider, not secrets.env) and whose server URL lives in
+// providerBaseUrls. locca's URL may be blank — the controller then falls back
+// to DEFAULT_LOCCA_BASE_URL (registry.ts); mirrored here so Test connection
+// works without an explicit override.
+const INLINE_KEY_PROVIDERS = ['openai-compatible', 'locca'];
+const LOCCA_DEFAULT_BASE_URL = 'http://host.docker.internal:8080/v1';
+
 interface LlmSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   refresh: () => void;
@@ -83,6 +91,8 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   const primaryKeySet = !!(primaryKeyVar && data.env?.[primaryKeyVar]);
 
   const primaryBaseUrl = form.llm.providerBaseUrls[form.llm.provider] ?? '';
+  const primaryTestBaseUrl =
+    primaryBaseUrl || (form.llm.provider === 'locca' ? LOCCA_DEFAULT_BASE_URL : '');
 
   const primaryDiscoveryEnabled =
     form.llm.provider === 'ollama'
@@ -103,6 +113,8 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   const fallbackKeySet = !!(fallbackKeyVar && data.env?.[fallbackKeyVar]);
 
   const fallbackBaseUrl = form.llm.fallback.providerBaseUrls[form.llm.fallback.provider] ?? '';
+  const fallbackTestBaseUrl =
+    fallbackBaseUrl || (form.llm.fallback.provider === 'locca' ? LOCCA_DEFAULT_BASE_URL : '');
 
   const fallbackDiscoveryEnabled =
     form.llm.fallback.enabled && (
@@ -202,7 +214,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   const save = async () => {
     const activeProvider = form.llm.provider;
     const activeFallbackProvider = form.llm.fallback.provider;
-    const inlineKeyProviders = ['openai-compatible', 'locca'];
     await saveSettings({
       llm: {
         provider: activeProvider,
@@ -222,7 +233,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         budgetSoftPct: form.llm.budgetSoftPct,
         exemptRequests: form.llm.exemptRequests,
         maxOutputTokens: form.llm.maxOutputTokens,
-        ...(inlineKeyProviders.includes(activeProvider) && compatKeyInput.trim()
+        ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()
           ? { apiKey: compatKeyInput.trim() }
           : {}),
         fallback: {
@@ -234,7 +245,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           repeatPenalty: form.llm.fallback.repeatPenalty,
           providerBaseUrls: form.llm.fallback.providerBaseUrls,
           reasoning: form.llm.fallback.reasoning,
-          ...(inlineKeyProviders.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()
+          ...(INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()
             ? { apiKey: compatFallbackKeyInput.trim() }
             : {}),
         },
@@ -251,10 +262,10 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       const ok = await saveKey(fallbackKeyVar, fallbackKeyInput);
       if (ok) { notify.ok('API key saved'); setFallbackKeyInput(''); refresh(); }
     }
-    if (inlineKeyProviders.includes(activeProvider) && compatKeyInput.trim()) {
+    if (INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()) {
       setCompatKeyInput('');
     }
-    if (inlineKeyProviders.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()) {
+    if (INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()) {
       setCompatFallbackKeyInput('');
     }
   };
@@ -375,42 +386,6 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             </div>
           )}
 
-          {form.llm.provider === 'openai-compatible' && (
-            <>
-              <div className="field">
-                <Label>Bearer token</Label>
-                <div className="flex items-stretch gap-2">
-                  <Input
-                    type="password"
-                    value={compatKeyInput}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
-                    placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.['openai-compatible'] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
-                    className="max-w-[360px]"
-                  />
-                  <Btn
-                    onClick={() =>
-                      testCompatKey(
-                        compatKeyInput || '',
-                        primaryBaseUrl,
-                        form.llm.model,
-                        setCompatKeyTesting,
-                        setCompatKeyTest,
-                      )
-                    }
-                    disabled={compatKeyTesting || !primaryBaseUrl.trim()}
-                  >
-                    {compatKeyTesting ? 'Testing…' : 'Test connection'}
-                  </Btn>
-                </div>
-                <div className="field-hint">
-                  Optional — only needed when the server requires bearer authentication.
-                  Saved to <code>settings.json</code>, takes effect on next save.
-                </div>
-              </div>
-              {compatKeyTest && <KeyTestResult result={compatKeyTest} />}
-            </>
-          )}
-
           {form.llm.provider === 'locca' && (
             <div className="field">
               <Label>locca server base URL</Label>
@@ -438,6 +413,43 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </a>
               </div>
             </div>
+          )}
+
+          {INLINE_KEY_PROVIDERS.includes(form.llm.provider) && (
+            <>
+              <div className="field">
+                <Label>Bearer token</Label>
+                <div className="flex items-stretch gap-2">
+                  <Input
+                    type="password"
+                    value={compatKeyInput}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
+                    placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.[form.llm.provider] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                    className="max-w-[360px]"
+                  />
+                  <Btn
+                    onClick={() =>
+                      testCompatKey(
+                        compatKeyInput || '',
+                        primaryTestBaseUrl,
+                        form.llm.model,
+                        setCompatKeyTesting,
+                        setCompatKeyTest,
+                      )
+                    }
+                    disabled={compatKeyTesting || !primaryTestBaseUrl.trim()}
+                  >
+                    {compatKeyTesting ? 'Testing…' : 'Test connection'}
+                  </Btn>
+                </div>
+                <div className="field-hint">
+                  Optional — only needed when the server requires bearer authentication
+                  (e.g. llama.cpp <code>--api-key</code>). Saved to{' '}
+                  <code>settings.json</code>, takes effect on next save.
+                </div>
+              </div>
+              {compatKeyTest && <KeyTestResult result={compatKeyTest} />}
+            </>
           )}
 
           {(form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca') && (
@@ -718,7 +730,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </div>
               )}
 
-              {form.llm.fallback.provider === 'openai-compatible' && (
+              {INLINE_KEY_PROVIDERS.includes(form.llm.fallback.provider) && (
                 <>
                   <div className="field">
                     <Label>Bearer token</Label>
@@ -727,20 +739,20 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                         type="password"
                         value={compatFallbackKeyInput}
                         onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
-                        placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.['openai-compatible'] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                        placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.[form.llm.fallback.provider] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
                         className="max-w-[360px]"
                       />
                       <Btn
                         onClick={() =>
                           testCompatKey(
                             compatFallbackKeyInput || '',
-                            fallbackBaseUrl,
+                            fallbackTestBaseUrl,
                             form.llm.fallback.model,
                             setCompatFallbackKeyTesting,
                             setCompatFallbackKeyTest,
                           )
                         }
-                        disabled={compatFallbackKeyTesting || !fallbackBaseUrl.trim()}
+                        disabled={compatFallbackKeyTesting || !fallbackTestBaseUrl.trim()}
                       >
                         {compatFallbackKeyTesting ? 'Testing…' : 'Test connection'}
                       </Btn>

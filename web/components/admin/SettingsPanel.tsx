@@ -244,8 +244,11 @@ export default function SettingsPanel() {
         providerBaseUrls: (() => {
           const stored = (v.embedding as { providerBaseUrls?: Record<string, string> })?.providerBaseUrls;
           if (stored && typeof stored === 'object') return { ...stored };
+          // Legacy migration keys by the EFFECTIVE provider (own, else the chat
+          // provider — the embedding leg inherits it when its own is empty), the
+          // same key LibrarySection reads and writes.
           const legacy = v.embedding?.baseUrl ?? '';
-          const prov = v.embedding?.provider ?? '';
+          const prov = v.embedding?.provider || v.llm?.provider || '';
           return legacy && prov ? { [prov]: legacy } : {};
         })(),
         ollamaUrl: v.embedding?.ollamaUrl ?? '',

@@ -421,7 +421,10 @@ function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown, label
     }
     target.ollamaUrl = v.replace(/\/+$/, ''); // strip trailing slashes
   }
-  if (l.providerBaseUrls !== undefined && typeof l.providerBaseUrls === 'object') {
+  if (l.providerBaseUrls !== undefined) {
+    if (!l.providerBaseUrls || typeof l.providerBaseUrls !== 'object' || Array.isArray(l.providerBaseUrls)) {
+      throw new Error(`${label}.providerBaseUrls must be an object map of provider → URL`);
+    }
     const incoming = l.providerBaseUrls as Record<string, unknown>;
     const existing = (target.providerBaseUrls as Record<string, string> | undefined) ?? {};
     const merged: Record<string, string> = { ...existing };
@@ -436,21 +439,16 @@ function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown, label
       if (clean) merged[p] = clean; else delete merged[p];
     }
     target.providerBaseUrls = merged;
-    // Derive baseUrl for the current provider so all runtime consumers are unaffected.
-    const prov = (target.provider ?? l.provider) as string | undefined;
-    target.baseUrl = (prov && merged[prov]) ? merged[prov] : '';
   }
   if (l.baseUrl !== undefined) {
-    // Legacy path — honour a plain baseUrl in the patch by writing it into the
-    // current provider's slot as well as the flat field.
+    // Legacy path — a plain baseUrl is written into the current provider's map
+    // slot; the flat field itself is re-derived below.
     const v = String(l.baseUrl).trim();
     if (v.length > 200) throw new Error(`${label}.baseUrl must be 0-200 chars`);
     if (v && !/^https?:\/\//i.test(v)) {
       throw new Error(`${label}.baseUrl must start with http:// or https://`);
     }
     const clean = v.replace(/\/+$/, '');
-    target.baseUrl = clean;
-    // Also seed providerBaseUrls so legacy POSTs are immediately migrated.
     const prov = (target.provider ?? l.provider) as string | undefined;
     if (prov && LLM_PROVIDERS.includes(prov)) {
       const urls = (target.providerBaseUrls as Record<string, string> | undefined) ?? {};
@@ -476,6 +474,14 @@ function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown, label
     }
     target.toolChoice = v;
   }
+  // Single writer of the flat legacy `baseUrl`: always re-derive it from the
+  // map so a provider-only patch can never leave a stale URL from the
+  // previously selected provider (issue #1082). Runtime consumers
+  // (registry/legs) keep reading `baseUrl`, so this is what keeps them
+  // pointed at the right server after any switch.
+  const urls = (target.providerBaseUrls as Record<string, string> | undefined) ?? {};
+  const prov = target.provider as string | undefined;
+  target.baseUrl = (prov && urls[prov]) ? urls[prov] : '';
 }
 
 // Route an incoming inline API key to its provider's slot in `llmHost.keys`
@@ -1939,6 +1945,32 @@ export async function load() {
       ? stored.archive.bitrate
       : DEFAULTS.archive.bitrate;
 
+  // Per-provider base-URL maps (issue #1082) — computed once per leg. The flat
+  // legacy `baseUrl` on each leg is derived from its map; the stored flat value
+  // only survives as a fallback for blobs that predate the map.
+  const llmProvider = LLM_PROVIDERS.includes(stored.llm?.provider)
+    ? stored.llm.provider
+    : DEFAULTS.llm.provider;
+  const llmBaseUrls = normalizeLlmProviderBaseUrls(stored.llm, LLM_PROVIDERS);
+  const fbStored = stored.llm?.fallback || {};
+  const fbProvider = LLM_PROVIDERS.includes(fbStored.provider)
+    ? fbStored.provider
+    : DEFAULTS.llm.fallback.provider;
+  const fbBaseUrls = normalizeLlmProviderBaseUrls(
+    { ...fbStored, provider: fbProvider },
+    LLM_PROVIDERS,
+  );
+  // The embedding leg inherits the chat provider when its own is empty, so the
+  // legacy dedicated embedding URL (issue #405) must migrate under the
+  // EFFECTIVE provider — that's the key the admin UI reads and writes.
+  const embedProvider =
+    (typeof stored.embedding?.provider === 'string' && stored.embedding.provider.trim()) ||
+    llmProvider;
+  const embedBaseUrls = normalizeLlmProviderBaseUrls(
+    { ...stored.embedding, provider: embedProvider },
+    LLM_PROVIDERS,
+  );
+
   cache = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
@@ -2178,13 +2210,9 @@ export async function load() {
         typeof stored.llm?.ollamaUrl === 'string'
           ? stored.llm.ollamaUrl.trim()
           : DEFAULTS.llm.ollamaUrl,
-      providerBaseUrls: normalizeLlmProviderBaseUrls(stored.llm, LLM_PROVIDERS),
-      baseUrl: (() => {
-        const urls = normalizeLlmProviderBaseUrls(stored.llm, LLM_PROVIDERS);
-        const prov = LLM_PROVIDERS.includes(stored.llm?.provider) ? stored.llm.provider : DEFAULTS.llm.provider;
-        return (prov && urls[prov]) ? urls[prov]
-          : (typeof stored.llm?.baseUrl === 'string' ? stored.llm.baseUrl.trim() : DEFAULTS.llm.baseUrl);
-      })(),
+      providerBaseUrls: llmBaseUrls,
+      baseUrl: llmBaseUrls[llmProvider]
+        ?? (typeof stored.llm?.baseUrl === 'string' ? stored.llm.baseUrl.trim() : DEFAULTS.llm.baseUrl),
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
       // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
@@ -2240,19 +2268,9 @@ export async function load() {
           apiKey: '',
           ollamaUrl:
             typeof fb.ollamaUrl === 'string' ? fb.ollamaUrl.trim() : DEFAULTS.llm.fallback.ollamaUrl,
-          providerBaseUrls: normalizeLlmProviderBaseUrls(
-            { ...fb, provider: LLM_PROVIDERS.includes(fb.provider) ? fb.provider : DEFAULTS.llm.fallback.provider },
-            LLM_PROVIDERS,
-          ),
-          baseUrl: (() => {
-            const urls = normalizeLlmProviderBaseUrls(
-              { ...fb, provider: LLM_PROVIDERS.includes(fb.provider) ? fb.provider : DEFAULTS.llm.fallback.provider },
-              LLM_PROVIDERS,
-            );
-            const prov = LLM_PROVIDERS.includes(fb.provider) ? fb.provider : DEFAULTS.llm.fallback.provider;
-            return (prov && urls[prov]) ? urls[prov]
-              : (typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl);
-          })(),
+          providerBaseUrls: fbBaseUrls,
+          baseUrl: fbBaseUrls[fbProvider]
+            ?? (typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl),
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
@@ -2280,19 +2298,11 @@ export async function load() {
         typeof stored.embedding?.model === 'string'
           ? stored.embedding.model.trim()
           : DEFAULTS.embedding.model,
-      providerBaseUrls: normalizeLlmProviderBaseUrls(
-        { ...stored.embedding, provider: stored.embedding?.provider || '' },
-        LLM_PROVIDERS,
-      ),
-      baseUrl: (() => {
-        const urls = normalizeLlmProviderBaseUrls(
-          { ...stored.embedding, provider: stored.embedding?.provider || '' },
-          LLM_PROVIDERS,
-        );
-        const prov = stored.embedding?.provider || '';
-        return (prov && urls[prov]) ? urls[prov]
-          : (typeof stored.embedding?.baseUrl === 'string' ? stored.embedding.baseUrl.trim() : DEFAULTS.embedding.baseUrl);
-      })(),
+      providerBaseUrls: embedBaseUrls,
+      // Derived with the effective provider (own, else the chat provider) so a
+      // dedicated embedding URL keeps working when the provider is inherited.
+      baseUrl: embedBaseUrls[embedProvider]
+        ?? (typeof stored.embedding?.baseUrl === 'string' ? stored.embedding.baseUrl.trim() : DEFAULTS.embedding.baseUrl),
       ollamaUrl:
         typeof stored.embedding?.ollamaUrl === 'string'
           ? stored.embedding.ollamaUrl.trim()
@@ -3670,7 +3680,10 @@ export async function update(patch) {
     }
     // Dedicated embedding endpoint (issue #405). Empty → inherit settings.llm.
     // New path: providerBaseUrls map keyed by provider id (issue #1082).
-    if (e.providerBaseUrls !== undefined && typeof e.providerBaseUrls === 'object') {
+    if (e.providerBaseUrls !== undefined) {
+      if (!e.providerBaseUrls || typeof e.providerBaseUrls !== 'object' || Array.isArray(e.providerBaseUrls)) {
+        throw new Error('embedding.providerBaseUrls must be an object map of provider → URL');
+      }
       const incoming = e.providerBaseUrls as Record<string, unknown>;
       const existing = (next.embedding.providerBaseUrls as Record<string, string> | undefined) ?? {};
       const merged: Record<string, string> = { ...existing };
@@ -3685,10 +3698,10 @@ export async function update(patch) {
         if (clean) merged[p] = clean; else delete merged[p];
       }
       next.embedding.providerBaseUrls = merged;
-      const prov = next.embedding.provider || '';
-      next.embedding.baseUrl = (prov && merged[prov]) ? merged[prov] : '';
     }
-    // Legacy single baseUrl — honour it and also seed providerBaseUrls.
+    // Legacy single baseUrl — seed the map under the EFFECTIVE provider (own,
+    // else the chat provider) — the same key the admin UI reads and writes.
+    // The flat field itself is re-derived after the patch blocks below.
     if (e.baseUrl !== undefined) {
       const v = String(e.baseUrl).trim();
       if (v.length > 200) throw new Error('embedding.baseUrl must be 0-200 chars');
@@ -3696,8 +3709,7 @@ export async function update(patch) {
         throw new Error('embedding.baseUrl must start with http:// or https://');
       }
       const clean = v.replace(/\/+$/, '');
-      next.embedding.baseUrl = clean;
-      const prov = next.embedding.provider || '';
+      const prov = next.embedding.provider || next.llm.provider || '';
       if (prov && LLM_PROVIDERS.includes(prov)) {
         const urls = (next.embedding.providerBaseUrls as Record<string, string> | undefined) ?? {};
         if (clean) urls[prov] = clean; else delete urls[prov];
@@ -3781,6 +3793,15 @@ export async function update(patch) {
         next.embedding.enrichment.originalYear = !!en.originalYear;
       }
     }
+  }
+  // Re-derive the embedding leg's flat baseUrl on EVERY update, not just when
+  // the embedding block was patched: the leg inherits the chat provider when
+  // its own is empty, so an llm.provider-only change also moves which map slot
+  // is live. Runtime (embeddingCfg) reads the flat field — issues #405/#1082.
+  {
+    const embedProv = (next.embedding.provider || next.llm.provider || '') as string;
+    const embedUrls = (next.embedding.providerBaseUrls as Record<string, string> | undefined) ?? {};
+    next.embedding.baseUrl = (embedProv && embedUrls[embedProv]) ? embedUrls[embedProv] : '';
   }
   if ('skills' in patch) {
     const sk = patch.skills || {};

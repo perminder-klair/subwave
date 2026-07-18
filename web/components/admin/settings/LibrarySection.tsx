@@ -153,9 +153,11 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
   // it cries "missing" for a provider whose key is already set for the DJ.
   const embedKeyPresent = embedKeySet || !!data.env?.['EMBEDDING_API_KEY'];
 
+  // `||` (not `??`) so a field cleared in the form ('' entry) falls through to
+  // the chat leg's URL, matching the pre-map `e.baseUrl || form.llm.baseUrl`.
   const embedBaseUrl = e.providerBaseUrls[effectiveProvider]
-    ?? form.llm.providerBaseUrls[effectiveProvider]
-    ?? '';
+    || form.llm.providerBaseUrls[effectiveProvider]
+    || '';
 
   const embedDiscoveryEnabled =
     effectiveProvider === 'ollama'
