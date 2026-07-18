@@ -1,24 +1,25 @@
-# Stem-aware transitions — research & feasibility (Neural Mix study)
+# Stem-aware transitions — research & design
 
 *Research notes, July 2026. Status: **Options A and B implemented.** A =
 vocal-aware transitions (tail vocal ranges, sung-ending exit shaping,
 chop-over-voice veto, never-talk-over-a-singer link gating). B = pair-aware
 drain scheduling (`transitions.pairDrain`, the #749 fix), the stem cache
 (`audio.stemCache`), and pre-rendered stem-blend seams
-(`transitions.stemBlends`, v1 "beat carry" preset). This doc captures what
-Algoriddim's Neural Mix actually is under the hood, what SUB/WAVE has that
-maps onto it, and the design that was built.*
+(`transitions.stemBlends`, v1 "beat carry" preset). This doc captures how
+commercial real-time stem-separation DJ software works under the hood, what
+SUB/WAVE has that maps onto it, and the design that was built.*
 
 ---
 
 ## TL;DR
 
-**Neural Mix is real-time AI stem separation.** djay splits any song into
-vocals / drums / instruments on the fly and builds its mixing features on top:
-per-stem faders and EQ, instant acapella/instrumental, and stem-aware automatic
-transitions. The hard engineering — a compressed neural net running with
-near-zero latency on Apple's Neural Engine — exists only because a human DJ can
-scratch or seek anywhere at any moment.
+**The commercial state of the art is real-time AI stem separation.** Leading
+DJ apps split any song into vocals / drums / instruments on the fly and build
+their mixing features on top: per-stem faders and EQ, instant
+acapella/instrumental, and stem-aware automatic transitions. The hard
+engineering — a compressed neural net running with near-zero latency on a
+phone's neural accelerator — exists only because a human DJ can scratch or
+seek anywhere at any moment.
 
 **SUB/WAVE doesn't need the hard part.** A radio station knows its next track
 minutes in advance and transitions happen at one known window, so separation
@@ -37,56 +38,48 @@ stem transitions — the flagship). Options C/D are documented as rejected.
 
 ---
 
-## Part 1 — What Neural Mix actually is, layer by layer
+## Part 1 — How the commercial apps do it, layer by layer
 
-Neural Mix isn't one model — it's a four-layer stack. Worth separating because
-SUB/WAVE already has equivalents for two of the layers.
+Real-time stem mixing isn't one model — it's a four-layer stack. Worth
+separating because SUB/WAVE already has equivalents for two of the layers.
 
-### Layer 1: Source separation (the namesake)
+### Layer 1: Source separation
 
-Splits any track into three stems — vocals, drums ("beats"), and
-instruments/harmonic — in real time, with no pre-processing or special encoding
-(unlike Native Instruments STEMS, which needed specially-mastered files).
-
-- **v1** (djay Pro AI, March 2020): per CDM's reporting, based on Deezer's
-  open-source **Spleeter**, ported to Core ML.
-- **v2** (djay Pro 5, Dec 2023): replaced with **AudioShake's** proprietary
-  models after ~a year of joint engineering. AudioShake called fitting large
-  separation models on-device in real time "a big technical challenge — one
-  made particularly difficult with audio, where the sound needs to be separated
-  in high resolution."
-- Quality auto-scales in tiers (Medium 70% / High 80% / Maximum 100%) by
-  hardware: Apple Silicon / A13+ gets the full model, older chips a smaller one.
+Splits any track into three-to-four stems — vocals, drums, bass,
+instruments/harmonic — in real time, with no pre-processing or special
+encoding (earlier approaches needed specially-mastered multi-track files).
+The first generation shipped ports of open-source research models (Spleeter
+lineage); current versions license proprietary separation models compressed
+hard enough to run on phones — the vendors themselves describe fitting
+high-resolution audio separation on-device in real time as the core technical
+challenge. Separation quality typically auto-scales in tiers by device
+hardware: recent neural-accelerator chips get the full model, older ones a
+smaller variant.
 
 ### Layer 2: On-device inference optimization
 
-Where most of Algoriddim's engineering went — and the layer a radio station can
-skip entirely. Sample-accurate seeking and scratching means separation must be
-computable at any playhead position instantly. They run on Core ML across
-CPU + GPU + Neural Engine, claiming prediction "up to 40× faster than on modern
-computers" and "virtually zero latency."
+Where most of the commercial engineering goes — and the layer a radio station
+can skip entirely. Sample-accurate seeking and scratching means separation
+must be computable at any playhead position instantly, so the models are
+compiled for the phone's CPU + GPU + neural accelerator with near-zero
+claimed latency.
 
 ### Layer 3: Musical analysis
 
-- **Fluid Beatgrid** (djay Pro 5): a dynamic beat grid that follows tempo
-  fluctuations and interruptions, so stems from two decks stay aligned even on
-  non-quantized music.
-- Key detection, and **tempo Morph** — time-stretch beat-matching that holds
-  the playing track's BPM when the incoming tempo is close.
+- **Dynamic beat grids** that follow tempo fluctuations and interruptions, so
+  stems from two decks stay aligned even on non-quantized music.
+- Key detection, and time-stretch beat-matching that holds the playing
+  track's BPM when the incoming tempo is close.
 
 ### Layer 4: Transition intelligence
 
-- **Automix AI** (djay Pro 2, 2017, refined since): trained on recordings of
-  human DJs to pick the best intro/outro transition points, fade durations,
-  and live EQ moves.
-- **Crossfader Fusion** (djay Pro 5, patented): transition *presets* —
-  automation curves binding stem gains + filters + effects to crossfader
-  position. E.g. the "Neural Mix (Harmonic Sustain)" preset holds the outgoing
-  track's harmonic stem while the incoming track's beat takes over. These
-  presets run automatically in Automix mode — exactly the hands-off radio
-  scenario.
-- Automix transition types include: Automatic, Fade, Filter, EQ, Echo,
-  Dissolve, Neural Mix.
+- **Auto-mix transition-point selection** trained on recordings of human DJs:
+  the best intro/outro points, fade durations, and live EQ moves.
+- **Stem-aware transition presets** — automation curves binding stem gains +
+  filters + effects to crossfader position; e.g. a "harmonic sustain" style
+  preset holds the outgoing track's harmonic stem while the incoming track's
+  beat takes over. These presets run automatically in auto-mix mode — exactly
+  the hands-off radio scenario.
 
 The product features all fall out of these layers: per-stem faders/EQ, instant
 acapella/instrumental extraction, per-stem colored waveforms recomputed live,
@@ -117,11 +110,11 @@ facts:
 - Per-track BPM, key (Camelot compat math in `controller/src/music/mix.ts`:
   `bpmCompat`, `keyCompat`, `mixCompat`), beat/bar grids (`beats_json`,
   `bars_json`), LUFS normalization (`gainForLoudness`, −14 LUFS target).
-- **Ending-aware exit canvas** — the Automix-AI analog: `outro_json`
+- **Ending-aware exit canvas** — the Layer-4 transition-intelligence analog: `outro_json`
   (fade-vs-cold, tail LUFS/tempo/bars) → `endingCrossSecondsFor` stamps each
   DJ-mode track's own crossfade seconds (`queue.applyMixTransition`,
   `controller/src/broadcast/queue.ts`).
-- **Six transition effects** — the Crossfader-Fusion analog, minus stems:
+- **Six transition effects** — the stem-preset analog, minus stems:
   washout / loop (exit-side) and sweep / dissolve / blend / chop (entry-side),
   synthesized live per-frame inside `dj_transition` (`liquidsoap/radio.liq`),
   driven by per-track `annotate` flags (`liq_washout`, `liq_sweep`, …) built in
@@ -212,7 +205,7 @@ kick off a render job on the analyzer:
 
 Why this shape is right:
 
-- **Skips djay's Layer 2 entirely** — no real-time model, no latency
+- **Skips Layer 2 entirely** — no real-time model, no latency
   engineering, and the model can be *better* than a phone's: current
   open-source SOTA (BS-RoFormer / Mel-Band RoFormer, ~11–12 dB vocal SDR vs
   htdemucs' ~9) is available via ZFTurbo's MSST repo as a future quality tier.
@@ -290,7 +283,7 @@ pair artifact and the pair is only known at pick time.
 
 ### Option C — Live per-stem buses in Liquidsoap (rejected)
 
-djay's actual architecture: pre-separate whole tracks, cache 4 stems per song,
+The commercial apps' actual architecture: pre-separate whole tracks, cache 4 stems per song,
 play 4 sample-aligned sources per deck with stem-gain automation in
 `dj_transition`. Rejected: 4× library disk, full-file separation cost, fragile
 multi-queue sample alignment in Liquidsoap — for no audible benefit over
@@ -298,30 +291,23 @@ Option B in a non-interactive stream.
 
 ### Option D — Real-time separation on the live bus (rejected)
 
-The part of Neural Mix that only exists because a human can scratch. CPU-only
+The capability that only exists because a human can scratch. CPU-only
 Docker can't do it, and radio lookahead makes it pointless.
 
 ---
 
-## Naming / IP note
+## Naming note
 
-Algoriddim holds patents on Neural Mix and Crossfader Fusion, and both names
-are trademarked. An open-source, server-side, offline-rendered implementation
-is a materially different approach — but the feature needs its own name
-(working candidates: "stem blends", "deep transitions"). Don't ship their
-trademarks in UI copy.
+Commercial vendors hold patents and trademarks around real-time stem-mixing
+features. This implementation is a materially different approach —
+open-source, server-side, offline-rendered — and the feature carries its own
+names throughout ("stem blends", "pair-aware transitions"). Keep commercial
+product names out of UI copy and docs.
 
 ---
 
-## Sources
+## Sources (technical)
 
-- [Algoriddim — Neural Mix](https://www.algoriddim.com/neural-mix)
-- [CDM — djay Pro adds real-time AI separation](https://cdm.link/djay-pro-ai-stem-separation/) (Spleeter/Core ML reporting)
-- [Algoriddim — djay Pro 5 press release](https://www.algoriddim.com/press_releases/447-algoriddim-unveils-djay-pro-5-with-next-generation-neural-mix-crossfader-fusion-and-fluid-beatgrid-)
-- [AudioShake — Neural Mix collaboration](https://www.audioshake.ai/post/algoriddim-djaypro-neural-mix)
-- [Algoriddim support — Neural Mix device compatibility & quality tiers](https://help.algoriddim.com/topic/using-djay/neuralmix-compatibility)
-- [Algoriddim support — Automix settings & transition types](https://help.algoriddim.com/user-manual/djay-pro-mac/settings/automix)
-- [DJ TechTools — djay Pro 2 Automix AI](https://djtechtools.com/2017/12/12/algoriddim-releases-djay-pro-2-mac-ai-automix-voiceover-accessibility/)
 - [Demucs (facebookresearch)](https://github.com/facebookresearch/demucs)
 - [HT-Demucs ONNX/CPU benchmarks](https://stemsplit.io/blog/htdemucs-ft-onnx-export)
 - [Demucs on Apple Silicon MLX (34× real-time)](https://medium.com/@andradeolivier/i-ported-demucs-to-apple-silicon-it-separates-a-7-minute-song-in-12-seconds-6c4e5cffb5c3)
