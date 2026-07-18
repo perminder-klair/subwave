@@ -249,13 +249,58 @@ fetched only when an operator is actually looking at a cloud voice field.
 
 | File | Change |
 |---|---|
-| `controller/src/llm/internal/speech/voice-catalog.ts` | new — normalizer + fetch |
-| `controller/src/llm/speech.ts` | re-export `listVoices` |
+| `controller/src/llm/internal/speech/voice-catalog.ts` | new — normalizer + probing fetch |
+| `controller/src/llm/speech.ts` | re-export `listVoices` / `normalizeVoiceList` |
 | `controller/src/routes/settings.ts` | new `GET /settings/tts/voices` |
-| `controller/src/settings.ts` | validate `tts.cloud.baseUrl` shape |
-| `controller/scripts/voice-catalog.test.ts` | new — normalizer cases |
+| `controller/scripts/voice-catalog.test.ts` | new — 24 tests (normalizer + live probing) |
 | `web/hooks/useVoiceDiscovery.ts` | new |
+| `web/lib/cloudVoiceGroups.ts` | new — shared group/merge logic |
 | `web/components/admin/personas/PersonaVoiceCard.tsx` | picker for compat + merged ElevenLabs groups |
-| `web/components/admin/personas/PersonaEditor.tsx` | own the hook, pass lists down |
 | `web/components/admin/settings/TtsSection.tsx` | same for the station default |
-| `docs/` | brief note on voice discovery in the TTS docs |
+
+## Implementation notes — where the build diverged from this design
+
+1. **No `settings.ts` change.** The proposed `tts.cloud.baseUrl` hardening was
+   already implemented at `settings.ts:3385-3391` (200-char cap + `http(s)://`
+   prefix on the write path); the report that prompted it only described the
+   deliberately-lenient `load()` path. A scheme guard went into `listVoices`
+   instead, which also covers a hand-edited `settings.json`.
+2. **The hook lives in `PersonaVoiceCard`, not lifted to `PersonaEditor`.**
+   The spec lifted it to dodge one-fetch-per-persona, but `PersonaEditor` only
+   ever renders the single focused persona, so at most one card is mounted and
+   the concern doesn't arise. `PersonaEditor` is untouched.
+3. **`fetchWithTimeout` instead of a hand-rolled signal.** `util/fetch-timeout.ts`
+   already exists precisely to absorb the AbortController+setTimeout dance; the
+   first draft reinvented it. Uses `bodyDeadline: true` so the deadline covers
+   the JSON read.
+4. **Stale-list fix in the hook.** Discovered during UI testing: on a provider
+   switch the previous provider's voices stayed on screen — labelled as the new
+   provider's — until the new response landed, which can be seconds. An
+   ElevenLabs field offering a local server's speaker ids would save a voice
+   that provider cannot synthesize. `useVoiceDiscovery` now clears on input
+   change rather than on response.
+5. **`selectCloudProvider` blanks the voice for compat**, matching
+   `PersonaVoiceCard`. It previously carried the old provider's id (e.g.
+   `alloy`) onto a self-hosted server that has no such voice.
+6. **Timeouts:** 10s for a managed provider (matching `/settings/llm/models`),
+   8s across the whole compat probe (3s per path), 15s route backstop above
+   both so the inner deadline is what reports.
+
+## Verification status
+
+Verified end to end against an isolated controller + worktree dev server:
+normalizer and probing (24 unit tests, including a real local HTTP server for
+path fallback and auth headers); the route for both providers and every failure
+mode (unreachable, all-404, no key, no provider, 401 unauthenticated); the
+ElevenLabs API returning 30 real voices including cloned ones; and the compat
+picker rendering `DISCOVERED | Bella | George | Narrator Raw | Custom voice id…`
+in the live admin UI.
+
+**Not visually confirmed:** the ElevenLabs list rendered in the browser with real
+account data. Requests originating from the Playwright session stalled past the
+10s budget every time, while `curl` against the same route at the same moment
+answered in ~150ms — a network artifact of the test host, not a code path. The
+timeout degraded exactly as designed (falls back to the curated presets, no
+stale entries), and the grouped `YOUR VOICES` / `PRESETS` layout was observed
+rendering correctly. Worth one look on a real ElevenLabs-configured station
+before this is considered done.
