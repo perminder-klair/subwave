@@ -4,11 +4,11 @@
 // sheet so the fascia stays clean.
 //
 // OUTPUT renders the NATIVE AirPlay/Cast buttons (they must be real native
-// views to present their system pickers), framed as labeled sockets. TIMER
-// and FASCIA are drill-in rows — the parent swaps this sheet's content for
-// the sleep/themes drawers in place (one <Sheet>, switched content).
+// views to present their system pickers), framed as labeled sockets. TIMER,
+// SIGNAL, and FASCIA are drill-in rows — the parent swaps this sheet's content
+// for the sleep/format/themes drawers in place (one <Sheet>, switched content).
 
-import { ChevronRight, MoonStar, Palette } from 'lucide-react-native';
+import { AudioLines, ChevronRight, MoonStar, Palette } from 'lucide-react-native';
 import type { ReactNode } from 'react';
 import { Platform, Pressable, Text, View } from 'react-native';
 import { CastButton } from 'react-native-google-cast';
@@ -23,8 +23,12 @@ export interface BackPanelDrawerProps {
   sleepActive: boolean;
   sleepRemainingSec: number | null;
   themeName: string | null;
+  /** Label of the current stream format pick, or null to hide the SIGNAL row
+   *  (station only serves the MP3 floor — nothing to choose). */
+  formatLabel: string | null;
   onOpenSleep: () => void;
   onOpenThemes: () => void;
+  onOpenFormat: () => void;
 }
 
 export default function BackPanelDrawer({
@@ -33,8 +37,10 @@ export default function BackPanelDrawer({
   sleepActive,
   sleepRemainingSec,
   themeName,
+  formatLabel,
   onOpenSleep,
   onOpenThemes,
+  onOpenFormat,
 }: BackPanelDrawerProps) {
   const { colors } = useTheme();
   const hasOutputs = Platform.OS === 'ios' || castAvailable;
@@ -77,6 +83,19 @@ export default function BackPanelDrawer({
         valueAccent={sleepActive}
         onPress={onOpenSleep}
       />
+
+      {formatLabel != null ? (
+        <>
+          <View style={{ height: 14 }} />
+          <SectionLabel text="SIGNAL" />
+          <PanelRow
+            icon={<AudioLines size={18} color={colors.muted} />}
+            title="Stream format"
+            value={formatLabel}
+            onPress={onOpenFormat}
+          />
+        </>
+      ) : null}
 
       <View style={{ height: 14 }} />
 
