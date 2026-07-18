@@ -29,11 +29,18 @@ export function stemPath(trackId: string, window: StemWindow, stem: string): str
 }
 
 // Whether a track has a complete stem set for the given window. The render
-// op is cache-hit-only, so "all four present" is the eligibility fact.
+// op is cache-hit-only, so "all four present" is the eligibility fact. The
+// tail window also needs its alignment sidecar (tail-meta.json — the decoded
+// duration + exact tail offset the stems were cut at): the render slices the
+// bar grid against that offset, and stems cached before the sidecar existed
+// would misalign by the tagged-vs-decoded duration gap, so they count as a
+// miss until a re-analysis refreshes them.
 export async function hasWindow(trackId: string, window: StemWindow): Promise<boolean> {
   try {
+    const files = STEM_NAMES.map(s => stemPath(trackId, window, s));
+    if (window === 'tail') files.push(path.join(dirFor(trackId), 'tail-meta.json'));
     const checks = await Promise.all(
-      STEM_NAMES.map(s => stat(stemPath(trackId, window, s)).then(st => st.size > 0, () => false)),
+      files.map(f => stat(f).then(st => st.size > 0, () => false)),
     );
     return checks.every(Boolean);
   } catch {

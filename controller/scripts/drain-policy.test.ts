@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import {
   remainingSec, drainAction, shouldDeadlinePick,
-  DRAIN_DEADLINE_SEC, HARD_DEADLINE_SEC,
+  DRAIN_DEADLINE_SEC, HARD_DEADLINE_SEC, DEADLINE_PICK_COOLDOWN_SEC,
 } from '../src/broadcast/drain-policy.js';
 
 // ── remainingSec ─────────────────────────────────────────────────────────────
@@ -91,5 +91,14 @@ assert.equal(shouldDeadlinePick(-5), false, 'expired → no pick');
 
 // The two deadlines must leave a real pick+render window between them.
 assert.ok(DRAIN_DEADLINE_SEC - HARD_DEADLINE_SEC >= 60, 'pick window is at least a minute');
+
+// The failure-retry cooldown must be long enough to matter against the 1.5s
+// watcher tick, yet short enough that the pick window still fits at least two
+// honest attempts — the deadline routine is a backstop, not a single shot.
+assert.ok(DEADLINE_PICK_COOLDOWN_SEC >= 10, 'cooldown actually meters the 1.5s tick');
+assert.ok(
+  (DRAIN_DEADLINE_SEC - HARD_DEADLINE_SEC) / DEADLINE_PICK_COOLDOWN_SEC >= 2,
+  'pick window fits at least two attempts',
+);
 
 console.log('drain-policy: all assertions passed');

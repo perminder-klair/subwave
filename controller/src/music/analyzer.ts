@@ -711,7 +711,7 @@ export async function embedTexts(
 export interface RenderTransitionPayload {
   out: {
     stems_dir: string;
-    duration_s: number;
+    duration_s: number; // tagged duration, advisory — tail alignment comes from the stems' tail-meta.json
     outro: { start_ms: number; bars: number[]; lufs?: number | null };
     lufs?: number | null;
   };

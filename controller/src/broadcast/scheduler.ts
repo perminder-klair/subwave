@@ -747,9 +747,11 @@ async function cleanup() {
     queue.log('error', `Stem cache sweep failed: ${err.message}`);
   }
   // Rendered transition clips are single-use seam artifacts — anything older
-  // than an hour is an orphan (cancelled pair, crashed drain).
+  // than an hour is an orphan (cancelled pair, crashed drain), EXCEPT clips
+  // still queued for a seam that hasn't aired (a clip behind a long outgoing
+  // track legitimately out-ages the window; the queue knows which).
   try {
-    const removed = await stemBlendStore.cleanupOldClips();
+    const removed = await stemBlendStore.cleanupOldClips(queue.pendingClipPaths());
     if (removed) queue.log('scheduler', `Transitions: removed ${removed} orphaned clip(s)`);
   } catch (err) {
     queue.log('error', `Transition clip sweep failed: ${err.message}`);

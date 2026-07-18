@@ -733,6 +733,23 @@ def write_stems(stems, window, dest_dir):
         os.replace(tmp, path)
 
 
+def write_tail_meta(dest_dir, tail_start_s, duration_s):
+    """Alignment sidecar for the cached tail stems. The tail window was cut at
+    DECODED duration - OUTRO_SECONDS; render_transition must slice the bar
+    grid against that exact offset. Re-deriving it from the library's tagged
+    duration (an integer from Subsonic) disagrees by up to ~1s, which shifts
+    the borrowed drum loop off the downbeat — so the true offset rides with
+    the stems and a render without it is a clean cache miss."""
+    path = os.path.join(dest_dir, "tail-meta.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({
+            "tail_start_sec": round(float(tail_start_s), 3),
+            "duration_sec": round(float(duration_s), 3),
+        }, f)
+    os.replace(tmp, path)
+
+
 def render_transition(req):
     """Pre-rendered stem-blend transition (feature: stem-blend transitions —
     docs/stem-transitions-research.md Option B). Mixes the OUTGOING track's
@@ -782,10 +799,20 @@ def render_transition(req):
         return {"ok": False, "error": "stems-missing"}
 
     sr = DEMUCS_SR
-    dur_s = float(out_spec.get("duration_s") or 0.0)
-    if dur_s <= OUTRO_SECONDS + 1.0:
+    # Alignment comes from the meta sidecar written WITH the stems (decoded
+    # duration + the exact tail offset) — never from out_spec's duration_s,
+    # which is the library's tagged integer and can sit ~1s off the decoded
+    # timeline the bar grid was measured on. Stems without the sidecar (an
+    # older cache) are a clean miss; a re-analysis pass refreshes them.
+    try:
+        with open(os.path.join(out_spec["stems_dir"], "tail-meta.json")) as f:
+            tail_meta = json.load(f)
+        tail_start_s = float(tail_meta["tail_start_sec"])
+        dur_s = float(tail_meta["duration_sec"])
+    except Exception:
+        return {"ok": False, "error": "stems-meta-missing"}
+    if dur_s <= OUTRO_SECONDS + 1.0 or tail_start_s < 0.0:
         return {"ok": False, "error": "out-track-too-short"}
-    tail_start_s = max(0.0, dur_s - OUTRO_SECONDS)
 
     def to_stereo(x, n):
         """First n samples as (n, 2) float32, zero-padded if short."""
@@ -1057,6 +1084,7 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None,
                     if stems_dir:
                         try:
                             write_stems(tail_stems, "tail", stems_dir)
+                            write_tail_meta(stems_dir, tail_offset, duration_s)
                         except Exception as e:  # noqa: BLE001 — cache is best-effort
                             log(f"stem cache write (tail) failed: {e}")
                     shift_ms = tail_offset * 1000.0

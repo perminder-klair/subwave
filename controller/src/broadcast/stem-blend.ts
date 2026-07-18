@@ -87,17 +87,21 @@ export async function maybeRenderBlend(
 
   // The render must lose the race to the drain's hard fallback: give it the
   // window between now and the hard deadline (minus a write/stamp margin),
-  // capped by the configured render budget.
-  let timeoutMs = config.analyzer.renderTimeoutMs;
-  if (remainingSec != null) {
-    const windowMs = Math.floor((remainingSec - HARD_DEADLINE_SEC - 5) * 1000);
-    if (windowMs < 3000) return null; // too late to even try
-    timeoutMs = Math.min(timeoutMs, windowMs);
-  }
+  // capped by the configured render budget. An UNKNOWN clock (boot/recover,
+  // untracked auto play) vetoes the render outright — the sender is blocked
+  // while it runs, and with no window to race the boundary could be seconds
+  // away; the seam just gets the plain pair-aware crossfade.
+  if (remainingSec == null) return null;
+  const windowMs = Math.floor((remainingSec - HARD_DEADLINE_SEC - 5) * 1000);
+  if (windowMs < 3000) return null; // too late to even try
+  const timeoutMs = Math.min(config.analyzer.renderTimeoutMs, windowMs);
 
   const result = await analyzer.renderTransition({
     out: {
       stems_dir: stemCache.dirFor(outTrack.id),
+      // Tagged (integer) duration — advisory only: the worker aligns the tail
+      // window from the stems' own tail-meta.json (exact decoded offset), and
+      // treats stems without that sidecar as a cache miss.
       duration_s: out.durationSec,
       outro: {
         start_ms: out.outro.startMs,
@@ -129,15 +133,22 @@ export async function maybeRenderBlend(
   };
 }
 
-// Age sweep for rendered clips — they're single-use seam artifacts, aired
-// within minutes of rendering; anything older than an hour is an orphan
-// (cancelled pair, crashed drain). Same shape as piper's voice sweep.
-export async function cleanupOldClips(maxAgeMs = 60 * 60 * 1000): Promise<number> {
+// Age sweep for rendered clips — a clip left behind by a cancelled pair or a
+// crashed drain is an orphan. Age alone isn't proof, though: a clip renders a
+// full outgoing-track-length before it airs, so behind a long track (an
+// uncapped listener-requested mix) a still-queued clip can out-age the
+// window. `keep` is the queue's live set of pending clip basenames
+// (queue.pendingClipPaths()) — those are skipped regardless of age.
+export async function cleanupOldClips(
+  keep: Set<string> = new Set(),
+  maxAgeMs = 60 * 60 * 1000,
+): Promise<number> {
   let removed = 0;
   try {
     const dir = transitionsDir();
     const now = Date.now();
     for (const f of await readdir(dir)) {
+      if (keep.has(f)) continue; // queued for a seam that hasn't aired yet
       try {
         const p = path.join(dir, f);
         const st = await stat(p);

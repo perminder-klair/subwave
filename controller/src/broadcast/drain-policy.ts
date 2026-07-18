@@ -24,6 +24,15 @@ export const DRAIN_DEADLINE_SEC = 120;
 // + subhttp fetch). Never risk dead air for a prettier seam.
 export const HARD_DEADLINE_SEC = 45;
 
+// Minimum gap between deadline-pick ATTEMPTS. The watcher tick re-enters
+// maybeDeadlinePick every 1.5s for the whole pick window; a pick that fails
+// fast (LLM host down, Navidrome refusing) would otherwise be re-fired ~50
+// times per window — exactly the aggressive-retry pattern the LLM layer is
+// documented to avoid. A successful pick self-limits (the held head gains a
+// successor and the routine stops matching), so this only meters failures:
+// the window still fits a few honest retries.
+export const DEADLINE_PICK_COOLDOWN_SEC = 25;
+
 // Seconds left before the on-air track's EFFECTIVE end — min(duration,
 // stamped cue_out): a length-capped track ends at its cue, minutes before its
 // tagged duration (pressure-test finding: raw duration desyncs the deadline).

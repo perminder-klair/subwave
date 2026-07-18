@@ -5,6 +5,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import { basename } from 'node:path';
 import { config } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import * as subsonic from '../music/subsonic.js';
@@ -24,7 +25,7 @@ import { djCallsAllowed, presentListeners } from './listeners.js';
 import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
 import * as liquidsoapControl from './liquidsoap-control.js';
-import { drainAction, remainingSec, shouldDeadlinePick } from './drain-policy.js';
+import { drainAction, remainingSec, shouldDeadlinePick, DEADLINE_PICK_COOLDOWN_SEC } from './drain-policy.js';
 import * as stemBlend from './stem-blend.js';
 import type { TrackOutro, TrackKeyRange } from '../music/library-db.js';
 
@@ -231,6 +232,7 @@ class Queue {
   _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
   _recentPlays: RecentPlay[] = [];
   _emptyDjQueueStreak = 0;      // consecutive reconcile checks seeing an empty dj_queue while sent items remain — see reconcileWithDjQueue
+  _deadlinePickAt = 0;          // last deadline-pick ATTEMPT (ms epoch) — failure-retry cooldown, see maybeDeadlinePick
   _pendingVoice: { text: string; kind: string; wavPath: string; persona: Persona | null; meta: TurnMeta; t: number } | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
 
   // Snapshot upcoming/current/history to disk. The queue is otherwise purely
@@ -963,6 +965,52 @@ class Queue {
     );
   }
 
+  // Seconds until ITEM airs: the on-air clock extended past every sent-but-
+  // unaired item ahead of it in `upcoming`. An unknown length anywhere in the
+  // chain makes the answer unknowable (null → callers take the safe path).
+  // Live — call it again after any await; the sender's TTS/render waits can
+  // stretch tens of seconds and a stale value overstates the real window.
+  remainingUntilItemAirs(item: QueueItem): number | null {
+    const idx = this.upcoming.indexOf(item);
+    if (idx < 0) return null;
+    let remaining = this.remainingSecOnAir();
+    if (remaining == null || idx === 0) return remaining;
+    for (const ahead of this.upcoming.slice(0, idx)) {
+      if (!ahead.sent) continue; // unsent ahead items drain first anyway
+      let d = Number(ahead.track?.duration) || 0;
+      if (!d && ahead.track?.id) d = Number(library.get(ahead.track.id)?.durationSec) || 0;
+      if (!d) return null;
+      remaining += ahead.cueOutSec != null ? Math.min(d, ahead.cueOutSec) : d;
+    }
+    return remaining;
+  }
+
+  // Whether pair-aware drains are in effect. The toggle is transitions.
+  // pairDrain, but the feature only pays off under a DJ-mode persona — both
+  // consumers of the hold (applyPairStamps, maybeRenderBlend) no-op without
+  // djMode, so holding would cost dj_queue visibility (and a wider restart
+  // window) for nothing. Non-DJ personas keep the eager drain byte-for-byte.
+  pairDrainActive(): boolean {
+    return settings.get().transitions?.pairDrain !== false
+      && !!settings.getEffectivePersona()?.djMode;
+  }
+
+  // Basenames of rendered transition clips that haven't AIRED yet — the clip
+  // rides its outgoing item's stemBlend stamp, and that item's clip airs at
+  // the item's own END, so `current` counts as pending too (its clip is still
+  // ahead while it plays). The hourly age sweep skips these: a clip behind a
+  // long outgoing track (an uncapped listener-requested mix) can legitimately
+  // out-age the sweep window while still queued in dj_queue.
+  pendingClipPaths(): Set<string> {
+    const names = new Set<string>();
+    const collect = (i: { stemBlend?: { clipPath: string } | null } | null | undefined) => {
+      if (i?.stemBlend?.clipPath) names.add(basename(i.stemBlend.clipPath));
+    };
+    collect(this.current);
+    for (const u of this.upcoming) collect(u);
+    return names;
+  }
+
   // Pair-sized exit blend (feature 1 — the #749 fix, applied at last): with
   // the successor known at drain time, size THIS track's own exit crossfade
   // for the actual pair — compatibility curve, daypart nudge, bar-snap,
@@ -1012,31 +1060,19 @@ class Queue {
         const idx = this.upcoming.indexOf(item);
         const hasSuccessor = idx >= 0 && idx + 1 < this.upcoming.length;
         // The clock that governs THIS item's drain is the end of the track it
-        // will FOLLOW — the on-air track only when nothing sent sits ahead of
-        // it. With sent-but-unaired items in between, add their effective
-        // lengths; an unknown length ahead makes the deadline unknowable
-        // (null → intrinsic drain, the safe direction). Without this, the
+        // will FOLLOW — the on-air track extended past any sent-but-unaired
+        // items ahead (remainingUntilItemAirs). Without the extension, the
         // freshly-picked next-NEXT item drained at every track boundary (the
         // on-air clock hit zero) and every other seam lost its pair stamps —
         // caught live in the first on-air smoke test.
-        let remaining = this.remainingSecOnAir();
-        if (remaining != null && idx > 0) {
-          for (const ahead of this.upcoming.slice(0, idx)) {
-            if (!ahead.sent) continue; // unsent ahead items drain first anyway
-            let d = Number(ahead.track?.duration) || 0;
-            if (!d && ahead.track?.id) d = Number(library.get(ahead.track.id)?.durationSec) || 0;
-            if (!d) { remaining = null; break; }
-            remaining += ahead.cueOutSec != null ? Math.min(d, ahead.cueOutSec) : d;
-          }
-        }
         // `force` is the clip-as-track recovery path (onTrackStarted's guard):
         // never hold, but a known successor still earns its pair stamps.
         const action = force
           ? (hasSuccessor ? 'send-pair' : 'send-intrinsic')
           : drainAction({
-              pairDrain: settings.get().transitions?.pairDrain !== false,
+              pairDrain: this.pairDrainActive(),
               hasSuccessor,
-              remainingSec: remaining,
+              remainingSec: this.remainingUntilItemAirs(item),
             });
         if (action === 'hold') break;
 
@@ -1095,10 +1131,13 @@ class Queue {
             // Cache-hit-only + deadline-raced inside; null → the plain
             // pair-aware crossfade just stamped above.
             try {
-              // `remaining` is the ahead-extended clock (time until THIS
-              // item's predecessor ends) — the window the render truly has.
+              // The render's window is the ahead-extended clock (time until
+              // THIS item's predecessor ends) — recomputed HERE, not reused
+              // from the hold decision above: the TTS await between them can
+              // run tens of seconds on a slow engine, and a stale window
+              // would let the render overrun the drain's hard fallback.
               const blend = await stemBlend.maybeRenderBlend(
-                item.track, successor.track, remaining, { outCapped: cappedExit },
+                item.track, successor.track, this.remainingUntilItemAirs(item), { outCapped: cappedExit },
               );
               if (blend && this.upcoming.includes(item) && this.upcoming.includes(successor)) {
                 // The rendered seam owns this ending: strip exit gestures
@@ -1667,13 +1706,19 @@ class Queue {
   // and drainToLiquidsoap's intrinsic path owns the endgame.
   maybeDeadlinePick() {
     if (!this.autoPick || this.pickerBusy || !djCallsAllowed()) return;
-    if (settings.get().transitions?.pairDrain === false) return;
+    if (!this.pairDrainActive()) return;
     const rem = this.remainingSecOnAir();
     if (!shouldDeadlinePick(rem)) return;
+    // Attempt cooldown: the watcher tick re-enters every 1.5s for the whole
+    // window, so a FAST-failing pick (LLM host down) would otherwise re-fire
+    // dozens of times per window. A success stops matching the conditions
+    // below on its own; this only meters failed attempts.
+    if (Date.now() - this._deadlinePickAt < DEADLINE_PICK_COOLDOWN_SEC * 1000) return;
     if (this.upcoming.length === 0) {
       // Nothing queued at all this close to the end — the track-start pick
       // failed or never fired. Same backstop pick as onTrackStarted's.
       const isAutonomous = this.current?.source === 'auto' || this.current?.source === 'ai';
+      this._deadlinePickAt = Date.now();
       this.runPickCycle({ isAutonomous });
       return;
     }
@@ -1683,6 +1728,7 @@ class Queue {
     // The held head needs a successor: pick what follows it. Links only ride
     // autonomous seams — a request brings its own intro, mirroring the
     // track-start path's source check.
+    this._deadlinePickAt = Date.now();
     this.runPickCycle({ isAutonomous: !head.requestedBy, predecessorItem: head });
   }
 
