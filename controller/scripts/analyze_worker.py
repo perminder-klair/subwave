@@ -39,6 +39,8 @@ the stored audio vectors possible.
 import importlib.util
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -57,6 +59,11 @@ import urllib.request
 ANALYZE_SECONDS = float(os.environ.get("ANALYZE_SECONDS", "").strip() or "40")
 ANALYZE_SR = int(os.environ.get("ANALYZE_SR", "").strip() or "22050")
 FETCH_TIMEOUT_S = float(os.environ.get("ANALYZE_FETCH_TIMEOUT_S", "").strip() or "60")
+# Ceiling for the one-shot ffmpeg pre-decode (ensure_fast_decode) — the input
+# is a byte-capped download, seconds of decode work even on a weak NAS CPU.
+FFMPEG_DECODE_TIMEOUT_S = float(
+    os.environ.get("ANALYZE_FFMPEG_TIMEOUT_S", "").strip() or "120"
+)
 
 # --- CLAP audio embedding (optional, opt-in) -------------------------------
 # Off unless ANALYZE_AUDIO_EMBEDDING is truthy. CLAP wants 48 kHz mono; the
@@ -719,6 +726,58 @@ def fetch_audio(url):
     return path, read < max_bytes
 
 
+def ensure_fast_decode(path):
+    """Give libsndfile a file it can open, or fall back to the original path.
+
+    librosa's fast path is soundfile/libsndfile; when that can't open the
+    container (m4a/AAC always; MP3s with junk bytes before the first frame
+    header — issue #1073) EVERY librosa.load in the request silently drops to
+    the deprecated audioread fallback: a fresh full-file ffmpeg decode per
+    load (duration probe + body + up to 3 CLAP windows + outro + vocal), a
+    warning per call, and audioread is removed in librosa 1.0. Probe once; if
+    libsndfile can't open the file, decode it ONCE to a temp WAV (native
+    rate/channels — the stereo BS.1770 loudness sum needs the real channel
+    layout) and run the whole request off that. Returns (use_path,
+    tmp_wav_or_None); the caller removes the tmp. Any failure — soundfile
+    absent, no ffmpeg on PATH (bare local venv), decode error — returns the
+    original path, i.e. exactly today's behaviour."""
+    try:
+        import soundfile as sf
+
+        with sf.SoundFile(path):
+            return path, None
+    except Exception:  # noqa: BLE001 — any open failure routes to the pre-decode
+        pass
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return path, None
+    fd, wav = tempfile.mkstemp(suffix=".wav", prefix="swanalyze_dec_")
+    os.close(fd)
+    try:
+        subprocess.run(
+            [ffmpeg, "-v", "error", "-y", "-i", path,
+             "-map", "0:a:0", "-acodec", "pcm_s16le", "-f", "wav", wav],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=FFMPEG_DECODE_TIMEOUT_S,
+        )
+        if os.path.getsize(wav) > 1024:
+            log("libsndfile can't open this container; pre-decoded once via ffmpeg")
+            return wav, wav
+        log("ffmpeg pre-decode produced no audio; falling back to per-load decode")
+    except subprocess.CalledProcessError as e:
+        err = (e.stderr or b"").decode("utf-8", "replace").strip()[:200]
+        log(f"ffmpeg pre-decode failed ({err or e}); falling back to per-load decode")
+    except Exception as e:  # noqa: BLE001 — pre-decode is best-effort
+        log(f"ffmpeg pre-decode failed ({e}); falling back to per-load decode")
+    try:
+        os.remove(wav)
+    except OSError:
+        pass
+    return path, None
+
+
 def measure_loudness(y, sr):
     """Integrated loudness (LUFS, ITU-R BS.1770 / EBU R128) + true-ish peak in
     dBFS over the decoded window. Accepts mono (n,) or librosa's multichannel
@@ -767,6 +826,13 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None)
     owned = path is None
     if owned:
         path, complete = fetch_audio(url)
+    # Pre-decode ONCE when libsndfile can't open the container (m4a, quirky
+    # MP3s — issue #1073), so every load below takes the fast soundfile path
+    # instead of audioread re-decoding the whole file per call. `src_path`
+    # keeps the original download for the ownership cleanup; the WAV is always
+    # ours to remove.
+    src_path = path
+    path, decoded_tmp = ensure_fast_decode(path)
     audio_embedding = None
     vocal_ranges = None
     outro = None
@@ -801,7 +867,12 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None)
                 audio_embedding = None
         # Outro (tail) features — only meaningful off a complete file; a
         # byte-capped download's "tail" is mid-song. Best-effort like the rest.
-        if complete is not False:
+        # With an UNKNOWN completeness (old caller) the original path's
+        # short-decode validation inside analyze_outro catches truncation, but
+        # a pre-decoded WAV defeats that check (its duration IS the decodable
+        # length, so the tail always decodes full) — skip outro rather than
+        # risk measuring mid-song audio as the ending.
+        if complete is not False and (complete is True or decoded_tmp is None):
             try:
                 outro = analyze_outro(path, librosa, duration_s)
             except Exception as e:  # noqa: BLE001 — outro is best-effort
@@ -825,9 +896,14 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None)
                 log(f"vocal activity failed: {e}")
                 vocal_ranges = None
     finally:
+        if decoded_tmp is not None:
+            try:
+                os.remove(decoded_tmp)
+            except OSError:
+                pass
         if owned:
             try:
-                os.remove(path)
+                os.remove(src_path)
             except OSError:
                 pass
 
