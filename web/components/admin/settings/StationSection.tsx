@@ -40,12 +40,14 @@ function clockPreview(timeZone: string, locale: StationLocale) {
 export function StationSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const save = () => saveSettings({
     station: form.station,
+    stationDescription: form.stationDescription,
     timezone: form.timezone,
     locale: form.locale,
     weather: {
       lat: parseFloat(form.weather.lat),
       lng: parseFloat(form.weather.lng),
       locationName: form.weather.locationName,
+      onAirLocation: form.weather.onAirLocation,
       units: form.weather.units,
     },
   });
@@ -81,13 +83,13 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
       <SectionHeader
         eyebrow="station"
         title="How the DJ identifies this radio on air."
-        sub="The station name is substituted into the DJ prompt as {station}. The location sets where the DJ thinks it broadcasts from and drives the Open-Meteo weather it reads on air. The timezone sets the clock the DJ lives on; locale controls how station times are displayed. All apply live, no mixer restart."
+        sub="The station name is substituted into the DJ prompt as {station}. The location is the point the Open-Meteo forecast is read for, and stays private to this page. The on-air location is what the DJ actually says and what public listeners see — set it to a broader area if you'd rather not name your exact town. The timezone sets the clock the DJ lives on; locale controls how station times are displayed. All apply live, no mixer restart."
         metrics={[
           { n: data.values?.station || 'SUB/WAVE', l: 'station', accent: true },
         ]}
       />
 
-      <Card title="Station name" sub="What the DJ calls this radio on air">
+      <Card title="Station identity" sub="What the DJ calls this radio on air, and how shared links describe it">
         <div className="field">
           <Label>Station name</Label>
           <Input
@@ -103,9 +105,28 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
             Substituted into the DJ prompt’s {'{station}'} placeholder (current: {data.values?.station || 'SUB/WAVE'}). Applies live.
           </div>
         </div>
+
+        <div className="field">
+          <Label>Share description</Label>
+          <Input
+            placeholder="A short line describing your station…"
+            value={form.stationDescription}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, stationDescription: e.target.value }))
+            }
+            className="w-full"
+            maxLength={200}
+          />
+          <div className="field-hint">
+            The blurb shown when someone shares a link to this station on social
+            media or chat. Stays the same whoever is on air — leave it empty and
+            the preview falls back to the current DJ’s tagline, which changes
+            with the schedule. Never read on air. {form.stationDescription.length}/200.
+          </div>
+        </div>
       </Card>
 
-      <Card title="Station location" sub="DJ context + Open-Meteo weather">
+      <Card title="Station location" sub="Private forecast point + what the DJ says on air">
         <div className="field">
           <Label>Location</Label>
           <LocationPicker
@@ -143,8 +164,33 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
             </div>
           ) : null}
           <div className="field-hint">
-            Where the station broadcasts from. Sets the DJ’s {'{location}'} and the Open-Meteo
-            weather it reads on air (current: {data.values?.weather?.locationName} @ {data.values?.weather?.lat}, {data.values?.weather?.lng}). Applies live.
+            The point the Open-Meteo forecast is read for (current: {data.values?.weather?.locationName} @ {data.values?.weather?.lat}, {data.values?.weather?.lng}).
+            Stays on this page — it is never spoken on air and never returned by a public
+            endpoint. Applies live.
+          </div>
+        </div>
+
+        <div className="field">
+          <Label>On-air location <span className="text-muted-foreground">(optional)</span></Label>
+          <Input
+            placeholder="e.g. the Peak District"
+            value={form.weather.onAirLocation}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, weather: { ...f.weather, onAirLocation: e.target.value } }))
+            }
+            className="w-[260px]"
+            maxLength={80}
+          />
+          <div className="field-hint">
+            What the DJ says on air and what listeners see — the {'{location}'} placeholder, plus
+            the location in the public now-playing and DJ responses. Leave blank to use the
+            location above (currently saying{' '}
+            <span className="text-foreground">
+              {data.values?.weather?.onAirLocation || data.values?.weather?.locationName}
+            </span>
+            ). Set a broader area if pairing your station name with your exact town would identify
+            you — the forecast still reads the precise coordinates. Applies live; the DJ may still
+            reference the old name until the current session rolls.
           </div>
         </div>
 

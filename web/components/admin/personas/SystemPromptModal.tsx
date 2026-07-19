@@ -180,7 +180,9 @@ export function SystemPromptModal({
               picker, requests, skill segments) use each persona&rsquo;s name and soul directly rather
               than this template. Keep several saved and switch which one is in use. Placeholders:{' '}
               <code>{'{name}'}</code> · <code>{'{soul}'}</code> · <code>{'{station}'}</code> ·{' '}
-              <code>{'{location}'}</code> · <code>{'{language}'}</code>. Most stations stay on the built-in default.
+              <code>{'{location}'}</code> · <code>{'{language}'}</code>. <code>{'{location}'}</code> resolves to the
+              station&rsquo;s on-air location, not the weather coordinates — drop it entirely if you
+              want the DJ never to name a place. Most stations stay on the built-in default.
             </p>
             <div className="grid gap-2">
               {row({

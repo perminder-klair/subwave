@@ -113,6 +113,21 @@ export interface ListenerCount {
   [key: string]: unknown;
 }
 
+/** Structured description of the live broadcast mounts (`stream` on
+ *  `/now-playing`). mount/format/bitrate describe the always-served MP3 floor;
+ *  the *Enabled flags advertise which optional mounts (`/stream.opus`,
+ *  `/stream.flac`, `/stream.aac`) are also live. */
+export interface StreamInfo {
+  mount?: string;
+  format?: string;
+  bitrate?: number | null;
+  sampleRate?: number | null;
+  channels?: number | null;
+  opusEnabled?: boolean;
+  flacEnabled?: boolean;
+  aacEnabled?: boolean;
+}
+
 /** `/now-playing` response. */
 export interface NowPlayingResponse {
   nowPlaying: NowPlayingTrack | null;
@@ -123,6 +138,8 @@ export interface NowPlayingResponse {
   streamOnline?: boolean;
   /** kbps of the first attached broadcast mount; null when offline. */
   streamBitrate?: number | null;
+  /** Broadcast mount descriptor — drives the listener stream-format picker. */
+  stream?: StreamInfo;
   /** Cumulative since-boot LLM token total — the player's token ticker. */
   llmTokens?: number | null;
   /** Station IANA timezone — render on-air timestamps in it so they match what
@@ -164,6 +181,26 @@ export interface RequestResult {
   requestText?: string;
   message?: string;
   status?: RequestStatus;
+}
+
+/** `POST /like` outcome (#991). Error statuses (403 disabled, 409 stale/no
+ *  track, 429 throttled) still carry a JSON body with `error`. */
+export interface LikeResult {
+  ok?: boolean;
+  songId?: string | null;
+  liked?: boolean;
+  alreadyLiked?: boolean;
+  count?: number;
+  error?: string;
+}
+
+/** `GET /like` — liked-state for the current airing, from this listener's
+ *  point of view (server-side dedup key, no account needed). */
+export interface LikeStatus {
+  enabled: boolean;
+  songId?: string | null;
+  liked?: boolean;
+  count?: number;
 }
 
 export interface DjLogEntry {

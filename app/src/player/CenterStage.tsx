@@ -3,11 +3,13 @@
 // phone column. The cover glitches + shows corner ticks during a ~3s `burst`
 // opened by a track change or a new DJ turn (the web's `.v3-cover-live`).
 
-import { Coins } from 'lucide-react-native';
+import * as Haptics from 'expo-haptics';
+import { Coins, Heart } from 'lucide-react-native';
 import { useEffect, useMemo, useState } from 'react';
-import { Text, View } from 'react-native';
+import { Pressable, Text, View } from 'react-native';
 import CoverArt from './CoverArt';
 import DjThinkingLine from './DjThinkingLine';
+import type { TrackLike } from '@/hooks/useTrackLike';
 import { fmtTime } from '@/lib/format';
 import { isDjTurn } from '@/lib/sessionFeed';
 import type { NowPlayingTrack, SessionTurn } from '@/lib/types';
@@ -42,6 +44,10 @@ export interface CenterStageProps {
   /** Cumulative since-boot LLM token total — the quiet "cost of the DJ" ticker
    *  by the now-playing time (web #449). null hides it. */
   llmTokens: number | null;
+  /** Listener like state for the on-air track (#991) — the heart lives in the
+   *  same caption row as on the web classic skin, and hides itself when likes
+   *  are off or nothing likeable is on air. */
+  trackLike: TrackLike;
   feed: SessionTurn[];
   djLineOn: boolean;
   live: boolean;
@@ -54,6 +60,7 @@ export default function CenterStage({
   coverSrc,
   elapsed,
   llmTokens,
+  trackLike,
   feed,
   djLineOn,
   live,
@@ -130,6 +137,37 @@ export default function CenterStage({
               {llmTokens.toLocaleString('en-US')}
             </Text>
           </View>
+        ) : null}
+        {trackLike.available ? (
+          <Pressable
+            onPress={() => {
+              Haptics.selectionAsync().catch(() => {});
+              void trackLike.like();
+            }}
+            disabled={trackLike.pending || trackLike.liked}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: trackLike.pending || trackLike.liked, selected: trackLike.liked }}
+            accessibilityLabel={trackLike.liked ? 'Liked' : 'Like this track'}
+            className="flex-row items-center"
+            style={{ gap: 3, opacity: trackLike.pending ? 0.6 : 1 }}
+          >
+            <Text className="font-mono text-muted" style={{ fontSize: 11 }}>·</Text>
+            <Heart
+              size={13}
+              color={trackLike.liked ? colors.accent : colors.muted}
+              fill={trackLike.liked ? colors.accent : 'none'}
+              strokeWidth={1.75}
+            />
+            {trackLike.count > 0 ? (
+              <Text
+                className="font-mono"
+                style={{ fontSize: 11, color: trackLike.liked ? colors.accent : colors.muted }}
+              >
+                {trackLike.count}
+              </Text>
+            ) : null}
+          </Pressable>
         ) : null}
       </View>
 

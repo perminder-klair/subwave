@@ -74,10 +74,16 @@ export interface ProgrammeState {
 
 // Outgoing-persona metadata stamped on a hard roll so a caller can air the
 // two-voice mic-pass.
-interface RolledFrom {
+export interface RolledFrom {
   personaId: string;
   personaName: string | null;
   showName: string | null;
+  // When the roll happened (epoch ms), so a mic-pass that never found a track
+  // boundary can expire instead of airing hours late. Optional: sessions
+  // persisted before this field existed read as fresh (see handoffIsStale).
+  // Distinct from the context's `at` — this is when the roll fired, not what
+  // moment the context described.
+  at?: number;
 }
 
 // The live DJ session (also the on-disk shape of session.json).
@@ -86,6 +92,12 @@ interface Session {
   kind: 'show' | 'auto';
   key: string;
   startedAt: string;
+  // The moment the key/persona were resolved FOR (the context's `at`): a
+  // look-ahead roll leads the wall clock by up to a track length, so this can
+  // sit ahead of startedAt. maybeRoll refuses to roll to an older moment
+  // (rollIsBackward); absent — a session persisted before this field existed —
+  // the guard never blocks.
+  ctxAt?: string;
   endedAt: string | null;
   show: { id?: string; name?: string; topic?: string } | null;
   persona: { id: string; name: string } | null;
@@ -120,17 +132,53 @@ function mintId() {
 // parallel stream with zero shared mutable state between them.
 export interface SessionStoreOpts {
   paths?: { currentFile: string; dir: string };
-  // Effective-persona resolver for new sessions. Default: the station's
-  // active persona (settings.getEffectivePersona); a channel store passes its
-  // own resolver so channel sessions open under the channel's persona.
-  personaFor?: () => { id: string; name: string } | null | undefined;
+  // Effective-persona resolver for new sessions, given the moment the
+  // session's CONTEXT describes (a boundary roll runs on a look-ahead date).
+  // Default: the station's effective persona at that moment; a channel store
+  // passes its own resolver (time-invariant — channels ignore the date).
+  personaFor?: (at?: Date) => { id: string; name: string } | null | undefined;
+}
+
+// The moment a context describes. `at` is stamped by getFullContext (context.ts);
+// a context from anywhere else, or one persisted before `at` existed, reads as
+// "now" — the pre-look-ahead behaviour. Pure: unit-pinned by
+// scripts/handoff-boundary.test.ts.
+export function contextDate(ctx: { at?: unknown } | null | undefined): Date {
+  const raw = ctx?.at;
+  if (typeof raw !== 'string') return new Date();
+  const d = new Date(raw);
+  return Number.isNaN(d.getTime()) ? new Date() : d;
+}
+
+// Whether a pending mic-pass has waited too long to still be worth airing.
+// A sign-off/greeting pair bakes in a time reference and names the show that
+// just ended, so a late one is worse than none — the same call airPendingVoice
+// makes for a stale ident (PENDING_VOICE_MAX_AGE_MS) and shouldDropStaleLink
+// makes for a stale back-announce.
+//
+// A session rolled before `at` existed has no stamp; treat it as fresh so an
+// in-flight handoff across a deploy still airs. Pure.
+export function handoffIsStale(at: unknown, now: number, maxAgeMs: number): boolean {
+  if (typeof at !== 'number' || !Number.isFinite(at)) return false;
+  return now - at > maxAgeMs;
+}
+
+// Whether a candidate context describes an OLDER moment than the one the live
+// session was resolved for — accepting it would roll the session backward
+// across a boundary the look-ahead already crossed. Missing or garbage stamps
+// (a pre-upgrade session.json, a context without `at`) → false: never block a
+// roll on bad data. Pure: unit-pinned by scripts/handoff-boundary.test.ts.
+export function rollIsBackward(ctxDate: Date, sessionCtxAt: unknown): boolean {
+  const at = typeof sessionCtxAt === 'string' ? Date.parse(sessionCtxAt) : NaN;
+  if (!Number.isFinite(at)) return false;
+  return ctxDate.getTime() < at;
 }
 
 export type SessionStore = ReturnType<typeof createSessionStore>;
 
 export function createSessionStore(opts: SessionStoreOpts = {}) {
   const paths = opts.paths ?? config.session;
-  const personaFor = opts.personaFor ?? (() => settings.getEffectivePersona());
+  const personaFor = opts.personaFor ?? ((at?: Date) => settings.getEffectivePersona(at));
 
   let _session: Session | null = null;
   let _writeTimer: NodeJS.Timeout | null = null;
@@ -215,6 +263,23 @@ async function archive(s: Session | null) {
   } catch {}
 }
 
+// The persona currently ON AIR — the one the live session is running as.
+//
+// Prefer this over settings.getEffectivePersona() for anything that writes or
+// voices a line for the current session. getEffectivePersona() reads the weekly
+// grid at the wall clock, but queue.onTrackStarted rolls the session on a
+// look-ahead (so the mic-pass lands in front of the changeover track rather
+// than over the middle of a song), which means the session legitimately leads
+// the grid by up to PICK_SHOW_LOOKAHEAD_SEC. Inside that window the two
+// disagree and the session is the one that's right: the handoff has aired, the
+// incoming DJ is on. Falls back to the store's own resolver (the grid for the
+// main station, the pinned persona for a channel) with no session, or if the
+// session's persona has since been deleted.
+function onAirPersona() {
+  const id = _session?.persona?.id;
+  return (id && settings.resolvePersonaById(id)) || personaFor();
+}
+
 function getSession() {
   return _session;
 }
@@ -234,12 +299,23 @@ function appendTurn({ role, kind, text, meta = {} }: { role: string; kind: strin
 
 // Start a fresh session for the current context.
 function start(ctx: SessionContext, handoff: string | null = null): Session {
-  const persona = personaFor();
+  // Resolve the persona for the moment the CONTEXT describes, not the wall
+  // clock. A boundary roll runs on a look-ahead context (queue.onTrackStarted
+  // rolls for the show that owns the next track), so `show` below comes from
+  // ctx.activeShow at that future moment — the persona has to agree, or
+  // stampRolledFrom compares the outgoing persona against itself, finds no
+  // change, and suppresses the mic-pass entirely. Missing `at` (a context from
+  // some other path) → wall clock, i.e. the previous behaviour. Resolved
+  // through the store's own personaFor so channel sessions stay pinned to the
+  // channel's persona regardless of the date.
+  const at = contextDate(ctx);
+  const persona = personaFor(at);
   _session = {
     id: mintId(),
     kind: ctx?.activeShow ? 'show' : 'auto',
     key: sessionKeyFor(ctx),
     startedAt: new Date().toISOString(),
+    ctxAt: at.toISOString(),
     endedAt: null,
     show: ctx?.activeShow
       ? { id: ctx.activeShow.id, name: ctx.activeShow.name, topic: ctx.activeShow.topic }
@@ -292,6 +368,16 @@ async function maybeRoll(ctx: SessionContext): Promise<Session> {
   const aged = Date.now() - new Date(_session.startedAt).getTime() > MAX_SESSION_MS;
   if (_session.key === nextKey && !aged) return _session;
 
+  // A key change that only exists because the CALLER's clock is behind the
+  // session is not a boundary — it's the boundary already crossed, seen from
+  // the wrong side. queue.onTrackStarted rolls on a look-ahead context
+  // (showAt), and inside that window a live-clock caller (routes/request.ts)
+  // still resolves the OUTGOING show: rolling here would archive the
+  // just-started session, stamp a mirrored rolledFrom (a reverse mic-pass
+  // armed for the next boundary), and hand onAirPersona() back to the DJ who
+  // just signed off. Skip it — the live clock catches up within the margin.
+  if (!aged && rollIsBackward(contextDate(ctx), _session.ctxAt)) return _session;
+
   const bothAuto = _session.key.startsWith('auto:') && nextKey.startsWith('auto:');
   if (bothAuto && !aged) return softShift(ctx, nextKey);
 
@@ -322,13 +408,14 @@ function stampRolledFrom(next: Session, prev: Session) {
         personaId: prevId,
         personaName: prev?.persona?.name ?? null,
         showName: prev?.show?.name ?? null,   // show that just ended, or null for an auto block
+        at: Date.now(),
       }
     : null;
 }
 
 // The pending on-air handoff for the live session (outgoing persona metadata),
 // or null when there's nothing to air (no persona change, or already aired).
-function pendingHandoff(): { personaId: string; personaName: string | null; showName: string | null } | null {
+function pendingHandoff(): RolledFrom | null {
   if (!_session?.rolledFrom || _session.handoffAired) return null;
   return _session.rolledFrom;
 }
@@ -515,6 +602,7 @@ async function recover(ctx: SessionContext): Promise<Session> {
   return {
     sessionKeyFor,
     getSession,
+    onAirPersona,
     appendTurn,
     start,
     maybeRoll,
@@ -536,6 +624,7 @@ async function recover(ctx: SessionContext): Promise<Session> {
 const _main = createSessionStore();
 
 export const getSession = _main.getSession;
+export const onAirPersona = _main.onAirPersona;
 export const appendTurn = _main.appendTurn;
 export const start = _main.start;
 export const maybeRoll = _main.maybeRoll;

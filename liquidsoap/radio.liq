@@ -50,6 +50,7 @@ flac_enabled = ref(false)
 aac_enabled = ref(false)
 aac_bitrate = ref(192)
 stream_bitrate = ref(192)
+ogg_icy_metadata = ref(true)
 station_name = ref("SUB/WAVE")
 
 # DJ transition effects (filter sweep + echo washout + reverb dissolve + beat
@@ -155,12 +156,21 @@ if file.exists("#{channel_state}/liquidsoap_flac_enabled.txt") then
   flac_enabled := (raw == "true")
 end
 
+# ICY (out-of-band) per-track titles on BOTH Ogg mounts (/stream.opus +
+# /stream.flac). ON by default — only an explicit "false" disables it, the
+# mirror image of the opt-in mount toggles above. See make_stream_outputs()
+# for the client trade-off this switches between (issue #1052 vs foobar2000).
+if file.exists("#{channel_state}/liquidsoap_ogg_icy_metadata.txt") then
+  raw = string.trim(file.contents("#{channel_state}/liquidsoap_ogg_icy_metadata.txt"))
+  ogg_icy_metadata := (raw != "false")
+end
+
 if file.exists("#{channel_state}/liquidsoap_station_name.txt") then
   raw = string.trim(file.contents("#{channel_state}/liquidsoap_station_name.txt"))
   if raw != "" then station_name := raw end
 end
 
-log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} opus_bitrate=#{opus_bitrate()} flac_enabled=#{flac_enabled()} aac_enabled=#{aac_enabled()} aac_bitrate=#{aac_bitrate()} station_name=#{station_name()}")
+log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} opus_bitrate=#{opus_bitrate()} flac_enabled=#{flac_enabled()} aac_enabled=#{aac_enabled()} aac_bitrate=#{aac_bitrate()} ogg_icy_metadata=#{ogg_icy_metadata()} station_name=#{station_name()}")
 
 # ---------------------------------------------------------------------------
 # HTTP(S) FETCH OVERRIDE — Liquidsoap's built-in http.get.stream returns
@@ -1535,15 +1545,17 @@ def make_stream_outputs() =
         opus_enc,
         id="stream_opus",
         fallible=true,
-        # Force ICY metadata ON. output.icecast leaves send_icy_metadata null by
-        # default, which GUESSES it off for any Ogg-container format and relies on
-        # in-band Ogg header re-emission (a new chained logical stream per track)
-        # instead. Many radio clients — Ferrosonic, Google Cast receivers, Symfonium
-        # — read the Ogg Vorbis comment only once at connect and never re-parse on a
-        # chained boundary, so they freeze on the first track's title (issue #1052).
-        # Icecast relays ICY StreamTitle out-of-band for Ogg mounts too, so enabling
-        # it gives those clients the same reliable per-track updates MP3/AAC get.
-        send_icy_metadata=true,
+        # ICY metadata is an operator toggle (default ON). output.icecast leaves
+        # send_icy_metadata null by default, which GUESSES it off for any
+        # Ogg-container format and relies on in-band Ogg header re-emission (a new
+        # chained logical stream per track) instead. Many radio clients — Ferrosonic,
+        # Google Cast receivers, Symfonium — read the Ogg Vorbis comment only once at
+        # connect and never re-parse on a chained boundary, so without ICY they
+        # freeze on the first track's title (issue #1052). foobar2000 is the
+        # opposite: it parses the in-band chained-Ogg tags correctly and the ICY
+        # channel on top breaks its Ogg-FLAC metadata — no single value suits both
+        # client camps, hence the toggle instead of a hardcoded true.
+        send_icy_metadata=ogg_icy_metadata(),
         host=environment.get(default="icecast", "ICECAST_HOST"),
         port=7702,
         password=environment.get("ICECAST_SOURCE_PASSWORD"),
@@ -1576,10 +1588,11 @@ def make_stream_outputs() =
         ),
         id="stream_flac",
         fallible=true,
-        # Force ICY metadata ON — see the /stream.opus note above. Ogg-FLAC clients
-        # (Ferrosonic and other internet-radio players) otherwise stay stuck on the
-        # connect-time track because they ignore in-band chained-Ogg metadata (#1052).
-        send_icy_metadata=true,
+        # ICY metadata operator toggle — see the /stream.opus note above. Default ON
+        # so Ogg-FLAC internet-radio clients (Ferrosonic etc.) get per-track titles
+        # (#1052); off for stations with foobar2000 listeners, where the ICY channel
+        # breaks fb2k's in-band Ogg-FLAC metadata.
+        send_icy_metadata=ogg_icy_metadata(),
         host=environment.get(default="icecast", "ICECAST_HOST"),
         port=7702,
         password=environment.get("ICECAST_SOURCE_PASSWORD"),

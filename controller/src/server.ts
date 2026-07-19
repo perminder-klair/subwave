@@ -177,10 +177,11 @@ app.listen(config.server.port, async () => {
     config.weather.lat = s.weather.lat;
     config.weather.lng = s.weather.lng;
     config.weather.locationName = s.weather.locationName;
+    config.weather.onAirLocation = s.weather.onAirLocation;
     config.weather.units = s.weather.units;
     await settings.ensureLiquidsoapSettingsFile();
     console.log(
-      `[settings] loaded. jingleRatio=${s.jingleRatio} crossfadeDuration=${s.crossfadeDuration} location=${s.weather.locationName}`,
+      `[settings] loaded. jingleRatio=${s.jingleRatio} crossfadeDuration=${s.crossfadeDuration} location=${s.weather.locationName} onAir=${settings.resolveOnAirLocation(s)}`,
     );
   } catch (err) {
     console.error('[settings] load failed:', err.message);
