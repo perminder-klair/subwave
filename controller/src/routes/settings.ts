@@ -16,6 +16,7 @@ import * as llmProvider from '../llm/provider.js';
 import { probeEmbeddingConfig } from '../music/embeddings.js';
 import { queue } from '../broadcast/queue.js';
 import * as stationContext from '../broadcast/station-context.js';
+import { refreshChannelPlaylists } from '../broadcast/scheduler.js';
 import { restartLiquidsoap, startStream, stopStream, streamStatus } from '../broadcast/liquidsoap-control.js';
 import { invalidateWeatherCache } from '../context.js';
 import { requireAdmin } from '../middleware/auth.js';
@@ -219,6 +220,13 @@ router.post('/settings', requireAdmin, async (req, res) => {
         stationContext.sync();
       } catch (err: any) {
         queue.log('error', `channel context sync failed: ${err.message}`);
+      }
+      // A just-created channel boots on an EMPTY auto.m3u — without this it
+      // loops the emergency single until the next scheduled refresh (up to
+      // autoQueueRefreshMinutes away). Fill every channel's fallback now,
+      // fire-and-forget; the refresher logs its own failures.
+      if ('channels' in (req.body || {})) {
+        void refreshChannelPlaylists();
       }
       for (const id of result.requiresChannelRestart ?? []) {
         const ch = settings.channelById(id);
