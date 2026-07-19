@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.44.0](https://github.com/perminder-klair/subwave/compare/v0.43.0...v0.44.0) (2026-07-19)
+
+
+### Features
+
+* **app:** like button for the on-air track ([#1100](https://github.com/perminder-klair/subwave/issues/1100)) ([6adaa67](https://github.com/perminder-klair/subwave/commit/6adaa6772fa8b0a2413d024db79b1c0669d86e2d))
+* **app:** listener-selectable stream format with MP3 floor ([#1075](https://github.com/perminder-klair/subwave/issues/1075)) ([495e99b](https://github.com/perminder-klair/subwave/commit/495e99b2824216ef6f6371d9e66a1eb7bcd521b2))
+* **app:** visible remove button for saved stations ([#1096](https://github.com/perminder-klair/subwave/issues/1096)) ([9e82a07](https://github.com/perminder-klair/subwave/commit/9e82a074a30ef1147a5d2016377224a45719f216))
+* **settings:** separate on-air location from weather location ([#1093](https://github.com/perminder-klair/subwave/issues/1093)) ([130b0fe](https://github.com/perminder-klair/subwave/commit/130b0fefe6430dbedd0d67a154f668abf56b236d))
+* **tts:** discover cloud TTS voices instead of typing ids blind ([#1094](https://github.com/perminder-klair/subwave/issues/1094)) ([1bc7265](https://github.com/perminder-klair/subwave/commit/1bc7265c34b5ae95b947e048ac0d0b00d46a4b75))
+* **web:** station-level social/embed description ([#1091](https://github.com/perminder-klair/subwave/issues/1091)) ([48c9d62](https://github.com/perminder-klair/subwave/commit/48c9d62f5b07a0514335b0267de4b296c3d8079f))
+
+
+### Bug Fixes
+
+* **analyzer:** pre-decode files libsndfile can't open once via ffmpeg ([#1089](https://github.com/perminder-klair/subwave/issues/1089)) ([6465b93](https://github.com/perminder-klair/subwave/commit/6465b93a69fbc71f2e1f97f75d62a94a81449cb3)), closes [#1073](https://github.com/perminder-klair/subwave/issues/1073)
+* **broadcast:** make ICY metadata on Ogg mounts an operator toggle ([#1052](https://github.com/perminder-klair/subwave/issues/1052)) ([#1097](https://github.com/perminder-klair/subwave/issues/1097)) ([fa3e15d](https://github.com/perminder-klair/subwave/commit/fa3e15de1a982d692c47b1b73f98c7bc7a39081f))
+* **dj:** air show handoffs at a track boundary, in the right voice ([#1090](https://github.com/perminder-klair/subwave/issues/1090)) ([a63ec99](https://github.com/perminder-klair/subwave/commit/a63ec9973b2bd9c27c7735b67e94fc7d87acc20c))
+* **dj:** frame request intros for air time, not write time ([#1092](https://github.com/perminder-klair/subwave/issues/1092)) ([53f8780](https://github.com/perminder-klair/subwave/commit/53f87809c541cd2dba70110b9dc3f28eb46f0006))
+* per-provider base URLs for locca and openai-compatible ([#1082](https://github.com/perminder-klair/subwave/issues/1082)) ([#1083](https://github.com/perminder-klair/subwave/issues/1083)) ([021db50](https://github.com/perminder-klair/subwave/commit/021db50d06abefe5eeb9a69da3c84666cc9ae811))
+* **scheduler:** stamp loudness gain on auto.m3u fallback tracks ([#1071](https://github.com/perminder-klair/subwave/issues/1071)) ([03204c0](https://github.com/perminder-klair/subwave/commit/03204c00358a069dca2e8efd18f9bafdb619f5c7))
+* **tts:** fall back to the configured default engine before Piper ([#1095](https://github.com/perminder-klair/subwave/issues/1095)) ([9466927](https://github.com/perminder-klair/subwave/commit/946692721f8f9ca481693b52f1b64e8f7821979f))
+
 ## [0.43.0](https://github.com/perminder-klair/subwave/compare/v0.42.1...v0.43.0) (2026-07-17)
 
 
