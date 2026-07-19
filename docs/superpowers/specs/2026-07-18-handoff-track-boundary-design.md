@@ -472,3 +472,35 @@ on the hour with different personas:
 - Deferring the other immediate `announce()` callers (hourly check, banter, skill
   segments) to track boundaries. Same class of improvement, but each has different
   timing semantics — the hourly check in particular is *about* the wall clock.
+
+## Review fixes (PR #1090)
+
+Code review found three places where a consumer of session state was still on
+the live clock while the roll had moved to the look-ahead date — the same
+disease Change 0 fixed for `session.start()`, in three more hosts:
+
+1. **`programme.maybeRunIntro` aired the standalone intro mid-song at `:00`.**
+   The hourly cron's `airHandoff: false` leaves `handoffAired` false, but the
+   intro's skip-guard required `rolledFrom && handoffAired` — so a
+   persona-change boundary into a programme show fell through the guard and
+   aired the intro immediately, then the deferred greeting introduced the
+   episode a second time. Fix: while `session.pendingHandoff()` is armed the
+   intro stays pending; the boundary tick resolves it after
+   `runPersonaHandoff` (which marks `handoffAired` on every exit path).
+
+2. **A listener request could roll the session backward.**
+   `routes/request.ts` still calls `session.maybeRoll` with a live-clock
+   context; inside the look-ahead window that context resolves the outgoing
+   show, and `maybeRoll` had no direction guard — a request there archived the
+   just-rolled session, stamped a mirrored reverse `rolledFrom`, and handed
+   `onAirPersona()` back to the DJ who just signed off. Fix: sessions carry
+   `ctxAt` (the moment their key/persona were resolved for) and `maybeRoll`
+   refuses a roll to an older moment (`rollIsBackward`, pure, unit-pinned).
+   The guard lives at the chokepoint, so every live-clock caller is covered.
+
+3. **`programme.ensurePlan`/`onSessionSettled` silently no-oped in the window.**
+   Their `now` defaulted to `new Date()`, so `activeEpisode` compared the
+   incoming session key against the outgoing show and returned null — the plan
+   never built at the roll tick and the greeting aired with `episodeAngle:
+   null`. Fix: `now` defaults to `session.contextDate(ctx)`, so the date and
+   the context can never disagree (the Change 0 principle, applied here).

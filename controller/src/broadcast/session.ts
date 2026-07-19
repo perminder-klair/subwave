@@ -92,6 +92,12 @@ interface Session {
   kind: 'show' | 'auto';
   key: string;
   startedAt: string;
+  // The moment the key/persona were resolved FOR (the context's `at`): a
+  // look-ahead roll leads the wall clock by up to a track length, so this can
+  // sit ahead of startedAt. maybeRoll refuses to roll to an older moment
+  // (rollIsBackward); absent — a session persisted before this field existed —
+  // the guard never blocks.
+  ctxAt?: string;
   endedAt: string | null;
   show: { id?: string; name?: string; topic?: string } | null;
   persona: { id: string; name: string } | null;
@@ -151,6 +157,17 @@ export function contextDate(ctx: { at?: unknown } | null | undefined): Date {
 export function handoffIsStale(at: unknown, now: number, maxAgeMs: number): boolean {
   if (typeof at !== 'number' || !Number.isFinite(at)) return false;
   return now - at > maxAgeMs;
+}
+
+// Whether a candidate context describes an OLDER moment than the one the live
+// session was resolved for — accepting it would roll the session backward
+// across a boundary the look-ahead already crossed. Missing or garbage stamps
+// (a pre-upgrade session.json, a context without `at`) → false: never block a
+// roll on bad data. Pure: unit-pinned by scripts/handoff-boundary.test.ts.
+export function rollIsBackward(ctxDate: Date, sessionCtxAt: unknown): boolean {
+  const at = typeof sessionCtxAt === 'string' ? Date.parse(sessionCtxAt) : NaN;
+  if (!Number.isFinite(at)) return false;
+  return ctxDate.getTime() < at;
 }
 
 function scenarioOf(ctx: SessionContext): Scenario {
@@ -268,12 +285,14 @@ export function start(ctx: SessionContext, handoff: string | null = null): Sessi
   // stampRolledFrom compares the outgoing persona against itself, finds no
   // change, and suppresses the mic-pass entirely. Missing `at` (a context from
   // some other path) → wall clock, i.e. the previous behaviour.
-  const persona = settings.getEffectivePersona(contextDate(ctx));
+  const at = contextDate(ctx);
+  const persona = settings.getEffectivePersona(at);
   _session = {
     id: mintId(),
     kind: ctx?.activeShow ? 'show' : 'auto',
     key: sessionKeyFor(ctx),
     startedAt: new Date().toISOString(),
+    ctxAt: at.toISOString(),
     endedAt: null,
     show: ctx?.activeShow
       ? { id: ctx.activeShow.id, name: ctx.activeShow.name, topic: ctx.activeShow.topic }
@@ -325,6 +344,16 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   const nextKey = sessionKeyFor(ctx);
   const aged = Date.now() - new Date(_session.startedAt).getTime() > MAX_SESSION_MS;
   if (_session.key === nextKey && !aged) return _session;
+
+  // A key change that only exists because the CALLER's clock is behind the
+  // session is not a boundary — it's the boundary already crossed, seen from
+  // the wrong side. queue.onTrackStarted rolls on a look-ahead context
+  // (showAt), and inside that window a live-clock caller (routes/request.ts)
+  // still resolves the OUTGOING show: rolling here would archive the
+  // just-started session, stamp a mirrored rolledFrom (a reverse mic-pass
+  // armed for the next boundary), and hand onAirPersona() back to the DJ who
+  // just signed off. Skip it — the live clock catches up within the margin.
+  if (!aged && rollIsBackward(contextDate(ctx), _session.ctxAt)) return _session;
 
   const bothAuto = _session.key.startsWith('auto:') && nextKey.startsWith('auto:');
   if (bothAuto && !aged) return softShift(ctx, nextKey);

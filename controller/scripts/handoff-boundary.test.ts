@@ -8,7 +8,7 @@
 // pick off that one date — so the sign-off/greeting land in front of the
 // changeover track, and the pick's brief can't disagree with the on-air persona.
 //
-// Two pure pieces hold that up, pinned here:
+// Three pure pieces hold that up, pinned here:
 //
 //  - contextDate    — reads the `at` stamp getFullContext puts on every context.
 //                     This is the load-bearing bit: session.start() resolves the
@@ -22,11 +22,18 @@
 //                     hourly cron rolls without airing, so with nobody listening
 //                     (or across one very long track) a pending handoff can
 //                     outlive the moment it describes.
+//  - rollIsBackward — refuses to roll the session to an OLDER moment than the
+//                     one it was resolved for. Inside the look-ahead window a
+//                     live-clock maybeRoll caller (routes/request.ts) still
+//                     resolves the outgoing show; unguarded, a listener request
+//                     there would archive the just-rolled session, arm a
+//                     mirrored reverse mic-pass, and voice the request intro as
+//                     the DJ who just signed off.
 //
 // node:assert-via-tsx style, matching scripts/stale-link.test.ts.
 
 import assert from 'node:assert/strict';
-import { contextDate, handoffIsStale } from '../src/broadcast/session.js';
+import { contextDate, handoffIsStale, rollIsBackward } from '../src/broadcast/session.js';
 
 const MAX_AGE = 20 * 60_000;   // mirrors HANDOFF_MAX_AGE_MS in dj-agent.ts
 
@@ -120,6 +127,34 @@ function main() {
   test('non-numeric stamp → treated as unstamped, not stale', () => {
     for (const bad of ['2026-07-18T10:00:00.000Z', NaN, Infinity, {}] as any[]) {
       assert.equal(handoffIsStale(bad, now, MAX_AGE), false, `at=${String(bad)}`);
+    }
+  });
+
+  console.log('\nbackward-roll guard (rollIsBackward):');
+  // The session was look-ahead-rolled for 10:02 at a real time of ~09:58.
+  const sessionAt = '2026-07-18T10:02:00.000Z';
+
+  test('live-clock caller inside the look-ahead window → backward, skip', () => {
+    // A listener request at 09:58:30 still resolves the outgoing show.
+    assert.equal(rollIsBackward(new Date('2026-07-18T09:58:30.000Z'), sessionAt), true);
+  });
+
+  test('caller past the described moment → forward, roll allowed', () => {
+    assert.equal(rollIsBackward(new Date('2026-07-18T10:02:00.001Z'), sessionAt), false);
+  });
+
+  test('exactly the described moment → not backward (strict <)', () => {
+    assert.equal(rollIsBackward(new Date(sessionAt), sessionAt), false);
+  });
+
+  test('session persisted before ctxAt existed → never blocks a roll', () => {
+    assert.equal(rollIsBackward(new Date('2020-01-01T00:00:00.000Z'), undefined), false);
+    assert.equal(rollIsBackward(new Date('2020-01-01T00:00:00.000Z'), null), false);
+  });
+
+  test('garbage stamp → never blocks a roll', () => {
+    for (const bad of ['not-a-date', '', 12345, {}] as any[]) {
+      assert.equal(rollIsBackward(new Date(), bad), false, `ctxAt=${JSON.stringify(bad)}`);
     }
   });
 
