@@ -16,6 +16,8 @@ import * as settings from '../settings.js';
 import { config } from '../config.js';
 import { runAudioMoodPass } from './audio-moods.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
+import { quietGateDecision, type QuietState } from './analyze-quiet-pure.js';
+import { probeListenerCount } from '../broadcast/listeners.js';
 
 // Structured status events for the panel, mirrored to the terse `[analyze] …`
 // console line. Shared by the tagger's analyze phase and the standalone CLI.
@@ -78,6 +80,89 @@ export function vocalActivityWanted(): boolean {
 // status enum so the panel doesn't have to re-derive the enable precedence.
 export function audioEmbeddingWanted(): boolean {
   return audioBackfillDefault();
+}
+
+// Quiet-times gate (#1099) — same env-wins-on precedence as the toggles above:
+// ANALYZE_QUIET_ONLY=1 forces it on, else the admin toggle
+// (settings.audio.analyzeQuietOnly). Both entry points call settings.load()
+// before the pass, so the child process reads the toggle without new plumbing.
+function quietOnlyDefault(): boolean {
+  const v = (process.env.ANALYZE_QUIET_ONLY || '').toLowerCase();
+  if (v === '1' || v === 'true' || v === 'yes') return true;
+  try {
+    return settings.get()?.audio?.analyzeQuietOnly === true;
+  } catch {
+    return false;
+  }
+}
+
+function quietMinutes(): number {
+  try {
+    const v = settings.get()?.audio?.analyzeQuietMinutes;
+    return Number.isFinite(v) && v >= 1 ? v : 10;
+  } catch {
+    return 10;
+  }
+}
+
+// How often the paused pass re-checks Icecast. One cheap status fetch per
+// tick (probeListenerCount — no history write); 30s keeps the resume latency
+// small without hammering a stream that's busy for hours.
+const QUIET_POLL_MS = 30_000;
+
+interface QuietGate {
+  enabled: boolean;
+  state: QuietState;
+  paused: boolean; // for one-per-transition logging, not decision logic
+}
+
+// Block until the gate allows the next track (immediately when disabled).
+// Sits BETWEEN tracks: an in-flight track finishes (seconds) and the pending
+// prefetch download is left to resolve — only the next *compute* waits. The
+// wait is unbounded by design; the operator's escape hatches are the tagger
+// Stop button and turning the toggle off (read once per pass, like the
+// embeddings/vocal toggles — it applies from the next run).
+async function waitForQuiet(gate: QuietGate, progress: { done: number; total: number }): Promise<void> {
+  if (!gate.enabled) return;
+  for (;;) {
+    const count = await probeListenerCount();
+    const d = quietGateDecision(gate.state, {
+      enabled: true,
+      count,
+      now: Date.now(),
+      quietAfterMs: quietMinutes() * 60_000,
+    });
+    gate.state = d.state;
+    if (d.proceed) {
+      if (gate.paused) {
+        gate.paused = false;
+        logEvent('info', 'Stream is quiet — resuming analysis');
+        // Restore the normal label now — the per-track reporter only fires
+        // every 25 tracks, which would leave "Waiting for quiet" on the panel
+        // long after the pass resumed.
+        reportProgress({ phase: 'analyze', label: 'Analysing audio', done: progress.done, total: progress.total });
+      }
+      return;
+    }
+    // count>0: someone is tuned in. count===0: the room just emptied and the
+    // quiet window is still draining (an unknown count never reaches here —
+    // the gate fails open).
+    const why = count && count > 0 ? `${count} listening` : 'waiting out the quiet window';
+    if (!gate.paused) {
+      gate.paused = true;
+      logEvent(
+        'info',
+        `Analysis paused — ${why}; resumes after ${quietMinutes()} min with no listeners`,
+      );
+    }
+    reportProgress({
+      phase: 'analyze',
+      label: `Waiting for quiet (${why})`,
+      done: progress.done,
+      total: progress.total,
+    });
+    await new Promise((r) => setTimeout(r, QUIET_POLL_MS));
+  }
 }
 
 export interface AnalyzeStats {
@@ -216,6 +301,16 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   let failed = 0;
   let audioEmbedded = 0;
   let vocalAnalyzed = 0;
+  // Quiet-times gate (#1099). Resolved once per pass, like every other audio
+  // toggle; state carries across tracks so the quiet clock isn't reset by the
+  // loop itself.
+  const quietGate: QuietGate = { enabled: quietOnlyDefault(), state: { quietSince: null }, paused: false };
+  if (quietGate.enabled) {
+    logEvent(
+      'info',
+      `Quiet-times gate on — analysis only runs once the stream has had no listeners for ${quietMinutes()} min`,
+    );
+  }
   // Stamp the audio-embedding provenance row once, on the first vector written
   // this run. Cheap idempotent guard so we don't touch the meta table per track.
   let audioMetaStamped = false;
@@ -239,6 +334,10 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   let inflight: Prefetch | null = ids.length > 0 ? prefetch(ids[0]) : null;
 
   for (let i = 0; i < ids.length; i++) {
+    // Gate BEFORE the next prefetch is kicked off: while paused, only the
+    // already-inflight download (this track's) is outstanding — the pass
+    // doesn't keep pulling audio for a queue it isn't going to compute yet.
+    await waitForQuiet(quietGate, { done: i, total: ids.length });
     const id = ids[i];
     const downloadPromise = inflight;
     // Kick off the NEXT download before awaiting this one's analysis so the

@@ -1448,6 +1448,15 @@ const DEFAULTS = {
     // request is a clean no-op. ANALYZE_VOCAL_ACTIVITY=1 also enables it
     // regardless of this toggle (env wins on, never off). Expensive — opt-in.
     vocalActivity: false,
+    // Quiet-times gate (#1099): pause the analysis pass while anyone is
+    // listening, resuming once the stream has been listener-free for
+    // analyzeQuietMinutes. Checked between tracks inside runAnalysisPass, so
+    // it covers both the server-spawned tagger child and `npm run analyze`,
+    // and applies to manual "Analyse now" runs too (a pass outlives the
+    // click; the bypass is turning this off). ANALYZE_QUIET_ONLY=1 also
+    // enables it (env wins on, never off), mirroring the toggles above.
+    analyzeQuietOnly: false,
+    analyzeQuietMinutes: 10,
   },
   // Sound-effects library. When disabled, the segment-director agent is never
   // shown the effect catalogue, so it stops garnishing spoken breaks with
@@ -2263,6 +2272,13 @@ export async function load() {
     audio: {
       embeddings: typeof stored.audio?.embeddings === 'boolean' ? stored.audio.embeddings : DEFAULTS.audio.embeddings,
       vocalActivity: typeof stored.audio?.vocalActivity === 'boolean' ? stored.audio.vocalActivity : DEFAULTS.audio.vocalActivity,
+      analyzeQuietOnly:
+        typeof stored.audio?.analyzeQuietOnly === 'boolean'
+          ? stored.audio.analyzeQuietOnly
+          : DEFAULTS.audio.analyzeQuietOnly,
+      analyzeQuietMinutes: Number.isFinite(stored.audio?.analyzeQuietMinutes)
+        ? Math.max(1, Math.min(120, Math.floor(stored.audio.analyzeQuietMinutes)))
+        : DEFAULTS.audio.analyzeQuietMinutes,
     },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
@@ -3682,6 +3698,16 @@ export async function update(patch) {
     }
     if (au.vocalActivity !== undefined) {
       next.audio.vocalActivity = !!au.vocalActivity;
+    }
+    if (au.analyzeQuietOnly !== undefined) {
+      next.audio.analyzeQuietOnly = !!au.analyzeQuietOnly;
+    }
+    if (au.analyzeQuietMinutes !== undefined) {
+      const v = Math.floor(Number(au.analyzeQuietMinutes));
+      if (!Number.isFinite(v) || v < 1 || v > 120) {
+        throw new Error('audio.analyzeQuietMinutes must be between 1 and 120');
+      }
+      next.audio.analyzeQuietMinutes = v;
     }
   }
   if ('sfx' in patch) {

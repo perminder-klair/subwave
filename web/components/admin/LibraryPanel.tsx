@@ -117,7 +117,14 @@ interface SettingsResponse {
   tagger?: TaggerState;
   libraryStats?: LibraryStatsLite;
   // Only the slice this panel needs from the full settings payload.
-  values?: { audio?: { embeddings?: boolean; vocalActivity?: boolean } };
+  values?: {
+    audio?: {
+      embeddings?: boolean;
+      vocalActivity?: boolean;
+      analyzeQuietOnly?: boolean;
+      analyzeQuietMinutes?: number;
+    };
+  };
   // Daily-token-budget tier — drives the "budget nearly/already used" warning in
   // the Tagging modal. Absent on an old controller → treated as 'normal'.
   budget?: { mode: BudgetMode };
@@ -204,6 +211,10 @@ export default function LibraryPanel() {
   const [audioEnabled, setAudioEnabled] = useState<boolean | null>(null);
   // settings.audio.vocalActivity — null until the first /settings poll lands.
   const [vocalEnabled, setVocalEnabled] = useState<boolean | null>(null);
+  // settings.audio.analyzeQuietOnly + analyzeQuietMinutes — the quiet-times
+  // gate (#1099); null until the first /settings poll lands.
+  const [quietEnabled, setQuietEnabled] = useState<boolean | null>(null);
+  const [quietMins, setQuietMins] = useState<number | null>(null);
   // Daily-token-budget tier from /settings — null until the first slow poll lands.
   const [budgetMode, setBudgetMode] = useState<BudgetMode | null>(null);
   const [logOpen, setLogOpen] = useState(false);
@@ -377,6 +388,12 @@ export default function LibraryPanel() {
       if (j.values?.audio) {
         setAudioEnabled(!!j.values.audio.embeddings);
         setVocalEnabled(!!j.values.audio.vocalActivity);
+        setQuietEnabled(!!j.values.audio.analyzeQuietOnly);
+        setQuietMins(
+          typeof j.values.audio.analyzeQuietMinutes === 'number'
+            ? j.values.audio.analyzeQuietMinutes
+            : 10,
+        );
       }
       if (j.budget) setBudgetMode(j.budget.mode);
     } catch { /* transient */ }
@@ -1063,6 +1080,57 @@ export default function LibraryPanel() {
     }
   };
 
+  // Flip settings.audio.analyzeQuietOnly — the quiet-times gate (#1099): any
+  // analysis run pauses while listeners are tuned in, resuming after the idle
+  // window. Read once per pass, so it applies from the next run; env
+  // ANALYZE_QUIET_ONLY still wins "on".
+  const toggleQuiet = async () => {
+    if (quietEnabled == null) return;
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio: { analyzeQuietOnly: !quietEnabled } }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
+      setQuietEnabled(!quietEnabled);
+      notify.ok(
+        !quietEnabled
+          ? 'quiet times on — analysis pauses while anyone is listening'
+          : 'quiet times off — analysis runs regardless of listeners',
+      );
+      void loadSettingsData();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
+  // Persist a new idle window for the quiet-times gate (minutes, 1–120) —
+  // committed by the panel's number input on blur/Enter.
+  const saveQuietMinutes = async (minutes: number) => {
+    setTaggerBusy(true);
+    try {
+      const r = await adminFetch('/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audio: { analyzeQuietMinutes: minutes } }),
+      });
+      const j = await r.json().catch(() => ({})) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
+      setQuietMins(minutes);
+      notify.ok(`quiet window set — analysis resumes after ${minutes} min with no listeners`);
+      void loadSettingsData();
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setTaggerBusy(false);
+    }
+  };
+
   // Backfill Demucs vocal ranges on tracks that lack them — POST with vocal:true
   // so the analyze pass forces the vocal scope (#646).
   const vocalBackfill = async () => {
@@ -1206,6 +1274,10 @@ export default function LibraryPanel() {
         vocalEnabled={vocalEnabled}
         onToggleVocal={toggleVocal}
         onVocalBackfill={vocalBackfill}
+        quietEnabled={quietEnabled}
+        quietMinutes={quietMins}
+        onToggleQuiet={toggleQuiet}
+        onQuietMinutes={saveQuietMinutes}
         budgetMode={budgetMode}
       />
 
