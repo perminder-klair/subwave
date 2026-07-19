@@ -421,13 +421,40 @@ function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown, label
     }
     target.ollamaUrl = v.replace(/\/+$/, ''); // strip trailing slashes
   }
+  if (l.providerBaseUrls !== undefined) {
+    if (!l.providerBaseUrls || typeof l.providerBaseUrls !== 'object' || Array.isArray(l.providerBaseUrls)) {
+      throw new Error(`${label}.providerBaseUrls must be an object map of provider → URL`);
+    }
+    const incoming = l.providerBaseUrls as Record<string, unknown>;
+    const existing = (target.providerBaseUrls as Record<string, string> | undefined) ?? {};
+    const merged: Record<string, string> = { ...existing };
+    for (const p of Object.keys(incoming)) {
+      if (!LLM_PROVIDERS.includes(p)) continue;
+      const v = String(incoming[p] ?? '').trim();
+      if (v.length > 200) throw new Error(`${label}.providerBaseUrls.${p} must be 0-200 chars`);
+      if (v && !/^https?:\/\//i.test(v)) {
+        throw new Error(`${label}.providerBaseUrls.${p} must start with http:// or https://`);
+      }
+      const clean = v.replace(/\/+$/, '');
+      if (clean) merged[p] = clean; else delete merged[p];
+    }
+    target.providerBaseUrls = merged;
+  }
   if (l.baseUrl !== undefined) {
+    // Legacy path — a plain baseUrl is written into the current provider's map
+    // slot; the flat field itself is re-derived below.
     const v = String(l.baseUrl).trim();
     if (v.length > 200) throw new Error(`${label}.baseUrl must be 0-200 chars`);
     if (v && !/^https?:\/\//i.test(v)) {
       throw new Error(`${label}.baseUrl must start with http:// or https://`);
     }
-    target.baseUrl = v.replace(/\/+$/, ''); // strip trailing slashes
+    const clean = v.replace(/\/+$/, '');
+    const prov = (target.provider ?? l.provider) as string | undefined;
+    if (prov && LLM_PROVIDERS.includes(prov)) {
+      const urls = (target.providerBaseUrls as Record<string, string> | undefined) ?? {};
+      if (clean) urls[prov] = clean; else delete urls[prov];
+      target.providerBaseUrls = urls;
+    }
   }
   if (l.reasoning !== undefined) {
     target.reasoning = !!l.reasoning;
@@ -447,6 +474,14 @@ function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown, label
     }
     target.toolChoice = v;
   }
+  // Single writer of the flat legacy `baseUrl`: always re-derive it from the
+  // map so a provider-only patch can never leave a stale URL from the
+  // previously selected provider (issue #1082). Runtime consumers
+  // (registry/legs) keep reading `baseUrl`, so this is what keeps them
+  // pointed at the right server after any switch.
+  const urls = (target.providerBaseUrls as Record<string, string> | undefined) ?? {};
+  const prov = target.provider as string | undefined;
+  target.baseUrl = (prov && urls[prov]) ? urls[prov] : '';
 }
 
 // Route an incoming inline API key to its provider's slot in `llmHost.keys`
@@ -498,6 +533,38 @@ function normalizeLlmKeys(storedLlm: unknown): Record<string, string> {
   if (legacyFallback) {
     const owner = ownerFor(sl?.fallback?.provider);
     if (!out[owner]) out[owner] = legacyFallback;
+  }
+  return out;
+}
+
+// Build the per-provider base-URL map from a stored settings.llm blob (issue #1082).
+// Sanitises any persisted `providerBaseUrls` and migrates the legacy single `baseUrl`
+// into the current provider's slot so no saved URL is lost on upgrade.
+function normalizeLlmProviderBaseUrls(
+  storedLeg: unknown,
+  providers: readonly string[],
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const sl = storedLeg as {
+    providerBaseUrls?: unknown;
+    baseUrl?: unknown;
+    provider?: unknown;
+  } | null | undefined;
+  const raw = sl?.providerBaseUrls;
+  if (raw && typeof raw === 'object') {
+    const rec = raw as Record<string, unknown>;
+    for (const p of Object.keys(rec)) {
+      if (providers.includes(p) && typeof rec[p] === 'string' && rec[p]) {
+        out[p] = (rec[p] as string).trim().replace(/\/+$/, '');
+      }
+    }
+  }
+  // Migrate legacy single baseUrl into the current provider's slot when no
+  // per-provider entry already covers that provider.
+  const legacyUrl = typeof sl?.baseUrl === 'string' ? sl.baseUrl.trim().replace(/\/+$/, '') : '';
+  const currentProvider = typeof sl?.provider === 'string' ? sl.provider : '';
+  if (legacyUrl && currentProvider && !out[currentProvider]) {
+    out[currentProvider] = legacyUrl;
   }
   return out;
 }
@@ -1059,6 +1126,16 @@ const DEFAULTS = {
     aacEnabled: false,
     aacBitrate: 192,
     bitrate: 192,
+    // ICY (out-of-band) per-track titles on the Ogg mounts (/stream.opus +
+    // /stream.flac). ON by default: most internet-radio clients (Ferrosonic,
+    // Cast receivers, Symfonium) read the in-band Ogg comment only once at
+    // connect and freeze on that title without ICY (issue #1052). foobar2000
+    // is the known exception — it parses the in-band chained-Ogg tags
+    // correctly, and the ICY channel on top breaks its Ogg-FLAC metadata — so
+    // operators with fb2k listeners turn this off. Which camp a station's
+    // listeners fall in is unknowable from here, hence a toggle rather than a
+    // hardcoded value. MP3/AAC always use ICY and are unaffected.
+    oggIcyMetadata: true,
     // Idle pause (broadcast/stream-idle.ts). When on, the controller flips
     // radio.liq's idle gate after idleAfterMinutes with zero Icecast
     // listeners: the mounts keep serving (silence), but the music chain
@@ -1084,12 +1161,36 @@ const DEFAULTS = {
     maxBoostDb: 6,
     source: 'replaygain-then-measured' as LoudnessSource,
   },
-  weather: { lat: 30.7333, lng: 76.7794, locationName: 'Punjab', units: 'metric' as 'metric' | 'imperial' },
+  weather: {
+    // Precise point. The ONLY thing Open-Meteo sees, and the only location
+    // data that never reaches a prompt, a listener, or a public response.
+    lat: 30.7333,
+    lng: 76.7794,
+    // Operator-facing label for those coordinates — admin UI, /debug, CLI
+    // status. Never spoken on air, never published. onAirLocation is what
+    // listeners and the LLM get.
+    locationName: 'Punjab',
+    // The place the station CLAIMS to broadcast from: the DJ prompt's
+    // {location}, and the `location` in GET /dj + GET /now-playing. Blank
+    // falls back to locationName, so installs that never set it are
+    // unchanged. Lets an operator name a broad area ("the Peak District")
+    // while the weather still reads their exact coordinates — a station's
+    // public URL shouldn't be able to dox its operator.
+    onAirLocation: '',
+    units: 'metric' as 'metric' | 'imperial',
+  },
   // Operator-facing station name. Substituted into the DJ prompt's {station}
   // placeholder and returned by GET /dj for the landing page. The product is
   // still called SUB/WAVE — this is what the operator's station running on it
   // is called (e.g. "Frequency 88", "Late Shift Radio").
   station: 'SUB/WAVE',
+  // Station-level blurb for link previews (og:description, twitter:description,
+  // meta description). Deliberately NOT the on-air persona's tagline: that
+  // changes with whoever is on air, so a shared station link would describe
+  // itself differently depending on the hour (issue #1086). Empty = unset, and
+  // the web app falls back to the persona tagline, preserving the behaviour of
+  // installs that predate this field. Never enters the DJ prompt.
+  stationDescription: '',
   // Station clock — IANA zone driving everything with local-time semantics
   // (time-of-day moods, schedule slots, hourly time checks, festival dates).
   // Empty = Auto: the container's own TZ, so existing installs are untouched.
@@ -1222,9 +1323,15 @@ const DEFAULTS = {
     // Ollama server URL. Empty → fall back to config.ollama.url. Only used
     // when provider === 'ollama'.
     ollamaUrl: '',
-    // OpenAI-compatible server base URL, including the /v1 suffix
-    // (e.g. http://192.168.1.101:8080/v1). Required — and only used —
-    // when provider === 'openai-compatible'.
+    // Per-provider server base URLs. Keyed by provider id so switching providers
+    // never overwrites another provider's saved URL (issue #1082). Replaces the
+    // legacy single `baseUrl` field; at runtime `baseUrl` is derived from this map
+    // in load()/applyLlmLegPatch(). The legacy field is kept as a migration source
+    // on load only — it is never written after the first save with the new schema.
+    providerBaseUrls: {} as Record<string, string>,
+    // Deprecated single slot — kept so an old settings.json migrates cleanly.
+    // Always derived from `providerBaseUrls` after load(). See
+    // normalizeLlmProviderBaseUrls().
     baseUrl: '',
     // Whether to let reasoning ("thinking") models emit a chain-of-thought
     // before the answer. Off by default: the DJ writes short scripts and
@@ -1345,6 +1452,7 @@ const DEFAULTS = {
       model: '',
       apiKey: '',
       ollamaUrl: '',
+      providerBaseUrls: {} as Record<string, string>,
       baseUrl: '',
       reasoning: false,
       toolChoice: 'required',
@@ -1372,7 +1480,8 @@ const DEFAULTS = {
     // embedding server runs on its own port. Empty → inherit settings.llm's
     // baseUrl / ollamaUrl (fine only when the chat server also does embeddings,
     // e.g. Ollama). See issue #405.
-    baseUrl: '',          // openai-compatible / locca embedding server URL (with /v1)
+    providerBaseUrls: {} as Record<string, string>, // per-provider embedding server URLs (issue #1082)
+    baseUrl: '',          // deprecated single slot — migration source only, never written after first save
     ollamaUrl: '',        // Ollama embedding server URL (ollama provider)
     apiKey: '',           // empty -> inherit settings.llm.apiKey
     seedCount: 0,         // 0 → auto (see autoSeedCount in tag-library.ts: ~4% of
@@ -1870,6 +1979,32 @@ export async function load() {
       ? stored.archive.bitrate
       : DEFAULTS.archive.bitrate;
 
+  // Per-provider base-URL maps (issue #1082) — computed once per leg. The flat
+  // legacy `baseUrl` on each leg is derived from its map; the stored flat value
+  // only survives as a fallback for blobs that predate the map.
+  const llmProvider = LLM_PROVIDERS.includes(stored.llm?.provider)
+    ? stored.llm.provider
+    : DEFAULTS.llm.provider;
+  const llmBaseUrls = normalizeLlmProviderBaseUrls(stored.llm, LLM_PROVIDERS);
+  const fbStored = stored.llm?.fallback || {};
+  const fbProvider = LLM_PROVIDERS.includes(fbStored.provider)
+    ? fbStored.provider
+    : DEFAULTS.llm.fallback.provider;
+  const fbBaseUrls = normalizeLlmProviderBaseUrls(
+    { ...fbStored, provider: fbProvider },
+    LLM_PROVIDERS,
+  );
+  // The embedding leg inherits the chat provider when its own is empty, so the
+  // legacy dedicated embedding URL (issue #405) must migrate under the
+  // EFFECTIVE provider — that's the key the admin UI reads and writes.
+  const embedProvider =
+    (typeof stored.embedding?.provider === 'string' && stored.embedding.provider.trim()) ||
+    llmProvider;
+  const embedBaseUrls = normalizeLlmProviderBaseUrls(
+    { ...stored.embedding, provider: embedProvider },
+    LLM_PROVIDERS,
+  );
+
   cache = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
@@ -1912,6 +2047,10 @@ export async function load() {
         typeof stored.stream?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.stream.bitrate)
           ? stored.stream.bitrate
           : DEFAULTS.stream.bitrate,
+      oggIcyMetadata:
+        typeof stored.stream?.oggIcyMetadata === 'boolean'
+          ? stored.stream.oggIcyMetadata
+          : DEFAULTS.stream.oggIcyMetadata,
       idleWhenEmpty:
         typeof stored.stream?.idleWhenEmpty === 'boolean'
           ? stored.stream.idleWhenEmpty
@@ -1944,6 +2083,9 @@ export async function load() {
       lat: stored.weather?.lat ?? DEFAULTS.weather.lat,
       lng: stored.weather?.lng ?? DEFAULTS.weather.lng,
       locationName: stored.weather?.locationName ?? DEFAULTS.weather.locationName,
+      // Absent key → '' → falls back to locationName at read time, so an
+      // install predating this field behaves exactly as it did before.
+      onAirLocation: stored.weather?.onAirLocation ?? DEFAULTS.weather.onAirLocation,
       units:
         stored.weather?.units === 'imperial' || stored.weather?.units === 'metric'
           ? stored.weather.units
@@ -1956,6 +2098,10 @@ export async function load() {
       typeof stored.station === 'string' && stored.station.trim()
         ? stored.station.trim().slice(0, 80)
         : DEFAULTS.station,
+    stationDescription:
+      typeof stored.stationDescription === 'string'
+        ? stored.stationDescription.trim().slice(0, 200)
+        : DEFAULTS.stationDescription,
     // Invalid stored zone (hand-edited file) falls back to Auto — the
     // station must never crash on a bad zone.
     timezone:
@@ -2109,8 +2255,9 @@ export async function load() {
         typeof stored.llm?.ollamaUrl === 'string'
           ? stored.llm.ollamaUrl.trim()
           : DEFAULTS.llm.ollamaUrl,
-      baseUrl:
-        typeof stored.llm?.baseUrl === 'string' ? stored.llm.baseUrl.trim() : DEFAULTS.llm.baseUrl,
+      providerBaseUrls: llmBaseUrls,
+      baseUrl: llmBaseUrls[llmProvider]
+        ?? (typeof stored.llm?.baseUrl === 'string' ? stored.llm.baseUrl.trim() : DEFAULTS.llm.baseUrl),
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
       // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
@@ -2166,8 +2313,9 @@ export async function load() {
           apiKey: '',
           ollamaUrl:
             typeof fb.ollamaUrl === 'string' ? fb.ollamaUrl.trim() : DEFAULTS.llm.fallback.ollamaUrl,
-          baseUrl:
-            typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl,
+          providerBaseUrls: fbBaseUrls,
+          baseUrl: fbBaseUrls[fbProvider]
+            ?? (typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl),
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
@@ -2195,10 +2343,11 @@ export async function load() {
         typeof stored.embedding?.model === 'string'
           ? stored.embedding.model.trim()
           : DEFAULTS.embedding.model,
-      baseUrl:
-        typeof stored.embedding?.baseUrl === 'string'
-          ? stored.embedding.baseUrl.trim()
-          : DEFAULTS.embedding.baseUrl,
+      providerBaseUrls: embedBaseUrls,
+      // Derived with the effective provider (own, else the chat provider) so a
+      // dedicated embedding URL keeps working when the provider is inherited.
+      baseUrl: embedBaseUrls[embedProvider]
+        ?? (typeof stored.embedding?.baseUrl === 'string' ? stored.embedding.baseUrl.trim() : DEFAULTS.embedding.baseUrl),
       ollamaUrl:
         typeof stored.embedding?.ollamaUrl === 'string'
           ? stored.embedding.ollamaUrl.trim()
@@ -3082,6 +3231,13 @@ export async function update(patch) {
         restart = true;
       }
     }
+    if (st.oggIcyMetadata !== undefined) {
+      const v = !!st.oggIcyMetadata;
+      if (v !== cur.stream.oggIcyMetadata) {
+        next.stream.oggIcyMetadata = v;
+        restart = true;
+      }
+    }
     if (st.aacEnabled !== undefined) {
       const v = !!st.aacEnabled;
       if (v !== cur.stream.aacEnabled) {
@@ -3170,6 +3326,12 @@ export async function update(patch) {
     if (typeof w.locationName === 'string' && w.locationName.trim()) {
       next.weather.locationName = w.locationName.trim().slice(0, 80);
     }
+    // Deliberately NOT the guard above: locationName ignores empty strings so
+    // the weather label can never be blanked, but blanking onAirLocation is
+    // exactly how an operator resets to the locationName fallback. Accept ''.
+    if (typeof w.onAirLocation === 'string') {
+      next.weather.onAirLocation = w.onAirLocation.trim().slice(0, 80);
+    }
     if (w.units !== undefined) {
       if (w.units !== 'metric' && w.units !== 'imperial') {
         throw new Error("weather.units must be 'metric' or 'imperial'");
@@ -3185,6 +3347,15 @@ export async function update(patch) {
       restart = true;
     }
     next.station = resolved;
+  }
+  if ('stationDescription' in patch) {
+    const v = String(patch.stationDescription ?? '').trim();
+    if (v.length > 200) {
+      throw new Error('station description must be 200 chars or fewer');
+    }
+    // No `restart` — this never reaches the DJ prompt or a liquidsoap_*.txt
+    // file; it is read per-request by the web app's generateMetadata().
+    next.stationDescription = v;
   }
   if ('timezone' in patch) {
     const v = String(patch.timezone ?? '').trim();
@@ -3575,13 +3746,42 @@ export async function update(patch) {
       next.embedding.model = v;
     }
     // Dedicated embedding endpoint (issue #405). Empty → inherit settings.llm.
+    // New path: providerBaseUrls map keyed by provider id (issue #1082).
+    if (e.providerBaseUrls !== undefined) {
+      if (!e.providerBaseUrls || typeof e.providerBaseUrls !== 'object' || Array.isArray(e.providerBaseUrls)) {
+        throw new Error('embedding.providerBaseUrls must be an object map of provider → URL');
+      }
+      const incoming = e.providerBaseUrls as Record<string, unknown>;
+      const existing = (next.embedding.providerBaseUrls as Record<string, string> | undefined) ?? {};
+      const merged: Record<string, string> = { ...existing };
+      for (const p of Object.keys(incoming)) {
+        if (!LLM_PROVIDERS.includes(p)) continue;
+        const v = String(incoming[p] ?? '').trim();
+        if (v.length > 200) throw new Error(`embedding.providerBaseUrls.${p} must be 0-200 chars`);
+        if (v && !/^https?:\/\//i.test(v)) {
+          throw new Error(`embedding.providerBaseUrls.${p} must start with http:// or https://`);
+        }
+        const clean = v.replace(/\/+$/, '');
+        if (clean) merged[p] = clean; else delete merged[p];
+      }
+      next.embedding.providerBaseUrls = merged;
+    }
+    // Legacy single baseUrl — seed the map under the EFFECTIVE provider (own,
+    // else the chat provider) — the same key the admin UI reads and writes.
+    // The flat field itself is re-derived after the patch blocks below.
     if (e.baseUrl !== undefined) {
       const v = String(e.baseUrl).trim();
       if (v.length > 200) throw new Error('embedding.baseUrl must be 0-200 chars');
       if (v && !/^https?:\/\//i.test(v)) {
         throw new Error('embedding.baseUrl must start with http:// or https://');
       }
-      next.embedding.baseUrl = v.replace(/\/+$/, ''); // strip trailing slashes
+      const clean = v.replace(/\/+$/, '');
+      const prov = next.embedding.provider || next.llm.provider || '';
+      if (prov && LLM_PROVIDERS.includes(prov)) {
+        const urls = (next.embedding.providerBaseUrls as Record<string, string> | undefined) ?? {};
+        if (clean) urls[prov] = clean; else delete urls[prov];
+        next.embedding.providerBaseUrls = urls;
+      }
     }
     if (e.ollamaUrl !== undefined) {
       const v = String(e.ollamaUrl).trim();
@@ -3660,6 +3860,15 @@ export async function update(patch) {
         next.embedding.enrichment.originalYear = !!en.originalYear;
       }
     }
+  }
+  // Re-derive the embedding leg's flat baseUrl on EVERY update, not just when
+  // the embedding block was patched: the leg inherits the chat provider when
+  // its own is empty, so an llm.provider-only change also moves which map slot
+  // is live. Runtime (embeddingCfg) reads the flat field — issues #405/#1082.
+  {
+    const embedProv = (next.embedding.provider || next.llm.provider || '') as string;
+    const embedUrls = (next.embedding.providerBaseUrls as Record<string, string> | undefined) ?? {};
+    next.embedding.baseUrl = (embedProv && embedUrls[embedProv]) ? embedUrls[embedProv] : '';
   }
   if ('skills' in patch) {
     const sk = patch.skills || {};
@@ -4023,6 +4232,23 @@ export function agentLanguageReminder(persona: unknown, fields: string) {
   return `\n\nLANGUAGE — this overrides the field descriptions below: you speak ${lang}. Write ${fields} entirely in ${lang}; that is the text the listener hears on air. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them. Internal fields (ids, reasons, kinds) stay in English.`;
 }
 
+// The place the station claims to broadcast from — what the DJ says on air and
+// what the public endpoints publish. Falls back to the weather label so an
+// install that never sets it is unchanged. weather.locationName stays the
+// operator-facing label for the coordinates and is never spoken or published;
+// weather.lat/lng never leave the Open-Meteo call.
+//
+// context.ts passes { weather: config.weather } instead of the cache default so
+// its weather block stays the single source it derives lat/lng/units from.
+export function resolveOnAirLocation(s: unknown = cache) {
+  const w = (s as { weather?: { onAirLocation?: unknown; locationName?: unknown } } | null | undefined)?.weather;
+  return (
+    String(w?.onAirLocation ?? '').trim() ||
+    (w?.locationName as string) ||
+    DEFAULTS.weather.locationName
+  );
+}
+
 // Render the DJ system prompt by substituting {name}, {soul}, {station},
 // {location}, {language}. {name}/{soul} come from the supplied persona; the
 // template is the global djPrompt (falling back to DEFAULT_DJ_PROMPT_TEMPLATE).
@@ -4033,7 +4259,7 @@ export function renderDjPrompt(persona: unknown, ctx: unknown = {}) {
   const c = (ctx ?? {}) as { station?: unknown; location?: unknown };
   const p = persona as { name?: unknown; soul?: unknown; language?: unknown } | null | undefined;
   const station = c.station || cache?.station || DEFAULTS.station;
-  const location = c.location || (cache?.weather?.locationName ?? DEFAULTS.weather.locationName);
+  const location = c.location || resolveOnAirLocation();
   const tpl =
     cache?.djPrompt && cache.djPrompt.trim() ? cache.djPrompt : DEFAULT_DJ_PROMPT_TEMPLATE;
   const rendered = tpl
@@ -4106,6 +4332,7 @@ const LIQ_ARCHIVE_BITRATE_PATH = `${STATE_DIR}/liquidsoap_archive_bitrate.txt`;
 const LIQ_OPUS_ENABLED_PATH = `${STATE_DIR}/liquidsoap_opus_enabled.txt`;
 const LIQ_OPUS_BITRATE_PATH = `${STATE_DIR}/liquidsoap_opus_bitrate.txt`;
 const LIQ_FLAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_flac_enabled.txt`;
+const LIQ_OGG_ICY_METADATA_PATH = `${STATE_DIR}/liquidsoap_ogg_icy_metadata.txt`;
 const LIQ_AAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_aac_enabled.txt`;
 const LIQ_AAC_BITRATE_PATH = `${STATE_DIR}/liquidsoap_aac_bitrate.txt`;
 const LIQ_STREAM_BITRATE_PATH = `${STATE_DIR}/liquidsoap_stream_bitrate.txt`;
@@ -4119,6 +4346,7 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_OPUS_ENABLED_PATH, s.stream.opusEnabled ? 'true' : 'false');
   await writeFile(LIQ_OPUS_BITRATE_PATH, String(s.stream.opusBitrate));
   await writeFile(LIQ_FLAC_ENABLED_PATH, s.stream.flacEnabled ? 'true' : 'false');
+  await writeFile(LIQ_OGG_ICY_METADATA_PATH, s.stream.oggIcyMetadata ? 'true' : 'false');
   await writeFile(LIQ_AAC_ENABLED_PATH, s.stream.aacEnabled ? 'true' : 'false');
   await writeFile(LIQ_AAC_BITRATE_PATH, String(s.stream.aacBitrate));
   await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));

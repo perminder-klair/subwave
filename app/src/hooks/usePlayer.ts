@@ -1,9 +1,10 @@
 // The native port of web/web/hooks/usePlayer.ts.
 //
 // Owns tune-in state, status, volume, and the stall watchdog — but backed by
-// react-native-track-player instead of an <audio> element. MP3-only (no codec
-// probe; native skips Opus for the same chained-Ogg reasons the web pins iOS to
-// MP3). The base URL comes from StationContext, not a build-time env.
+// react-native-track-player instead of an <audio> element. Tunes the MP3 floor
+// by default; an optional stream format (validated upstream by useStreamFormat
+// against platform + station support) selects the Opus/FLAC/AAC mounts. The
+// base URL comes from StationContext, not a build-time env.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import TrackPlayer, {
@@ -17,6 +18,7 @@ import {
 } from '../../modules/airplay-route-picker';
 import { getLastLiveMeta, loadAndPlay, setupPlayer, teardown } from '@/audio/player';
 import type { StationApi } from '@/lib/api';
+import type { StreamFormat } from '@/lib/streamFormat';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
 // Dev-build diagnostics for the audio pipeline (route handoffs, watchdog
@@ -53,6 +55,9 @@ export function usePlayer(
   // Device-level reachability (from useConnectivity), threaded in so a regained
   // link triggers an immediate reconnect rather than waiting for the watchdog.
   isConnected: boolean | null = null,
+  // The Icecast mount to tune (already platform- and station-validated by
+  // useStreamFormat — this hook just uses it). Defaults to the MP3 floor.
+  streamFormat: StreamFormat = 'mp3',
 ): Player {
   const [tunedIn, setTunedIn] = useState(false);
   const [status, setStatus] = useState<PlayerStatus>('idle');
@@ -61,12 +66,14 @@ export function usePlayer(
 
   const tunedInRef = useRef(tunedIn);
   const apiRef = useRef(api);
+  const formatRef = useRef(streamFormat);
   const watchdog = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Consecutive failed reconnects since the last successful 'playing' — drives
   // the exponential backoff below.
   const retryCount = useRef(0);
   useEffect(() => { tunedInRef.current = tunedIn; }, [tunedIn]);
   useEffect(() => { apiRef.current = api; }, [api]);
+  useEffect(() => { formatRef.current = streamFormat; }, [streamFormat]);
 
   useEffect(() => { setupPlayer().catch(() => {}); }, []);
 
@@ -123,10 +130,10 @@ export function usePlayer(
     clearWatchdog();
     const a = apiRef.current;
     if (!tunedInRef.current || !a) return;
-    plog('reconnect → loadAndPlay');
+    plog(`reconnect → loadAndPlay (${formatRef.current})`);
     setStatus('connecting');
     try {
-      await loadAndPlay({ url: a.streamUrl(), headers: a.streamHeaders() });
+      await loadAndPlay({ url: a.streamUrl(formatRef.current), headers: a.streamHeaders() });
       await TrackPlayer.setVolume(volume);
     } catch {
       // A throw here may not surface as a PlaybackError event — re-arm
@@ -271,6 +278,20 @@ export function usePlayer(
     if (tunedInRef.current) stop();
   }, [api, stop]);
 
+  // Format change mid-listen — retune onto the new mount in place. Covers both
+  // a fresh pick in the format drawer and the effective format snapping back
+  // to MP3 when the station stops advertising the chosen mount. Keyed on the
+  // transition (like the station-change effect above) so a steady value never
+  // reloads the stream.
+  const prevFormatRef = useRef(streamFormat);
+  useEffect(() => {
+    if (prevFormatRef.current === streamFormat) return;
+    prevFormatRef.current = streamFormat;
+    if (!tunedInRef.current) return;
+    retryCount.current = 0;
+    reconnect();
+  }, [streamFormat, reconnect]);
+
   const tune = useCallback(() => {
     if (tunedInRef.current) {
       stop();
@@ -282,7 +303,7 @@ export function usePlayer(
     retryCount.current = 0;
     setTunedIn(true);
     setStatus('connecting');
-    loadAndPlay({ url: a.streamUrl(), headers: a.streamHeaders() })
+    loadAndPlay({ url: a.streamUrl(formatRef.current), headers: a.streamHeaders() })
       .then(() => TrackPlayer.setVolume(volume))
       .catch(() => { if (tunedInRef.current) armWatchdog(nextRetryDelay()); });
   }, [stop, volume, armWatchdog, nextRetryDelay]);

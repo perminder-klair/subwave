@@ -18,6 +18,34 @@ import { introBudgetPhrase, introMsFor, bpmKeyFor } from './intro-budget.js';
 // it, a model told to "mention the weather" would only invent it.
 const SCRIPT_CONTEXT_FIELDS = ['date', 'clock', 'time', 'festival', 'show', 'listeners'];
 
+// A request intro is WRITTEN when the request resolves but AIRED from
+// onTrackStarted — it plays over the opening bars of the track it introduces,
+// heavy-ducked, not in the gap before it (queue.airIntro, deferred by #189).
+// Requests also append to the END of `upcoming` (queue.push), so an already-
+// queued track can air in between, putting minutes and a whole other song
+// between writing and airing. Two failure modes follow, and this clause is the
+// single place both are addressed:
+//   1. TENSE — "what comes through the speakers next" is written correctly at
+//      resolve time and is wrong on air, because the track is playing by then.
+//      Observed in the wild even at queue depth 1, with nothing in between.
+//   2. STALE MOMENT — anything anchored to what was on-air, or to the state of
+//      the room "right now", may have been overtaken by the track that slipped
+//      in between. shouldDropStaleLink only catches a wrongly NAMED
+//      predecessor, so tense/mood staleness has to be prevented here.
+// Exported so the request AGENT path (broadcast/dj-agent.ts requestSystem)
+// shares the wording verbatim instead of drifting from this one.
+// NOTE: deliberately no example opening phrasings here. An earlier draft
+// offered a few ("this is…", "that's us into…") and a live run put the SAME
+// opener on three consecutive request intros — the model treats a menu as a
+// template. State the constraint, let ANGLES + the opener blocklist keep the
+// shape varied.
+export const AIR_TIME_CLAUSE = ' Timing: this line airs over the opening seconds'
+  + ' of the track itself, not in the gap before it. The track is already'
+  + ' sounding as you speak — refer to it as present and playing, never as'
+  + ' something still to come. Minutes and another song may pass between writing'
+  + ' this and airing it, so say nothing about what is on air at this instant or'
+  + ' about how the room feels right now.';
+
 export async function generateIntro({ track, context, requestedBy = null, requestText = null, artistMiss = null, recap = null, recentTracks = null, recentOpeners = null }: any) {
   const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS });
   if (requestedBy) ctxLines.push(`Requested by: ${requestedBy}`);
@@ -31,18 +59,18 @@ export async function generateIntro({ track, context, requestedBy = null, reques
   // pretending the track is by the requested artist (issue: "asked for Katy
   // Perry, got Daft Punk, intro still said Katy Perry").
   if (artistMiss) {
-    ctxLines.push(`IMPORTANT: We do NOT have "${artistMiss}" in the library. The track coming up is NOT by them — it's a fitting substitute for the moment. Do not imply or claim the track is by "${artistMiss}".`);
+    ctxLines.push(`IMPORTANT: We do NOT have "${artistMiss}" in the library. The track now starting is NOT by them — it's a fitting substitute for the moment. Do not imply or claim the track is by "${artistMiss}".`);
   }
-  ctxLines.push(`Coming up: "${track.title}" by ${track.artist}${track.album ? ` from ${track.album}` : ''}${track.year ? ` (${track.year})` : ''}`);
+  ctxLines.push(`Now starting: "${track.title}" by ${track.artist}${track.album ? ` from ${track.album}` : ''}${track.year ? ` (${track.year})` : ''}`);
 
   // Talk-within-the-intro (A.3 phase 1): when the track's intro runway is
   // known, budget the line to land before the vocals. Advisory + additive —
   // empty for un-analysed tracks, so behaviour is unchanged there.
   const budget = introBudgetPhrase(introMsFor(track));
   const missClause = artistMiss
-    ? ` The listener asked for "${artistMiss}", but we don't have them — briefly own that ("no ${artistMiss} in the crates", or similar), then introduce what's actually coming up as a worthy stand-in. Never pretend the track is by "${artistMiss}".`
+    ? ` The listener asked for "${artistMiss}", but we don't have them — briefly own that ("no ${artistMiss} in the crates", or similar), then introduce what's actually playing as a worthy stand-in. Never pretend the track is by "${artistMiss}".`
     : '';
-  const prompt = `Write an intro for this track. ${lengthPhrase('intro')}${budget ? ' ' + budget : ''} If the listener said something specific, acknowledge their words naturally — don't quote them verbatim, but weave the gist in. Never read the request out loud as-is. This is a listener request — keep the focus on what they asked for and the track coming up; don't back-announce or talk about the track that was just playing.${missClause}\n\n${ctxLines.join('\n')}`;
+  const prompt = `Write an intro for this track. ${lengthPhrase('intro')}${budget ? ' ' + budget : ''} If the listener said something specific, acknowledge their words naturally — don't quote them verbatim, but weave the gist in. Never read the request out loud as-is. This is a listener request — keep the focus on what they asked for and the track now starting; don't back-announce or talk about the track that was just playing.${AIR_TIME_CLAUSE}${missClause}\n\n${ctxLines.join('\n')}`;
 
   return djText({
     system: djSystem(),

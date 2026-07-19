@@ -2,7 +2,7 @@
 // Used by the autonomous scheduler to pick mood-appropriate tracks.
 
 import { config } from './config.js';
-import { resolveActiveShow, get as getSettings } from './settings.js';
+import { resolveActiveShow, resolveOnAirLocation, get as getSettings } from './settings.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase } from './time.js';
@@ -56,6 +56,20 @@ export function invalidateWeatherCache() {
   weatherCache = { data: null, fetchedAt: 0 };
 }
 
+// The place the weather readout is ATTRIBUTED to — the broad on-air location,
+// not the precise point the forecast was actually fetched for. Every downstream
+// consumer reads this one field, so resolving it here covers all of them at
+// once: the spoken "Weather in X" line, the weather skill's tool result, GET
+// /now-playing's public context blob, and the listener-facing schedule drawer.
+// Keeping the precise locationName out of it is what stops a station's public
+// URL from naming its operator's town.
+//
+// Fed config.weather rather than the settings cache so this module keeps
+// deriving weather from the same mirrored block as lat/lng/units.
+function attributedLocation() {
+  return resolveOnAirLocation({ weather: config.weather });
+}
+
 export async function getWeather() {
   if (weatherCache.data && Date.now() - weatherCache.fetchedAt < WEATHER_TTL_MS) {
     return weatherCache.data;
@@ -75,12 +89,12 @@ export async function getWeather() {
       temp: Math.round(data.current.temperature_2m),
       tempUnit,
       isDay: data.current.is_day === 1,
-      location: config.weather.locationName,
+      location: attributedLocation(),
     };
     weatherCache = { data: result, fetchedAt: Date.now() };
     return result;
   } catch {
-    return { condition: 'unknown', mood: null, temp: null, tempUnit, location: config.weather.locationName };
+    return { condition: 'unknown', mood: null, temp: null, tempUnit, location: attributedLocation() };
   }
 }
 
@@ -325,5 +339,12 @@ export async function getFullContext(at?: Date) {
   // it couldn't be read — callers treat that as "unknown" and stay quiet.
   const listeners = { count: getListenerCount() };
 
-  return { time, weather, festival, dominantMood, date, clock, activeShow, listeners };
+  // The moment this context DESCRIBES, stamped so consumers can tell a
+  // look-ahead context from a live one. Without it a consumer that needs a date
+  // (session.start → getEffectivePersona) silently falls back to the wall clock
+  // and disagrees with the activeShow resolved above — which, on a look-ahead
+  // roll, stamps the OUTGOING persona onto the INCOMING show's session and
+  // makes stampRolledFrom see no persona change at all (mic-pass suppressed).
+  // Note this is distinct from `date` (getDateContext's calendar strings).
+  return { at: now.toISOString(), time, weather, festival, dominantMood, date, clock, activeShow, listeners };
 }

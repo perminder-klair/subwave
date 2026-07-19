@@ -8,6 +8,10 @@ import type { ChangeEvent } from 'react';
 import type { Persona, PersonaTts, SettingsResponse } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
 import { CLOUD_VOICES } from '../../../lib/cloudVoices';
+import {
+  buildCloudVoiceGroups, isKnownCloudVoice, providerSupportsDiscovery, CUSTOM_VOICE_ID,
+} from '../../../lib/cloudVoiceGroups';
+import { useVoiceDiscovery } from '../../../hooks/useVoiceDiscovery';
 import { CB_DEFAULT_VOICE, KOKORO_RE, CHATTERBOX_VOICE_RE, POCKET_TTS_VOICE_RE } from './constants';
 import { Card, Seg } from '../ui';
 import { EngineSelector } from '../tts/EngineSelector';
@@ -39,6 +43,21 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
   const pocketTtsVoices = data?.tts?.pocketTtsVoices || [];
   const cloudProviders = data?.tts?.cloudProviders || ['openai', 'elevenlabs'];
 
+  // Voices offered by this persona's cloud provider. The server falls back to
+  // the saved base URL when we don't send one, which is right here: a persona
+  // always uses the station-wide openai-compatible server. ElevenLabs is gated
+  // on a key actually being set, so we don't fire a request we know will fail.
+  const cloudProvider = persona.tts.cloudProvider;
+  const elevenLabsReady = data?.tts?.available?.cloudByProvider?.elevenlabs !== false;
+  const voiceDiscovery = useVoiceDiscovery({
+    provider: cloudProvider,
+    enabled: persona.tts.engine === 'cloud'
+      && providerSupportsDiscovery(cloudProvider)
+      && (cloudProvider !== 'elevenlabs' || elevenLabsReady),
+    adminFetch,
+  });
+  const discoveredVoices = voiceDiscovery.voices;
+
   const gain = persona.tts.gainDb ?? 0;
   const gainLabel = !gain
     ? '0 dB'
@@ -57,8 +76,11 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
     const patch: Partial<PersonaTts> = { engine: v };
     const cur = persona.tts.voice.trim();
     if (v === 'cloud') {
-      const provVoices = CLOUD_VOICES[persona.tts.cloudProvider as keyof typeof CLOUD_VOICES] || [];
-      if (!provVoices.some(pv => pv.id === cur)) {
+      // A discovered voice counts as valid too — otherwise toggling the engine
+      // away and back silently destroys a voice the operator picked from the
+      // server's own list.
+      if (!isKnownCloudVoice(cloudProvider, discoveredVoices, cur)) {
+        const provVoices = CLOUD_VOICES[cloudProvider as keyof typeof CLOUD_VOICES] || [];
         patch.voice = provVoices[0]?.id || cur;
       }
     } else if (v === 'kokoro') {
@@ -336,10 +358,13 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
           })()}
 
           {persona.tts.engine === 'cloud' && (() => {
-            const isCompat = persona.tts.cloudProvider === 'openai-compatible';
-            const provVoices = CLOUD_VOICES[persona.tts.cloudProvider as keyof typeof CLOUD_VOICES] || [];
+            const isCompat = cloudProvider === 'openai-compatible';
             const voice = persona.tts.voice.trim();
-            const isPreset = provVoices.some(v => v.id === voice);
+            const isPreset = isKnownCloudVoice(cloudProvider, discoveredVoices, voice);
+            // A compat server that advertised nothing leaves us with no list to
+            // show, so keep the plain text box it had before discovery existed.
+            const hasList = discoveredVoices.length > 0 || !isCompat;
+            const voiceGroups = buildCloudVoiceGroups(cloudProvider, discoveredVoices);
             return (
               <>
                 {cloudIssueText && (
@@ -357,8 +382,8 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                       onChange={v => {
                         // Switching provider invalidates the old voice id.
                         // openai-compatible has no curated voices — leave the
-                        // field blank so the operator types their own (server
-                        // picks its default when blank).
+                        // field blank so the operator picks from the new
+                        // server's discovered list (or the server's default).
                         const next = v === 'openai-compatible'
                           ? ''
                           : (CLOUD_VOICES[v as keyof typeof CLOUD_VOICES]?.[0]?.id || persona.tts.voice);
@@ -373,7 +398,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                   </div>
                   <div className="field">
                     <Label>Cloud voice</Label>
-                    {isCompat ? (
+                    {!hasList ? (
                       <>
                         <Input
                           value={persona.tts.voice}
@@ -382,46 +407,48 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                           onChange={(e: ChangeEvent<HTMLInputElement>) => updateTts({ voice: e.target.value })}
                         />
                         <div className="field-hint">
-                          Server-specific: Chatterbox cloning ref name, Qwen3
-                          speaker id, etc. Leave blank to let the server pick.
+                          {voiceDiscovery.loading
+                            ? 'Checking the server for a voice list…'
+                            : <>Server-specific: Chatterbox cloning ref name, Qwen3
+                                speaker id, etc. Leave blank to let the server pick.</>}
                         </div>
                       </>
                     ) : (
                       <>
                         <VoicePicker
-                          value={isPreset ? voice : '__custom__'}
+                          value={isPreset ? voice : CUSTOM_VOICE_ID}
                           onChange={val => {
                             // "Custom voice id…" clears the preset so isPreset flips
                             // false and the free-text input below appears for entry.
-                            updateTts({ voice: val === '__custom__' ? '' : val });
+                            updateTts({ voice: val === CUSTOM_VOICE_ID ? '' : val });
                           }}
-                          groups={[{
-                            voices: [
-                              ...provVoices.map(v => ({ id: v.id, label: v.label })),
-                              // An action row, not a voice — no preview affordance.
-                              { id: '__custom__', label: 'Custom voice id…', previewVoice: null },
-                            ],
-                          }]}
+                          groups={voiceGroups}
                           title="Cloud voice"
                           preview={{
                             engine: 'cloud',
-                            cloudProvider: persona.tts.cloudProvider,
+                            cloudProvider,
                             speed: persona.tts.speed,
                             adminFetch,
                           }}
                         />
                         {!isPreset && (
                           <Input
-                            className={cn('mt-2', voice ? 'border-ink' : 'border-[var(--danger)]')}
+                            // A blank compat voice is legitimate — the server
+                            // picks its own default — so don't flag it red.
+                            className={cn('mt-2', voice || isCompat ? 'border-ink' : 'border-[var(--danger)]')}
                             value={persona.tts.voice}
                             maxLength={100}
-                            placeholder="Enter a custom voice id"
+                            placeholder={isCompat ? 'Blank = server default' : 'Enter a custom voice id'}
                             onChange={(e: ChangeEvent<HTMLInputElement>) => updateTts({ voice: e.target.value })}
                           />
                         )}
                         <div className="field-hint">
-                          Pick a default voice, or choose <em>Custom voice id…</em> to enter your own
-                          (e.g. an OpenAI voice name or an ElevenLabs voice id).
+                          {discoveredVoices.length > 0
+                            ? <>{discoveredVoices.length} voice{discoveredVoices.length === 1 ? '' : 's'} found
+                                on your {isCompat ? 'server' : 'account'}. Choose <em>Custom voice id…</em> to
+                                enter one that isn&apos;t listed.</>
+                            : <>Pick a default voice, or choose <em>Custom voice id…</em> to enter your own
+                                (e.g. an OpenAI voice name or an ElevenLabs voice id).</>}
                         </div>
                       </>
                     )}

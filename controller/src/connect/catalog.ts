@@ -157,7 +157,9 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
         description:
           'The effective DJ persona right now — name, tagline, soul blurb, talk ' +
           'frequency, DJ-mode flag, avatar URL, and station name. Reflects the ' +
-          'active show\'s persona when a show is on air.',
+          'active show\'s persona when a show is on air. `location` is the ' +
+          'station\'s on-air location, which operators may deliberately set to a ' +
+          'broad area — treat it as approximate, never as a precise position.',
         auth: 'none',
         responseExample: {
           name: 'Frequency',
