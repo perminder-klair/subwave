@@ -63,6 +63,32 @@
 	}
 
 	# -------------------------------------------------------------------------
+	# /ch/<id>/… — sub-station channels (any number, no per-channel config)
+	# -------------------------------------------------------------------------
+	# Each channel's liquidsoap mounts itself on the shared Icecast under its
+	# full public path (/ch/kids/stream.mp3), so streams pass through untouched.
+	# The channel API rewrites to the controller's /channels/:id router, giving
+	# every channel a self-contained base URL (https://host/ch/<id>) that speaks
+	# the station API — the native app can add a channel as a "station" as-is.
+	@chStreams path_regexp ^/ch/[a-z0-9-]+/stream\.(mp3|opus|flac|aac)$
+	handle @chStreams {
+		reverse_proxy broadcast:7702 {
+			flush_interval -1
+			transport http {
+				read_buffer 16KB
+				response_header_timeout 30s
+				dial_timeout 5s
+			}
+		}
+	}
+
+	@chApi path_regexp chapi ^/ch/([a-z0-9-]+)/api(/.*)?$
+	handle @chApi {
+		rewrite * /channels/{re.chapi.1}{re.chapi.2}
+		reverse_proxy controller:7701
+	}
+
+	# -------------------------------------------------------------------------
 	# /api/* — Controller REST API
 	# -------------------------------------------------------------------------
 	# handle_path strips the /api prefix before forwarding, so the controller
@@ -92,7 +118,11 @@
 	# Don't compress the live audio mounts — MP3/Opus/FLAC/AAC are already
 	# compressed (gzip just burns CPU on incompressible data) and an encoder
 	# layer on the never-ending body fights the `flush_interval -1` live path.
-	@compressible not path /stream.mp3 /stream.opus /stream.flac /stream.aac
+	# The second matcher excludes the sub-station channel mounts the same way.
+	@compressible {
+		not path /stream.mp3 /stream.opus /stream.flac /stream.aac
+		not path_regexp ^/ch/[a-z0-9-]+/stream\.
+	}
 	encode @compressible gzip zstd
 
 	log {

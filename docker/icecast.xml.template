@@ -4,7 +4,12 @@
 
     <limits>
         <clients>${ICECAST_MAX_CLIENTS}</clients>
-        <sources>4</sources>
+        <!-- sources: max concurrent source-client connections. Each liquidsoap
+             process pushes up to 4 mounts (mp3 always; opus/flac/aac opt-in),
+             and sub-station channels each run their own liquidsoap — 32 covers
+             the main station + 7 channels fully opted-in. Idle allowance is
+             free: sources are connection slots, not CPU. -->
+        <sources>32</sources>
         <!-- queue-size: per-client backlog before Icecast drops a lagging
              listener. 2 MB ≈ 87s of MP3@192k / 131s@128k — must comfortably
              exceed burst-size, and gives jittery mobile and Cloudflare-proxied

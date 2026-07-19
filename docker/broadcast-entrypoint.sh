@@ -46,7 +46,8 @@ mkdir -p /var/sub-wave \
          /var/sub-wave/jingles \
          /var/sub-wave/logs \
          /var/sub-wave/sessions \
-         /var/sub-wave/sfx
+         /var/sub-wave/sfx \
+         /var/sub-wave/channels
 chmod 777 /var/sub-wave \
           /var/sub-wave/voice \
           /var/sub-wave/voices \
@@ -54,7 +55,8 @@ chmod 777 /var/sub-wave \
           /var/sub-wave/jingles \
           /var/sub-wave/logs \
           /var/sub-wave/sessions \
-          /var/sub-wave/sfx
+          /var/sub-wave/sfx \
+          /var/sub-wave/channels
 # Bootstrap empty m3u files Liquidsoap's reload_mode="watch" needs to see.
 touch /var/sub-wave/auto.m3u /var/sub-wave/jingles.m3u
 chmod 666 /var/sub-wave/auto.m3u /var/sub-wave/jingles.m3u
@@ -175,18 +177,98 @@ echo "broadcast: starting liquidsoap" >&2
 liquidsoap /etc/liquidsoap/radio.liq &
 LIQ_PID=$!
 
+# ---- Sub-station channel supervisor -----------------------------------------
+# state/channels.json (written by the controller's settings layer) lists the
+# enabled sub-station channels: {"channels":[{"id":"kids","telnetPort":1235}]}.
+# A background reconciler diffs running channel liquidsoaps against it every
+# 15s — spawn new, kill removed, respawn dead — so adding a channel in the
+# admin UI goes on air without a container restart. Channel processes are NOT
+# fate-shared with the main pair: only icecast/main-liquidsoap death restarts
+# the container (channels are respawned by the reconciler after it).
+# Each child runs the SAME radio.liq, parameterized by env (see the
+# SUB-STATION PARAMETERS block at the top of radio.liq).
+
+reconcile_channels() {
+    local manifest=/var/sub-wave/channels.json
+    local want=""
+    if [ -f "$manifest" ]; then
+        # -> "id port" per line. jq failure (half-written file) = keep current.
+        want=$(jq -r '.channels[]? | "\(.id) \(.telnetPort)"' "$manifest" 2>/dev/null) || return 0
+    fi
+
+    # Kill children that left the manifest / changed port; forget dead ones.
+    local id
+    for id in "${!CHANNEL_PIDS[@]}"; do
+        local keep=0 wid wport
+        while read -r wid wport; do
+            [ "$wid" = "$id" ] && [ "$wport" = "${CHANNEL_PORTS[$id]}" ] && keep=1
+        done <<< "$want"
+        if ! kill -0 "${CHANNEL_PIDS[$id]}" 2>/dev/null; then
+            echo "broadcast: channel '$id' liquidsoap died — will respawn" >&2
+            unset "CHANNEL_PIDS[$id]" "CHANNEL_PORTS[$id]"
+        elif [ "$keep" = 0 ]; then
+            echo "broadcast: stopping channel '$id' (removed from manifest)" >&2
+            kill -TERM "${CHANNEL_PIDS[$id]}" 2>/dev/null || true
+            unset "CHANNEL_PIDS[$id]" "CHANNEL_PORTS[$id]"
+        fi
+    done
+
+    # Spawn manifest entries with no live child. Ids/ports are validated by
+    # the controller, but sanitize anyway — they become paths and env values.
+    local wid wport
+    while read -r wid wport; do
+        [ -n "$wid" ] || continue
+        case "$wid" in *[!a-z0-9-]*) continue ;; esac
+        case "$wport" in ''|*[!0-9]*) continue ;; esac
+        if [ -z "${CHANNEL_PIDS[$wid]:-}" ]; then
+            local cdir=/var/sub-wave/channels/$wid
+            mkdir -p "$cdir"
+            chmod 777 "$cdir" 2>/dev/null || true
+            # reload_mode="watch" playlists need the files to exist at boot.
+            touch "$cdir/auto.m3u" "$cdir/jingles.m3u"
+            chmod 666 "$cdir/auto.m3u" "$cdir/jingles.m3u" 2>/dev/null || true
+            echo "broadcast: starting channel '$wid' liquidsoap (telnet :$wport, mount /ch/$wid)" >&2
+            CHANNEL_STATE="$cdir" MOUNT_PREFIX="/ch/$wid" TELNET_PORT="$wport" CHANNEL_ID="$wid" \
+                liquidsoap /etc/liquidsoap/radio.liq &
+            CHANNEL_PIDS[$wid]=$!
+            CHANNEL_PORTS[$wid]=$wport
+        fi
+    done <<< "$want"
+}
+
+channel_supervisor() {
+    declare -A CHANNEL_PIDS CHANNEL_PORTS
+    stop_channels() {
+        local id
+        for id in "${!CHANNEL_PIDS[@]}"; do
+            kill -TERM "${CHANNEL_PIDS[$id]}" 2>/dev/null || true
+        done
+        exit 0
+    }
+    trap stop_channels INT TERM
+    while true; do
+        reconcile_channels
+        # Interruptible sleep so TERM tears channels down promptly.
+        sleep 15 &
+        wait $! || true
+    done
+}
+
+channel_supervisor &
+CHANNELS_PID=$!
+
 # ---- Wait for either to die, then exit -------------------------------------
 # `wait -n` is a bash builtin (and not yet in dash, which is /bin/sh on the
 # savonet image — hence the bash shebang at the top). If either child exits,
 # kill the other and propagate the exit code so docker restarts the container.
 
-trap 'kill -TERM "$ICECAST_PID" "$LIQ_PID" 2>/dev/null || true' INT TERM
+trap 'kill -TERM "$ICECAST_PID" "$LIQ_PID" "$CHANNELS_PID" 2>/dev/null || true' INT TERM
 
 wait -n "$ICECAST_PID" "$LIQ_PID"
 EXIT=$?
 
-echo "broadcast: child exited ($EXIT) — taking the other down" >&2
-kill -TERM "$ICECAST_PID" "$LIQ_PID" 2>/dev/null || true
+echo "broadcast: child exited ($EXIT) — taking the others down" >&2
+kill -TERM "$ICECAST_PID" "$LIQ_PID" "$CHANNELS_PID" 2>/dev/null || true
 wait 2>/dev/null || true
 
 exit "$EXIT"

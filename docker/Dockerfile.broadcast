@@ -29,12 +29,15 @@ USER root
 # - openssl: random hex generation for first-boot secrets.
 # - curl: liquidsoap's protocol.external HTTPS fetch (Subsonic stream URLs)
 #   and the supervisor's "icecast accepting connections yet" probe.
+# - jq: the supervisor's channel reconcile loop parses state/channels.json
+#   (sub-station manifest written by the controller).
 RUN apt-get update -qq \
  && apt-get install -y --no-install-recommends \
         icecast2 \
         sudo \
         openssl \
         curl \
+        jq \
         ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 

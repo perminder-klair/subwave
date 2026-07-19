@@ -2,16 +2,38 @@
 # Reads a JSON queue file written by the Node.js controller,
 # crossfades, ducks DJ voice over song intros, falls back to autonomous playlist.
 
+# ---------------------------------------------------------------------------
+# SUB-STATION PARAMETERS — one liquidsoap process per channel.
+# The broadcast supervisor runs this same script once for the main station
+# (no env — the defaults below) and once per enabled channel with:
+#   CHANNEL_STATE — the channel's state subdir (/var/sub-wave/channels/<id>);
+#                   ALL file IPC + liquidsoap_*.txt knobs resolve against it
+#   MOUNT_PREFIX  — public mount prefix, e.g. "/ch/kids" (mount == public
+#                   path, so the edge proxy needs no per-channel rewriting)
+#   TELNET_PORT   — per-process telnet port (1234 main, 1235+ channels)
+#   CHANNEL_ID    — keeps per-channel log files apart; "" = main
+# Defaults reproduce the single-station behaviour byte-for-byte.
+# ---------------------------------------------------------------------------
+channel_state = environment.get(default="/var/sub-wave", "CHANNEL_STATE")
+mount_prefix = environment.get(default="", "MOUNT_PREFIX")
+channel_id = environment.get(default="", "CHANNEL_ID")
+
 settings.log.level := 3
 settings.log.file := true
-settings.log.file.path := "/var/log/liquidsoap/radio.log"
+settings.log.file.path :=
+  if channel_id == "" then
+    "/var/log/liquidsoap/radio.log"
+  else
+    "/var/log/liquidsoap/radio-#{channel_id}.log"
+  end
 
 # Telnet server — used by the controller to send a "restart" command after
 # changing settings that this script reads at startup. Bound to all interfaces
-# on the container's private network only; NOT exposed to the host.
+# on the container's private network only; NOT exposed to the host. Channel
+# processes each get their own port via TELNET_PORT (from state/channels.json).
 settings.server.telnet := true
 settings.server.telnet.bind_addr := "0.0.0.0"
-settings.server.telnet.port := 1234
+settings.server.telnet.port := int_of_string(default=1234, environment.get(default="1234", "TELNET_PORT"))
 
 # ---------------------------------------------------------------------------
 # RUNTIME SETTINGS — written by the controller at startup, read here.
@@ -59,33 +81,33 @@ station_name = ref("SUB/WAVE")
 # collapses the signal to near-silence — hence filter.rc with the "open" cutoff
 # capped at 9 kHz (near-transparent on music).
 
-if file.exists("/var/sub-wave/liquidsoap_jingle_ratio.txt") then
-  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_jingle_ratio.txt"))
+if file.exists("#{channel_state}/liquidsoap_jingle_ratio.txt") then
+  raw = string.trim(file.contents("#{channel_state}/liquidsoap_jingle_ratio.txt"))
   v = int_of_string(default=30, raw)
   # 0 is a valid value: jingles OFF (issue #997). Negative/garbage keeps the
   # default.
   if v >= 0 then jingle_ratio := v end
 end
 
-if file.exists("/var/sub-wave/liquidsoap_crossfade.txt") then
-  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_crossfade.txt"))
+if file.exists("#{channel_state}/liquidsoap_crossfade.txt") then
+  raw = string.trim(file.contents("#{channel_state}/liquidsoap_crossfade.txt"))
   v = float_of_string(default=10.0, raw)
   if v >= 0.0 then crossfade_duration := v end
 end
 
-if file.exists("/var/sub-wave/liquidsoap_archive_enabled.txt") then
-  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_archive_enabled.txt"))
+if file.exists("#{channel_state}/liquidsoap_archive_enabled.txt") then
+  raw = string.trim(file.contents("#{channel_state}/liquidsoap_archive_enabled.txt"))
   archive_enabled := (raw == "true")
 end
 
-if file.exists("/var/sub-wave/liquidsoap_archive_bitrate.txt") then
-  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_archive_bitrate.txt"))
+if file.exists("#{channel_state}/liquidsoap_archive_bitrate.txt") then
+  raw = string.trim(file.contents("#{channel_state}/liquidsoap_archive_bitrate.txt"))
   v = int_of_string(default=128, raw)
   if v > 0 then archive_bitrate := v end
 end
 
-if file.exists("/var/sub-wave/liquidsoap_stream_bitrate.txt") then
-  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_stream_bitrate.txt"))
+if file.exists("#{channel_state}/liquidsoap_stream_bitrate.txt") then
+  raw = string.trim(file.contents("#{channel_state}/liquidsoap_stream_bitrate.txt"))
   v = int_of_string(default=192, raw)
   if v > 0 then stream_bitrate := v end
 end
@@ -95,13 +117,13 @@ end
 # web/hooks/usePlayer.ts, which keeps Safari/iOS/Firefox on the MP3 mount — so
 # it's off by default and operators who want the extra mount turn it on. The
 # mandatory /stream.mp3 mount always serves everyone.
-if file.exists("/var/sub-wave/liquidsoap_opus_enabled.txt") then
-  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_opus_enabled.txt"))
+if file.exists("#{channel_state}/liquidsoap_opus_enabled.txt") then
+  raw = string.trim(file.contents("#{channel_state}/liquidsoap_opus_enabled.txt"))
   opus_enabled := (raw == "true")
 end
 
-if file.exists("/var/sub-wave/liquidsoap_opus_bitrate.txt") then
-  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_opus_bitrate.txt"))
+if file.exists("#{channel_state}/liquidsoap_opus_bitrate.txt") then
+  raw = string.trim(file.contents("#{channel_state}/liquidsoap_opus_bitrate.txt"))
   v = int_of_string(default=96, raw)
   if v > 0 then opus_bitrate := v end
 end
@@ -110,13 +132,13 @@ end
 # device compatibility — players/hardware that decode AAC but not Opus — so it's
 # off by default and aimed at external players, not the web/native UI (which
 # never auto-select it). Stays at the source 44.1 kHz (no resample).
-if file.exists("/var/sub-wave/liquidsoap_aac_enabled.txt") then
-  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_aac_enabled.txt"))
+if file.exists("#{channel_state}/liquidsoap_aac_enabled.txt") then
+  raw = string.trim(file.contents("#{channel_state}/liquidsoap_aac_enabled.txt"))
   aac_enabled := (raw == "true")
 end
 
-if file.exists("/var/sub-wave/liquidsoap_aac_bitrate.txt") then
-  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_aac_bitrate.txt"))
+if file.exists("#{channel_state}/liquidsoap_aac_bitrate.txt") then
+  raw = string.trim(file.contents("#{channel_state}/liquidsoap_aac_bitrate.txt"))
   v = int_of_string(default=192, raw)
   if v > 0 then aac_bitrate := v end
 end
@@ -128,13 +150,13 @@ end
 # it faithfully carries lossy audio at 4x the MP3 bandwidth. Intended for
 # external players (VLC / foobar / network streamers) — the web player does not
 # auto-select it. The mandatory /stream.mp3 mount always serves everyone.
-if file.exists("/var/sub-wave/liquidsoap_flac_enabled.txt") then
-  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_flac_enabled.txt"))
+if file.exists("#{channel_state}/liquidsoap_flac_enabled.txt") then
+  raw = string.trim(file.contents("#{channel_state}/liquidsoap_flac_enabled.txt"))
   flac_enabled := (raw == "true")
 end
 
-if file.exists("/var/sub-wave/liquidsoap_station_name.txt") then
-  raw = string.trim(file.contents("/var/sub-wave/liquidsoap_station_name.txt"))
+if file.exists("#{channel_state}/liquidsoap_station_name.txt") then
+  raw = string.trim(file.contents("#{channel_state}/liquidsoap_station_name.txt"))
   if raw != "" then station_name := raw end
 end
 
@@ -184,9 +206,9 @@ dj_queue = request.queue(id="dj_queue")
 
 # Periodically drain the queue file into request.queue
 def poll_queue() =
-  if file.exists("/var/sub-wave/next.txt") then
-    contents = string.trim(file.contents("/var/sub-wave/next.txt"))
-    file.remove("/var/sub-wave/next.txt")
+  if file.exists("#{channel_state}/next.txt") then
+    contents = string.trim(file.contents("#{channel_state}/next.txt"))
+    file.remove("#{channel_state}/next.txt")
     if contents != "" then
       log("Queueing: #{contents}")
       ignore(dj_queue.push(request.create(contents)))
@@ -205,7 +227,7 @@ auto_playlist = playlist(
   id="auto",
   reload_mode="watch",
   mode="randomize",
-  "/var/sub-wave/auto.m3u"
+  "#{channel_state}/auto.m3u"
 )
 
 # ---------------------------------------------------------------------------
@@ -973,7 +995,7 @@ music =
       id="jingles",
       mode="randomize",
       reload_mode="watch",
-      "/var/sub-wave/jingles.m3u"
+      "#{channel_state}/jingles.m3u"
     )
     # Announce each jingle to the controller. Jingles are invisible to it (no
     # on_metadata — music_meta is captured above this rotate) and play outside
@@ -989,7 +1011,7 @@ music =
           startedAt = time()
         }),
         atomic=true,
-        "/var/sub-wave/jingle-playing.json"
+        "#{channel_state}/jingle-playing.json"
       )
     )
     rotate(
@@ -1065,9 +1087,9 @@ else
 end
 
 def poll_voice() =
-  if file.exists("/var/sub-wave/say.txt") then
-    contents = string.trim(file.contents("/var/sub-wave/say.txt"))
-    file.remove("/var/sub-wave/say.txt")
+  if file.exists("#{channel_state}/say.txt") then
+    contents = string.trim(file.contents("#{channel_state}/say.txt"))
+    file.remove("#{channel_state}/say.txt")
     if contents != "" then
       log("DJ says: #{contents}")
       if has_leadin then
@@ -1080,9 +1102,9 @@ end
 thread.run(every=0.5, poll_voice)
 
 def poll_intro() =
-  if file.exists("/var/sub-wave/intro.txt") then
-    contents = string.trim(file.contents("/var/sub-wave/intro.txt"))
-    file.remove("/var/sub-wave/intro.txt")
+  if file.exists("#{channel_state}/intro.txt") then
+    contents = string.trim(file.contents("#{channel_state}/intro.txt"))
+    file.remove("#{channel_state}/intro.txt")
     if contents != "" then
       log("DJ talk-over: #{contents}")
       if has_leadin then
@@ -1095,9 +1117,9 @@ end
 thread.run(every=0.5, poll_intro)
 
 def poll_sfx() =
-  if file.exists("/var/sub-wave/sfx.txt") then
-    contents = string.trim(file.contents("/var/sub-wave/sfx.txt"))
-    file.remove("/var/sub-wave/sfx.txt")
+  if file.exists("#{channel_state}/sfx.txt") then
+    contents = string.trim(file.contents("#{channel_state}/sfx.txt"))
+    file.remove("#{channel_state}/sfx.txt")
     if contents != "" then
       log("DJ sound effect: #{contents}")
       # No lead-in: an SFX clip is already-rendered audio, and it is meant to
@@ -1387,7 +1409,7 @@ def on_meta(m) =
     # every 1.5s and per /now-playing request, and its reader treats ANY parse
     # failure as null; an in-place truncate-then-write here made it possible to
     # observe a half-written JSON and blank the now-playing data for a tick.
-    file.write(data=payload, atomic=true, "/var/sub-wave/now-playing.json")
+    file.write(data=payload, atomic=true, "#{channel_state}/now-playing.json")
     # Push the same metadata onto the Icecast stream so the ICY title
     # tracks the current song instead of lagging a transition behind.
     radio.insert_metadata([
@@ -1452,7 +1474,7 @@ settings.init.allow_root := true
 # literal "%Y-%m-%d/%H-00.mp3" file that gets truncated at the top of each hour.
 # Defined here (before make_stream_outputs) because the archive output is built
 # inside it, tied to the on-air lifecycle.
-archive_path = {time.string("/var/sub-wave/archive/%Y-%m-%d/%H-00.mp3")}
+archive_path = {time.string("#{channel_state}/archive/%Y-%m-%d/%H-00.mp3")}
 
 def make_stream_outputs() =
   # Pick the encoder from a fixed set: %mp3(bitrate=…) needs a parse-time
@@ -1480,7 +1502,7 @@ def make_stream_outputs() =
     host=environment.get(default="icecast", "ICECAST_HOST"),
     port=7702,
     password=environment.get("ICECAST_SOURCE_PASSWORD"),
-    mount="/stream.mp3",
+    mount="#{mount_prefix}/stream.mp3",
     name=station_name(),
     description="Personal frequency from the homelab",
     genre="Various",
@@ -1525,7 +1547,7 @@ def make_stream_outputs() =
         host=environment.get(default="icecast", "ICECAST_HOST"),
         port=7702,
         password=environment.get("ICECAST_SOURCE_PASSWORD"),
-        mount="/stream.opus",
+        mount="#{mount_prefix}/stream.opus",
         name=station_name(),
         description="Personal frequency from the homelab",
         genre="Various",
@@ -1561,7 +1583,7 @@ def make_stream_outputs() =
         host=environment.get(default="icecast", "ICECAST_HOST"),
         port=7702,
         password=environment.get("ICECAST_SOURCE_PASSWORD"),
-        mount="/stream.flac",
+        mount="#{mount_prefix}/stream.flac",
         name=station_name(),
         description="Personal frequency from the homelab — lossless",
         genre="Various",
@@ -1597,7 +1619,7 @@ def make_stream_outputs() =
         host=environment.get(default="icecast", "ICECAST_HOST"),
         port=7702,
         password=environment.get("ICECAST_SOURCE_PASSWORD"),
-        mount="/stream.aac",
+        mount="#{mount_prefix}/stream.aac",
         name=station_name(),
         description="Personal frequency from the homelab",
         genre="Various",
@@ -1666,8 +1688,8 @@ def stream_down() =
     # track that played. on_meta rewrites it as soon as we're back on air and
     # the next track's metadata fires; the controller reads a missing file as
     # "nothing playing".
-    if file.exists("/var/sub-wave/now-playing.json") then
-      file.remove("/var/sub-wave/now-playing.json")
+    if file.exists("#{channel_state}/now-playing.json") then
+      file.remove("#{channel_state}/now-playing.json")
     end
   end
 end
