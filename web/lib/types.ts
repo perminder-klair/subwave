@@ -184,6 +184,12 @@ export interface StationState {
    *  the operator's player-skin pick (see components/skins); `tuneInOverlay`
    *  gates the full-bleed tap-to-tune gate (default on). */
   ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
+  /** Enabled sub-station channels (empty/absent on a single-station install).
+   *  Drives the channel section of the palette menu; each channel is a
+   *  parallel stream at /ch/<id>. On a channel's own /state, `channel` names
+   *  the one being served. */
+  channels?: { id: string; name: string }[];
+  channel?: { id: string; name: string };
 }
 
 /** A single turn in the live DJ session — `voice` (spoken on-air), `dj` (the

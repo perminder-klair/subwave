@@ -12,6 +12,7 @@ import {
   Disc3,
   CalendarClock,
   Drama,
+  RadioTower,
   Sparkles,
   SlidersHorizontal,
   Terminal,
@@ -67,6 +68,7 @@ const NAV_SECTIONS: NavSection[] = [
       // reached from doorways inside Library — not top-level nav items.
       { href: '/admin/library', id: 'library', label: 'Library', icon: Disc3 },
       { href: '/admin/shows', id: 'shows', label: 'Shows', icon: CalendarClock },
+      { href: '/admin/channels', id: 'channels', label: 'Channels', icon: RadioTower },
       { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
       { href: '/admin/skills', id: 'skills', label: 'Skills', icon: Sparkles },
     ],

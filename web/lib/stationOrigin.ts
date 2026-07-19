@@ -65,6 +65,25 @@ export function originForStation(siteUrl: string): StationOrigin {
   };
 }
 
+// Origin for one of this install's sub-station channels. Two shapes of
+// API_URL exist: the edge-routed default ('/api', or a full origin ending in
+// /api) where the channel API is /ch/<id>/api on the same host (Caddy
+// rewrites it to the controller's /channels/:id router), and the
+// direct-controller dev override (http://localhost:7701, no /api suffix)
+// where the router is reached at /channels/<id> directly. Streams: channels
+// serve MP3 only, so the Opus canPlayType upgrade is disabled.
+export function originForChannel(id: string): StationOrigin {
+  const slug = encodeURIComponent(id);
+  const apiUrl = API_URL.endsWith('/api')
+    ? `${API_URL.slice(0, -'/api'.length)}/ch/${slug}/api`
+    : `${API_URL}/channels/${slug}`;
+  const chMp3 = `/ch/${slug}${MP3_PATH}`;
+  const mp3 = STREAM_URL_OVERRIDE
+    ? STREAM_URL_OVERRIDE.replace(MP3_PATH, chMp3)
+    : chMp3;
+  return { apiUrl, streams: { mp3, opus: null } };
+}
+
 const StationOriginContext = createContext<StationOrigin>(DEFAULT_STATION_ORIGIN);
 
 export const StationOriginProvider = StationOriginContext.Provider;

@@ -2,12 +2,13 @@
 
 import { useCallback, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { LayoutTemplate, Palette, Zap } from 'lucide-react';
+import { LayoutTemplate, Palette, RadioTower, Zap } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useDynamicStyle } from '../hooks/useDynamicStyle';
 import { useLiteMode } from '../hooks/useLiteMode';
 import { useThemeSwitcher } from './ThemeBootstrap';
 import { useSkinSelection } from './skins/SkinContext';
+import { useChannelList } from '@/lib/channels';
 
 /** The columns shown in each card's swatch — paper, ink, accent, overlay.
  *  Matches admin Settings → Theme so the same vocabulary travels with the
@@ -60,6 +61,12 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
   const showSkins = skinCtx != null && skinCtx.skins.length > 1;
   const [open, setOpen] = useState(false);
   const { lite, setLite } = useLiteMode();
+  // Sub-station channels — fetched lazily once the modal opens; hidden on a
+  // single-station install (empty list) and in the admin header variant.
+  // Switching is a navigation: each channel is its own page (/ch/<id>), which
+  // keeps the audio element, feed polling, and origin plumbing per-page.
+  const { channels, currentId } = useChannelList(open && variant === 'player');
+  const showChannels = variant === 'player' && !!channels && channels.length > 0;
 
   const onPickTheme = useCallback(
     (id: string | null) => {
@@ -114,7 +121,39 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
           </div>
 
           <div className="v3-scroll grid flex-1 gap-1 overflow-auto px-3 py-3">
-            <SectionLabel>Theme</SectionLabel>
+            {/* Sub-station channels — parallel always-on streams from this
+                install. A pick is a plain navigation (each channel is its own
+                page with its own audio element + origin), so the row is an
+                anchor, not a toggle. Hidden on single-station installs. */}
+            {showChannels && channels && (
+              <>
+                <SectionLabel>Channel</SectionLabel>
+                {[{ id: null as string | null, name: 'Main station', href: '/listen' },
+                  ...channels.map(c => ({ id: c.id as string | null, name: c.name, href: `/ch/${encodeURIComponent(c.id)}` }))].map(c => {
+                  const isActive = c.id === currentId;
+                  return (
+                    <a
+                      key={c.id ?? '__main'}
+                      href={c.href}
+                      aria-current={isActive ? 'page' : undefined}
+                      className={cn(
+                        'v3-focus flex w-full cursor-pointer items-center gap-2 border px-2 py-1.5 text-left no-underline',
+                        isActive
+                          ? 'border-vermilion bg-[var(--ink-softer)]'
+                          : 'border-soft-border bg-bg hover:bg-[var(--overlay)]',
+                      )}
+                    >
+                      <RadioTower className="h-4 w-4 shrink-0" aria-hidden="true" />
+                      <span className="truncate text-[11px] font-bold tracking-[0.12em] uppercase">
+                        {c.name}
+                      </span>
+                    </a>
+                  );
+                })}
+              </>
+            )}
+
+            <SectionLabel className={showChannels ? 'mt-2' : undefined}>Theme</SectionLabel>
             {themes.map(t => {
               const isActive = t.id === effectiveId;
               return (
