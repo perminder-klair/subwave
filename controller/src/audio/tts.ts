@@ -12,6 +12,7 @@ import * as pocketTts from './pocketTts.js';
 import { heavyEnabledEngines } from './ttsHeavyClient.js';
 import * as remoteTts from './remoteTts.js';
 import { normalizeForSpeech } from './speech-text.js';
+import { orderedFallbacks } from './tts-fallback.js';
 import { localizedPreviewText } from './preview-text.js';
 import * as cloud from '../llm/speech.js';
 import { stripThinking } from '../llm/sdk.js';
@@ -98,7 +99,7 @@ function engineUsable(engine: string, cloudProvider?: string | null): boolean {
 // The persona's own cloud provider, but only when the persona is actually ON
 // the cloud engine — otherwise the global Cloud provider applies.
 function personaCloudProvider(personaTts: any): string | null {
-  return (personaTts && personaTts.engine === 'cloud') ? personaTts.cloudProvider : null;
+  return (personaTts && personaTts.engine === 'cloud') ? (personaTts.cloudProvider ?? null) : null;
 }
 
 function resolveEngine(kind: string, personaTts: any) {
@@ -130,16 +131,18 @@ function resolveEngine(kind: string, personaTts: any) {
 //
 // The default engine is checked with the GLOBAL cloud provider (null), not the
 // persona's — falling back to `cloud` means the station default's credentials,
-// not the ones that just failed.
+// not the ones that just failed. The rescue call itself must agree: speak()'s
+// chain loop passes a null personaTts to speakWith() so a cloud-persona rescue
+// can't re-apply the persona's own provider/voice override.
+//
+// At most three rescue attempts — the ordering itself is pure and pinned by
+// scripts/tts-fallback.test.ts.
 function fallbackChain(primary: string): string[] {
-  const def = settings.get().tts?.defaultEngine;
-  const out: string[] = [];
-  for (const engine of [def, 'piper', 'kokoro']) {
-    if (!engine || engine === primary || out.includes(engine)) continue;
-    if (!engineUsable(engine, null)) continue;
-    out.push(engine);
-  }
-  return out;
+  return orderedFallbacks(
+    primary,
+    settings.get().tts?.defaultEngine,
+    (engine) => engineUsable(engine, null),
+  );
 }
 
 // Effective voice level trim (dB) for a spoken segment of `kind`: the resolved
@@ -418,7 +421,16 @@ export async function speak(
     for (const fallback of chain) {
       console.error(`[tts] ${lastEngine} failed for kind=${kind}: ${lastErr.message} — falling back to ${fallback}`);
       try {
-        const result = await speakWith(fallback, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
+        // personaTts is deliberately NOT forwarded to a rescue: speakWith()'s
+        // per-engine branches only read it when personaTts.engine === the
+        // engine being spoken, and the chain excludes the primary — so for
+        // every rescue it's inert EXCEPT the one corner where a cloud persona
+        // was pre-flight-rerouted (its provider unconfigured) and the default
+        // engine is `cloud`: forwarding it would re-apply the persona's dead
+        // provider/voice instead of the station default's credentials the
+        // chain probe just validated. Null keeps probe and call in agreement.
+        // The persona's `language`/`soul` hints still ride via opts.
+        const result = await speakWith(fallback, speakText, { outPath, speedScale: scale, language, soul }, null);
         if (typeof result === 'string') await applyEdgeFades(result);
         recordTts({
           ...callBase, engine: fallback, fellBack: true,
