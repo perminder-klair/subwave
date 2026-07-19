@@ -40,6 +40,7 @@ function clockPreview(timeZone: string, locale: StationLocale) {
 export function StationSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
   const save = () => saveSettings({
     station: form.station,
+    stationDescription: form.stationDescription,
     timezone: form.timezone,
     locale: form.locale,
     weather: {
@@ -88,7 +89,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
         ]}
       />
 
-      <Card title="Station name" sub="What the DJ calls this radio on air">
+      <Card title="Station identity" sub="What the DJ calls this radio on air, and how shared links describe it">
         <div className="field">
           <Label>Station name</Label>
           <Input
@@ -102,6 +103,25 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
           />
           <div className="field-hint">
             Substituted into the DJ prompt’s {'{station}'} placeholder (current: {data.values?.station || 'SUB/WAVE'}). Applies live.
+          </div>
+        </div>
+
+        <div className="field">
+          <Label>Share description</Label>
+          <Input
+            placeholder="A short line describing your station…"
+            value={form.stationDescription}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, stationDescription: e.target.value }))
+            }
+            className="w-full"
+            maxLength={200}
+          />
+          <div className="field-hint">
+            The blurb shown when someone shares a link to this station on social
+            media or chat. Stays the same whoever is on air — leave it empty and
+            the preview falls back to the current DJ’s tagline, which changes
+            with the schedule. Never read on air. {form.stationDescription.length}/200.
           </div>
         </div>
       </Card>

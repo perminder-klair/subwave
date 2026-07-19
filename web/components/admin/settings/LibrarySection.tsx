@@ -56,8 +56,9 @@ interface LibrarySectionProps extends SectionProps {
 export function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: LibrarySectionProps) {
   const e = form.embedding;
   const [embeddingKeyInput, setEmbeddingKeyInput] = useState('');
+  const [compatEmbedKeyInput, setCompatEmbedKeyInput] = useState('');
 
-  useEffect(() => { setEmbeddingKeyInput(''); }, [form.embedding.provider]);
+  useEffect(() => { setEmbeddingKeyInput(''); setCompatEmbedKeyInput(''); }, [form.embedding.provider]);
 
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
@@ -85,7 +86,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         enabled: e.enabled,
         provider: e.provider,
         model: e.model,
-        baseUrl: e.baseUrl,
+        providerBaseUrls: e.providerBaseUrls,
         ollamaUrl: e.ollamaUrl,
         seedCount: parseInt(e.seedCount, 10) || 0,
         knnNeighbours: parseInt(e.knnNeighbours, 10) || 10,
@@ -102,8 +103,19 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           lastfmTags: e.enrichment.lastfmTags,
           lyrics: e.enrichment.lyrics,
         },
+        // openai-compatible bearer token — write only when typed, 'set' sentinel
+        // from getRedacted() is ignored server-side so it never overwrites the key.
+        ...(effectiveProvider === 'openai-compatible' && compatEmbedKeyInput.trim()
+          ? { apiKey: compatEmbedKeyInput.trim() }
+          : {}),
       },
     });
+    // No separate toast/refresh — saveSettings already notifies and refreshes
+    // for the whole embedding patch (and toasting ok here would lie when the
+    // save itself failed). Mirrors the LlmSection compat-key flow.
+    if (effectiveProvider === 'openai-compatible' && compatEmbedKeyInput.trim()) {
+      setCompatEmbedKeyInput('');
+    }
     // Save embedding API key override if typed (cloud embedding providers only —
     // embedKeyVar is set only for providers that use a conventional key).
     if (embedKeyVar && embeddingKeyInput.trim()) {
@@ -153,36 +165,49 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
   // it cries "missing" for a provider whose key is already set for the DJ.
   const embedKeyPresent = embedKeySet || !!data.env?.['EMBEDDING_API_KEY'];
 
+  // `||` (not `??`) so a field cleared in the form ('' entry) falls through to
+  // the chat leg's URL, matching the pre-map `e.baseUrl || form.llm.baseUrl`.
+  const embedBaseUrl = e.providerBaseUrls[effectiveProvider]
+    || form.llm.providerBaseUrls[effectiveProvider]
+    || '';
+
   const embedDiscoveryEnabled =
     effectiveProvider === 'ollama'
     || effectiveProvider === 'locca'
-    || (effectiveProvider === 'openai-compatible' && !!(e.baseUrl || form.llm.baseUrl).trim())
+    || (effectiveProvider === 'openai-compatible' && !!embedBaseUrl.trim())
     || (effectiveProvider === 'openrouter')
     || (!!embedKeyVar && embedKeySet);
 
   const embedDiscovery = useModelDiscovery({
     provider: effectiveProvider,
-    baseUrl: e.baseUrl || form.llm.baseUrl,
+    baseUrl: embedBaseUrl,
     ollamaUrl: e.ollamaUrl || form.llm.ollamaUrl,
     scope: 'embedding',
     enabled: embedDiscoveryEnabled,
     adminFetch,
   });
 
-  const probeQuery = () => {
-    const p = new URLSearchParams();
-    if (e.provider) p.set('provider', e.provider);
-    if (e.model) p.set('model', e.model);
-    if (e.baseUrl) p.set('baseUrl', e.baseUrl);
-    if (e.ollamaUrl) p.set('ollamaUrl', e.ollamaUrl);
-    return p.toString();
+  // POST body, not query params — the unsaved bearer token must never ride a
+  // URL that reverse-proxy access logs capture.
+  const probeBody = () => {
+    const b: Record<string, string> = {};
+    if (e.provider) b.provider = e.provider;
+    if (e.model) b.model = e.model;
+    if (embedBaseUrl) b.baseUrl = embedBaseUrl;
+    if (e.ollamaUrl) b.ollamaUrl = e.ollamaUrl;
+    if (compatEmbedKeyInput.trim()) b.apiKey = compatEmbedKeyInput.trim();
+    return b;
   };
 
   const runProbe = async () => {
     setProbing(true);
     setProbe(null);
     try {
-      const r = await adminFetch(`/settings/embedding/probe?${probeQuery()}`);
+      const r = await adminFetch('/settings/embedding/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(probeBody()),
+      });
       setProbe(await r.json());
     } catch (err) {
       setProbe({ ok: false, dim: null, code: 'unknown', message: errorMessage(err) });
@@ -207,11 +232,15 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
       } catch {
         /* discovery is best-effort — fall through and probe with the default model */
       }
-      const p = new URLSearchParams({ provider: 'locca', baseUrl: url, model });
-      const j = await (await adminFetch(`/settings/embedding/probe?${p.toString()}`)).json();
+      const r = await adminFetch('/settings/embedding/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'locca', baseUrl: url, model }),
+      });
+      const j = await r.json();
       setProbe(j);
       if (j.ok) {
-        setForm(f => ({ ...f, embedding: { ...f.embedding, provider: 'locca', baseUrl: url, model } }));
+        setForm(f => ({ ...f, embedding: { ...f.embedding, provider: 'locca', providerBaseUrls: { ...f.embedding.providerBaseUrls, locca: url }, model } }));
       }
     } catch (err) {
       setProbe({ ok: false, dim: null, code: 'unknown', message: errorMessage(err) });
@@ -463,9 +492,9 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             <div className="field">
               <Label>Embedding server base URL</Label>
               <Input
-                value={e.baseUrl}
+                value={e.providerBaseUrls[effectiveProvider] ?? ''}
                 onChange={(ev: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, embedding: { ...f.embedding, baseUrl: ev.target.value } }))
+                  setForm(f => ({ ...f, embedding: { ...f.embedding, providerBaseUrls: { ...f.embedding.providerBaseUrls, [effectiveProvider]: ev.target.value } } }))
                 }
                 placeholder="http://host.docker.internal:8090/v1"
                 className="max-w-[360px]"
@@ -492,6 +521,28 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 {' '}Must be reachable from the controller container. Use the host
                 LAN/Tailscale IP or <code>host.docker.internal</code>, not{' '}
                 <code>127.0.0.1</code>.
+              </div>
+            </div>
+          )}
+
+          {effectiveProvider === 'openai-compatible' && (
+            <div className="field">
+              <Label>Bearer token</Label>
+              <Input
+                type="password"
+                value={compatEmbedKeyInput}
+                onChange={(ev: ChangeEvent<HTMLInputElement>) => setCompatEmbedKeyInput(ev.target.value)}
+                placeholder={
+                  (data.values?.embedding as { apiKey?: string })?.apiKey === 'set'
+                    ? '•••••• (on file)'
+                    : 'Bearer token (optional)'
+                }
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">
+                Optional — only needed when the embedding server requires bearer
+                authentication. Saved to <code>settings.json</code>, takes effect
+                on next save.
               </div>
             </div>
           )}

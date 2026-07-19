@@ -228,7 +228,7 @@ export function requestSchema() {
   return z.object({
     id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
     ack: z.string().describe('short on-air acknowledgement of the listener, in character — max 20 words; no "thank you for listening" or self-intros'),
-    intro: z.string().describe(`a natural DJ intro for the track in the DJ voice; weave in what the listener asked for without reading the request back verbatim. ${dj.lengthPhrase('intro')}`),
+    intro: z.string().describe(`a natural DJ intro for the track in the DJ voice; weave in what the listener asked for without reading the request back verbatim. It airs over the track's opening seconds, so write it in the present tense — never "next" or "coming up". ${dj.lengthPhrase('intro')}`),
   });
 }
 
@@ -318,7 +318,9 @@ export function requestSystem() {
   const persona = settings.getEffectivePersona();
   return `${settings.agentPersonaPreamble(persona)}
 
-The messages above are the live session. The final user line names the ONE listener request you are resolving now — any earlier request lines are already handled by someone else; ignore them. If the exact ask isn't in the library, pick the closest thing your tools actually returned and own the substitution in the "ack" and "intro" — never pretend it's what they asked for.${settings.agentLanguageReminder(persona, 'the "ack" and "intro" lines')}`;
+The messages above are the live session. The final user line names the ONE listener request you are resolving now — any earlier request lines are already handled by someone else; ignore them. If the exact ask isn't in the library, pick the closest thing your tools actually returned and own the substitution in the "ack" and "intro" — never pretend it's what they asked for.${settings.agentLanguageReminder(persona, 'the "ack" and "intro" lines')}
+
+The currently-playing track named in that line is there ONLY so you can interpret asks that lean on it ("something like this", "match this energy"). It is not the track your intro introduces and it may well have finished by the time the intro airs — never mention it, back-announce it, or describe the mood it set.${dj.AIR_TIME_CLAUSE}`;
 }
 
 // --- Agent circuit breaker ---------------------------------------------------

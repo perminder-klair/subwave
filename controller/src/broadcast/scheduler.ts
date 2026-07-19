@@ -357,6 +357,18 @@ async function refreshAutoPlaylistInner() {
     if (allowed.length) { pool.length = 0; pool.push(...allowed); }
   }
 
+  // Loudness normalisation: the queue drain stamps liq_amplify per track, but
+  // this fallback bypasses the drain entirely — without a stamp here every
+  // coast track (queue empty: LLM down/slow, budget-hard, restart) played at
+  // unity gain, so a hot master aired loud until the next queued pick. Same
+  // resolver as the drain path (queue.applyLoudnessGain: ReplayGain tag →
+  // measured LUFS, per settings.loudness.source), so both paths level
+  // identically. Subsonic-sourced pool tracks carry the replayGain field for
+  // free; library-sourced rows recover it via a best-effort getSong (bounded
+  // by TARGET_POOL per refresh). No loudness from any source → no liq_amplify
+  // → unity, exactly as before.
+  for (const t of pool) await queue.applyLoudnessGain(t);
+
   // Stamp the station cap on every fallback entry (#447). max-track-length is a
   // pure on-air cue_out cut, not a selection filter, so over-length tracks stay
   // in the pool and simply crossfade out at the cap when the queue runs dry.

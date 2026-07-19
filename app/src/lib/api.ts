@@ -11,6 +11,7 @@
 // mounted under `/api`, and the Icecast stream at `/stream.mp3` on the same
 // origin (matches docker/Caddyfile routing).
 
+import { mountFor, type StreamFormat } from './streamFormat';
 import type {
   DjPublic,
   NowPlayingResponse,
@@ -74,10 +75,11 @@ export interface StationApi {
    *  emits it WITHOUT the `/api` prefix; this client adds it like every other
    *  endpoint. */
   avatar(path: string): string;
-  /** The live MP3 Icecast mount — the universal floor; Opus/Ogg is skipped on
-   *  native for the same chained-Ogg reasons the web pins iOS to MP3. Carries NO
-   *  embedded credentials — see streamHeaders(). */
-  streamUrl(): string;
+  /** The live Icecast mount for `format`, defaulting to the universal MP3
+   *  floor. Callers pass a non-MP3 format only after gating it on platform +
+   *  station support (lib/streamFormat.ts) — this just builds the URL. Carries
+   *  NO embedded credentials — see streamHeaders(). */
+  streamUrl(format?: StreamFormat): string;
   /** Headers to attach to the audio stream request. When the station URL
    *  embedded HTTP basic-auth credentials (`https://user:pass@host`), this
    *  returns `{ Authorization: 'Basic …' }`; otherwise `undefined`. iOS AVPlayer
@@ -257,7 +259,7 @@ export function createApi(rawBase: string): StationApi {
       if (/^https?:\/\//i.test(path)) return path;
       return api(path.startsWith('/') ? path : `/${path}`);
     },
-    streamUrl: () => `${cleanBase}/stream.mp3`,
+    streamUrl: (format = 'mp3') => `${cleanBase}${mountFor(format)}`,
     streamHeaders: () => streamAuthHeaders,
   };
 }

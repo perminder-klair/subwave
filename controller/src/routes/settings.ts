@@ -13,6 +13,7 @@ import * as remoteTts from '../audio/remoteTts.js';
 import * as chatterbox from '../audio/chatterbox.js';
 import * as piper from '../audio/piper.js';
 import * as llmProvider from '../llm/provider.js';
+import * as speech from '../llm/speech.js';
 import { probeEmbeddingConfig } from '../music/embeddings.js';
 import { queue } from '../broadcast/queue.js';
 import { restartLiquidsoap, startStream, stopStream, streamStatus } from '../broadcast/liquidsoap-control.js';
@@ -94,6 +95,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         stream: s.stream,
         loudness: s.loudness,
         station: s.station,
+        stationDescription: s.stationDescription,
         timezone: s.timezone,
         locale: s.locale,
         theme: s.theme,
@@ -516,6 +518,65 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /settings/tts/voices — discover the voices a cloud TTS provider offers,
+// so persona + station-default voice fields can be a dropdown instead of a
+// free-text box the operator fills from memory. The TTS twin of
+// /settings/llm/models.
+//
+// Two discoverable providers: `openai-compatible` (probes a few conventional
+// paths on the operator's own server — /v1/audio/voices isn't in the OpenAI
+// spec, so there's no single right answer) and `elevenlabs` (a real API, and
+// the one that matters most since cloned voices can never be hardcoded).
+// `openai` publishes no list endpoint; its curated UI list is already complete.
+//
+// `baseUrl` rides in on the query so the operator can discover against a URL
+// they've typed but not yet saved — same affordance the model dropdown gives.
+// The API key deliberately does NOT: it's read from saved config, so it can't
+// leak into access logs or browser history. ElevenLabs discovery therefore
+// only works once the key is saved, which the UI gates on.
+//
+// Always 200s with { ok, voices, provider, error? } — an unreachable server is
+// a normal answer, and the UI falls back to the free-text input.
+// ---------------------------------------------------------------------------
+router.get('/settings/tts/voices', requireAdmin, async (req, res) => {
+  const provider = String(req.query.provider || '').trim();
+  if (!provider) {
+    return res.json({ ok: false, voices: [], provider: '', error: 'provider is required' });
+  }
+  const baseUrl = String(req.query.baseUrl || '').trim();
+  await settings.load();
+  const cloud = settings.get().tts?.cloud || {};
+
+  // Same precedence as cloud-speech.isConfigured(): a key typed into Settings
+  // counts only for the provider it was entered against, otherwise fall back
+  // to that provider's env var from state/secrets.env.
+  const envKey = provider === 'elevenlabs'
+    ? process.env.ELEVENLABS_API_KEY
+    : process.env.OPENAI_API_KEY;
+  const settingsKey = provider === cloud.provider ? cloud.apiKey : '';
+  const apiKey = (settingsKey || envKey || '').trim();
+
+  // Backstop only — listVoices runs its own per-provider budget (10s managed,
+  // 8s across the compat probe). Sits above both so the inner deadline is what
+  // actually fires and the caller gets a real reason instead of a bare abort.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 15_000);
+  try {
+    const result = await speech.listVoices({
+      provider,
+      // Fall back to the saved baseUrl so a persona card can discover without
+      // re-sending the station-wide server URL.
+      baseUrl: baseUrl || cloud.baseUrl || '',
+      apiKey,
+      signal: ctrl.signal,
+    });
+    res.json({ ...result, provider });
+  } finally {
+    clearTimeout(timer);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // GET /settings/llm/discover — probe a locca / openai-compatible server for
 // liveness + its loaded model list, so the onboarding wizard and admin
 // Settings UI can auto-fill the model field with no hand-typing. Non-mutating.
@@ -806,18 +867,21 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// GET /settings/embedding/probe — test whether the configured (or supplied)
+// POST /settings/embedding/probe — test whether the configured (or supplied)
 // embedding endpoint can actually produce embeddings, surfacing the result
 // in the admin UI BEFORE a long tagging run instead of failing mid-job.
-// Optional query overrides (provider/model/baseUrl/ollamaUrl) test the unsaved
-// form values; omitted fields fall back to saved settings.embedding → llm.
+// Optional body overrides (provider/model/baseUrl/ollamaUrl/apiKey) test the
+// unsaved form values; omitted fields fall back to saved settings.embedding →
+// llm. POST body rather than query params so the bearer token never rides a
+// URL that reverse-proxy access logs capture — same shape as
+// /settings/llm/probe-compat.
 // Always 200s with { ok, dim, code, message } — a chat-model / unreachable
 // server is a normal, actionable answer, not an error.
 // ---------------------------------------------------------------------------
-router.get('/settings/embedding/probe', requireAdmin, async (req, res) => {
+router.post('/settings/embedding/probe', requireAdmin, async (req, res) => {
   const overrides: Record<string, string> = {};
-  for (const k of ['provider', 'model', 'baseUrl', 'ollamaUrl']) {
-    const v = req.query[k];
+  for (const k of ['provider', 'model', 'baseUrl', 'ollamaUrl', 'apiKey']) {
+    const v = (req.body || {})[k];
     if (typeof v === 'string' && v.trim()) overrides[k] = v.trim();
   }
   try {

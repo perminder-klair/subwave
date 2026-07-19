@@ -4,7 +4,11 @@ import type { ChangeEvent, ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
+import { useVoiceDiscovery } from '@/hooks/useVoiceDiscovery';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../../lib/cloudVoices';
+import {
+  buildCloudVoiceGroups, isKnownCloudVoice, providerSupportsDiscovery, CUSTOM_VOICE_ID,
+} from '../../../lib/cloudVoiceGroups';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
@@ -15,6 +19,7 @@ import { ScrollArea } from '../../ui/scroll-area';
 import { Trash2 } from 'lucide-react';
 import { EngineSelector } from '../tts/EngineSelector';
 import { VoicePreviewButton } from '../tts/VoicePreviewButton';
+import { VoicePicker } from '../tts/VoicePicker';
 import { ModelCombobox } from '../llm/ModelCombobox';
 import { cn } from '../../../lib/cn';
 import {
@@ -321,6 +326,17 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     adminFetch,
   });
 
+  // Voice list from the provider itself — the compat server's /audio/voices, or
+  // the operator's ElevenLabs account (where their cloned voices live). Same
+  // readiness gate as model discovery: a URL for compat, a saved key otherwise.
+  const voiceDiscovery = useVoiceDiscovery({
+    provider: form.tts.cloud.provider,
+    baseUrl: form.tts.cloud.baseUrl,
+    enabled: ttsDiscoveryEnabled && providerSupportsDiscovery(form.tts.cloud.provider),
+    adminFetch,
+  });
+  const discoveredVoices = voiceDiscovery.voices;
+
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
@@ -413,9 +429,15 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
 
   const selectCloudProvider = (f: FormState, provider: string): FormState => {
     const provVoices = CLOUD_VOICES[provider as keyof typeof CLOUD_VOICES] || [];
-    const voice = provVoices.some(pv => pv.id === f.tts.cloud.voice.trim())
-      ? f.tts.cloud.voice
-      : (provVoices[0]?.id || f.tts.cloud.voice);
+    // Switching provider invalidates the old voice id. openai-compatible has no
+    // curated list, so blank it and let discovery (or the server's own default)
+    // fill in — carrying an OpenAI name like "alloy" over to a local server
+    // would just fail at synthesis time. Matches PersonaVoiceCard.
+    const voice = provider === 'openai-compatible'
+      ? ''
+      : (provVoices.some(pv => pv.id === f.tts.cloud.voice.trim())
+        ? f.tts.cloud.voice
+        : (provVoices[0]?.id || f.tts.cloud.voice));
     const provModels = CLOUD_MODELS[provider as keyof typeof CLOUD_MODELS] || [];
     const model = provModels.includes(f.tts.cloud.model.trim() as never)
       ? f.tts.cloud.model
@@ -866,10 +888,15 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </div>
               </div>
               {(() => {
-                const provVoices = CLOUD_VOICES[form.tts.cloud.provider as keyof typeof CLOUD_VOICES] || [];
+                const provider = form.tts.cloud.provider;
                 const voice = form.tts.cloud.voice.trim();
-                const isPreset = provVoices.some(v => v.id === voice);
-                if (isCompat) {
+                const isPreset = isKnownCloudVoice(provider, discoveredVoices, voice);
+                const setVoice = (v: string) =>
+                  setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, voice: v } } }));
+                // A compat server that advertised no voices leaves nothing to
+                // pick from — keep the plain text box it had before discovery.
+                const hasList = discoveredVoices.length > 0 || !isCompat;
+                if (!hasList) {
                   return (
                     <div className="field">
                       <Label>Default voice</Label>
@@ -877,14 +904,14 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                         value={form.tts.cloud.voice}
                         maxLength={100}
                         placeholder="Server-specific (cloning ref or speaker id)"
-                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                          setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, voice: e.target.value } } }))
-                        }
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setVoice(e.target.value)}
                       />
                       <div className="field-hint">
-                        Server-specific: Chatterbox cloning ref name, Qwen3
-                        speaker id, etc. Leave blank to let the server pick its
-                        own default.
+                        {voiceDiscovery.loading
+                          ? 'Checking the server for a voice list…'
+                          : <>Server-specific: Chatterbox cloning ref name, Qwen3
+                              speaker id, etc. Leave blank to let the server pick its
+                              own default.</>}
                       </div>
                     </div>
                   );
@@ -892,38 +919,36 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                 return (
                   <div className="field">
                     <Label>Default voice</Label>
-                    <Select
-                      value={isPreset ? voice : '__custom__'}
-                      onValueChange={val => {
+                    <VoicePicker
+                      value={isPreset ? voice : CUSTOM_VOICE_ID}
+                      onChange={val => {
                         // "Custom voice id…" clears the preset so isPreset flips
                         // false and the free-text input below appears for entry.
-                        setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, voice: val === '__custom__' ? '' : val } } }));
+                        setVoice(val === CUSTOM_VOICE_ID ? '' : val);
                       }}
-                    >
-                      <SelectTrigger><SelectValue /></SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          {provVoices.map(v => (
-                            <SelectItem key={v.id} value={v.id}>{v.label}</SelectItem>
-                          ))}
-                          <SelectItem value="__custom__">Custom voice id…</SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
+                      groups={buildCloudVoiceGroups(provider, discoveredVoices)}
+                      title="Default cloud voice"
+                      preview={{ engine: 'cloud', cloudProvider: provider, adminFetch }}
+                    />
                     {!isPreset && (
                       <Input
-                        className={cn('mt-2', voice ? 'border-ink' : 'border-[var(--danger)]')}
+                        // A blank compat voice is legitimate — the server picks
+                        // its own default — so don't flag it red.
+                        className={cn('mt-2', voice || isCompat ? 'border-ink' : 'border-[var(--danger)]')}
                         value={form.tts.cloud.voice}
                         maxLength={100}
-                        placeholder="Enter a custom voice id"
-                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                          setForm(f => ({ ...f, tts: { ...f.tts, cloud: { ...f.tts.cloud, voice: e.target.value } } }))
-                        }
+                        placeholder={isCompat ? 'Blank = server default' : 'Enter a custom voice id'}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) => setVoice(e.target.value)}
                       />
                     )}
                     <div className="field-hint">
-                      Used when a Cloud persona hasn’t set its own voice. Pick a default, or choose
-                      <em> Custom voice id…</em> for any other OpenAI voice name / ElevenLabs voice id.
+                      Used when a Cloud persona hasn’t set its own voice.{' '}
+                      {discoveredVoices.length > 0
+                        ? <>{discoveredVoices.length} voice{discoveredVoices.length === 1 ? '' : 's'} found
+                            on your {isCompat ? 'server' : 'account'} — or choose <em>Custom voice id…</em> to
+                            enter one that isn’t listed.</>
+                        : <>Pick a default, or choose <em>Custom voice id…</em> for any other OpenAI voice
+                            name / ElevenLabs voice id.</>}
                     </div>
                   </div>
                 );
