@@ -3,7 +3,7 @@
 // DJ personas, shows); others require a Liquidsoap restart (jingle frequency,
 // crossfade duration).
 
-import { readFile, writeFile, unlink, readdir } from 'node:fs/promises';
+import { readFile, writeFile, unlink, readdir, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { STATE_DIR, config } from './config.js';
@@ -23,6 +23,20 @@ const SETTINGS_PATH = `${STATE_DIR}/settings.json`;
 // always loaded/saved together, so they share one file. On first load after
 // upgrade, load() migrates them out of settings.json into here.
 const SCHEDULE_PATH = `${STATE_DIR}/schedule.json`;
+
+// Sub-station channels (parallel always-on streams sharing this install's
+// library). The channel definitions live in settings.json (`channels`);
+// this manifest is the tiny runtime slice the broadcast supervisor's
+// reconcile loop + liquidsoap-control need — enabled channels only, id +
+// telnet port. Rewritten on every update() so adding/removing a channel in
+// the admin UI goes on air without a container restart.
+const CHANNELS_MANIFEST_PATH = `${STATE_DIR}/channels.json`;
+export const CHANNELS_LIMIT = 8;
+// First per-channel liquidsoap telnet port; the main station keeps 1234.
+const CHANNEL_TELNET_BASE = 1235;
+const CHANNEL_ID_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
+// Ids that collide with existing public paths or the main station itself.
+const CHANNEL_RESERVED_IDS = new Set(['main', 'api', 'admin', 'stream', 'ch']);
 
 // Default DJ system-prompt template. Placeholders are substituted at LLM
 // call time via renderDjPrompt(). Keep {name} mandatory — update() refuses
@@ -737,6 +751,29 @@ export interface DjPromptEntry {
   text: string;
 }
 
+// One sub-station channel (settings.channels). `id` is the public slug
+// (/ch/<id>/stream.mp3, state/channels/<id>/); `showId` pins a show as the
+// channel's music identity (null = the station's default mood-driven pool);
+// `telnetPort` is assigned once at creation and kept stable so the broadcast
+// supervisor doesn't churn processes when unrelated channels change.
+// `frequency` caps the channel DJ's talk cadence (phase 2) — 'quiet' by
+// default so extra channels don't multiply the LLM/TTS load by surprise;
+// '' = inherit the speaking persona's own frequency. `personaId` overrides
+// the on-air persona for this channel ('' = the station's active persona).
+// jingleRatio/crossfadeDuration override the station values in the channel's
+// own liquidsoap_*.txt files (null = inherit).
+export interface Channel {
+  id: string;
+  name: string;
+  enabled: boolean;
+  showId: string | null;
+  telnetPort: number;
+  frequency: string;
+  personaId: string;
+  jingleRatio: number | null;
+  crossfadeDuration: number | null;
+}
+
 // A show as produced by the lenient load-time normalizer (normalizeShows).
 // The plural music-filter lists are canonical; legacy singular fields have
 // already been migrated by the coercers below.
@@ -1133,6 +1170,11 @@ const DEFAULTS = {
   // a scheduled show can override which persona is on-air for its hour.
   personas: SEED_PERSONAS,
   activePersonaId: SEED_PERSONAS[0].id,
+  // Sub-station channels — parallel always-on streams. Each pins a show as
+  // its music identity (null = the station's default mood-driven pool) and
+  // airs on /ch/<id>/stream.mp3 via its own liquidsoap process. Empty =
+  // single-station install, bit-identical behaviour.
+  channels: [] as Channel[],
   // Reusable show definitions, placed into the weekly schedule grid.
   shows: [],
   // 7-day x 24-hour grid of showId|null. An empty hour = run autonomously.
@@ -1999,6 +2041,7 @@ export async function load() {
     shows,
     schedule,
     scheduleOverride,
+    channels: normalizeChannels(stored.channels, shows),
     tts: {
       defaultEngine: TTS_ENGINES.includes(stored.tts?.defaultEngine)
         ? stored.tts.defaultEngine
@@ -2935,6 +2978,134 @@ function validateWebhooksStrict(raw: unknown, existing: Webhook[] = []) {
 
 const FESTIVALS_LIMIT = 50;
 
+// Assign each channel a stable, unique telnet port. Existing valid ports are
+// preserved (so the broadcast supervisor never restarts a channel because an
+// unrelated one was added/removed); anything missing or colliding gets the
+// lowest free port from CHANNEL_TELNET_BASE.
+function assignChannelPorts<T extends { telnetPort?: unknown }>(list: T[]): void {
+  const used = new Set<number>();
+  for (const c of list) {
+    const p = Number(c.telnetPort);
+    if (Number.isInteger(p) && p >= CHANNEL_TELNET_BASE && !used.has(p)) {
+      used.add(p);
+    } else {
+      (c as { telnetPort?: unknown }).telnetPort = undefined;
+    }
+  }
+  let next = CHANNEL_TELNET_BASE;
+  for (const c of list) {
+    if (c.telnetPort !== undefined) continue;
+    while (used.has(next)) next += 1;
+    (c as { telnetPort: number }).telnetPort = next;
+    used.add(next);
+  }
+}
+
+// Lenient normalizer — used by load(). Drops invalid entries silently rather
+// than failing the whole boot; a channel pinning a show that no longer exists
+// falls back to the default pool (showId null) instead of vanishing.
+function normalizeChannels(raw: unknown, shows: Array<{ id: string }>): Channel[] {
+  if (!Array.isArray(raw)) return [];
+  const showIds = new Set(shows.map(s => s.id));
+  const seen = new Set<string>();
+  const out: Channel[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const id = typeof item.id === 'string' ? item.id.trim() : '';
+    if (!CHANNEL_ID_RE.test(id) || CHANNEL_RESERVED_IDS.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    const jr = Number(item.jingleRatio);
+    const cf = Number(item.crossfadeDuration);
+    out.push({
+      id,
+      name: typeof item.name === 'string' && item.name.trim() ? item.name.trim().slice(0, 80) : id,
+      enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
+      showId: typeof item.showId === 'string' && showIds.has(item.showId) ? item.showId : null,
+      telnetPort: Number(item.telnetPort),
+      frequency: FREQUENCIES.includes(item.frequency) ? item.frequency : 'quiet',
+      personaId: typeof item.personaId === 'string' ? item.personaId : '',
+      jingleRatio:
+        Number.isInteger(jr) && jr >= BOUNDS.jingleRatio.min && jr <= BOUNDS.jingleRatio.max
+          ? jr
+          : null,
+      crossfadeDuration:
+        Number.isFinite(cf) && cf >= BOUNDS.crossfadeDuration.min && cf <= BOUNDS.crossfadeDuration.max
+          ? cf
+          : null,
+    });
+    if (out.length >= CHANNELS_LIMIT) break;
+  }
+  assignChannelPorts(out);
+  return out;
+}
+
+// Strict validator — used by update(). Throws on any invalid input so the
+// admin UI gets a real error instead of a silent drop.
+function validateChannelsStrict(raw: unknown, shows: Array<{ id: string }>, personas: Array<{ id: string }>, existing: Channel[]): Channel[] {
+  if (!Array.isArray(raw)) throw new Error('channels must be an array');
+  if (raw.length > CHANNELS_LIMIT) {
+    throw new Error(`channels must be at most ${CHANNELS_LIMIT} entries`);
+  }
+  const showIds = new Set(shows.map(s => s.id));
+  const personaIds = new Set(personas.map(p => p.id));
+  const byId = new Map(existing.map(c => [c.id, c]));
+  const seen = new Set<string>();
+  const out = raw.map((item, i) => {
+    if (!item || typeof item !== 'object') throw new Error(`channels[${i}] must be an object`);
+    const id = String(item.id ?? '').trim();
+    if (!CHANNEL_ID_RE.test(id)) {
+      throw new Error(`channels[${i}].id must be 1-24 chars of a-z, 0-9, '-' (starting alphanumeric)`);
+    }
+    if (CHANNEL_RESERVED_IDS.has(id)) throw new Error(`channels[${i}].id "${id}" is reserved`);
+    if (seen.has(id)) throw new Error(`channels[${i}].id "${id}" is duplicated`);
+    seen.add(id);
+    const name = String(item.name ?? '').trim();
+    if (name.length < 1 || name.length > 80) throw new Error(`channels[${i}].name must be 1-80 chars`);
+    const showId = item.showId == null || item.showId === '' ? null : String(item.showId);
+    if (showId !== null && !showIds.has(showId)) {
+      throw new Error(`channels[${i}].showId "${showId}" does not match a saved show`);
+    }
+    const frequency = item.frequency == null || item.frequency === '' ? 'quiet' : String(item.frequency);
+    if (frequency !== '' && !FREQUENCIES.includes(frequency)) {
+      throw new Error(`channels[${i}].frequency must be one of: ${FREQUENCIES.join(', ')}`);
+    }
+    const personaId = item.personaId == null ? '' : String(item.personaId);
+    if (personaId !== '' && !personaIds.has(personaId)) {
+      throw new Error(`channels[${i}].personaId "${personaId}" does not match a persona`);
+    }
+    let jingleRatio: number | null = null;
+    if (item.jingleRatio != null && item.jingleRatio !== '') {
+      const v = parseInt(item.jingleRatio, 10);
+      if (!Number.isInteger(v) || v < BOUNDS.jingleRatio.min || v > BOUNDS.jingleRatio.max) {
+        throw new Error(`channels[${i}].jingleRatio must be int in [${BOUNDS.jingleRatio.min}, ${BOUNDS.jingleRatio.max}]`);
+      }
+      jingleRatio = v;
+    }
+    let crossfadeDuration: number | null = null;
+    if (item.crossfadeDuration != null && item.crossfadeDuration !== '') {
+      const v = parseFloat(item.crossfadeDuration);
+      if (!Number.isFinite(v) || v < BOUNDS.crossfadeDuration.min || v > BOUNDS.crossfadeDuration.max) {
+        throw new Error(`channels[${i}].crossfadeDuration must be number in [${BOUNDS.crossfadeDuration.min}, ${BOUNDS.crossfadeDuration.max}]`);
+      }
+      crossfadeDuration = v;
+    }
+    return {
+      id,
+      name,
+      enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
+      showId,
+      // Preserve the stored port; assignChannelPorts fills gaps/collisions.
+      telnetPort: byId.get(id)?.telnetPort ?? Number(item.telnetPort),
+      frequency,
+      personaId,
+      jingleRatio,
+      crossfadeDuration,
+    };
+  });
+  assignChannelPorts(out);
+  return out;
+}
+
 function validateFestivalsStrict(raw) {
   if (!Array.isArray(raw)) throw new Error('festivals must be an array');
   if (raw.length > FESTIVALS_LIMIT) {
@@ -3282,6 +3453,13 @@ export async function update(patch) {
   }
   if ('scheduleOverride' in patch) {
     next.scheduleOverride = validateScheduleOverrideStrict(patch.scheduleOverride, next.shows);
+  }
+  if ('channels' in patch) {
+    // No `restart = true`: channel topology is applied by the broadcast
+    // supervisor's reconcile loop off the manifest written below, and knob
+    // changes restart only the affected channel's own liquidsoap (see
+    // requiresChannelRestart in the return value) — the main mixer plays on.
+    next.channels = validateChannelsStrict(patch.channels, next.shows, next.personas, cur.channels ?? []);
   }
   if ('activePersonaId' in patch) {
     if (!next.personas.some(p => p.id === patch.activePersonaId)) {
@@ -3800,6 +3978,11 @@ export async function update(patch) {
     if (next.scheduleOverride && !showIds.includes(next.scheduleOverride.showId)) {
       next.scheduleOverride = null;
     }
+    // A channel pinning a removed show falls back to the default pool (the
+    // channel itself keeps airing — its music identity just widens).
+    for (const ch of next.channels ?? []) {
+      if (ch.showId && !showIds.includes(ch.showId)) ch.showId = null;
+    }
     if (!personaIds.includes(next.activePersonaId)) next.activePersonaId = personaIds[0];
 
     // Garbage-collect avatar files for personas that no longer exist. Best
@@ -3844,7 +4027,88 @@ export async function update(patch) {
     ),
   );
   await writeLiquidsoapSettings(next);
-  return { saved: next, requiresRestart: restart };
+  await writeChannelsRuntime(next);
+  // Channels whose liquidsoap-boot-time knobs changed: their own mixer needs a
+  // restart (the supervisor only reacts to topology — add/remove/port — not
+  // knob edits). The settings route restarts them via liquidsoap-control.
+  const requiresChannelRestart: string[] = [];
+  const curChannels = new Map<string, Channel>((cur.channels ?? []).map((c: Channel) => [c.id, c]));
+  for (const ch of next.channels ?? []) {
+    const prev = curChannels.get(ch.id);
+    if (!prev || !ch.enabled) continue;
+    const stationTouched = restart; // station-level knob change ripples into inherited values
+    if (
+      stationTouched ||
+      prev.enabled !== ch.enabled ||
+      prev.name !== ch.name ||
+      prev.jingleRatio !== ch.jingleRatio ||
+      prev.crossfadeDuration !== ch.crossfadeDuration
+    ) {
+      requiresChannelRestart.push(ch.id);
+    }
+  }
+  return { saved: next, requiresRestart: restart, requiresChannelRestart };
+}
+
+// ---------------------------------------------------------------------------
+// Sub-station channel runtime — the on-disk slice the broadcast side reads.
+// ---------------------------------------------------------------------------
+
+export function enabledChannels(s: { channels?: Channel[] } = get()): Channel[] {
+  return (s.channels ?? []).filter(c => c.enabled);
+}
+
+export function channelById(id: string, s: { channels?: Channel[] } = get()): Channel | null {
+  return (s.channels ?? []).find(c => c.id === id) ?? null;
+}
+
+// Resolve a channel's pinned show to the same resolved shape the scheduler
+// uses for the grid (null = no pin → the default mood-driven pool).
+export function channelShow(channel: Channel, s: any = get()) {
+  if (!channel.showId) return null;
+  const show = (s.shows ?? []).find((x: { id: string }) => x.id === channel.showId);
+  return show ? resolveShowShape(show, s) : null;
+}
+
+// Scaffold + refresh every enabled channel's state dir and write the
+// supervisor manifest. Called from update() on every save and from
+// ensureLiquidsoapSettingsFile() at boot, so the dirs/knob files exist before
+// the supervisor spawns the channel's liquidsoap. Disabled/removed channels
+// keep their dir on disk (operator data — sessions, archives — is never
+// deleted implicitly); they just leave the manifest, which stops the process.
+export async function writeChannelsRuntime(s: any) {
+  const channels: Channel[] = enabledChannels(s);
+  for (const ch of channels) {
+    const dir = `${STATE_DIR}/channels/${ch.id}`;
+    await mkdir(dir, { recursive: true });
+    // reload_mode="watch" playlists need the files to exist at liquidsoap
+    // boot. Never truncate an existing auto.m3u — the channel refresher owns
+    // its contents.
+    for (const f of ['auto.m3u', 'jingles.m3u']) {
+      if (!existsSync(`${dir}/${f}`)) await writeFile(`${dir}/${f}`, '');
+    }
+    await writeFile(`${dir}/liquidsoap_jingle_ratio.txt`, String(ch.jingleRatio ?? s.jingleRatio));
+    await writeFile(`${dir}/liquidsoap_crossfade.txt`, String(ch.crossfadeDuration ?? s.crossfadeDuration));
+    // Extra encoders + the hourly archive stay off on channels — the mp3
+    // mount is the channel product; opting a channel into opus/flac/aac or
+    // archiving is a later feature (spec: open question 4).
+    await writeFile(`${dir}/liquidsoap_archive_enabled.txt`, 'false');
+    await writeFile(`${dir}/liquidsoap_opus_enabled.txt`, 'false');
+    await writeFile(`${dir}/liquidsoap_flac_enabled.txt`, 'false');
+    await writeFile(`${dir}/liquidsoap_aac_enabled.txt`, 'false');
+    await writeFile(`${dir}/liquidsoap_stream_bitrate.txt`, String(s.stream.bitrate));
+    await writeFile(`${dir}/liquidsoap_station_name.txt`, ch.name);
+  }
+  // Manifest last, atomically — the supervisor's jq parse of a half-written
+  // file skips the reconcile pass, but a rename is cleaner still.
+  await writeFileAtomic(
+    CHANNELS_MANIFEST_PATH,
+    JSON.stringify(
+      { channels: channels.map(c => ({ id: c.id, telnetPort: c.telnetPort })) },
+      null,
+      2,
+    ),
+  );
 }
 
 // ── persona / show resolution ───────────────────────────────────────────────
@@ -4139,4 +4403,7 @@ export async function ensureLiquidsoapSettingsFile() {
   ) {
     await writeLiquidsoapSettings(s);
   }
+  // Channel dirs + manifest must exist before the broadcast supervisor's
+  // reconcile loop spawns each channel's liquidsoap. Idempotent.
+  await writeChannelsRuntime(s);
 }

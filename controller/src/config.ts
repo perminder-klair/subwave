@@ -276,3 +276,38 @@ export const config = {
     cloudSpeed: parseFloat(process.env.CLOUD_TTS_SPEED || TTS_SPEED),
   },
 };
+
+// ---------------------------------------------------------------------------
+// Sub-station channels — per-channel counterparts of the state-dir paths
+// above. A channel's liquidsoap runs against state/channels/<id>/ (see the
+// SUB-STATION PARAMETERS block in radio.liq); everything the controller
+// exchanges with THAT process resolves through here. Shared assets
+// (library.db, voices, jingle WAVs, settings) keep the root-level constants.
+// ---------------------------------------------------------------------------
+export function channelStateDir(id: string): string {
+  return `${STATE_DIR}/channels/${id}`;
+}
+
+export function channelPaths(id: string) {
+  const dir = channelStateDir(id);
+  return {
+    stateDir: dir,
+    liquidsoap: {
+      queueFile: `${dir}/next.txt`,
+      sayFile: `${dir}/say.txt`,
+      introFile: `${dir}/intro.txt`,
+      sfxFile: `${dir}/sfx.txt`,
+      autoPlaylist: `${dir}/auto.m3u`,
+      nowPlayingFile: `${dir}/now-playing.json`,
+      jinglePlayingFile: `${dir}/jingle-playing.json`,
+    },
+    session: {
+      currentFile: `${dir}/session.json`,
+      dir: `${dir}/sessions`,
+    },
+    queue: {
+      file: `${dir}/queue.json`,
+      recentPlaysFile: `${dir}/recent-plays.json`,
+    },
+  };
+}

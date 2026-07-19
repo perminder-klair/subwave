@@ -36,6 +36,19 @@ import { hasEraBound } from '../music/show-filter.js';
 import { djCallsAllowed } from './listeners.js';
 import * as likes from './likes.js';
 
+// ---------------------------------------------------------------------------
+// Channel-aware resolvers. Every entry point here receives the QUEUE it works
+// for; a channel queue (broadcast/station-context.ts) carries its own session
+// store, persona resolver, and pinned-show resolver. A missing queue — or the
+// main station's default instance — resolves to the singletons, so the bench
+// harnesses (scripts/llm-bench, picker-test.mjs) and every pre-channels call
+// path behave exactly as before.
+// ---------------------------------------------------------------------------
+const sessOf = (q?: any) => (q?.session ?? session);
+const personaOf = (q?: any) => (q?.personaFor ? q.personaFor() : settings.getEffectivePersona());
+const showOf = (q?: any, at?: Date | null) =>
+  (q?.activeShowFor ? q.activeShowFor(at ?? undefined) : settings.resolveActiveShow(at ?? undefined));
+
 // --- Feature 4: DJ-mode mini-runs ------------------------------------------
 // A short, deliberate tempo/key journey across 2-3 consecutive picks. While a
 // run is active the pool re-rank is anchored to the run target (not just the
@@ -254,8 +267,8 @@ export function requestSchema() {
 // queue.onTrackStarted). The persona stays the live one — the outgoing DJ
 // tees the changeover up in their own voice; the on-air mic-pass is
 // runPersonaHandoff's job.
-export function pickSystem(showAt: Date | null = null, playlistResolved = true) {
-  const persona = settings.getEffectivePersona();
+export function pickSystem(showAt: Date | null = null, playlistResolved = true, q?: any) {
+  const persona = personaOf(q);
   // In DJ mode, lean on the live session history: a working DJ runs threads
   // and calls back to a track or a remark from earlier in the shift. This pairs
   // with the cross-hour memory in broadcast/session.ts, which now keeps that
@@ -267,7 +280,7 @@ export function pickSystem(showAt: Date | null = null, playlistResolved = true) 
   // opening message: the session window (~40 turns) scrolls past the opener
   // within the first hour, after which the picker would lose every show
   // constraint mid-show and revert to generic picks.
-  const activeShow = settings.resolveActiveShow(showAt ?? undefined);
+  const activeShow = showOf(q, showAt);
   const showLine = activeShow?.topic
     ? `\n\nCurrent show brief — follow this for every pick:\n${activeShow.topic}`
     : '';
@@ -314,8 +327,8 @@ Finding candidates: prefer tools backed by the local library — searchLibrary, 
 }
 
 // Exported for scripts/llm-bench, like requestSchema above.
-export function requestSystem() {
-  const persona = settings.getEffectivePersona();
+export function requestSystem(q?: any) {
+  const persona = personaOf(q);
   return `${settings.agentPersonaPreamble(persona)}
 
 The messages above are the live session. The final user line names the ONE listener request you are resolving now — any earlier request lines are already handled by someone else; ignore them. If the exact ask isn't in the library, pick the closest thing your tools actually returned and own the substitution in the "ack" and "intro" — never pretend it's what they asked for.${settings.agentLanguageReminder(persona, 'the "ack" and "intro" lines')}`;
@@ -391,7 +404,7 @@ export const pickerAgent = defineAgent({
   // actually rescues these, not more steps on a polluted trail.
   maxSteps: 2,
   timeoutMs: agentDeadline,
-  buildSystem: ({ showAt, playlistTracks }: any = {}) => pickSystem(showAt ?? null, !!playlistTracks?.length),
+  buildSystem: ({ showAt, playlistTracks, q }: any = {}) => pickSystem(showAt ?? null, !!playlistTracks?.length, q),
   buildTools: ({ recentIds, recentKeys, hardRecentIds, hardRecentKeys, audioWaypoint, genreLock, eraLock, moodLock, energyLock, playlistLock, playlistTracks, excludedIds }) => {
     // For a strict show (filtersStrict) EVERY set music filter — genre, era,
     // mood, energy — becomes a hard lock the discovery tools enforce on
@@ -420,7 +433,7 @@ export const requestAgent = defineAgent({
   // See pickerAgent.maxSteps above — same reasoning.
   maxSteps: 2,
   timeoutMs: agentDeadline,
-  buildSystem: () => requestSystem(),
+  buildSystem: ({ q }: any = {}) => requestSystem(q),
   // resolveReferences adds the web-backed reference resolver (request path only;
   // no-op without a search provider) when the operator opts in via
   // settings.llm.requestWebResolve. (Artists are no longer filtered on any pick
@@ -473,10 +486,10 @@ function trackFields(song) {
 // speechPaceScale('link') maps the word ceiling to the rate the line will be
 // spoken at (engine × persona × daypart). Returns the text unchanged when not
 // in DJ mode; enforceIntroBudget itself no-ops on an un-analysed pick.
-function trimLinkToIntro(text: string | null | undefined, song: any): string | null {
+function trimLinkToIntro(text: string | null | undefined, song: any, q?: any): string | null {
   const raw = (text || '').trim();
   if (!raw) return null;
-  if (!settings.getEffectivePersona()?.djMode) return raw;
+  if (!personaOf(q)?.djMode) return raw;
   // Same corrections as speak() so the word count matches the aired text.
   const spoken = normalizeForSpeech(stripThinking(raw), settings.get().tts?.corrections);
   return dj.enforceIntroBudget(spoken, introMsOf(song), speechPaceScale('link')) || null;
@@ -505,7 +518,7 @@ async function enqueuePick(
   // skipped by a new caller. Idempotent — callers that already trimmed (the
   // agent path does, to record the aired text in its session turn) pass
   // through unchanged.
-  const introLink = trimLinkToIntro(link, song);
+  const introLink = trimLinkToIntro(link, song, queue);
   const track: any = trackFields(song);
   // Flag the transition effects on this pick (DJ mode only). getAnnotatedUri
   // stamps liq_sweep / liq_washout / liq_dissolve / liq_chop; radio.liq ramps
@@ -552,7 +565,7 @@ async function enqueuePick(
 // the same closing move pickNextTrack already uses. Returns a full pick object
 // (id/reason/say/transition) or null; never throws, so a salvage failure falls
 // through to the caller's pick.rejected path unchanged.
-async function repickFromSeen({ seen, badId, wantLink, showAt = null, playlistResolved = true }: { seen: Map<string, any>; badId: string | null; wantLink: boolean; showAt?: Date | null; playlistResolved?: boolean }) {
+async function repickFromSeen({ seen, badId, wantLink, showAt = null, playlistResolved = true, q }: { seen: Map<string, any>; badId: string | null; wantLink: boolean; showAt?: Date | null; playlistResolved?: boolean; q?: any }) {
   const ids = [...seen.keys()];
   if (ids.length === 0) return null;
   const schema = modelTolerant(pickSchemaBase().extend({
@@ -565,7 +578,7 @@ async function repickFromSeen({ seen, badId, wantLink, showAt = null, playlistRe
       // showPlaylistTracks first / every pick MUST come from the playlist" when
       // the anchor never resolved (no such tool exists here) or resolve a
       // different show than the run whose candidates we're re-picking from.
-      system: pickSystem(showAt, playlistResolved),
+      system: pickSystem(showAt, playlistResolved, q),
       prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
         + `\n\nYou explored the library and then answered with ${badId ? `the id "${badId}", which matches none of the tracks your tools returned` : 'no usable track id'}. Only ids from the candidates above are real. Choose the best next track from them.`
         + (wantLink
@@ -610,7 +623,7 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   // pick's look-ahead moment (showAt) so the anchored playlist is the show's
   // that will be on air when the pick plays — same clock as pickSystem's brief
   // and buildTools' locks.
-  const activeShow = settings.resolveActiveShow(showAt ?? undefined);
+  const activeShow = showOf(queue, showAt);
   const playlistPool = activeShow ? await resolveShowPlaylistPool(activeShow) : null;
   const playlistLock = playlistPool && activeShow?.playlistStrict ? playlistPool.ids : null;
   const playlistTracks = playlistPool?.tracks ?? null;
@@ -656,7 +669,8 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   }
 
   const run = await pickerAgent.run({
-    messages: session.windowMessages(),
+    q: queue,
+    messages: sessOf(queue).windowMessages(),
     recentIds,
     recentKeys,
     hardRecentIds,
@@ -701,7 +715,7 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
     }
   }
   if (!song && extras.seen.size) {
-    const repicked = await repickFromSeen({ seen: extras.seen, badId: object?.id ?? null, wantLink, showAt, playlistResolved: !!playlistTracks?.length });
+    const repicked = await repickFromSeen({ seen: extras.seen, badId: object?.id ?? null, wantLink, showAt, playlistResolved: !!playlistTracks?.length , q: queue });
     if (repicked) {
       logEvent('pick.repicked', { agent: 'pick', from: object?.id ?? null, to: repicked.id, candidates: extras.seen.size });
       queue.log('picker', `agent returned unknown id "${object?.id}" — re-picked "${repicked.id}" from its own candidates`);
@@ -725,7 +739,7 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   // the chokepoint (idempotent); it runs here too so the session turn below
   // records the line as it will actually air — trimmed, and dropped links as
   // null, never a line the listeners didn't hear.
-  const say = trimLinkToIntro(rawSay, song) || '';
+  const say = trimLinkToIntro(rawSay, song, queue) || '';
   // Transition effects on this pick (persona djMode via settings.effectsActive),
   // independent of whether a link airs.
   const link = (wantLink && say) ? say : null;
@@ -751,7 +765,7 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   // for a track that never airs. Returning false lets runTrackEvent fall through
   // to the pool for a fresh pick.
   if (queued === -1) return false;
-  session.appendTurn({
+  sessOf(queue).appendTurn({
     role: 'dj', kind: 'pick',
     text: object.reason || `Selected "${song.title}".`,
     meta: {
@@ -827,7 +841,7 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
   const sessionText = (result.reason && result.reason !== 'fallback (LLM pick failed)')
     ? result.reason
     : `Selected "${result.song.title}".`;
-  session.appendTurn({
+  sessOf(queue).appendTurn({
     role: 'dj', kind: 'pick',
     text: sessionText,
     meta: { trackId: result.song.id, title: result.song.title, artist: result.song.artist },
@@ -857,7 +871,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null }: { w
 
     const current = queue.current?.track || null;
     const previous = queue.history[0]?.track || null;
-    const djMode = !!settings.getEffectivePersona()?.djMode;
+    const djMode = !!personaOf(queue)?.djMode;
 
     // Feature 4 + Phase 2 — advance/maybe-start a mini-run; get the tempo/key
     // re-rank target and (when the audio index supports it) a sonic-journey
@@ -948,7 +962,7 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null }: { w
       + '. Pick the track to play next.'
       + linkClause;
     const promptSuffix = `${clockClause}${effectClause}${runClause}${journeyClause}`;
-    session.appendTurn({
+    sessOf(queue).appendTurn({
       role: 'event', kind: 'pick', text: eventText,
       meta: promptSuffix ? { promptSuffix } : {},
     });
@@ -1023,7 +1037,7 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     const cur = queue.current?.track || null;
     const tail = `The request to resolve now — listener "${requester}" asks: "${text}"`
       + (cur ? ` (currently playing "${cur.title}" by ${cur.artist}${cur.id ? ` [id: ${cur.id}]` : ''})` : '');
-    const messages = session.windowMessages();
+    const messages = sessOf(queue).windowMessages();
     const last = messages[messages.length - 1];
     if (last && last.role === 'user') last.content += '\n' + tail;
     else messages.push({ role: 'user', content: tail });
@@ -1070,14 +1084,14 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
     // reply so the request event isn't left without one.
     if (pos === -1) {
       const ack = queue.dedupAck(song.id);
-      session.appendTurn({
+      sessOf(queue).appendTurn({
         role: 'dj', kind: 'request',
         text: ack,
         meta: { trackId: song.id, requester, toolCalls },
       });
       return { ack, track: { title: song.title, artist: song.artist, id: song.id }, introScript: null };
     }
-    session.appendTurn({
+    sessOf(queue).appendTurn({
       role: 'dj', kind: 'request',
       text: intro || object.ack || `Queued "${song.title}".`,
       meta: { trackId: song.id, requester, toolCalls },
@@ -1123,7 +1137,7 @@ export async function runPersonaHandoff(queue: any, ctx: any): Promise<void> {
   // over, so getEffectivePersona() no longer returns it. Incoming is the fresh
   // session's persona. A persona deleted mid-shift → nothing to voice; drop it.
   const personaOut = settings.resolvePersonaById(pending.personaId);
-  const cur = session.getSession();
+  const cur = sessOf(queue).getSession();
   const personaIn = settings.resolvePersonaById(cur?.persona?.id) || settings.getEffectivePersona();
   if (!personaOut || !personaIn) {
     session.markHandoffAired();
@@ -1139,7 +1153,7 @@ export async function runPersonaHandoff(queue: any, ctx: any): Promise<void> {
     let aired = false;
 
     // 1. Sign-off, in the OUTGOING persona's voice. Tag the session turn with
-    //    the outgoing persona's id + name — session.windowMessages() uses the id
+    //    the outgoing persona's id + name — sessOf(queue).windowMessages() uses the id
     //    to spot a turn spoken by someone other than the session's own persona
     //    and names the real speaker, so the incoming DJ never reads the
     //    sign-off as its own words.

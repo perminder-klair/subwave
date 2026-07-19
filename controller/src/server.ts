@@ -25,6 +25,7 @@ import { cors } from './middleware/cors.js';
 import { assertAdminConfigured } from './middleware/auth.js';
 import { router as publicRoutes } from './routes/public.js';
 import { router as requestRoutes } from './routes/request.js';
+import { router as channelRoutes } from './routes/channels.js';
 import { router as settingsRoutes } from './routes/settings.js';
 import { router as jingleRoutes } from './routes/jingles.js';
 import { router as sfxRoutes } from './routes/sfx.js';
@@ -53,6 +54,7 @@ import { loadSecretsIntoEnv } from './setup/secrets.js';
 import { loadSetupConfig } from './setup/config.js';
 import { getSetupStatus } from './setup/firstRun.js';
 import * as library from './music/library.js';
+import * as stationContext from './broadcast/station-context.js';
 
 // Fail fast in production if the admin gate isn't configured.
 assertAdminConfigured();
@@ -105,6 +107,7 @@ app.use(cors);
 // Routes. `requireAdmin` is applied per-route inside the admin modules.
 app.use(publicRoutes);
 app.use(requestRoutes);
+app.use(channelRoutes);
 app.use(settingsRoutes);
 app.use(jingleRoutes);
 app.use(sfxRoutes);
@@ -275,6 +278,14 @@ app.listen(config.server.port, async () => {
   }
 
   queue.startWatcher();
+  // Sub-station channel contexts — one isolated queue + session per enabled
+  // channel, each with its own now-playing watcher (the channel DJ's trigger).
+  // After the main watcher so the main station always comes up first.
+  try {
+    stationContext.sync();
+  } catch (err: any) {
+    console.error('[channels] context sync failed:', err.message);
+  }
   startListenerMonitor();
   startStreamIdleMonitor();
   startAudienceMonitor().catch(err => console.error('[audience] init failed:', err.message));

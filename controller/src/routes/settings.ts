@@ -15,6 +15,7 @@ import * as piper from '../audio/piper.js';
 import * as llmProvider from '../llm/provider.js';
 import { probeEmbeddingConfig } from '../music/embeddings.js';
 import { queue } from '../broadcast/queue.js';
+import * as stationContext from '../broadcast/station-context.js';
 import { restartLiquidsoap, startStream, stopStream, streamStatus } from '../broadcast/liquidsoap-control.js';
 import { invalidateWeatherCache } from '../context.js';
 import { requireAdmin } from '../middleware/auth.js';
@@ -106,6 +107,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         activePersonaId: s.activePersonaId,
         shows: s.shows,
         schedule: s.schedule,
+        channels: s.channels,
         tts: s.tts,
         llm: s.llm,
         search: s.search,
@@ -206,6 +208,24 @@ router.post('/settings', requireAdmin, async (req, res) => {
     }
     if (result.requiresRestart) {
       queue.log('scheduler', `mixer settings changed — Liquidsoap restart required`);
+    }
+    // Sub-station channels: reconcile the in-process contexts (new/removed
+    // channels start/stop their queue+session immediately — the broadcast
+    // supervisor picks up the manifest within its 15s loop), and bounce the
+    // liquidsoap of any channel whose boot-time knobs changed. Best-effort:
+    // a channel's liquidsoap may not be up yet (supervisor still spawning).
+    if ('channels' in (req.body || {}) || result.requiresRestart) {
+      try {
+        stationContext.sync();
+      } catch (err: any) {
+        queue.log('error', `channel context sync failed: ${err.message}`);
+      }
+      for (const id of result.requiresChannelRestart ?? []) {
+        const ch = settings.channelById(id);
+        if (!ch) continue;
+        restartLiquidsoap(ch.telnetPort).catch((err: Error) =>
+          queue.log('error', `channel "${id}" mixer restart failed: ${err.message}`));
+      }
     }
     // A changed remote-TTS URL re-probes immediately so availability (and the
     // admin "ready/unreachable" badge) reflects the new endpoint on the next

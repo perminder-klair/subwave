@@ -26,6 +26,11 @@ import * as settings from '../settings.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 let lastCount: number | null = null;        // null = unknown (not yet polled, or Icecast down)
+// Per-channel raw listener sums from the same poll, keyed by channel id
+// (mount /ch/<id>/stream.*). null = unknown (mirrors lastCount). Raw status
+// sums, not admin-deduped — these gate channel DJ spend, they don't need the
+// Safari double-count fix the headline number gets.
+let lastChannelCounts: Map<string, number> | null = null;
 let peakSeen = 0;                            // running max of the deduped count this process run
 let consecutiveStatusFailures = 0;          // resets to 0 on every successful poll
 
@@ -115,6 +120,15 @@ async function fetchCount() {
     const broadcastSources = sources.filter((s: any) =>
       BROADCAST_MOUNTS.some(m => String(s?.listenurl || '').includes(m))
     );
+    // Sub-station channel mounts ride the same poll. Deliberately EXCLUDED
+    // from the main-station numbers below (BROADCAST_MOUNTS filter), so the
+    // headline count keeps meaning "people on the main stream".
+    const chCounts = new Map<string, number>();
+    for (const src of sources) {
+      const m = String(src?.listenurl || '').match(/\/ch\/([a-z0-9-]+)\/stream\./);
+      if (m) chCounts.set(m[1], (chCounts.get(m[1]) ?? 0) + Number(src.listeners || 0));
+    }
+    lastChannelCounts = chCounts;
     online = broadcastSources.length > 0;
     rawCount = broadcastSources.reduce(
       (sum: number, s: any) => sum + Number(s.listeners || 0), 0);
@@ -151,6 +165,7 @@ async function fetchCount() {
     consecutiveStatusFailures = 0;
   } catch {
     lastCount = null;
+    lastChannelCounts = null;
     // Treat a transient Icecast status fetch failure as "unknown", not as proof
     // the broadcast went offline: hold the last known status so the listener UI
     // doesn't tear down a healthy audio element over a momentary stats timeout
@@ -228,6 +243,32 @@ export function djCallsAllowed() {
   if (!settings.get()?.llm?.pauseWhenEmpty) return true;
   if (lastCount === null) return true;
   return lastCount > 0;
+}
+
+// Per-channel listener count from the last poll. null = unknown (poll failed
+// or not yet run); a polled channel with nobody attached reads 0.
+export function channelListeners(channelId: string): number | null {
+  if (lastChannelCounts === null) return null;
+  return lastChannelCounts.get(channelId) ?? 0;
+}
+
+// Whether the channel's Icecast mount had a source attached on the last poll.
+// null = unknown (poll failed / not yet run).
+export function channelMountOnline(channelId: string): boolean | null {
+  if (lastChannelCounts === null) return null;
+  return lastChannelCounts.has(channelId);
+}
+
+// djCallsAllowed for one sub-station channel: same pause-when-empty semantics,
+// gated on THAT channel's own audience (a kid listening to /ch/kids must not
+// keep the main DJ — or a sibling channel — spending tokens, and vice versa).
+// Channels have no idle gate yet, so streamIdle doesn't apply; unknown counts
+// fail open for the same stats-outage reason as the main gate.
+export function channelDjCallsAllowed(channelId: string) {
+  if (!settings.get()?.llm?.pauseWhenEmpty) return true;
+  const n = channelListeners(channelId);
+  if (n === null) return true;
+  return n > 0;
 }
 
 export function startListenerMonitor() {

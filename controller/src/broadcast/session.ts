@@ -109,16 +109,35 @@ const MAX_TURNS = 500;
 const RATIONALE_WINDOW = 3;                 // most-recent dj/pick reasons kept in the window (anti-thread-momentum)
 const PERSIST_DEBOUNCE_MS = 1000;
 
-let _session: Session | null = null;
-let _writeTimer: NodeJS.Timeout | null = null;
-
 function mintId() {
   return 'sess_' + randomBytes(4).toString('hex');
 }
 
+// Options for a session store instance. The zero-arg default is the main
+// station (state/session.json, the station's effective persona) — sub-station
+// channels get their own store via createSessionStore({paths, personaFor})
+// from broadcast/station-context.ts, keeping one Session lifecycle per
+// parallel stream with zero shared mutable state between them.
+export interface SessionStoreOpts {
+  paths?: { currentFile: string; dir: string };
+  // Effective-persona resolver for new sessions. Default: the station's
+  // active persona (settings.getEffectivePersona); a channel store passes its
+  // own resolver so channel sessions open under the channel's persona.
+  personaFor?: () => { id: string; name: string } | null | undefined;
+}
+
+export type SessionStore = ReturnType<typeof createSessionStore>;
+
+export function createSessionStore(opts: SessionStoreOpts = {}) {
+  const paths = opts.paths ?? config.session;
+  const personaFor = opts.personaFor ?? (() => settings.getEffectivePersona());
+
+  let _session: Session | null = null;
+  let _writeTimer: NodeJS.Timeout | null = null;
+
 // Identity of the run. Consecutive hours of the same show share one session;
 // an autonomous block rolls when its time period or dominant mood changes.
-export function sessionKeyFor(ctx: SessionContext) {
+function sessionKeyFor(ctx: SessionContext) {
   if (ctx?.activeShow?.id) return `show:${ctx.activeShow.id}`;
   return `auto:${ctx?.time?.period || 'unknown'}:${ctx?.dominantMood || 'none'}`;
 }
@@ -179,7 +198,7 @@ async function persist() {
   try {
     // Atomic replace — /debug and boot recovery read this file, and a crash
     // mid-write should leave the previous snapshot, not a truncated one.
-    await writeFileAtomic(config.session.currentFile, JSON.stringify(_session, null, 2));
+    await writeFileAtomic(paths.currentFile, JSON.stringify(_session, null, 2));
   } catch {}
 }
 
@@ -191,18 +210,18 @@ function schedulePersist() {
 async function archive(s: Session | null) {
   if (!s?.id) return;
   try {
-    await mkdir(config.session.dir, { recursive: true });
-    await writeFileAtomic(`${config.session.dir}/${s.id}.json`, JSON.stringify(s, null, 2));
+    await mkdir(paths.dir, { recursive: true });
+    await writeFileAtomic(`${paths.dir}/${s.id}.json`, JSON.stringify(s, null, 2));
   } catch {}
 }
 
-export function getSession() {
+function getSession() {
   return _session;
 }
 
 // Append a turn. `role` ∈ event|dj|track|segment; `kind` names the turn type
 // (scenario|pick|request|play|link|station-id|hourly|weather|...).
-export function appendTurn({ role, kind, text, meta = {} }: { role: string; kind: string; text?: string; meta?: TurnMeta }) {
+function appendTurn({ role, kind, text, meta = {} }: { role: string; kind: string; text?: string; meta?: TurnMeta }) {
   if (!_session) return null;
   const turn = { t: new Date().toISOString(), role, kind, text: text || '', meta };
   _session.messages.push(turn);
@@ -214,8 +233,8 @@ export function appendTurn({ role, kind, text, meta = {} }: { role: string; kind
 }
 
 // Start a fresh session for the current context.
-export function start(ctx: SessionContext, handoff: string | null = null): Session {
-  const persona = settings.getEffectivePersona();
+function start(ctx: SessionContext, handoff: string | null = null): Session {
+  const persona = personaFor();
   _session = {
     id: mintId(),
     kind: ctx?.activeShow ? 'show' : 'auto',
@@ -267,7 +286,7 @@ async function end() {
 // clean slate (with a handoff line): a genuine show boundary (a scheduled
 // program begins, ends, or changes — `show:<id>` in the old or new key) and the
 // 4h MAX_SESSION_MS safety cap.
-export async function maybeRoll(ctx: SessionContext): Promise<Session> {
+async function maybeRoll(ctx: SessionContext): Promise<Session> {
   if (!_session) return start(ctx);
   const nextKey = sessionKeyFor(ctx);
   const aged = Date.now() - new Date(_session.startedAt).getTime() > MAX_SESSION_MS;
@@ -309,7 +328,7 @@ function stampRolledFrom(next: Session, prev: Session) {
 
 // The pending on-air handoff for the live session (outgoing persona metadata),
 // or null when there's nothing to air (no persona change, or already aired).
-export function pendingHandoff(): { personaId: string; personaName: string | null; showName: string | null } | null {
+function pendingHandoff(): { personaId: string; personaName: string | null; showName: string | null } | null {
   if (!_session?.rolledFrom || _session.handoffAired) return null;
   return _session.rolledFrom;
 }
@@ -317,7 +336,7 @@ export function pendingHandoff(): { personaId: string; personaName: string | nul
 // Mark the handoff aired so it fires at most once. Called up front by the runner
 // (before generating/airing) so a mid-way failure can't retry into the middle
 // of the new show — the existing text handoff is the floor.
-export function markHandoffAired() {
+function markHandoffAired() {
   if (!_session) return;
   _session.handoffAired = true;
   schedulePersist();
@@ -327,11 +346,11 @@ export function markHandoffAired() {
 // Same persistence contract as handoffAired: state rides the session file so a
 // controller restart mid-episode resumes the plan and never double-airs a beat.
 
-export function getProgramme(): ProgrammeState | null {
+function getProgramme(): ProgrammeState | null {
   return _session?.programme || null;
 }
 
-export function attachProgramme(programme: ProgrammeState) {
+function attachProgramme(programme: ProgrammeState) {
   if (!_session) return;
   _session.programme = programme;
   schedulePersist();
@@ -339,7 +358,7 @@ export function attachProgramme(programme: ProgrammeState) {
 
 // Flip one beat flag (e.g. 'intro', 'outro', 'feature:0'). Called BEFORE the
 // beat generates/airs — the markHandoffAired idempotency pattern.
-export function markProgrammeBeat(beat: string) {
+function markProgrammeBeat(beat: string) {
   if (!_session?.programme) return;
   _session.programme.beats = _session.programme.beats || {};
   _session.programme.beats[beat] = true;
@@ -406,7 +425,7 @@ function softShift(ctx: SessionContext, nextKey: string): Session {
 // "what did I just play" memory without the momentum. Track-recency is enforced
 // at the tool layer regardless (recentIds/recentKeys in buildPickerTools), so
 // trimming these costs the picker no track-level anti-repeat coverage.
-export function windowMessages() {
+function windowMessages() {
   if (!_session) return [];
   const raw: { role: 'user' | 'assistant'; content: string }[] = [];
   if (_session.handoff) {
@@ -474,10 +493,10 @@ export function windowMessages() {
 
 // Boot recovery — resume the persisted session if its key still matches the
 // current context, otherwise archive it and start fresh.
-export async function recover(ctx: SessionContext): Promise<Session> {
-  if (existsSync(config.session.currentFile)) {
+async function recover(ctx: SessionContext): Promise<Session> {
+  if (existsSync(paths.currentFile)) {
     try {
-      const stored = JSON.parse(await readFile(config.session.currentFile, 'utf8'));
+      const stored = JSON.parse(await readFile(paths.currentFile, 'utf8'));
       if (stored?.id && !stored.endedAt && stored.key === sessionKeyFor(ctx)
           && Array.isArray(stored.messages)) {
         _session = stored as Session;
@@ -492,3 +511,41 @@ export async function recover(ctx: SessionContext): Promise<Session> {
   }
   return start(ctx);
 }
+
+  return {
+    sessionKeyFor,
+    getSession,
+    appendTurn,
+    start,
+    maybeRoll,
+    pendingHandoff,
+    markHandoffAired,
+    getProgramme,
+    attachProgramme,
+    markProgrammeBeat,
+    windowMessages,
+    recover,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Default instance — the MAIN station's session. The module-level exports
+// below delegate to it, so every existing call site behaves exactly as before
+// the factory refactor. Channel stores live on their StationContext.
+// ---------------------------------------------------------------------------
+const _main = createSessionStore();
+
+export const getSession = _main.getSession;
+export const appendTurn = _main.appendTurn;
+export const start = _main.start;
+export const maybeRoll = _main.maybeRoll;
+export const pendingHandoff = _main.pendingHandoff;
+export const markHandoffAired = _main.markHandoffAired;
+export const getProgramme = _main.getProgramme;
+export const attachProgramme = _main.attachProgramme;
+export const markProgrammeBeat = _main.markProgrammeBeat;
+export const windowMessages = _main.windowMessages;
+export const recover = _main.recover;
+// Pure — identical across instances; exported at module level for callers
+// that key sessions without a store in hand.
+export const sessionKeyFor = _main.sessionKeyFor;

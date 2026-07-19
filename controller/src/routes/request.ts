@@ -7,13 +7,10 @@ import { randomUUID } from 'node:crypto';
 import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
-import { getFullContext } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as djAgent from '../broadcast/dj-agent.js';
-import * as session from '../broadcast/session.js';
 import * as requestLog from '../broadcast/request-log.js';
 import * as listeners from '../broadcast/listeners.js';
-import * as webhooks from '../broadcast/webhooks.js';
 import {
   checkRateLimit, clientIp,
   REQUESTS_DISABLED, REQUEST_TEXT_MAX, REQUEST_NAME_MAX,
@@ -189,7 +186,7 @@ function recordOutcome(entry) {
   }
 }
 
-async function resolveRequest(entry) {
+async function resolveRequest(entry, q = queue) {
   const { requester, text } = entry;
   entry.startedAt = Date.now();
 
@@ -208,9 +205,9 @@ async function resolveRequest(entry) {
 
   let ctx;
   try {
-    ctx = await getFullContext();
+    ctx = await q.stationContext();
   } catch (err) {
-    queue.log('error', `getFullContext for request failed: ${err.message}`);
+    q.log('error', `getFullContext for request failed: ${err.message}`);
     ctx = {};
   }
 
@@ -220,15 +217,15 @@ async function resolveRequest(entry) {
   // shortcut and the stateless cascade all share one event turn, so the
   // session never carries an orphan event with no DJ reply.
   try {
-    await session.maybeRoll(ctx);
-    const cur = queue.current?.track || null;
-    session.appendTurn({
+    await q.session.maybeRoll(ctx);
+    const cur = q.current?.track || null;
+    q.session.appendTurn({
       role: 'event', kind: 'request',
       text: `Listener "${requester}" requests: "${text}"`
         + (cur ? ` (currently playing "${cur.title}" by ${cur.artist}${cur.id ? ` [id: ${cur.id}]` : ''})` : ''),
     });
   } catch (err) {
-    queue.log('error', `Session update for request failed: ${err.message}`);
+    q.log('error', `Session update for request failed: ${err.message}`);
   }
 
   // 0. "more like this" — never let it through the generic search path, it's a
@@ -238,15 +235,15 @@ async function resolveRequest(entry) {
   if (isMoreLikeThis) {
     entry.path = 'more-like-this';
     entry.pickSource = 'more-like-this';
-    const reference = queue.current || queue.history[0];
+    const reference = q.current || q.history[0];
     const refArtist = reference?.track?.artist;
     if (!refArtist) {
       return failed(`Nothing's playing yet — tell me what you're after instead.`);
     }
     // Requests stay near-unfiltered — 2h is enough to skip the song still
     // ringing in their ears without blocking a re-request from earlier today.
-    const recentIds = queue.recentlyPlayedIds(2);
-    for (const id of queue.queuedIds()) recentIds.add(id);
+    const recentIds = q.recentlyPlayedIds(2);
+    for (const id of q.queuedIds()) recentIds.add(id);
     // Try another track by the same artist first (the cheap, on-the-nose read),
     // then fall back to real track similarity so a one-off collab credit playing
     // now doesn't dead-end the request ("Couldn't find more from X in the crates").
@@ -269,11 +266,11 @@ async function resolveRequest(entry) {
       context: ctx,
       requestedBy: requester,
       requestText: text,
-      recap: queue.getDjRecap(),
-      recentTracks: queue.getRecentTracks(),
-      recentOpeners: queue.getRecentOpeners(),
+      recap: q.getDjRecap(),
+      recentTracks: q.getRecentTracks(),
+      recentOpeners: q.getRecentOpeners(),
     });
-    const pos = await queue.push({
+    const pos = await q.push({
       track: pick, requestedBy: requester, intent: 'more_like_this', introScript,
       introKind: 'dj-speak',
     });
@@ -288,12 +285,12 @@ async function resolveRequest(entry) {
     if (pos === -1) {
       // A concurrent request already queued this exact track — acknowledge
       // honestly instead of airing a second intro over a phantom replay (#619).
-      const dupAck = queue.dedupAck(pick.id);
+      const dupAck = q.dedupAck(pick.id);
       entry.pickSource = `${entry.pickSource}:already-queued`;
-      session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
+      q.session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
       return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
     }
-    session.appendTurn({
+    q.session.appendTurn({
       role: 'dj', kind: 'request',
       text: introScript || ackLine,
       meta: { trackId: pick.id, requester },
@@ -302,7 +299,7 @@ async function resolveRequest(entry) {
     return resolved({
       ack: ackLine,
       track: { title: pick.title, artist: pick.artist },
-      queuePosition: queue.upcoming.length,
+      queuePosition: q.upcoming.length,
     });
   }
 
@@ -311,9 +308,9 @@ async function resolveRequest(entry) {
   // live session. On any failure, fall through to the stateless matcher
   // cascade below so a request is never dropped.
   try {
-    const agentRes = await djAgent.runRequest(queue, ctx, { requester, text });
+    const agentRes = await djAgent.runRequest(q, ctx, { requester, text });
     if (agentRes) {
-      queue.log('request', `agent resolved: ${agentRes.track.title} — ${agentRes.track.artist}`);
+      q.log('request', `agent resolved: ${agentRes.track.title} — ${agentRes.track.artist}`);
       entry.path = 'agent';
       entry.pickSource = 'agent';
       entry.pick = agentRes.track;
@@ -321,22 +318,22 @@ async function resolveRequest(entry) {
       return resolved({
         ack: agentRes.ack,
         track: agentRes.track,
-        queuePosition: queue.upcoming.length,
+        queuePosition: q.upcoming.length,
       });
     }
   } catch (err) {
-    queue.log('error', `DJ agent request failed: ${err.message} — falling back`);
+    q.log('error', `DJ agent request failed: ${err.message} — falling back`);
   }
 
   // 1. LLM matches intent — pass current track so vibe queries can be
   // interpreted against what's actually on-air ("match this energy",
   // "something slower than this", etc.).
-  const currentTrack = queue.current?.track || null;
+  const currentTrack = q.current?.track || null;
   const matched = await dj.matchRequest(text, {
     listenerName: requester,
     nowPlaying: currentTrack,
   });
-  queue.log('intent', `"${text}" → ${matched.intent || '(no intent)'}`, {
+  q.log('intent', `"${text}" → ${matched.intent || '(no intent)'}`, {
     mood: matched.mood,
     scope: matched.scope,
     sort: matched.sort,
@@ -358,8 +355,8 @@ async function resolveRequest(entry) {
   entry.searchTerms = matched.search_terms || null;
 
   // Requests stay near-unfiltered — see /more-like-this comment above.
-  const recentIds = queue.recentlyPlayedIds(2);
-  for (const id of queue.queuedIds()) recentIds.add(id);
+  const recentIds = q.recentlyPlayedIds(2);
+  for (const id of q.queuedIds()) recentIds.add(id);
   await library.load();
 
   // Helper: pick a fresh random item from a pool, preferring non-recents.
@@ -404,7 +401,7 @@ async function resolveRequest(entry) {
         pick = randomFresh(songs);
         if (pick) pickSource = `genre:${genre}`;
       } catch (err) {
-        queue.log('error', `genre pick failed: ${err.message}`);
+        q.log('error', `genre pick failed: ${err.message}`);
       }
     }
   }
@@ -422,7 +419,7 @@ async function resolveRequest(entry) {
         pick = randomFresh(songs);
         if (pick) pickSource = `language-genre:${genre}`;
       } catch (err) {
-        queue.log('error', `language genre pick failed: ${err.message}`);
+        q.log('error', `language genre pick failed: ${err.message}`);
       }
     }
     if (!pick) {
@@ -431,7 +428,7 @@ async function resolveRequest(entry) {
         pick = randomFresh(r);
         if (pick) pickSource = `language-search:${matched.language}`;
       } catch (err) {
-        queue.log('error', `language search pick failed: ${err.message}`);
+        q.log('error', `language search pick failed: ${err.message}`);
       }
     }
   }
@@ -510,7 +507,7 @@ async function resolveRequest(entry) {
   }
 
   if (!pick) {
-    queue.log('miss', `Nothing matched "${text}"`);
+    q.log('miss', `Nothing matched "${text}"`);
     return failed(`Sorry ${requester}, nothing in the crates matched that.`);
   }
 
@@ -526,11 +523,11 @@ async function resolveRequest(entry) {
       || want.split(/\s+/).some(t => t.length >= 3 && got.includes(t));
     if (!hit) {
       entry.artistMiss = matched.artist;
-      queue.log('miss', `Requested artist "${matched.artist}" not in library — airing ${pick.artist} instead`);
+      q.log('miss', `Requested artist "${matched.artist}" not in library — airing ${pick.artist} instead`);
     }
   }
 
-  queue.log('request', `resolved via ${pickSource}: ${pick.title} — ${pick.artist}`);
+  q.log('request', `resolved via ${pickSource}: ${pick.title} — ${pick.artist}`);
 
   // On an artist miss the up-front `ack` (written by matchRequest before the
   // cascade knew it would miss) is a lie — "Got some Katy Perry coming up!"
@@ -548,15 +545,15 @@ async function resolveRequest(entry) {
     requestedBy: requester,
     requestText: text,
     artistMiss: entry.artistMiss || null,
-    recap: queue.getDjRecap(),
-    recentTracks: queue.getRecentTracks(),
-    recentOpeners: queue.getRecentOpeners(),
+    recap: q.getDjRecap(),
+    recentTracks: q.getRecentTracks(),
+    recentOpeners: q.getRecentOpeners(),
   });
 
   // 4. Add to queue (will trigger Liquidsoap via the queue manager). A
   // concurrent request that already queued this exact track makes push() dedup
   // it (#619) — acknowledge honestly rather than pretending it's freshly queued.
-  const pos = await queue.push({
+  const pos = await q.push({
     track: pick,
     requestedBy: requester,
     intent: matched.intent,
@@ -571,12 +568,12 @@ async function resolveRequest(entry) {
     return failed(`Sorry ${requester}, nothing in the crates matched that.`);
   }
   if (pos === -1) {
-    const dupAck = queue.dedupAck(pick.id);
+    const dupAck = q.dedupAck(pick.id);
     entry.pickSource = `${pickSource}:already-queued`;
-    session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
+    q.session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
     return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
   }
-  session.appendTurn({
+  q.session.appendTurn({
     role: 'dj', kind: 'request',
     text: introScript || ack || `Queued "${pick.title}".`,
     meta: { trackId: pick.id, requester },
@@ -587,7 +584,7 @@ async function resolveRequest(entry) {
   return resolved({
     ack,
     track: { title: pick.title, artist: pick.artist },
-    queuePosition: queue.upcoming.length,
+    queuePosition: q.upcoming.length,
   });
 }
 
@@ -596,7 +593,11 @@ async function resolveRequest(entry) {
 // synchronously, then returns a request id immediately and resolves in the
 // background. The listener never waits on the LLM.
 // ---------------------------------------------------------------------------
-router.post('/request', async (req, res) => {
+// Shared by POST /request (main station) and the sub-station channel router
+// (routes/channels.ts): same validation, rate limit, ledger, and background
+// resolver — only the queue (and with it the session, persona, and IPC
+// files) differs.
+export async function handleRequestPost(req: express.Request, res: express.Response, q = queue) {
   if (REQUESTS_DISABLED) {
     return res.status(503).json({ success: false, message: 'Requests are temporarily closed.' });
   }
@@ -605,7 +606,10 @@ router.post('/request', async (req, res) => {
   // Force a fresh Icecast read so a listener who just connected isn't turned
   // away on a stale cached count.
   await listeners.refresh();
-  if (!listeners.djCallsAllowed()) {
+  const allowed = q.channelId
+    ? listeners.channelDjCallsAllowed(q.channelId)
+    : listeners.djCallsAllowed();
+  if (!allowed) {
     return res.status(503).json({
       success: false,
       message: "The DJ's on autopilot — requests reopen when someone's tuned in.",
@@ -644,25 +648,27 @@ router.post('/request', async (req, res) => {
     createdAt: Date.now(),
   };
   requests.set(id, entry);
-  queue.log('request', `${requester}: "${text}" (id ${id.slice(0, 8)})`);
-  webhooks.notify('request.received', { requestedBy: requester, text });
+  q.log('request', `${requester}: "${text}" (id ${id.slice(0, 8)})`);
+  q.notifyWebhook('request.received', { requestedBy: requester, text });
 
   // Hand the listener a receipt and let go of the connection. The booth does
   // the rest; GET /request/:id reports the outcome.
   res.status(202).json({ success: true, requestId: id, status: 'pending' });
 
-  resolveRequest(entry).catch(err => {
-    queue.log('error', `Request resolution crashed: ${err.message}`);
+  resolveRequest(entry, q).catch(err => {
+    q.log('error', `Request resolution crashed: ${err.message}`);
     entry.status = 'failed';
     entry.message = 'Something went wrong in the booth — try again.';
     recordOutcome(entry);
   });
-});
+}
+
+router.post('/request', (req, res) => handleRequestPost(req, res));
 
 // ---------------------------------------------------------------------------
 // GET /request/:id — poll for the outcome of a submitted request.
 // ---------------------------------------------------------------------------
-router.get('/request/:id', (req, res) => {
+export function handleRequestStatus(req: express.Request, res: express.Response) {
   const entry = requests.get(req.params.id);
   if (!entry) {
     // Unknown id: either never existed, or pruned / lost to a restart. The
@@ -677,4 +683,6 @@ router.get('/request/:id', (req, res) => {
     queuePosition: entry.queuePosition,
     message: entry.message,
   });
-});
+}
+
+router.get('/request/:id', handleRequestStatus);

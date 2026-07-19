@@ -2,6 +2,14 @@
 // via TCP. radio.liq enables this and registers a "restart" command that
 // triggers shutdown(); the container's restart-policy brings it right back
 // with whatever updated settings the controller just wrote to disk.
+//
+// Sub-station channels: every channel runs its own liquidsoap process inside
+// the same broadcast container, each on its own telnet port (assigned in
+// settings.channels[].telnetPort, 1235+; the main station keeps 1234). Every
+// exported command takes an optional trailing `port` — omitted = the main
+// mixer, so existing call sites are untouched. Channel processes are
+// respawned by the supervisor's reconcile loop (not the container restart
+// policy), so restartLiquidsoap(port) has the same down-then-back semantics.
 
 import net from 'node:net';
 
@@ -10,11 +18,11 @@ import net from 'node:net';
 // for operators with a pinned override in their .env, but the default reflects
 // the merged image.
 const HOST = process.env.LIQUIDSOAP_HOST || 'broadcast';
-const PORT = parseInt(process.env.LIQUIDSOAP_PORT || '1234', 10);
+const DEFAULT_PORT = parseInt(process.env.LIQUIDSOAP_PORT || '1234', 10);
 
-export function sendCommand(cmd: string, timeoutMs = 3000): Promise<string> {
+export function sendCommand(cmd: string, timeoutMs = 3000, port = DEFAULT_PORT): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    const sock = net.createConnection({ host: HOST, port: PORT });
+    const sock = net.createConnection({ host: HOST, port });
     let buf = '';
     let done = false;
 
@@ -36,7 +44,7 @@ export function sendCommand(cmd: string, timeoutMs = 3000): Promise<string> {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
         finish(new Error(
-          `liquidsoap host "${HOST}:${PORT}" did not resolve — set LIQUIDSOAP_HOST=localhost in controller/.env if the controller is running outside docker-compose (and ensure liquidsoap's port 1234 is exposed on the host)`
+          `liquidsoap host "${HOST}:${port}" did not resolve — set LIQUIDSOAP_HOST=localhost in controller/.env if the controller is running outside docker-compose (and ensure liquidsoap's port ${port} is exposed on the host)`
         ));
         return;
       }
@@ -59,9 +67,9 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 // container restart-policy brings it back, so a port that stops accepting
 // connections is proof the shutdown landed. Any connect error (refused,
 // timeout) counts as "down".
-function isLiquidsoapReachable(timeoutMs = 800): Promise<boolean> {
+function isLiquidsoapReachable(timeoutMs = 800, port = DEFAULT_PORT): Promise<boolean> {
   return new Promise(resolve => {
-    const sock = net.createConnection({ host: HOST, port: PORT });
+    const sock = net.createConnection({ host: HOST, port });
     let settled = false;
     const done = (up: boolean) => {
       if (settled) return;
@@ -76,19 +84,20 @@ function isLiquidsoapReachable(timeoutMs = 800): Promise<boolean> {
   });
 }
 
-export async function restartLiquidsoap() {
+export async function restartLiquidsoap(port = DEFAULT_PORT) {
   // The custom "restart" command in radio.liq calls shutdown(); the container
-  // restart-policy then brings Liquidsoap back with the freshly-written
-  // settings files. We can't trust sendCommand resolving as proof the command
-  // landed: the telnet socket can close cleanly with an empty buffer (e.g. it
-  // raced a concurrent stream_status poll), which still resolves — so a bare
-  // "no error" would let /restart-mixer report success while pending settings
+  // restart-policy (main mixer) or the supervisor's reconcile loop (channel
+  // mixers) then brings Liquidsoap back with the freshly-written settings
+  // files. We can't trust sendCommand resolving as proof the command landed:
+  // the telnet socket can close cleanly with an empty buffer (e.g. it raced a
+  // concurrent stream_status poll), which still resolves — so a bare "no
+  // error" would let /restart-mixer report success while pending settings
   // silently never apply. Confirm by watching the port actually go down, and
   // resend if it doesn't.
   let lastErr: Error | null = null;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      await sendCommand('restart', 2000);
+      await sendCommand('restart', 2000, port);
     } catch (err) {
       // A reset/timeout is expected — Liquidsoap is tearing the socket down.
       // Anything else (e.g. an unresolved host) is a real failure to surface.
@@ -100,19 +109,19 @@ export async function restartLiquidsoap() {
     // still accepting after the window the command was dropped — retry it.
     const deadline = Date.now() + 8000;
     while (Date.now() < deadline) {
-      if (!(await isLiquidsoapReachable())) return; // confirmed down → restart took
+      if (!(await isLiquidsoapReachable(800, port))) return; // confirmed down → restart took
       await sleep(250);
     }
   }
   throw new Error(
-    `liquidsoap restart did not take effect after 3 attempts — telnet port stayed up${lastErr ? ` (last error: ${lastErr.message})` : ''}`,
+    `liquidsoap restart did not take effect after 3 attempts — telnet port ${port} stayed up${lastErr ? ` (last error: ${lastErr.message})` : ''}`,
   );
 }
 
 // Skip the currently playing track via the custom "skip" command in radio.liq.
 // Unlike restart, this returns a normal "OK" response — Liquidsoap stays up.
-export async function skipTrack() {
-  return sendCommand('skip', 2000);
+export async function skipTrack(port = DEFAULT_PORT) {
+  return sendCommand('skip', 2000, port);
 }
 
 // Force the auto.m3u fallback playlist to re-read from disk. The playlist
@@ -124,9 +133,9 @@ export async function skipTrack() {
 // after every write makes the reload deterministic instead of trusting inotify.
 // Best-effort: swallow errors (telnet may be unreachable in dev or mid-restart)
 // so a refresh never fails on the reload.
-export async function reloadAutoPlaylist(): Promise<boolean> {
+export async function reloadAutoPlaylist(port = DEFAULT_PORT): Promise<boolean> {
   try {
-    await sendCommand('auto.reload', 2000);
+    await sendCommand('auto.reload', 2000, port);
     return true;
   } catch {
     return false;
@@ -137,18 +146,18 @@ export async function reloadAutoPlaylist(): Promise<boolean> {
 // stream_off / stream_status server commands: stream_off shuts the Icecast
 // output down so the /stream.mp3 mount disconnects (the station goes off
 // air); stream_on recreates it. The mixer process keeps running throughout.
-export async function startStream() {
-  return sendCommand('stream_on', 2000);
+export async function startStream(port = DEFAULT_PORT) {
+  return sendCommand('stream_on', 2000, port);
 }
 
-export async function stopStream() {
-  return sendCommand('stream_off', 2000);
+export async function stopStream(port = DEFAULT_PORT) {
+  return sendCommand('stream_off', 2000, port);
 }
 
 // Returns true when on air, false otherwise. `stream_status` replies "on" /
 // "off".
-export async function streamStatus() {
-  const res = await sendCommand('stream_status', 2000);
+export async function streamStatus(port = DEFAULT_PORT) {
+  const res = await sendCommand('stream_status', 2000, port);
   return /\bon\b/i.test(res);
 }
 
@@ -157,17 +166,17 @@ export async function streamStatus() {
 // connect normally, which is what lets the stream-idle monitor wake the
 // programme when someone tunes in. Both commands are idempotent, so the
 // monitor can re-assert the desired state after a mixer restart.
-export async function idleOn() {
-  return sendCommand('idle_on', 2000);
+export async function idleOn(port = DEFAULT_PORT) {
+  return sendCommand('idle_on', 2000, port);
 }
 
-export async function idleOff() {
-  return sendCommand('idle_off', 2000);
+export async function idleOff(port = DEFAULT_PORT) {
+  return sendCommand('idle_off', 2000, port);
 }
 
 // Returns true when the idle gate is active. `idle_status` replies "on"/"off".
-export async function idleStatus() {
-  const res = await sendCommand('idle_status', 2000);
+export async function idleStatus(port = DEFAULT_PORT) {
+  const res = await sendCommand('idle_status', 2000, port);
   return /\bon\b/i.test(res);
 }
 
@@ -181,21 +190,22 @@ interface DjQueueSnapshot {
 interface DjQueueCache extends DjQueueSnapshot {
   timestamp: number;
 }
-let _djQueueCache: DjQueueCache | null = null;
-let _djQueueInflight: Promise<Set<string>> | null = null;
+// Keyed by telnet port — each channel's liquidsoap holds its own dj_queue.
+const _djQueueCache = new Map<number, DjQueueCache>();
+const _djQueueInflight = new Map<number, Promise<Set<string>>>();
 
 // Query Liquidsoap's dj_queue using two telnet hops:
 // 1. dj_queue.queue returns space-separated request IDs.
 // 2. request.metadata <rid> returns metadata for each request ID.
-async function fetchDjQueue(): Promise<DjQueueSnapshot> {
-  const res = await sendCommand('dj_queue.queue', 2000);
+async function fetchDjQueue(port = DEFAULT_PORT): Promise<DjQueueSnapshot> {
+  const res = await sendCommand('dj_queue.queue', 2000, port);
   const rids = res.trim().split(/\s+/).filter(Boolean);
   const ids = new Set<string>();
   const ridBySubsonicId = new Map<string, string>();
 
   for (const rid of rids) {
     try {
-      const meta = await sendCommand(`request.metadata ${rid}`, 2000);
+      const meta = await sendCommand(`request.metadata ${rid}`, 2000, port);
       // A pending request that Liquidsoap hasn't prepared yet is `status=idle`
       // with no resolved top-level metadata — but its annotate URI is still
       // there as `initial_uri="annotate:...,subsonic_id=\"…\"..."`. So match the
@@ -217,33 +227,36 @@ async function fetchDjQueue(): Promise<DjQueueSnapshot> {
 }
 
 // Returns a Set of subsonic_ids currently in the queue (cached ~4s).
-export async function getDjQueueIds(): Promise<Set<string>> {
-  if (_djQueueCache && Date.now() - _djQueueCache.timestamp < 4000) {
-    return _djQueueCache.ids;
+export async function getDjQueueIds(port = DEFAULT_PORT): Promise<Set<string>> {
+  const cached = _djQueueCache.get(port);
+  if (cached && Date.now() - cached.timestamp < 4000) {
+    return cached.ids;
   }
-  if (_djQueueInflight) {
-    return _djQueueInflight;
+  const inflight = _djQueueInflight.get(port);
+  if (inflight) {
+    return inflight;
   }
 
-  _djQueueInflight = (async () => {
+  const fetching = (async () => {
     try {
-      const snap = await fetchDjQueue();
-      _djQueueCache = { timestamp: Date.now(), ...snap };
+      const snap = await fetchDjQueue(port);
+      _djQueueCache.set(port, { timestamp: Date.now(), ...snap });
       return snap.ids;
     } finally {
-      _djQueueInflight = null;
+      _djQueueInflight.delete(port);
     }
   })();
+  _djQueueInflight.set(port, fetching);
 
-  return _djQueueInflight;
+  return fetching;
 }
 
 // Resolve the Liquidsoap request id for a queued track. Always a fresh read —
 // cancel decisions can't ride a 4s-stale cache (the track may have gone on
 // air since). Returns null when the track is no longer pending in dj_queue.
-export async function resolveDjQueueRid(subsonicId: string): Promise<string | null> {
-  const snap = await fetchDjQueue();
-  _djQueueCache = { timestamp: Date.now(), ...snap };
+export async function resolveDjQueueRid(subsonicId: string, port = DEFAULT_PORT): Promise<string | null> {
+  const snap = await fetchDjQueue(port);
+  _djQueueCache.set(port, { timestamp: Date.now(), ...snap });
   return snap.ridBySubsonicId.get(subsonicId) ?? null;
 }
 
@@ -251,9 +264,8 @@ export async function resolveDjQueueRid(subsonicId: string): Promise<string | nu
 // command in radio.liq. Returns false when Liquidsoap replies NOT_FOUND —
 // the request already left the queue (playing or played), so there is
 // nothing left to cancel.
-export async function removeFromDjQueue(rid: string): Promise<boolean> {
-  const res = await sendCommand(`dj_queue_remove ${rid}`, 2000);
-  _djQueueCache = null; // the queue just changed under the cache
+export async function removeFromDjQueue(rid: string, port = DEFAULT_PORT): Promise<boolean> {
+  const res = await sendCommand(`dj_queue_remove ${rid}`, 2000, port);
+  _djQueueCache.delete(port); // the queue just changed under the cache
   return res.trim() === 'OK';
 }
-

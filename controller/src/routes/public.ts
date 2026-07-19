@@ -42,7 +42,7 @@ function mimeForAvatar(filename: string): string {
 // Caddy, an absolute origin in dev), mirroring how `/cover/:id` is consumed.
 // Always returns a string — the endpoint serves a 1×1 placeholder when no
 // avatar is set, so callers don't need to check for "is it set".
-function avatarUrlFor(personaId?: string | null): string {
+export function avatarUrlFor(personaId?: string | null): string {
   return personaId ? `/persona-avatar/${encodeURIComponent(personaId)}` : '';
 }
 
@@ -156,47 +156,51 @@ router.get('/persona-avatar/:id', async (req, res) => {
 // ---------------------------------------------------------------------------
 // GET /now-playing — current track + context snapshot
 // ---------------------------------------------------------------------------
+// Enrich a now-playing record with the analysis/tag data the player surfaces
+// in its minimal metadata strip (genre · BPM · key · mood). All of it lives
+// in the library DB keyed by subsonic_id; getNowPlaying() stays a pure reader
+// of now-playing.json. A not-yet-tagged track (or unloaded DB) yields null and
+// the fields are simply omitted. Shared with the sub-station channel router
+// (routes/channels.ts) — pass the channel's queue for its duration fallback.
+export function enrichNowPlaying(nowPlaying: any, q: typeof queue) {
+  if (!nowPlaying?.subsonic_id) return;
+  // Lean read: only the scalar fields the metadata strip renders, so this
+  // per-listener 5s poll never parses the heavy acoustic *_json blobs (#723).
+  const rec = library.getPlaybackMeta(nowPlaying.subsonic_id);
+  if (rec) {
+    // Full tag set for consumers that want it, plus the comma-joined
+    // string in the legacy `genre` field the metadata strip renders —
+    // same shape the annotate metadata now carries ("Hip-Hop, Rap").
+    nowPlaying.genres = rec.genres ?? [];
+    nowPlaying.genre = rec.genres?.length ? rec.genres.join(', ') : rec.genre ?? null;
+    nowPlaying.bpm = rec.bpm ?? null;
+    nowPlaying.musicalKey = rec.musicalKey ?? null;
+    nowPlaying.moods = Array.isArray(rec.moods) ? rec.moods : [];
+    nowPlaying.energy = rec.energy ?? null;
+    if (nowPlaying.year == null && rec.year != null) nowPlaying.year = rec.year;
+  }
+  // Duration isn't in the annotate metadata Liquidsoap reports, so the
+  // player's track clock / up-next tease would never fire without help.
+  // The queue's record of the airing track carries the full Subsonic song
+  // (requests + DJ picks); auto-playlist plays fall back to the library
+  // DB's duration_sec. Tracks known to neither just omit it — the player
+  // degrades to an elapsed-only readout, same as the metadata strip.
+  if (nowPlaying.duration == null) {
+    const cur = q.current;
+    const queueDuration =
+      cur?.track?.id === nowPlaying.subsonic_id ? cur?.track?.duration : null;
+    const duration = queueDuration ?? rec?.durationSec ?? null;
+    if (typeof duration === 'number' && duration > 0) nowPlaying.duration = duration;
+  }
+}
+
 router.get('/now-playing', async (req, res) => {
   try {
     const [nowPlaying, ctx] = await Promise.all([
       queue.getNowPlaying(),
       getFullContext(),
     ]);
-    // Enrich the live track with the analysis/tag data the player surfaces in
-    // its minimal metadata strip (genre · BPM · key · mood). All of it lives
-    // in the library DB keyed by subsonic_id; getNowPlaying() stays a pure
-    // reader of now-playing.json. A not-yet-tagged track (or unloaded DB)
-    // yields null here and the fields are simply omitted.
-    if (nowPlaying?.subsonic_id) {
-      // Lean read: only the scalar fields the metadata strip renders, so this
-      // per-listener 5s poll never parses the heavy acoustic *_json blobs (#723).
-      const rec = library.getPlaybackMeta(nowPlaying.subsonic_id);
-      if (rec) {
-        // Full tag set for consumers that want it, plus the comma-joined
-        // string in the legacy `genre` field the metadata strip renders —
-        // same shape the annotate metadata now carries ("Hip-Hop, Rap").
-        nowPlaying.genres = rec.genres ?? [];
-        nowPlaying.genre = rec.genres?.length ? rec.genres.join(', ') : rec.genre ?? null;
-        nowPlaying.bpm = rec.bpm ?? null;
-        nowPlaying.musicalKey = rec.musicalKey ?? null;
-        nowPlaying.moods = Array.isArray(rec.moods) ? rec.moods : [];
-        nowPlaying.energy = rec.energy ?? null;
-        if (nowPlaying.year == null && rec.year != null) nowPlaying.year = rec.year;
-      }
-      // Duration isn't in the annotate metadata Liquidsoap reports, so the
-      // player's track clock / up-next tease would never fire without help.
-      // The queue's record of the airing track carries the full Subsonic song
-      // (requests + DJ picks); auto-playlist plays fall back to the library
-      // DB's duration_sec. Tracks known to neither just omit it — the player
-      // degrades to an elapsed-only readout, same as the metadata strip.
-      if (nowPlaying.duration == null) {
-        const cur = queue.current;
-        const queueDuration =
-          cur?.track?.id === nowPlaying.subsonic_id ? cur?.track?.duration : null;
-        const duration = queueDuration ?? rec?.durationSec ?? null;
-        if (typeof duration === 'number' && duration > 0) nowPlaying.duration = duration;
-      }
-    }
+    enrichNowPlaying(nowPlaying, queue);
     // Served from the 15s listener-monitor cache — no per-request Icecast hit.
     const stream = getStreamStatus();
     const stationSettings = settings.get();
@@ -409,6 +413,10 @@ router.get('/state', (req, res) => {
   res.json({
     ...snap,
     needsSetup: getSetupStatusSync().needsSetup,
+    // Enabled sub-station channels — drives the web player's channel picker
+    // and lets any client discover the sibling streams. Empty on a
+    // single-station install, so existing clients see a harmless extra [].
+    channels: settings.enabledChannels().map(c => ({ id: c.id, name: c.name })),
     // True while the idle gate has the programme paused (zero listeners) —
     // lets clients tell "silence because the room is empty" from "broken".
     streamIdle: isIdle(),

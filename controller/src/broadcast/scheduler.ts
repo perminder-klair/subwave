@@ -5,7 +5,7 @@
 //   - agentic segment tick (weather, news, now-playing digs, facts, web search) every 5 min
 
 import cron from 'node-cron';
-import { config } from '../config.js';
+import { config, channelPaths } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import { shuffle } from '../util/shuffle.js';
 import * as subsonic from '../music/subsonic.js';
@@ -23,12 +23,13 @@ import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
-import { djCallsAllowed } from './listeners.js';
+import { djCallsAllowed, channelDjCallsAllowed } from './listeners.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
 import { agenticTick, skillCatalog } from '../skills/_agent.js';
 import { withTrace, pruneOldEvents } from '../observability/events.js';
 import * as archives from './archives.js';
 import * as doctor from '../doctor.js';
+import * as stationContext from './station-context.js';
 
 const TARGET_POOL = 30;
 const MOOD_WEIGHT = 12;          // up to this many mood-tagged tracks per pool
@@ -66,10 +67,50 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
 // ---------------------------------------------------------------------------
 
 export async function refreshAutoPlaylist() {
-  return withTrace({ kind: 'auto-playlist' }, () => refreshAutoPlaylistInner());
+  await withTrace({ kind: 'auto-playlist' }, () => refreshAutoPlaylistInner());
+  // Sub-station channels ride the same refresh cadence, serially after the
+  // main pool (serial = no Navidrome stampede at :00). Per-channel failures
+  // are logged, never thrown — one broken channel must not stale the rest.
+  await refreshChannelPlaylists();
 }
 
-async function refreshAutoPlaylistInner() {
+// Per-channel fallback refresh: same pool builder, steered by the channel's
+// pinned show (null = the station's default mood-driven pool), written to the
+// channel's own auto.m3u and reloaded over the channel's telnet port. In
+// phase 1 a channel has no queue/DJ — this playlist IS the channel's entire
+// programme (the same LLM-free coast the main station runs under budget-hard).
+export async function refreshChannelPlaylists() {
+  const s = settings.get();
+  for (const ch of settings.enabledChannels(s)) {
+    try {
+      await withTrace({ kind: 'auto-playlist' }, () =>
+        refreshAutoPlaylistInner({
+          show: settings.channelShow(ch, s),
+          outPath: channelPaths(ch.id).liquidsoap.autoPlaylist,
+          telnetPort: ch.telnetPort,
+          label: `Channel "${ch.id}" playlist`,
+          // The channel's own recently-played guard (its queue tracks its own
+          // plays) — never the main station's, whose recency would pointlessly
+          // narrow a channel pinned to an overlapping format.
+          recent: stationContext.get(ch.id)?.queue.recentlyPlayed(12)
+            ?? { ids: new Set<string>(), keys: new Set<string>() },
+        }));
+    } catch (err) {
+      queue.log('error', `Channel "${ch.id}" playlist refresh failed: ${err.message}`);
+    }
+  }
+}
+
+interface RefreshOpts {
+  show?: any;
+  outPath?: string;
+  telnetPort?: number;
+  label?: string;
+  recent?: { ids: Set<string>; keys: Set<string> };
+}
+
+async function refreshAutoPlaylistInner(opts: RefreshOpts = {}) {
+  const label = opts.label ?? 'Auto-playlist';
   const ctx = await getFullContext();
   const mood = ctx.dominantMood;
   // Match the auto-DJ picker's window (dj-agent.pickViaAgent) — 12h. Keyed by
@@ -77,13 +118,14 @@ async function refreshAutoPlaylistInner() {
   // song holds N Subsonic ids for it, so an id-only recency filter lets copies
   // #2..N sail into the fallback and re-air a just-played track (issue #874).
   // Mirrors collect() in the picker's tool layer.
-  const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(12);
+  const { ids: recentIds, keys: recentKeys } = opts.recent ?? queue.recentlyPlayed(12);
 
   // The fallback is what airs when the live AI picks pause (e.g. pause-when-empty
   // with zero listeners). When a show is scheduled for this hour, the fallback
   // should stay on-brand exactly as the picker does — so we steer the pool by the
   // active show's genre / era / energy, mirroring music/picker.ts (issue #629).
-  const show: any = settings.resolveActiveShow();
+  // A sub-station channel passes its own pinned show (possibly null) instead.
+  const show: any = 'show' in opts ? opts.show : settings.resolveActiveShow();
   // Multi-value lists (#929): OR within an attribute, AND across attributes.
   const showGenres: string[] = show?.genres ?? [];
   const eras = (show?.eras ?? []) as { fromYear: number | null; toYear: number | null }[];
@@ -363,26 +405,26 @@ async function refreshAutoPlaylistInner() {
   const lines = ['#EXTM3U', ...pool.map((t: any) => subsonic.getAnnotatedUri(t, { maxDurationSec }))];
   // Atomic replace: Liquidsoap watches this file (reload_mode="watch"), so an
   // in-place write can trigger a reload that loads a truncated playlist.
-  await writeFileAtomic(config.liquidsoap.autoPlaylist, lines.join('\n'));
+  await writeFileAtomic(opts.outPath ?? config.liquidsoap.autoPlaylist, lines.join('\n'));
   // Deterministic reload: don't trust Liquidsoap's inotify watch. The atomic
   // rename above swaps the file's inode, and if the watch ever orphans itself
   // the fallback loops the last-loaded ~30-track snapshot forever until the
   // container restarts (issue #874). Telnet `auto.reload` forces a re-read every
   // time; best-effort so an unreachable mixer (dev / mid-restart) never fails
   // the refresh — the watch remains as a backstop.
-  const reloaded = await reloadAutoPlaylist();
-  if (!reloaded) queue.log('scheduler', 'Auto-playlist written but telnet reload failed — relying on inotify watch');
+  const reloaded = await reloadAutoPlaylist(opts.telnetPort);
+  if (!reloaded) queue.log('scheduler', `${label} written but telnet reload failed — relying on inotify watch`);
 
   // Make the show-scoping visible to the operator (acceptance criteria #629):
   // a misspelled / absent strict genre that silently degraded, and a strict show
   // whose genre is too thin to fill the pool, are both worth surfacing.
   if (strict && showGenres.length && !genreNames.length) {
-    queue.log('scheduler', `Auto-playlist: strict genre(s) "${showGenres.join(', ')}" not found in library — fallback left unfiltered`);
+    queue.log('scheduler', `${label}: strict genre(s) "${showGenres.join(', ')}" not found in library — fallback left unfiltered`);
   } else if (strict && genreNames.length && pool.length < TARGET_POOL) {
-    queue.log('scheduler', `Auto-playlist: only ${pool.length} in-genre tracks for ${genreNames.join(', ')} — looping a short genre-pure fallback`);
+    queue.log('scheduler', `${label}: only ${pool.length} in-genre tracks for ${genreNames.join(', ')} — looping a short genre-pure fallback`);
   }
   if (strictPlaylist && pool.length < TARGET_POOL) {
-    queue.log('scheduler', `Auto-playlist: only ${pool.length} in-playlist tracks — looping a short playlist-pure fallback`);
+    queue.log('scheduler', `${label}: only ${pool.length} in-playlist tracks — looping a short playlist-pure fallback`);
   }
 
   const playlistTag = hasPlaylist
@@ -400,7 +442,7 @@ async function refreshAutoPlaylistInner() {
       (hasPlaylist ? ` playlist=${playlistTag} (${strictPlaylist ? 'strict' : 'soft'})` : '')
     : '';
   queue.log('scheduler',
-    `Auto-playlist refreshed: ${pool.length} tracks (` +
+    `${label} refreshed: ${pool.length} tracks (` +
     Object.entries(fromSource).filter(([, v]) => v > 0).map(([k, v]) => `${k}=${v}`).join(' ') +
     `, mood=${mood || 'none'}${showInfo})`);
 }
@@ -692,6 +734,52 @@ async function stationId() {
 }
 
 // ---------------------------------------------------------------------------
+// SUB-STATION CHANNEL TICKS
+// The same wall-clock talkers (hourly time check, station ID) for each
+// enabled channel, gated by the CHANNEL's own frequency (default 'quiet') and
+// spoken by the channel's persona through the channel's own queue — so the
+// voice, the duck, and the session turn all land on that channel's stream.
+// Segments, banter, and programmes stay main-station-only for now. The
+// install-wide guards (pause-when-empty, daily token budget) apply to
+// channels too: they exist to bound the WHOLE install's LLM/TTS spend.
+// ---------------------------------------------------------------------------
+
+async function channelTick(kind: 'hourly' | 'stationId', now = new Date()) {
+  for (const ctx of stationContext.all()) {
+    const ch = settings.channelById(ctx.channel.id);
+    if (!ch) continue;
+    if (!shouldFire(kind, now, ch.frequency || 'quiet')) continue;
+    if (!channelDjCallsAllowed(ch.id)) continue;   // this channel's own room is empty
+    if (!optionalSegmentsAllowed()) return;        // install-wide budget tier
+    try {
+      await withTrace({ kind: kind === 'hourly' ? 'hourly' : 'station-id' }, async () => {
+        const c = await ctx.queue.stationContext();
+        const persona = ctx.queue.personaFor();
+        const script = kind === 'hourly'
+          ? await dj.generateHourlyTime({
+              recap: ctx.queue.getDjRecap(),
+              context: c,
+              recentOpeners: ctx.queue.getRecentOpeners(),
+              persona,
+            })
+          : await dj.generateStationId({
+              recap: ctx.queue.getDjRecap(),
+              context: c,
+              recentOpeners: ctx.queue.getRecentOpeners(),
+              persona,
+            });
+        const opts = { persona, meta: { personaId: persona?.id, personaName: persona?.name } };
+        // Idents hold for the channel's next track boundary, same as main.
+        if (kind === 'stationId') await ctx.queue.announceAtNextTrack(script, 'station-id', opts);
+        else await ctx.queue.announce(script, 'hourly-check', opts);
+      });
+    } catch (err) {
+      ctx.queue.log('error', `Channel "${ctx.channel.id}" ${kind} failed: ${(err as Error).message}`);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // CLEAN UP — old voice WAVs + library DB WAL
 // ---------------------------------------------------------------------------
 
@@ -779,8 +867,12 @@ export function startScheduler() {
   // Auto-playlist refresh every 10 minutes
   cron.schedule(`*/${config.show.autoQueueRefreshMinutes} * * * *`, refreshAutoPlaylist);
 
-  // Top of every hour
-  cron.schedule('0 * * * *', hourlyCheck);
+  // Top of every hour — main station, then each enabled channel (serial, so
+  // N channels can't stampede the shared LLM/TTS at :00).
+  cron.schedule('0 * * * *', async () => {
+    await hourlyCheck();
+    await channelTick('hourly');
+  });
 
   // Segment tick every 5 minutes — the segment-director agent decides whether
   // to air a segment; per-kind cooldowns and the frequency floor live in it.
@@ -789,7 +881,10 @@ export function startScheduler() {
   // Station ID candidate ticks at :15, :30, :45 — handler gates by frequency.
   // Deliberately NOT :00: the hourly check owns the top of the hour, and firing
   // both there stacked two voice segments on each other (issue #310).
-  cron.schedule('15,30,45 * * * *', stationId);
+  cron.schedule('15,30,45 * * * *', async () => {
+    await stationId();
+    await channelTick('stationId');
+  });
 
   // Guest-show banter at :20/:50 — minutes no other wall-clock talker owns
   // (same issue-#310 reasoning as the ident slots). The handler gates on the

@@ -13,10 +13,12 @@
 import * as settings from '../settings.js';
 import { zonedParts } from '../time.js';
 
-export function shouldFire(kind, now = new Date()) {
+export function shouldFire(kind, now = new Date(), frequencyOverride?: string) {
   // effectiveFrequency bumps a DJ-mode persona one rung up the ladder, so it
   // drops more idents / time checks — a working DJ marks the clock more often.
-  const f = settings.effectiveFrequency(settings.getEffectivePersona(now));
+  // A sub-station channel passes its own frequency (channels[].frequency,
+  // default 'quiet') so a chatty main persona can't make every channel chatty.
+  const f = frequencyOverride || settings.effectiveFrequency(settings.getEffectivePersona(now));
   const m = now.getMinutes();
 
   // 'silent' never auto-fires anything — manual /dj/segment triggers bypass

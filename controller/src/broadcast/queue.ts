@@ -16,11 +16,11 @@ import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import * as sfx from './sfx.js';
 import * as session from './session.js';
-import type { TurnMeta } from './session.js';
+import type { TurnMeta, SessionStore } from './session.js';
 import { getFullContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
-import { djCallsAllowed, presentListeners } from './listeners.js';
+import { djCallsAllowed, channelDjCallsAllowed, presentListeners } from './listeners.js';
 import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
 import * as liquidsoapControl from './liquidsoap-control.js';
@@ -197,7 +197,64 @@ export function playAlreadyRecorded(
   return false;
 }
 
+// Instance wiring for a Queue. The zero-arg default is the MAIN station —
+// same paths, session store, and resolvers the singleton always used, so the
+// default instance is behaviour-identical to the pre-channels code. A
+// sub-station channel (broadcast/station-context.ts) passes its channelPaths()
+// slice, its own session store, its liquidsoap telnet port, and per-channel
+// persona/show resolvers, giving each parallel stream an isolated queue with
+// zero shared mutable state (its own voice chain, watcher, and IPC files).
+export interface QueueOpts {
+  paths?: {
+    liquidsoap: {
+      queueFile: string; sayFile: string; introFile: string; sfxFile: string;
+      autoPlaylist: string; nowPlayingFile: string; jinglePlayingFile: string;
+    };
+    queue: { file: string; recentPlaysFile: string };
+  };
+  telnetPort?: number;
+  channelId?: string;
+  session?: SessionStore;
+  personaFor?: () => any;
+  activeShowFor?: (at?: Date) => any;
+}
+
 class Queue {
+  paths: NonNullable<QueueOpts['paths']>;
+  telnetPort: number | undefined;
+  channelId: string;
+  session: SessionStore;
+  personaFor: () => any;
+  activeShowFor: (at?: Date) => any;
+
+  constructor(opts: QueueOpts = {}) {
+    this.paths = opts.paths ?? { liquidsoap: config.liquidsoap, queue: config.queue };
+    this.telnetPort = opts.telnetPort;
+    this.channelId = opts.channelId ?? '';
+    this.session = opts.session ?? session;
+    this.personaFor = opts.personaFor ?? (() => settings.getEffectivePersona());
+    this.activeShowFor = opts.activeShowFor ?? ((at?: Date) => settings.resolveActiveShow(at));
+  }
+
+  // The context object the session/DJ layer keys off. For the main station
+  // this is getFullContext() untouched. For a channel, `activeShow` is
+  // replaced by the channel's own pinned show (or null — the default pool):
+  // the channel is a 24/7 broadcast of that identity, so its session key,
+  // picker steering, and prompts must never follow the MAIN station's grid.
+  async stationContext(at?: Date) {
+    const ctx = await getFullContext(at);
+    if (!this.channelId) return ctx;
+    return { ...ctx, activeShow: this.activeShowFor(at) };
+  }
+
+  // Outbound webhooks are an install-level integration describing the MAIN
+  // broadcast — channel queues stay silent on them so parallel streams don't
+  // interleave events into the operator's Discord/webhook feed.
+  notifyWebhook(event: Parameters<typeof webhooks.notify>[0], payload: Record<string, unknown>) {
+    if (this.channelId) return;
+    webhooks.notify(event, payload);
+  }
+
   upcoming: QueueItem[] = [];  // request items pushed by listeners, not yet playing
   current: QueueItem | null = null;    // what's broadcasting right now (request or auto)
   history: QueueItem[] = [];   // finished tracks, newest first
@@ -228,7 +285,7 @@ class Queue {
     this._persistTimer = setTimeout(async () => {
       this._persistTimer = null;
       try {
-        await writeFileAtomic(config.queue.file, JSON.stringify({
+        await writeFileAtomic(this.paths.queue.file, JSON.stringify({
           upcoming: this.upcoming,
           current: this.current,
           history: this.history,
@@ -248,7 +305,7 @@ class Queue {
     this._recentPlaysTimer = setTimeout(async () => {
       this._recentPlaysTimer = null;
       try {
-        await writeFileAtomic(config.queue.recentPlaysFile,
+        await writeFileAtomic(this.paths.queue.recentPlaysFile,
           JSON.stringify(this._recentPlays, null, 2));
       } catch (err) {
         console.error('[queue] recent-plays persist failed:', (err as Error).message);
@@ -263,9 +320,9 @@ class Queue {
   // key differs and the watcher reconciles normally (see onTrackStarted, which
   // drops any upcoming items Liquidsoap consumed while the controller was down).
   recover() {
-    if (!existsSync(config.queue.file)) return;
+    if (!existsSync(this.paths.queue.file)) return;
     try {
-      const stored = JSON.parse(readFileSync(config.queue.file, 'utf8'));
+      const stored = JSON.parse(readFileSync(this.paths.queue.file, 'utf8'));
       // Drop anything queued long enough ago that Liquidsoap has certainly
       // played past it — guards against a stale snapshot from a long downtime
       // resurrecting tracks as permanent "Up next" zombies.
@@ -294,9 +351,9 @@ class Queue {
     } catch (err) {
       console.error('[queue] recover failed:', (err as Error).message);
     }
-    if (existsSync(config.queue.recentPlaysFile)) {
+    if (existsSync(this.paths.queue.recentPlaysFile)) {
       try {
-        const arr = JSON.parse(readFileSync(config.queue.recentPlaysFile, 'utf8'));
+        const arr = JSON.parse(readFileSync(this.paths.queue.recentPlaysFile, 'utf8'));
         if (Array.isArray(arr)) {
           // Drop anything older than 48h on boot — keeps the file from
           // ballooning if the cap was raised between restarts.
@@ -335,7 +392,7 @@ class Queue {
       const filled: typeof this._recentPlays = [];
       const today = new Date().toISOString().slice(0, 10);
       const yest = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-      const stateDir = config.queue.file.replace(/\/queue\.json$/, '');
+      const stateDir = this.paths.queue.file.replace(/\/queue\.json$/, '');
       for (const day of [today, yest]) {
         const path = `${stateDir}/logs/events-${day}.jsonl`;
         if (!existsSync(path)) continue;
@@ -979,7 +1036,7 @@ class Queue {
         // mirroring the request path's selection-cap exemption in picker-tools.
         const maxDurationSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
         const uri = subsonic.getAnnotatedUri(item.track, { maxDurationSec });
-        await writeHandoff(config.liquidsoap.queueFile, uri);
+        await writeHandoff(this.paths.liquidsoap.queueFile, uri);
         item.sent = true;
         this.persist();  // record the sent flag — these are now live in dj_queue
 
@@ -1010,15 +1067,15 @@ class Queue {
     try {
       const wavPath = await speak(text, { kind, persona });
       const targetFile = kind === 'link'
-        ? config.liquidsoap.introFile
-        : config.liquidsoap.sayFile;
-      await airVoice(targetFile, wavPath, text, voiceGainDb(kind, persona));
+        ? this.paths.liquidsoap.introFile
+        : this.paths.liquidsoap.sayFile;
+      await airVoice(targetFile, wavPath, text, voiceGainDb(kind, persona), { jingleFile: this.paths.liquidsoap.jinglePlayingFile, chainKey: this.channelId });
       this.log(kind, text);
-      session.appendTurn({ role: 'segment', kind, text, meta });
+      this.session.appendTurn({ role: 'segment', kind, text, meta });
       // The auto-DJ link channel is its own event; everything else (station
       // IDs, weather, hourly) is `dj.say`. Operators that pipe these into
       // Discord usually want to filter the chatty link stream separately.
-      webhooks.notify(kind === 'link' ? 'dj.link' : 'dj.say',
+      this.notifyWebhook(kind === 'link' ? 'dj.link' : 'dj.say',
         kind === 'link' ? { text } : { text, kind });
     } catch (err) {
       this.log('error', `Announce failed: ${(err as Error).message}`);
@@ -1046,9 +1103,9 @@ class Queue {
     }
     for (const l of rendered) {
       try {
-        await airVoice(config.liquidsoap.sayFile, l.wavPath, l.text, voiceGainDb(kind, l.persona));
+        await airVoice(this.paths.liquidsoap.sayFile, l.wavPath, l.text, voiceGainDb(kind, l.persona), { jingleFile: this.paths.liquidsoap.jinglePlayingFile, chainKey: this.channelId });
         this.log(kind, `${l.persona?.name ? `${l.persona.name}: ` : ''}${l.text}`);
-        session.appendTurn({
+        this.session.appendTurn({
           role: 'segment', kind, text: l.text,
           meta: { personaId: l.persona?.id, personaName: l.persona?.name },
         });
@@ -1058,7 +1115,7 @@ class Queue {
     }
     // One webhook for the whole exchange — per-line events would read as five
     // separate segments to a Discord pipe.
-    webhooks.notify('dj.say', {
+    this.notifyWebhook('dj.say', {
       text: rendered.map(l => `${l.persona?.name || 'DJ'}: ${l.text}`).join('\n'),
       kind,
     });
@@ -1105,10 +1162,10 @@ class Queue {
     }
     if (!existsSync(p.wavPath)) return;
     try {
-      await airVoice(config.liquidsoap.introFile, p.wavPath, p.text, voiceGainDb(p.kind, p.persona));
+      await airVoice(this.paths.liquidsoap.introFile, p.wavPath, p.text, voiceGainDb(p.kind, p.persona), { jingleFile: this.paths.liquidsoap.jinglePlayingFile, chainKey: this.channelId });
       this.log(p.kind, p.text);
-      session.appendTurn({ role: 'segment', kind: p.kind, text: p.text, meta: p.meta });
-      webhooks.notify('dj.say', { text: p.text, kind: p.kind });
+      this.session.appendTurn({ role: 'segment', kind: p.kind, text: p.text, meta: p.meta });
+      this.notifyWebhook('dj.say', { text: p.text, kind: p.kind });
     } catch (err) {
       this.log('error', `Air pending voice failed: ${(err as Error).message}`);
     }
@@ -1139,14 +1196,14 @@ class Queue {
     }
     const kind = item.introKind || 'dj-speak';
     const targetFile = kind === 'link'
-      ? config.liquidsoap.introFile
-      : config.liquidsoap.sayFile;
+      ? this.paths.liquidsoap.introFile
+      : this.paths.liquidsoap.sayFile;
     try {
-      await airVoice(targetFile, item.introWav, item.introScript || '', voiceGainDb(kind));
+      await airVoice(targetFile, item.introWav, item.introScript || '', voiceGainDb(kind), { jingleFile: this.paths.liquidsoap.jinglePlayingFile, chainKey: this.channelId });
       this.persist();
       this.log(kind, item.introScript!);
-      session.appendTurn({ role: 'segment', kind, text: item.introScript! });
-      webhooks.notify(kind === 'link' ? 'dj.link' : 'dj.say',
+      this.session.appendTurn({ role: 'segment', kind, text: item.introScript! });
+      this.notifyWebhook(kind === 'link' ? 'dj.link' : 'dj.say',
         kind === 'link' ? { text: item.introScript } : { text: item.introScript, kind });
     } catch (err) {
       this.log('error', `Air intro failed: ${(err as Error).message}`);
@@ -1173,9 +1230,9 @@ class Queue {
         return;
       }
       if (underVoice) await sleep(VOICE_LEADIN_MS);
-      await writeHandoff(config.liquidsoap.sfxFile, path);
+      await writeHandoff(this.paths.liquidsoap.sfxFile, path);
       this.log('sfx', name);
-      session.appendTurn({ role: 'segment', kind: 'sfx', text: name });
+      this.session.appendTurn({ role: 'segment', kind: 'sfx', text: name });
     } catch (err) {
       this.log('error', `playSfx failed: ${(err as Error).message}`);
     }
@@ -1290,7 +1347,7 @@ class Queue {
     }
 
     // Record the play into the live session's chat history.
-    session.appendTurn({
+    this.session.appendTurn({
       role: 'track', kind: 'play',
       text: `▶ "${this.current.track.title}" by ${this.current.track.artist || 'unknown'}`,
       meta: { source: this.current.source, requestedBy: this.current.requestedBy || null },
@@ -1299,7 +1356,7 @@ class Queue {
     // The show on air right now — stamped onto the durable play record (and the
     // event log) so history can answer "what show was this on" without
     // correlating session archives after the fact.
-    const onAirShow = session.getSession()?.show || null;
+    const onAirShow = this.session.getSession()?.show || null;
 
     // Milestone on the unified timeline — the anchor each pick trace hangs off.
     logEvent('track.play', {
@@ -1340,15 +1397,15 @@ class Queue {
     if (gated) {
       const listeners = presentListeners();
       if (listeners !== null) {
-        webhooks.notify('track.play', { ...trackPayload, listeners });
+        this.notifyWebhook('track.play', { ...trackPayload, listeners });
       }
     } else {
-      webhooks.notify('track.play', trackPayload);
+      this.notifyWebhook('track.play', trackPayload);
     }
 
     // Last.fm / ListenBrainz — also fire-and-forget. Internally gated on
     // listener count > 0 (fail-closed) and per-backend enable flags.
-    scrobble.onTrackEvent({
+    if (!this.channelId) scrobble.onTrackEvent({
       outgoing: outgoingPrev?.track
         ? {
             id: outgoingPrev.track.id || null,
@@ -1380,7 +1437,8 @@ class Queue {
     // watcher still gets onTrackStarted events for those auto tracks, so the
     // first transition after a listener returns re-enters this block.
     const isAutonomous = this.current.source === 'auto' || this.current.source === 'ai';
-    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy && djCallsAllowed()) {
+    const callsAllowed = this.channelId ? channelDjCallsAllowed(this.channelId) : djCallsAllowed();
+    if (this.autoPick && this.upcoming.length === 0 && !this.pickerBusy && callsAllowed) {
       let wantLink = false;
       if (this.autoLink && isAutonomous && this.history[0]) {
         this.tracksUntilLink--;
@@ -1392,30 +1450,37 @@ class Queue {
       this.pickerBusy = true;
       (async () => {
         try {
-          const ctx = await getFullContext();
-          await session.maybeRoll(ctx);
-          // Plan a programme episode BEFORE the mic-pass so a handoff into a
-          // programme show can weave the episode angle into its greeting.
-          try {
-            await programme.ensurePlan(ctx);
-          } catch (err) {
-            this.log('error', `Programme plan failed: ${(err as Error).message}`);
-          }
-          // If that roll crossed a persona boundary, air the mic-pass first
-          // (sign-off + greeting) so it plays before the incoming DJ's first
-          // pick. Guarded so a handoff failure never blocks the next track.
-          try {
-            await djAgent.runPersonaHandoff(this, ctx);
-          } catch (err) {
-            this.log('error', `Persona handoff failed: ${(err as Error).message}`);
-          }
-          // Programme shows: open the episode if the hourly cron hasn't
-          // already (whichever call site settles the session first wins; the
-          // beat flag makes the other a no-op).
-          try {
-            await programme.onSessionSettled(this, ctx);
-          } catch (err) {
-            this.log('error', `Programme episode hook failed: ${(err as Error).message}`);
+          const ctx = await this.stationContext();
+          await this.session.maybeRoll(ctx);
+          // Programme episodes + the persona mic-pass are MAIN-station-only
+          // for now: programme.ts reads the main session store directly, and
+          // a channel's persona is pinned (no roster rotation to hand off
+          // between). Channels get track picks + links; produced episodes on
+          // channels are a later phase.
+          if (!this.channelId) {
+            // Plan a programme episode BEFORE the mic-pass so a handoff into a
+            // programme show can weave the episode angle into its greeting.
+            try {
+              await programme.ensurePlan(ctx);
+            } catch (err) {
+              this.log('error', `Programme plan failed: ${(err as Error).message}`);
+            }
+            // If that roll crossed a persona boundary, air the mic-pass first
+            // (sign-off + greeting) so it plays before the incoming DJ's first
+            // pick. Guarded so a handoff failure never blocks the next track.
+            try {
+              await djAgent.runPersonaHandoff(this, ctx);
+            } catch (err) {
+              this.log('error', `Persona handoff failed: ${(err as Error).message}`);
+            }
+            // Programme shows: open the episode if the hourly cron hasn't
+            // already (whichever call site settles the session first wins; the
+            // beat flag makes the other a no-op).
+            try {
+              await programme.onSessionSettled(this, ctx);
+            } catch (err) {
+              this.log('error', `Programme episode hook failed: ${(err as Error).message}`);
+            }
           }
           // The pick made now airs when the track that just started ends — so
           // near a show boundary the rules to pick by are the NEXT show's, not
@@ -1431,7 +1496,7 @@ class Queue {
           let showAt: Date | null = null;
           if (Number.isFinite(durSec) && durSec > 0) {
             showAt = new Date(Date.now() + (durSec + PICK_SHOW_LOOKAHEAD_SEC) * 1000);
-            pickCtx = await getFullContext(showAt);
+            pickCtx = await this.stationContext(showAt);
           }
           await djAgent.runTrackEvent(this, pickCtx, { wantLink, showAt });
         } catch (err) {
@@ -1457,7 +1522,7 @@ class Queue {
     }
 
     try {
-      const liveIds = await liquidsoapControl.getDjQueueIds();
+      const liveIds = await liquidsoapControl.getDjQueueIds(this.telnetPort);
 
       // Empty dj_queue while we still hold sent items. On a single read this is
       // ambiguous — a pick may be mid-poll (written to next.txt, not yet pulled
@@ -1527,8 +1592,8 @@ class Queue {
     if (!item) return { ok: false, reason: 'not-queued' };
 
     if (item.sent) {
-      const rid = await liquidsoapControl.resolveDjQueueRid(trackId);
-      if (!rid || !(await liquidsoapControl.removeFromDjQueue(rid))) {
+      const rid = await liquidsoapControl.resolveDjQueueRid(trackId, this.telnetPort);
+      if (!rid || !(await liquidsoapControl.removeFromDjQueue(rid, this.telnetPort))) {
         return { ok: false, reason: 'already-playing' };
       }
     }
@@ -1655,15 +1720,26 @@ class Queue {
   // Poll now-playing.json every 1.5s and dispatch track changes. Each tick
   // also refreshes the in-memory copy getNowPlaying() serves, so the
   // per-listener /now-playing poll never has to touch the disk.
+  _watcherHandle: NodeJS.Timeout | null = null;
+
   startWatcher() {
+    if (this._watcherHandle) return;   // idempotent — one watcher per queue
     const tick = async () => {
       this._nowPlaying = await this.readNowPlayingFromDisk();
       this._nowPlayingFresh = true;
       this.onTrackStarted(this._nowPlaying);
     };
     void tick();
-    setInterval(tick, 1500);
+    this._watcherHandle = setInterval(tick, 1500);
     this.log('scheduler', 'Now-playing watcher started');
+  }
+
+  // Stop the watcher + flush timers. Used when a sub-station channel is
+  // removed/disabled at runtime (station-context reconcile) — the main
+  // station's queue lives for the process and never calls this.
+  stopWatcher() {
+    if (this._watcherHandle) clearInterval(this._watcherHandle);
+    this._watcherHandle = null;
   }
 
   snapshot() {
@@ -1710,7 +1786,7 @@ class Queue {
   // Read the now-playing JSON Liquidsoap writes
   async readNowPlayingFromDisk() {
     try {
-      const raw = await readFile(config.liquidsoap.nowPlayingFile, 'utf8');
+      const raw = await readFile(this.paths.liquidsoap.nowPlayingFile, 'utf8');
       return JSON.parse(raw);
     } catch {
       return null;
@@ -1843,7 +1919,9 @@ async function writeHandoff(path: string, contents: string, { maxWaitMs = 1500 }
 // for silence instead of talking over the last one. The caller unblocks as soon
 // as its own clip is handed to liquidsoap (writeHandoff resolved); only the
 // *next* caller pays the duration wait.
-let _voiceChain: Promise<void> = Promise.resolve();
+// Keyed by channel id ('' = main): each parallel stream serialises its OWN
+// spoken segments — channel A's DJ talking must never delay channel B's.
+const _voiceChains: Map<string, Promise<void>> = new Map();
 
 const VOICE_LEADIN_MS = 800;   // /sounds/leadin.wav pushed before each spoken clip
 const VOICE_TAIL_MS = 700;     // duck ramp-back + poll/scheduling slack
@@ -1851,22 +1929,27 @@ const VOICE_TAIL_MS = 700;     // duck ramp-back + poll/scheduling slack
 // really aired) can't wedge the voice channel for minutes.
 const VOICE_HOLD_MAX_MS = 90_000;
 
-async function airVoice(path: string, wavPath: string, text: string, gainDb = 0) {
+async function airVoice(
+  path: string, wavPath: string, text: string, gainDb = 0,
+  opts: { jingleFile?: string; chainKey?: string } = {},
+) {
   // Duration is read from the bare WAV path (header parse), so compute it BEFORE
   // wrapping — the annotate URI isn't a real file. The wrapped URI is only what
   // gets written to the handoff file for Liquidsoap to consume.
   const holdMs = Math.min(VOICE_HOLD_MAX_MS, speechDurationMs(wavPath, text));
   const uri = voiceUriWithGain(wavPath, gainDb);
-  const turn = _voiceChain
+  const chainKey = opts.chainKey ?? '';
+  const jingleFile = opts.jingleFile ?? config.liquidsoap.jinglePlayingFile;
+  const turn = (_voiceChains.get(chainKey) ?? Promise.resolve())
     .catch(() => undefined)
     .then(async () => {
       // A jingle stinger may be on air (or inside the cross buffer) right now —
       // it plays outside this serialiser, so wait it out before handing over.
-      await waitForJingleClear();
+      await waitForJingleClear(jingleFile);
       return writeHandoff(path, uri);
     });
   // Extend the shared lock until this clip has (about) finished playing.
-  _voiceChain = turn.then(() => sleep(holdMs)).then(() => {}, () => {});
+  _voiceChains.set(chainKey, turn.then(() => sleep(holdMs)).then(() => {}, () => {}));
   return turn;
 }
 
@@ -1890,9 +1973,9 @@ const JINGLE_FALLBACK_MS = 15_000; // clip length when the WAV can't be parsed
 const JINGLE_TAIL_MS = 1_000;      // fade tail + poll slack
 const JINGLE_WAIT_MAX_MS = 60_000; // never wedge the voice chain on a bad marker
 
-function jingleClearAtMs(): number {
+function jingleClearAtMs(jingleFile: string): number {
   try {
-    const m = JSON.parse(readFileSync(config.liquidsoap.jinglePlayingFile, 'utf8'));
+    const m = JSON.parse(readFileSync(jingleFile, 'utf8'));
     const startedMs = Number(m?.startedAt) * 1000; // liquidsoap time() is unix seconds
     if (!Number.isFinite(startedMs) || startedMs <= 0) return 0;
     const clipMs = (typeof m?.filename === 'string' && wavDurationMs(m.filename)) || JINGLE_FALLBACK_MS;
@@ -1903,8 +1986,8 @@ function jingleClearAtMs(): number {
   }
 }
 
-async function waitForJingleClear() {
-  const waitMs = Math.min(JINGLE_WAIT_MAX_MS, jingleClearAtMs() - Date.now());
+async function waitForJingleClear(jingleFile: string) {
+  const waitMs = Math.min(JINGLE_WAIT_MAX_MS, jingleClearAtMs(jingleFile) - Date.now());
   if (waitMs > 0) await sleep(waitMs);
 }
 
@@ -2017,4 +2100,5 @@ function formatAgo(ms: number) {
   return `${Math.floor(s / 86400)}d`;
 }
 
+export { Queue };
 export const queue = new Queue();
