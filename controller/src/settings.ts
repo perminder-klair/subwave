@@ -1126,6 +1126,16 @@ const DEFAULTS = {
     aacEnabled: false,
     aacBitrate: 192,
     bitrate: 192,
+    // ICY (out-of-band) per-track titles on the Ogg mounts (/stream.opus +
+    // /stream.flac). ON by default: most internet-radio clients (Ferrosonic,
+    // Cast receivers, Symfonium) read the in-band Ogg comment only once at
+    // connect and freeze on that title without ICY (issue #1052). foobar2000
+    // is the known exception — it parses the in-band chained-Ogg tags
+    // correctly, and the ICY channel on top breaks its Ogg-FLAC metadata — so
+    // operators with fb2k listeners turn this off. Which camp a station's
+    // listeners fall in is unknowable from here, hence a toggle rather than a
+    // hardcoded value. MP3/AAC always use ICY and are unaffected.
+    oggIcyMetadata: true,
     // Idle pause (broadcast/stream-idle.ts). When on, the controller flips
     // radio.liq's idle gate after idleAfterMinutes with zero Icecast
     // listeners: the mounts keep serving (silence), but the music chain
@@ -2020,6 +2030,10 @@ export async function load() {
         typeof stored.stream?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.stream.bitrate)
           ? stored.stream.bitrate
           : DEFAULTS.stream.bitrate,
+      oggIcyMetadata:
+        typeof stored.stream?.oggIcyMetadata === 'boolean'
+          ? stored.stream.oggIcyMetadata
+          : DEFAULTS.stream.oggIcyMetadata,
       idleWhenEmpty:
         typeof stored.stream?.idleWhenEmpty === 'boolean'
           ? stored.stream.idleWhenEmpty
@@ -3197,6 +3211,13 @@ export async function update(patch) {
         restart = true;
       }
     }
+    if (st.oggIcyMetadata !== undefined) {
+      const v = !!st.oggIcyMetadata;
+      if (v !== cur.stream.oggIcyMetadata) {
+        next.stream.oggIcyMetadata = v;
+        restart = true;
+      }
+    }
     if (st.aacEnabled !== undefined) {
       const v = !!st.aacEnabled;
       if (v !== cur.stream.aacEnabled) {
@@ -4268,6 +4289,7 @@ const LIQ_ARCHIVE_BITRATE_PATH = `${STATE_DIR}/liquidsoap_archive_bitrate.txt`;
 const LIQ_OPUS_ENABLED_PATH = `${STATE_DIR}/liquidsoap_opus_enabled.txt`;
 const LIQ_OPUS_BITRATE_PATH = `${STATE_DIR}/liquidsoap_opus_bitrate.txt`;
 const LIQ_FLAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_flac_enabled.txt`;
+const LIQ_OGG_ICY_METADATA_PATH = `${STATE_DIR}/liquidsoap_ogg_icy_metadata.txt`;
 const LIQ_AAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_aac_enabled.txt`;
 const LIQ_AAC_BITRATE_PATH = `${STATE_DIR}/liquidsoap_aac_bitrate.txt`;
 const LIQ_STREAM_BITRATE_PATH = `${STATE_DIR}/liquidsoap_stream_bitrate.txt`;
@@ -4281,6 +4303,7 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_OPUS_ENABLED_PATH, s.stream.opusEnabled ? 'true' : 'false');
   await writeFile(LIQ_OPUS_BITRATE_PATH, String(s.stream.opusBitrate));
   await writeFile(LIQ_FLAC_ENABLED_PATH, s.stream.flacEnabled ? 'true' : 'false');
+  await writeFile(LIQ_OGG_ICY_METADATA_PATH, s.stream.oggIcyMetadata ? 'true' : 'false');
   await writeFile(LIQ_AAC_ENABLED_PATH, s.stream.aacEnabled ? 'true' : 'false');
   await writeFile(LIQ_AAC_BITRATE_PATH, String(s.stream.aacBitrate));
   await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));

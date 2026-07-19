@@ -124,6 +124,7 @@ export default function SettingsPanel() {
         aacEnabled: v.stream?.aacEnabled ?? false,
         aacBitrate: String(v.stream?.aacBitrate ?? 192),
         bitrate: String(v.stream?.bitrate ?? 192),
+        oggIcyMetadata: v.stream?.oggIcyMetadata ?? true,
         idleWhenEmpty: v.stream?.idleWhenEmpty ?? false,
         idleAfterMinutes: String(v.stream?.idleAfterMinutes ?? 10),
       },
@@ -1175,6 +1176,49 @@ export default function SettingsPanel() {
                     players (VLC, foobar2000, a network streamer) — the web and mobile players
                     stay on MP3/Opus and won&apos;t auto-select it. The mandatory{' '}
                     <code>/stream.mp3</code> mount always serves everyone.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Ogg metadata" sub="ICY titles on /stream.opus + /stream.flac">
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Push ICY track titles on the Ogg mounts</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'on', label: 'On' },
+                        { id: 'off', label: 'Off' },
+                      ]}
+                      value={form.stream.oggIcyMetadata ? 'on' : 'off'}
+                      onChange={id =>
+                        setForm(f =>
+                          f ? { ...f, stream: { ...f.stream, oggIcyMetadata: id === 'on' } } : f,
+                        )
+                      }
+                    />
+                    <Btn
+                      sm
+                      onClick={() =>
+                        saveSettings({ stream: { oggIcyMetadata: form.stream.oggIcyMetadata } })
+                      }
+                      disabled={busy}
+                    >
+                      Save
+                    </Btn>
+                  </div>
+                  <div className="field-hint">
+                    On by default. Sends each track&apos;s title out-of-band (ICY) on the Opus and
+                    FLAC mounts, which most internet-radio players and Cast receivers need — they
+                    read the in-band Ogg tags only once, at connect, and otherwise stay stuck on
+                    the first title. Turn it <strong>off</strong> if your listeners use
+                    foobar2000: it reads the in-band tags correctly, and the extra ICY channel
+                    breaks its FLAC metadata display. The MP3 and AAC mounts always use ICY and
+                    are unaffected either way.
                   </div>
                 </div>
               </Card>

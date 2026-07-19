@@ -172,6 +172,7 @@ export interface StreamForm {
   aacEnabled: boolean;
   aacBitrate: string;
   bitrate: string;
+  oggIcyMetadata: boolean;
   idleWhenEmpty: boolean;
   idleAfterMinutes: string;
 }
@@ -242,6 +243,7 @@ export interface SettingsData {
       aacEnabled?: boolean;
       aacBitrate?: number;
       bitrate?: number;
+      oggIcyMetadata?: boolean;
       idleWhenEmpty?: boolean;
       idleAfterMinutes?: number;
     };
