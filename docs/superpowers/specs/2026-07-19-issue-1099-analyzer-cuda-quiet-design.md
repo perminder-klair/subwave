@@ -39,7 +39,7 @@ Two independent deliverables, one PR (closes #1099):
    *nested* heavy-vs-cuda choice cleanly, and — decisive — a GPU device reservation
    **cannot be toggled from `.env`** in the base compose file at all. GPU wiring needs a
    compose-level block either way.
-2. **Compose overlay file** (`docker-compose.gpu.yml`) that overrides the analyzer image
+2. **Compose overlay file** (`docker-compose.analyzer-gpu.yml`) that overrides the analyzer image
    to `-cuda` AND adds the nvidia device reservation. **Chosen** — it's the standard
    compose idiom, keeps the three main compose files untouched, works over both
    `docker-compose.yml` and `docker-compose.byo.yml`, and puts image selection and GPU
@@ -103,11 +103,11 @@ amd64-only (CUDA wheels are amd64; matches the heavy precedent). The cuda flavou
 heavy + CUDA — there is no lean-cuda (librosa alone doesn't use torch, so a GPU lean image
 would be pointless).
 
-### Compose overlay (`docker-compose.gpu.yml`, new file at repo root)
+### Compose overlay (`docker-compose.analyzer-gpu.yml`, new file at repo root)
 
 ```yaml
 # GPU overlay — run the CUDA analyzer flavour on an NVIDIA host:
-#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+#   docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
 # Requires the NVIDIA driver + nvidia-container-toolkit on the host.
 services:
   analyzer:

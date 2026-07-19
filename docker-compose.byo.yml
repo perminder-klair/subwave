@@ -297,6 +297,10 @@ services:
       # admin toggles drive these per request.
       - ANALYZE_AUDIO_EMBEDDING=${ANALYZE_AUDIO_EMBEDDING:-}
       - ANALYZE_VOCAL_ACTIVITY=${ANALYZE_VOCAL_ACTIVITY:-}
+      # Torch device for CLAP/Demucs: auto (default) / cpu / cuda. Only
+      # meaningful on the cuda analyzer flavour (docker-compose.analyzer-gpu.yml);
+      # cpu-wheel images always resolve to cpu.
+      - ANALYZE_DEVICE=${ANALYZE_DEVICE:-}
       - CLAP_MODEL=${CLAP_MODEL:-}
       - CLAP_MODEL_PATH=${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (worker reads both; see

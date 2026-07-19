@@ -111,6 +111,42 @@ def log(msg):
     sys.stderr.flush()
 
 
+# --- Torch device for the heavy models (CLAP / Demucs) ----------------------
+# ANALYZE_DEVICE ∈ auto (default) | cpu | cuda. `auto` picks cuda when torch
+# actually sees a GPU (the subwave-analyzer-cuda flavour on an NVIDIA host)
+# and cpu everywhere else — on the cpu-wheel images torch.cuda.is_available()
+# is always False, so existing installs behave exactly as before. A cuda
+# request without a visible GPU warns and falls back to cpu: device selection
+# must never fail an analysis pass. The torch import stays lazy — only the
+# heavy code paths call this, so the librosa-only venv never needs torch.
+_DEVICE = None
+
+
+def resolve_device():
+    global _DEVICE
+    if _DEVICE is not None:
+        return _DEVICE
+    import torch
+
+    want = os.environ.get("ANALYZE_DEVICE", "").strip().lower() or "auto"
+    if want not in ("auto", "cpu", "cuda"):
+        log(f"ANALYZE_DEVICE={want} not recognised (auto|cpu|cuda); using auto")
+        want = "auto"
+    if want != "cpu" and torch.cuda.is_available():
+        _DEVICE = "cuda"
+        log(f"analysis device: cuda ({torch.cuda.get_device_name(0)})")
+    else:
+        if want == "cuda":
+            log(
+                "ANALYZE_DEVICE=cuda but torch sees no CUDA device "
+                "(cpu-only wheels, no GPU exposed to the container, or missing "
+                "nvidia-container-toolkit); falling back to cpu"
+            )
+        _DEVICE = "cpu"
+        log("analysis device: cpu")
+    return _DEVICE
+
+
 def _pearson(a, b):
     n = len(a)
     ma = sum(a) / n
@@ -303,6 +339,7 @@ class ClapEmbedder:
 
             self.model = ClapModel.from_pretrained(hf_id)
             self.model.eval()
+            self.model.to(resolve_device())
             self.processor = ClapProcessor.from_pretrained(hf_id)
             self.mode = "transformers"
             log(f"CLAP transformers model loaded: {hf_id}")
@@ -332,6 +369,7 @@ class ClapEmbedder:
         else:
             import torch
 
+            feats = feats.to(resolve_device())
             with torch.no_grad():
                 emb = self.model.get_audio_features(input_features=feats)
             # transformers ≤4.x returns the projected 512-d audio-features
@@ -366,6 +404,7 @@ class ClapEmbedder:
             feat_id = os.environ.get("CLAP_FEATURE_MODEL", "").strip() or hf_id
             m = ClapTextModelWithProjection.from_pretrained(feat_id)
             m.eval()
+            m.to(resolve_device())
             self.text_model = m
             log(f"CLAP text tower loaded: {feat_id}")
         return self.text_model
@@ -380,6 +419,7 @@ class ClapEmbedder:
 
         model = self._resolve_text_model()
         inputs = self.processor(text=list(texts), return_tensors="pt", padding=True)
+        inputs = inputs.to(resolve_device())
         with torch.no_grad():
             emb = model.get_text_features(**inputs) if hasattr(model, "get_text_features") \
                 else model(**inputs)
@@ -599,7 +639,9 @@ class VocalActivityDetector:
         from demucs.apply import apply_model
 
         with torch.no_grad():
-            est = apply_model(self.model, wav.unsqueeze(0), device="cpu")[0]
+            # apply_model moves the model + chunks to the device itself (this
+            # is how the demucs CLI's -d flag works), so no .to() here.
+            est = apply_model(self.model, wav.unsqueeze(0), device=resolve_device())[0]
         vocals = est[self.sources.index("vocals")].mean(dim=0).cpu().numpy()
 
         # RMS envelope of the vocal stem, thresholded against its own loud level
