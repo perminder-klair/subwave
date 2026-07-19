@@ -504,3 +504,24 @@ disease Change 0 fixed for `session.start()`, in three more hosts:
    never built at the roll tick and the greeting aired with `episodeAngle:
    null`. Fix: `now` defaults to `session.contextDate(ctx)`, so the date and
    the context can never disagree (the Change 0 principle, applied here).
+
+### Review-fix verification
+
+Beyond the new `rollIsBackward` unit pins, the three fixes were exercised
+against the real settings/session/programme modules with a seeded temp
+STATE_DIR (two adjacent shows on the 10:00 UTC boundary, different personas,
+show B `programme: true`), 11 assertions:
+
+- The Change 0 chain still holds: a roll on a context stamped `10:05` at
+  wall-clock `09:58` lands on show B as the incoming persona with the forward
+  mic-pass armed and `ctxAt` stamped.
+- Replaying the request path (`maybeRoll` with a live `09:58` context) leaves
+  the session, the pending handoff, and `onAirPersona()` untouched.
+- `ensurePlan` with an explicit live-clock `now` reproduces the pre-fix silent
+  no-op (no episode state attached); the `contextDate` default attaches it.
+- `maybeRunIntro` returns pending (intro unmarked) while the handoff is armed,
+  and marks the intro as covered once `handoffAired` flips.
+
+The harness needs the settings graph, so it isn't part of `npm test` (repo
+tests stay dependency-free); it lives outside the repo like the Change 0
+verification.
