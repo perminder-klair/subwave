@@ -276,6 +276,9 @@ async function resolveRequest(entry) {
     const pos = await queue.push({
       track: pick, requestedBy: requester, intent: 'more_like_this', introScript,
       introKind: 'dj-speak',
+      // Voice it as whoever wrote it — render and air both happen later and
+      // would otherwise re-resolve the speaker off the wall clock.
+      introPersona: session.onAirPersona(),
     });
     entry.pick = pick;
     if (pos === -2) {
@@ -562,6 +565,8 @@ async function resolveRequest(entry) {
     intent: matched.intent,
     introScript,
     introKind: 'dj-speak',
+    // Voice it as whoever wrote it (see the more_like_this push above).
+    introPersona: session.onAirPersona(),
   });
   entry.pick = pick;
   if (pos === -2) {

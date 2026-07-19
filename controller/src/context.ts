@@ -339,5 +339,12 @@ export async function getFullContext(at?: Date) {
   // it couldn't be read — callers treat that as "unknown" and stay quiet.
   const listeners = { count: getListenerCount() };
 
-  return { time, weather, festival, dominantMood, date, clock, activeShow, listeners };
+  // The moment this context DESCRIBES, stamped so consumers can tell a
+  // look-ahead context from a live one. Without it a consumer that needs a date
+  // (session.start → getEffectivePersona) silently falls back to the wall clock
+  // and disagrees with the activeShow resolved above — which, on a look-ahead
+  // roll, stamps the OUTGOING persona onto the INCOMING show's session and
+  // makes stampRolledFrom see no persona change at all (mic-pass suppressed).
+  // Note this is distinct from `date` (getDateContext's calendar strings).
+  return { at: now.toISOString(), time, weather, festival, dominantMood, date, clock, activeShow, listeners };
 }
