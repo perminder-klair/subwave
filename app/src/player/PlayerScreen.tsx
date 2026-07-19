@@ -39,6 +39,7 @@ import { usePlayer } from '@/hooks/usePlayer';
 import { useSignal } from '@/hooks/useSignal';
 import { useSleepTimer } from '@/hooks/useSleepTimer';
 import { useStationFeed } from '@/hooks/useStationFeed';
+import { useTrackLike } from '@/hooks/useTrackLike';
 import type { StationApi } from '@/lib/api';
 import type { StationLocale } from '@/lib/format';
 import type {
@@ -207,6 +208,8 @@ export default function PlayerScreen() {
     () => (api && nowPlaying?.subsonic_id ? api.cover(nowPlaying.subsonic_id) : null),
     [api, nowPlaying?.subsonic_id],
   );
+
+  const trackLike = useTrackLike(api, nowPlaying?.subsonic_id ?? null);
 
   // Google Cast, merged over the local player: with no session this is
   // localPlayer untouched; while connected, tune/stop/volume/status re-target
@@ -409,6 +412,7 @@ export default function PlayerScreen() {
                     coverSrc={coverSrc}
                     elapsed={elapsed}
                     llmTokens={llmTokens}
+                    trackLike={trackLike}
                     feed={boothFeed}
                     djLineOn
                     live={tunedIn}

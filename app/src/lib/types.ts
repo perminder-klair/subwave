@@ -166,6 +166,26 @@ export interface RequestResult {
   status?: RequestStatus;
 }
 
+/** `POST /like` outcome (#991). Error statuses (403 disabled, 409 stale/no
+ *  track, 429 throttled) still carry a JSON body with `error`. */
+export interface LikeResult {
+  ok?: boolean;
+  songId?: string | null;
+  liked?: boolean;
+  alreadyLiked?: boolean;
+  count?: number;
+  error?: string;
+}
+
+/** `GET /like` — liked-state for the current airing, from this listener's
+ *  point of view (server-side dedup key, no account needed). */
+export interface LikeStatus {
+  enabled: boolean;
+  songId?: string | null;
+  liked?: boolean;
+  count?: number;
+}
+
 export interface DjLogEntry {
   t?: string;
   text?: string;

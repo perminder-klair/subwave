@@ -13,6 +13,8 @@
 
 import type {
   DjPublic,
+  LikeResult,
+  LikeStatus,
   NowPlayingResponse,
   RequestResult,
   SchedulePayload,
@@ -64,6 +66,12 @@ export interface StationApi {
   probeHealth(signal?: AbortSignal): Promise<HealthResult>;
   postRequest(body: RequestBody): Promise<RequestResult>;
   pollRequest(id: string): Promise<RequestResult>;
+  /** Like the currently playing track (#991). `songId` is what the client
+   *  believes is on air — the controller rejects a stale tap. Error statuses
+   *  come back as a LikeResult with `error`; null on network error. */
+  likeCurrent(songId: string): Promise<LikeResult | null>;
+  /** Liked-state + count for the current airing. null on network error. */
+  likeStatus(): Promise<LikeStatus | null>;
   /** Fire-and-forget audience beacon. Analytics must never break a listener —
    *  all failures are swallowed. */
   postBeacon(body: BeaconBody): Promise<void>;
@@ -250,6 +258,27 @@ export function createApi(rawBase: string): StationApi {
       const res = await fetchWithTimeout(api(`/request/${encodeURIComponent(id)}`));
       if (res.status === 404) return { success: false, status: 'unknown' };
       return (await res.json()) as RequestResult;
+    },
+    likeCurrent: async (songId) => {
+      try {
+        const res = await fetchWithTimeout(api('/like'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ songId }),
+        });
+        // Error statuses carry a JSON body too — surface it, don't throw.
+        return (await res.json()) as LikeResult;
+      } catch {
+        return null;
+      }
+    },
+    likeStatus: async () => {
+      try {
+        const res = await fetchWithTimeout(api('/like'));
+        return (await res.json()) as LikeStatus;
+      } catch {
+        return null;
+      }
     },
     cover: (subsonicId) => api(`/cover/${encodeURIComponent(subsonicId)}`),
     avatar: (path) => {
