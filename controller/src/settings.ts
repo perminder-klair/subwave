@@ -4217,8 +4217,8 @@ export function agentLanguageReminder(persona: unknown, fields: string) {
 // operator-facing label for the coordinates and is never spoken or published;
 // weather.lat/lng never leave the Open-Meteo call.
 //
-// context.ts can't use this — it reads config.weather.*, not settings.get(), so
-// it applies the same fallback inline against config. Keep the two in step.
+// context.ts passes { weather: config.weather } instead of the cache default so
+// its weather block stays the single source it derives lat/lng/units from.
 export function resolveOnAirLocation(s: unknown = cache) {
   const w = (s as { weather?: { onAirLocation?: unknown; locationName?: unknown } } | null | undefined)?.weather;
   return (

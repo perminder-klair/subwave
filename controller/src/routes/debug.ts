@@ -289,11 +289,7 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     // proof the split is live: `location` drives the forecast, `onAirLocation`
     // is what the DJ says and what the public endpoints publish.
     location: settingsSnapshot?.weather?.locationName || config.weather.locationName,
-    onAirLocation:
-      settingsSnapshot?.weather?.onAirLocation ||
-      config.weather.onAirLocation ||
-      settingsSnapshot?.weather?.locationName ||
-      config.weather.locationName,
+    onAirLocation: settings.resolveOnAirLocation(settingsSnapshot ?? { weather: config.weather }),
     port: config.server.port,
   };
 

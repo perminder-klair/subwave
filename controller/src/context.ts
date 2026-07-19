@@ -2,7 +2,7 @@
 // Used by the autonomous scheduler to pick mood-appropriate tracks.
 
 import { config } from './config.js';
-import { resolveActiveShow, get as getSettings } from './settings.js';
+import { resolveActiveShow, resolveOnAirLocation, get as getSettings } from './settings.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase } from './time.js';
@@ -64,10 +64,10 @@ export function invalidateWeatherCache() {
 // Keeping the precise locationName out of it is what stops a station's public
 // URL from naming its operator's town.
 //
-// Mirrors settings.resolveOnAirLocation(), which this module can't call — it
-// reads config.weather.*, never settings.get(). Keep the two in step.
+// Fed config.weather rather than the settings cache so this module keeps
+// deriving weather from the same mirrored block as lat/lng/units.
 function attributedLocation() {
-  return config.weather.onAirLocation || config.weather.locationName;
+  return resolveOnAirLocation({ weather: config.weather });
 }
 
 export async function getWeather() {

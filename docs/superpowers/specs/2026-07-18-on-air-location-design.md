@@ -76,14 +76,14 @@ export function resolveOnAirLocation(s = cache) {
 }
 ```
 
-**The fallback rule is expressed in two places, and that is intentional.** `context.ts` reads `config.weather.*`, never `settings.get()` (see *Config mirror*), so it cannot call this helper — it applies the same `onAirLocation || locationName` fallback against `config`. Every other consumer goes through `resolveOnAirLocation`. Keep the two in agreement; a reader finding the inline version in `context.ts` should not "fix" it by importing the helper, which would create a settings→context dependency the module deliberately avoids.
+**The fallback rule lives in one place.** Every consumer goes through `resolveOnAirLocation`. `context.ts` derives weather from `config.weather.*` (see *Config mirror*), so it calls the helper with an explicit snapshot — `resolveOnAirLocation({ weather: config.weather })` — rather than letting it default to the settings cache. (An earlier draft duplicated the fallback inline in `context.ts` on the belief that importing the helper would create a dependency cycle; `context.ts` already imports from `settings.js`, and `settings.ts` imports nothing that reaches back to `context.ts`, so no cycle exists.)
 
 ### Consumer changes
 
 **`context.ts:getWeather()` — the high-leverage one.** Emit the on-air name as `location` on both the success (`:78`) and failure (`:83`) paths:
 
 ```ts
-location: config.weather.onAirLocation || config.weather.locationName,
+location: resolveOnAirLocation({ weather: config.weather }),
 ```
 
 This single edit fixes **five** consumers at once, because they all read `context.weather.location`:
@@ -93,7 +93,7 @@ This single edit fixes **five** consumers at once, because they all read `contex
 - `web/.../ScheduleDrawer.tsx:182,199` — the listener-facing render
 - `cli/src/commands/status.ts:66` — operator CLI (cosmetic; harmless either way)
 
-`context.ts` reads `config.weather.*`, not `settings.get()`, so the value must be mirrored into `config` — see *Config mirror*.
+`context.ts` derives weather from `config.weather.*`, so the value must be mirrored into `config` — see *Config mirror*.
 
 **`prompts/system.ts:50`** — the `{location}` call site:
 
@@ -113,14 +113,11 @@ const location = c.location || resolveOnAirLocation();
 location: settings.resolveOnAirLocation(s),
 ```
 
-**`routes/debug.ts:288`** — admin-only diagnostic. Show **both**, so an operator can confirm the split is working. Mirror the existing config-fallback shape rather than the settings helper, since `settingsSnapshot` may be absent here:
+**`routes/debug.ts:288`** — admin-only diagnostic. Show **both**, so an operator can confirm the split is working. `settingsSnapshot` may be absent here, so fall back to the mirrored config block:
 
 ```ts
 location: settingsSnapshot?.weather?.locationName || config.weather.locationName,
-onAirLocation: settingsSnapshot?.weather?.onAirLocation
-  || config.weather.onAirLocation
-  || settingsSnapshot?.weather?.locationName
-  || config.weather.locationName,
+onAirLocation: settings.resolveOnAirLocation(settingsSnapshot ?? { weather: config.weather }),
 ```
 
 **Deliberately unchanged:** `agentPersonaPreamble`. It has no location clause today. Adding one would *increase* leak surface in service of a privacy feature, and the picker/request/skill agents have never needed it. Out of scope.
