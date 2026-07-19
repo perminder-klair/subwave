@@ -305,8 +305,11 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   const [cloudKeyInput, setCloudKeyInput] = useState('');
   const [cloudKeyTest, setCloudKeyTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
   const [cloudKeyTesting, setCloudKeyTesting] = useState(false);
+  // Compat servers don't use the OPENAI/ELEVENLABS env keys — their optional
+  // bearer lives in settings.tts.cloud.apiKey, so it rides the settings payload.
+  const [compatKeyInput, setCompatKeyInput] = useState('');
 
-  useEffect(() => { setCloudKeyInput(''); }, [form.tts.cloud.provider]);
+  useEffect(() => { setCloudKeyInput(''); setCompatKeyInput(''); }, [form.tts.cloud.provider]);
   useEffect(() => { setCloudKeyTest(null); }, [form.tts.cloud.provider]);
 
   const isCloudEngine = form.tts.defaultEngine === 'cloud';
@@ -403,6 +406,9 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
           voiceStyle: form.tts.cloud.voiceStyle,
           voiceSimilarityBoost: form.tts.cloud.voiceSimilarityBoost,
           voiceUseSpeakerBoost: form.tts.cloud.voiceUseSpeakerBoost,
+          // Only sent when the operator typed one — the controller keeps the
+          // stored key when the field is absent (or the 'set' sentinel).
+          ...(isCompat && compatKeyInput.trim() ? { apiKey: compatKeyInput.trim() } : {}),
         },
         remote: { url: form.tts.remote.url },
         // Per-engine voice-level trim. Always sent (server clamps + drops unknown
@@ -419,7 +425,6 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
       },
     });
     // Save cloud API key if typed -- goes to secrets.env, not settings.json
-    const isCompat = form.tts.cloud.provider === 'openai-compatible';
     if (!isCompat && cloudKeyInput.trim()) {
       const cloudKeyVar = form.tts.cloud.provider === 'elevenlabs' ? 'ELEVENLABS_API_KEY' : 'OPENAI_API_KEY';
       const ok = await saveKey(cloudKeyVar, cloudKeyInput);
@@ -457,6 +462,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     voice?: string;
     model?: string;
     baseUrl?: string;
+    apiKey?: string; // redacted by GET /settings: 'set' when on file, '' otherwise
     voiceStability?: number;
     voiceStyle?: number;
     voiceSimilarityBoost?: number;
@@ -989,9 +995,21 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
               );
             })()}
             {isCompat && (
-              <div className="field-hint mt-3.5">
-                Most self-hosted servers accept any non-empty API key, so no env
-                var is required.
+              <div className="field">
+                <Label>API key</Label>
+                <Input
+                  type="password"
+                  value={compatKeyInput}
+                  placeholder={savedCloud.apiKey === 'set' ? '•••••• (on file)' : 'Optional'}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
+                  className="max-w-[360px]"
+                />
+                <div className="field-hint">
+                  Optional — only if your server requires one (e.g. SUB/WAVE DJ
+                  Brain); most self-hosted servers accept any non-empty key.
+                  Blank keeps the existing key. Saved with these settings, takes
+                  effect immediately.
+                </div>
               </div>
             )}
             <TtsGainField engineId="cloud" form={form} setForm={setForm} />
