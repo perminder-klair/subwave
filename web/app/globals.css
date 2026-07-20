@@ -26,6 +26,19 @@
   --color-scrollbar-hover: var(--scrollbar-hover);
   --color-field: var(--field);
 
+  /* Depth + hierarchy tokens (theme foundation). Utilities: bg-surface /
+     border-surface-border (cards lift off the page), text-ink-faint (3rd ink
+     rung under ink → muted), border-line (crisp hairline vs the soft border),
+     bg-accent-2 / bg-accent-soft (a real second colour + accent tint). Values
+     derive from the base palette in :root, so themes inherit them unless they
+     set their own. */
+  --color-surface: var(--surface);
+  --color-surface-border: var(--surface-border);
+  --color-ink-faint: var(--ink-faint);
+  --color-line: var(--line);
+  --color-accent-2: var(--accent-2);
+  --color-accent-soft: var(--accent-soft);
+
   /* shadcn/ui semantic bridge — `accent` here is the muted hover overlay
      shadcn expects (Button hover, Toggle on-state), not the raw vermilion.
      Light/dark flips reach these via :root redeclarations below. */
@@ -61,10 +74,12 @@
 
   /* Type families — promoted so `font-sans` / `font-display` / `font-mono`
      utilities resolve to the next/font variables set on <html>. Plus Jakarta
-     Sans is the UI/body default, Fraunces the display serif, JetBrains Mono the
-     data face. */
+     Sans is the UI/body default, JetBrains Mono the data face. `font-display`
+     now follows the themeable --display-font token (default: Fraunces via the
+     :root fallback below), so an operator-picked headline face applies to every
+     `font-display` headline app-wide. */
   --font-sans: var(--font-sans);
-  --font-display: var(--font-display);
+  --font-display: var(--display-font);
   --font-mono: var(--font-mono);
 }
 
@@ -94,9 +109,9 @@
      needed. Radius is pinned to 0 to keep the brutalist sharp-corner look. */
     --background: var(--bg);
     --foreground: var(--ink);
-    --card: var(--bg);
+    --card: var(--surface);
     --card-foreground: var(--ink);
-    --popover: var(--bg);
+    --popover: var(--surface);
     --popover-foreground: var(--ink);
     --primary: var(--accent);
     --primary-foreground: #fff;
@@ -118,6 +133,22 @@
      card they sit on: darker on light, lighter on dark. Auto-flips because
      both --bg and --ink flip in dark mode. */
     --field: color-mix(in oklab, var(--bg) 92%, var(--ink));
+
+    /* Theme-foundation derived tokens. A theme that omits these inherits a
+     value mixed from its own --bg / --ink / --accent, so every existing theme
+     (and every user theme) gains depth, an ink ladder, hairlines and a second
+     accent for free. All are mode-agnostic — they mix toward --bg / --ink,
+     which already flip in dark mode, so no dark-block redeclaration is needed.
+     A theme overrides any of them via its token map. */
+    --surface: color-mix(in oklab, var(--bg) 93%, var(--ink));
+    --surface-border: var(--soft-border);
+    --ink-faint: color-mix(in oklab, var(--ink) 45%, var(--bg));
+    --line: color-mix(in oklab, var(--ink) 70%, var(--bg));
+    --accent-2: var(--accent);
+    --accent-soft: color-mix(in oklab, var(--accent) 14%, var(--bg));
+    /* Default display face; the --display-font token (a curated id resolved to
+     a family stack in lib/theme) overrides it, and font-display follows it. */
+    --display-font: var(--font-fraunces);
 }
 
 /* Dark palette — applied either by manual override (data-theme="dark") or
@@ -245,7 +276,10 @@ body::after {
     content: "";
     position: fixed;
     inset: 0;
-    opacity: var(--grain-alpha);
+    /* --grain (a themeable 0–1 token) overrides the per-mode paper default when
+       a theme sets it — dial grain up for a heavy VOLT/LAB look or to 0 to kill
+       it. Omitted → the newsprint paper grain (--grain-alpha) is unchanged. */
+    opacity: var(--grain, var(--grain-alpha));
     mix-blend-mode: var(--grain-blend);
     pointer-events: none;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/><feColorMatrix values='0 0 0 0 0.4  0 0 0 0 0.35  0 0 0 0 0.3  0 0 0 0.4 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");

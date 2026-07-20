@@ -17,7 +17,8 @@
     "llm-bench:publish": "tsx scripts/llm-bench/publish-manual.ts",
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "gen:themes": "tsx scripts/gen-theme-tokens.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.11",

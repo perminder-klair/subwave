@@ -57,4 +57,13 @@ jobs:
         working-directory: controller
         run: npm ci --no-audit --no-fund
 
+      # The web theme-token mirror (web/lib/theme-tokens.generated.ts) is
+      # generated from the controller registry. Regenerate and fail on any
+      # drift, so a token change can't ship without regenerating the mirror.
+      - name: Verify theme-token mirror is up to date
+        if: matrix.package == 'controller'
+        run: |
+          npm run gen:themes
+          git diff --exit-code ../web/lib/theme-tokens.generated.ts
+
       - run: npm run lint

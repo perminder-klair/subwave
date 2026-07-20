@@ -1,0 +1,23 @@
+{
+  "id": "lab",
+  "name": "Lab",
+  "description": "Flat off-white paper, white lifted cards, crisp black hairlines, one electric accent, dot-matrix display + grain.",
+  "mode": "light",
+  "tokens": {
+    "--bg": "#f1f1f1",
+    "--surface": "#ffffff",
+    "--surface-border": "rgba(17, 17, 17, 0.16)",
+    "--field": "#e7e7e7",
+    "--ink": "#111111",
+    "--muted": "#565656",
+    "--ink-faint": "#8f8f8f",
+    "--accent": "#ff5a00",
+    "--accent-2": "#0a5cff",
+    "--accent-soft": "rgba(255, 90, 0, 0.12)",
+    "--line": "#111111",
+    "--soft-border": "rgba(17, 17, 17, 0.10)",
+    "--overlay": "rgba(0, 0, 0, 0.06)",
+    "--display-font": "doto",
+    "--grain": "0.45"
+  }
+}

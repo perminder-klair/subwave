@@ -133,7 +133,7 @@ export default function Themes() {
         <p>
           The theme is set in the same admin section, each entry a card with a
           four-swatch row (paper, ink, accent, overlay) so you can read the
-          palette without leaving Settings. Five ship with the box:
+          palette without leaving Settings. Six ship with the box:
         </p>
         <ul className="bs-list">
           <li><strong>Classic Light</strong> &mdash; newsprint cream with hot vermilion ink. The default.</li>
@@ -141,6 +141,7 @@ export default function Themes() {
           <li><strong>Sunset</strong> &mdash; warm dusk: plum paper, peach ink, vermilion-magenta accent.</li>
           <li><strong>Vinyl</strong> &mdash; sepia &ldquo;warm record sleeve&rdquo; with mustard accent.</li>
           <li><strong>Cyberpunk</strong> &mdash; near-black paper, cyan ink, hot pink accent.</li>
+          <li><strong>Lab</strong> &mdash; flat off-white paper, white lifted cards, crisp black hairlines, one electric accent, dot-matrix display + grain.</li>
         </ul>
         <p className="text-muted">
           The palette recolours both the player <em>and</em> the admin console,

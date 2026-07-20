@@ -8,19 +8,22 @@
 // THEME_INIT_SCRIPT so there's no flash. Once /themes responds, the fresh
 // token map is applied + cached for the next visit.
 
-const THEME_TOKEN_KEYS = [
-  '--bg',
-  '--ink',
-  '--muted',
-  '--accent',
-  '--overlay',
-  '--soft-border',
-  '--field',
-] as const;
+import { THEME_TOKEN_KEYS, type DisplayFontId } from './theme-tokens.generated';
 
 const TOKEN_KEY_SET = new Set<string>(THEME_TOKEN_KEYS);
 const TOKEN_CACHE_KEY = 'subwave-theme-tokens';
 const OVERRIDE_KEY = 'subwave-theme-override';
+
+// A theme stores --display-font as a curated id; resolve it to a real family
+// stack here (the stacks reference next/font variables set in app/layout.tsx).
+// Keyed by DisplayFontId so TypeScript fails the build if the curated set grows
+// without a matching stack.
+const FONT_STACKS: Record<DisplayFontId, string> = {
+  'fraunces': 'var(--font-fraunces), Georgia, serif',
+  'doto': 'var(--font-doto), var(--font-mono), monospace',
+  'space-grotesk': 'var(--font-space-grotesk), var(--font-sans), sans-serif',
+  'instrument-serif': 'var(--font-instrument-serif), Georgia, serif',
+};
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -42,7 +45,8 @@ export function applyTheme(theme: Theme): void {
   const html = document.documentElement;
   for (const [k, v] of Object.entries(theme.tokens)) {
     if (!TOKEN_KEY_SET.has(k)) continue;
-    html.style.setProperty(k, v);
+    const value = k === '--display-font' ? (FONT_STACKS[v as DisplayFontId] ?? v) : v;
+    html.style.setProperty(k, value);
   }
   html.setAttribute('data-theme', theme.mode);
 }
@@ -87,9 +91,9 @@ export function saveThemeOverride(id: string | null): void {
 // inlined into layout.tsx via dangerouslySetInnerHTML; no untrusted input
 // reaches it.
 //
-// Keep in sync with THEME_TOKEN_KEYS — the script walks the cached object's
-// own keys, so adding a new themable token here just means adding it to the
-// constant in this file (and globals.css).
+// The key list + font stacks are inlined from the generated registry mirror, so
+// adding a token there (and a :root fallback in globals.css) flows here with a
+// regenerate — no hand-editing this script.
 export const THEME_INIT_SCRIPT = `
   try {
     var raw = localStorage.getItem('${TOKEN_CACHE_KEY}');
@@ -98,9 +102,14 @@ export const THEME_INIT_SCRIPT = `
       if (t && t.tokens) {
         var html = document.documentElement;
         var keys = ${JSON.stringify([...THEME_TOKEN_KEYS])};
+        var fonts = ${JSON.stringify(FONT_STACKS)};
         for (var i = 0; i < keys.length; i++) {
           var k = keys[i];
-          if (typeof t.tokens[k] === 'string') html.style.setProperty(k, t.tokens[k]);
+          var v = t.tokens[k];
+          if (typeof v === 'string') {
+            if (k === '--display-font' && fonts[v]) v = fonts[v];
+            html.style.setProperty(k, v);
+          }
         }
         if (t.mode === 'light' || t.mode === 'dark') html.setAttribute('data-theme', t.mode);
       }

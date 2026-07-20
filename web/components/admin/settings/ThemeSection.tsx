@@ -13,6 +13,7 @@ import { AiFill } from '../AiFill';
 import { cn } from '../../../lib/cn';
 import { SkinGallery } from './SkinGallery';
 import { DEFAULT_SKIN_ID, SKINS } from '../../skins';
+import { THEME_TOKENS, SWATCH_KEYS, DISPLAY_FONT_IDS } from '../../../lib/theme-tokens.generated';
 import {
   SectionHeader,
   type SettingsData, type SaveSettings,
@@ -36,10 +37,10 @@ interface ThemeDef {
   builtin?: boolean;
 }
 
-// Swatch columns shown per theme card — chosen to read the palette at a
-// glance: paper, ink, accent, and the muted overlay (which doubles as the
-// hover wash, so it telegraphs interactive state).
-const SWATCH_KEYS = ['--bg', '--ink', '--accent', '--overlay'] as const;
+// SWATCH_KEYS (paper / ink / accent / overlay — reads the palette at a glance,
+// overlay doubles as the hover wash) + THEME_TOKENS come from the generated
+// registry mirror now, so this form, the controller validator and the no-flash
+// bootstrap can't drift.
 
 // Each swatch is its own ref because useDynamicStyle wants a single element
 // per call. The arbitrary token values can't go through Tailwind utilities
@@ -50,18 +51,6 @@ function Swatch({ color }: { color?: string }) {
   useDynamicStyle(ref, { background: color || 'transparent' });
   return <span ref={ref} className="h-7 w-7" aria-hidden="true" />;
 }
-
-// The 7 themable tokens (mirrors controller THEME_TOKEN_KEYS) with human
-// labels for the create form. Generated drafts and manual edits both fill these.
-const THEME_TOKENS: { key: string; label: string }[] = [
-  { key: '--bg', label: 'background' },
-  { key: '--ink', label: 'text' },
-  { key: '--muted', label: 'muted text' },
-  { key: '--accent', label: 'accent' },
-  { key: '--overlay', label: 'overlay' },
-  { key: '--soft-border', label: 'border' },
-  { key: '--field', label: 'field' },
-];
 
 // Create a custom theme from a description (AI-drafted) or by hand, then save it
 // as state/themes/<id>.json via POST /themes. Tokens are editable before save so
@@ -101,10 +90,13 @@ function ThemeCreator({
     if (!name.trim() || saving) return;
     setSaving(true); setErr(null);
     try {
+      // Drop blank tokens — an omitted token derives from the base palette in
+      // globals.css, and an empty value would fail the typed validator.
+      const cleaned = Object.fromEntries(Object.entries(tokens).filter(([, v]) => v.trim() !== ''));
       const r = await adminFetch('/themes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), description: description.trim(), mode, tokens }),
+        body: JSON.stringify({ name: name.trim(), description: description.trim(), mode, tokens: cleaned }),
       });
       const j = (await r.json().catch(() => ({}))) as { error?: string; themes?: ThemeDef[] };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
@@ -146,17 +138,46 @@ function ThemeCreator({
         />
       </div>
       <div className="grid gap-1.5">
-        {THEME_TOKENS.map(({ key, label }) => (
-          <div key={key} className="grid grid-cols-[auto_5.5rem_1fr] items-center gap-2">
-            <span className="inline-flex shrink-0 border border-ink"><Swatch color={tokens[key]} /></span>
-            <span className="text-[11px] tracking-[0.12em] text-muted uppercase">{label}</span>
-            <Input
-              value={tokens[key] || ''}
-              maxLength={100}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setTokens(prev => ({ ...prev, [key]: e.target.value }))}
-              placeholder="#000000 or rgba(…)"
-              className="font-mono text-[12px]"
-            />
+        {THEME_TOKENS.map(({ key, label, type, group }, i) => (
+          <div key={key} className="grid gap-1.5">
+            {group !== (i > 0 ? THEME_TOKENS[i - 1]?.group : null) && (
+              <div className="mt-2 text-[10px] tracking-[0.16em] text-ink-faint uppercase first:mt-0">{group}</div>
+            )}
+            <div className="grid grid-cols-[auto_5.5rem_1fr] items-center gap-2">
+              <span className="inline-flex shrink-0 border border-ink">
+                <Swatch color={type === 'color' ? tokens[key] : undefined} />
+              </span>
+              <span className="text-[11px] tracking-[0.12em] text-muted uppercase">{label}</span>
+              {type === 'font' ? (
+                <select
+                  value={tokens[key] || ''}
+                  onChange={(e: ChangeEvent<HTMLSelectElement>) => setTokens(prev => ({ ...prev, [key]: e.target.value }))}
+                  className="border border-ink bg-field px-2 py-1.5 font-mono text-[12px] text-ink"
+                >
+                  <option value="">default (fraunces)</option>
+                  {DISPLAY_FONT_IDS.map(id => <option key={id} value={id}>{id}</option>)}
+                </select>
+              ) : type === 'grain' ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range" min={0} max={1} step={0.05}
+                    value={tokens[key] ? Number(tokens[key]) : 0}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setTokens(prev => ({ ...prev, [key]: e.target.value }))}
+                    className="w-full accent-vermilion"
+                    aria-label={label}
+                  />
+                  <span className="w-8 shrink-0 text-right font-mono text-[11px] text-muted">{tokens[key] || '—'}</span>
+                </div>
+              ) : (
+                <Input
+                  value={tokens[key] || ''}
+                  maxLength={100}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => setTokens(prev => ({ ...prev, [key]: e.target.value }))}
+                  placeholder="#000000 or rgba(…)"
+                  className="font-mono text-[12px]"
+                />
+              )}
+            </div>
           </div>
         ))}
       </div>
