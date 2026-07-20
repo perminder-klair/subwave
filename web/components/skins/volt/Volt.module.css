@@ -1,0 +1,529 @@
+/* Volt — "digital display meets newsprint". Flat off-white paper, hairline
+   ink rules, one electric accent, Doto dot-matrix headlines, film grain.
+   Everything visual is co-located here per the skin contract; globals.css is
+   never touched. Layout utilities come from Tailwind in the component; this
+   module owns the VOLT/LAB vocabulary (palette, grid hairlines, grain, ticker,
+   pills, corner tags, blink). */
+
+/* ── palette + scope ──────────────────────────────────────────────────────
+   Paper bg/ink are fixed so the aesthetic holds under every operator theme;
+   only the light/dark toggle (data-theme) and the accent follow the operator.
+   --acc falls through the theme's --accent so a themed accent swaps in, else
+   the signature electric orange. One accent, ever. */
+.volt {
+  --acc: var(--accent, #ff5a00);
+  --pg-bg: #f1f1f1;
+  --pg-ink: #111111;
+  --line: #111111;
+  --ink-70: color-mix(in oklab, var(--pg-ink), transparent 28%);
+  --ink-55: color-mix(in oklab, var(--pg-ink), transparent 45%);
+  --ink-40: color-mix(in oklab, var(--pg-ink), transparent 58%);
+
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--pg-bg);
+  color: var(--pg-ink);
+  font-family: var(--font-mono), ui-monospace, monospace;
+  -webkit-font-smoothing: antialiased;
+}
+:global([data-theme='dark']) .volt {
+  --pg-bg: #141414;
+  --pg-ink: #f1f1f1;
+  --line: #4a4a4a;
+}
+.volt ::selection {
+  background: var(--acc);
+  color: #fff;
+}
+
+/* Inner scroll layer — the paper scrolls, the grain (a sibling of this) does
+   not, so the texture stays pinned over the visible area in both full-page
+   and contained (landing-embed) mounts. */
+.scroll {
+  position: absolute;
+  inset: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  z-index: 1;
+}
+.column {
+  width: 100%;
+  max-width: 660px;
+  margin: 0 auto;
+  padding: 18px 16px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+/* ── film grain ───────────────────────────────────────────────────────────
+   SVG fractal-noise tile, multiply over the paper. Absolute to the (non-
+   scrolling) wrapper so it never escapes a contained frame. Dropped under
+   lite + reduced-motion. */
+.grain {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  opacity: 0.4;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+}
+:global([data-theme='dark']) .grain {
+  mix-blend-mode: screen;
+  opacity: 0.24;
+}
+:global(html.lite) .grain {
+  display: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .grain {
+    display: none;
+  }
+}
+
+/* ── type roles ───────────────────────────────────────────────────────── */
+.doto {
+  font-family: var(--font-volt-display), var(--font-mono), monospace;
+  font-weight: 900;
+  text-transform: uppercase;
+  line-height: 0.94;
+  letter-spacing: 0.01em;
+}
+.eyebrow {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--ink-55);
+}
+.label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: var(--ink-55);
+}
+.wordmark {
+  font-family: var(--font-volt-display), var(--font-mono), monospace;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 15px;
+}
+.accent {
+  color: var(--acc);
+}
+
+/* ── ticker ───────────────────────────────────────────────────────────── */
+.ticker {
+  overflow: hidden;
+  background: var(--acc);
+  color: #fff;
+  padding: 5px 0;
+}
+.tickerTrack {
+  display: inline-flex;
+  white-space: nowrap;
+  animation: volt-marquee 24s linear infinite;
+  will-change: transform;
+}
+.tickerText {
+  padding: 0 14px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+@keyframes volt-marquee {
+  to {
+    transform: translateX(-50%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tickerTrack {
+    animation: none;
+  }
+}
+
+/* ── blink cursor + status square ─────────────────────────────────────── */
+.cursor {
+  display: inline-block;
+  width: 0.5em;
+  height: 1.02em;
+  margin-left: 0.14em;
+  background: var(--acc);
+  vertical-align: -0.14em;
+  animation: volt-blink 1.2s steps(1) infinite;
+}
+.statusDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: var(--acc);
+  animation: volt-blink 1.4s steps(1) infinite;
+}
+.statusOff {
+  background: var(--ink-40);
+  animation: none;
+}
+@keyframes volt-blink {
+  50% {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cursor,
+  .statusDot {
+    animation: none;
+  }
+}
+
+/* ── cards, corner tags, index codes, rules ───────────────────────────── */
+.card {
+  position: relative;
+  border: 1px solid var(--line);
+  background: var(--pg-bg);
+}
+.cornerTag {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: var(--pg-ink);
+  color: var(--pg-bg);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  padding: 4px 9px;
+  z-index: 2;
+}
+.indexCode {
+  position: absolute;
+  top: 6px;
+  right: 9px;
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--ink-40);
+}
+.rule {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 0;
+}
+
+/* ── now-playing card ─────────────────────────────────────────────────── */
+.cover {
+  border: 1px solid var(--line);
+  object-fit: cover;
+  background: var(--pg-bg);
+}
+.coverEmpty {
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  color: var(--ink-40);
+  font-size: 9px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+}
+.title {
+  font-size: clamp(32px, 7vw, 58px);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.byline {
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  color: var(--ink-70);
+}
+.bylineArtist {
+  color: var(--pg-ink);
+  font-weight: 700;
+}
+.facts {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-55);
+}
+.moods {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--acc);
+}
+
+/* DJ reasoning line */
+.djLine {
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--ink-70);
+  overflow-wrap: anywhere;
+}
+.robot {
+  flex: none;
+  color: var(--pg-ink);
+}
+
+/* ── progress hairline ────────────────────────────────────────────────── */
+.progress {
+  position: relative;
+  height: 3px;
+  background: color-mix(in oklab, var(--line), transparent 62%);
+  overflow: hidden;
+}
+.progressFill {
+  position: absolute;
+  inset: 0;
+  transform-origin: left center;
+  background: var(--acc);
+}
+.progressIdle {
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--ink-40) 0 2px,
+    transparent 2px 7px
+  );
+  opacity: 0.5;
+}
+
+/* ── bento grid (hairline gaps) ───────────────────────────────────────── */
+.bento {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+}
+.cell {
+  position: relative;
+  background: var(--pg-bg);
+  padding: 15px 15px 13px;
+  min-height: 92px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.cellWide {
+  grid-column: 1 / -1;
+}
+.statNum {
+  font-family: var(--font-volt-display), var(--font-mono), monospace;
+  font-weight: 900;
+  font-size: clamp(30px, 6vw, 46px);
+  line-height: 1;
+  letter-spacing: 0.01em;
+}
+
+/* arrow-link tile — the whole cell is the button, hover inverts to ink */
+.arrowCell {
+  background: var(--pg-bg);
+  border: 0;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+  transition: none;
+}
+.arrowCell:hover {
+  background: var(--pg-ink);
+  color: var(--pg-bg);
+}
+.arrowCell:hover .label,
+.arrowCell:hover .eyebrow {
+  color: color-mix(in oklab, var(--pg-bg), transparent 30%);
+}
+.arrowRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.arrowGlyph {
+  font-size: 22px;
+  line-height: 1;
+}
+
+/* booth / history rows */
+.feedRow {
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+.feedRowMuted {
+  color: var(--ink-55);
+}
+.histRow {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-55);
+}
+.histNow {
+  color: var(--acc);
+  font-weight: 700;
+}
+.clip {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── controls: pills, ghost, field ────────────────────────────────────── */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--pg-ink);
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  padding: 12px 24px;
+  cursor: pointer;
+}
+.pillPrimary {
+  background: var(--acc);
+  border-color: var(--acc);
+  color: #fff;
+}
+.pillPrimary:hover {
+  filter: brightness(1.08);
+}
+.pillGhost:hover {
+  background: var(--pg-ink);
+  color: var(--pg-bg);
+}
+.pill:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.pillActive {
+  background: var(--acc);
+  border-color: var(--acc);
+  color: #fff;
+}
+
+/* sharp request/search field — deliberately NOT a pill */
+.field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  padding: 9px 12px;
+}
+.fieldGlyph {
+  flex: none;
+  color: var(--ink-55);
+  font-size: 13px;
+}
+.fieldInput {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--pg-ink);
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+}
+.fieldInput::placeholder {
+  color: var(--ink-55);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+}
+.sendBtn {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--acc);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.sendBtn:disabled {
+  color: var(--ink-40);
+  cursor: default;
+}
+
+/* native range as a sharp track + block thumb */
+.range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  width: 100%;
+  background: transparent;
+  cursor: pointer;
+}
+.range::-webkit-slider-runnable-track {
+  height: 3px;
+  background: color-mix(in oklab, var(--line), transparent 55%);
+}
+.range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 9px;
+  height: 14px;
+  border-radius: 0;
+  background: var(--acc);
+  margin-top: -5.5px;
+}
+.range::-moz-range-track {
+  height: 3px;
+  background: color-mix(in oklab, var(--line), transparent 55%);
+}
+.range::-moz-range-thumb {
+  width: 9px;
+  height: 14px;
+  border: 0;
+  border-radius: 0;
+  background: var(--acc);
+}
+
+/* focus ring in the paper palette */
+.focus:focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+}
+
+/* ── tune-in gate ─────────────────────────────────────────────────────── */
+.gate {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  background: var(--pg-bg);
+  text-align: center;
+  padding: 24px;
+}
+.gateTitle {
+  font-family: var(--font-volt-display), var(--font-mono), monospace;
+  font-weight: 900;
+  text-transform: uppercase;
+  line-height: 0.94;
+  font-size: clamp(48px, 12vw, 96px);
+}
