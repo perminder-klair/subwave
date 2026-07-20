@@ -1,0 +1,15 @@
+{
+  "id": "factory",
+  "name": "Factory",
+  "description": "Industrial blueprint — warm-gray paper, charcoal ink, factory-orange accent.",
+  "mode": "light",
+  "tokens": {
+    "--bg": "#e9e9e6",
+    "--ink": "#1a1a16",
+    "--muted": "#6f6d66",
+    "--accent": "#f85000",
+    "--overlay": "rgba(26, 25, 22, 0.06)",
+    "--soft-border": "rgba(26, 25, 22, 0.16)",
+    "--field": "color-mix(in oklab, #e9e9e6 92%, #1a1a16)"
+  }
+}
