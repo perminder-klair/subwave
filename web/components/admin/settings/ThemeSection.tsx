@@ -4,7 +4,7 @@ import type { ChangeEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../../lib/notify';
-import { applyTheme, cacheTheme } from '../../../lib/theme';
+import { applyTheme, cacheTheme, resolveDisplayFont } from '../../../lib/theme';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
@@ -13,7 +13,7 @@ import { AiFill } from '../AiFill';
 import { cn } from '../../../lib/cn';
 import { SkinGallery } from './SkinGallery';
 import { DEFAULT_SKIN_ID, SKINS } from '../../skins';
-import { THEME_TOKENS, SWATCH_KEYS, DISPLAY_FONT_IDS } from '../../../lib/theme-tokens.generated';
+import { THEME_TOKENS, THEME_TOKEN_KEYS, SWATCH_KEYS, DISPLAY_FONT_IDS } from '../../../lib/theme-tokens.generated';
 import {
   SectionHeader,
   type SettingsData, type SaveSettings,
@@ -50,6 +50,43 @@ function Swatch({ color }: { color?: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   useDynamicStyle(ref, { background: color || 'transparent' });
   return <span ref={ref} className="h-7 w-7" aria-hidden="true" />;
+}
+
+// Live preview — applies the in-progress token map (+ resolved display font) to
+// a scoped subtree so the operator sees the palette they're building without
+// touching the live page theme. Tokens are set via the DOM API (ref), not the
+// inline style prop (issue #50); omitted tokens derive from the base palette via
+// the globals.css :root fallbacks, exactly like the real system.
+function ThemePreview({ tokens, mode }: { tokens: Record<string, string>; mode: 'light' | 'dark' }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    for (const key of THEME_TOKEN_KEYS) el.style.removeProperty(key);
+    for (const [k, v] of Object.entries(tokens)) {
+      if (!v.trim()) continue;
+      el.style.setProperty(k, k === '--display-font' ? resolveDisplayFont(v) : v);
+    }
+  }, [tokens, mode]);
+  return (
+    <div ref={ref} data-theme={mode} className="grid gap-2 border border-line bg-bg p-3 text-ink">
+      <div className="flex items-baseline justify-between">
+        <span className="font-display text-[22px] leading-none">Aa Now Playing</span>
+        <span className="text-[9px] tracking-[0.2em] text-ink-faint uppercase">preview</span>
+      </div>
+      <div className="grid gap-1 border border-surface-border bg-surface p-2.5">
+        <span className="text-[12px] text-ink">a track title</span>
+        <span className="text-[11px] text-muted">an artist · an album</span>
+        <span className="text-[10px] text-ink-faint">tertiary caption / timestamp</span>
+        <div className="mt-1.5 flex items-center gap-2">
+          <span className="bg-vermilion px-2 py-1 text-[10px] font-semibold text-white">Accent</span>
+          <span className="bg-accent-soft px-2 py-1 text-[10px] text-ink">tint</span>
+          <span className="border border-line px-2 py-1 text-[10px] text-ink">hairline</span>
+          <span className="ml-auto inline-block h-3.5 w-3.5 bg-accent-2" title="accent 2" />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // Create a custom theme from a description (AI-drafted) or by hand, then save it
@@ -181,6 +218,7 @@ function ThemeCreator({
           </div>
         ))}
       </div>
+      <ThemePreview tokens={tokens} mode={mode} />
       {err && <span className="text-[12px] text-[var(--danger)]">{err}</span>}
       <div className="flex gap-2">
         <Btn sm tone="accent" onClick={save} disabled={saving || !name.trim()}>

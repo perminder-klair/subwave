@@ -25,6 +25,13 @@ const FONT_STACKS: Record<DisplayFontId, string> = {
   'instrument-serif': 'var(--font-instrument-serif), Georgia, serif',
 };
 
+/** Resolve a `--display-font` token value: a curated id → its family stack, or
+ *  the value unchanged (already a stack, or unset). Used by the theme builder's
+ *  live preview to render sample text in the picked face. */
+export function resolveDisplayFont(id: string): string {
+  return FONT_STACKS[id as DisplayFontId] ?? id;
+}
+
 export type ThemeMode = 'light' | 'dark';
 
 export interface Theme {
