@@ -835,3 +835,26 @@ export function clipText(s: unknown, max: number): unknown {
   const onWord = cut.replace(/\s+\S*$/, '');
   return (onWord.length >= max * 0.6 ? onWord : cut).trim();
 }
+
+// A persona `soul` is capped at settings.SOUL_MAX (2000) because it is injected
+// into every free-text generation call for THAT persona — the seat it was
+// written for, which earns the full length. Two consumers inline a soul where
+// that reasoning doesn't hold, and they clamp to this instead:
+//
+//   - the multi-voice cast blocks (prompts/banter.ts, prompts/programme.ts) —
+//     one entry per cast member (host + up to 3 guests), and the block exists
+//     to say who is in the room, not to hand each of them a character document;
+//   - the cloud-TTS delivery hint (speech/cloud-speech.ts) — rebuilt and sent
+//     on EVERY spoken line, and it only steers tone and pacing, so backstory
+//     and recurring bits enlarge each request without changing the read.
+//
+// Both want the opening sketch, which is where operators put the voice.
+// Whitespace is collapsed because a soul is multi-line free text and the cast
+// blocks are one-bullet-per-speaker — a raw newline would break the list. The
+// ellipsis marks the sketch as abridged rather than reading as a full stop.
+export const SOUL_BRIEF_MAX = 320;
+export function soulBrief(soul: unknown, max: number = SOUL_BRIEF_MAX): string {
+  const s = String(soul ?? '').trim().replace(/\s+/g, ' ');
+  if (s.length <= max) return s;
+  return `${String(clipText(s, max)).replace(/[,;:.]+$/, '')}…`;
+}

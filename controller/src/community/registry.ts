@@ -26,6 +26,7 @@ import {
   SCRIPT_LENGTHS,
   SHOW_MOODS,
   SHOW_ENERGY,
+  SOUL_MAX,
   type EraWindow,
 } from '../settings.js';
 
@@ -174,8 +175,11 @@ function normalizeSkill(raw: any): CommunitySkill | null {
 function normalizePersona(raw: any): CommunityPersona | null {
   const slug = str(raw?.slug);
   if (!SLUG_RE.test(slug)) return null;
+  // Must track SOUL_MAX: an over-cap soul would fail validatePersonasStrict at
+  // install time, so a catalog entry the operator can't actually install is
+  // dropped from the listing rather than offered and then rejected with a 400.
   const soul = str(raw?.soul);
-  if (!soul || soul.length > 1000) return null;
+  if (!soul || soul.length > SOUL_MAX) return null;
   return {
     slug,
     displayName: (str(raw?.displayName) || slug).slice(0, 40),

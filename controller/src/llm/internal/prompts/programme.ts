@@ -10,6 +10,7 @@
 
 import { z } from 'zod';
 import * as settings from '../../../settings.js';
+import { soulBrief } from '../core/pure.js';
 import { djText } from '../strategy/text.js';
 import { djObject } from '../strategy/object.js';
 import { djSystem, lengthPhrase } from './system.js';
@@ -215,9 +216,12 @@ export async function generateProgrammeExchange({
     })).min(MIN_EXCHANGE_LINES).max(MAX_EXCHANGE_LINES).describe('the exchange, in air order — the host opens and closes it'),
   });
 
+  // Briefs, not full souls — same reasoning as banter.ts castBlock: one entry
+  // per cast member, and the block places people in the room rather than
+  // handing each of them their whole character document.
   const castBlock = [
-    `- ${host.id} — ${host.name} (HOST): ${String(host.soul || '').trim() || 'no notes'}`,
-    ...guests.map((g: any) => `- ${g.id} — ${g.name} (GUEST): ${String(g.soul || '').trim() || 'no notes'}`),
+    `- ${host.id} — ${host.name} (HOST): ${soulBrief(host.soul) || 'no notes'}`,
+    ...guests.map((g: any) => `- ${g.id} — ${g.name} (GUEST): ${soulBrief(g.soul) || 'no notes'}`),
   ].join('\n');
 
   const lang = String(host?.language || '').trim();

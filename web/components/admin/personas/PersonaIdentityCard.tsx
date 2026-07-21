@@ -111,7 +111,7 @@ export function PersonaIdentityCard({
         <div className="field mt-4 lg:mt-0">
           <Label>Soul</Label>
           <Textarea
-            rows={9}
+            rows={14}
             value={persona.soul}
             placeholder="e.g. warm and dry, never corny, observant, favours one good image over a list"
             onChange={(e: ChangeEvent<HTMLTextAreaElement>) => update({ soul: e.target.value })}

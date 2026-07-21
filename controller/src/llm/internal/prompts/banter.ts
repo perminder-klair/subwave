@@ -7,6 +7,7 @@
 // can't invent a voice we can't render.
 
 import { z } from 'zod';
+import { soulBrief } from '../core/pure.js';
 import { djObject } from '../strategy/object.js';
 import { buildContextLines } from './context.js';
 
@@ -20,9 +21,12 @@ const BANTER_CONTEXT_FIELDS = ['date', 'clock', 'time', 'festival', 'show', 'lis
 const MIN_LINES = 3;
 const MAX_LINES = 6;
 
+// Souls ride as briefs, not in full: this block repeats once per cast member
+// (host + up to GUESTS_PER_SHOW guests), and it exists to tell the model who
+// is in the room, not to hand each one their whole character document.
 function castBlock(host: any, guests: any[]): string {
   const entry = (p: any, role: string) =>
-    `- ${p.id} — ${p.name} (${role}): ${String(p.soul || '').trim() || 'no notes'}`;
+    `- ${p.id} — ${p.name} (${role}): ${soulBrief(p.soul) || 'no notes'}`;
   return [entry(host, 'HOST'), ...guests.map((g: any) => entry(g, 'GUEST'))].join('\n');
 }
 

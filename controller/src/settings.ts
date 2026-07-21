@@ -712,6 +712,16 @@ const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 // Exported for the community-persona install route (routes/personas.ts), which
 // gives a friendly 409 before settings.update() would throw on an oversize roster.
 export const PERSONA_LIMIT = 48;
+// Persona `soul` — the character sketch injected into EVERY free-text DJ
+// generation call, so each char is a recurring per-call token cost. Bounded
+// rather than unbounded for that reason alone; nothing structural depends on
+// the number. Keep in lockstep with SOUL_MAX in
+// web/components/admin/personas/constants.ts and the AI-fill draft schema in
+// llm/internal/prompts/generate.ts. Consumers that inline a soul somewhere it
+// is NOT the speaking seat (the multi-voice cast blocks, the cloud-TTS
+// delivery hint) clamp it further at their own boundary — see soulBrief() in
+// llm/internal/core/pure.ts.
+export const SOUL_MAX = 2000;
 export const SHOWS_LIMIT = 64;
 // Guest co-hosts per show. Small on purpose: each guest is a full persona the
 // speaker rotation can hand a segment to, and past ~3 the host stops sounding
@@ -1710,7 +1720,7 @@ function normalizePersona(raw: unknown) {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
   const name = typeof r.name === 'string' ? r.name.trim().slice(0, 40) : '';
-  const soul = typeof r.soul === 'string' ? r.soul.trim().slice(0, 1000) : '';
+  const soul = typeof r.soul === 'string' ? r.soul.trim().slice(0, SOUL_MAX) : '';
   if (!name || !soul) return null;
   // Avatar — stored as a bare basename. Reset to '' if the persisted value
   // doesn't match the strict basename shape, so a hand-edited settings.json
@@ -2687,8 +2697,8 @@ export function validatePersonasStrict(raw) {
     if (name.length < 1 || name.length > 40)
       throw new Error(`personas[${i}].name must be 1-40 chars`);
     const soul = String(item.soul ?? '').trim();
-    if (soul.length < 1 || soul.length > 1000)
-      throw new Error(`personas[${i}].soul must be 1-1000 chars`);
+    if (soul.length < 1 || soul.length > SOUL_MAX)
+      throw new Error(`personas[${i}].soul must be 1-${SOUL_MAX} chars`);
     const tagline = String(item.tagline ?? '').trim();
     if (tagline.length > 80) throw new Error(`personas[${i}].tagline must be 0-80 chars`);
     // language — optional free text ("Turkish", "Türkçe", …). Absent/empty →
