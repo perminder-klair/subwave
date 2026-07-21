@@ -136,11 +136,55 @@ case "$ICECAST_MAX_CLIENTS" in
         ;;
 esac
 
+# Listener buffer depth (<burst-size>) — audio bursted to a client on connect
+# so a coverage gap drains the buffer instead of stalling (issue #993).
+#
+# Sized in SECONDS and converted to bytes here, because burst-size is a byte
+# count and a fixed one means wildly different depths per bitrate: the old
+# hardcoded 512 KB was ~22s at 192k but ~66s at 64k, so the stations least able
+# to afford lag got the most of it (issue #1114). Deriving from the live
+# bitrate keeps the depth an operator picks the depth they actually get.
+#
+# Sources, in precedence order: env override > settings (written by the
+# controller on save) > default. Read from the shared state dir rather than
+# passed in, so a settings change applies on the next broadcast bounce with no
+# compose edit.
+read_state_num() {
+    # $1 = filename, $2 = fallback. Non-numeric or missing → fallback.
+    _v=$(cat "/var/sub-wave/$1" 2>/dev/null || true)
+    case "$_v" in
+        ''|*[!0-9]*) echo "$2" ;;
+        *) echo "$_v" ;;
+    esac
+}
+
+STREAM_BITRATE="${ICECAST_STREAM_BITRATE:-$(read_state_num liquidsoap_stream_bitrate.txt 192)}"
+BUFFER_SECONDS="${ICECAST_BUFFER_SECONDS:-$(read_state_num liquidsoap_stream_buffer_seconds.txt 22)}"
+case "$STREAM_BITRATE" in *[!0-9]*|'') STREAM_BITRATE=192 ;; esac
+case "$BUFFER_SECONDS" in *[!0-9]*|'') BUFFER_SECONDS=22 ;; esac
+[ "$BUFFER_SECONDS" -gt 60 ] && BUFFER_SECONDS=60
+
+# kbps → bytes/sec is bitrate * 1000 / 8 = bitrate * 125.
+ICECAST_BURST_SIZE=$(( BUFFER_SECONDS * STREAM_BITRATE * 125 ))
+
+# queue-size is the per-client backlog before Icecast drops a lagging listener.
+# It must comfortably exceed burst-size or a client is evicted the moment it
+# falls behind its own primed buffer. 4x the burst (floored at the historical
+# 2 MB) preserves the ~minute of rope issue #993 wanted at the default depth
+# while still scaling with a deeper buffer.
+ICECAST_QUEUE_SIZE=$(( ICECAST_BURST_SIZE * 4 ))
+[ "$ICECAST_QUEUE_SIZE" -lt 2097152 ] && ICECAST_QUEUE_SIZE=2097152
+
+echo "broadcast: listener buffer ${BUFFER_SECONDS}s @ ${STREAM_BITRATE}kbps" \
+     "→ burst-size ${ICECAST_BURST_SIZE}B, queue-size ${ICECAST_QUEUE_SIZE}B" >&2
+
 sed \
     -e "s|\${ICECAST_SOURCE_PASSWORD}|$ICECAST_SOURCE_PASSWORD|g" \
     -e "s|\${ICECAST_ADMIN_PASSWORD}|$ICECAST_ADMIN_PASSWORD|g" \
     -e "s|\${ICECAST_RELAY_PASSWORD}|$ICECAST_RELAY_PASSWORD|g" \
     -e "s|\${ICECAST_MAX_CLIENTS}|$ICECAST_MAX_CLIENTS|g" \
+    -e "s|\${ICECAST_BURST_SIZE}|$ICECAST_BURST_SIZE|g" \
+    -e "s|\${ICECAST_QUEUE_SIZE}|$ICECAST_QUEUE_SIZE|g" \
     "$TEMPLATE" > "$RENDERED"
 chown icecast2 "$RENDERED" 2>/dev/null || true
 

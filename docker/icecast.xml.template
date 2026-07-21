@@ -6,24 +6,37 @@
         <clients>${ICECAST_MAX_CLIENTS}</clients>
         <sources>4</sources>
         <!-- queue-size: per-client backlog before Icecast drops a lagging
-             listener. 2 MB ≈ 87s of MP3@192k / 131s@128k — must comfortably
-             exceed burst-size, and gives jittery mobile and Cloudflare-proxied
-             clients over a minute of rope to ride out a coverage gap without
+             listener. Computed by broadcast-entrypoint.sh as 4x burst-size
+             (floored at the historical 2 MB) — it must comfortably exceed the
+             burst or a client is evicted the moment it falls behind its own
+             primed buffer, and it gives jittery mobile and Cloudflare-proxied
+             clients a good minute of rope to ride out a coverage gap without
              being kicked (issue #993). -->
-        <queue-size>2097152</queue-size>
+        <queue-size>${ICECAST_QUEUE_SIZE}</queue-size>
         <client-timeout>30</client-timeout>
         <header-timeout>15</header-timeout>
         <source-timeout>10</source-timeout>
         <burst-on-connect>1</burst-on-connect>
         <!-- burst-size: audio bursted to a client on connect to prime its
-             buffer. 512 KB ≈ 22s of MP3@192k / 33s@128k (was 256 KB ≈ 16s),
-             deep enough that a real cellular dead zone drains the buffer
-             instead of stalling (issue #993). Delivered at line speed, so
-             tune-in stays instant — the cost is listening that far behind
-             the live edge (and now-playing metadata leading the audio by
-             the same amount). Every player-watchdog reconnect carries a
-             ?t= cache-buster, so each reconnect primes a fresh burst. -->
-        <burst-size>524288</burst-size>
+             buffer, deep enough that a real cellular dead zone drains the
+             buffer instead of stalling (issue #993). Delivered at line speed,
+             so tune-in stays instant — the cost is listening that far behind
+             the live edge. Every player-watchdog reconnect carries a ?t=
+             cache-buster, so each reconnect primes a fresh burst.
+
+             Computed by broadcast-entrypoint.sh from settings.stream.
+             bufferSeconds x the live bitrate, NOT hardcoded: this is a byte
+             count, so a fixed value drifts badly across bitrates (the old flat
+             512 KB was ~22s at 192k but ~66s at 64k). Deriving it keeps the
+             depth the operator picked the depth every bitrate gets.
+
+             This is also precisely how far behind the live edge every listener
+             sits, so /now-playing publishes the same number as stream.
+             bufferSeconds and players subtract it to align the now-playing
+             title and elapsed clock with the audio actually in someone's ears
+             (issue #1114). Changing the depth here without updating that
+             pairing reintroduces the drift. -->
+        <burst-size>${ICECAST_BURST_SIZE}</burst-size>
     </limits>
 
     <authentication>

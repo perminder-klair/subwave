@@ -128,6 +128,10 @@ export interface StreamInfo {
   opusEnabled?: boolean;
   flacEnabled?: boolean;
   aacEnabled?: boolean;
+  /** Seconds of audio Icecast bursts on connect — i.e. how far behind the live
+   *  edge this listener is for the whole connection. Every timestamp on the
+   *  payload is live-edge; subtract this to render listener-time (issue #1114). */
+  bufferSeconds?: number | null;
 }
 
 /** `/now-playing` response. */

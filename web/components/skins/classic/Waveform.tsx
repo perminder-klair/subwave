@@ -132,7 +132,10 @@ export default memo(function Waveform({ audioRef, tunedIn, trackStartedAt, durat
       return;
     }
     return pollWhileVisible(() => {
-      const progress = Math.min(1, (Date.now() - trackStartedAt) / 1000 / duration);
+      // Clamped at both ends: trackStartedAt is listener-time and can sit a
+      // few seconds in the future on a cold load (the audio is still in the
+      // Icecast burst buffer), which would otherwise floor to negative bars.
+      const progress = Math.max(0, Math.min(1, (Date.now() - trackStartedAt) / 1000 / duration));
       setPastBars(Math.floor(progress * BARS));
     }, 1000);
   }, [trackStartedAt, duration]);
