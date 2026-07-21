@@ -56,6 +56,21 @@ await test('genreMatches: containment respects word boundaries', () => {
   assert.equal(genreMatches(t({ genre: 'Hip-Hop/Rap' }), [normGenre('Rap')]), true);
   assert.equal(genreMatches(t({ genre: 'Pop-Punk' }), [normGenre('Pop Punk')]), true);
 });
+// Regressions found by replaying the new predicate over a real 10.4k-track
+// library — every one of these was a live false positive under the old
+// bidirectional substring, not a hypothetical.
+await test('genreMatches: real-library false positives stay dead', () => {
+  // "urbanolatino" contains "rb", so an R&B show swept up Urbano latino.
+  assert.equal(genreMatches(t({ genre: 'Urbano latino' }), [normGenre('R&B')]), false);
+  assert.equal(genreMatches(t({ genre: 'Contemporary R&B' }), [normGenre('R&B')]), true);
+  // An "Indian Pop" show pulled in everything tagged merely Pop or Indian.
+  assert.equal(genreMatches(t({ genre: 'Pop' }), [normGenre('Indian Pop')]), false);
+  assert.equal(genreMatches(t({ genre: 'Indian' }), [normGenre('Indian Pop')]), false);
+  assert.equal(genreMatches(t({ genre: 'Indian Pop' }), [normGenre('Indian Pop')]), true);
+  // A broad show must NOT lose its refinements — the fix only tightens narrow shows.
+  assert.equal(genreMatches(t({ genre: 'Punjabi Pop' }), [normGenre('Punjabi')]), true);
+  assert.equal(genreMatches(t({ genre: 'West Coast Rap' }), [normGenre('Rap')]), true);
+});
 await test('preferGenre keeps tracks matching any entry; empty list is passthrough', () => {
   const rock = t({ genre: 'Hard Rock' });
   const jazz = t({ genre: 'Jazz' });
