@@ -6,10 +6,10 @@
 // the pool picker (music/picker.ts), the session DJ agent's tools
 // (broadcast/dj-agent.ts), and the LLM-free fallback (broadcast/scheduler.ts).
 //
-// subsonic.getPlaylist already rejects station-archive entries, so there's no
+// source.getPlaylist already rejects station-archive entries, so there's no
 // extra archive filtering here — the merge is purely union + dedupe by id.
 
-import * as subsonic from './subsonic.js';
+import * as source from './source.js';
 
 export type PlaylistPool = {
   ids: Set<string>; // every track id in the union — the strict lock set
@@ -61,14 +61,14 @@ export async function resolveShowPlaylistPool(show: any): Promise<PlaylistPool |
   // here just drop the names, never the tracks.
   let index: any[] = [];
   try {
-    index = await memoFetch('playlists-index', () => subsonic.getPlaylists());
+    index = await memoFetch('playlists-index', () => source.getPlaylists());
   } catch {}
 
   const lists: any[][] = [];
   const names: string[] = [];
   for (const id of ids) {
     try {
-      const songs = await memoFetch(`playlist:${id}`, () => subsonic.getPlaylist(id));
+      const songs = await memoFetch(`playlist:${id}`, () => source.getPlaylist(id));
       lists.push(songs || []);
       const meta = index.find((p: any) => p.id === id);
       if (meta?.name) names.push(meta.name);
@@ -101,7 +101,7 @@ export async function resolveExcludedPlaylistIds(show: any): Promise<Set<string>
   const blocked = new Set<string>();
   for (const id of ids) {
     try {
-      const songs = await memoFetch(`playlist:${id}`, () => subsonic.getPlaylist(id));
+      const songs = await memoFetch(`playlist:${id}`, () => source.getPlaylist(id));
       for (const t of songs || []) {
         if (t?.id) blocked.add(t.id);
       }

@@ -6,7 +6,10 @@ import { readFile, unlink } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { config } from '../config.js';
 import * as library from '../music/library.js';
+import * as source from '../music/source.js';
+import * as localScanner from '../music/sources/local/scanner.js';
 import * as jingles from '../broadcast/jingles.js';
+import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import * as settings from '../settings.js';
 import * as tts from '../audio/tts.js';
 import * as remoteTts from '../audio/remoteTts.js';
@@ -109,6 +112,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         shows: s.shows,
         schedule: s.schedule,
         tts: s.tts,
+        music: s.music,
         llm: s.llm,
         search: s.search,
         embedding: s.embedding,
@@ -148,6 +152,13 @@ router.get('/settings', requireAdmin, async (req, res) => {
       llm: {
         providers: settings.LLM_PROVIDERS,
         active: llmProvider.activeModelLabel(),
+      },
+      music: {
+        sources: settings.MUSIC_SOURCES,
+        active: source.activeSourceId(),
+        // Scan status for the local-folder source (track count, last scan,
+        // scanning-now) — the Settings panel polls this to render the card.
+        local: localScanner.getStatus(),
       },
       embedding: {
         // Embedding-capable providers only — a strict subset of llm.providers.
@@ -213,6 +224,26 @@ router.post('/settings', requireAdmin, async (req, res) => {
     }
     if (result.requiresRestart) {
       queue.log('scheduler', `mixer settings changed — Liquidsoap restart required`);
+    }
+    // A changed music source re-resolves lazily (the registry re-keys on the
+    // next call), but the auto.m3u fallback playlist holds annotate URIs built
+    // from the OLD source — rebuild it now so Liquidsoap coasts on the new
+    // source's tracks. Fire-and-forget, mirroring onboarding's post-save refresh.
+    if ('music' in (req.body || {})) {
+      const newSource = result.saved.music.source;
+      queue.log('scheduler', `music source → ${newSource}`);
+      if (newSource === 'local') {
+        // Switching to local at runtime: the scanner may never have started (boot
+        // only starts it when local is already active). ensureStarted() is
+        // idempotent; scan first so the playlist rebuild sees the real index.
+        localScanner.ensureStarted()
+          .then(() => localScanner.scan())
+          .then(() => refreshAutoPlaylist())
+          .catch((err: any) => queue.log('error', `local-source activation failed: ${err?.message || err}`));
+      } else {
+        refreshAutoPlaylist().catch((err: any) =>
+          queue.log('error', `music-source playlist refresh failed: ${err?.message || err}`));
+      }
     }
     // A changed remote-TTS URL re-probes immediately so availability (and the
     // admin "ready/unreachable" badge) reflects the new endpoint on the next

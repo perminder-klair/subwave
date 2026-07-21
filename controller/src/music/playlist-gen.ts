@@ -13,7 +13,7 @@
 // it is deliberately NOT daily-token-budget gated.
 
 import { z } from 'zod';
-import * as subsonic from './subsonic.js';
+import * as musicSource from './source.js';
 import * as library from './library.js';
 import * as embeddings from './embeddings.js';
 import * as analyzer from './analyzer.js';
@@ -111,7 +111,7 @@ function norm(r: any, source: string, baseScore: number): PoolTrack {
     albumId: r.albumId ?? null,
     durationSec: r.durationSec ?? r.duration ?? null,
     year: Number.isFinite(yearNum) ? yearNum : null,
-    genre: subsonic.songGenres(r).join(', ') || null,
+    genre: musicSource.songGenres(r).join(', ') || null,
     moods: Array.isArray(r.moods) ? r.moods : [],
     energy: r.energy ?? null,
     bpm: typeof r.bpm === 'number' && r.bpm > 0 ? r.bpm : null,
@@ -128,11 +128,11 @@ function normMany(rows: any[] | null | undefined, source: string, baseScore: num
 // Expand recently-added albums into their tracks (Subsonic returns albums, not
 // songs for the "newest" list). Bounded so a huge library doesn't fan out.
 async function recentlyAddedTracks(): Promise<any[]> {
-  const albums = await subsonic.getRecentlyAddedAlbums({ size: 20 }).catch(() => []);
+  const albums = await musicSource.getRecentlyAddedAlbums({ size: 20 }).catch(() => []);
   const out: any[] = [];
   for (const album of albums.slice(0, 20)) {
     if (!album?.id) continue;
-    const songs = await subsonic.getAlbum(album.id).catch(() => []);
+    const songs = await musicSource.getAlbum(album.id).catch(() => []);
     out.push(...songs);
     if (out.length >= 200) break;
   }
@@ -186,18 +186,18 @@ export async function buildCandidatePool(
   // Seed tracks → similar songs (+ the seeds themselves).
   for (const seedId of (input.seedTrackIds || []).slice(0, 5)) {
     try {
-      const seed = await subsonic.getSong(seedId).catch(() => null);
+      const seed = await musicSource.getSong(seedId).catch(() => null);
       if (seed) pools.push(normMany([seed], 'seed', 0.8));
-      pools.push(normMany(await subsonic.getSimilarSongs(seedId, { count: 25 }), 'seed-similar', 0.65));
+      pools.push(normMany(await musicSource.getSimilarSongs(seedId, { count: 25 }), 'seed-similar', 0.65));
     } catch { /* a bad seed id shouldn't sink the whole build */ }
   }
 
   // Seed artist → their top songs.
   if (input.seedArtist?.trim()) {
     try {
-      const artists = await subsonic.searchArtists(input.seedArtist.trim(), { artistCount: 1 });
+      const artists = await musicSource.searchArtists(input.seedArtist.trim(), { artistCount: 1 });
       const name = artists?.[0]?.name;
-      if (name) pools.push(normMany(await subsonic.getTopSongs(name, { count: 20 }), 'seed-artist', 0.6));
+      if (name) pools.push(normMany(await musicSource.getTopSongs(name, { count: 20 }), 'seed-artist', 0.6));
     } catch { /* ignore */ }
   }
 
@@ -209,8 +209,8 @@ export async function buildCandidatePool(
   // Knob genres → Subsonic genre lists (resolve free text to the real tag).
   for (const genre of (knobs.genres || []).slice(0, 6)) {
     try {
-      const tag = (await subsonic.resolveGenreName(genre)) || genre;
-      pools.push(normMany(await subsonic.getSongsByGenre(tag, { count: 40 }), `genre:${genre}`, 0.5));
+      const tag = (await musicSource.resolveGenreName(genre)) || genre;
+      pools.push(normMany(await musicSource.getSongsByGenre(tag, { count: 40 }), `genre:${genre}`, 0.5));
     } catch { /* ignore */ }
   }
 
@@ -219,10 +219,10 @@ export async function buildCandidatePool(
   // below trims the search noise back to actual credits.
   for (const artist of (knobs.artists || []).slice(0, 6)) {
     try {
-      pools.push(normMany(await subsonic.getTopSongs(artist, { count: 40 }), `artist:${artist}`, 0.65));
+      pools.push(normMany(await musicSource.getTopSongs(artist, { count: 40 }), `artist:${artist}`, 0.65));
     } catch { /* ignore */ }
     try {
-      pools.push(normMany(await subsonic.search(artist, { songCount: 40 }), `artist-search:${artist}`, 0.45));
+      pools.push(normMany(await musicSource.search(artist, { songCount: 40 }), `artist-search:${artist}`, 0.45));
     } catch { /* ignore */ }
   }
 
@@ -251,10 +251,10 @@ export async function buildCandidatePool(
   // Fillers when the pool is thin — keeps a small/under-tagged library usable.
   let pool = mergePools(pools);
   if (pool.length < 30) {
-    pools.push(normMany(await subsonic.getStarred().catch(() => []), 'starred', 0.4));
+    pools.push(normMany(await musicSource.getStarred().catch(() => []), 'starred', 0.4));
     const era = eraSpan(knobs.eras);
     pools.push(normMany(
-      await subsonic.getRandomSongs({
+      await musicSource.getRandomSongs({
         size: 60,
         fromYear: era.fromYear ?? undefined,
         toYear: era.toYear ?? undefined,

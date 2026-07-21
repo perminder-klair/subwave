@@ -4,7 +4,7 @@ import ManualPage from './ManualPage';
 export default function Observatory() {
   return (
     <ManualPage
-      eyebrow="MANUAL · 08"
+      eyebrow="MANUAL · 09"
       title="The Library Observatory."
       intro="A full-screen, data-art map of everything the DJ has tagged: every track placed by genre and lit by energy, with its full record a click away. It's the DJ's understanding of your library, laid out in one picture."
       current="/manual/observatory"

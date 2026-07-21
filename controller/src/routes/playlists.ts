@@ -4,7 +4,10 @@
 // immediately; the picker's own 30-min playlist memo catches up on its own.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
-import * as subsonic from '../music/subsonic.js';
+// Playlist mutation is a Subsonic/Navidrome capability, not part of the
+// MusicSource facade — import the source module directly.
+import * as subsonic from '../music/sources/subsonic.js';
+import { songGenres } from '../music/source.js';
 import * as library from '../music/library.js';
 import { queue } from '../broadcast/queue.js';
 import { generatePlaylist, type GenerateInput } from '../music/playlist-gen.js';
@@ -72,7 +75,7 @@ router.get('/playlists/:id', requireAdmin, async (req, res) => {
           album: s.album,
           year: s.year,
           durationSec: s.duration ?? 0,
-          genre: subsonic.songGenres(s).join(', ') || tag?.genres?.join(', ') || null,
+          genre: songGenres(s).join(', ') || tag?.genres?.join(', ') || null,
           moods: tag?.moods ?? [],
           energy: tag?.energy ?? null,
         };

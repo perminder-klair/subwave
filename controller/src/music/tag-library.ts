@@ -35,7 +35,7 @@
 // On boot the library-db auto-migrates any state/moods.json into the SQLite
 // tracks table as legacy v1 entries (see library-db.ts).
 
-import * as subsonic from './subsonic.js';
+import * as source from './source.js';
 import * as lastfm from './lastfm.js';
 import * as musicbrainz from './musicbrainz.js';
 import * as db from './library-db.js';
@@ -162,7 +162,7 @@ async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }
   reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
   let walked = 0;
   const liveIds = new Set<string>();
-  for await (const song of subsonic.iterateAllSongs()) {
+  for await (const song of source.iterateAllSongs()) {
     db.upsertTrackMeta(song.id, {
       title: song.title,
       artist: song.artist,
@@ -174,7 +174,7 @@ async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }
       // stay unresolved here and phase-0 asks MusicBrainz per track instead.
       originalYear: song.albumIsCompilation ? null : song.albumOriginalYear ?? null,
       isCompilation: song.albumIsCompilation ?? null,
-      genres: subsonic.songGenres(song),
+      genres: source.songGenres(song),
       duration: song.duration,
     });
     liveIds.add(song.id);
@@ -195,22 +195,32 @@ async function reconcileOnly() {
   await db.open({ embeddingDim: embeddings.resolveEmbeddingDim(), adoptStoredDim: true });
   console.log('[tag] reconcile-only: walking Navidrome to prune orphaned rows');
   const { walked, liveIds } = await walkNavidrome();
+  let adopted = 0;
   let pruned = 0;
   if (walked > 0) {
+    // Re-key first, prune what's left: rows whose id re-minted (source rescan,
+    // moved file, source switch) carry their tags/analysis to the new id when
+    // the metadata identity matches; only genuinely-gone tracks get dropped.
+    adopted = db.adoptOrphanTracks(liveIds);
+    if (adopted > 0) {
+      console.log(`[tag] reconcile carried tags/analysis across to ${adopted} re-minted track ids`);
+    }
     pruned = db.pruneMissingTracks(liveIds);
-    console.log(`[tag] reconcile pruned ${pruned} orphaned tracks no longer in Navidrome`);
+    console.log(`[tag] reconcile pruned ${pruned} orphaned tracks no longer in the library`);
   } else {
-    // A transient empty Navidrome response must never wipe the DB.
-    console.warn('[tag] reconcile: Navidrome returned 0 tracks — skipping prune');
+    // A transient empty catalogue response must never wipe the DB.
+    console.warn('[tag] reconcile: source returned 0 tracks — skipping prune');
   }
+  const bits = [
+    adopted > 0 ? `carried ${adopted} track${adopted === 1 ? '' : 's'} to new ids` : '',
+    pruned > 0 ? `removed ${pruned} track${pruned === 1 ? '' : 's'} no longer in the library` : '',
+  ].filter(Boolean);
   reportProgress({
     phase: 'done',
-    label: pruned > 0
-      ? `Removed ${pruned} track${pruned === 1 ? '' : 's'} no longer in Navidrome`
-      : 'Library is in sync with Navidrome',
-    done: pruned,
+    label: bits.length ? bits.join(', ') : 'Library is in sync with the music source',
+    done: adopted + pruned,
   });
-  console.log(`[tag] reconcile complete (walked ${walked}, pruned ${pruned})`);
+  console.log(`[tag] reconcile complete (walked ${walked}, adopted ${adopted}, pruned ${pruned})`);
   process.exit(0);
 }
 
@@ -444,9 +454,14 @@ async function main() {
   if (flags.noPrune) {
     console.log('[tag] --no-prune: skipping orphan prune (reconcile step deselected)');
   } else if (walked > 0) {
+    // Adopt before pruning — see reconcileOnly(): re-minted ids keep their data.
+    const adopted = db.adoptOrphanTracks(liveIds);
+    if (adopted > 0) {
+      console.log(`[tag] carried tags/analysis across to ${adopted} re-minted track ids`);
+    }
     const pruned = db.pruneMissingTracks(liveIds);
     if (pruned > 0) {
-      console.log(`[tag] pruned ${pruned} orphaned tracks no longer in Navidrome`);
+      console.log(`[tag] pruned ${pruned} orphaned tracks no longer in the library`);
     }
   }
   lap('walk');
@@ -904,7 +919,7 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
     let lyricExcerpt: string | null = null;
     if (lyricsEnabled) {
       try {
-        const raw = await subsonic.getLyrics(id);
+        const raw = await source.getLyrics(id);
         if (typeof raw === 'string' && raw.trim()) {
           lyricExcerpt = raw.trim();
         }
@@ -941,7 +956,7 @@ async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<void> {
       if (!t || !musicbrainz.needsOriginalYearLookup(t, reEnrich)) return;
       let mbid: string | null = null;
       try {
-        mbid = (await subsonic.getSong(id))?.musicBrainzId || null;
+        mbid = (await source.getSong(id))?.musicBrainzId || null;
       } catch { /* MBID is optional — the search path covers it */ }
       const year = await musicbrainz.lookupOriginalYear({ title: t.title, artist: t.artist, mbid, year: t.year });
       db.setOriginalYear(id, year);

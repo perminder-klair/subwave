@@ -9,7 +9,7 @@ import { requireAdmin } from '../middleware/auth.js';
 import { zipUpload } from '../middleware/upload.js';
 import { queue } from '../broadcast/queue.js';
 import * as dj from '../llm/dj.js';
-import * as subsonic from '../music/subsonic.js';
+import * as source from '../music/source.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
 import { runStationId, runHourlyCheck, runLink, runBanter, runProgrammeIntro, runProgrammeFeature, runProgrammeOutro, refreshAutoPlaylist } from '../broadcast/scheduler.js';
@@ -883,7 +883,7 @@ router.get('/dj/search', requireAdmin, async (req, res) => {
     await library.load();
     // includeBlocked: the operator must still find never-play tracks here to
     // review them; queueing one is refused at the queue gate with a clear 409.
-    const songs = await subsonic.search(q, { songCount: limit, songOffset: offset, includeBlocked: true });
+    const songs = await source.search(q, { songCount: limit, songOffset: offset, includeBlocked: true });
     const results = songs.map(toAdminRow);
     // A full page means there may be more — the UI shows Load more on this
     // rather than a total (search3 doesn't return one).
@@ -900,8 +900,8 @@ router.get('/dj/search', requireAdmin, async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/dj/playlists', requireAdmin, async (_req, res) => {
   try {
-    const playlists = await subsonic.getPlaylists();
-    const results = (Array.isArray(playlists) ? playlists : []).map((p) => ({
+    const playlists = await source.getPlaylists();
+    const results = (Array.isArray(playlists) ? playlists : []).map((p: any) => ({
       id: p.id,
       name: p.name,
       songCount: p.songCount ?? null,
@@ -922,13 +922,13 @@ router.get('/dj/recent', requireAdmin, async (req, res) => {
   const limit = Math.min(Math.max(parseInt(String(req.query?.limit || ''), 10) || 20, 1), 50);
   try {
     await library.load();
-    const albums = await subsonic.getRecentlyAddedAlbums({ size: limit });
+    const albums = await source.getRecentlyAddedAlbums({ size: limit });
     // Bounded fan-out: an unbounded Promise.all fired one getAlbum per album
     // (~21 parallel Navidrome calls at the default limit), which tipped a
     // slow/loaded Navidrome into failures (#786). 5-wide keeps it snappy
     // without the thundering herd.
     const songLists = await mapPool(albums, 5, (a: { id: string }) =>
-      subsonic.getAlbum(a.id).catch(() => []),
+      source.getAlbum(a.id).catch(() => []),
     );
     const results = songLists.flat().slice(0, limit).map(toAdminRow);
     res.json({ results });

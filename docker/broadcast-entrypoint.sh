@@ -46,6 +46,7 @@ mkdir -p /var/sub-wave \
          /var/sub-wave/jingles \
          /var/sub-wave/logs \
          /var/sub-wave/sessions \
+         /var/sub-wave/music \
          /var/sub-wave/sfx
 chmod 777 /var/sub-wave \
           /var/sub-wave/voice \
@@ -54,6 +55,7 @@ chmod 777 /var/sub-wave \
           /var/sub-wave/jingles \
           /var/sub-wave/logs \
           /var/sub-wave/sessions \
+          /var/sub-wave/music \
           /var/sub-wave/sfx
 # Bootstrap empty m3u files Liquidsoap's reload_mode="watch" needs to see.
 touch /var/sub-wave/auto.m3u /var/sub-wave/jingles.m3u

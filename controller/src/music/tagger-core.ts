@@ -7,7 +7,7 @@
 import { z } from 'zod';
 import { SHOW_MOODS as MOOD_VOCAB } from '../settings.js';
 import { djObject } from '../llm/sdk.js';
-import { songGenres } from './subsonic.js';
+import { songGenres } from './source.js';
 
 export const TagSchema = z.object({
   moods: z.array(z.string()).default([]),

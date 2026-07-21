@@ -25,7 +25,7 @@ const TOOLS = [
 export default function AgentAccess() {
   return (
     <ManualPage
-      eyebrow="MANUAL · 14"
+      eyebrow="MANUAL · 15"
       title="Agent access."
       intro="SUB/WAVE isn't only for human listeners. An AI agent can read what's on air and put songs, DJ segments, and sound effects onto the broadcast through the station's MCP server."
       current="/manual/mcp"

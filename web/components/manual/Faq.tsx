@@ -4,7 +4,7 @@ import ManualPage from './ManualPage';
 export default function Faq() {
   return (
     <ManualPage
-      eyebrow="MANUAL · 15"
+      eyebrow="MANUAL · 16"
       title="Questions & answers."
       intro="The things people ask most about how SUB/WAVE behaves — how it copes with an empty room, what it needs from a model, and what the moving parts behind the DJ actually do."
       current="/manual/faq"

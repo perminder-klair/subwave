@@ -58,6 +58,8 @@ detect_tz() {
 say "Using STATE_DIR=$STATE_DIR"
 mkdir -p "$STATE_DIR"
 chmod 777 "$STATE_DIR"
+# Local-folder music source drop point (belt to the controller-side mkdir).
+mkdir -p "$STATE_DIR/music"
 
 # ---- 2. Root .env (3 required vars) ----------------------------------------
 if [[ ! -f "$ROOT_ENV" ]]; then

@@ -18,7 +18,7 @@ import BackupPanel from './BackupPanel';
 import FestivalsSection from './FestivalsSection';
 import {
   Radio, Palette, Cpu, Mic, Library, Search, Music, AudioLines,
-  Activity, Archive, Save, AlertTriangle, CalendarDays, Heart,
+  Activity, Archive, Save, AlertTriangle, CalendarDays, Disc3, Heart,
 } from 'lucide-react';
 import {
   SectionHeader, ELEVENLABS_VS_DEFAULTS,
@@ -35,6 +35,7 @@ import { ThemeSection } from './settings/ThemeSection';
 import { JinglesSection } from './settings/JinglesSection';
 import { SfxSection } from './settings/SfxSection';
 import { ScrobbleSection } from './settings/ScrobbleSection';
+import { MusicSection } from './settings/MusicSection';
 import { LikesSection } from './settings/LikesSection';
 
 const SECTIONS = [
@@ -42,6 +43,7 @@ const SECTIONS = [
   { id: 'theme',    label: 'Skin & Themes', hint: 'player skin · palette', icon: Palette },
   { id: 'festivals', label: 'Festivals', hint: 'calendar · mood', icon: CalendarDays },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
+  { id: 'music',    label: 'Music source', hint: 'library backend', icon: Disc3 },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine', icon: Mic },
   { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation', icon: Library },
   { id: 'search',   label: 'Web search', hint: 'live-facts backend', icon: Search },
@@ -186,6 +188,9 @@ export default function SettingsPanel() {
         },
         // Operator speech corrections — hydrate to clean {from, to} rows.
         corrections: (v.tts?.corrections || []).map(c => ({ from: c.from ?? '', to: c.to ?? '' })),
+      },
+      music: {
+        source: v.music?.source ?? 'subsonic',
       },
       llm: {
         provider: v.llm?.provider ?? 'ollama',
@@ -576,6 +581,12 @@ export default function SettingsPanel() {
             )}
             {activeSection === 'llm' && data.llm && (
               <LlmSection
+                data={data} form={form} setForm={updateForm} busy={busy}
+                saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh}
+              />
+            )}
+            {activeSection === 'music' && (
+              <MusicSection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh}
               />

@@ -5,7 +5,7 @@ import CodeBlock from '@/components/CodeBlock';
 export default function AcousticAnalysis() {
   return (
     <ManualPage
-      eyebrow="MANUAL · 13"
+      eyebrow="MANUAL · 14"
       title="Acoustic analysis."
       intro="Beyond mood and energy tags, SUB/WAVE can listen to each track and measure how it actually sounds — tempo, key, loudness, and, optionally, a 'sounds-like' fingerprint and where the vocals sit. The DJ leans on these to build smoother, better-matched sets. The basics run out of the box; the heavier dimensions are one line away."
       current="/manual/analysis"

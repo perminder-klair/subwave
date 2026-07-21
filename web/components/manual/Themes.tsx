@@ -50,7 +50,7 @@ const SKINS = [
 export default function Themes() {
   return (
     <ManualPage
-      eyebrow="MANUAL · 09"
+      eyebrow="MANUAL · 10"
       title="Skins & themes."
       intro="The look of the player is two independent knobs. A skin is the whole face — the layout every listener sees. A theme is the palette that face is painted in. You set a station-wide default for each; a listener can override either in their own browser without changing what anyone else sees."
       current="/manual/themes"

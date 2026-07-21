@@ -8,6 +8,7 @@
 
 import { config } from '../config.js';
 import { loadSetupConfig } from './config.js';
+import * as settings from '../settings.js';
 
 export interface SetupStatus {
   needsSetup: boolean;
@@ -16,7 +17,23 @@ export interface SetupStatus {
   navidromeSource: 'env' | 'setup-config' | 'unset';
 }
 
+// The Navidrome-creds threshold only applies when the active music source IS
+// Navidrome/Subsonic. A source that needs no server (e.g. the local folder) is
+// broadcastable with zero Navidrome config, so it never gates first-run.
+// Reads settings.get() directly (sync, DEFAULTS → 'subsonic' pre-load) to keep
+// setup/ off the music import graph.
+function activeMusicSource(): string {
+  try {
+    return (settings.get() as any)?.music?.source || 'subsonic';
+  } catch {
+    return 'subsonic';
+  }
+}
+
 export async function getSetupStatus(): Promise<SetupStatus> {
+  if (activeMusicSource() !== 'subsonic') {
+    return { needsSetup: false, setupCompletedAt: null, navidromeSource: 'unset' };
+  }
   // config.navidrome.* is populated from env at boot; setup-config.json is the
   // wizard's persistence layer. If env supplies values, env wins.
   const envHasNavidrome = Boolean(
@@ -48,6 +65,9 @@ export async function getSetupStatus(): Promise<SetupStatus> {
 // Falls back to the env check if the cache hasn't loaded yet, which keeps the
 // /state response safe even on the first request after a cold start.
 export function getSetupStatusSync(): SetupStatus {
+  if (activeMusicSource() !== 'subsonic') {
+    return { needsSetup: false, setupCompletedAt: null, navidromeSource: 'unset' };
+  }
   const envHasNavidrome = Boolean(
     process.env.NAVIDROME_URL &&
       process.env.NAVIDROME_USER &&

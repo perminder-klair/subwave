@@ -15,7 +15,7 @@ import type { Dirent } from 'node:fs';
 import { z } from 'zod';
 import { config, STATE_DIR } from './config.js';
 import * as settings from './settings.js';
-import * as subsonic from './music/subsonic.js';
+import * as source from './music/source.js';
 import * as subsonicLog from './music/subsonic-log.js';
 import * as library from './music/library.js';
 import * as embeddings from './music/embeddings.js';
@@ -404,7 +404,7 @@ async function checkLlm(s: StationSettings | null): Promise<Finding[]> {
 async function checkNavidrome(): Promise<Finding[]> {
   const out: Finding[] = [];
 
-  const p = await subsonic.ping();
+  const p = await source.ping();
   out.push({
     label: 'connectivity',
     status: p.ok ? 'ok' : 'fail',
@@ -475,7 +475,7 @@ async function checkNavidrome(): Promise<Finding[]> {
 // Cached live-config Navidrome connectivity for the always-on admin banner.
 // The banner polls this from every admin page every ~30s; a short cache keeps
 // that from becoming a steady drip of Subsonic `ping` calls (and shields a
-// flapping Navidrome). Shares subsonic.ping() — the same never-throwing check
+// flapping Navidrome). Shares source.ping() — the same never-throwing check
 // checkNavidrome() uses — so the banner and the Doctor's connectivity finding
 // can never disagree.
 let navidromeCache: { at: number; result: { ok: boolean; reason?: string } } | null = null;
@@ -488,7 +488,7 @@ export async function navidromeConnectivity(): Promise<{
 }> {
   const now = Date.now();
   if (!navidromeCache || now - navidromeCache.at > NAVIDROME_TTL_MS) {
-    navidromeCache = { at: now, result: await subsonic.ping() };
+    navidromeCache = { at: now, result: await source.ping() };
   }
   return { ...navidromeCache.result, url: config.navidrome.url };
 }

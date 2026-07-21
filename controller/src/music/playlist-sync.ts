@@ -2,7 +2,9 @@
 // appends library songs that are (a) new since the last sync and (b) still match
 // the recipe — reusing the builder's own candidate-pool engine, no LLM call.
 
-import * as subsonic from './subsonic.js';
+// Playlist mutation (addToPlaylist) is a Subsonic/Navidrome capability, not
+// part of the MusicSource facade — import the source module directly.
+import * as subsonic from './sources/subsonic.js';
 import * as library from './library.js';
 import { buildCandidatePool, type GenerateInput } from './playlist-gen.js';
 import { selectAppendable } from './playlist-gen-pure.js';

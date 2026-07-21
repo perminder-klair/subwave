@@ -311,6 +311,17 @@ export const EMBEDDING_PROVIDERS = [
   'requesty',
 ];
 
+// Pluggable music sources — the enum backing settings.music.source. One active
+// source at a time. Only list sources with a registered implementation (the
+// music/sources/registry.ts switch): validating a source that can't be built
+// would let an operator strand the station on a backend nothing can resolve.
+// Part B appends 'local'.
+export const MUSIC_SOURCES = [
+  'subsonic',
+  'local',
+  'plex',
+];
+
 // Coerce a stored Ollama context-window value. 0 disables (use Ollama's own
 // default); any other number is clamped to a sane [2048, 131072] band and
 // floored to an integer. Non-numeric/NaN falls back to `def`. Shared by the
@@ -1307,6 +1318,12 @@ const DEFAULTS = {
     // Each entry: { from: 'GHz', to: 'gigahertz' }. Empty by default.
     corrections: [],
   },
+  // Active music source. Only `source` lives here — per-source connection config
+  // stays where it already is (Navidrome creds in config.navidrome / setup
+  // overlay). See music/sources/registry.ts.
+  music: {
+    source: 'subsonic',
+  },
   llm: {
     provider: 'ollama',
     model: '',
@@ -2241,6 +2258,11 @@ export async function load() {
       // Operator speech corrections — malformed entries dropped, list capped.
       // An older save (no corrections) loads as [].
       corrections: normalizeTtsCorrections(stored.tts?.corrections),
+    },
+    music: {
+      source: MUSIC_SOURCES.includes(stored.music?.source)
+        ? stored.music.source
+        : DEFAULTS.music.source,
     },
     llm: {
       provider: LLM_PROVIDERS.includes(stored.llm?.provider)
@@ -3636,6 +3658,15 @@ export async function update(patch) {
     // full edited list. No restart: read live on every speak() call.
     if (t.corrections !== undefined) {
       next.tts.corrections = validateTtsCorrectionsStrict(t.corrections);
+    }
+  }
+  if ('music' in patch) {
+    const m = patch.music || {};
+    if (m.source !== undefined) {
+      if (!MUSIC_SOURCES.includes(m.source)) {
+        throw new Error(`music.source must be one of: ${MUSIC_SOURCES.join(', ')}`);
+      }
+      next.music.source = m.source;
     }
   }
   if ('llm' in patch) {

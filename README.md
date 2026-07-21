@@ -52,7 +52,7 @@ https://github.com/user-attachments/assets/0a2ba78a-eda3-44c1-adce-bfa78ae992cd
 - **One shared Icecast stream.** Every listener hears the same broadcast at the same time.
 - **AI DJ that picks and talks.** Curates tracks, writes intros, and reads station idents, the time, and the weather.
 - **Plain-language requests.** "Play something more upbeat" or "anything by Radiohead" works.
-- **Your own music library.** Pulls from Navidrome over the Subsonic API. No external catalogue.
+- **Your own music library.** Pulls from Navidrome over the Subsonic API, a Plex server, or a plain folder of files on the box — pick the source in the admin UI. No external catalogue.
 - **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Requesty, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy. A daily token budget can cap hosted-model spend; past the cap the music keeps playing without the chatter.
 - **Six TTS engines.** Piper and Kokoro (multilingual) in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) and a Remote engine (any self-hosted HTTP endpoint, audio over the wire) round it out. Pick a different engine per kind of speech.
 - **Multiple DJ personas.** Up to 24 in the roster, each with its own voice and writing style. A show can seat up to three guest co-hosts who trade scripted banter with the host, and ready-made personas install from the [community catalog](https://www.getsubwave.com/personas).
@@ -259,6 +259,41 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
   restart is enough after editing it.
 - **The LLM provider is swappable at runtime** from the admin UI. Every model
   call goes through the Vercel AI SDK.
+- **The music source is pluggable** (Admin → Settings → Music source), one
+  active source at a time (full comparison — including what the mood tagger and
+  acoustic analyzer can do on each — in [docs/music-sources.md](docs/music-sources.md)):
+  - **Navidrome / Subsonic** (default) — a streaming server on your network,
+    the full-featured source (similar songs, playlists, starred, lyrics).
+  - **Local folder** — point SUB/WAVE at a directory of audio files (`.mp3`,
+    `.m4a`, `.flac`, `.ogg`, `.opus`, `.wav`) with **no server**. Drop files into
+    `state/music` (already mounted into every container — no compose changes),
+    switch the source in the admin UI, and hit **Rescan**. Tags are read on
+    scan; discovery legs the folder can't provide (Last.fm similarity, server
+    playlists, stars, lyrics) are automatically switched off while genre, random,
+    recently-added, artist and mood/embedding-based picks still work. Track ids
+    are derived from each file's path, so **moving or renaming a file re-mints
+    its id** — but reconcile carries the accrued mood/analysis data across to
+    the new id when the file's artist/title/album tags still match.
+    Advanced: set `MUSIC_DIR` to use a folder elsewhere, but it must be
+    bind-mounted at the *same* path into the controller, broadcast **and**
+    analyzer containers.
+  - **Plex** — point SUB/WAVE at a Plex Media Server over its HTTP API. Set
+    `PLEX_URL` + `PLEX_TOKEN` (and optionally `PLEX_LIBRARY` to pin the music
+    section) in `.env`, then switch the source in the admin UI. Playlists,
+    starred (rated ≥3★), play-count-ranked top-songs/favourites, recently-added,
+    genre, random and mood/embedding picks all work; the Last.fm-graph tier
+    (similar songs, artist bios, crowd tags, lyrics) is switched off, since the
+    PMS API doesn't expose it. The server URL must be reachable from the
+    broadcast container too (Liquidsoap fetches the files over curl).
+
+  > **Tags and analysis follow the track across id changes.** The mood /
+  > analysis database is keyed by track id, and ids re-mint (a Navidrome full
+  > rescan, a moved file, a source switch) — but reconcile first matches
+  > orphaned rows to live tracks by artist/title/album (+ duration sanity) and
+  > carries their tags, analysis and embeddings to the new id; only unmatched
+  > rows are pruned. After a deliberate source switch, run reconcile then
+  > re-tag whatever couldn't be matched (metadata that differs between
+  > sources won't carry over).
 - **There is no `/skip` for listeners.** Track-end is the only natural
   transition; operators have an admin-only skip endpoint.
 - **Add to Sonos / VLC with one link.** Hardware and software players take a

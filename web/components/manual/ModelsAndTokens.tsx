@@ -5,7 +5,7 @@ import LlmBenchTable from './LlmBenchTable';
 export default function ModelsAndTokens() {
   return (
     <ManualPage
-      eyebrow="MANUAL · 11"
+      eyebrow="MANUAL · 12"
       title="Models & tokens."
       intro="The AI DJ can run on a small model on your own hardware or a large hosted one. This page tells you which models actually hold up — measured, not guessed — and which settings match the station to whichever you pick."
       current="/manual/llm"

@@ -15,7 +15,11 @@
 import express from 'express';
 import { queue } from '../broadcast/queue.js';
 import * as likes from '../broadcast/likes.js';
-import * as subsonic from '../music/subsonic.js';
+// The star write-back is a Subsonic/Navidrome capability by design
+// (settings.likes.starInNavidrome), not part of the MusicSource facade —
+// import the source module directly, like the playlists routes do.
+import * as subsonic from '../music/sources/subsonic.js';
+import { activeSourceId } from '../music/source.js';
 import * as settings from '../settings.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { clientIp } from '../middleware/ratelimit.js';
@@ -92,8 +96,10 @@ router.post('/like', async (req, res) => {
 
     // Mirror into Navidrome on every accepted (non-duplicate) like — star is
     // idempotent, and re-starring heals a star the operator removed by hand
-    // only when listeners actually like the song again.
-    if (!result.duplicate && cfg.starInNavidrome) {
+    // only when listeners actually like the song again. Only meaningful when
+    // the active music source IS Navidrome/Subsonic (the default `true` would
+    // otherwise error on every like on a Plex/local-folder station).
+    if (!result.duplicate && cfg.starInNavidrome && activeSourceId() === 'subsonic') {
       subsonic.star(on.songId).catch((err) =>
         console.error(`[likes] Navidrome star failed for ${on.songId}:`, err.message),
       );

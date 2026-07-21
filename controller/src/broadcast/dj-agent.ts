@@ -17,7 +17,7 @@ import * as session from './session.js';
 import * as picker from '../music/picker.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
 import * as library from '../music/library.js';
-import * as subsonic from '../music/subsonic.js';
+import * as source from '../music/source.js';
 import * as mix from '../music/mix.js';
 import * as journey from '../music/journey.js';
 import { shuffle } from '../util/shuffle.js';
@@ -456,7 +456,7 @@ function trackFields(song) {
     // All genre tags, comma-joined — the slim projection already carries the
     // joined string in `genre` (songGenres passes it through unchanged), raw
     // Subsonic children get their multi-value array flattened here.
-    genre: subsonic.songGenres(song).join(', ') || null,
+    genre: source.songGenres(song).join(', ') || null,
     // Seconds. The queue needs it to spot picks that will hit the
     // max-track-length cap (its liq_cue_out) so it can auto-arm a washout on
     // the forced mid-song exit — see applyMixTransition. Field name varies by
@@ -641,7 +641,7 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   if (strict && activeShow?.genres?.length) {
     const resolved: string[] = [];
     for (const g of activeShow.genres) {
-      try { const r = await subsonic.resolveGenreName(g); if (r) resolved.push(r); } catch {}
+      try { const r = await source.resolveGenreName(g); if (r) resolved.push(r); } catch {}
     }
     genreLock = resolved.length ? resolved : null;
   }

@@ -52,6 +52,28 @@ export const config = {
     // behind them (#786's "recent failed (500)").
     timeoutMs: parseInt(process.env.NAVIDROME_TIMEOUT_MS || '', 10) || 30_000,
   },
+  // Local-folder music source (settings.music.source === 'local'). The default
+  // <STATE_DIR>/music needs no compose changes — the state dir is already
+  // bind-mounted at the same /var/sub-wave path in the controller, broadcast AND
+  // analyzer containers, so the absolute file paths this source hands Liquidsoap
+  // resolve identically everywhere. Override with MUSIC_DIR only if you also
+  // bind-mount that path into all three at the SAME location.
+  music: {
+    localDir: process.env.MUSIC_DIR || `${STATE_DIR}/music`,
+  },
+  // Plex Media Server music source (settings.music.source === 'plex'). Static
+  // server URL + X-Plex-Token auth — the token is under Plex → account →
+  // "Get an account token" / any authenticated request's `X-Plex-Token`. The
+  // controller builds `subhttp:` file URLs Liquidsoap fetches over curl (same
+  // path as Navidrome), so the URL must be reachable from the broadcast
+  // container too. `section` optionally pins the music library id (numeric, from
+  // /library/sections); blank → auto-discover the first `artist`-type section.
+  plex: {
+    url: process.env.PLEX_URL || 'http://plex:32400',
+    token: process.env.PLEX_TOKEN || '',
+    section: process.env.PLEX_LIBRARY || '',
+    clientName: 'sub-wave',
+  },
   ollama: {
     // Default-when-blank server URL + model. The admin Settings UI
     // (`llm.ollamaUrl` / `llm.model`) overrides both — there are no

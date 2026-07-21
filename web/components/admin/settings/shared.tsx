@@ -203,6 +203,7 @@ export interface FormState {
   kokoroLang: string;
   weather: WeatherCfg;
   tts: TtsForm;
+  music: { source: string };
   llm: LlmForm;
   search: SearchForm;
   embedding: EmbeddingForm;
@@ -275,6 +276,7 @@ export interface SettingsData {
       speed?: Record<string, number>;
       corrections?: { from?: string; to?: string }[];
     };
+    music?: { source?: string };
     llm?: Partial<LlmForm>;
     search?: Partial<SearchForm>;
     embedding?: {
@@ -320,6 +322,18 @@ export interface SettingsData {
     pocketTtsVoices?: Array<{ id: string; label: string }>;
     pocketTtsCustomVoices?: string[];
     cloudProviders?: string[];
+  };
+  music?: {
+    sources?: string[];
+    active?: string;
+    local?: {
+      state?: 'idle' | 'scanning';
+      root?: string;
+      trackCount?: number;
+      lastScanAt?: string | null;
+      failed?: number;
+      lastError?: string | null;
+    };
   };
   llm?: {
     providers?: string[];

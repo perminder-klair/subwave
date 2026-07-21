@@ -9,7 +9,7 @@ import * as blocklist from '../music/blocklist.js';
 import * as db from '../music/library-db.js';
 import * as analyzer from '../music/analyzer.js';
 import * as coverage from '../music/library-coverage.js';
-import * as subsonic from '../music/subsonic.js';
+import * as source from '../music/source.js';
 import * as lastfm from '../music/lastfm.js';
 import * as musicbrainz from '../music/musicbrainz.js';
 import * as settings from '../settings.js';
@@ -20,6 +20,7 @@ import { promptVocabHash } from '../music/embeddings.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
 import { tagger, taggerView, startAnalyzer, startReconcile } from '../broadcast/tagger.js';
+import * as localScanner from '../music/sources/local/scanner.js';
 import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import * as mapProjection from '../music/map-projection.js';
 
@@ -71,7 +72,7 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
     // Drop any station-archive rows the tagger may have written into the index
     // before the subsonic-layer guard existed (issue #273), so the admin library
     // is clean without requiring a re-tag.
-    const cleanRows = result.rows.filter((row) => !subsonic.isStationArchive(row));
+    const cleanRows = result.rows.filter((row) => !source.isStationArchive(row));
     const removed = result.rows.length - cleanRows.length;
     result.rows = cleanRows;
     result.total = Math.max(0, result.total - removed);
@@ -137,7 +138,7 @@ router.get('/library/search-sound', requireAdmin, async (req, res) => {
     // Wide KNN, capped after the archive filter so junk rows don't eat slots.
     const hits = library.tracksByAudioVector(vecs[0], Math.max(limit * 2, 60));
     const results = hits
-      .filter((t) => !subsonic.isStationArchive(t))
+      .filter((t: any) => !source.isStationArchive(t))
       .slice(0, limit)
       .map((t) => ({
         id: t.id,
@@ -172,7 +173,7 @@ router.get('/library/genres', requireAdmin, async (req, res) => {
     await library.load();
     const tagged = library.stats().byGenre || {};
     let navidromeGenres: { value: string; songCount?: number }[] = [];
-    try { navidromeGenres = await subsonic.getGenres(); } catch {}
+    try { navidromeGenres = await source.getGenres(); } catch {}
     const merged: Record<string, number> = { ...tagged };
     for (const g of navidromeGenres || []) {
       if (!g?.value) continue;
@@ -263,7 +264,7 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
     const all = sampled ? db.allTaggedSampled(max, total) : db.allTagged();
     const truncated = sampled;
     const tracks = all
-      .filter((t) => !subsonic.isStationArchive(t))
+      .filter((t) => !source.isStationArchive(t))
       .slice(0, max)
       .map((t) => ({
         id: t.id,
@@ -457,12 +458,12 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
 
   try {
     outer: while (visited < SCAN_BUDGET) {
-      const albums = await subsonic.getAlbumList(albumOffset, BATCH);
+      const albums = await source.getAlbumList(albumOffset, BATCH);
       if (albums.length === 0) break;
       for (let i = 0; i < albums.length; i++) {
         const album = albums[i];
         let songs: LibrarySong[] = [];
-        try { songs = await subsonic.getAlbum(album.id); } catch { songs = []; }
+        try { songs = await source.getAlbum(album.id); } catch { songs = []; }
         for (let j = (i === 0 ? songIndex : 0); j < songs.length; j++) {
           const s = songs[j];
           visited++;
@@ -520,6 +521,20 @@ router.get('/library/coverage', requireAdmin, async (req, res) => {
 // ---------------------------------------------------------------------------
 router.get('/library/tagger', requireAdmin, (_req, res) => {
   res.json({ tagger: taggerView() });
+});
+
+// ---------------------------------------------------------------------------
+// POST /library/local/rescan — re-scan the local-folder music source (the
+// admin "Rescan" button, only meaningful when settings.music.source is 'local').
+// Single-flight: the scanner dedupes concurrent scans, and unchanged files are
+// stat-only, so this is cheap. Returns the scan status the Settings panel polls.
+// ---------------------------------------------------------------------------
+router.post('/library/local/rescan', requireAdmin, (_req, res) => {
+  if (localScanner.getStatus().state === 'scanning') {
+    return res.status(409).json({ error: 'a local-music scan is already running', localMusic: localScanner.getStatus() });
+  }
+  void localScanner.scan();
+  res.json({ ok: true, localMusic: localScanner.getStatus() });
 });
 
 // ---------------------------------------------------------------------------
@@ -605,8 +620,8 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     let song = req.body || {};
     if (!song.title || !song.artist) {
       // Reach back to Subsonic to fill metadata when the caller only sent an id.
-      const found = await subsonic.search(`${song.title || ''} ${song.artist || ''}`.trim() || id, { songCount: 25 });
-      const hit = (found || []).find((s) => s.id === id);
+      const found = await source.search(`${song.title || ''} ${song.artist || ''}`.trim() || id, { songCount: 25 });
+      const hit = (found || []).find((s: any) => s.id === id);
       if (hit) song = { ...hit, ...song };
     }
     if (!song.title) return res.status(404).json({ error: 'track metadata not found' });
@@ -628,7 +643,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       artist: song.artist,
       album: song.album,
       year: song.year ?? null,
-      genres: subsonic.songGenres(song),
+      genres: source.songGenres(song),
     });
 
     // 2. Refresh enrichment (best-effort).
@@ -646,7 +661,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
     }
     if (lyricsEnabled) {
       try {
-        const raw = await subsonic.getLyrics(id);
+        const raw = await source.getLyrics(id);
         if (typeof raw === 'string' && raw.trim()) lyricExcerpt = raw.trim();
       } catch (err) {
         queue.log('warn', `/library/retag enrich(lyrics) ${id}: ${err.message}`);
@@ -690,7 +705,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
             artist: song.artist,
             album: song.album,
             year: song.year ?? null,
-            genres: subsonic.songGenres(song),
+            genres: source.songGenres(song),
           },
           { lastfmTags, lyricExcerpt },
         );
@@ -714,7 +729,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       artist: song.artist,
       album: song.album,
       year: song.year,
-      genres: subsonic.songGenres(song),
+      genres: source.songGenres(song),
       moods,
       energy,
       source: 'llm',
@@ -737,7 +752,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
 //
 // `moods: []` clears the tags entirely (track returns to the untagged pool).
 // `applyToAlbum` resolves the whole album server-side from the track id
-// (subsonic.getSong → albumId → getAlbum) and applies the same tags to every
+// (source.getSong → albumId → getAlbum) and applies the same tags to every
 // track — this is the "tag an album/folder for targeted queuing" path
 // (discussion #336). Moods are restricted to settings.SHOW_MOODS so manual
 // rows feed songsByMood()/MOOD_NEIGHBOURS exactly like LLM-tagged ones.
@@ -767,7 +782,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
     // Resolve the seed track — Subsonic first (carries albumId), library-db
     // row as fallback so already-indexed tracks work even if Navidrome misses.
     let song: LibrarySong | null = null;
-    try { song = await subsonic.getSong(id); } catch {}
+    try { song = await source.getSong(id); } catch {}
     if (!song) {
       const row = db.getTrack(id);
       if (row) song = { id: row.id, title: row.title, artist: row.artist, album: row.album, year: row.year, genre: row.genre, duration: row.durationSec };
@@ -777,7 +792,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
     let targets: LibrarySong[] = [song];
     if (applyToAlbum) {
       if (!song.albumId) return res.status(404).json({ error: 'album not resolvable for this track' });
-      targets = await subsonic.getAlbum(song.albumId);
+      targets = await source.getAlbum(song.albumId);
       if (!targets.length) return res.status(404).json({ error: 'album has no tracks' });
     }
 
@@ -789,7 +804,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
         artist: t.artist,
         album: t.album,
         year: t.year ?? null,
-        genres: subsonic.songGenres(t),
+        genres: source.songGenres(t),
         duration: t.duration ?? null,
       });
       if (clearing) {
@@ -855,7 +870,7 @@ router.post('/library/blocklist', requireAdmin, async (req, res) => {
       // Resolve from a track row — Subsonic first (carries albumId/artistId),
       // library-db fallback so track-blocking works even if Navidrome misses.
       let song: any = null;
-      try { song = await subsonic.getSong(trackId); } catch {}
+      try { song = await source.getSong(trackId); } catch {}
       if (!song) {
         const row = db.getTrack(trackId);
         if (row && type === 'track') song = { id: row.id, title: row.title, artist: row.artist, album: row.album };

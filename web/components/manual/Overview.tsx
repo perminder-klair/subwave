@@ -38,6 +38,11 @@ const GUIDE = [
     blurb: 'For the operator — signing in, tuning the DJ, scheduling shows, and managing jingles.',
   },
   {
+    href: '/manual/music-sources',
+    label: 'Music Sources',
+    blurb: 'Where your library comes from — Navidrome, Plex, or a plain local folder, and what each can serve.',
+  },
+  {
     href: '/manual/themes',
     label: 'Skins & Themes',
     blurb: 'Swap the player face between six built-in skins, pick the station-wide palette, or fork the reference player entirely.',

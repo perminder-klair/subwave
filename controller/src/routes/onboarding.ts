@@ -29,6 +29,7 @@ import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
 import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
+import * as localScanner from '../music/sources/local/scanner.js';
 import { saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
 import { getSetupStatus } from '../setup/firstRun.js';
@@ -235,6 +236,11 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     // settings.update accepts a partial patch — pass through whatever the
     // wizard sent for llm / tts / djPrompt / personas.
     const settingsPatch: any = {};
+    // Music source (subsonic | local). settings.update() enum-validates it; a
+    // 'local' choice is what makes needsSetup fall to false without Navidrome.
+    if (b.music && typeof b.music === 'object' && typeof b.music.source === 'string') {
+      settingsPatch.music = { source: b.music.source };
+    }
     if (b.llm && typeof b.llm === 'object') settingsPatch.llm = b.llm;
     if (b.tts && typeof b.tts === 'object') settingsPatch.tts = b.tts;
     if (typeof b.djPrompt === 'string') settingsPatch.djPrompt = b.djPrompt;
@@ -249,6 +255,16 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
     // Mark setup complete so the wizard exits even if Navidrome was skipped.
     await saveSetupConfig({ setupCompletedAt: new Date().toISOString() });
     clearSetupConfigCache();
+
+    // If the operator chose the local-folder source, start its scanner now so the
+    // index is warm (and the playlist refresh below sees it) without waiting for a
+    // restart. Idempotent + fire-and-forget: the operator may not have dropped any
+    // files yet, so an empty first scan is fine.
+    if (settingsPatch.music?.source === 'local') {
+      localScanner.ensureStarted()
+        .then(() => localScanner.scan())
+        .catch((err: any) => queue.log('error', `local-source activation failed: ${err?.message || err}`));
+    }
 
     // Kick the auto-playlist refresher. The boot-time call from
     // scheduler.start() runs before onboarding completes, so on a fresh

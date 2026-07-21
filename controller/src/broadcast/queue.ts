@@ -6,8 +6,8 @@ import { readFile } from 'node:fs/promises';
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { config } from '../config.js';
+import * as source from '../music/source.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
-import * as subsonic from '../music/subsonic.js';
 import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
 import * as blocklist from '../music/blocklist.js';
@@ -25,6 +25,7 @@ import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
 import * as liquidsoapControl from './liquidsoap-control.js';
 import type { TrackOutro, TrackKeyRange } from '../music/library-db.js';
+import type { Song } from '../music/sources/types.js';
 
 // A persona as it flows through the queue's voice path — only `id`/`name`/
 // `djMode` are read here; the rest rides through to tts.speak()/voiceGainDb().
@@ -617,14 +618,14 @@ class Queue {
   async applyLoudnessGain(track: Track | null) {
     if (!track) return;
     const loud = settings.get().loudness;
-    const source = loud?.source ?? 'replaygain-then-measured';
+    const loudnessSource = loud?.source ?? 'replaygain-then-measured';
     let lufs: number | null | undefined = null;
     let peakDb: number | null | undefined = null;
-    if (source !== 'measured') {
+    if (loudnessSource !== 'measured') {
       let rg = mix.loudnessFromReplayGain(track.replayGain);
       if (!rg && track.replayGain === undefined && track.id) {
         try {
-          const song = await subsonic.getSong(track.id);
+          const song = await source.getSong(track.id);
           track.replayGain = song?.replayGain ?? null; // cache the answer either way
           rg = mix.loudnessFromReplayGain(song?.replayGain);
         } catch (err) {
@@ -637,7 +638,7 @@ class Queue {
         peakDb = rg.peakDb;
       }
     }
-    if (lufs == null && source !== 'replaygain') {
+    if (lufs == null && loudnessSource !== 'replaygain') {
       lufs = track.loudnessLufs;
       peakDb = track.peakDb;
       if ((lufs == null || peakDb == null) && track.id) {
@@ -688,7 +689,7 @@ class Queue {
   // DJ-mode mixing applied to the transition INTO `item`'s track (features 1 &
   // 2, plus the sweep/washout transition effects). No-op unless the active
   // persona is in DJ mode. Stashes a per-transition crossfade length on the
-  // track (read by subsonic.getAnnotatedUri → liq_cross_duration) and, on a
+  // track (read by source.getAnnotatedUri → liq_cross_duration) and, on a
   // notable upward tempo jump, fires a rate-limited riser across the blend.
   applyMixTransition(item: QueueItem) {
     const persona: Persona | null = settings.getEffectivePersona();
@@ -984,7 +985,7 @@ class Queue {
         // not just DJ mode. Resolve the track's integrated loudness (ReplayGain
         // tag first by default — see applyLoudnessGain — else the measured
         // value from the item or a library lookup) and stash a clamped gain
-        // offset toward the target; subsonic.getAnnotatedUri folds it into
+        // offset toward the target; source.getAnnotatedUri folds it into
         // liq_amplify. No loudness from any source → no liq_amplify → unity.
         await this.applyLoudnessGain(item.track);
 
@@ -993,7 +994,7 @@ class Queue {
         // (requestedBy set) stay exempt — a requested long mix plays in full,
         // mirroring the request path's selection-cap exemption in picker-tools.
         const maxDurationSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
-        const uri = subsonic.getAnnotatedUri(item.track, { maxDurationSec });
+        const uri = source.getAnnotatedUri(item.track as Song, { maxDurationSec });
         await writeHandoff(config.liquidsoap.queueFile, uri);
         item.sent = true;
         this.persist();  // record the sent flag — these are now live in dj_queue
@@ -1982,7 +1983,7 @@ async function waitForJingleClear() {
 // liq_amplify gain, so the per-engine/persona voice trim is applied as the clip
 // plays (radio.liq wraps the voice queues in amplify(override="liq_amplify")).
 // 0 dB → the bare path, no annotation — byte-for-byte today's behaviour. Mirrors
-// subsonic.getAnnotatedUri's liq_amplify="<n> dB" form (the music loudness path).
+// source.getAnnotatedUri's liq_amplify="<n> dB" form (the music loudness path).
 function voiceUriWithGain(wavPath: string, gainDb: number): string {
   return gainDb !== 0 ? `annotate:liq_amplify="${gainDb} dB":${wavPath}` : wavPath;
 }

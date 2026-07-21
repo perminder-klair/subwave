@@ -18,7 +18,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, createWriteStream, readFileSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { config } from '../config.js';
-import * as subsonic from './subsonic.js';
+import * as source from './source.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 
 // A structural span over the track, in milliseconds (span shape). Spans
@@ -660,7 +660,12 @@ export async function embedTexts(
 export async function analyze(songId: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
-  const url = subsonic.getRawStreamUrl(songId);
+  const ref = await source.getAnalyzableRef(songId);
+  if (!ref) throw new Error(`no analyzable audio for ${songId}`);
+  // A source that exposes files on the shared mount (local folder) hands back a
+  // path — feed the backend directly (no fetch). Subsonic returns a URL.
+  if ('path' in ref) return analyzePath(ref.path, opts);
+  const url = ref.url;
   return backend === 'sidecar' ? analyzeViaSidecar(url, opts) : analyzeViaLocal(url, opts);
 }
 
@@ -702,9 +707,16 @@ function subsonicErrorMessage(body: string): string {
 export async function downloadCapped(
   songId: string,
 ): Promise<{ path: string; complete: boolean }> {
+  const ref = await source.getAnalyzableRef(songId);
+  if (!ref) throw new Error(`no analyzable audio for ${songId}`);
+  // Already local (local-folder source): hand back the library path as-is. This
+  // is the source's own file — callers pass it to analyzePath, which never
+  // deletes it (only genuine temp downloads under ANALYZE_TMP_DIR are cleaned).
+  // A local file is the whole file, so it's always complete.
+  if ('path' in ref) return { path: ref.path, complete: true };
   mkdirSync(ANALYZE_TMP_DIR, { recursive: true });
   const dest = `${ANALYZE_TMP_DIR}/${encodeURIComponent(songId)}.audio`;
-  const url = subsonic.getRawStreamUrl(songId);
+  const url = ref.url;
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), config.analyzer.requestTimeoutMs);
   try {
