@@ -36,7 +36,7 @@ export interface StationFeed {
    *  everyone hears that far behind it. This carries the offset already added,
    *  which is why it can briefly sit in the future — useElapsed clamps at 0, so
    *  the clock holds 0:00 until the track actually starts instead of banking
-   *  the buffer as elapsed time (issue #1113). */
+   *  the buffer as elapsed time (issue #1114). */
   trackStartedAt: number | null;
   /** Station IANA timezone (e.g. "Europe/London"), or null before first poll.
    *  Render on-air timestamps in this zone so they match what the DJ speaks
@@ -116,7 +116,7 @@ export function useStationFeed(): StationFeed {
         }
         // Shift into listener-time. serverStart is the live edge; the audio
         // reaches this listener leadMs later, so that's when the track is
-        // genuinely "now playing" for them (issue #1113).
+        // genuinely "now playing" for them (issue #1114).
         const leadMs = leadMsRef.current;
         const audibleAt = Number.isFinite(serverStart) ? serverStart + leadMs : Date.now();
 

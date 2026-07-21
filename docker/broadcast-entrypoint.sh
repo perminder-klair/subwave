@@ -142,7 +142,7 @@ esac
 # Sized in SECONDS and converted to bytes here, because burst-size is a byte
 # count and a fixed one means wildly different depths per bitrate: the old
 # hardcoded 512 KB was ~22s at 192k but ~66s at 64k, so the stations least able
-# to afford lag got the most of it (issue #1113). Deriving from the live
+# to afford lag got the most of it (issue #1114). Deriving from the live
 # bitrate keeps the depth an operator picks the depth they actually get.
 #
 # Sources, in precedence order: env override > settings (written by the

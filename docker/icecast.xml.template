@@ -34,7 +34,7 @@
              sits, so /now-playing publishes the same number as stream.
              bufferSeconds and players subtract it to align the now-playing
              title and elapsed clock with the audio actually in someone's ears
-             (issue #1113). Changing the depth here without updating that
+             (issue #1114). Changing the depth here without updating that
              pairing reintroduces the drift. -->
         <burst-size>${ICECAST_BURST_SIZE}</burst-size>
     </limits>

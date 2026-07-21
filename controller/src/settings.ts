@@ -1138,7 +1138,7 @@ const DEFAULTS = {
     // for their whole connection, which is why /now-playing publishes it as
     // stream.bufferSeconds — players subtract it to line the now-playing
     // title and elapsed clock up with the audio actually in someone's ears
-    // rather than the live edge (issue #1113).
+    // rather than the live edge (issue #1114).
     bufferSeconds: 22,
     // ICY (out-of-band) per-track titles on the Ogg mounts (/stream.opus +
     // /stream.flac). ON by default: most internet-radio clients (Ferrosonic,

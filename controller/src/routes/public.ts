@@ -259,7 +259,7 @@ router.get('/now-playing', async (req, res) => {
         // the LIVE EDGE by radio.liq's pre-cross on_metadata hook. Players are
         // expected to subtract this to render listener-time — without it the
         // title and elapsed clock run this far ahead of the audio, which is
-        // the "Now Spinning is ahead of real time" report (issue #1113).
+        // the "Now Spinning is ahead of real time" report (issue #1114).
         // Operator surfaces (admin dash, MCP) intentionally keep live edge.
         bufferSeconds: stationSettings.stream?.bufferSeconds ?? 22,
         opusEnabled: stationSettings.stream?.opusEnabled === true,
