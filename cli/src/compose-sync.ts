@@ -19,6 +19,7 @@ import {
   COMPOSE_YML,
   COMPOSE_BYO_YML,
   COMPOSE_TTS_HEAVY_GPU_YML,
+  COMPOSE_ANALYZER_GPU_YML,
   ENV_EXAMPLE,
 } from './assets.ts';
 import { loadConfig } from './config.ts';
@@ -59,6 +60,7 @@ export function expectedFiles(mode: InstallMode): ExpectedFile[] {
     },
     { name: 'docker-compose.byo.yml', content: COMPOSE_BYO_YML, backup: true },
     { name: 'docker-compose.tts-heavy-gpu.yml', content: COMPOSE_TTS_HEAVY_GPU_YML, backup: true },
+    { name: 'docker-compose.analyzer-gpu.yml', content: COMPOSE_ANALYZER_GPU_YML, backup: true },
     { name: '.env.example', content: ENV_EXAMPLE, backup: false },
   ];
 }

@@ -15,7 +15,7 @@
 // touch, a tap toggles one cell and a long-press arms drag-painting — a
 // plain swipe only scrolls (see HOLD_MS below).
 import type { ChangeEvent, RefObject, TouchEvent } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Users, Share2 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
@@ -1559,6 +1559,19 @@ function ShowEditor({
     update({ genres: [...show.genres, v] });
     setGenreDraft('');
   };
+  // Genres this show asks for that no track actually carries. The controller
+  // resolves a free-text genre onto the nearest library tag, which silently
+  // broadens the show ("Pop Punk" → "Pop") or drops the filter altogether when
+  // nothing is close — invisible on air unless we say it here, at the moment
+  // the operator is looking at the field. Mirrors show-filter.normGenre so the
+  // UI and the station agree on what counts as "the same tag". Only meaningful
+  // once the library list has loaded (empty = not fetched yet, or the endpoint
+  // failed — never warn on a fetch failure).
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const knownGenres = useMemo(() => new Set(genres.map(norm)), [genres]);
+  const unknownGenres = genres.length
+    ? show.genres.filter(g => !knownGenres.has(norm(g)))
+    : [];
   return (
     <EditorDialog
       open
@@ -1642,10 +1655,10 @@ function ShowEditor({
                 max={GUESTS_MAX}
               />
               <span className="field-hint">
-                Optional, up to {GUESTS_MAX}. While this show is on air, guests
-                take some of the talk breaks — station IDs, time checks,
-                weather/news segments — in their own voice. The host still
-                drives the music and the track intros.
+                Optional, up to {GUESTS_MAX}. While this show airs, guests take
+                some of the talk breaks (station IDs, time checks, weather and
+                news) in their own voice. The host still drives the music and
+                track intros.
               </span>
 
               <div className="mt-1 flex items-start gap-3">
@@ -1661,10 +1674,10 @@ function ShowEditor({
                     Banter breaks
                   </Label>
                   <span className="field-hint">
-                    Short scripted exchanges between the host and guests — a few
-                    lines of real back-and-forth, each voice rendered
-                    separately — up to twice an hour depending on the
-                    persona&apos;s talk frequency. Needs at least one guest.
+                    Short scripted back-and-forth between the host and guests,
+                    each voice rendered separately. Up to twice an hour,
+                    depending on the persona&apos;s talk frequency. Needs at
+                    least one guest.
                   </span>
                 </div>
               </div>
@@ -1682,10 +1695,9 @@ function ShowEditor({
               <div className="grid gap-0.5">
                 <Label>Programme (produced episode)</Label>
                 <span className="field-hint">
-                  The DJ produces each airing as a coherent episode from the
-                  topic brief: an intro at the top of the show, a planned
-                  feature segment mid-hour, and a sign-off in the closing
-                  minutes — with a fresh angle every episode.
+                  The DJ produces each airing as a full episode from the topic
+                  brief: an intro up top, a planned feature mid-hour, and a
+                  sign-off in the closing minutes. Fresh angle every episode.
                 </span>
               </div>
             </div>
@@ -1709,9 +1721,9 @@ function ShowEditor({
                   </SelectContent>
                 </Select>
                 <span className="field-hint">
-                  Optional. Pin the mid-hour feature to one skill — e.g. news
-                  for a morning roundup. Producer&apos;s choice lets each
-                  episode&apos;s plan decide.
+                  Optional. Pin the mid-hour feature to one skill, like news for
+                  a morning roundup. Producer&apos;s choice lets each episode
+                  decide.
                 </span>
               </div>
             )}
@@ -1726,9 +1738,9 @@ function ShowEditor({
               onChange={id => update({ themeId: id })}
             />
             <span className="field-hint">
-              Optional. When this show goes on air the player switches to
-              this palette; back to the station default when the hour ends.
-              Manage themes in admin → Settings → Theme.
+              Optional. The player switches to this palette while the show airs,
+              then back to the station default. Manage themes in
+              Settings → Theme.
             </span>
           </Field>
         </Card>
@@ -1746,8 +1758,8 @@ function ShowEditor({
               })}
             />
             <span className="field-hint">
-              Pick any that fit — a track matching any selected mood qualifies.
-              None selected = Any (auto): the station&apos;s autonomous mood applies.
+              Pick any that fit; a track matching any of them qualifies. None
+              selected = Any (auto), following the station&apos;s own mood.
             </span>
           </Field>
 
@@ -1784,7 +1796,7 @@ function ShowEditor({
               </div>
             )}
             <span className="field-hint">
-              Pick any decades — non-adjacent ones work ({'"'}90s + 2010s{'"'}).
+              Pick any decades, even non-adjacent ones ({'"'}90s + 2010s{'"'}).
               None selected = any era.
             </span>
           </Field>
@@ -1843,6 +1855,18 @@ function ShowEditor({
             <span className="field-hint">
               Up to {FILTER_VALUES_MAX}; a track matching any of them qualifies.
             </span>
+            {unknownGenres.length > 0 && (
+              <span className="field-hint text-vermilion">
+                No track in your library is tagged{' '}
+                {unknownGenres.map((g, i) => (
+                  <span key={g}>{i > 0 ? ', ' : ''}&ldquo;{g}&rdquo;</span>
+                ))}
+                . The station falls back to the closest tag it can find, so this show
+                will air broader results than you asked for — or, if nothing is close,
+                the genre filter switches off entirely. Pick a genre from the
+                suggestions, or re-tag the tracks in Navidrome.
+              </span>
+            )}
           </Field>
 
           <GenreSuggest
@@ -1864,33 +1888,32 @@ function ShowEditor({
                 Strict filter
               </Label>
               <span className="field-hint">
-                Hard-enforce every filter set above — mood, era, energy and
-                genre. Off-filter tracks only play as a last resort to avoid
-                silence. When off, they&apos;re all soft leans the DJ can break
-                for flow. Needs at least one filter set.
+                Hard-enforces every filter set above (mood, era, energy,
+                genre); off-filter tracks play only as a last resort. When off,
+                they&apos;re soft leans the DJ can break for flow. Needs at
+                least one filter set.
               </span>
             </div>
           </div>
 
           <span className="field-hint -mt-1.5">
-            Optional music steer for this show: a mood, a genre, an era, an
-            energy band, or any mix. Soft by default — the DJ leans toward them
-            but can break them for flow; Strict filter above turns every set
-            one into a hard rule. Mood set to Any (auto) follows the
-            station&apos;s autonomous mood — time of day, weather, festivals —
-            instead of pinning one.
+            Optional steer for this show: mood, genre, era, energy, or any mix.
+            Soft by default, so the DJ leans toward them but can break them for
+            flow; Strict filter above makes them hard rules. Mood set to Any
+            (auto) follows the station&apos;s own mood instead of pinning one.
           </span>
 
           <Field>
             <Label>playlist anchor</Label>
             <span className="field-hint">
-              Pin one or more Navidrome playlists: their combined tracks become
-              this show&apos;s pool. The AI DJ still sequences and talks over
-              them. Pick none to let genre/era/mood drive selection (up to 10).
+              Pin one or more Navidrome playlists and their combined tracks
+              become this show&apos;s pool. The AI DJ still sequences and talks
+              over them. Pick none to let genre/era/mood drive selection
+              (up to 10).
             </span>
             {playlists.length === 0 ? (
               <span className="field-hint opacity-60">
-                No Navidrome playlists found yet — create some in Navidrome and
+                No Navidrome playlists found yet. Create some in Navidrome, then
                 reopen this panel.
               </span>
             ) : (
@@ -1935,10 +1958,10 @@ function ShowEditor({
               <div className="grid gap-0.5">
                 <Label>Playlist only (strict)</Label>
                 <span className="field-hint">
-                  On: play ONLY tracks from the pinned playlist(s) — off-playlist
-                  tracks air only as a last resort to avoid silence. Off: the
-                  playlist dominates but the DJ can still wander for variety.
-                  Listener requests are always allowed through, either way.
+                  On: play only the pinned playlist(s); off-playlist tracks air
+                  only as a last resort. Off: the playlist dominates but the DJ
+                  can still wander for variety. Listener requests always get
+                  through, either way.
                 </span>
               </div>
             </div>
@@ -1947,14 +1970,14 @@ function ShowEditor({
           <Field>
             <Label>excluded playlists</Label>
             <span className="field-hint">
-              Tracks from these playlists will never play during this show,
-              regardless of other filters. Useful for blocking genres or moods
-              that don&apos;t fit — add them to a Navidrome playlist and
-              exclude it here (up to 10).
+              Tracks from these playlists never play during this show, whatever
+              the other filters say. Handy for blocking genres or moods that
+              don&apos;t fit: gather them in a Navidrome playlist and exclude it
+              here (up to 10).
             </span>
             {playlists.length === 0 ? (
               <span className="field-hint opacity-60">
-                No Navidrome playlists found yet — create some in Navidrome and
+                No Navidrome playlists found yet. Create some in Navidrome, then
                 reopen this panel.
               </span>
             ) : (
@@ -1993,11 +2016,11 @@ function ShowEditor({
           <Field>
             <Label htmlFor="show-topic">topic (fed to the DJ as the show theme)</Label>
             <span className="field-hint">
-              This is the brief the AI DJ works from. The more you describe,
-              the better it picks music and writes links: name genres, eras,
-              moods, artists to lean into or avoid, the time of day, the kind
-              of listener, and how the host should sound. Write it like
-              you&apos;re briefing a real DJ before their slot.
+              The brief the AI DJ works from. The more you describe, the better
+              it picks music and writes links: genres, eras, moods, artists to
+              lean into or avoid, time of day, the listener, how the host should
+              sound. Write it like you&apos;re briefing a real DJ before their
+              slot.
             </span>
             <Textarea
               id="show-topic"
@@ -2023,11 +2046,10 @@ function ShowEditor({
               }}
             />
             <span className="field-hint">
-              The longest a single track plays while this show is on air —
-              anything longer fades out at the limit. Leave it blank to use the
-              station limit, enter 0 for no limit (good for long mixes or DJ
-              sets), or set at least {minTrackSeconds ?? 30}s to
-              cap it for this show.
+              The longest a single track plays during this show; anything longer
+              fades out at the limit. Blank uses the station limit, 0 means no
+              limit (good for long mixes or DJ sets), or set at
+              least {minTrackSeconds ?? 30}s to cap it here.
             </span>
           </Field>
         </Card>

@@ -23,16 +23,21 @@ export function absoluteUrl(path = '/'): string {
 //   og:* tags, and without it every subpage inherits the root layout's
 //   sitewide twitter card. twitter:image stays global (hand-written in the
 //   root layout <head>).
+// - `siteName` defaults to the product name. Player routes pass the operator's
+//   own station name so a branded install's share card is not labelled with the
+//   software it happens to run on (issue #1086).
 export function pageMeta({
   title,
   description,
   path,
   type = 'website',
+  siteName = 'SUB/WAVE',
 }: {
   title: string;
   description?: string;
   path: string;
   type?: 'website' | 'article';
+  siteName?: string;
 }): Metadata {
   const url = absoluteUrl(path);
   return {
@@ -43,7 +48,7 @@ export function pageMeta({
       title,
       ...(description ? { description } : {}),
       url,
-      siteName: 'SUB/WAVE',
+      siteName,
       type,
     },
     twitter: {

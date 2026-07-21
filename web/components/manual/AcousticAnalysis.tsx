@@ -116,6 +116,68 @@ ANALYZER_HEAVY=1`}</CodeBlock>
           backfill.
         </p>
       </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">ON AN NVIDIA GPU</p>
+        <h2>The CUDA flavour — same features, much faster.</h2>
+        <p>
+          Hosts with an NVIDIA card can run the heavy stack on the GPU instead of pinning
+          CPU cores — a big speed-up on deep library ingestion. It&rsquo;s a compose{' '}
+          <em>overlay</em>, not an <code className="bs-code-inline">.env</code> toggle (a
+          GPU reservation can&rsquo;t be switched from <code className="bs-code-inline">.env</code>):
+        </p>
+        <CodeBlock>{`docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d`}</CodeBlock>
+        <p>
+          That swaps the analyzer to the{' '}
+          <code className="bs-code-inline">subwave-analyzer-cuda</code> image — everything{' '}
+          <code className="bs-code-inline">-heavy</code> does, on CUDA —{' '}so{' '}
+          <code className="bs-code-inline">ANALYZER_HEAVY</code> is unnecessary while the
+          overlay is applied. Requirements: the NVIDIA driver + Container Toolkit on the
+          host, nothing else (the CUDA runtime rides inside the image). If the GPU
+          isn&rsquo;t actually visible, the worker logs a warning and falls back to CPU —
+          analysis never fails over device selection.
+        </p>
+        <div className="bs-callout">
+          <div className="bs-eyebrow">NON-COMPOSE INSTALLS</div>
+          <p>
+            Point the analyzer container&rsquo;s image at{' '}
+            <code className="bs-code-inline">ghcr.io/perminder-klair/subwave-analyzer-cuda</code>{' '}
+            and pass the GPU through (<code className="bs-code-inline">--gpus all</code> or
+            your platform&rsquo;s equivalent). The AIO one-click container stays CPU-only —
+            GPU analysis needs the split stack.
+          </p>
+        </div>
+        <p>
+          Sharing the card with a local TTS or LLM? After ~5 idle minutes the worker drops
+          its models out of VRAM and reloads them on the next request
+          (<code className="bs-code-inline">ANALYZE_IDLE_UNLOAD_S</code> tunes the window;{' '}
+          <code className="bs-code-inline">0</code> keeps them resident). Pair it with{' '}
+          <strong>Quiet times</strong> below and a long scan frees the GPU whenever
+          listeners are tuned in.
+        </p>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">QUIET TIMES</p>
+        <h2>Let analysis yield to the live station.</h2>
+        <p>
+          A bulk pass over a large library runs for hours, and on a homelab it competes
+          with local LLM / TTS — and the stream itself — for the same CPU or GPU.{' '}
+          <strong>Quiet times</strong> (off by default, on the{' '}
+          <Link href="/admin/library">Library</Link> page next to the sounds-like and vocal
+          controls) pauses any analysis run while someone is listening, and resumes once
+          the stream has had no listeners for the configured window (default 10 minutes).
+        </p>
+        <p>
+          The gate checks between tracks, so a listener tuning in pauses the pass within
+          ~30 seconds; the running view shows{' '}
+          <em>&ldquo;Waiting for quiet&rdquo;</em> while it holds. It applies to manual{' '}
+          <strong>Analyse</strong> runs too — a pass outlives the click, so the bypass is
+          turning the toggle off, not the button. If the listener count can&rsquo;t be read
+          at all (Icecast down), analysis proceeds — a stats outage never stalls a library
+          scan.
+        </p>
+      </section>
     </ManualPage>
   );
 }

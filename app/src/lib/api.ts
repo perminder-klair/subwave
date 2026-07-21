@@ -11,8 +11,11 @@
 // mounted under `/api`, and the Icecast stream at `/stream.mp3` on the same
 // origin (matches docker/Caddyfile routing).
 
+import { mountFor, type StreamFormat } from './streamFormat';
 import type {
   DjPublic,
+  LikeResult,
+  LikeStatus,
   NowPlayingResponse,
   RequestResult,
   SchedulePayload,
@@ -64,6 +67,12 @@ export interface StationApi {
   probeHealth(signal?: AbortSignal): Promise<HealthResult>;
   postRequest(body: RequestBody): Promise<RequestResult>;
   pollRequest(id: string): Promise<RequestResult>;
+  /** Like the currently playing track (#991). `songId` is what the client
+   *  believes is on air — the controller rejects a stale tap. Error statuses
+   *  come back as a LikeResult with `error`; null on network error. */
+  likeCurrent(songId: string): Promise<LikeResult | null>;
+  /** Liked-state + count for the current airing. null on network error. */
+  likeStatus(): Promise<LikeStatus | null>;
   /** Fire-and-forget audience beacon. Analytics must never break a listener —
    *  all failures are swallowed. */
   postBeacon(body: BeaconBody): Promise<void>;
@@ -74,10 +83,11 @@ export interface StationApi {
    *  emits it WITHOUT the `/api` prefix; this client adds it like every other
    *  endpoint. */
   avatar(path: string): string;
-  /** The live MP3 Icecast mount — the universal floor; Opus/Ogg is skipped on
-   *  native for the same chained-Ogg reasons the web pins iOS to MP3. Carries NO
-   *  embedded credentials — see streamHeaders(). */
-  streamUrl(): string;
+  /** The live Icecast mount for `format`, defaulting to the universal MP3
+   *  floor. Callers pass a non-MP3 format only after gating it on platform +
+   *  station support (lib/streamFormat.ts) — this just builds the URL. Carries
+   *  NO embedded credentials — see streamHeaders(). */
+  streamUrl(format?: StreamFormat): string;
   /** Headers to attach to the audio stream request. When the station URL
    *  embedded HTTP basic-auth credentials (`https://user:pass@host`), this
    *  returns `{ Authorization: 'Basic …' }`; otherwise `undefined`. iOS AVPlayer
@@ -251,13 +261,34 @@ export function createApi(rawBase: string): StationApi {
       if (res.status === 404) return { success: false, status: 'unknown' };
       return (await res.json()) as RequestResult;
     },
+    likeCurrent: async (songId) => {
+      try {
+        const res = await fetchWithTimeout(api('/like'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ songId }),
+        });
+        // Error statuses carry a JSON body too — surface it, don't throw.
+        return (await res.json()) as LikeResult;
+      } catch {
+        return null;
+      }
+    },
+    likeStatus: async () => {
+      try {
+        const res = await fetchWithTimeout(api('/like'));
+        return (await res.json()) as LikeStatus;
+      } catch {
+        return null;
+      }
+    },
     cover: (subsonicId) => api(`/cover/${encodeURIComponent(subsonicId)}`),
     avatar: (path) => {
       if (!path) return '';
       if (/^https?:\/\//i.test(path)) return path;
       return api(path.startsWith('/') ? path : `/${path}`);
     },
-    streamUrl: () => `${cleanBase}/stream.mp3`,
+    streamUrl: (format = 'mp3') => `${cleanBase}${mountFor(format)}`,
     streamHeaders: () => streamAuthHeaders,
   };
 }

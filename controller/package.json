@@ -1,6 +1,6 @@
 {
   "name": "sub-wave-controller",
-  "version": "0.42.1",
+  "version": "0.43.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -17,7 +17,8 @@
     "llm-bench:publish": "tsx scripts/llm-bench/publish-manual.ts",
     "lint": "eslint . && tsc --noEmit",
     "lint:fix": "eslint . --fix",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "gen:themes": "tsx scripts/gen-theme-tokens.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.11",

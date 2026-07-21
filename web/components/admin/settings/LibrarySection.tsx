@@ -56,8 +56,9 @@ interface LibrarySectionProps extends SectionProps {
 export function LibrarySection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: LibrarySectionProps) {
   const e = form.embedding;
   const [embeddingKeyInput, setEmbeddingKeyInput] = useState('');
+  const [compatEmbedKeyInput, setCompatEmbedKeyInput] = useState('');
 
-  useEffect(() => { setEmbeddingKeyInput(''); }, [form.embedding.provider]);
+  useEffect(() => { setEmbeddingKeyInput(''); setCompatEmbedKeyInput(''); }, [form.embedding.provider]);
 
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
@@ -85,7 +86,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         enabled: e.enabled,
         provider: e.provider,
         model: e.model,
-        baseUrl: e.baseUrl,
+        providerBaseUrls: e.providerBaseUrls,
         ollamaUrl: e.ollamaUrl,
         seedCount: parseInt(e.seedCount, 10) || 0,
         knnNeighbours: parseInt(e.knnNeighbours, 10) || 10,
@@ -102,8 +103,19 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           lastfmTags: e.enrichment.lastfmTags,
           lyrics: e.enrichment.lyrics,
         },
+        // openai-compatible bearer token — write only when typed, 'set' sentinel
+        // from getRedacted() is ignored server-side so it never overwrites the key.
+        ...(effectiveProvider === 'openai-compatible' && compatEmbedKeyInput.trim()
+          ? { apiKey: compatEmbedKeyInput.trim() }
+          : {}),
       },
     });
+    // No separate toast/refresh — saveSettings already notifies and refreshes
+    // for the whole embedding patch (and toasting ok here would lie when the
+    // save itself failed). Mirrors the LlmSection compat-key flow.
+    if (effectiveProvider === 'openai-compatible' && compatEmbedKeyInput.trim()) {
+      setCompatEmbedKeyInput('');
+    }
     // Save embedding API key override if typed (cloud embedding providers only —
     // embedKeyVar is set only for providers that use a conventional key).
     if (embedKeyVar && embeddingKeyInput.trim()) {
@@ -153,36 +165,49 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
   // it cries "missing" for a provider whose key is already set for the DJ.
   const embedKeyPresent = embedKeySet || !!data.env?.['EMBEDDING_API_KEY'];
 
+  // `||` (not `??`) so a field cleared in the form ('' entry) falls through to
+  // the chat leg's URL, matching the pre-map `e.baseUrl || form.llm.baseUrl`.
+  const embedBaseUrl = e.providerBaseUrls[effectiveProvider]
+    || form.llm.providerBaseUrls[effectiveProvider]
+    || '';
+
   const embedDiscoveryEnabled =
     effectiveProvider === 'ollama'
     || effectiveProvider === 'locca'
-    || (effectiveProvider === 'openai-compatible' && !!(e.baseUrl || form.llm.baseUrl).trim())
+    || (effectiveProvider === 'openai-compatible' && !!embedBaseUrl.trim())
     || (effectiveProvider === 'openrouter')
     || (!!embedKeyVar && embedKeySet);
 
   const embedDiscovery = useModelDiscovery({
     provider: effectiveProvider,
-    baseUrl: e.baseUrl || form.llm.baseUrl,
+    baseUrl: embedBaseUrl,
     ollamaUrl: e.ollamaUrl || form.llm.ollamaUrl,
     scope: 'embedding',
     enabled: embedDiscoveryEnabled,
     adminFetch,
   });
 
-  const probeQuery = () => {
-    const p = new URLSearchParams();
-    if (e.provider) p.set('provider', e.provider);
-    if (e.model) p.set('model', e.model);
-    if (e.baseUrl) p.set('baseUrl', e.baseUrl);
-    if (e.ollamaUrl) p.set('ollamaUrl', e.ollamaUrl);
-    return p.toString();
+  // POST body, not query params — the unsaved bearer token must never ride a
+  // URL that reverse-proxy access logs capture.
+  const probeBody = () => {
+    const b: Record<string, string> = {};
+    if (e.provider) b.provider = e.provider;
+    if (e.model) b.model = e.model;
+    if (embedBaseUrl) b.baseUrl = embedBaseUrl;
+    if (e.ollamaUrl) b.ollamaUrl = e.ollamaUrl;
+    if (compatEmbedKeyInput.trim()) b.apiKey = compatEmbedKeyInput.trim();
+    return b;
   };
 
   const runProbe = async () => {
     setProbing(true);
     setProbe(null);
     try {
-      const r = await adminFetch(`/settings/embedding/probe?${probeQuery()}`);
+      const r = await adminFetch('/settings/embedding/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(probeBody()),
+      });
       setProbe(await r.json());
     } catch (err) {
       setProbe({ ok: false, dim: null, code: 'unknown', message: errorMessage(err) });
@@ -207,11 +232,15 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
       } catch {
         /* discovery is best-effort — fall through and probe with the default model */
       }
-      const p = new URLSearchParams({ provider: 'locca', baseUrl: url, model });
-      const j = await (await adminFetch(`/settings/embedding/probe?${p.toString()}`)).json();
+      const r = await adminFetch('/settings/embedding/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'locca', baseUrl: url, model }),
+      });
+      const j = await r.json();
       setProbe(j);
       if (j.ok) {
-        setForm(f => ({ ...f, embedding: { ...f.embedding, provider: 'locca', baseUrl: url, model } }));
+        setForm(f => ({ ...f, embedding: { ...f.embedding, provider: 'locca', providerBaseUrls: { ...f.embedding.providerBaseUrls, locca: url }, model } }));
       }
     } catch (err) {
       setProbe({ ok: false, dim: null, code: 'unknown', message: errorMessage(err) });
@@ -271,7 +300,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         <div className="grid grid-cols-[1fr_auto] items-center gap-4">
           <div>
             <div className="text-[13px] font-bold">Embedding-propagated tagging</div>
-            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+            <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
               When off, the bulk tagger refuses to start. Single-track retags
               from the Library admin page still work (they bypass the
               embedding pipeline).
@@ -325,7 +354,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             <div className="flex items-start gap-x-2 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] p-3 text-[11px] leading-[1.5] text-ink">
               <span className="flex-none text-[12px] leading-[1.5] text-[var(--accent)]">✓</span>
               <span className="min-w-0">
-                Ready to tag with defaults — <code>{llmProviderLabel(effectiveProvider)}</code>
+                Ready to tag with defaults: <code>{llmProviderLabel(effectiveProvider)}</code>
                 {!e.provider && <span className="text-muted"> (your DJ&rsquo;s provider)</span>}
                 {' · '}<code>{effectiveModel}</code>
                 {effectiveDim != null && <span className="text-muted"> · {effectiveDim}-d</span>}.
@@ -358,8 +387,8 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 with a different model (a full re-embed on change). */}
             {embeddedMeta && embeddedMeta.model !== effectiveModel && (
               <div className="field-hint">
-                Your library is currently embedded with{' '}
-                <code>{embeddedMeta.model}</code> ({embeddedMeta.dim}-d) — changing
+                Your library is embedded with{' '}
+                <code>{embeddedMeta.model}</code> ({embeddedMeta.dim}-d); changing
                 the model means a full re-embed.
               </div>
             )}
@@ -375,7 +404,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                     {llmProviderLabel(effectiveProvider)} can’t make embeddings
                   </span>
                 </div>
-                <p className="mt-2 text-[11px] leading-[1.55] text-muted">
+                <p className="mt-2 text-[14px] leading-[1.55] text-muted">
                   {e.provider ? (
                     <><code>{llmProviderLabel(effectiveProvider)}</code> is a chat-only provider, with no embeddings endpoint, so the tagger can’t use it.</>
                   ) : (
@@ -463,9 +492,9 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             <div className="field">
               <Label>Embedding server base URL</Label>
               <Input
-                value={e.baseUrl}
+                value={e.providerBaseUrls[effectiveProvider] ?? ''}
                 onChange={(ev: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, embedding: { ...f.embedding, baseUrl: ev.target.value } }))
+                  setForm(f => ({ ...f, embedding: { ...f.embedding, providerBaseUrls: { ...f.embedding.providerBaseUrls, [effectiveProvider]: ev.target.value } } }))
                 }
                 placeholder="http://host.docker.internal:8090/v1"
                 className="max-w-[360px]"
@@ -492,6 +521,28 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 {' '}Must be reachable from the controller container. Use the host
                 LAN/Tailscale IP or <code>host.docker.internal</code>, not{' '}
                 <code>127.0.0.1</code>.
+              </div>
+            </div>
+          )}
+
+          {effectiveProvider === 'openai-compatible' && (
+            <div className="field">
+              <Label>Bearer token</Label>
+              <Input
+                type="password"
+                value={compatEmbedKeyInput}
+                onChange={(ev: ChangeEvent<HTMLInputElement>) => setCompatEmbedKeyInput(ev.target.value)}
+                placeholder={
+                  (data.values?.embedding as { apiKey?: string })?.apiKey === 'set'
+                    ? '•••••• (on file)'
+                    : 'Bearer token (optional)'
+                }
+                className="max-w-[360px]"
+              />
+              <div className="field-hint">
+                Optional. Only needed when the embedding server requires bearer
+                authentication. Saved to <code>settings.json</code>, takes effect
+                on next save.
               </div>
             </div>
           )}
@@ -533,7 +584,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                   className="max-w-[360px]"
                 />
                 <div className="field-hint">
-                  Optional. Embeddings reuse your DJ&rsquo;s <code>{embedKeyVar}</code> automatically —
+                  Optional. Embeddings reuse your DJ&rsquo;s <code>{embedKeyVar}</code> automatically;
                   only set this to run embeddings on a different provider than your DJ.
                   Stored in <code>state/secrets.env</code>.
                 </div>
@@ -611,7 +662,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
               How many tracks the LLM tags by hand before propagation kicks in.
               <code> 0</code> = auto: <code>~4% of the library</code> (floored at
               200, capped at 2500). For a 5k library that&apos;s 200; for 50k,
-              2000. A denser seed set is often net-cheaper — more anchors means a
+              2000. A denser seed set is often net-cheaper: more anchors means a
               smaller (expensive) active-learning residual. CLI{' '}
               <code>--seeds N</code> overrides this.
             </div>
@@ -638,7 +689,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             />
             <div className="field-hint">
               How many nearest tagged neighbours vote on an untagged track&apos;s
-              moods + energy. Default <code>10</code> — a broader, steadier vote
+              moods + energy. Default <code>10</code>, a broader, steadier vote
               than the old 5. Very high values dilute the vote on a sparsely-tagged
               library (coverage below counts against confidence).
             </div>
@@ -687,7 +738,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             <div className="field-hint">
               Minimum confidence for a propagated tag to be accepted; below it the
               track is queued for (pricier) LLM tagging. Confidence is{' '}
-              <code>topSim × coverage</code> — the nearest tagged neighbour&apos;s
+              <code>topSim × coverage</code>: the nearest tagged neighbour&apos;s
               similarity times the fraction of neighbours that were tagged. Being a
               product of two sub-1 numbers it compounds fast, so the default is{' '}
               <code>0.35</code>, not 0.6 (0.6 rejected even strong matches and sent
@@ -713,7 +764,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             />
             <div className="field-hint">
               Lets tracks with a &ldquo;sounds-like&rdquo; (CLAP) vector pull
-              audio-similar neighbours into the mood vote, scaled by this weight —
+              audio-similar neighbours into the mood vote, scaled by this weight;
               sound is the stronger mood signal for instrumentals and tracks with
               thin metadata. <code>0</code> = text-only vote; <code>1</code> =
               trust audio similarity as much as text. Default <code>0.5</code>.
@@ -751,12 +802,12 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           <div className="grid grid-cols-[1fr_auto] items-center gap-4">
             <div>
               <div className="text-[13px] font-bold">Last.fm tags</div>
-              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
                 With a Last.fm API key configured (Scrobbling), crowd tags come
                 straight from the Last.fm API and work on vanilla Navidrome.
                 Without a key it falls back to Navidrome&apos;s{' '}
                 <code>getArtistInfo2</code>, which only surfaces tags on a custom
-                Navidrome — so leave off unless you have a key or that setup.
+                Navidrome, so leave off unless you have a key or that setup.
               </div>
             </div>
             <Seg
@@ -781,7 +832,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           <div className="grid grid-cols-[1fr_auto] items-center gap-4">
             <div>
               <div className="text-[13px] font-bold">Lyrics</div>
-              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
                 Fetch a short lyric excerpt per track and fold it into the
                 embedding text. Improves propagation quality on
                 lyrically-driven tracks (folk, hip-hop, singer-songwriter);

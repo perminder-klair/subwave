@@ -5,11 +5,19 @@
   "mode": "light",
   "tokens": {
     "--bg": "#efe4cf",
+    "--surface": "#f7efdf",
+    "--surface-border": "rgba(42, 26, 16, 0.14)",
+    "--field": "color-mix(in oklab, #efe4cf 90%, #2a1a10)",
     "--ink": "#2a1a10",
     "--muted": "#8a6f55",
+    "--ink-faint": "#b09a7e",
     "--accent": "oklch(0.62 0.16 70)",
-    "--overlay": "rgba(42, 26, 16, 0.06)",
+    "--accent-2": "oklch(0.5 0.13 32)",
+    "--accent-soft": "color-mix(in oklab, oklch(0.62 0.16 70) 14%, #efe4cf)",
+    "--line": "rgba(42, 26, 16, 0.22)",
     "--soft-border": "rgba(42, 26, 16, 0.12)",
-    "--field": "color-mix(in oklab, #efe4cf 90%, #2a1a10)"
+    "--overlay": "rgba(42, 26, 16, 0.06)",
+    "--display-font": "instrument-serif",
+    "--mono-font": "courier-prime"
   }
 }

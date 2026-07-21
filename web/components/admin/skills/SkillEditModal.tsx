@@ -586,7 +586,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
 
             {/* Cooldown */}
             <div className="sw-section">
-              <div style={sectionLabel}>COOLDOWN — MINIMUM GAP BETWEEN AIRINGS</div>
+              <div style={sectionLabel}>COOLDOWN · MINIMUM GAP BETWEEN AIRINGS</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap', marginTop: 16 }}>
                 <div style={{ display: 'flex' }}>
                   {COOLDOWN_PRESETS.map((v, i) => (
@@ -620,7 +620,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
             {/* News feed — news built-in only */}
             {isNews && (
               <div className="sw-section">
-                <div style={sectionLabel}>NEWS FEED — RSS 2.0</div>
+                <div style={sectionLabel}>NEWS FEED · RSS 2.0</div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginTop: 16 }}>
                   <input
                     type="url"
@@ -664,13 +664,13 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
                 })}
               </div>
               <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 14, lineHeight: 1.6, maxWidth: '78ch' }}>
-                Switch on only what&apos;s topical for this segment. A context left dark stays out of the prompt — so the DJ stops working it into every break.
+                Switch on only what&apos;s topical for this segment. A context left dark stays out of the prompt, so the DJ stops working it into every break.
               </div>
             </div>
 
             {/* Tags — freeform organisation labels for the skill list */}
             <div className="sw-section">
-              <div style={sectionLabel}>TAGS — ORGANISE THE SKILL LIST</div>
+              <div style={sectionLabel}>TAGS · ORGANISE THE SKILL LIST</div>
               <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10, marginTop: 16 }}>
                 {fields.tags.map(t => (
                   <button
@@ -710,7 +710,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
                 </div>
               )}
               <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12 }}>
-                Freeform — tag by show, mood, type, whatever helps you filter. Tags travel with the skill when exported or shared.
+                Freeform: tag by show, mood, type, whatever helps you filter. Tags travel with the skill when exported or shared.
               </div>
             </div>
 
@@ -737,7 +737,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 14, lineHeight: 1.6, maxWidth: '78ch' }}>
                   The same assignments as each persona&apos;s Skills card, edited from the skill&apos;s side.
-                  A skill fires only for the ticked DJs — and must be enabled station-wide (the on-air toggle below).
+                  A skill fires only for the ticked DJs, and must be enabled station-wide (the on-air toggle below).
                 </div>
               </div>
             )}
@@ -745,7 +745,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
             {/* Brief */}
             <div className="sw-section">
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                <div style={sectionLabel}>THE BRIEF — WHAT THE DJ SAYS, AND WHEN TO STAY SILENT</div>
+                <div style={sectionLabel}>THE BRIEF · WHAT THE DJ SAYS, AND WHEN TO STAY SILENT</div>
                 {/* Built-ins revert to their shipped default — restores both the
                     brief (SKILL.md) and the data tool (tool.mjs) from the image. */}
                 {!custom && defaults && (
@@ -762,7 +762,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
                 )}
               </div>
               <p className="sw-dropcap" style={{ fontSize: 13, lineHeight: 1.65, color: 'var(--muted)', margin: '14px 0', maxWidth: '74ch' }}>
-                Write it the way the DJ would read it on air. One or two lines, in character — and say plainly when the segment is better left unaired.
+                Write it the way the DJ would read it on air: one or two lines, in character. Say plainly when the segment is better left unaired.
               </p>
               <textarea
                 value={fields.brief}
@@ -777,7 +777,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               </div>
               {hasTool && (
                 <div style={{ marginTop: 14, border: '1px solid color-mix(in oklab, var(--ink) 24%, transparent)', borderLeft: '3px solid var(--accent)', padding: '12px 14px', fontSize: 12, lineHeight: 1.6, color: 'var(--muted)' }}>
-                  A <code>tool.mjs</code> data fetcher is attached and runs each tick before the DJ speaks. Edit it on disk in <code>state/skills/{kind}/</code> + Rescan — it isn&apos;t editable here.{custom ? ' Deleting the skill removes it too.' : ' Use ↺ Reset to default to restore the shipped version.'}
+                  A <code>tool.mjs</code> data fetcher is attached and runs each tick before the DJ speaks. It isn&apos;t editable here; edit it on disk in <code>state/skills/{kind}/</code>, then Rescan.{custom ? ' Deleting the skill removes it too.' : ' Use ↺ Reset to default to restore the shipped version.'}
                 </div>
               )}
             </div>

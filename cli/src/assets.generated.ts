@@ -355,6 +355,13 @@ services:
       # pass. Usually unnecessary — the admin toggles drive these per request.
       - ANALYZE_AUDIO_EMBEDDING=\${ANALYZE_AUDIO_EMBEDDING:-}
       - ANALYZE_VOCAL_ACTIVITY=\${ANALYZE_VOCAL_ACTIVITY:-}
+      # Torch device for CLAP/Demucs: auto (default) / cpu / cuda. Only
+      # meaningful on the cuda analyzer flavour (docker-compose.analyzer-gpu.yml);
+      # cpu-wheel images always resolve to cpu.
+      - ANALYZE_DEVICE=\${ANALYZE_DEVICE:-}
+      # Seconds of no requests before the cuda flavour drops its models out of
+      # VRAM (default 300; 0 = never). CPU images ignore it.
+      - ANALYZE_IDLE_UNLOAD_S=\${ANALYZE_IDLE_UNLOAD_S:-}
       - CLAP_MODEL=\${CLAP_MODEL:-}
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (worker reads both; see
@@ -683,6 +690,13 @@ services:
       # admin toggles drive these per request.
       - ANALYZE_AUDIO_EMBEDDING=\${ANALYZE_AUDIO_EMBEDDING:-}
       - ANALYZE_VOCAL_ACTIVITY=\${ANALYZE_VOCAL_ACTIVITY:-}
+      # Torch device for CLAP/Demucs: auto (default) / cpu / cuda. Only
+      # meaningful on the cuda analyzer flavour (docker-compose.analyzer-gpu.yml);
+      # cpu-wheel images always resolve to cpu.
+      - ANALYZE_DEVICE=\${ANALYZE_DEVICE:-}
+      # Seconds of no requests before the cuda flavour drops its models out of
+      # VRAM (default 300; 0 = never). CPU images ignore it.
+      - ANALYZE_IDLE_UNLOAD_S=\${ANALYZE_IDLE_UNLOAD_S:-}
       - CLAP_MODEL=\${CLAP_MODEL:-}
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (worker reads both; see
@@ -955,6 +969,13 @@ services:
     environment:
       - ANALYZE_AUDIO_EMBEDDING=\${ANALYZE_AUDIO_EMBEDDING:-}
       - ANALYZE_VOCAL_ACTIVITY=\${ANALYZE_VOCAL_ACTIVITY:-}
+      # Torch device for CLAP/Demucs: auto (default) / cpu / cuda. Only
+      # meaningful on the cuda analyzer flavour (docker-compose.analyzer-gpu.yml);
+      # cpu-wheel images always resolve to cpu.
+      - ANALYZE_DEVICE=\${ANALYZE_DEVICE:-}
+      # Seconds of no requests before the cuda flavour drops its models out of
+      # VRAM (default 300; 0 = never). CPU images ignore it.
+      - ANALYZE_IDLE_UNLOAD_S=\${ANALYZE_IDLE_UNLOAD_S:-}
       - CLAP_MODEL=\${CLAP_MODEL:-}
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (worker reads both; see
@@ -1022,6 +1043,64 @@ services:
     #   runtime: nvidia
     #   environment:
     #     - TTS_HEAVY_DEVICE=cuda
+    #     - NVIDIA_VISIBLE_DEVICES=all
+    #     - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+`;
+
+// docker-compose.analyzer-gpu.yml
+export const COMPOSE_ANALYZER_GPU_YML = `# GPU opt-in overlay for the analyzer — runs CLAP + Demucs on CUDA (#1099).
+#
+# The default analyzer flavours are CPU-only on purpose: a GPU device
+# reservation can't live in the base compose because \`docker compose up\` errors
+# on a host without the NVIDIA runtime, which would break every CPU install.
+# This overlay swaps the \`analyzer\` service to the published
+# \`subwave-analyzer-cuda\` image (the heavy CLAP + Demucs stack on cu124 torch
+# wheels) and reserves the GPU. ANALYZER_HEAVY in .env is irrelevant while this
+# overlay is applied — the image is overridden outright.
+#
+# Layer it on top of your prod compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
+#
+# (BYO reverse-proxy hosts: swap docker-compose.yml for docker-compose.byo.yml.)
+#
+# Requirements: an NVIDIA GPU with the driver + NVIDIA Container Toolkit
+# installed — nothing else; the cu124 wheels vendor the CUDA runtime. The
+# worker picks the device itself (ANALYZE_DEVICE defaults to auto: cuda when
+# torch sees a GPU, else cpu with a logged warning — a misconfigured host
+# degrades, not fails). To force CPU temporarily without dropping the overlay,
+# set ANALYZE_DEVICE=cpu in your root .env (the base compose passes it through).
+#
+# VRAM etiquette: after ~5 idle minutes the worker drops its models out of
+# VRAM so a co-resident TTS/LLM gets the card back between passes
+# (ANALYZE_IDLE_UNLOAD_S in .env tunes it; 0 keeps models resident). A few
+# hundred MB of CUDA context remain until the container stops.
+services:
+  analyzer:
+    image: ghcr.io/perminder-klair/subwave-analyzer-cuda:\${SUBWAVE_VERSION:-latest}
+    # Local \`docker compose build analyzer\` with this overlay applied mirrors
+    # the published cuda image.
+    build:
+      args:
+        WITH_CLAP: 1
+        WITH_DEMUCS: 1
+        WITH_CUDA: 1
+    # Hand the GPU into the container (needs the NVIDIA Container Toolkit).
+    #
+    # The deploy.resources reservation below is the modern (CDI) path. On hosts
+    # where the NVIDIA runtime is registered in LEGACY mode, that reservation
+    # fails with "could not select device driver nvidia"; there, delete the
+    # \`deploy:\` block and instead use the legacy runtime:
+    #
+    #   runtime: nvidia
+    #   environment:
     #     - NVIDIA_VISIBLE_DEVICES=all
     #     - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     deploy:
@@ -1153,10 +1232,22 @@ SITE_URL=
 #                    # set DOCKER_DEFAULT_PLATFORM=linux/amd64 (runs emulated).
 #                    # Unraid one-click (AIO) users instead pull subwave-aio-heavy.
 #
+# NVIDIA GPU? The heavy stack can run on CUDA instead — not an .env toggle (a
+# GPU device reservation can't live here); layer the analyzer-gpu overlay:
+#   docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
+# ANALYZE_DEVICE=    # auto (default) / cpu / cuda — torch device for CLAP/Demucs;
+#                    # only meaningful on the cuda analyzer flavour
+# ANALYZE_IDLE_UNLOAD_S=  # cuda flavour: seconds of no analysis before models are
+#                         # dropped from VRAM (default 300; 0 = keep resident).
+#                         # Frees the GPU for co-resident TTS/LLM between passes.
+#
 # Runtime flags — env wins ON over the admin toggles (settings.audio.*), never
 # off. A flag with no matching backend in the image is a clean no-op.
 # ANALYZE_AUDIO_EMBEDDING=   # 1/true = fill CLAP audio vectors (needs ANALYZER_HEAVY)
 # ANALYZE_VOCAL_ACTIVITY=    # 1/true = fill Demucs vocal ranges (needs ANALYZER_HEAVY)
+# ANALYZE_QUIET_ONLY=        # 1/true = pause analysis while anyone is listening;
+#                            # resumes after settings.audio.analyzeQuietMinutes
+#                            # (default 10) with no listeners (#1099)
 #
 # Building from source instead of pulling? \`docker compose build analyzer\` with
 # ANALYZER_HEAVY=1 bakes the stack (or pass WITH_CLAP=1 / WITH_DEMUCS=1 directly).
@@ -1202,4 +1293,4 @@ SITE_URL=
 
 // cli/package.json#version (embedded so the compiled binary can self-identify
 // — used by `subwave --version`).
-export const CLI_VERSION = `0.42.1`; // x-release-please-version
+export const CLI_VERSION = `0.43.0`; // x-release-please-version

@@ -12,7 +12,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { normGenre, genreMatches, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan } from '../music/show-filter.js';
+import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan } from '../music/show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
@@ -120,6 +120,10 @@ async function refreshAutoPlaylistInner() {
   for (const g of showGenres) {
     try {
       const resolved = await subsonic.resolveGenreName(g);
+      // A resolution that silently broadened / dropped the operator's genre is
+      // the show airing something other than what was configured — say so.
+      const warning = genreResolutionWarningOnce(g, resolved);
+      if (warning) queue.log('scheduler', `Show "${show?.name ?? 'auto'}": ${warning}`);
       if (resolved) genreNames.push(resolved);
     } catch {}
   }
@@ -359,6 +363,18 @@ async function refreshAutoPlaylistInner() {
     if (allowed.length) { pool.length = 0; pool.push(...allowed); }
   }
 
+  // Loudness normalisation: the queue drain stamps liq_amplify per track, but
+  // this fallback bypasses the drain entirely — without a stamp here every
+  // coast track (queue empty: LLM down/slow, budget-hard, restart) played at
+  // unity gain, so a hot master aired loud until the next queued pick. Same
+  // resolver as the drain path (queue.applyLoudnessGain: ReplayGain tag →
+  // measured LUFS, per settings.loudness.source), so both paths level
+  // identically. Subsonic-sourced pool tracks carry the replayGain field for
+  // free; library-sourced rows recover it via a best-effort getSong (bounded
+  // by TARGET_POOL per refresh). No loudness from any source → no liq_amplify
+  // → unity, exactly as before.
+  for (const t of pool) await queue.applyLoudnessGain(t);
+
   // Stamp the station cap on every fallback entry (#447). max-track-length is a
   // pure on-air cue_out cut, not a selection filter, so over-length tracks stay
   // in the pool and simply crossfade out at the cap when the queue runs dry.
@@ -440,7 +456,16 @@ export async function runHourlyCheck() {
 // cancel / expiry airs promptly instead of waiting for the next track or hour.
 // Every step traps its own errors — node-cron doesn't catch async throws, and
 // the route callers are fire-and-forget.
-export async function rollSessionNow() {
+//
+// `airHandoff` decides whether this call site may air the mic-pass itself.
+// The hourly cron passes false: it must still roll the session and plan the
+// episode (that state has to be right whether or not a track boundary is
+// near), but airing at wall-clock :00 ducks the middle of a song. Leaving the
+// handoff pending hands it to the next track boundary, which is where it
+// belongs. The takeover routes keep the default true — an operator action is
+// explicit and should air promptly, the same reasoning that exempts the manual
+// /dj/segment runners from the budget gate.
+export async function rollSessionNow({ airHandoff = true }: { airHandoff?: boolean } = {}) {
   let ctx: Awaited<ReturnType<typeof getFullContext>> | null = null;
   try {
     ctx = await getFullContext();
@@ -448,11 +473,12 @@ export async function rollSessionNow() {
   } catch (err) {
     queue.log('error', `Session roll failed: ${err.message}`);
   }
-  // If that roll crossed a persona boundary, air the two-voice mic-pass. It
-  // does its own listener/budget gating and marks itself aired, so it's safe to
-  // call unconditionally here (whichever call site rolls the session first
-  // drives it — the others no-op). No ctx → the roll above didn't happen
-  // either; leave the handoff pending for the next call site.
+  // If that roll crossed a persona boundary, air the two-voice mic-pass — when
+  // this call site is allowed to (see `airHandoff`). It does its own
+  // listener/budget gating and marks itself aired, so it's safe to call
+  // unconditionally below (whichever call site rolls the session first drives
+  // it — the others no-op). No ctx → the roll above didn't happen either;
+  // leave the handoff pending for the next call site.
   if (!ctx) return { ctx: null, introAired: false };
   // Plan the episode BEFORE the mic-pass so a persona handoff into a
   // programme show can weave the episode angle into the greeting (the
@@ -462,10 +488,12 @@ export async function rollSessionNow() {
   } catch (err) {
     queue.log('error', `Programme plan failed: ${err.message}`);
   }
-  try {
-    await djAgent.runPersonaHandoff(queue, ctx);
-  } catch (err) {
-    queue.log('error', `Persona handoff failed: ${err.message}`);
+  if (airHandoff) {
+    try {
+      await djAgent.runPersonaHandoff(queue, ctx);
+    } catch (err) {
+      queue.log('error', `Persona handoff failed: ${err.message}`);
+    }
   }
   // Programme shows: open the episode. The intro owns the top of the show's
   // first hour, so when it airs (now, or minutes ago via the track-start
@@ -481,10 +509,16 @@ export async function rollSessionNow() {
 }
 
 async function hourlyCheck() {
-  // The top of the hour is the natural show boundary — roll the session here
-  // so a scheduled show starting/ending opens a fresh chat history even if no
-  // track happens to start right on the hour.
-  const rolled = await rollSessionNow();
+  // The top of the hour is the natural show boundary for STATE — roll the
+  // session here so a scheduled show starting/ending opens a fresh chat
+  // history even if no track happens to start right on the hour.
+  //
+  // It is NOT the natural boundary for the AIR, though: :00 lands mid-song.
+  // So don't air the mic-pass from here (issue: handoffs ducking the middle of
+  // a track). The roll leaves it pending and the next track boundary airs it —
+  // normally queue.onTrackStarted has already rolled and aired it a track
+  // earlier via its look-ahead, making this call a no-op.
+  const rolled = await rollSessionNow({ airHandoff: false });
   if (rolled.ctx && (rolled.introAired || programme.suppressHourly())) return;
   if (!shouldFire('hourly')) return;
   if (!djCallsAllowed()) return;  // nobody listening — stay on the auto playlist

@@ -237,7 +237,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
               {!canConnect
                 ? 'Enter your API key + secret above and Save first, then connect.'
                 : !authToken
-                  ? 'Opens Last.fm to grant access, then fills in your session key and switches scrobbling on — no terminal needed.'
+                  ? 'Opens Last.fm to grant access, then fills in your session key and switches scrobbling on, no terminal needed.'
                   : 'A Last.fm tab opened. Click “Yes, allow access” there, then finish here.'}
             </div>
           </div>

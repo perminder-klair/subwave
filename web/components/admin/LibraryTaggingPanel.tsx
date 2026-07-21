@@ -8,9 +8,10 @@
 // stays over there.
 
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Sparkles, Activity, Play, Square, Terminal, Loader2 } from 'lucide-react';
+import { Sparkles, Activity, Play, Square, Terminal, Loader2, Moon } from 'lucide-react';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { Btn, Eyebrow } from './ui';
+import { Input } from '../ui/input';
 import { cn } from '../../lib/cn';
 import LibraryTaggingModal from './LibraryTaggingModal';
 
@@ -210,6 +211,13 @@ interface TaggingPanelProps {
   // settings poll lands. Drives the "build WITH_DEMUCS=1" warning when on but
   // the backend can't produce vocal ranges.
   vocalEnabled: boolean | null;
+  // Quiet-times gate (#1099) — any analysis run pauses while listeners are
+  // tuned in, resuming after the idle window. Null until the settings poll.
+  quietEnabled: boolean | null;
+  quietMinutes: number | null;
+  onToggleQuiet: () => void;
+  // Persist a new idle window (minutes, 1–120) — committed on blur/Enter.
+  onQuietMinutes: (minutes: number) => void;
   // Daily-token-budget tier from /settings — null until the first slow poll lands.
   // Forwarded to the modal for its pre-run spend warning.
   budgetMode: BudgetMode | null;
@@ -357,6 +365,17 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // they stayed invisible until a repoll/refresh after enabling. Only the
   // analysis-state bits (vocalStatus) stay coverage-driven.
   const vocalOptedIn = p.vocalEnabled ?? vocalWanted;
+
+  // Quiet-times minutes input — validate + commit on blur/Enter; out-of-range
+  // or unparsable values snap back to the persisted setting rather than saving.
+  const commitQuietMinutes = (el: HTMLInputElement) => {
+    const v = Math.floor(Number(el.value));
+    if (!Number.isFinite(v) || v < 1 || v > 120) {
+      el.value = String(p.quietMinutes ?? 10);
+      return;
+    }
+    if (v !== p.quietMinutes) p.onQuietMinutes(v);
+  };
   const vocalOn = (vocalAnalyzed ?? 0) > 0;
   // Whether ANY tagging/analysis work has ever landed. On a completely virgin
   // library the honest affordance is the primary Start-tagging run, so the
@@ -852,6 +871,63 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             )}
           </div>
         )}
+        {/* Quiet-times gate (#1099) — a pass-level control, not a coverage
+            dimension: while on, ANY analysis run (auto or manual) pauses when
+            listeners are tuned in and resumes after the idle window. Engine-
+            independent, so it renders regardless of analyzer capability. */}
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-dashed border-separator-strong pt-3">
+          <span className="caption flex items-center gap-2">
+            <Moon size={13} /> Quiet times · analyse only while idle
+          </span>
+          <span className="lib-opt-tag">optional</span>
+          <span className="caption mono-num !tracking-[0.04em]">
+            {p.quietEnabled == null
+              ? '…'
+              : p.quietEnabled
+                ? `on · after ${p.quietMinutes ?? 10} min with no listeners`
+                : 'off'}
+          </span>
+          <span className="ml-auto flex items-center gap-2">
+            {p.quietEnabled ? (
+              <label className="caption flex items-center gap-1.5 !normal-case">
+                idle
+                <Input
+                  className="mono-num h-7 w-16 px-2 text-xs"
+                  type="number"
+                  min={1}
+                  max={120}
+                  step={1}
+                  key={p.quietMinutes ?? 'unset'}
+                  defaultValue={p.quietMinutes ?? 10}
+                  disabled={p.busy}
+                  aria-label="Minutes with no listeners before analysis resumes"
+                  onBlur={(e) => commitQuietMinutes(e.currentTarget)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') (e.currentTarget as HTMLInputElement).blur();
+                  }}
+                />
+                min
+              </label>
+            ) : null}
+            <Btn
+              sm
+              onClick={p.onToggleQuiet}
+              disabled={p.busy || p.quietEnabled == null}
+              title={
+                p.quietEnabled
+                  ? 'Let analysis run while listeners are tuned in (the default).'
+                  : 'Pause analysis runs while anyone is listening — frees the CPU/GPU for the live station. Applies to manual runs too; a waiting run shows “Waiting for quiet”.'
+              }
+            >
+              {p.quietEnabled ? 'Disable' : 'Enable'}
+            </Btn>
+          </span>
+          <span className="caption basis-full !tracking-[0.04em] !normal-case">
+            {p.quietEnabled
+              ? 'Analysis runs pause while anyone is listening and resume once the stream has been idle this long. Applies to manual runs too — turn this off to analyse regardless.'
+              : 'Pause analysis while anyone is listening, so bulk scans never compete with the live station for CPU/GPU. Off by default.'}
+          </span>
+        </div>
         {audioStatus === 'pending-heavy' && p.audioEnabled ? (
           <div className="border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-3 py-2 text-[11px] leading-[1.5] text-ink !normal-case">
             <b>Sounds-like is enabled — fingerprinting starts once your analyzer can do it.</b> The

@@ -97,11 +97,11 @@ export function PersonaIdentityCard({
               onChange={(e: ChangeEvent<HTMLInputElement>) => update({ language: e.target.value })}
             />
             <div className="field-hint">
-              The DJ <em>writes</em> every on-air line in this language. Leave empty for English.
-              The <em>accent</em> comes from the voice, not this field — set a voice that speaks
-              it in the Voice section below (e.g. drop a Piper voice like <code>it_IT-*.onnx</code>{' '}
-              into <code>state/voices/</code>, or use a Cloud voice). An English-only voice will
-              read this language with an English accent.
+              The DJ <em>writes</em> every on-air line in this language; leave empty for English.
+              The <em>accent</em> comes from the voice, not this field, so set a matching voice
+              in the Voice section below (e.g. a Piper <code>it_IT-*.onnx</code> in{' '}
+              <code>state/voices/</code>, or a Cloud voice). An English-only voice reads it
+              with an English accent.
               <span className="ml-2 text-muted">{persona.language.trim().length} / {LANGUAGE_MAX}</span>
             </div>
           </div>
@@ -111,7 +111,7 @@ export function PersonaIdentityCard({
         <div className="field mt-4 lg:mt-0">
           <Label>Soul</Label>
           <Textarea
-            rows={9}
+            rows={14}
             value={persona.soul}
             placeholder="e.g. warm and dry, never corny, observant, favours one good image over a list"
             onChange={(e: ChangeEvent<HTMLTextAreaElement>) => update({ soul: e.target.value })}

@@ -16,6 +16,7 @@
 import { useRef } from 'react';
 import { cn } from '../../lib/cn';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
+import { SWATCH_KEYS } from '../../lib/theme-tokens.generated';
 
 export interface PersonaOpt {
   id: string;
@@ -33,9 +34,6 @@ export interface ThemeOpt {
   tokens?: Record<string, string>;
 }
 
-// Read the palette at a glance: paper, ink, accent, overlay — same four the
-// admin theme gallery shows.
-const SWATCH_KEYS = ['--bg', '--ink', '--accent', '--overlay'] as const;
 // Fallback for the "Station default" card when the active theme's tokens aren't
 // known: paint the live CSS variables so it still shows the real palette.
 const LIVE_TOKENS: Record<string, string> = {

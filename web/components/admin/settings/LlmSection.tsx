@@ -23,6 +23,14 @@ import {
 // in ./llm/providerMeta (imported above) — shared with the ProviderSelector card
 // grid and, later, the onboarding wizard. Don't redefine them here.
 
+// Providers whose bearer token is typed inline (routed into settings.llm.keys
+// per provider, not secrets.env) and whose server URL lives in
+// providerBaseUrls. locca's URL may be blank — the controller then falls back
+// to DEFAULT_LOCCA_BASE_URL (registry.ts); mirrored here so Test connection
+// works without an explicit override.
+const INLINE_KEY_PROVIDERS = ['openai-compatible', 'locca'];
+const LOCCA_DEFAULT_BASE_URL = 'http://host.docker.internal:8080/v1';
+
 interface LlmSectionProps extends SectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   refresh: () => void;
@@ -82,16 +90,20 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   const primaryKeyVar = LLM_ENV_VARS[form.llm.provider];
   const primaryKeySet = !!(primaryKeyVar && data.env?.[primaryKeyVar]);
 
+  const primaryBaseUrl = form.llm.providerBaseUrls[form.llm.provider] ?? '';
+  const primaryTestBaseUrl =
+    primaryBaseUrl || (form.llm.provider === 'locca' ? LOCCA_DEFAULT_BASE_URL : '');
+
   const primaryDiscoveryEnabled =
     form.llm.provider === 'ollama'
     || form.llm.provider === 'locca'
-    || (form.llm.provider === 'openai-compatible' && !!form.llm.baseUrl.trim())
+    || (form.llm.provider === 'openai-compatible' && !!primaryBaseUrl.trim())
     || (form.llm.provider === 'openrouter')
     || (!!primaryKeyVar && primaryKeySet);
 
   const primaryDiscovery = useModelDiscovery({
     provider: form.llm.provider,
-    baseUrl: form.llm.baseUrl,
+    baseUrl: primaryBaseUrl,
     ollamaUrl: form.llm.ollamaUrl,
     enabled: primaryDiscoveryEnabled,
     adminFetch,
@@ -100,18 +112,22 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   const fallbackKeyVar = LLM_ENV_VARS[form.llm.fallback.provider];
   const fallbackKeySet = !!(fallbackKeyVar && data.env?.[fallbackKeyVar]);
 
+  const fallbackBaseUrl = form.llm.fallback.providerBaseUrls[form.llm.fallback.provider] ?? '';
+  const fallbackTestBaseUrl =
+    fallbackBaseUrl || (form.llm.fallback.provider === 'locca' ? LOCCA_DEFAULT_BASE_URL : '');
+
   const fallbackDiscoveryEnabled =
     form.llm.fallback.enabled && (
       form.llm.fallback.provider === 'ollama'
       || form.llm.fallback.provider === 'locca'
-      || (form.llm.fallback.provider === 'openai-compatible' && !!form.llm.fallback.baseUrl.trim())
+      || (form.llm.fallback.provider === 'openai-compatible' && !!fallbackBaseUrl.trim())
       || (form.llm.fallback.provider === 'openrouter')
       || (!!fallbackKeyVar && fallbackKeySet)
     );
 
   const fallbackDiscovery = useModelDiscovery({
     provider: form.llm.fallback.provider,
-    baseUrl: form.llm.fallback.baseUrl,
+    baseUrl: fallbackBaseUrl,
     ollamaUrl: form.llm.fallback.ollamaUrl,
     enabled: fallbackDiscoveryEnabled,
     adminFetch,
@@ -196,14 +212,16 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
   };
 
   const save = async () => {
+    const activeProvider = form.llm.provider;
+    const activeFallbackProvider = form.llm.fallback.provider;
     await saveSettings({
       llm: {
-        provider: form.llm.provider,
+        provider: activeProvider,
         model: form.llm.model,
         ollamaUrl: form.llm.ollamaUrl,
         numCtx: form.llm.numCtx,
         repeatPenalty: form.llm.repeatPenalty,
-        baseUrl: form.llm.baseUrl,
+        providerBaseUrls: form.llm.providerBaseUrls,
         reasoning: form.llm.reasoning,
         toolChoice: form.llm.toolChoice,
         pickerAgent: form.llm.pickerAgent,
@@ -215,39 +233,39 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         budgetSoftPct: form.llm.budgetSoftPct,
         exemptRequests: form.llm.exemptRequests,
         maxOutputTokens: form.llm.maxOutputTokens,
-        ...(form.llm.provider === 'openai-compatible' && compatKeyInput.trim()
+        ...(INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()
           ? { apiKey: compatKeyInput.trim() }
           : {}),
         fallback: {
           enabled: form.llm.fallback.enabled,
-          provider: form.llm.fallback.provider,
+          provider: activeFallbackProvider,
           model: form.llm.fallback.model,
           ollamaUrl: form.llm.fallback.ollamaUrl,
           numCtx: form.llm.fallback.numCtx,
           repeatPenalty: form.llm.fallback.repeatPenalty,
-          baseUrl: form.llm.fallback.baseUrl,
+          providerBaseUrls: form.llm.fallback.providerBaseUrls,
           reasoning: form.llm.fallback.reasoning,
-          ...(form.llm.fallback.provider === 'openai-compatible' && compatFallbackKeyInput.trim()
+          ...(INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()
             ? { apiKey: compatFallbackKeyInput.trim() }
             : {}),
         },
       },
     });
     // Save API keys if typed — these go to secrets.env, not settings.json
-    const primaryKeyVar = LLM_ENV_VARS[form.llm.provider];
+    const primaryKeyVar = LLM_ENV_VARS[activeProvider];
     if (primaryKeyVar && primaryKeyInput.trim()) {
       const ok = await saveKey(primaryKeyVar, primaryKeyInput);
       if (ok) { notify.ok('API key saved'); setPrimaryKeyInput(''); refresh(); }
     }
-    const fallbackKeyVar = LLM_ENV_VARS[form.llm.fallback.provider];
+    const fallbackKeyVar = LLM_ENV_VARS[activeFallbackProvider];
     if (fallbackKeyVar && fallbackKeyInput.trim()) {
       const ok = await saveKey(fallbackKeyVar, fallbackKeyInput);
       if (ok) { notify.ok('API key saved'); setFallbackKeyInput(''); refresh(); }
     }
-    if (form.llm.provider === 'openai-compatible' && compatKeyInput.trim()) {
+    if (INLINE_KEY_PROVIDERS.includes(activeProvider) && compatKeyInput.trim()) {
       setCompatKeyInput('');
     }
-    if (form.llm.fallback.provider === 'openai-compatible' && compatFallbackKeyInput.trim()) {
+    if (INLINE_KEY_PROVIDERS.includes(activeFallbackProvider) && compatFallbackKeyInput.trim()) {
       setCompatFallbackKeyInput('');
     }
   };
@@ -278,7 +296,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
               <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">
                 Routing now · {llmProviderLabel(activeProvider)}
               </span>
-              <span className="text-[11px] leading-[1.5] text-muted">
+              <span className="text-[14px] leading-[1.5] text-muted">
                 {activeModel
                   ? <>Model <code>{activeModel}</code>, every LLM call goes here. {llmDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}</>
                   : <>No model is set for this provider yet.</>}
@@ -352,9 +370,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             <div className="field">
               <Label>Server base URL</Label>
               <Input
-                value={form.llm.baseUrl}
+                value={form.llm.providerBaseUrls['openai-compatible'] ?? ''}
                 onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, llm: { ...f.llm, baseUrl: e.target.value } }))
+                  setForm(f => ({ ...f, llm: { ...f.llm, providerBaseUrls: { ...f.llm.providerBaseUrls, 'openai-compatible': e.target.value } } }))
                 }
                 placeholder="http://192.168.1.101:8080/v1"
                 className="max-w-[360px]"
@@ -368,49 +386,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             </div>
           )}
 
-          {form.llm.provider === 'openai-compatible' && (
-            <>
-              <div className="field">
-                <Label>Bearer token</Label>
-                <div className="flex items-stretch gap-2">
-                  <Input
-                    type="password"
-                    value={compatKeyInput}
-                    onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
-                    placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.['openai-compatible'] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
-                    className="max-w-[360px]"
-                  />
-                  <Btn
-                    onClick={() =>
-                      testCompatKey(
-                        compatKeyInput || '',
-                        form.llm.baseUrl,
-                        form.llm.model,
-                        setCompatKeyTesting,
-                        setCompatKeyTest,
-                      )
-                    }
-                    disabled={compatKeyTesting || !form.llm.baseUrl.trim()}
-                  >
-                    {compatKeyTesting ? 'Testing…' : 'Test connection'}
-                  </Btn>
-                </div>
-                <div className="field-hint">
-                  Optional — only needed when the server requires bearer authentication.
-                  Saved to <code>settings.json</code>, takes effect on next save.
-                </div>
-              </div>
-              {compatKeyTest && <KeyTestResult result={compatKeyTest} />}
-            </>
-          )}
-
           {form.llm.provider === 'locca' && (
             <div className="field">
               <Label>locca server base URL</Label>
               <Input
-                value={form.llm.baseUrl}
+                value={form.llm.providerBaseUrls['locca'] ?? ''}
                 onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                  setForm(f => ({ ...f, llm: { ...f.llm, baseUrl: e.target.value } }))
+                  setForm(f => ({ ...f, llm: { ...f.llm, providerBaseUrls: { ...f.llm.providerBaseUrls, locca: e.target.value } } }))
                 }
                 placeholder="http://host.docker.internal:8080/v1"
                 className="max-w-[360px]"
@@ -431,6 +413,43 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </a>
               </div>
             </div>
+          )}
+
+          {INLINE_KEY_PROVIDERS.includes(form.llm.provider) && (
+            <>
+              <div className="field">
+                <Label>Bearer token</Label>
+                <div className="flex items-stretch gap-2">
+                  <Input
+                    type="password"
+                    value={compatKeyInput}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
+                    placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.[form.llm.provider] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                    className="max-w-[360px]"
+                  />
+                  <Btn
+                    onClick={() =>
+                      testCompatKey(
+                        compatKeyInput || '',
+                        primaryTestBaseUrl,
+                        form.llm.model,
+                        setCompatKeyTesting,
+                        setCompatKeyTest,
+                      )
+                    }
+                    disabled={compatKeyTesting || !primaryTestBaseUrl.trim()}
+                  >
+                    {compatKeyTesting ? 'Testing…' : 'Test connection'}
+                  </Btn>
+                </div>
+                <div className="field-hint">
+                  Optional: only needed when the server requires bearer authentication
+                  (e.g. llama.cpp <code>--api-key</code>). Saved to{' '}
+                  <code>settings.json</code>, takes effect on next save.
+                </div>
+              </div>
+              {compatKeyTest && <KeyTestResult result={compatKeyTest} />}
+            </>
           )}
 
           {(form.llm.provider === 'openai-compatible' || form.llm.provider === 'locca') && (
@@ -455,7 +474,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 and never finish a pick. <strong>1.15</strong> is a sane floor;
                 raise toward 1.25 if a model still loops. Set <code>1.0</code> to
                 disable (e.g. a vLLM server that rejects the{' '}
-                <code>repeat_penalty</code> field — its name there is{' '}
+                <code>repeat_penalty</code> field; its name there is{' '}
                 <code>repetition_penalty</code>).
               </div>
             </div>
@@ -568,7 +587,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
               <div className="field-hint">
                 How the picker forces the model to return a structured pick.
                 <code>Required</code> (default) sends{' '}
-                <code>tool_choice:&quot;required&quot;</code> — the reliable path for
+                <code>tool_choice:&quot;required&quot;</code>, the reliable path for
                 local models. Switch to <code>Auto</code> only if your server
                 <strong> crashes</strong> on a tool call: some newer vLLM images
                 (notably Intel/XPU builds) mishandle the guided-decoding backend
@@ -586,7 +605,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <div className="grid grid-cols-[1fr_auto] items-center gap-4">
             <div>
               <div className="text-[13px] font-bold">Use a backup LLM</div>
-              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
                 When the primary host can&apos;t be reached (connection refused,
                 DNS failure, timeout, e.g. a GPU box that&apos;s powered off), the
                 call is retried once against this backup, then routes straight back
@@ -678,9 +697,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <div className="field">
                   <Label>Backup server base URL</Label>
                   <Input
-                    value={form.llm.fallback.baseUrl}
+                    value={form.llm.fallback.providerBaseUrls['openai-compatible'] ?? ''}
                     onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, baseUrl: e.target.value } } }))
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, providerBaseUrls: { ...f.llm.fallback.providerBaseUrls, 'openai-compatible': e.target.value } } } }))
                     }
                     placeholder="http://192.168.1.101:8080/v1"
                     className="max-w-[360px]"
@@ -692,7 +711,26 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 </div>
               )}
 
-              {form.llm.fallback.provider === 'openai-compatible' && (
+              {form.llm.fallback.provider === 'locca' && (
+                <div className="field">
+                  <Label>Backup locca server base URL</Label>
+                  <Input
+                    value={form.llm.fallback.providerBaseUrls['locca'] ?? ''}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, providerBaseUrls: { ...f.llm.fallback.providerBaseUrls, locca: e.target.value } } } }))
+                    }
+                    placeholder="http://host.docker.internal:8080/v1"
+                    className="max-w-[360px]"
+                  />
+                  <div className="field-hint">
+                    Leave blank to use the locca server on the host
+                    (<code>http://host.docker.internal:8080/v1</code>). Override only
+                    for a non-default port or a remote host.
+                  </div>
+                </div>
+              )}
+
+              {INLINE_KEY_PROVIDERS.includes(form.llm.fallback.provider) && (
                 <>
                   <div className="field">
                     <Label>Bearer token</Label>
@@ -701,26 +739,26 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                         type="password"
                         value={compatFallbackKeyInput}
                         onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
-                        placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.['openai-compatible'] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
+                        placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.[form.llm.fallback.provider] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
                         className="max-w-[360px]"
                       />
                       <Btn
                         onClick={() =>
                           testCompatKey(
                             compatFallbackKeyInput || '',
-                            form.llm.fallback.baseUrl,
+                            fallbackTestBaseUrl,
                             form.llm.fallback.model,
                             setCompatFallbackKeyTesting,
                             setCompatFallbackKeyTest,
                           )
                         }
-                        disabled={compatFallbackKeyTesting || !form.llm.fallback.baseUrl.trim()}
+                        disabled={compatFallbackKeyTesting || !fallbackTestBaseUrl.trim()}
                       >
                         {compatFallbackKeyTesting ? 'Testing…' : 'Test connection'}
                       </Btn>
                     </div>
                     <div className="field-hint">
-                      Optional — only needed when the backup server requires bearer
+                      Optional: only needed when the backup server requires bearer
                       authentication. Saved to <code>settings.json</code>, takes effect on
                       next save.
                     </div>
@@ -842,7 +880,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
               <div className="grid grid-cols-[1fr_auto] items-center gap-4">
                 <div>
                   <div className="text-[13px] font-bold">Backup chain-of-thought</div>
-                  <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+                  <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
                     Whether the backup model may emit a reasoning step. Off by
                     default, like the primary.
                   </div>
@@ -868,18 +906,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         <div className="grid grid-cols-[1fr_auto] items-center gap-4">
           <div>
             <div className="text-[13px] font-bold">Chain-of-thought</div>
-            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
-              When off, the picker tells the model to skip or minimize its
-              internal thinking step. Wired across providers that expose a
-              thinking knob: Ollama, openai-compatible (Qwen3), Gemini 2.5/3.x,
-              OpenAI o-series and gpt-5, Claude (adaptive thinking) and DeepSeek
-              V4. DJ scripts and structured picks are short, and an uncapped
-              thought chain just balloons latency and cost. Leave off unless
-              you&apos;re running a model that genuinely needs it. Note: on
-              Claude and DeepSeek the picker always suppresses thinking for its
-              structured/tool calls, since those APIs reject forced tool calls while
-              thinking, so there this toggle affects only the free-text DJ
-              lines.
+            <div className="field-hint mt-1 max-w-[440px]">
+              When off, thinking-capable models skip their internal reasoning
+              step (Ollama, Qwen3, Gemini, OpenAI o-series/gpt-5, Claude,
+              DeepSeek). DJ scripts and structured picks are short, so thinking
+              mostly just adds latency and cost; leave it off unless your model
+              needs it. On Claude and DeepSeek, structured/tool calls always skip
+              thinking anyway, so the toggle only affects free-text lines there.
             </div>
           </div>
           <Seg
@@ -908,12 +941,12 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             className="max-w-[200px]"
           />
           <div className="field-hint">
-            Caps the tokens the model may generate per response &mdash; the size
+            Caps the tokens the model may generate per response: the size
             of each reply, not a daily total. <strong>0 = use the built-in
             defaults</strong> (the default). Set a value (500&ndash;8000) to
             shrink it: useful on a local model with a small context window, where
-            an oversized response allowance crowds out the system prompt and tool
-            list and risks truncation &mdash; especially with reasoning off, where
+            an oversized allowance crowds out the system prompt and tool
+            list and risks truncation, especially with reasoning off, where
             replies are short anyway. Values between 1 and 499 round up to 500.
           </div>
         </div>
@@ -923,11 +956,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         <div className="grid grid-cols-[1fr_auto] items-center gap-4">
           <div>
             <div className="text-[13px] font-bold">Agentic picker</div>
-            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
-              When on, the next-track picker is a tool-using agent that explores the library
-              itself. Needs a model that handles multi-step tool calls well. Leave off for
-              small local models &mdash; skill segments (weather, news, &hellip;) then also run as a
-              single call instead of a tool loop.
+            <div className="field-hint mt-1 max-w-[440px]">
+              When on, the picker is a tool-using agent that explores the library
+              itself; needs a model good at multi-step tool calls. Leave off for
+              small local models, where skill segments (weather, news&hellip;) then
+              run as one call instead of a tool loop.
             </div>
           </div>
           <Seg
@@ -969,11 +1002,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <div className="mt-4 grid grid-cols-[1fr_auto] items-center gap-4">
             <div>
               <div className="text-[13px] font-bold">Resolve described requests via web</div>
-              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
-                When on, a listener who <em>describes</em> a track instead of naming it
-                (&ldquo;the song from the new Dune movie&rdquo;) gets it looked up on the
-                web, then matched against your library. Needs a web-search provider
-                configured under Web search; otherwise it has no effect.
+              <div className="field-hint mt-1 max-w-[440px]">
+                When on, a listener who <em>describes</em> a track instead of naming
+                it (&ldquo;the song from the new Dune movie&rdquo;) gets it looked up on
+                the web, then matched to your library. Needs a web-search provider
+                set under Web search; otherwise it does nothing.
               </div>
             </div>
             <Seg
@@ -1003,7 +1036,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             className="max-w-[200px]"
           />
           <div className="field-hint">
-            The last N <strong>distinct</strong> tracks can never be re-picked &mdash; a hard
+            The last N <strong>distinct</strong> tracks can never be re-picked: a hard
             guard on both the agent and candidate-pool pickers, on top of the time-based
             window. Auto-scales down on a small library so it never blocks everything.
             {' '}<strong>0 = off</strong>. Listener requests stay exempt. 0&ndash;290.
@@ -1015,11 +1048,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         <div className="grid grid-cols-[1fr_auto] items-center gap-4">
           <div>
             <div className="text-[13px] font-bold">Pause DJ when empty</div>
-            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
-              When on, the DJ stops making LLM calls (track picks, links, station
-              IDs, hourly checks, segments and listener requests) whenever Icecast
-              reports zero listeners. The stream keeps playing from the auto
-              playlist, and the DJ resumes the moment someone tunes back in.
+            <div className="field-hint mt-1 max-w-[440px]">
+              When on, the DJ stops all LLM calls (picks, links, IDs, hourly,
+              segments, requests) while Icecast reports zero listeners. The stream
+              keeps playing from the auto playlist, and the DJ resumes the moment
+              someone tunes in.
             </div>
           </div>
           <Seg
@@ -1051,10 +1084,10 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <div className="field-hint">
             Hard ceiling on tokens the DJ may spend per day (UTC), counted from
             the same usage stats as the token ticker. <strong>0 = unlimited</strong>
-            {' '}(the default &mdash; leave it off for a free local model). When set,
+            {' '}(the default; leave it off for a free local model). When set,
             the DJ drops to the cheap picker and mutes optional segments as it
             nears the cap, then stops calling the model entirely and coasts on the
-            auto playlist once it&rsquo;s hit &mdash; music never stops.
+            auto playlist once it&rsquo;s hit; music never stops.
           </div>
         </div>
 
@@ -1085,9 +1118,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <div className="mt-4 grid grid-cols-[1fr_auto] items-center gap-4">
             <div>
               <div className="text-[13px] font-bold">Always answer requests</div>
-              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
                 When on, listener requests are still answered by the AI DJ even
-                over the cap &mdash; a human asked, so honour it. When off,
+                over the cap; a human asked, so honour it. When off,
                 requests over the cap fall back to plain library matching like
                 everything else.
               </div>
@@ -1126,7 +1159,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             Your library is embedded with <code>{embedPinNotice.model}</code> ({embedPinNotice.dim}-d
             vectors). Embeddings were following the chat provider, so switching to{' '}
             <strong>{llmProviderLabel(embedPinNotice.newProvider)}</strong> would have changed the
-            embedding model too — and a different model produces incompatible vectors, breaking
+            embedding model too; a different model produces incompatible vectors, breaking
             library / vibe search until you re-embed every track.
             {' '}To keep search working, embeddings are now <strong>pinned</strong> to{' '}
             <code>{embedPinNotice.model}</code> (Library tagger → Embedding). Switch embeddings to

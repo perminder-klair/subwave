@@ -7,7 +7,7 @@
 // generated draft round-trips through Save without surprises.
 
 import { z } from 'zod';
-import { FREQUENCIES, SCRIPT_LENGTHS, SHOW_MOODS, SHOW_ENERGY } from '../../../settings.js';
+import { FREQUENCIES, SCRIPT_LENGTHS, SHOW_MOODS, SHOW_ENERGY, SOUL_MAX } from '../../../settings.js';
 import { THEME_TOKEN_KEYS } from '../../../themes.js';
 import { djObject } from '../strategy/object.js';
 import { buildContextLines } from './context.js';
@@ -26,7 +26,7 @@ import { buildContextLines } from './context.js';
 const PERSONA_SCHEMA = z.object({
   name: z.string().min(1).max(40).describe('the DJ name shown in the player — 1-3 words, evocative, never generic like "DJ" or "Host"').catch('New DJ'),
   tagline: z.string().max(80).describe('a short one-line descriptor shown next to the name (e.g. "atmospheric & immersive"), 0-80 chars; "" if none fits').catch(''),
-  soul: z.string().min(1).max(1000).describe('the personality/voice sketch the DJ speaks with — tone, sensibility, quirks, the kind of imagery they reach for. Aim for 1-3 sentences; max 1000 chars. Concrete and specific, not a list of adjectives.').catch(''),
+  soul: z.string().min(1).max(SOUL_MAX).describe(`the personality/voice sketch the DJ speaks with — tone, sensibility, quirks, the kind of imagery they reach for. Aim for 1-3 sentences; max ${SOUL_MAX} chars. Concrete and specific, not a list of adjectives.`).catch(''),
   frequency: z.enum(FREQUENCIES as [string, ...string[]]).describe('how chatty, ascending: silent (never talks unprompted), quiet (rarely), moderate, chatty, aggressive (talks a lot)').catch('moderate'),
   scriptLength: z.enum(SCRIPT_LENGTHS as [string, ...string[]]).describe('how long each spoken bit runs, ascending: one-liner (a single line), concise (one or two lines), extended (longer riffs), storyteller (long-form)').catch('concise'),
   djMode: z.boolean().describe('true if this host works the desk like a real radio DJ — back-announces tracks, teases what is coming, more present; false for a quieter selector').catch(true),

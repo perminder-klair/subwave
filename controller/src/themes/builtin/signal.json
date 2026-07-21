@@ -1,0 +1,24 @@
+{
+  "id": "signal",
+  "name": "Signal",
+  "description": "Concrete monochrome: a mid-gray press field, near-black ink, hairline rules, a grotesque display face over a mono technical caption. No colour, all signal.",
+  "mode": "light",
+  "tokens": {
+    "--bg": "#9c9ea1",
+    "--surface": "#a8aaad",
+    "--surface-border": "rgba(20, 20, 22, 0.20)",
+    "--field": "color-mix(in oklab, #9c9ea1 90%, #18181a)",
+    "--ink": "#18181a",
+    "--muted": "#363739",
+    "--ink-faint": "#5a5c5e",
+    "--accent": "oklch(0.24 0 0)",
+    "--accent-2": "oklch(0.5 0 0)",
+    "--accent-soft": "color-mix(in oklab, oklch(0.24 0 0) 12%, #9c9ea1)",
+    "--line": "rgba(20, 20, 22, 0.30)",
+    "--soft-border": "rgba(20, 20, 22, 0.14)",
+    "--overlay": "rgba(20, 20, 22, 0.08)",
+    "--display-font": "space-grotesk",
+    "--mono-font": "space-mono",
+    "--grain": "0.06"
+  }
+}

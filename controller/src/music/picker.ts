@@ -15,7 +15,7 @@ import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { shuffle } from '../util/shuffle.js';
 import { filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
-import { normGenre, genreMatches, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type YearRange } from './show-filter.js';
+import { normGenre, genreMatches, genreResolutionWarningOnce, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type YearRange } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
 import * as likes from '../broadcast/likes.js';
 
@@ -209,10 +209,15 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // front. A resolution failure drops that entry (never-starve: none resolving
   // means no genre filter at all, so misspelled genres never strand the show).
   const strictGenres: string[] = [];
+  // Resolutions that silently broadened / dropped what the operator configured.
+  // Surfaced through strictInfo so the caller (which owns `queue`) can log them.
+  const genreWarnings: string[] = [];
   if (strict && showFilter?.genres.length) {
     for (const g of showFilter.genres) {
       try {
         const resolved = await subsonic.resolveGenreName(g);
+        const warning = genreResolutionWarningOnce(g, resolved);
+        if (warning) genreWarnings.push(warning);
         if (resolved) strictGenres.push(resolved);
       } catch {}
     }
@@ -532,7 +537,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // Strict-genre diagnostics for the caller's never-starve log: how much of the
   // final pool actually landed in-genre. `resolved` is null when NONE of the
   // show's genres mapped to a library tag (strict silently degraded to soft).
-  let strictInfo: { requested: string; resolved: string | null; matched: number; total: number } | null = null;
+  let strictInfo: { requested: string; resolved: string | null; matched: number; total: number; warnings: string[] } | null = null;
   if (strict && showFilter?.genres.length) {
     const targets = strictGenres.map(normGenre).filter(Boolean);
     strictInfo = {
@@ -540,6 +545,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
       resolved: strictGenres.length ? strictGenres.join(', ') : null,
       matched: targets.length ? final.filter((t) => genreMatches(t, targets)).length : 0,
       total: final.length,
+      warnings: genreWarnings,
     };
   }
 
@@ -654,6 +660,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // Strict-genre visibility — make the never-starve fallback audible in the log
   // so a thin/misspelled genre isn't a silent mystery.
   if (strictInfo) {
+    for (const w of strictInfo.warnings) queue.log('picker', `Show genre: ${w}`);
     if (!strictInfo.resolved) {
       queue.log('picker', `strict genre "${strictInfo.requested}" not found in library — falling back to unfiltered pool`);
     } else if (strictInfo.matched === 0) {

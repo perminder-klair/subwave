@@ -32,7 +32,7 @@ import { speechPaceScale } from '../audio/tts.js';
 import { normalizeForSpeech } from '../audio/speech-text.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { recencyWindowsForLibrary, effectiveNoRepeatWindow } from '../music/recency.js';
-import { hasEraBound } from '../music/show-filter.js';
+import { hasEraBound, genreResolutionWarningOnce } from '../music/show-filter.js';
 import { djCallsAllowed } from './listeners.js';
 import * as likes from './likes.js';
 
@@ -228,7 +228,7 @@ export function requestSchema() {
   return z.object({
     id: z.string().describe('the exact song id returned by one of the discovery tools — never invent or compose ids'),
     ack: z.string().describe('short on-air acknowledgement of the listener, in character — max 20 words; no "thank you for listening" or self-intros'),
-    intro: z.string().describe(`a natural DJ intro for the track in the DJ voice; weave in what the listener asked for without reading the request back verbatim. ${dj.lengthPhrase('intro')}`),
+    intro: z.string().describe(`a natural DJ intro for the track in the DJ voice; weave in what the listener asked for without reading the request back verbatim. It airs over the track's opening seconds, so write it in the present tense — never "next" or "coming up". ${dj.lengthPhrase('intro')}`),
   });
 }
 
@@ -251,11 +251,12 @@ export function requestSchema() {
 // `showAt` — resolve the show brief/leans for that future moment instead of
 // now: the pick airs when the current track ends, so near a show boundary the
 // INCOMING show's rules are the ones to follow (see the look-ahead in
-// queue.onTrackStarted). The persona stays the live one — the outgoing DJ
-// tees the changeover up in their own voice; the on-air mic-pass is
-// runPersonaHandoff's job.
+// queue.onTrackStarted). The persona now comes from the session, which the
+// same look-ahead has already rolled — the mic-pass aired ahead of this pick,
+// so the incoming DJ introduces their own opener rather than the outgoing DJ
+// teeing up a show they've already signed off from.
 export function pickSystem(showAt: Date | null = null, playlistResolved = true) {
-  const persona = settings.getEffectivePersona();
+  const persona = session.onAirPersona();
   // In DJ mode, lean on the live session history: a working DJ runs threads
   // and calls back to a track or a remark from earlier in the shift. This pairs
   // with the cross-hour memory in broadcast/session.ts, which now keeps that
@@ -315,10 +316,12 @@ Finding candidates: prefer tools backed by the local library — searchLibrary, 
 
 // Exported for scripts/llm-bench, like requestSchema above.
 export function requestSystem() {
-  const persona = settings.getEffectivePersona();
+  const persona = session.onAirPersona();
   return `${settings.agentPersonaPreamble(persona)}
 
-The messages above are the live session. The final user line names the ONE listener request you are resolving now — any earlier request lines are already handled by someone else; ignore them. If the exact ask isn't in the library, pick the closest thing your tools actually returned and own the substitution in the "ack" and "intro" — never pretend it's what they asked for.${settings.agentLanguageReminder(persona, 'the "ack" and "intro" lines')}`;
+The messages above are the live session. The final user line names the ONE listener request you are resolving now — any earlier request lines are already handled by someone else; ignore them. If the exact ask isn't in the library, pick the closest thing your tools actually returned and own the substitution in the "ack" and "intro" — never pretend it's what they asked for.${settings.agentLanguageReminder(persona, 'the "ack" and "intro" lines')}
+
+The currently-playing track named in that line is there ONLY so you can interpret asks that lean on it ("something like this", "match this energy"). It is not the track your intro introduces and it may well have finished by the time the intro airs — never mention it, back-announce it, or describe the mood it set.${dj.AIR_TIME_CLAUSE}`;
 }
 
 // --- Agent circuit breaker ---------------------------------------------------
@@ -336,6 +339,11 @@ const BREAKER_FAILURES = 3;
 const BREAKER_COOLDOWN_MS = 10 * 60_000;
 let breakerFails = 0;
 let breakerOpenUntil = 0;
+
+// How long a rolled-but-unaired mic-pass stays worth airing. Mirrors
+// queue.ts's PENDING_VOICE_MAX_AGE_MS for a deferred ident, for the same
+// reason: the script bakes in a moment, so a late one misreads on air.
+const HANDOFF_MAX_AGE_MS = 20 * 60_000;
 
 function breakerOpen(): boolean {
   return Date.now() < breakerOpenUntil;
@@ -528,6 +536,9 @@ async function enqueuePick(
     intent: reason || 'ai pick',
     introScript: introLink,
     introKind: 'link',
+    // Pin the voice to whoever wrote the line — the render (drainToLiquidsoap)
+    // and the air (airIntro) both happen later and used to re-resolve it.
+    introPersona: session.onAirPersona(),
     aiPicked: true,
     linkPrev,
   });
@@ -633,7 +644,12 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   if (strict && activeShow?.genres?.length) {
     const resolved: string[] = [];
     for (const g of activeShow.genres) {
-      try { const r = await subsonic.resolveGenreName(g); if (r) resolved.push(r); } catch {}
+      try {
+        const r = await subsonic.resolveGenreName(g);
+        const warning = genreResolutionWarningOnce(g, r);
+        if (warning) queue.log('picker', `Show "${activeShow?.name ?? 'auto'}": ${warning}`);
+        if (r) resolved.push(r);
+      } catch {}
     }
     genreLock = resolved.length ? resolved : null;
   }
@@ -788,6 +804,11 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
         // set, so its clock is the link's air time — the only case the link may
         // speak it (issue #864: generation-time clocks aired a track late).
         clockIsAirTime: !!showAt,
+        // Name the speaker explicitly. Left unset, scripts.generateLink falls
+        // back to getEffectivePersona() on the wall clock, which disagrees with
+        // the session inside the look-ahead window — the incoming DJ's line
+        // written in the outgoing DJ's voice.
+        persona: session.onAirPersona(),
         recap: queue.getDjRecap(),
         recentTracks: queue.getRecentTracks(),
         recentOpeners: queue.getRecentOpeners(),
@@ -1074,6 +1095,8 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
       intent: 'listener request',
       introScript: intro || null,
       introKind: 'dj-speak',
+      // Voice the intro as whoever wrote it (see the pool-pick push above).
+      introPersona: session.onAirPersona(),
     });
     // Never-play blocklist refused the pick — throw so the route's stateless
     // fallback cascade runs; its own resolution is blocklist-filtered, so the
@@ -1134,6 +1157,19 @@ export async function runPersonaHandoff(queue: any, ctx: any): Promise<void> {
     return;
   }
 
+  // Expired: the roll happened, but no track boundary came along in time to
+  // air it. The hourly cron rolls without airing (scheduler.rollSessionNow's
+  // airHandoff=false), so with nobody listening — or across one very long
+  // track — a pending mic-pass can outlive the moment it describes. A sign-off
+  // names the show that just ended and a greeting opens the one that started;
+  // airing that an hour late is worse than staying quiet, the same call
+  // airPendingVoice makes for a stale ident.
+  if (session.handoffIsStale(pending.at, Date.now(), HANDOFF_MAX_AGE_MS)) {
+    queue.log('scheduler', `Dropped pending mic-pass from ${pending.personaName || 'the previous DJ'} — no track boundary in time`);
+    session.markHandoffAired();
+    return;
+  }
+
   // Outgoing persona comes from the roll metadata — its clock slot is already
   // over, so getEffectivePersona() no longer returns it. Incoming is the fresh
   // session's persona. A persona deleted mid-shift → nothing to voice; drop it.
@@ -1184,7 +1220,9 @@ export async function runPersonaHandoff(queue: any, ctx: any): Promise<void> {
         episodeAngle: session.getProgramme()?.plan?.angle || null,
         context: ctx, recap: queue.getDjRecap(), recentOpeners,
       });
-      await queue.announce(greeting, 'handoff', { persona: personaIn });
+      await queue.announce(greeting, 'handoff', {
+        persona: personaIn, meta: { personaId: personaIn.id, personaName: personaIn.name },
+      });
       aired = true;
     } catch (err: any) {
       queue.log('error', `Handoff greeting failed: ${err.message}`);

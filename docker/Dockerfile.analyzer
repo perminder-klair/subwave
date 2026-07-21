@@ -20,14 +20,22 @@
 # long-lived subprocess. Wire contract (/health + /analyze) is identical to
 # tts-heavy's, so the controller treats the two interchangeably.
 #
-# Two published flavours (see .github/workflows/publish-images.yml):
+# Three published flavours (see .github/workflows/publish-images.yml):
 #   * subwave-analyzer        — LEAN (default), ~1.1GB, MULTI-ARCH (amd64+arm64).
 #       librosa + ffmpeg, no torch: bpm/key/intro/loudness. WITH_CLAP=0 WITH_DEMUCS=0.
 #   * subwave-analyzer-heavy  — CLAP + Demucs baked (~1.9GB), amd64-only.
 #       "sounds-like" embeddings + vocal ranges. WITH_CLAP=1 WITH_DEMUCS=1.
+#       CPU-only torch wheels.
+#   * subwave-analyzer-cuda   — heavy + NVIDIA CUDA torch (cu124), amd64-only.
+#       Same features as -heavy with CLAP/Demucs on the GPU. WITH_CUDA=1 flips
+#       the torch wheel index; the host needs only the NVIDIA driver +
+#       nvidia-container-toolkit (cu124 wheels vendor the CUDA runtime). Run it
+#       via the docker-compose.analyzer-gpu.yml overlay, which also adds the
+#       GPU device reservation. Several GB larger than -heavy (nvidia-*-cu12).
 # Operators switch to the heavy image with `ANALYZER_HEAVY=1` in .env (the
-# compose `analyzer` service pulls `subwave-analyzer${ANALYZER_HEAVY:+-heavy}`).
-# CPU-only torch wheels — no CUDA build. Models are NOT baked: the heavy worker
+# compose `analyzer` service pulls `subwave-analyzer${ANALYZER_HEAVY:+-heavy}`);
+# the cuda image is selected by the analyzer-gpu overlay instead (a device
+# reservation can't be toggled from .env). Models are NOT baked: the heavy worker
 # downloads CLAP/Demucs weights into the HF cache (HF_HOME) the first time the
 # analyze pass needs them; the compose files mount a named volume over that
 # cache so the download survives container recreates.
@@ -60,17 +68,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # from now resolves the SAME wheels (reproducible, no surprise major bumps).
 # These pins are the single source of truth for the analyzer venv — keep them in
 # lockstep with the mirrored analyzer block in docker/Dockerfile.aio. torch/
-# torchaudio come off the CPU wheel index and are held at 2.6.0 (the version
-# chatterbox pins in docker/Dockerfile.tts-heavy; keeps one CPU-torch repo-wide).
+# torchaudio are held at 2.6.0 (the version chatterbox pins in
+# docker/Dockerfile.tts-heavy; keeps one torch VERSION repo-wide). WITH_CUDA
+# only switches which 2.6.0 build is installed: the cpu wheel index (default)
+# or cu124 (the subwave-analyzer-cuda flavour — cu124 builds of 2.6.0 vendor
+# the CUDA runtime as nvidia-*-cu12 pip deps, so the base image stays slim).
 ARG WITH_CLAP=0
 ARG WITH_DEMUCS=0
+ARG WITH_CUDA=0
 ENV ANALYZER_HF_HOME=/opt/analyzer/hf-cache
-RUN python3 -m venv /opt/analyzer/venv && \
+RUN TORCH_INDEX="https://download.pytorch.org/whl/cpu" && \
+    if [ "$WITH_CUDA" = "1" ]; then TORCH_INDEX="https://download.pytorch.org/whl/cu124"; fi && \
+    python3 -m venv /opt/analyzer/venv && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir --upgrade pip && \
     /opt/analyzer/venv/bin/pip install --no-cache-dir librosa==0.11.0 soundfile==0.14.0 pyloudnorm==0.2.0 && \
     if [ "$WITH_CLAP" = "1" ]; then \
+      # onnxruntime stays the CPU build even under WITH_CUDA: the ONNX path is
+      # the optional CLAP_MODEL_PATH custom-export route, and onnxruntime-gpu
+      # drags in a fragile CUDA/cuDNN version matrix. The default transformers
+      # path is what runs on the GPU.
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cpu \
+        --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
         torch==2.6.0 transformers==5.13.0 onnxruntime==1.27.0 && \
       /opt/analyzer/venv/bin/python -c "import torch, transformers, onnxruntime" ; \
@@ -82,7 +100,7 @@ RUN python3 -m venv /opt/analyzer/venv && \
       # purge in the SAME layer — the lean image never pays for any of this.
       apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev && \
       /opt/analyzer/venv/bin/pip install --no-cache-dir \
-        --index-url https://download.pytorch.org/whl/cpu \
+        --index-url "$TORCH_INDEX" \
         --extra-index-url https://pypi.org/simple \
         torch==2.6.0 torchaudio==2.6.0 demucs==4.0.1 diffq==0.2.4 && \
       /opt/analyzer/venv/bin/python -c "import torch, demucs, diffq" && \

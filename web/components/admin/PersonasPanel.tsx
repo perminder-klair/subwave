@@ -20,7 +20,8 @@ import type { Persona, PersonaTts, DjPromptPreset, FormState, SettingsResponse, 
 import { DIAL_NEUTRAL, PERSONA_MAX } from './personas/constants';
 import {
   clientMintId, fetchDicebearAvatar, fileToAvatarDataUrl, personaValid, promptPresetValid,
-  voiceForSave, cloudIssue,
+  voiceForSave, cloudIssue, formFromSettings, personaFromSettings, personasEqual,
+  promptLibraryFromSettings,
 } from './personas/helpers';
 import { PersonaHero } from './personas/PersonaHero';
 import { SystemPromptModal } from './personas/SystemPromptModal';
@@ -51,6 +52,9 @@ export default function PersonasPanel() {
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   // Index of the persona pending a delete-confirm (null = no dialog open).
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
+  // True while the "you have unsaved changes" dialog is up — raised when the
+  // editor is closed by ×/Escape with the focused persona still dirty.
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
   // The shipped community persona catalog (best-effort; null = still loading).
   const [community, setCommunity] = useState<CommunityPersona[] | null>(null);
   const [communityOpen, setCommunityOpen] = useState(false); // catalog modal open?
@@ -88,61 +92,8 @@ export default function PersonasPanel() {
       }
     };
     (async () => {
-      const j = await initial();
-      if (j?.values?.personas) {
-        const v = j.values;
-        const defaultPrompt = j.defaults?.djPrompt || '';
-        // Prompt-template library. An older controller (no djPrompts field)
-        // degrades to its single custom djPrompt as a lone library entry.
-        let djPrompts: DjPromptPreset[] = Array.isArray(v.djPrompts)
-          ? v.djPrompts.map(p => ({
-              id: typeof p.id === 'string' && p.id ? p.id : clientMintId('dp_'),
-              name: typeof p.name === 'string' ? p.name : '',
-              text: typeof p.text === 'string' ? p.text : '',
-            }))
-          : [];
-        let activeDjPromptId = typeof v.activeDjPromptId === 'string' ? v.activeDjPromptId : '';
-        if (!Array.isArray(v.djPrompts)) {
-          const stored = v.djPrompt || '';
-          if (stored !== '' && stored !== defaultPrompt) {
-            djPrompts = [{ id: clientMintId('dp_'), name: 'Custom prompt', text: stored }];
-            activeDjPromptId = djPrompts[0]!.id;
-          }
-        }
-        if (activeDjPromptId && !djPrompts.some(p => p.id === activeDjPromptId)) {
-          activeDjPromptId = '';
-        }
-        // Catalog of every skill. A persona with no stored `skills` (legacy /
-        // code default) is treated as running all of them.
-        const allSkills = (j.skills?.catalog || []).map(s => s.name);
-        setForm({
-          personas: (v.personas || []).map(p => ({
-            id: p.id ?? clientMintId(),
-            name: p.name ?? '',
-            tagline: p.tagline ?? '',
-            frequency: p.frequency ?? 'moderate',
-            scriptLength: p.scriptLength ?? 'concise',
-            djMode: p.djMode === true,
-            humour: typeof p.humour === 'number' ? p.humour : DIAL_NEUTRAL,
-            localColour: typeof p.localColour === 'number' ? p.localColour : DIAL_NEUTRAL,
-            warmth: typeof p.warmth === 'number' ? p.warmth : DIAL_NEUTRAL,
-            soul: p.soul ?? '',
-            language: typeof p.language === 'string' ? p.language : '',
-            avatar: typeof p.avatar === 'string' ? p.avatar : '',
-            tts: {
-              engine: p.tts?.engine ?? 'piper',
-              cloudProvider: p.tts?.cloudProvider ?? 'openai',
-              voice: p.tts?.voice ?? 'bf_isabella',
-              gainDb: typeof p.tts?.gainDb === 'number' ? p.tts.gainDb : 0,
-              speed: typeof p.tts?.speed === 'number' ? p.tts.speed : 1,
-            },
-            skills: Array.isArray(p.skills) ? p.skills : allSkills,
-          })),
-          activePersonaId: v.activePersonaId ?? '',
-          djPrompts,
-          activeDjPromptId,
-        });
-      }
+      const next = formFromSettings(await initial());
+      if (next) setForm(next);
     })();
     // The community catalog is best-effort — a failure here shouldn't blank the
     // roster, so it fetches independently and just leaves the modal empty.
@@ -217,31 +168,16 @@ export default function PersonasPanel() {
       const p = j.persona;
       if (p && typeof p.id === 'string') {
         const allSkills = (data?.skills?.catalog || []).map(s => s.name);
-        setForm(f => f ? {
-          ...f,
-          personas: [...f.personas, {
-            id: p.id as string,
-            name: p.name ?? '',
-            tagline: p.tagline ?? '',
-            frequency: p.frequency ?? 'moderate',
-            scriptLength: p.scriptLength ?? 'concise',
-            djMode: p.djMode === true,
-            humour: typeof p.humour === 'number' ? p.humour : DIAL_NEUTRAL,
-            localColour: typeof p.localColour === 'number' ? p.localColour : DIAL_NEUTRAL,
-            warmth: typeof p.warmth === 'number' ? p.warmth : DIAL_NEUTRAL,
-            soul: p.soul ?? '',
-            language: typeof p.language === 'string' ? p.language : '',
-            avatar: '',
-            tts: {
-              engine: p.tts?.engine ?? 'piper',
-              cloudProvider: p.tts?.cloudProvider ?? 'openai',
-              voice: p.tts?.voice ?? '',
-              gainDb: typeof p.tts?.gainDb === 'number' ? p.tts.gainDb : 0,
-              speed: typeof p.tts?.speed === 'number' ? p.tts.speed : 1,
-            },
-            skills: Array.isArray(p.skills) ? p.skills : allSkills,
-          }],
-        } : f);
+        // Community personas arrive with no avatar and (usually) no voice —
+        // the shared mapper's `bf_isabella` default would be wrong here, so
+        // both are pinned to the "unset" values after defaulting.
+        const mapped = personaFromSettings(p, allSkills);
+        const installed: Persona = {
+          ...mapped,
+          avatar: '',
+          tts: { ...mapped.tts, voice: p.tts?.voice ?? '' },
+        };
+        setForm(f => f ? { ...f, personas: [...f.personas, installed] } : f);
       }
       notify.ok(`Installed “${p?.name || slug}” — off air until you put them on the desk`);
     } catch (e) {
@@ -408,6 +344,82 @@ export default function PersonasPanel() {
     } finally { setBusy(false); }
   };
 
+  // ── discard ──────────────────────────────────────────────────────────────
+  // Discard has to actually revert. `form` is the only copy of the roster the
+  // UI reads, and save() POSTs the WHOLE array — so simply closing the editor
+  // left the abandoned edits live: the roster kept showing them, a half-filled
+  // new persona blocked Save for every OTHER persona ("another persona in the
+  // roster is incomplete"), and the next save of any persona shipped them to
+  // the server. Issue #1106.
+  //
+  // The revert is scoped to the persona being edited, not the whole form:
+  // Discard sits inside a single persona's editor, so it must not silently drop
+  // edits made to a different persona in the same session.
+  const discardPersona = async (): Promise<void> => {
+    // Close the editor FIRST, before the settings round-trip. The click already
+    // means "stop editing", and an editor left open across the fetch re-raises
+    // the unsaved-changes confirm: clicking inside the confirm counts as an
+    // interaction outside the editor, so its dismissable layer fires onClose
+    // while the form is still dirty.
+    setConfirmDiscard(false);
+    setEditorOpen(false);
+    setBusy(true);
+    try {
+      // Fresh server truth, falling back to the last snapshot we loaded. Never
+      // revert against nothing: `stored` missing is what marks a persona as
+      // never-saved, so an empty response would turn Discard into Delete.
+      const server = formFromSettings(await load()) ?? formFromSettings(data);
+      if (!server) {
+        notify.err('could not reach the controller — your changes were kept');
+        return;
+      }
+      setForm(f => {
+        if (!f) return f;
+        // Clamp here rather than closing over the render's `safeIdx` — the
+        // roster can shift between render and click (an install lands, say).
+        const idx = Math.min(focusIdx, f.personas.length - 1);
+        const target = f.personas[idx];
+        if (!target) return f;
+        const stored = server.personas.find(p => p.id === target.id);
+        // Never saved (added in this session) → it leaves the roster entirely.
+        const personas = stored
+          ? f.personas.map((p, i) => (i === idx ? stored : p))
+          : f.personas.filter((_, i) => i !== idx);
+        if (!personas.length) return f; // paranoia: keep at least one persona
+        // "Set as default" is a form edit too. Undo it when it pointed at the
+        // persona we just reverted, then make sure the id still resolves.
+        let activePersonaId = f.activePersonaId === target.id
+          ? server.activePersonaId
+          : f.activePersonaId;
+        if (!personas.some(p => p.id === activePersonaId)) {
+          activePersonaId = personas[0]!.id;
+        }
+        return { ...f, personas, activePersonaId };
+      });
+      // focusIdx needs no adjustment — the render clamps it to the roster
+      // length (`safeIdx`), so a removal just lands focus on the neighbour.
+      setCreatingId(null);
+      notify.ok('changes discarded');
+    } finally { setBusy(false); }
+  };
+
+  // Same contract for the prompt library: revert the templates from the server
+  // and leave the personas alone.
+  const discardPrompts = async (): Promise<void> => {
+    setShowPrompt(false);
+    setBusy(true);
+    try {
+      const j = await load();
+      if (!j) {
+        notify.err('could not reach the controller — your changes were kept');
+        return;
+      }
+      const { djPrompts, activeDjPromptId } = promptLibraryFromSettings(j);
+      setForm(f => f ? { ...f, djPrompts, activeDjPromptId } : f);
+      notify.ok('changes discarded');
+    } finally { setBusy(false); }
+  };
+
   if (err) {
     return (
       <div className="grid gap-4">
@@ -448,6 +460,13 @@ export default function PersonasPanel() {
   const onAirPersona = form.personas.find(p => p.id === onAirPersonaId) || activePersona;
   const onAirShow = data?.onAir?.show || null;
   const focusedOk = personaValid(focused);
+  // Does the focused persona differ from what the controller has stored? Drives
+  // the confirm on ×/Escape — closing the editor keeps edits pending (they are
+  // still in `form`), so leaving silently is how unsaved state used to ride
+  // along on the next save.
+  const storedFocused = data?.values?.personas?.find(p => p.id === focused.id);
+  const focusedDirty = !storedFocused
+    || !personasEqual(focused, personaFromSettings(storedFocused, (data?.skills?.catalog || []).map(s => s.name)));
   const focusedCloudIssue = cloudIssue(focused, data);
   const onAirCloudIssue = onAirPersona ? cloudIssue(onAirPersona, data) : null;
   const defaultEngine = data?.values?.tts?.defaultEngine || 'piper';
@@ -478,7 +497,7 @@ export default function PersonasPanel() {
         onPatchPreset={patchPromptPreset}
         onRemovePreset={removePromptPreset}
         onSave={async () => { if (await save()) setShowPrompt(false); }}
-        onDiscard={() => { load(); setShowPrompt(false); }}
+        onDiscard={() => { void discardPrompts(); }}
       />
 
       <PersonaRoster
@@ -592,7 +611,9 @@ export default function PersonasPanel() {
         editorRef={editorRef}
         open={editorOpen}
         isNew={focused.id === creatingId}
-        onClose={() => setEditorOpen(false)}
+        // ×/Escape with unsaved edits asks first — closing used to keep them
+        // pending in `form`, which is the other half of issue #1106.
+        onClose={() => { if (focusedDirty) setConfirmDiscard(true); else setEditorOpen(false); }}
         setPersona={setPersona}
         setPersonaTts={setPersonaTts}
         setPersonaSkills={setPersonaSkills}
@@ -607,7 +628,23 @@ export default function PersonasPanel() {
         promptOk={promptsOk}
         busy={busy}
         onSave={async () => { if (await save()) setEditorOpen(false); }}
-        onDiscard={() => { load(); setEditorOpen(false); }}
+        onDiscard={() => { void discardPersona(); }}
+      />
+
+      <V3AlertDialog
+        open={confirmDiscard}
+        onOpenChange={(o) => { if (!o) setConfirmDiscard(false); }}
+        title="Discard changes"
+        description={
+          <>
+            <b>{focused.name.trim() || 'This persona'}</b> has unsaved changes. Closing without
+            saving throws them away — nothing reaches the station until you Save persona.
+          </>
+        }
+        confirmLabel="Discard"
+        cancelLabel="Keep editing"
+        danger
+        onConfirm={() => { setConfirmDiscard(false); void discardPersona(); }}
       />
 
       <V3AlertDialog

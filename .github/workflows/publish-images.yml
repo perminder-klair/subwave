@@ -106,6 +106,18 @@ jobs:
             build_args: |
               WITH_CLAP=1
               WITH_DEMUCS=1
+          # CUDA analyzer — the heavy stack on cu124 torch wheels for NVIDIA
+          # hosts (#1099). amd64-only like heavy. Selected by the
+          # docker-compose.analyzer-gpu.yml overlay (which also adds the GPU
+          # device reservation), not by an .env var. onnxruntime stays the CPU
+          # build — only the transformers CLAP path and Demucs run on the GPU.
+          - image: subwave-analyzer-cuda
+            dockerfile: docker/Dockerfile.analyzer
+            platforms: linux/amd64
+            build_args: |
+              WITH_CLAP=1
+              WITH_DEMUCS=1
+              WITH_CUDA=1
     steps:
       # fetch-depth: 0 pulls full history + tags so `git describe` resolves the
       # version on a workflow_dispatch from a branch (a tag push already has the
