@@ -117,7 +117,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         sfx: s.sfx,
         ui: s.ui,
         scrobble: s.scrobble,
-        // listenerPassword arrives redacted ('set'/'') from getRedacted().
+        // privacy.password arrives redacted ('set'/'') from getRedacted().
         privacy: s.privacy,
       },
       defaults: {

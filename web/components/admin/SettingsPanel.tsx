@@ -18,7 +18,7 @@ import BackupPanel from './BackupPanel';
 import FestivalsSection from './FestivalsSection';
 import {
   Radio, Palette, Cpu, Mic, Library, Search, Music, AudioLines,
-  Activity, Archive, Save, AlertTriangle, CalendarDays, Lock, Heart,
+  Activity, Archive, Save, AlertTriangle, CalendarDays, Heart,
 } from 'lucide-react';
 import {
   SectionHeader, ELEVENLABS_VS_DEFAULTS,
@@ -31,7 +31,6 @@ import { LlmSection } from './settings/LlmSection';
 import { SearchSection } from './settings/SearchSection';
 import { LibrarySection } from './settings/LibrarySection';
 import { StationSection } from './settings/StationSection';
-import { PrivacySection } from './settings/PrivacySection';
 import { ThemeSection } from './settings/ThemeSection';
 import { JinglesSection } from './settings/JinglesSection';
 import { SfxSection } from './settings/SfxSection';
@@ -40,7 +39,6 @@ import { LikesSection } from './settings/LikesSection';
 
 const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
-  { id: 'privacy',  label: 'Privacy', hint: 'private player · stream password', icon: Lock },
   { id: 'theme',    label: 'Skin & Themes', hint: 'player skin · palette', icon: Palette },
   { id: 'festivals', label: 'Festivals', hint: 'calendar · mood', icon: CalendarDays },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
@@ -143,7 +141,7 @@ export default function SettingsPanel() {
         privatePlayer: v.privacy?.privatePlayer ?? false,
         listenerAuth: v.privacy?.listenerAuth ?? false,
         // Arrives as the 'set' sentinel ('' when unset) — never the secret.
-        listenerPassword: v.privacy?.listenerPassword ?? '',
+        password: v.privacy?.password ?? '',
       },
       kokoroLang: v.tts?.kokoro?.lang ?? '',
       weather: {
@@ -602,12 +600,6 @@ export default function SettingsPanel() {
             )}
             {activeSection === 'station' && (
               <StationSection
-                data={data} form={form} setForm={updateForm} busy={busy}
-                saveSettings={saveSettings}
-              />
-            )}
-            {activeSection === 'privacy' && (
-              <PrivacySection
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings}
               />

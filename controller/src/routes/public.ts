@@ -20,7 +20,8 @@ import { listCommunityPersonas } from '../personas/community.js';
 import { listCommunityShows } from '../shows/community.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
-import { listenerAuthDecision } from '../util/listener-auth.js';
+import { listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
+import { checkAuthRateLimit, clientIp } from '../middleware/ratelimit.js';
 
 export const router = express.Router();
 
@@ -467,10 +468,12 @@ router.get('/state', (req, res) => {
 // POST /listener-auth — Icecast URL-auth callback (#478). Icecast (the
 // broadcast container) POSTs a form body here on every listener connect when
 // privacy.listenerAuth is on; `icecast-auth-user: 1` + 200 admits the
-// listener, 401 rejects. The web player reuses the same endpoint to validate
-// a typed password (it checks res.ok). Deliberately NOT rate-limited per IP:
-// the caller is always Icecast, so per-IP limiting would throttle every
-// listener through one bucket. The password never gets logged.
+// listener, 401 rejects. Deliberately NOT rate-limited per IP: the caller is
+// always Icecast, so per-IP limiting would throttle every listener through
+// one bucket. The password never gets logged.
+//
+// This endpoint fails OPEN when listenerAuth is off — see listenerAuthDecision.
+// The web UI must NOT use it for that reason; it has /station-auth below.
 // ---------------------------------------------------------------------------
 router.post(
   '/listener-auth',
@@ -480,7 +483,7 @@ router.post(
     const s = settings.get();
     const allow = listenerAuthDecision({
       enabled: s?.privacy?.listenerAuth === true,
-      password: s?.privacy?.listenerPassword || '',
+      password: s?.privacy?.password || '',
       action: typeof req.body?.action === 'string' ? req.body.action : '',
       pass: typeof req.body?.pass === 'string' ? req.body.pass : '',
       mount: typeof req.body?.mount === 'string' ? req.body.mount : '',
@@ -492,6 +495,36 @@ router.post(
       res.setHeader('icecast-auth-message', 'invalid listener credentials');
       res.status(401).send('denied\n');
     }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /station-auth — the web player's gate (#478). Same shared password as
+// /listener-auth, opposite failure mode: this one fails CLOSED whenever either
+// privacy lock is on, so a private player can't be opened with a wrong
+// password just because stream auth happens to be off. Body: {password}.
+// 200 = unlock, 401 = wrong. Rate-limited (unlike the Icecast callback, the
+// caller here really is an arbitrary browser). The password is never logged.
+// ---------------------------------------------------------------------------
+router.post(
+  '/station-auth',
+  express.json({ limit: '10kb' }),
+  async (req, res) => {
+    const gate = checkAuthRateLimit(clientIp(req));
+    if (!gate.ok) {
+      res.setHeader('Retry-After', String(gate.retryAfter));
+      res.status(429).json({ ok: false, error: 'too many attempts' });
+      return;
+    }
+    await settings.load();
+    const s = settings.get();
+    const ok = stationAuthDecision({
+      privatePlayer: s?.privacy?.privatePlayer === true,
+      listenerAuth: s?.privacy?.listenerAuth === true,
+      password: s?.privacy?.password || '',
+      candidate: typeof req.body?.password === 'string' ? req.body.password : '',
+    });
+    res.status(ok ? 200 : 401).json({ ok });
   },
 );
 

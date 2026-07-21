@@ -48,3 +48,36 @@ export function checkRateLimit(ip) {
   }
   return { ok: true };
 }
+
+// ---------------------------------------------------------------------------
+// Station-password attempts (#478). A separate bucket from the /request one
+// above, deliberately shaped differently: /request throttles an expensive
+// side-effecting action, so it can afford a 20s cooldown and 8/hour. A
+// password box can't — one typo would lock a legitimate listener out for 20
+// seconds, and a household sharing a NAT would exhaust 8/hour in a sitting.
+//
+// So: no cooldown, but a hard ceiling per window. Generous enough that real
+// people never notice, tight enough that the shared password isn't
+// brute-forceable over HTTP. In-memory like the above; a controller restart
+// resets it, which is fine — an attacker gains one window, not the password.
+// ---------------------------------------------------------------------------
+const AUTH_WINDOW_MS = 15 * 60_000;
+const AUTH_WINDOW_CAP = 20;
+const authHistory = new Map(); // ip → [ts, ...]
+
+export function checkAuthRateLimit(ip) {
+  const now = Date.now();
+  const cutoff = now - AUTH_WINDOW_MS;
+  const hits = (authHistory.get(ip) || []).filter(t => t > cutoff);
+  if (hits.length >= AUTH_WINDOW_CAP) {
+    return { ok: false, retryAfter: Math.ceil((hits[0] + AUTH_WINDOW_MS - now) / 1000) };
+  }
+  hits.push(now);
+  authHistory.set(ip, hits);
+  if (authHistory.size > 2000) {
+    for (const [k, v] of authHistory) {
+      if (!v.some(t => t > cutoff)) authHistory.delete(k);
+    }
+  }
+  return { ok: true };
+}

@@ -8,7 +8,7 @@ import { Label } from '../../ui/label';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../../ui/select';
-import { Card, Btn } from '../ui';
+import { Card, Btn, Pill, Seg } from '../ui';
 import { LocationPicker, type GeocodeResult } from '../../LocationPicker';
 import {
   SectionHeader, SaveBar,
@@ -37,7 +37,16 @@ function clockPreview(timeZone: string, locale: StationLocale) {
   return fmtClockMinute(new Date(), timeZone || undefined, locale);
 }
 
+const ON_OFF = [
+  { id: 'on', label: 'On' },
+  { id: 'off', label: 'Off' },
+] as const;
+
 export function StationSection({ data, form, setForm, busy, saveSettings }: SectionProps) {
+  // Persisted state, for the "restart required" pill (shown only when the
+  // stream toggle differs from what's on file) and the password placeholder.
+  const authOnFile = data.values?.privacy?.listenerAuth === true;
+  const passwordOnFile = data.values?.privacy?.password === 'set';
   const save = () => saveSettings({
     station: form.station,
     stationDescription: form.stationDescription,
@@ -49,6 +58,13 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
       locationName: form.weather.locationName,
       onAirLocation: form.weather.onAirLocation,
       units: form.weather.units,
+    },
+    privacy: {
+      privatePlayer: form.privacy.privatePlayer,
+      listenerAuth: form.privacy.listenerAuth,
+      // 'set' is the redaction sentinel — the controller ignores it, so an
+      // untouched field never clobbers the stored password.
+      password: form.privacy.password,
     },
   });
 
@@ -287,8 +303,75 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
         </div>
       </Card>
 
+      <Card title="Privacy" sub="Keep the station off the open web — one password, two locks">
+        <div className="grid gap-3">
+          <div className="field">
+            <Label>Private player</Label>
+            <Seg
+              options={[...ON_OFF]}
+              value={form.privacy.privatePlayer ? 'on' : 'off'}
+              onChange={id =>
+                setForm(f => ({ ...f, privacy: { ...f.privacy, privatePlayer: id === 'on' } }))
+              }
+            />
+            <div className="field-hint">
+              On: <code>/</code> and <code>/listen</code> ask for the station password
+              before showing the player. Hides the interface only — the now-playing
+              JSON stays public, so pair it with the stream password to actually gate
+              the audio. Applies live.
+            </div>
+          </div>
+
+          <div className="field">
+            <div className="flex items-center gap-2">
+              <Label>Stream password</Label>
+              {form.privacy.listenerAuth !== authOnFile && (
+                <Pill tone="ink">restart required</Pill>
+              )}
+            </div>
+            <Seg
+              options={[...ON_OFF]}
+              value={form.privacy.listenerAuth ? 'on' : 'off'}
+              onChange={id =>
+                setForm(f => ({ ...f, privacy: { ...f.privacy, listenerAuth: id === 'on' } }))
+              }
+            />
+            <div className="field-hint">
+              Icecast checks every listener connect against the controller, on every
+              mount. Turning this on or off needs a mixer restart (danger zone) to
+              re-render the Icecast config; password changes apply live. While it&apos;s
+              on, the tune-in files (<code>/listen.pls</code>, <code>/listen.m3u</code>)
+              are disabled, and if the controller is down new listeners can&apos;t
+              connect (already-tuned listeners keep playing).
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>Station password</Label>
+            <Input
+              type="password"
+              value={form.privacy.password === 'set' ? '' : form.privacy.password}
+              placeholder={passwordOnFile ? '••••••••  (saved)' : 'shared station password'}
+              onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                setForm(f => ({ ...f, privacy: { ...f.privacy, password: e.target.value } }))
+              }
+              className="w-[320px]"
+            />
+            <div className="field-hint">
+              One password for everyone, used by both locks above (Icecast is
+              basic-auth only, so there are no per-user accounts). The web player asks
+              for it once and remembers it. Radio apps, VLC, Sonos and the native app
+              tune in with <code>https://listener:PASSWORD@your-station/stream.mp3</code>
+              {' '}— or append <code>?auth=PASSWORD</code> where userinfo isn&apos;t
+              supported. No whitespace; max 128 chars. Required before either lock can
+              be turned on.
+            </div>
+          </div>
+        </div>
+      </Card>
+
       <SaveBar
-        note="Station name, location, timezone, and locale apply live."
+        note="Station name, location, timezone, locale, and the private player apply live. Turning the stream password on or off needs a mixer restart."
         busy={busy}
         onSave={save}
         saveLabel="Save station settings"

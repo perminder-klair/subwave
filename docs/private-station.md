@@ -2,14 +2,18 @@
 
 SUB/WAVE is public by default: anyone with the address can open the player and
 anyone who guesses `/stream.mp3` can listen. If you'd rather keep your station
-to yourself (issue #478), **admin → Settings → Privacy** gives you two
-independent locks.
+to yourself (issue #478), **admin → Settings → Station → Privacy** gives you
+two independent locks.
+
+Both locks share **one station password**, set in the same place. Turning on
+either lock requires a password first.
 
 ## Private player (UI lock)
 
-Swaps the public web pages (`/`, `/listen`) for a minimal "this station is
-private" screen with a link to the admin sign-in. `/admin` and `/onboarding`
-keep working. Applies live — no restart.
+Swaps the public web pages (`/`, `/listen`) for a password prompt. Type the
+station password and the player appears as normal; the browser remembers it.
+`/admin` and `/onboarding` keep working (the admin console keeps its own
+separate sign-in). Applies live — no restart.
 
 This only hides the interface. The now-playing JSON endpoints stay public
 (the player and admin dash rely on them), and the stream URL still works —
@@ -18,8 +22,8 @@ for actual gating you want the stream password too.
 ## Stream password (the real boundary)
 
 Turns on Icecast listener authentication for every mount (`/stream.mp3`,
-`/stream.opus`, `/stream.flac`, `/stream.aac`). One shared password for all
-listeners — Icecast only speaks HTTP basic auth, so there are no per-user
+`/stream.opus`, `/stream.flac`, `/stream.aac`). The same station password, for
+all listeners — Icecast only speaks HTTP basic auth, so there are no per-user
 accounts (and no OIDC; that's not viable for a live audio stream).
 
 How it works under the hood: the controller writes
@@ -38,8 +42,9 @@ every listener connect, so:
 ### Tuning in with a password
 
 - **Web player** — asks for the password once and remembers it in the
-  browser. Under the hood it rides a `?auth=PASSWORD` token on the stream URL
-  (browsers can't attach basic auth to an `<audio>` element).
+  browser. If the private player is on too, the single prompt unlocks both the
+  interface and the audio. Under the hood it rides a `?auth=PASSWORD` token on
+  the stream URL (browsers can't attach basic auth to an `<audio>` element).
 - **Radio apps / VLC / Sonos / hardware** — use a credentialed URL:
   `https://listener:PASSWORD@your-station.example/stream.mp3`
   (any username works; only the password is checked).
@@ -54,8 +59,8 @@ would otherwise hand out credential-less URLs that no longer play.
 
 ## Known limits
 
-- One shared password; rotating it logs every listener out (web listeners get
-  re-prompted automatically).
+- One shared password for both locks; rotating it logs every listener out
+  (web listeners get re-prompted automatically).
 - Metadata endpoints (`/api/now-playing`, `/api/state`) stay public.
 - The landing broadsheet (`/landing`) is not gated — it exists to market a
   station, which is at odds with private mode; leave `SUBWAVE_HOMEPAGE=player`

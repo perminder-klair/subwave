@@ -55,3 +55,25 @@ export function listenerAuthDecision(opts: {
   if (safeEqual(opts.pass || '', opts.password)) return true;
   return safeEqual(mountAuthToken(opts.mount || ''), opts.password);
 }
+
+// The web UI's gate. Deliberately NOT listenerAuthDecision: that one fails
+// OPEN when stream auth is off, which is right for Icecast (it covers the
+// restart window where icecast.xml still has the auth blocks but the setting
+// is already off) and catastrophic here — with privatePlayer on and
+// listenerAuth off, `enabled` is false and every password would be accepted,
+// making the player gate decorative.
+//
+// So this fails CLOSED: a lock that is on only opens for the real password.
+export function stationAuthDecision(opts: {
+  privatePlayer: boolean;
+  listenerAuth: boolean;
+  password: string;
+  candidate?: string;
+}): boolean {
+  // Neither lock engaged — nothing to unlock, so nothing to reject.
+  if (!opts.privatePlayer && !opts.listenerAuth) return true;
+  // A lock is on but no password is on file (settings validation prevents
+  // this) — fail closed rather than hand out the station.
+  if (!opts.password) return false;
+  return safeEqual(opts.candidate || '', opts.password);
+}

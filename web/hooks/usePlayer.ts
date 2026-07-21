@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { isIOSDevice } from '@/lib/platform';
 import { useStationOrigin } from '@/lib/stationOrigin';
-import { withStreamAuth } from '@/lib/streamAuth';
+import { withStreamAuth } from '@/lib/stationAuth';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
 // We pick MP3 vs Ogg-Opus on the client via canPlayType — Opus is roughly
