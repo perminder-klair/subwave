@@ -9,11 +9,8 @@ import { useLiteMode } from '../hooks/useLiteMode';
 import { useThemeSwitcher } from './ThemeBootstrap';
 import { useSkinSelection } from './skins/SkinContext';
 import { useChannelList } from '@/lib/channels';
+import { SWATCH_KEYS } from '@/lib/theme-tokens.generated';
 
-/** The columns shown in each card's swatch — paper, ink, accent, overlay.
- *  Matches admin Settings → Theme so the same vocabulary travels with the
- *  user from operator picker to listener picker. */
-const SWATCH_KEYS = ['--bg', '--ink', '--accent', '--overlay'] as const;
 
 interface SwatchProps {
   color: string | undefined;

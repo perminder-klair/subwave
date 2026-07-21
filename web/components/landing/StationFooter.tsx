@@ -168,7 +168,7 @@ export default function StationFooter({ djName }: { djName?: string }) {
       </div>
 
       <div
-        className="py-3 text-center font-mono text-[11px] tracking-[0.4em] text-muted select-none"
+        className="py-3 text-center font-mono text-[11px] tracking-[0.4em] text-ink-faint select-none"
         title="End of copy — the old press-room sign-off"
         aria-hidden="true"
       >

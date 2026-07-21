@@ -33,6 +33,7 @@ import {
 import { SkinSelectionProvider, type SkinSelection } from '@/components/skins/SkinContext';
 import type { SkinComponent } from '@/components/skins/types';
 import { PlayerCoreProvider, usePlayerAudio, usePlayerFeed } from './PlayerCore';
+import { StationPasswordGate, useStationAuth } from './StationGate';
 
 export interface PlayerShellProps {
   /** Explicit skin — bypasses registry resolution (previews, tests). */
@@ -149,6 +150,14 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
   // here in the shell — playback never hiccups when the face changes.
   const Skin = skin ?? SKIN_COMPONENTS[effectiveId] ?? DEFAULT_SKIN_COMPONENT;
 
+  // Private-station gate (#478). `hideFace` stays true until the password is
+  // accepted, so a private station never mounts the skin or the <audio>
+  // element for someone who hasn't unlocked it. 'checking' counts as hidden:
+  // revealing the player while a stored token is still being validated would
+  // flash the whole face at a locked-out visitor.
+  const auth = useStationAuth();
+  const hideFace = state.privacy?.privatePlayer === true && auth.phase !== 'ok';
+
   return (
     <SkinSelectionProvider value={selection}>
       <div
@@ -160,8 +169,21 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
           'inset-0 overflow-hidden bg-bg text-ink',
         )}
       >
-        <audio ref={audioRef} crossOrigin="anonymous" preload="auto" />
-        <Skin contained={contained} portalNode={portalNode} />
+        {hideFace ? (
+          // Private station (#478): the whole face stands down — no skin, no
+          // audio element, just the password prompt. Live-flipped by the
+          // /state poll like themes/skins. Unlocking (or an already-valid
+          // stored token) drops straight through to the branch below.
+          <StationPasswordGate phase={auth.phase} unlock={auth.unlock} solid />
+        ) : (
+          <>
+            <audio ref={audioRef} crossOrigin="anonymous" preload="auto" />
+            <Skin contained={contained} portalNode={portalNode} />
+            {/* Same prompt, overlaid, when only the stream is locked —
+                shell-level so every skin gets it without changes. */}
+            <StationPasswordGate phase={auth.phase} unlock={auth.unlock} solid={false} />
+          </>
+        )}
         {!contained && <Toaster />}
       </div>
     </SkinSelectionProvider>

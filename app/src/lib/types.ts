@@ -126,6 +126,11 @@ export interface StreamInfo {
   opusEnabled?: boolean;
   flacEnabled?: boolean;
   aacEnabled?: boolean;
+  /** Seconds of already-broadcast audio Icecast bursts on connect, so this is
+   *  how far behind the live edge the listener sits for the whole connection.
+   *  Every timestamp the controller publishes is live-edge; subtract this to
+   *  render listener-time (issue #1114). */
+  bufferSeconds?: number | null;
 }
 
 /** `/now-playing` response. */
@@ -214,6 +219,11 @@ export interface StationState {
   upcoming: QueueEntry[];
   history: QueueEntry[];
   djLog: DjLogEntry[];
+  /** The track the controller has on air right now, stamped at the LIVE EDGE.
+   *  The authoritative start time, as opposed to "when this client first saw
+   *  the track" — a backgrounded app or a missed poll makes the latter drift
+   *  minutes. Shifted into listener-time before display (issue #1114). */
+  current?: { title?: string; artist?: string; startedAt?: string } | null;
   timezone?: string;
   locale?: StationLocale;
   /** Station-wide listener-player UI toggles (from GET /state). */

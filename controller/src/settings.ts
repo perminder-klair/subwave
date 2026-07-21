@@ -726,6 +726,16 @@ const SKILL_SLUG_RE = /^[a-z0-9-]{1,40}$/;
 // Exported for the community-persona install route (routes/personas.ts), which
 // gives a friendly 409 before settings.update() would throw on an oversize roster.
 export const PERSONA_LIMIT = 48;
+// Persona `soul` — the character sketch injected into EVERY free-text DJ
+// generation call, so each char is a recurring per-call token cost. Bounded
+// rather than unbounded for that reason alone; nothing structural depends on
+// the number. Keep in lockstep with SOUL_MAX in
+// web/components/admin/personas/constants.ts and the AI-fill draft schema in
+// llm/internal/prompts/generate.ts. Consumers that inline a soul somewhere it
+// is NOT the speaking seat (the multi-voice cast blocks, the cloud-TTS
+// delivery hint) clamp it further at their own boundary — see soulBrief() in
+// llm/internal/core/pure.ts.
+export const SOUL_MAX = 2000;
 export const SHOWS_LIMIT = 64;
 // Guest co-hosts per show. Small on purpose: each guest is a full persona the
 // speaker rotation can hand a segment to, and past ~3 the host stops sounding
@@ -1163,6 +1173,20 @@ const DEFAULTS = {
     aacEnabled: false,
     aacBitrate: 192,
     bitrate: 192,
+    // Seconds of already-broadcast audio Icecast bursts to a client on
+    // connect (<burst-size>), so a cellular dead zone drains the buffer
+    // instead of stalling (issue #993). Specified in SECONDS, not bytes:
+    // burst-size is a byte count, so a fixed one silently stretches at low
+    // bitrates — the old flat 512 KB was ~22s at 192k but ~66s at 64k. The
+    // broadcast entrypoint converts this to bytes using stream.bitrate, so
+    // the depth an operator picks is the depth every bitrate gets.
+    //
+    // This is also exactly how far behind the live edge every listener sits
+    // for their whole connection, which is why /now-playing publishes it as
+    // stream.bufferSeconds — players subtract it to line the now-playing
+    // title and elapsed clock up with the audio actually in someone's ears
+    // rather than the live edge (issue #1114).
+    bufferSeconds: 22,
     // ICY (out-of-band) per-track titles on the Ogg mounts (/stream.opus +
     // /stream.flac). ON by default: most internet-radio clients (Ferrosonic,
     // Cast receivers, Symfonium) read the in-band Ogg comment only once at
@@ -1258,6 +1282,15 @@ const DEFAULTS = {
   // OFF drops the takeover and listeners start via the skin's own play button
   // (browsers still can't autoplay, so a tap is always required somewhere).
   ui: { boothBuddy: false, skin: 'classic', tuneInOverlay: true },
+  // Private-station controls (issue #478). Two independent locks over ONE
+  // shared `password`. `privatePlayer` gates the public web pages behind a
+  // password prompt — UI-level only, applies live. `listenerAuth` puts
+  // Icecast listener auth on every stream mount via URL auth calling back
+  // into POST /listener-auth; no per-user accounts (Icecast can only do basic
+  // auth). Toggling listenerAuth re-renders icecast.xml, so it needs a mixer
+  // restart; password changes apply live (the controller validates every
+  // connect). Either lock being on requires a password — see update().
+  privacy: { privatePlayer: false, listenerAuth: false, password: '' },
   // Global DJ prompt template. '' means "use DEFAULT_DJ_PROMPT_TEMPLATE".
   // Always the RESOLVED text of the active djPrompts entry — kept so
   // renderDjPrompt() (and an older controller sharing the same settings.json)
@@ -1599,6 +1632,15 @@ const DEFAULTS = {
     // request is a clean no-op. ANALYZE_VOCAL_ACTIVITY=1 also enables it
     // regardless of this toggle (env wins on, never off). Expensive — opt-in.
     vocalActivity: false,
+    // Quiet-times gate (#1099): pause the analysis pass while anyone is
+    // listening, resuming once the stream has been listener-free for
+    // analyzeQuietMinutes. Checked between tracks inside runAnalysisPass, so
+    // it covers both the server-spawned tagger child and `npm run analyze`,
+    // and applies to manual "Analyse now" runs too (a pass outlives the
+    // click; the bypass is turning this off). ANALYZE_QUIET_ONLY=1 also
+    // enables it (env wins on, never off), mirroring the toggles above.
+    analyzeQuietOnly: false,
+    analyzeQuietMinutes: 10,
   },
   // Sound-effects library. When disabled, the segment-director agent is never
   // shown the effect catalogue, so it stops garnishing spoken breaks with
@@ -1752,7 +1794,7 @@ function normalizePersona(raw: unknown) {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
   const name = typeof r.name === 'string' ? r.name.trim().slice(0, 40) : '';
-  const soul = typeof r.soul === 'string' ? r.soul.trim().slice(0, 1000) : '';
+  const soul = typeof r.soul === 'string' ? r.soul.trim().slice(0, SOUL_MAX) : '';
   if (!name || !soul) return null;
   // Avatar — stored as a bare basename. Reset to '' if the persisted value
   // doesn't match the strict basename shape, so a hand-edited settings.json
@@ -2182,6 +2224,20 @@ export async function load() {
           ? stored.ui.tuneInOverlay
           : DEFAULTS.ui.tuneInOverlay,
     },
+    privacy: {
+      privatePlayer:
+        typeof stored.privacy?.privatePlayer === 'boolean'
+          ? stored.privacy.privatePlayer
+          : DEFAULTS.privacy.privatePlayer,
+      listenerAuth:
+        typeof stored.privacy?.listenerAuth === 'boolean'
+          ? stored.privacy.listenerAuth
+          : DEFAULTS.privacy.listenerAuth,
+      password:
+        typeof stored.privacy?.password === 'string'
+          ? stored.privacy.password
+          : DEFAULTS.privacy.password,
+    },
     personas,
     activePersonaId,
     shows,
@@ -2455,6 +2511,13 @@ export async function load() {
     audio: {
       embeddings: typeof stored.audio?.embeddings === 'boolean' ? stored.audio.embeddings : DEFAULTS.audio.embeddings,
       vocalActivity: typeof stored.audio?.vocalActivity === 'boolean' ? stored.audio.vocalActivity : DEFAULTS.audio.vocalActivity,
+      analyzeQuietOnly:
+        typeof stored.audio?.analyzeQuietOnly === 'boolean'
+          ? stored.audio.analyzeQuietOnly
+          : DEFAULTS.audio.analyzeQuietOnly,
+      analyzeQuietMinutes: Number.isFinite(stored.audio?.analyzeQuietMinutes)
+        ? Math.max(1, Math.min(120, Math.floor(stored.audio.analyzeQuietMinutes)))
+        : DEFAULTS.audio.analyzeQuietMinutes,
     },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
@@ -2616,6 +2679,9 @@ export function getRedacted() {
   if (clone.scrobble?.listenbrainz) {
     clone.scrobble.listenbrainz.userToken = s.scrobble?.listenbrainz?.userToken ? 'set' : '';
   }
+  if (clone.privacy) {
+    clone.privacy.password = s.privacy?.password ? 'set' : '';
+  }
   return clone;
 }
 
@@ -2730,8 +2796,8 @@ export function validatePersonasStrict(raw) {
     if (name.length < 1 || name.length > 40)
       throw new Error(`personas[${i}].name must be 1-40 chars`);
     const soul = String(item.soul ?? '').trim();
-    if (soul.length < 1 || soul.length > 1000)
-      throw new Error(`personas[${i}].soul must be 1-1000 chars`);
+    if (soul.length < 1 || soul.length > SOUL_MAX)
+      throw new Error(`personas[${i}].soul must be 1-${SOUL_MAX} chars`);
     const tagline = String(item.tagline ?? '').trim();
     if (tagline.length > 80) throw new Error(`personas[${i}].tagline must be 0-80 chars`);
     // language — optional free text ("Turkish", "Türkçe", …). Absent/empty →
@@ -3440,6 +3506,29 @@ export async function update(patch) {
         restart = true;
       }
     }
+    // Listener-side buffer depth (Icecast <burst-size>, in seconds). Deep =
+    // survives a dead zone but sits further behind the live edge; shallow =
+    // tighter sync, likelier to stall. 0 disables burst-on-connect entirely.
+    // Capped at 60s: past that a listener is a full minute behind and
+    // <queue-size> (which must comfortably exceed the burst) gets unreasonable.
+    //
+    // restart=true is load-bearing here and NOT just a mixer concern: burst
+    // lives in icecast.xml, which is rendered once by the broadcast entrypoint
+    // at container boot. It applies anyway because liquidsoap and icecast
+    // share a container and the entrypoint `wait -n`s on both — the telnet
+    // restart shuts liquidsoap down, the container bounces, and the entrypoint
+    // re-renders the template on the way back up.
+    if (st.bufferSeconds !== undefined) {
+      const v = Number(st.bufferSeconds);
+      if (!Number.isFinite(v) || v < 0 || v > 60) {
+        throw new Error('stream.bufferSeconds must be a number between 0 and 60');
+      }
+      const rounded = Math.round(v);
+      if (rounded !== cur.stream.bufferSeconds) {
+        next.stream.bufferSeconds = rounded;
+        restart = true;
+      }
+    }
     // Idle pause is enforced controller-side over telnet (broadcast/
     // stream-idle.ts) — no Liquidsoap boot file, no mixer restart. Turning it
     // off mid-idle is handled by the monitor's next tick, which resumes the
@@ -4070,6 +4159,16 @@ export async function update(patch) {
     if (au.vocalActivity !== undefined) {
       next.audio.vocalActivity = !!au.vocalActivity;
     }
+    if (au.analyzeQuietOnly !== undefined) {
+      next.audio.analyzeQuietOnly = !!au.analyzeQuietOnly;
+    }
+    if (au.analyzeQuietMinutes !== undefined) {
+      const v = Math.floor(Number(au.analyzeQuietMinutes));
+      if (!Number.isFinite(v) || v < 1 || v > 120) {
+        throw new Error('audio.analyzeQuietMinutes must be between 1 and 120');
+      }
+      next.audio.analyzeQuietMinutes = v;
+    }
   }
   if ('sfx' in patch) {
     const sx = patch.sfx || {};
@@ -4092,6 +4191,47 @@ export async function update(patch) {
     }
     if (ui.tuneInOverlay !== undefined) {
       next.ui.tuneInOverlay = !!ui.tuneInOverlay;
+    }
+  }
+  if ('privacy' in patch) {
+    const pv = patch.privacy || {};
+    if (pv.privatePlayer !== undefined) {
+      next.privacy.privatePlayer = !!pv.privatePlayer;
+    }
+    // 'set' is the redaction sentinel from getRedacted() — ignore it so a
+    // round-tripped form doesn't overwrite the stored secret.
+    if (pv.password !== undefined && pv.password !== 'set') {
+      const v = String(pv.password ?? '').trim();
+      if (v.length > 128) {
+        throw new Error('privacy.password must be 0-128 chars');
+      }
+      // The password travels in basic-auth userinfo and ?auth= query strings;
+      // whitespace/control chars only cause client-side grief there.
+      if (/[\s]/.test(v)) {
+        throw new Error('privacy.password must not contain whitespace');
+      }
+      next.privacy.password = v;
+    }
+    if (pv.listenerAuth !== undefined) {
+      const v = !!pv.listenerAuth;
+      if (v !== cur.privacy.listenerAuth) {
+        // Flipping the toggle adds/removes the <mount> auth blocks in
+        // icecast.xml, which only re-render on a broadcast restart. Password
+        // changes don't need this — URL auth validates live.
+        next.privacy.listenerAuth = v;
+        restart = true;
+      }
+    }
+    // Whatever combination the patch produced, never persist a lock that is on
+    // with no password behind it. For the stream that would fail every
+    // listener closed at /listener-auth; for the player it would render a
+    // prompt nobody can satisfy, locking the operator out of their own station
+    // with no in-band way back in.
+    if (
+      (next.privacy.privatePlayer || next.privacy.listenerAuth) &&
+      !next.privacy.password
+    ) {
+      throw new Error('set a station password before turning on a privacy lock');
     }
   }
   if ('webhooks' in patch) {
@@ -4600,7 +4740,16 @@ const LIQ_OGG_ICY_METADATA_PATH = `${STATE_DIR}/liquidsoap_ogg_icy_metadata.txt`
 const LIQ_AAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_aac_enabled.txt`;
 const LIQ_AAC_BITRATE_PATH = `${STATE_DIR}/liquidsoap_aac_bitrate.txt`;
 const LIQ_STREAM_BITRATE_PATH = `${STATE_DIR}/liquidsoap_stream_bitrate.txt`;
+// Read by docker/broadcast-entrypoint.sh (not radio.liq) to size Icecast's
+// <burst-size>. Same liquidsoap_*.txt convention because it shares their
+// lifecycle exactly: written on save, consumed once at broadcast boot.
+const LIQ_STREAM_BUFFER_SECONDS_PATH = `${STATE_DIR}/liquidsoap_stream_buffer_seconds.txt`;
 const LIQ_STATION_NAME_PATH = `${STATE_DIR}/liquidsoap_station_name.txt`;
+// Read by the BROADCAST ENTRYPOINT (docker/broadcast-entrypoint.sh + the AIO
+// supervisor), not liquidsoap: only the literal value 'true' makes the
+// entrypoint render the per-mount <authentication type="url"> blocks into
+// icecast.xml on the next broadcast restart.
+const ICECAST_LISTENER_AUTH_PATH = `${STATE_DIR}/icecast_listener_auth.txt`;
 
 export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_JINGLE_RATIO_PATH, String(s.jingleRatio));
@@ -4614,7 +4763,12 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_AAC_ENABLED_PATH, s.stream.aacEnabled ? 'true' : 'false');
   await writeFile(LIQ_AAC_BITRATE_PATH, String(s.stream.aacBitrate));
   await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));
+  await writeFile(LIQ_STREAM_BUFFER_SECONDS_PATH, String(s.stream.bufferSeconds));
   await writeFile(LIQ_STATION_NAME_PATH, s.station || DEFAULTS.station);
+  await writeFile(
+    ICECAST_LISTENER_AUTH_PATH,
+    s.privacy?.listenerAuth ? 'true' : 'false',
+  );
 }
 
 // Called from server.js startup so the files exist before Liquidsoap reads
@@ -4627,7 +4781,9 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(LIQ_ARCHIVE_ENABLED_PATH) ||
     !existsSync(LIQ_ARCHIVE_BITRATE_PATH) ||
     !existsSync(LIQ_OPUS_ENABLED_PATH) ||
-    !existsSync(LIQ_STREAM_BITRATE_PATH)
+    !existsSync(LIQ_STREAM_BITRATE_PATH) ||
+    !existsSync(LIQ_STREAM_BUFFER_SECONDS_PATH) ||
+    !existsSync(ICECAST_LISTENER_AUTH_PATH)
   ) {
     await writeLiquidsoapSettings(s);
   }

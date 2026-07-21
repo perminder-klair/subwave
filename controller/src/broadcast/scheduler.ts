@@ -12,7 +12,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
-import { normGenre, genreMatches, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan } from '../music/show-filter.js';
+import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan } from '../music/show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/show-playlist.js';
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
@@ -160,6 +160,10 @@ async function refreshAutoPlaylistInner(opts: RefreshOpts = {}) {
   for (const g of showGenres) {
     try {
       const resolved = await subsonic.resolveGenreName(g);
+      // A resolution that silently broadened / dropped the operator's genre is
+      // the show airing something other than what was configured — say so.
+      const warning = genreResolutionWarningOnce(g, resolved);
+      if (warning) queue.log('scheduler', `Show "${show?.name ?? 'auto'}": ${warning}`);
       if (resolved) genreNames.push(resolved);
     } catch {}
   }

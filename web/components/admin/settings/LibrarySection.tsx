@@ -300,7 +300,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         <div className="grid grid-cols-[1fr_auto] items-center gap-4">
           <div>
             <div className="text-[13px] font-bold">Embedding-propagated tagging</div>
-            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+            <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
               When off, the bulk tagger refuses to start. Single-track retags
               from the Library admin page still work (they bypass the
               embedding pipeline).
@@ -354,7 +354,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             <div className="flex items-start gap-x-2 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] p-3 text-[11px] leading-[1.5] text-ink">
               <span className="flex-none text-[12px] leading-[1.5] text-[var(--accent)]">✓</span>
               <span className="min-w-0">
-                Ready to tag with defaults — <code>{llmProviderLabel(effectiveProvider)}</code>
+                Ready to tag with defaults: <code>{llmProviderLabel(effectiveProvider)}</code>
                 {!e.provider && <span className="text-muted"> (your DJ&rsquo;s provider)</span>}
                 {' · '}<code>{effectiveModel}</code>
                 {effectiveDim != null && <span className="text-muted"> · {effectiveDim}-d</span>}.
@@ -387,8 +387,8 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 with a different model (a full re-embed on change). */}
             {embeddedMeta && embeddedMeta.model !== effectiveModel && (
               <div className="field-hint">
-                Your library is currently embedded with{' '}
-                <code>{embeddedMeta.model}</code> ({embeddedMeta.dim}-d) — changing
+                Your library is embedded with{' '}
+                <code>{embeddedMeta.model}</code> ({embeddedMeta.dim}-d); changing
                 the model means a full re-embed.
               </div>
             )}
@@ -404,7 +404,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                     {llmProviderLabel(effectiveProvider)} can’t make embeddings
                   </span>
                 </div>
-                <p className="mt-2 text-[11px] leading-[1.55] text-muted">
+                <p className="mt-2 text-[14px] leading-[1.55] text-muted">
                   {e.provider ? (
                     <><code>{llmProviderLabel(effectiveProvider)}</code> is a chat-only provider, with no embeddings endpoint, so the tagger can’t use it.</>
                   ) : (
@@ -540,7 +540,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 className="max-w-[360px]"
               />
               <div className="field-hint">
-                Optional — only needed when the embedding server requires bearer
+                Optional. Only needed when the embedding server requires bearer
                 authentication. Saved to <code>settings.json</code>, takes effect
                 on next save.
               </div>
@@ -584,7 +584,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                   className="max-w-[360px]"
                 />
                 <div className="field-hint">
-                  Optional. Embeddings reuse your DJ&rsquo;s <code>{embedKeyVar}</code> automatically —
+                  Optional. Embeddings reuse your DJ&rsquo;s <code>{embedKeyVar}</code> automatically;
                   only set this to run embeddings on a different provider than your DJ.
                   Stored in <code>state/secrets.env</code>.
                 </div>
@@ -662,7 +662,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
               How many tracks the LLM tags by hand before propagation kicks in.
               <code> 0</code> = auto: <code>~4% of the library</code> (floored at
               200, capped at 2500). For a 5k library that&apos;s 200; for 50k,
-              2000. A denser seed set is often net-cheaper — more anchors means a
+              2000. A denser seed set is often net-cheaper: more anchors means a
               smaller (expensive) active-learning residual. CLI{' '}
               <code>--seeds N</code> overrides this.
             </div>
@@ -689,7 +689,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             />
             <div className="field-hint">
               How many nearest tagged neighbours vote on an untagged track&apos;s
-              moods + energy. Default <code>10</code> — a broader, steadier vote
+              moods + energy. Default <code>10</code>, a broader, steadier vote
               than the old 5. Very high values dilute the vote on a sparsely-tagged
               library (coverage below counts against confidence).
             </div>
@@ -738,7 +738,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             <div className="field-hint">
               Minimum confidence for a propagated tag to be accepted; below it the
               track is queued for (pricier) LLM tagging. Confidence is{' '}
-              <code>topSim × coverage</code> — the nearest tagged neighbour&apos;s
+              <code>topSim × coverage</code>: the nearest tagged neighbour&apos;s
               similarity times the fraction of neighbours that were tagged. Being a
               product of two sub-1 numbers it compounds fast, so the default is{' '}
               <code>0.35</code>, not 0.6 (0.6 rejected even strong matches and sent
@@ -764,7 +764,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             />
             <div className="field-hint">
               Lets tracks with a &ldquo;sounds-like&rdquo; (CLAP) vector pull
-              audio-similar neighbours into the mood vote, scaled by this weight —
+              audio-similar neighbours into the mood vote, scaled by this weight;
               sound is the stronger mood signal for instrumentals and tracks with
               thin metadata. <code>0</code> = text-only vote; <code>1</code> =
               trust audio similarity as much as text. Default <code>0.5</code>.
@@ -802,12 +802,12 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           <div className="grid grid-cols-[1fr_auto] items-center gap-4">
             <div>
               <div className="text-[13px] font-bold">Last.fm tags</div>
-              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
                 With a Last.fm API key configured (Scrobbling), crowd tags come
                 straight from the Last.fm API and work on vanilla Navidrome.
                 Without a key it falls back to Navidrome&apos;s{' '}
                 <code>getArtistInfo2</code>, which only surfaces tags on a custom
-                Navidrome — so leave off unless you have a key or that setup.
+                Navidrome, so leave off unless you have a key or that setup.
               </div>
             </div>
             <Seg
@@ -832,7 +832,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
           <div className="grid grid-cols-[1fr_auto] items-center gap-4">
             <div>
               <div className="text-[13px] font-bold">Lyrics</div>
-              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
                 Fetch a short lyric excerpt per track and fold it into the
                 embedding text. Improves propagation quality on
                 lyrically-driven tracks (folk, hip-hop, singer-songwriter);

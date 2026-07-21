@@ -276,7 +276,7 @@ export default memo(function CenterStage({ nowPlaying, trackStartedAt, llmTokens
                   <>
                     {' · '}
                     <span
-                      className="inline-flex items-center gap-1 align-middle text-muted"
+                      className="inline-flex items-center gap-1 align-middle text-ink-faint"
                       title="LLM tokens generated since the station booted"
                       aria-label={`${llmTokens.toLocaleString('en-US')} AI tokens generated`}
                     >

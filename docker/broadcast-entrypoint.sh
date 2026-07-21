@@ -138,11 +138,99 @@ case "$ICECAST_MAX_CLIENTS" in
         ;;
 esac
 
+# Listener buffer depth (<burst-size>) — audio bursted to a client on connect
+# so a coverage gap drains the buffer instead of stalling (issue #993).
+#
+# Sized in SECONDS and converted to bytes here, because burst-size is a byte
+# count and a fixed one means wildly different depths per bitrate: the old
+# hardcoded 512 KB was ~22s at 192k but ~66s at 64k, so the stations least able
+# to afford lag got the most of it (issue #1114). Deriving from the live
+# bitrate keeps the depth an operator picks the depth they actually get.
+#
+# Sources, in precedence order: env override > settings (written by the
+# controller on save) > default. Read from the shared state dir rather than
+# passed in, so a settings change applies on the next broadcast bounce with no
+# compose edit.
+read_state_num() {
+    # $1 = filename, $2 = fallback. Non-numeric or missing → fallback.
+    _v=$(cat "/var/sub-wave/$1" 2>/dev/null || true)
+    case "$_v" in
+        ''|*[!0-9]*) echo "$2" ;;
+        *) echo "$_v" ;;
+    esac
+}
+
+STREAM_BITRATE="${ICECAST_STREAM_BITRATE:-$(read_state_num liquidsoap_stream_bitrate.txt 192)}"
+BUFFER_SECONDS="${ICECAST_BUFFER_SECONDS:-$(read_state_num liquidsoap_stream_buffer_seconds.txt 22)}"
+case "$STREAM_BITRATE" in *[!0-9]*|'') STREAM_BITRATE=192 ;; esac
+case "$BUFFER_SECONDS" in *[!0-9]*|'') BUFFER_SECONDS=22 ;; esac
+[ "$BUFFER_SECONDS" -gt 60 ] && BUFFER_SECONDS=60
+
+# kbps → bytes/sec is bitrate * 1000 / 8 = bitrate * 125.
+ICECAST_BURST_SIZE=$(( BUFFER_SECONDS * STREAM_BITRATE * 125 ))
+
+# queue-size is the per-client backlog before Icecast drops a lagging listener.
+# It must comfortably exceed burst-size or a client is evicted the moment it
+# falls behind its own primed buffer. 4x the burst (floored at the historical
+# 2 MB) preserves the ~minute of rope issue #993 wanted at the default depth
+# while still scaling with a deeper buffer.
+ICECAST_QUEUE_SIZE=$(( ICECAST_BURST_SIZE * 4 ))
+[ "$ICECAST_QUEUE_SIZE" -lt 2097152 ] && ICECAST_QUEUE_SIZE=2097152
+
+echo "broadcast: listener buffer ${BUFFER_SECONDS}s @ ${STREAM_BITRATE}kbps" \
+     "→ burst-size ${ICECAST_BURST_SIZE}B, queue-size ${ICECAST_QUEUE_SIZE}B" >&2
+
+# Listener auth (#478). The controller writes state/icecast_listener_auth.txt
+# ('true'/'false') from settings.privacy.listenerAuth; only the literal value
+# "true" enables (mirroring the archive_enabled pattern — missing/garbled file
+# means public). When enabled, every stream mount gets an
+# <authentication type="url"> block: icecast POSTs each listener connect to
+# the controller, which admits it with an `icecast-auth-user: 1` header. The
+# password itself lives ONLY in the controller's settings.json — password
+# changes apply live, and this render only matters when the toggle flips
+# (which the admin UI routes through the existing restart-mixer flow).
+LISTENER_AUTH_FLAG=/var/sub-wave/icecast_listener_auth.txt
+LISTENER_AUTH_URL="${LISTENER_AUTH_URL:-http://controller:7701/listener-auth}"
+MOUNTS_XML=/etc/icecast2/listener-auth-mounts.xml
+: > "$MOUNTS_XML"
+if [ "$(cat "$LISTENER_AUTH_FLAG" 2>/dev/null | tr -d '[:space:]')" = "true" ]; then
+    echo "broadcast: listener auth ON — mounts require credentials via $LISTENER_AUTH_URL" >&2
+    for MOUNT in /stream.mp3 /stream.opus /stream.flac /stream.aac; do
+        cat >> "$MOUNTS_XML" <<EOF
+    <mount type="normal">
+        <mount-name>$MOUNT</mount-name>
+        <authentication type="url">
+            <option name="listener_add" value="$LISTENER_AUTH_URL"/>
+            <option name="auth_header" value="icecast-auth-user: 1"/>
+        </authentication>
+    </mount>
+EOF
+    done
+    # Channel mounts (/ch/<id>/stream.mp3) are spawned at runtime by the
+    # channel supervisor — possibly AFTER this render — so they can't be
+    # enumerated here. A default mount carries the same auth for every mount
+    # without an explicit block above, present or future.
+    cat >> "$MOUNTS_XML" <<EOF
+    <mount type="default">
+        <authentication type="url">
+            <option name="listener_add" value="$LISTENER_AUTH_URL"/>
+            <option name="auth_header" value="icecast-auth-user: 1"/>
+        </authentication>
+    </mount>
+EOF
+fi
+
+# `r` splices the generated mount blocks (empty file = nothing) where the
+# marker sits, then the marker line itself is deleted.
 sed \
     -e "s|\${ICECAST_SOURCE_PASSWORD}|$ICECAST_SOURCE_PASSWORD|g" \
     -e "s|\${ICECAST_ADMIN_PASSWORD}|$ICECAST_ADMIN_PASSWORD|g" \
     -e "s|\${ICECAST_RELAY_PASSWORD}|$ICECAST_RELAY_PASSWORD|g" \
     -e "s|\${ICECAST_MAX_CLIENTS}|$ICECAST_MAX_CLIENTS|g" \
+    -e "s|\${ICECAST_BURST_SIZE}|$ICECAST_BURST_SIZE|g" \
+    -e "s|\${ICECAST_QUEUE_SIZE}|$ICECAST_QUEUE_SIZE|g" \
+    -e "/<!--@LISTENER_AUTH_MOUNTS@-->/r $MOUNTS_XML" \
+    -e "/<!--@LISTENER_AUTH_MOUNTS@-->/d" \
     "$TEMPLATE" > "$RENDERED"
 chown icecast2 "$RENDERED" 2>/dev/null || true
 

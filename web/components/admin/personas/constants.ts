@@ -76,7 +76,7 @@ export const KOKORO_RE = /^[a-z]{2}_[a-z0-9]+$/;
 
 export const NAME_MAX = 40;
 export const TAGLINE_MAX = 80;
-export const SOUL_MAX = 1000;
+export const SOUL_MAX = 2000;
 export const LANGUAGE_MAX = 60;
 export const PROMPT_MIN = 50;
 export const PROMPT_MAX = 4000;

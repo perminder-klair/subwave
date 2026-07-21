@@ -3,42 +3,28 @@
 // active theme's tokens onto <html> as inline CSS variables (web/lib/theme.ts);
 // the values here are whatever you'd write directly into a CSS custom property.
 //
-// Adding a new themable token: extend THEME_TOKEN_KEYS *and* declare a
-// fallback for it in :root in web/app/globals.css. Themes that omit the new
-// key inherit the fallback. Themes that mention keys outside this allowlist
-// have those keys silently dropped — operators can't inject arbitrary CSS via
-// a theme file.
+// Adding a new themable token: add a descriptor in ./theme-tokens.ts *and*
+// declare a fallback for it in :root in web/app/globals.css. Themes that omit
+// the new key inherit the fallback. Themes that mention keys outside the
+// registry have those keys silently dropped, and per-token values are validated
+// by type — operators can't inject arbitrary CSS via a theme file.
 import { promises as fs, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { config } from './config.js';
+import { THEME_TOKEN_KEYS, tokenType, isValidTokenValue } from './theme-tokens.js';
 
-export const THEME_TOKEN_KEYS = [
-  '--bg',
-  '--ink',
-  '--muted',
-  '--accent',
-  '--overlay',
-  '--soft-border',
-  '--field',
-] as const;
-
-const TOKEN_KEY_SET = new Set<string>(THEME_TOKEN_KEYS);
-
-// Reject anything that could break out of the inline CSS variable assignment
-// once the browser writes it onto document.documentElement.style. A stray ";"
-// would close the property and let the rest of the value declare arbitrary
-// styles; "{}" / "<>" guard against tag-shaped payloads. 100-char cap covers
-// every realistic token value (the longest builtin is a color-mix() call).
-const TOKEN_VAL_RE = /^[^;{}<>]{1,100}$/;
+// Re-exported so existing importers (e.g. the AI theme-fill prompt in
+// llm/internal/prompts/generate.ts) keep resolving it from this module.
+export { THEME_TOKEN_KEYS };
 
 const TokenMapSchema = z.record(z.string(), z.string()).transform((rec, ctx) => {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(rec)) {
-    if (!TOKEN_KEY_SET.has(k)) continue; // silently drop unknown keys
-    if (!TOKEN_VAL_RE.test(v)) {
-      ctx.addIssue({ code: 'custom', message: `token ${k} has unsafe value` });
+    if (tokenType(k) === undefined) continue; // silently drop unknown keys
+    if (!isValidTokenValue(k, v)) {
+      ctx.addIssue({ code: 'custom', message: `token ${k} has an unsafe or out-of-range value` });
       continue;
     }
     out[k] = v;

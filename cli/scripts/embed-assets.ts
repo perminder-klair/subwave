@@ -31,6 +31,7 @@ const ASSETS: Asset[] = [
   { name: 'COMPOSE_BYO_YML',            source: 'docker-compose.byo.yml' },
   { name: 'COMPOSE_DEV_YML',            source: 'docker-compose.dev.yml' },
   { name: 'COMPOSE_TTS_HEAVY_GPU_YML',  source: 'docker-compose.tts-heavy-gpu.yml' },
+  { name: 'COMPOSE_ANALYZER_GPU_YML',   source: 'docker-compose.analyzer-gpu.yml' },
   { name: 'ENV_EXAMPLE',                source: '.env.example' },
 ];
 

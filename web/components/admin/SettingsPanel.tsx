@@ -137,6 +137,12 @@ export default function SettingsPanel() {
       stationDescription: v.stationDescription ?? '',
       timezone: v.timezone ?? '',
       locale: normalizeStationLocale(v.locale),
+      privacy: {
+        privatePlayer: v.privacy?.privatePlayer ?? false,
+        listenerAuth: v.privacy?.listenerAuth ?? false,
+        // Arrives as the 'set' sentinel ('' when unset) — never the secret.
+        password: v.privacy?.password ?? '',
+      },
       kokoroLang: v.tts?.kokoro?.lang ?? '',
       weather: {
         lat: String(v.weather?.lat ?? ''),
@@ -754,7 +760,7 @@ export default function SettingsPanel() {
                     </div>
                     <div className="field-hint">
                       0 = keep forever (the default). With a window set, the hourly cleanup
-                      deletes whole days of recordings once they age past it — at 128 kbps the
+                      deletes whole days of recordings once they age past it. At 128 kbps the
                       archive grows ~1.4 GB per day, so an unbounded archive eventually fills
                       the disk. Applies live, no restart.
                     </div>
@@ -850,10 +856,10 @@ export default function SettingsPanel() {
                   </div>
                   <div className="field-hint">
                     After this long with zero listeners the programme pauses mid-track and the DJ
-                    goes quiet — no track pulls from Navidrome, no LLM or TTS work. The stream
+                    goes quiet: no track pulls from Navidrome, no LLM or TTS work. The stream
                     mounts stay up, so any player (VLC, Sonos, the web player) connects normally;
                     playback resumes where it left off within a few seconds of the first listener
-                    tuning in. Applies live — no mixer restart.
+                    tuning in. Applies live, no mixer restart.
                   </div>
                 </div>
               </Card>
@@ -926,7 +932,7 @@ export default function SettingsPanel() {
                     </Btn>
                   </div>
                   <div className="field-hint">
-                    The DJ won&rsquo;t auto-pick tracks longer than this — handy for hour-long
+                    The DJ won&rsquo;t auto-pick tracks longer than this, handy for hour-long
                     album mixes or DJ sets that keep landing in rotation. Listener requests still
                     play any length, and a show can override this with its own limit (0 there means
                     unlimited). Applies on the next pick; no restart needed.
@@ -966,7 +972,7 @@ export default function SettingsPanel() {
                     </Select>
                     <div className="field-hint">
                       Where each track&rsquo;s loudness figure comes from. ReplayGain tags (read
-                      via Navidrome) are a whole-file stereo measurement — the most accurate when
+                      via Navidrome) are a whole-file stereo measurement, the most accurate when
                       your library carries them. Measured values come from this station&rsquo;s
                       acoustic analysis, which scans only the opening of each track. The default
                       prefers the tag and falls back to the measurement for untagged files.
@@ -1033,7 +1039,7 @@ export default function SettingsPanel() {
                     <div className="field-hint">
                       Cap on how far a quiet track is turned up (0 = level down only). Boost is
                       also limited by each track&rsquo;s own measured peak headroom, so raising
-                      this won&rsquo;t distort dynamic material — very quiet, dynamic masters
+                      this won&rsquo;t distort dynamic material; very quiet, dynamic masters
                       simply can&rsquo;t reach the target cleanly. Loud tracks are turned down as
                       far as needed. Applies from the next queued track; no restart, tracks need
                       acoustic analysis (Library → Analyze).
@@ -1174,7 +1180,7 @@ export default function SettingsPanel() {
                     tier <strong>only when your source files are themselves lossless</strong>{' '}
                     (FLAC/ALAC/WAV); for a lossy-source library (e.g. AAC/MP3) it faithfully
                     carries lossy audio and adds no fidelity over MP3/Opus. Meant for external
-                    players (VLC, foobar2000, a network streamer) — the web and mobile players
+                    players (VLC, foobar2000, a network streamer); the web and mobile players
                     stay on MP3/Opus and won&apos;t auto-select it. The mandatory{' '}
                     <code>/stream.mp3</code> mount always serves everyone.
                   </div>
@@ -1214,7 +1220,7 @@ export default function SettingsPanel() {
                   </div>
                   <div className="field-hint">
                     On by default. Sends each track&apos;s title out-of-band (ICY) on the Opus and
-                    FLAC mounts, which most internet-radio players and Cast receivers need — they
+                    FLAC mounts, which most internet-radio players and Cast receivers need: they
                     read the in-band Ogg tags only once, at connect, and otherwise stay stuck on
                     the first title. Turn it <strong>off</strong> if your listeners use
                     foobar2000: it reads the in-band tags correctly, and the extra ICY channel
@@ -1266,11 +1272,10 @@ export default function SettingsPanel() {
                       </div>
                     )}
                     <div className="field-hint">
-                      Off by default. A continuous AAC-LC encoder whose purpose is reach —
-                      players and hardware that decode AAC but not Opus. Aimed at external
-                      players; the web and mobile players stay on MP3/Opus and won&apos;t
-                      auto-select it. The mandatory <code>/stream.mp3</code> mount serves
-                      everyone either way.
+                      Off by default. A continuous AAC-LC encoder for reach: players and
+                      hardware that decode AAC but not Opus. Aimed at external players; the
+                      web and mobile players stay on MP3/Opus and won&apos;t auto-select it.
+                      The mandatory <code>/stream.mp3</code> mount serves everyone either way.
                     </div>
                   </div>
                   <div className="field">

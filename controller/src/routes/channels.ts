@@ -16,7 +16,7 @@ import { requireAdmin } from '../middleware/auth.js';
 import { getStationTimezone } from '../time.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
 import { lifetimeTokenCount } from '../llm/log.js';
-import { router as publicRoutes, publicOrigin, avatarUrlFor, enrichNowPlaying } from './public.js';
+import { router as publicRoutes, publicOrigin, avatarUrlFor, enrichNowPlaying, tuneInFilesBlocked } from './public.js';
 import { handleRequestPost, handleRequestStatus } from './request.js';
 
 export const router = express.Router();
@@ -87,6 +87,10 @@ channel.get('/now-playing', async (req, res) => {
         bitrate: st.stream?.bitrate ?? null,
         sampleRate: null,
         channels: null,
+        // Icecast's burst-on-connect applies to channel mounts too (it's the
+        // install-wide <burst-size>), so channel players need the same
+        // listener-lag hint or Now Spinning runs ahead of the audio (#1114).
+        bufferSeconds: st.stream?.bufferSeconds ?? 22,
         opusEnabled: false,
         flacEnabled: false,
         aacEnabled: false,
@@ -119,6 +123,13 @@ channel.get('/state', (req, res) => {
       boothBuddy: s?.ui?.boothBuddy ?? false,
       skin: s?.ui?.skin || 'classic',
       tuneInOverlay: s?.ui?.tuneInOverlay ?? true,
+    },
+    // Privacy is install-wide (#478): a private station's channels are private
+    // too. Same shape as the main /state so the shared PlayerShell gate works
+    // unchanged on channel pages.
+    privacy: {
+      privatePlayer: s?.privacy?.privatePlayer === true,
+      listenerAuth: s?.privacy?.listenerAuth === true,
     },
     timezone: getStationTimezone(),
     locale: s.locale,
@@ -162,6 +173,7 @@ channel.get('/request/:id', handleRequestStatus);
 // One-paste tune-in files, channel edition (MP3 mount only — channels don't
 // serve the optional encoders).
 channel.get('/listen.m3u', (req, res) => {
+  if (tuneInFilesBlocked(res)) return;
   const ctx = ctxOf(res);
   const url = `${publicOrigin(req)}/ch/${ctx.channel.id}/stream.mp3`;
   res.setHeader('Content-Type', 'audio/x-mpegurl; charset=utf-8');
@@ -170,6 +182,7 @@ channel.get('/listen.m3u', (req, res) => {
 });
 
 channel.get('/listen.pls', (req, res) => {
+  if (tuneInFilesBlocked(res)) return;
   const ctx = ctxOf(res);
   const url = `${publicOrigin(req)}/ch/${ctx.channel.id}/stream.mp3`;
   res.setHeader('Content-Type', 'audio/x-scpls; charset=utf-8');

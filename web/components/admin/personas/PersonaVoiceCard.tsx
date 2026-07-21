@@ -348,9 +348,9 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                   onChange={(e: ChangeEvent<HTMLInputElement>) => updateTts({ voice: e.target.value })}
                 />
                 <div className="field-hint">
-                  Free text forwarded to your self-hosted TTS endpoint. It can be
-                  a voice id, a reference-wav filename, or a VoiceDesign prompt —
-                  your sidecar decides. Configure the endpoint URL in Settings
+                  Free text forwarded to your self-hosted TTS endpoint: a voice
+                  id, a reference-wav filename, or a VoiceDesign prompt, whatever
+                  your sidecar accepts. Configure the endpoint URL in Settings
                   &rarr; Voice.
                 </div>
               </div>
@@ -469,7 +469,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
               adminFetch={adminFetch}
             />
             <div className="field-hint mt-1.5">
-              Plays a short sample in this persona&apos;s voice — and language,
+              Plays a short sample in this persona&apos;s voice, and language
               when one is set. Reflects the voice and speed; the dB trim is
               applied later, on air.
             </div>
@@ -524,7 +524,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
             <div className="field-hint">
               {speedSupported
                 ? <>Slow down or speed up this persona on top of the engine pace. <code>1.00×</code> = no change.</>
-                : <>Not supported by this engine — only Piper, Kokoro and cloud honour speed.</>}
+                : <>Not supported by this engine; only Piper, Kokoro and cloud honour speed.</>}
             </div>
           </div>
         </div>

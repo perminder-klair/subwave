@@ -189,6 +189,14 @@ export interface LoudnessForm {
   source: LoudnessSource;
 }
 
+export interface PrivacyForm {
+  privatePlayer: boolean;
+  listenerAuth: boolean;
+  /** Round-trips the 'set' redaction sentinel when saved and untouched.
+   *  One shared secret behind both locks above. */
+  password: string;
+}
+
 export interface FormState {
   jingleRatio: string;
   crossfadeDuration: string;
@@ -207,6 +215,7 @@ export interface FormState {
   search: SearchForm;
   embedding: EmbeddingForm;
   scrobble: ScrobbleForm;
+  privacy: PrivacyForm;
   likes: LikesForm;
 }
 
@@ -294,6 +303,7 @@ export interface SettingsData {
     };
     sfx?: { enabled?: boolean };
     ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
+    privacy?: { privatePlayer?: boolean; listenerAuth?: boolean; password?: string };
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;
       listenbrainz?: Partial<ScrobbleListenbrainzForm>;
@@ -387,20 +397,23 @@ interface SectionHeaderProps {
   metrics?: MetricSpec[];
   manualHref?: string;
   manualLabel?: ReactNode;
+  actions?: ReactNode;
 }
 
-export function SectionHeader({ eyebrow, title, sub, metrics, manualHref, manualLabel }: SectionHeaderProps) {
+export function SectionHeader({ eyebrow, title, sub, metrics, manualHref, manualLabel, actions }: SectionHeaderProps) {
+  const hasMetrics = !!(metrics && metrics.length > 0);
+  const hasBar = hasMetrics || !!manualHref || !!actions;
   return (
-    <div className="flex flex-wrap items-start gap-4 border border-ink p-4">
-      <div className="min-w-[240px] flex-1">
+    <section className="card">
+      <div className={cn('p-4', hasBar && 'border-b border-ink')}>
         <Eyebrow className="text-vermilion">{eyebrow}</Eyebrow>
         <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
           {title}
         </div>
-        <div className="mt-1.5 max-w-[540px] text-[12px] leading-[1.5] text-muted">
+        <div className="mt-1.5 max-w-[600px] text-[14px] leading-[1.55] text-muted">
           {sub}
         </div>
-        {manualHref && (
+        {manualHref && !hasBar && (
           <a
             href={manualHref}
             target="_blank"
@@ -411,12 +424,27 @@ export function SectionHeader({ eyebrow, title, sub, metrics, manualHref, manual
           </a>
         )}
       </div>
-      {metrics && metrics.length > 0 && (
-        <div className="grid grid-flow-col gap-[18px] pt-1">
-          {metrics.map((m, i) => <Metric key={i} n={m.n} l={m.l} accent={m.accent} />)}
+      {hasBar && (
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3 bg-[var(--ink-softer)] p-3.5">
+          {metrics?.map((met, i) => <Metric key={i} n={met.n} l={met.l} accent={met.accent} />)}
+          {(manualHref || actions) && (
+            <div className="ml-auto flex items-center gap-3">
+              {manualHref && (
+                <a
+                  href={manualHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[12px] font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+                >
+                  {manualLabel || 'Read this in the manual'} ↗
+                </a>
+              )}
+              {actions}
+            </div>
+          )}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -434,7 +462,7 @@ export function SaveBar({ note, busy, onSave, saveLabel, extra }: SaveBarProps) 
   return (
     <div className="flex flex-wrap items-center gap-3 border border-ink bg-[var(--ink-softer)] p-3">
       <span className="size-1.5 rounded-full bg-vermilion" />
-      <span className="text-[11px] text-muted">{note}</span>
+      <span className="text-[12px] leading-[1.5] text-muted">{note}</span>
       <span className="ml-auto flex gap-2">
         {extra}
         {/* whileTap fires before the network call — operator feels the
@@ -474,7 +502,7 @@ export function KeyStatus({ envVar, present }: KeyStatusProps) {
         <span className={cn('text-[11px] font-bold tracking-[0.12em] uppercase', toneClass)}>
           {present ? 'API key found in environment' : 'API key missing'}
         </span>
-        <span className="text-[11px] leading-[1.5] text-muted">
+        <span className="text-[14px] leading-[1.5] text-muted">
           {present ? (
             <>The controller has <code>{envVar}</code> set, so this provider is ready to use.</>
           ) : (

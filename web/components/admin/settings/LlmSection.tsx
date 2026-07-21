@@ -296,7 +296,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
               <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">
                 Routing now · {llmProviderLabel(activeProvider)}
               </span>
-              <span className="text-[11px] leading-[1.5] text-muted">
+              <span className="text-[14px] leading-[1.5] text-muted">
                 {activeModel
                   ? <>Model <code>{activeModel}</code>, every LLM call goes here. {llmDirty ? 'Your edits below aren’t live until you Save.' : 'This is the saved, running config.'}</>
                   : <>No model is set for this provider yet.</>}
@@ -443,7 +443,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                   </Btn>
                 </div>
                 <div className="field-hint">
-                  Optional — only needed when the server requires bearer authentication
+                  Optional: only needed when the server requires bearer authentication
                   (e.g. llama.cpp <code>--api-key</code>). Saved to{' '}
                   <code>settings.json</code>, takes effect on next save.
                 </div>
@@ -474,7 +474,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 and never finish a pick. <strong>1.15</strong> is a sane floor;
                 raise toward 1.25 if a model still loops. Set <code>1.0</code> to
                 disable (e.g. a vLLM server that rejects the{' '}
-                <code>repeat_penalty</code> field — its name there is{' '}
+                <code>repeat_penalty</code> field; its name there is{' '}
                 <code>repetition_penalty</code>).
               </div>
             </div>
@@ -587,7 +587,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
               <div className="field-hint">
                 How the picker forces the model to return a structured pick.
                 <code>Required</code> (default) sends{' '}
-                <code>tool_choice:&quot;required&quot;</code> — the reliable path for
+                <code>tool_choice:&quot;required&quot;</code>, the reliable path for
                 local models. Switch to <code>Auto</code> only if your server
                 <strong> crashes</strong> on a tool call: some newer vLLM images
                 (notably Intel/XPU builds) mishandle the guided-decoding backend
@@ -605,7 +605,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <div className="grid grid-cols-[1fr_auto] items-center gap-4">
             <div>
               <div className="text-[13px] font-bold">Use a backup LLM</div>
-              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
                 When the primary host can&apos;t be reached (connection refused,
                 DNS failure, timeout, e.g. a GPU box that&apos;s powered off), the
                 call is retried once against this backup, then routes straight back
@@ -758,7 +758,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                       </Btn>
                     </div>
                     <div className="field-hint">
-                      Optional — only needed when the backup server requires bearer
+                      Optional: only needed when the backup server requires bearer
                       authentication. Saved to <code>settings.json</code>, takes effect on
                       next save.
                     </div>
@@ -880,7 +880,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
               <div className="grid grid-cols-[1fr_auto] items-center gap-4">
                 <div>
                   <div className="text-[13px] font-bold">Backup chain-of-thought</div>
-                  <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+                  <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
                     Whether the backup model may emit a reasoning step. Off by
                     default, like the primary.
                   </div>
@@ -906,18 +906,13 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         <div className="grid grid-cols-[1fr_auto] items-center gap-4">
           <div>
             <div className="text-[13px] font-bold">Chain-of-thought</div>
-            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
-              When off, the picker tells the model to skip or minimize its
-              internal thinking step. Wired across providers that expose a
-              thinking knob: Ollama, openai-compatible (Qwen3), Gemini 2.5/3.x,
-              OpenAI o-series and gpt-5, Claude (adaptive thinking) and DeepSeek
-              V4. DJ scripts and structured picks are short, and an uncapped
-              thought chain just balloons latency and cost. Leave off unless
-              you&apos;re running a model that genuinely needs it. Note: on
-              Claude and DeepSeek the picker always suppresses thinking for its
-              structured/tool calls, since those APIs reject forced tool calls while
-              thinking, so there this toggle affects only the free-text DJ
-              lines.
+            <div className="field-hint mt-1 max-w-[440px]">
+              When off, thinking-capable models skip their internal reasoning
+              step (Ollama, Qwen3, Gemini, OpenAI o-series/gpt-5, Claude,
+              DeepSeek). DJ scripts and structured picks are short, so thinking
+              mostly just adds latency and cost; leave it off unless your model
+              needs it. On Claude and DeepSeek, structured/tool calls always skip
+              thinking anyway, so the toggle only affects free-text lines there.
             </div>
           </div>
           <Seg
@@ -946,12 +941,12 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             className="max-w-[200px]"
           />
           <div className="field-hint">
-            Caps the tokens the model may generate per response &mdash; the size
+            Caps the tokens the model may generate per response: the size
             of each reply, not a daily total. <strong>0 = use the built-in
             defaults</strong> (the default). Set a value (500&ndash;8000) to
             shrink it: useful on a local model with a small context window, where
-            an oversized response allowance crowds out the system prompt and tool
-            list and risks truncation &mdash; especially with reasoning off, where
+            an oversized allowance crowds out the system prompt and tool
+            list and risks truncation, especially with reasoning off, where
             replies are short anyway. Values between 1 and 499 round up to 500.
           </div>
         </div>
@@ -961,11 +956,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         <div className="grid grid-cols-[1fr_auto] items-center gap-4">
           <div>
             <div className="text-[13px] font-bold">Agentic picker</div>
-            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
-              When on, the next-track picker is a tool-using agent that explores the library
-              itself. Needs a model that handles multi-step tool calls well. Leave off for
-              small local models &mdash; skill segments (weather, news, &hellip;) then also run as a
-              single call instead of a tool loop.
+            <div className="field-hint mt-1 max-w-[440px]">
+              When on, the picker is a tool-using agent that explores the library
+              itself; needs a model good at multi-step tool calls. Leave off for
+              small local models, where skill segments (weather, news&hellip;) then
+              run as one call instead of a tool loop.
             </div>
           </div>
           <Seg
@@ -1007,11 +1002,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <div className="mt-4 grid grid-cols-[1fr_auto] items-center gap-4">
             <div>
               <div className="text-[13px] font-bold">Resolve described requests via web</div>
-              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
-                When on, a listener who <em>describes</em> a track instead of naming it
-                (&ldquo;the song from the new Dune movie&rdquo;) gets it looked up on the
-                web, then matched against your library. Needs a web-search provider
-                configured under Web search; otherwise it has no effect.
+              <div className="field-hint mt-1 max-w-[440px]">
+                When on, a listener who <em>describes</em> a track instead of naming
+                it (&ldquo;the song from the new Dune movie&rdquo;) gets it looked up on
+                the web, then matched to your library. Needs a web-search provider
+                set under Web search; otherwise it does nothing.
               </div>
             </div>
             <Seg
@@ -1041,7 +1036,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             className="max-w-[200px]"
           />
           <div className="field-hint">
-            The last N <strong>distinct</strong> tracks can never be re-picked &mdash; a hard
+            The last N <strong>distinct</strong> tracks can never be re-picked: a hard
             guard on both the agent and candidate-pool pickers, on top of the time-based
             window. Auto-scales down on a small library so it never blocks everything.
             {' '}<strong>0 = off</strong>. Listener requests stay exempt. 0&ndash;290.
@@ -1053,11 +1048,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         <div className="grid grid-cols-[1fr_auto] items-center gap-4">
           <div>
             <div className="text-[13px] font-bold">Pause DJ when empty</div>
-            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
-              When on, the DJ stops making LLM calls (track picks, links, station
-              IDs, hourly checks, segments and listener requests) whenever Icecast
-              reports zero listeners. The stream keeps playing from the auto
-              playlist, and the DJ resumes the moment someone tunes back in.
+            <div className="field-hint mt-1 max-w-[440px]">
+              When on, the DJ stops all LLM calls (picks, links, IDs, hourly,
+              segments, requests) while Icecast reports zero listeners. The stream
+              keeps playing from the auto playlist, and the DJ resumes the moment
+              someone tunes in.
             </div>
           </div>
           <Seg
@@ -1089,10 +1084,10 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <div className="field-hint">
             Hard ceiling on tokens the DJ may spend per day (UTC), counted from
             the same usage stats as the token ticker. <strong>0 = unlimited</strong>
-            {' '}(the default &mdash; leave it off for a free local model). When set,
+            {' '}(the default; leave it off for a free local model). When set,
             the DJ drops to the cheap picker and mutes optional segments as it
             nears the cap, then stops calling the model entirely and coasts on the
-            auto playlist once it&rsquo;s hit &mdash; music never stops.
+            auto playlist once it&rsquo;s hit; music never stops.
           </div>
         </div>
 
@@ -1123,9 +1118,9 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <div className="mt-4 grid grid-cols-[1fr_auto] items-center gap-4">
             <div>
               <div className="text-[13px] font-bold">Always answer requests</div>
-              <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+              <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
                 When on, listener requests are still answered by the AI DJ even
-                over the cap &mdash; a human asked, so honour it. When off,
+                over the cap; a human asked, so honour it. When off,
                 requests over the cap fall back to plain library matching like
                 everything else.
               </div>
@@ -1164,7 +1159,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             Your library is embedded with <code>{embedPinNotice.model}</code> ({embedPinNotice.dim}-d
             vectors). Embeddings were following the chat provider, so switching to{' '}
             <strong>{llmProviderLabel(embedPinNotice.newProvider)}</strong> would have changed the
-            embedding model too — and a different model produces incompatible vectors, breaking
+            embedding model too; a different model produces incompatible vectors, breaking
             library / vibe search until you re-embed every track.
             {' '}To keep search working, embeddings are now <strong>pinned</strong> to{' '}
             <code>{embedPinNotice.model}</code> (Library tagger → Embedding). Switch embeddings to

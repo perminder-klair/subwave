@@ -1,0 +1,24 @@
+{
+  "id": "recon",
+  "name": "Recon",
+  "description": "Field-ops poster: warm khaki stock, a hot-orange grid and accent, near-black grotesque ink. Bold, tactical, high-vis.",
+  "mode": "light",
+  "tokens": {
+    "--bg": "#d4c8a9",
+    "--surface": "#dccfb0",
+    "--surface-border": "rgba(22, 16, 9, 0.20)",
+    "--field": "color-mix(in oklab, #d4c8a9 90%, #161009)",
+    "--ink": "#161009",
+    "--muted": "#463c2e",
+    "--ink-faint": "#78694f",
+    "--accent": "#ff6201",
+    "--accent-2": "#a84408",
+    "--accent-soft": "color-mix(in oklab, #ff6201 14%, #d4c8a9)",
+    "--line": "rgba(255, 98, 1, 0.30)",
+    "--soft-border": "rgba(22, 16, 9, 0.12)",
+    "--overlay": "rgba(22, 16, 9, 0.08)",
+    "--display-font": "saira-stencil-one",
+    "--mono-font": "overpass-mono",
+    "--grain": "0.08"
+  }
+}

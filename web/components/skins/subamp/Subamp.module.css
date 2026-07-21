@@ -47,3 +47,40 @@
   border-radius: 0;
   background: var(--ink);
 }
+
+/* Recessed "screen" for the scrolling feed/log bodies — an inset panel a shade
+   off the window fill so the lists read as a readout rather than text floating
+   on the window. A tint of ink over the base, so it adapts to every theme. */
+.screen {
+  background: color-mix(in oklab, var(--ink) 7%, var(--bg));
+}
+
+/* The desktop behind the windows — a shade lighter than the raw theme base so
+   the windows read as panels sitting on a surface, not a flat flood of --bg.
+   Also themes every scroll region inside the skin with the app's ink-tinted
+   scrollbar (the same one the drawers/modals use) instead of the OS default:
+   scrollbar-width/color inherit down to the stick-to-bottom scroller, and the
+   webkit rules catch WebKit/Blink. */
+.shell {
+  background: color-mix(in oklab, var(--bg) 88%, #fff);
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+.shell::-webkit-scrollbar,
+.shell *::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+.shell::-webkit-scrollbar-track,
+.shell *::-webkit-scrollbar-track {
+  background: transparent;
+}
+.shell::-webkit-scrollbar-thumb,
+.shell *::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 3px;
+}
+.shell::-webkit-scrollbar-thumb:hover,
+.shell *::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+}
