@@ -31,7 +31,7 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
-import { useRequestSlip, useVolumeNudge } from '../sharedHooks';
+import { useRequestSlip, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
 const PROGRESS_CELLS = 16;
@@ -66,6 +66,7 @@ export default function TtySkin(_props: SkinProps) {
   const upNext = state.upcoming?.[0];
 
   const adjustVolume = useVolumeNudge();
+  const like = useTrackLike();
 
   // :req prompt + :log depth toggle.
   const [reqOpen, setReqOpen] = useState(false);
@@ -122,7 +123,7 @@ export default function TtySkin(_props: SkinProps) {
 
         {/* header bar — station line truncates; context is desktop-only so
             mobile stays one clean row with the theme icon pinned right */}
-        <div className="flex flex-none items-center justify-between gap-x-4 border border-soft-border px-4 py-2.5">
+        <div className="flex flex-none items-center justify-between gap-x-4 border border-[var(--line)] px-4 py-2.5">
           <div className="min-w-0 truncate text-[13px] tracking-[0.1em]">
             <span className={cn(offline ? 'text-muted' : 'text-[var(--accent)]')}>●</span>{' '}
             <span className="font-bold">{stationName.toUpperCase()}</span>
@@ -141,7 +142,7 @@ export default function TtySkin(_props: SkinProps) {
         {/* now playing + booth — fills most of the middle; stacked on mobile
             (now-playing auto, booth fills + scrolls), side-by-side on lg */}
         <div className="grid min-h-0 flex-[2] grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-3.5 lg:grid-cols-[1fr_380px] lg:grid-rows-1">
-          <section className="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto border border-soft-border px-5 py-5 sm:px-7">
+          <section className="flex min-h-0 min-w-0 flex-col gap-4 overflow-y-auto border border-[var(--line)] px-5 py-5 sm:px-7">
             <Rule>NOW PLAYING</Rule>
             <div className="flex min-w-0 flex-row items-start gap-4 sm:gap-6">
               <div className="flex min-w-0 flex-1 flex-col gap-3">
@@ -161,7 +162,7 @@ export default function TtySkin(_props: SkinProps) {
                 {!offline && (meta.facts.length > 0 || meta.moods.length > 0) && (
                   <div className="flex flex-wrap gap-2">
                     {meta.facts.map(f => (
-                      <span key={f} className="border border-soft-border px-2 py-0.5 text-[11px] tracking-[0.1em] uppercase">{f}</span>
+                      <span key={f} className="border border-[var(--line)] px-2 py-0.5 text-[11px] tracking-[0.1em] uppercase">{f}</span>
                     ))}
                     {meta.moods.map(m => (
                       <span key={m} className="border border-[var(--accent)] px-2 py-0.5 text-[11px] tracking-[0.1em] text-[var(--accent)] uppercase">{m}</span>
@@ -184,7 +185,7 @@ export default function TtySkin(_props: SkinProps) {
                 )}
               </div>
               <div className="hidden flex-none flex-col gap-1.5 sm:flex">
-                <div className="grid h-[120px] w-[120px] place-items-center border border-soft-border sm:h-[148px] sm:w-[148px]">
+                <div className="grid h-[120px] w-[120px] place-items-center border border-[var(--line)] sm:h-[148px] sm:w-[148px]">
                   {coverId && !offline ? (
                     <img src={client.coverUrl(coverId)} alt="" className="h-full w-full object-cover" />
                   ) : (
@@ -196,7 +197,7 @@ export default function TtySkin(_props: SkinProps) {
             </div>
           </section>
 
-          <section className="flex min-h-0 min-w-0 flex-col gap-3 border border-soft-border px-5 py-4">
+          <section className="flex min-h-0 min-w-0 flex-col gap-3 border border-[var(--line)] px-5 py-4">
             <Rule>BOOTH · tail -f</Rule>
             <ScrollArea className="-mx-5 min-h-0 flex-1">
               <div className="flex flex-col gap-3 px-5">
@@ -225,7 +226,7 @@ export default function TtySkin(_props: SkinProps) {
         {/* up next + last — last fills + scrolls; stacked on mobile,
             side-by-side from sm */}
         <div className="grid min-h-0 flex-none grid-cols-1 grid-rows-[auto_minmax(0,1fr)] gap-3.5 sm:flex-[1] sm:grid-cols-2 sm:grid-rows-1">
-          <section className="flex min-h-0 min-w-0 flex-col gap-2.5 border border-soft-border px-5 py-4">
+          <section className="flex min-h-0 min-w-0 flex-col gap-2.5 border border-[var(--line)] px-5 py-4">
             <Rule>UP NEXT</Rule>
             {upNext?.title ? (
               <>
@@ -241,7 +242,7 @@ export default function TtySkin(_props: SkinProps) {
               <div className="text-[12px] text-muted">queue empty — the DJ decides at the wire</div>
             )}
           </section>
-          <section className="hidden min-h-0 min-w-0 flex-col gap-2 border border-soft-border px-5 py-4 sm:flex">
+          <section className="hidden min-h-0 min-w-0 flex-col gap-2 border border-[var(--line)] px-5 py-4 sm:flex">
             <Rule>LAST</Rule>
             <ScrollArea className="-mx-5 min-h-0 flex-1">
               <div className="flex flex-col gap-2 px-5">
@@ -294,7 +295,7 @@ export default function TtySkin(_props: SkinProps) {
           </div>
         ) : (
           /* status line */
-          <div className="flex flex-none flex-wrap items-baseline gap-x-5 gap-y-1 border border-soft-border bg-[var(--field)] px-4 py-2.5 text-[12px] tracking-[0.08em]">
+          <div className="flex flex-none flex-wrap items-baseline gap-x-5 gap-y-1 border border-[var(--line)] bg-[var(--field)] px-4 py-2.5 text-[12px] tracking-[0.08em]">
             <button
               type="button"
               onClick={handleTune}
@@ -316,6 +317,22 @@ export default function TtySkin(_props: SkinProps) {
             >
               {muted ? 'MUTED' : 'MUTE'}
             </button>
+            {like.available && (
+              <button
+                type="button"
+                onClick={() => void like.like()}
+                disabled={like.pending || like.liked}
+                aria-pressed={like.liked}
+                aria-label={like.liked ? 'Liked' : 'Like this track'}
+                className={cn(
+                  'v3-focus border-0 bg-transparent p-0 uppercase',
+                  like.liked ? 'font-bold text-[var(--accent)]' : 'cursor-pointer text-muted hover:text-ink',
+                  like.pending && 'opacity-60',
+                )}
+              >
+                {like.liked ? '[♥ LIKED]' : '[♥ LIKE]'}{like.count > 0 ? ` ${like.count}` : ''}
+              </button>
+            )}
             {signal.latencyMs != null && tunedIn && (
               <span className="hidden text-muted uppercase sm:inline">SIG {signal.latencyMs} MS · {signal.quality}</span>
             )}

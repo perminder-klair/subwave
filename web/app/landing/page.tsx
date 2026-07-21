@@ -9,6 +9,12 @@ export const metadata = pageMeta({
   path: '/landing',
 });
 
+// Render per-request so the canonical/og:url pick up the runtime SITE_URL.
+// The showcase-station fetch keeps its own ISR revalidate window (explicit
+// per-fetch options win over the force-dynamic no-store default), so this
+// costs a re-render from cached data, not a catalog refetch per request.
+export const dynamic = 'force-dynamic';
+
 // Fixed app-shell layout — lock out pinch-zoom on mobile. Merges with root.
 export const viewport = {
   maximumScale: 1,

@@ -8,8 +8,9 @@
 
 import assert from 'node:assert/strict';
 import {
-  normGenre, genreMatches, preferGenre,
+  normGenre, genreMatches, genreResolutionWarning, preferGenre,
   hasEraBound, eraSpan, inYearRange, preferEra,
+  resolveEraYear, trackEraYear,
   preferEnergy, preferEnergyStrict, preferMood,
   onlyGenre, onlyMood, onlyEnergy, applyStrictLocks,
 } from '../src/music/show-filter.js';
@@ -28,11 +29,47 @@ async function test(name: string, fn: () => void | Promise<void>) {
 const t = (over: Record<string, unknown>) => ({ id: 'x', title: 't', artist: 'a', ...over });
 
 console.log('genre (any-of, never-starve):');
-await test('genreMatches matches ANY normalised target, substring both ways', () => {
+await test('genreMatches matches ANY normalised target', () => {
   assert.equal(genreMatches(t({ genre: 'Hip Hop' }), [normGenre('Hip-Hop')]), true);
   assert.equal(genreMatches(t({ genre: 'Jazz' }), [normGenre('Rock'), normGenre('Jazz')]), true);
   assert.equal(genreMatches(t({ genre: 'Jazz' }), [normGenre('Rock')]), false);
   assert.equal(genreMatches(t({ genre: 'Jazz' }), []), false);
+});
+await test('genreMatches: a track tag may REFINE the show genre', () => {
+  assert.equal(genreMatches(t({ genre: 'Punk Rock' }), [normGenre('Punk')]), true);
+  assert.equal(genreMatches(t({ genre: 'Contemporary R&B' }), [normGenre('R&B')]), true);
+  assert.equal(genreMatches(t({ genre: 'Post-Hardcore' }), [normGenre('Hardcore')]), true);
+  assert.equal(genreMatches(t({ genre: 'Pop Punk Revival' }), [normGenre('Pop Punk')]), true);
+  // multi-tag: a secondary tag refines just as well as the primary one
+  assert.equal(genreMatches(t({ genres: ['Alternative', 'Emo Pop'] }), [normGenre('Emo')]), true);
+});
+await test('genreMatches: a BROADER track tag never satisfies a stricter show genre', () => {
+  assert.equal(genreMatches(t({ genre: 'Pop' }), [normGenre('Pop Punk')]), false);
+  assert.equal(genreMatches(t({ genre: 'Rock' }), [normGenre('Alternative Rock')]), false);
+  assert.equal(genreMatches(t({ genre: 'Emo' }), [normGenre('Emo Pop')]), false);
+  assert.equal(genreMatches(t({ genre: 'Alternative' }), [normGenre('Alternative Rock')]), false);
+});
+await test('genreMatches: containment respects word boundaries', () => {
+  assert.equal(genreMatches(t({ genre: 'Trap' }), [normGenre('Rap')]), false);
+  assert.equal(genreMatches(t({ genre: 'Rockabilly' }), [normGenre('Rock')]), false);
+  // ...but separators are still noise, so the boundary survives normalisation
+  assert.equal(genreMatches(t({ genre: 'Hip-Hop/Rap' }), [normGenre('Rap')]), true);
+  assert.equal(genreMatches(t({ genre: 'Pop-Punk' }), [normGenre('Pop Punk')]), true);
+});
+// Regressions found by replaying the new predicate over a real 10.4k-track
+// library — every one of these was a live false positive under the old
+// bidirectional substring, not a hypothetical.
+await test('genreMatches: real-library false positives stay dead', () => {
+  // "urbanolatino" contains "rb", so an R&B show swept up Urbano latino.
+  assert.equal(genreMatches(t({ genre: 'Urbano latino' }), [normGenre('R&B')]), false);
+  assert.equal(genreMatches(t({ genre: 'Contemporary R&B' }), [normGenre('R&B')]), true);
+  // An "Indian Pop" show pulled in everything tagged merely Pop or Indian.
+  assert.equal(genreMatches(t({ genre: 'Pop' }), [normGenre('Indian Pop')]), false);
+  assert.equal(genreMatches(t({ genre: 'Indian' }), [normGenre('Indian Pop')]), false);
+  assert.equal(genreMatches(t({ genre: 'Indian Pop' }), [normGenre('Indian Pop')]), true);
+  // A broad show must NOT lose its refinements — the fix only tightens narrow shows.
+  assert.equal(genreMatches(t({ genre: 'Punjabi Pop' }), [normGenre('Punjabi')]), true);
+  assert.equal(genreMatches(t({ genre: 'West Coast Rap' }), [normGenre('Rap')]), true);
 });
 await test('preferGenre keeps tracks matching any entry; empty list is passthrough', () => {
   const rock = t({ genre: 'Hard Rock' });
@@ -45,6 +82,28 @@ await test('preferGenre keeps tracks matching any entry; empty list is passthrou
 await test('preferGenre never-starves: zero matches → full set', () => {
   const pool = [t({ genre: 'Jazz' }), t({ genre: 'Soul' })];
   assert.deepEqual(preferGenre(pool, ['Polka']), pool);
+});
+
+console.log('genre resolution honesty (what the operator asked vs what the library has):');
+await test('genreResolutionWarning: a faithful resolution says nothing', () => {
+  assert.equal(genreResolutionWarning('Hip-Hop', 'Hip-Hop'), null);
+  // cosmetic-only differences are still faithful
+  assert.equal(genreResolutionWarning('hip hop', 'Hip-Hop'), null);
+  assert.equal(genreResolutionWarning('', null), null);
+});
+await test('genreResolutionWarning: broadening is called out by name', () => {
+  const w = genreResolutionWarning('Pop Punk', 'Pop');
+  assert.ok(w && w.includes('Pop Punk') && w.includes('"Pop"'), w ?? 'no warning');
+  assert.match(w!, /broader/);
+});
+await test('genreResolutionWarning: an unresolvable genre says the filter is OFF', () => {
+  const w = genreResolutionWarning('Emo', null);
+  assert.match(w!, /not a tag in your library/);
+  assert.match(w!, /OFF/);
+});
+await test('genreResolutionWarning: narrowing is reported differently from broadening', () => {
+  const w = genreResolutionWarning('Punk', 'Pop Punk');
+  assert.match(w!, /[Nn]arrowing/);
 });
 
 console.log('era (window union, envelope):');
@@ -82,6 +141,44 @@ await test('eraSpan: bounded windows → min/max envelope; any open bound opens 
     { fromYear: null, toYear: 2029 },
   );
   assert.deepEqual(eraSpan([]), { fromYear: null, toYear: null });
+});
+
+console.log('era year resolution (#842 — original year, compilation distrust):');
+await test('resolveEraYear: originalYear wins over year; junk originalYear falls through', () => {
+  assert.equal(resolveEraYear(2013, 1976, true), 1976);   // comp track, resolved
+  assert.equal(resolveEraYear(2013, 1976, false), 1976);  // reissue, album-tag year
+  assert.equal(resolveEraYear(1995, null, false), 1995);  // plain track
+  assert.equal(resolveEraYear(1995, 0, false), 1995);     // TYER=0000-style junk original
+});
+await test("resolveEraYear: a compilation's plain year is untrusted (unknown)", () => {
+  assert.equal(resolveEraYear(2013, null, true), null);
+  // Unknown compilation status (null) keeps trusting the year — only a
+  // positive flag distrusts it.
+  assert.equal(resolveEraYear(2013, null, null), 2013);
+});
+await test('resolveEraYear: junk years read as unknown', () => {
+  assert.equal(resolveEraYear(0, null, false), null);
+  assert.equal(resolveEraYear('', null, false), null);
+  assert.equal(resolveEraYear(null, null, false), null);
+});
+await test('trackEraYear: own fields short-circuit (no library lookup when either is present)', () => {
+  assert.equal(trackEraYear(t({ year: 2013, originalYear: 1976, isCompilation: true })), 1976);
+  assert.equal(trackEraYear(t({ year: 2013, originalYear: null, isCompilation: true })), null);
+  assert.equal(trackEraYear(t({ year: 1995, originalYear: null, isCompilation: false })), 1995);
+  // Bare Subsonic child (no era fields, library not loaded here) → plain year.
+  assert.equal(trackEraYear(t({ year: 1995 })), 1995);
+});
+await test('inYearRange places a compilation track by its ORIGINAL year (#842)', () => {
+  const seventies = [{ fromYear: 1970, toYear: 1979 }];
+  const tens = [{ fromYear: 2010, toYear: 2019 }];
+  const compResolved = t({ year: 2013, originalYear: 1976, isCompilation: true });
+  const compUnresolved = t({ year: 2013, originalYear: null, isCompilation: true });
+  // Resolved: lands in the 70s window, NOT the 2010s one.
+  assert.deepEqual(inYearRange([compResolved], seventies), [compResolved]);
+  assert.deepEqual(inYearRange([compResolved], tens), []);
+  // Unresolved: year is the compilation's own date — untrusted, drops everywhere.
+  assert.deepEqual(inYearRange([compUnresolved], tens), []);
+  assert.deepEqual(inYearRange([compUnresolved], seventies), []);
 });
 
 console.log('energy (any-of bands):');

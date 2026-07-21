@@ -1,8 +1,9 @@
 // Pure-ish helpers for the personas editor: id minting, initials, avatar
-// encoding, and the validation/sanitisation used by the container on save.
-import type { Persona, SettingsResponse } from './types';
+// encoding, the settings→form mapping, and the validation/sanitisation used by
+// the container on save.
+import type { DjPromptPreset, FormState, Persona, SettingsResponse } from './types';
 import {
-  AVATAR_TARGET_PX, DICEBEAR_STYLES,
+  AVATAR_TARGET_PX, DICEBEAR_STYLES, DIAL_NEUTRAL,
   NAME_MAX, TAGLINE_MAX, SOUL_MAX, LANGUAGE_MAX,
   PROMPT_NAME_MAX, PROMPT_MIN, PROMPT_MAX,
   KOKORO_RE, CHATTERBOX_VOICE_RE, POCKET_TTS_VOICE_RE,
@@ -26,6 +27,92 @@ export function promptPresetValid(p: { name: string; text: string }): boolean {
     text.length >= PROMPT_MIN && text.length <= PROMPT_MAX &&
     text.includes('{name}')
   );
+}
+
+// ── settings → form ────────────────────────────────────────────────────────
+// One mapping, used by the initial load, by community install, and by Discard.
+// Discard reverts by re-deriving from the server response, so this MUST stay
+// the single defaulting path — a second, drifting copy is how "discard" ends up
+// reverting to something the server never said.
+
+// A stored persona → the fully-defaulted form shape. `allSkills` is the skill
+// catalog: a persona with no stored `skills` (legacy / code default) runs them all.
+export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: string[]): Persona {
+  return {
+    id: p?.id ?? clientMintId(),
+    name: p?.name ?? '',
+    tagline: p?.tagline ?? '',
+    frequency: p?.frequency ?? 'moderate',
+    scriptLength: p?.scriptLength ?? 'concise',
+    djMode: p?.djMode === true,
+    humour: typeof p?.humour === 'number' ? p.humour : DIAL_NEUTRAL,
+    localColour: typeof p?.localColour === 'number' ? p.localColour : DIAL_NEUTRAL,
+    warmth: typeof p?.warmth === 'number' ? p.warmth : DIAL_NEUTRAL,
+    soul: p?.soul ?? '',
+    language: typeof p?.language === 'string' ? p.language : '',
+    avatar: typeof p?.avatar === 'string' ? p.avatar : '',
+    tts: {
+      engine: p?.tts?.engine ?? 'piper',
+      cloudProvider: p?.tts?.cloudProvider ?? 'openai',
+      voice: p?.tts?.voice ?? 'bf_isabella',
+      gainDb: typeof p?.tts?.gainDb === 'number' ? p.tts.gainDb : 0,
+      speed: typeof p?.tts?.speed === 'number' ? p.tts.speed : 1,
+    },
+    skills: Array.isArray(p?.skills) ? p.skills : allSkills,
+  };
+}
+
+// The prompt-template library. An older controller (no djPrompts field)
+// degrades to its single custom djPrompt as a lone library entry.
+export function promptLibraryFromSettings(
+  j: SettingsResponse,
+): Pick<FormState, 'djPrompts' | 'activeDjPromptId'> {
+  const v = j.values || {};
+  const defaultPrompt = j.defaults?.djPrompt || '';
+  let djPrompts: DjPromptPreset[] = Array.isArray(v.djPrompts)
+    ? v.djPrompts.map(p => ({
+        id: typeof p.id === 'string' && p.id ? p.id : clientMintId('dp_'),
+        name: typeof p.name === 'string' ? p.name : '',
+        text: typeof p.text === 'string' ? p.text : '',
+      }))
+    : [];
+  let activeDjPromptId = typeof v.activeDjPromptId === 'string' ? v.activeDjPromptId : '';
+  if (!Array.isArray(v.djPrompts)) {
+    const stored = v.djPrompt || '';
+    if (stored !== '' && stored !== defaultPrompt) {
+      djPrompts = [{ id: clientMintId('dp_'), name: 'Custom prompt', text: stored }];
+      activeDjPromptId = djPrompts[0]!.id;
+    }
+  }
+  if (activeDjPromptId && !djPrompts.some(p => p.id === activeDjPromptId)) {
+    activeDjPromptId = '';
+  }
+  return { djPrompts, activeDjPromptId };
+}
+
+// The whole form, straight off a /settings response. null when the controller
+// returned no roster at all (nothing sane to edit).
+export function formFromSettings(j: SettingsResponse | null): FormState | null {
+  if (!j?.values?.personas) return null;
+  const allSkills = (j.skills?.catalog || []).map(s => s.name);
+  return {
+    personas: (j.values.personas || []).map(p => personaFromSettings(p, allSkills)),
+    activePersonaId: j.values.activePersonaId ?? '',
+    ...promptLibraryFromSettings(j),
+  };
+}
+
+// Do these two personas hold the same values? Used to decide whether closing
+// the editor needs a "discard changes?" confirm. Two normalisations:
+//   • skills are a set, not a list — toggling one off and back on reorders the
+//     array without changing meaning;
+//   • `avatar` is excluded — avatar mutations POST to their own endpoint and are
+//     already durable, so a fresh avatar is never a pending change.
+export function personasEqual(a: Persona | undefined, b: Persona | undefined): boolean {
+  if (!a || !b) return a === b;
+  const canonical = (p: Persona) =>
+    JSON.stringify({ ...p, avatar: '', skills: [...p.skills].sort() });
+  return canonical(a) === canonical(b);
 }
 
 export function initialsFor(name: string): string {

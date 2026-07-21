@@ -38,7 +38,7 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
-import { useRequestSlip, useVolumeNudge } from '../sharedHooks';
+import { useRequestSlip, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
 function Grip() {
@@ -100,6 +100,7 @@ export default function SubampSkin(_props: SkinProps) {
   const playing = tunedIn && status === 'playing' && !offline;
 
   const adjustVolume = useVolumeNudge();
+  const like = useTrackLike();
 
   // Request line (station log window).
   const slip = useRequestSlip({
@@ -133,7 +134,7 @@ export default function SubampSkin(_props: SkinProps) {
   const digits = showTuneIn || offline ? '--:--' : fmtTime(elapsed);
 
   return (
-    <div className="absolute inset-0 overflow-hidden font-mono text-ink lg:overflow-y-auto">
+    <div className={cn('absolute inset-0 overflow-hidden font-mono text-ink lg:overflow-y-auto', styles.shell)}>
       <div
         className="pointer-events-none absolute inset-0 bg-[radial-gradient(70%_70%_at_50%_42%,color-mix(in_oklab,var(--accent)_5%,transparent),transparent)]"
         aria-hidden="true"
@@ -206,7 +207,7 @@ export default function SubampSkin(_props: SkinProps) {
                 className={cn(
                   'v3-focus grid h-[34px] w-11 cursor-pointer place-items-center border text-[13px]',
                   tunedIn
-                    ? 'border-soft-border text-muted'
+                    ? 'border-[var(--line)] bg-[var(--field)] text-muted'
                     : 'border-[var(--accent)] bg-[var(--accent)] text-bg',
                 )}
               >
@@ -217,7 +218,7 @@ export default function SubampSkin(_props: SkinProps) {
                 onClick={() => { if (tunedIn) handleTune(); }}
                 aria-label="Tune out"
                 className={cn(
-                  'v3-focus grid h-[34px] w-11 place-items-center border border-soft-border text-[11px]',
+                  'v3-focus grid h-[34px] w-11 place-items-center border border-[var(--line)] bg-[var(--field)] text-[11px]',
                   tunedIn ? 'cursor-pointer text-ink hover:bg-[var(--overlay)]' : 'cursor-default text-muted',
                 )}
               >
@@ -229,15 +230,33 @@ export default function SubampSkin(_props: SkinProps) {
                 aria-pressed={muted}
                 className={cn(
                   'v3-focus grid h-[34px] w-11 cursor-pointer place-items-center border text-[9px] font-bold tracking-[0.1em]',
-                  muted ? 'border-[var(--accent)] text-[var(--accent)]' : 'border-soft-border hover:bg-[var(--overlay)]',
+                  muted ? 'border-[var(--accent)] text-[var(--accent)]' : 'border-[var(--line)] bg-[var(--field)] hover:bg-[var(--overlay)]',
                 )}
               >
                 MUTE
               </button>
+              {like.available && (
+                <button
+                  type="button"
+                  onClick={() => void like.like()}
+                  disabled={like.pending || like.liked}
+                  aria-pressed={like.liked}
+                  aria-label={like.liked ? 'Liked' : 'Like this track'}
+                  className={cn(
+                    'v3-focus grid h-[34px] w-11 place-items-center border text-[13px]',
+                    like.liked
+                      ? 'border-[var(--accent)] text-[var(--accent)]'
+                      : 'cursor-pointer border-[var(--line)] bg-[var(--field)] hover:bg-[var(--overlay)]',
+                    like.pending && 'opacity-60',
+                  )}
+                >
+                  {like.liked ? '♥' : '♡'}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => reqInputRef.current?.focus()}
-                className="v3-focus grid h-[34px] w-11 cursor-pointer place-items-center border border-[var(--accent)] text-[9px] font-bold tracking-[0.1em] text-[var(--accent)] hover:bg-[var(--overlay)]"
+                className="v3-focus grid h-[34px] w-11 cursor-pointer place-items-center border border-[var(--accent)] bg-[var(--field)] text-[9px] font-bold tracking-[0.1em] text-[var(--accent)] hover:bg-[var(--overlay)]"
               >
                 REQ
               </button>
@@ -266,7 +285,7 @@ export default function SubampSkin(_props: SkinProps) {
               line at the bottom (same ai-elements Conversation as the admin
               dash Booth log). Needs a definite height for the scroll region,
               hence lg:h-[240px] rather than a content-driven max-height. */}
-          <Conversation className="min-h-0 flex-1 lg:h-[240px]">
+          <Conversation className={cn('min-h-0 flex-1 lg:h-[240px]', styles.screen)}>
             <ConversationContent className="flex flex-col gap-2 px-4 py-3">
               {booth.length === 0 && (
                 <div className="text-[11px] text-muted">waiting for the booth…</div>
@@ -299,7 +318,7 @@ export default function SubampSkin(_props: SkinProps) {
           {/* stick-to-bottom log tail — pins the view to the ▶ now-playing /
               queued lines at the bottom (ai-elements Conversation, like the
               booth above). Definite height so the scroll region resolves. */}
-          <Conversation className="min-h-0 flex-1 lg:h-[200px]">
+          <Conversation className={cn('min-h-0 flex-1 lg:h-[200px]', styles.screen)}>
             <ConversationContent className="flex flex-col gap-1.5 py-2.5 pr-5 pl-4">
               {history.map((h, i) => (
                 <div key={`${h.t ?? i}-${h.title ?? i}`} className="flex gap-2.5 text-[11px] tracking-[0.06em] text-muted uppercase">

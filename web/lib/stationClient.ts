@@ -37,6 +37,26 @@ export interface BeaconPayload {
   utmSource?: string;
 }
 
+/** `POST /like` outcome. Error statuses (403 disabled, 409 stale/no track,
+ *  429 throttled) still carry a JSON body with `error`. */
+export interface LikeResult {
+  ok?: boolean;
+  songId?: string | null;
+  liked?: boolean;
+  alreadyLiked?: boolean;
+  count?: number;
+  error?: string;
+}
+
+/** `GET /like` — liked-state for the current airing, from this listener's
+ *  point of view (server-side dedup key, no account needed). */
+export interface LikeStatus {
+  enabled: boolean;
+  songId?: string | null;
+  liked?: boolean;
+  count?: number;
+}
+
 export interface StationClient {
   origin: StationOrigin;
   /** Prefix a controller-relative path (e.g. `/persona-avatar/p_x`) with the
@@ -56,6 +76,11 @@ export interface StationClient {
   /** `/request/:id` outcome. 404 → status 'unknown'; network error → null so
    *  drawers keep polling. */
   requestStatus(requestId: string): Promise<RequestResult | null>;
+  /** Like the currently playing track. `songId` is what the client believes
+   *  is on air — the controller rejects a stale tap. null on network error. */
+  likeCurrent(songId: string): Promise<LikeResult | null>;
+  /** Liked-state + count for the current airing. null on network error. */
+  likeStatus(): Promise<LikeStatus | null>;
   /** One-shot audience beacon. Best-effort: never throws, never blocks. */
   beacon(payload: BeaconPayload): void;
   /** First-run wizard state. null on any failure — callers treat that as
@@ -97,6 +122,27 @@ export function createStationClient(origin: StationOrigin): StationClient {
         const r = await fetch(`${api}/request/${requestId}`);
         if (r.status === 404) return { success: false, status: 'unknown' };
         return await json<RequestResult>(r);
+      } catch {
+        return null;
+      }
+    },
+    likeCurrent: async songId => {
+      try {
+        const r = await fetch(`${api}/like`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ songId }),
+        });
+        // Error statuses carry a JSON body too — surface it, don't throw.
+        return await json<LikeResult>(r);
+      } catch {
+        return null;
+      }
+    },
+    likeStatus: async () => {
+      try {
+        const r = await fetch(`${api}/like`);
+        return await json<LikeStatus>(r);
       } catch {
         return null;
       }

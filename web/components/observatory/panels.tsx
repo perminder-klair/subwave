@@ -8,7 +8,7 @@
    ============================================================================ */
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   heat,
   tally,
@@ -501,6 +501,7 @@ export function Dossier({
   mixNodes,
   onSelect,
   onClose,
+  onQueue,
 }: {
   track: ObsTrack;
   detail: TrackDetail | null;
@@ -508,11 +509,21 @@ export function Dossier({
   mixNodes: ObsTrack[];
   onSelect: (t: ObsTrack) => void;
   onClose: () => void;
+  // Push this track to the live broadcast queue. Absent on the mock/showcase
+  // dossier, which hides the button entirely.
+  onQueue?: (t: ObsTrack) => Promise<{ ok: boolean; message: string }>;
 }) {
   const dur = (s: number | null) => (s == null ? '—' : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`);
   const d = detail?.track;
   const lastfm = d?.lastfmTags ?? null;
   const lyric = d?.lyricExcerpt ?? null;
+
+  const [queueState, setQueueState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle');
+  const [queueMsg, setQueueMsg] = useState('');
+  useEffect(() => {
+    setQueueState('idle');
+    setQueueMsg('');
+  }, [track.id]);
 
   return (
     <div className="obs-stack dossier">
@@ -534,6 +545,28 @@ export function Dossier({
           <div className="t-caption ad-muted" style={{ marginTop: 4 }}>
             {track.album}
           </div>
+        )}
+        {onQueue && (
+          <>
+            <button
+              className={'dossier-queue' + (queueState === 'done' ? ' done' : '')}
+              disabled={queueState === 'busy' || queueState === 'done'}
+              onClick={async () => {
+                setQueueState('busy');
+                const r = await onQueue(track);
+                setQueueState(r.ok ? 'done' : 'error');
+                setQueueMsg(r.ok ? '' : r.message);
+              }}
+            >
+              {queueState === 'idle' && '▶ QUEUE ON AIR'}
+              {queueState === 'busy' && 'QUEUEING…'}
+              {queueState === 'done' && 'QUEUED ✓'}
+              {queueState === 'error' && 'FAILED — RETRY'}
+            </button>
+            {queueState === 'error' && queueMsg && (
+              <div className="t-caption dossier-queue-err">{queueMsg}</div>
+            )}
+          </>
         )}
       </div>
 

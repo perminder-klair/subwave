@@ -200,7 +200,7 @@ export function JinglesSection({
         open={modal === 'import'}
         onOpenChange={(o) => { if (!o && !importProgress) closeImport(); }}
         title="Import jingles"
-        sub="bring your own mp3 / wav — select one or many"
+        sub="bring your own mp3 / wav, select one or many"
         footer={
           <>
             {importProgress ? (

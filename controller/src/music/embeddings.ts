@@ -35,6 +35,7 @@ export interface SongMeta {
   artist?: string | null;
   album?: string | null;
   year?: number | string | null;
+  genres?: string[] | null;
   genre?: string | null;
 }
 
@@ -99,9 +100,12 @@ export function resolveEmbeddingDim(): number {
 //    Last.fm: chill, west-coast, smooth, late-night
 //    Lyrics: I slid off, ain't been the same since the call dropped..."
 export function formatTrackText(song: SongMeta, enrich?: TrackEnrichment | null): string {
+  // All genre tags, comma-joined — multi-genre tracks embed with their full
+  // tag set so genre-adjacent similarity reflects every tag, not just genres[0].
+  const genre = song.genres?.length ? song.genres.join(', ') : song.genre;
   const head =
     `${song.artist || 'Unknown Artist'} — ${song.title || 'Unknown Title'} ` +
-    `· ${song.album || 'Unknown Album'} (${song.year ?? '?'}) [${song.genre || '?'}]`;
+    `· ${song.album || 'Unknown Album'} (${song.year ?? '?'}) [${genre || '?'}]`;
   const lines = [head];
   if (enrich?.lastfmTags && enrich.lastfmTags.length) {
     lines.push(`Last.fm: ${enrich.lastfmTags.join(', ')}`);

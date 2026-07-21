@@ -43,8 +43,18 @@ const INTRO_SUPPRESSES_HOURLY_MS = 45 * 60 * 1000;
 
 // Pure arc helpers live in programme-pure.ts (dependency-free, so the unit
 // test doesn't drag in the queue/settings graph) — re-exported for callers.
-import { showSpan, planFeature, beatWindow } from './programme-pure.js';
-export { showSpan, planFeature, beatWindow };
+import { showSpan, overrideSpan, planFeature, beatWindow } from './programme-pure.js';
+export { showSpan, overrideSpan, planFeature, beatWindow };
+
+// The episode's position/length at `now`. A live takeover (#930) IS the
+// episode — its window drives the arc, since the pinned show usually isn't in
+// the grid at these hours and showSpan can't see it. Otherwise the grid run.
+function episodeSpan(now: Date): { index: number; total: number } {
+  const ov = settings.getScheduleOverride(now.getTime());
+  if (ov) return overrideSpan(ov, now.getTime());
+  const { dow, hour } = zonedParts(now);
+  return showSpan(settings.get().schedule, dow, hour);
+}
 
 // The beat due at this moment on the STATION clock, for the scheduler's
 // 5-minute programme tick (see beatWindow for why crons can't fire on fixed
@@ -126,7 +136,15 @@ function featureKindMenu(host: { skills?: string[] } | null | undefined): { kind
 // gate leaves the plan `pending` (a later tick retries once budget frees up);
 // a real generation failure marks it `fallback` for the episode (beats then
 // run brief-only — one failed producer call shouldn't burn a retry per tick).
-export async function ensurePlan(ctx: SessionContext, now = new Date()): Promise<void> {
+//
+// `now` defaults to the moment the CONTEXT describes (contextDate), not the
+// wall clock: queue.onTrackStarted rolls the session on a look-ahead context,
+// and judging the episode with a live `now` inside that window makes
+// activeEpisode compare the incoming session key against the OUTGOING show —
+// a silent null, so the plan never builds and the handoff greeting airs with
+// no episode angle. A live context carries a live `at`, so live callers are
+// unchanged.
+export async function ensurePlan(ctx: SessionContext, now = session.contextDate(ctx)): Promise<void> {
   const ep = activeEpisode(now);
   if (!ep) return;
   let prog = session.getProgramme();
@@ -137,8 +155,7 @@ export async function ensurePlan(ctx: SessionContext, now = new Date()): Promise
   if (prog.status !== 'pending') return;
   if (!optionalSegmentsAllowed()) return;  // over budget — stay pending, retry later
 
-  const { dow, hour } = zonedParts(now);
-  const span = showSpan(settings.get().schedule, dow, hour);
+  const span = episodeSpan(now);
   // Span is measured from the show's FIRST hour: if the session rolled late
   // (controller boot mid-show), the remaining hours are what the plan covers.
   const hoursLeft = Math.max(1, span.total - span.index);
@@ -178,7 +195,7 @@ export async function ensurePlan(ctx: SessionContext, now = new Date()): Promise
 // half of the mic-pass already opened the show (with the episode angle woven
 // in — see dj-agent), so the standalone intro is skipped and just marked.
 // Returns true when it aired a standalone intro now.
-export async function maybeRunIntro(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<boolean> {
+export async function maybeRunIntro(queue: QueueApi, ctx: SessionContext, now = session.contextDate(ctx)): Promise<boolean> {
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
   if (!prog || prog.beats?.intro) return false;
@@ -188,6 +205,13 @@ export async function maybeRunIntro(queue: QueueApi, ctx: SessionContext, now = 
     markIntroAired();
     return false;
   }
+  // The mic-pass is still PENDING for this boundary (the hourly cron rolls
+  // with airHandoff=false and leaves airing to the next track boundary). The
+  // greeting doubles as the intro there — airing the standalone intro now
+  // would duck mid-song, the exact bug the deferral fixes, and introduce the
+  // episode twice. Stay pending: the boundary tick re-runs this after
+  // runPersonaHandoff, which marks handoffAired on every exit path.
+  if (session.pendingHandoff()) return false;
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return false;  // stays pending — may air later this hour
 
   markIntroAired();
@@ -243,8 +267,7 @@ export async function featureTick(queue: QueueApi, ctx: SessionContext, now = ne
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
   if (!prog) return;
-  const { dow, hour } = zonedParts(now);
-  const span = showSpan(settings.get().schedule, dow, hour);
+  const span = episodeSpan(now);
   const beat = `feature:${span.index}`;
   if (prog.beats?.[beat]) return;
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return;
@@ -267,8 +290,7 @@ export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourInd
   if (!show?.programme) throw new Error('no programme show is on air');
   const prog = session.getProgramme();
   const plan = prog?.plan || null;
-  const { dow, hour } = zonedParts(now);
-  const idx = hourIndex ?? showSpan(settings.get().schedule, dow, hour).index;
+  const idx = hourIndex ?? episodeSpan(now).index;
   const feature = planFeature(plan, idx);
   const topic = feature?.topic || show.topic || `the heart of "${show.name}"`;
   const kind = String(show.segmentSkill || '').trim() || feature?.kind || null;
@@ -301,8 +323,7 @@ export async function outroTick(queue: QueueApi, ctx: SessionContext, now = new 
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
   if (!prog || prog.beats?.outro) return;
-  const { dow, hour } = zonedParts(now);
-  const span = showSpan(settings.get().schedule, dow, hour);
+  const span = episodeSpan(now);
   if (span.index !== span.total - 1) return;  // not the final hour yet
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return;
   session.markProgrammeBeat('outro');
@@ -351,7 +372,8 @@ export async function runOutro(queue: QueueApi, ctx: SessionContext, now = new D
 // runPersonaHandoff: attach + plan the episode, then air the intro if it's
 // still pending. Returns true when a standalone intro aired just now (the
 // hourly cron uses this to skip the generic time check).
-export async function onSessionSettled(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<boolean> {
+// `now` follows the same contextDate rule as ensurePlan.
+export async function onSessionSettled(queue: QueueApi, ctx: SessionContext, now = session.contextDate(ctx)): Promise<boolean> {
   if (!activeEpisode(now)) return false;
   await ensurePlan(ctx, now);
   return maybeRunIntro(queue, ctx, now);

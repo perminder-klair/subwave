@@ -72,7 +72,7 @@ router.get('/playlists/:id', requireAdmin, async (req, res) => {
           album: s.album,
           year: s.year,
           durationSec: s.duration ?? 0,
-          genre: s.genre ?? tag?.genre ?? null,
+          genre: subsonic.songGenres(s).join(', ') || tag?.genres?.join(', ') || null,
           moods: tag?.moods ?? [],
           energy: tag?.energy ?? null,
         };

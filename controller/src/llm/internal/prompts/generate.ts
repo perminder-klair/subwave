@@ -7,9 +7,10 @@
 // generated draft round-trips through Save without surprises.
 
 import { z } from 'zod';
-import { FREQUENCIES, SCRIPT_LENGTHS, SHOW_MOODS, SHOW_ENERGY } from '../../../settings.js';
+import { FREQUENCIES, SCRIPT_LENGTHS, SHOW_MOODS, SHOW_ENERGY, SOUL_MAX } from '../../../settings.js';
 import { THEME_TOKEN_KEYS } from '../../../themes.js';
 import { djObject } from '../strategy/object.js';
+import { buildContextLines } from './context.js';
 
 // ---------------------------------------------------------------------------
 // Persona
@@ -25,7 +26,7 @@ import { djObject } from '../strategy/object.js';
 const PERSONA_SCHEMA = z.object({
   name: z.string().min(1).max(40).describe('the DJ name shown in the player — 1-3 words, evocative, never generic like "DJ" or "Host"').catch('New DJ'),
   tagline: z.string().max(80).describe('a short one-line descriptor shown next to the name (e.g. "atmospheric & immersive"), 0-80 chars; "" if none fits').catch(''),
-  soul: z.string().min(1).max(1000).describe('the personality/voice sketch the DJ speaks with — tone, sensibility, quirks, the kind of imagery they reach for. Aim for 1-3 sentences; max 1000 chars. Concrete and specific, not a list of adjectives.').catch(''),
+  soul: z.string().min(1).max(SOUL_MAX).describe(`the personality/voice sketch the DJ speaks with — tone, sensibility, quirks, the kind of imagery they reach for. Aim for 1-3 sentences; max ${SOUL_MAX} chars. Concrete and specific, not a list of adjectives.`).catch(''),
   frequency: z.enum(FREQUENCIES as [string, ...string[]]).describe('how chatty, ascending: silent (never talks unprompted), quiet (rarely), moderate, chatty, aggressive (talks a lot)').catch('moderate'),
   scriptLength: z.enum(SCRIPT_LENGTHS as [string, ...string[]]).describe('how long each spoken bit runs, ascending: one-liner (a single line), concise (one or two lines), extended (longer riffs), storyteller (long-form)').catch('concise'),
   djMode: z.boolean().describe('true if this host works the desk like a real radio DJ — back-announces tracks, teases what is coming, more present; false for a quieter selector').catch(true),
@@ -132,4 +133,65 @@ export async function generateTheme(description: string, mode: 'light' | 'dark')
     temperature: 0.7,
     kind: 'generateTheme',
   });
+}
+
+// ---------------------------------------------------------------------------
+// Manual-voice suggestions
+// ---------------------------------------------------------------------------
+
+// The canonical canned prompts for the dash's "Manual voice DJ" chip row —
+// few-shot style anchors for the generator below AND the permanent fallback.
+// The web client keeps its own copy (DashPanel SAY_SUGGESTIONS) for the
+// zero-latency initial render; keep the two lists in step.
+export const SAY_SUGGESTION_EXAMPLES = [
+  'Tease the weather like it’s a rumour you can’t quite confirm.',
+  'Do a station ID like you suspect nobody’s listening — and you’re fine with it.',
+  'Salute the graveyard shift: night drivers, dish pits, the deliberately awake.',
+  'Tease the next track without giving up the title.',
+  'Remind everyone the request line exists and judges no one.',
+  'Announce the time like it’s classified information.',
+];
+
+// Six NAMED slots, not an array — same "singular is kinder to weak local
+// models" reasoning as SHOW_SCHEMA above: given an array field, a 4B model
+// reliably emitted one item and stopped; six required fields make it fill six.
+// No length bounds and .catch('') per slot: a botched or missing slot degrades
+// to '' for the route's normaliser to drop, never a ZodError. The route trims,
+// dedupes, and length-caps; fewer than 3 survivors = failure.
+const SAY_SUGGESTIONS_SCHEMA = z.object({
+  s1: z.string().describe('prompt suggestion 1 of 6').catch(''),
+  s2: z.string().describe('prompt suggestion 2 of 6').catch(''),
+  s3: z.string().describe('prompt suggestion 3 of 6').catch(''),
+  s4: z.string().describe('prompt suggestion 4 of 6').catch(''),
+  s5: z.string().describe('prompt suggestion 5 of 6').catch(''),
+  s6: z.string().describe('prompt suggestion 6 of 6').catch(''),
+});
+
+const SAY_SUGGESTIONS_SYSTEM = `You write prompt suggestions for the operator of a personal internet radio station. Each suggestion is a one-line DIRECTION handed to the on-air AI DJ, who rewrites it in their own persona before speaking — so write instructions ("Tease…", "Salute…", "Announce…"), never finished on-air copy. Keep each under 90 characters: imperative, playful, a little sideways. No emoji, no numbering, no quotation marks. Never tell the DJ to say a specific track or artist name.`;
+
+// Returns the raw slot values as a list — the route normalises (trim, dedupe,
+// drop empties/over-long) and decides whether enough survived.
+export async function generateSaySuggestions(context: any, nowPlaying?: any): Promise<string[]> {
+  const lines = buildContextLines(context);
+  if (nowPlaying?.title) {
+    lines.push(`Now playing: "${nowPlaying.title}" by ${nowPlaying.artist || 'unknown'}`);
+  }
+  const prompt = [
+    'Station status right now:',
+    ...lines.map(l => `  ${l}`),
+    '',
+    'Suggestions in the house voice, for flavour (do NOT repeat any of these):',
+    ...SAY_SUGGESTION_EXAMPLES.map(s => `  - ${s}`),
+    '',
+    'Write 6 fresh suggestions in that voice, one per field s1–s6. Make at least half of them react to the station status above (the hour, the weather, the day, the show on air); the rest can be evergreen bits of radio business.',
+  ].join('\n');
+
+  const out = await djObject({
+    system: SAY_SUGGESTIONS_SYSTEM,
+    prompt,
+    schema: SAY_SUGGESTIONS_SCHEMA,
+    temperature: 0.9,
+    kind: 'generateSaySuggestions',
+  });
+  return [out.s1, out.s2, out.s3, out.s4, out.s5, out.s6];
 }

@@ -35,6 +35,9 @@ interface VoicePreviewButtonProps {
   speed?: number;
   // Kokoro phonemizer language override (e.g. "en-gb", "ja").
   lang?: string;
+  // Persona's free-text on-air language ("Turkish", "Türkçe") — the server
+  // renders the sample sentence in this language when it recognizes it.
+  language?: string;
   // Unsaved ElevenLabs voice_settings sliders (issue #696) — sent so the sample
   // auditions the CURRENT slider positions, not the last-saved values. Only
   // meaningful when engine is 'cloud' with the elevenlabs provider; the server
@@ -53,7 +56,7 @@ interface VoicePreviewButtonProps {
 type PreviewState = 'idle' | 'loading' | 'error';
 
 export function VoicePreviewButton({
-  engine, voice, cloudProvider, speed, lang, voiceSettings, adminFetch, disabled, className,
+  engine, voice, cloudProvider, speed, lang, language, voiceSettings, adminFetch, disabled, className,
 }: VoicePreviewButtonProps) {
   const [state, setState] = useState<PreviewState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -81,7 +84,7 @@ export function VoicePreviewButton({
     discardSample();
     setState('idle');
     setError(null);
-  }, [engine, voice, cloudProvider, speed, lang, discardSample]);
+  }, [engine, voice, cloudProvider, speed, lang, language, discardSample]);
 
   const onClick = async () => {
     // Re-click while synthesizing cancels the request.
@@ -94,7 +97,7 @@ export function VoicePreviewButton({
     try {
       const res = await fetchPreviewSample(
         adminFetch,
-        { engine, voice, cloudProvider, speed, lang, voiceSettings },
+        { engine, voice, cloudProvider, speed, lang, language, voiceSettings },
         ac.signal,
       );
       if (ac.signal.aborted) return;

@@ -19,6 +19,7 @@ import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { Button } from '../ui/button';
 import { Switch } from '../ui/switch';
 import { V3Alert } from '../ui/alert';
+import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '../../lib/cn';
 
 const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
@@ -470,7 +471,10 @@ export default function PlaylistBuilderPanel() {
   // Energy-bar → track-row jump: center the row inside the LIST's own scroll
   // context (scrollIntoView would drag the page along) and flare it briefly.
   const jumpToRow = useCallback((i: number) => {
-    const list = listRef.current;
+    // ScrollArea scrolls its internal radix viewport, not the Root that listRef
+    // points at — resolve it so scrollTop/scrollTo act on the right element.
+    const root = listRef.current;
+    const list = root?.querySelector<HTMLElement>('[data-radix-scroll-area-viewport]') ?? root;
     const row = list?.querySelector<HTMLElement>(`[data-row="${i}"]`);
     if (!list || !row) return;
     if (list.scrollHeight > list.clientHeight) {
@@ -819,8 +823,12 @@ export default function PlaylistBuilderPanel() {
       <div ref={frameRef} className="flex min-w-0 flex-col lg:h-[calc(100dvh-146px)] lg:min-h-[480px] lg:flex-row">
 
         {/* ============ LEFT: RECIPE ============ */}
-        <aside className="flex min-h-0 flex-none flex-col border-b border-ink lg:w-[380px] lg:border-r lg:border-b-0">
-          <div className="min-h-0 flex-1 pt-1 pr-5 pb-[26px] lg:overflow-y-auto">
+        {/* The recipe rail is a lifted controls panel (--card-bg, matching the
+            other admin panels) so it reads distinct from the page/deck; the deck
+            on the right stays the open canvas. */}
+        <aside className="flex min-h-0 flex-none flex-col border-b border-ink bg-[var(--card-bg)] lg:w-[380px] lg:border-r lg:border-b-0">
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="px-5 pt-4 pb-[26px]">
 
             <div className="mb-1.5 font-mono text-[10px] font-bold tracking-[0.2em] text-muted uppercase">Recipe</div>
             <h1 className="mb-[18px] font-display text-[22px] font-bold tracking-[-0.01em]">
@@ -1137,10 +1145,11 @@ export default function PlaylistBuilderPanel() {
               <SwitchRow label="Recently added" hint="source from new library arrivals" on={recentlyAdded} onToggle={setRecentlyAdded} />
               <SwitchRow label="Skip recent plays" hint="avoid tracks that recently aired" on={excludeRecent} onToggle={setExcludeRecent} />
             </div>
-          </div>
+            </div>
+          </ScrollArea>
 
           {/* generate footer */}
-          <div className="flex-none border-t border-ink py-3.5 pr-5">
+          <div className="flex-none border-t border-ink px-5 py-3.5">
             <div className="mb-[9px] flex gap-2">
               <Button
                 variant="accent"
@@ -1304,7 +1313,8 @@ export default function PlaylistBuilderPanel() {
                 </div>
 
                 {/* track list — the star of the screen; every spare pixel is here */}
-                <div ref={listRef} className="flex-1 pb-8 lg:overflow-y-auto">
+                <ScrollArea ref={listRef} className="flex-1">
+                  <div className="pb-8">
                   {tracks.map((t, i) => (
                     <div
                       key={`${t.id}-${i}`}
@@ -1366,6 +1376,7 @@ export default function PlaylistBuilderPanel() {
                     </div>
                   ))}
                 </div>
+                </ScrollArea>
               </div>
             )}
 

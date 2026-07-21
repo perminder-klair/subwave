@@ -18,8 +18,14 @@ import * as library from './library.js';
 // they return the caller's own element type unchanged.
 export interface FilterTrack {
   id?: string;
+  genres?: string[] | null;
   genre?: string | null;
   year?: number | string | null;
+  // Original-release-year surface (issue #842). Library-sourced tracks carry
+  // both; raw Subsonic children carry neither (undefined ≠ "not a comp") and
+  // fall back to a library lookup in trackEraYear.
+  originalYear?: number | null;
+  isCompilation?: boolean | null;
   energy?: string | null;
   moods?: string[] | null;
   audioMoods?: string[] | null;
@@ -33,24 +39,125 @@ export function normGenre(s: unknown): string {
   return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-// Per-track genre — from the track itself (Subsonic + slimTrack library sources
-// both carry it) or a library lookup. null when the track has no genre tag.
-export function trackGenre(t: FilterTrack | null | undefined): string | null {
-  if (t?.genre) return t.genre;
+// Per-track genre tags — every tag the track carries, from the track itself
+// (Subsonic children and slimTrack library rows both carry `genres`; older
+// callers may carry only the scalar `genre`) or a library lookup. Empty when
+// the track has no genre tag.
+export function trackGenres(t: FilterTrack | null | undefined): string[] {
+  if (Array.isArray(t?.genres) && t.genres.length) return t.genres;
+  if (t?.genre) return [t.genre];
   const rec = t?.id ? library.get(t.id) : null;
-  return rec?.genre ?? null;
+  if (Array.isArray(rec?.genres) && rec.genres.length) return rec.genres;
+  return rec?.genre ? [rec.genre] : [];
 }
 
-// True when a track's genre matches ANY of the (already normalised) target
-// genres. Exact-normalised match, or substring either way — same shape as
-// subsonic.resolveGenreName, so "Hip-Hop" matches a "Hip Hop" tag etc.
+// Normalised genre tag plus, per normalised character, whether it opens /
+// closes a word in the ORIGINAL string. A "word" is a maximal run of
+// alphanumerics, so "Contemporary R&B" normalises to "contemporaryrb" with
+// words "contemporary" | "r" | "b". This is what lets containment respect word
+// boundaries even though normGenre has thrown the separators away.
+function genreBoundaries(s: unknown): { norm: string; opens: boolean[]; closes: boolean[] } {
+  const src = String(s ?? '').toLowerCase();
+  const chars: string[] = [];
+  const opens: boolean[] = [];
+  let prevAlnum = false;
+  for (const ch of src) {
+    const alnum = (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9');
+    if (!alnum) { prevAlnum = false; continue; }
+    chars.push(ch);
+    opens.push(!prevAlnum);
+    prevAlnum = true;
+  }
+  // A char closes its word when it is last overall, or the next char opens one.
+  const closes = chars.map((_, i) => i === chars.length - 1 || opens[i + 1]!);
+  return { norm: chars.join(''), opens, closes };
+}
+
+// True when the show's (already normalised) target genre appears inside a
+// track's raw genre tag, aligned to word boundaries. ONE-DIRECTIONAL by design
+// — see genreMatches.
+function tagCoversGenre(tag: string, target: string): boolean {
+  const { norm, opens, closes } = genreBoundaries(tag);
+  if (!norm || !target) return false;
+  if (norm === target) return true;
+  for (let i = norm.indexOf(target); i !== -1; i = norm.indexOf(target, i + 1)) {
+    if (opens[i] && closes[i + target.length - 1]) return true;
+  }
+  return false;
+}
+
+// True when ANY of a track's genre tags matches ANY of the (already
+// normalised) target genres. Multi-genre (#OpenSubsonic): a track tagged
+// Hip-Hop + Rap is in-genre for a Rap show even when Rap isn't its primary tag.
+//
+// Matching is exact-normalised ("Hip-Hop" matches a "Hip Hop" tag), or the
+// track's tag REFINES the target — the target appears in the tag on word
+// boundaries. The direction is the whole point: a show asks for a genre and a
+// track may be tagged more specifically than asked, never less.
+//
+//   show "Punk"      ← track "Punk Rock"          ✓ refines
+//   show "R&B"       ← track "Contemporary R&B"   ✓ refines
+//   show "Pop Punk"  ← track "Pop"                ✗ broader than asked
+//   show "Rap"       ← track "Trap"               ✗ not a word boundary
+//
+// Matching the reverse way too (a track tag that merely CONTAINS the show's
+// genre as a substring) is what let strict emo / pop-punk shows fill up with
+// anything tagged plain "Pop" or "Rock", and unbounded substrings pulled Trap
+// into a Rap show. Both directions were deliberate once; neither survives
+// contact with a strict show.
 export function genreMatches(t: FilterTrack | null | undefined, targetNorms: string[]): boolean {
   if (!targetNorms.length) return false;
-  const g = trackGenre(t);
-  if (!g) return false;
-  const gn = normGenre(g);
-  if (!gn) return false;
-  return targetNorms.some(target => !!target && (gn === target || gn.includes(target) || target.includes(gn)));
+  const tags = trackGenres(t).filter(Boolean);
+  if (!tags.length) return false;
+  return tags.some(tag => targetNorms.some(target => !!target && tagCoversGenre(tag, target)));
+}
+
+// ── Genre resolution honesty ────────────────────────────────────────────────
+
+// subsonic.resolveGenreName maps a show's free-text genre onto a tag the
+// library actually carries, and it matches substrings BOTH ways on purpose —
+// that looseness is right for a listener request ("play some punk") and for
+// the server-side genre fetch, where over-fetching is harmless because the
+// pick paths filter afterwards.
+//
+// It is NOT right silently: a show configured "Pop Punk" against a library
+// with no such tag resolves to plain "Pop" and the station quietly airs a
+// different show than the operator asked for, with nothing in the logs saying
+// so. This describes that gap in operator-facing words; null means the
+// resolution was faithful and there is nothing to say.
+//
+// Note this is about *reporting*, not filtering — the resolved tag is still
+// what gets used. A genre absent from the library makes a show unsatisfiable,
+// and no matching rule fixes that; the fix is telling the operator.
+export function genreResolutionWarning(raw: string, resolved: string | null): string | null {
+  const asked = normGenre(raw);
+  if (!asked) return null;
+  if (!resolved) {
+    return `genre "${raw}" is not a tag in your library — the genre filter is OFF for this show, so it can air anything. Check the spelling, or pick a genre from the editor's suggestions.`;
+  }
+  const got = normGenre(resolved);
+  // Cosmetic differences ("hip hop" → "Hip-Hop") are a faithful resolution.
+  if (got === asked) return null;
+  if (tagCoversGenre(raw, got)) {
+    return `genre "${raw}" is not a tag in your library — falling back to the broader tag "${resolved}", so this show will air more than it asks for. Re-tag the tracks, or set the show's genre to "${resolved}".`;
+  }
+  if (tagCoversGenre(resolved, asked)) {
+    return `genre "${raw}" is not a tag in your library — narrowing to "${resolved}", the only tag that carries it. Other "${raw}" tracks (if any) will not air.`;
+  }
+  return `genre "${raw}" resolved to the unrelated-looking tag "${resolved}" — worth a check.`;
+}
+
+// One-shot memo so a standing misconfiguration doesn't reprint on every pick
+// and every hourly refresh. Keyed by the resolution itself, so the message is
+// identical for every show that hits it. Process-lifetime; a restart re-warns.
+const warnedGenreResolutions = new Set<string>();
+
+export function genreResolutionWarningOnce(raw: string, resolved: string | null): string | null {
+  const key = `${normGenre(raw)} ${resolved ?? ''}`;
+  if (warnedGenreResolutions.has(key)) return null;
+  const warning = genreResolutionWarning(raw, resolved);
+  if (warning) warnedGenreResolutions.add(key);
+  return warning;
 }
 
 // Hard-prefer tracks matching ANY of the show's genres (strict mode). Unlike
@@ -116,19 +223,52 @@ function inAnyWindow(year: number, eras: YearRange[]): boolean {
   });
 }
 
+// The year a track's ERA is judged by (issue #842). Precedence: the resolved
+// original release year (walk-time album tag or MusicBrainz enrichment) wins;
+// a plain `year` only counts when the track is NOT on a compilation album —
+// a compilation's year is the compilation's own release date ("100 Hits: 70s
+// Chartbusters" is 2013), so trusting it both mis-includes the track in the
+// wrong era and misses it in the right one. Returns null for "unknown".
+//
+// Junk-year guard shared by both fields: Number(null)/Number('') are 0, and
+// some taggers write TYER=0000 → a literal 0 — either would sail through a
+// window with an open lower bound ("1989 and earlier": 0 <= 1989). A real
+// recording year is always > 0, so null / '' / non-finite / non-positive all
+// read as unknown.
+export function resolveEraYear(
+  year: number | string | null | undefined,
+  originalYear: number | null | undefined,
+  isCompilation: boolean | null | undefined,
+): number | null {
+  const oy = Number(originalYear);
+  if (Number.isFinite(oy) && oy > 0) return oy;
+  if (isCompilation) return null;
+  const y = Number(year);
+  return Number.isFinite(y) && y > 0 ? y : null;
+}
+
+// Per-track era year — from the track's own fields when the source carries
+// them (library slimTrack rows do), else a light library lookup (Subsonic
+// children carry a bare `year` only, and undefined isn't "not a compilation").
+// Off-library tracks fall back to the plain year, today's behaviour.
+export function trackEraYear(t: FilterTrack | null | undefined): number | null {
+  if (t && (t.originalYear !== undefined || t.isCompilation !== undefined)) {
+    return resolveEraYear(t.year, t.originalYear, t.isCompilation);
+  }
+  const rec = t?.id ? library.getPlaybackMeta(t.id) : null;
+  if (rec) return resolveEraYear(rec.year ?? t?.year, rec.originalYear, rec.isCompilation);
+  return resolveEraYear(t?.year, null, null);
+}
+
 // Hard-filter to tracks inside ANY of the era windows. Unknown-year tracks are
-// treated as out-of-range (dropped). Callers that must not starve should use
-// preferEra (or fall back to the full set themselves).
+// treated as out-of-range (dropped) — including compilation-album tracks whose
+// original year hasn't been resolved yet (see trackEraYear). Callers that must
+// not starve should use preferEra (or fall back to the full set themselves).
 export function inYearRange<T extends FilterTrack>(tracks: T[], eras: YearRange[]): T[] {
   if (!hasEraBound(eras)) return tracks;
   return tracks.filter((t) => {
-    // Unknown year drops (the hard-filter contract). Two traps this guards:
-    // Number(null)/Number('') are 0, and some taggers write TYER=0000 → a
-    // literal 0 — either would sail through a window with an open lower bound
-    // ("1989 and earlier": 0 <= 1989). A real recording year is always > 0, so
-    // treat null / '' / non-finite / non-positive as unknown and drop it.
-    const y = Number(t?.year);
-    return Number.isFinite(y) && y > 0 && inAnyWindow(y, eras);
+    const y = trackEraYear(t);
+    return y != null && inAnyWindow(y, eras);
   });
 }
 

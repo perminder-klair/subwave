@@ -114,6 +114,7 @@ Each candidate carries a "source" tag — a hint about where it came from:
 - recent: newly added to the library
 - frequent / starred / playlist: an established favourite
 - mood-library: matches the room's mood
+- listener-liked: listeners hit the like button on this recently — a proven crowd-pleaser on this station
 - random: a wildcard for breaking a predictable run
 Use it to balance familiarity against discovery. The two *-similar sources may
 carry a "similarity" (0–1, higher = closer) — a high value means a very tight

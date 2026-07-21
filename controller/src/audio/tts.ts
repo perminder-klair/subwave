@@ -12,6 +12,8 @@ import * as pocketTts from './pocketTts.js';
 import { heavyEnabledEngines } from './ttsHeavyClient.js';
 import * as remoteTts from './remoteTts.js';
 import { normalizeForSpeech } from './speech-text.js';
+import { orderedFallbacks } from './tts-fallback.js';
+import { localizedPreviewText } from './preview-text.js';
 import * as cloud from '../llm/speech.js';
 import { stripThinking } from '../llm/sdk.js';
 import * as settings from '../settings.js';
@@ -70,6 +72,36 @@ function requestedEngine(kind: string, personaTts: any): string {
   return settings.get().tts?.defaultEngine || 'piper';
 }
 
+// Can this engine plausibly speak right now? The pre-flight availability/key
+// gates, in one predicate so resolveEngine() (which picks the primary) and
+// fallbackChain() (which picks the runtime rescue) can never disagree about
+// what "installed" means.
+//
+// - `cloud` without a configured key would just throw and fall back — skip the
+//   wasted API attempt. `cloudProvider` scopes the key check: a persona on
+//   ElevenLabs needs that provider's key, not the global Cloud provider's.
+// - `chatterbox` / `pocket-tts` are opt-in (--build-arg WITH_CHATTERBOX=1 /
+//   WITH_POCKETTTS=1); without the venv there's no Python to spawn.
+// - `kokoro` ships in the default image, but its model/voices files are pulled
+//   at build time and can be missing if that download failed.
+// - `remote` needs a configured URL AND a reachable sidecar (/health probe).
+// - `piper` is local, keyless and always present — the universal floor.
+function engineUsable(engine: string, cloudProvider?: string | null): boolean {
+  if (!ENGINES.includes(engine)) return false;
+  if (engine === 'cloud') return cloud.isConfigured(cloudProvider ?? null);
+  if (engine === 'chatterbox') return chatterbox.isAvailable();
+  if (engine === 'pocket-tts') return pocketTts.isAvailable();
+  if (engine === 'kokoro') return kokoro.isAvailable();
+  if (engine === 'remote') return remoteTts.isAvailable();
+  return true;
+}
+
+// The persona's own cloud provider, but only when the persona is actually ON
+// the cloud engine — otherwise the global Cloud provider applies.
+function personaCloudProvider(personaTts: any): string | null {
+  return (personaTts && personaTts.engine === 'cloud') ? (personaTts.cloudProvider ?? null) : null;
+}
+
 function resolveEngine(kind: string, personaTts: any) {
   const tts = settings.get().tts || {};
   let chosen;
@@ -79,44 +111,38 @@ function resolveEngine(kind: string, personaTts: any) {
     chosen = tts.defaultEngine || 'piper';   // jingle / fallback
   }
   if (!ENGINES.includes(chosen)) return 'piper';
-  // `cloud` without a configured key would just throw and fall back — skip
-  // the wasted API attempt and resolve straight to a local engine. Check the
-  // persona's own provider: a persona on ElevenLabs needs that provider's key,
-  // not the global Cloud-engine provider's.
-  if (chosen === 'cloud') {
-    const provider = (personaTts && personaTts.engine === 'cloud')
-      ? personaTts.cloudProvider
-      : null;
-    if (!cloud.isConfigured(provider)) {
-      return tts.defaultEngine && tts.defaultEngine !== 'cloud' ? tts.defaultEngine : 'piper';
-    }
-  }
-  // Chatterbox is opt-in — if the controller image wasn't built with
-  // --build-arg WITH_CHATTERBOX=1, the venv isn't there. Skip straight to a
-  // local engine instead of trying to spawn a Python that doesn't exist.
-  if (chosen === 'chatterbox' && !chatterbox.isAvailable()) {
-    return tts.defaultEngine && tts.defaultEngine !== 'chatterbox' ? tts.defaultEngine : 'piper';
-  }
-  // Same story for PocketTTS — opt-in via --build-arg WITH_POCKETTTS=1.
-  // When the venv is absent, route to the saved default (or Piper as the
-  // universal local fallback).
-  if (chosen === 'pocket-tts' && !pocketTts.isAvailable()) {
-    return tts.defaultEngine && tts.defaultEngine !== 'pocket-tts' ? tts.defaultEngine : 'piper';
-  }
-  // Kokoro ships in the default image, but its model/voices files are pulled at
-  // build time and can be missing if that download failed. isAvailable() now
-  // existsSyncs them, so route around a broken Kokoro install instead of
-  // spawning a worker that just dies on load and falls back per segment.
-  if (chosen === 'kokoro' && !kokoro.isAvailable()) {
-    return tts.defaultEngine && tts.defaultEngine !== 'kokoro' ? tts.defaultEngine : 'piper';
-  }
-  // The remote engine needs a configured URL and a reachable sidecar — unlike
-  // the local engines, which gate on installed venvs/models. When the URL is
-  // blank or the /health probe hasn't succeeded yet, fall back to the default.
-  if (chosen === 'remote' && !remoteTts.isAvailable()) {
-    return tts.defaultEngine && tts.defaultEngine !== 'remote' ? tts.defaultEngine : 'piper';
+  // Known-unavailable engine → route to the operator's saved default (or Piper
+  // as the universal local fallback) instead of attempting a call that can only
+  // throw. Note this does NOT verify the default is itself usable; if it isn't,
+  // the runtime chain in speak() picks up the pieces.
+  if (!engineUsable(chosen, personaCloudProvider(personaTts))) {
+    return tts.defaultEngine && tts.defaultEngine !== chosen ? tts.defaultEngine : 'piper';
   }
   return chosen;
+}
+
+// Ordered runtime rescues after `primary` threw mid-render (cloud API 500,
+// worker crash, network timeout — a failure the pre-flight gate can't predict).
+// The operator's configured default engine comes FIRST: it's their explicit
+// second choice, and jumping straight past it to Piper meant a station whose
+// default was, say, Kokoro still dropped to the flattest voice in the box the
+// moment a persona's provider hiccuped. Piper follows as the universal local
+// floor, then Kokoro for the case where Piper itself was the primary.
+//
+// The default engine is checked with the GLOBAL cloud provider (null), not the
+// persona's — falling back to `cloud` means the station default's credentials,
+// not the ones that just failed. The rescue call itself must agree: speak()'s
+// chain loop passes a null personaTts to speakWith() so a cloud-persona rescue
+// can't re-apply the persona's own provider/voice override.
+//
+// At most three rescue attempts — the ordering itself is pure and pinned by
+// scripts/tts-fallback.test.ts.
+function fallbackChain(primary: string): string[] {
+  return orderedFallbacks(
+    primary,
+    settings.get().tts?.defaultEngine,
+    (engine) => engineUsable(engine, null),
+  );
 }
 
 // Effective voice level trim (dB) for a spoken segment of `kind`: the resolved
@@ -247,12 +273,17 @@ const PREVIEW_TEXT_MAX = 200;
 const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
 
 export async function synthesizeSample(
-  { engine, voice = '', cloudProvider = 'openai', speed, lang, text, voiceSettings }: {
+  { engine, voice = '', cloudProvider = 'openai', speed, lang, language, text, voiceSettings }: {
     engine: string;
     voice?: string;
     cloudProvider?: string;
     speed?: number;
     lang?: string;
+    // Persona's free-text on-air language ("Turkish", "Türkçe"). When set and
+    // no explicit `text` is given, the sample sentence is looked up in that
+    // language (preview-text.ts) so the audition matches what the persona
+    // sounds like on air; unrecognized/empty falls back to the English line.
+    language?: string;
     text?: string;
     // Unsaved ElevenLabs voice_settings sliders to audition (issue #696) —
     // same field names as settings.tts.cloud so they merge straight into the
@@ -266,7 +297,9 @@ export async function synthesizeSample(
   },
 ): Promise<string> {
   if (!ENGINES.includes(engine)) throw new Error(`Unknown engine: ${engine}`);
-  const raw = (typeof text === 'string' && text.trim()) ? text.trim() : DEFAULT_PREVIEW_TEXT;
+  const raw = (typeof text === 'string' && text.trim())
+    ? text.trim()
+    : (localizedPreviewText(language) ?? DEFAULT_PREVIEW_TEXT);
   const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), settings.get().tts?.corrections);
   const scale = settings.clampTtsSpeed(speed);
   // Clamp the audition voice_settings to ElevenLabs' [0,1] the same way
@@ -371,11 +404,11 @@ export async function speak(
     });
     return result;
   } catch (err) {
-    // Piper is the universal local fallback — no model load, no API key.
-    // From any non-piper engine we always fall back to piper; if piper itself
-    // is the primary, try kokoro (only if its worker is installed).
-    const fallback = primary === 'piper' ? 'kokoro' : 'piper';
-    if (fallback === 'kokoro' && !kokoro.isAvailable()) {
+    // The primary passed the pre-flight gate but threw mid-render. Walk the
+    // rescue chain — configured default engine, then Piper, then Kokoro — so
+    // the DJ never goes silent because one provider hiccuped.
+    const chain = fallbackChain(primary);
+    if (!chain.length) {
       recordTts({
         ...callBase, engine: primary, fellBack: requested !== primary,
         ok: false, ms: Date.now() - started, error: err.message,
@@ -383,23 +416,39 @@ export async function speak(
       });
       throw err;
     }
-    console.error(`[tts] ${primary} failed for kind=${kind}: ${err.message} — falling back to ${fallback}`);
-    try {
-      const result = await speakWith(fallback, speakText, { outPath, speedScale: scale, language, soul }, personaTts);
-      if (typeof result === 'string') await applyEdgeFades(result);
-      recordTts({
-        ...callBase, engine: fallback, fellBack: true,
-        ok: true, ms: Date.now() - started, t: new Date().toISOString(),
-      });
-      return result;
-    } catch (err2) {
-      recordTts({
-        ...callBase, engine: fallback, fellBack: true,
-        ok: false, ms: Date.now() - started, error: err2.message,
-        t: new Date().toISOString(),
-      });
-      throw err2;
+    let lastErr = err;
+    let lastEngine = primary;
+    for (const fallback of chain) {
+      console.error(`[tts] ${lastEngine} failed for kind=${kind}: ${lastErr.message} — falling back to ${fallback}`);
+      try {
+        // personaTts is deliberately NOT forwarded to a rescue: speakWith()'s
+        // per-engine branches only read it when personaTts.engine === the
+        // engine being spoken, and the chain excludes the primary — so for
+        // every rescue it's inert EXCEPT the one corner where a cloud persona
+        // was pre-flight-rerouted (its provider unconfigured) and the default
+        // engine is `cloud`: forwarding it would re-apply the persona's dead
+        // provider/voice instead of the station default's credentials the
+        // chain probe just validated. Null keeps probe and call in agreement.
+        // The persona's `language`/`soul` hints still ride via opts.
+        const result = await speakWith(fallback, speakText, { outPath, speedScale: scale, language, soul }, null);
+        if (typeof result === 'string') await applyEdgeFades(result);
+        recordTts({
+          ...callBase, engine: fallback, fellBack: true,
+          ok: true, ms: Date.now() - started, t: new Date().toISOString(),
+        });
+        return result;
+      } catch (err2) {
+        lastErr = err2;
+        lastEngine = fallback;
+      }
     }
+    // Every rescue failed too — record against the last engine attempted.
+    recordTts({
+      ...callBase, engine: lastEngine, fellBack: true,
+      ok: false, ms: Date.now() - started, error: lastErr.message,
+      t: new Date().toISOString(),
+    });
+    throw lastErr;
   }
 }
 

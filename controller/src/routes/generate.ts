@@ -9,6 +9,8 @@ import * as dj from '../llm/dj.js';
 import * as settings from '../settings.js';
 import * as library from '../music/library.js';
 import { listThemes } from '../themes.js';
+import { getFullContext } from '../context.js';
+import { queue } from '../broadcast/queue.js';
 
 export const router = express.Router();
 
@@ -87,6 +89,69 @@ router.post('/generate/show', requireAdmin, async (req, res) => {
     };
 
     res.json({ ok: true, show: draft });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Manual-voice suggestion chips (admin dash "Manual voice DJ" card). The last
+// generated batch is cached in memory only — after a controller restart the
+// dash falls back to its hardcoded set until the operator hits refresh again.
+let sayCache: { suggestions: string[]; generatedAt: string } | null = null;
+
+// A weak model's batch arrives here raw (the Zod schema is deliberately
+// unbounded): strip list markers and wrapping quotes, drop empties, dupes,
+// and over-long lines. Under 3 survivors the caller treats it as a failure.
+function normalizeSuggestions(raw: unknown): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of Array.isArray(raw) ? raw : []) {
+    if (typeof item !== 'string') continue;
+    const s = item
+      .replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '')
+      .replace(/^["'“”‘’]+|["'“”‘’]+$/g, '')
+      .trim();
+    if (!s || s.length > 120) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out.slice(0, 8);
+}
+
+// GET /generate/say-suggestions — the cached batch, never a model call.
+// suggestions: null = nothing generated since boot (client keeps its fallback).
+router.get('/generate/say-suggestions', requireAdmin, (_req, res) => {
+  res.json({
+    ok: true,
+    suggestions: sayCache?.suggestions ?? null,
+    generatedAt: sayCache?.generatedAt ?? null,
+  });
+});
+
+// POST /generate/say-suggestions — generate a fresh batch and cache it.
+// Explicit operator action (the ↻ button), so — like the manual /dj/segment
+// runners — intentionally not budget-gated.
+router.post('/generate/say-suggestions', requireAdmin, async (_req, res) => {
+  try {
+    const ctx = await getFullContext();
+    const nowPlaying = await queue.getNowPlaying().catch(() => null);
+    // Small local models routinely under-deliver the asked-for 6 (two lines is
+    // common from a 4B). One extra attempt, MERGING batches rather than
+    // discarding the first — two half-batches at temperature 0.9 usually add
+    // up. Bounded at 2 calls total: this is an explicit operator click, and
+    // the configured station model may be slow (see CLAUDE.md on retries).
+    let suggestions: string[] = [];
+    for (let attempt = 0; attempt < 2 && suggestions.length < 3; attempt++) {
+      const batch = await dj.generateSaySuggestions(ctx, nowPlaying);
+      suggestions = normalizeSuggestions([...suggestions, ...batch]);
+    }
+    if (suggestions.length < 3) {
+      throw new Error('model returned too few usable suggestions');
+    }
+    sayCache = { suggestions, generatedAt: new Date().toISOString() };
+    res.json({ ok: true, ...sayCache });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

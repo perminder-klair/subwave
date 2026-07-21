@@ -1,0 +1,24 @@
+{
+  "id": "blueprint",
+  "name": "Blueprint",
+  "description": "Drafting-table blueprint: deep cobalt stock, chalk-white linework and dimensions, a bright azure accent over a faint drawing grid.",
+  "mode": "dark",
+  "tokens": {
+    "--bg": "#0a3a92",
+    "--surface": "#0f409c",
+    "--surface-border": "rgba(226, 236, 255, 0.28)",
+    "--field": "color-mix(in oklab, #0a3a92 88%, #f4f7ff)",
+    "--ink": "#f4f7ff",
+    "--muted": "#b7c6ec",
+    "--ink-faint": "#7f92c6",
+    "--accent": "#3fa9ff",
+    "--accent-2": "#8fd4ff",
+    "--accent-soft": "color-mix(in oklab, #3fa9ff 20%, #0a3a92)",
+    "--line": "rgba(226, 236, 255, 0.22)",
+    "--soft-border": "rgba(226, 236, 255, 0.14)",
+    "--overlay": "rgba(2, 16, 48, 0.55)",
+    "--display-font": "chakra-petch",
+    "--mono-font": "ibm-plex-mono",
+    "--grain": "0.08"
+  }
+}

@@ -68,7 +68,7 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="text-[13px] font-bold">Enable sound effects</div>
-            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
+            <div className="mt-0.5 max-w-[480px] text-[14px] leading-[1.5] text-muted">
               When off, the segment-director agent is never shown the effect catalogue and stops
               playing stingers under its voice. The library below is kept either way.
             </div>
@@ -87,7 +87,7 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
 
       {!ready && (
         <div className="card">
-          <div className="card-body text-[12px] leading-[1.5] text-muted">
+          <div className="card-body text-[14px] leading-[1.5] text-muted">
             <strong className="tracking-[0.12em] text-ink uppercase">
               ElevenLabs key not set
             </strong>

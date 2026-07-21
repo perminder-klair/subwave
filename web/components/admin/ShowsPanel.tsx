@@ -15,7 +15,7 @@
 // touch, a tap toggles one cell and a long-press arms drag-painting — a
 // plain swipe only scrolls (see HOLD_MS below).
 import type { ChangeEvent, RefObject, TouchEvent } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Users, Share2 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
@@ -207,6 +207,27 @@ interface Persona {
 
 interface Schedule {
   [day: number]: (string | null)[];
+}
+
+/** Timed takeover (#930): one show pinned over the weekly grid until
+ *  `expiresAt` (epoch ms), then normal programming resumes on its own. */
+interface ScheduleOverride {
+  showId: string;
+  startedAt: number;
+  expiresAt: number;
+}
+
+// Mirrors the controller's OVERRIDE_MIN/MAX_MINUTES (settings.ts).
+const PIN_MIN_MINUTES = 15;
+const PIN_MAX_MINUTES = 720;
+const PIN_PRESETS = [
+  { minutes: 60, label: '1h' },
+  { minutes: 120, label: '2h' },
+  { minutes: 180, label: '3h' },
+];
+
+function fmtDuration(minutes: number): string {
+  return minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`;
 }
 
 interface FormState {
@@ -461,6 +482,13 @@ export default function ShowsPanel() {
   // Navidrome playlists for the per-show playlist-anchor picker. Admin-gated;
   // failures are silent (the picker just shows no options to choose from).
   const [playlists, setPlaylists] = useState<{ id: string; name: string; songCount: number | null }[]>([]);
+  // Timed takeover (#930): the pin currently in force (null = none), plus the
+  // pin form's own state. `override` comes from GET /schedule and is refreshed
+  // by the pin/cancel actions.
+  const [override, setOverride] = useState<ScheduleOverride | null>(null);
+  const [pinShowId, setPinShowId] = useState('');
+  const [pinMinutes, setPinMinutes] = useState(60);
+  const [pinBusy, setPinBusy] = useState(false);
 
   // Drag-paint stroke: { active, value } — value is the showId/null painted
   // for the whole stroke, decided on mousedown so a drag doesn't flicker.
@@ -550,6 +578,22 @@ export default function ShowsPanel() {
         if (firstValid) setBrush(b => b ?? firstValid.id);
       }
     })();
+  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch the live takeover once after sign-in (GET /schedule is public but
+  // adminFetch keeps the base-URL handling consistent). Expired/absent → null.
+  useEffect(() => {
+    if (!hydrated || needsAuth) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await adminFetch('/schedule');
+        if (!r.ok || cancelled) return;
+        const j = (await r.json()) as { override?: ScheduleOverride | null };
+        if (j.override) setOverride(j.override);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch the skill catalogue once for the programme feature-segment pin.
@@ -943,6 +987,42 @@ export default function ShowsPanel() {
     } finally { setBusy(false); }
   };
 
+  // Pin a show over the weekly grid for `pinMinutes` (#930). The controller
+  // persists the window, airs the handoff in the background, and reverts on
+  // its own when the timer lapses — nothing here to undo later.
+  const pinShow = async () => {
+    if (!pinShowId) return;
+    setPinBusy(true);
+    try {
+      const r = await adminFetch('/schedule/override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ showId: pinShowId, minutes: pinMinutes }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { error?: string; override?: ScheduleOverride };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      setOverride(j.override ?? null);
+      const name = showById(pinShowId)?.name?.trim() || 'show';
+      notify.ok(`“${name}” takes over for ${fmtDuration(pinMinutes)} — the switch airs on the next track.`);
+    } catch (e) {
+      notify.err(errorMessage(e));
+    } finally { setPinBusy(false); }
+  };
+
+  // Cancel a takeover early — the weekly schedule resumes on the next roll.
+  const cancelPin = async () => {
+    setPinBusy(true);
+    try {
+      const r = await adminFetch('/schedule/override', { method: 'DELETE' });
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      setOverride(null);
+      notify.ok('Takeover cancelled — back to the weekly schedule.');
+    } catch (e) {
+      notify.err(errorMessage(e));
+    } finally { setPinBusy(false); }
+  };
+
   // ── error / loading shells ───────────────────────────────────────────────
   if (err) {
     return (
@@ -964,7 +1044,12 @@ export default function ShowsPanel() {
   }
 
   const validBrushes = form.shows.filter(showValid);
-  const nowShow = showById(form.schedule[nowDay]?.[nowHour] ?? null);
+  // A live takeover outranks the grid on the On-air card — mirror the
+  // controller's resolveActiveShow. `now` ticks every second, so an expiring
+  // pin drops off the card by itself; a pin of a since-deleted show is void.
+  const liveOverride = override && override.expiresAt > now.getTime() ? override : null;
+  const pinnedShow = liveOverride ? showById(liveOverride.showId) : null;
+  const nowShow = pinnedShow ?? showById(form.schedule[nowDay]?.[nowHour] ?? null);
   const upNext = slotAhead(1);
   const after = slotAhead(2);
   const upNextShow = upNext.showId ? showById(upNext.showId) : null;
@@ -1004,8 +1089,8 @@ export default function ShowsPanel() {
 
         {/* Now / Up next / After that strip */}
         <div className="stack-mobile grid grid-cols-3 border-b border-separator-strong">
-          <NowCard label="On air" accent slotHour={nowHour} show={nowShow}
-            color={colorOf(form.schedule[nowDay]?.[nowHour])}
+          <NowCard label={pinnedShow ? 'On air · takeover' : 'On air'} accent slotHour={nowHour} show={nowShow}
+            color={colorOf(pinnedShow ? pinnedShow.id : form.schedule[nowDay]?.[nowHour])}
             personaLabel={nowShow ? personaName(nowShow.personaId) : ''} />
           <NowCard label="Up next" slotHour={upNext.hour} show={upNextShow}
             color={colorOf(upNext.showId)}
@@ -1013,6 +1098,80 @@ export default function ShowsPanel() {
           <NowCard label="After that" slotHour={after.hour} show={afterShow}
             color={colorOf(after.showId)}
             personaLabel={afterShow ? personaName(afterShow.personaId) : ''} />
+        </div>
+
+        {/* Takeover — pin a show over the grid for a while (#930). The switch
+            airs at the next roll; expiry reverts to the schedule on its own. */}
+        <div className="flex flex-wrap items-center gap-2 border-b border-separator-strong p-3.5">
+          <Eyebrow className={liveOverride ? 'text-vermilion' : 'text-muted'}>takeover</Eyebrow>
+          {liveOverride && pinnedShow ? (
+            <>
+              <span className="text-[13px] font-bold text-ink">
+                {pinnedShow.name.trim() || 'untitled'}
+              </span>
+              <span className="text-[12px] text-muted">
+                ends {fmtClock(liveOverride.expiresAt, stationTz, stationLocale)}
+                {' · '}
+                {Math.max(1, Math.ceil((liveOverride.expiresAt - now.getTime()) / 60_000))} min left
+              </span>
+              <Btn sm onClick={cancelPin} disabled={pinBusy}>
+                {pinBusy ? 'cancelling…' : 'Cancel takeover'}
+              </Btn>
+            </>
+          ) : (
+            <>
+              <Select value={pinShowId} onValueChange={setPinShowId}>
+                <SelectTrigger className="h-8 w-52 text-[13px]">
+                  <SelectValue placeholder="pin a show…" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectGroup>
+                    {validBrushes.map(s => (
+                      <SelectItem key={s.id} value={s.id}>{s.name.trim() || 'untitled'}</SelectItem>
+                    ))}
+                  </SelectGroup>
+                </SelectContent>
+              </Select>
+              {PIN_PRESETS.map(p => (
+                <button
+                  key={p.minutes}
+                  type="button"
+                  aria-pressed={pinMinutes === p.minutes}
+                  onClick={() => setPinMinutes(p.minutes)}
+                  className={cn(
+                    'border border-ink px-2 py-0.5 text-[12px]',
+                    pinMinutes === p.minutes ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
+                  )}
+                >
+                  {p.label}
+                </button>
+              ))}
+              <Input
+                type="number"
+                min={PIN_MIN_MINUTES}
+                max={PIN_MAX_MINUTES}
+                value={pinMinutes}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                  const v = Number(e.target.value);
+                  if (Number.isFinite(v)) setPinMinutes(Math.round(v));
+                }}
+                className="h-8 w-20 text-[13px]"
+                aria-label="takeover minutes"
+              />
+              <span className="caption">min</span>
+              <Btn
+                sm
+                tone="accent"
+                onClick={pinShow}
+                disabled={pinBusy || !pinShowId || pinMinutes < PIN_MIN_MINUTES || pinMinutes > PIN_MAX_MINUTES}
+              >
+                {pinBusy ? 'pinning…' : 'Pin show'}
+              </Btn>
+              {validBrushes.length === 0 && (
+                <span className="text-[11px] text-muted italic">add a show first</span>
+              )}
+            </>
+          )}
         </div>
       </section>
 
@@ -1400,6 +1559,19 @@ function ShowEditor({
     update({ genres: [...show.genres, v] });
     setGenreDraft('');
   };
+  // Genres this show asks for that no track actually carries. The controller
+  // resolves a free-text genre onto the nearest library tag, which silently
+  // broadens the show ("Pop Punk" → "Pop") or drops the filter altogether when
+  // nothing is close — invisible on air unless we say it here, at the moment
+  // the operator is looking at the field. Mirrors show-filter.normGenre so the
+  // UI and the station agree on what counts as "the same tag". Only meaningful
+  // once the library list has loaded (empty = not fetched yet, or the endpoint
+  // failed — never warn on a fetch failure).
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const knownGenres = useMemo(() => new Set(genres.map(norm)), [genres]);
+  const unknownGenres = genres.length
+    ? show.genres.filter(g => !knownGenres.has(norm(g)))
+    : [];
   return (
     <EditorDialog
       open
@@ -1483,10 +1655,10 @@ function ShowEditor({
                 max={GUESTS_MAX}
               />
               <span className="field-hint">
-                Optional, up to {GUESTS_MAX}. While this show is on air, guests
-                take some of the talk breaks — station IDs, time checks,
-                weather/news segments — in their own voice. The host still
-                drives the music and the track intros.
+                Optional, up to {GUESTS_MAX}. While this show airs, guests take
+                some of the talk breaks (station IDs, time checks, weather and
+                news) in their own voice. The host still drives the music and
+                track intros.
               </span>
 
               <div className="mt-1 flex items-start gap-3">
@@ -1502,10 +1674,10 @@ function ShowEditor({
                     Banter breaks
                   </Label>
                   <span className="field-hint">
-                    Short scripted exchanges between the host and guests — a few
-                    lines of real back-and-forth, each voice rendered
-                    separately — up to twice an hour depending on the
-                    persona&apos;s talk frequency. Needs at least one guest.
+                    Short scripted back-and-forth between the host and guests,
+                    each voice rendered separately. Up to twice an hour,
+                    depending on the persona&apos;s talk frequency. Needs at
+                    least one guest.
                   </span>
                 </div>
               </div>
@@ -1523,10 +1695,9 @@ function ShowEditor({
               <div className="grid gap-0.5">
                 <Label>Programme (produced episode)</Label>
                 <span className="field-hint">
-                  The DJ produces each airing as a coherent episode from the
-                  topic brief: an intro at the top of the show, a planned
-                  feature segment mid-hour, and a sign-off in the closing
-                  minutes — with a fresh angle every episode.
+                  The DJ produces each airing as a full episode from the topic
+                  brief: an intro up top, a planned feature mid-hour, and a
+                  sign-off in the closing minutes. Fresh angle every episode.
                 </span>
               </div>
             </div>
@@ -1550,9 +1721,9 @@ function ShowEditor({
                   </SelectContent>
                 </Select>
                 <span className="field-hint">
-                  Optional. Pin the mid-hour feature to one skill — e.g. news
-                  for a morning roundup. Producer&apos;s choice lets each
-                  episode&apos;s plan decide.
+                  Optional. Pin the mid-hour feature to one skill, like news for
+                  a morning roundup. Producer&apos;s choice lets each episode
+                  decide.
                 </span>
               </div>
             )}
@@ -1567,9 +1738,9 @@ function ShowEditor({
               onChange={id => update({ themeId: id })}
             />
             <span className="field-hint">
-              Optional. When this show goes on air the player switches to
-              this palette; back to the station default when the hour ends.
-              Manage themes in admin → Settings → Theme.
+              Optional. The player switches to this palette while the show airs,
+              then back to the station default. Manage themes in
+              Settings → Theme.
             </span>
           </Field>
         </Card>
@@ -1587,8 +1758,8 @@ function ShowEditor({
               })}
             />
             <span className="field-hint">
-              Pick any that fit — a track matching any selected mood qualifies.
-              None selected = Any (auto): the station&apos;s autonomous mood applies.
+              Pick any that fit; a track matching any of them qualifies. None
+              selected = Any (auto), following the station&apos;s own mood.
             </span>
           </Field>
 
@@ -1625,7 +1796,7 @@ function ShowEditor({
               </div>
             )}
             <span className="field-hint">
-              Pick any decades — non-adjacent ones work ({'"'}90s + 2010s{'"'}).
+              Pick any decades, even non-adjacent ones ({'"'}90s + 2010s{'"'}).
               None selected = any era.
             </span>
           </Field>
@@ -1684,6 +1855,18 @@ function ShowEditor({
             <span className="field-hint">
               Up to {FILTER_VALUES_MAX}; a track matching any of them qualifies.
             </span>
+            {unknownGenres.length > 0 && (
+              <span className="field-hint text-vermilion">
+                No track in your library is tagged{' '}
+                {unknownGenres.map((g, i) => (
+                  <span key={g}>{i > 0 ? ', ' : ''}&ldquo;{g}&rdquo;</span>
+                ))}
+                . The station falls back to the closest tag it can find, so this show
+                will air broader results than you asked for — or, if nothing is close,
+                the genre filter switches off entirely. Pick a genre from the
+                suggestions, or re-tag the tracks in Navidrome.
+              </span>
+            )}
           </Field>
 
           <GenreSuggest
@@ -1705,33 +1888,32 @@ function ShowEditor({
                 Strict filter
               </Label>
               <span className="field-hint">
-                Hard-enforce every filter set above — mood, era, energy and
-                genre. Off-filter tracks only play as a last resort to avoid
-                silence. When off, they&apos;re all soft leans the DJ can break
-                for flow. Needs at least one filter set.
+                Hard-enforces every filter set above (mood, era, energy,
+                genre); off-filter tracks play only as a last resort. When off,
+                they&apos;re soft leans the DJ can break for flow. Needs at
+                least one filter set.
               </span>
             </div>
           </div>
 
           <span className="field-hint -mt-1.5">
-            Optional music steer for this show: a mood, a genre, an era, an
-            energy band, or any mix. Soft by default — the DJ leans toward them
-            but can break them for flow; Strict filter above turns every set
-            one into a hard rule. Mood set to Any (auto) follows the
-            station&apos;s autonomous mood — time of day, weather, festivals —
-            instead of pinning one.
+            Optional steer for this show: mood, genre, era, energy, or any mix.
+            Soft by default, so the DJ leans toward them but can break them for
+            flow; Strict filter above makes them hard rules. Mood set to Any
+            (auto) follows the station&apos;s own mood instead of pinning one.
           </span>
 
           <Field>
             <Label>playlist anchor</Label>
             <span className="field-hint">
-              Pin one or more Navidrome playlists: their combined tracks become
-              this show&apos;s pool. The AI DJ still sequences and talks over
-              them. Pick none to let genre/era/mood drive selection (up to 10).
+              Pin one or more Navidrome playlists and their combined tracks
+              become this show&apos;s pool. The AI DJ still sequences and talks
+              over them. Pick none to let genre/era/mood drive selection
+              (up to 10).
             </span>
             {playlists.length === 0 ? (
               <span className="field-hint opacity-60">
-                No Navidrome playlists found yet — create some in Navidrome and
+                No Navidrome playlists found yet. Create some in Navidrome, then
                 reopen this panel.
               </span>
             ) : (
@@ -1776,10 +1958,10 @@ function ShowEditor({
               <div className="grid gap-0.5">
                 <Label>Playlist only (strict)</Label>
                 <span className="field-hint">
-                  On: play ONLY tracks from the pinned playlist(s) — off-playlist
-                  tracks air only as a last resort to avoid silence. Off: the
-                  playlist dominates but the DJ can still wander for variety.
-                  Listener requests are always allowed through, either way.
+                  On: play only the pinned playlist(s); off-playlist tracks air
+                  only as a last resort. Off: the playlist dominates but the DJ
+                  can still wander for variety. Listener requests always get
+                  through, either way.
                 </span>
               </div>
             </div>
@@ -1788,14 +1970,14 @@ function ShowEditor({
           <Field>
             <Label>excluded playlists</Label>
             <span className="field-hint">
-              Tracks from these playlists will never play during this show,
-              regardless of other filters. Useful for blocking genres or moods
-              that don&apos;t fit — add them to a Navidrome playlist and
-              exclude it here (up to 10).
+              Tracks from these playlists never play during this show, whatever
+              the other filters say. Handy for blocking genres or moods that
+              don&apos;t fit: gather them in a Navidrome playlist and exclude it
+              here (up to 10).
             </span>
             {playlists.length === 0 ? (
               <span className="field-hint opacity-60">
-                No Navidrome playlists found yet — create some in Navidrome and
+                No Navidrome playlists found yet. Create some in Navidrome, then
                 reopen this panel.
               </span>
             ) : (
@@ -1834,11 +2016,11 @@ function ShowEditor({
           <Field>
             <Label htmlFor="show-topic">topic (fed to the DJ as the show theme)</Label>
             <span className="field-hint">
-              This is the brief the AI DJ works from. The more you describe,
-              the better it picks music and writes links: name genres, eras,
-              moods, artists to lean into or avoid, the time of day, the kind
-              of listener, and how the host should sound. Write it like
-              you&apos;re briefing a real DJ before their slot.
+              The brief the AI DJ works from. The more you describe, the better
+              it picks music and writes links: genres, eras, moods, artists to
+              lean into or avoid, time of day, the listener, how the host should
+              sound. Write it like you&apos;re briefing a real DJ before their
+              slot.
             </span>
             <Textarea
               id="show-topic"
@@ -1864,11 +2046,10 @@ function ShowEditor({
               }}
             />
             <span className="field-hint">
-              The longest a single track plays while this show is on air —
-              anything longer fades out at the limit. Leave it blank to use the
-              station limit, enter 0 for no limit (good for long mixes or DJ
-              sets), or set at least {minTrackSeconds ?? 30}s to
-              cap it for this show.
+              The longest a single track plays during this show; anything longer
+              fades out at the limit. Blank uses the station limit, 0 means no
+              limit (good for long mixes or DJ sets), or set at
+              least {minTrackSeconds ?? 30}s to cap it here.
             </span>
           </Field>
         </Card>

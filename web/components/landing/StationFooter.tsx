@@ -133,6 +133,22 @@ export default function StationFooter({ djName }: { djName?: string }) {
             className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
           >
             Discord
+          </AnimatedLink>{' '}
+          ·{' '}
+          <AnimatedLink
+            href="https://x.com/getsubwave"
+            variant="arrow"
+            className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
+          >
+            X
+          </AnimatedLink>{' '}
+          ·{' '}
+          <AnimatedLink
+            href="https://www.reddit.com/r/getsubwave/"
+            variant="arrow"
+            className="font-semibold tracking-[inherit] text-ink hover:text-vermilion"
+          >
+            Reddit
           </AnimatedLink>
         </span>
       </div>
@@ -152,7 +168,7 @@ export default function StationFooter({ djName }: { djName?: string }) {
       </div>
 
       <div
-        className="py-3 text-center font-mono text-[11px] tracking-[0.4em] text-muted select-none"
+        className="py-3 text-center font-mono text-[11px] tracking-[0.4em] text-ink-faint select-none"
         title="End of copy — the old press-room sign-off"
         aria-hidden="true"
       >

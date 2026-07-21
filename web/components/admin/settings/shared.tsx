@@ -23,6 +23,10 @@ export interface WeatherCfg {
   lat: string;
   lng: string;
   locationName: string;
+  /** Broad place the DJ names on air, e.g. "the Peak District". Empty = fall
+   *  back to locationName. Kept separate so the forecast can read an exact
+   *  point without the station broadcasting it. */
+  onAirLocation: string;
   units: 'metric' | 'imperial';
 }
 
@@ -78,7 +82,7 @@ export interface LlmFallbackForm {
   ollamaUrl: string;
   numCtx: number;
   repeatPenalty: number;
-  baseUrl: string;
+  providerBaseUrls: Record<string, string>;
   reasoning: boolean;
 }
 
@@ -88,7 +92,7 @@ export interface LlmForm {
   ollamaUrl: string;
   numCtx: number;
   repeatPenalty: number;
-  baseUrl: string;
+  providerBaseUrls: Record<string, string>;
   reasoning: boolean;
   toolChoice: string;
   pickerAgent: boolean;
@@ -118,7 +122,7 @@ export interface EmbeddingForm {
   enabled: boolean;
   provider: string;          // empty → follow llm.provider
   model: string;             // empty → sensible default per provider
-  baseUrl: string;           // dedicated embedding server URL (openai-compatible / locca); empty → inherit llm
+  providerBaseUrls: Record<string, string>; // per-provider embedding server URLs; empty → inherit llm
   ollamaUrl: string;         // dedicated embedding server URL (ollama); empty → inherit llm
   seedCount: string;         // '0' = auto
   knnNeighbours: string;
@@ -150,6 +154,15 @@ export interface ScrobbleForm {
   listenbrainz: ScrobbleListenbrainzForm;
 }
 
+/** Listener likes (#991) — heart button + Navidrome star + DJ influence. */
+export interface LikesForm {
+  enabled: boolean;
+  starInNavidrome: boolean;
+  influenceDj: boolean;
+  maxTracks: string;
+  windowDays: string;
+}
+
 export interface ArchiveForm {
   enabled: boolean;
   bitrate: string;
@@ -163,6 +176,9 @@ export interface StreamForm {
   aacEnabled: boolean;
   aacBitrate: string;
   bitrate: string;
+  oggIcyMetadata: boolean;
+  idleWhenEmpty: boolean;
+  idleAfterMinutes: string;
 }
 
 export type LoudnessSource = 'replaygain-then-measured' | 'replaygain' | 'measured';
@@ -188,6 +204,7 @@ export interface FormState {
   stream: StreamForm;
   loudness: LoudnessForm;
   station: string;
+  stationDescription: string;
   timezone: string;
   locale: StationLocale;
   kokoroLang: string;
@@ -198,6 +215,7 @@ export interface FormState {
   embedding: EmbeddingForm;
   scrobble: ScrobbleForm;
   privacy: PrivacyForm;
+  likes: LikesForm;
 }
 
 export interface JingleEntry {
@@ -237,13 +255,23 @@ export interface SettingsData {
       aacEnabled?: boolean;
       aacBitrate?: number;
       bitrate?: number;
+      oggIcyMetadata?: boolean;
+      idleWhenEmpty?: boolean;
+      idleAfterMinutes?: number;
     };
     loudness?: { targetLufs?: number; maxBoostDb?: number; source?: LoudnessSource };
     station?: string;
+    stationDescription?: string;
     timezone?: string;
     locale?: StationLocale;
     theme?: { active?: string };
-    weather?: { lat?: number; lng?: number; locationName?: string; units?: 'metric' | 'imperial' };
+    weather?: {
+      lat?: number;
+      lng?: number;
+      locationName?: string;
+      onAirLocation?: string;
+      units?: 'metric' | 'imperial';
+    };
     tts?: {
       defaultEngine?: string;
       kokoro?: { voice?: string; lang?: string };
@@ -278,6 +306,13 @@ export interface SettingsData {
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;
       listenbrainz?: Partial<ScrobbleListenbrainzForm>;
+    };
+    likes?: {
+      enabled?: boolean;
+      starInNavidrome?: boolean;
+      influenceDj?: boolean;
+      maxTracks?: number;
+      windowDays?: number;
     };
   };
   tts?: {
@@ -361,20 +396,23 @@ interface SectionHeaderProps {
   metrics?: MetricSpec[];
   manualHref?: string;
   manualLabel?: ReactNode;
+  actions?: ReactNode;
 }
 
-export function SectionHeader({ eyebrow, title, sub, metrics, manualHref, manualLabel }: SectionHeaderProps) {
+export function SectionHeader({ eyebrow, title, sub, metrics, manualHref, manualLabel, actions }: SectionHeaderProps) {
+  const hasMetrics = !!(metrics && metrics.length > 0);
+  const hasBar = hasMetrics || !!manualHref || !!actions;
   return (
-    <div className="flex flex-wrap items-start gap-4 border border-ink p-4">
-      <div className="min-w-[240px] flex-1">
+    <section className="card">
+      <div className={cn('p-4', hasBar && 'border-b border-ink')}>
         <Eyebrow className="text-vermilion">{eyebrow}</Eyebrow>
         <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
           {title}
         </div>
-        <div className="mt-1.5 max-w-[540px] text-[12px] leading-[1.5] text-muted">
+        <div className="mt-1.5 max-w-[600px] text-[14px] leading-[1.55] text-muted">
           {sub}
         </div>
-        {manualHref && (
+        {manualHref && !hasBar && (
           <a
             href={manualHref}
             target="_blank"
@@ -385,12 +423,27 @@ export function SectionHeader({ eyebrow, title, sub, metrics, manualHref, manual
           </a>
         )}
       </div>
-      {metrics && metrics.length > 0 && (
-        <div className="grid grid-flow-col gap-[18px] pt-1">
-          {metrics.map((m, i) => <Metric key={i} n={m.n} l={m.l} accent={m.accent} />)}
+      {hasBar && (
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3 bg-[var(--ink-softer)] p-3.5">
+          {metrics?.map((met, i) => <Metric key={i} n={met.n} l={met.l} accent={met.accent} />)}
+          {(manualHref || actions) && (
+            <div className="ml-auto flex items-center gap-3">
+              {manualHref && (
+                <a
+                  href={manualHref}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[12px] font-bold text-vermilion underline decoration-[1.5px] underline-offset-2"
+                >
+                  {manualLabel || 'Read this in the manual'} ↗
+                </a>
+              )}
+              {actions}
+            </div>
+          )}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -408,7 +461,7 @@ export function SaveBar({ note, busy, onSave, saveLabel, extra }: SaveBarProps) 
   return (
     <div className="flex flex-wrap items-center gap-3 border border-ink bg-[var(--ink-softer)] p-3">
       <span className="size-1.5 rounded-full bg-vermilion" />
-      <span className="text-[11px] text-muted">{note}</span>
+      <span className="text-[12px] leading-[1.5] text-muted">{note}</span>
       <span className="ml-auto flex gap-2">
         {extra}
         {/* whileTap fires before the network call — operator feels the
@@ -448,7 +501,7 @@ export function KeyStatus({ envVar, present }: KeyStatusProps) {
         <span className={cn('text-[11px] font-bold tracking-[0.12em] uppercase', toneClass)}>
           {present ? 'API key found in environment' : 'API key missing'}
         </span>
-        <span className="text-[11px] leading-[1.5] text-muted">
+        <span className="text-[14px] leading-[1.5] text-muted">
           {present ? (
             <>The controller has <code>{envVar}</code> set, so this provider is ready to use.</>
           ) : (

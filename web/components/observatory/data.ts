@@ -221,6 +221,18 @@ export interface ObservatoryStats {
   updatedAt: string | null;
 }
 
+// Sound-map projection job status, mirrored from the controller's
+// map-projection.ts ProjectionStatus. Rides the bulk load and the lightweight
+// GET /library/observatory/projection poll.
+export interface MapProjectionStatus {
+  running: boolean;
+  startedAt: string | null;
+  lastLog: string[];
+  meta: { algo: string; space: string; count: number; setAt: string } | null;
+  audioVectors: number;
+  stale: boolean;
+}
+
 export interface LibraryData {
   tracks: ObsTrack[];
   genres: string[];
@@ -232,6 +244,7 @@ export interface LibraryData {
   sampled: boolean; // truncated via a stratified per-genre sample (vs. full)
   max: number | null; // node cap the server applied to this load (null: mock)
   hardMax: number; // ceiling the UI may raise the node cap to
+  mapProjection: MapProjectionStatus | null; // null: mock / older controller
   mock: boolean;
 }
 
@@ -723,6 +736,7 @@ export function buildMockLibrary(count = 400): LibraryData {
     sampled: false,
     max: null,
     hardMax: 100000,
+    mapProjection: null,
     mock: true,
   };
 }

@@ -26,6 +26,19 @@
   --color-scrollbar-hover: var(--scrollbar-hover);
   --color-field: var(--field);
 
+  /* Depth + hierarchy tokens (theme foundation). Utilities: bg-surface /
+     border-surface-border (cards lift off the page), text-ink-faint (3rd ink
+     rung under ink → muted), border-line (crisp hairline vs the soft border),
+     bg-accent-2 / bg-accent-soft (a real second colour + accent tint). Values
+     derive from the base palette in :root, so themes inherit them unless they
+     set their own. */
+  --color-surface: var(--surface);
+  --color-surface-border: var(--surface-border);
+  --color-ink-faint: var(--ink-faint);
+  --color-line: var(--line);
+  --color-accent-2: var(--accent-2);
+  --color-accent-soft: var(--accent-soft);
+
   /* shadcn/ui semantic bridge — `accent` here is the muted hover overlay
      shadcn expects (Button hover, Toggle on-state), not the raw vermilion.
      Light/dark flips reach these via :root redeclarations below. */
@@ -61,11 +74,13 @@
 
   /* Type families — promoted so `font-sans` / `font-display` / `font-mono`
      utilities resolve to the next/font variables set on <html>. Plus Jakarta
-     Sans is the UI/body default, Fraunces the display serif, JetBrains Mono the
-     data face. */
+     Sans is the UI/body default, JetBrains Mono the data face. `font-display`
+     now follows the themeable --display-font token (default: Fraunces via the
+     :root fallback below), so an operator-picked headline face applies to every
+     `font-display` headline app-wide. */
   --font-sans: var(--font-sans);
-  --font-display: var(--font-display);
-  --font-mono: var(--font-mono);
+  --font-display: var(--display-font);
+  --font-mono: var(--mono-font);
 }
 
 /* V3 / Frequency — newsprint cream, near-black ink, hot vermilion.
@@ -94,9 +109,9 @@
      needed. Radius is pinned to 0 to keep the brutalist sharp-corner look. */
     --background: var(--bg);
     --foreground: var(--ink);
-    --card: var(--bg);
+    --card: var(--surface);
     --card-foreground: var(--ink);
-    --popover: var(--bg);
+    --popover: var(--surface);
     --popover-foreground: var(--ink);
     --primary: var(--accent);
     --primary-foreground: #fff;
@@ -118,6 +133,24 @@
      card they sit on: darker on light, lighter on dark. Auto-flips because
      both --bg and --ink flip in dark mode. */
     --field: color-mix(in oklab, var(--bg) 92%, var(--ink));
+
+    /* Theme-foundation derived tokens. A theme that omits these inherits a
+     value mixed from its own --bg / --ink / --accent, so every existing theme
+     (and every user theme) gains depth, an ink ladder, hairlines and a second
+     accent for free. All are mode-agnostic — they mix toward --bg / --ink,
+     which already flip in dark mode, so no dark-block redeclaration is needed.
+     A theme overrides any of them via its token map. */
+    --surface: color-mix(in oklab, var(--bg) 93%, var(--ink));
+    --surface-border: var(--soft-border);
+    --ink-faint: color-mix(in oklab, var(--ink) 45%, var(--bg));
+    --line: color-mix(in oklab, var(--ink) 70%, var(--bg));
+    --accent-2: var(--accent);
+    --accent-soft: color-mix(in oklab, var(--accent) 14%, var(--bg));
+    /* Default display + mono faces; the --display-font / --mono-font tokens (a
+     curated id resolved to a family stack in lib/theme) override them, and the
+     font-display / font-mono utilities follow them. */
+    --display-font: var(--font-fraunces);
+    --mono-font: var(--font-jetbrains);
 }
 
 /* Dark palette — applied either by manual override (data-theme="dark") or
@@ -245,19 +278,18 @@ body::after {
     content: "";
     position: fixed;
     inset: 0;
-    opacity: var(--grain-alpha);
+    /* --grain (a themeable 0–1 token) overrides the per-mode paper default when
+       a theme sets it — dial grain up for a heavy VOLT/LAB look or to 0 to kill
+       it. Omitted → the newsprint paper grain (--grain-alpha) is unchanged. */
+    opacity: var(--grain, var(--grain-alpha));
     mix-blend-mode: var(--grain-blend);
     pointer-events: none;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/><feColorMatrix values='0 0 0 0 0.4  0 0 0 0 0.35  0 0 0 0 0.3  0 0 0 0.4 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
     z-index: 100;
 }
 
-:root[data-theme="dark"] body::after,
-:root:not([data-theme="light"]) body::after {
-    /* In dark mode swap the SVG noise tint to a warm off-white so screen-blend
-     lifts the charcoal background instead of muddying it. */
-}
-
+/* In dark mode swap the SVG noise tint to a warm off-white so screen-blend
+   lifts the charcoal background instead of muddying it. */
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) body::after {
         background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/><feColorMatrix values='0 0 0 0 0.55  0 0 0 0 0.5  0 0 0 0 0.45  0 0 0 0.4 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
@@ -945,6 +977,11 @@ html.lite .sw-ripple-circle {
     --fz-dim: color-mix(in oklab, var(--ink) 45%, transparent);
     /* Top edge of the bar — lighter than full ink so it reads as a soft rule. */
     --fz-edge: color-mix(in oklab, var(--ink) 55%, transparent);
+    /* Console-shelf fill for the whole deck + the recessed well behind each
+       dial, so the bar reads as a control shelf and the instruments sit in
+       matching wells on every theme instead of floating on the page colour. */
+    --fz-panel: color-mix(in oklab, var(--ink) 6%, var(--bg));
+    --fz-well: color-mix(in oklab, var(--ink) 12%, var(--bg));
 }
 
 /* Power — circular button, open ring + stem (the power glyph). The ring sits
@@ -954,7 +991,7 @@ html.lite .sw-ripple-circle {
     position: relative;
     border-radius: 50%;
     border: 1px solid var(--ink);
-    background: transparent;
+    background: var(--fz-well);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -963,14 +1000,14 @@ html.lite .sw-ripple-circle {
     transition: background 0.15s;
 }
 .fz-power:hover {
-    background: color-mix(in srgb, var(--ink) 8%, transparent);
+    background: color-mix(in oklab, var(--ink) 17%, var(--bg));
 }
 .fz-power:disabled {
     cursor: not-allowed;
     opacity: 0.45;
 }
 .fz-power:disabled:hover {
-    background: transparent;
+    background: var(--fz-well);
 }
 .fz-power .fz-ring {
     width: 38%;
@@ -1005,7 +1042,7 @@ html.lite .sw-ripple-circle {
 .fz-scale {
     position: relative;
     border: 1px solid var(--fz-line);
-    background: var(--field);
+    background: var(--fz-well);
     overflow: hidden;
     flex: none;
     min-width: 0;
@@ -1105,7 +1142,7 @@ html.lite .sw-ripple-circle {
     position: absolute;
     inset: 0;
     border-radius: 50%;
-    background: transparent;
+    background: var(--fz-well);
     border: 1px solid var(--ink);
     /* Pointer angle driven by the JSX via a ref-set --fz-angle (-135..135deg)
        from the current volume; matches the conic tick scale's -135deg origin. */
@@ -1429,8 +1466,12 @@ html.lite .sw-ripple-circle {
     content: "";
     flex: 1;
     height: 1px;
-    background: currentColor;
-    opacity: 0.4;
+    /* Second editorial colour: the eyebrow label stays --accent, its trailing
+       rule takes --accent-2. Identical to the label on mono themes (accent-2
+       falls back to accent), a two-tone marker on themes that set a distinct
+       second accent (Press, Neon, Sunset, Vinyl, Cyberpunk). */
+    background: var(--accent-2);
+    opacity: 0.5;
     min-width: 24px;
 }
 
@@ -2834,6 +2875,11 @@ html.lite .sw-ripple-circle {
     --danger: #c5302a;
     --ink-soft: color-mix(in oklab, var(--ink) 6%, transparent);
     --ink-softer: color-mix(in oklab, var(--ink) 3%, transparent);
+    /* Higher-contrast muted than the listener surfaces: admin is a dense
+       control panel, so labels + help copy need to clear the readable-contrast
+       floor (the theme's editorial --muted sits ~3.5:1 on the card). Derived
+       from --ink/--bg so it tracks the palette and flips in dark mode. */
+    --muted: color-mix(in oklab, var(--ink) 55%, var(--bg));
     --muted-2: color-mix(in oklab, var(--muted) 70%, var(--bg));
     /* Two-tone surface split so cards always read as panels instead of
      dissolving into the page. Light mode keeps cards at the bright cream and
@@ -2887,13 +2933,17 @@ html.lite .sw-ripple-circle {
     display: flex;
     align-items: center;
     gap: 16px;
-    padding: 14px 28px;
+    padding: 10px 28px;
+    /* Lift the header off the (darker) page body onto the same off-white card
+       fill as the rest of the console, so the bar reads as a distinct chrome
+       strip instead of dissolving into the page. */
+    background: var(--card-bg);
     border-bottom: 1px solid var(--ink);
     flex-wrap: wrap;
 }
 .admin-root .shell-header .wordmark {
-    font-size: 13px;
-    letter-spacing: 0.3em;
+    font-size: 14px;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
     font-weight: 800;
 }
@@ -2915,7 +2965,8 @@ html.lite .sw-ripple-circle {
     font-size: 10px;
     letter-spacing: 0.22em;
     text-transform: uppercase;
-    color: var(--muted);
+    /* Full ink so the toolbar icons/labels read as controls, not faint chrome. */
+    color: var(--ink);
 }
 .admin-root .live-dot {
     width: 8px;
@@ -2944,13 +2995,13 @@ html.lite .sw-ripple-circle {
 .admin-root .shell-body {
     display: grid;
     grid-template-columns: 200px 1fr;
-    gap: 28px;
-    padding: 24px 28px;
+    gap: 20px;
+    padding: 16px 20px;
     max-width: 1440px;
     margin: 0 auto;
 }
 .admin-root .shell-nav {
-    border-right: 1px solid var(--separator-strong);
+    border-right: 1px solid var(--line);
     padding-right: 18px;
     display: flex;
     flex-direction: column;
@@ -2971,8 +3022,13 @@ html.lite .sw-ripple-circle {
 }
 .admin-root .shell-nav .nav-item {
     position: relative; /* hosts the motion.span layoutId background */
-    border: 1px solid var(--separator-strong);
-    background: transparent;
+    border: 1px solid var(--line);
+    /* Sit on the same card fill as the rest of the console (--card-bg, the
+       off-white that lifts off the darker --page-bg) with a crisp hairline, so
+       each item reads as a button matching the other panels instead of a faint
+       outline dissolving into the page. The .active item's black fill comes from
+       the motion layoutId span, so its own background stays transparent. */
+    background: var(--card-bg);
     color: var(--ink);
     padding: 8px 10px;
     font-size: 11px;
@@ -2990,7 +3046,7 @@ html.lite .sw-ripple-circle {
 }
 .admin-root .shell-nav .nav-item .nav-icon {
     flex: 0 0 auto;
-    opacity: 0.55;
+    opacity: 0.72;
     transition: opacity 0.12s ease;
     position: relative; /* above the absolute motion bg */
     z-index: 1;
@@ -3001,7 +3057,9 @@ html.lite .sw-ripple-circle {
     z-index: 1;
 }
 .admin-root .shell-nav .nav-item:hover {
-    background: var(--ink-soft);
+    /* Darken the card fill slightly on hover (keeps the lifted-card feel) and
+       firm the border to full ink. */
+    background: color-mix(in oklab, var(--card-bg) 90%, var(--ink));
     border-color: var(--ink);
 }
 .admin-root .shell-nav .nav-item:hover .nav-icon {
@@ -3392,11 +3450,13 @@ html.lite .sw-ripple-circle {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    margin: 0 0 12px 0;
 }
 .admin-root .field-hint {
     font-size: 11px;
     color: var(--muted);
-    line-height: 1.45;
+    line-height: 1.2;
+    font-family: var(--font-jetbrains);
 }
 
 /* Key/value table */
@@ -5013,6 +5073,52 @@ html.lite .sw-ripple-circle {
 .observatory-root .cmap-tlabel.acc { color: var(--accent); font-weight: 700; }
 @keyframes obs-glabel-in { from { opacity: 0; } }
 @keyframes obs-tlabel-in { from { opacity: 0; } }
+
+/* ---- load-error banner — the map still renders (sample / last good data),
+   but a failed load must never masquerade as a fresh install ---- */
+.observatory-root .obs-error { display: flex; align-items: center; gap: 14px; padding: 8px 22px; border-bottom: 1px solid var(--accent); background: color-mix(in oklab, var(--accent) 9%, var(--bg)); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; flex: none; z-index: 4; }
+.observatory-root .obs-error button { margin-left: auto; flex: none; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; font-weight: 700; padding: 4px 10px; cursor: pointer; transition: background 0.12s, color 0.12s; }
+.observatory-root .obs-error button:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.observatory-root .obs-error button:disabled { cursor: default; opacity: 0.6; }
+
+/* ---- search jump-to dropdown ---- */
+.observatory-root .rail-search-wrap { position: relative; }
+.observatory-root .rail-search-results { position: absolute; top: 100%; left: 0; right: 0; z-index: 30; border: 1px solid var(--ink); border-top: 0; background: var(--bg); max-height: 300px; overflow-y: auto; box-shadow: 4px 4px 0 var(--separator-strong); }
+.observatory-root .rail-search-hit { display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left; padding: 8px 10px; background: transparent; border: 0; border-bottom: 1px dashed var(--separator-strong); cursor: pointer; transition: background 0.12s; }
+.observatory-root .rail-search-hit:last-child { border-bottom: 0; }
+.observatory-root .rail-search-hit:hover { background: var(--ink-soft); }
+.observatory-root .hit-title { font-size: 11px; font-weight: 700; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.observatory-root .hit-artist { font-size: 9px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- sound-map projection status (rail footer) ---- */
+.observatory-root .rail-proj { display: flex; flex-direction: column; gap: 6px; }
+.observatory-root .rail-proj-live { display: flex; align-items: center; gap: 8px; color: var(--accent); font-weight: 700; }
+.observatory-root .rail-proj-log { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-transform: none; letter-spacing: 0.04em; }
+
+/* ---- dossier queue-on-air ---- */
+.observatory-root .dossier-queue { margin-top: 12px; width: 100%; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 700; padding: 9px 0; cursor: pointer; transition: background 0.12s, color 0.12s; }
+.observatory-root .dossier-queue:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.observatory-root .dossier-queue:disabled { cursor: default; }
+.observatory-root .dossier-queue.done { background: var(--accent); color: #fff; opacity: 0.85; }
+.observatory-root .dossier-queue-err { margin-top: 6px; color: var(--accent); text-transform: none; letter-spacing: 0.04em; }
+
+/* keyboard focus on the map (tabIndex=0 — arrows pan, +/- zoom) */
+.observatory-root .cmap-galaxy:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ---- small screens: stack header → map → filters → panels and let the page
+   scroll. Scoped away from the landing-page embed, which has its own two-row
+   phone layout. ---- */
+@media (max-width: 900px) {
+    .observatory-root:not(.obs-embed) { height: auto; min-height: 100vh; min-height: 100dvh; overflow: visible; }
+    .observatory-root:not(.obs-embed) .obs-top { flex-wrap: wrap; row-gap: 8px; }
+    .observatory-root:not(.obs-embed) .obs-top-r { margin-left: 0; flex-wrap: wrap; row-gap: 8px; }
+    .observatory-root:not(.obs-embed) .obs-main { display: flex; flex-direction: column; min-height: 0; }
+    .observatory-root:not(.obs-embed) .obs-stage { order: -1; min-height: 62vh; border-bottom: 1px solid var(--ink); }
+    .observatory-root:not(.obs-embed) .obs-rail { border-right: 0; border-bottom: 1px solid var(--ink); overflow-y: visible; }
+    .observatory-root:not(.obs-embed) .obs-side { border-left: 0; overflow-y: visible; }
+    .observatory-root:not(.obs-embed) .rail-foot { margin-top: 0; }
+    .observatory-root:not(.obs-embed) .stage-hint { display: none; }
+}
 
 @media (prefers-reduced-motion: reduce) {
     .observatory-root .obs-disc,
