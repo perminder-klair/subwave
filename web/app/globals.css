@@ -981,6 +981,11 @@ html.lite .sw-ripple-circle {
     --fz-dim: color-mix(in oklab, var(--ink) 45%, transparent);
     /* Top edge of the bar — lighter than full ink so it reads as a soft rule. */
     --fz-edge: color-mix(in oklab, var(--ink) 55%, transparent);
+    /* Console-shelf fill for the whole deck + the recessed well behind each
+       dial, so the bar reads as a control shelf and the instruments sit in
+       matching wells on every theme instead of floating on the page colour. */
+    --fz-panel: color-mix(in oklab, var(--ink) 6%, var(--bg));
+    --fz-well: color-mix(in oklab, var(--ink) 12%, var(--bg));
 }
 
 /* Power — circular button, open ring + stem (the power glyph). The ring sits
@@ -990,7 +995,7 @@ html.lite .sw-ripple-circle {
     position: relative;
     border-radius: 50%;
     border: 1px solid var(--ink);
-    background: transparent;
+    background: var(--fz-well);
     cursor: pointer;
     display: flex;
     align-items: center;
@@ -999,14 +1004,14 @@ html.lite .sw-ripple-circle {
     transition: background 0.15s;
 }
 .fz-power:hover {
-    background: color-mix(in srgb, var(--ink) 8%, transparent);
+    background: color-mix(in oklab, var(--ink) 17%, var(--bg));
 }
 .fz-power:disabled {
     cursor: not-allowed;
     opacity: 0.45;
 }
 .fz-power:disabled:hover {
-    background: transparent;
+    background: var(--fz-well);
 }
 .fz-power .fz-ring {
     width: 38%;
@@ -1041,7 +1046,7 @@ html.lite .sw-ripple-circle {
 .fz-scale {
     position: relative;
     border: 1px solid var(--fz-line);
-    background: var(--field);
+    background: var(--fz-well);
     overflow: hidden;
     flex: none;
     min-width: 0;
@@ -1141,7 +1146,7 @@ html.lite .sw-ripple-circle {
     position: absolute;
     inset: 0;
     border-radius: 50%;
-    background: transparent;
+    background: var(--fz-well);
     border: 1px solid var(--ink);
     /* Pointer angle driven by the JSX via a ref-set --fz-angle (-135..135deg)
        from the current volume; matches the conic tick scale's -135deg origin. */
@@ -2932,7 +2937,7 @@ html.lite .sw-ripple-circle {
     display: flex;
     align-items: center;
     gap: 16px;
-    padding: 14px 28px;
+    padding: 10px 28px;
     /* Lift the header off the (darker) page body onto the same off-white card
        fill as the rest of the console, so the bar reads as a distinct chrome
        strip instead of dissolving into the page. */
@@ -2941,8 +2946,8 @@ html.lite .sw-ripple-circle {
     flex-wrap: wrap;
 }
 .admin-root .shell-header .wordmark {
-    font-size: 13px;
-    letter-spacing: 0.3em;
+    font-size: 14px;
+    letter-spacing: 0.1em;
     text-transform: uppercase;
     font-weight: 800;
 }
@@ -3449,11 +3454,13 @@ html.lite .sw-ripple-circle {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    margin: 0 0 12px 0;
 }
 .admin-root .field-hint {
-    font-size: 14px;
+    font-size: 11px;
     color: var(--muted);
-    line-height: 1.5;
+    line-height: 1.2;
+    font-family: var(--font-jetbrains);
 }
 
 /* Key/value table */
