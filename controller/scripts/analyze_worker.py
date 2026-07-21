@@ -41,6 +41,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import urllib.request
 
 # 40s is enough for stable BPM (beat_track) / key (chroma); intro detection
@@ -145,6 +147,80 @@ def resolve_device():
         _DEVICE = "cpu"
         log("analysis device: cpu")
     return _DEVICE
+
+
+# --- Idle GPU release (#1099 follow-up) -------------------------------------
+# On the cuda device the resident CLAP + Demucs models hold multiple GB of
+# VRAM even when no analysis is running, starving co-resident GPU work (a
+# local TTS/LLM on the same card OOMed hours after a pass finished). A daemon
+# thread drops the model singletons after ANALYZE_IDLE_UNLOAD_S seconds with
+# no requests (default 300; 0 disables). CUDA-only: on cpu the models stay
+# resident as always — system RAM is cheap and reload latency isn't worth it.
+# The next request lazy-reloads from the on-disk HF cache. NOTE: torch's CUDA
+# context (a few hundred MB) survives until the process exits — stopping the
+# analyzer container is the full release.
+IDLE_UNLOAD_S = float(os.environ.get("ANALYZE_IDLE_UNLOAD_S", "").strip() or "300")
+
+_last_used = time.time()
+_model_lock = threading.Lock()  # held during request handling AND unload
+_idle_thread_started = False
+
+
+def _touch():
+    global _last_used
+    _last_used = time.time()
+
+
+def _release_models():
+    """Drop the loaded model singletons and return their VRAM. Leaves the
+    *_failed flags alone, so the next request reloads instead of no-opping."""
+    global _embedder, _vocal_detector
+    import gc
+
+    freed = []
+    if _embedder is not None:
+        _embedder = None
+        freed.append("CLAP")
+    if _vocal_detector is not None:
+        _vocal_detector = None
+        freed.append("Demucs")
+    if not freed:
+        return
+    gc.collect()
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:  # noqa: BLE001 — freeing is best-effort
+        pass
+    log(
+        f"idle {int(IDLE_UNLOAD_S)}s — released {' + '.join(freed)} from GPU memory "
+        "(reloads on next use)"
+    )
+
+
+def _idle_release_loop():
+    while True:
+        time.sleep(30)
+        if time.time() - _last_used < IDLE_UNLOAD_S:
+            continue
+        with _model_lock:
+            # Re-check under the lock: a request may have landed while we
+            # waited to acquire it (a slow track holds the lock for minutes).
+            if time.time() - _last_used >= IDLE_UNLOAD_S:
+                _release_models()
+
+
+def _maybe_start_idle_release():
+    """Arm the idle-release thread — once, and only where it matters (cuda
+    device, unload enabled). Called after a heavy model actually loads."""
+    global _idle_thread_started
+    if _idle_thread_started or IDLE_UNLOAD_S <= 0 or resolve_device() != "cuda":
+        return
+    _idle_thread_started = True
+    threading.Thread(target=_idle_release_loop, daemon=True, name="idle-release").start()
+    log(f"idle GPU release armed — models unload after {int(IDLE_UNLOAD_S)}s without requests")
 
 
 def _pearson(a, b):
@@ -599,6 +675,7 @@ def get_embedder(force=False):
             e = ClapEmbedder()
             e.load()
             _embedder = e
+            _maybe_start_idle_release()
         except Exception as ex:  # noqa: BLE001 — degrade, never crash the worker
             log(f"CLAP load failed ({ex}); audio embeddings disabled for this run")
             _embed_failed = True
@@ -726,6 +803,7 @@ def get_vocal_detector(force=False):
             d = VocalActivityDetector()
             d.load()
             _vocal_detector = d
+            _maybe_start_idle_release()
         # BaseException, not Exception: demucs' fatal() raises SystemExit on an
         # unusable model (e.g. a *_q quantized checkpoint without diffq), which
         # sails past `except Exception` and killed the whole worker — every
@@ -1046,14 +1124,17 @@ def main():
             ):
                 emit({"id": rid, "ok": False, "error": "texts must be 1-64 non-empty strings"})
                 continue
-            embedder = get_embedder(force=True)
-            if embedder is None:
-                emit({"id": rid, "ok": False, "error": "CLAP unavailable (load failed or libs absent)"})
-                continue
-            try:
-                emit({"id": rid, "ok": True, "text_embeddings": embedder.embed_texts(texts)})
-            except Exception as e:  # noqa: BLE001 — one bad request never kills the worker
-                emit({"id": rid, "ok": False, "error": str(e)})
+            _touch()
+            with _model_lock:
+                embedder = get_embedder(force=True)
+                if embedder is None:
+                    emit({"id": rid, "ok": False, "error": "CLAP unavailable (load failed or libs absent)"})
+                    continue
+                try:
+                    emit({"id": rid, "ok": True, "text_embeddings": embedder.embed_texts(texts)})
+                except Exception as e:  # noqa: BLE001 — one bad request never kills the worker
+                    emit({"id": rid, "ok": False, "error": str(e)})
+            _touch()
             continue
         url = req.get("url")
         path = req.get("path")
@@ -1063,11 +1144,17 @@ def main():
         try:
             import librosa
 
-            result = analyze(
-                librosa, url=url, path=path,
-                embed=req.get("embed"), vocal=req.get("vocal"),
-                complete=req.get("complete"),
-            )
+            # _touch() on both edges + the lock keep the idle-release thread
+            # honest: the clock reads fresh after a long track, and an unload
+            # can never race a request that's mid-flight.
+            _touch()
+            with _model_lock:
+                result = analyze(
+                    librosa, url=url, path=path,
+                    embed=req.get("embed"), vocal=req.get("vocal"),
+                    complete=req.get("complete"),
+                )
+            _touch()
             emit({"id": rid, "ok": True, **result})
         except Exception as e:
             emit({"id": rid, "ok": False, "error": str(e)})

@@ -359,6 +359,9 @@ services:
       # meaningful on the cuda analyzer flavour (docker-compose.analyzer-gpu.yml);
       # cpu-wheel images always resolve to cpu.
       - ANALYZE_DEVICE=\${ANALYZE_DEVICE:-}
+      # Seconds of no requests before the cuda flavour drops its models out of
+      # VRAM (default 300; 0 = never). CPU images ignore it.
+      - ANALYZE_IDLE_UNLOAD_S=\${ANALYZE_IDLE_UNLOAD_S:-}
       - CLAP_MODEL=\${CLAP_MODEL:-}
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (worker reads both; see
@@ -691,6 +694,9 @@ services:
       # meaningful on the cuda analyzer flavour (docker-compose.analyzer-gpu.yml);
       # cpu-wheel images always resolve to cpu.
       - ANALYZE_DEVICE=\${ANALYZE_DEVICE:-}
+      # Seconds of no requests before the cuda flavour drops its models out of
+      # VRAM (default 300; 0 = never). CPU images ignore it.
+      - ANALYZE_IDLE_UNLOAD_S=\${ANALYZE_IDLE_UNLOAD_S:-}
       - CLAP_MODEL=\${CLAP_MODEL:-}
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (worker reads both; see
@@ -967,6 +973,9 @@ services:
       # meaningful on the cuda analyzer flavour (docker-compose.analyzer-gpu.yml);
       # cpu-wheel images always resolve to cpu.
       - ANALYZE_DEVICE=\${ANALYZE_DEVICE:-}
+      # Seconds of no requests before the cuda flavour drops its models out of
+      # VRAM (default 300; 0 = never). CPU images ignore it.
+      - ANALYZE_IDLE_UNLOAD_S=\${ANALYZE_IDLE_UNLOAD_S:-}
       - CLAP_MODEL=\${CLAP_MODEL:-}
       - CLAP_MODEL_PATH=\${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (worker reads both; see
@@ -1068,6 +1077,11 @@ export const COMPOSE_ANALYZER_GPU_YML = `# GPU opt-in overlay for the analyzer �
 # torch sees a GPU, else cpu with a logged warning — a misconfigured host
 # degrades, not fails). To force CPU temporarily without dropping the overlay,
 # set ANALYZE_DEVICE=cpu in your root .env (the base compose passes it through).
+#
+# VRAM etiquette: after ~5 idle minutes the worker drops its models out of
+# VRAM so a co-resident TTS/LLM gets the card back between passes
+# (ANALYZE_IDLE_UNLOAD_S in .env tunes it; 0 keeps models resident). A few
+# hundred MB of CUDA context remain until the container stops.
 services:
   analyzer:
     image: ghcr.io/perminder-klair/subwave-analyzer-cuda:\${SUBWAVE_VERSION:-latest}
@@ -1223,6 +1237,9 @@ SITE_URL=
 #   docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
 # ANALYZE_DEVICE=    # auto (default) / cpu / cuda — torch device for CLAP/Demucs;
 #                    # only meaningful on the cuda analyzer flavour
+# ANALYZE_IDLE_UNLOAD_S=  # cuda flavour: seconds of no analysis before models are
+#                         # dropped from VRAM (default 300; 0 = keep resident).
+#                         # Frees the GPU for co-resident TTS/LLM between passes.
 #
 # Runtime flags — env wins ON over the admin toggles (settings.audio.*), never
 # off. A flag with no matching backend in the image is a clean no-op.

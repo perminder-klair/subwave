@@ -20,6 +20,11 @@
 # torch sees a GPU, else cpu with a logged warning — a misconfigured host
 # degrades, not fails). To force CPU temporarily without dropping the overlay,
 # set ANALYZE_DEVICE=cpu in your root .env (the base compose passes it through).
+#
+# VRAM etiquette: after ~5 idle minutes the worker drops its models out of
+# VRAM so a co-resident TTS/LLM gets the card back between passes
+# (ANALYZE_IDLE_UNLOAD_S in .env tunes it; 0 keeps models resident). A few
+# hundred MB of CUDA context remain until the container stops.
 services:
   analyzer:
     image: ghcr.io/perminder-klair/subwave-analyzer-cuda:${SUBWAVE_VERSION:-latest}

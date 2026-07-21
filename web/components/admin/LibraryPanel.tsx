@@ -1082,8 +1082,9 @@ export default function LibraryPanel() {
 
   // Flip settings.audio.analyzeQuietOnly — the quiet-times gate (#1099): any
   // analysis run pauses while listeners are tuned in, resuming after the idle
-  // window. Read once per pass, so it applies from the next run; env
-  // ANALYZE_QUIET_ONLY still wins "on".
+  // window. The pass re-reads the toggle from disk on every check, so a flip
+  // takes effect mid-run within one track; env ANALYZE_QUIET_ONLY still wins
+  // "on".
   const toggleQuiet = async () => {
     if (quietEnabled == null) return;
     setTaggerBusy(true);

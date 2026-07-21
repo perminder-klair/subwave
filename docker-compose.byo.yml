@@ -301,6 +301,9 @@ services:
       # meaningful on the cuda analyzer flavour (docker-compose.analyzer-gpu.yml);
       # cpu-wheel images always resolve to cpu.
       - ANALYZE_DEVICE=${ANALYZE_DEVICE:-}
+      # Seconds of no requests before the cuda flavour drops its models out of
+      # VRAM (default 300; 0 = never). CPU images ignore it.
+      - ANALYZE_IDLE_UNLOAD_S=${ANALYZE_IDLE_UNLOAD_S:-}
       - CLAP_MODEL=${CLAP_MODEL:-}
       - CLAP_MODEL_PATH=${CLAP_MODEL_PATH:-}
       # Demucs model + analysis-window overrides (worker reads both; see

@@ -230,7 +230,7 @@ the stream has been idle this many minutes. Applies to manual runs too."
 | `ANALYZE_DEVICE=cuda` but no GPU visible | Warn once, run on CPU; pass completes |
 | CUDA OOM / driver fault mid-track | Existing per-track try/catch records the track as failed, row stays NULL, next run retries; `mem_limit` OOM containment unchanged |
 | Icecast unreachable during quiet gate | Count `null` → treated as quiet → analysis proceeds |
-| Toggle flipped off mid-pause | Settings are read once per pass (the embeddings/vocal precedent), so the change applies from the next pass; to unstick a paused pass immediately, use the existing tagger Stop button |
+| Toggle flipped off mid-pause | The gate re-reads settings.json from disk on every check (revised after #1102 field testing — a pass runs for hours, so the once-per-pass read the embeddings/vocal toggles use was too stale here); a flip in either direction applies within one track / one 30s poll |
 | Gate on, listeners never drop to 0 | Pass waits indefinitely with a visible "Waiting for quiet" progress label; Stop button remains the escape hatch |
 
 ## Testing & verification

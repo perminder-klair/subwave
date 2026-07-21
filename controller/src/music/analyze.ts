@@ -9,7 +9,7 @@
 // local librosa venv). When no backend is available this is a clean no-op, so
 // it's always safe to call as a tagger phase.
 
-import { rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
 import * as settings from '../settings.js';
@@ -84,25 +84,39 @@ export function audioEmbeddingWanted(): boolean {
 
 // Quiet-times gate (#1099) — same env-wins-on precedence as the toggles above:
 // ANALYZE_QUIET_ONLY=1 forces it on, else the admin toggle
-// (settings.audio.analyzeQuietOnly). Both entry points call settings.load()
-// before the pass, so the child process reads the toggle without new plumbing.
-function quietOnlyDefault(): boolean {
-  const v = (process.env.ANALYZE_QUIET_ONLY || '').toLowerCase();
-  if (v === '1' || v === 'true' || v === 'yes') return true;
-  try {
-    return settings.get()?.audio?.analyzeQuietOnly === true;
-  } catch {
-    return false;
-  }
+// (settings.audio.analyzeQuietOnly).
+//
+// Unlike the other audio toggles this one is re-read from DISK on every gate
+// check, not once per pass: settings.load() caches for the child process's
+// lifetime, and a pass over a big library runs for hours — an operator who
+// flips the toggle mid-scan (the reporter's overnight run in #1102) expects
+// the running pass to react, in both directions. Raw read, no normalization:
+// two scalar fields, and any parse failure falls back to the boot-time
+// snapshot (settings.get()) and then the defaults.
+interface QuietConfig {
+  enabled: boolean;
+  minutes: number;
 }
 
-function quietMinutes(): number {
+async function readQuietConfig(): Promise<QuietConfig> {
+  const v = (process.env.ANALYZE_QUIET_ONLY || '').toLowerCase();
+  const envOn = v === '1' || v === 'true' || v === 'yes';
+  let enabled = envOn;
+  let minutes = 10;
+  let audio: any = null;
   try {
-    const v = settings.get()?.audio?.analyzeQuietMinutes;
-    return Number.isFinite(v) && v >= 1 ? v : 10;
+    audio = JSON.parse(await readFile(`${config.stateDir}/settings.json`, 'utf8'))?.audio;
   } catch {
-    return 10;
+    try {
+      audio = settings.get()?.audio;
+    } catch {
+      audio = null;
+    }
   }
+  if (!enabled) enabled = audio?.analyzeQuietOnly === true;
+  const m = audio?.analyzeQuietMinutes;
+  if (Number.isFinite(m) && m >= 1 && m <= 120) minutes = Math.floor(m);
+  return { enabled, minutes };
 }
 
 // How often the paused pass re-checks Icecast. One cheap status fetch per
@@ -111,7 +125,6 @@ function quietMinutes(): number {
 const QUIET_POLL_MS = 30_000;
 
 interface QuietGate {
-  enabled: boolean;
   state: QuietState;
   paused: boolean; // for one-per-transition logging, not decision logic
 }
@@ -119,18 +132,21 @@ interface QuietGate {
 // Block until the gate allows the next track (immediately when disabled).
 // Sits BETWEEN tracks: an in-flight track finishes (seconds) and the pending
 // prefetch download is left to resolve — only the next *compute* waits. The
-// wait is unbounded by design; the operator's escape hatches are the tagger
-// Stop button and turning the toggle off (read once per pass, like the
-// embeddings/vocal toggles — it applies from the next run).
+// wait is unbounded by design; the escape hatches are the tagger Stop button
+// and the admin toggle, which readQuietConfig() re-reads on every check so a
+// mid-pass flip takes effect within one track / one 30s poll.
 async function waitForQuiet(gate: QuietGate, progress: { done: number; total: number }): Promise<void> {
-  if (!gate.enabled) return;
   for (;;) {
-    const count = await probeListenerCount();
+    const quiet = await readQuietConfig();
+    // Skip the Icecast probe entirely while the gate is off (the default
+    // path stays one cheap file read per track); the pure helper still runs
+    // so a disabled gate resets the quiet clock.
+    const count = quiet.enabled ? await probeListenerCount() : null;
     const d = quietGateDecision(gate.state, {
-      enabled: true,
+      enabled: quiet.enabled,
       count,
       now: Date.now(),
-      quietAfterMs: quietMinutes() * 60_000,
+      quietAfterMs: quiet.minutes * 60_000,
     });
     gate.state = d.state;
     if (d.proceed) {
@@ -152,7 +168,7 @@ async function waitForQuiet(gate: QuietGate, progress: { done: number; total: nu
       gate.paused = true;
       logEvent(
         'info',
-        `Analysis paused — ${why}; resumes after ${quietMinutes()} min with no listeners`,
+        `Analysis paused — ${why}; resumes after ${quiet.minutes} min with no listeners`,
       );
     }
     reportProgress({
@@ -301,15 +317,18 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   let failed = 0;
   let audioEmbedded = 0;
   let vocalAnalyzed = 0;
-  // Quiet-times gate (#1099). Resolved once per pass, like every other audio
-  // toggle; state carries across tracks so the quiet clock isn't reset by the
-  // loop itself.
-  const quietGate: QuietGate = { enabled: quietOnlyDefault(), state: { quietSince: null }, paused: false };
-  if (quietGate.enabled) {
-    logEvent(
-      'info',
-      `Quiet-times gate on — analysis only runs once the stream has had no listeners for ${quietMinutes()} min`,
-    );
+  // Quiet-times gate (#1099). The toggle itself is re-read from disk on every
+  // check (see readQuietConfig); only the quiet-clock STATE lives here, so it
+  // carries across tracks instead of resetting each loop iteration.
+  const quietGate: QuietGate = { state: { quietSince: null }, paused: false };
+  {
+    const quiet = await readQuietConfig();
+    if (quiet.enabled) {
+      logEvent(
+        'info',
+        `Quiet-times gate on — analysis only runs once the stream has had no listeners for ${quiet.minutes} min`,
+      );
+    }
   }
   // Stamp the audio-embedding provenance row once, on the first vector written
   // this run. Cheap idempotent guard so we don't touch the meta table per track.

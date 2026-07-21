@@ -147,6 +147,14 @@ ANALYZER_HEAVY=1`}</CodeBlock>
             GPU analysis needs the split stack.
           </p>
         </div>
+        <p>
+          Sharing the card with a local TTS or LLM? After ~5 idle minutes the worker drops
+          its models out of VRAM and reloads them on the next request
+          (<code className="bs-code-inline">ANALYZE_IDLE_UNLOAD_S</code> tunes the window;{' '}
+          <code className="bs-code-inline">0</code> keeps them resident). Pair it with{' '}
+          <strong>Quiet times</strong> below and a long scan frees the GPU whenever
+          listeners are tuned in.
+        </p>
       </section>
 
       <section className="bs-section">

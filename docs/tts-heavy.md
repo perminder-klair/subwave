@@ -105,6 +105,14 @@ is irrelevant while the overlay is applied — the image is overridden outright.
 (The AIO one-click container stays CPU-only; GPU analysis needs the split
 stack.)
 
+Sharing the card with a local TTS or LLM? The worker plays nice: after ~5
+minutes with no analysis requests it drops its models out of VRAM and reloads
+them on the next request (`ANALYZE_IDLE_UNLOAD_S` in `.env` tunes the window;
+`0` keeps them resident). A few hundred MB of CUDA context remain until the
+analyzer container stops. Pair it with the **quiet times** toggle on the admin
+Library page and a long scan pauses — and frees the GPU — whenever listeners
+are tuned in.
+
 ---
 
 ## Voices: why they're off by default
