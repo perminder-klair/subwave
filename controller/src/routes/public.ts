@@ -251,6 +251,17 @@ router.get('/now-playing', async (req, res) => {
         bitrate: stream.bitrate,
         sampleRate: stream.sampleRate,
         channels: stream.channels,
+        // How far behind the live edge a listener is: Icecast bursts this many
+        // seconds of already-broadcast audio on connect, and the client plays
+        // it out at 1x, so the offset holds for the whole connection.
+        //
+        // Every timestamp on this payload (startedAt included) is stamped at
+        // the LIVE EDGE by radio.liq's pre-cross on_metadata hook. Players are
+        // expected to subtract this to render listener-time — without it the
+        // title and elapsed clock run this far ahead of the audio, which is
+        // the "Now Spinning is ahead of real time" report (issue #1113).
+        // Operator surfaces (admin dash, MCP) intentionally keep live edge.
+        bufferSeconds: stationSettings.stream?.bufferSeconds ?? 22,
         opusEnabled: stationSettings.stream?.opusEnabled === true,
         flacEnabled: stationSettings.stream?.flacEnabled === true,
         aacEnabled: stationSettings.stream?.aacEnabled === true,

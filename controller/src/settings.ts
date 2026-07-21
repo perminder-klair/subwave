@@ -1126,6 +1126,20 @@ const DEFAULTS = {
     aacEnabled: false,
     aacBitrate: 192,
     bitrate: 192,
+    // Seconds of already-broadcast audio Icecast bursts to a client on
+    // connect (<burst-size>), so a cellular dead zone drains the buffer
+    // instead of stalling (issue #993). Specified in SECONDS, not bytes:
+    // burst-size is a byte count, so a fixed one silently stretches at low
+    // bitrates — the old flat 512 KB was ~22s at 192k but ~66s at 64k. The
+    // broadcast entrypoint converts this to bytes using stream.bitrate, so
+    // the depth an operator picks is the depth every bitrate gets.
+    //
+    // This is also exactly how far behind the live edge every listener sits
+    // for their whole connection, which is why /now-playing publishes it as
+    // stream.bufferSeconds — players subtract it to line the now-playing
+    // title and elapsed clock up with the audio actually in someone's ears
+    // rather than the live edge (issue #1113).
+    bufferSeconds: 22,
     // ICY (out-of-band) per-track titles on the Ogg mounts (/stream.opus +
     // /stream.flac). ON by default: most internet-radio clients (Ferrosonic,
     // Cast receivers, Symfonium) read the in-band Ogg comment only once at
@@ -3269,6 +3283,29 @@ export async function update(patch) {
         restart = true;
       }
     }
+    // Listener-side buffer depth (Icecast <burst-size>, in seconds). Deep =
+    // survives a dead zone but sits further behind the live edge; shallow =
+    // tighter sync, likelier to stall. 0 disables burst-on-connect entirely.
+    // Capped at 60s: past that a listener is a full minute behind and
+    // <queue-size> (which must comfortably exceed the burst) gets unreasonable.
+    //
+    // restart=true is load-bearing here and NOT just a mixer concern: burst
+    // lives in icecast.xml, which is rendered once by the broadcast entrypoint
+    // at container boot. It applies anyway because liquidsoap and icecast
+    // share a container and the entrypoint `wait -n`s on both — the telnet
+    // restart shuts liquidsoap down, the container bounces, and the entrypoint
+    // re-renders the template on the way back up.
+    if (st.bufferSeconds !== undefined) {
+      const v = Number(st.bufferSeconds);
+      if (!Number.isFinite(v) || v < 0 || v > 60) {
+        throw new Error('stream.bufferSeconds must be a number between 0 and 60');
+      }
+      const rounded = Math.round(v);
+      if (rounded !== cur.stream.bufferSeconds) {
+        next.stream.bufferSeconds = rounded;
+        restart = true;
+      }
+    }
     // Idle pause is enforced controller-side over telnet (broadcast/
     // stream-idle.ts) — no Liquidsoap boot file, no mixer restart. Turning it
     // off mid-idle is handled by the monitor's next tick, which resumes the
@@ -4336,6 +4373,10 @@ const LIQ_OGG_ICY_METADATA_PATH = `${STATE_DIR}/liquidsoap_ogg_icy_metadata.txt`
 const LIQ_AAC_ENABLED_PATH = `${STATE_DIR}/liquidsoap_aac_enabled.txt`;
 const LIQ_AAC_BITRATE_PATH = `${STATE_DIR}/liquidsoap_aac_bitrate.txt`;
 const LIQ_STREAM_BITRATE_PATH = `${STATE_DIR}/liquidsoap_stream_bitrate.txt`;
+// Read by docker/broadcast-entrypoint.sh (not radio.liq) to size Icecast's
+// <burst-size>. Same liquidsoap_*.txt convention because it shares their
+// lifecycle exactly: written on save, consumed once at broadcast boot.
+const LIQ_STREAM_BUFFER_SECONDS_PATH = `${STATE_DIR}/liquidsoap_stream_buffer_seconds.txt`;
 const LIQ_STATION_NAME_PATH = `${STATE_DIR}/liquidsoap_station_name.txt`;
 
 export async function writeLiquidsoapSettings(s) {
@@ -4350,6 +4391,7 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_AAC_ENABLED_PATH, s.stream.aacEnabled ? 'true' : 'false');
   await writeFile(LIQ_AAC_BITRATE_PATH, String(s.stream.aacBitrate));
   await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));
+  await writeFile(LIQ_STREAM_BUFFER_SECONDS_PATH, String(s.stream.bufferSeconds));
   await writeFile(LIQ_STATION_NAME_PATH, s.station || DEFAULTS.station);
 }
 
@@ -4363,7 +4405,8 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(LIQ_ARCHIVE_ENABLED_PATH) ||
     !existsSync(LIQ_ARCHIVE_BITRATE_PATH) ||
     !existsSync(LIQ_OPUS_ENABLED_PATH) ||
-    !existsSync(LIQ_STREAM_BITRATE_PATH)
+    !existsSync(LIQ_STREAM_BITRATE_PATH) ||
+    !existsSync(LIQ_STREAM_BUFFER_SECONDS_PATH)
   ) {
     await writeLiquidsoapSettings(s);
   }
