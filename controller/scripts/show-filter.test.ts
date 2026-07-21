@@ -8,7 +8,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  normGenre, genreMatches, preferGenre,
+  normGenre, genreMatches, genreResolutionWarning, preferGenre,
   hasEraBound, eraSpan, inYearRange, preferEra,
   resolveEraYear, trackEraYear,
   preferEnergy, preferEnergyStrict, preferMood,
@@ -82,6 +82,28 @@ await test('preferGenre keeps tracks matching any entry; empty list is passthrou
 await test('preferGenre never-starves: zero matches → full set', () => {
   const pool = [t({ genre: 'Jazz' }), t({ genre: 'Soul' })];
   assert.deepEqual(preferGenre(pool, ['Polka']), pool);
+});
+
+console.log('genre resolution honesty (what the operator asked vs what the library has):');
+await test('genreResolutionWarning: a faithful resolution says nothing', () => {
+  assert.equal(genreResolutionWarning('Hip-Hop', 'Hip-Hop'), null);
+  // cosmetic-only differences are still faithful
+  assert.equal(genreResolutionWarning('hip hop', 'Hip-Hop'), null);
+  assert.equal(genreResolutionWarning('', null), null);
+});
+await test('genreResolutionWarning: broadening is called out by name', () => {
+  const w = genreResolutionWarning('Pop Punk', 'Pop');
+  assert.ok(w && w.includes('Pop Punk') && w.includes('"Pop"'), w ?? 'no warning');
+  assert.match(w!, /broader/);
+});
+await test('genreResolutionWarning: an unresolvable genre says the filter is OFF', () => {
+  const w = genreResolutionWarning('Emo', null);
+  assert.match(w!, /not a tag in your library/);
+  assert.match(w!, /OFF/);
+});
+await test('genreResolutionWarning: narrowing is reported differently from broadening', () => {
+  const w = genreResolutionWarning('Punk', 'Pop Punk');
+  assert.match(w!, /[Nn]arrowing/);
 });
 
 console.log('era (window union, envelope):');

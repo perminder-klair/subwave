@@ -32,7 +32,7 @@ import { speechPaceScale } from '../audio/tts.js';
 import { normalizeForSpeech } from '../audio/speech-text.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { recencyWindowsForLibrary, effectiveNoRepeatWindow } from '../music/recency.js';
-import { hasEraBound } from '../music/show-filter.js';
+import { hasEraBound, genreResolutionWarningOnce } from '../music/show-filter.js';
 import { djCallsAllowed } from './listeners.js';
 import * as likes from './likes.js';
 
@@ -641,7 +641,12 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
   if (strict && activeShow?.genres?.length) {
     const resolved: string[] = [];
     for (const g of activeShow.genres) {
-      try { const r = await subsonic.resolveGenreName(g); if (r) resolved.push(r); } catch {}
+      try {
+        const r = await subsonic.resolveGenreName(g);
+        const warning = genreResolutionWarningOnce(g, r);
+        if (warning) queue.log('picker', `Show "${activeShow?.name ?? 'auto'}": ${warning}`);
+        if (r) resolved.push(r);
+      } catch {}
     }
     genreLock = resolved.length ? resolved : null;
   }

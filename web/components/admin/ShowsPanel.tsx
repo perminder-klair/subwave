@@ -15,7 +15,7 @@
 // touch, a tap toggles one cell and a long-press arms drag-painting — a
 // plain swipe only scrolls (see HOLD_MS below).
 import type { ChangeEvent, RefObject, TouchEvent } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Users, Share2 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
@@ -1559,6 +1559,19 @@ function ShowEditor({
     update({ genres: [...show.genres, v] });
     setGenreDraft('');
   };
+  // Genres this show asks for that no track actually carries. The controller
+  // resolves a free-text genre onto the nearest library tag, which silently
+  // broadens the show ("Pop Punk" → "Pop") or drops the filter altogether when
+  // nothing is close — invisible on air unless we say it here, at the moment
+  // the operator is looking at the field. Mirrors show-filter.normGenre so the
+  // UI and the station agree on what counts as "the same tag". Only meaningful
+  // once the library list has loaded (empty = not fetched yet, or the endpoint
+  // failed — never warn on a fetch failure).
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const knownGenres = useMemo(() => new Set(genres.map(norm)), [genres]);
+  const unknownGenres = genres.length
+    ? show.genres.filter(g => !knownGenres.has(norm(g)))
+    : [];
   return (
     <EditorDialog
       open
@@ -1842,6 +1855,18 @@ function ShowEditor({
             <span className="field-hint">
               Up to {FILTER_VALUES_MAX}; a track matching any of them qualifies.
             </span>
+            {unknownGenres.length > 0 && (
+              <span className="field-hint text-vermilion">
+                No track in your library is tagged{' '}
+                {unknownGenres.map((g, i) => (
+                  <span key={g}>{i > 0 ? ', ' : ''}&ldquo;{g}&rdquo;</span>
+                ))}
+                . The station falls back to the closest tag it can find, so this show
+                will air broader results than you asked for — or, if nothing is close,
+                the genre filter switches off entirely. Pick a genre from the
+                suggestions, or re-tag the tracks in Navidrome.
+              </span>
+            )}
           </Field>
 
           <GenreSuggest
