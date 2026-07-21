@@ -29,11 +29,32 @@ async function test(name: string, fn: () => void | Promise<void>) {
 const t = (over: Record<string, unknown>) => ({ id: 'x', title: 't', artist: 'a', ...over });
 
 console.log('genre (any-of, never-starve):');
-await test('genreMatches matches ANY normalised target, substring both ways', () => {
+await test('genreMatches matches ANY normalised target', () => {
   assert.equal(genreMatches(t({ genre: 'Hip Hop' }), [normGenre('Hip-Hop')]), true);
   assert.equal(genreMatches(t({ genre: 'Jazz' }), [normGenre('Rock'), normGenre('Jazz')]), true);
   assert.equal(genreMatches(t({ genre: 'Jazz' }), [normGenre('Rock')]), false);
   assert.equal(genreMatches(t({ genre: 'Jazz' }), []), false);
+});
+await test('genreMatches: a track tag may REFINE the show genre', () => {
+  assert.equal(genreMatches(t({ genre: 'Punk Rock' }), [normGenre('Punk')]), true);
+  assert.equal(genreMatches(t({ genre: 'Contemporary R&B' }), [normGenre('R&B')]), true);
+  assert.equal(genreMatches(t({ genre: 'Post-Hardcore' }), [normGenre('Hardcore')]), true);
+  assert.equal(genreMatches(t({ genre: 'Pop Punk Revival' }), [normGenre('Pop Punk')]), true);
+  // multi-tag: a secondary tag refines just as well as the primary one
+  assert.equal(genreMatches(t({ genres: ['Alternative', 'Emo Pop'] }), [normGenre('Emo')]), true);
+});
+await test('genreMatches: a BROADER track tag never satisfies a stricter show genre', () => {
+  assert.equal(genreMatches(t({ genre: 'Pop' }), [normGenre('Pop Punk')]), false);
+  assert.equal(genreMatches(t({ genre: 'Rock' }), [normGenre('Alternative Rock')]), false);
+  assert.equal(genreMatches(t({ genre: 'Emo' }), [normGenre('Emo Pop')]), false);
+  assert.equal(genreMatches(t({ genre: 'Alternative' }), [normGenre('Alternative Rock')]), false);
+});
+await test('genreMatches: containment respects word boundaries', () => {
+  assert.equal(genreMatches(t({ genre: 'Trap' }), [normGenre('Rap')]), false);
+  assert.equal(genreMatches(t({ genre: 'Rockabilly' }), [normGenre('Rock')]), false);
+  // ...but separators are still noise, so the boundary survives normalisation
+  assert.equal(genreMatches(t({ genre: 'Hip-Hop/Rap' }), [normGenre('Rap')]), true);
+  assert.equal(genreMatches(t({ genre: 'Pop-Punk' }), [normGenre('Pop Punk')]), true);
 });
 await test('preferGenre keeps tracks matching any entry; empty list is passthrough', () => {
   const rock = t({ genre: 'Hard Rock' });

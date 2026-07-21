@@ -51,18 +51,65 @@ export function trackGenres(t: FilterTrack | null | undefined): string[] {
   return rec?.genre ? [rec.genre] : [];
 }
 
+// Normalised genre tag plus, per normalised character, whether it opens /
+// closes a word in the ORIGINAL string. A "word" is a maximal run of
+// alphanumerics, so "Contemporary R&B" normalises to "contemporaryrb" with
+// words "contemporary" | "r" | "b". This is what lets containment respect word
+// boundaries even though normGenre has thrown the separators away.
+function genreBoundaries(s: unknown): { norm: string; opens: boolean[]; closes: boolean[] } {
+  const src = String(s ?? '').toLowerCase();
+  const chars: string[] = [];
+  const opens: boolean[] = [];
+  let prevAlnum = false;
+  for (const ch of src) {
+    const alnum = (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9');
+    if (!alnum) { prevAlnum = false; continue; }
+    chars.push(ch);
+    opens.push(!prevAlnum);
+    prevAlnum = true;
+  }
+  // A char closes its word when it is last overall, or the next char opens one.
+  const closes = chars.map((_, i) => i === chars.length - 1 || opens[i + 1]!);
+  return { norm: chars.join(''), opens, closes };
+}
+
+// True when the show's (already normalised) target genre appears inside a
+// track's raw genre tag, aligned to word boundaries. ONE-DIRECTIONAL by design
+// — see genreMatches.
+function tagCoversGenre(tag: string, target: string): boolean {
+  const { norm, opens, closes } = genreBoundaries(tag);
+  if (!norm || !target) return false;
+  if (norm === target) return true;
+  for (let i = norm.indexOf(target); i !== -1; i = norm.indexOf(target, i + 1)) {
+    if (opens[i] && closes[i + target.length - 1]) return true;
+  }
+  return false;
+}
+
 // True when ANY of a track's genre tags matches ANY of the (already
-// normalised) target genres. Exact-normalised match, or substring either way —
-// same shape as subsonic.resolveGenreName, so "Hip-Hop" matches a "Hip Hop"
-// tag etc. Multi-genre (#OpenSubsonic): a track tagged Hip-Hop + Rap is
-// in-genre for a Rap show even when Rap isn't its primary tag.
+// normalised) target genres. Multi-genre (#OpenSubsonic): a track tagged
+// Hip-Hop + Rap is in-genre for a Rap show even when Rap isn't its primary tag.
+//
+// Matching is exact-normalised ("Hip-Hop" matches a "Hip Hop" tag), or the
+// track's tag REFINES the target — the target appears in the tag on word
+// boundaries. The direction is the whole point: a show asks for a genre and a
+// track may be tagged more specifically than asked, never less.
+//
+//   show "Punk"      ← track "Punk Rock"          ✓ refines
+//   show "R&B"       ← track "Contemporary R&B"   ✓ refines
+//   show "Pop Punk"  ← track "Pop"                ✗ broader than asked
+//   show "Rap"       ← track "Trap"               ✗ not a word boundary
+//
+// Matching the reverse way too (a track tag that merely CONTAINS the show's
+// genre as a substring) is what let strict emo / pop-punk shows fill up with
+// anything tagged plain "Pop" or "Rock", and unbounded substrings pulled Trap
+// into a Rap show. Both directions were deliberate once; neither survives
+// contact with a strict show.
 export function genreMatches(t: FilterTrack | null | undefined, targetNorms: string[]): boolean {
   if (!targetNorms.length) return false;
-  const genreNorms = trackGenres(t).map(normGenre).filter(Boolean);
-  if (!genreNorms.length) return false;
-  return genreNorms.some(gn =>
-    targetNorms.some(target => !!target && (gn === target || gn.includes(target) || target.includes(gn))),
-  );
+  const tags = trackGenres(t).filter(Boolean);
+  if (!tags.length) return false;
+  return tags.some(tag => targetNorms.some(target => !!target && tagCoversGenre(tag, target)));
 }
 
 // Hard-prefer tracks matching ANY of the show's genres (strict mode). Unlike
