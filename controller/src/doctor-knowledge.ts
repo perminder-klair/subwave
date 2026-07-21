@@ -162,6 +162,13 @@ regular cadence — it's cheap insurance.
     \`docker run\`) change the analyzer container's image to
     \`ghcr.io/perminder-klair/subwave-analyzer-heavy\`. \`ANALYZER_HEAVY\` is a compose
     interpolation variable, so setting it on a container does nothing.
+  - **Split stack on an NVIDIA host**: the CUDA flavour runs the same heavy
+    features on the GPU — layer the \`docker-compose.analyzer-gpu.yml\` overlay
+    (\`docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d\`;
+    \`ANALYZER_HEAVY\` is irrelevant while it's applied), or on non-compose installs
+    point the container at \`ghcr.io/perminder-klair/subwave-analyzer-cuda\` with GPU
+    passthrough (\`--gpus all\`). Needs the NVIDIA driver + Container Toolkit; without
+    a visible GPU the worker logs a warning and runs on CPU.
   - **All-in-one image** (\`analyzer local\` — the AIO bundles the analyzer
     in-process): switch the single container's image to
     \`ghcr.io/perminder-klair/subwave-aio-heavy\`. Do NOT point an AIO install at

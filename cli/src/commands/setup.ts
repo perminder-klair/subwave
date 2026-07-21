@@ -548,6 +548,8 @@ async function promptHeavyAnalysis(): Promise<boolean> {
   header('Heavy acoustic analysis (optional)');
   muted('Basic analysis (bpm/key/loudness) is already on. This adds CLAP');
   muted('"sounds-like" similarity + Demucs vocal ranges; pulls a ~1.9 GB image (amd64).');
+  muted('NVIDIA GPU? Skip this and layer docker-compose.analyzer-gpu.yml instead —');
+  muted('it runs the same features on CUDA (see docs/tts-heavy.md).');
   return exitIfCancelled(await p.confirm({
     message: 'Enable heavy analysis (sounds-like + vocals)?',
     initialValue: false,
