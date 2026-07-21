@@ -24,11 +24,16 @@ const FONT_STACKS: Record<DisplayFontId | MonoFontId, string> = {
   'doto': 'var(--font-doto), var(--font-jetbrains), monospace',
   'space-grotesk': 'var(--font-space-grotesk), var(--font-sans), sans-serif',
   'instrument-serif': 'var(--font-instrument-serif), Georgia, serif',
+  'anton': 'var(--font-anton), var(--font-space-grotesk), sans-serif',
+  'chakra-petch': 'var(--font-chakra-petch), var(--font-sans), sans-serif',
+  'saira-stencil-one': 'var(--font-saira-stencil-one), var(--font-space-grotesk), sans-serif',
   // mono faces (--mono-font)
   'jetbrains': 'var(--font-jetbrains), ui-monospace, monospace',
   'ibm-plex-mono': 'var(--font-ibm-plex-mono), ui-monospace, monospace',
   'space-mono': 'var(--font-space-mono), ui-monospace, monospace',
   'fira-code': 'var(--font-fira-code), ui-monospace, monospace',
+  'courier-prime': 'var(--font-courier-prime), "Courier New", monospace',
+  'overpass-mono': 'var(--font-overpass-mono), ui-monospace, monospace',
 };
 
 // Token keys whose value is a curated font id (resolved to a family stack).
@@ -59,6 +64,10 @@ export interface Theme {
 export function applyTheme(theme: Theme): void {
   if (typeof document === 'undefined') return;
   const html = document.documentElement;
+  // Clear the whole allowlist first: a token the incoming theme omits must fall
+  // back to its :root default (paper grain, Fraunces/JetBrains), not linger
+  // from the previously applied theme.
+  for (const key of THEME_TOKEN_KEYS) html.style.removeProperty(key);
   for (const [k, v] of Object.entries(theme.tokens)) {
     if (!TOKEN_KEY_SET.has(k)) continue;
     const value = FONT_TOKEN_KEYS.has(k) ? resolveFont(v) : v;

@@ -16,6 +16,8 @@
     "--accent-soft": "color-mix(in oklab, oklch(0.62 0.16 70) 14%, #efe4cf)",
     "--line": "rgba(42, 26, 16, 0.22)",
     "--soft-border": "rgba(42, 26, 16, 0.12)",
-    "--overlay": "rgba(42, 26, 16, 0.06)"
+    "--overlay": "rgba(42, 26, 16, 0.06)",
+    "--display-font": "instrument-serif",
+    "--mono-font": "courier-prime"
   }
 }

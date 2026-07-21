@@ -17,7 +17,7 @@
     "--line": "rgba(226, 236, 255, 0.22)",
     "--soft-border": "rgba(226, 236, 255, 0.14)",
     "--overlay": "rgba(2, 16, 48, 0.55)",
-    "--display-font": "space-grotesk",
+    "--display-font": "chakra-petch",
     "--mono-font": "ibm-plex-mono",
     "--grain": "0.08"
   }

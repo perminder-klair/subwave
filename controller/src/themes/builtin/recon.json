@@ -17,8 +17,8 @@
     "--line": "rgba(255, 98, 1, 0.30)",
     "--soft-border": "rgba(22, 16, 9, 0.12)",
     "--overlay": "rgba(22, 16, 9, 0.08)",
-    "--display-font": "space-grotesk",
-    "--mono-font": "space-mono",
+    "--display-font": "saira-stencil-one",
+    "--mono-font": "overpass-mono",
     "--grain": "0.08"
   }
 }

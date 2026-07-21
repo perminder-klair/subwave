@@ -17,7 +17,7 @@
     "--line": "rgba(23, 19, 8, 0.32)",
     "--soft-border": "rgba(23, 19, 8, 0.14)",
     "--overlay": "rgba(23, 19, 8, 0.10)",
-    "--display-font": "space-grotesk",
+    "--display-font": "anton",
     "--mono-font": "space-mono",
     "--grain": "0.06"
   }

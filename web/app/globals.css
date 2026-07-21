@@ -288,12 +288,8 @@ body::after {
     z-index: 100;
 }
 
-:root[data-theme="dark"] body::after,
-:root:not([data-theme="light"]) body::after {
-    /* In dark mode swap the SVG noise tint to a warm off-white so screen-blend
-     lifts the charcoal background instead of muddying it. */
-}
-
+/* In dark mode swap the SVG noise tint to a warm off-white so screen-blend
+   lifts the charcoal background instead of muddying it. */
 @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) body::after {
         background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2'/><feColorMatrix values='0 0 0 0 0.55  0 0 0 0 0.5  0 0 0 0 0.45  0 0 0 0.4 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");

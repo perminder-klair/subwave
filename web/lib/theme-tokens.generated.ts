@@ -120,8 +120,8 @@ export const THEME_TOKEN_KEYS: readonly string[] = ["--bg","--surface","--surfac
 
 export const SWATCH_KEYS = ["--bg","--ink","--accent","--overlay"] as const;
 
-export const DISPLAY_FONT_IDS = ["fraunces","doto","space-grotesk","instrument-serif"] as const;
+export const DISPLAY_FONT_IDS = ["fraunces","doto","space-grotesk","instrument-serif","anton","chakra-petch","saira-stencil-one"] as const;
 export type DisplayFontId = (typeof DISPLAY_FONT_IDS)[number];
 
-export const MONO_FONT_IDS = ["jetbrains","ibm-plex-mono","space-mono","fira-code"] as const;
+export const MONO_FONT_IDS = ["jetbrains","ibm-plex-mono","space-mono","fira-code","courier-prime","overpass-mono"] as const;
 export type MonoFontId = (typeof MONO_FONT_IDS)[number];
