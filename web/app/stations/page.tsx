@@ -1,7 +1,13 @@
+import { Suspense } from 'react';
 import { AnimatedLink } from '@/components/ui/animated-link';
 import StationCard from '@/components/stations/StationCard';
 import StationMap from '@/components/stations/StationMap';
-import { getAllStations, getStationStats } from '@/lib/stations';
+import {
+  CatalogGridSkeleton,
+  CatalogMapSkeleton,
+  CatalogStatSkeleton,
+} from '@/components/ui/catalog-skeleton';
+import { getAllStations, stationStats, type Station } from '@/lib/stations';
 import { stationSubmitUrl, reportStationUrl, COMMUNITY_REPO_URL } from '@/lib/repo';
 import { pageMeta } from '@/lib/seo';
 
@@ -25,9 +31,56 @@ const SUBMIT_URL = stationSubmitUrl();
 // Report / takedown for a listed station — opens the report-station issue form.
 const REPORT_URL = reportStationUrl();
 
-export default async function StationsIndex() {
-  const stations = await getAllStations();
-  const { count, countries } = await getStationStats();
+// The catalog-backed regions. Each takes the in-flight promise rather than
+// calling getAllStations() itself, so one render issues one catalog fetch
+// regardless of how many boundaries read it.
+
+async function StationsStat({ stations }: { stations: Promise<Station[]> }) {
+  const { count, countries } = stationStats(await stations);
+  if (count === 0) return null;
+  return (
+    <p className="bs-stat-strip">
+      <span>
+        <strong>{count}</strong> {count === 1 ? 'station' : 'stations'}
+      </span>
+      <span aria-hidden="true" className="bs-stat-sep">
+        ·
+      </span>
+      <span>
+        <strong>{countries}</strong> {countries === 1 ? 'country' : 'countries'}
+      </span>
+    </p>
+  );
+}
+
+// The dot field is a 10k-sample computation on every request (this route is
+// force-dynamic), so it earns its own boundary — the hero shouldn't wait on it.
+async function StationsMap({ stations }: { stations: Promise<Station[]> }) {
+  return <StationMap stations={await stations} />;
+}
+
+async function StationsGrid({ stations }: { stations: Promise<Station[]> }) {
+  const all = await stations;
+  if (all.length === 0) {
+    return (
+      <p className="bs-news-empty">
+        No stations on the directory yet. Be the first to add yours above.
+      </p>
+    );
+  }
+  return (
+    <ul className="bs-stations-grid">
+      {all.map((s) => (
+        <StationCard key={s.slug} station={s} />
+      ))}
+    </ul>
+  );
+}
+
+export default function StationsIndex() {
+  // Started, not awaited — see the note on /shows. getAllStations degrades to
+  // an empty list on any catalog failure, so this never rejects.
+  const stations = getAllStations();
 
   return (
     <article>
@@ -40,21 +93,13 @@ export default async function StationsIndex() {
         </p>
       </header>
 
-      {count > 0 ? (
-        <p className="bs-stat-strip">
-          <span>
-            <strong>{count}</strong> {count === 1 ? 'station' : 'stations'}
-          </span>
-          <span aria-hidden="true" className="bs-stat-sep">
-            ·
-          </span>
-          <span>
-            <strong>{countries}</strong> {countries === 1 ? 'country' : 'countries'}
-          </span>
-        </p>
-      ) : null}
+      <Suspense fallback={<CatalogStatSkeleton />}>
+        <StationsStat stations={stations} />
+      </Suspense>
 
-      <StationMap stations={stations} />
+      <Suspense fallback={<CatalogMapSkeleton />}>
+        <StationsMap stations={stations} />
+      </Suspense>
 
       <div className="bs-station-cta">
         <p className="bs-station-cta-copy">
@@ -71,17 +116,9 @@ export default async function StationsIndex() {
         </AnimatedLink>
       </div>
 
-      {stations.length > 0 ? (
-        <ul className="bs-stations-grid">
-          {stations.map((s) => (
-            <StationCard key={s.slug} station={s} />
-          ))}
-        </ul>
-      ) : (
-        <p className="bs-news-empty">
-          No stations on the directory yet. Be the first to add yours above.
-        </p>
-      )}
+      <Suspense fallback={<CatalogGridSkeleton />}>
+        <StationsGrid stations={stations} />
+      </Suspense>
 
       <p className="bs-stations-report">
         Stations are run by their operators, not by SUB/WAVE.{' '}
