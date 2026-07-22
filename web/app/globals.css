@@ -4700,6 +4700,23 @@ html.lite .sw-ripple-circle {
 .bs-skeleton-line-short {
     width: 40%;
 }
+/* Hero placeholders for the route-level loading.tsx skeletons. Sized to the
+   real .bs-news-hero type so the headline doesn't jump when the page lands. */
+.bs-skeleton-eyebrow {
+    width: 160px;
+    height: 13px;
+    margin-bottom: 18px;
+}
+.bs-skeleton-headline {
+    width: min(520px, 90%);
+    height: clamp(38px, 8vw, 76px);
+    margin-bottom: 20px;
+}
+.bs-skeleton-prose {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
 
 /* Community-skill card — same newspaper-run column as the station grid, but a
    text-first entry: title + cadence, the DJ brief, context tags, credit line.
