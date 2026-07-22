@@ -192,6 +192,20 @@ export default defineConfig([
     },
   },
 
+  // Exemption for the global error boundary. app/global-error.tsx REPLACES the
+  // root layout when it renders, so globals.css — which the root layout imports
+  // — is not loaded. It therefore has to ship its own self-contained stylesheet
+  // and its own ge-* class names, which by design exist nowhere else. Adding
+  // them to globals.css to satisfy the linter would be dead CSS in the one file
+  // that can never reach them.
+  {
+    files: ['app/global-error.tsx'],
+    rules: {
+      'better-tailwindcss/no-unknown-classes': 'off',
+      'better-tailwindcss/enforce-consistent-class-order': 'off',
+    },
+  },
+
   // Exemptions for the Library Observatory — a full-bleed data-art view ported
   // from a Claude Design prototype (web/app/observatory + components/
   // observatory). Its styling is intrinsically dynamic: SVG node positions,
