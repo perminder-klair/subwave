@@ -4642,6 +4642,65 @@ html.lite .sw-ripple-circle {
     min-width: 0;
 }
 
+/* Streaming placeholders — the Suspense fallbacks for the catalog-backed
+   regions of /stations and /shows. Both pages are force-dynamic and await a
+   remote catalog before rendering, so without a boundary the hero and the CTA
+   wait on the network too. These reserve the same footprint as the real thing
+   so nothing jumps when the data streams in. Ink-toned, no new colors. */
+.bs-skeleton {
+    display: block;
+    border-radius: 2px;
+    background: var(--separator-strong);
+    opacity: 0.5;
+    animation: bs-skeleton-pulse 1.6s ease-in-out infinite;
+}
+@keyframes bs-skeleton-pulse {
+    50% {
+        opacity: 0.22;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .bs-skeleton {
+        animation: none;
+    }
+}
+/* Matches .bs-stat-strip's display numeral, which sets that row's height. */
+.bs-skeleton-stat {
+    width: min(260px, 60%);
+    height: clamp(28px, 4vw, 44px);
+}
+/* Matches .bs-station-map's padded, rule-bounded block. The chart is a
+   width-100%/height-auto SVG on a 360x180 viewBox, so the placeholder has to
+   track the same 2:1 ratio — a fixed height lands ~200px short at desktop
+   widths and the whole page below the map jumps when the chart streams in. */
+.bs-skeleton-map {
+    width: 100%;
+    aspect-ratio: 360 / 180;
+}
+/* One card's worth of column, mirroring .bs-station-card's top rule. */
+.bs-skeleton-card {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 20px;
+    border-top: 1px solid var(--separator-strong);
+    min-width: 0;
+}
+.bs-skeleton-line {
+    height: 12px;
+}
+.bs-skeleton-line-title {
+    height: clamp(19px, 2vw, 24px);
+    width: 70%;
+}
+/* Ragged widths so a run of cards reads as text, not as a barcode. */
+.bs-skeleton-line-wide {
+    width: 85%;
+}
+.bs-skeleton-line-short {
+    width: 40%;
+}
+
 /* Community-skill card — same newspaper-run column as the station grid, but a
    text-first entry: title + cadence, the DJ brief, context tags, credit line.
    Reuses .bs-stations-grid for layout. */
