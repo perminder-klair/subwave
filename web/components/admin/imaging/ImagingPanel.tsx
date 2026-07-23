@@ -15,9 +15,11 @@
    ConnectPanel (Seg control + ?tab= deep-link). */
 
 import { useCallback, useEffect, useState } from 'react';
+import { Music, AudioLines, Waves } from 'lucide-react';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { notify, errorMessage } from '../../../lib/notify';
-import { Eyebrow, Seg } from '../ui';
+import { cn } from '../../../lib/cn';
+import { Eyebrow } from '../ui';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import type { SettingsData, SaveSettings } from '../settings/shared';
 import type { SfxData, SfxForm, BedsData, JingleImportFailure, JingleImportResult } from './types';
@@ -296,9 +298,9 @@ export default function ImagingPanel() {
   const sfxCount = sfxData?.sfx?.length;
   const bedCount = bedsData?.beds?.length;
   const tabs = [
-    { id: 'jingles', label: jingleCount == null ? 'Jingles' : `Jingles · ${jingleCount}` },
-    { id: 'sfx', label: sfxCount == null ? 'SFX' : `SFX · ${sfxCount}` },
-    { id: 'beds', label: bedCount == null ? 'Beds' : `Beds · ${bedCount}` },
+    { id: 'jingles' as TabId, label: 'Jingles', count: jingleCount, icon: Music },
+    { id: 'sfx' as TabId, label: 'SFX', count: sfxCount, icon: AudioLines },
+    { id: 'beds' as TabId, label: 'Beds', count: bedCount, icon: Waves },
   ];
 
   return (
@@ -315,8 +317,42 @@ export default function ImagingPanel() {
             instrumentals the DJ talks over. All of it is created, imported, and managed here.
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3 bg-[var(--ink-softer)] p-3.5">
-          <Seg value={tab} options={tabs} accent onChange={selectTab} />
+        {/* Full-width tab row — three equal cells, active one filled in the
+            accent so the current section reads at a glance. */}
+        <div className="grid grid-cols-3" role="tablist" aria-label="Imaging sections">
+          {tabs.map((t, i) => {
+            const active = tab === t.id;
+            const Icon = t.icon;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => selectTab(t.id)}
+                className={cn(
+                  'flex items-center justify-center gap-2.5 px-4 py-4 text-[13px] font-bold tracking-[0.18em] uppercase transition-colors',
+                  i > 0 && 'border-l border-ink',
+                  active
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'bg-[var(--ink-softer)] text-ink hover:bg-ink/10',
+                )}
+              >
+                <Icon size={17} strokeWidth={2} aria-hidden />
+                <span>{t.label}</span>
+                {t.count != null && (
+                  <span
+                    className={cn(
+                      'ml-0.5 min-w-[1.5em] rounded-full px-1.5 py-0.5 text-[10px] leading-none font-bold',
+                      active ? 'bg-white/25 text-white' : 'bg-ink/10 text-muted',
+                    )}
+                  >
+                    {t.count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </section>
 
