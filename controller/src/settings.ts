@@ -913,6 +913,7 @@ export interface NormalizedShow {
   guestPersonaIds: string[];
   banter: boolean;
   programme: boolean;
+  pauseTalk: boolean;
   segmentSkill: string;
   moods: string[];
   themeId: string;
@@ -1201,6 +1202,12 @@ export type LoudnessSource = (typeof LOUDNESS_SOURCES)[number];
 const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
   crossfadeDuration: 10.0, // seconds
+  // Pause-then-talk (issue #551): on a show with `pauseTalk` enabled, a spoken
+  // skill segment whose rendered clip runs at least this many seconds pauses
+  // the music (song ends, DJ speaks in the clear, next song ramps in) instead
+  // of ducking. Shorter segments — and every segment on shows without the
+  // toggle — stay ducked. Applies live; no mixer restart (rides annotations).
+  pauseTalkMinSeconds: 20,
   // Station-wide cap (seconds) on how long a single autonomously-picked track
   // may be — keeps hour-long album mixes and DJ sets out of normal rotation
   // (issue #447). 0 = no cap (default, unchanged behaviour). A scheduled show
@@ -1778,6 +1785,10 @@ const BOUNDS = {
   // ratio file reads 0 (issue #997: no way to disable the station stinger).
   jingleRatio: { min: 0, max: 1000, type: 'int' },
   crossfadeDuration: { min: 0, max: 30, type: 'float' },
+  // Gap-vs-duck threshold for pause-then-talk. Floor of 5s keeps a stray tiny
+  // value from wedging a music gap in front of a one-liner; ceiling of 90s is
+  // longer than any segment the generators produce.
+  pauseTalkMinSeconds: { min: 5, max: 90, type: 'int' },
   // 0 = bed every link whose incoming vocal onset is unknown. The ceiling is
   // deliberately low: past ~60s the DJ has outlasted any script the generators
   // produce, so a higher value is indistinguishable from beds being off.
@@ -2011,6 +2022,10 @@ function normalizeShows(raw: unknown, personaIds: string[]): NormalizedShow[] {
     // the live skill catalog at air time (a stale kind degrades to the
     // producer's choice, same tolerance as playlistIds).
     const programme = item.programme === true;
+    // Pause-then-talk: long spoken segments pause the music instead of ducking.
+    // Opt-in per show, off by default; no cross-field requirement (unlike
+    // banter, no guests needed).
+    const pauseTalk = item.pauseTalk === true;
     const segmentSkill = typeof item.segmentSkill === 'string' ? item.segmentSkill.trim().slice(0, 64) : '';
     out.push({
       id,
@@ -2020,6 +2035,7 @@ function normalizeShows(raw: unknown, personaIds: string[]): NormalizedShow[] {
       guestPersonaIds,
       banter,
       programme,
+      pauseTalk,
       segmentSkill,
       moods,
       themeId,
@@ -2176,6 +2192,9 @@ export async function load() {
   cache = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
+    pauseTalkMinSeconds: Number.isFinite(stored.pauseTalkMinSeconds)
+      ? stored.pauseTalkMinSeconds
+      : DEFAULTS.pauseTalkMinSeconds,
     maxTrackSeconds: coerceMaxTrackSeconds(rawMaxTrackSec(stored), false) ?? DEFAULTS.maxTrackSeconds,
     archive: {
       enabled:
@@ -3211,12 +3230,14 @@ export function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>,
     // shape-checked only — resolved against the live skill catalog at air time,
     // so a stale/misspelled kind degrades instead of blocking a settings save.
     const programme = item.programme === true;
+    // Pause-then-talk toggle — plain boolean, no cross-field requirement.
+    const pauseTalk = item.pauseTalk === true;
     const segmentSkill = String(item.segmentSkill ?? '').trim();
     if (segmentSkill.length > 64) throw new Error(`shows[${i}].segmentSkill must be 0-64 chars`);
     let id = typeof item.id === 'string' && ID_RE.test(item.id) ? item.id : mintId('s_');
     if (seen.has(id)) id = mintId('s_');
     seen.add(id);
-    return { id, name, topic, personaId: item.personaId, guestPersonaIds, banter, programme, segmentSkill, moods, themeId, genres, eras, energies, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
+    return { id, name, topic, personaId: item.personaId, guestPersonaIds, banter, programme, pauseTalk, segmentSkill, moods, themeId, genres, eras, energies, filtersStrict, maxTrackSeconds, playlistIds, playlistStrict, excludedPlaylistIds };
   });
 }
 
@@ -3473,6 +3494,21 @@ export async function update(patch) {
       next.crossfadeDuration = v;
       restart = true;
     }
+  }
+  if ('pauseTalkMinSeconds' in patch) {
+    const v = parseInt(patch.pauseTalkMinSeconds, 10);
+    if (
+      !Number.isFinite(v) ||
+      v < BOUNDS.pauseTalkMinSeconds.min ||
+      v > BOUNDS.pauseTalkMinSeconds.max
+    ) {
+      throw new Error(
+        `pauseTalkMinSeconds must be number in [${BOUNDS.pauseTalkMinSeconds.min}, ${BOUNDS.pauseTalkMinSeconds.max}]`,
+      );
+    }
+    // No restart — the decision is made per-segment in the controller; nothing
+    // in radio.liq or the liquidsoap_*.txt files reads this.
+    next.pauseTalkMinSeconds = v;
   }
   if ('maxTrackSeconds' in patch || 'maxTrackMinutes' in patch) {
     const v = parseInt(rawMaxTrackSec(patch) as string, 10);
@@ -4602,6 +4638,9 @@ function resolveShowShape(show, s) {
     // Programme mode: produced episode arc (broadcast/programme.ts). The
     // optional segmentSkill pins the feature beat to one capability kind.
     programme: show.programme === true,
+    // Pause-then-talk: long spoken segments pause the music (read at announce()
+    // time via resolveActiveShow()?.pauseTalk).
+    pauseTalk: show.pauseTalk === true,
     segmentSkill: typeof show.segmentSkill === 'string' ? show.segmentSkill : '',
   };
 }

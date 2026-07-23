@@ -526,8 +526,10 @@ export async function agenticTick(ctx) {
     // queue.announce appends the segment turn into the live session. The
     // speaker's id rides in meta so session.windowMessages names a guest's
     // turn as theirs rather than the host's own words.
+    // gapEligible opts this segment into pause-then-talk (#551): on a show with
+    // the toggle on, a long enough clip pauses the music instead of ducking.
     await queue.announce(seg.text.trim(), seg.kind, {
-      persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name },
+      persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name }, gapEligible: true,
     });
 
     // Record what actually aired so the durable ledger can keep both the tool
@@ -692,9 +694,10 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
 
   // A rotated speaker rides through announce so the voice and the session
   // attribution agree (windowMessages names foreign speakers by meta id).
+  // gapEligible opts into pause-then-talk (#551), same as the autonomous path.
   await queue.announce(text, cap.kind, persona
-    ? { persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name } }
-    : {});
+    ? { persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name }, gapEligible: true }
+    : { gapEligible: true });
 
   // Record an operator-fired curiosity line in the durable ledger too, so a
   // later autonomous tick doesn't repeat it (issue #577).

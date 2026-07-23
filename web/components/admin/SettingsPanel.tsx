@@ -102,6 +102,7 @@ export default function SettingsPanel() {
     setForm({
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
       maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
+      pauseTalkMinSeconds: String(v.pauseTalkMinSeconds ?? 20),
       archive: {
         enabled: v.archive?.enabled ?? false,
         bitrate: String(v.archive?.bitrate ?? 128),
@@ -760,6 +761,44 @@ export default function SettingsPanel() {
                     album mixes or DJ sets that keep landing in rotation. Listener requests still
                     play any length, and a show can override this with its own limit (0 there means
                     unlimited). Applies on the next pick; no restart needed.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Pause-and-talk" sub="length cut-off for a music gap vs a duck">
+                <div className="field">
+                  <Label>Pause-and-talk threshold</Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      className="mono-num w-28"
+                      type="number"
+                      step={1}
+                      min={5}
+                      max={90}
+                      value={form.pauseTalkMinSeconds}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f => (f ? { ...f, pauseTalkMinSeconds: e.target.value } : f))
+                      }
+                    />
+                    <span className="text-[12px] text-muted">sec · 5–90</span>
+                    <Btn
+                      sm
+                      onClick={() =>
+                        saveSettings({ pauseTalkMinSeconds: parseInt(form.pauseTalkMinSeconds, 10) || 20 })
+                      }
+                      disabled={busy}
+                    >
+                      Save threshold
+                    </Btn>
+                  </div>
+                  <div className="field-hint">
+                    On shows with pause-and-talk enabled, a spoken segment at least this
+                    long pauses the music (the song ends, the DJ speaks in the clear, the
+                    next track starts) instead of ducking. Shorter segments stay ducked.
+                    Enable it per show under Shows. Cloud TTS voices always duck. Applies
+                    live; no restart needed.
                   </div>
                 </div>
               </Card>
