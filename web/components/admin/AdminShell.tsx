@@ -18,6 +18,7 @@ import {
   BookOpen,
   Apple,
   Smartphone,
+  Monitor,
   Users,
   Headphones,
   Plug,
@@ -227,6 +228,16 @@ export default function AdminShell({ children }: AdminShellProps) {
             >
               <Smartphone className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
               <span className="nav-label">Android app</span>
+              <span className="pill">↗</span>
+            </Link>
+            <Link
+              href="https://github.com/getsubwave/subwave-desktop/releases/latest"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="nav-item"
+            >
+              <Monitor className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+              <span className="nav-label">Desktop app</span>
               <span className="pill">↗</span>
             </Link>
             <Link
