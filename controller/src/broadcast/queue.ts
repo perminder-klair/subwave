@@ -5,6 +5,7 @@
 import { readFile } from 'node:fs/promises';
 import { existsSync, readFileSync, openSync, readSync, closeSync, statSync } from 'node:fs';
 import { stat } from 'node:fs/promises';
+import { join, basename } from 'node:path';
 import { config } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import * as subsonic from '../music/subsonic.js';
@@ -17,6 +18,8 @@ import * as programme from './programme.js';
 import * as sfx from './sfx.js';
 import * as beds from './beds.js';
 import * as bedPolicy from './bed-policy.js';
+import * as pauseTalk from './pause-talk.js';
+import { padWavSilence } from '../audio/wav-pad.js';
 import * as session from './session.js';
 import type { TurnMeta } from './session.js';
 import { getFullContext, energyForDaypart } from '../context.js';
@@ -109,6 +112,12 @@ interface QueueItem {
   // fires at cross-FEED time, this many seconds before the bed is dominant —
   // onBedStarted holds the link for what remains of it.
   bedEntrySec?: number;
+  // Set at drain time when a pause-then-talk break was pushed into dj_queue
+  // immediately ahead of this item (issue #551) — the current song ends, the DJ
+  // speaks in the clear, and this track ramps in under the sign-off. Guards the
+  // recovery re-drain from queuing a second talk clip ahead of an unsent item,
+  // same role as `bedded`.
+  talkGapped?: boolean;
   queuedAt?: string;
   sent?: boolean;
   confirmedInLiquidsoap?: boolean;
@@ -240,6 +249,7 @@ class Queue {
   _recentPlays: RecentPlay[] = [];
   _emptyDjQueueStreak = 0;      // consecutive reconcile checks seeing an empty dj_queue while sent items remain — see reconcileWithDjQueue
   _pendingVoice: { text: string; kind: string; wavPath: string; persona: Persona | null; meta: TurnMeta; t: number } | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
+  _pendingPauseTalk: { text: string; kind: string; wavPath: string; persona: Persona | null; meta: TurnMeta; t: number } | null = null; // one long spoken segment held for a music gap — see maybePushPauseTalk (pause-then-talk, #551)
 
   // Snapshot upcoming/current/history to disk. The queue is otherwise purely
   // in-memory, so a controller restart (every `--build controller` rebuild)
@@ -809,6 +819,169 @@ class Queue {
     }
   }
 
+  // Pause-then-talk decision (#551). Returns true when this segment was HELD for
+  // a music gap, meaning announce() must NOT air it now — it airs later from the
+  // music timeline (maybePushPauseTalk). All air-time bookkeeping is deferred to
+  // that point, exactly like announceAtNextTrack/airPendingVoice, so a clip
+  // dropped as stale never touches the session or the recap.
+  holdForPauseTalk({ text, kind, wavPath, persona, meta, gapEligible }: {
+    text: string; kind: string; wavPath: string; persona: Persona | null; meta: TurnMeta; gapEligible: boolean;
+  }): boolean {
+    const enabled = settings.resolveActiveShow()?.pauseTalk === true;
+    const wavMs = wavDurationMs(wavPath);
+    const thresholdSec = Number(settings.get()?.pauseTalkMinSeconds) || 20;
+    if (!pauseTalk.wantsPauseTalk({ enabled, gapEligible, wavMs, thresholdSec })) {
+      // The cloud engine renders mp3, which the PCM padder can't touch — duck
+      // it, but say why so an operator who enabled the toggle isn't left
+      // wondering why long cloud-voiced segments still talk over the music.
+      if (enabled && gapEligible && wavMs == null) {
+        this.log('pause-talk', `${kind}: cloud voice (mp3) can't pause-and-talk — ducking instead`);
+      }
+      return false;
+    }
+    if (this._pendingPauseTalk) {
+      this.log('pause-talk', `Superseding an unaired ${this._pendingPauseTalk.kind} hold with ${kind}`);
+    }
+    this._pendingPauseTalk = { text, kind, wavPath, persona, meta, t: Date.now() };
+    this.log('pause-talk', `Holding ${kind} (${Math.round((wavMs as number) / 1000)}s) for a music gap`);
+    return true;
+  }
+
+  // Pause-then-talk (#551): inject a held long segment into the music timeline
+  // as its own subwave_kind="talk" item AHEAD of `item`, so the current song
+  // ends, the DJ speaks in the clear, and `item` ramps in under the sign-off.
+  // Called from drainToLiquidsoap BEFORE maybePushBed — dj_queue is FIFO, so the
+  // talk must be handed over before the track URI. Silent no-op unless a fresh
+  // gap-worthy hold is waiting in front of an eligible song.
+  async maybePushPauseTalk(item: QueueItem) {
+    if (!this._pendingPauseTalk) return;
+    // Never wedge a talk break in front of a listener request — the request
+    // intro is the personal moment there.
+    if (item.requestedBy || item.introKind === 'dj-speak') return;
+    // Crash-restart guard: a talk already pushed ahead of this unsent item must
+    // not be pushed a second time on the recovery re-drain (mirrors item.bedded).
+    if (item.talkGapped) return;
+
+    // Whatever plays right before this item is what the talk crosses in under —
+    // the item just ahead in the (FIFO) queue, else the track on air now.
+    const idx = this.upcoming.indexOf(item);
+    const predecessor = (idx > 0 ? this.upcoming[idx - 1]?.track : null) ?? this.current?.track ?? null;
+    await this._insertPauseTalk(predecessor, item);
+  }
+
+  // Shared timeline insertion for pause-then-talk. `following` is the song the
+  // talk leads into (its link + entry effects are stripped) or null when the
+  // station is coasting on the auto playlist with nothing queued. Best-effort:
+  // any failure falls back to airing the segment ducked, so a talk break never
+  // costs the station its voice.
+  async _insertPauseTalk(predecessor: Track | null, following: QueueItem | null) {
+    const p = this._pendingPauseTalk;
+    if (!p) return;
+
+    // Fallback: air the held clip ducked (staleness aside), mirroring the
+    // bookkeeping announce() does. Used for a non-paddable clip, the sanity
+    // guard, or any error on the timeline path.
+    const airDucked = async (why: string) => {
+      this._pendingPauseTalk = null;
+      this.log('pause-talk', `${p.kind}: ${why} — airing ducked`);
+      try {
+        await airVoice(config.liquidsoap.sayFile, p.wavPath, p.text, voiceGainDb(p.kind, p.persona));
+        this.log(p.kind, p.text);
+        session.appendTurn({ role: 'segment', kind: p.kind, text: p.text, meta: p.meta });
+        webhooks.notify('dj.say', { text: p.text, kind: p.kind });
+      } catch (err) {
+        this.log('error', `Pause-talk ducked fallback failed: ${(err as Error).message}`);
+      }
+    };
+
+    // Stale clip: its prompt context baked in the clock at generation time, so a
+    // 20-min-old "right now" break aired late is worse than silence. Drop, don't
+    // duck — matches _pendingVoice/airPendingVoice.
+    if (Date.now() - p.t > pauseTalk.PAUSE_TALK_MAX_AGE_MS) {
+      this._pendingPauseTalk = null;
+      this.log('pause-talk', `Dropped held ${p.kind} — waited too long for a music gap`);
+      return;
+    }
+    if (!existsSync(p.wavPath)) { this._pendingPauseTalk = null; return; }
+
+    try {
+      // Entry canvas: the fade the previous song exits on — identical math to
+      // beds. The talk fades IN over the same d (radio.liq sizes the incoming
+      // fade from the OUTGOING item's stamped liq_cross_duration). 0 is a valid
+      // value (a hard-cut station), so guard with isFinite, not `||`.
+      const rawCross = Number(predecessor?.crossSec ?? settings.get()?.crossfadeDuration);
+      const entryCrossSec = Math.min(15, Math.max(0, Number.isFinite(rawCross) ? rawCross : 10));
+      const { headMs, tailMs } = pauseTalk.padTimesFor({ entryCrossSec });
+
+      // Pad head/tail silence into a NEW file — the original stays intact for the
+      // ducked fallback. Lands in the voice out-dir so the 1-hour cleanup owns
+      // its lifecycle. Non-WAV (cloud mp3) or a parse failure → null → duck.
+      const dest = join(config.piper.outDir, `${basename(p.wavPath).replace(/\.wav$/i, '')}-talk-${Date.now()}.wav`);
+      const paddedPath = await padWavSilence(p.wavPath, dest, { headMs, tailMs });
+      if (!paddedPath) { await airDucked('voice clip is not paddable'); return; }
+
+      const paddedMs = wavDurationMs(paddedPath) ?? 0;
+      // Belt-and-suspenders: a clip shorter than its own entry cross would glitch
+      // cross(). With the >= threshold this never fires; it guards tiny thresholds.
+      if (pauseTalk.talkTooShort(paddedMs, entryCrossSec)) { await airDucked('clip too short to gap safely'); return; }
+
+      const uri = pauseTalk.talkUri(paddedPath, { gainDb: voiceGainDb(p.kind, p.persona) });
+      await writeHandoff(config.liquidsoap.queueFile, uri);
+      this._pendingPauseTalk = null;
+
+      // The talk reached the stream — do announce()'s deferred bookkeeping now.
+      this.log(p.kind, p.text);
+      session.appendTurn({ role: 'segment', kind: p.kind, text: p.text, meta: p.meta });
+      webhooks.notify('dj.say', { text: p.text, kind: p.kind });
+
+      if (following) {
+        following.talkGapped = true;
+        // The entry-side transition effects (validated for the predecessor→
+        // following pair, read off the INCOMING track's metadata) would now land
+        // on the talk→following cross. Same for the armed transition stinger.
+        // The talk break replaced the seam they were validated for, so they all
+        // come off — same as beds. Exit-side stamps govern this track's OWN
+        // ending and stay.
+        if (following.track && (following.track.sweep || following.track.blend || following.track.dissolve || following.track.chop)) {
+          const fx = following.track.sweep ? 'sweep' : following.track.blend ? 'blend' : following.track.dissolve ? 'dissolve' : 'chop';
+          delete following.track.sweep;
+          delete following.track.blend;
+          delete following.track.dissolve;
+          delete following.track.chop;
+          delete following.track.chopPeriod;
+          this.log('mix', `${fx} dropped (a talk break replaced the transition it was validated for)`);
+        }
+        if (following.transitionSfx) delete following.transitionSfx;
+        // Suppress the following track's own link: a ducked link over the very
+        // next song start, right after a long break, is double-talk. Clearing
+        // introScript also makes maybePushBed a natural no-op for this item (it
+        // requires introScript && introWav), so no talk/bed collision to handle.
+        if (following.introScript || following.introWav) {
+          this.log('pause-talk', `Cleared "${following.track?.title}" link (it follows a talk break)`);
+          following.introScript = null;
+          following.introWav = null;
+        }
+      }
+
+      this.log('pause-talk', `talk "${p.kind}" ${Math.round(paddedMs / 1000)}s (${entryCrossSec}s entry cross) → ${pauseTalk.TALK_EXIT_CROSS_SEC}s ramp${following?.track ? ` into "${following.track.title}"` : ' (coasting)'}`);
+    } catch (err) {
+      this.log('error', `Pause-talk push failed: ${(err as Error).message}`);
+      await airDucked('timeline insertion failed');
+    }
+  }
+
+  // Coasting flush: when the station runs on the auto playlist with nothing
+  // queued (so drainToLiquidsoap never fires), a held talk break would sit until
+  // it went stale. Push it standalone into dj_queue — it preempts auto_playlist
+  // at the next natural boundary. Skipped when a drain or a pick is in flight or
+  // an unsent item is queued; those paths consume the slot instead.
+  async flushCoastingPauseTalk() {
+    if (!this._pendingPauseTalk) return;
+    if (this.senderBusy || this.pickerBusy) return;
+    if (this.upcoming.some(i => !i.sent)) return;
+    await this._insertPauseTalk(this.current?.track ?? null, null);
+  }
+
   applyMixTransition(item: QueueItem) {
     const persona: Persona | null = settings.getEffectivePersona();
     if (!item?.track) return;
@@ -1118,6 +1291,12 @@ class Queue {
         //
         // Order matters and dj_queue is FIFO, so the bed must be handed over
         // before the track URI below.
+        //
+        // Pause-then-talk (#551): a held long segment is injected as its own
+        // timeline item AHEAD of this track — before the bed, since a talk break
+        // clears this item's link (so maybePushBed then no-ops) and both must
+        // land in dj_queue before the track URI.
+        await this.maybePushPauseTalk(item);
         await this.maybePushBed(item);
 
         const maxDurationSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
@@ -1148,10 +1327,18 @@ class Queue {
   // (see broadcast/dj-agent.runPersonaHandoff). `opts.meta` is merged into the
   // session turn (e.g. tagging the sign-off with the outgoing persona id). Both
   // default to absent, so every existing call site is byte-identical.
-  async announce(text, kind = 'announcement', { persona = null, meta = {} }: { persona?: Persona | null; meta?: TurnMeta } = {}) {
+  // `opts.gapEligible` opts this segment into pause-then-talk (#551): if the
+  // active show has the toggle on and the rendered clip is long enough, it's
+  // held for a real music gap instead of aired ducked here. Only the skill-
+  // segment call sites pass it; every other caller keeps today's ducked air.
+  async announce(text, kind = 'announcement', { persona = null, meta = {}, gapEligible = false }: { persona?: Persona | null; meta?: TurnMeta; gapEligible?: boolean } = {}) {
     if (!text || !text.trim()) return;
     try {
       const wavPath = await speak(text, { kind, persona });
+      // Pause-then-talk: a long segment on an opted-in show is held for a music
+      // gap (aired later from the timeline in maybePushPauseTalk) rather than
+      // ducked. holdForPauseTalk returns true when it took ownership of the clip.
+      if (this.holdForPauseTalk({ text, kind, wavPath, persona, meta, gapEligible })) return;
       const targetFile = kind === 'link'
         ? config.liquidsoap.introFile
         : config.liquidsoap.sayFile;
@@ -1654,6 +1841,12 @@ class Queue {
         }
       })();
     }
+
+    // Pause-then-talk coasting flush (#551): if a talk break is held but nothing
+    // is queued and no pick/drain fired above, it would sit until it went stale.
+    // Push it standalone so it preempts the auto playlist at the next boundary.
+    // Fire-and-forget like the rest of this tick — must not stall the watcher.
+    void this.flushCoastingPauseTalk();
   }
 
   // Reconcile Node's upcoming queue with Liquidsoap's actual dj_queue.

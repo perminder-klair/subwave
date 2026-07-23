@@ -197,6 +197,12 @@ export const config = {
     // controller learns to air the link OVER the bed rather than over the next
     // song. Mirrors jinglePlayingFile; same {filename, startedAt} shape.
     bedPlayingFile: `${STATE_DIR}/bed-playing.json`,
+    // Written by radio.liq when a track annotated `subwave_kind="talk"` starts
+    // (pause-then-talk, issue #551). Like a bed it carries no title/artist, so
+    // on_meta skips now-playing.json and writes this instead. Observability/
+    // future-hook only; nothing in v1 depends on it. Same {filename, startedAt}
+    // shape as bedPlayingFile / jinglePlayingFile.
+    talkPlayingFile: `${STATE_DIR}/talk-playing.json`,
   },
   session: {
     // The live DJ session — a chat-history JSON the controller rewrites as

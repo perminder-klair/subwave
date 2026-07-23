@@ -967,6 +967,11 @@ music_meta = music
 # it (exactly as it does for an empty jingles.m3u) and the jingle defers to
 # the next real track boundary.
 bed_on_air = ref(false)
+# PAUSE-THEN-TALK (#551) — up while a `subwave_kind="talk"` clip is on air (a
+# long DJ segment injected into the music timeline as its own item). Like
+# bed_on_air, it makes the jingles source unavailable so the rotate can't drop a
+# stinger between the talk break and the song it leads into.
+talk_on_air = ref(false)
 
 # JINGLES & STATION ID — rotate a jingle in every N tracks.
 #
@@ -1012,9 +1017,10 @@ music =
         "/var/sub-wave/jingle-playing.json"
       )
     )
-    # A bed on air makes jingles unavailable (see bed_on_air above) so the
-    # rotate can't split a bed from the song it ramps into.
-    jingles = source.available(jingles, {not bed_on_air()})
+    # A bed OR a pause-then-talk break on air makes jingles unavailable (see
+    # bed_on_air / talk_on_air above) so the rotate can't split either from the
+    # song it ramps into.
+    jingles = source.available(jingles, {not bed_on_air() and not talk_on_air()})
     rotate(
       weights=[1, jingle_ratio()],  # 1 jingle for every N music tracks (settings.json)
       [jingles, music]
@@ -1406,6 +1412,7 @@ def on_meta(m) =
   if m["subwave_kind"] == "bed" then
     log("on_meta: bed started (#{filename})")
     bed_on_air := true
+    talk_on_air := false
     file.write(
       data=json.stringify(compact=true, {
         filename = filename,
@@ -1414,8 +1421,27 @@ def on_meta(m) =
       atomic=true,
       "/var/sub-wave/bed-playing.json"
     )
+  elsif m["subwave_kind"] == "talk" then
+    # PAUSE-THEN-TALK (#551) — a long DJ segment riding the music timeline as its
+    # own item. Same contract as a bed: no title/artist, so it must NOT reach
+    # now-playing.json, the ICY title, history, scrobbles, or _recentPlays. Branch
+    # BEFORE the title gate and mark it on its own channel. The UI keeps showing
+    # the previous song during the break (same as beds today); talk-playing.json
+    # is written for observability and as a future "DJ break" now-playing hook.
+    log("on_meta: pause-talk segment started (#{filename})")
+    talk_on_air := true
+    bed_on_air := false
+    file.write(
+      data=json.stringify(compact=true, {
+        filename = filename,
+        startedAt = time()
+      }),
+      atomic=true,
+      "/var/sub-wave/talk-playing.json"
+    )
   elsif title != "" or artist != "" then
     bed_on_air := false
+    talk_on_air := false
     log("on_meta: title=#{title} | artist=#{artist} | album=#{album} | id=#{subsonic_id}")
     ts = int_of_float(time())
     # Build via json.stringify so values with embedded quotes/backslashes
@@ -1442,11 +1468,12 @@ def on_meta(m) =
       ("album", album)
     ])
   else
-    # Untitled, non-bed metadata (the emergency single, an untagged local
-    # file). Nothing to publish — but it still marks the bed's end, and
-    # without this reset bed_on_air would latch true and keep the jingle
-    # rotate starved until the next tagged song.
+    # Untitled, non-bed, non-talk metadata (the emergency single, an untagged
+    # local file). Nothing to publish — but it still marks the end of a bed or a
+    # talk break, and without these resets bed_on_air/talk_on_air would latch
+    # true and keep the jingle rotate starved until the next tagged song.
     bed_on_air := false
+    talk_on_air := false
   end
 end
 
