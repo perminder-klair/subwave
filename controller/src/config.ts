@@ -198,6 +198,12 @@ export const config = {
     // so airVoice reads this to hold spoken segments until the stinger has
     // cleared the air.
     jinglePlayingFile: `${STATE_DIR}/jingle-playing.json`,
+    // Written by radio.liq when a track annotated `subwave_kind="bed"` starts
+    // (broadcast/beds.ts). A bed carries no title/artist, so on_meta skips
+    // now-playing.json for it and writes this instead — which is also how the
+    // controller learns to air the link OVER the bed rather than over the next
+    // song. Mirrors jinglePlayingFile; same {filename, startedAt} shape.
+    bedPlayingFile: `${STATE_DIR}/bed-playing.json`,
   },
   session: {
     // The live DJ session — a chat-history JSON the controller rewrites as

@@ -13,6 +13,8 @@ import { readFile, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/prom
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
 import { generateSfx, isConfigured } from '../audio/sfx-gen.js';
 import { transcodeAudio, hasFfmpeg, extOf, isAcceptedAudio, probeDurationSec } from '../audio/audio-import.js';
+import { writeFileAtomic } from '../util/atomic-file.js';
+import { slugify } from '../util/slug.js';
 
 // Hard ceiling on any effect's length, generated or uploaded. Effects are
 // stingers that ride under a voice line or a crossfade, not beds — Liquidsoap
@@ -66,14 +68,6 @@ const DEFAULT_SFX = [
   },
 ];
 
-function slugify(name: string) {
-  return String(name || '')
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
 async function loadMeta(): Promise<any> {
   try {
     return JSON.parse(await readFile(META, 'utf8'));
@@ -83,7 +77,8 @@ async function loadMeta(): Promise<any> {
 }
 
 async function saveMeta(meta: any) {
-  await writeFile(META, JSON.stringify(meta, null, 2));
+  // Atomic: playSfx's getPath can read this concurrently with an admin save.
+  await writeFileAtomic(META, JSON.stringify(meta, null, 2));
 }
 
 async function statOrNull(p: string) {

@@ -1,6 +1,8 @@
+import { Suspense } from 'react';
 import { AnimatedLink } from '@/components/ui/animated-link';
+import { CatalogGridSkeleton, CatalogStatSkeleton } from '@/components/ui/catalog-skeleton';
 import CommunityPersonaCard from '@/components/personas/CommunityPersonaCard';
-import { fetchCommunityPersonas } from '@/lib/communityPersonas';
+import { fetchCommunityPersonas, type CommunityPersona } from '@/lib/communityPersonas';
 import { pageMeta } from '@/lib/seo';
 import { personaSubmitUrl } from '@/lib/repo';
 
@@ -20,9 +22,47 @@ export const dynamic = 'force-dynamic';
 // share flow.
 const SUBMIT_URL = personaSubmitUrl();
 
-export default async function CommunityPersonasIndex() {
-  const personas = await fetchCommunityPersonas();
-  const count = personas.length;
+// Catalog-backed regions, each reading the one in-flight promise rather than
+// calling the loader itself — see the note in app/shows/page.tsx.
+
+async function PersonasStat({ personas }: { personas: Promise<CommunityPersona[]> }) {
+  const count = (await personas).length;
+  if (count === 0) return null;
+  return (
+    <p className="bs-stat-strip">
+      <span>
+        <strong>{count}</strong> {count === 1 ? 'persona' : 'personas'} in the catalog
+      </span>
+    </p>
+  );
+}
+
+async function PersonasGrid({ personas }: { personas: Promise<CommunityPersona[]> }) {
+  const list = await personas;
+  if (list.length === 0) {
+    return (
+      <p className="bs-news-empty">
+        No community personas to show yet — the catalog may still be loading, or this station
+        hasn&rsquo;t shipped one. Be the first to{' '}
+        <AnimatedLink href={SUBMIT_URL} className="bs-link">
+          share a persona
+        </AnimatedLink>
+        .
+      </p>
+    );
+  }
+  return (
+    <ul className="bs-stations-grid">
+      {list.map((p) => (
+        <CommunityPersonaCard key={p.slug} persona={p} />
+      ))}
+    </ul>
+  );
+}
+
+export default function CommunityPersonasIndex() {
+  // Started, not awaited, so the hero + CTA flush before the controller answers.
+  const personas = fetchCommunityPersonas();
 
   return (
     <article>
@@ -37,13 +77,9 @@ export default async function CommunityPersonasIndex() {
         </p>
       </header>
 
-      {count > 0 ? (
-        <p className="bs-stat-strip">
-          <span>
-            <strong>{count}</strong> {count === 1 ? 'persona' : 'personas'} in the catalog
-          </span>
-        </p>
-      ) : null}
+      <Suspense fallback={<CatalogStatSkeleton />}>
+        <PersonasStat personas={personas} />
+      </Suspense>
 
       <div className="bs-station-cta">
         <p className="bs-station-cta-copy">Dreamed up a DJ worth sharing? Add them to the catalog.</p>
@@ -55,22 +91,9 @@ export default async function CommunityPersonasIndex() {
         </AnimatedLink>
       </div>
 
-      {count > 0 ? (
-        <ul className="bs-stations-grid">
-          {personas.map((p) => (
-            <CommunityPersonaCard key={p.slug} persona={p} />
-          ))}
-        </ul>
-      ) : (
-        <p className="bs-news-empty">
-          No community personas to show yet — the catalog may still be loading, or this station
-          hasn&rsquo;t shipped one. Be the first to{' '}
-          <AnimatedLink href={SUBMIT_URL} className="bs-link">
-            share a persona
-          </AnimatedLink>
-          .
-        </p>
-      )}
+      <Suspense fallback={<CatalogGridSkeleton />}>
+        <PersonasGrid personas={personas} />
+      </Suspense>
 
       <p className="bs-stations-report">
         Installing is a two-tap job in your station&rsquo;s admin: open{' '}

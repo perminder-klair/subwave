@@ -184,6 +184,15 @@ interface DjQueueSnapshot {
   // real track playing untracked. Clips are keyed here instead and excluded
   // from ids/ridBySubsonicId entirely.
   clipRidBySubsonicId: Map<string, string>;
+  // Request ids in queue order — needed to find the entry pushed immediately
+  // ahead of a given track (a bed rides that slot; see resolveDjQueueRidWithBed).
+  // Relies on `dj_queue.queue` listing pending rids in FIFO push order, which
+  // is what request.queue's telnet command does (Liquidsoap 2.x: the queue
+  // command prints the ready/pending list oldest-first).
+  orderedRids: string[];
+  // Request ids whose annotate URI carries subwave_kind="bed" — beds have no
+  // subsonic_id, so this is the only way to recognise them in the queue.
+  bedRids: Set<string>;
 }
 interface DjQueueCache extends DjQueueSnapshot {
   timestamp: number;
@@ -200,6 +209,7 @@ async function fetchDjQueue(): Promise<DjQueueSnapshot> {
   const ids = new Set<string>();
   const ridBySubsonicId = new Map<string, string>();
   const clipRidBySubsonicId = new Map<string, string>();
+  const bedRids = new Set<string>();
 
   for (const rid of rids) {
     try {
@@ -222,12 +232,13 @@ async function fetchDjQueue(): Promise<DjQueueSnapshot> {
           if (!ridBySubsonicId.has(match[1])) ridBySubsonicId.set(match[1], rid);
         }
       }
+      if (/subwave_kind=\\?"bed/.test(meta)) bedRids.add(rid);
     } catch (ridErr: any) {
       console.warn(`[liquidsoap] request.metadata ${rid} failed: ${ridErr.message}`);
     }
   }
 
-  return { ids, ridBySubsonicId, clipRidBySubsonicId };
+  return { ids, ridBySubsonicId, clipRidBySubsonicId, orderedRids: rids, bedRids };
 }
 
 // Returns a Set of subsonic_ids currently in the queue (cached ~4s).
@@ -256,9 +267,22 @@ export async function getDjQueueIds(): Promise<Set<string>> {
 // cancel decisions can't ride a 4s-stale cache (the track may have gone on
 // air since). Returns null when the track is no longer pending in dj_queue.
 export async function resolveDjQueueRid(subsonicId: string): Promise<string | null> {
+  return (await resolveDjQueueRidWithBed(subsonicId)).rid;
+}
+
+// Same fresh read, plus the bed queued immediately ahead of the track, if any.
+// A bed is a separate dj_queue entry with no subsonic_id (queue.maybePushBed
+// writes it right before the track URI), so an id-keyed cancel can't see it —
+// this is how removeUpcoming finds it to cancel it along with its track.
+export async function resolveDjQueueRidWithBed(
+  subsonicId: string,
+): Promise<{ rid: string | null; bedRid: string | null }> {
   const snap = await fetchDjQueue();
   _djQueueCache = { timestamp: Date.now(), ...snap };
-  return snap.ridBySubsonicId.get(subsonicId) ?? null;
+  const rid = snap.ridBySubsonicId.get(subsonicId) ?? null;
+  if (!rid) return { rid: null, bedRid: null };
+  const prev = snap.orderedRids[snap.orderedRids.indexOf(rid) - 1];
+  return { rid, bedRid: prev && snap.bedRids.has(prev) ? prev : null };
 }
 
 // Resolve the rid of a pending transition CLIP rendered for the given
