@@ -34,12 +34,12 @@ export function LikesSection({ data, form, setForm, busy, saveSettings }: Sectio
     <>
       <SectionHeader
         eyebrow="likes"
-        title="The heart button — listeners tag tracks they love."
+        title="The heart button: listeners tag tracks they love."
         sub={<>
           One tap on the player likes the track on air: it lands in the Dash
           Likes card, optionally as a star in Navidrome (so it shows up in any
           Subsonic client&apos;s Starred view), and optionally as a preference
-          signal for the AI DJ. No listener accounts — duplicates are folded
+          signal for the AI DJ. No listener accounts. Duplicates are folded
           per airing by a hashed connection key; the raw IP is never stored.
         </>}
         metrics={[
@@ -79,7 +79,7 @@ export function LikesSection({ data, form, setForm, busy, saveSettings }: Sectio
             />
             <div className="field-hint">
               When on, every liked track is starred in Navidrome via the Subsonic
-              API — one shared &quot;station favourites&quot; list any Subsonic client can
+              API: one shared &quot;station favourites&quot; list any Subsonic client can
               see and build playlists from. Removing likes here never unstars;
               Navidrome stays the source of truth for its own stars.
             </div>
@@ -100,8 +100,8 @@ export function LikesSection({ data, form, setForm, busy, saveSettings }: Sectio
               options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
             />
             <div className="field-hint">
-              When on, the most-liked tracks ride into both pick paths — the
-              session DJ&apos;s prompt and the pool picker&apos;s candidate list — as a
+              When on, the most-liked tracks ride into both pick paths (the
+              session DJ&apos;s prompt and the pool picker&apos;s candidate list) as a
               weighted preference signal (favour these and similar artists,
               genres, moods), never a hard playlist. Variety rules still apply.
             </div>

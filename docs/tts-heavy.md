@@ -84,6 +84,35 @@ set `DOCKER_DEFAULT_PLATFORM=linux/amd64` — it runs under emulation (slow, but
 analysis is a one-time per-track pass). Model weights download lazily into the
 analyzer's HF cache the first time you actually run a sounds-like/vocals rescan.
 
+### Heavy analysis on an NVIDIA GPU (CUDA)
+
+On a host with an NVIDIA card, the heavy stack can run CLAP + Demucs on the GPU
+instead of pinning your CPU cores — a big speed-up on deep library ingestion.
+It's a compose overlay, not an `.env` toggle (a GPU device reservation can't be
+switched from `.env`):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
+```
+
+That swaps the `analyzer` service to the `subwave-analyzer-cuda` image (heavy +
+cu124 torch wheels) and hands it the GPU. Requirements: the NVIDIA driver +
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+— nothing else; the CUDA runtime rides inside the image. The worker picks the
+device itself (`ANALYZE_DEVICE=auto`): if the GPU isn't actually visible it logs
+a warning and falls back to CPU rather than failing the pass. `ANALYZER_HEAVY`
+is irrelevant while the overlay is applied — the image is overridden outright.
+(The AIO one-click container stays CPU-only; GPU analysis needs the split
+stack.)
+
+Sharing the card with a local TTS or LLM? The worker plays nice: after ~5
+minutes with no analysis requests it drops its models out of VRAM and reloads
+them on the next request (`ANALYZE_IDLE_UNLOAD_S` in `.env` tunes the window;
+`0` keeps them resident). A few hundred MB of CUDA context remain until the
+analyzer container stops. Pair it with the **quiet times** toggle on the admin
+Library page and a long scan pauses — and frees the GPU — whenever listeners
+are tuned in.
+
 ---
 
 ## Voices: why they're off by default

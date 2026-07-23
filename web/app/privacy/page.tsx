@@ -7,6 +7,10 @@ export const metadata = pageMeta({
   path: '/privacy',
 });
 
+// Render per-request so the canonical/og:url pick up the runtime SITE_URL — a
+// build-time render bakes localhost into image-based installs (see lib/site.ts).
+export const dynamic = 'force-dynamic';
+
 export default function PrivacyPage() {
   return (
     <article className="bs-article">

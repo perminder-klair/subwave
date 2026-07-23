@@ -39,8 +39,11 @@ import { usePlayer } from '@/hooks/usePlayer';
 import { useSignal } from '@/hooks/useSignal';
 import { useSleepTimer } from '@/hooks/useSleepTimer';
 import { useStationFeed } from '@/hooks/useStationFeed';
+import { useStreamFormat } from '@/hooks/useStreamFormat';
+import { useTrackLike } from '@/hooks/useTrackLike';
 import type { StationApi } from '@/lib/api';
 import type { StationLocale } from '@/lib/format';
+import { formatLabel } from '@/lib/streamFormat';
 import type {
   ActiveShow,
   NowPlayingTrack,
@@ -57,6 +60,7 @@ import TransportBar from './TransportBar';
 import Waveform from './Waveform';
 import BackPanelDrawer from './drawers/BackPanelDrawer';
 import BoothDrawer from './drawers/BoothDrawer';
+import FormatDrawer from './drawers/FormatDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import ScheduleDrawer from './drawers/ScheduleDrawer';
 import SleepDrawer from './drawers/SleepDrawer';
@@ -177,8 +181,13 @@ export default function PlayerScreen() {
   const { colors, mode, themes, activeId } = useTheme();
 
   const { isConnected } = useConnectivity();
-  const localPlayer = usePlayer(api, 1, isConnected);
 
+  // The feed must be called before the player: the player tunes with the
+  // stream format, which useStreamFormat validates against the feed's
+  // streamInfo — but the feed's backgroundPoll winds down on the player's
+  // tunedIn. `bgPoll` mirrors tunedIn into state to break that cycle (one
+  // extra render per tune toggle, nothing per-poll).
+  const [bgPoll, setBgPoll] = useState(false);
   const {
     nowPlaying,
     context,
@@ -186,6 +195,7 @@ export default function PlayerScreen() {
     dj,
     listeners,
     streamOnline,
+    streamInfo,
     llmTokens,
     state,
     session,
@@ -197,8 +207,16 @@ export default function PlayerScreen() {
     // screen (useNowPlayingInfo) tracks the broadcast; idle + backgrounded
     // polls nothing at all. While casting there's no local audio session, so
     // the OS suspends us in the background anyway — no point polling.
-  } = useStationFeed(api, { backgroundPoll: localPlayer.tunedIn });
+  } = useStationFeed(api, { backgroundPoll: bgPoll });
   const boothFeed = session.messages;
+
+  // Listener-picked stream format (MP3 floor / Opus / FLAC / AAC), per
+  // station, gated on platform decodability + the mounts the station serves.
+  const streamFormat = useStreamFormat(api?.base ?? null, streamInfo);
+  const localPlayer = usePlayer(api, 1, isConnected, streamFormat.format);
+  useEffect(() => {
+    setBgPoll(localPlayer.tunedIn);
+  }, [localPlayer.tunedIn]);
 
   const stationName = typeof dj?.station === 'string' ? dj.station : undefined;
   const djName = typeof dj?.name === 'string' ? dj.name : undefined;
@@ -207,6 +225,8 @@ export default function PlayerScreen() {
     () => (api && nowPlaying?.subsonic_id ? api.cover(nowPlaying.subsonic_id) : null),
     [api, nowPlaying?.subsonic_id],
   );
+
+  const trackLike = useTrackLike(api, nowPlaying?.subsonic_id ?? null);
 
   // Google Cast, merged over the local player: with no session this is
   // localPlayer untouched; while connected, tune/stop/volume/status re-target
@@ -326,11 +346,17 @@ export default function PlayerScreen() {
   // component's intended pattern): the masthead's single button opens the
   // "back panel"; its TIMER/FASCIA rows swap content in place — no
   // modal-dismissal race between stacked sheets.
-  const [activeSheet, setActiveSheet] = useState<'panel' | 'sleep' | 'themes' | null>(null);
+  const [activeSheet, setActiveSheet] = useState<'panel' | 'sleep' | 'themes' | 'format' | null>(
+    null,
+  );
   const themeName = useMemo(
     () => themes.find((t) => t.id === activeId)?.name ?? null,
     [themes, activeId],
   );
+  // Hide the SIGNAL row when there is nothing to choose (only the MP3 floor is
+  // pickable on this device for this station) — mirrors the web skin picker.
+  const streamFormatLabel =
+    streamFormat.options.length > 1 ? formatLabel(streamFormat.format) : null;
 
   // Footprints of the two frosted overlays (masthead/dial header at the top,
   // transport bar at the bottom). The pager fills the full height behind both,
@@ -409,6 +435,7 @@ export default function PlayerScreen() {
                     coverSrc={coverSrc}
                     elapsed={elapsed}
                     llmTokens={llmTokens}
+                    trackLike={trackLike}
                     feed={boothFeed}
                     djLineOn
                     live={tunedIn}
@@ -500,7 +527,15 @@ export default function PlayerScreen() {
       <Sheet
         open={activeSheet !== null}
         onClose={() => setActiveSheet(null)}
-        title={activeSheet === 'panel' ? 'Back panel' : activeSheet === 'sleep' ? 'Sleep timer' : 'Theme'}
+        title={
+          activeSheet === 'panel'
+            ? 'Back panel'
+            : activeSheet === 'sleep'
+              ? 'Sleep timer'
+              : activeSheet === 'format'
+                ? 'Stream format'
+                : 'Theme'
+        }
       >
         {activeSheet === 'panel' ? (
           <BackPanelDrawer
@@ -509,8 +544,10 @@ export default function PlayerScreen() {
             sleepActive={sleep.active}
             sleepRemainingSec={sleep.remainingSec}
             themeName={themeName}
+            formatLabel={streamFormatLabel}
             onOpenSleep={() => setActiveSheet('sleep')}
             onOpenThemes={() => setActiveSheet('themes')}
+            onOpenFormat={() => setActiveSheet('format')}
           />
         ) : null}
         {activeSheet === 'sleep' ? (
@@ -520,6 +557,13 @@ export default function PlayerScreen() {
             remainingSec={sleep.remainingSec}
             onStart={sleep.start}
             onCancel={sleep.cancel}
+          />
+        ) : null}
+        {activeSheet === 'format' ? (
+          <FormatDrawer
+            options={streamFormat.options}
+            selected={streamFormat.format}
+            onSelect={streamFormat.setFormat}
           />
         ) : null}
         {activeSheet === 'themes' ? <ThemesDrawer /> : null}

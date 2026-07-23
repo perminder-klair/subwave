@@ -243,6 +243,10 @@ export const config = {
     lat: 30.7333,
     lng: 76.7794,
     locationName: 'Punjab',
+    // Broader place the DJ names on air, mirrored from settings.weather. Blank
+    // falls back to locationName. Settings-layer config, not boot config —
+    // deliberately no env override, like the rest of this block.
+    onAirLocation: '',
     // 'metric' → Celsius, 'imperial' → Fahrenheit. Drives Open-Meteo's
     // temperature_unit query param and what unit the DJ announces on air.
     units: 'metric' as 'metric' | 'imperial',

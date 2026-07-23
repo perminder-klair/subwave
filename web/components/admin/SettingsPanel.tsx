@@ -24,7 +24,7 @@ import {
   SectionHeader, ELEVENLABS_VS_DEFAULTS,
   type FormState, type FormUpdater, type SettingsData, type SaveSettings,
   type SfxData, type SfxForm, type BedsData, type JingleImportFailure, type JingleImportResult,
-  type LoudnessSource,
+  type LoudnessSource, type LlmForm, type LlmFallbackForm,
 } from './settings/shared';
 import { TtsSection } from './settings/TtsSection';
 import { LlmSection } from './settings/LlmSection';
@@ -136,6 +136,9 @@ export default function SettingsPanel() {
         aacEnabled: v.stream?.aacEnabled ?? false,
         aacBitrate: String(v.stream?.aacBitrate ?? 192),
         bitrate: String(v.stream?.bitrate ?? 192),
+        oggIcyMetadata: v.stream?.oggIcyMetadata ?? true,
+        idleWhenEmpty: v.stream?.idleWhenEmpty ?? false,
+        idleAfterMinutes: String(v.stream?.idleAfterMinutes ?? 10),
       },
       loudness: {
         targetLufs: String(v.loudness?.targetLufs ?? -14),
@@ -143,13 +146,21 @@ export default function SettingsPanel() {
         source: v.loudness?.source ?? 'replaygain-then-measured',
       },
       station: v.station ?? '',
+      stationDescription: v.stationDescription ?? '',
       timezone: v.timezone ?? '',
       locale: normalizeStationLocale(v.locale),
+      privacy: {
+        privatePlayer: v.privacy?.privatePlayer ?? false,
+        listenerAuth: v.privacy?.listenerAuth ?? false,
+        // Arrives as the 'set' sentinel ('' when unset) — never the secret.
+        password: v.privacy?.password ?? '',
+      },
       kokoroLang: v.tts?.kokoro?.lang ?? '',
       weather: {
         lat: String(v.weather?.lat ?? ''),
         lng: String(v.weather?.lng ?? ''),
         locationName: v.weather?.locationName ?? '',
+        onAirLocation: v.weather?.onAirLocation ?? '',
         units: v.weather?.units === 'imperial' ? 'imperial' : 'metric',
       },
       tts: {
@@ -200,7 +211,17 @@ export default function SettingsPanel() {
         ollamaUrl: v.llm?.ollamaUrl ?? '',
         numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
         repeatPenalty: typeof v.llm?.repeatPenalty === 'number' ? v.llm.repeatPenalty : 1.15,
-        baseUrl: v.llm?.baseUrl ?? '',
+        // Per-provider base URLs. Migrate from legacy single baseUrl on first load:
+        // if the server has already stored providerBaseUrls use that; otherwise seed
+        // the current provider's slot from the old baseUrl field so no URL is lost.
+        providerBaseUrls: (() => {
+          const llmAny = v.llm as (Partial<LlmForm> & { baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
+          const stored = llmAny?.providerBaseUrls;
+          if (stored && typeof stored === 'object') return { ...stored };
+          const legacy = llmAny?.baseUrl ?? '';
+          const prov = llmAny?.provider ?? 'ollama';
+          return legacy ? { [prov]: legacy } : {};
+        })(),
         reasoning: !!v.llm?.reasoning,
         toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
@@ -219,7 +240,14 @@ export default function SettingsPanel() {
           ollamaUrl: v.llm?.fallback?.ollamaUrl ?? '',
           numCtx: typeof v.llm?.fallback?.numCtx === 'number' ? v.llm.fallback.numCtx : 16384,
           repeatPenalty: typeof v.llm?.fallback?.repeatPenalty === 'number' ? v.llm.fallback.repeatPenalty : 1.15,
-          baseUrl: v.llm?.fallback?.baseUrl ?? '',
+          providerBaseUrls: (() => {
+            const fbAny = v.llm?.fallback as (LlmFallbackForm & { baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
+            const stored = fbAny?.providerBaseUrls;
+            if (stored && typeof stored === 'object') return { ...stored };
+            const legacy = fbAny?.baseUrl ?? '';
+            const prov = fbAny?.provider ?? 'ollama';
+            return legacy ? { [prov]: legacy } : {};
+          })(),
           reasoning: !!v.llm?.fallback?.reasoning,
         },
       },
@@ -234,7 +262,16 @@ export default function SettingsPanel() {
         enabled: v.embedding?.enabled ?? true,
         provider: v.embedding?.provider ?? '',
         model: v.embedding?.model ?? '',
-        baseUrl: v.embedding?.baseUrl ?? '',
+        providerBaseUrls: (() => {
+          const stored = (v.embedding as { providerBaseUrls?: Record<string, string> })?.providerBaseUrls;
+          if (stored && typeof stored === 'object') return { ...stored };
+          // Legacy migration keys by the EFFECTIVE provider (own, else the chat
+          // provider — the embedding leg inherits it when its own is empty), the
+          // same key LibrarySection reads and writes.
+          const legacy = v.embedding?.baseUrl ?? '';
+          const prov = v.embedding?.provider || v.llm?.provider || '';
+          return legacy && prov ? { [prov]: legacy } : {};
+        })(),
         ollamaUrl: v.embedding?.ollamaUrl ?? '',
         seedCount: String(v.embedding?.seedCount ?? 0),
         knnNeighbours: String(v.embedding?.knnNeighbours ?? 10),
@@ -776,7 +813,7 @@ export default function SettingsPanel() {
                     </div>
                     <div className="field-hint">
                       0 = keep forever (the default). With a window set, the hourly cleanup
-                      deletes whole days of recordings once they age past it — at 128 kbps the
+                      deletes whole days of recordings once they age past it. At 128 kbps the
                       archive grows ~1.4 GB per day, so an unbounded archive eventually fills
                       the disk. Applies live, no restart.
                     </div>
@@ -820,6 +857,66 @@ export default function SettingsPanel() {
                 </div>
               </div>
             </Card>
+
+            {form && (
+              <Card title="Idle pause" sub="silence the programme when nobody is listening">
+                <div className="field">
+                  <Label>Pause when the room is empty</Label>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'on', label: 'On' },
+                        { id: 'off', label: 'Off' },
+                      ]}
+                      value={form.stream.idleWhenEmpty ? 'on' : 'off'}
+                      onChange={id =>
+                        setForm(f =>
+                          f ? { ...f, stream: { ...f.stream, idleWhenEmpty: id === 'on' } } : f,
+                        )
+                      }
+                    />
+                    <span className="text-[12px] text-muted">after</span>
+                    <Input
+                      className="mono-num w-24"
+                      type="number"
+                      step={1}
+                      min={1}
+                      max={1440}
+                      value={form.stream.idleAfterMinutes}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f =>
+                          f
+                            ? { ...f, stream: { ...f.stream, idleAfterMinutes: e.target.value } }
+                            : f,
+                        )
+                      }
+                    />
+                    <span className="text-[12px] text-muted">min</span>
+                    <Btn
+                      sm
+                      onClick={() =>
+                        saveSettings({
+                          stream: {
+                            idleWhenEmpty: form.stream.idleWhenEmpty,
+                            idleAfterMinutes: parseInt(form.stream.idleAfterMinutes, 10),
+                          },
+                        })
+                      }
+                      disabled={busy}
+                    >
+                      Save
+                    </Btn>
+                  </div>
+                  <div className="field-hint">
+                    After this long with zero listeners the programme pauses mid-track and the DJ
+                    goes quiet: no track pulls from Navidrome, no LLM or TTS work. The stream
+                    mounts stay up, so any player (VLC, Sonos, the web player) connects normally;
+                    playback resumes where it left off within a few seconds of the first listener
+                    tuning in. Applies live, no mixer restart.
+                  </div>
+                </div>
+              </Card>
+            )}
 
             {form && (
               <Card title="Crossfade" sub="track transition overlap">
@@ -888,7 +985,7 @@ export default function SettingsPanel() {
                     </Btn>
                   </div>
                   <div className="field-hint">
-                    The DJ won&rsquo;t auto-pick tracks longer than this — handy for hour-long
+                    The DJ won&rsquo;t auto-pick tracks longer than this, handy for hour-long
                     album mixes or DJ sets that keep landing in rotation. Listener requests still
                     play any length, and a show can override this with its own limit (0 there means
                     unlimited). Applies on the next pick; no restart needed.
@@ -928,7 +1025,7 @@ export default function SettingsPanel() {
                     </Select>
                     <div className="field-hint">
                       Where each track&rsquo;s loudness figure comes from. ReplayGain tags (read
-                      via Navidrome) are a whole-file stereo measurement — the most accurate when
+                      via Navidrome) are a whole-file stereo measurement, the most accurate when
                       your library carries them. Measured values come from this station&rsquo;s
                       acoustic analysis, which scans only the opening of each track. The default
                       prefers the tag and falls back to the measurement for untagged files.
@@ -995,7 +1092,7 @@ export default function SettingsPanel() {
                     <div className="field-hint">
                       Cap on how far a quiet track is turned up (0 = level down only). Boost is
                       also limited by each track&rsquo;s own measured peak headroom, so raising
-                      this won&rsquo;t distort dynamic material — very quiet, dynamic masters
+                      this won&rsquo;t distort dynamic material; very quiet, dynamic masters
                       simply can&rsquo;t reach the target cleanly. Loud tracks are turned down as
                       far as needed. Applies from the next queued track; no restart, tracks need
                       acoustic analysis (Library → Analyze).
@@ -1136,9 +1233,52 @@ export default function SettingsPanel() {
                     tier <strong>only when your source files are themselves lossless</strong>{' '}
                     (FLAC/ALAC/WAV); for a lossy-source library (e.g. AAC/MP3) it faithfully
                     carries lossy audio and adds no fidelity over MP3/Opus. Meant for external
-                    players (VLC, foobar2000, a network streamer) — the web and mobile players
+                    players (VLC, foobar2000, a network streamer); the web and mobile players
                     stay on MP3/Opus and won&apos;t auto-select it. The mandatory{' '}
                     <code>/stream.mp3</code> mount always serves everyone.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Ogg metadata" sub="ICY titles on /stream.opus + /stream.flac">
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Push ICY track titles on the Ogg mounts</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'on', label: 'On' },
+                        { id: 'off', label: 'Off' },
+                      ]}
+                      value={form.stream.oggIcyMetadata ? 'on' : 'off'}
+                      onChange={id =>
+                        setForm(f =>
+                          f ? { ...f, stream: { ...f.stream, oggIcyMetadata: id === 'on' } } : f,
+                        )
+                      }
+                    />
+                    <Btn
+                      sm
+                      onClick={() =>
+                        saveSettings({ stream: { oggIcyMetadata: form.stream.oggIcyMetadata } })
+                      }
+                      disabled={busy}
+                    >
+                      Save
+                    </Btn>
+                  </div>
+                  <div className="field-hint">
+                    On by default. Sends each track&apos;s title out-of-band (ICY) on the Opus and
+                    FLAC mounts, which most internet-radio players and Cast receivers need: they
+                    read the in-band Ogg tags only once, at connect, and otherwise stay stuck on
+                    the first title. Turn it <strong>off</strong> if your listeners use
+                    foobar2000: it reads the in-band tags correctly, and the extra ICY channel
+                    breaks its FLAC metadata display. The MP3 and AAC mounts always use ICY and
+                    are unaffected either way.
                   </div>
                 </div>
               </Card>
@@ -1185,11 +1325,10 @@ export default function SettingsPanel() {
                       </div>
                     )}
                     <div className="field-hint">
-                      Off by default. A continuous AAC-LC encoder whose purpose is reach —
-                      players and hardware that decode AAC but not Opus. Aimed at external
-                      players; the web and mobile players stay on MP3/Opus and won&apos;t
-                      auto-select it. The mandatory <code>/stream.mp3</code> mount serves
-                      everyone either way.
+                      Off by default. A continuous AAC-LC encoder for reach: players and
+                      hardware that decode AAC but not Opus. Aimed at external players; the
+                      web and mobile players stay on MP3/Opus and won&apos;t auto-select it.
+                      The mandatory <code>/stream.mp3</code> mount serves everyone either way.
                     </div>
                   </div>
                   <div className="field">

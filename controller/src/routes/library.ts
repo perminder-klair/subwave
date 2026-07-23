@@ -404,10 +404,25 @@ router.get('/library/observatory/track/:id', requireAdmin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /library/observatory/projection — lightweight sound-map job status. The
+// same object that rides the bulk payload, without the multi-MB track body, so
+// the Observatory can poll a running projection cheaply and know when to
+// reload the map.
+// ---------------------------------------------------------------------------
+router.get('/library/observatory/projection', requireAdmin, async (_req, res) => {
+  try {
+    await library.load();
+    res.json(mapProjection.projectionStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /library/observatory/project — force a sound-map projection pass now
 // (the boot hook only fires when the map is stale). Spawns the standalone
 // UMAP child; 409 when one is already running. Minutes-long at library scale —
-// the client polls the bulk endpoint's `mapProjection` status for completion.
+// the client polls GET /library/observatory/projection for completion.
 // ---------------------------------------------------------------------------
 router.post('/library/observatory/project', requireAdmin, async (_req, res) => {
   try {

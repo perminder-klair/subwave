@@ -125,7 +125,15 @@ init_secrets() {
 	# Liquidsoap connects to icecast over loopback inside this container;
 	# radio.liq reads ICECAST_HOST (default "icecast").
 	export ICECAST_HOST=localhost
+}
 
+# ---------------------------------------------------------------------------
+# Render icecast.xml from the template + resolved secrets. Called on EVERY
+# broadcast pair (re)launch — not just boot — so a restart-mixer picks up a
+# flipped listener-auth flag the same way the split stack's container restart
+# re-runs its entrypoint.
+# ---------------------------------------------------------------------------
+render_icecast() {
 	# Concurrent-listener ceiling (<limits><clients>). Empty/unset → the stock 100.
 	# A non-numeric value would render invalid XML and fail icecast at boot,
 	# so fall back to the default with a warning instead.
@@ -137,11 +145,37 @@ init_secrets() {
 			;;
 	esac
 
+	# Listener auth (#478) — same contract as docker/broadcast-entrypoint.sh:
+	# only a literal 'true' in the controller-written flag file enables, and
+	# each stream mount then gets an <authentication type="url"> block. The
+	# controller runs in-process here, so the callback goes over loopback.
+	local FLAG=/var/sub-wave/icecast_listener_auth.txt
+	local AUTH_URL="${LISTENER_AUTH_URL:-http://localhost:7701/listener-auth}"
+	local MOUNTS_XML=/etc/icecast2/listener-auth-mounts.xml
+	: > "$MOUNTS_XML"
+	if [ "$(cat "$FLAG" 2>/dev/null | tr -d '[:space:]')" = "true" ]; then
+		log "listener auth ON — mounts require credentials via $AUTH_URL"
+		local MOUNT
+		for MOUNT in /stream.mp3 /stream.opus /stream.flac /stream.aac; do
+			cat >> "$MOUNTS_XML" <<-EOF
+				    <mount type="normal">
+				        <mount-name>$MOUNT</mount-name>
+				        <authentication type="url">
+				            <option name="listener_add" value="$AUTH_URL"/>
+				            <option name="auth_header" value="icecast-auth-user: 1"/>
+				        </authentication>
+				    </mount>
+			EOF
+		done
+	fi
+
 	sed \
 		-e "s|\${ICECAST_SOURCE_PASSWORD}|$ICECAST_SOURCE_PASSWORD|g" \
 		-e "s|\${ICECAST_ADMIN_PASSWORD}|$ICECAST_ADMIN_PASSWORD|g" \
 		-e "s|\${ICECAST_RELAY_PASSWORD}|$ICECAST_RELAY_PASSWORD|g" \
 		-e "s|\${ICECAST_MAX_CLIENTS}|$ICECAST_MAX_CLIENTS|g" \
+		-e "/<!--@LISTENER_AUTH_MOUNTS@-->/r $MOUNTS_XML" \
+		-e "/<!--@LISTENER_AUTH_MOUNTS@-->/d" \
 		"$TEMPLATE" > "$RENDERED"
 	chown icecast2 "$RENDERED" 2>/dev/null || true
 }
@@ -155,6 +189,9 @@ init_secrets() {
 # the pair). icecast runs as the icecast2 user; liquidsoap as the liquidsoap
 # user (uid 10000). `sudo -E` preserves the resolved ICECAST_* env.
 run_broadcast() {
+	# Re-render on every pair launch so a flipped listener-auth flag lands
+	# after a restart-mixer (which bounces this pair, not the container).
+	render_icecast
 	log "starting icecast2"
 	sudo -E -u icecast2 icecast2 -n -c "$RENDERED" &
 	local ic=$!

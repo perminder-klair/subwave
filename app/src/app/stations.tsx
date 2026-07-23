@@ -3,12 +3,14 @@
 // through selectStation (which tears down playback before re-pointing the app);
 // navigation returns to the EXISTING root player via dismissTo — replace() here
 // would stack a second player screen on top of the modal (overlapping screens,
-// duplicate polling). Long-press a recent to forget it.
+// duplicate polling). Saved stations carry a trash button (long-press works
+// too); both confirm before forgetting. The featured station is config-seeded
+// and would silently reappear, so it never offers removal.
 
 import { router } from 'expo-router';
-import { ChevronRight, X } from 'lucide-react-native';
+import { ChevronRight, Trash2, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Alert, Pressable, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import LiveDot from '@/components/LiveDot';
 import StationLiveStatus from '@/components/StationLiveStatus';
@@ -48,6 +50,13 @@ export default function Stations() {
       await selectStation(ref);
     }
     router.dismissTo('/');
+  };
+
+  const confirmForget = (st: StationRef) => {
+    Alert.alert('Remove station?', `${st.name} will be removed from your stations.`, [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Remove', style: 'destructive', onPress: () => forgetStation(st.url) },
+    ]);
   };
 
   // Tapping a directory station deep-links into onboarding's health-check so a
@@ -117,29 +126,42 @@ export default function Stations() {
         ) : null}
 
         {recentRows.length ? <Divider>Recent</Divider> : null}
-        {recentRows.map((st) => (
-          <Pressable
-            key={st.url}
-            onPress={() => switchTo(st)}
-            onLongPress={() => forgetStation(st.url)}
-            accessibilityRole="button"
-            accessibilityLabel={`Tune in to ${st.name}`}
-            accessibilityHint="Long-press to forget"
-            className="flex-row items-center"
-            style={{ gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.softBorder }}
-          >
-            <LiveDot />
-            <View className="flex-1">
-              <Text className="font-body-semibold text-ink" style={{ fontSize: 14 }} numberOfLines={1}>
-                {st.name}
-              </Text>
-              <Text className="font-mono text-muted" style={{ fontSize: 11 }} numberOfLines={1}>
-                {stripProto(st.url)}
-              </Text>
-            </View>
-            <ChevronRight size={15} color={colors.muted} />
-          </Pressable>
-        ))}
+        {recentRows.map((st) => {
+          const removable = normalizeBase(st.url) !== normalizeBase(featured.url);
+          return (
+            <Pressable
+              key={st.url}
+              onPress={() => switchTo(st)}
+              onLongPress={removable ? () => confirmForget(st) : undefined}
+              accessibilityRole="button"
+              accessibilityLabel={`Tune in to ${st.name}`}
+              className="flex-row items-center"
+              style={{ gap: 12, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: colors.softBorder }}
+            >
+              <LiveDot />
+              <View className="flex-1">
+                <Text className="font-body-semibold text-ink" style={{ fontSize: 14 }} numberOfLines={1}>
+                  {st.name}
+                </Text>
+                <Text className="font-mono text-muted" style={{ fontSize: 11 }} numberOfLines={1}>
+                  {stripProto(st.url)}
+                </Text>
+              </View>
+              {removable ? (
+                <Pressable
+                  onPress={() => confirmForget(st)}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Remove ${st.name}`}
+                  style={{ padding: 4 }}
+                >
+                  <Trash2 size={15} color={colors.muted} />
+                </Pressable>
+              ) : null}
+              <ChevronRight size={15} color={colors.muted} />
+            </Pressable>
+          );
+        })}
 
         {discoverRows.length ? <Divider>Discover</Divider> : null}
         {discoverRows.map((st) => {

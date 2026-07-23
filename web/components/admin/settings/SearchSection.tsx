@@ -130,7 +130,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
               <span className="text-[11px] font-bold tracking-[0.12em] text-vermilion uppercase">
                 Routing now · {searchProviderLabel(savedSearch.provider || 'duckduckgo')}
               </span>
-              <span className="text-[11px] leading-[1.5] text-muted">
+              <span className="text-[14px] leading-[1.5] text-muted">
                 {searchDirty
                   ? <>Your edits below aren&apos;t live until you Save.</>
                   : <>This is the saved, running config.</>}
@@ -167,8 +167,8 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                 : provider === 'tavily'
                 ? 'Tavily, paid web search with full results and an answer summary. Needs an API key.'
                 : provider === 'brave'
-                ? 'Brave Search API — real web + news results for artist queries. Metered billing with $5/month in free credits (~1,000 queries; a card on file is required). SUB/WAVE caches every search for 30 minutes.'
-                : 'SearXNG, self-hosted meta-search aggregating Google, Brave, DDG and more. No API key needed — just a running SearXNG instance.'}
+                ? 'Brave Search API: real web + news results for artist queries. Metered billing with $5/month in free credits (~1,000 queries; a card on file is required). SUB/WAVE caches every search for 30 minutes.'
+                : 'SearXNG, self-hosted meta-search aggregating Google, Brave, DDG and more. No API key needed, just a running SearXNG instance.'}
             </div>
           </div>
 

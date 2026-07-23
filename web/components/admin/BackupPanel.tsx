@@ -267,7 +267,7 @@ export default function BackupPanel() {
       >
         <div className="mb-3 text-[12px] leading-[1.6] text-muted">
           A big tag database (tens of thousands of tracks) can exceed your reverse proxy&apos;s
-          upload limit — Cloudflare rejects uploads over 100&nbsp;MB with a <strong>413</strong>.
+          upload limit: Cloudflare rejects uploads over 100&nbsp;MB with a <strong>413</strong>.
           Copy the backup zip into the station&apos;s <code className="text-ink">state/</code>{' '}
           folder on the server
           {stateDir ? (
@@ -276,7 +276,7 @@ export default function BackupPanel() {
               <code className="text-ink">{stateDir}</code>)
             </>
           ) : null}
-          , then <strong>Refresh</strong> and restore it here — it never travels through the proxy.
+          , then <strong>Refresh</strong> and restore it here; it never travels through the proxy.
         </div>
         {diskErr && <div className="mb-2 text-[12px] text-[var(--danger)]">{diskErr}</div>}
         {diskFiles && diskFiles.length === 0 && !diskErr && (

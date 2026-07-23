@@ -220,7 +220,7 @@ export default memo(function TransportBar({
       // background fills down to the screen edge — no page bg peeks through.
       className="absolute inset-x-0 bottom-0 z-20"
     >
-      <div className="fz-deck relative grid grid-cols-[auto_1fr_auto] items-stretch bg-bg pt-3 pr-[env(safe-area-inset-right)] pb-[calc(env(safe-area-inset-bottom)_+_0.75rem)] pl-[env(safe-area-inset-left)] [border-top:1px_solid_var(--fz-edge)]">
+      <div className="fz-deck relative grid grid-cols-[auto_1fr_auto] items-stretch bg-[var(--fz-panel)] pt-3 pr-[env(safe-area-inset-right)] pb-[calc(env(safe-area-inset-bottom)_+_0.75rem)] pl-[env(safe-area-inset-left)] [border-top:1px_solid_var(--fz-edge)]">
         {/* ── POWER ──────────────────────────────────────────────── */}
         <div className="relative flex flex-col items-center justify-center gap-1.5 px-4 pt-1 pb-2 md:px-5 md:pt-1 md:pb-2.5 lg:gap-2 lg:px-6 lg:pt-1.5 lg:pb-3">
           <span className="v3-caption hidden text-muted lg:block">Power</span>

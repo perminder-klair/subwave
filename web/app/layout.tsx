@@ -1,7 +1,7 @@
 import './globals.css';
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
-import { Fraunces, Plus_Jakarta_Sans, JetBrains_Mono } from 'next/font/google';
+import { Fraunces, Plus_Jakarta_Sans, JetBrains_Mono, Doto, Space_Grotesk, Instrument_Serif, IBM_Plex_Mono, Space_Mono, Fira_Code, Anton, Chakra_Petch, Saira_Stencil_One, Courier_Prime, Overpass_Mono } from 'next/font/google';
 import { GoogleAnalytics } from '@next/third-parties/google';
 import { THEME_INIT_SCRIPT } from '@/lib/theme';
 import { LITE_INIT_SCRIPT } from '@/lib/lite';
@@ -25,7 +25,52 @@ const fraunces = Fraunces({
   subsets: ['latin'],
   axes: ['opsz'],
   display: 'swap',
-  variable: '--font-display',
+  variable: '--font-fraunces',
+});
+
+// Curated display faces a theme can select via the --display-font token (see
+// lib/theme FONT_STACKS + the theme-token registry). Loaded globally so the
+// operator-picked headline face applies across every skin + the admin console.
+// Kept small to bound bundle weight; latin subset, display: swap.
+const doto = Doto({
+  subsets: ['latin'],
+  weight: 'variable',
+  display: 'swap',
+  variable: '--font-doto',
+});
+
+const spaceGrotesk = Space_Grotesk({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-space-grotesk',
+});
+
+const instrumentSerif = Instrument_Serif({
+  subsets: ['latin'],
+  weight: '400',
+  display: 'swap',
+  variable: '--font-instrument-serif',
+});
+
+const anton = Anton({
+  subsets: ['latin'],
+  weight: '400',
+  display: 'swap',
+  variable: '--font-anton',
+});
+
+const chakraPetch = Chakra_Petch({
+  subsets: ['latin'],
+  weight: ['400', '700'],
+  display: 'swap',
+  variable: '--font-chakra-petch',
+});
+
+const sairaStencilOne = Saira_Stencil_One({
+  subsets: ['latin'],
+  weight: '400',
+  display: 'swap',
+  variable: '--font-saira-stencil-one',
 });
 
 const plusJakarta = Plus_Jakarta_Sans({
@@ -34,11 +79,49 @@ const plusJakarta = Plus_Jakarta_Sans({
   variable: '--font-sans',
 });
 
+// JetBrains is the default data face. Its next/font variable is --font-jetbrains
+// now (not --font-mono), because the `font-mono` utility follows the themeable
+// --mono-font token (globals.css @theme), which defaults to JetBrains.
 const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin', 'latin-ext'],
   weight: ['300', '400', '500', '700', '800'],
   display: 'swap',
-  variable: '--font-mono',
+  variable: '--font-jetbrains',
+});
+
+// Curated monospace faces a theme can select via the --mono-font token — reaches
+// the mono-forward skins (Subamp, TTY) and everything using `font-mono`.
+const ibmPlexMono = IBM_Plex_Mono({
+  subsets: ['latin'],
+  weight: ['400', '500', '600', '700'],
+  display: 'swap',
+  variable: '--font-ibm-plex-mono',
+});
+
+const spaceMono = Space_Mono({
+  subsets: ['latin'],
+  weight: ['400', '700'],
+  display: 'swap',
+  variable: '--font-space-mono',
+});
+
+const firaCode = Fira_Code({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-fira-code',
+});
+
+const courierPrime = Courier_Prime({
+  subsets: ['latin'],
+  weight: ['400', '700'],
+  display: 'swap',
+  variable: '--font-courier-prime',
+});
+
+const overpassMono = Overpass_Mono({
+  subsets: ['latin'],
+  display: 'swap',
+  variable: '--font-overpass-mono',
 });
 
 const DESCRIPTION =
@@ -116,7 +199,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html
       lang="en"
-      className={`${fraunces.variable} ${plusJakarta.variable} ${jetbrainsMono.variable}`}
+      className={`${fraunces.variable} ${plusJakarta.variable} ${jetbrainsMono.variable} ${doto.variable} ${spaceGrotesk.variable} ${instrumentSerif.variable} ${anton.variable} ${chakraPetch.variable} ${sairaStencilOne.variable} ${ibmPlexMono.variable} ${spaceMono.variable} ${firaCode.variable} ${courierPrime.variable} ${overpassMono.variable}`}
       suppressHydrationWarning
     >
       <head>
@@ -139,8 +222,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
 
         {/* Absolute share-card image tags — see the metadata comment above for
             why these bypass the Metadata API. Per-page canonical + og:url are
-            set via lib/seo's pageMeta(). SITE_URL is baked at build time from
-            the Docker build arg. */}
+            set via lib/seo's pageMeta(). SITE_URL is resolved from the runtime
+            container env — the public pages render per-request (see
+            lib/site.ts), so these tags always carry the operator's domain. */}
         <meta property="og:image" content={`${SITE_URL}/og`} />
         <meta property="og:image:type" content="image/png" />
         <meta property="og:image:width" content="1200" />

@@ -14,7 +14,7 @@ import crypto from 'node:crypto';
 import { config } from '../../../config.js';
 import * as settings from '../../../settings.js';
 import { transcodeAudio, hasFfmpeg } from '../../../audio/audio-import.js';
-import { isElevenLabsV3, snapV3Stability } from '../core/pure.js';
+import { isElevenLabsV3, snapV3Stability, soulBrief } from '../core/pure.js';
 
 // Default TTS model per cloud provider. A model id is provider-specific — an
 // OpenAI id like "gpt-4o-mini-tts" is invalid against ElevenLabs and vice
@@ -128,7 +128,11 @@ function deliveryHint(
   model: string,
 ): { instructions?: string; language?: string } {
   const lang = String(language || '').trim();
-  const character = String(soul || '').trim();
+  // Brief, not the full soul: this hint is rebuilt and sent on EVERY spoken
+  // line, and it only steers tone and pacing — the backstory and recurring
+  // bits further down a long soul can't change how a line is read, they just
+  // enlarge every request.
+  const character = soulBrief(soul);
   if (provider === 'openai') {
     // `instructions` only steers gpt-4o*-tts models; tts-1 / tts-1-hd ignore or
     // reject it, so don't send it there (a 400 would drop us to an English

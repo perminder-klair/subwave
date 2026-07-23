@@ -178,6 +178,13 @@ that isn't in the lean image (the `-heavy` images are ~1.9 GB):
 - **Split stack (Compose Manager).** Add `ANALYZER_HEAVY=1` to your **.env**,
   **Save**, then **Pull & Up** — the `analyzer` container re-pulls as
   `subwave-analyzer-heavy`.
+
+  **Got an NVIDIA card in the box?** Use the CUDA flavour instead — same
+  features, GPU-fast: add `docker-compose.analyzer-gpu.yml` from the repo as a
+  second compose file in the stack (it swaps the analyzer to
+  `subwave-analyzer-cuda` and reserves the GPU; `ANALYZER_HEAVY` is then
+  irrelevant). Needs the Unraid **Nvidia Driver** plugin; if the GPU isn't
+  visible the analyzer just falls back to CPU.
 - **All-in-one (one-click from Community Applications).** The heavy/lean split
   is baked into the image, so you switch by pointing the container at the heavy
   tag — **`ANALYZER_HEAVY` does nothing here** (it's the split-stack toggle):

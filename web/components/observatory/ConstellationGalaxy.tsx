@@ -49,6 +49,9 @@ interface Props {
   selected: ObsTrack | null;
   neighbours: ObsTrack[];
   hovered: ObsTrack | null;
+  // Fly-to request: animate the camera to centre this node. The nonce `n`
+  // distinguishes repeat requests for the same track; map clicks never set it.
+  focus?: { t: ObsTrack; n: number } | null;
   onHover: (t: ObsTrack | null, e?: React.MouseEvent) => void;
   onSelect: (t: ObsTrack | null) => void;
 }
@@ -215,6 +218,7 @@ export default function ConstellationGalaxy({
   selected,
   neighbours,
   hovered,
+  focus,
   onHover,
   onSelect,
 }: Props) {
@@ -803,6 +807,65 @@ export default function ConstellationGalaxy({
       return { k: k2, tx: 500 - ux * k2, ty: 500 - uy * k2 };
     });
 
+  // ---- fly-to: animate the camera to centre a requested node -----------------
+  // Screen centre is always viewbox (500,500) under meet-fit letterboxing, so
+  // the target is exact regardless of stage aspect. Zoom eases geometrically
+  // (perceptually linear), translation linearly on the same eased parameter —
+  // the focal point drifts a hair mid-flight but lands exactly.
+  const flyRaf = useRef<number | null>(null);
+  useEffect(() => {
+    if (!focus) return;
+    const t = focus.t;
+    const from = viewRef.current;
+    const k2 = clampK(Math.max(from.k, 3));
+    const target = { k: k2, tx: 500 - t.x * k2, ty: 500 - t.y * k2 };
+    if (flyRaf.current != null) cancelAnimationFrame(flyRaf.current);
+    if (reducedMotion) {
+      viewRef.current = target;
+      setView(target);
+      return;
+    }
+    const t0 = performance.now();
+    const DUR = 600;
+    const step = () => {
+      const p = Math.min(1, (performance.now() - t0) / DUR);
+      const e = 1 - Math.pow(1 - p, 3);
+      const k = from.k * Math.pow(target.k / from.k, e);
+      const next = {
+        k,
+        tx: from.tx + (target.tx - from.tx) * e,
+        ty: from.ty + (target.ty - from.ty) * e,
+      };
+      viewRef.current = next;
+      setView(next);
+      flyRaf.current = p < 1 ? requestAnimationFrame(step) : null;
+    };
+    flyRaf.current = requestAnimationFrame(step);
+    return () => {
+      if (flyRaf.current != null) {
+        cancelAnimationFrame(flyRaf.current);
+        flyRaf.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focus?.n]);
+
+  // ---- keyboard: pan with arrows, zoom with +/-, 0 resets ---------------------
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if ((e.target as HTMLElement).closest('button')) return; // zoom controls keep their own keys
+    const PAN = 60; // viewbox units per press — a comfortable nudge at any zoom
+    const v = viewRef.current;
+    if (e.key === 'ArrowLeft') commitView({ ...v, tx: v.tx + PAN });
+    else if (e.key === 'ArrowRight') commitView({ ...v, tx: v.tx - PAN });
+    else if (e.key === 'ArrowUp') commitView({ ...v, ty: v.ty + PAN });
+    else if (e.key === 'ArrowDown') commitView({ ...v, ty: v.ty - PAN });
+    else if (e.key === '+' || e.key === '=') zoom(1.3);
+    else if (e.key === '-' || e.key === '_') zoom(0.77);
+    else if (e.key === '0') reset();
+    else return;
+    e.preventDefault();
+  };
+
   const transform = `translate(${view.tx} ${view.ty}) scale(${view.k})`;
   // Constellation names, greedily decluttered: lib.genres is most-populous
   // first, so when two centroids crowd each other (common on the sound map,
@@ -833,6 +896,10 @@ export default function ConstellationGalaxy({
       className="cmap cmap-galaxy"
       ref={wrapRef}
       style={{ cursor: dragging ? 'grabbing' : hovered ? 'pointer' : 'grab' }}
+      tabIndex={0}
+      role="application"
+      aria-label="library map — arrow keys pan, plus and minus zoom, zero resets, click a star to inspect it"
+      onKeyDown={onKeyDown}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerEnd}
@@ -934,17 +1001,30 @@ export default function ConstellationGalaxy({
         </button>
       </div>
 
-      {/* legend — swatches pass through the same night-lift as the stars */}
+      {/* legend — swatches pass through the same night-lift as the stars, and
+          every colour-by mode gets the key its nodeColor/nodeFilled actually
+          draw: heat ramps for the continuous scalars (with a hollow chip for
+          the unmeasured), palettes for the categoricals */}
       <div className="cmap-legend">
         <span className="t-caption ad-muted">{legendLabel(colorBy)}</span>
-        {colorBy === 'energy' || colorBy === 'confidence' ? (
-          <div className="legend-ramp">
-            <span className="lr-bar" />
-            <span className="t-caption ad-muted">{colorBy === 'energy' ? 'LOW' : '0.0'}</span>
-            <span className="t-caption ad-muted" style={{ marginLeft: 'auto' }}>
-              {colorBy === 'energy' ? 'HIGH' : '1.0'}
-            </span>
-          </div>
+        {colorBy === 'energy' || colorBy === 'confidence' || colorBy === 'loudness' || colorBy === 'pace' ? (
+          <>
+            <div className="legend-ramp">
+              <span className="lr-bar" />
+              <span className="t-caption ad-muted">{RAMP_ENDS[colorBy][0]}</span>
+              <span className="t-caption ad-muted" style={{ marginLeft: 'auto' }}>
+                {RAMP_ENDS[colorBy][1]}
+              </span>
+            </div>
+            {(colorBy === 'loudness' || colorBy === 'pace') && (
+              <div className="legend-keys">
+                <span>
+                  <i className="lk hollow" style={{ borderColor: liftNightCss('#9b948a') }} />
+                  NOT MEASURED
+                </span>
+              </div>
+            )}
+          </>
         ) : colorBy === 'source' ? (
           <div className="legend-keys">
             <span>
@@ -964,6 +1044,21 @@ export default function ConstellationGalaxy({
               UNCERTAIN · LEGACY
             </span>
           </div>
+        ) : colorBy === 'vocal' ? (
+          <div className="legend-keys">
+            <span>
+              <i className="lk" style={{ background: liftNightCss('#d94b2a') }} />
+              VOCAL
+            </span>
+            <span>
+              <i className="lk" style={{ background: liftNightCss('#4a443d') }} />
+              INSTRUMENTAL
+            </span>
+            <span>
+              <i className="lk hollow" style={{ borderColor: liftNightCss('#9b948a') }} />
+              NOT ANALYSED
+            </span>
+          </div>
         ) : (
           <div className="legend-keys">
             <span>
@@ -981,12 +1076,29 @@ export default function ConstellationGalaxy({
   );
 }
 
+// End labels for the heat-ramp legends, per continuous colour-by mode.
+const RAMP_ENDS: Record<'energy' | 'confidence' | 'loudness' | 'pace', [string, string]> = {
+  energy: ['LOW', 'HIGH'],
+  confidence: ['0.0', '1.0'],
+  loudness: ['QUIET', 'LOUD'],
+  pace: ['CALM', 'DRIVING'],
+};
+
 function legendLabel(c: ColorBy): string {
-  return c === 'energy'
-    ? 'NODE COLOUR · ENERGY'
-    : c === 'confidence'
-      ? 'NODE COLOUR · TAG CONFIDENCE'
-      : c === 'source'
-        ? 'NODE COLOUR · TAG SOURCE'
-        : 'NODE COLOUR · ACOUSTIC ANALYSIS';
+  switch (c) {
+    case 'energy':
+      return 'NODE COLOUR · ENERGY';
+    case 'confidence':
+      return 'NODE COLOUR · TAG CONFIDENCE';
+    case 'source':
+      return 'NODE COLOUR · TAG SOURCE';
+    case 'loudness':
+      return 'NODE COLOUR · LOUDNESS';
+    case 'pace':
+      return 'NODE COLOUR · PACE';
+    case 'vocal':
+      return 'NODE COLOUR · VOICE';
+    default:
+      return 'NODE COLOUR · ACOUSTIC ANALYSIS';
+  }
 }

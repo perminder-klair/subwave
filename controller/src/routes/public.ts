@@ -11,6 +11,7 @@ import { getFullContext, geocodePlace } from '../context.js';
 import { queue } from '../broadcast/queue.js';
 import * as session from '../broadcast/session.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
+import { isIdle } from '../broadcast/stream-idle.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
 import { getStationTimezone } from '../time.js';
 import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
@@ -19,6 +20,8 @@ import { listCommunityPersonas } from '../personas/community.js';
 import { listCommunityShows } from '../shows/community.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
+import { checkAuthRateLimit, clientIp } from '../middleware/ratelimit.js';
 
 export const router = express.Router();
 
@@ -250,6 +253,17 @@ router.get('/now-playing', async (req, res) => {
         bitrate: stream.bitrate,
         sampleRate: stream.sampleRate,
         channels: stream.channels,
+        // How far behind the live edge a listener is: Icecast bursts this many
+        // seconds of already-broadcast audio on connect, and the client plays
+        // it out at 1x, so the offset holds for the whole connection.
+        //
+        // Every timestamp on this payload (startedAt included) is stamped at
+        // the LIVE EDGE by radio.liq's pre-cross on_metadata hook. Players are
+        // expected to subtract this to render listener-time — without it the
+        // title and elapsed clock run this far ahead of the audio, which is
+        // the "Now Spinning is ahead of real time" report (issue #1114).
+        // Operator surfaces (admin dash, MCP) intentionally keep live edge.
+        bufferSeconds: stationSettings.stream?.bufferSeconds ?? 22,
         opusEnabled: stationSettings.stream?.opusEnabled === true,
         flacEnabled: stationSettings.stream?.flacEnabled === true,
         aacEnabled: stationSettings.stream?.aacEnabled === true,
@@ -299,7 +313,17 @@ function listenMounts(req: express.Request) {
   return { station, entries };
 }
 
+// When listener auth is on, the tune-in files would hand out credential-less
+// URLs that Icecast rejects — refuse instead; operators share credentialed
+// URLs (user:pass@ or ?auth=) by hand.
+function tuneInFilesBlocked(res: express.Response): boolean {
+  if (settings.get()?.privacy?.listenerAuth !== true) return false;
+  res.status(403).send('This station is private.\n');
+  return true;
+}
+
 router.get('/listen.pls', (req, res) => {
+  if (tuneInFilesBlocked(res)) return;
   const { entries } = listenMounts(req);
   const lines = ['[playlist]', `NumberOfEntries=${entries.length}`];
   entries.forEach((e, i) => {
@@ -313,6 +337,7 @@ router.get('/listen.pls', (req, res) => {
 });
 
 router.get('/listen.m3u', (req, res) => {
+  if (tuneInFilesBlocked(res)) return;
   const { entries } = listenMounts(req);
   const lines = ['#EXTM3U'];
   for (const e of entries) lines.push(`#EXTINF:-1,${e.title}`, e.url);
@@ -338,7 +363,14 @@ router.get('/dj', async (req, res) => {
       djMode: persona?.djMode === true,
       avatar: avatarUrlFor(persona?.id),
       station: s.station,
-      location: s.weather?.locationName || '',
+      // Station-level share-card blurb. Persona-independent by design, so a
+      // shared link reads the same whoever is on air (issue #1086). '' = unset;
+      // the web app falls back to the persona tagline.
+      stationDescription: s.stationDescription || '',
+      // Unauthenticated: publish the broad on-air location, never the precise
+      // weather label. Pairing a station name with an exact town here is the
+      // doxxing vector this field exists to close.
+      location: settings.resolveOnAirLocation(s),
       locale: s.locale,
     });
   } catch (err) {
@@ -408,6 +440,9 @@ router.get('/state', (req, res) => {
   res.json({
     ...snap,
     needsSetup: getSetupStatusSync().needsSetup,
+    // True while the idle gate has the programme paused (zero listeners) —
+    // lets clients tell "silence because the room is empty" from "broken".
+    streamIdle: isIdle(),
     theme: { active: activeThemeId },
     // Listener-player UI settings ride along with /state like the theme does,
     // so the player can flip them live on the next poll. Defaults off if
@@ -420,8 +455,78 @@ router.get('/state', (req, res) => {
     // Station zone for rendering djLog timestamps in station-local time (#418).
     timezone: getStationTimezone(),
     locale: s.locale,
+    // Private-station flags (#478) — booleans only, never the password. The
+    // player uses these to render the private screen / stream-auth prompt.
+    privacy: {
+      privatePlayer: s?.privacy?.privatePlayer === true,
+      listenerAuth: s?.privacy?.listenerAuth === true,
+    },
   });
 });
+
+// ---------------------------------------------------------------------------
+// POST /listener-auth — Icecast URL-auth callback (#478). Icecast (the
+// broadcast container) POSTs a form body here on every listener connect when
+// privacy.listenerAuth is on; `icecast-auth-user: 1` + 200 admits the
+// listener, 401 rejects. Deliberately NOT rate-limited per IP: the caller is
+// always Icecast, so per-IP limiting would throttle every listener through
+// one bucket. The password never gets logged.
+//
+// This endpoint fails OPEN when listenerAuth is off — see listenerAuthDecision.
+// The web UI must NOT use it for that reason; it has /station-auth below.
+// ---------------------------------------------------------------------------
+router.post(
+  '/listener-auth',
+  express.urlencoded({ extended: false, limit: '10kb' }),
+  async (req, res) => {
+    await settings.load();
+    const s = settings.get();
+    const allow = listenerAuthDecision({
+      enabled: s?.privacy?.listenerAuth === true,
+      password: s?.privacy?.password || '',
+      action: typeof req.body?.action === 'string' ? req.body.action : '',
+      pass: typeof req.body?.pass === 'string' ? req.body.pass : '',
+      mount: typeof req.body?.mount === 'string' ? req.body.mount : '',
+    });
+    if (allow) {
+      res.setHeader('icecast-auth-user', '1');
+      res.status(200).send('ok\n');
+    } else {
+      res.setHeader('icecast-auth-message', 'invalid listener credentials');
+      res.status(401).send('denied\n');
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /station-auth — the web player's gate (#478). Same shared password as
+// /listener-auth, opposite failure mode: this one fails CLOSED whenever either
+// privacy lock is on, so a private player can't be opened with a wrong
+// password just because stream auth happens to be off. Body: {password}.
+// 200 = unlock, 401 = wrong. Rate-limited (unlike the Icecast callback, the
+// caller here really is an arbitrary browser). The password is never logged.
+// ---------------------------------------------------------------------------
+router.post(
+  '/station-auth',
+  express.json({ limit: '10kb' }),
+  async (req, res) => {
+    const gate = checkAuthRateLimit(clientIp(req));
+    if (!gate.ok) {
+      res.setHeader('Retry-After', String(gate.retryAfter));
+      res.status(429).json({ ok: false, error: 'too many attempts' });
+      return;
+    }
+    await settings.load();
+    const s = settings.get();
+    const ok = stationAuthDecision({
+      privatePlayer: s?.privacy?.privatePlayer === true,
+      listenerAuth: s?.privacy?.listenerAuth === true,
+      password: s?.privacy?.password || '',
+      candidate: typeof req.body?.password === 'string' ? req.body.password : '',
+    });
+    res.status(ok ? 200 : 401).json({ ok });
+  },
+);
 
 // ---------------------------------------------------------------------------
 // GET /themes — public theme registry. Returns the active theme id plus the

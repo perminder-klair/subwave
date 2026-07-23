@@ -38,6 +38,7 @@ const GENERATED_FILES = [
   'docker-compose.yml',
   'docker-compose.byo.yml',
   'docker-compose.tts-heavy-gpu.yml',
+  'docker-compose.analyzer-gpu.yml',
   '.env',
   '.env.example',
 ];

@@ -100,7 +100,7 @@ function audioParam(src: any, key: 'samplerate' | 'channels'): number | null {
   return m ? Number(m[1]) : null;
 }
 
-async function fetchCount() {
+async function fetchCount(persistHistory = true) {
   let online = false;
   let bitrate: number | null = null;
   let sampleRate: number | null = null;
@@ -162,7 +162,7 @@ async function fetchCount() {
   // Persist at most one row per wall-clock minute. Skip null samples — a
   // stats outage shouldn't leave a misleading "0 listeners" stripe in the
   // graph; the gap itself communicates the outage.
-  if (lastCount !== null) {
+  if (persistHistory && lastCount !== null) {
     const now = new Date();
     const minute = Math.floor(now.getTime() / 60000);
     if (minute !== lastPersistedMinute) {
@@ -202,11 +202,38 @@ export async function refresh() {
   return fetchCount();
 }
 
+// One-shot count probe for out-of-process callers — the analysis quiet gate
+// (#1099) runs inside the tagger/analyze CHILD process, which has no 15s
+// monitor loop. Same status fetch + Safari dedupe as the monitor, but skips
+// the history append: the server process already persists one row per minute,
+// and a second writer would stripe duplicate rows into the sparkline JSONL.
+export async function probeListenerCount(): Promise<number | null> {
+  return fetchCount(false);
+}
+
+// Set by broadcast/stream-idle.ts (via setStreamIdle) while the programme is
+// idle-paused — a flag pushed in rather than imported out, so listeners.ts
+// and stream-idle.ts don't form an import cycle.
+let streamIdle = false;
+
+export function setStreamIdle(v: boolean) {
+  streamIdle = v;
+}
+
+export function isStreamIdle() {
+  return streamIdle;
+}
+
 // True when autonomous DJ LLM work is allowed right now. When the pause toggle
 // is off, always true. When on, allowed only if at least one listener is
 // counted — an unknown count (Icecast unreachable) is treated as occupied so a
 // stats outage can never take the DJ off the air.
+//
+// An idle-paused stream blocks DJ calls regardless of the LLM toggle: the
+// voice queues aren't being pulled while the idle gate is up, so any WAV
+// written to say.txt/intro.txt would pile up and play back-to-back on resume.
 export function djCallsAllowed() {
+  if (streamIdle) return false;
   if (!settings.get()?.llm?.pauseWhenEmpty) return true;
   if (lastCount === null) return true;
   return lastCount > 0;

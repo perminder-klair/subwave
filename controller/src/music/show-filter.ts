@@ -51,18 +51,113 @@ export function trackGenres(t: FilterTrack | null | undefined): string[] {
   return rec?.genre ? [rec.genre] : [];
 }
 
+// Normalised genre tag plus, per normalised character, whether it opens /
+// closes a word in the ORIGINAL string. A "word" is a maximal run of
+// alphanumerics, so "Contemporary R&B" normalises to "contemporaryrb" with
+// words "contemporary" | "r" | "b". This is what lets containment respect word
+// boundaries even though normGenre has thrown the separators away.
+function genreBoundaries(s: unknown): { norm: string; opens: boolean[]; closes: boolean[] } {
+  const src = String(s ?? '').toLowerCase();
+  const chars: string[] = [];
+  const opens: boolean[] = [];
+  let prevAlnum = false;
+  for (const ch of src) {
+    const alnum = (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9');
+    if (!alnum) { prevAlnum = false; continue; }
+    chars.push(ch);
+    opens.push(!prevAlnum);
+    prevAlnum = true;
+  }
+  // A char closes its word when it is last overall, or the next char opens one.
+  const closes = chars.map((_, i) => i === chars.length - 1 || opens[i + 1]!);
+  return { norm: chars.join(''), opens, closes };
+}
+
+// True when the show's (already normalised) target genre appears inside a
+// track's raw genre tag, aligned to word boundaries. ONE-DIRECTIONAL by design
+// — see genreMatches.
+function tagCoversGenre(tag: string, target: string): boolean {
+  const { norm, opens, closes } = genreBoundaries(tag);
+  if (!norm || !target) return false;
+  if (norm === target) return true;
+  for (let i = norm.indexOf(target); i !== -1; i = norm.indexOf(target, i + 1)) {
+    if (opens[i] && closes[i + target.length - 1]) return true;
+  }
+  return false;
+}
+
 // True when ANY of a track's genre tags matches ANY of the (already
-// normalised) target genres. Exact-normalised match, or substring either way —
-// same shape as subsonic.resolveGenreName, so "Hip-Hop" matches a "Hip Hop"
-// tag etc. Multi-genre (#OpenSubsonic): a track tagged Hip-Hop + Rap is
-// in-genre for a Rap show even when Rap isn't its primary tag.
+// normalised) target genres. Multi-genre (#OpenSubsonic): a track tagged
+// Hip-Hop + Rap is in-genre for a Rap show even when Rap isn't its primary tag.
+//
+// Matching is exact-normalised ("Hip-Hop" matches a "Hip Hop" tag), or the
+// track's tag REFINES the target — the target appears in the tag on word
+// boundaries. The direction is the whole point: a show asks for a genre and a
+// track may be tagged more specifically than asked, never less.
+//
+//   show "Punk"      ← track "Punk Rock"          ✓ refines
+//   show "R&B"       ← track "Contemporary R&B"   ✓ refines
+//   show "Pop Punk"  ← track "Pop"                ✗ broader than asked
+//   show "Rap"       ← track "Trap"               ✗ not a word boundary
+//
+// Matching the reverse way too (a track tag that merely CONTAINS the show's
+// genre as a substring) is what let strict emo / pop-punk shows fill up with
+// anything tagged plain "Pop" or "Rock", and unbounded substrings pulled Trap
+// into a Rap show. Both directions were deliberate once; neither survives
+// contact with a strict show.
 export function genreMatches(t: FilterTrack | null | undefined, targetNorms: string[]): boolean {
   if (!targetNorms.length) return false;
-  const genreNorms = trackGenres(t).map(normGenre).filter(Boolean);
-  if (!genreNorms.length) return false;
-  return genreNorms.some(gn =>
-    targetNorms.some(target => !!target && (gn === target || gn.includes(target) || target.includes(gn))),
-  );
+  const tags = trackGenres(t).filter(Boolean);
+  if (!tags.length) return false;
+  return tags.some(tag => targetNorms.some(target => !!target && tagCoversGenre(tag, target)));
+}
+
+// ── Genre resolution honesty ────────────────────────────────────────────────
+
+// subsonic.resolveGenreName maps a show's free-text genre onto a tag the
+// library actually carries, and it matches substrings BOTH ways on purpose —
+// that looseness is right for a listener request ("play some punk") and for
+// the server-side genre fetch, where over-fetching is harmless because the
+// pick paths filter afterwards.
+//
+// It is NOT right silently: a show configured "Pop Punk" against a library
+// with no such tag resolves to plain "Pop" and the station quietly airs a
+// different show than the operator asked for, with nothing in the logs saying
+// so. This describes that gap in operator-facing words; null means the
+// resolution was faithful and there is nothing to say.
+//
+// Note this is about *reporting*, not filtering — the resolved tag is still
+// what gets used. A genre absent from the library makes a show unsatisfiable,
+// and no matching rule fixes that; the fix is telling the operator.
+export function genreResolutionWarning(raw: string, resolved: string | null): string | null {
+  const asked = normGenre(raw);
+  if (!asked) return null;
+  if (!resolved) {
+    return `genre "${raw}" is not a tag in your library — the genre filter is OFF for this show, so it can air anything. Check the spelling, or pick a genre from the editor's suggestions.`;
+  }
+  const got = normGenre(resolved);
+  // Cosmetic differences ("hip hop" → "Hip-Hop") are a faithful resolution.
+  if (got === asked) return null;
+  if (tagCoversGenre(raw, got)) {
+    return `genre "${raw}" is not a tag in your library — falling back to the broader tag "${resolved}", so this show will air more than it asks for. Re-tag the tracks, or set the show's genre to "${resolved}".`;
+  }
+  if (tagCoversGenre(resolved, asked)) {
+    return `genre "${raw}" is not a tag in your library — narrowing to "${resolved}", the only tag that carries it. Other "${raw}" tracks (if any) will not air.`;
+  }
+  return `genre "${raw}" resolved to the unrelated-looking tag "${resolved}" — worth a check.`;
+}
+
+// One-shot memo so a standing misconfiguration doesn't reprint on every pick
+// and every hourly refresh. Keyed by the resolution itself, so the message is
+// identical for every show that hits it. Process-lifetime; a restart re-warns.
+const warnedGenreResolutions = new Set<string>();
+
+export function genreResolutionWarningOnce(raw: string, resolved: string | null): string | null {
+  const key = `${normGenre(raw)} ${resolved ?? ''}`;
+  if (warnedGenreResolutions.has(key)) return null;
+  const warning = genreResolutionWarning(raw, resolved);
+  if (warning) warnedGenreResolutions.add(key);
+  return warning;
 }
 
 // Hard-prefer tracks matching ANY of the show's genres (strict mode). Unlike

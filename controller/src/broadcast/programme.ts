@@ -136,7 +136,15 @@ function featureKindMenu(host: { skills?: string[] } | null | undefined): { kind
 // gate leaves the plan `pending` (a later tick retries once budget frees up);
 // a real generation failure marks it `fallback` for the episode (beats then
 // run brief-only — one failed producer call shouldn't burn a retry per tick).
-export async function ensurePlan(ctx: SessionContext, now = new Date()): Promise<void> {
+//
+// `now` defaults to the moment the CONTEXT describes (contextDate), not the
+// wall clock: queue.onTrackStarted rolls the session on a look-ahead context,
+// and judging the episode with a live `now` inside that window makes
+// activeEpisode compare the incoming session key against the OUTGOING show —
+// a silent null, so the plan never builds and the handoff greeting airs with
+// no episode angle. A live context carries a live `at`, so live callers are
+// unchanged.
+export async function ensurePlan(ctx: SessionContext, now = session.contextDate(ctx)): Promise<void> {
   const ep = activeEpisode(now);
   if (!ep) return;
   let prog = session.getProgramme();
@@ -187,7 +195,7 @@ export async function ensurePlan(ctx: SessionContext, now = new Date()): Promise
 // half of the mic-pass already opened the show (with the episode angle woven
 // in — see dj-agent), so the standalone intro is skipped and just marked.
 // Returns true when it aired a standalone intro now.
-export async function maybeRunIntro(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<boolean> {
+export async function maybeRunIntro(queue: QueueApi, ctx: SessionContext, now = session.contextDate(ctx)): Promise<boolean> {
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
   if (!prog || prog.beats?.intro) return false;
@@ -197,6 +205,13 @@ export async function maybeRunIntro(queue: QueueApi, ctx: SessionContext, now = 
     markIntroAired();
     return false;
   }
+  // The mic-pass is still PENDING for this boundary (the hourly cron rolls
+  // with airHandoff=false and leaves airing to the next track boundary). The
+  // greeting doubles as the intro there — airing the standalone intro now
+  // would duck mid-song, the exact bug the deferral fixes, and introduce the
+  // episode twice. Stay pending: the boundary tick re-runs this after
+  // runPersonaHandoff, which marks handoffAired on every exit path.
+  if (session.pendingHandoff()) return false;
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return false;  // stays pending — may air later this hour
 
   markIntroAired();
@@ -357,7 +372,8 @@ export async function runOutro(queue: QueueApi, ctx: SessionContext, now = new D
 // runPersonaHandoff: attach + plan the episode, then air the intro if it's
 // still pending. Returns true when a standalone intro aired just now (the
 // hourly cron uses this to skip the generic time check).
-export async function onSessionSettled(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<boolean> {
+// `now` follows the same contextDate rule as ensurePlan.
+export async function onSessionSettled(queue: QueueApi, ctx: SessionContext, now = session.contextDate(ctx)): Promise<boolean> {
   if (!activeEpisode(now)) return false;
   await ensurePlan(ctx, now);
   return maybeRunIntro(queue, ctx, now);

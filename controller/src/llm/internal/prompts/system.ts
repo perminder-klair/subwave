@@ -47,7 +47,9 @@ export function djSystem(
   const s = settings.get();
   const base = settings.renderDjPrompt(persona, {
     station: s.station,
-    location: s.weather?.locationName,
+    // The broad on-air location, never the precise weather label — this is the
+    // string the DJ speaks as "broadcasting from {location}".
+    location: settings.resolveOnAirLocation(s),
   }) + settings.onAirRosterClause(persona);
   if (persona?.tts?.engine === 'chatterbox') return base + CHATTERBOX_TAG_HINT;
   // cloudModel is non-empty only when the persona actually resolves to a

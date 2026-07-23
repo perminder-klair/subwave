@@ -423,21 +423,21 @@ export default function SkillsPanel() {
             What the DJ does between tracks.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            Each skill is an autonomous segment. A skill fires only when it is enabled here
-            <strong> and</strong> assigned to the persona on air. Assign DJs from each skill&apos;s
-            Edit sheet, or per-persona on the Personas page. “Run now” is an operator override
-            and ignores both.
+            Each skill is an autonomous segment. It fires only when it&apos;s enabled here
+            <strong> and</strong> assigned to the persona on air. Assign DJs from a skill&apos;s
+            Edit sheet, or per-persona on the Personas page. &quot;Run now&quot; is an operator
+            override and ignores both.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            Hit <strong>Edit</strong> on any skill to open its segment sheet — change the brief,
-            cooldown, or which real-world context (time, weather…) it may mention (and, for News,
-            its feed URL). Edits are saved to <code>state/skills/&lt;kind&gt;/SKILL.md</code>.
+            Hit <strong>Edit</strong> on any skill to open its segment sheet: change the brief,
+            cooldown, or which real-world context (time, weather) it may mention, plus the feed
+            URL for News. Edits save to <code>state/skills/&lt;kind&gt;/SKILL.md</code>.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            Add your own with <strong>New skill</strong> — it writes
-            <code> state/skills/&lt;name&gt;/SKILL.md</code> for you. (You can still drop a folder there
-            by hand — with an optional <code>tool.mjs</code> data tool — and hit <strong>Rescan</strong>.)
-            Custom skills arrive <strong>disabled</strong>, so review them, then enable them before they can air.
+            Add your own with <strong>New skill</strong> and it writes
+            <code> state/skills/&lt;name&gt;/SKILL.md</code> for you. (You can also drop a folder there
+            by hand, with an optional <code>tool.mjs</code> data tool, then hit <strong>Rescan</strong>.)
+            Custom skills arrive <strong>disabled</strong>, so review them before enabling.
           </div>
           <a
             href="/manual/skills"

@@ -4,4 +4,4 @@
 // strategies later (raw imports, Bun --embed, fetched from GHCR release
 // assets) without touching every caller.
 
-export { COMPOSE_YML, COMPOSE_BYO_YML, COMPOSE_DEV_YML, COMPOSE_TTS_HEAVY_GPU_YML, ENV_EXAMPLE, CLI_VERSION } from './assets.generated.ts';
+export { COMPOSE_YML, COMPOSE_BYO_YML, COMPOSE_DEV_YML, COMPOSE_TTS_HEAVY_GPU_YML, COMPOSE_ANALYZER_GPU_YML, ENV_EXAMPLE, CLI_VERSION } from './assets.generated.ts';

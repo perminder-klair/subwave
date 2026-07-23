@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
-import { Card, Btn, Eyebrow } from './ui';
+import { Card, Btn } from './ui';
+import { SectionHeader } from './settings/shared';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import {
@@ -188,20 +189,17 @@ export default function FestivalsSection() {
 
   return (
     <section className="grid gap-6">
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <Eyebrow>festivals</Eyebrow>
-          <h2 className="text-[24px] font-bold tracking-[0.04em]">Festival calendar.</h2>
-          <p className="mt-2 text-[13px] leading-[1.5] text-muted">
-            Mood-forming dates the DJ leans into around the year. Add your local holidays,
-            regional celebrations, or personal landmarks — the station&apos;s mood shifts
-            to match the nearest active festival.
-          </p>
-        </div>
-        <Btn tone="accent" className="shrink-0" onClick={startAdd} disabled={festivals === null}>
-          Add festival
-        </Btn>
-      </div>
+      <SectionHeader
+        eyebrow="festivals"
+        title="Festival calendar."
+        sub="Mood-forming dates the DJ leans into around the year. Add your local holidays, regional celebrations, or personal landmarks; the station's mood shifts to match the nearest active festival."
+        metrics={festivals ? [{ n: String(festivals.length), l: `date${festivals.length === 1 ? '' : 's'}`, accent: true }] : undefined}
+        actions={
+          <Btn tone="accent" onClick={startAdd} disabled={festivals === null}>
+            Add festival
+          </Btn>
+        }
+      />
 
       {err && (
         <Card>
@@ -403,7 +401,7 @@ export default function FestivalsSection() {
             </div>
             <div className="field-hint -mt-2">
               Music selection and spoken tone shift into the mood for the window around
-              the date — e.g. a 3-day window spans a full week.
+              the date, e.g. a 3-day window spans a full week.
             </div>
           </div>
         )}

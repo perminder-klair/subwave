@@ -5,6 +5,10 @@ CPU it pegs every core and still renders slower than real time, so a chatty
 station can fall behind. If you have an NVIDIA GPU, there are two ways to put it
 to work.
 
+> **Not TTS?** Library *analysis* (CLAP "sounds-like" + Demucs vocals) has its
+> own GPU path — the `docker-compose.analyzer-gpu.yml` overlay, no rebuild
+> needed. See [docs/tts-heavy.md → Heavy analysis on an NVIDIA GPU](tts-heavy.md#heavy-analysis-on-an-nvidia-gpu-cuda).
+
 | | Easy route (OpenAI layer) | Native route (sidecar on GPU) |
 |---|---|---|
 | Image rebuild | **None** | Required (CUDA PyTorch) |

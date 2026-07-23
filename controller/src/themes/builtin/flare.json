@@ -1,0 +1,24 @@
+{
+  "id": "flare",
+  "name": "Flare",
+  "description": "Hazard-orange flood: a full high-vis field, near-black ink and marks, an ultra-bold grotesque. Two-tone, maximum signal.",
+  "mode": "light",
+  "tokens": {
+    "--bg": "#ff7235",
+    "--surface": "#ff7b42",
+    "--surface-border": "rgba(23, 19, 8, 0.22)",
+    "--field": "color-mix(in oklab, #ff7235 90%, #171308)",
+    "--ink": "#211d14",
+    "--muted": "#3a2e1c",
+    "--ink-faint": "#6a5636",
+    "--accent": "#171308",
+    "--accent-2": "#ac542e",
+    "--accent-soft": "color-mix(in oklab, #171308 12%, #ff7235)",
+    "--line": "rgba(23, 19, 8, 0.32)",
+    "--soft-border": "rgba(23, 19, 8, 0.14)",
+    "--overlay": "rgba(23, 19, 8, 0.10)",
+    "--display-font": "anton",
+    "--mono-font": "space-mono",
+    "--grain": "0.06"
+  }
+}

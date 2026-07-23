@@ -129,9 +129,11 @@ export async function getShowcaseStations(): Promise<ShowcaseStation[]> {
   return [local, ...all.filter((s) => s !== local)];
 }
 
-/** Header tallies: total stations + distinct countries. */
-export async function getStationStats(): Promise<{ count: number; countries: number }> {
-  const all = await getAllStations();
+/** Header tallies: total stations + distinct countries. Pure, over an
+ *  already-loaded list — /stations reads the directory once and streams it
+ *  into several Suspense boundaries, so a tally helper that re-entered
+ *  getAllStations() would mean a second catalog fetch per render. */
+export function stationStats(all: Station[]): { count: number; countries: number } {
   const countries = new Set(
     all.map((s) => (s.country || s.location || '').trim().toLowerCase()).filter(Boolean),
   );
