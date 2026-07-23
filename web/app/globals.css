@@ -158,6 +158,21 @@
     --line: color-mix(in oklab, var(--ink) 70%, var(--bg));
     --accent-2: var(--accent);
     --accent-soft: color-mix(in oklab, var(--accent) 14%, var(--bg));
+    /* Admin surface + sidebar tokens — promoted to :root (not .admin-root) so
+       the @theme `--color-sidebar` bridge, which resolves var(--sidebar) at
+       :root, gets a real value, and so the admin sidebar's mobile drawer
+       resolves its fills even though Radix portals it to <body>, outside
+       .admin-root. --page-bg deepens slightly in dark mode below. */
+    --card-bg: var(--bg);
+    --page-bg: color-mix(in oklab, var(--bg) 90%, var(--ink));
+    --sidebar: var(--page-bg);
+    --sidebar-foreground: var(--ink);
+    --sidebar-primary: var(--ink);
+    --sidebar-primary-foreground: var(--bg);
+    --sidebar-accent: color-mix(in oklab, var(--card-bg) 90%, var(--ink));
+    --sidebar-accent-foreground: var(--ink);
+    --sidebar-border: var(--line);
+    --sidebar-ring: var(--accent);
     /* Default display + mono faces; the --display-font / --mono-font tokens (a
      curated id resolved to a family stack in lib/theme) override them, and the
      font-display / font-mono utilities follow them. */
@@ -182,6 +197,8 @@
         --grain-color: 0.55 0.5 0.45;
         --grain-alpha: 0.25;
         --grain-blend: screen;
+        /* Admin page deepens slightly in dark mode (--sidebar tracks it). */
+        --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
         color-scheme: dark;
     }
 }
@@ -201,6 +218,7 @@
     --grain-color: 0.55 0.5 0.45;
     --grain-alpha: 0.25;
     --grain-blend: screen;
+    --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
     color-scheme: dark;
 }
 
@@ -2893,35 +2911,9 @@ html.lite .sw-ripple-circle {
        from --ink/--bg so it tracks the palette and flips in dark mode. */
     --muted: color-mix(in oklab, var(--ink) 55%, var(--bg));
     --muted-2: color-mix(in oklab, var(--muted) 70%, var(--bg));
-    /* Two-tone surface split so cards always read as panels instead of
-     dissolving into the page. Light mode keeps cards at the bright cream and
-     darkens the page beneath them; dark mode keeps cards at the deep charcoal
-     and lifts the page around them — cards sit darker than the page. */
-    --card-bg: var(--bg);
-    --page-bg: color-mix(in oklab, var(--bg) 90%, var(--ink));
-
-    /* shadcn Sidebar tokens — the rail sits on the (darker) --page-bg with an
-       ink hairline edge; nav items are the lifted --card-bg cards. Derived
-       from --ink/--bg/--line so themes + dark mode inherit for free. */
-    --sidebar: var(--page-bg);
-    --sidebar-foreground: var(--ink);
-    --sidebar-primary: var(--ink);
-    --sidebar-primary-foreground: var(--bg);
-    --sidebar-accent: color-mix(in oklab, var(--card-bg) 90%, var(--ink));
-    --sidebar-accent-foreground: var(--ink);
-    --sidebar-border: var(--line);
-    --sidebar-ring: var(--accent);
-}
-
-:root[data-theme="dark"] .admin-root {
-    --card-bg: var(--bg);
-    --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
-}
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .admin-root {
-        --card-bg: var(--bg);
-        --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
-    }
+    /* Two-tone surface split (--card-bg / --page-bg) and the shadcn --sidebar-*
+       family live at :root now — see the note there. The admin subtree just
+       inherits them; only the higher-contrast --muted override stays local. */
 }
 
 .admin-root.paper {

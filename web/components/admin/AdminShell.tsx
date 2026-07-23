@@ -25,6 +25,9 @@ import {
   Coffee,
   MessageCircle,
   Podcast,
+  LogOut,
+  ChevronDown,
+  MoreHorizontal,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -61,7 +64,14 @@ import {
   BreadcrumbSeparator,
 } from '../ui/breadcrumb';
 import { Separator } from '../ui/separator';
-import { cn } from '@/lib/cn';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu';
+import { DiscMark } from '../../lib/discMark';
 import { animate as motionAnimate } from 'motion/react';
 
 type NavIcon = ComponentType<{
@@ -88,7 +98,10 @@ interface NavSection {
 const NAV_SECTIONS: NavSection[] = [
   {
     label: 'Monitor',
-    items: [{ href: '/admin/dash', id: 'dash', label: 'Dash', icon: Radio, pill: 'live' }],
+    items: [
+      { href: '/admin/dash', id: 'dash', label: 'Dash', icon: Radio, pill: 'live' },
+      { href: '/admin/stats', id: 'stats', label: 'Stats', icon: BarChart3 },
+    ],
   },
   {
     label: 'Programming',
@@ -105,7 +118,6 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: 'System',
     items: [
-      { href: '/admin/stats', id: 'stats', label: 'Stats', icon: BarChart3 },
       { href: '/admin/connect', id: 'connect', label: 'Connect', icon: Plug },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
@@ -113,38 +125,32 @@ const NAV_SECTIONS: NavSection[] = [
   },
 ];
 
-interface ExternalLink {
+interface AppLink {
   href: string;
   label: string;
   icon: NavIcon;
-  pill: string;
-  // The Ko-fi ask — the one vermilion item on the rail so it reads as a
-  // request, not another utility link.
-  accent?: boolean;
 }
 
-const EXTERNAL_LINKS: ExternalLink[] = [
-  { href: '/manual', label: 'Manual', icon: BookOpen, pill: '↗' },
-  {
-    href: 'https://apps.apple.com/app/sub-wave/id6778786696',
-    label: 'iOS app',
-    icon: Apple,
-    pill: '↗',
-  },
+// Native player apps — surfaced from the top-bar "Listen" dropdown alongside
+// the in-browser player.
+const APP_LINKS: AppLink[] = [
+  { href: 'https://apps.apple.com/app/sub-wave/id6778786696', label: 'iOS app', icon: Apple },
   {
     href: 'https://play.google.com/store/apps/details?id=com.getsubwave.app',
     label: 'Android app',
     icon: Smartphone,
-    pill: '↗',
   },
   {
     href: 'https://github.com/getsubwave/subwave-desktop/releases/latest',
     label: 'Desktop app',
     icon: Monitor,
-    pill: '↗',
   },
+];
+
+// Footer utility links (grouped with Sign out in the sidebar footer).
+const FOOTER_LINKS: { href: string; label: string; icon: NavIcon; pill: string }[] = [
+  { href: '/manual', label: 'Manual', icon: BookOpen, pill: '↗' },
   { href: 'https://discord.gg/vjVbVKnMBa', label: 'Discord', icon: MessageCircle, pill: '↗' },
-  { href: 'https://ko-fi.com/pklair', label: 'Buy me a coffee', icon: Coffee, pill: '♥', accent: true },
 ];
 
 // Section + page label for the top-bar breadcrumb. Playlists and DJ Doc aren't
@@ -239,9 +245,9 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
   return (
     <div className="admin-root paper">
       <SidebarProvider defaultOpen={defaultOpen}>
-        <AdminSidebar pathname={pathname} />
+        <AdminSidebar pathname={pathname} onSignOut={signOut} />
         <SidebarInset className="min-w-0 bg-transparent">
-          <TopBar pathname={pathname} onSignOut={signOut} />
+          <TopBar pathname={pathname} />
           {/* Persistent connectivity warning — visible on every admin page
               whenever the live station can't reach Navidrome. Renders nothing
               when healthy. */}
@@ -269,11 +275,19 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
   );
 }
 
-// The wordmark (SidebarHeader), grouped nav (SidebarContent), and external
-// links + version foot (SidebarFooter). Collapses to an icon rail; the mobile
-// branch renders inside a Sheet drawer (handled by the Sidebar component).
-function AdminSidebar({ pathname }: { pathname: string | null }) {
+// The wordmark (SidebarHeader), grouped nav (SidebarContent), and the footer
+// (Manual / Discord / Sign out, then the Ko-fi ask, then the version). Collapses
+// to an icon rail; the mobile branch renders inside a Sheet drawer (handled by
+// the Sidebar component).
+function AdminSidebar({
+  pathname,
+  onSignOut,
+}: {
+  pathname: string | null;
+  onSignOut: () => void;
+}) {
   const { setOpenMobile, isMobile } = useSidebar();
+  const [confirmingSignOut, setConfirmingSignOut] = useState(false);
   // The shell lives in the persistent layout, so a client-side nav doesn't
   // remount it — the mobile Sheet would stay open over the new page. Close it
   // explicitly on any drawer link tap.
@@ -286,12 +300,17 @@ function AdminSidebar({ pathname }: { pathname: string | null }) {
         <Link
           href="/admin/dash"
           onClick={closeOnMobileNav}
-          className="flex items-center px-1 text-[13px] font-extrabold tracking-[0.1em] text-ink uppercase no-underline"
+          className="flex items-center gap-2 px-1 no-underline"
         >
-          <span className="group-data-[collapsible=icon]:hidden">SUB / WAVE</span>
-          <span className="hidden group-data-[collapsible=icon]:inline">S/W</span>
+          {/* The station's disc mark — also serves as the collapsed rail logo. */}
+          <span className="inline-flex size-5 shrink-0">
+            <DiscMark size={20} />
+          </span>
+          <span className="text-[13px] font-extrabold tracking-[0.1em] text-ink uppercase group-data-[collapsible=icon]:hidden">
+            SUB / WAVE
+          </span>
         </Link>
-        <span className="caption px-1 group-data-[collapsible=icon]:hidden">admin console</span>
+        <span className="caption px-1 group-data-[collapsible=icon]:hidden">control center</span>
       </SidebarHeader>
 
       <SidebarContent className="gap-4 px-2 py-1">
@@ -340,60 +359,95 @@ function AdminSidebar({ pathname }: { pathname: string | null }) {
       </SidebarContent>
 
       <SidebarFooter className="gap-3 px-2 py-3">
+        {/* Manual, Discord, and Sign out merged into one "More" submenu. A
+            dropdown (rather than an inline collapsible) so it stays reachable
+            when the rail is collapsed to icons. */}
         <SidebarMenu className="gap-1.5">
-          {EXTERNAL_LINKS.map(link => {
-            const Icon = link.icon;
-            return (
-              <SidebarMenuItem key={link.href}>
-                <SidebarMenuButton
-                  asChild
-                  tooltip={link.label}
-                  className={cn(
-                    link.accent &&
-                      'border-[color-mix(in_oklab,var(--accent)_55%,var(--line))] text-[var(--accent)] hover:border-[var(--accent)]',
-                  )}
-                >
-                  <Link href={link.href} target="_blank" rel="noopener noreferrer">
-                    <Icon className="shrink-0 opacity-80" strokeWidth={2} aria-hidden="true" />
-                    <span className="flex-1 truncate">{link.label}</span>
-                  </Link>
+          <SidebarMenuItem>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <SidebarMenuButton title="More">
+                  <MoreHorizontal
+                    className="shrink-0 opacity-80"
+                    strokeWidth={2}
+                    aria-hidden="true"
+                  />
+                  <span className="flex-1 truncate">More</span>
+                  <ChevronDown className="ml-auto opacity-60" strokeWidth={2} aria-hidden="true" />
                 </SidebarMenuButton>
-                <SidebarMenuBadge
-                  className={cn(link.accent && 'border-[var(--accent)] text-[var(--accent)]')}
-                >
-                  {link.pill}
-                </SidebarMenuBadge>
-              </SidebarMenuItem>
-            );
-          })}
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="right" align="end" className="min-w-[11rem]">
+                <DropdownMenuGroup>
+                  {FOOTER_LINKS.map(link => {
+                    const Icon = link.icon;
+                    return (
+                      <DropdownMenuItem asChild key={link.href}>
+                        <Link
+                          href={link.href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={closeOnMobileNav}
+                        >
+                          <Icon aria-hidden="true" />
+                          {link.label}
+                        </Link>
+                      </DropdownMenuItem>
+                    );
+                  })}
+                  <DropdownMenuItem onClick={() => setConfirmingSignOut(true)}>
+                    <LogOut aria-hidden="true" />
+                    Sign out
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </SidebarMenuItem>
         </SidebarMenu>
-        <div className="border-t border-dashed border-[var(--separator-strong)] px-1 pt-3 text-[10px] leading-relaxed tracking-[0.18em] text-muted uppercase group-data-[collapsible=icon]:hidden">
-          sub / wave
-          <br />
-          admin console
-          {process.env.NEXT_PUBLIC_APP_VERSION ? (
-            <>
-              <br />
-              <span className="tracking-[0.12em] opacity-70">
-                v{process.env.NEXT_PUBLIC_APP_VERSION}
-              </span>
-            </>
-          ) : null}
-        </div>
+
+        {/* The Ko-fi ask — the one vermilion item on the rail. */}
+        <SidebarMenu className="gap-1.5">
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              asChild
+              tooltip="Buy me a coffee"
+              className="border-[color-mix(in_oklab,var(--accent)_55%,var(--line))] text-[var(--accent)] hover:border-[var(--accent)]"
+            >
+              <Link href="https://ko-fi.com/pklair" target="_blank" rel="noopener noreferrer">
+                <Coffee className="shrink-0 opacity-80" strokeWidth={2} aria-hidden="true" />
+                <span className="flex-1 truncate">Buy me a coffee</span>
+              </Link>
+            </SidebarMenuButton>
+            <SidebarMenuBadge className="border-[var(--accent)] text-[var(--accent)]">
+              ♥
+            </SidebarMenuBadge>
+          </SidebarMenuItem>
+        </SidebarMenu>
+
+        {process.env.NEXT_PUBLIC_APP_VERSION ? (
+          <div className="border-t border-dashed border-[var(--separator-strong)] px-1 pt-3 text-[10px] tracking-[0.18em] text-muted uppercase group-data-[collapsible=icon]:hidden">
+            v{process.env.NEXT_PUBLIC_APP_VERSION}
+          </div>
+        ) : null}
       </SidebarFooter>
       <SidebarRail />
+
+      {/* Sign out drops the cached credentials — worth a confirm, matching the
+          dash's skip-track dialog. */}
+      <V3AlertDialog
+        open={confirmingSignOut}
+        onOpenChange={setConfirmingSignOut}
+        title="Sign out"
+        description="Sign out of the admin console? You'll need the operator credentials to get back in."
+        confirmLabel="sign out"
+        danger
+        onConfirm={onSignOut}
+      />
     </Sidebar>
   );
 }
 
 // Sticky top bar — sidebar toggle, breadcrumb, and the live-station strip.
-function TopBar({
-  pathname,
-  onSignOut,
-}: {
-  pathname: string | null;
-  onSignOut: () => void;
-}) {
+function TopBar({ pathname }: { pathname: string | null }) {
   const { section, page } = resolveCrumb(pathname);
   const { nowPlaying, listeners } = useStationFeed();
   const onAir = !!nowPlaying?.title;
@@ -431,8 +485,10 @@ function TopBar({
   return (
     <header className="sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink bg-[var(--card-bg)] px-4 py-2.5 sm:px-6">
       <SidebarTrigger className="-ml-1 shrink-0" />
-      <Separator orientation="vertical" className="h-5" />
-      <Breadcrumb>
+      <Separator orientation="vertical" className="hidden h-5 sm:block" />
+      {/* Breadcrumb text is hidden on mobile — space is tight next to the
+          hamburger, and the current page is already obvious from the drawer. */}
+      <Breadcrumb className="hidden sm:block">
         <BreadcrumbList className="gap-1.5 text-[10px] tracking-[0.28em] uppercase sm:gap-2">
           {section && (
             <>
@@ -480,17 +536,38 @@ function TopBar({
           <span className="caption">DJ Doc</span>
         </Link>
         <ThemeSwitcher variant="admin" />
-        <Link
-          href="/listen"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="caption inline-flex items-center text-muted no-underline"
-          aria-label="Open the player"
-          title="Listen"
-        >
-          <Headphones size={15} strokeWidth={2} aria-hidden="true" />
-        </Link>
-        <SignOutButton onSignOut={onSignOut} />
+        {/* Listen — a menu grouping the in-browser player with the native apps. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            className="caption inline-flex cursor-pointer items-center gap-1 text-muted focus:outline-none"
+            aria-label="Listen and get the app"
+            title="Listen"
+          >
+            <Headphones size={15} strokeWidth={2} aria-hidden="true" />
+            <ChevronDown size={11} strokeWidth={2} aria-hidden="true" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-[11rem]">
+            <DropdownMenuGroup>
+              <DropdownMenuItem asChild>
+                <Link href="/listen" target="_blank" rel="noopener noreferrer">
+                  <Headphones aria-hidden="true" />
+                  Listen in browser
+                </Link>
+              </DropdownMenuItem>
+              {APP_LINKS.map(app => {
+                const Icon = app.icon;
+                return (
+                  <DropdownMenuItem asChild key={app.href}>
+                    <a href={app.href} target="_blank" rel="noopener noreferrer">
+                      <Icon aria-hidden="true" />
+                      {app.label}
+                    </a>
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </span>
     </header>
   );
@@ -521,27 +598,3 @@ function SignedOutHeader() {
   );
 }
 
-// Sign out drops the cached credentials, so a stray click means re-entering
-// them — worth a confirm, matching the dash's skip-track dialog.
-function SignOutButton({ onSignOut }: { onSignOut: () => void }) {
-  const [confirming, setConfirming] = useState(false);
-  return (
-    <>
-      <button
-        className="cursor-pointer border border-ink bg-transparent px-3 py-[5px] text-[9px] font-bold tracking-[0.25em] text-ink uppercase hover:bg-ink hover:text-bg"
-        onClick={() => setConfirming(true)}
-      >
-        sign out
-      </button>
-      <V3AlertDialog
-        open={confirming}
-        onOpenChange={setConfirming}
-        title="Sign out"
-        description="Sign out of the admin console? You'll need the operator credentials to get back in."
-        confirmLabel="sign out"
-        danger
-        onConfirm={onSignOut}
-      />
-    </>
-  );
-}
