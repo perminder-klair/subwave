@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Trash2, Palette, Clock, CalendarDays, Volume2 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
@@ -58,7 +59,15 @@ export default function MoodsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // which card is saving
-  const [tab, setTab] = useState<TabId>('vocab');
+
+  // The active tab is derived from the URL (?tab=…) so it stays a single source
+  // of truth: both the in-page SectionTabs and the sidebar's Moods submenu drive
+  // it through the router, and switching tabs while already on the page works.
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const rawTab = searchParams.get('tab');
+  const tab: TabId = (TAB_IDS as string[]).includes(rawTab ?? '') ? (rawTab as TabId) : 'vocab';
 
   // Working copies + saved baselines (for dirty detection).
   const [moods, setMoods] = useState<MoodEntry[] | null>(null);
@@ -110,21 +119,16 @@ export default function MoodsPanel() {
   }, [hydrated, needsAuth, load]);
 
   // Deep-link: /admin/moods?tab=moments opens that tab directly (mirrors
-  // /admin/imaging?tab=… and /admin/connect?tab=…).
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const t = new URLSearchParams(window.location.search).get('tab');
-    if (t && (TAB_IDS as string[]).includes(t)) setTab(t as TabId);
-  }, []);
-
-  const selectTab = useCallback((id: string) => {
-    setTab(id as TabId);
-    if (typeof window !== 'undefined') {
-      const url = new URL(window.location.href);
-      url.searchParams.set('tab', id);
-      window.history.replaceState(null, '', url.toString());
-    }
-  }, []);
+  // /admin/imaging?tab=… and /admin/connect?tab=…). Routed through the Next
+  // router so a soft nav (in-page tab or sidebar submenu) re-derives `tab`.
+  const selectTab = useCallback(
+    (id: string) => {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      params.set('tab', id);
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    },
+    [router, pathname, searchParams],
+  );
 
   // POST one settings slice; on success adopt the sent value as the new
   // baseline. The controller validates strictly and returns a clear message

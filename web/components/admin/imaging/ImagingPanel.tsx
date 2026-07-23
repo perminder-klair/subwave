@@ -15,6 +15,7 @@
    ConnectPanel (Seg control + ?tab= deep-link). */
 
 import { useCallback, useEffect, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Music, AudioLines, Waves } from 'lucide-react';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { notify, errorMessage } from '../../../lib/notify';
@@ -38,7 +39,15 @@ export default function ImagingPanel() {
   const [bedsData, setBedsData] = useState<BedsData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<TabId>('jingles');
+
+  // Active tab derived from the URL (?tab=…) — single source of truth shared by
+  // the in-page SectionTabs and the sidebar's Imaging submenu (both route
+  // through Next), so switching tabs while already on the page works.
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const rawTab = searchParams.get('tab');
+  const tab: TabId = (TAB_IDS as string[]).includes(rawTab ?? '') ? (rawTab as TabId) : 'jingles';
 
   // Jingles: the create-text box + the lone settings field this page carries
   // (the whole FormState stayed behind in SettingsPanel). null = not yet
@@ -81,14 +90,6 @@ export default function ImagingPanel() {
     } catch { /* non-fatal */ }
   };
 
-  // Deep-link: /admin/imaging?tab=sfx opens that tab directly (mirrors
-  // /admin/connect?tab=… and the old /admin/settings?section=…).
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const t = new URLSearchParams(window.location.search).get('tab');
-    if (t && (TAB_IDS as string[]).includes(t)) setTab(t as TabId);
-  }, []);
-
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     refresh(); refreshSfx(); refreshBeds();
@@ -101,14 +102,17 @@ export default function ImagingPanel() {
     if (data?.values && jingleRatio == null) setJingleRatio(String(data.values.jingleRatio ?? ''));
   }, [data, jingleRatio]);
 
-  const selectTab = useCallback((id: string) => {
-    setTab(id as TabId);
-    if (typeof window !== 'undefined') {
-      const url = new URL(window.location.href);
-      url.searchParams.set('tab', id);
-      window.history.replaceState(null, '', url.toString());
-    }
-  }, []);
+  // Deep-link: /admin/imaging?tab=sfx opens that tab directly (mirrors
+  // /admin/connect?tab=…). Routed through Next so a soft nav (in-page tab or
+  // sidebar submenu) re-derives `tab`.
+  const selectTab = useCallback(
+    (id: string) => {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      params.set('tab', id);
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    },
+    [router, pathname, searchParams],
+  );
 
   const saveSettings: SaveSettings = async (patch) => {
     setBusy(true);
