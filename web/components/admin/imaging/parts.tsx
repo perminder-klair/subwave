@@ -63,21 +63,27 @@ export function TabMetric({
   );
 }
 
-/** Per-tab masthead: Fraunces headline + description on the left, metrics on
-    the right. Replaces the boxed SectionHeader inside the imaging tabs. */
+/** Per-tab header card: title + description on the left, metrics on the right,
+    and the tab's primary actions on a row below. A card surface (--card-bg)
+    like the rest of the admin, not floating on the page background. */
 export function SectionMasthead({
-  title, sub, metrics,
-}: { title: ReactNode; sub: ReactNode; metrics: ReactNode }) {
+  title, sub, metrics, actions,
+}: { title: ReactNode; sub: ReactNode; metrics?: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
-      <div>
-        <h2 className="font-display text-[34px] leading-[1.1] font-semibold">{title}</h2>
-        <p className="mt-2 max-w-[58ch] text-[13px] leading-[1.6] [text-wrap:pretty] text-muted">
-          {sub}
-        </p>
+    <section className="card">
+      <div className="p-[18px]">
+        <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+          <div className="min-w-0">
+            <h2 className="text-[22px] leading-tight font-extrabold tracking-[-0.02em]">{title}</h2>
+            <p className="mt-1.5 max-w-[58ch] text-[12px] leading-[1.6] [text-wrap:pretty] text-muted">
+              {sub}
+            </p>
+          </div>
+          {metrics && <div className="flex flex-none gap-7">{metrics}</div>}
+        </div>
+        {actions && <div className="mt-4 flex flex-wrap items-center gap-2">{actions}</div>}
       </div>
-      <div className="flex flex-none gap-7">{metrics}</div>
-    </div>
+    </section>
   );
 }
 

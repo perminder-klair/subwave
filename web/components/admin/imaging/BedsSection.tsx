@@ -79,6 +79,7 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
         title="Beds"
         sub="Instrumentals the DJ talks over between songs: the song ends, the bed carries the talk, and the next song ramps in under the DJ’s closing words."
         metrics={<TabMetric accent n={pad2(list.length)} l="beds" />}
+        actions={<Btn sm onClick={() => setModal(true)} disabled={busy}>Import</Btn>}
       />
 
       {/* On/off */}
@@ -170,10 +171,7 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
 
       {/* Library */}
       <PanelBox>
-        <PanelHead
-          label={`bed library · ${pad2(list.length)}`}
-          right={<Btn sm onClick={() => setModal(true)} disabled={busy}>Import</Btn>}
-        />
+        <PanelHead label={`bed library · ${pad2(list.length)}`} />
         {list.length === 0 ? (
           <EmptyState caption="beds can’t be generated — import an instrumental" />
         ) : (

@@ -4,8 +4,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Trash2, Palette, Clock, CalendarDays, Volume2 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
-import { cn } from '../../lib/cn';
 import { Card, Btn, Eyebrow } from './ui';
+import { SectionTabs } from './SectionTabs';
 import { Input } from '../ui/input';
 import { ScrollArea } from '../ui/scroll-area';
 import {
@@ -206,43 +206,8 @@ export default function MoodsPanel() {
             pick draws from it.
           </div>
         </div>
-        {/* Full-width tab row — active cell filled in the accent, mirroring the
-            Imaging page. */}
-        <div className="grid grid-cols-4" role="tablist" aria-label="Moods sections">
-          {tabs.map((t, i) => {
-            const active = tab === t.id;
-            const Icon = t.icon;
-            return (
-              <button
-                key={t.id}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => selectTab(t.id)}
-                className={cn(
-                  'flex items-center justify-center gap-2.5 px-4 py-4 text-[13px] font-bold tracking-[0.18em] uppercase transition-colors',
-                  i > 0 && 'border-l border-ink',
-                  active
-                    ? 'bg-[var(--accent)] text-white'
-                    : 'bg-[var(--ink-softer)] text-ink hover:bg-ink/10',
-                )}
-              >
-                <Icon size={17} strokeWidth={2} aria-hidden />
-                <span>{t.label}</span>
-                {t.count != null && (
-                  <span
-                    className={cn(
-                      'ml-0.5 min-w-[1.5em] rounded-full px-1.5 py-0.5 text-[10px] leading-none font-bold',
-                      active ? 'bg-white/25 text-white' : 'bg-ink/10 text-muted',
-                    )}
-                  >
-                    {t.count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
+        {/* Shared editorial section-tabs, edge-to-edge along the card's foot. */}
+        <SectionTabs tabs={tabs} value={tab} onChange={selectTab} label="Moods sections" />
       </section>
 
       {err && (

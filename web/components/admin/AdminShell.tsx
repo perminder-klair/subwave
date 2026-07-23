@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import type { ComponentType, ReactNode } from 'react';
+import type { ComponentType, CSSProperties, ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
@@ -246,7 +246,9 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
 
   return (
     <div className="admin-root paper">
-      <SidebarProvider defaultOpen={defaultOpen}>
+      {/* Narrower rail than the shadcn 16rem default — the admin nav is short
+          labels, so ~13rem reclaims horizontal room for the panels. */}
+      <SidebarProvider defaultOpen={defaultOpen} style={{ '--sidebar-width': '13rem' } as CSSProperties}>
         <AdminSidebar pathname={pathname} onSignOut={signOut} />
         <SidebarInset className="min-w-0 bg-transparent">
           <TopBar pathname={pathname} />

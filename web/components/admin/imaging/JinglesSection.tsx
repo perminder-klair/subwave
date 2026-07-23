@@ -94,6 +94,12 @@ export function JinglesSection({
             <TabMetric n={ratioMetric} l="ratio" />
           </>
         }
+        actions={
+          <>
+            <Btn sm onClick={() => setModal('import')} disabled={busy}>Import</Btn>
+            <Btn sm tone="solid" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
+          </>
+        }
       />
 
       {/* Frequency */}
@@ -130,15 +136,7 @@ export function JinglesSection({
 
       {/* Library */}
       <PanelBox>
-        <PanelHead
-          label={`jingle library · ${pad2(jingles.length)}`}
-          right={
-            <>
-              <Btn sm onClick={() => setModal('import')} disabled={busy}>Import</Btn>
-              <Btn sm tone="solid" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
-            </>
-          }
-        />
+        <PanelHead label={`jingle library · ${pad2(jingles.length)}`} />
         {jingles.length === 0 ? (
           <EmptyState caption="create one via TTS or import your own" />
         ) : (
