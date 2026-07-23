@@ -53,7 +53,6 @@ export default function YourStack() {
 
       <div className="bs-whatis-grid mt-4">
         <article className="bs-whatis-card">
-          <div className="bs-eyebrow mb-2">THE BRAIN · LLM</div>
           <h3 className="m-0 mb-[10px] text-[clamp(20px,2.2vw,26px)] leading-[1.15] font-extrabold tracking-[-0.02em]">
             Any model can run the booth.
           </h3>
@@ -75,7 +74,6 @@ export default function YourStack() {
         </article>
 
         <article className="bs-whatis-card">
-          <div className="bs-eyebrow mb-2">THE VOICE · TTS</div>
           <h3 className="m-0 mb-[10px] text-[clamp(20px,2.2vw,26px)] leading-[1.15] font-extrabold tracking-[-0.02em]">
             And any voice can read it out.
           </h3>
@@ -95,7 +93,6 @@ export default function YourStack() {
       </div>
 
       <div className="bs-whatis-card mt-4">
-        <div className="bs-eyebrow mb-2">VOICE CLONING</div>
         <h3 className="m-0 mb-[10px] text-[clamp(20px,2.2vw,26px)] leading-[1.15] font-extrabold tracking-[-0.02em]">
           Give a host a voice of its own.
         </h3>
