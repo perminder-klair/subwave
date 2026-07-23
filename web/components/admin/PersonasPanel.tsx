@@ -14,6 +14,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { Card, Btn, Pill } from './ui';
+import { SkeletonRows } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/ui/error-state';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { Modal } from '../ui/modal';
 import type { Persona, PersonaTts, DjPromptPreset, FormState, SettingsResponse, CommunityPersona } from './personas/types';
@@ -424,7 +426,7 @@ export default function PersonasPanel() {
     return (
       <div className="grid gap-4">
         <Card title="Personas">
-          <div className="text-[13px] text-[var(--danger)]">controller error: {err}</div>
+          <ErrorState error={err} onRetry={load} />
         </Card>
       </div>
     );
@@ -433,7 +435,7 @@ export default function PersonasPanel() {
     return (
       <div className="grid gap-4">
         <Card title="Personas">
-          <div className="text-[13px] text-muted italic">loading…</div>
+          <SkeletonRows rows={4} />
         </Card>
       </div>
     );

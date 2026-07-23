@@ -958,6 +958,16 @@ end
 # one song behind until the next crossfade.
 music_meta = music
 
+# BEDS ↔ JINGLES — true from a bed's first metadata until the next real song's
+# (both set in on_meta, defined further down). The jingle rotate below counts
+# every music-chain track and a bed IS a track, so without a gate the rotate
+# can insert a stinger BETWEEN the bed and the song it ramps into — the bed's
+# exit cross then lands on a jingle, right after the DJ's closing words. While
+# this flag is up the jingles source reads as unavailable, so the rotate skips
+# it (exactly as it does for an empty jingles.m3u) and the jingle defers to
+# the next real track boundary.
+bed_on_air = ref(false)
+
 # JINGLES & STATION ID — rotate a jingle in every N tracks.
 #
 # CRITICAL: this rotate MUST sit here, on the raw pre-cross / pre-duck music
@@ -1002,6 +1012,9 @@ music =
         "/var/sub-wave/jingle-playing.json"
       )
     )
+    # A bed on air makes jingles unavailable (see bed_on_air above) so the
+    # rotate can't split a bed from the song it ramps into.
+    jingles = source.available(jingles, {not bed_on_air()})
     rotate(
       weights=[1, jingle_ratio()],  # 1 jingle for every N music tracks (settings.json)
       [jingles, music]
@@ -1379,7 +1392,30 @@ def on_meta(m) =
   album = m["album"]
   filename = m["filename"]
   subsonic_id = m["subsonic_id"]
-  if title != "" or artist != "" then
+  # BEDS — an instrumental bed the controller pushed into dj_queue for the DJ to
+  # talk over between two songs (broadcast/beds.ts). It rides the music chain
+  # like any other request, but it is NOT a song: it must never reach
+  # now-playing.json (the UI would announce it) and must never push an ICY title
+  # (hardware radios would show it). It carries no title/artist, so the gate
+  # below would drop it silently anyway — and that silence is the problem, since
+  # the controller learns "the bed is on air, air the link now" only from this
+  # marker. So branch BEFORE the gate and announce it on its own channel.
+  #
+  # Same shape and rationale as jingle-playing.json (#997): liquidsoap telling
+  # the controller that a non-track thing started.
+  if m["subwave_kind"] == "bed" then
+    log("on_meta: bed started (#{filename})")
+    bed_on_air := true
+    file.write(
+      data=json.stringify(compact=true, {
+        filename = filename,
+        startedAt = time()
+      }),
+      atomic=true,
+      "/var/sub-wave/bed-playing.json"
+    )
+  elsif title != "" or artist != "" then
+    bed_on_air := false
     log("on_meta: title=#{title} | artist=#{artist} | album=#{album} | id=#{subsonic_id}")
     ts = int_of_float(time())
     # Build via json.stringify so values with embedded quotes/backslashes
@@ -1405,6 +1441,12 @@ def on_meta(m) =
       ("artist", artist),
       ("album", album)
     ])
+  else
+    # Untitled, non-bed metadata (the emergency single, an untagged local
+    # file). Nothing to publish — but it still marks the bed's end, and
+    # without this reset bed_on_air would latch true and keep the jingle
+    # rotate starved until the next tagged song.
+    bed_on_air := false
   end
 end
 

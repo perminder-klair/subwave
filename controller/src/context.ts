@@ -2,25 +2,34 @@
 // Used by the autonomous scheduler to pick mood-appropriate tracks.
 
 import { config } from './config.js';
-import { resolveActiveShow, resolveOnAirLocation, get as getSettings } from './settings.js';
+import { resolveActiveShow, resolveOnAirLocation, get as getSettings, moodScheduleFor, weatherMoodFor } from './settings.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase } from './time.js';
 
+// The day-period → {vibe, show} table stays in code (these feed spoken-segment
+// prompts and show resolution). Each period's MOOD is operator-editable
+// (settings.moodSchedule via moodScheduleFor). Note the 'drive-time' vibe reads
+// 'end of the workday', not 'drive home': the vibe string lands in every
+// spoken-segment prompt and the commute framing had the DJ doing traffic-jockey
+// patter for two hours a day. The period names keep driving pick energy, not talk.
+const PERIOD_TABLE: Array<{ from: number; to: number; period: string; vibe: string; show: string }> = [
+  { from: 5, to: 9, period: 'early-morning', vibe: 'gentle waking', show: 'breakfast' },
+  { from: 9, to: 12, period: 'morning', vibe: 'productive', show: 'morning' },
+  { from: 12, to: 14, period: 'midday', vibe: 'lunch hour', show: 'midday' },
+  { from: 14, to: 17, period: 'afternoon', vibe: 'sustained energy', show: 'afternoon' },
+  { from: 17, to: 19, period: 'drive-time', vibe: 'end of the workday', show: 'drive-time' },
+  { from: 19, to: 22, period: 'evening', vibe: 'wind down', show: 'evening' },
+];
+
 export function getTimeContext(date = new Date()) {
   const h = zonedParts(date).hour;
-  if (h >= 5 && h < 9) return { period: 'early-morning', mood: 'morning', vibe: 'gentle waking', show: 'breakfast' };
-  if (h >= 9 && h < 12) return { period: 'morning', mood: 'morning', vibe: 'productive', show: 'morning' };
-  if (h >= 12 && h < 14) return { period: 'midday', mood: 'energetic', vibe: 'lunch hour', show: 'midday' };
-  if (h >= 14 && h < 17) return { period: 'afternoon', mood: 'focus', vibe: 'sustained energy', show: 'afternoon' };
-  // vibe reads 'end of the workday', not 'drive home': the vibe string lands in
-  // every spoken-segment prompt (Period: drive-time (…)) and the commute framing
-  // had the DJ doing traffic-jockey patter for two hours a day. The period/mood
-  // keep their names — they drive pick energy, not talk.
-  if (h >= 17 && h < 19) return { period: 'drive-time', mood: 'driving', vibe: 'end of the workday', show: 'drive-time' };
-  if (h >= 19 && h < 22) return { period: 'evening', mood: 'evening', vibe: 'wind down', show: 'evening' };
-  if (h >= 22 || h < 1) return { period: 'late-evening', mood: 'night', vibe: 'late hours', show: 'late' };
-  return { period: 'after-hours', mood: 'reflective', vibe: 'after hours', show: 'graveyard' };
+  const slot =
+    PERIOD_TABLE.find((s) => h >= s.from && h < s.to) ??
+    (h >= 22 || h < 1
+      ? { period: 'late-evening', vibe: 'late hours', show: 'late' }
+      : { period: 'after-hours', vibe: 'after hours', show: 'graveyard' });
+  return { period: slot.period, mood: moodScheduleFor(slot.period), vibe: slot.vibe, show: slot.show };
 }
 
 // Festival calendar — read from persisted settings so the operator can
@@ -109,19 +118,11 @@ function mapWeatherCode(code: number) {
   return 'cloudy';
 }
 
+// Operator-editable weather → mood map (settings.weatherMoods). '' (no steer)
+// normalises to null so the dominantMood chain (festival > weather > time)
+// falls through to the time mood, exactly as the old hardcoded default did.
 function weatherToMood(condition) {
-  switch (condition) {
-    case 'rainy':
-    case 'foggy':
-    case 'stormy':
-      return 'rainy';
-    case 'clear':
-      return 'sunny';
-    case 'snowy':
-      return 'reflective';
-    default:
-      return null;
-  }
+  return weatherMoodFor(condition) || null;
 }
 
 // ---------------------------------------------------------------------------

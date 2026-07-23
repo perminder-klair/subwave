@@ -2,6 +2,7 @@
 
 import type { ChangeEvent } from 'react';
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { notify, errorMessage } from '../../lib/notify';
 import { normalizeStationLocale } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -12,18 +13,18 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
 import { Card, Btn, Pill, Seg } from './ui';
+import { SkeletonForm } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/ui/error-state';
 import { cn } from '../../lib/cn';
 import ArchivesPanel from './ArchivesPanel';
 import BackupPanel from './BackupPanel';
-import FestivalsSection from './FestivalsSection';
 import {
-  Radio, Palette, Cpu, Mic, Library, Search, Music, AudioLines,
-  Activity, Archive, Save, AlertTriangle, CalendarDays, Heart,
+  Radio, Palette, Cpu, Mic, Library, Search,
+  Activity, Archive, Save, AlertTriangle, Heart,
 } from 'lucide-react';
 import {
   SectionHeader, ELEVENLABS_VS_DEFAULTS,
   type FormState, type FormUpdater, type SettingsData, type SaveSettings,
-  type SfxData, type SfxForm, type JingleImportFailure, type JingleImportResult,
   type LoudnessSource, type LlmForm, type LlmFallbackForm,
 } from './settings/shared';
 import { TtsSection } from './settings/TtsSection';
@@ -32,21 +33,16 @@ import { SearchSection } from './settings/SearchSection';
 import { LibrarySection } from './settings/LibrarySection';
 import { StationSection } from './settings/StationSection';
 import { ThemeSection } from './settings/ThemeSection';
-import { JinglesSection } from './settings/JinglesSection';
-import { SfxSection } from './settings/SfxSection';
 import { ScrobbleSection } from './settings/ScrobbleSection';
 import { LikesSection } from './settings/LikesSection';
 
 const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
   { id: 'theme',    label: 'Skin & Themes', hint: 'player skin · palette', icon: Palette },
-  { id: 'festivals', label: 'Festivals', hint: 'calendar · mood', icon: CalendarDays },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine', icon: Mic },
   { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation', icon: Library },
   { id: 'search',   label: 'Web search', hint: 'live-facts backend', icon: Search },
-  { id: 'jingles',  label: 'Jingles', hint: 'stingers', icon: Music },
-  { id: 'sfx',      label: 'Sound FX', hint: 'agent stingers', icon: AudioLines },
   { id: 'scrobble', label: 'Scrobbling', hint: 'last.fm · listenbrainz', icon: Activity },
   { id: 'likes',    label: 'Likes', hint: 'heart button · navidrome stars', icon: Heart },
   { id: 'archives', label: 'Archives', hint: 'hourly recordings', icon: Archive },
@@ -68,16 +64,12 @@ export default function SettingsPanel() {
   const [data, setData] = useState<SettingsData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [jingleText, setJingleText] = useState('');
   const [form, setForm] = useState<FormState | null>(null);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [activeSection, setActiveSection] = useState<SectionId>('station');
-  const [sfxData, setSfxData] = useState<SfxData | null>(null);
-  const [sfxForm, setSfxForm] = useState<SfxForm>({ name: '', description: '', prompt: '', durationSec: '' });
-  const [confirmDeleteSfx, setConfirmDeleteSfx] = useState<string | null>(null);
+  const router = useRouter();
 
   const refresh = async () => {
     try {
@@ -88,28 +80,26 @@ export default function SettingsPanel() {
     } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
   };
 
-  const refreshSfx = async () => {
-    try {
-      const r = await adminFetch('/sfx');
-      if (!r.ok) return;
-      setSfxData((await r.json()) as SfxData);
-    } catch { /* non-fatal */ }
-  };
-
   // Deep-link: /admin/settings?section=archives opens that rail directly. The
   // old standalone /admin/{archives,backup} routes redirect here, so existing
   // bookmarks keep working after the move into Settings. (Webhooks moved on to
   // its own tab under /admin/connect?tab=webhooks.)
+  //
+  // Jingles / SFX / Beds left Settings for /admin/imaging — send their old
+  // ?section deep-links on to the matching tab so existing bookmarks survive.
   useEffect(() => {
     const s = new URLSearchParams(window.location.search).get('section');
+    if (s === 'jingles' || s === 'sfx' || s === 'beds') {
+      router.replace(`/admin/imaging?tab=${s}`);
+      return;
+    }
     if (s && SECTIONS.some(x => x.id === s)) setActiveSection(s as SectionId);
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     if (!data?.values || form) return;
     const v = data.values;
     setForm({
-      jingleRatio: String(v.jingleRatio ?? ''),
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
       maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
       archive: {
@@ -302,8 +292,7 @@ export default function SettingsPanel() {
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     refresh();
-    refreshSfx();
-    const id = setInterval(() => { refresh(); refreshSfx(); }, 3000);
+    const id = setInterval(() => { refresh(); }, 3000);
     return () => clearInterval(id);
   }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -364,140 +353,6 @@ export default function SettingsPanel() {
     } finally { setBusy(false); }
   };
 
-  const createJingle = async (): Promise<boolean> => {
-    if (!jingleText.trim() || busy) return false;
-    setBusy(true);
-    try {
-      const r = await adminFetch('/jingles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: jingleText.trim() }),
-      });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setJingleText('');
-      await refresh();
-      return true;
-    } catch (e) { notify.err(`Jingle creation failed: ${errorMessage(e)}`); return false; }
-    finally { setBusy(false); }
-  };
-
-  const deleteJingle = async (filename: string) => {
-    setBusy(true);
-    try {
-      const r = await adminFetch(`/jingles/${encodeURIComponent(filename)}`, { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      await refresh();
-    } catch (e) { notify.err(`Delete failed: ${errorMessage(e)}`); }
-    finally { setBusy(false); }
-  };
-
-  // Multipart upload — adminFetch leaves Content-Type unset so the browser
-  // sets the multipart boundary itself. The controller transcodes + levels.
-  // Files upload one request at a time (not one multipart batch) so a big
-  // import doesn't hold 40+ files in memory at once server-side and a single
-  // bad file doesn't sink the rest. `label` only applies when importing a
-  // single file — each file in a batch defaults to its own filename. An
-  // abort via `signal` cancels the in-flight request too; the file it
-  // interrupted counts as skipped, not failed.
-  const uploadJingle = async (
-    files: File[],
-    label: string,
-    opts: { onProgress?: (done: number, total: number) => void; signal?: AbortSignal } = {},
-  ): Promise<JingleImportResult | null> => {
-    if (busy || !files.length) return null;
-    const { onProgress, signal } = opts;
-    setBusy(true);
-    const total = files.length;
-    let ok = 0;
-    let aborted = false;
-    const failures: JingleImportFailure[] = [];
-    try {
-      for (const [i, file] of files.entries()) {
-        if (signal?.aborted) { aborted = true; break; }
-        try {
-          const fd = new FormData();
-          fd.append('file', file);
-          if (total === 1 && label.trim()) fd.append('label', label.trim());
-          const r = await adminFetch('/jingles/upload', { method: 'POST', body: fd, signal });
-          const j = (await r.json().catch(() => ({}))) as { error?: string };
-          if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-          ok++;
-        } catch (e) {
-          if (signal?.aborted) { aborted = true; break; }
-          failures.push({ name: file.name, reason: errorMessage(e) });
-        }
-        onProgress?.(i + 1, total);
-      }
-      if (ok) await refresh();
-      if (aborted) {
-        notify.info(`Import stopped — ${ok}/${total} imported`);
-      } else if (total === 1) {
-        if (ok) notify.ok('jingle imported');
-        else notify.err(`Jingle import failed: ${failures[0]?.reason}`);
-      } else if (failures.length === 0) {
-        notify.ok(`${ok} jingles imported`);
-      } else {
-        notify.err(`${ok}/${total} jingles imported · ${failures.length} failed`);
-      }
-      return { ok, total, failures, aborted };
-    } finally { setBusy(false); }
-  };
-
-  const createSfx = async (): Promise<boolean> => {
-    if (!sfxForm.name.trim() || !sfxForm.prompt.trim() || busy) return false;
-    setBusy(true);
-    try {
-      const r = await adminFetch('/sfx', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: sfxForm.name.trim(),
-          description: sfxForm.description.trim(),
-          prompt: sfxForm.prompt.trim(),
-          durationSec: sfxForm.durationSec ? parseFloat(sfxForm.durationSec) : undefined,
-        }),
-      });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setSfxForm({ name: '', description: '', prompt: '', durationSec: '' });
-      await refreshSfx();
-      return true;
-    } catch (e) { notify.err(`Sound effect creation failed: ${errorMessage(e)}`); return false; }
-    finally { setBusy(false); }
-  };
-
-  const deleteSfx = async (name: string) => {
-    setBusy(true);
-    try {
-      const r = await adminFetch(`/sfx/${encodeURIComponent(name)}`, { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      await refreshSfx();
-    } catch (e) { notify.err(`Delete failed: ${errorMessage(e)}`); }
-    finally { setBusy(false); }
-  };
-
-  // Upload a ready-made effect — no ElevenLabs key required (unlike createSfx).
-  const uploadSfx = async (file: File, name: string, description: string): Promise<boolean> => {
-    if (busy) return false;
-    setBusy(true);
-    try {
-      const fd = new FormData();
-      fd.append('file', file);
-      fd.append('name', name.trim());
-      if (description.trim()) fd.append('description', description.trim());
-      const r = await adminFetch('/sfx/upload', { method: 'POST', body: fd });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      await refreshSfx();
-      notify.ok('sound effect imported');
-      return true;
-    } catch (e) { notify.err(`Sound effect import failed: ${errorMessage(e)}`); return false; }
-    finally { setBusy(false); }
-  };
-
   return (
     <div className="stack-mobile grid grid-cols-[240px_1fr] items-start gap-6">
       {/* Section rail */}
@@ -521,11 +376,7 @@ export default function SettingsPanel() {
                   {s.label}
                 </span>
                 <span className="text-[9px] tracking-[0.18em] uppercase opacity-70">
-                  {s.id === 'jingles' && data
-                    ? `${data.jingles?.length ?? 0} file${(data.jingles?.length ?? 0) === 1 ? '' : 's'}`
-                    : s.id === 'sfx' && sfxData
-                      ? `${sfxData.sfx?.length ?? 0} effect${(sfxData.sfx?.length ?? 0) === 1 ? '' : 's'}`
-                      : s.hint}
+                  {s.hint}
                 </span>
               </span>
             </button>
@@ -535,14 +386,7 @@ export default function SettingsPanel() {
 
       {/* Active section */}
       <div className="grid gap-4">
-        {err && (
-          <div className="card border-[var(--danger)]">
-            <div className="card-body text-[12px] text-[var(--danger)]">
-              <strong className="tracking-[0.12em] uppercase">controller error</strong>
-              <div className="mt-1">{err}</div>
-            </div>
-          </div>
-        )}
+        {err && <ErrorState error={err} onRetry={refresh} />}
         {pendingRestart && (
           <div
             role="alert"
@@ -565,9 +409,7 @@ export default function SettingsPanel() {
             </Btn>
           </div>
         )}
-        {!data && !err && (
-          <div className="text-[13px] text-muted italic">loading…</div>
-        )}
+        {!data && !err && <SkeletonForm fields={5} />}
 
         {data && form && (() => {
           const updateForm: FormUpdater = (updater) =>
@@ -610,15 +452,6 @@ export default function SettingsPanel() {
                 adminFetch={adminFetch}
               />
             )}
-            {activeSection === 'jingles' && (
-              <JinglesSection
-                data={data} form={form} setForm={updateForm} busy={busy}
-                jingleText={jingleText} setJingleText={setJingleText}
-                createJingle={createJingle} uploadJingle={uploadJingle}
-                saveSettings={saveSettings}
-                onDelete={setConfirmDelete} adminFetch={adminFetch}
-              />
-            )}
             {activeSection === 'scrobble' && (
               <ScrobbleSection
                 data={data} form={form} setForm={updateForm} busy={busy}
@@ -634,14 +467,6 @@ export default function SettingsPanel() {
           </>
           );
         })()}
-        {activeSection === 'sfx' && (
-          <SfxSection
-            sfxData={sfxData} sfxForm={sfxForm} setSfxForm={setSfxForm}
-            busy={busy} createSfx={createSfx} uploadSfx={uploadSfx}
-            onDelete={setConfirmDeleteSfx}
-            data={data} saveSettings={saveSettings} adminFetch={adminFetch}
-          />
-        )}
         {/* Self-contained panels — each re-calls useAdminAuth and owns its
             own data fetch, so they render outside the data && form guard. */}
         {activeSection === 'archives' && (
@@ -770,7 +595,6 @@ export default function SettingsPanel() {
             )}
           </>
         )}
-        {activeSection === 'festivals' && <FestivalsSection />}
         {activeSection === 'backup' && <BackupPanel />}
         {activeSection === 'danger' && (
           <>
@@ -1404,24 +1228,6 @@ export default function SettingsPanel() {
         confirmLabel="stop stream"
         danger
         onConfirm={stopStream}
-      />
-      <V3AlertDialog
-        open={confirmDelete != null}
-        onOpenChange={(o) => { if (!o) setConfirmDelete(null); }}
-        title="Delete jingle"
-        description={confirmDelete ? `Delete the jingle "${confirmDelete}"? This removes the rendered audio file permanently.` : ''}
-        confirmLabel="delete"
-        danger
-        onConfirm={() => { if (confirmDelete) deleteJingle(confirmDelete); setConfirmDelete(null); }}
-      />
-      <V3AlertDialog
-        open={confirmDeleteSfx != null}
-        onOpenChange={(o) => { if (!o) setConfirmDeleteSfx(null); }}
-        title="Delete sound effect"
-        description={confirmDeleteSfx ? `Delete the sound effect "${confirmDeleteSfx}"? This removes the rendered audio file permanently.` : ''}
-        confirmLabel="delete"
-        danger
-        onConfirm={() => { if (confirmDeleteSfx) deleteSfx(confirmDeleteSfx); setConfirmDeleteSfx(null); }}
       />
     </div>
   );

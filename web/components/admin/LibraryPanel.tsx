@@ -42,6 +42,8 @@ import { cn } from '../../lib/cn';
 import TaggingPanel, { num } from './LibraryTaggingPanel';
 import type { Coverage, TaggerState, LibraryStatsLite, Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
 import type { PlaylistSummary } from './LibraryPlaylistsTab';
+import { SkeletonRows, SkeletonText } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
 
 // ---------------------------------------------------------------------------
 // types
@@ -1737,16 +1739,22 @@ interface TrackTableProps {
 
 function TrackTable(p: TrackTableProps) {
   if (p.loading && p.rows.length === 0) {
-    return <div className="px-4 py-8 text-center text-[12px] text-muted italic">loading…</div>;
+    return <SkeletonRows rows={6} />;
   }
   if (p.rows.length === 0) {
     return (
-      <div className="px-4 py-10 text-center text-[12px] text-muted italic">
-        {p.tab === 'browse' && 'no tracks match, try clearing some filters'}
-        {p.tab === 'search' && 'search your library to queue a track on demand'}
-        {p.tab === 'untagged' && 'every track is tagged, nice'}
-        {p.tab === 'recent' && 'nothing here yet'}
-      </div>
+      <>
+        {p.tab === 'browse' && (
+          <EmptyState compact title="No tracks match" description="Try clearing some filters." />
+        )}
+        {p.tab === 'search' && (
+          <EmptyState compact title="Search your library" description="Find a track to queue on demand." />
+        )}
+        {p.tab === 'untagged' && (
+          <EmptyState compact title="Everything's tagged" description="Nice — the whole library has moods." />
+        )}
+        {p.tab === 'recent' && <EmptyState compact title="Nothing here yet" />}
+      </>
     );
   }
 
@@ -1934,11 +1942,15 @@ function BlockedTab({ entries, loading, unblocking, onUnblock, onRefresh }: {
       bodyClass="!p-0"
     >
       {rows.length === 0 ? (
-        <div className="px-4 py-10 text-center text-[12px] text-muted italic">
-          {loading ? 'loading…' : (
-            <>nothing blocked — use the <Ban size={11} className="inline align-[-1px]" /> action on any track row to keep a track, album or artist off the air</>
-          )}
-        </div>
+        loading ? (
+          <SkeletonRows rows={4} className="m-4" />
+        ) : (
+          <EmptyState
+            compact
+            title="Nothing blocked"
+            description={<>Use the <Ban size={11} className="inline align-[-1px]" /> action on any track row to keep a track, album or artist off the air.</>}
+          />
+        )
       ) : (
         <div className={cn(loading && 'opacity-60 transition-opacity')}>
           {rows.map(e => {
@@ -2013,11 +2025,15 @@ function HistoryTab({ rows, total, page, setPage, loading, queuing, onQueue, onR
         bodyClass="!p-0"
       >
         {!rows || rows.length === 0 ? (
-          <div className="px-4 py-10 text-center text-[12px] text-muted italic">
-            {loading || !rows
-              ? 'loading…'
-              : 'nothing on record yet — plays are logged from the moment this version starts airing tracks'}
-          </div>
+          loading || !rows ? (
+            <SkeletonRows rows={4} className="m-4" />
+          ) : (
+            <EmptyState
+              compact
+              title="Nothing on record yet"
+              description="Plays are logged from the moment this version starts airing tracks."
+            />
+          )
         ) : (
           <div className={cn(loading && 'opacity-60 transition-opacity')}>
             {rows.map((p, i) => {
@@ -2111,9 +2127,7 @@ function ManualTagEditor(props: {
       <div className="grid gap-1.5">
         <Eyebrow>moods · up to 3</Eyebrow>
         <div className="flex flex-wrap gap-1.5">
-          {vocab.length === 0 && (
-            <span className="text-[11px] text-muted italic">loading moods…</span>
-          )}
+          {vocab.length === 0 && <SkeletonText lines={1} />}
           {vocab.map(m => {
             const on = sel.includes(m);
             return (

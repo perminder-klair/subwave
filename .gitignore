@@ -8,6 +8,9 @@
 # (a broken macOS-local symlink slipped past the dir-only pattern in #325).
 node_modules
 
+# Python bytecode (running scripts/vocal_gate_test.py compiles analyze_worker)
+__pycache__/
+
 # Next.js
 .next/
 out/

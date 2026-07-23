@@ -25,7 +25,7 @@ const POINTS = [
     eyebrow: 'INSTALL IT',
     title: 'A real app on the lock screen.',
     body:
-      'Native iOS and Android apps are on the stores, and the web player installs as a PWA. The OS media controls wire straight through, so the lock screen, your headphones, and the car display all show the station. Old-school hardware? /listen.m3u and /listen.pls tune in VLC, Sonos, and internet radios.',
+      'Native iOS and Android apps are on the stores, a native desktop player covers macOS, Windows, and Linux, and the web player installs as a PWA. The OS media controls wire straight through, so the lock screen, your headphones, and the car display all show the station. Old-school hardware? /listen.m3u and /listen.pls tune in VLC, Sonos, and internet radios.',
   },
 ];
 

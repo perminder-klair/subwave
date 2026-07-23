@@ -103,6 +103,64 @@ export default function Clients() {
       </section>
 
       <section className="bs-section">
+        <p className="bs-eyebrow">MACOS, WINDOWS &amp; LINUX</p>
+        <h2>The app on your desk.</h2>
+        <p>
+          There is a native desktop player too &mdash; a real windowed app, no browser
+          and no Electron. It carries the full station experience: now-playing with
+          cover art and a live spectrum analyser, the booth feed, the timeline, the
+          schedule grid, a request slip, and station themes that repaint the whole
+          window. It sits in your menu bar / tray with a mini player, keyboard
+          transport, a sleep timer, and the same multi-station switcher as the
+          mobile apps.
+        </p>
+        <p className="text-muted">
+          Grab the build for your platform from the{' '}
+          <a
+            href="https://github.com/getsubwave/subwave-desktop/releases/latest"
+            className="bs-link"
+            target="_blank"
+            rel="noreferrer"
+          >
+            latest release on GitHub ↗
+          </a>
+          . It&rsquo;s open source, in its own repo:{' '}
+          <a
+            href="https://github.com/getsubwave/subwave-desktop"
+            className="bs-link"
+            target="_blank"
+            rel="noreferrer"
+          >
+            github.com/getsubwave/subwave-desktop ↗
+          </a>
+          .
+        </p>
+        <table className="bs-doc-table">
+          <thead>
+            <tr>
+              <th>Platform</th>
+              <th>How to get it</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>macOS / Windows / Linux</strong></td>
+              <td>
+                <a
+                  href="https://github.com/getsubwave/subwave-desktop/releases/latest"
+                  className="bs-link"
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Latest release ↗
+                </a>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section className="bs-section">
         <p className="bs-eyebrow">THE ONE THING YOU NEED</p>
         <h2>The stream URL.</h2>
         <p>

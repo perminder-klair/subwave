@@ -1,6 +1,8 @@
+import { Suspense } from 'react';
 import { AnimatedLink } from '@/components/ui/animated-link';
 import CommunitySkillCard from '@/components/skills/CommunitySkillCard';
-import { fetchCommunitySkills } from '@/lib/communitySkills';
+import { CatalogGridSkeleton, CatalogStatSkeleton } from '@/components/ui/catalog-skeleton';
+import { fetchCommunitySkills, type CommunitySkill } from '@/lib/communitySkills';
 import { skillSubmitUrl } from '@/lib/repo';
 import { pageMeta } from '@/lib/seo';
 
@@ -22,9 +24,47 @@ const REPO = 'https://github.com/perminder-klair/subwave';
 const SUBMIT_URL = skillSubmitUrl();
 const DOCS_URL = `${REPO}/blob/main/docs/custom-skills.md`;
 
-export default async function CommunitySkillsIndex() {
-  const skills = await fetchCommunitySkills();
-  const count = skills.length;
+// Catalog-backed regions, each reading the one in-flight promise rather than
+// calling the loader itself — see the note in app/shows/page.tsx.
+
+async function SkillsStat({ skills }: { skills: Promise<CommunitySkill[]> }) {
+  const count = (await skills).length;
+  if (count === 0) return null;
+  return (
+    <p className="bs-stat-strip">
+      <span>
+        <strong>{count}</strong> {count === 1 ? 'skill' : 'skills'} in the catalog
+      </span>
+    </p>
+  );
+}
+
+async function SkillsGrid({ skills }: { skills: Promise<CommunitySkill[]> }) {
+  const list = await skills;
+  if (list.length === 0) {
+    return (
+      <p className="bs-news-empty">
+        No community skills to show yet — the catalog may still be loading, or this station
+        hasn&rsquo;t shipped one. Be the first to{' '}
+        <AnimatedLink href={SUBMIT_URL} className="bs-link">
+          share a skill
+        </AnimatedLink>
+        .
+      </p>
+    );
+  }
+  return (
+    <ul className="bs-stations-grid">
+      {list.map((s) => (
+        <CommunitySkillCard key={s.slug} skill={s} />
+      ))}
+    </ul>
+  );
+}
+
+export default function CommunitySkillsIndex() {
+  // Started, not awaited, so the hero + CTA flush before the controller answers.
+  const skills = fetchCommunitySkills();
 
   return (
     <article>
@@ -39,13 +79,9 @@ export default async function CommunitySkillsIndex() {
         </p>
       </header>
 
-      {count > 0 ? (
-        <p className="bs-stat-strip">
-          <span>
-            <strong>{count}</strong> {count === 1 ? 'skill' : 'skills'} in the catalog
-          </span>
-        </p>
-      ) : null}
+      <Suspense fallback={<CatalogStatSkeleton />}>
+        <SkillsStat skills={skills} />
+      </Suspense>
 
       <div className="bs-station-cta">
         <p className="bs-station-cta-copy">Made a segment worth sharing? Add it to the catalog.</p>
@@ -57,22 +93,9 @@ export default async function CommunitySkillsIndex() {
         </AnimatedLink>
       </div>
 
-      {count > 0 ? (
-        <ul className="bs-stations-grid">
-          {skills.map((s) => (
-            <CommunitySkillCard key={s.slug} skill={s} />
-          ))}
-        </ul>
-      ) : (
-        <p className="bs-news-empty">
-          No community skills to show yet — the catalog may still be loading, or this station
-          hasn&rsquo;t shipped one. Be the first to{' '}
-          <AnimatedLink href={SUBMIT_URL} className="bs-link">
-            share a skill
-          </AnimatedLink>
-          .
-        </p>
-      )}
+      <Suspense fallback={<CatalogGridSkeleton />}>
+        <SkillsGrid skills={skills} />
+      </Suspense>
 
       <p className="bs-stations-report">
         Installing is a two-tap job in your station&rsquo;s admin: open{' '}

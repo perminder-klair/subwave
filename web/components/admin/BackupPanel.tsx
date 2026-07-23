@@ -206,7 +206,7 @@ export default function BackupPanel() {
 
       <Card title="Export" sub="Download a full config + tag-DB snapshot.">
         {exportErr && (
-          <div className="mb-2 text-[12px] text-[var(--danger)]">export error: {exportErr}</div>
+          <div className="mb-2 text-[12px] leading-[1.6] text-[var(--danger)]">export error: {exportErr}</div>
         )}
         <Btn tone="accent" onClick={exportBackup} disabled={exporting}>
           {exporting ? 'Preparing…' : 'Download backup'}
@@ -278,7 +278,7 @@ export default function BackupPanel() {
           ) : null}
           , then <strong>Refresh</strong> and restore it here; it never travels through the proxy.
         </div>
-        {diskErr && <div className="mb-2 text-[12px] text-[var(--danger)]">{diskErr}</div>}
+        {diskErr && <div className="mb-2 text-[12px] leading-[1.6] text-[var(--danger)]">{diskErr}</div>}
         {diskFiles && diskFiles.length === 0 && !diskErr && (
           <div className="text-[12px] text-muted">
             No <code className="text-ink">.zip</code> backups found in the station folder yet.

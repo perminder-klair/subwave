@@ -45,10 +45,28 @@ const PANELS = [
       'Search the Navidrome library by text, mood, and energy, queue any track, and browse recent additions. The mood tagger walks the library album-by-album and classifies every track.',
   },
   {
+    eyebrow: 'PLAYLISTS',
+    title: 'A generator, not a spreadsheet.',
+    body:
+      'Describe a set in a line, drop in a seed track or artist, and the Playlist Builder curates a running order from your library, with an energy arc you shape and mood, genre, era, and tempo to tune. Save it for a show to anchor to, or for the DJ to draw on.',
+  },
+  {
+    eyebrow: 'IMAGING',
+    title: 'The sounds between the songs.',
+    body:
+      'Jingles are the station idents rotated between tracks, SFX are stingers mixed under the DJ’s voice, and beds are instrumentals the host talks over when a link runs long. Render each from the configured voice or a text-to-sound prompt, or import your own audio.',
+  },
+  {
+    eyebrow: 'MOODS',
+    title: 'The vocabulary of feeling.',
+    body:
+      'The words the library is tagged with, and how the DJ reaches for them: which mood each part of the day and each weather condition leans into, a festival calendar that colors the day, and pronunciation fixes for the voice. Edit the list and every show, festival, and auto-pick draws from it.',
+  },
+  {
     eyebrow: 'DEBUG & STATS',
     title: 'Health and diagnostics.',
     body:
-      'Debug and Stats show health, Liquidsoap logs, LLM call history, and usage at a glance. DJ Doc runs a full station check-up and has your own LLM review the findings. Settings (TTS, LLM, mixer, jingles) and a danger zone that starts, stops, and restarts the broadcast.',
+      'Debug and Stats show health, Liquidsoap logs, LLM call history, and usage at a glance. DJ Doc runs a full station check-up and has your own LLM review the findings. Settings (TTS, LLM, mixer, streams) and a danger zone that starts, stops, and restarts the broadcast.',
   },
 ];
 
