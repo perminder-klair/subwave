@@ -91,7 +91,10 @@ function slim(s: any) {
 // clustered around what's currently playing — i.e. the just-played artist's
 // neighbours — so an artist-recency strip gutted them to ~1 result while the
 // 12h track guard already prevents literal repeats (issue: thin picker pools on
-// niche catalogues). Track-recency alone is enough.
+// niche catalogues). Track-recency alone is enough here; back-to-back artist
+// variety is enforced downstream at the point of choice, in
+// dj-agent.pickViaAgent (re-pick off the on-air artist when possible, #1124),
+// so the tools can keep surfacing same-artist neighbours for the model to weigh.
 export function buildPickerTools({
   recentIds = new Set<string>(),
   recentKeys = new Set<string>(),
