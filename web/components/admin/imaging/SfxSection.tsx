@@ -8,10 +8,8 @@ import { Input } from '../../ui/input';
 import { Textarea } from '../../ui/textarea';
 import { Label } from '../../ui/label';
 import { Card, Btn, Pill, Seg } from '../ui';
-import {
-  SectionHeader, PreviewButton,
-  type SettingsData, type SaveSettings, type SfxData, type SfxForm,
-} from './shared';
+import { SectionHeader, PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
+import type { SfxData, SfxForm } from './types';
 
 interface SfxSectionProps {
   sfxData: SfxData | null;

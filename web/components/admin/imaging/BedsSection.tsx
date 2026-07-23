@@ -7,10 +7,8 @@ import { Modal } from '../../ui/modal';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { Card, Btn, Pill, Seg } from '../ui';
-import {
-  SectionHeader, PreviewButton,
-  type SettingsData, type SaveSettings, type BedsData,
-} from './shared';
+import { SectionHeader, PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
+import type { BedsData } from './types';
 
 interface BedsSectionProps {
   bedsData: BedsData | null;
