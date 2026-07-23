@@ -88,6 +88,12 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
         title="Beds"
         sub="Instrumentals the DJ talks over between songs: the song ends, the bed carries the talk, and the next song ramps in under the DJ’s closing words."
         metrics={<TabMetric accent n={pad2(list.length)} l="beds" />}
+        actions={
+          <>
+            <Btn sm onClick={() => setModal('import')} disabled={busy}>Import</Btn>
+            <Btn sm tone="solid" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
+          </>
+        }
       />
 
       {/* On/off */}
@@ -188,15 +194,7 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
 
       {/* Library */}
       <PanelBox>
-        <PanelHead
-          label={`bed library · ${pad2(list.length)}`}
-          right={
-            <>
-              <Btn sm onClick={() => setModal('import')} disabled={busy}>Import</Btn>
-              <Btn sm tone="solid" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
-            </>
-          }
-        />
+        <PanelHead label={`bed library · ${pad2(list.length)}`} />
         {list.length === 0 ? (
           <EmptyState caption="generate via ElevenLabs or import an instrumental" />
         ) : (
