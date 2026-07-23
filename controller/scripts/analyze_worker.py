@@ -101,6 +101,32 @@ VOCAL_ENABLED = os.environ.get("ANALYZE_VOCAL_ACTIVITY", "").strip().lower() in 
 DEMUCS_SR = 44100
 DEMUCS_MODEL = os.environ.get("DEMUCS_MODEL", "").strip() or "htdemucs"
 
+
+def _env_float(name, default):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        # Runs at module load, before log() is defined — write stderr directly.
+        sys.stderr.write(
+            f"[analyze-worker] {name}={raw!r} is not a number; using default {default}\n"
+        )
+        return default
+
+
+# Vocal-stem gate thresholds (issue #1125). The stem is thresholded against BOTH
+# its own loud level (self-relative, catches quiet-but-present vocals) AND a
+# fraction of the FULL-MIX loud level (an absolute-ish floor). Demucs never
+# separates cleanly: an instrumental's vocal stem carries residual bleed (pad
+# swells, cymbals, guitar harmonics). A purely self-relative gate scales down to
+# that bleed and mass-flags instrumentals as vocal. Anchoring the floor to the
+# whole song's loudness fixes it — bleed sits far below the mix, real vocals
+# don't. Both tunable so operators can adapt to their masters' compression.
+VOCAL_STEM_REL = _env_float("VOCAL_STEM_REL", 0.15)  # x 90th-pct of vocal-stem RMS
+VOCAL_MIX_FLOOR = _env_float("VOCAL_MIX_FLOOR", 0.06)  # x 90th-pct of full-mix RMS
+
 # Krumhansl-Kessler key profiles (major/minor), indexed from the tonic.
 MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
 MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
@@ -727,11 +753,18 @@ class VocalActivityDetector:
             # is how the demucs CLI's -d flag works), so no .to() here.
             est = apply_model(self.model, wav.unsqueeze(0), device=resolve_device())[0]
         vocals = est[self.sources.index("vocals")].mean(dim=0).cpu().numpy()
+        mix = wav.mean(dim=0).cpu().numpy()
 
-        # RMS envelope of the vocal stem, thresholded against its own loud level
-        # (40th-pct of the loud half) — robust to overall mix level. Frames where
-        # vocal energy sustains above threshold become "vocal present" ranges,
-        # merging gaps shorter than ~0.4s so a breath doesn't split a phrase.
+        # RMS envelope of the vocal stem, gated against BOTH its own loud level
+        # (self-relative, catches quiet-but-present vocals) AND a fraction of the
+        # full-mix loud level (issue #1125). Demucs never separates cleanly: an
+        # instrumental's vocal stem carries residual bleed (pad swells, cymbals,
+        # guitar harmonics). A purely self-relative gate scales down to that
+        # bleed and mass-flags instrumentals as vocal — anchoring a floor to the
+        # whole song's loudness keeps bleed below the line while real vocals,
+        # which sit at a real fraction of the mix, still cross. Frames that
+        # sustain above threshold become "vocal present" ranges, merging gaps
+        # shorter than ~0.4s so a breath doesn't split a phrase.
         hop = 512
         rms = librosa.feature.rms(y=vocals, frame_length=2048, hop_length=hop)[0]
         if rms.size == 0:
@@ -739,7 +772,9 @@ class VocalActivityDetector:
         loud = float(np.percentile(rms, 90))
         if loud <= 0:
             return []
-        thr = 0.15 * loud
+        mix_rms = librosa.feature.rms(y=mix, frame_length=2048, hop_length=hop)[0]
+        mix_loud = float(np.percentile(mix_rms, 90)) if mix_rms.size else 0.0
+        thr = max(VOCAL_STEM_REL * loud, VOCAL_MIX_FLOOR * mix_loud)
         times = librosa.frames_to_time(np.arange(rms.size), sr=sr, hop_length=hop)
         active = rms >= thr
         ranges = []

@@ -12,8 +12,10 @@
 import { readFile, rm } from 'node:fs/promises';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
+import * as subsonic from './subsonic.js';
 import * as settings from '../settings.js';
 import { config } from '../config.js';
+import { deriveVocalFromLyrics, type LyricVocalResult } from './lyric-vocal.js';
 import { runAudioMoodPass } from './audio-moods.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
 import { quietGateDecision, type QuietState } from './analyze-quiet-pure.js';
@@ -384,16 +386,36 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       // doesn't have ANALYZE_AUDIO_EMBEDDING (the admin-toggle path); omitted
       // when audio is off so the backend keeps its env-driven default.
       const embed = audioBackfill ? true : undefined;
+      // Lyric-first vocal ranges (#1125): when vocal activity is wanted, try the
+      // track's timed Navidrome lyrics before spending a Demucs separation. A
+      // synced-lyric or explicit-instrumental track is decided here — accurately,
+      // with no separation bleed — and skips Demucs. Anything inconclusive (no
+      // lyrics, or unsynced text) still runs Demucs (now with the mix floor).
+      // Best-effort: a lyric-fetch failure just falls through to Demucs.
+      let lyricVocal: LyricVocalResult | null = null;
+      if (vocalBackfill) {
+        try {
+          lyricVocal = deriveVocalFromLyrics(await subsonic.getStructuredLyrics(id));
+        } catch {
+          lyricVocal = null;
+        }
+      }
       // vocal:true forces the Demucs pass for this track (admin/backfill path),
-      // mirroring embed; omitted when vocal activity is off.
-      const vocal = vocalBackfill ? true : undefined;
+      // mirroring embed; skipped when lyrics already decided it, or when vocal
+      // activity is off.
+      const vocal = vocalBackfill && !lyricVocal ? true : undefined;
       const a = localPath
         ? await analyzer.analyzePath(localPath, { embed, vocal, complete: localComplete })
         : await analyzer.analyze(id, { embed, vocal });
+      // Lyrics win over the worker's vocal output when present: the ranges are
+      // ground truth, and a synced onset is a truer intro than the energy
+      // heuristic the worker returns once Demucs is skipped. An instrumental
+      // marker (introMs null) keeps the energy-based intro.
+      const vocalRanges = lyricVocal ? lyricVocal.vocalRanges : a.vocalRanges;
       db.upsertTrackAnalysis(id, {
         bpm: a.bpm,
         musicalKey: a.musicalKey,
-        introMs: a.introMs,
+        introMs: lyricVocal?.introMs != null ? lyricVocal.introMs : a.introMs,
         confidence: a.confidence,
         loudnessLufs: a.loudnessLufs,
         peakDb: a.peakDb,
@@ -402,10 +424,10 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         beats: a.beats,
         bars: a.bars,
         keyRanges: a.keyRanges,
-        vocalRanges: a.vocalRanges,
+        vocalRanges,
         outro: a.outro,
       });
-      if (a.vocalRanges != null) vocalAnalyzed += 1;
+      if (vocalRanges != null) vocalAnalyzed += 1;
       // Opportunistically store the CLAP audio vector whenever the backend
       // carried one. Independent of the bpm/key write above: a track analysed
       // before CLAP was enabled simply gets its vector on the next pass once
