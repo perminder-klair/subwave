@@ -26,6 +26,9 @@ import {
   MessageCircle,
   Podcast,
   Palette,
+  LogOut,
+  ChevronDown,
+  MoreHorizontal,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -37,18 +40,53 @@ import BoothBuddy from '../BoothBuddy';
 import ThemeSwitcher from '../ThemeSwitcher';
 import { Toaster } from '../ui/toaster';
 import { V3AlertDialog } from '../ui/alert-dialog';
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarRail,
+  SidebarTrigger,
+  useSidebar,
+} from '../ui/sidebar';
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from '../ui/breadcrumb';
+import { Separator } from '../ui/separator';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu';
+import { DiscMark } from '../../lib/discMark';
 import { animate as motionAnimate } from 'motion/react';
+
+type NavIcon = ComponentType<{
+  className?: string;
+  size?: number;
+  strokeWidth?: number;
+  'aria-hidden'?: boolean | 'true' | 'false';
+}>;
 
 interface NavItem {
   href: string;
   id: string;
   label: string;
-  icon: ComponentType<{
-    className?: string;
-    size?: number;
-    strokeWidth?: number;
-    'aria-hidden'?: boolean | 'true' | 'false';
-  }>;
+  icon: NavIcon;
   pill?: string;
 }
 
@@ -61,7 +99,10 @@ interface NavSection {
 const NAV_SECTIONS: NavSection[] = [
   {
     label: 'Monitor',
-    items: [{ href: '/admin/dash', id: 'dash', label: 'Dash', icon: Radio, pill: 'live' }],
+    items: [
+      { href: '/admin/dash', id: 'dash', label: 'Dash', icon: Radio, pill: 'live' },
+      { href: '/admin/stats', id: 'stats', label: 'Stats', icon: BarChart3 },
+    ],
   },
   {
     label: 'Programming',
@@ -79,7 +120,6 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: 'System',
     items: [
-      { href: '/admin/stats', id: 'stats', label: 'Stats', icon: BarChart3 },
       { href: '/admin/connect', id: 'connect', label: 'Connect', icon: Plug },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
@@ -87,16 +127,59 @@ const NAV_SECTIONS: NavSection[] = [
   },
 ];
 
-const NAV = NAV_SECTIONS.flatMap(s => s.items);
+interface AppLink {
+  href: string;
+  label: string;
+  icon: NavIcon;
+}
+
+// Native player apps — surfaced from the top-bar "Listen" dropdown alongside
+// the in-browser player.
+const APP_LINKS: AppLink[] = [
+  { href: 'https://apps.apple.com/app/sub-wave/id6778786696', label: 'iOS app', icon: Apple },
+  {
+    href: 'https://play.google.com/store/apps/details?id=com.getsubwave.app',
+    label: 'Android app',
+    icon: Smartphone,
+  },
+  {
+    href: 'https://github.com/getsubwave/subwave-desktop/releases/latest',
+    label: 'Desktop app',
+    icon: Monitor,
+  },
+];
+
+// Footer utility links (grouped with Sign out in the sidebar footer).
+const FOOTER_LINKS: { href: string; label: string; icon: NavIcon; pill: string }[] = [
+  { href: '/manual', label: 'Manual', icon: BookOpen, pill: '↗' },
+  { href: 'https://discord.gg/vjVbVKnMBa', label: 'Discord', icon: MessageCircle, pill: '↗' },
+];
+
+// Section + page label for the top-bar breadcrumb. Playlists and DJ Doc aren't
+// sidebar items (Playlists lives under Library's doorway, DJ Doc in the header
+// strip), so they're resolved explicitly; Library stays lit in the rail while
+// on Playlists, so the crumb mirrors that with the Programming section.
+function resolveCrumb(pathname: string | null): { section?: string; page: string } {
+  if (pathname?.startsWith('/admin/playlists')) return { section: 'Programming', page: 'Playlists' };
+  if (pathname?.startsWith('/admin/doctor')) return { section: 'Monitor', page: 'DJ Doc' };
+  for (const section of NAV_SECTIONS) {
+    const item = section.items.find(n => pathname?.startsWith(n.href));
+    if (item) return { section: section.label, page: item.label };
+  }
+  return { page: 'Admin' };
+}
 
 export interface AdminShellProps {
   children: ReactNode;
+  // Resolved server-side from the `sidebar_state` cookie so the rail renders
+  // collapsed/expanded on first paint without a hydration flash.
+  defaultOpen?: boolean;
 }
 
-// Wraps every page under /admin. Renders the newsprint shell + sign-in gate.
-// Children are admin panels that re-call useAdminAuth themselves to avoid
-// prop-drilling the adminFetch.
-export default function AdminShell({ children }: AdminShellProps) {
+// Wraps every page under /admin. Renders the newsprint shell (shadcn Sidebar +
+// sticky top bar) behind a sign-in gate. Children are admin panels that
+// re-call useAdminAuth themselves to avoid prop-drilling the adminFetch.
+export default function AdminShell({ children, defaultOpen = true }: AdminShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { auth, needsAuth, hydrated, signIn, signOut, adminFetch } = useAdminAuth();
@@ -143,7 +226,7 @@ export default function AdminShell({ children }: AdminShellProps) {
 
   if (!hydrated) {
     return (
-      <div className="admin-root paper flex items-center justify-center">
+      <div className="admin-root paper flex min-h-screen items-center justify-center">
         <span className="caption">loading…</span>
       </div>
     );
@@ -152,8 +235,8 @@ export default function AdminShell({ children }: AdminShellProps) {
   // Authentication gate — covers both "no token yet" and "token rejected".
   if (!auth || needsAuth) {
     return (
-      <div className="admin-root paper">
-        <ShellHeader pathname={pathname} signedIn={false} />
+      <div className="admin-root paper min-h-screen">
+        <SignedOutHeader />
         <div className="mx-auto max-w-[1440px] px-7 py-12">
           <SignInForm onSubmit={handleSignIn} />
         </div>
@@ -163,163 +246,211 @@ export default function AdminShell({ children }: AdminShellProps) {
 
   return (
     <div className="admin-root paper">
-      <ShellHeader pathname={pathname} signedIn onSignOut={signOut} />
-      {/* Persistent connectivity warning — visible on every admin page whenever
-          the live station can't reach Navidrome. Renders nothing when healthy. */}
-      <NavidromeBanner adminFetch={adminFetch} />
-      <div className="shell-body">
-        <nav className="shell-nav">
-          {NAV_SECTIONS.map(section => (
-            <div key={section.label} className="nav-section">
-              <span className="nav-section-label">{section.label}</span>
-              {section.items.map(n => {
-                // Playlists lives under Library's wing now — keep Library lit there.
-                const active =
-                  pathname?.startsWith(n.href) ||
-                  (n.id === 'library' && pathname?.startsWith('/admin/playlists'));
-                const Icon = n.icon;
-                return (
-                  <Link key={n.id} href={n.href} className={`nav-item ${active ? 'active' : ''}`}>
-                    {/* Active background morphs across nav groups via shared
-                        layoutId — same trick as DotRail. initial={false}
-                        suppresses the first-paint animation. */}
-                    {active && (
-                      <m.span
-                        layoutId="admin-nav-active"
-                        className="absolute inset-0 z-0 bg-ink"
-                        initial={false}
-                        transition={{ type: 'spring', stiffness: 380, damping: 32 }}
-                        aria-hidden="true"
-                      />
-                    )}
-                    <Icon className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
-                    <span className="nav-label">{n.label}</span>
-                    {n.pill && <span className="pill">{n.pill}</span>}
-                  </Link>
-                );
-              })}
-            </div>
-          ))}
-          {/* External links — grouped like a nav-section so they sit tight
-              together (3px) rather than the rail's 18px; nav-ext pins the
-              group to the bottom. */}
-          <div className="nav-section nav-ext">
-            <Link
-              href="/manual"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="nav-item"
-            >
-              <BookOpen className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
-              <span className="nav-label">Manual</span>
-              <span className="pill">↗</span>
-            </Link>
-            <Link
-              href="https://apps.apple.com/app/sub-wave/id6778786696"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="nav-item"
-            >
-              <Apple className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
-              <span className="nav-label">iOS app</span>
-              <span className="pill">↗</span>
-            </Link>
-            <Link
-              href="https://play.google.com/store/apps/details?id=com.getsubwave.app"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="nav-item"
-            >
-              <Smartphone className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
-              <span className="nav-label">Android app</span>
-              <span className="pill">↗</span>
-            </Link>
-            <Link
-              href="https://github.com/getsubwave/subwave-desktop/releases/latest"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="nav-item"
-            >
-              <Monitor className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
-              <span className="nav-label">Desktop app</span>
-              <span className="pill">↗</span>
-            </Link>
-            <Link
-              href="https://discord.gg/vjVbVKnMBa"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="nav-item"
-            >
-              <MessageCircle className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
-              <span className="nav-label">Discord</span>
-              <span className="pill">↗</span>
-            </Link>
-            {/* The donation link — "Support" read as tech support, so say what
-                it is. nav-support gives it the one splash of vermilion on the
-                rail so it doesn't camouflage among the utility links. */}
-            <Link
-              href="https://ko-fi.com/pklair"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="nav-item nav-support"
-            >
-              <Coffee className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
-              <span className="nav-label">Buy me a coffee</span>
-              <span className="pill">♥</span>
-            </Link>
+      <SidebarProvider defaultOpen={defaultOpen}>
+        <AdminSidebar pathname={pathname} onSignOut={signOut} />
+        <SidebarInset className="min-w-0 bg-transparent">
+          <TopBar pathname={pathname} />
+          {/* Persistent connectivity warning — visible on every admin page
+              whenever the live station can't reach Navidrome. Renders nothing
+              when healthy. */}
+          <NavidromeBanner adminFetch={adminFetch} />
+          <div className="mx-auto w-full max-w-[1440px] min-w-0 px-5 py-4">
+            {/* Panel route transitions — 120 ms cross-fade between admin pages
+                keyed on pathname. No y translate (operator surface, vertical
+                drift would feel twitchy on a list of panels). */}
+            <AnimatePresence mode="wait" initial={false}>
+              <m.div
+                key={pathname}
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.12 }}
+              >
+                {children}
+              </m.div>
+            </AnimatePresence>
           </div>
-          <div className="nav-foot">
-            sub / wave
-            <br />
-            admin console
-            {process.env.NEXT_PUBLIC_APP_VERSION ? (
-              <>
-                <br />
-                <span className="nav-foot-version">
-                  v{process.env.NEXT_PUBLIC_APP_VERSION}
-                </span>
-              </>
-            ) : null}
-          </div>
-        </nav>
-        <main className="min-w-0">
-          {/* Panel route transitions — 120 ms cross-fade between admin pages
-              keyed on pathname. No y translate (operator surface, vertical
-              drift would feel twitchy on a list of panels). */}
-          <AnimatePresence mode="wait" initial={false}>
-            <m.div
-              key={pathname}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.12 }}
-            >
-              {children}
-            </m.div>
-          </AnimatePresence>
-        </main>
-      </div>
+        </SidebarInset>
+      </SidebarProvider>
       <Toaster />
     </div>
   );
 }
 
-interface ShellHeaderProps {
+// The wordmark (SidebarHeader), grouped nav (SidebarContent), and the footer
+// (Manual / Discord / Sign out, then the Ko-fi ask, then the version). Collapses
+// to an icon rail; the mobile branch renders inside a Sheet drawer (handled by
+// the Sidebar component).
+function AdminSidebar({
+  pathname,
+  onSignOut,
+}: {
   pathname: string | null;
-  signedIn: boolean;
-  onSignOut?: () => void;
+  onSignOut: () => void;
+}) {
+  const { setOpenMobile, isMobile } = useSidebar();
+  const [confirmingSignOut, setConfirmingSignOut] = useState(false);
+  // The shell lives in the persistent layout, so a client-side nav doesn't
+  // remount it — the mobile Sheet would stay open over the new page. Close it
+  // explicitly on any drawer link tap.
+  const closeOnMobileNav = () => {
+    if (isMobile) setOpenMobile(false);
+  };
+  return (
+    <Sidebar collapsible="icon" className="border-sidebar-border">
+      <SidebarHeader className="gap-1 px-2 py-3">
+        <Link
+          href="/admin/dash"
+          onClick={closeOnMobileNav}
+          className="flex items-center gap-2 px-1 no-underline"
+        >
+          {/* The station's disc mark — also serves as the collapsed rail logo. */}
+          <span className="inline-flex size-5 shrink-0">
+            <DiscMark size={20} />
+          </span>
+          <span className="text-[13px] font-extrabold tracking-[0.1em] text-ink uppercase group-data-[collapsible=icon]:hidden">
+            SUB / WAVE
+          </span>
+        </Link>
+        <span className="caption px-1 group-data-[collapsible=icon]:hidden">control center</span>
+      </SidebarHeader>
+
+      <SidebarContent className="gap-4 px-2 py-1">
+        {NAV_SECTIONS.map(section => (
+          <SidebarGroup key={section.label} className="p-0">
+            <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
+            <SidebarMenu className="gap-1.5">
+              {section.items.map(n => {
+                // Playlists lives under Library's wing — keep Library lit there.
+                const active =
+                  !!pathname &&
+                  (pathname.startsWith(n.href) ||
+                    (n.id === 'library' && pathname.startsWith('/admin/playlists')));
+                const Icon = n.icon;
+                return (
+                  <SidebarMenuItem key={n.id}>
+                    <SidebarMenuButton asChild isActive={active} tooltip={n.label}>
+                      <Link href={n.href} onClick={closeOnMobileNav}>
+                        {/* Active background morphs across nav groups via a
+                            shared layoutId — same trick as DotRail. The icon
+                            and label sit above it via z-index. */}
+                        {active && (
+                          <m.span
+                            layoutId="admin-nav-active"
+                            className="absolute inset-0 z-0 bg-ink"
+                            initial={false}
+                            transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+                            aria-hidden="true"
+                          />
+                        )}
+                        <Icon
+                          className="relative z-[1] shrink-0 opacity-80"
+                          strokeWidth={2}
+                          aria-hidden="true"
+                        />
+                        <span className="relative z-[1] flex-1 truncate">{n.label}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                    {n.pill && <SidebarMenuBadge>{n.pill}</SidebarMenuBadge>}
+                  </SidebarMenuItem>
+                );
+              })}
+            </SidebarMenu>
+          </SidebarGroup>
+        ))}
+      </SidebarContent>
+
+      <SidebarFooter className="gap-3 px-2 py-3">
+        {/* Manual, Discord, and Sign out merged into one "More" submenu. A
+            dropdown (rather than an inline collapsible) so it stays reachable
+            when the rail is collapsed to icons. */}
+        <SidebarMenu className="gap-1.5">
+          <SidebarMenuItem>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <SidebarMenuButton title="More">
+                  <MoreHorizontal
+                    className="shrink-0 opacity-80"
+                    strokeWidth={2}
+                    aria-hidden="true"
+                  />
+                  <span className="flex-1 truncate">More</span>
+                  <ChevronDown className="ml-auto opacity-60" strokeWidth={2} aria-hidden="true" />
+                </SidebarMenuButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent side="right" align="end" className="min-w-[11rem]">
+                <DropdownMenuGroup>
+                  {FOOTER_LINKS.map(link => {
+                    const Icon = link.icon;
+                    return (
+                      <DropdownMenuItem asChild key={link.href}>
+                        <Link
+                          href={link.href}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          onClick={closeOnMobileNav}
+                        >
+                          <Icon aria-hidden="true" />
+                          {link.label}
+                        </Link>
+                      </DropdownMenuItem>
+                    );
+                  })}
+                  <DropdownMenuItem onClick={() => setConfirmingSignOut(true)}>
+                    <LogOut aria-hidden="true" />
+                    Sign out
+                  </DropdownMenuItem>
+                </DropdownMenuGroup>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </SidebarMenuItem>
+        </SidebarMenu>
+
+        {/* The Ko-fi ask — the one vermilion item on the rail. */}
+        <SidebarMenu className="gap-1.5">
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              asChild
+              tooltip="Buy me a coffee"
+              className="border-[color-mix(in_oklab,var(--accent)_55%,var(--line))] text-[var(--accent)] hover:border-[var(--accent)]"
+            >
+              <Link href="https://ko-fi.com/pklair" target="_blank" rel="noopener noreferrer">
+                <Coffee className="shrink-0 opacity-80" strokeWidth={2} aria-hidden="true" />
+                <span className="flex-1 truncate">Buy me a coffee</span>
+              </Link>
+            </SidebarMenuButton>
+            <SidebarMenuBadge className="border-[var(--accent)] text-[var(--accent)]">
+              ♥
+            </SidebarMenuBadge>
+          </SidebarMenuItem>
+        </SidebarMenu>
+
+        {process.env.NEXT_PUBLIC_APP_VERSION ? (
+          <div className="border-t border-dashed border-[var(--separator-strong)] px-1 pt-3 text-[10px] tracking-[0.18em] text-muted uppercase group-data-[collapsible=icon]:hidden">
+            v{process.env.NEXT_PUBLIC_APP_VERSION}
+          </div>
+        ) : null}
+      </SidebarFooter>
+      <SidebarRail />
+
+      {/* Sign out drops the cached credentials — worth a confirm, matching the
+          dash's skip-track dialog. */}
+      <V3AlertDialog
+        open={confirmingSignOut}
+        onOpenChange={setConfirmingSignOut}
+        title="Sign out"
+        description="Sign out of the admin console? You'll need the operator credentials to get back in."
+        confirmLabel="sign out"
+        danger
+        onConfirm={onSignOut}
+      />
+    </Sidebar>
+  );
 }
 
-// Header — wordmark, breadcrumb, and (when signed in) the live station strip.
-function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
-  // DJ Doc and Playlists aren't in the sidebar nav (DJ Doc is reached from the
-  // header strip, Playlists from Library's doorway), so the nav lookup can't
-  // resolve their breadcrumb labels — special-case them.
-  const current =
-    NAV.find(n => pathname?.startsWith(n.href))?.label ||
-    (pathname?.startsWith('/admin/doctor') ? 'DJ Doc'
-      : pathname?.startsWith('/admin/playlists') ? 'Playlists'
-        : 'Admin');
+// Sticky top bar — sidebar toggle, breadcrumb, and the live-station strip.
+function TopBar({ pathname }: { pathname: string | null }) {
+  const { section, page } = resolveCrumb(pathname);
   const { nowPlaying, listeners } = useStationFeed();
   const onAir = !!nowPlaying?.title;
   const listenersObj =
@@ -332,7 +463,12 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
     (typeof listeners === 'number' ? listeners : null);
 
   const dotRef = useRef<HTMLSpanElement>(null);
-  useDynamicStyle(dotRef, { background: onAir ? 'var(--accent)' : 'var(--muted)' });
+  useDynamicStyle(dotRef, {
+    background: onAir ? 'var(--accent)' : 'var(--muted)',
+    boxShadow: onAir
+      ? '0 0 0 3px color-mix(in oklab, var(--accent) 20%, transparent)'
+      : 'none',
+  });
 
   // Pulse the dot when onAir flips false → true (track just started). We
   // don't pulse on the steady-state polls — only on transitions.
@@ -349,97 +485,118 @@ function ShellHeader({ pathname, signedIn, onSignOut }: ShellHeaderProps) {
   }, [onAir]);
 
   return (
-    <header className="shell-header">
-      <span className="wordmark">SUB / WAVE</span>
-      <span className="caption text-muted">· admin</span>
-      <span className="crumb">
-        / <b>{current}</b>
-      </span>
-      {signedIn && (
-        <span className="right">
-          {/* Live dot only — the on-air/off-air word is dropped; the dot's colour
-              (accent when live, muted when not) already carries the state. */}
-          <span
-            ref={dotRef}
-            className="live-dot"
-            aria-label={onAir ? 'on air' : 'off air'}
-            title={onAir ? 'on air' : 'off air'}
-          />
-          {count != null && (
+    <header className="sticky top-0 z-20 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-ink bg-[var(--card-bg)] px-4 py-2.5 sm:px-6">
+      <SidebarTrigger className="-ml-1 shrink-0" />
+      <Separator orientation="vertical" className="hidden h-5 sm:block" />
+      {/* Breadcrumb text is hidden on mobile — space is tight next to the
+          hamburger, and the current page is already obvious from the drawer. */}
+      <Breadcrumb className="hidden sm:block">
+        <BreadcrumbList className="gap-1.5 text-[10px] tracking-[0.28em] uppercase sm:gap-2">
+          {section && (
             <>
-              <span className="w-px self-stretch bg-separator-strong" />
-              <span
-                className="inline-flex items-center gap-1"
-                aria-label={`${count} listening`}
-                title={`${count} listening`}
-              >
-                <OdometerNumber value={count} />
-                <Users size={13} strokeWidth={2} aria-hidden="true" />
-              </span>
+              <BreadcrumbItem className="text-muted">{section}</BreadcrumbItem>
+              <BreadcrumbSeparator className="text-muted">/</BreadcrumbSeparator>
             </>
           )}
-          {/* DJ Doc — the primary entry point lives here in the header, right
-              after the listener count, with the booth buddy in its on-air mood. */}
-          <span className="w-px self-stretch bg-separator-strong" />
-          <Link
-            href="/admin/doctor"
-            className="inline-flex items-center gap-1.5 text-[var(--accent)] no-underline"
-            title="DJ Doc — run a station health check and get the producer's review"
-          >
-            <BoothBuddy mood="onair" size={16} />
-            <span className="caption">DJ Doc</span>
-          </Link>
-          <ThemeSwitcher variant="admin" />
-          <Link
-            href="/listen"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="caption inline-flex items-center text-muted no-underline"
-            aria-label="Open the player"
+          <BreadcrumbItem>
+            <BreadcrumbPage className="font-bold text-ink">{page}</BreadcrumbPage>
+          </BreadcrumbItem>
+        </BreadcrumbList>
+      </Breadcrumb>
+
+      <span className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-2 text-[10px] tracking-[0.22em] text-ink uppercase">
+        {/* Live dot only — the on-air/off-air word is dropped; the dot's colour
+            (accent when live, muted when not) already carries the state. */}
+        <span
+          ref={dotRef}
+          className="size-2 rounded-full bg-[var(--accent)]"
+          aria-label={onAir ? 'on air' : 'off air'}
+          title={onAir ? 'on air' : 'off air'}
+        />
+        {count != null && (
+          <>
+            <span className="h-4 w-px bg-separator-strong" />
+            <span
+              className="inline-flex items-center gap-1"
+              aria-label={`${count} listening`}
+              title={`${count} listening`}
+            >
+              <OdometerNumber value={count} />
+              <Users size={13} strokeWidth={2} aria-hidden="true" />
+            </span>
+          </>
+        )}
+        {/* DJ Doc — the primary entry point lives here in the header, right
+            after the listener count, with the booth buddy in its on-air mood. */}
+        <span className="h-4 w-px bg-separator-strong" />
+        <Link
+          href="/admin/doctor"
+          className="inline-flex items-center gap-1.5 text-[var(--accent)] no-underline"
+          title="DJ Doc — run a station health check and get the producer's review"
+        >
+          <BoothBuddy mood="onair" size={16} />
+          <span className="caption">DJ Doc</span>
+        </Link>
+        <ThemeSwitcher variant="admin" />
+        {/* Listen — a menu grouping the in-browser player with the native apps. */}
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            className="caption inline-flex cursor-pointer items-center gap-1 text-muted focus:outline-none"
+            aria-label="Listen and get the app"
             title="Listen"
           >
             <Headphones size={15} strokeWidth={2} aria-hidden="true" />
-          </Link>
-          {onSignOut && <SignOutButton onSignOut={onSignOut} />}
-        </span>
-      )}
-      {!signedIn && (
-        <span className="right">
-          <ThemeSwitcher variant="admin" />
-          <Link
-            href="/listen"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="caption inline-flex items-center text-muted no-underline"
-            aria-label="Open the player"
-            title="Listen"
-          >
-            <Headphones size={15} strokeWidth={2} aria-hidden="true" />
-          </Link>
-        </span>
-      )}
+            <ChevronDown size={11} strokeWidth={2} aria-hidden="true" />
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="min-w-[11rem]">
+            <DropdownMenuGroup>
+              <DropdownMenuItem asChild>
+                <Link href="/listen" target="_blank" rel="noopener noreferrer">
+                  <Headphones aria-hidden="true" />
+                  Listen in browser
+                </Link>
+              </DropdownMenuItem>
+              {APP_LINKS.map(app => {
+                const Icon = app.icon;
+                return (
+                  <DropdownMenuItem asChild key={app.href}>
+                    <a href={app.href} target="_blank" rel="noopener noreferrer">
+                      <Icon aria-hidden="true" />
+                      {app.label}
+                    </a>
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </span>
     </header>
   );
 }
 
-// Sign out drops the cached credentials, so a stray click means re-entering
-// them — worth a confirm, matching the dash's skip-track dialog.
-function SignOutButton({ onSignOut }: { onSignOut: () => void }) {
-  const [confirming, setConfirming] = useState(false);
+// Slim header for the signed-out gate — no sidebar behind it.
+function SignedOutHeader() {
   return (
-    <>
-      <button className="sign-out" onClick={() => setConfirming(true)}>
-        sign out
-      </button>
-      <V3AlertDialog
-        open={confirming}
-        onOpenChange={setConfirming}
-        title="Sign out"
-        description="Sign out of the admin console? You'll need the operator credentials to get back in."
-        confirmLabel="sign out"
-        danger
-        onConfirm={onSignOut}
-      />
-    </>
+    <header className="flex items-center gap-3 border-b border-ink bg-[var(--card-bg)] px-4 py-2.5 sm:px-7">
+      <span className="text-[13px] font-extrabold tracking-[0.1em] text-ink uppercase">
+        SUB / WAVE
+      </span>
+      <span className="caption text-muted">· admin</span>
+      <span className="ml-auto flex items-center gap-3">
+        <ThemeSwitcher variant="admin" />
+        <Link
+          href="/listen"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="caption inline-flex items-center text-muted no-underline"
+          aria-label="Open the player"
+          title="Listen"
+        >
+          <Headphones size={15} strokeWidth={2} aria-hidden="true" />
+        </Link>
+      </span>
+    </header>
   );
 }
+
