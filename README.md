@@ -22,7 +22,7 @@ https://github.com/user-attachments/assets/0a2ba78a-eda3-44c1-adce-bfa78ae992cd
 - **Setup walkthrough** — [getsubwave.com/setup](https://www.getsubwave.com/setup)
 - **Operator manual** — [getsubwave.com/manual](https://www.getsubwave.com/manual)
 - **Community** — [join the Discord](https://discord.gg/vjVbVKnMBa)
-- **Support the project** — built by one person; [buy me a coffee on Ko-fi](https://ko-fi.com/pklair)
+- **Support the project** — [buy me a coffee on Ko-fi](https://ko-fi.com/pklair)
 
 ## Screenshots
 
