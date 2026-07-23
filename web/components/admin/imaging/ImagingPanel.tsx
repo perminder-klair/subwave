@@ -19,13 +19,15 @@ import { Music, AudioLines, Waves } from 'lucide-react';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { notify, errorMessage } from '../../../lib/notify';
 import { cn } from '../../../lib/cn';
-import { Eyebrow } from '../ui';
+import { Wave } from '../ui';
+import { V3Alert } from '../../ui/alert';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import type { SettingsData, SaveSettings } from '../settings/shared';
 import type { SfxData, SfxForm, BedsData, JingleImportFailure, JingleImportResult } from './types';
 import { JinglesSection } from './JinglesSection';
 import { SfxSection } from './SfxSection';
 import { BedsSection } from './BedsSection';
+import { MonoLabel, TabMetric, pad2 } from './parts';
 
 type TabId = 'jingles' | 'sfx' | 'beds';
 const TAB_IDS: TabId[] = ['jingles', 'sfx', 'beds'];
@@ -292,11 +294,14 @@ export default function ImagingPanel() {
     finally { setBusy(false); }
   };
 
-  // Live counts ride on the tab labels — the at-a-glance figures the settings
-  // rail used to show. Omitted until each source has loaded.
+  // Live counts ride on the tab badges + the masthead metrics. Undefined
+  // until each source loads; the badge is simply omitted until then.
   const jingleCount = data?.jingles?.length;
   const sfxCount = sfxData?.sfx?.length;
   const bedCount = bedsData?.beds?.length;
+  const totalAssets = (jingleCount ?? 0) + (sfxCount ?? 0) + (bedCount ?? 0);
+  const ratioVal = data?.values?.jingleRatio;
+  const ratioMetric = ratioVal == null ? '—' : ratioVal === 0 ? 'off' : `1 : ${ratioVal}`;
   const tabs = [
     { id: 'jingles' as TabId, label: 'Jingles', count: jingleCount, icon: Music },
     { id: 'sfx' as TabId, label: 'SFX', count: sfxCount, icon: AudioLines },
@@ -304,98 +309,117 @@ export default function ImagingPanel() {
   ];
 
   return (
-    <div className="grid gap-4">
-      <section className="card">
-        <div className="border-b border-ink p-4">
-          <Eyebrow className="text-vermilion">imaging</Eyebrow>
-          <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
-            The sounds between the songs.
-          </div>
-          <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            Station imaging — the audio furniture the DJ drops between and over tracks. Jingles
-            are pre-recorded stingers, sound effects garnish a spoken break, and beds are
-            instrumentals the DJ talks over. All of it is created, imported, and managed here.
+    <div className="max-w-[1060px]">
+      {/* Editorial masthead — the sounds between the songs. */}
+      <header>
+        <div className="flex items-baseline justify-between gap-4">
+          <MonoLabel>imaging</MonoLabel>
+          <span className="flex items-center gap-[7px] font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
+            <span className="size-1.5 animate-pulse bg-[var(--accent)]" aria-hidden />
+            live · refreshed every 3s
+          </span>
+        </div>
+        <h1 className="mt-3.5 font-display text-[54px] leading-[1.02] font-semibold tracking-[-0.01em] [text-wrap:balance] lg:text-[62px]">
+          The sounds between the&nbsp;songs.
+        </h1>
+        <div aria-hidden className="my-6">
+          <Wave bars={88} seed={7} h={42} />
+        </div>
+        <div className="flex flex-wrap items-start justify-between gap-x-10 gap-y-5 border-t border-ink pt-[18px]">
+          <p className="m-0 max-w-[62ch] text-[14px] leading-[1.65] [text-wrap:pretty] text-muted">
+            Everything the DJ drops between and over the music:{' '}
+            <strong className="font-semibold text-ink">jingles</strong> are the station idents
+            played between tracks, <strong className="font-semibold text-ink">SFX</strong> are
+            stingers mixed under the DJ&rsquo;s voice, and{' '}
+            <strong className="font-semibold text-ink">beds</strong> are instrumentals the DJ
+            talks over when a link runs long.
+          </p>
+          <div className="flex flex-none gap-7">
+            <TabMetric big n={pad2(totalAssets)} l="assets" />
+            <TabMetric big accent n={ratioMetric} l="jingle ratio" />
           </div>
         </div>
-        {/* Full-width tab row — three equal cells, active one filled in the
-            accent so the current section reads at a glance. */}
-        <div className="grid grid-cols-3" role="tablist" aria-label="Imaging sections">
-          {tabs.map((t, i) => {
-            const active = tab === t.id;
-            const Icon = t.icon;
-            return (
-              <button
-                key={t.id}
-                type="button"
-                role="tab"
-                aria-selected={active}
-                onClick={() => selectTab(t.id)}
-                className={cn(
-                  'flex items-center justify-center gap-2.5 px-4 py-4 text-[13px] font-bold tracking-[0.18em] uppercase transition-colors',
-                  i > 0 && 'border-l border-ink',
-                  active
-                    ? 'bg-[var(--accent)] text-white'
-                    : 'bg-[var(--ink-softer)] text-ink hover:bg-ink/10',
-                )}
-              >
-                <Icon size={17} strokeWidth={2} aria-hidden />
-                <span>{t.label}</span>
-                {t.count != null && (
-                  <span
-                    className={cn(
-                      'ml-0.5 min-w-[1.5em] rounded-full px-1.5 py-0.5 text-[10px] leading-none font-bold',
-                      active ? 'bg-white/25 text-white' : 'bg-ink/10 text-muted',
-                    )}
-                  >
-                    {t.count}
-                  </span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </section>
+      </header>
 
       {err && (
-        <div className="card border-[var(--danger)]">
-          <div className="card-body text-[12px] text-[var(--danger)]">
-            <strong className="tracking-[0.12em] uppercase">controller error</strong>
-            <div className="mt-1">{err}</div>
-          </div>
+        <div className="mt-7">
+          <V3Alert tone="error" title="controller error">{err}</V3Alert>
         </div>
       )}
 
-      {tab === 'jingles' && (
-        data ? (
-          <JinglesSection
-            data={data} busy={busy}
-            jingleRatio={jingleRatio ?? ''} setJingleRatio={setJingleRatio}
-            jingleText={jingleText} setJingleText={setJingleText}
-            createJingle={createJingle} uploadJingle={uploadJingle}
-            saveSettings={saveSettings}
-            onDelete={setConfirmDelete} adminFetch={adminFetch}
+      {/* Tab row — three equal cells, the active one inverted with an accent
+          top-rule so the current section reads at a glance. */}
+      <nav
+        className="mt-[34px] grid grid-cols-3 border border-ink"
+        role="tablist"
+        aria-label="Imaging sections"
+      >
+        {tabs.map((t, i) => {
+          const active = tab === t.id;
+          const Icon = t.icon;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => selectTab(t.id)}
+              className={cn(
+                'relative flex cursor-pointer items-center justify-center gap-2.5 px-3 py-[19px] transition-colors',
+                i > 0 && 'border-l border-ink',
+                active ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
+              )}
+            >
+              {active && (
+                <span className="absolute -top-px -right-px -left-px h-1 bg-[var(--accent)]" aria-hidden />
+              )}
+              <Icon size={16} strokeWidth={2} aria-hidden />
+              <span className="font-mono text-[12px] font-bold tracking-[0.16em] uppercase">
+                {t.label}
+              </span>
+              {t.count != null && (
+                <span className="min-w-[14px] border border-current px-1.5 py-[2px] text-center font-mono text-[10px] leading-none font-bold">
+                  {pad2(t.count)}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="mt-11">
+        {tab === 'jingles' && (
+          data ? (
+            <JinglesSection
+              data={data} busy={busy}
+              jingleRatio={jingleRatio ?? ''} setJingleRatio={setJingleRatio}
+              jingleText={jingleText} setJingleText={setJingleText}
+              createJingle={createJingle} uploadJingle={uploadJingle}
+              saveSettings={saveSettings}
+              onDelete={setConfirmDelete} adminFetch={adminFetch}
+            />
+          ) : (
+            !err && <div className="text-[13px] text-muted italic">loading…</div>
+          )
+        )}
+
+        {tab === 'sfx' && (
+          <SfxSection
+            sfxData={sfxData} sfxForm={sfxForm} setSfxForm={setSfxForm}
+            busy={busy} createSfx={createSfx} uploadSfx={uploadSfx}
+            onDelete={setConfirmDeleteSfx}
+            data={data} saveSettings={saveSettings} adminFetch={adminFetch}
           />
-        ) : (
-          !err && <div className="text-[13px] text-muted italic">loading…</div>
-        )
-      )}
+        )}
 
-      {tab === 'sfx' && (
-        <SfxSection
-          sfxData={sfxData} sfxForm={sfxForm} setSfxForm={setSfxForm}
-          busy={busy} createSfx={createSfx} uploadSfx={uploadSfx}
-          onDelete={setConfirmDeleteSfx}
-          data={data} saveSettings={saveSettings} adminFetch={adminFetch}
-        />
-      )}
-
-      {tab === 'beds' && (
-        <BedsSection
-          bedsData={bedsData} busy={busy} uploadBed={uploadBed}
-          onDelete={setConfirmDeleteBed}
-          data={data} saveSettings={saveSettings} adminFetch={adminFetch}
-        />
-      )}
+        {tab === 'beds' && (
+          <BedsSection
+            bedsData={bedsData} busy={busy} uploadBed={uploadBed}
+            onDelete={setConfirmDeleteBed}
+            data={data} saveSettings={saveSettings} adminFetch={adminFetch}
+          />
+        )}
+      </div>
 
       <V3AlertDialog
         open={confirmDelete != null}

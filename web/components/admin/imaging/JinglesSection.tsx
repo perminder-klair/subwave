@@ -2,14 +2,20 @@
 
 import type { ChangeEvent } from 'react';
 import { useRef, useState } from 'react';
+import { Trash2 } from 'lucide-react';
 import { fmtSize } from '../../../lib/format';
 import { Modal } from '../../ui/modal';
 import { Input } from '../../ui/input';
 import { Textarea } from '../../ui/textarea';
 import { Label } from '../../ui/label';
-import { Card, Btn, Pill } from '../ui';
-import { SectionHeader, PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
+import { Button } from '../../ui/button';
+import { Badge } from '../../ui/badge';
+import { Btn } from '../ui';
+import { PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
 import type { JingleImportFailure, JingleImportResult } from './types';
+import {
+  SectionMasthead, PanelBox, PanelHead, EmptyState, DropZone, MetaLine, TabMetric, pad2,
+} from './parts';
 
 interface JinglesSectionProps {
   data: SettingsData;
@@ -36,7 +42,9 @@ export function JinglesSection({
   data, busy, jingleRatio, setJingleRatio, jingleText, setJingleText,
   createJingle, uploadJingle, saveSettings, onDelete, adminFetch,
 }: JinglesSectionProps) {
-  const ratioDirty = jingleRatio !== String(data.values?.jingleRatio);
+  const ratioRaw = data.values?.jingleRatio;
+  const ratioDirty = jingleRatio !== String(ratioRaw);
+  const ratioMetric = ratioRaw == null ? '—' : ratioRaw === 0 ? 'off' : `1 : ${ratioRaw}`;
   const jingles = data.jingles || [];
   const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importFiles, setImportFiles] = useState<File[]>([]);
@@ -76,154 +84,159 @@ export function JinglesSection({
   };
 
   return (
-    <>
-      <SectionHeader
-        eyebrow="jingles"
-        title="Pre-recorded TTS station stingers."
-        sub="A default station ident is generated on first boot; you can add your own here. The built-in ident can’t be deleted."
-        metrics={[
-          { n: String(jingles.length), l: 'files' },
-          { n: data.values?.jingleRatio === 0 ? 'off' : String(data.values?.jingleRatio), l: 'ratio', accent: true },
-        ]}
+    <section className="grid gap-[22px]">
+      <SectionMasthead
+        title="Jingles"
+        sub="Pre-rendered station idents dropped between tracks. A default ident is generated on first boot and can’t be deleted."
+        metrics={
+          <>
+            <TabMetric n={pad2(jingles.length)} l="files" />
+            <TabMetric n={ratioMetric} l="ratio" />
+          </>
+        }
       />
 
-      <Card title="Frequency" sub="needs mixer restart">
-        <div className="field">
-          <div className="flex items-center gap-2">
-            <Label>Jingle ratio</Label>
-            <Pill tone="ink">restart required</Pill>
-          </div>
-          <div className="flex flex-wrap items-center gap-2.5">
+      {/* Frequency */}
+      <PanelBox>
+        <PanelHead label="frequency" right={<Badge variant="accent">restart required</Badge>} />
+        <div className="flex flex-wrap items-center gap-5 px-[18px] py-[18px]">
+          <div className="flex flex-none items-center gap-2.5">
+            <span className="font-mono text-[13px]">1 jingle every</span>
             <Input
-              className="mono-num w-24"
+              className="mono-num w-[84px]"
               type="number"
               min={0}
               max={1000}
               value={jingleRatio}
+              aria-label="Jingle ratio"
               onChange={(e: ChangeEvent<HTMLInputElement>) => setJingleRatio(e.target.value)}
             />
-            <span className="text-[12px] text-muted">music tracks per jingle</span>
-            <Btn
-              tone="solid"
-              onClick={() => saveSettings({ jingleRatio: parseInt(jingleRatio, 10) })}
-              disabled={busy || !ratioDirty}
-            >
-              Save · needs restart
-            </Btn>
+            <span className="font-mono text-[13px]">music tracks</span>
           </div>
-          <div className="field-hint">
-            1 jingle every N music tracks; 0 turns jingles off entirely
-            (current: {data.values?.jingleRatio === 0 ? 'off' : data.values?.jingleRatio}).
-            Restart the mixer from the danger zone to apply.
-          </div>
+          <p className="m-0 min-w-[220px] flex-1 text-[12px] leading-[1.55] text-muted">
+            0 turns jingles off entirely. Changes apply after a mixer restart — the restart
+            control lives in Settings → danger zone.
+          </p>
+          <Btn
+            sm
+            tone="accent"
+            onClick={() => saveSettings({ jingleRatio: parseInt(jingleRatio, 10) })}
+            disabled={busy || !ratioDirty}
+          >
+            Save · needs restart
+          </Btn>
         </div>
-      </Card>
+      </PanelBox>
 
-      <Card
-        title="Jingles"
-        sub={`${jingles.length} file${jingles.length === 1 ? '' : 's'}`}
-        right={
-          <>
-            <Btn sm tone="accent" onClick={() => setModal('create')} disabled={busy}>
-              + Create
-            </Btn>
-            <Btn sm tone="solid" onClick={() => setModal('import')} disabled={busy}>
-              Import
-            </Btn>
-          </>
-        }
-      >
-        {jingles.length === 0 && (
-          <div className="py-2 text-[12px] text-muted italic">
-            none yet
+      {/* Library */}
+      <PanelBox>
+        <PanelHead
+          label={`jingle library · ${pad2(jingles.length)}`}
+          right={
+            <>
+              <Btn sm onClick={() => setModal('import')} disabled={busy}>Import</Btn>
+              <Btn sm tone="solid" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
+            </>
+          }
+        />
+        {jingles.length === 0 ? (
+          <EmptyState caption="create one via TTS or import your own" />
+        ) : (
+          <div className="divide-y divide-separator-soft">
+            {jingles.map(j => (
+              <div
+                key={j.filename}
+                className="grid grid-cols-[1fr_auto] items-center gap-[18px] px-[18px] py-[15px]"
+              >
+                <div className="min-w-0">
+                  <div className="font-display text-[18px] leading-[1.35] [text-wrap:pretty] italic">
+                    &ldquo;{j.text || j.filename}&rdquo;
+                  </div>
+                  <MetaLine>
+                    <span className="break-all">{j.filename}</span>
+                    <span aria-hidden>·</span>
+                    <span>{fmtSize(j.size)}</span>
+                    {j.createdAt && (
+                      <>
+                        <span aria-hidden>·</span>
+                        <span>{new Date(j.createdAt).toLocaleString('en-GB')}</span>
+                      </>
+                    )}
+                    {j.builtin && <Badge variant="solid">builtin</Badge>}
+                    {j.source === 'upload' && <Badge variant="ink">uploaded</Badge>}
+                  </MetaLine>
+                </div>
+                <div className="flex flex-none items-center gap-2">
+                  <PreviewButton
+                    path={`/jingles/${encodeURIComponent(j.filename)}/audio`}
+                    adminFetch={adminFetch}
+                  />
+                  <span title={j.builtin ? 'The default ident can’t be deleted' : 'Delete this jingle'}>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Delete jingle"
+                      disabled={busy || j.builtin}
+                      onClick={() => onDelete(j.filename)}
+                    >
+                      <Trash2 aria-hidden />
+                    </Button>
+                  </span>
+                </div>
+              </div>
+            ))}
           </div>
         )}
-        {jingles.map(j => (
-          <div
-            key={j.filename}
-            className="flex items-start gap-3 border-b border-dashed border-separator-strong py-3"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="text-[13px] break-words text-ink">{j.text}</div>
-              <div className="mt-1 flex flex-wrap items-center gap-2">
-                <span className="caption">{j.filename}</span>
-                <span className="caption">{fmtSize(j.size)}</span>
-                {j.createdAt && (
-                  <span className="caption">{new Date(j.createdAt).toLocaleString('en-GB')}</span>
-                )}
-                {j.builtin && <Pill tone="accent">builtin</Pill>}
-                {j.source === 'upload' && <Pill tone="ink">uploaded</Pill>}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <PreviewButton
-                path={`/jingles/${encodeURIComponent(j.filename)}/audio`}
-                adminFetch={adminFetch}
-              />
-              <Btn
-                sm
-                tone="danger"
-                onClick={() => onDelete(j.filename)}
-                disabled={busy || j.builtin}
-                title={j.builtin ? "Can't delete the built-in ident" : 'Delete this jingle'}
-              >
-                Delete
-              </Btn>
-            </div>
-          </div>
-        ))}
-      </Card>
+      </PanelBox>
 
+      {/* Create — Piper TTS */}
       <Modal
         open={modal === 'create'}
         onOpenChange={(o) => { if (!o) setModal(null); }}
-        title="Create jingle"
+        title="create jingle"
         sub="rendered via Piper TTS"
         footer={
           <>
-            <Btn onClick={() => setModal(null)}>Cancel</Btn>
-            <Btn tone="accent" onClick={doCreate} disabled={busy || !jingleText.trim()}>
-              {busy ? 'Generating…' : 'Create jingle'}
+            <Button variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</Button>
+            <Btn sm tone="accent" onClick={doCreate} disabled={busy || !jingleText.trim()}>
+              {busy ? 'Generating…' : 'Create'}
             </Btn>
           </>
         }
       >
-        <div className="field">
+        <div className="grid gap-1.5">
           <Label>Jingle text</Label>
           <Textarea
-            rows={3}
+            rows={4}
             value={jingleText}
-            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setJingleText(e.target.value)}
-            placeholder='e.g. "You are listening to SUB slash WAVE. Requests open all night."'
+            onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setJingleText(e.target.value.slice(0, 500))}
+            placeholder="You’re tuned to SUB/WAVE…"
           />
-          <div className="field-hint">{jingleText.length}/500 chars · Piper TTS</div>
+          <div className="text-right font-mono text-[11px] text-muted">{jingleText.length} / 500</div>
         </div>
       </Modal>
 
+      {/* Import — bring your own audio */}
       <Modal
         open={modal === 'import'}
         onOpenChange={(o) => { if (!o && !importProgress) closeImport(); }}
-        title="Import jingles"
-        sub="bring your own mp3 / wav, select one or many"
+        title="import jingles"
+        sub="bring your own mp3 / wav — select one or many"
         footer={
           <>
-            {importProgress ? (
-              <Btn onClick={() => importAbort.current?.abort()}>Stop</Btn>
-            ) : (
-              <Btn onClick={closeImport}>Cancel</Btn>
-            )}
-            <Btn tone="accent" onClick={doImport} disabled={busy || !importFiles.length}>
+            <Button variant="ghost" size="sm" onClick={closeImport} disabled={!!importProgress}>Cancel</Button>
+            <Btn sm tone="accent" onClick={doImport} disabled={busy || !importFiles.length}>
               {importProgress
-                ? `Importing ${importProgress.done}/${importProgress.total}…`
+                ? 'Importing…'
                 : importFiles.length > 1
                   ? `Import ${importFiles.length} files`
-                  : 'Import jingle'}
+                  : 'Import'}
             </Btn>
           </>
         }
       >
-        <div className="field">
-          <Label>Audio files</Label>
+        <div className="grid gap-3.5">
           <input
             ref={importRef}
             type="file"
@@ -237,46 +250,72 @@ export function JinglesSection({
             }}
             className="hidden"
           />
-          <div className="flex flex-wrap items-center gap-2.5">
-            <Btn tone="solid" onClick={() => importRef.current?.click()} disabled={busy}>
-              {importFiles.length ? 'Change files…' : 'Choose audio files…'}
-            </Btn>
-            {importFiles.length === 1 && (
-              <span className="text-[12px] text-ink">{importFiles[0]?.name}</span>
-            )}
-            {importFiles.length > 1 && (
-              <span className="text-[12px] text-ink">{importFiles.length} files selected</span>
-            )}
-          </div>
-          <div className="field-hint">
-            mp3, wav, ogg, flac, m4a, aac or opus · up to 25 MB each · converted and level-matched on import.
-            Selecting multiple files uploads them one at a time and keeps going past any single failure.
-          </div>
-          {importProgress && (
-            <div className="field-hint">Uploading {importProgress.done}/{importProgress.total}…</div>
+          <DropZone
+            label={
+              importFiles.length
+                ? `${importFiles.length} file${importFiles.length === 1 ? '' : 's'} selected — click to re-select`
+                : 'choose files…'
+            }
+            hint="mp3 · wav · ogg · flac · m4a · aac · opus — up to 25 MB each · converted + level-matched on import"
+            onClick={() => importRef.current?.click()}
+            disabled={!!importProgress}
+          />
+
+          {importFiles.length > 0 && (
+            <div className="max-h-[180px] divide-y divide-separator-soft overflow-auto border border-separator-strong">
+              {importFiles.map((f, i) => (
+                <div
+                  key={`${f.name}-${i}`}
+                  className="flex justify-between gap-3 px-3 py-2 font-mono text-[11px]"
+                >
+                  <span className="truncate">{f.name}</span>
+                  <span className="flex-none text-muted">{fmtSize(f.size)}</span>
+                </div>
+              ))}
+            </div>
           )}
+
+          {importFiles.length === 1 && (
+            <div className="grid gap-1.5">
+              <Label>Label · optional</Label>
+              <Input
+                value={importLabel}
+                maxLength={200}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setImportLabel(e.target.value)}
+                placeholder="Defaults to the file’s own name"
+              />
+            </div>
+          )}
+
+          {importProgress && (
+            <div className="flex items-center justify-between gap-3 border border-ink px-3.5 py-2.5">
+              <span className="font-mono text-[12px] font-bold">
+                Importing {importProgress.done}/{importProgress.total}…
+              </span>
+              <Btn sm tone="danger" onClick={() => importAbort.current?.abort()}>Stop</Btn>
+            </div>
+          )}
+
           {importFailures.length > 0 && (
-            <div className="mt-2 text-[12px] text-[var(--danger)]">
-              <div>{importFailures.length} file{importFailures.length === 1 ? '' : 's'} failed — re-select to retry:</div>
-              <ul className="m-0 list-none p-0">
+            <div className="border border-[var(--destructive)]">
+              <div className="border-b border-separator-soft px-3 py-2 font-mono text-[10px] font-bold tracking-[0.16em] text-[var(--destructive)] uppercase">
+                failed — re-select just these to retry
+              </div>
+              <div className="divide-y divide-separator-soft">
                 {importFailures.map((f, i) => (
-                  <li key={`${f.name}-${i}`} className="truncate">{f.name} — {f.reason}</li>
+                  <div
+                    key={`${f.name}-${i}`}
+                    className="flex justify-between gap-3 px-3 py-2 font-mono text-[11px]"
+                  >
+                    <span className="truncate">{f.name}</span>
+                    <span className="flex-none text-[var(--destructive)]">{f.reason}</span>
+                  </div>
                 ))}
-              </ul>
+              </div>
             </div>
           )}
         </div>
-        <div className="field mt-3.5">
-          <Label>Label (optional)</Label>
-          <Input
-            value={importLabel}
-            maxLength={200}
-            disabled={importFiles.length > 1}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportLabel(e.target.value)}
-            placeholder={importFiles.length > 1 ? 'defaults to each file name' : 'shown in the list, defaults to the file name'}
-          />
-        </div>
       </Modal>
-    </>
+    </section>
   );
 }
