@@ -3096,6 +3096,17 @@ html.lite .sw-ripple-circle {
 .admin-root .shell-nav .nav-ext {
     margin-top: auto;
 }
+/* The Ko-fi donation link — the only vermilion item on the rail, so it reads
+   as an ask instead of another utility link. currentColor carries the accent
+   into the icon and the ♥ pill for free. */
+.admin-root .shell-nav .nav-item.nav-support {
+    color: var(--accent);
+    border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+}
+.admin-root .shell-nav .nav-item.nav-support:hover {
+    background: color-mix(in oklab, var(--card-bg) 92%, var(--accent));
+    border-color: var(--accent);
+}
 .admin-root .shell-nav .nav-foot {
     padding-top: 14px;
     border-top: 1px dashed var(--separator-strong);

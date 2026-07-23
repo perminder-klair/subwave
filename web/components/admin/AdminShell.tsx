@@ -18,6 +18,7 @@ import {
   BookOpen,
   Apple,
   Smartphone,
+  Monitor,
   Users,
   Headphones,
   Plug,
@@ -232,6 +233,16 @@ export default function AdminShell({ children }: AdminShellProps) {
               <span className="pill">↗</span>
             </Link>
             <Link
+              href="https://github.com/getsubwave/subwave-desktop/releases/latest"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="nav-item"
+            >
+              <Monitor className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
+              <span className="nav-label">Desktop app</span>
+              <span className="pill">↗</span>
+            </Link>
+            <Link
               href="https://discord.gg/vjVbVKnMBa"
               target="_blank"
               rel="noopener noreferrer"
@@ -241,15 +252,18 @@ export default function AdminShell({ children }: AdminShellProps) {
               <span className="nav-label">Discord</span>
               <span className="pill">↗</span>
             </Link>
+            {/* The donation link — "Support" read as tech support, so say what
+                it is. nav-support gives it the one splash of vermilion on the
+                rail so it doesn't camouflage among the utility links. */}
             <Link
               href="https://ko-fi.com/pklair"
               target="_blank"
               rel="noopener noreferrer"
-              className="nav-item"
+              className="nav-item nav-support"
             >
               <Coffee className="nav-icon" size={15} strokeWidth={2} aria-hidden="true" />
-              <span className="nav-label">Support</span>
-              <span className="pill">↗</span>
+              <span className="nav-label">Buy me a coffee</span>
+              <span className="pill">♥</span>
             </Link>
           </div>
           <div className="nav-foot">
