@@ -353,12 +353,12 @@ export default function ImagingPanel() {
               The sounds between the songs.
             </div>
             <p className="mt-1 max-w-[62ch] text-[11px] leading-[1.6] [text-wrap:pretty] text-muted">
-              Everything the DJ drops between and over the music:{' '}
+              Everything your DJ slips between and over the music:{' '}
               <strong className="font-semibold text-ink">jingles</strong> are the station idents
-              played between tracks, <strong className="font-semibold text-ink">SFX</strong> are
-              stingers mixed under the DJ&rsquo;s voice, and{' '}
-              <strong className="font-semibold text-ink">beds</strong> are instrumentals the DJ
-              talks over when a link runs long.
+              between tracks, <strong className="font-semibold text-ink">SFX</strong> are the little
+              stingers under the voice, and{' '}
+              <strong className="font-semibold text-ink">beds</strong> are instrumentals to talk
+              over when a link runs long.
             </p>
           </div>
           <div className="flex flex-none gap-7">

@@ -86,7 +86,7 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
     <section className="grid gap-[22px]">
       <SectionMasthead
         title="Beds"
-        sub="Instrumentals the DJ talks over between songs: the song ends, the bed carries the talk, and the next song ramps in under the DJ’s closing words."
+        sub="Instrumentals your DJ talks over between songs — the track ends, the bed carries the chat, and the next song fades in under the closing words."
         metrics={<TabMetric accent n={pad2(list.length)} l="beds" />}
         actions={
           <>
@@ -103,8 +103,8 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
             <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">talk beds</div>
             <p className="mt-1.5 text-[12px] leading-[1.55] text-muted">
               {enabled
-                ? 'Long links get their own instrumental. Needs at least one bed long enough to carry a script.'
-                : 'Off — every link is talked over the incoming song, as before. The library is kept.'}
+                ? 'When on, longer links get their own instrumental to sit on. You’ll need at least one bed long enough to carry the chat.'
+                : 'Off — links play over the incoming song, like before. Your library stays put.'}
             </p>
           </div>
           <Seg
@@ -118,8 +118,8 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
 
       {enabled && list.length === 0 && (
         <V3Alert title="no beds in the library">
-          Beds are on, but the library is empty — links fall back to talking over the incoming
-          song until you import a bed at least {minSec} seconds long.
+          Beds are on, but there’s nothing here yet — links keep playing over the incoming song
+          until you add a bed at least {minSec} seconds long.
         </V3Alert>
       )}
 
@@ -149,9 +149,9 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
               <span className="font-mono text-[12px] text-muted">seconds</span>
             </div>
             <p className="mt-2.5 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
-              Links above this length get their own bed. Where the analyzer has measured a track’s
-              vocals, that measurement wins — a bed exactly when the DJ would otherwise talk over
-              singing; instrumentals never get one. Saves on blur.
+              Anything longer than this gets its own bed. Where we’ve measured a track’s vocals,
+              that wins — a bed lands exactly when your DJ would otherwise talk over singing, and
+              instrumentals never get one. Saves when you click away.
             </p>
           </div>
           <div className="p-[18px]">
@@ -176,8 +176,8 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
               <span className="font-mono text-[12px] text-muted">seconds</span>
             </div>
             <p className="mt-2.5 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
-              Crossfade for the next song to fade in under the DJ’s closing words. 0 is a hard cut.
-              Saves on blur.
+              How long the next song takes to fade in under your DJ’s closing words. 0 is a hard
+              cut. Saves when you click away.
             </p>
           </div>
         </div>
@@ -187,7 +187,7 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
       <PanelBox>
         <PanelHead label={`bed library · ${pad2(list.length)}`} />
         {list.length === 0 ? (
-          <EmptyState caption="generate via ElevenLabs or import an instrumental" />
+          <EmptyState caption="generate one with ElevenLabs, or import an instrumental" />
         ) : (
           <div className="divide-y divide-separator-soft">
             {list.map(b => (
@@ -242,7 +242,7 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
         open={modal === 'create'}
         onOpenChange={(o) => { if (!o) setModal(null); }}
         title="create bed"
-        sub="an instrumental generated via ElevenLabs"
+        sub="an instrumental we’ll generate with ElevenLabs"
         footer={
           <>
             <Button variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</Button>
@@ -260,7 +260,7 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
         <div className="grid gap-3.5">
           {!ready && (
             <V3Alert title="key required">
-              Generation needs an ElevenLabs key. Set{' '}
+              You’ll need an ElevenLabs key to generate. Add{' '}
               <code className="font-mono text-[12px]">ELEVENLABS_API_KEY</code> and restart the
               controller.
             </V3Alert>
@@ -309,9 +309,9 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
             <div className="text-right font-mono text-[11px] text-muted">{bedsForm.prompt.length} / 500</div>
           </div>
           <p className="m-0 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
-            Generated instrumental only (no vocals), {minSec}–{maxGenSec}s. A bed is trimmed per
-            link, so it just needs to outlast the DJ’s longest script — atmospheric and neutral
-            travels best.
+            Vocal-free instrumental, {minSec}–{maxGenSec}s. Each bed is trimmed to fit the link, so
+            it just needs to outlast your DJ’s longest bit of chat — atmospheric and neutral works
+            best.
           </p>
         </div>
       </Modal>
@@ -363,8 +363,8 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
             onClick={() => importRef.current?.click()}
           />
           <p className="m-0 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
-            A bed is trimmed per link and never looped — it only needs to outlast the DJ’s longest
-            script. Atmospheric, no strong key travels best.
+            Each bed is trimmed to fit the link and never loops — it only needs to outlast your
+            DJ’s longest bit of chat. Atmospheric, with no strong key, works best.
           </p>
         </div>
       </Modal>

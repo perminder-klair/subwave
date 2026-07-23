@@ -64,7 +64,7 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
     <section className="grid gap-[22px]">
       <SectionMasthead
         title="Sound effects"
-        sub="Stingers the segment-director agent mixes under its voice during a spoken break. Built-ins ship with the station."
+        sub="Little stingers your DJ can drop under its voice during a break — a record scratch, an airhorn, a whoosh. A handful ship with the station."
         metrics={<TabMetric accent n={pad2(list.length)} l="effects" />}
         actions={
           <>
@@ -81,8 +81,8 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
             <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">stingers</div>
             <p className="mt-1.5 text-[12px] leading-[1.55] text-muted">
               {enabled
-                ? 'The agent sees the effect catalogue and mixes stingers under its voice during spoken breaks.'
-                : 'Off — the agent never sees the catalogue and plays no stingers. The library is kept.'}
+                ? 'When on, your DJ can reach for these and mix them under its voice during a break.'
+                : 'Off — your DJ never reaches for a stinger. Your library stays as it is.'}
             </p>
           </div>
           <Seg
@@ -98,7 +98,7 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
       <PanelBox>
         <PanelHead label={`effect library · ${pad2(list.length)}`} />
         {list.length === 0 ? (
-          <EmptyState caption="generate via ElevenLabs or import your own" />
+          <EmptyState caption="generate one with ElevenLabs, or import your own" />
         ) : (
           <div className="divide-y divide-separator-soft">
             {list.map(s => (
@@ -152,7 +152,7 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
         open={modal === 'create'}
         onOpenChange={(o) => { if (!o) setModal(null); }}
         title="create effect"
-        sub="rendered via ElevenLabs"
+        sub="we’ll generate it with ElevenLabs"
         footer={
           <>
             <Button variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</Button>
@@ -170,7 +170,7 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
         <div className="grid gap-3.5">
           {!ready && (
             <V3Alert title="key required">
-              Generation needs an ElevenLabs key. Set{' '}
+              You’ll need an ElevenLabs key to generate. Add{' '}
               <code className="font-mono text-[12px]">ELEVENLABS_API_KEY</code> and restart the
               controller.
             </V3Alert>
@@ -205,7 +205,7 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
               value={sfxForm.description}
               maxLength={200}
               onChange={(e: ChangeEvent<HTMLInputElement>) => setSfxForm(f => ({ ...f, description: e.target.value }))}
-              placeholder="The agent reads this to decide when the effect fits a line"
+              placeholder="Your DJ reads this to decide when the effect fits a line"
             />
           </div>
           <div className="grid gap-1.5">
