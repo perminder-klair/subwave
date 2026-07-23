@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import type { ComponentType, CSSProperties, ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
@@ -32,6 +32,12 @@ import {
   MoreHorizontal,
   ListMusic,
   Telescope,
+  Clock,
+  CalendarDays,
+  Volume2,
+  Music,
+  AudioLines,
+  Waves,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -95,6 +101,12 @@ interface NavSubItem {
   id: string;
   label: string;
   icon: NavIcon;
+  // Tab-based children (Moods / Imaging) share the parent's page and differ
+  // only by ?tab=. `tab` is the query value this item selects; `defaultTab`
+  // marks the one shown when the URL carries no (or an unknown) ?tab=. Route
+  // children (Library → Playlists / Observatory) leave both unset.
+  tab?: string;
+  defaultTab?: boolean;
 }
 
 interface NavItem {
@@ -143,8 +155,31 @@ const NAV_SECTIONS: NavSection[] = [
       { href: '/admin/shows', id: 'shows', label: 'Shows', icon: CalendarClock },
       { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
       { href: '/admin/skills', id: 'skills', label: 'Skills', icon: Sparkles },
-      { href: '/admin/imaging', id: 'imaging', label: 'Imaging', icon: Podcast },
-      { href: '/admin/moods', id: 'moods', label: 'Moods', icon: Palette },
+      // Imaging + Moods are single pages with ?tab= sections; the submenu
+      // deep-links into each tab (see ImagingPanel / MoodsPanel).
+      {
+        href: '/admin/imaging',
+        id: 'imaging',
+        label: 'Imaging',
+        icon: Podcast,
+        children: [
+          { href: '/admin/imaging?tab=jingles', id: 'imaging-jingles', label: 'Jingles', icon: Music, tab: 'jingles', defaultTab: true },
+          { href: '/admin/imaging?tab=sfx', id: 'imaging-sfx', label: 'SFX', icon: AudioLines, tab: 'sfx' },
+          { href: '/admin/imaging?tab=beds', id: 'imaging-beds', label: 'Beds', icon: Waves, tab: 'beds' },
+        ],
+      },
+      {
+        href: '/admin/moods',
+        id: 'moods',
+        label: 'Moods',
+        icon: Palette,
+        children: [
+          { href: '/admin/moods?tab=vocab', id: 'moods-vocab', label: 'Vocabulary', icon: Palette, tab: 'vocab', defaultTab: true },
+          { href: '/admin/moods?tab=moments', id: 'moods-moments', label: 'Moments', icon: Clock, tab: 'moments' },
+          { href: '/admin/moods?tab=festivals', id: 'moods-festivals', label: 'Festivals', icon: CalendarDays, tab: 'festivals' },
+          { href: '/admin/moods?tab=speech', id: 'moods-speech', label: 'Speech', icon: Volume2, tab: 'speech' },
+        ],
+      },
     ],
   },
   {
@@ -519,15 +554,38 @@ function CollapsibleNavItem({
   onNavigate: () => void;
 }) {
   const children = item.children ?? [];
-  const onChild = children.some(c => !!pathname && pathname.startsWith(c.href));
-  const parentActive = !!pathname && pathname.startsWith(item.href) && !onChild;
-  const sectionActive = (!!pathname && pathname.startsWith(item.href)) || onChild;
-  const [open, setOpen] = useState(sectionActive);
+  const searchParams = useSearchParams();
+
+  // Tab-based groups (Moods / Imaging) share the parent page and select a
+  // section via ?tab=; resolve the effective tab (falling back to the group's
+  // default when the URL has none/unknown), then a child is active when the
+  // page matches and its tab is the effective one. Route-based groups (Library)
+  // just prefix-match their child's own path.
+  const tabChildren = children.filter(c => c.tab != null);
+  const validTabs = tabChildren.map(c => c.tab as string);
+  const rawTab = searchParams.get('tab');
+  const effectiveTab =
+    rawTab && validTabs.includes(rawTab)
+      ? rawTab
+      : (tabChildren.find(c => c.defaultTab)?.tab ?? null);
+  const childActive = (sub: NavSubItem): boolean =>
+    sub.tab != null
+      ? pathname === item.href && sub.tab === effectiveTab
+      : !!pathname && pathname.startsWith(sub.href);
+
+  const hasActiveChild = children.some(childActive);
+  const onSection = (!!pathname && pathname.startsWith(item.href)) || hasActiveChild;
+  // Parent shows the filled pill only on its own page with no child selected
+  // (Library's overview). Tab groups always have a child selected, so the pill
+  // moves to the child and the parent stays a plain, open group header.
+  const parentActive = onSection && !hasActiveChild;
+
+  const [open, setOpen] = useState(onSection);
   // Reveal the group whenever a nav lands on one of its pages (the shell is
   // persistent, so the state survives across route changes otherwise).
   useEffect(() => {
-    if (sectionActive) setOpen(true);
-  }, [sectionActive]);
+    if (onSection) setOpen(true);
+  }, [onSection]);
   const Icon = item.icon;
   return (
     <Collapsible open={open} onOpenChange={setOpen} asChild>
@@ -554,11 +612,10 @@ function CollapsibleNavItem({
         <CollapsibleContent>
           <SidebarMenuSub className="mt-1">
             {children.map(sub => {
-              const subActive = !!pathname && pathname.startsWith(sub.href);
               const SubIcon = sub.icon;
               return (
                 <SidebarMenuSubItem key={sub.id}>
-                  <SidebarMenuSubButton asChild isActive={subActive}>
+                  <SidebarMenuSubButton asChild isActive={childActive(sub)}>
                     <Link href={sub.href} onClick={onNavigate}>
                       <SubIcon aria-hidden="true" />
                       <span className="truncate">{sub.label}</span>
