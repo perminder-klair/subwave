@@ -18,9 +18,7 @@ export function PersonaSkillsCard({ persona, skillCatalog, setSkills }: PersonaS
         also be enabled station-wide on the <strong>Skills</strong> page.
       </p>
       {skillCatalog.length === 0 ? (
-        <div className="text-[12px] text-muted italic">
-          no skills available
-        </div>
+        <span className="text-[12px] text-muted">No skills available</span>
       ) : (
         <div className="grid gap-x-8 sm:grid-cols-2">
           {skillCatalog.map(s => {

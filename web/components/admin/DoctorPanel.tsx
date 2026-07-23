@@ -10,6 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { Card, Btn, Pill } from './ui';
+import { ErrorState } from '@/components/ui/error-state';
 import BoothBuddy, { type BuddyMood } from '../BoothBuddy';
 import { ChevronDownIcon } from 'lucide-react';
 import { Task, TaskContent, TaskItem, TaskTrigger } from '../ai-elements/task';
@@ -399,7 +400,7 @@ export default function DoctorPanel() {
                   Runs the full check and gets DJ Doc&apos;s read in one go.
                 </span>
               </div>
-              {err && <p className="mt-3 text-[13px] text-[var(--accent)]">{err}</p>}
+              {err && <ErrorState error={err} onRetry={run} />}
             </div>
           </div>
         </Card>
@@ -445,7 +446,7 @@ export default function DoctorPanel() {
                   last run {new Date(report.t).toLocaleTimeString()}
                 </span>
               </div>
-              {err && <p className="mt-3 text-[13px] text-[var(--accent)]">{err}</p>}
+              {err && <ErrorState error={err} onRetry={run} />}
             </div>
           </div>
         </Card>

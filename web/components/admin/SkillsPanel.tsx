@@ -23,6 +23,9 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import { Card, Btn, Pill, Eyebrow, MetaChip, Toggle } from './ui';
 import { V3Alert } from '../ui/alert';
+import { SkeletonRows } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 import { Modal } from '../ui/modal';
 import { Input } from '../ui/input';
 import {
@@ -340,7 +343,7 @@ export default function SkillsPanel() {
     return (
       <div className="grid gap-4">
         <Card title="Skills">
-          <div className="text-[13px] text-[var(--danger)]">controller error: {err}</div>
+          <ErrorState error={err} />
         </Card>
       </div>
     );
@@ -349,7 +352,7 @@ export default function SkillsPanel() {
     return (
       <div className="grid gap-4">
         <Card title="Skills">
-          <div className="text-[13px] text-muted italic">loading…</div>
+          <SkeletonRows rows={4} />
         </Card>
       </div>
     );
@@ -571,12 +574,15 @@ export default function SkillsPanel() {
       {/* ── SKILL LIST ───────────────────────────────────────────────────── */}
       {visible.length === 0 && (
         <Card title="No matches">
-          <div className="text-[13px] text-muted italic">
-            No skill matches the current filters.{' '}
-            <button type="button" onClick={clearFilters} className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2">
-              Clear filters
-            </button>
-          </div>
+          <EmptyState
+            title="No skills match"
+            description="Nothing fits the current filters."
+            action={
+              <button type="button" onClick={clearFilters} className="font-bold text-vermilion underline decoration-[1.5px] underline-offset-2">
+                Clear filters
+              </button>
+            }
+          />
         </Card>
       )}
       {visible.map(s => {

@@ -16,6 +16,8 @@ import { useAdminAuth } from '../../../lib/adminAuth';
 import { notify, errorMessage } from '../../../lib/notify';
 import type { LucideIcon } from 'lucide-react';
 import { Braces, Boxes, Cable, Webhook } from 'lucide-react';
+import { SkeletonRows } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/ui/error-state';
 import { Card, Btn, Eyebrow } from '../ui';
 import { SectionTabs } from '../SectionTabs';
 import type { Catalog } from './types';
@@ -95,14 +97,14 @@ export default function ConnectPanel() {
   if (err) {
     return (
       <div className="grid gap-4">
-        <Card title="Connect"><div className="text-[13px] text-[var(--danger)]">controller error: {err}</div></Card>
+        <Card title="Connect"><ErrorState error={err} /></Card>
       </div>
     );
   }
   if (!catalog) {
     return (
       <div className="grid gap-4">
-        <Card title="Connect"><div className="text-[13px] text-muted italic">loading…</div></Card>
+        <Card title="Connect"><SkeletonRows rows={3} /></Card>
       </div>
     );
   }

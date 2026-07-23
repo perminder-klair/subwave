@@ -10,6 +10,7 @@ import { Label } from '../../ui/label';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
 import { V3Alert } from '../../ui/alert';
+import { SkeletonCards } from '@/components/ui/skeleton';
 import { Btn, Seg } from '../ui';
 import { PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
 import type { BedsData } from './types';
@@ -52,7 +53,7 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
   };
 
   if (!bedsData) {
-    return <div className="text-[13px] text-muted italic">loading…</div>;
+    return <SkeletonCards cards={4} />;
   }
   const list = bedsData.beds || [];
   const minSec = bedsData.minDurationSec ?? 30;

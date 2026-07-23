@@ -13,6 +13,8 @@ import { notify, errorMessage } from '../../lib/notify';
 import { Input } from '../ui/input';
 import { Card, Btn } from './ui';
 import { cn } from '../../lib/cn';
+import { SkeletonRows } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
 
 export interface PlaylistSummary {
   id: string;
@@ -233,13 +235,13 @@ export default function LibraryPlaylistsTab({
           <Btn sm onClick={() => { setCreating(false); setNewName(''); }} disabled={busy}>Cancel</Btn>
         </div>
       )}
-      {loading && rows.length === 0 && (
-        <div className="px-4 py-8 text-center text-[12px] text-muted italic">loading…</div>
-      )}
+      {loading && rows.length === 0 && <SkeletonRows rows={4} />}
       {!loading && rows.length === 0 && (
-        <div className="px-4 py-10 text-center text-[12px] text-muted italic">
-          no playlists yet — select tracks in any tab and “Add to playlist”
-        </div>
+        <EmptyState
+          compact
+          title="No playlists yet"
+          description={<>Select tracks in any tab and “Add to playlist” to start one.</>}
+        />
       )}
       {rows.map(pl => {
         const open = openId === pl.id;
@@ -303,9 +305,7 @@ export default function LibraryPlaylistsTab({
             )}
             {open && (
               <div className="border-t border-dashed border-separator-strong bg-[var(--ink-softer)]">
-                {entriesLoading && (
-                  <div className="px-4 py-4 text-center text-[12px] text-muted italic">loading…</div>
-                )}
+                {entriesLoading && <SkeletonRows rows={4} />}
                 {!entriesLoading && entries && entries.length === 0 && (
                   <div className="px-4 py-4 text-center text-[12px] text-muted italic">empty playlist</div>
                 )}

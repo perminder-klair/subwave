@@ -12,6 +12,9 @@ import {
 } from '../ui/select';
 import { Modal } from '../ui/modal';
 import { V3AlertDialog } from '../ui/alert-dialog';
+import { SkeletonRows } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 
 interface Festival {
   month: number;
@@ -201,15 +204,9 @@ export default function FestivalsSection() {
         }
       />
 
-      {err && (
-        <Card>
-          <div className="text-[var(--danger)]">{err}</div>
-        </Card>
-      )}
+      {err && <ErrorState error={err} onRetry={load} />}
 
-      {festivals === null && !err && (
-        <div className="text-[13px] text-muted italic">loading…</div>
-      )}
+      {festivals === null && !err && <SkeletonRows rows={4} />}
 
       {festivals !== null && (
         <Card
@@ -217,9 +214,10 @@ export default function FestivalsSection() {
           sub={`${festivals.length} date${festivals.length === 1 ? '' : 's'} · click one to edit`}
         >
           {festivals.length === 0 ? (
-            <div className="text-[13px] text-muted italic">
-              No festivals defined. Add one to get started.
-            </div>
+            <EmptyState
+              title="No festivals defined"
+              description="Add one so the station can theme the day around it."
+            />
           ) : (
             <div className="grid">
               {months.map(({ month, rows }) => (
