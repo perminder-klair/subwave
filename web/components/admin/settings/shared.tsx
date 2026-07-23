@@ -198,7 +198,6 @@ export interface PrivacyForm {
 }
 
 export interface FormState {
-  jingleRatio: string;
   crossfadeDuration: string;
   maxTrackSeconds: string;
   archive: ArchiveForm;
@@ -226,33 +225,6 @@ export interface JingleEntry {
   createdAt?: string;
   builtin?: boolean;
   source?: string;
-}
-
-export interface SfxEntry {
-  name: string;
-  description?: string;
-  size?: number;
-  durationSec?: number;
-  builtin?: boolean;
-  source?: string;
-}
-
-export interface SfxData {
-  sfx?: SfxEntry[];
-  generatorReady?: boolean;
-}
-
-export interface BedEntry {
-  name: string;
-  description?: string;
-  size?: number;
-  durationSec?: number | null;
-  source?: string;
-}
-
-export interface BedsData {
-  beds?: BedEntry[];
-  minDurationSec?: number;
 }
 
 export interface SettingsData {
@@ -375,18 +347,8 @@ export interface SettingsData {
   serverTimezone?: string;
 }
 
-export interface SfxForm {
-  name: string;
-  description: string;
-  prompt: string;
-  durationSec: string;
-}
-
 export type Patch = Record<string, unknown>;
 export type SaveSettings = (patch: Patch) => Promise<void>;
-
-export type JingleImportFailure = { name: string; reason: string };
-export type JingleImportResult = { ok: number; total: number; failures: JingleImportFailure[]; aborted: boolean };
 
 export type FormUpdater = (updater: (f: FormState) => FormState) => void;
 

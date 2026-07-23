@@ -8,12 +8,18 @@ import { Input } from '../../ui/input';
 import { Textarea } from '../../ui/textarea';
 import { Label } from '../../ui/label';
 import { Card, Btn, Pill } from '../ui';
-import {
-  SectionHeader, PreviewButton,
-  type SectionProps, type JingleImportFailure, type JingleImportResult,
-} from './shared';
+import { SectionHeader, PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
+import type { JingleImportFailure, JingleImportResult } from './types';
 
-interface JinglesSectionProps extends SectionProps {
+interface JinglesSectionProps {
+  data: SettingsData;
+  busy: boolean;
+  saveSettings: SaveSettings;
+  // Slimmed from the full FormState — jingleRatio is the only settings field
+  // this section touches, so the Imaging page holds it as a lone string rather
+  // than rebuilding Settings' whole form-hydration machinery.
+  jingleRatio: string;
+  setJingleRatio: (v: string) => void;
   jingleText: string;
   setJingleText: (s: string) => void;
   createJingle: () => Promise<boolean>;
@@ -27,10 +33,10 @@ interface JinglesSectionProps extends SectionProps {
 }
 
 export function JinglesSection({
-  data, form, setForm, busy, jingleText, setJingleText,
+  data, busy, jingleRatio, setJingleRatio, jingleText, setJingleText,
   createJingle, uploadJingle, saveSettings, onDelete, adminFetch,
 }: JinglesSectionProps) {
-  const ratioDirty = form.jingleRatio !== String(data.values?.jingleRatio);
+  const ratioDirty = jingleRatio !== String(data.values?.jingleRatio);
   const jingles = data.jingles || [];
   const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importFiles, setImportFiles] = useState<File[]>([]);
@@ -93,15 +99,13 @@ export function JinglesSection({
               type="number"
               min={0}
               max={1000}
-              value={form.jingleRatio}
-              onChange={(e: ChangeEvent<HTMLInputElement>) =>
-                setForm(f => ({ ...f, jingleRatio: e.target.value }))
-              }
+              value={jingleRatio}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setJingleRatio(e.target.value)}
             />
             <span className="text-[12px] text-muted">music tracks per jingle</span>
             <Btn
               tone="solid"
-              onClick={() => saveSettings({ jingleRatio: parseInt(form.jingleRatio, 10) })}
+              onClick={() => saveSettings({ jingleRatio: parseInt(jingleRatio, 10) })}
               disabled={busy || !ratioDirty}
             >
               Save · needs restart
