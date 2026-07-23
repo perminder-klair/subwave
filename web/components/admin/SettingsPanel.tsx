@@ -16,10 +16,9 @@ import { Card, Btn, Pill, Seg } from './ui';
 import { cn } from '../../lib/cn';
 import ArchivesPanel from './ArchivesPanel';
 import BackupPanel from './BackupPanel';
-import FestivalsSection from './FestivalsSection';
 import {
   Radio, Palette, Cpu, Mic, Library, Search,
-  Activity, Archive, Save, AlertTriangle, CalendarDays, Heart,
+  Activity, Archive, Save, AlertTriangle, Heart,
 } from 'lucide-react';
 import {
   SectionHeader, ELEVENLABS_VS_DEFAULTS,
@@ -38,7 +37,6 @@ import { LikesSection } from './settings/LikesSection';
 const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
   { id: 'theme',    label: 'Skin & Themes', hint: 'player skin · palette', icon: Palette },
-  { id: 'festivals', label: 'Festivals', hint: 'calendar · mood', icon: CalendarDays },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine', icon: Mic },
   { id: 'library',  label: 'Library tagger', hint: 'embedding · propagation', icon: Library },
@@ -604,7 +602,6 @@ export default function SettingsPanel() {
             )}
           </>
         )}
-        {activeSection === 'festivals' && <FestivalsSection />}
         {activeSection === 'backup' && <BackupPanel />}
         {activeSection === 'danger' && (
           <>
