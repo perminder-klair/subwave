@@ -32,12 +32,13 @@ export default function AdminSettings() {
             with a way to step into the autonomous DJ and steer it directly.
           </li>
           <li>
-            <strong>Programming — Library, Shows, Personas, Skills.</strong> Everything
-            that shapes what the station plays and who it sounds like.
+            <strong>Programming — Library, Shows, Personas, Skills, Imaging, Moods.</strong>{' '}
+            Everything that shapes what the station plays and who it sounds like.
           </li>
           <li>
-            <strong>System — Stats, Settings, Debug.</strong> How the station is behaving
-            under the hood, the engine-room settings, and a live diagnostic view.
+            <strong>System — Stats, Connect, Settings, Debug.</strong> How the station is
+            behaving under the hood, the ways to plug other tools into it, the engine-room
+            settings, and a live diagnostic view.
           </li>
         </ul>
       </section>
@@ -53,7 +54,11 @@ export default function AdminSettings() {
           <li>
             <strong>Library</strong> — search the music library and check how well it's
             been mood-tagged. The tagger labels tracks with a mood so the DJ can pick by
-            feel; this is where you watch its progress.
+            feel; this is where you watch its progress. Two doorways open from here: the{' '}
+            <strong>Playlist Builder</strong>, where you generate a set from a vibe prompt
+            and tuning, then save it for the DJ and shows to draw on, and the{' '}
+            <Link href="/manual/observatory" className="bs-link">Library Observatory</Link>,
+            a visual map of everything the station has heard.
           </li>
           <li>
             <strong>Shows</strong> — a show is a reusable definition: a name, a topic, a
@@ -71,6 +76,25 @@ export default function AdminSettings() {
             <strong>Skills</strong> — the real-world segments the autonomous DJ can run:
             weather, news, now-playing digs, facts, web search. Toggle each on or off
             station-wide.
+          </li>
+          <li>
+            <strong>Imaging</strong> — the sounds the DJ drops between and over the music.
+            Three tabs: <strong>Jingles</strong> (the short station idents rotated between
+            tracks, plus how often one plays), <strong>SFX</strong> (stingers mixed under
+            the DJ's voice mid-break), and <strong>Beds</strong> (instrumentals the DJ
+            talks over when a link runs long). Render each through the configured voice or
+            a text-to-sound prompt, or import your own audio; new files are picked up
+            automatically.
+          </li>
+          <li>
+            <strong>Moods</strong> — the station's mood vocabulary and how the autonomous
+            DJ reaches for it. Four tabs: <strong>Vocabulary</strong> (the moods every
+            track is tagged with, each with an optional sound description for audio
+            tagging), <strong>Moments</strong> (which mood each part of the day and each
+            weather condition leans into), <strong>Festivals</strong> (the calendar that
+            nudges the mood on the day), and <strong>Speech</strong> (pronunciation fixes
+            applied to every spoken line). Edit the vocabulary and every show, festival,
+            and auto-DJ pick draws from it.
           </li>
         </ul>
       </section>
@@ -107,24 +131,19 @@ export default function AdminSettings() {
             (DuckDuckGo, Tavily, or a self-hosted SearXNG).
           </li>
           <li>
-            <strong>Jingles</strong> — the short pre-rendered idents the station rotates
-            between music tracks, and how often one plays. Render them through the
-            configured voice, or import your own mp3/wav; new files are picked up
-            automatically.
+            <strong>Skin &amp; themes</strong> — the player's default face (skin) and the
+            station-wide colour palette. Covered in{' '}
+            <Link href="/manual/themes" className="bs-link">Skins &amp; Themes</Link>.
           </li>
           <li>
-            <strong>Sound FX</strong> — the library of stingers the DJ can drop into a
-            spoken break. Generate one from a text prompt, or import your own audio file
-            (no ElevenLabs key needed). Toggle the whole library on or off.
+            <strong>Likes</strong> — the listener heart button: whether it shows, whether a
+            like stars the track in Navidrome, and whether recent likes nudge what the DJ
+            plays.
           </li>
           <li>
-            <strong>Theme &amp; Festivals</strong> — the station-wide colour palette, and
-            the festival calendar that nudges the DJ's mood on the day.
-          </li>
-          <li>
-            <strong>Scrobbling, Archives, Webhooks &amp; Backup</strong> — scrobble plays
-            to Last.fm / ListenBrainz, record the broadcast to hourly files, fire outbound
-            webhooks on station events, and export or restore the whole station's config.
+            <strong>Scrobbling, Archives &amp; Backup</strong> — scrobble plays to Last.fm
+            / ListenBrainz, record the broadcast to hourly files, and export or restore the
+            whole station's config.
           </li>
           <li>
             <strong>Danger zone</strong> — the broadcast controls that bite: crossfade
