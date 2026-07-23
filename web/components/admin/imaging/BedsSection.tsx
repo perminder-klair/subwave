@@ -6,20 +6,24 @@ import { Trash2 } from 'lucide-react';
 import { fmtSize } from '../../../lib/format';
 import { Modal } from '../../ui/modal';
 import { Input } from '../../ui/input';
+import { Textarea } from '../../ui/textarea';
 import { Label } from '../../ui/label';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
 import { V3Alert } from '../../ui/alert';
 import { Btn, Seg } from '../ui';
 import { PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
-import type { BedsData } from './types';
+import type { BedsData, BedsForm } from './types';
 import {
   SectionMasthead, PanelBox, PanelHead, EmptyState, DropZone, MetaLine, TabMetric, pad2,
 } from './parts';
 
 interface BedsSectionProps {
   bedsData: BedsData | null;
+  bedsForm: BedsForm;
+  setBedsForm: (updater: (f: BedsForm) => BedsForm) => void;
   busy: boolean;
+  createBed: () => Promise<boolean>;
   uploadBed: (file: File, name: string, description: string) => Promise<boolean>;
   onDelete: (name: string | null) => void;
   data: SettingsData | null;
@@ -27,9 +31,9 @@ interface BedsSectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
-export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSettings, adminFetch }: BedsSectionProps) {
+export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, uploadBed, onDelete, data, saveSettings, adminFetch }: BedsSectionProps) {
   // Hooks must run before the early "loading…" return — keep them at the top.
-  const [modal, setModal] = useState(false);
+  const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importName, setImportName] = useState('');
   const [importDesc, setImportDesc] = useState('');
@@ -47,8 +51,11 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
       setImportName('');
       setImportDesc('');
       if (importRef.current) importRef.current.value = '';
-      setModal(false);
+      setModal(null);
     }
+  };
+  const doCreate = async () => {
+    if (await createBed()) setModal(null);
   };
 
   if (!bedsData) {
@@ -56,6 +63,8 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
   }
   const list = bedsData.beds || [];
   const minSec = bedsData.minDurationSec ?? 30;
+  const maxGenSec = bedsData.maxGenDurationSec ?? 120;
+  const ready = !!bedsData.generatorReady;
   const beds = data?.values?.beds;
   const enabled = beds?.enabled === true;
   const thresholdSec = beds?.thresholdSec ?? 12;
@@ -100,6 +109,15 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
           />
         </div>
       </PanelBox>
+
+      {!ready && (
+        <V3Alert title="no ElevenLabs key">
+          The built-in bed and uploads work without a key — one is only needed to generate new
+          beds. Set{' '}
+          <code className="font-mono text-[12px]">ELEVENLABS_API_KEY</code> and restart the
+          controller to enable Create.
+        </V3Alert>
+      )}
 
       {enabled && list.length === 0 && (
         <V3Alert title="no beds in the library">
@@ -172,10 +190,15 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
       <PanelBox>
         <PanelHead
           label={`bed library · ${pad2(list.length)}`}
-          right={<Btn sm onClick={() => setModal(true)} disabled={busy}>Import</Btn>}
+          right={
+            <>
+              <Btn sm onClick={() => setModal('import')} disabled={busy}>Import</Btn>
+              <Btn sm tone="solid" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
+            </>
+          }
         />
         {list.length === 0 ? (
-          <EmptyState caption="beds can’t be generated — import an instrumental" />
+          <EmptyState caption="generate via ElevenLabs or import an instrumental" />
         ) : (
           <div className="divide-y divide-separator-soft">
             {list.map(b => (
@@ -196,7 +219,8 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
                         <span>{Math.round(b.durationSec)}s</span>
                       </>
                     )}
-                    {b.source === 'bundled' && <Badge variant="solid">bundled</Badge>}
+                    {b.builtin && <Badge variant="solid">builtin</Badge>}
+                    {b.source === 'generated' && <Badge variant="ink">generated</Badge>}
                     {b.source === 'upload' && <Badge variant="ink">uploaded</Badge>}
                   </MetaLine>
                 </div>
@@ -205,13 +229,13 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
                     path={`/beds/${encodeURIComponent(b.name)}/audio`}
                     adminFetch={adminFetch}
                   />
-                  <span title="Delete this bed">
+                  <span title={b.builtin ? 'The built-in bed can’t be deleted' : 'Delete this bed'}>
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon"
                       aria-label="Delete bed"
-                      disabled={busy}
+                      disabled={busy || b.builtin}
                       onClick={() => onDelete(b.name)}
                     >
                       <Trash2 aria-hidden />
@@ -224,15 +248,94 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
         )}
       </PanelBox>
 
+      {/* Create — ElevenLabs Music API */}
+      <Modal
+        open={modal === 'create'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="create bed"
+        sub="an instrumental generated via ElevenLabs"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</Button>
+            <Btn
+              sm
+              tone="accent"
+              onClick={doCreate}
+              disabled={busy || !ready || !bedsForm.name.trim() || !bedsForm.prompt.trim()}
+            >
+              {busy ? 'Generating…' : 'Create'}
+            </Btn>
+          </>
+        }
+      >
+        <div className="grid gap-3.5">
+          {!ready && (
+            <V3Alert title="key required">
+              Generation needs an ElevenLabs key. Set{' '}
+              <code className="font-mono text-[12px]">ELEVENLABS_API_KEY</code> and restart the
+              controller.
+            </V3Alert>
+          )}
+          <div className="grid grid-cols-[1fr_120px] gap-3">
+            <div className="grid gap-1.5">
+              <Label>Name</Label>
+              <Input
+                value={bedsForm.name}
+                maxLength={60}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setBedsForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="midnight-drift"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label>Length · s</Label>
+              <Input
+                className="mono-num"
+                type="number"
+                step={1}
+                min={minSec}
+                max={maxGenSec}
+                value={bedsForm.durationSec}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setBedsForm(f => ({ ...f, durationSec: e.target.value }))}
+                placeholder="45"
+              />
+            </div>
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Description · optional</Label>
+            <Input
+              value={bedsForm.description}
+              maxLength={200}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setBedsForm(f => ({ ...f, description: e.target.value }))}
+              placeholder="For your own reference — the DJ never reads this"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Generation prompt</Label>
+            <Textarea
+              rows={3}
+              value={bedsForm.prompt}
+              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setBedsForm(f => ({ ...f, prompt: e.target.value.slice(0, 500) }))}
+              placeholder="Describe the instrumental for ElevenLabs — e.g. warm lo-fi ambient pad, no drums, soft and neutral…"
+            />
+            <div className="text-right font-mono text-[11px] text-muted">{bedsForm.prompt.length} / 500</div>
+          </div>
+          <p className="m-0 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
+            Generated instrumental only (no vocals), {minSec}–{maxGenSec}s. A bed is trimmed per
+            link, so it just needs to outlast the DJ’s longest script — atmospheric and neutral
+            travels best.
+          </p>
+        </div>
+      </Modal>
+
       {/* Import — bring your own instrumental */}
       <Modal
-        open={modal}
-        onOpenChange={(o) => { if (!o) setModal(false); }}
+        open={modal === 'import'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
         title="import bed"
         sub="an instrumental the DJ can talk over"
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={() => setModal(false)}>Cancel</Button>
+            <Button variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</Button>
             <Btn sm tone="accent" onClick={doImport} disabled={busy || !importFile || !importName.trim()}>
               {busy ? 'Importing…' : 'Import'}
             </Btn>
