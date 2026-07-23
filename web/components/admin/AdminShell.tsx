@@ -71,9 +71,9 @@ const NAV_SECTIONS: NavSection[] = [
       { href: '/admin/library', id: 'library', label: 'Library', icon: Disc3 },
       { href: '/admin/shows', id: 'shows', label: 'Shows', icon: CalendarClock },
       { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
-      { href: '/admin/moods', id: 'moods', label: 'Moods', icon: Palette },
       { href: '/admin/skills', id: 'skills', label: 'Skills', icon: Sparkles },
       { href: '/admin/imaging', id: 'imaging', label: 'Imaging', icon: Podcast },
+      { href: '/admin/moods', id: 'moods', label: 'Moods', icon: Palette },
     ],
   },
   {
