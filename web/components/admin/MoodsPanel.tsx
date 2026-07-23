@@ -1,11 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Trash2 } from 'lucide-react';
+import { Trash2, Palette, Clock, CalendarDays, Volume2 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
-import { Card, Btn } from './ui';
-import { SectionHeader } from './settings/shared';
+import { cn } from '../../lib/cn';
+import { Card, Btn, Eyebrow } from './ui';
 import { Input } from '../ui/input';
 import { ScrollArea } from '../ui/scroll-area';
 import {
@@ -51,10 +51,14 @@ const NONE = '__none__';
 
 const MOODS_LIMIT = 40; // mirrors the server MOODS_LIMIT
 
+type TabId = 'vocab' | 'moments' | 'festivals' | 'speech';
+const TAB_IDS: TabId[] = ['vocab', 'moments', 'festivals', 'speech'];
+
 export default function MoodsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null); // which card is saving
+  const [tab, setTab] = useState<TabId>('vocab');
 
   // Working copies + saved baselines (for dirty detection).
   const [moods, setMoods] = useState<MoodEntry[] | null>(null);
@@ -104,6 +108,23 @@ export default function MoodsPanel() {
     if (!hydrated || needsAuth) return;
     void load();
   }, [hydrated, needsAuth, load]);
+
+  // Deep-link: /admin/moods?tab=moments opens that tab directly (mirrors
+  // /admin/imaging?tab=… and /admin/connect?tab=…).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const t = new URLSearchParams(window.location.search).get('tab');
+    if (t && (TAB_IDS as string[]).includes(t)) setTab(t as TabId);
+  }, []);
+
+  const selectTab = useCallback((id: string) => {
+    setTab(id as TabId);
+    if (typeof window !== 'undefined') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('tab', id);
+      window.history.replaceState(null, '', url.toString());
+    }
+  }, []);
 
   // POST one settings slice; on success adopt the sent value as the new
   // baseline. The controller validates strictly and returns a clear message
@@ -162,89 +183,147 @@ export default function MoodsPanel() {
       () => setSavedCorrections(effectiveCorr), 'Speech corrections saved');
   };
 
+  const loading = moods === null && !err;
+  const tabs = [
+    { id: 'vocab' as TabId, label: 'Vocabulary', count: moods?.length, icon: Palette },
+    { id: 'moments' as TabId, label: 'Moments', count: undefined as number | undefined, icon: Clock },
+    { id: 'festivals' as TabId, label: 'Festivals', count: undefined as number | undefined, icon: CalendarDays },
+    { id: 'speech' as TabId, label: 'Speech', count: moods !== null ? corrections.length : undefined, icon: Volume2 },
+  ];
+
   return (
-    <section className="grid gap-6">
-      <SectionHeader
-        eyebrow="moods"
-        title="Moods & moments."
-        sub="The station's mood vocabulary and how the autonomous DJ reaches for it — the words the library is tagged with, and which mood each part of the day, weather, and festival leans into. Edit the list, and every show, festival, and auto-DJ pick draws from it."
-        metrics={moods ? [{ n: String(moods.length), l: `mood${moods.length === 1 ? '' : 's'}`, accent: true }] : undefined}
-      />
+    <div className="grid gap-4">
+      <section className="card">
+        <div className="border-b border-ink p-4">
+          <Eyebrow className="text-vermilion">moods</Eyebrow>
+          <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
+            Moods &amp; moments.
+          </div>
+          <div className="mt-1 text-[11px] leading-[1.6] text-muted">
+            The station&apos;s mood vocabulary and how the autonomous DJ reaches for it — the
+            words the library is tagged with, and which mood each part of the day, the weather,
+            and the calendar leans into. Edit the list, and every show, festival, and auto-DJ
+            pick draws from it.
+          </div>
+        </div>
+        {/* Full-width tab row — active cell filled in the accent, mirroring the
+            Imaging page. */}
+        <div className="grid grid-cols-4" role="tablist" aria-label="Moods sections">
+          {tabs.map((t, i) => {
+            const active = tab === t.id;
+            const Icon = t.icon;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => selectTab(t.id)}
+                className={cn(
+                  'flex items-center justify-center gap-2.5 px-4 py-4 text-[13px] font-bold tracking-[0.18em] uppercase transition-colors',
+                  i > 0 && 'border-l border-ink',
+                  active
+                    ? 'bg-[var(--accent)] text-white'
+                    : 'bg-[var(--ink-softer)] text-ink hover:bg-ink/10',
+                )}
+              >
+                <Icon size={17} strokeWidth={2} aria-hidden />
+                <span>{t.label}</span>
+                {t.count != null && (
+                  <span
+                    className={cn(
+                      'ml-0.5 min-w-[1.5em] rounded-full px-1.5 py-0.5 text-[10px] leading-none font-bold',
+                      active ? 'bg-white/25 text-white' : 'bg-ink/10 text-muted',
+                    )}
+                  >
+                    {t.count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
       {err && (
-        <Card>
-          <div className="text-[var(--danger)]">{err}</div>
-        </Card>
+        <div className="card border-[var(--danger)]">
+          <div className="card-body text-[12px] text-[var(--danger)]">
+            <strong className="tracking-[0.12em] uppercase">controller error</strong>
+            <div className="mt-1">{err}</div>
+          </div>
+        </div>
       )}
 
-      {moods === null && !err && (
+      {loading && tab !== 'festivals' && (
         <div className="text-[13px] text-muted italic">loading…</div>
       )}
 
-      {moods !== null && (
-        <>
-          {/* --- Vocabulary --- */}
-          <Card title="Mood vocabulary" sub="the moods every track is tagged with">
-            <div className="field">
-              <div className="field-hint">
-                Each mood needs a short id (letters, digits, dashes) and an optional
-                sound description used for zero-shot audio tagging (heavy analyzer).
-                Changing moods or their descriptions re-scores audio moods on the
-                next analysis pass and marks LLM tags stale — re-run the tagger to
-                refresh. Removing a mood that a show, festival, or the maps below
-                still use is rejected until you reassign it.
-              </div>
-              <ScrollArea className="max-h-[360px]">
-                <div className="flex flex-col gap-2 pr-2">
-                  {moods.map((m, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <Input
-                        value={m.name}
-                        onChange={e => setMoods(list =>
-                          (list ?? []).map((row, i) => i === idx ? { ...row, name: e.target.value } : row))}
-                        placeholder="id (e.g. mellow)"
-                        maxLength={40}
-                        className="max-w-[160px] min-w-0 shrink-0"
-                      />
-                      <Input
-                        value={m.clapPrompt}
-                        onChange={e => setMoods(list =>
-                          (list ?? []).map((row, i) => i === idx ? { ...row, clapPrompt: e.target.value } : row))}
-                        placeholder="sound description for audio tagging (optional)"
-                        maxLength={200}
-                        className="min-w-0 flex-1"
-                      />
-                      <Btn
-                        sm
-                        title="Remove mood"
-                        className="shrink-0"
-                        onClick={() => setMoods(list => (list ?? []).filter((_, i) => i !== idx))}
-                      >
-                        <Trash2 size={12} />
-                      </Btn>
-                    </div>
-                  ))}
-                </div>
-              </ScrollArea>
-              <div className="mt-3 flex items-center gap-2">
-                <Btn
-                  disabled={moods.length >= MOODS_LIMIT}
-                  onClick={() => setMoods(list => [...(list ?? []), { name: '', clapPrompt: '' }])}
-                >
-                  Add mood
-                </Btn>
-                <Btn
-                  tone="accent"
-                  disabled={!moodsDirty || busy === 'moods'}
-                  onClick={saveMoods}
-                >
-                  {busy === 'moods' ? 'Saving…' : 'Save vocabulary'}
-                </Btn>
-              </div>
+      {/* --- Vocabulary --- */}
+      {tab === 'vocab' && moods !== null && (
+        <Card title="Mood vocabulary" sub="the moods every track is tagged with">
+          <div className="field">
+            <div className="field-hint">
+              Each mood needs a short id (letters, digits, dashes) and an optional
+              sound description used for zero-shot audio tagging (heavy analyzer).
+              Changing moods or their descriptions re-scores audio moods on the
+              next analysis pass and marks LLM tags stale — re-run the tagger to
+              refresh. Removing a mood that a show, festival, or the maps in Moments
+              still use is rejected until you reassign it.
             </div>
-          </Card>
+            <ScrollArea className="max-h-[420px]">
+              <div className="flex flex-col gap-2 pr-2">
+                {moods.map((m, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <Input
+                      value={m.name}
+                      onChange={e => setMoods(list =>
+                        (list ?? []).map((row, i) => i === idx ? { ...row, name: e.target.value } : row))}
+                      placeholder="id (e.g. mellow)"
+                      maxLength={40}
+                      className="max-w-[160px] min-w-0 shrink-0"
+                    />
+                    <Input
+                      value={m.clapPrompt}
+                      onChange={e => setMoods(list =>
+                        (list ?? []).map((row, i) => i === idx ? { ...row, clapPrompt: e.target.value } : row))}
+                      placeholder="sound description for audio tagging (optional)"
+                      maxLength={200}
+                      className="min-w-0 flex-1"
+                    />
+                    <Btn
+                      sm
+                      title="Remove mood"
+                      className="shrink-0"
+                      onClick={() => setMoods(list => (list ?? []).filter((_, i) => i !== idx))}
+                    >
+                      <Trash2 size={12} />
+                    </Btn>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+            <div className="mt-3 flex items-center gap-2">
+              <Btn
+                disabled={moods.length >= MOODS_LIMIT}
+                onClick={() => setMoods(list => [...(list ?? []), { name: '', clapPrompt: '' }])}
+              >
+                Add mood
+              </Btn>
+              <Btn
+                tone="accent"
+                disabled={!moodsDirty || busy === 'moods'}
+                onClick={saveMoods}
+              >
+                {busy === 'moods' ? 'Saving…' : 'Save vocabulary'}
+              </Btn>
+            </div>
+          </div>
+        </Card>
+      )}
 
-          {/* --- Time of day → mood --- */}
+      {/* --- Moments: time-of-day + weather --- */}
+      {tab === 'moments' && moods !== null && (
+        <>
           <Card title="Time of day → mood" sub="what the autonomous DJ leans into through the day">
             <div className="grid gap-2">
               {PERIODS.map(p => (
@@ -276,7 +355,6 @@ export default function MoodsPanel() {
             </div>
           </Card>
 
-          {/* --- Weather → mood --- */}
           <Card title="Weather → mood" sub="how live conditions colour the mood (overrides time of day)">
             <div className="grid gap-2">
               {CONDITIONS.map(c => (
@@ -305,72 +383,74 @@ export default function MoodsPanel() {
               </div>
             </div>
           </Card>
-
-          {/* --- Speech corrections (relocated from the TTS tab) --- */}
-          <Card title="Speech corrections" sub="pronunciation fixes">
-            <div className="field">
-              <div className="field-hint">
-                Find→replace rules applied to every spoken line before the voice engine
-                reads it, for names and terms the engines mispronounce (<em>GHz</em> →
-                <em> gigahertz</em>, <em>Hozier</em> → <em>Ho-zeer</em>). Case-insensitive,
-                matches whole words and phrases; leave the spoken form empty to drop the
-                phrase entirely. Saved rules apply from the next spoken line, no restart.
-              </div>
-              <ScrollArea className="max-h-[280px]">
-                <div className="flex flex-col gap-2 pr-2">
-                  {corrections.map((c, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <Input
-                        value={c.from}
-                        onChange={e => setCorrections(list =>
-                          list.map((row, i) => i === idx ? { ...row, from: e.target.value } : row))}
-                        placeholder="text on air (e.g. GHz)"
-                        maxLength={80}
-                        className="max-w-[220px] min-w-0 flex-1"
-                      />
-                      <span className="shrink-0 text-[11px] text-muted">reads as</span>
-                      <Input
-                        value={c.to}
-                        onChange={e => setCorrections(list =>
-                          list.map((row, i) => i === idx ? { ...row, to: e.target.value } : row))}
-                        placeholder="spoken form (e.g. gigahertz)"
-                        maxLength={160}
-                        className="max-w-[260px] min-w-0 flex-1"
-                      />
-                      <Btn
-                        sm
-                        title="Remove correction"
-                        className="shrink-0"
-                        onClick={() => setCorrections(list => list.filter((_, i) => i !== idx))}
-                      >
-                        <Trash2 size={12} />
-                      </Btn>
-                    </div>
-                  ))}
-                </div>
-              </ScrollArea>
-              <div className="mt-3 flex items-center gap-2">
-                <Btn
-                  disabled={corrections.length >= 100}
-                  onClick={() => setCorrections(list => [...list, { from: '', to: '' }])}
-                >
-                  Add correction
-                </Btn>
-                <Btn
-                  tone="accent"
-                  disabled={!correctionsDirty || busy === 'corrections'}
-                  onClick={saveCorrections}
-                >
-                  {busy === 'corrections' ? 'Saving…' : 'Save corrections'}
-                </Btn>
-              </div>
-            </div>
-          </Card>
         </>
       )}
 
-      {/* --- Festival calendar (self-contained, composed as-is) --- */}
-      <FestivalsSection />
-    </section>
+      {/* --- Festivals (self-contained, composed as-is) --- */}
+      {tab === 'festivals' && <FestivalsSection />}
+
+      {/* --- Speech corrections (relocated from the TTS tab) --- */}
+      {tab === 'speech' && moods !== null && (
+        <Card title="Speech corrections" sub="pronunciation fixes">
+          <div className="field">
+            <div className="field-hint">
+              Find→replace rules applied to every spoken line before the voice engine
+              reads it, for names and terms the engines mispronounce (<em>GHz</em> →
+              <em> gigahertz</em>, <em>Hozier</em> → <em>Ho-zeer</em>). Case-insensitive,
+              matches whole words and phrases; leave the spoken form empty to drop the
+              phrase entirely. Saved rules apply from the next spoken line, no restart.
+            </div>
+            <ScrollArea className="max-h-[360px]">
+              <div className="flex flex-col gap-2 pr-2">
+                {corrections.map((c, idx) => (
+                  <div key={idx} className="flex items-center gap-2">
+                    <Input
+                      value={c.from}
+                      onChange={e => setCorrections(list =>
+                        list.map((row, i) => i === idx ? { ...row, from: e.target.value } : row))}
+                      placeholder="text on air (e.g. GHz)"
+                      maxLength={80}
+                      className="max-w-[220px] min-w-0 flex-1"
+                    />
+                    <span className="shrink-0 text-[11px] text-muted">reads as</span>
+                    <Input
+                      value={c.to}
+                      onChange={e => setCorrections(list =>
+                        list.map((row, i) => i === idx ? { ...row, to: e.target.value } : row))}
+                      placeholder="spoken form (e.g. gigahertz)"
+                      maxLength={160}
+                      className="max-w-[260px] min-w-0 flex-1"
+                    />
+                    <Btn
+                      sm
+                      title="Remove correction"
+                      className="shrink-0"
+                      onClick={() => setCorrections(list => list.filter((_, i) => i !== idx))}
+                    >
+                      <Trash2 size={12} />
+                    </Btn>
+                  </div>
+                ))}
+              </div>
+            </ScrollArea>
+            <div className="mt-3 flex items-center gap-2">
+              <Btn
+                disabled={corrections.length >= 100}
+                onClick={() => setCorrections(list => [...list, { from: '', to: '' }])}
+              >
+                Add correction
+              </Btn>
+              <Btn
+                tone="accent"
+                disabled={!correctionsDirty || busy === 'corrections'}
+                onClick={saveCorrections}
+              >
+                {busy === 'corrections' ? 'Saving…' : 'Save corrections'}
+              </Btn>
+            </div>
+          </div>
+        </Card>
+      )}
+    </div>
   );
 }
