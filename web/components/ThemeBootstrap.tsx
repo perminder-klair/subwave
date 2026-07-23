@@ -11,10 +11,15 @@ import {
 } from 'react';
 import {
   applyTheme,
+  applyMode,
   cacheTheme,
   loadThemeOverride,
   saveThemeOverride,
+  loadModeOverride,
+  saveModeOverride,
+  resolveCurrentMode,
   type Theme,
+  type ThemeMode,
 } from '@/lib/theme';
 // Install-level concern: the theme registry belongs to *this* deployment, so
 // this always goes through the same-origin default client — never a showcase
@@ -32,6 +37,11 @@ interface ThemeContextValue {
   effectiveId: string | null;
   /** Save or clear the override and re-apply immediately. null clears it. */
   setOverride: (id: string | null) => void;
+  /** The listener's explicit light/dark override, or null when following the
+   *  active palette / system preference. */
+  mode: ThemeMode | null;
+  /** Flip the explicit light/dark override (also bound to the `d` hotkey). */
+  toggleMode: () => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
@@ -61,20 +71,44 @@ export default function ThemeBootstrap({ children }: { children?: ReactNode }) {
   const [themes, setThemes] = useState<Theme[]>([]);
   const [stationActiveId, setStationActiveId] = useState<string | null>(null);
   const [overrideId, setOverrideIdState] = useState<string | null>(null);
+  const [mode, setModeState] = useState<ThemeMode | null>(null);
 
-  // Read the override on mount so SSR can render through cleanly — localStorage
+  // Read the overrides on mount so SSR can render through cleanly — localStorage
   // is only safe to touch in an effect. The pre-paint <script> already painted
-  // the right tokens, so a one-tick lag in state is invisible.
+  // the right tokens + mode, so a one-tick lag in state is invisible.
   useEffect(() => {
     setOverrideIdState(loadThemeOverride());
+    setModeState(loadModeOverride());
   }, []);
 
-  // Hold the latest themes + override in refs so the polling loop can resolve
+  // Keep the document's dark-mode class in lock-step with the resolved mode:
+  // the listener's explicit light/dark override when set, otherwise the active
+  // palette's mode / the system `prefers-color-scheme`. Written inline so the
+  // theme-class management lives in the shell-mounted provider itself.
+  useEffect(() => {
+    const root = document.documentElement;
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const syncDark = () => {
+      const forced = loadModeOverride();
+      const attr = root.getAttribute('data-theme');
+      const isDark = forced
+        ? forced === 'dark'
+        : attr === 'dark' || (attr !== 'light' && media.matches);
+      root.classList.toggle('dark', isDark);
+    };
+    syncDark();
+    media.addEventListener('change', syncDark);
+    return () => media.removeEventListener('change', syncDark);
+  }, [mode, stationActiveId, overrideId]);
+
+  // Hold the latest themes + overrides in refs so the polling loop can resolve
   // the effective theme without re-creating itself on every state change.
   const themesRef = useRef<Theme[]>(themes);
   const overrideRef = useRef<string | null>(overrideId);
+  const modeRef = useRef<ThemeMode | null>(mode);
   themesRef.current = themes;
   overrideRef.current = overrideId;
+  modeRef.current = mode;
 
   // Resolve and apply the effective theme from the latest registry + override.
   // Returns the resolved theme so callers can derive ids for state updates.
@@ -86,6 +120,10 @@ export default function ThemeBootstrap({ children }: { children?: ReactNode }) {
         applyTheme(theme);
         cacheTheme(theme);
       }
+      // The listener's explicit light/dark choice wins over the palette's own
+      // mode — re-assert it after every (re)apply so the 30s poll can't revert
+      // it back to the palette default.
+      if (modeRef.current) applyMode(modeRef.current);
       return theme;
     },
     [],
@@ -129,6 +167,54 @@ export default function ThemeBootstrap({ children }: { children?: ReactNode }) {
     [applyEffective, stationActiveId],
   );
 
+  // Set (or clear, with null) the explicit light/dark override. Applies
+  // immediately; clearing re-applies the active palette's own mode.
+  const setMode = useCallback(
+    (next: ThemeMode | null) => {
+      saveModeOverride(next);
+      // Keep the ref in lock-step so applyEffective's re-assert sees the new
+      // value on this same tick (clearing must not re-apply the old mode).
+      modeRef.current = next;
+      setModeState(next);
+      if (next) applyMode(next);
+      else applyEffective(themesRef.current, stationActiveId, overrideRef.current);
+    },
+    [applyEffective, stationActiveId],
+  );
+
+  // Toggle bound to the `d` hotkey (below) and any switcher UI: flip the
+  // document's current light/dark rendering and pin it as the explicit choice.
+  const toggleMode = useCallback(() => {
+    setMode(resolveCurrentMode() === 'dark' ? 'light' : 'dark');
+  }, [setMode]);
+
+  // Global dark-mode shortcut: bare `d`, ignoring auto-repeat, already-handled
+  // presses, modifier combos, and any keystroke aimed at a text field / select
+  // / contenteditable so it never fires while the listener is typing.
+  const toggleModeRef = useRef(toggleMode);
+  toggleModeRef.current = toggleMode;
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat || e.defaultPrevented) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+      if (e.key.toLowerCase() !== 'd') return;
+      const t = e.target;
+      if (
+        t instanceof HTMLElement &&
+        (t.tagName === 'INPUT' ||
+          t.tagName === 'TEXTAREA' ||
+          t.tagName === 'SELECT' ||
+          t.isContentEditable)
+      ) {
+        return;
+      }
+      e.preventDefault();
+      toggleModeRef.current();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   // The resolved effective id — what the switcher should highlight as "active".
   // Mirrors the resolution in applyEffective so context consumers don't need
   // to re-implement the precedence rules.
@@ -137,7 +223,7 @@ export default function ThemeBootstrap({ children }: { children?: ReactNode }) {
 
   return (
     <ThemeContext.Provider
-      value={{ themes, stationActiveId, overrideId, effectiveId, setOverride }}
+      value={{ themes, stationActiveId, overrideId, effectiveId, setOverride, mode, toggleMode }}
     >
       {children}
     </ThemeContext.Provider>

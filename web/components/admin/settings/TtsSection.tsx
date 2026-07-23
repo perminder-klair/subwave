@@ -638,7 +638,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                           if (first) setVoice(first);
                         }}
                       >
-                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectTrigger aria-label="Language"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectGroup>
                             {Object.entries(languages).map(([k, v]) => (
@@ -651,7 +651,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                     <div className="field mt-3">
                       <Label>Voice</Label>
                       <Select value={voice} onValueChange={setVoice}>
-                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectTrigger aria-label="Voice"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           <SelectGroup>
                             {!filtered.includes(voice) && (
@@ -677,7 +677,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                     setForm(f => ({ ...f, kokoroLang: val === '__auto__' ? '' : val }))
                   }
                 >
-                  <SelectTrigger className="w-[260px]"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-[260px]" aria-label="Language override"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       <SelectItem value="__auto__">Natural, voice default</SelectItem>
@@ -712,7 +712,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                       tts: { ...f.tts, chatterbox: { ...f.tts.chatterbox, referenceVoice: val === CB_DEFAULT_VOICE ? '' : val } },
                     }))}
                   >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger aria-label="Chatterbox reference voice"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
                         <SelectItem value={CB_DEFAULT_VOICE}>Built-in default voice</SelectItem>
@@ -759,7 +759,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                       ...f, tts: { ...f.tts, pocketTts: { ...f.tts.pocketTts, voice: val } },
                     }))}
                   >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger aria-label="PocketTTS voice"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
                         <SelectLabel>Built-in</SelectLabel>
@@ -950,6 +950,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                     <div className="flex items-stretch gap-2">
                       <Input
                         type="password"
+                        autoComplete="new-password"
                         value={cloudKeyInput}
                         placeholder={data.env?.[cloudKeyVar] ? '•••••• (on file)' : (KEY_HINTS[cloudKeyVar] ?? '')}
                         onChange={(e: ChangeEvent<HTMLInputElement>) => setCloudKeyInput(e.target.value)}
@@ -980,6 +981,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <Label>API key</Label>
                 <Input
                   type="password"
+                  autoComplete="new-password"
                   value={compatKeyInput}
                   placeholder={savedCloud.apiKey === 'set' ? '•••••• (on file)' : 'Optional'}
                   onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}

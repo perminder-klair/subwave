@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { LayoutTemplate, Palette, Zap } from 'lucide-react';
+import { LayoutTemplate, Moon, Palette, Sun, Zap } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useDynamicStyle } from '../hooks/useDynamicStyle';
 import { useLiteMode } from '../hooks/useLiteMode';
@@ -70,7 +70,10 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
   // nothing useful to open.
   if (!ctx || ctx.themes.length === 0) return null;
 
-  const { themes, stationActiveId, overrideId, effectiveId } = ctx;
+  const { themes, stationActiveId, overrideId, effectiveId, mode, toggleMode } = ctx;
+  // Reflect the current rendering: the explicit override if the listener set
+  // one, otherwise the effective palette's own mode.
+  const isDark = mode ? mode === 'dark' : themes.find(t => t.id === effectiveId)?.mode === 'dark';
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
@@ -161,6 +164,41 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
                   ({themes.find(t => t.id === stationActiveId)?.name ?? stationActiveId})
                 </span>
               )}
+            </button>
+
+            {/* Explicit light/dark toggle — independent of which palette is
+                active, and the on-screen twin of the `d` keyboard shortcut.
+                Pins the choice per-browser (wins over the palette + system
+                preference); tapping again flips it. Stays open so the flip is
+                visible. */}
+            <button
+              type="button"
+              aria-pressed={isDark}
+              onClick={() => toggleMode()}
+              className="v3-focus mt-2 flex w-full cursor-pointer items-center gap-2 border border-soft-border bg-bg px-2 py-1.5 text-left hover:bg-[var(--overlay)]"
+            >
+              {isDark ? (
+                <Moon className="h-4 w-4 shrink-0" aria-hidden="true" />
+              ) : (
+                <Sun className="h-4 w-4 shrink-0" aria-hidden="true" />
+              )}
+              <span className="grid min-w-0 flex-1 gap-0.5">
+                <span className="truncate text-[11px] font-bold tracking-[0.12em] uppercase">
+                  Dark mode
+                </span>
+                <span className="truncate text-[10px] leading-[1.3] text-muted">
+                  Toggle light / dark — shortcut: D
+                </span>
+              </span>
+              <span
+                className={cn(
+                  'shrink-0 text-[10px] font-bold tracking-[0.2em] uppercase',
+                  isDark ? 'text-vermilion' : 'text-muted',
+                )}
+                aria-hidden="true"
+              >
+                {isDark ? 'On' : 'Off'}
+              </span>
             </button>
 
             {/* Player-skin picker — a different face for the whole player, not

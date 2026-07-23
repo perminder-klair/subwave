@@ -355,6 +355,7 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
             ref={importRef}
             type="file"
             accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
+            aria-label="Import bed audio file"
             onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
             className="hidden"
           />

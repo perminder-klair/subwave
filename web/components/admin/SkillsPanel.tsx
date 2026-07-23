@@ -732,6 +732,7 @@ export default function SkillsPanel() {
               ref={fileInputRef}
               type="file"
               accept=".zip,application/zip"
+              aria-label="Import skill zip"
               className="hidden"
               onChange={e => {
                 const f = e.target.files?.[0];

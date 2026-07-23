@@ -28,7 +28,7 @@ export default function SetupPage() {
 
   if (error) {
     return (
-      <div className="mx-auto max-w-2xl px-4 py-12">
+      <div role="alert" className="mx-auto max-w-2xl px-4 py-12">
         <h1 className="text-2xl font-semibold text-ink">Couldn&apos;t reach the controller</h1>
         <p className="mt-2 text-sm text-ink/70">
           Open <code>{API_URL}/onboarding/status</code> in another tab to confirm it&apos;s up. Error: <code>{error}</code>
@@ -36,7 +36,7 @@ export default function SetupPage() {
       </div>
     );
   }
-  if (!status) return <div className="p-8 text-sm text-ink/60">Loading…</div>;
+  if (!status) return <div role="status" className="p-8 text-sm text-ink/60">Loading…</div>;
   if (status.needsSetup) return <WizardShell />;
 
   // Setup already complete.

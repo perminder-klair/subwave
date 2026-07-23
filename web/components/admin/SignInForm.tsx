@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Input } from '../ui/input';
 import { Button } from '../ui/button';
@@ -16,6 +16,7 @@ export default function SignInForm({ onSubmit }: SignInFormProps) {
   const [pass, setPass] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const errId = useId();
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e?.preventDefault?.();
@@ -46,6 +47,8 @@ export default function SignInForm({ onSubmit }: SignInFormProps) {
               type="text"
               autoComplete="username"
               placeholder="username"
+              aria-label="Username"
+              required
               value={user}
               onChange={e => setUser(e.target.value)}
               autoFocus
@@ -56,11 +59,15 @@ export default function SignInForm({ onSubmit }: SignInFormProps) {
               type="password"
               autoComplete="current-password"
               placeholder="password"
+              aria-label="Password"
+              required
+              minLength={1}
               value={pass}
               onChange={e => setPass(e.target.value)}
               aria-invalid={err ? true : undefined}
+              aria-describedby={err ? errId : undefined}
             />
-            <FieldError>{err}</FieldError>
+            <FieldError id={errId}>{err}</FieldError>
           </Field>
           <Button type="submit" variant="accent" disabled={!user || !pass || busy}>
             {busy ? 'signing in…' : 'sign in'}

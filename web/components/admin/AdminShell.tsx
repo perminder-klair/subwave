@@ -47,7 +47,15 @@ import NavidromeBanner from './NavidromeBanner';
 import OdometerNumber from '../OdometerNumber';
 import BoothBuddy from '../BoothBuddy';
 import ThemeSwitcher from '../ThemeSwitcher';
-import { Toaster } from '../ui/toaster';
+import {
+  CommandDialog,
+  CommandInput,
+  CommandList,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+  CommandShortcut,
+} from '../ui/command';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import {
   Sidebar,
@@ -339,8 +347,68 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
           </div>
         </SidebarInset>
       </SidebarProvider>
-      <Toaster />
+      <AdminCommandMenu />
+      {/* Toaster is mounted once at the app shell (app/layout.tsx). */}
     </div>
+  );
+}
+
+// ⌘K / Ctrl+K command menu for the admin console — jump between panels without
+// reaching for the sidebar. Reuses the shared cmdk-based CommandDialog, and is
+// mounted from the authenticated admin shell so it is available on every admin
+// route. The chord is a modifier combo, so it is safe to honour even while a
+// field is focused (it never intercepts a bare keystroke).
+function AdminCommandMenu() {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setOpen(o => !o);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  const go = (href: string) => () => {
+    setOpen(false);
+    router.push(href);
+  };
+
+  // Flatten the sidebar nav (section items + their route/tab children) into one
+  // searchable jump list.
+  const targets: { href: string; label: string; group: string }[] = [];
+  for (const section of NAV_SECTIONS) {
+    for (const item of section.items) {
+      targets.push({ href: item.href, label: item.label, group: section.label });
+      for (const child of item.children ?? []) {
+        targets.push({
+          href: child.href,
+          label: `${item.label} → ${child.label}`,
+          group: section.label,
+        });
+      }
+    }
+  }
+
+  return (
+    <CommandDialog open={open} onOpenChange={setOpen} label="Admin command menu">
+      <CommandInput placeholder="Jump to a panel…" />
+      <CommandList>
+        <CommandEmpty>No matches.</CommandEmpty>
+        <CommandGroup heading="Go to">
+          {targets.map(t => (
+            <CommandItem key={`${t.href}::${t.label}`} value={t.label} onSelect={go(t.href)}>
+              <span>{t.label}</span>
+              <CommandShortcut>{t.group}</CommandShortcut>
+            </CommandItem>
+          ))}
+        </CommandGroup>
+      </CommandList>
+    </CommandDialog>
   );
 }
 

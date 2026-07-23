@@ -499,6 +499,7 @@ export const CodeBlockCopyButton = ({
 
   return (
     <Button
+      aria-label="Copy"
       className={cn("shrink-0", className)}
       onClick={copyToClipboard}
       size="icon"
@@ -525,6 +526,7 @@ export const CodeBlockLanguageSelectorTrigger = ({
   ...props
 }: CodeBlockLanguageSelectorTriggerProps) => (
   <SelectTrigger
+    aria-label="Select language"
     className={cn(
       "h-7 border-none bg-transparent px-2 text-xs shadow-none",
       className

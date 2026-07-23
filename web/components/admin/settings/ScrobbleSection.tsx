@@ -177,6 +177,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
             <Label>API key</Label>
             <Input
               type="password"
+              autoComplete="new-password"
               value={inputValue(lf.apiKey)}
               placeholder={placeholder(lf.apiKey, 'your last.fm API key')}
               onChange={(e: ChangeEvent<HTMLInputElement>) =>
@@ -197,6 +198,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
             <Label>API secret</Label>
             <Input
               type="password"
+              autoComplete="new-password"
               value={inputValue(lf.apiSecret)}
               placeholder={placeholder(lf.apiSecret, 'your last.fm API secret')}
               onChange={(e: ChangeEvent<HTMLInputElement>) =>
@@ -246,6 +248,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
             <Label>Session key</Label>
             <Input
               type="password"
+              autoComplete="current-password"
               value={inputValue(lf.sessionKey)}
               placeholder={placeholder(lf.sessionKey, 'long-lived session key')}
               onChange={(e: ChangeEvent<HTMLInputElement>) =>
@@ -353,6 +356,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
             <Label>User token</Label>
             <Input
               type="password"
+              autoComplete="current-password"
               value={inputValue(lb.userToken)}
               placeholder={placeholder(lb.userToken, 'your listenbrainz user token')}
               onChange={(e: ChangeEvent<HTMLInputElement>) =>

@@ -247,7 +247,7 @@ function SwitchRow({ label, hint, on, onToggle, mutedLabel }: {
         <div className={cn('text-[13px] font-semibold', mutedLabel && 'text-muted')}>{label}</div>
         <div className="font-mono text-[10px] text-muted">{hint}</div>
       </div>
-      <Switch checked={on} onCheckedChange={onToggle} />
+      <Switch checked={on} onCheckedChange={onToggle} aria-label={label} />
     </div>
   );
 }
@@ -840,6 +840,7 @@ export default function PlaylistBuilderPanel() {
                 onChange={e => setPrompt(e.target.value)}
                 rows={3}
                 placeholder={'“rainy sunday jazz that warms up halfway through”'}
+                aria-label="Vibe"
                 className={cn(searchInputClass, 'resize-none leading-[1.45]')}
               />
             </div>
@@ -855,6 +856,7 @@ export default function PlaylistBuilderPanel() {
                   value={seedQuery}
                   onChange={e => setSeedQuery(e.target.value)}
                   placeholder="Search a track or artist to anchor on…"
+                  aria-label="Search seeds"
                   className={searchInputClass}
                 />
                 {seedResults && (seedResults.length > 0 || seedArtists.length > 0) && (
@@ -915,7 +917,7 @@ export default function PlaylistBuilderPanel() {
                 <Eyeb>Target length</Eyeb>
                 <span className="font-mono text-[11px] font-bold text-vermilion">{count} tracks</span>
               </div>
-              <input type="range" min={5} max={60} value={count} onChange={e => setCount(+e.target.value)} className="w-full accent-[var(--accent)]" />
+              <input type="range" min={5} max={60} value={count} onChange={e => setCount(+e.target.value)} aria-label="Target length in tracks" className="w-full accent-[var(--accent)]" />
               <div className="mt-[5px] flex justify-between font-mono text-[9px] text-muted"><span>5</span><span>60</span></div>
             </div>
 
@@ -925,7 +927,7 @@ export default function PlaylistBuilderPanel() {
                 <Eyeb>Artist spacing</Eyeb>
                 <span className="font-mono text-[11px] text-muted">{artistSpacing ? `min ${artistSpacing} apart` : 'off'}</span>
               </div>
-              <input type="range" min={0} max={5} value={artistSpacing} onChange={e => setArtistSpacing(+e.target.value)} className="w-full accent-[var(--accent)]" />
+              <input type="range" min={0} max={5} value={artistSpacing} onChange={e => setArtistSpacing(+e.target.value)} aria-label="Artist spacing" className="w-full accent-[var(--accent)]" />
             </div>
 
             {/* track-length band — min/max anchors on one track */}
@@ -941,7 +943,7 @@ export default function PlaylistBuilderPanel() {
                             : 'any'}
                     </span>
                   )}
-                  <Switch checked={capOn} onCheckedChange={setCapOn} />
+                  <Switch checked={capOn} onCheckedChange={setCapOn} aria-label="Limit track length" />
                 </div>
               </div>
               <DualRange
@@ -970,7 +972,7 @@ export default function PlaylistBuilderPanel() {
                             : 'any bpm'}
                     </span>
                   )}
-                  <Switch checked={bpmOn} onCheckedChange={setBpmOn} />
+                  <Switch checked={bpmOn} onCheckedChange={setBpmOn} aria-label="Limit tempo" />
                 </div>
               </div>
               <DualRange
@@ -1058,6 +1060,7 @@ export default function PlaylistBuilderPanel() {
                   onKeyDown={e => { if (e.key === 'Enter' || e.key === ',') { e.preventDefault(); addGenre(); } }}
                   onBlur={() => { if (genreInput.trim()) addGenre(); }}
                   placeholder="Add a genre…"
+                  aria-label="Add a genre"
                   className={searchInputClass}
                 />
                 {genreSuggestions && genreSuggestions.length > 0 && (
@@ -1104,6 +1107,7 @@ export default function PlaylistBuilderPanel() {
                   value={artistQuery}
                   onChange={e => setArtistQuery(e.target.value)}
                   placeholder="Add an artist…"
+                  aria-label="Add an artist"
                   className={searchInputClass}
                 />
                 {artistResults && artistResults.length > 0 && (
@@ -1196,17 +1200,18 @@ export default function PlaylistBuilderPanel() {
                       value={name}
                       onChange={e => setName(e.target.value)}
                       placeholder="Untitled set"
+                      aria-label="Playlist name"
                       className="min-w-0 flex-1 border-b border-transparent bg-transparent py-0.5 font-display text-2xl font-bold tracking-[-0.01em] text-ink outline-none placeholder:text-muted/50 hover:border-separator-soft focus:border-[var(--accent)]"
                     />
                     <div className="flex flex-none items-center gap-1.5">
                       <Button variant="ghost" size="sm" className="h-8" onClick={openBrowse} title="open a playlist from the music server">
-                        <FolderOpen />Open
+                        <FolderOpen data-icon="inline-start" />Open
                       </Button>
                       <Button variant="ghost" size="sm" className="h-8" onClick={doNew} title="start a blank draft">
-                        <FilePlus2 />New
+                        <FilePlus2 data-icon="inline-start" />New
                       </Button>
                       <Button variant="accent" size="sm" className="h-8" disabled={saveDisabled} onClick={openSave} title="save to Navidrome">
-                        <Save />{existingId ? 'Update' : 'Save'}
+                        <Save data-icon="inline-start" />{existingId ? 'Update' : 'Save'}
                       </Button>
                     </div>
                   </div>
@@ -1287,7 +1292,8 @@ export default function PlaylistBuilderPanel() {
                     value={addQuery}
                     onChange={e => setAddQuery(e.target.value)}
                     placeholder="Add any track from your library…"
-                    className="w-full bg-transparent text-sm text-ink outline-none placeholder:text-muted/60"
+                    aria-label="Add a track"
+                    className="w-full bg-transparent text-sm text-ink outline-none placeholder:text-muted/60 focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
                   />
                   {addResults && addResults.length > 0 && (
                     <div className="absolute top-full right-4 left-4 z-20 max-h-64 overflow-auto border border-ink bg-bg shadow-drawer sm:right-6 sm:left-6">
@@ -1479,12 +1485,25 @@ export default function PlaylistBuilderPanel() {
       {/* OPEN-EXISTING MODAL */}
       {modal === 'open' && (
         <div
+          role="button"
+          tabIndex={0}
+          aria-label="Close dialog"
           className="fixed inset-0 z-[80] flex items-start justify-center bg-[rgba(20,18,14,0.42)] p-5 pt-16"
-          onClick={() => setModal(null)}
+          // Close on a click landing on the backdrop itself (not bubbled from
+          // the panel), so the panel needs no onClick stopPropagation of its own.
+          onClick={e => { if (e.target === e.currentTarget) setModal(null); }}
+          // Escape closes from anywhere in the dialog; Enter/Space only when the
+          // backdrop itself is focused, so typing inside a field isn't hijacked.
+          onKeyDown={e => {
+            if (e.key === 'Escape') { setModal(null); return; }
+            if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
+              e.preventDefault();
+              setModal(null);
+            }
+          }}
         >
           <div
             className="flex max-h-[78vh] w-full max-w-[560px] flex-col border border-ink bg-bg shadow-drawer"
-            onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between border-b border-ink px-5 py-4">
               <div>
@@ -1498,6 +1517,7 @@ export default function PlaylistBuilderPanel() {
                 value={playlistQuery}
                 onChange={e => setPlaylistQuery(e.target.value)}
                 placeholder="Search playlists…"
+                aria-label="Search playlists"
                 className={searchInputClass}
               />
             </div>
@@ -1559,10 +1579,20 @@ export default function PlaylistBuilderPanel() {
       {/* SAVE MODAL */}
       {modal === 'save' && (
         <div
+          role="button"
+          tabIndex={0}
+          aria-label="Close dialog"
           className="fixed inset-0 z-[80] flex items-start justify-center bg-[rgba(20,18,14,0.42)] p-5 pt-16"
-          onClick={() => setModal(null)}
+          onClick={e => { if (e.target === e.currentTarget) setModal(null); }}
+          onKeyDown={e => {
+            if (e.key === 'Escape') { setModal(null); return; }
+            if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
+              e.preventDefault();
+              setModal(null);
+            }
+          }}
         >
-          <div className="w-full max-w-[480px] border border-ink bg-bg shadow-drawer" onClick={e => e.stopPropagation()}>
+          <div className="w-full max-w-[480px] border border-ink bg-bg shadow-drawer">
             <div className="flex items-center justify-between border-b border-ink px-5 py-4">
               <div>
                 <div className="font-mono text-[10px] font-bold tracking-[0.18em] text-muted uppercase">
@@ -1575,7 +1605,7 @@ export default function PlaylistBuilderPanel() {
             <div className="grid gap-4 px-5 py-[18px]">
               <div>
                 <div className="mb-[7px]"><Eyeb>Name</Eyeb></div>
-                <input value={saveName} onChange={e => setSaveName(e.target.value)} placeholder="Untitled set" className={searchInputClass} />
+                <input value={saveName} onChange={e => setSaveName(e.target.value)} placeholder="Untitled set" aria-label="Playlist name" className={searchInputClass} />
               </div>
               {existingId && (
                 <div className="grid gap-2">
@@ -1610,7 +1640,7 @@ export default function PlaylistBuilderPanel() {
                     Remembers this recipe and appends new matching songs after library tagging.
                   </div>
                 </div>
-                <Switch checked={saveSync} onCheckedChange={setSaveSync} />
+                <Switch checked={saveSync} onCheckedChange={setSaveSync} aria-label="Keep in sync" />
               </div>
             </div>
             <div className="flex items-center justify-between gap-3 border-t border-ink px-5 py-3.5">

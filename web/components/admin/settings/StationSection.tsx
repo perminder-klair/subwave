@@ -221,7 +221,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
               }))
             }
           >
-            <SelectTrigger className="w-[240px]"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-[240px]" aria-label="Weather units"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
                 <SelectItem value="metric">Metric (°C)</SelectItem>
@@ -245,7 +245,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
               setForm(f => ({ ...f, timezone: val === 'auto' ? '' : val }))
             }
           >
-            <SelectTrigger className="w-[300px]"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-[300px]" aria-label="Station timezone"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
                 <SelectItem value="auto">Auto, server timezone ({serverTz})</SelectItem>
@@ -289,7 +289,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
               setForm(f => ({ ...f, locale: normalizeStationLocale(val) }))
             }
           >
-            <SelectTrigger className="w-[260px]"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="w-[260px]" aria-label="Station locale"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
                 <SelectItem value="en-GB">English (UK), 24-hour</SelectItem>
@@ -350,6 +350,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
             <Label>Station password</Label>
             <Input
               type="password"
+              autoComplete="current-password"
               value={form.privacy.password === 'set' ? '' : form.privacy.password}
               placeholder={passwordOnFile ? '••••••••  (saved)' : 'shared station password'}
               onChange={(e: ChangeEvent<HTMLInputElement>) =>

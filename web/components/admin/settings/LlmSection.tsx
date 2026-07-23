@@ -422,6 +422,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <div className="flex items-stretch gap-2">
                   <Input
                     type="password"
+                    autoComplete="new-password"
                     value={compatKeyInput}
                     onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
                     placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.[form.llm.provider] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
@@ -489,6 +490,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                   <div className="flex items-stretch gap-2">
                     <Input
                       type="password"
+                      autoComplete="new-password"
                       value={primaryKeyInput}
                       placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
                       onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
@@ -638,7 +640,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                     setForm(f => ({ ...f, llm: { ...f.llm, fallback: { ...f.llm.fallback, provider: v } } }))
                   }
                 >
-                  <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="max-w-[360px]" aria-label="Backup provider"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
                       {(data.llm?.providers || ['ollama']).map(p => (
@@ -737,6 +739,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                     <div className="flex items-stretch gap-2">
                       <Input
                         type="password"
+                        autoComplete="new-password"
                         value={compatFallbackKeyInput}
                         onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
                         placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.[form.llm.fallback.provider] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
@@ -799,6 +802,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                       <div className="flex items-stretch gap-2">
                         <Input
                           type="password"
+                          autoComplete="new-password"
                           value={fallbackKeyInput}
                           placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
                           onChange={(e: ChangeEvent<HTMLInputElement>) => setFallbackKeyInput(e.target.value)}

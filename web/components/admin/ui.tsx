@@ -195,14 +195,18 @@ export interface ToggleProps {
   on?: boolean;
   onClick?: () => void;
   disabled?: boolean;
+  /** Accessible name — the switch has no visible text of its own, so pass the
+   *  label of the setting it controls (from the surrounding row). */
+  ariaLabel?: string;
 }
 
-export function Toggle({ on, onClick, disabled }: ToggleProps) {
+export function Toggle({ on, onClick, disabled, ariaLabel }: ToggleProps) {
   return (
     <Switch
       checked={!!on}
       onCheckedChange={onClick ? () => onClick() : undefined}
       disabled={disabled}
+      aria-label={ariaLabel}
     />
   );
 }

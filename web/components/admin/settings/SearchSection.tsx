@@ -152,7 +152,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                 setForm(f => ({ ...f, search: { ...f.search, provider: v } }));
               }}
             >
-              <SelectTrigger className="max-w-[360px]"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="max-w-[360px]" aria-label="Provider"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectGroup>
                   {providers.map(p => (
@@ -179,6 +179,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                 <div className="flex items-stretch gap-2">
                   <Input
                     type="password"
+                    autoComplete="new-password"
                     value={form.search.apiKey === 'set' ? '' : form.search.apiKey}
                     placeholder={form.search.apiKey === 'set' ? '•••••• (key on file)' : keyed.placeholder}
                     onChange={(e: ChangeEvent<HTMLInputElement>) =>
@@ -228,7 +229,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                   </Btn>
                 </div>
                 {searxngTestResult && (
-                  <p className={`text-sm ${searxngTestResult.ok ? 'text-green-600' : 'text-destructive'}`}>
+                  <p role="status" className={`text-sm ${searxngTestResult.ok ? 'text-green-600' : 'text-destructive'}`}>
                     {searxngTestResult.ok
                       ? `Connected · ${searxngTestResult.results} results`
                       : `Failed: ${searxngTestResult.error}`}

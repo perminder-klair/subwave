@@ -13,6 +13,10 @@ import { THEME_TOKEN_KEYS, type DisplayFontId, type MonoFontId } from './theme-t
 const TOKEN_KEY_SET = new Set<string>(THEME_TOKEN_KEYS);
 const TOKEN_CACHE_KEY = 'subwave-theme-tokens';
 const OVERRIDE_KEY = 'subwave-theme-override';
+// A listener's explicit light/dark choice, independent of which palette is
+// active. When set it wins over the palette's own mode and the system
+// preference — see applyMode / ThemeBootstrap.
+const MODE_KEY = 'subwave-mode-override';
 
 // A theme stores --display-font / --mono-font as a curated id; resolve it to a
 // real family stack here (the stacks reference next/font variables set in
@@ -74,6 +78,62 @@ export function applyTheme(theme: Theme): void {
     html.style.setProperty(k, value);
   }
   html.setAttribute('data-theme', theme.mode);
+  syncDarkClass(theme.mode);
+}
+
+/** Keep the shadcn-convention `.dark` class in sync with the resolved mode.
+ *  SUB/WAVE's Tailwind `dark:` variant keys off `[data-theme='dark']` (see
+ *  globals.css `@custom-variant dark`), so this class is not what drives the
+ *  palette — it's mirrored so the app also reads as dark to tooling and shadcn
+ *  primitives that expect the `.dark` class. */
+function syncDarkClass(mode: ThemeMode): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.classList.toggle('dark', mode === 'dark');
+}
+
+/** Force the document into an explicit light/dark mode. This is the listener's
+ *  dark-mode toggle: it sets `data-theme` (which drives every themed token +
+ *  the Tailwind `dark:` variant) and mirrors the `.dark` class, overriding both
+ *  the active palette's own mode and the system preference. */
+export function applyMode(mode: ThemeMode): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.setAttribute('data-theme', mode);
+  syncDarkClass(mode);
+}
+
+/** The mode the document is currently rendering — the explicit `data-theme`
+ *  attribute if present, otherwise the system preference. */
+export function resolveCurrentMode(): ThemeMode {
+  if (typeof document === 'undefined') return 'light';
+  const attr = document.documentElement.getAttribute('data-theme');
+  if (attr === 'dark') return 'dark';
+  if (attr === 'light') return 'light';
+  return typeof window !== 'undefined' &&
+    window.matchMedia?.('(prefers-color-scheme: dark)').matches
+    ? 'dark'
+    : 'light';
+}
+
+/** Read the listener's explicit light/dark override, or null when unset. */
+export function loadModeOverride(): ThemeMode | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(MODE_KEY);
+    return raw === 'light' || raw === 'dark' ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Save (or, with null, clear) the listener's explicit light/dark override. */
+export function saveModeOverride(mode: ThemeMode | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (mode) window.localStorage.setItem(MODE_KEY, mode);
+    else window.localStorage.removeItem(MODE_KEY);
+  } catch {
+    /* private mode / quota — non-fatal */
+  }
 }
 
 /** Cache the theme so the next page load can apply it pre-paint via
@@ -121,11 +181,11 @@ export function saveThemeOverride(id: string | null): void {
 // regenerate — no hand-editing this script.
 export const THEME_INIT_SCRIPT = `
   try {
+    var html = document.documentElement;
     var raw = localStorage.getItem('${TOKEN_CACHE_KEY}');
     if (raw) {
       var t = JSON.parse(raw);
       if (t && t.tokens) {
-        var html = document.documentElement;
         var keys = ${JSON.stringify([...THEME_TOKEN_KEYS])};
         var fonts = ${JSON.stringify(FONT_STACKS)};
         for (var i = 0; i < keys.length; i++) {
@@ -139,5 +199,11 @@ export const THEME_INIT_SCRIPT = `
         if (t.mode === 'light' || t.mode === 'dark') html.setAttribute('data-theme', t.mode);
       }
     }
+    // The listener's explicit light/dark toggle wins over the palette's own
+    // mode — apply it (and mirror the .dark class) before paint so there is no
+    // flash of the palette default.
+    var mode = localStorage.getItem('${MODE_KEY}');
+    if (mode === 'light' || mode === 'dark') html.setAttribute('data-theme', mode);
+    html.classList.toggle('dark', html.getAttribute('data-theme') === 'dark');
   } catch (e) {}
 `;

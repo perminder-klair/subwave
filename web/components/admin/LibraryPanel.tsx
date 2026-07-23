@@ -1363,6 +1363,8 @@ export default function LibraryPanel() {
               <InputGroup>
                 <InputGroupAddon><Search /></InputGroupAddon>
                 <InputGroupInput
+                  required
+                  minLength={2}
                   placeholder={searchMode === 'sound'
                     ? 'dusty late-night jazz with brushed drums, warm acoustic fingerpicking…'
                     : 'floating points, kingdoms in colour, 2018…'}
@@ -1684,9 +1686,9 @@ function BrowseFilters(p: BrowseFiltersProps) {
         <div className="flex flex-col gap-2">
           <div className="caption">year</div>
           <div className="flex items-center gap-2">
-            <Input type="number" inputMode="numeric" placeholder="from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
+            <Input type="number" inputMode="numeric" placeholder="from" aria-label="year from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
             <span className="text-[10px] text-muted">–</span>
-            <Input type="number" inputMode="numeric" placeholder="to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
+            <Input type="number" inputMode="numeric" placeholder="to" aria-label="year to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
           </div>
         </div>
 
@@ -1884,33 +1886,51 @@ function BlockMenu({ track, busy, disabled, onBlock }: {
   onBlock: (t: Track, type: BlockType) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
   const pick = (type: BlockType) => { setOpen(false); onBlock(track, type); };
+
+  // Dismiss on outside pointer-down or Escape via a document listener rather
+  // than a full-screen click-catcher div: the backdrop approach relies on a
+  // non-semantic clickable element with no keyboard path, whereas this closes
+  // for keyboard users too and keeps focus handling to the real menu buttons.
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
   return (
-    <div className="relative">
+    <div ref={rootRef} className="relative">
       <Btn sm onClick={() => setOpen(o => !o)} disabled={disabled} title="Never play this on air">
         {busy ? '…' : <Ban size={12} />}
       </Btn>
       {open && (
-        <>
-          {/* click-away backdrop */}
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
-          <div className="absolute top-full right-0 z-50 mt-1 min-w-[200px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
-            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('track')}>
-              Never play this track
+        <div role="menu" className="absolute top-full right-0 z-50 mt-1 min-w-[200px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+          <button type="button" role="menuitem" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('track')}>
+            Never play this track
+          </button>
+          {track.album && (
+            <button type="button" role="menuitem" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('album')}>
+              Never play this album
             </button>
-            {track.album && (
-              <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('album')}>
-                Never play this album
-              </button>
-            )}
-            {track.artist && (
-              <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('artist')}>
-                Never play this artist
-                <span className="block text-[10px] text-muted">primary credit only — collabs filed under other artists still play</span>
-              </button>
-            )}
-          </div>
-        </>
+          )}
+          {track.artist && (
+            <button type="button" role="menuitem" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('artist')}>
+              Never play this artist
+              <span className="block text-[10px] text-muted">primary credit only — collabs filed under other artists still play</span>
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -2197,7 +2217,7 @@ function AddToPlaylistBar({ count, playlists, busy, onAdd, onClear }: {
           {count} track{count === 1 ? '' : 's'} selected
         </span>
         <Select value={target} onValueChange={setTarget}>
-          <SelectTrigger className="min-w-[180px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="min-w-[180px]" aria-label="Target playlist"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="__new">New playlist…</SelectItem>
             {(playlists || []).map(p => (
@@ -2210,6 +2230,7 @@ function AddToPlaylistBar({ count, playlists, busy, onAdd, onClear }: {
         {creating && (
           <Input
             placeholder="playlist name"
+            aria-label="New playlist name"
             className="w-48"
             value={name}
             onChange={(e: ChangeEvent<HTMLInputElement>) => setName(e.target.value)}

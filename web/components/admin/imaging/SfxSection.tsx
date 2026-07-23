@@ -260,6 +260,7 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
             ref={importRef}
             type="file"
             accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
+            aria-label="Import SFX audio file"
             onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
             className="hidden"
           />

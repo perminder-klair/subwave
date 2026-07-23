@@ -240,6 +240,7 @@ export function JinglesSection({
             type="file"
             multiple
             accept="audio/*,.mp3,.wav,.ogg,.flac,.m4a,.aac,.opus"
+            aria-label="Import jingle audio files"
             onChange={(e: ChangeEvent<HTMLInputElement>) => {
               const list = Array.from(e.target.files ?? []);
               setImportFiles(list);

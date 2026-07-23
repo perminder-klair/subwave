@@ -4,7 +4,7 @@
 // types what they want, hits Generate, and the parent merges the returned draft
 // into its form fields for review (nothing is saved here). Backed by the
 // admin-gated /generate/* endpoints, which ride the station's configured LLM.
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Textarea } from '../ui/textarea';
 import { Btn } from './ui';
 import { errorMessage } from '../../lib/notify';
@@ -34,6 +34,7 @@ export function AiFill<T = unknown>({
   const [desc, setDesc] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const hintId = useId();
 
   const generate = async () => {
     const description = desc.trim();
@@ -60,11 +61,13 @@ export function AiFill<T = unknown>({
 
   return (
     <div className="flex flex-col gap-2 border border-soft-border bg-overlay/40 p-3">
-      <span className="field-hint">
+      <span id={hintId} className="field-hint">
         Describe what you want. We&apos;ll draft the fields, then you can edit before saving.
       </span>
       <Textarea
         rows={2}
+        aria-label="Describe what you want generated"
+        aria-describedby={hintId}
         value={desc}
         onChange={(e) => setDesc(e.target.value)}
         maxLength={400}
@@ -78,7 +81,7 @@ export function AiFill<T = unknown>({
         <Btn tone="accent" sm onClick={generate} disabled={busy || disabled || !desc.trim()}>
           {busy ? 'Generating…' : 'Generate'}
         </Btn>
-        {err && <span className="text-[12px] text-destructive">{err}</span>}
+        {err && <span role="alert" className="text-[12px] text-destructive">{err}</span>}
       </div>
     </div>
   );
