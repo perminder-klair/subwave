@@ -15,6 +15,7 @@
    ConnectPanel (Seg control + ?tab= deep-link). */
 
 import { useCallback, useEffect, useState } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Music, AudioLines, Waves } from 'lucide-react';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { notify, errorMessage } from '../../../lib/notify';
@@ -23,7 +24,7 @@ import { V3AlertDialog } from '../../ui/alert-dialog';
 import { SkeletonCards } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import type { SettingsData, SaveSettings } from '../settings/shared';
-import type { SfxData, SfxForm, BedsData, JingleImportFailure, JingleImportResult } from './types';
+import type { SfxData, SfxForm, BedsData, BedsForm, JingleImportFailure, JingleImportResult } from './types';
 import { JinglesSection } from './JinglesSection';
 import { SfxSection } from './SfxSection';
 import { BedsSection } from './BedsSection';
@@ -39,7 +40,15 @@ export default function ImagingPanel() {
   const [bedsData, setBedsData] = useState<BedsData | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [tab, setTab] = useState<TabId>('jingles');
+
+  // Active tab derived from the URL (?tab=…) — single source of truth shared by
+  // the in-page SectionTabs and the sidebar's Imaging submenu (both route
+  // through Next), so switching tabs while already on the page works.
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const rawTab = searchParams.get('tab');
+  const tab: TabId = (TAB_IDS as string[]).includes(rawTab ?? '') ? (rawTab as TabId) : 'jingles';
 
   // Jingles: the create-text box + the lone settings field this page carries
   // (the whole FormState stayed behind in SettingsPanel). null = not yet
@@ -54,6 +63,7 @@ export default function ImagingPanel() {
   const [confirmDeleteSfx, setConfirmDeleteSfx] = useState<string | null>(null);
 
   // Beds
+  const [bedsForm, setBedsForm] = useState<BedsForm>({ name: '', description: '', prompt: '', durationSec: '' });
   const [confirmDeleteBed, setConfirmDeleteBed] = useState<string | null>(null);
 
   const refresh = async () => {
@@ -81,14 +91,6 @@ export default function ImagingPanel() {
     } catch { /* non-fatal */ }
   };
 
-  // Deep-link: /admin/imaging?tab=sfx opens that tab directly (mirrors
-  // /admin/connect?tab=… and the old /admin/settings?section=…).
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const t = new URLSearchParams(window.location.search).get('tab');
-    if (t && (TAB_IDS as string[]).includes(t)) setTab(t as TabId);
-  }, []);
-
   useEffect(() => {
     if (!hydrated || needsAuth) return;
     refresh(); refreshSfx(); refreshBeds();
@@ -101,14 +103,17 @@ export default function ImagingPanel() {
     if (data?.values && jingleRatio == null) setJingleRatio(String(data.values.jingleRatio ?? ''));
   }, [data, jingleRatio]);
 
-  const selectTab = useCallback((id: string) => {
-    setTab(id as TabId);
-    if (typeof window !== 'undefined') {
-      const url = new URL(window.location.href);
-      url.searchParams.set('tab', id);
-      window.history.replaceState(null, '', url.toString());
-    }
-  }, []);
+  // Deep-link: /admin/imaging?tab=sfx opens that tab directly (mirrors
+  // /admin/connect?tab=…). Routed through Next so a soft nav (in-page tab or
+  // sidebar submenu) re-derives `tab`.
+  const selectTab = useCallback(
+    (id: string) => {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      params.set('tab', id);
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    },
+    [router, pathname, searchParams],
+  );
 
   const saveSettings: SaveSettings = async (patch) => {
     setBusy(true);
@@ -263,6 +268,31 @@ export default function ImagingPanel() {
     finally { setBusy(false); }
   };
 
+  // Generate a bed via the ElevenLabs Music API — needs a key (unlike uploadBed).
+  const createBed = async (): Promise<boolean> => {
+    if (!bedsForm.name.trim() || !bedsForm.prompt.trim() || busy) return false;
+    setBusy(true);
+    try {
+      const r = await adminFetch('/beds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: bedsForm.name.trim(),
+          description: bedsForm.description.trim(),
+          prompt: bedsForm.prompt.trim(),
+          durationSec: bedsForm.durationSec ? parseFloat(bedsForm.durationSec) : undefined,
+        }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      setBedsForm({ name: '', description: '', prompt: '', durationSec: '' });
+      await refreshBeds();
+      notify.ok('bed generated');
+      return true;
+    } catch (e) { notify.err(`Bed generation failed: ${errorMessage(e)}`); return false; }
+    finally { setBusy(false); }
+  };
+
   const uploadBed = async (file: File, name: string, description: string): Promise<boolean> => {
     if (busy) return false;
     setBusy(true);
@@ -328,12 +358,12 @@ export default function ImagingPanel() {
               The sounds between the songs.
             </div>
             <p className="mt-1 max-w-[62ch] text-[11px] leading-[1.6] [text-wrap:pretty] text-muted">
-              Everything the DJ drops between and over the music:{' '}
+              Everything your DJ slips between and over the music:{' '}
               <strong className="font-semibold text-ink">jingles</strong> are the station idents
-              played between tracks, <strong className="font-semibold text-ink">SFX</strong> are
-              stingers mixed under the DJ&rsquo;s voice, and{' '}
-              <strong className="font-semibold text-ink">beds</strong> are instrumentals the DJ
-              talks over when a link runs long.
+              between tracks, <strong className="font-semibold text-ink">SFX</strong> are the little
+              stingers under the voice, and{' '}
+              <strong className="font-semibold text-ink">beds</strong> are instrumentals to talk
+              over when a link runs long.
             </p>
           </div>
           <div className="flex flex-none gap-7">
@@ -379,7 +409,8 @@ export default function ImagingPanel() {
 
         {tab === 'beds' && (
           <BedsSection
-            bedsData={bedsData} busy={busy} uploadBed={uploadBed}
+            bedsData={bedsData} bedsForm={bedsForm} setBedsForm={setBedsForm}
+            busy={busy} createBed={createBed} uploadBed={uploadBed}
             onDelete={setConfirmDeleteBed}
             data={data} saveSettings={saveSettings} adminFetch={adminFetch}
           />
@@ -408,7 +439,7 @@ export default function ImagingPanel() {
         open={confirmDeleteBed != null}
         onOpenChange={(o) => { if (!o) setConfirmDeleteBed(null); }}
         title="Delete bed"
-        description={confirmDeleteBed ? `Delete the bed "${confirmDeleteBed}"? This removes the audio file permanently. A bundled bed stays deleted — it won't come back on the next restart.` : ''}
+        description={confirmDeleteBed ? `Delete the bed "${confirmDeleteBed}"? This removes the audio file permanently.` : ''}
         confirmLabel="delete"
         danger
         onConfirm={() => { if (confirmDeleteBed) deleteBed(confirmDeleteBed); setConfirmDeleteBed(null); }}

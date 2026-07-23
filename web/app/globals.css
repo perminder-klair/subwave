@@ -165,7 +165,11 @@
        .admin-root. --page-bg deepens slightly in dark mode below. */
     --card-bg: var(--bg);
     --page-bg: color-mix(in oklab, var(--bg) 90%, var(--ink));
-    --sidebar: var(--page-bg);
+    /* The sidebar rail sits ~12% darker than the admin page so it reads as its
+       own chrome. "Darker" flips direction per theme: toward --ink in light
+       (preserves the paper warmth), toward black in the dark overrides below
+       (where --ink is light and mixing toward it would lighten instead). */
+    --sidebar: color-mix(in oklab, var(--page-bg), var(--ink) 12%);
     --sidebar-foreground: var(--ink);
     --sidebar-primary: var(--ink);
     --sidebar-primary-foreground: var(--bg);
@@ -197,8 +201,10 @@
         --grain-color: 0.55 0.5 0.45;
         --grain-alpha: 0.25;
         --grain-blend: screen;
-        /* Admin page deepens slightly in dark mode (--sidebar tracks it). */
+        /* Admin page deepens slightly in dark mode. */
         --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
+        /* Sidebar darker than the page — toward black, since --ink is light here. */
+        --sidebar: color-mix(in oklab, var(--page-bg), #000 15%);
         color-scheme: dark;
     }
 }
@@ -219,6 +225,8 @@
     --grain-alpha: 0.25;
     --grain-blend: screen;
     --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
+    /* Sidebar darker than the page — toward black, since --ink is light here. */
+    --sidebar: color-mix(in oklab, var(--page-bg), #000 15%);
     color-scheme: dark;
 }
 

@@ -6,6 +6,7 @@ import { Trash2 } from 'lucide-react';
 import { fmtSize } from '../../../lib/format';
 import { Modal } from '../../ui/modal';
 import { Input } from '../../ui/input';
+import { Textarea } from '../../ui/textarea';
 import { Label } from '../../ui/label';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
@@ -13,14 +14,17 @@ import { V3Alert } from '../../ui/alert';
 import { SkeletonCards } from '@/components/ui/skeleton';
 import { Btn, Seg } from '../ui';
 import { PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
-import type { BedsData } from './types';
+import type { BedsData, BedsForm } from './types';
 import {
   SectionMasthead, PanelBox, PanelHead, EmptyState, DropZone, MetaLine, TabMetric, pad2,
 } from './parts';
 
 interface BedsSectionProps {
   bedsData: BedsData | null;
+  bedsForm: BedsForm;
+  setBedsForm: (updater: (f: BedsForm) => BedsForm) => void;
   busy: boolean;
+  createBed: () => Promise<boolean>;
   uploadBed: (file: File, name: string, description: string) => Promise<boolean>;
   onDelete: (name: string | null) => void;
   data: SettingsData | null;
@@ -28,9 +32,9 @@ interface BedsSectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
-export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSettings, adminFetch }: BedsSectionProps) {
+export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, uploadBed, onDelete, data, saveSettings, adminFetch }: BedsSectionProps) {
   // Hooks must run before the early "loading…" return — keep them at the top.
-  const [modal, setModal] = useState(false);
+  const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importName, setImportName] = useState('');
   const [importDesc, setImportDesc] = useState('');
@@ -48,8 +52,11 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
       setImportName('');
       setImportDesc('');
       if (importRef.current) importRef.current.value = '';
-      setModal(false);
+      setModal(null);
     }
+  };
+  const doCreate = async () => {
+    if (await createBed()) setModal(null);
   };
 
   if (!bedsData) {
@@ -57,6 +64,8 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
   }
   const list = bedsData.beds || [];
   const minSec = bedsData.minDurationSec ?? 30;
+  const maxGenSec = bedsData.maxGenDurationSec ?? 120;
+  const ready = !!bedsData.generatorReady;
   const beds = data?.values?.beds;
   const enabled = beds?.enabled === true;
   const thresholdSec = beds?.thresholdSec ?? 12;
@@ -78,9 +87,14 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
     <section className="grid gap-[22px]">
       <SectionMasthead
         title="Beds"
-        sub="Instrumentals the DJ talks over between songs: the song ends, the bed carries the talk, and the next song ramps in under the DJ’s closing words."
+        sub="Instrumentals your DJ talks over between songs — the track ends, the bed carries the chat, and the next song fades in under the closing words."
         metrics={<TabMetric accent n={pad2(list.length)} l="beds" />}
-        actions={<Btn sm onClick={() => setModal(true)} disabled={busy}>Import</Btn>}
+        actions={
+          <>
+            <Btn sm onClick={() => setModal('import')} disabled={busy}>Import</Btn>
+            <Btn sm tone="solid" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
+          </>
+        }
       />
 
       {/* On/off */}
@@ -90,8 +104,8 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
             <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">talk beds</div>
             <p className="mt-1.5 text-[12px] leading-[1.55] text-muted">
               {enabled
-                ? 'Long links get their own instrumental. Needs at least one bed long enough to carry a script.'
-                : 'Off — every link is talked over the incoming song, as before. The library is kept.'}
+                ? 'When on, longer links get their own instrumental to sit on. You’ll need at least one bed long enough to carry the chat.'
+                : 'Off — links play over the incoming song, like before. Your library stays put.'}
             </p>
           </div>
           <Seg
@@ -105,8 +119,8 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
 
       {enabled && list.length === 0 && (
         <V3Alert title="no beds in the library">
-          Beds are on, but the library is empty — links fall back to talking over the incoming
-          song until you import a bed at least {minSec} seconds long.
+          Beds are on, but there’s nothing here yet — links keep playing over the incoming song
+          until you add a bed at least {minSec} seconds long.
         </V3Alert>
       )}
 
@@ -136,9 +150,9 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
               <span className="font-mono text-[12px] text-muted">seconds</span>
             </div>
             <p className="mt-2.5 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
-              Links above this length get their own bed. Where the analyzer has measured a track’s
-              vocals, that measurement wins — a bed exactly when the DJ would otherwise talk over
-              singing; instrumentals never get one. Saves on blur.
+              Anything longer than this gets its own bed. Where we’ve measured a track’s vocals,
+              that wins — a bed lands exactly when your DJ would otherwise talk over singing, and
+              instrumentals never get one. Saves when you click away.
             </p>
           </div>
           <div className="p-[18px]">
@@ -163,8 +177,8 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
               <span className="font-mono text-[12px] text-muted">seconds</span>
             </div>
             <p className="mt-2.5 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
-              Crossfade for the next song to fade in under the DJ’s closing words. 0 is a hard cut.
-              Saves on blur.
+              How long the next song takes to fade in under your DJ’s closing words. 0 is a hard
+              cut. Saves when you click away.
             </p>
           </div>
         </div>
@@ -174,7 +188,7 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
       <PanelBox>
         <PanelHead label={`bed library · ${pad2(list.length)}`} />
         {list.length === 0 ? (
-          <EmptyState caption="beds can’t be generated — import an instrumental" />
+          <EmptyState caption="generate one with ElevenLabs, or import an instrumental" />
         ) : (
           <div className="divide-y divide-separator-soft">
             {list.map(b => (
@@ -195,7 +209,8 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
                         <span>{Math.round(b.durationSec)}s</span>
                       </>
                     )}
-                    {b.source === 'bundled' && <Badge variant="solid">bundled</Badge>}
+                    {b.builtin && <Badge variant="solid">builtin</Badge>}
+                    {b.source === 'generated' && <Badge variant="ink">generated</Badge>}
                     {b.source === 'upload' && <Badge variant="ink">uploaded</Badge>}
                   </MetaLine>
                 </div>
@@ -204,13 +219,13 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
                     path={`/beds/${encodeURIComponent(b.name)}/audio`}
                     adminFetch={adminFetch}
                   />
-                  <span title="Delete this bed">
+                  <span title={b.builtin ? 'The built-in bed can’t be deleted' : 'Delete this bed'}>
                     <Button
                       type="button"
                       variant="ghost"
                       size="icon"
                       aria-label="Delete bed"
-                      disabled={busy}
+                      disabled={busy || b.builtin}
                       onClick={() => onDelete(b.name)}
                     >
                       <Trash2 aria-hidden />
@@ -223,15 +238,94 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
         )}
       </PanelBox>
 
+      {/* Create — ElevenLabs Music API */}
+      <Modal
+        open={modal === 'create'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
+        title="create bed"
+        sub="an instrumental we’ll generate with ElevenLabs"
+        footer={
+          <>
+            <Button variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</Button>
+            <Btn
+              sm
+              tone="accent"
+              onClick={doCreate}
+              disabled={busy || !ready || !bedsForm.name.trim() || !bedsForm.prompt.trim()}
+            >
+              {busy ? 'Generating…' : 'Create'}
+            </Btn>
+          </>
+        }
+      >
+        <div className="grid gap-3.5">
+          {!ready && (
+            <V3Alert title="key required">
+              You’ll need an ElevenLabs key to generate. Add{' '}
+              <code className="font-mono text-[12px]">ELEVENLABS_API_KEY</code> and restart the
+              controller.
+            </V3Alert>
+          )}
+          <div className="grid grid-cols-[1fr_120px] gap-3">
+            <div className="grid gap-1.5">
+              <Label>Name</Label>
+              <Input
+                value={bedsForm.name}
+                maxLength={60}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setBedsForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="midnight-drift"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label>Length · s</Label>
+              <Input
+                className="mono-num"
+                type="number"
+                step={1}
+                min={minSec}
+                max={maxGenSec}
+                value={bedsForm.durationSec}
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setBedsForm(f => ({ ...f, durationSec: e.target.value }))}
+                placeholder="45"
+              />
+            </div>
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Description · optional</Label>
+            <Input
+              value={bedsForm.description}
+              maxLength={200}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setBedsForm(f => ({ ...f, description: e.target.value }))}
+              placeholder="For your own reference — the DJ never reads this"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Generation prompt</Label>
+            <Textarea
+              rows={3}
+              value={bedsForm.prompt}
+              onChange={(e: ChangeEvent<HTMLTextAreaElement>) => setBedsForm(f => ({ ...f, prompt: e.target.value.slice(0, 500) }))}
+              placeholder="Describe the instrumental for ElevenLabs — e.g. warm lo-fi ambient pad, no drums, soft and neutral…"
+            />
+            <div className="text-right font-mono text-[11px] text-muted">{bedsForm.prompt.length} / 500</div>
+          </div>
+          <p className="m-0 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
+            Vocal-free instrumental, {minSec}–{maxGenSec}s. Each bed is trimmed to fit the link, so
+            it just needs to outlast your DJ’s longest bit of chat — atmospheric and neutral works
+            best.
+          </p>
+        </div>
+      </Modal>
+
       {/* Import — bring your own instrumental */}
       <Modal
-        open={modal}
-        onOpenChange={(o) => { if (!o) setModal(false); }}
+        open={modal === 'import'}
+        onOpenChange={(o) => { if (!o) setModal(null); }}
         title="import bed"
         sub="an instrumental the DJ can talk over"
         footer={
           <>
-            <Button variant="ghost" size="sm" onClick={() => setModal(false)}>Cancel</Button>
+            <Button variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</Button>
             <Btn sm tone="accent" onClick={doImport} disabled={busy || !importFile || !importName.trim()}>
               {busy ? 'Importing…' : 'Import'}
             </Btn>
@@ -270,8 +364,8 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
             onClick={() => importRef.current?.click()}
           />
           <p className="m-0 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
-            A bed is trimmed per link and never looped — it only needs to outlast the DJ’s longest
-            script. Atmospheric, no strong key travels best.
+            Each bed is trimmed to fit the link and never loops — it only needs to outlast your
+            DJ’s longest bit of chat. Atmospheric, with no strong key, works best.
           </p>
         </div>
       </Modal>
