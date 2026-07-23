@@ -3013,7 +3013,7 @@ export function validatePersonasStrict(raw) {
   });
 }
 
-function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>, moodNames: string[] = SHOW_MOODS) {
+export function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>, moodNames: string[] = SHOW_MOODS) {
   if (!Array.isArray(raw)) throw new Error('shows must be an array');
   if (raw.length > SHOWS_LIMIT) throw new Error(`shows must be at most ${SHOWS_LIMIT} entries`);
   const personaIds = personas.map(p => p.id);
@@ -3047,13 +3047,24 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>, moodNa
     // Optional per-show theme override. Empty/missing means "fall back to the
     // station default while this show is on air". The allow-set is built once
     // by update() so we stay sync here.
+    //
+    // A stale id (a retired built-in like the old "sunset"/"neon" palettes,
+    // renamed in 58c3782b, or a custom theme file deleted under our feet) is
+    // DROPPED to "" rather than throwing — same tolerance as the lenient load
+    // path and the serve-time getTheme() fallback. Throwing here bricked EVERY
+    // shows/schedule save and full restore for any install still carrying one
+    // retired id on one show, because update() re-validates the whole array
+    // (issue #917 is the theme.active twin of this). Self-heals: the dead id
+    // is gone the next time the array is persisted. This never discards a fresh
+    // operator pick — those come from the live theme list — only a dead one.
     let themeId = '';
     if (item.themeId !== undefined && item.themeId !== null && item.themeId !== '') {
       const v = String(item.themeId).trim();
-      if (!allowedThemeIds.has(v)) {
-        throw new Error(`shows[${i}].themeId "${v}" is not a known theme id`);
+      if (allowedThemeIds.has(v)) {
+        themeId = v;
+      } else {
+        console.warn(`[shows] dropping unknown themeId "${v}" from "${name}" — falling back to the station theme`);
       }
-      themeId = v;
     }
     // Optional music-steering filters — all default to "no constraint" and all
     // multi-value lists (#929, legacy singular fields still accepted). Genres
@@ -3713,10 +3724,16 @@ export async function update(patch) {
     if (t.active !== undefined) {
       const v = String(t.active ?? '').trim();
       if (!v) throw new Error('theme.active must be a theme id');
-      if (!(await isValidThemeId(v))) {
-        throw new Error(`theme.active "${v}" is not a known theme id`);
+      // A stale active theme (a retired built-in renamed in 58c3782b, or a
+      // custom theme that isn't on disk) falls back to the built-in default
+      // rather than failing the save — same tolerance as shows[].themeId above
+      // and the serve-time getTheme() fallback, and the same precedent as the
+      // activeDjPromptId reset. Throwing here aborted the whole restore for any
+      // install whose active theme id had since been retired (issue #917).
+      next.theme.active = (await isValidThemeId(v)) ? v : DEFAULT_THEME_ID;
+      if (next.theme.active !== v) {
+        console.warn(`[theme] active theme "${v}" is not a known theme id — falling back to "${DEFAULT_THEME_ID}"`);
       }
-      next.theme.active = v;
     }
   }
   // Mood system (context-only — no Liquidsoap restart). Validate the vocabulary
