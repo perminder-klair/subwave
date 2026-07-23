@@ -200,10 +200,9 @@ export default function MoodsPanel() {
             Moods &amp; moments.
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            The station&apos;s mood vocabulary and how the autonomous DJ reaches for it — the
-            words the library is tagged with, and which mood each part of the day, the weather,
-            and the calendar leans into. Edit the list, and every show, festival, and auto-DJ
-            pick draws from it.
+            The moods your station knows, and when it reaches for them — the words your library is
+            tagged with, and which mood each part of the day, the weather, and the calendar leans
+            into. Edit the list and every show, festival, and auto-DJ pick draws from it.
           </div>
         </div>
         {/* Shared editorial section-tabs, edge-to-edge along the card's foot. */}
@@ -228,12 +227,12 @@ export default function MoodsPanel() {
         <Card title="Mood vocabulary" sub="the moods every track is tagged with">
           <div className="field">
             <div className="field-hint">
-              Each mood needs a short id (letters, digits, dashes) and an optional
-              sound description used for zero-shot audio tagging (heavy analyzer).
-              Changing moods or their descriptions re-scores audio moods on the
-              next analysis pass and marks LLM tags stale — re-run the tagger to
-              refresh. Removing a mood that a show, festival, or the maps in Moments
-              still use is rejected until you reassign it.
+              Give each mood a short id (letters, digits, dashes) and, if you like, a sound
+              description we use for audio tagging (needs the heavy analyzer). Change a mood or its
+              description and we’ll re-score audio moods on the next analysis pass and mark the
+              older tags stale — re-run the tagger to refresh them. If a mood is still used by a
+              show, festival, or one of the maps in Moments, you’ll need to reassign it before you
+              can remove it.
             </div>
             <ScrollArea className="max-h-[420px]">
               <div className="flex flex-col gap-2 pr-2">
@@ -289,7 +288,7 @@ export default function MoodsPanel() {
       {/* --- Moments: time-of-day + weather --- */}
       {tab === 'moments' && moods !== null && (
         <>
-          <Card title="Time of day → mood" sub="what the autonomous DJ leans into through the day">
+          <Card title="Time of day → mood" sub="the mood your station leans into through the day">
             <div className="grid gap-2">
               {PERIODS.map(p => (
                 <div key={p.id} className="flex items-center justify-between gap-3">
@@ -320,7 +319,7 @@ export default function MoodsPanel() {
             </div>
           </Card>
 
-          <Card title="Weather → mood" sub="how live conditions colour the mood (overrides time of day)">
+          <Card title="Weather → mood" sub="how live weather colours the mood — this wins over time of day">
             <div className="grid gap-2">
               {CONDITIONS.map(c => (
                 <div key={c.id} className="flex items-center justify-between gap-3">
@@ -356,14 +355,14 @@ export default function MoodsPanel() {
 
       {/* --- Speech corrections (relocated from the TTS tab) --- */}
       {tab === 'speech' && moods !== null && (
-        <Card title="Speech corrections" sub="pronunciation fixes">
+        <Card title="Speech corrections" sub="how names and tricky words should sound">
           <div className="field">
             <div className="field-hint">
-              Find→replace rules applied to every spoken line before the voice engine
-              reads it, for names and terms the engines mispronounce (<em>GHz</em> →
-              <em> gigahertz</em>, <em>Hozier</em> → <em>Ho-zeer</em>). Case-insensitive,
-              matches whole words and phrases; leave the spoken form empty to drop the
-              phrase entirely. Saved rules apply from the next spoken line, no restart.
+              Find-and-replace rules we apply to every line before it’s spoken, for names and
+              words the voice tends to get wrong (<em>GHz</em> →<em> gigahertz</em>, <em>Hozier</em>{' '}
+              → <em>Ho-zeer</em>). Case doesn’t matter, and it matches whole words and phrases;
+              leave the spoken form empty to drop a word entirely. New rules kick in from the next
+              line — no restart needed.
             </div>
             <ScrollArea className="max-h-[360px]">
               <div className="flex flex-col gap-2 pr-2">

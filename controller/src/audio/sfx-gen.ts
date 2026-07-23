@@ -5,23 +5,13 @@
 
 import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-import * as settings from '../settings.js';
+import { elevenLabsKey, isConfigured } from './elevenlabs.js';
 
 const ENDPOINT = 'https://api.elevenlabs.io/v1/sound-generation';
 
-// Resolve the ElevenLabs key the same way llm/speech.js does: a key typed into
-// Settings only counts when the cloud TTS provider is ElevenLabs; otherwise
-// fall back to the ELEVENLABS_API_KEY env var.
-function apiKey() {
-  const c = settings.get().tts?.cloud || {};
-  const settingsKey = c.provider === 'elevenlabs' ? c.apiKey : '';
-  return settingsKey || process.env.ELEVENLABS_API_KEY || '';
-}
-
-// True when a key is resolvable — backs the admin UI's "needs a key" state.
-export function isConfigured() {
-  return !!apiKey();
-}
+// Re-exported for back-compat with call sites that reach isConfigured through
+// this module; the resolver itself lives in audio/elevenlabs.ts now.
+export { isConfigured };
 
 // Generate a sound effect from a text prompt and write it to outPath (mp3).
 // durationSec is optional — ElevenLabs accepts ~0.5–22s; omit it to let the
@@ -32,7 +22,7 @@ export async function generateSfx(
 ) {
   if (!prompt || !prompt.trim()) throw new Error('Empty SFX prompt');
   if (!outPath) throw new Error('generateSfx requires an outPath');
-  const key = apiKey();
+  const key = elevenLabsKey();
   if (!key) {
     throw new Error('ElevenLabs API key not configured — set it under cloud TTS, or ELEVENLABS_API_KEY');
   }

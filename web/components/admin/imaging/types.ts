@@ -33,11 +33,21 @@ export interface BedEntry {
   size?: number;
   durationSec?: number | null;
   source?: string;
+  builtin?: boolean;
 }
 
 export interface BedsData {
   beds?: BedEntry[];
   minDurationSec?: number;
+  maxGenDurationSec?: number;
+  generatorReady?: boolean;
+}
+
+export interface BedsForm {
+  name: string;
+  description: string;
+  prompt: string;
+  durationSec: string;
 }
 
 export type JingleImportFailure = { name: string; reason: string };

@@ -22,7 +22,7 @@ import { SectionTabs } from '../SectionTabs';
 import { V3Alert } from '../../ui/alert';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import type { SettingsData, SaveSettings } from '../settings/shared';
-import type { SfxData, SfxForm, BedsData, JingleImportFailure, JingleImportResult } from './types';
+import type { SfxData, SfxForm, BedsData, BedsForm, JingleImportFailure, JingleImportResult } from './types';
 import { JinglesSection } from './JinglesSection';
 import { SfxSection } from './SfxSection';
 import { BedsSection } from './BedsSection';
@@ -53,6 +53,7 @@ export default function ImagingPanel() {
   const [confirmDeleteSfx, setConfirmDeleteSfx] = useState<string | null>(null);
 
   // Beds
+  const [bedsForm, setBedsForm] = useState<BedsForm>({ name: '', description: '', prompt: '', durationSec: '' });
   const [confirmDeleteBed, setConfirmDeleteBed] = useState<string | null>(null);
 
   const refresh = async () => {
@@ -262,6 +263,31 @@ export default function ImagingPanel() {
     finally { setBusy(false); }
   };
 
+  // Generate a bed via the ElevenLabs Music API — needs a key (unlike uploadBed).
+  const createBed = async (): Promise<boolean> => {
+    if (!bedsForm.name.trim() || !bedsForm.prompt.trim() || busy) return false;
+    setBusy(true);
+    try {
+      const r = await adminFetch('/beds', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: bedsForm.name.trim(),
+          description: bedsForm.description.trim(),
+          prompt: bedsForm.prompt.trim(),
+          durationSec: bedsForm.durationSec ? parseFloat(bedsForm.durationSec) : undefined,
+        }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      setBedsForm({ name: '', description: '', prompt: '', durationSec: '' });
+      await refreshBeds();
+      notify.ok('bed generated');
+      return true;
+    } catch (e) { notify.err(`Bed generation failed: ${errorMessage(e)}`); return false; }
+    finally { setBusy(false); }
+  };
+
   const uploadBed = async (file: File, name: string, description: string): Promise<boolean> => {
     if (busy) return false;
     setBusy(true);
@@ -327,12 +353,12 @@ export default function ImagingPanel() {
               The sounds between the songs.
             </div>
             <p className="mt-1 max-w-[62ch] text-[11px] leading-[1.6] [text-wrap:pretty] text-muted">
-              Everything the DJ drops between and over the music:{' '}
+              Everything your DJ slips between and over the music:{' '}
               <strong className="font-semibold text-ink">jingles</strong> are the station idents
-              played between tracks, <strong className="font-semibold text-ink">SFX</strong> are
-              stingers mixed under the DJ&rsquo;s voice, and{' '}
-              <strong className="font-semibold text-ink">beds</strong> are instrumentals the DJ
-              talks over when a link runs long.
+              between tracks, <strong className="font-semibold text-ink">SFX</strong> are the little
+              stingers under the voice, and{' '}
+              <strong className="font-semibold text-ink">beds</strong> are instrumentals to talk
+              over when a link runs long.
             </p>
           </div>
           <div className="flex flex-none gap-7">
@@ -378,7 +404,8 @@ export default function ImagingPanel() {
 
         {tab === 'beds' && (
           <BedsSection
-            bedsData={bedsData} busy={busy} uploadBed={uploadBed}
+            bedsData={bedsData} bedsForm={bedsForm} setBedsForm={setBedsForm}
+            busy={busy} createBed={createBed} uploadBed={uploadBed}
             onDelete={setConfirmDeleteBed}
             data={data} saveSettings={saveSettings} adminFetch={adminFetch}
           />
@@ -407,7 +434,7 @@ export default function ImagingPanel() {
         open={confirmDeleteBed != null}
         onOpenChange={(o) => { if (!o) setConfirmDeleteBed(null); }}
         title="Delete bed"
-        description={confirmDeleteBed ? `Delete the bed "${confirmDeleteBed}"? This removes the audio file permanently. A bundled bed stays deleted — it won't come back on the next restart.` : ''}
+        description={confirmDeleteBed ? `Delete the bed "${confirmDeleteBed}"? This removes the audio file permanently.` : ''}
         confirmLabel="delete"
         danger
         onConfirm={() => { if (confirmDeleteBed) deleteBed(confirmDeleteBed); setConfirmDeleteBed(null); }}

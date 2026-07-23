@@ -192,7 +192,7 @@ export default function FestivalsSection() {
       <SectionHeader
         eyebrow="festivals"
         title="Festival calendar."
-        sub="Mood-forming dates the DJ leans into around the year. Add your local holidays, regional celebrations, or personal landmarks; the station's mood shifts to match the nearest active festival."
+        sub="Dates that set a mood, marked across the year. Add your local holidays, regional celebrations, or personal landmarks — the station leans into the nearest one as it comes around."
         metrics={festivals ? [{ n: String(festivals.length), l: `date${festivals.length === 1 ? '' : 's'}`, accent: true }] : undefined}
         actions={
           <Btn tone="accent" onClick={startAdd} disabled={festivals === null}>
@@ -218,7 +218,7 @@ export default function FestivalsSection() {
         >
           {festivals.length === 0 ? (
             <div className="text-[13px] text-muted italic">
-              No festivals defined. Add one to get started.
+              Nothing on the calendar yet — add your first date to get started.
             </div>
           ) : (
             <div className="grid">
@@ -366,7 +366,7 @@ export default function FestivalsSection() {
                 maxLength={200}
               />
               <div className="field-hint mt-1">
-                A brief note the DJ can weave into its on-air talk when the festival is active.
+                A short note your DJ can weave into its chat while the festival is on.
               </div>
             </div>
 
@@ -400,8 +400,8 @@ export default function FestivalsSection() {
               </div>
             </div>
             <div className="field-hint -mt-2">
-              Music selection and spoken tone shift into the mood for the window around
-              the date, e.g. a 3-day window spans a full week.
+              Music and spoken tone shift into the mood for the days around the date — a 3-day
+              window covers a full week.
             </div>
           </div>
         )}

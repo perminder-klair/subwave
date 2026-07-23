@@ -87,7 +87,7 @@ export function JinglesSection({
     <section className="grid gap-[22px]">
       <SectionMasthead
         title="Jingles"
-        sub="Pre-rendered station idents dropped between tracks. A default ident is generated on first boot and can’t be deleted."
+        sub="Short station idents that play between tracks. One ships with the station and stays put — add as many of your own as you like alongside it."
         metrics={
           <>
             <TabMetric n={pad2(jingles.length)} l="files" />
@@ -104,7 +104,7 @@ export function JinglesSection({
 
       {/* Frequency */}
       <PanelBox>
-        <PanelHead label="frequency" right={<Badge variant="accent">restart required</Badge>} />
+        <PanelHead label="how often" right={<Badge variant="accent">restart required</Badge>} />
         <div className="flex flex-wrap items-center gap-5 px-[18px] py-[18px]">
           <div className="flex flex-none items-center gap-2.5">
             <span className="font-mono text-[13px]">1 jingle every</span>
@@ -120,8 +120,8 @@ export function JinglesSection({
             <span className="font-mono text-[13px]">music tracks</span>
           </div>
           <p className="m-0 min-w-[220px] flex-1 text-[12px] leading-[1.55] text-muted">
-            0 turns jingles off entirely. Changes apply after a mixer restart — the restart
-            control lives in Settings → danger zone.
+            Set it to 0 to switch jingles off altogether. Changes take effect once you restart
+            the mixer — that button lives in Settings → danger zone.
           </p>
           <Btn
             sm
@@ -138,7 +138,7 @@ export function JinglesSection({
       <PanelBox>
         <PanelHead label={`jingle library · ${pad2(jingles.length)}`} />
         {jingles.length === 0 ? (
-          <EmptyState caption="create one via TTS or import your own" />
+          <EmptyState caption="write one and we’ll voice it, or import your own" />
         ) : (
           <div className="divide-y divide-separator-soft">
             {jingles.map(j => (
@@ -193,7 +193,7 @@ export function JinglesSection({
         open={modal === 'create'}
         onOpenChange={(o) => { if (!o) setModal(null); }}
         title="create jingle"
-        sub="rendered via Piper TTS"
+        sub="we’ll voice it with Piper TTS"
         footer={
           <>
             <Button variant="ghost" size="sm" onClick={() => setModal(null)}>Cancel</Button>
@@ -254,7 +254,7 @@ export function JinglesSection({
                 ? `${importFiles.length} file${importFiles.length === 1 ? '' : 's'} selected — click to re-select`
                 : 'choose files…'
             }
-            hint="mp3 · wav · ogg · flac · m4a · aac · opus — up to 25 MB each · converted + level-matched on import"
+            hint="mp3 · wav · ogg · flac · m4a · aac · opus — up to 25 MB each · we convert and level-match them for you"
             onClick={() => importRef.current?.click()}
             disabled={!!importProgress}
           />
