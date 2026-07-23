@@ -15,41 +15,7 @@
 // hard-edge click doesn't arise there.
 
 import { readFile, writeFile } from 'node:fs/promises';
-
-const RIFF = 0x46464952; // "RIFF" LE
-const WAVE = 0x45564157; // "WAVE" LE
-
-type Fmt = { audioFormat: number; channels: number; sampleRate: number; bitsPerSample: number };
-
-// Walk the RIFF chunks for `fmt ` + `data`. Returns null on anything that
-// isn't a plain little-endian WAV.
-function parseWav(buf: Buffer): { fmt: Fmt; dataStart: number; dataLen: number } | null {
-  if (buf.length < 44) return null;
-  if (buf.readUInt32LE(0) !== RIFF || buf.readUInt32LE(8) !== WAVE) return null;
-  let fmt: Fmt | null = null;
-  let dataStart = -1;
-  let dataLen = 0;
-  let off = 12;
-  while (off + 8 <= buf.length) {
-    const id = buf.toString('ascii', off, off + 4);
-    const size = buf.readUInt32LE(off + 4);
-    if (id === 'fmt ' && off + 8 + 16 <= buf.length) {
-      fmt = {
-        audioFormat: buf.readUInt16LE(off + 8),
-        channels: buf.readUInt16LE(off + 10),
-        sampleRate: buf.readUInt32LE(off + 12),
-        bitsPerSample: buf.readUInt16LE(off + 22),
-      };
-    } else if (id === 'data') {
-      dataStart = off + 8;
-      // A streaming writer may leave the size field stale — trust the file.
-      dataLen = Math.min(size, buf.length - dataStart);
-    }
-    off += 8 + size + (size % 2); // chunks are word-aligned
-  }
-  if (!fmt || dataStart < 0 || dataLen <= 0) return null;
-  return { fmt, dataStart, dataLen };
-}
+import { parseWav, type Fmt } from './wav-riff.js';
 
 // Linear ramp over the first and last `ms` of the data chunk. Mutates `buf`.
 // Returns false when the format isn't one we can safely edit.
