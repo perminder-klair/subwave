@@ -2,7 +2,9 @@
 
 **Date:** 2026-07-23
 **Status:** Draft for review
-**Scope:** Make SUB/WAVE's mood system operator-editable from admin settings, in one combined tab alongside Festivals. Genres are already dynamic (pulled live from Navidrome) — no change there.
+**Scope:** Make SUB/WAVE's mood system operator-editable, and give it (plus the festival calendar and the TTS speech-corrections dictionary) a **brand-new top-level admin page** in the sidebar — pulling all three out of Settings. Genres are already dynamic (pulled live from Navidrome) — no change there.
+
+> **Page name — open decision.** The page anchors on **Moods** but also holds Festivals and Speech corrections. Proposed sidebar label: **"Moods"** (route `/admin/moods`), matching how we've been referring to it. Since it now also owns the festival calendar and the pronunciation dictionary, a broader label ("DJ", "Programming", "Voice") may read better — it's a one-line change in `NAV_SECTIONS`. Flagging for the review pass.
 
 ---
 
@@ -17,7 +19,7 @@ Make all four editable in the admin UI:
 3. **The time-of-day → mood map** — which mood each of the 8 fixed day-periods leans toward.
 4. **The weather → mood map** — which mood each of the 6 fixed weather conditions leans toward.
 
-All of this lives in **one admin tab, merged with the existing Festivals editor** (festivals already reference a mood, so the vocabulary and the festival calendar belong together).
+All of this lives on **one new admin page** in the sidebar, which also absorbs the existing **Festivals** editor (festivals reference a mood, so the vocabulary and the calendar belong together) and the **Speech corrections** editor currently buried in the TTS voice tab. All three move *out* of Settings.
 
 ---
 
@@ -112,18 +114,33 @@ Seeded from `WEATHER_MOOD_DEFAULTS`: `clear→sunny, cloudy→'', foggy→rainy,
 
 ---
 
-## 5. Web UI — one combined "Moods" tab
+## 5. Web UI — a new `/admin/moods` page
 
-Extend the existing self-contained `web/components/admin/FestivalsSection.tsx` into a combined panel (renamed to `MoodsSection.tsx`), and relabel the registry entry. The panel stacks four cards:
+A brand-new top-level admin page, patterned on how existing self-contained pages (e.g. `/admin/debug`) are wired. Three tiny additions, no `SettingsPanel` involvement:
 
-1. **Vocabulary** — a table of `{ name, CLAP prompt }` rows with add / edit / remove (modal editor like the festival row modal). A one-line note: *"Changing moods or their sound descriptions re-scores audio moods on the next analysis pass and marks LLM tags stale — re-run the tagger to refresh."*
-2. **Time of day → mood** — 8 fixed period rows (labelled with their hour ranges), each a mood `<Select>` populated from the current vocabulary.
-3. **Weather → mood** — 6 fixed condition rows, each a mood `<Select>` plus a "— none —" option.
-4. **Festival calendar** — the existing festivals editor, unchanged, its mood dropdown now fed by the same live vocabulary.
+- **Route:** `web/app/admin/moods/page.tsx` — a thin server component mirroring `web/app/admin/debug/page.tsx` (`metadata.title = 'Moods'`, renders `<MoodsPanel />`). The admin layout (`app/admin/layout.tsx`) already wraps every child in `AdminShell`, so the auth gate applies automatically.
+- **Sidebar entry:** one `NavItem` added to `NAV_SECTIONS` in `web/components/admin/AdminShell.tsx` (the "System" group, ~line 79, alongside Settings/Debug): `{ href: '/admin/moods', id: 'moods', label: 'Moods', icon: Palette }`, plus the icon added to the `lucide-react` import. Rendering + breadcrumb pick it up with no further change.
+- **Panel:** `web/components/admin/MoodsPanel.tsx` — `'use client'`, self-contained (calls `useAdminAuth()` for its own `adminFetch`, like `FestivalsSection`). It fetches `/settings` once and stacks five cards:
 
-Registration in `SettingsPanel.tsx` (3 points, per the established pattern): import, one `SECTIONS` entry relabelled **`{ id: 'festivals', label: 'Moods', hint: 'moods · calendar · weather', icon: Palette }`** (keep `id: 'festivals'` so existing `?section=festivals` deep-links still resolve; swap the `CalendarDays` icon for a mood-appropriate one such as `Palette`), and the self-contained render line `{activeSection === 'festivals' && <MoodsSection />}`.
+  1. **Vocabulary** — a table of `{ name, CLAP prompt }` rows with add / edit / remove. A one-line note: *"Changing moods or their sound descriptions re-scores audio moods on the next analysis pass and marks LLM tags stale — re-run the tagger to refresh."* Saves `{ moods: [...] }`.
+  2. **Time of day → mood** — 8 fixed period rows (labelled with their hour ranges), each a mood `<Select>` from the current vocabulary. Saves `{ moodSchedule: {...} }`.
+  3. **Weather → mood** — 6 fixed condition rows, each a mood `<Select>` plus a "— none —" option. Saves `{ weatherMoods: {...} }`.
+  4. **Festival calendar** — the existing `FestivalsSection` **composed as-is** (it already self-fetches/saves via `adminFetch` and reads the live vocabulary for its mood dropdown). No rewrite; just render `<FestivalsSection />` as a card on this page.
+  5. **Speech corrections** — the pronunciation dictionary relocated from the TTS tab (see §5.1). Saves `{ tts: { corrections: [...] } }` (partial `tts` patch; the controller merges it).
 
-Saving keeps the Festivals convention: whole-array/object replace POSTed to `/settings`; each card saves its own slice. Client-side validation stays light (server is authoritative): non-empty unique names, values drawn from the current vocabulary.
+Saving keeps the Festivals convention: whole-array/object replace POSTed to `/settings`; each card saves its own slice. Client-side validation stays light (server is authoritative): non-empty unique mood names, map values drawn from the current vocabulary.
+
+### 5.1 Moving Speech corrections out of the TTS tab
+
+The setting (`settings.tts.corrections`), its `validateTtsCorrectionsStrict`, its on-load normalise, and its runtime consumption (`audio/speech-text.ts` applied by `audio/tts.ts` reading `settings.get().tts.corrections`) are **all UI-location-agnostic — no controller change**. This is a pure front-end relocation:
+
+- **Cut** from `web/components/admin/settings/TtsSection.tsx`: the `<Card title="Speech corrections">` block (`TtsSection.tsx:1106-1186`), the `correctionsDirty` computation (`:504-512`) and its term in `ttsDirty` (`:531`), and the `corrections:` key in TtsSection's `save()` payload (`:422-424`).
+- **Rebuild** in `MoodsPanel` as the fifth card, reading/writing its own `corrections` `useState` seeded from the panel's `/settings` fetch, POSTing `{ tts: { corrections } }` (rows with an empty `from` dropped as drafts, matching current behaviour).
+
+### 5.2 Removing the old Festivals section from Settings
+
+- Remove the `festivals` entry from the `SECTIONS` registry in `SettingsPanel.tsx` (~line 41) and its self-contained render line (~line 607). `FestivalsSection.tsx` itself is **kept** (now imported by `MoodsPanel` instead).
+- Existing deep-links to `/admin/settings?section=festivals` no longer resolve to a section; `SettingsPanel`'s `?section=` validator falls back to its default section (soft, no 404). Optional nicety: a `web/app/admin/archives`-style redirect isn't possible for a query-param section, so we accept the soft fallback (or add a small note in release copy).
 
 No other web change needed — the first audit found only cosmetic mock data in `observatory/data.ts` (an empty-library preview), which stays as-is.
 
@@ -148,8 +165,11 @@ No other web change needed — the first audit found only cosmetic mock data in 
 
 ## 8. Files touched (summary)
 
-**Controller:** `settings.ts` (constants, accessors, seeding, 3 validators, update branches), `context.ts` (2 maps → settings reads), `music/audio-moods.ts`, `music/embeddings.ts`, `music/tagger-core.ts`, `music/seed-selector.ts`, `llm/internal/prompts/generate.ts`, `routes/settings.ts`, `routes/library.ts`. Tests under `controller/scripts/`.
+**Controller (moods only — speech corrections needs none):** `settings.ts` (constants, accessors, seeding, 3 validators, update branches), `context.ts` (2 maps → settings reads), `music/audio-moods.ts`, `music/embeddings.ts`, `music/tagger-core.ts`, `music/seed-selector.ts`, `llm/internal/prompts/generate.ts`, `routes/settings.ts` (expose 3 new keys in GET; `moods:` export → `moodVocab()`), `routes/library.ts`. Tests under `controller/scripts/`.
 
-**Web:** `components/admin/FestivalsSection.tsx` → `MoodsSection.tsx` (extended), `components/admin/SettingsPanel.tsx` (registry relabel).
+**Web:**
+- **New:** `app/admin/moods/page.tsx`, `components/admin/MoodsPanel.tsx`.
+- **Edited:** `components/admin/AdminShell.tsx` (one `NavItem` + icon import), `components/admin/settings/TtsSection.tsx` (cut the Speech-corrections card + its dirty-check/save-key), `components/admin/SettingsPanel.tsx` (drop the `festivals` section entry + render line).
+- **Reused unchanged:** `components/admin/FestivalsSection.tsx` (now composed by `MoodsPanel`).
 
-**No change:** genres (already dynamic), `SHOW_ENERGY`, Liquidsoap / compose / `.env`, native app.
+**No change:** genres (already dynamic), `SHOW_ENERGY`, the speech-corrections setting/validator/runtime (`settings.tts.corrections`, `audio/speech-text.ts`, `audio/tts.ts`), Liquidsoap / compose / `.env`, native app.
