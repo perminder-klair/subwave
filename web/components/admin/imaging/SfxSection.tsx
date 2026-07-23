@@ -94,14 +94,6 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
         </div>
       </PanelBox>
 
-      {!ready && (
-        <V3Alert title="no ElevenLabs key">
-          Built-in effects work without a key — one is only needed to generate new ones. Set{' '}
-          <code className="font-mono text-[12px]">ELEVENLABS_API_KEY</code> and restart the
-          controller to enable Create.
-        </V3Alert>
-      )}
-
       {/* Library */}
       <PanelBox>
         <PanelHead label={`effect library · ${pad2(list.length)}`} />

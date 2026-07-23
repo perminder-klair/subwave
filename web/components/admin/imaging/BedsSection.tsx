@@ -116,15 +116,6 @@ export function BedsSection({ bedsData, bedsForm, setBedsForm, busy, createBed, 
         </div>
       </PanelBox>
 
-      {!ready && (
-        <V3Alert title="no ElevenLabs key">
-          The built-in bed and uploads work without a key — one is only needed to generate new
-          beds. Set{' '}
-          <code className="font-mono text-[12px]">ELEVENLABS_API_KEY</code> and restart the
-          controller to enable Create.
-        </V3Alert>
-      )}
-
       {enabled && list.length === 0 && (
         <V3Alert title="no beds in the library">
           Beds are on, but the library is empty — links fall back to talking over the incoming
