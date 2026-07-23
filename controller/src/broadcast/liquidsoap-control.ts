@@ -160,6 +160,9 @@ interface DjQueueSnapshot {
   ridBySubsonicId: Map<string, string>;
   // Request ids in queue order — needed to find the entry pushed immediately
   // ahead of a given track (a bed rides that slot; see resolveDjQueueRidWithBed).
+  // Relies on `dj_queue.queue` listing pending rids in FIFO push order, which
+  // is what request.queue's telnet command does (Liquidsoap 2.x: the queue
+  // command prints the ready/pending list oldest-first).
   orderedRids: string[];
   // Request ids whose annotate URI carries subwave_kind="bed" — beds have no
   // subsonic_id, so this is the only way to recognise them in the queue.

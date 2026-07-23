@@ -94,6 +94,8 @@ interface QueueItem {
   // this item, meaning its link airs over the BED rather than over this track
   // (broadcast/bed-policy.ts). The bed's own start is what fires airIntro — see
   // onBedStarted — so this is how that event finds the item it belongs to.
+  // Both bed fields ride persist()'s wholesale item snapshot, which is what
+  // makes the maybePushBed re-drain guard hold across a controller restart.
   bedded?: boolean;
   // The predecessor's exit canvas the bed fades in under. The bed's marker
   // fires at cross-FEED time, this many seconds before the bed is dominant —
@@ -749,8 +751,11 @@ class Queue {
       // is held for it in onBedStarted. The predecessor's own crossSec stamp
       // (applyMixTransition's ending-aware canvas) is exactly that length;
       // fall back to the operator's crossfade setting like getAnnotatedUri.
-      const entryCrossSec = Math.min(15, Math.max(0,
-        Number(predecessor?.crossSec ?? settings.get()?.crossfadeDuration) || 10));
+      // 0 is a legitimate value (a hard-cut station has NO entry canvas), so
+      // guard with isFinite rather than `||` — `|| 10` would turn crossfade 0
+      // into 10s of phantom dead time the listener hears as bare bed.
+      const rawCross = Number(predecessor?.crossSec ?? settings.get()?.crossfadeDuration);
+      const entryCrossSec = Math.min(15, Math.max(0, Number.isFinite(rawCross) ? rawCross : 10));
 
       const { bedSec, crossSec } = bedPolicy.bedLengthFor(voiceMs, cfg, entryCrossSec);
       const pick = bedPolicy.pickBed(await beds.catalog(), bedSec, this._lastBed, Math.random());

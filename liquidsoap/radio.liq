@@ -1408,6 +1408,12 @@ def on_meta(m) =
       ("artist", artist),
       ("album", album)
     ])
+  else
+    # Untitled, non-bed metadata (the emergency single, an untagged local
+    # file). Nothing to publish — but it still marks the bed's end, and
+    # without this reset bed_on_air would latch true and keep the jingle
+    # rotate starved until the next tagged song.
+    bed_on_air := false
   end
 end
 
