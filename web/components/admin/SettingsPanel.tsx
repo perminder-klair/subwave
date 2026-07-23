@@ -13,6 +13,8 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
 import { Card, Btn, Pill, Seg } from './ui';
+import { SkeletonForm } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/ui/error-state';
 import { cn } from '../../lib/cn';
 import ArchivesPanel from './ArchivesPanel';
 import BackupPanel from './BackupPanel';
@@ -384,14 +386,7 @@ export default function SettingsPanel() {
 
       {/* Active section */}
       <div className="grid gap-4">
-        {err && (
-          <div className="card border-[var(--danger)]">
-            <div className="card-body text-[12px] text-[var(--danger)]">
-              <strong className="tracking-[0.12em] uppercase">controller error</strong>
-              <div className="mt-1">{err}</div>
-            </div>
-          </div>
-        )}
+        {err && <ErrorState error={err} onRetry={refresh} />}
         {pendingRestart && (
           <div
             role="alert"
@@ -414,9 +409,7 @@ export default function SettingsPanel() {
             </Btn>
           </div>
         )}
-        {!data && !err && (
-          <div className="text-[13px] text-muted italic">loading…</div>
-        )}
+        {!data && !err && <SkeletonForm fields={5} />}
 
         {data && form && (() => {
           const updateForm: FormUpdater = (updater) =>

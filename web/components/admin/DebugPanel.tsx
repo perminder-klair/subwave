@@ -10,6 +10,8 @@ import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
 import { Card, Btn, Pill, Eyebrow } from './ui';
 import { ScrollArea } from '../ui/scroll-area';
+import { SkeletonRows } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/ui/error-state';
 import { cn } from '../../lib/cn';
 import type { StationLocale } from '../../lib/types';
 import {
@@ -374,11 +376,11 @@ export default function DebugPanel() {
         </div>
       </section>
 
-      {err && <V3Alert tone="error" title="controller error">{err}</V3Alert>}
+      {err && <ErrorState error={err} />}
 
       {!data && !err && (
         <Card title="Debug">
-          <span className="field-hint italic">connecting…</span>
+          <SkeletonRows rows={6} />
         </Card>
       )}
 
@@ -699,8 +701,8 @@ function TtsCallList({ calls }: { calls: TtsCall[] }) {
       <ScrollArea className="max-h-[420px]">
         <div className="grid gap-1.5">
         {shown.length === 0 && (
-          <span className="field-hint italic">
-            {calls.length === 0 ? 'no spoken segments yet' : 'no calls match this filter'}
+          <span className="field-hint text-muted">
+            {calls.length === 0 ? 'No spoken segments yet' : 'No calls match this filter'}
           </span>
         )}
         {shown.map((c, i) => (
@@ -1306,8 +1308,8 @@ function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
       <ScrollArea className="max-h-[600px]">
         <div className="grid gap-1.5">
           {shown.length === 0 && (
-            <span className="field-hint italic">
-              {calls.length === 0 ? 'no calls yet' : 'no calls match this filter'}
+            <span className="field-hint text-muted">
+              {calls.length === 0 ? 'No calls yet' : 'No calls match this filter'}
             </span>
           )}
           {shown.map((c, i) => (
@@ -1400,8 +1402,8 @@ function SubsonicCalls({ subsonic }: { subsonic: DebugSubsonic | undefined }) {
   if (!subsonic || subsonic.error) {
     return (
       <Card title="Subsonic API calls">
-        <span className="field-hint italic">
-          {subsonic?.error || 'no data yet'}
+        <span className="field-hint text-muted">
+          {subsonic?.error || 'No data yet'}
         </span>
       </Card>
     );
@@ -1447,8 +1449,8 @@ function SubsonicCalls({ subsonic }: { subsonic: DebugSubsonic | undefined }) {
           <ScrollArea className="max-h-[480px]">
             <div className="grid gap-1.5">
               {shown.length === 0 && (
-                <span className="field-hint italic">
-                  {calls.length === 0 ? 'no calls yet' : 'no calls match this filter'}
+                <span className="field-hint text-muted">
+                  {calls.length === 0 ? 'No calls yet' : 'No calls match this filter'}
                 </span>
               )}
               {shown.map((c, i) => (

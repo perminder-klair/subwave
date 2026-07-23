@@ -30,6 +30,9 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Metric, MetaChip, Toggle } from './ui';
+import { SkeletonRows } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { EditorDialog } from '../ui/editor-dialog';
 import { Modal } from '../ui/modal';
@@ -1028,7 +1031,7 @@ export default function ShowsPanel() {
     return (
       <div className="grid gap-4">
         <Card title="Shows" sub="weekly grid">
-          <div className="text-[13px] text-[var(--danger)]">controller error: {err}</div>
+          <ErrorState error={err} onRetry={load} />
         </Card>
       </div>
     );
@@ -1037,7 +1040,7 @@ export default function ShowsPanel() {
     return (
       <div className="grid gap-4">
         <Card title="Shows" sub="weekly grid">
-          <div className="text-[13px] text-muted italic">loading…</div>
+          <SkeletonRows rows={4} />
         </Card>
       </div>
     );
@@ -1317,9 +1320,10 @@ export default function ShowsPanel() {
         </div>
       </div>
       {form.shows.length === 0 && (
-        <p className="text-[12px] text-muted">
-          No shows yet. Add one to start programming the week.
-        </p>
+        <EmptyState
+          title="No shows scheduled"
+          description="Add one to start programming the week."
+        />
       )}
 
       {form.shows.map((s, i) => {

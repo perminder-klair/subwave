@@ -10,6 +10,7 @@
 
 import type { ReactNode } from 'react';
 import { cn } from '../../../lib/cn';
+import { EmptyState as SharedEmptyState } from '../../ui/empty-state';
 
 /** Zero-pad a count to two digits, the way the metrics read in the design. */
 export function pad2(n: number): string {
@@ -87,14 +88,11 @@ export function SectionMasthead({
   );
 }
 
-/** Empty-library state: a display-italic "None yet." over a mono caption. */
+/** Empty-library state — the imaging sections' "None yet." over a caption.
+    Thin wrapper over the shared console EmptyState so imaging stays in step
+    with the rest of the admin; the `caption` API is unchanged for callers. */
 export function EmptyState({ caption }: { caption: ReactNode }) {
-  return (
-    <div className="px-[18px] py-11 text-center">
-      <div className="font-display text-[22px] text-muted italic">None yet.</div>
-      <div className="mt-2 font-mono text-[11px] tracking-[0.12em] text-muted uppercase">{caption}</div>
-    </div>
-  );
+  return <SharedEmptyState title="None yet." description={caption} />;
 }
 
 /** Dashed drop-zone that triggers a hidden file input in the import modals. */

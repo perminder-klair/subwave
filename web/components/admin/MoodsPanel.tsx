@@ -12,6 +12,8 @@ import { ScrollArea } from '../ui/scroll-area';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
+import { SkeletonCards } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/ui/error-state';
 import FestivalsSection from './FestivalsSection';
 
 interface MoodEntry {
@@ -213,18 +215,9 @@ export default function MoodsPanel() {
         <SectionTabs tabs={tabs} value={tab} onChange={selectTab} label="Moods sections" />
       </section>
 
-      {err && (
-        <div className="card border-[var(--danger)]">
-          <div className="card-body text-[12px] text-[var(--danger)]">
-            <strong className="tracking-[0.12em] uppercase">controller error</strong>
-            <div className="mt-1">{err}</div>
-          </div>
-        </div>
-      )}
+      {err && <ErrorState error={err} onRetry={load} />}
 
-      {loading && tab !== 'festivals' && (
-        <div className="text-[13px] text-muted italic">loading…</div>
-      )}
+      {loading && tab !== 'festivals' && <SkeletonCards cards={6} />}
 
       {/* --- Vocabulary --- */}
       {tab === 'vocab' && moods !== null && (

@@ -20,8 +20,9 @@ import { Music, AudioLines, Waves } from 'lucide-react';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { notify, errorMessage } from '../../../lib/notify';
 import { SectionTabs } from '../SectionTabs';
-import { V3Alert } from '../../ui/alert';
 import { V3AlertDialog } from '../../ui/alert-dialog';
+import { SkeletonCards } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/ui/error-state';
 import type { SettingsData, SaveSettings } from '../settings/shared';
 import type { SfxData, SfxForm, BedsData, BedsForm, JingleImportFailure, JingleImportResult } from './types';
 import { JinglesSection } from './JinglesSection';
@@ -378,7 +379,7 @@ export default function ImagingPanel() {
       </section>
 
       {err && (
-        <V3Alert tone="error" title="controller error">{err}</V3Alert>
+        <ErrorState error={err} onRetry={refresh} />
       )}
 
       <div>
@@ -393,7 +394,7 @@ export default function ImagingPanel() {
               onDelete={setConfirmDelete} adminFetch={adminFetch}
             />
           ) : (
-            !err && <div className="text-[13px] text-muted italic">loading…</div>
+            !err && <SkeletonCards cards={6} />
           )
         )}
 
