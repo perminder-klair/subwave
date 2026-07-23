@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.46.0](https://github.com/perminder-klair/subwave/compare/v0.45.0...v0.46.0) (2026-07-23)
+
+
+### Features
+
+* **dj:** instrumental beds under between-track links ([#1072](https://github.com/perminder-klair/subwave/issues/1072)) ([d1986a4](https://github.com/perminder-klair/subwave/commit/d1986a410471b0ed6559f062f5406252b63737f5))
+* **imaging:** protect the built-in bed & generate beds via ElevenLabs Music ([#1144](https://github.com/perminder-klair/subwave/issues/1144)) ([bb1b617](https://github.com/perminder-klair/subwave/commit/bb1b617735480a2a853e5cca9045ede96539dca3))
+* **web:** collapsible Library submenu (Playlists + Observatory) in admin sidebar ([#1145](https://github.com/perminder-klair/subwave/issues/1145)) ([bc29ec0](https://github.com/perminder-klair/subwave/commit/bc29ec0e124b5b8f8e90e3dc6d070930a358b937))
+* **web:** move Jingles / SFX / Beds to their own Imaging admin page ([#1131](https://github.com/perminder-klair/subwave/issues/1131)) ([19049c8](https://github.com/perminder-klair/subwave/commit/19049c89b5fd497e7fe68006b3983ff83d79ffef))
+* **web:** operator-editable moods on a dedicated /admin/moods page ([#1137](https://github.com/perminder-klair/subwave/issues/1137)) ([34f2fd0](https://github.com/perminder-klair/subwave/commit/34f2fd0c463557075f4eec0315983ee38b0f468f))
+* **web:** rebuild the admin shell on shadcn Sidebar ([#1140](https://github.com/perminder-klair/subwave/issues/1140)) ([f0545e7](https://github.com/perminder-klair/subwave/commit/f0545e7b886863f790e68ebabaec0ca1f621e7b3))
+* **web:** redesign /admin/imaging with editorial layout ([#1136](https://github.com/perminder-klair/subwave/issues/1136)) ([6a639ca](https://github.com/perminder-klair/subwave/commit/6a639ca21add608cd44c6bdc97c6f3485f8921c3))
+* **web:** shared admin loading/empty/error states ([#1146](https://github.com/perminder-klair/subwave/issues/1146)) ([90db930](https://github.com/perminder-klair/subwave/commit/90db93086945eacd07d9a2b5fe607c41a5ec2fe6))
+
+
+### Bug Fixes
+
+* **analyzer:** stop mass false-positive vocal tags ([#1125](https://github.com/perminder-klair/subwave/issues/1125)) ([#1135](https://github.com/perminder-klair/subwave/issues/1135)) ([6a57172](https://github.com/perminder-klair/subwave/commit/6a57172d9efa6b582285f40a9f4c6ad6d97fca24))
+* **picker:** enforce back-to-back artist variety on the agent path ([#1124](https://github.com/perminder-klair/subwave/issues/1124)) ([#1134](https://github.com/perminder-klair/subwave/issues/1134)) ([0e53ff6](https://github.com/perminder-klair/subwave/commit/0e53ff65669385096e2eb3913d017ff5d0601f72))
+* **settings:** tolerate stale theme ids instead of bricking show saves & restores ([#1141](https://github.com/perminder-klair/subwave/issues/1141)) ([ffdda14](https://github.com/perminder-klair/subwave/commit/ffdda144e492ed7bc53f2d744f4b717e8cd186de))
+* **stream:** per-mount burst sizing + measured listener lag for now-playing alignment ([#1138](https://github.com/perminder-klair/subwave/issues/1138)) ([f199521](https://github.com/perminder-klair/subwave/commit/f1995215dafe1e628fc6916fd5f7cd42934acb1f))
+* **tts:** chunk long Chatterbox input to stop autoregressive garbling ([#1130](https://github.com/perminder-klair/subwave/issues/1130)) ([#1133](https://github.com/perminder-klair/subwave/issues/1133)) ([de08199](https://github.com/perminder-klair/subwave/commit/de08199d6bf6f5566d3cb548d1acde8ae27ee8ca))
+* **web:** card-wrap admin Imaging sections to match Moods/Skills ([#1143](https://github.com/perminder-klair/subwave/issues/1143)) ([f6bd82f](https://github.com/perminder-klair/subwave/commit/f6bd82f2659467da62bd9d5441b252a46ee5cec4))
+
+
+### Performance
+
+* **web:** stream /stations + /shows behind Suspense boundaries ([#1126](https://github.com/perminder-klair/subwave/issues/1126)) ([bf8a7e1](https://github.com/perminder-klair/subwave/commit/bf8a7e1a0e1ffc4e660fcc89fc8e65c8315b5b9b))
+
+
+### Documentation
+
+* **web:** link the native desktop app across landing, manual, admin, and README ([#1132](https://github.com/perminder-klair/subwave/issues/1132)) ([9b299a9](https://github.com/perminder-klair/subwave/commit/9b299a948ef3ee2db420a72f43d06af9617d24a9))
+* **web:** reflect Moods & Imaging admin pages in manual + landing ([#1139](https://github.com/perminder-klair/subwave/issues/1139)) ([97711f3](https://github.com/perminder-klair/subwave/commit/97711f37bea064f59cce522dc1f1165718984aaf))
+
 ## [0.45.0](https://github.com/perminder-klair/subwave/compare/v0.44.0...v0.45.0) (2026-07-21)
 
 
