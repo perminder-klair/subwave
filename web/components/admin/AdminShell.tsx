@@ -28,7 +28,10 @@ import {
   Palette,
   LogOut,
   ChevronDown,
+  ChevronRight,
   MoreHorizontal,
+  ListMusic,
+  Telescope,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -49,14 +52,19 @@ import {
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarProvider,
   SidebarRail,
   SidebarTrigger,
   useSidebar,
 } from '../ui/sidebar';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '../ui/collapsible';
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -82,12 +90,23 @@ type NavIcon = ComponentType<{
   'aria-hidden'?: boolean | 'true' | 'false';
 }>;
 
+interface NavSubItem {
+  href: string;
+  id: string;
+  label: string;
+  icon: NavIcon;
+}
+
 interface NavItem {
   href: string;
   id: string;
   label: string;
   icon: NavIcon;
   pill?: string;
+  // Nested pages surfaced under a collapsible submenu (e.g. Library →
+  // Playlists / Observatory). The parent still links to its own page; the
+  // chevron toggles the sub-items.
+  children?: NavSubItem[];
 }
 
 interface NavSection {
@@ -107,9 +126,20 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: 'Programming',
     items: [
-      // Playlists (/admin/playlists) and the Observatory (/observatory) are
-      // reached from doorways inside Library — not top-level nav items.
-      { href: '/admin/library', id: 'library', label: 'Library', icon: Disc3 },
+      // Library owns a collapsible submenu — Playlists (/admin/playlists) and
+      // the Observatory (/observatory) live under its wing. The parent still
+      // links to /admin/library; the chevron opens/closes the sub-items (which
+      // also stay reachable from the doorway cards inside the Library page).
+      {
+        href: '/admin/library',
+        id: 'library',
+        label: 'Library',
+        icon: Disc3,
+        children: [
+          { href: '/admin/playlists', id: 'playlists', label: 'Playlists', icon: ListMusic },
+          { href: '/observatory', id: 'observatory', label: 'Observatory', icon: Telescope },
+        ],
+      },
       { href: '/admin/shows', id: 'shows', label: 'Shows', icon: CalendarClock },
       { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
       { href: '/admin/skills', id: 'skills', label: 'Skills', icon: Sparkles },
@@ -322,41 +352,23 @@ function AdminSidebar({
           <SidebarGroup key={section.label} className="p-0">
             <SidebarGroupLabel>{section.label}</SidebarGroupLabel>
             <SidebarMenu className="gap-1.5">
-              {section.items.map(n => {
-                // Playlists lives under Library's wing — keep Library lit there.
-                const active =
-                  !!pathname &&
-                  (pathname.startsWith(n.href) ||
-                    (n.id === 'library' && pathname.startsWith('/admin/playlists')));
-                const Icon = n.icon;
-                return (
-                  <SidebarMenuItem key={n.id}>
-                    <SidebarMenuButton asChild isActive={active} tooltip={n.label}>
-                      <Link href={n.href} onClick={closeOnMobileNav}>
-                        {/* Active background morphs across nav groups via a
-                            shared layoutId — same trick as DotRail. The icon
-                            and label sit above it via z-index. */}
-                        {active && (
-                          <m.span
-                            layoutId="admin-nav-active"
-                            className="absolute inset-0 z-0 bg-ink"
-                            initial={false}
-                            transition={{ type: 'spring', stiffness: 380, damping: 32 }}
-                            aria-hidden="true"
-                          />
-                        )}
-                        <Icon
-                          className="relative z-[1] shrink-0 opacity-80"
-                          strokeWidth={2}
-                          aria-hidden="true"
-                        />
-                        <span className="relative z-[1] flex-1 truncate">{n.label}</span>
-                      </Link>
-                    </SidebarMenuButton>
-                    {n.pill && <SidebarMenuBadge>{n.pill}</SidebarMenuBadge>}
-                  </SidebarMenuItem>
-                );
-              })}
+              {section.items.map(n =>
+                n.children?.length ? (
+                  <CollapsibleNavItem
+                    key={n.id}
+                    item={n}
+                    pathname={pathname}
+                    onNavigate={closeOnMobileNav}
+                  />
+                ) : (
+                  <NavItemRow
+                    key={n.id}
+                    item={n}
+                    pathname={pathname}
+                    onNavigate={closeOnMobileNav}
+                  />
+                ),
+              )}
             </SidebarMenu>
           </SidebarGroup>
         ))}
@@ -447,6 +459,118 @@ function AdminSidebar({
         onConfirm={onSignOut}
       />
     </Sidebar>
+  );
+}
+
+// The filled active pill, morphed across nav rows via a shared layoutId — same
+// trick as DotRail. Only ever ONE row renders it at a time (sub-items use their
+// own subtler highlight), so the layout animation never doubles up.
+function NavActiveBg() {
+  return (
+    <m.span
+      layoutId="admin-nav-active"
+      className="absolute inset-0 z-0 bg-ink"
+      initial={false}
+      transition={{ type: 'spring', stiffness: 380, damping: 32 }}
+      aria-hidden="true"
+    />
+  );
+}
+
+// A plain (childless) nav row.
+function NavItemRow({
+  item,
+  pathname,
+  onNavigate,
+}: {
+  item: NavItem;
+  pathname: string | null;
+  onNavigate: () => void;
+}) {
+  const active = !!pathname && pathname.startsWith(item.href);
+  const Icon = item.icon;
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
+        <Link href={item.href} onClick={onNavigate}>
+          {active && <NavActiveBg />}
+          <Icon className="relative z-[1] shrink-0 opacity-80" strokeWidth={2} aria-hidden="true" />
+          <span className="relative z-[1] flex-1 truncate">{item.label}</span>
+        </Link>
+      </SidebarMenuButton>
+      {item.pill && <SidebarMenuBadge>{item.pill}</SidebarMenuBadge>}
+    </SidebarMenuItem>
+  );
+}
+
+// A nav row that owns a collapsible submenu (Library → Playlists / Observatory).
+// The parent button still links to its own page; a chevron action toggles the
+// sub-items open/closed. The group auto-opens whenever the operator is on the
+// parent or any of its child pages. In the icon-collapsed rail both the chevron
+// and the sub-list hide (built into SidebarMenuAction / SidebarMenuSub), so the
+// parent icon just links straight through.
+function CollapsibleNavItem({
+  item,
+  pathname,
+  onNavigate,
+}: {
+  item: NavItem;
+  pathname: string | null;
+  onNavigate: () => void;
+}) {
+  const children = item.children ?? [];
+  const onChild = children.some(c => !!pathname && pathname.startsWith(c.href));
+  const parentActive = !!pathname && pathname.startsWith(item.href) && !onChild;
+  const sectionActive = (!!pathname && pathname.startsWith(item.href)) || onChild;
+  const [open, setOpen] = useState(sectionActive);
+  // Reveal the group whenever a nav lands on one of its pages (the shell is
+  // persistent, so the state survives across route changes otherwise).
+  useEffect(() => {
+    if (sectionActive) setOpen(true);
+  }, [sectionActive]);
+  const Icon = item.icon;
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} asChild>
+      <SidebarMenuItem>
+        <SidebarMenuButton asChild isActive={parentActive} tooltip={item.label}>
+          <Link href={item.href} onClick={onNavigate}>
+            {parentActive && <NavActiveBg />}
+            <Icon
+              className="relative z-[1] shrink-0 opacity-80"
+              strokeWidth={2}
+              aria-hidden="true"
+            />
+            <span className="relative z-[1] flex-1 truncate">{item.label}</span>
+          </Link>
+        </SidebarMenuButton>
+        <CollapsibleTrigger asChild>
+          <SidebarMenuAction
+            className="z-[2] transition-transform data-[state=open]:rotate-90"
+            aria-label={`Toggle ${item.label} submenu`}
+          >
+            <ChevronRight strokeWidth={2} aria-hidden="true" />
+          </SidebarMenuAction>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <SidebarMenuSub className="mt-1">
+            {children.map(sub => {
+              const subActive = !!pathname && pathname.startsWith(sub.href);
+              const SubIcon = sub.icon;
+              return (
+                <SidebarMenuSubItem key={sub.id}>
+                  <SidebarMenuSubButton asChild isActive={subActive}>
+                    <Link href={sub.href} onClick={onNavigate}>
+                      <SubIcon aria-hidden="true" />
+                      <span className="truncate">{sub.label}</span>
+                    </Link>
+                  </SidebarMenuSubButton>
+                </SidebarMenuSubItem>
+              );
+            })}
+          </SidebarMenuSub>
+        </CollapsibleContent>
+      </SidebarMenuItem>
+    </Collapsible>
   );
 }
 
