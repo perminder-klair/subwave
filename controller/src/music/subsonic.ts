@@ -576,7 +576,9 @@ export async function getLyrics(songId) {
 // start offsets getLyrics() throws away (#1125). Returns { synced, lines } — the
 // raw material for lyric-derived vocal ranges (music/lyric-vocal.ts) — or null
 // when no lyrics are indexed. Line `start` is milliseconds from track start; the
-// entry-level `offset` (a global shift) is folded in and negatives clamped to 0.
+// entry-level `offset` (a global shift) is folded in — per OpenSubsonic
+// "positive means lyrics appear sooner", i.e. effective start = start − offset —
+// and negatives clamped to 0.
 // synced=false marks unsynced/plain-text lyrics whose line timings are absent.
 export async function getStructuredLyrics(
   songId,
@@ -594,7 +596,7 @@ export async function getStructuredLyrics(
     const lines = lineArr.map((l) => {
       const text = typeof l?.value === 'string' ? l.value : '';
       const rawStart = Number(l?.start);
-      const startMs = Number.isFinite(rawStart) ? Math.max(0, rawStart + offset) : NaN;
+      const startMs = Number.isFinite(rawStart) ? Math.max(0, rawStart - offset) : NaN;
       return { startMs, text };
     });
     return { synced, lines };

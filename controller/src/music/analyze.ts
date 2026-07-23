@@ -401,9 +401,12 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         }
       }
       // vocal:true forces the Demucs pass for this track (admin/backfill path),
-      // mirroring embed; skipped when lyrics already decided it, or when vocal
-      // activity is off.
-      const vocal = vocalBackfill && !lyricVocal ? true : undefined;
+      // mirroring embed. A lyric-decided track sends an EXPLICIT false — the
+      // worker only skips Demucs on undefined when its OWN env has vocal off,
+      // and the analyzer service/AIO can carry ANALYZE_VOCAL_ACTIVITY, which
+      // would pay the whole separation just to have its result overridden
+      // below. Omitted when vocal activity is off.
+      const vocal = vocalBackfill ? (lyricVocal ? false : true) : undefined;
       const a = localPath
         ? await analyzer.analyzePath(localPath, { embed, vocal, complete: localComplete })
         : await analyzer.analyze(id, { embed, vocal });
