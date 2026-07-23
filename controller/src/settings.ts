@@ -3313,7 +3313,9 @@ function validateWebhooksStrict(raw: unknown, existing: Webhook[] = []) {
 // shape: whole-value replace, indexed throws, rebuilt objects strip unknown
 // keys). `moodNames` is the effective vocabulary being saved, so a schedule /
 // weather / festival entry may reference a mood added in the SAME patch. ---
-function validateMoodsStrict(raw: any): Array<{ name: string; clapPrompt: string }> {
+// Exported for unit tests (scripts/moods.test.ts) — the pure validation/guard
+// logic that keeps the mood system consistent on every save.
+export function validateMoodsStrict(raw: any): Array<{ name: string; clapPrompt: string }> {
   if (!Array.isArray(raw)) throw new Error('moods must be an array');
   if (raw.length < 1) throw new Error('moods must have at least one entry');
   if (raw.length > MOODS_LIMIT) throw new Error(`moods must be at most ${MOODS_LIMIT} entries`);
@@ -3333,7 +3335,7 @@ function validateMoodsStrict(raw: any): Array<{ name: string; clapPrompt: string
   });
 }
 
-function validateMoodScheduleStrict(raw: any, moodNames: string[]): Record<string, string> {
+export function validateMoodScheduleStrict(raw: any, moodNames: string[]): Record<string, string> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('moodSchedule must be an object');
   }
@@ -3349,7 +3351,7 @@ function validateMoodScheduleStrict(raw: any, moodNames: string[]): Record<strin
   return out;
 }
 
-function validateWeatherMoodsStrict(raw: any, moodNames: string[]): Record<string, string> {
+export function validateWeatherMoodsStrict(raw: any, moodNames: string[]): Record<string, string> {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('weatherMoods must be an object');
   }
@@ -3369,7 +3371,7 @@ function validateWeatherMoodsStrict(raw: any, moodNames: string[]): Record<strin
 // festival calendar, either mood map, or a scheduled show. Renames are a
 // two-step (add the new name, repoint the referrers, remove the old) — this is
 // the guard that names exactly what still points at a removed mood.
-function assertNoOrphanMoods(next: any): void {
+export function assertNoOrphanMoods(next: any): void {
   const names = new Set<string>((next.moods || []).map((m: any) => m.name));
   const refs: string[] = [];
   for (const [period, mood] of Object.entries(next.moodSchedule || {})) {
