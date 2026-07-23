@@ -173,3 +173,12 @@ No other web change needed — the first audit found only cosmetic mock data in 
 - **Reused unchanged:** `components/admin/FestivalsSection.tsx` (now composed by `MoodsPanel`).
 
 **No change:** genres (already dynamic), `SHOW_ENERGY`, the speech-corrections setting/validator/runtime (`settings.tts.corrections`, `audio/speech-text.ts`, `audio/tts.ts`), Liquidsoap / compose / `.env`, native app.
+
+---
+
+## 9. Implementation notes (as built)
+
+- **Accessor seam:** every consumer now reads `settings.moodVocab()` / `moodEntries()` / `moodPromptFor()` / `moodScheduleFor()` / `weatherMoodFor()`. `SHOW_MOODS` survives as `MOOD_DEFAULTS.map(m => m.name)` for two legitimate default-vocab uses. New accessor test at `controller/scripts/moods.test.ts`; the existing `audio-moods.test.ts` (moodPrompt/moodVocabHash) still passes because `get()` returns `DEFAULTS` pre-load.
+- **`community/registry.ts` intentionally stays on `SHOW_MOODS`** (the default names): a *shared/imported* station config validates against the canonical set, not the local operator's custom vocabulary — coupling it to a local edit would drop moods on import.
+- **Known follow-up — `web/components/admin/PlaylistBuilderPanel.tsx`** hardcodes the mood list (its `MOODS` const). Custom moods work everywhere else (tagging, shows, festivals, autonomous DJ, the Library editor which reads the vocab from the API), but won't appear in the Playlist Builder's mood picker until that panel is pointed at the API vocab. Deferred to keep this PR focused; noted in the PR body.
+- **In-use removal:** enforced server-side by `assertNoOrphanMoods(next)` in `settings.update()` (rejects with the referrer named). Internal, matching the untested-by-convention `validateFestivalsStrict` shape.

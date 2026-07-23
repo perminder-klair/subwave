@@ -15,7 +15,7 @@
 
 import * as subsonic from './subsonic.js';
 import * as db from './library-db.js';
-import { SHOW_MOODS } from '../settings.js';
+import { moodVocab } from '../settings.js';
 import { shuffle } from '../util/shuffle.js';
 
 export interface SeedSelection {
@@ -37,7 +37,11 @@ export interface SelectorOpts {
   untaggedPool?: Set<string>;
 }
 
-const MOOD_WORDS = new Set(SHOW_MOODS.map(s => s.toLowerCase()));
+// Live vocabulary as a lowercased Set — read per call, not at module load, so
+// operator-added moods (settings.moods) still match mood-named playlists.
+function moodWords(): Set<string> {
+  return new Set(moodVocab().map(s => s.toLowerCase()));
+}
 
 export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
   const alreadyTagged = new Set(db.allTaggedIds());
@@ -82,10 +86,11 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
   if (chosen.size < operatorCap) {
     try {
       const playlists = await subsonic.getPlaylists();
+      const moodTokens = moodWords();
       const moodPlaylists = (Array.isArray(playlists) ? playlists : []).filter(
         (p: any) => {
           const name = String(p?.name || '').toLowerCase();
-          for (const mood of MOOD_WORDS) {
+          for (const mood of moodTokens) {
             if (name.includes(mood)) return true;
           }
           return false;

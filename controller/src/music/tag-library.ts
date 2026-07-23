@@ -51,7 +51,7 @@ import { loadSetupConfig } from '../setup/config.js';
 import { activeModelLabel, primaryLeg, fallbackLeg, probeLegReachable } from '../llm/provider.js';
 import { isUnreachable, isQuotaOrAuthError, errReason } from '../llm/sdk.js';
 import { setRawDebugStderrMirror } from '../llm/log.js';
-import { tagBatch, tagOne, TAGGER_BATCH_SYSTEM, type TagResult } from './tagger-core.js';
+import { tagBatch, tagOne, taggerBatchSystem, type TagResult } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
 import { reportProgress, formatPhaseBreakdown, sortedPhaseTimings, makeEventLogger } from './tagger-progress.js';
 import { planRun } from './rescan-scope.js';
@@ -418,7 +418,7 @@ async function main() {
     if (flags.rescan && reembedIds.length === 0) reembedIds = db.unembeddedIds();
   }
 
-  const promptHash = embeddings.promptVocabHash(TAGGER_BATCH_SYSTEM);
+  const promptHash = embeddings.promptVocabHash(taggerBatchSystem());
   const modelLabel = activeModelLabel();
 
   // Single- vs dual-LLM tagging. Decided once and shared by the seed + active-
