@@ -2,13 +2,20 @@
 
 import type { ChangeEvent } from 'react';
 import { useRef, useState } from 'react';
+import { Trash2 } from 'lucide-react';
 import { fmtSize } from '../../../lib/format';
 import { Modal } from '../../ui/modal';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
-import { Card, Btn, Pill, Seg } from '../ui';
-import { SectionHeader, PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
+import { Button } from '../../ui/button';
+import { Badge } from '../../ui/badge';
+import { V3Alert } from '../../ui/alert';
+import { Btn, Seg } from '../ui';
+import { PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
 import type { BedsData } from './types';
+import {
+  SectionMasthead, PanelBox, PanelHead, EmptyState, DropZone, MetaLine, TabMetric, pad2,
+} from './parts';
 
 interface BedsSectionProps {
   bedsData: BedsData | null;
@@ -67,196 +74,190 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
   };
 
   return (
-    <>
-      <SectionHeader
-        eyebrow="beds"
-        title="An instrumental bed for the DJ to talk over between songs."
-        sub="Normally a link is talked over the song it's introducing, so every second of DJ costs a second of music. With beds on, a long link gets its own instrumental bed instead: the song ends, the bed carries the talk, and the next song ramps in under the DJ's closing words."
-        metrics={[{ n: String(list.length), l: 'beds', accent: true }]}
+    <section className="grid gap-[22px]">
+      <SectionMasthead
+        title="Beds"
+        sub="Instrumentals the DJ talks over between songs: the song ends, the bed carries the talk, and the next song ramps in under the DJ’s closing words."
+        metrics={<TabMetric accent n={pad2(list.length)} l="beds" />}
       />
 
-      <Card title="Beds" sub="whether long links get a bed of their own">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="text-[13px] font-bold">Enable beds</div>
-            <div className="mt-0.5 max-w-[480px] text-[11px] leading-[1.5] text-muted">
-              When off, every link is talked over the incoming song, exactly as before. The
-              library below is kept either way. Needs at least one bed long enough to carry a
-              script.
-            </div>
+      {/* On/off */}
+      <PanelBox>
+        <div className="flex flex-wrap items-center justify-between gap-5 px-[18px] py-[16px]">
+          <div className="min-w-[240px] flex-1">
+            <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">talk beds</div>
+            <p className="mt-1.5 text-[12px] leading-[1.55] text-muted">
+              {enabled
+                ? 'Long links get their own instrumental. Needs at least one bed long enough to carry a script.'
+                : 'Off — every link is talked over the incoming song, as before. The library is kept.'}
+            </p>
           </div>
           <Seg
             accent
             value={enabled ? 'on' : 'off'}
-            options={[
-              { id: 'off', label: 'Off' },
-              { id: 'on', label: 'On' },
-            ]}
+            options={[{ id: 'on', label: 'On' }, { id: 'off', label: 'Off' }]}
             onChange={v => { if (!busy) saveSettings({ beds: { enabled: v === 'on' } }); }}
           />
         </div>
-      </Card>
+      </PanelBox>
 
       {enabled && list.length === 0 && (
-        <div className="card">
-          <div className="card-body text-[12px] leading-[1.5] text-muted">
-            <strong className="tracking-[0.12em] text-ink uppercase">No beds in the library</strong>
-            <div className="mt-1">
-              Beds are on, but there's nothing to play. Every link will be talked over its song
-              as usual until you add a bed of at least {minSec}s.
-            </div>
-          </div>
-        </div>
+        <V3Alert title="no beds in the library">
+          Beds are on, but the library is empty — links fall back to talking over the incoming
+          song until you import a bed at least {minSec} seconds long.
+        </V3Alert>
       )}
 
-      <Card title="When to use a bed" sub="how long a link has to run before it gets its own bed">
-        <div className="flex items-start justify-between gap-4">
-          <div className="max-w-[480px]">
-            <div className="text-[13px] font-bold">Bed links longer than</div>
-            <div className="mt-0.5 text-[11px] leading-[1.5] text-muted">
-              Where the analyzer has measured a track's vocals, that's used instead: the DJ gets
-              a bed exactly when it would otherwise talk over the singing, and instrumentals
-              never get one. This threshold covers everything else. Lower it and more links get
-              a bed; a bed on <em>every</em> link is a distinctive sound, and not everyone's.
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Input
-              className="mono-num w-20"
-              type="number"
-              step={1}
-              min={0}
-              max={60}
-              value={thresholdEdit ?? String(thresholdSec)}
-              disabled={busy}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setThresholdEdit(e.target.value)}
-              onBlur={() => {
-                if (thresholdEdit == null) return;
-                void saveNumber(thresholdEdit, thresholdSec, 60,
-                  v => ({ beds: { thresholdSec: v } }), setThresholdEdit);
-              }}
-            />
-            <span className="text-[12px] text-muted">sec</span>
-          </div>
-        </div>
-        <div className="mt-4 flex items-start justify-between gap-4 border-t border-dashed border-separator-strong pt-4">
-          <div className="max-w-[480px]">
-            <div className="text-[13px] font-bold">Ramp into the next song</div>
-            <div className="mt-0.5 text-[11px] leading-[1.5] text-muted">
-              How long the next song takes to fade in under the DJ's closing words at the end
-              of the bed. Longer is smoother; shorter is punchier. 0 is a hard cut.
-            </div>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Input
-              className="mono-num w-20"
-              type="number"
-              step={1}
-              min={0}
-              max={15}
-              value={crossEdit ?? String(crossSec)}
-              disabled={busy}
-              onChange={(e: ChangeEvent<HTMLInputElement>) => setCrossEdit(e.target.value)}
-              onBlur={() => {
-                if (crossEdit == null) return;
-                void saveNumber(crossEdit, crossSec, 15,
-                  v => ({ beds: { crossSec: v } }), setCrossEdit);
-              }}
-            />
-            <span className="text-[12px] text-muted">sec</span>
-          </div>
-        </div>
-      </Card>
-
-      <Card
-        title="Bed library"
-        sub={`${list.length} bed${list.length === 1 ? '' : 's'}`}
-        right={
-          <Btn sm tone="accent" onClick={() => setModal(true)} disabled={busy}>
-            Import
-          </Btn>
-        }
-      >
-        {list.length === 0 && (
-          <div className="py-2 text-[12px] text-muted italic">none yet</div>
-        )}
-        {list.map(b => (
-          <div
-            key={b.name}
-            className="flex items-start gap-3 border-b border-dashed border-separator-strong py-3"
-          >
-            <div className="min-w-0 flex-1">
-              <div className="text-[13px] font-bold text-ink">{b.name}</div>
-              {b.description && (
-                <div className="mt-0.5 text-[12px] break-words text-muted">{b.description}</div>
-              )}
-              <div className="mt-1 flex flex-wrap items-center gap-2">
-                <span className="caption">{fmtSize(b.size)}</span>
-                {b.durationSec != null && <span className="caption">{Math.round(b.durationSec)}s</span>}
-                {b.source === 'bundled' && <Pill tone="accent">bundled</Pill>}
-                {b.source === 'upload' && <Pill tone="ink">uploaded</Pill>}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <PreviewButton
-                path={`/beds/${encodeURIComponent(b.name)}/audio`}
-                adminFetch={adminFetch}
-              />
-              <Btn
-                sm
-                tone="danger"
-                onClick={() => onDelete(b.name)}
+      {/* Thresholds */}
+      <PanelBox>
+        <PanelHead label="when to use a bed" />
+        <div className="grid grid-cols-2">
+          <div className="border-r border-separator-soft p-[18px]">
+            <div className="flex items-center gap-2.5">
+              <span className="text-[13px] font-semibold">Bed links longer than</span>
+              <Input
+                className="mono-num w-[72px]"
+                type="number"
+                step={1}
+                min={0}
+                max={60}
+                value={thresholdEdit ?? String(thresholdSec)}
                 disabled={busy}
-                title="Delete this bed"
-              >
-                Delete
-              </Btn>
+                aria-label="Bed threshold seconds"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setThresholdEdit(e.target.value)}
+                onBlur={() => {
+                  if (thresholdEdit == null) return;
+                  void saveNumber(thresholdEdit, thresholdSec, 60,
+                    v => ({ beds: { thresholdSec: v } }), setThresholdEdit);
+                }}
+              />
+              <span className="font-mono text-[12px] text-muted">seconds</span>
             </div>
+            <p className="mt-2.5 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
+              Links above this length get their own bed. Where the analyzer has measured a track’s
+              vocals, that measurement wins — a bed exactly when the DJ would otherwise talk over
+              singing; instrumentals never get one. Saves on blur.
+            </p>
           </div>
-        ))}
-      </Card>
+          <div className="p-[18px]">
+            <div className="flex items-center gap-2.5">
+              <span className="text-[13px] font-semibold">Ramp into the next song</span>
+              <Input
+                className="mono-num w-[72px]"
+                type="number"
+                step={1}
+                min={0}
+                max={15}
+                value={crossEdit ?? String(crossSec)}
+                disabled={busy}
+                aria-label="Ramp seconds"
+                onChange={(e: ChangeEvent<HTMLInputElement>) => setCrossEdit(e.target.value)}
+                onBlur={() => {
+                  if (crossEdit == null) return;
+                  void saveNumber(crossEdit, crossSec, 15,
+                    v => ({ beds: { crossSec: v } }), setCrossEdit);
+                }}
+              />
+              <span className="font-mono text-[12px] text-muted">seconds</span>
+            </div>
+            <p className="mt-2.5 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
+              Crossfade for the next song to fade in under the DJ’s closing words. 0 is a hard cut.
+              Saves on blur.
+            </p>
+          </div>
+        </div>
+      </PanelBox>
 
+      {/* Library */}
+      <PanelBox>
+        <PanelHead
+          label={`bed library · ${pad2(list.length)}`}
+          right={<Btn sm onClick={() => setModal(true)} disabled={busy}>Import</Btn>}
+        />
+        {list.length === 0 ? (
+          <EmptyState caption="beds can’t be generated — import an instrumental" />
+        ) : (
+          <div className="divide-y divide-separator-soft">
+            {list.map(b => (
+              <div
+                key={b.name}
+                className="grid grid-cols-[1fr_auto] items-center gap-[18px] px-[18px] py-[15px]"
+              >
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-baseline gap-3">
+                    <span className="font-mono text-[14px] font-bold">{b.name}</span>
+                    {b.description && <span className="text-[13px] text-muted">{b.description}</span>}
+                  </div>
+                  <MetaLine>
+                    <span>{fmtSize(b.size)}</span>
+                    {b.durationSec != null && (
+                      <>
+                        <span aria-hidden>·</span>
+                        <span>{Math.round(b.durationSec)}s</span>
+                      </>
+                    )}
+                    {b.source === 'bundled' && <Badge variant="solid">bundled</Badge>}
+                    {b.source === 'upload' && <Badge variant="ink">uploaded</Badge>}
+                  </MetaLine>
+                </div>
+                <div className="flex flex-none items-center gap-2">
+                  <PreviewButton
+                    path={`/beds/${encodeURIComponent(b.name)}/audio`}
+                    adminFetch={adminFetch}
+                  />
+                  <span title="Delete this bed">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      aria-label="Delete bed"
+                      disabled={busy}
+                      onClick={() => onDelete(b.name)}
+                    >
+                      <Trash2 aria-hidden />
+                    </Button>
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </PanelBox>
+
+      {/* Import — bring your own instrumental */}
       <Modal
         open={modal}
         onOpenChange={(o) => { if (!o) setModal(false); }}
-        title="Import bed"
+        title="import bed"
         sub="an instrumental the DJ can talk over"
         footer={
           <>
-            <Btn onClick={() => setModal(false)}>Cancel</Btn>
-            <Btn
-              tone="accent"
-              onClick={doImport}
-              disabled={busy || !importFile || !importName.trim()}
-            >
-              {busy ? 'Importing…' : 'Import bed'}
+            <Button variant="ghost" size="sm" onClick={() => setModal(false)}>Cancel</Button>
+            <Btn sm tone="accent" onClick={doImport} disabled={busy || !importFile || !importName.trim()}>
+              {busy ? 'Importing…' : 'Import'}
             </Btn>
           </>
         }
       >
-        <div className="field">
-          <Label>Name</Label>
-          <Input
-            value={importName}
-            maxLength={60}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportName(e.target.value)}
-            placeholder="e.g. warm-pad"
-            className="max-w-[280px]"
-          />
-          <div className="field-hint">A short slug: letters, numbers and dashes.</div>
-        </div>
-        <div className="field mt-3.5">
-          <Label>Description</Label>
-          <Input
-            value={importDesc}
-            maxLength={200}
-            onChange={(e: ChangeEvent<HTMLInputElement>) => setImportDesc(e.target.value)}
-            placeholder="what this bed sounds like"
-          />
-          <div className="field-hint">For your own reference — the DJ never reads this.</div>
-        </div>
-        <div className="field mt-3.5">
-          <Label>Audio file</Label>
+        <div className="grid gap-3.5">
+          <div className="grid gap-1.5">
+            <Label>Name</Label>
+            <Input
+              value={importName}
+              maxLength={60}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setImportName(e.target.value)}
+              placeholder="midnight-drift"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Description · optional</Label>
+            <Input
+              value={importDesc}
+              maxLength={200}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setImportDesc(e.target.value)}
+              placeholder="For your own reference — the DJ never reads this"
+            />
+          </div>
           <input
             ref={importRef}
             type="file"
@@ -264,23 +265,17 @@ export function BedsSection({ bedsData, busy, uploadBed, onDelete, data, saveSet
             onChange={(e: ChangeEvent<HTMLInputElement>) => setImportFile(e.target.files?.[0] ?? null)}
             className="hidden"
           />
-          <div className="flex flex-wrap items-center gap-2.5">
-            <Btn tone="solid" onClick={() => importRef.current?.click()} disabled={busy}>
-              {importFile ? 'Change file…' : 'Choose audio file…'}
-            </Btn>
-            {importFile && <span className="text-[12px] text-ink">{importFile.name}</span>}
-          </div>
-          <div className="field-hint">
-            mp3, wav, ogg, flac, m4a, aac or opus · at least {minSec}s · up to 25 MB · converted to
-            MP3 on import
-          </div>
-        </div>
-        <div className="field-hint mt-3.5">
-          A bed is trimmed to each link, never looped, so it only has to be <em>longer</em> than
-          the DJ's longest script. Something atmospheric with no strong key travels best — it has
-          to sit under whatever song comes next.
+          <DropZone
+            label={importFile ? `${importFile.name} · ${fmtSize(importFile.size)}` : 'choose a file…'}
+            hint={`same formats · at least ${minSec}s · up to 25 MB · converted to MP3`}
+            onClick={() => importRef.current?.click()}
+          />
+          <p className="m-0 text-[12px] leading-[1.55] [text-wrap:pretty] text-muted">
+            A bed is trimmed per link and never looped — it only needs to outlast the DJ’s longest
+            script. Atmospheric, no strong key travels best.
+          </p>
         </div>
       </Modal>
-    </>
+    </section>
   );
 }

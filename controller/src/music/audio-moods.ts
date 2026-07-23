@@ -17,47 +17,25 @@
 import crypto from 'node:crypto';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
-import { SHOW_MOODS } from '../settings.js';
+import { moodVocab, moodPromptFor } from '../settings.js';
 import { makeEventLogger } from './tagger-progress.js';
 
 const logEvent = makeEventLogger('audio-moods');
 
-// One CLAP text prompt per mood. Deliberately DESCRIPTIVE of sound — CLAP was
-// trained on audio captions, so "how it sounds" phrasing scores far better than
-// the bare vocabulary word (several moods — cooking, focus, morning — are
-// listening contexts, not acoustic qualities). Changing a prompt changes
-// moodVocabHash(), which re-scores the whole library on the next pass.
-const MOOD_PROMPTS: Record<string, string> = {
-  energetic: 'high-energy, upbeat, powerful music with a strong driving beat',
-  calm: 'calm, peaceful, soft, soothing, gentle music',
-  reflective: 'reflective, introspective, melancholic, emotional music',
-  celebratory: 'joyful, festive, celebratory party music',
-  romantic: 'romantic, intimate, tender, loving music',
-  spiritual: 'spiritual, devotional, sacred, meditative music',
-  focus: 'minimal, unobtrusive, ambient instrumental background music for concentration',
-  workout: 'intense, pounding, adrenaline-pumping workout music',
-  driving: 'steady, groovy, mid-tempo cruising music for a road trip',
-  cooking: 'light, cheerful, breezy, feel-good easy-listening music',
-  rainy: 'mellow, wistful, cozy music for a rainy day',
-  sunny: 'bright, warm, sunny, feel-good summer music',
-  night: 'dark, atmospheric, moody late-night music',
-  morning: 'fresh, gentle, optimistic early-morning music',
-  evening: 'smooth, warm, relaxed evening music',
-  festival: 'big, anthemic, euphoric festival crowd music',
-  cultural: 'traditional folk music with regional acoustic instruments',
-};
-
-// Prompt for one mood — unknown vocabulary entries (a future SHOW_MOODS
-// addition without a prompt here) fall back to the bare word, which still
-// works, just less sharply.
+// Prompt for one mood — its operator-edited CLAP sound-description
+// (settings.moods[].clapPrompt), or the bare word for a mood with no prompt.
+// The descriptions are DESCRIPTIVE of sound on purpose — CLAP was trained on
+// audio captions, so "how it sounds" phrasing scores far better than the bare
+// word. Changing a prompt changes moodVocabHash(), which re-scores the whole
+// library on the next pass.
 export function moodPrompt(mood: string): string {
-  return MOOD_PROMPTS[mood] ?? `${mood} music`;
+  return moodPromptFor(mood);
 }
 
 // Hash of the vocabulary + prompts the stored audio_moods were scored with.
 // Stored in audio_embedding_meta.mood_vocab_hash; a mismatch re-scores every
 // vector-carrying track (mirrors the tagger's promptVocabHash pattern).
-export function moodVocabHash(vocab: readonly string[] = SHOW_MOODS): string {
+export function moodVocabHash(vocab: readonly string[] = moodVocab()): string {
   const h = crypto.createHash('sha256');
   for (const m of vocab) h.update(`${m}=${moodPrompt(m)}|`);
   return h.digest('hex').slice(0, 16);
@@ -111,10 +89,12 @@ export async function runAudioMoodPass(): Promise<AudioMoodStats> {
   }
 
   // One round-trip for the whole vocabulary. Generous timeout: the first call
-  // after a cold boot may lazy-load (or download) the CLAP text tower.
-  const prompts = SHOW_MOODS.map(moodPrompt);
+  // after a cold boot may lazy-load (or download) the CLAP text tower. Snapshot
+  // the live vocab once so prompts and the scoring loop stay index-aligned.
+  const vocab = moodVocab();
+  const prompts = vocab.map(moodPrompt);
   const vecs = await analyzer.embedTexts(prompts, { timeoutMs: 10 * 60_000 });
-  if (!vecs || vecs.length !== SHOW_MOODS.length) {
+  if (!vecs || vecs.length !== vocab.length) {
     // A backend that ADVERTISES the text tower but failed the call is a runtime
     // fault (worker error, oversized-response 500 — #996), not a lean build;
     // "enable ANALYZER_HEAVY" would send the operator in the wrong direction.
@@ -144,10 +124,10 @@ export async function runAudioMoodPass(): Promise<AudioMoodStats> {
     const v = db.getAudioVector(id);
     if (!v) continue;
     const scores: Record<string, number> = {};
-    for (let i = 0; i < SHOW_MOODS.length; i++) {
+    for (let i = 0; i < vocab.length; i++) {
       // Both sides are L2-normalised, so the dot IS the cosine. 3 decimals is
       // plenty of precision and keeps the stored JSON small.
-      scores[SHOW_MOODS[i]] = Math.round(dot(v, vecs[i]) * 1000) / 1000;
+      scores[vocab[i]] = Math.round(dot(v, vecs[i]) * 1000) / 1000;
     }
     batch.push({ id, moods: topAudioMoods(scores), scores });
     scored += 1;

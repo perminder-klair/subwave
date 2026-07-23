@@ -31,7 +31,7 @@ import * as budget from './dj-budget.js';
 import { speechPaceScale } from '../audio/tts.js';
 import { normalizeForSpeech } from '../audio/speech-text.js';
 import { withTrace, logEvent } from '../observability/events.js';
-import { recencyWindowsForLibrary, effectiveNoRepeatWindow } from '../music/recency.js';
+import { recencyWindowsForLibrary, effectiveNoRepeatWindow, artistKey } from '../music/recency.js';
 import { hasEraBound, genreResolutionWarningOnce } from '../music/show-filter.js';
 import { djCallsAllowed } from './listeners.js';
 import * as likes from './likes.js';
@@ -563,12 +563,18 @@ async function enqueuePick(
 // the same closing move pickNextTrack already uses. Returns a full pick object
 // (id/reason/say/transition) or null; never throws, so a salvage failure falls
 // through to the caller's pick.rejected path unchanged.
-async function repickFromSeen({ seen, badId, wantLink, showAt = null, playlistResolved = true }: { seen: Map<string, any>; badId: string | null; wantLink: boolean; showAt?: Date | null; playlistResolved?: boolean }) {
+// `reason`, when given, replaces the default "you returned a bad id" framing —
+// the back-to-back artist guard (#1124) reuses this same constrained re-pick
+// but for a valid pick it wants to swap off the on-air artist, so the bad-id
+// wording would be false and confuse the model.
+async function repickFromSeen({ seen, badId, wantLink, showAt = null, playlistResolved = true, reason = null }: { seen: Map<string, any>; badId: string | null; wantLink: boolean; showAt?: Date | null; playlistResolved?: boolean; reason?: string | null }) {
   const ids = [...seen.keys()];
   if (ids.length === 0) return null;
   const schema = modelTolerant(pickSchemaBase().extend({
     id: z.enum(ids as [string, ...string[]]).describe('the exact id of one candidate'),
   }));
+  const why = reason
+    ?? `You explored the library and then answered with ${badId ? `the id "${badId}", which matches none of the tracks your tools returned` : 'no usable track id'}. Only ids from the candidates above are real. Choose the best next track from them.`;
   try {
     return await djObject({
       // Same show snapshot as the failed run (showAt) and the same playlist-
@@ -578,7 +584,7 @@ async function repickFromSeen({ seen, badId, wantLink, showAt = null, playlistRe
       // different show than the run whose candidates we're re-picking from.
       system: pickSystem(showAt, playlistResolved),
       prompt: JSON.stringify({ candidates: [...seen.values()] }, null, 2)
-        + `\n\nYou explored the library and then answered with ${badId ? `the id "${badId}", which matches none of the tracks your tools returned` : 'no usable track id'}. Only ids from the candidates above are real. Choose the best next track from them.`
+        + `\n\n${why}`
         + (wantLink
             ? ' Write the "say" link for the track you choose, following the same rules.'
             : ' Set "say" to null.'),
@@ -734,6 +740,47 @@ async function pickViaAgent(queue, { wantLink, audioWaypoint = null, current = n
     // live trace so agent-pick reliability is real.
     logEvent('pick.rejected', { agent: 'pick', id: object?.id ?? null, candidates: extras.seen.size, steps, toolCalls });
     throw new Error(`agent returned unknown id ${object?.id}`);
+  }
+
+  // Back-to-back artist guard (#1124). The discovery tools — especially
+  // tracksLikeThis / tracksThatSoundLikeThis — return a tight cluster around
+  // the current track, which is frequently a run of the SAME artist, and the
+  // agent path (unlike the pool picker) carries no recentArtists / maxPerArtist
+  // filter (see the buildPickerTools note: an artist strip inside the tools
+  // gutted the similarity pool to ~1 survivor on niche catalogues, #618). So
+  // enforce variety at the point of choice instead: if the pick repeats the
+  // on-air artist and the run surfaced ANY other-artist candidate, re-pick from
+  // just those (a constrained djObject over the run's own `seen`, so it still
+  // reasons about flow and writes a coherent link). Relax — allow the repeat —
+  // only when the whole pool is that one artist, mirroring the pool picker's
+  // never-starve. The relaxation is logged with the candidate count so an
+  // operator can tell "no alternative existed" from a real bug (#1124 ask #2).
+  const curArtist = artistKey(current || {});
+  if (curArtist && artistKey(song) === curArtist) {
+    const alt = new Map<string, any>([...extras.seen].filter(([, s]) => artistKey(s) !== curArtist));
+    if (alt.size) {
+      const repicked = await repickFromSeen({
+        seen: alt, badId: null, wantLink, showAt,
+        playlistResolved: !!playlistTracks?.length,
+        reason: `The track you chose is by ${song.artist}, the artist already on air — never play the same artist twice in a row. Choose a DIFFERENT artist from the candidates above.`,
+      });
+      const altSong = repicked?.id ? extras.seen.get(repicked.id) : null;
+      if (altSong) {
+        logEvent('pick.artistGuard', { relaxed: false, from: song.artist, to: altSong.artist, candidates: alt.size });
+        queue.log('picker', `back-to-back artist "${song.artist}" avoided — re-picked "${altSong.title}" by ${altSong.artist} from ${alt.size} other-artist candidate(s)`);
+        object = repicked;
+        song = altSong;
+      } else {
+        // The constrained re-pick call itself failed (model/parse error). Keep
+        // the original pick rather than drop the slot — but say so, since the
+        // guard did NOT get to relax by choice.
+        logEvent('pick.artistGuard', { relaxed: true, reason: 'repick-failed', artist: song.artist, candidates: alt.size });
+        queue.log('picker', `back-to-back artist "${song.artist}" — re-pick from ${alt.size} other-artist candidate(s) didn't land; keeping original`);
+      }
+    } else {
+      logEvent('pick.artistGuard', { relaxed: true, reason: 'no-other-artist', artist: song.artist, candidates: 0 });
+      queue.log('picker', `back-to-back artist "${song.artist}" allowed — no other-artist candidate in the pool (relaxed)`);
+    }
   }
 
   const rawSay = typeof object.say === 'string' ? object.say.trim() : '';

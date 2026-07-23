@@ -65,7 +65,7 @@ router.post('/generate/show', requireAdmin, async (req, res) => {
     // form is multi-value (#929), so lift each field into a one-element list.
     // An unknown/missing mood becomes [] (Any — the autonomous mood applies)
     // rather than an arbitrary vocabulary entry the operator didn't ask for.
-    const moods = raw.mood && settings.SHOW_MOODS.includes(raw.mood) ? [raw.mood] : [];
+    const moods = raw.mood && settings.moodVocab().includes(raw.mood) ? [raw.mood] : [];
     const genreDraft = typeof raw.genre === 'string' ? raw.genre.trim() : '';
     const showGenres = genreDraft ? [genreDraft] : [];
     const energies = raw.energy && settings.SHOW_ENERGY.includes(raw.energy) ? [raw.energy] : [];

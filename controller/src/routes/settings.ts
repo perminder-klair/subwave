@@ -100,6 +100,11 @@ router.get('/settings', requireAdmin, async (req, res) => {
         locale: s.locale,
         theme: s.theme,
         festivals: s.festivals,
+        // Editable mood system (/admin/moods): the vocabulary + CLAP prompts,
+        // and the time/weather → mood maps.
+        moods: s.moods,
+        moodSchedule: s.moodSchedule,
+        weatherMoods: s.weatherMoods,
         weather: s.weather,
         djPrompt: s.djPrompt,
         djPrompts: s.djPrompts,
@@ -146,7 +151,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
         pocketTtsCustomVoices: customVoices,
         cloudProviders: settings.TTS_CLOUD_PROVIDERS,
         frequencies: settings.FREQUENCIES,
-        moods: settings.SHOW_MOODS,
+        // The live mood NAMES, for the show/festival mood dropdowns. Now driven
+        // by the operator-editable vocabulary rather than the static default.
+        moods: settings.moodVocab(),
       },
       llm: {
         providers: settings.LLM_PROVIDERS,

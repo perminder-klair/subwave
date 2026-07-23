@@ -25,6 +25,7 @@ import {
   Coffee,
   MessageCircle,
   Podcast,
+  Palette,
   LogOut,
   ChevronDown,
   MoreHorizontal,
@@ -113,6 +114,7 @@ const NAV_SECTIONS: NavSection[] = [
       { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
       { href: '/admin/skills', id: 'skills', label: 'Skills', icon: Sparkles },
       { href: '/admin/imaging', id: 'imaging', label: 'Imaging', icon: Podcast },
+      { href: '/admin/moods', id: 'moods', label: 'Moods', icon: Palette },
     ],
   },
   {

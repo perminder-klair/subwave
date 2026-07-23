@@ -101,6 +101,32 @@ VOCAL_ENABLED = os.environ.get("ANALYZE_VOCAL_ACTIVITY", "").strip().lower() in 
 DEMUCS_SR = 44100
 DEMUCS_MODEL = os.environ.get("DEMUCS_MODEL", "").strip() or "htdemucs"
 
+
+def _env_float(name, default):
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        # Runs at module load, before log() is defined — write stderr directly.
+        sys.stderr.write(
+            f"[analyze-worker] {name}={raw!r} is not a number; using default {default}\n"
+        )
+        return default
+
+
+# Vocal-stem gate thresholds (issue #1125). The stem is thresholded against BOTH
+# its own loud level (self-relative, catches quiet-but-present vocals) AND a
+# fraction of the FULL-MIX loud level (an absolute-ish floor). Demucs never
+# separates cleanly: an instrumental's vocal stem carries residual bleed (pad
+# swells, cymbals, guitar harmonics). A purely self-relative gate scales down to
+# that bleed and mass-flags instrumentals as vocal. Anchoring the floor to the
+# whole song's loudness fixes it — bleed sits far below the mix, real vocals
+# don't. Both tunable so operators can adapt to their masters' compression.
+VOCAL_STEM_REL = _env_float("VOCAL_STEM_REL", 0.15)  # x 90th-pct of vocal-stem RMS
+VOCAL_MIX_FLOOR = _env_float("VOCAL_MIX_FLOOR", 0.06)  # x 90th-pct of full-mix RMS
+
 # Krumhansl-Kessler key profiles (major/minor), indexed from the tonic.
 MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
 MINOR_PROFILE = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17]
@@ -690,6 +716,53 @@ def get_embedder(force=False):
     return _embedder
 
 
+# The vocal gate, split out of the detector so it's testable without torch /
+# demucs / real audio (scripts/vocal_gate_test.py). Takes the vocal-stem RMS
+# envelope and the FULL-MIX RMS envelope (same hop) and returns [{startMs,endMs}]
+# where vocals are present. The stem is gated against BOTH its own loud level
+# (self-relative, catches quiet-but-present vocals) AND a fraction of the mix
+# loud level (issue #1125): Demucs never separates cleanly, so an instrumental's
+# vocal stem carries residual bleed (pad swells, cymbals, guitar harmonics); a
+# purely self-relative gate scales down to that bleed and mass-flags
+# instrumentals as vocal. The mix-anchored floor keeps bleed below the line
+# while real vocals — a genuine fraction of the mix — still cross. Frames that
+# sustain above threshold merge into ranges (gaps <0.4s bridged so a breath
+# doesn't split a phrase); sub-300ms blips are dropped as separation artefacts.
+def vocal_ranges_from_rms(rms, mix_rms, sr, hop):
+    import numpy as np
+
+    if rms.size == 0:
+        return []
+    loud = float(np.percentile(rms, 90))
+    if loud <= 0:
+        return []
+    mix_loud = float(np.percentile(mix_rms, 90)) if mix_rms.size else 0.0
+    thr = max(VOCAL_STEM_REL * loud, VOCAL_MIX_FLOOR * mix_loud)
+    # frames → seconds; librosa.frames_to_time's default is frames * hop / sr.
+    times = np.arange(rms.size) * (hop / float(sr))
+    active = rms >= thr
+    ranges = []
+    merge_gap_ms = 400
+    i = 0
+    n = rms.size
+    while i < n:
+        if not active[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and active[j + 1]:
+            j += 1
+        start_ms = int(round(float(times[i]) * 1000.0))
+        end_ms = int(round(float(times[min(j + 1, n - 1)]) * 1000.0))
+        if ranges and start_ms - ranges[-1]["endMs"] <= merge_gap_ms:
+            ranges[-1]["endMs"] = end_ms
+        else:
+            ranges.append({"startMs": start_ms, "endMs": end_ms})
+        i = j + 1
+    # Drop sub-300ms blips (separation artefacts, not sung lines).
+    return [r for r in ranges if r["endMs"] - r["startMs"] >= 300]
+
+
 # ---------------------------------------------------------------------------
 # Vocal-activity detector — Demucs source separation → vocal energy envelope →
 # present/absent time ranges. All heavy imports (torch, demucs) are lazy so a
@@ -727,41 +800,12 @@ class VocalActivityDetector:
             # is how the demucs CLI's -d flag works), so no .to() here.
             est = apply_model(self.model, wav.unsqueeze(0), device=resolve_device())[0]
         vocals = est[self.sources.index("vocals")].mean(dim=0).cpu().numpy()
+        mix = wav.mean(dim=0).cpu().numpy()
 
-        # RMS envelope of the vocal stem, thresholded against its own loud level
-        # (40th-pct of the loud half) — robust to overall mix level. Frames where
-        # vocal energy sustains above threshold become "vocal present" ranges,
-        # merging gaps shorter than ~0.4s so a breath doesn't split a phrase.
         hop = 512
         rms = librosa.feature.rms(y=vocals, frame_length=2048, hop_length=hop)[0]
-        if rms.size == 0:
-            return []
-        loud = float(np.percentile(rms, 90))
-        if loud <= 0:
-            return []
-        thr = 0.15 * loud
-        times = librosa.frames_to_time(np.arange(rms.size), sr=sr, hop_length=hop)
-        active = rms >= thr
-        ranges = []
-        merge_gap_ms = 400
-        i = 0
-        n = rms.size
-        while i < n:
-            if not active[i]:
-                i += 1
-                continue
-            j = i
-            while j + 1 < n and active[j + 1]:
-                j += 1
-            start_ms = int(round(float(times[i]) * 1000.0))
-            end_ms = int(round(float(times[min(j + 1, n - 1)]) * 1000.0))
-            if ranges and start_ms - ranges[-1]["endMs"] <= merge_gap_ms:
-                ranges[-1]["endMs"] = end_ms
-            else:
-                ranges.append({"startMs": start_ms, "endMs": end_ms})
-            i = j + 1
-        # Drop sub-300ms blips (separation artefacts, not sung lines).
-        return [r for r in ranges if r["endMs"] - r["startMs"] >= 300]
+        mix_rms = librosa.feature.rms(y=mix, frame_length=2048, hop_length=hop)[0]
+        return vocal_ranges_from_rms(rms, mix_rms, sr, hop)
 
 
 def estimate_pace(y, sr, librosa, window_s=5.0):
