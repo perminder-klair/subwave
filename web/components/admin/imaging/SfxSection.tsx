@@ -66,6 +66,12 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
         title="Sound effects"
         sub="Stingers the segment-director agent mixes under its voice during a spoken break. Built-ins ship with the station."
         metrics={<TabMetric accent n={pad2(list.length)} l="effects" />}
+        actions={
+          <>
+            <Btn sm onClick={() => setModal('import')} disabled={busy}>Import</Btn>
+            <Btn sm tone="solid" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
+          </>
+        }
       />
 
       {/* On/off */}
@@ -98,15 +104,7 @@ export function SfxSection({ sfxData, sfxForm, setSfxForm, busy, createSfx, uplo
 
       {/* Library */}
       <PanelBox>
-        <PanelHead
-          label={`effect library · ${pad2(list.length)}`}
-          right={
-            <>
-              <Btn sm onClick={() => setModal('import')} disabled={busy}>Import</Btn>
-              <Btn sm tone="solid" onClick={() => setModal('create')} disabled={busy}>+ Create</Btn>
-            </>
-          }
-        />
+        <PanelHead label={`effect library · ${pad2(list.length)}`} />
         {list.length === 0 ? (
           <EmptyState caption="generate via ElevenLabs or import your own" />
         ) : (

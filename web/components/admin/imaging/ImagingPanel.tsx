@@ -18,8 +18,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Music, AudioLines, Waves } from 'lucide-react';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { notify, errorMessage } from '../../../lib/notify';
-import { cn } from '../../../lib/cn';
-import { Wave } from '../ui';
+import { SectionTabs } from '../SectionTabs';
 import { V3Alert } from '../../ui/alert';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import type { SettingsData, SaveSettings } from '../settings/shared';
@@ -309,9 +308,12 @@ export default function ImagingPanel() {
   ];
 
   return (
-    <div className="max-w-[1060px]">
-      {/* Editorial masthead — the sounds between the songs. */}
-      <header>
+    <div className="grid max-w-[1060px] gap-4">
+      {/* Editorial masthead + tab row, on a lifted card surface so the header
+          reads as a card like the rest of the admin (Moods / Skills / Shows)
+          rather than floating on the page background. */}
+      <section className="card">
+      <header className="p-4 lg:p-5">
         <div className="flex items-baseline justify-between gap-4">
           <MonoLabel>imaging</MonoLabel>
           <span className="flex items-center gap-[7px] font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
@@ -319,21 +321,20 @@ export default function ImagingPanel() {
             live · refreshed every 3s
           </span>
         </div>
-        <h1 className="mt-3.5 font-display text-[54px] leading-[1.02] font-semibold tracking-[-0.01em] [text-wrap:balance] lg:text-[62px]">
-          The sounds between the&nbsp;songs.
-        </h1>
-        <div aria-hidden className="my-6">
-          <Wave bars={88} seed={7} h={42} />
-        </div>
-        <div className="flex flex-wrap items-start justify-between gap-x-10 gap-y-5 border-t border-ink pt-[18px]">
-          <p className="m-0 max-w-[62ch] text-[14px] leading-[1.65] [text-wrap:pretty] text-muted">
-            Everything the DJ drops between and over the music:{' '}
-            <strong className="font-semibold text-ink">jingles</strong> are the station idents
-            played between tracks, <strong className="font-semibold text-ink">SFX</strong> are
-            stingers mixed under the DJ&rsquo;s voice, and{' '}
-            <strong className="font-semibold text-ink">beds</strong> are instrumentals the DJ
-            talks over when a link runs long.
-          </p>
+        <div className="mt-2 flex flex-wrap items-start justify-between gap-x-8 gap-y-3">
+          <div className="min-w-0">
+            <div className="text-[22px] leading-tight font-extrabold tracking-[-0.02em]">
+              The sounds between the songs.
+            </div>
+            <p className="mt-1 max-w-[62ch] text-[11px] leading-[1.6] [text-wrap:pretty] text-muted">
+              Everything the DJ drops between and over the music:{' '}
+              <strong className="font-semibold text-ink">jingles</strong> are the station idents
+              played between tracks, <strong className="font-semibold text-ink">SFX</strong> are
+              stingers mixed under the DJ&rsquo;s voice, and{' '}
+              <strong className="font-semibold text-ink">beds</strong> are instrumentals the DJ
+              talks over when a link runs long.
+            </p>
+          </div>
           <div className="flex flex-none gap-7">
             <TabMetric big n={pad2(totalAssets)} l="assets" />
             <TabMetric big accent n={ratioMetric} l="jingle ratio" />
@@ -341,53 +342,16 @@ export default function ImagingPanel() {
         </div>
       </header>
 
+      {/* Tab row — the shared editorial section-tabs, edge-to-edge along the
+          card's foot. */}
+      <SectionTabs tabs={tabs} value={tab} onChange={selectTab} label="Imaging sections" />
+      </section>
+
       {err && (
-        <div className="mt-7">
-          <V3Alert tone="error" title="controller error">{err}</V3Alert>
-        </div>
+        <V3Alert tone="error" title="controller error">{err}</V3Alert>
       )}
 
-      {/* Tab row — three equal cells, the active one inverted with an accent
-          top-rule so the current section reads at a glance. */}
-      <nav
-        className="mt-[34px] grid grid-cols-3 border border-ink"
-        role="tablist"
-        aria-label="Imaging sections"
-      >
-        {tabs.map((t, i) => {
-          const active = tab === t.id;
-          const Icon = t.icon;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => selectTab(t.id)}
-              className={cn(
-                'relative flex cursor-pointer items-center justify-center gap-2.5 px-3 py-[19px] transition-colors',
-                i > 0 && 'border-l border-ink',
-                active ? 'bg-ink text-bg' : 'text-ink hover:bg-[var(--ink-soft)]',
-              )}
-            >
-              {active && (
-                <span className="absolute -top-px -right-px -left-px h-1 bg-[var(--accent)]" aria-hidden />
-              )}
-              <Icon size={16} strokeWidth={2} aria-hidden />
-              <span className="font-mono text-[12px] font-bold tracking-[0.16em] uppercase">
-                {t.label}
-              </span>
-              {t.count != null && (
-                <span className="min-w-[14px] border border-current px-1.5 py-[2px] text-center font-mono text-[10px] leading-none font-bold">
-                  {pad2(t.count)}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </nav>
-
-      <div className="mt-11">
+      <div>
         {tab === 'jingles' && (
           data ? (
             <JinglesSection
