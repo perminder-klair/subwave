@@ -309,9 +309,12 @@ export default function ImagingPanel() {
   ];
 
   return (
-    <div className="max-w-[1060px]">
-      {/* Editorial masthead — the sounds between the songs. */}
-      <header>
+    <div className="grid max-w-[1060px] gap-4">
+      {/* Editorial masthead + tab row, on a lifted card surface so the header
+          reads as a card like the rest of the admin (Moods / Skills / Shows)
+          rather than floating on the page background. */}
+      <section className="card">
+      <header className="p-6 lg:p-7">
         <div className="flex items-baseline justify-between gap-4">
           <MonoLabel>imaging</MonoLabel>
           <span className="flex items-center gap-[7px] font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
@@ -341,16 +344,11 @@ export default function ImagingPanel() {
         </div>
       </header>
 
-      {err && (
-        <div className="mt-7">
-          <V3Alert tone="error" title="controller error">{err}</V3Alert>
-        </div>
-      )}
-
-      {/* Tab row — three equal cells, the active one inverted with an accent
-          top-rule so the current section reads at a glance. */}
+      {/* Tab row — three equal cells edge-to-edge along the card's foot, the
+          active one inverted with an accent top-rule so the current section
+          reads at a glance. */}
       <nav
-        className="mt-[34px] grid grid-cols-3 border border-ink"
+        className="grid grid-cols-3 border-t border-ink"
         role="tablist"
         aria-label="Imaging sections"
       >
@@ -386,8 +384,13 @@ export default function ImagingPanel() {
           );
         })}
       </nav>
+      </section>
 
-      <div className="mt-11">
+      {err && (
+        <V3Alert tone="error" title="controller error">{err}</V3Alert>
+      )}
+
+      <div>
         {tab === 'jingles' && (
           data ? (
             <JinglesSection

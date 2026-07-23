@@ -25,9 +25,11 @@ export function MonoLabel({ children, className }: { children: ReactNode; classN
   );
 }
 
-/** A bordered editorial panel. Sharp corners, 1px ink border, no shadow. */
+/** A bordered editorial panel. Sharp corners, 1px ink border, no shadow, on
+    the lifted card surface (--card-bg) so sections read as cards over the page
+    background — matching the rest of the admin (Moods / Skills / Shows). */
 export function PanelBox({ children, className }: { children: ReactNode; className?: string }) {
-  return <div className={cn('border border-ink', className)}>{children}</div>;
+  return <div className={cn('border border-ink bg-[var(--card-bg)]', className)}>{children}</div>;
 }
 
 /** Panel header row: mono label on the left, an optional actions cluster on
