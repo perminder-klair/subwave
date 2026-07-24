@@ -463,9 +463,9 @@ export default function SchedulePanel() {
   const lineCurrent = blockAt(schedule, line.day, line.start);
 
   return (
-    <div className="flex min-h-full min-w-[1180px] flex-1 flex-col bg-[var(--card-bg)]">
+    <div className="flex min-h-full min-w-0 flex-1 flex-col bg-[var(--card-bg)]">
       {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div className="flex items-end justify-between gap-10 border-b border-ink px-[30px] pt-4 pb-3.5">
+      <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-4 border-b border-ink px-[30px] pt-4 pb-3.5">
         <div className="flex min-w-0 flex-col gap-2">
           <div className="flex items-center gap-3">
             <span className="eyebrow text-vermilion">Show plan · The Rundown</span>
@@ -550,12 +550,12 @@ export default function SchedulePanel() {
         </div>
 
         {/* Takeover strip */}
-        <div className="flex items-center gap-3.5 border-t border-separator-strong px-[22px] py-[11px]">
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-separator-strong px-[22px] py-[11px]">
           <span className="eyebrow text-ink">Takeover</span>
           <Mu className="text-[9px]">
             Jump a show to the front of the queue — the schedule picks up again after
           </Mu>
-          <div className="ml-auto flex items-center gap-2.5">
+          <div className="ml-auto flex flex-wrap items-center gap-2.5">
             {liveOverride && pinnedShow ? (
               <>
                 <ColorChip color={colorOf(pinnedShow.id)} />

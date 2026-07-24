@@ -75,7 +75,7 @@ export default function EditorBand({
     <section className="border-t border-ink bg-[var(--page-bg)] px-[30px] py-[22px]">
       <div className="grid items-start gap-x-9 gap-y-7 xl:grid-cols-[minmax(430px,1.25fr)_1fr_1fr_1fr]">
         {/* ── Editing this line ─────────────────────────────────────────── */}
-        <div>
+        <div className="min-w-0">
           <div className="mb-0.5">
             <span className="eyebrow text-ink">Editing this line</span>
           </div>
@@ -172,7 +172,7 @@ export default function EditorBand({
         </div>
 
         {/* ── Orders behind this day ────────────────────────────────────── */}
-        <div className="xl:border-l xl:border-separator-strong xl:pl-9">
+        <div className="min-w-0 xl:border-l xl:border-separator-strong xl:pl-9">
           <div className="mb-0.5">
             <span className="eyebrow text-ink">Orders behind this day</span>
           </div>
@@ -209,7 +209,7 @@ export default function EditorBand({
         </div>
 
         {/* ── The week in numbers ───────────────────────────────────────── */}
-        <div className="xl:border-l xl:border-separator-strong xl:pl-9">
+        <div className="min-w-0 xl:border-l xl:border-separator-strong xl:pl-9">
           <div className="mb-2.5">
             <span className="eyebrow text-ink">The week in numbers</span>
           </div>
@@ -222,7 +222,7 @@ export default function EditorBand({
         </div>
 
         {/* ── Airtime against your target ───────────────────────────────── */}
-        <div className="xl:border-l xl:border-separator-strong xl:pl-9">
+        <div className="min-w-0 xl:border-l xl:border-separator-strong xl:pl-9">
           <div className="mb-[11px] flex items-baseline gap-2">
             <span className="eyebrow text-ink">Airtime against your target</span>
             <Mu className="text-[9px] tracking-[0.1em]">tick = {target} h</Mu>

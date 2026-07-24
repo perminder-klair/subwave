@@ -352,7 +352,7 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
           <div
             className={
               fullBleed
-                ? 'flex w-full min-w-0 flex-1 flex-col overflow-x-auto'
+                ? 'flex w-full min-w-0 flex-1 flex-col'
                 : 'mx-auto w-full max-w-[1440px] min-w-0 px-5 py-4'
             }
           >
