@@ -234,6 +234,20 @@ export function playAlreadyRecorded(
   return false;
 }
 
+// Duration ladder shared by the length-cap checks (applyMixTransition's
+// auto-washout and the drain loop's stem-blend outCapped gate): the track
+// object first (Subsonic picks carry it), the library row when it doesn't
+// (agent picks resolve from the picker tools' slim projections, which omit
+// length when the source tool didn't surface one). 0 = unknown. The two
+// checks MUST agree — a 0 read as "uncapped" in one of them arms a stem
+// blend on an ending the cap never lets air (and strips the auto-washout
+// protecting the forced cut).
+function knownDurationSec(track: Track): number {
+  const dur = Number(track.duration) || 0;
+  if (dur) return dur;
+  return track.id ? Number(library.get(track.id)?.durationSec) || 0 : 0;
+}
+
 class Queue {
   upcoming: QueueItem[] = [];  // request items pushed by listeners, not yet playing
   current: QueueItem | null = null;    // what's broadcasting right now (request or auto)
@@ -243,6 +257,7 @@ class Queue {
   _nowPlaying: NowPlaying | null = null;   // last parse of now-playing.json, refreshed by the watcher
   _nowPlayingFresh = false;            // true once the watcher's first tick has landed
   senderBusy = false;          // drain-to-Liquidsoap mutex
+  pendingForceDrain = false;   // a forced drain arrived while senderBusy — re-run on release
   pickerBusy = false;          // prevent concurrent LLM picks
   autoPick = true;             // toggle: should we ask Ollama for next track when idle
   autoLink = true;             // toggle: random DJ links between auto tracks
@@ -880,12 +895,7 @@ class Queue {
     // sweep on the same pick (sweep shapes its ENTRY, washout its EXIT).
     // Requests are exempt from the cap (requestedBy) so they never arm this.
     const capSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
-    let durSec = Number(item.track.duration) || 0;
-    // Same resolution ladder as loudness/analysis: the track object first
-    // (Subsonic picks carry it), the library row when it doesn't (agent picks
-    // resolve from the picker tools' slim projections, which omit length when
-    // the source tool didn't surface one).
-    if (!durSec && item.track.id) durSec = Number(library.get(item.track.id)?.durationSec) || 0;
+    const durSec = knownDurationSec(item.track);
     const cappedExit = !!(capSec && durSec > capSec);
     // A DJ-chosen loop exit already makes a capped cut sound intentional —
     // don't stack the auto-washout on top of it (both shape the same ending,
@@ -1178,7 +1188,15 @@ class Queue {
   // advances; past the hard deadline the item drains with track-intrinsic
   // stamps only. transitions.pairDrain off → eager drain, today's behaviour.
   async drainToLiquidsoap(force = false) {
-    if (this.senderBusy) return;
+    if (this.senderBusy) {
+      // A forced drain (the clip-as-track recovery) must not vanish into a
+      // busy sender — a stem-blend render or a slow TTS engine can hold the
+      // mutex for tens of seconds, and "force" promises never to hold.
+      // Single-flight stays single: flag it and the in-flight drain re-runs
+      // forced the moment it releases.
+      if (force) this.pendingForceDrain = true;
+      return;
+    }
     this.senderBusy = true;
     try {
       while (true) {
@@ -1257,7 +1275,7 @@ class Queue {
         await this.maybePushBed(item);
 
         const maxDurationSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
-        const itemDurSec = Number(item.track.duration) || 0;
+        const itemDurSec = knownDurationSec(item.track);
         const cappedExit = !!(maxDurationSec && itemDurSec > maxDurationSec);
 
         // Pair stamps for THIS item's own exit (the seam into its successor)
@@ -1265,8 +1283,9 @@ class Queue {
         // after the awaits above: an operator cancel during the TTS render
         // may have removed the successor, in which case the item just drains
         // with its intrinsic stamps.
+        let successor: QueueItem | null = null;
         if (action === 'send-pair') {
-          const successor = this.upcoming[this.upcoming.indexOf(item) + 1] ?? null;
+          successor = this.upcoming[this.upcoming.indexOf(item) + 1] ?? null;
           if (successor) {
             this.applyPairStamps(item, successor);
             // Stem-blend seam (feature: stem-blend transitions): with the
@@ -1321,11 +1340,23 @@ class Queue {
         await writeHandoff(config.liquidsoap.queueFile, uri, { maxWaitMs: 5000 });
         if (item.stemBlend) {
           // The clip rides right behind its outgoing track, annotated as the
-          // INCOMING track so now-playing flips when the blend begins.
-          const successor = this.upcoming[this.upcoming.indexOf(item) + 1] ?? null;
-          if (successor) {
+          // INCOMING track so now-playing flips when the blend begins. Reuse
+          // the successor the blend was rendered FOR — NOT a fresh index
+          // lookup: the writeHandoff above can wait seconds, and an operator
+          // cancel in that window would land the clip's annotation on
+          // whatever item slid into the slot (the clip would air carrying an
+          // unrelated track's identity).
+          if (successor && this.upcoming.includes(successor)) {
             const clipUri = subsonic.getClipUri(successor.track, item.stemBlend.clipPath, stemBlend.CLIP_SEAM_CROSS_SEC);
             await writeHandoff(config.liquidsoap.queueFile, clipUri, { maxWaitMs: 5000 });
+          } else {
+            // Successor cancelled between the render and the clip write: skip
+            // the clip. The early cue_out already annotated on the outgoing
+            // track airs as the accepted abrupt-but-crossfaded exit; dropping
+            // the flag keeps the sweep's keep-set and the cancel cascade
+            // honest about "no clip queued".
+            delete item.stemBlend;
+            this.log('mix', `stem-blend successor cancelled mid-handoff — clip skipped; "${item.track.title}" exits early into a plain crossfade`);
           }
         }
         item.sent = true;
@@ -1336,6 +1367,10 @@ class Queue {
       }
     } finally {
       this.senderBusy = false;
+      if (this.pendingForceDrain) {
+        this.pendingForceDrain = false;
+        void this.drainToLiquidsoap(true);
+      }
     }
   }
 
@@ -2058,6 +2093,40 @@ class Queue {
           this.log('scheduler', `transition clip for ${item.track.title} could not be removed — its predecessor will exit early into the clip`);
         }
       } catch { /* best-effort */ }
+    }
+
+    // …and the OUTGOING half (item.stemBlend): the clip queued right behind
+    // this track was mixed from ITS tail and carries the successor's identity
+    // — with the track cancelled it's an orphan that would air after whatever
+    // actually plays (flipping now-playing to a track no seam justifies), and
+    // the successor's stamped head-skip would then cut an intro no clip
+    // fronts. Pull the clip and, while the successor is still unsent, clear
+    // its seam stamps so it drains with its intrinsic head. A successor
+    // already sent keeps them — its cue_in is annotated and gone, and the
+    // clip still fronts it coherently; only the seam INTO the clip is abrupt
+    // (accepted, as above). Same best-effort rules as the incoming half.
+    if (item.stemBlend) {
+      const next = this.upcoming[this.upcoming.indexOf(item) + 1];
+      if (next?.stemSeam && next.track?.id) {
+        if (!next.sent) {
+          let clipRemoved = false;
+          try {
+            const clipRid = await liquidsoapControl.resolveClipRid(next.track.id);
+            clipRemoved = !!clipRid && await liquidsoapControl.removeFromDjQueue(clipRid);
+          } catch { /* best-effort */ }
+          if (clipRemoved) {
+            delete next.stemSeam;
+            delete next.stemCueInSec;
+            this.log('scheduler', `removed the rendered transition clip into ${next.track.title} along with it`);
+          } else {
+            // The clip stays queued, so the successor keeps its head-skip —
+            // clip → track is still a coherent seam, only its entry is abrupt.
+            this.log('scheduler', `transition clip into ${next.track.title} could not be removed — it will front the track after an abrupt seam`);
+          }
+        } else {
+          this.log('scheduler', `cancelled the outgoing half of a rendered seam — the clip still fronts "${next.track.title}"`);
+        }
+      }
     }
 
     const idx = this.upcoming.indexOf(item);

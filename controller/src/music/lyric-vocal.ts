@@ -88,3 +88,22 @@ export function deriveVocalFromLyrics(lyrics: StructuredLyrics | null): LyricVoc
 
   return { instrumental: false, vocalRanges: ranges, introMs: ranges[0].startMs };
 }
+
+// Clip whole-track vocal ranges into a track's outro window — the lyric
+// counterpart of the worker's tail Demucs pass (feature: vocal-aware
+// transitions). Spans are trimmed to the window (and to the track end when
+// known, since the nominal last-line tail can outrun it); [] = no sung line
+// reaches the window, i.e. an instrumental tail, mirroring the worker's
+// tri-state semantics.
+export function clipRangesToTail(
+  ranges: Section[],
+  windowStartMs: number,
+  endCapMs: number | null = null,
+): Section[] {
+  return ranges
+    .map((r) => ({
+      startMs: Math.max(r.startMs, windowStartMs),
+      endMs: endCapMs != null ? Math.min(r.endMs, endCapMs) : r.endMs,
+    }))
+    .filter((r) => r.endMs > r.startMs);
+}

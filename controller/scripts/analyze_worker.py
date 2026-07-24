@@ -126,6 +126,11 @@ def _env_float(name, default):
 # don't. Both tunable so operators can adapt to their masters' compression.
 VOCAL_STEM_REL = _env_float("VOCAL_STEM_REL", 0.15)  # x 90th-pct of vocal-stem RMS
 VOCAL_MIX_FLOOR = _env_float("VOCAL_MIX_FLOOR", 0.06)  # x 90th-pct of full-mix RMS
+# Absolute RMS floor for the TAIL detect() pass (feature: vocal-aware
+# transitions): a fading outro's separation bleed otherwise reads as artefact
+# "vocals". ~-40 dBFS — genuine sung tails sit well above it, bleed well
+# below. Tunable like the pair above and for the same reason.
+TAIL_VOCAL_MIN_LOUD = _env_float("TAIL_VOCAL_MIN_LOUD", 0.01)
 
 # Krumhansl-Kessler key profiles (major/minor), indexed from the tonic.
 MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
@@ -1309,9 +1314,8 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None,
         # outro: outro non-None already proves the file is complete and long
         # enough for a distinct tail. Spans are shifted to ABSOLUTE ms like
         # the outro's beat grid; [] = analysed instrumental tail, mirroring
-        # the head semantics. The RMS floor guards against separation bleed
-        # on a fading outro reading as artefact "vocals" (~-40 dBFS: genuine
-        # sung tails sit well above it, bleed well below).
+        # the head semantics. TAIL_VOCAL_MIN_LOUD (see its definition) guards
+        # against separation bleed on a fading outro.
         if detector is not None and outro is not None:
             try:
                 tail_offset = max(0.0, duration_s - OUTRO_SECONDS)
@@ -1322,7 +1326,7 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None,
                 if y_tail is not None and np.size(y_tail) > 0:
                     tail_stems = detector.separate(y_tail)
                     tail_vocals = detector.detect(
-                        y_tail, DEMUCS_SR, librosa, min_loud=0.01, stems=tail_stems
+                        y_tail, DEMUCS_SR, librosa, min_loud=TAIL_VOCAL_MIN_LOUD, stems=tail_stems
                     )
                     if stems_dir:
                         try:
