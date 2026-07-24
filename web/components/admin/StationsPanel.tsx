@@ -285,9 +285,10 @@ export default function StationsPanel() {
   const loading = data === null && !err;
 
   return (
-    <div className="grid gap-6">
-      {/* Header */}
-      <header>
+    <div className="grid gap-4">
+      {/* Header + dial card */}
+      <section className="card">
+      <header className="p-5">
         <div className="font-mono text-[10px] font-bold tracking-[0.22em] text-vermilion uppercase">
           transmitter rack — admin
         </div>
@@ -325,7 +326,7 @@ export default function StationsPanel() {
 
       {/* FM dial band */}
       {data ? (
-        <div>
+        <div className="border-t border-ink px-5 pt-4 pb-3">
           <div className="relative h-[88px] border-y border-ink bg-field">
             <div className={cn(styles.dialFine, 'absolute inset-x-0 bottom-0 h-3')} />
             <div className={cn(styles.dialCoarse, 'absolute inset-x-0 bottom-0 h-5')} />
@@ -349,10 +350,13 @@ export default function StationsPanel() {
           </div>
         </div>
       ) : null}
+      </section>
 
+      {/* Rack card: loading / error / rows */}
+      <section className="card">
       {/* Loading skeleton */}
       {loading ? (
-        <div className="border border-ink">
+        <div>
           {[0, 1, 2].map(k => (
             <div
               key={k}
@@ -374,7 +378,7 @@ export default function StationsPanel() {
 
       {/* Load error */}
       {err && !data ? (
-        <div className="grid justify-items-start gap-2.5 border border-ink px-9 py-9">
+        <div className="grid justify-items-start gap-2.5 px-9 py-9">
           <div className="font-mono text-[10px] font-bold tracking-[0.22em] text-vermilion uppercase">
             ▚▚ signal lost
           </div>
@@ -395,7 +399,7 @@ export default function StationsPanel() {
 
       {/* The rack */}
       {data ? (
-        <div className="border border-ink">
+        <div>
           {stations.map((s, i) => (
             <div
               key={s.id ?? '__install'}
@@ -511,12 +515,13 @@ export default function StationsPanel() {
 
       {/* Single-station note */}
       {data && singleMode ? (
-        <div className="border border-separator-strong px-4 py-4 text-[13px] leading-relaxed text-muted">
+        <div className="border-t border-separator-strong px-4 py-4 text-[13px] leading-relaxed text-muted">
           This install hasn&apos;t been converted to multi-station yet — it runs exactly this one
           station. Creating a second station converts the install and restarts the controller,
           and this rack fills up.
         </div>
       ) : null}
+      </section>
 
       {/* Create modal */}
       <Modal
