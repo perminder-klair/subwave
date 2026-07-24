@@ -566,7 +566,7 @@ export default function StationsPanel() {
               placeholder="e.g. Night Loop"
               onChange={e => setCreateName(e.target.value)}
               onKeyDown={e => {
-                if (e.key === 'Enter' && createName.trim() && !busy) void create();
+                if (e.key === 'Enter' && createName.trim() && !busy && !atCap) void create();
               }}
             />
             <div className="font-mono text-[10px] tracking-[0.1em] text-muted lowercase">

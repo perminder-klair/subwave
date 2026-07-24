@@ -176,6 +176,11 @@ export async function ensureDefaultIdent() {
 
   // Already the bundled asset — or an existing render with no asset to upgrade to.
   if (existsSync(filePath) && existing && (existing.source === 'builtin' || !havePrebaked)) {
+    // Rewrite the playlist anyway: its entries are ABSOLUTE paths under the
+    // active station dir, and a multi-station conversion (or duplicate) moves
+    // or copies the m3u without touching its contents — re-deriving it at
+    // every boot is what keeps jingles airing after the dir changes identity.
+    await rewritePlaylist(Object.keys(meta.items));
     return;
   }
 

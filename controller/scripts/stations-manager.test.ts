@@ -81,14 +81,19 @@ try {
 
   // Activate drains stale file-based IPC in the TARGET dir first — a leftover
   // next.txt from this station's last stint as live must not be replayed the
-  // moment Liquidsoap starts polling it again after the switch.
+  // moment Liquidsoap starts polling it again after the switch, and a stale
+  // now-playing.json must not be served as the current track after the boot.
   const nightShiftDir = join(root, 'stations', 'night-shift');
   writeFileSync(join(nightShiftDir, 'next.txt'), 'annotate:title=stale:file:///stale.mp3');
+  writeFileSync(join(nightShiftDir, 'now-playing.json'), '{"title":"stale"}');
+  writeFileSync(join(nightShiftDir, 'jingle-playing.json'), '{"filename":"stale.wav"}');
 
   // Activate + delete the loser.
   manager.activateStation(root, 'night-shift');
   assert.equal(manager.activeIdOnDisk(root), 'night-shift');
   assert.ok(!existsSync(join(nightShiftDir, 'next.txt')));
+  assert.ok(!existsSync(join(nightShiftDir, 'now-playing.json')));
+  assert.ok(!existsSync(join(nightShiftDir, 'jingle-playing.json')));
   manager.deleteStation(root, 'night-shift-2');
   assert.ok(!existsSync(dupDir));
 
@@ -179,6 +184,21 @@ try {
   assert.ok(!existsSync(join(root3, 'stations', 'x')));
 } finally {
   rmSync(root3, { recursive: true, force: true });
+}
+
+// Duplicate with an unresolvable pointer (multi-station dir present, pointer
+// corrupt) must refuse loudly rather than silently degrade to a fresh station.
+const root4 = mkdtempSync(join(tmpdir(), 'subwave-mgr-nosrc-'));
+try {
+  mkdirSync(join(root4, 'stations', 'alpha'), { recursive: true });
+  writeFileSync(join(root4, 'stations', 'active.json'), 'corrupt');
+  await assert.rejects(
+    manager.createStation(root4, { name: 'Copy', mode: 'duplicate', currentName: 'X' }),
+    /no active station to duplicate from/,
+  );
+  assert.ok(!existsSync(join(root4, 'stations', 'copy')));
+} finally {
+  rmSync(root4, { recursive: true, force: true });
 }
 
 console.log('stations-manager.test: OK');

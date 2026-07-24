@@ -69,6 +69,10 @@ including things you might not expect, like `library.db` — is per-station.
 - **Analysis is per-station.** `library.db` lives inside each station's
   directory, so switching stations switches which library's analysis cache
   (bpm/key/mood/embeddings) is in play.
+- **Liquidsoap's own log stays install-level.** The compose files bind-mount
+  `state/logs` over `/var/log/liquidsoap`, so `radio.log` is shared across
+  stations regardless of which one is live. Only the controller's event logs
+  (`logs/events-*.jsonl`) live inside each station's directory.
 
 ## Dev mode
 

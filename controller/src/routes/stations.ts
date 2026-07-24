@@ -1,7 +1,8 @@
 // Multi-station profile management (spec §4/§5). Offline stations are inert:
 // list / rename / delete / make-live only — editing one means switching to it.
 
-import { utimesSync } from 'node:fs';
+import { readFileSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
@@ -14,16 +15,55 @@ import { restartLiquidsoap } from '../broadcast/liquidsoap-control.js';
 
 export const router = express.Router();
 
+// A switch whose mixer restart never landed is a SPLIT-BRAIN: broadcast keeps
+// serving the previous station's dir while this controller reboots into the
+// new one — and the admin UI reports success (the /state poll only watches
+// the controller). The old process can't warn anyone (it's about to exit), so
+// it leaves this marker and the NEXT boot logs it loudly, right where the
+// operator is looking after a switch.
+const MIXER_FAIL_MARKER = join(STATE_ROOT, 'stations', 'mixer-restart-failed.json');
+try {
+  const m = JSON.parse(readFileSync(MIXER_FAIL_MARKER, 'utf8')) as { at?: string; error?: string };
+  console.error(
+    `[stations] WARNING: the station switch at ${m.at} could not restart the mixer (${m.error}). ` +
+    'Broadcast may still be playing the PREVIOUS station — restart it manually: ' +
+    'docker compose restart broadcast',
+  );
+  unlinkSync(MIXER_FAIL_MARKER); // warn once, on the boot right after the failed switch
+} catch {
+  // no marker — the normal case
+}
+
 // The switch: pointer already written → bounce the mixer (its container
 // entrypoint re-resolves + re-renders icecast on restart), then exit so the
 // compose restart policy boots this process against the new station dir.
 // setImmediate so the HTTP response flushes first.
 function scheduleSwitchExit(): void {
   setImmediate(async () => {
-    try {
-      await restartLiquidsoap();
-    } catch (err) {
-      console.error('[stations] mixer restart failed:', (err as Error).message);
+    // Retry transient telnet failures before giving up — the mixer restart is
+    // what moves broadcast onto the new station dir (see MIXER_FAIL_MARKER).
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        await restartLiquidsoap();
+        break;
+      } catch (err) {
+        console.error(
+          `[stations] mixer restart failed (attempt ${attempt}/3):`,
+          (err as Error).message,
+        );
+        if (attempt < 3) {
+          await new Promise((r) => setTimeout(r, 2000));
+        } else {
+          try {
+            writeFileSync(MIXER_FAIL_MARKER, JSON.stringify({
+              at: new Date().toISOString(),
+              error: (err as Error).message,
+            }));
+          } catch {
+            // best-effort — the console.error above is the fallback trail
+          }
+        }
+      }
     }
     console.log('[stations] exiting for station switch — supervisor restarts us');
     // Dev runs under `tsx watch`, which does NOT respawn a cleanly-exited

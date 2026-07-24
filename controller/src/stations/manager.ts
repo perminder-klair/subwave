@@ -4,9 +4,10 @@
 // pass config.stateRoot. Spec §5/§6.
 
 import {
-  cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync,
+  existsSync, mkdirSync, readdirSync, readFileSync, renameSync,
   rmSync, unlinkSync, writeFileSync,
 } from 'node:fs';
+import { cp } from 'node:fs/promises';
 import { join, resolve as pathResolve, sep } from 'node:path';
 import {
   MAX_STATIONS, STATION_ID_RE, conversionAction, duplicateAction,
@@ -194,6 +195,12 @@ export async function createStation(root: string, opts: {
     throw new StationCreateError(`this install is capped at ${MAX_STATIONS} stations`, converted);
   }
   const sourceId = activeIdOnDisk(root);
+  // A duplicate with nothing to duplicate FROM (multi-station dir present but
+  // the pointer corrupt/missing) must refuse loudly, not silently degrade to
+  // a fresh station.
+  if (opts.mode === 'duplicate' && !sourceId) {
+    throw new StationCreateError('no active station to duplicate from', converted);
+  }
   const id = uniqueStationId(root, name);
   const dest = stationPath(root, id);
   // Everything from here is wrapped: if it throws, the new-station dir is
@@ -214,7 +221,10 @@ export async function createStation(root: string, opts: {
       for (const entry of readdirSync(src)) {
         const action = duplicateAction(entry);
         if (action === 'copy') {
-          cpSync(join(src, entry), join(dest, entry), { recursive: true });
+          // Async cp — voices/ and jingles/ can run to hundreds of MB, and a
+          // sync copy would block the event loop (and /now-playing) for the
+          // whole duplicate.
+          await cp(join(src, entry), join(dest, entry), { recursive: true });
         } else if (action === 'backup') {
           if (opts.backupLibraryDb) {
             await opts.backupLibraryDb(join(dest, entry));
@@ -260,9 +270,15 @@ export function deleteStation(root: string, id: string): void {
 
 // Stale file-based IPC in the TARGET station dir — left over from whenever
 // this station was last live (or never cleaned up) — must not be replayed
-// the moment Liquidsoap starts polling it again after the switch. Each is
-// swallowed independently: a missing file is the common case, not an error.
-const STALE_IPC_FILES = ['next.txt', 'say.txt', 'intro.txt', 'sfx.txt'];
+// the moment Liquidsoap starts polling it again after the switch. The
+// *-playing snapshots come along too: a days-old now-playing.json would be
+// served as the current track until the first on_meta fires after the
+// switch. Each is swallowed independently: a missing file is the common
+// case, not an error.
+const STALE_IPC_FILES = [
+  'next.txt', 'say.txt', 'intro.txt', 'sfx.txt',
+  'now-playing.json', 'jingle-playing.json', 'bed-playing.json',
+];
 
 function drainStaleIpc(dir: string): void {
   for (const file of STALE_IPC_FILES) {
