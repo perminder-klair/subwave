@@ -34,8 +34,6 @@ https://github.com/user-attachments/assets/0a2ba78a-eda3-44c1-adce-bfa78ae992cd
 
 ## Screenshots
 
-Click any image for the full-size version.
-
 **The listener player.** One shared broadcast, with in-app song requests.
 
 <p>
