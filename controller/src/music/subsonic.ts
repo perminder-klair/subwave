@@ -173,6 +173,71 @@ export async function ping(): Promise<{ ok: boolean; reason?: string }> {
   }
 }
 
+// One-off connectivity + auth probe with ARBITRARY creds — the shared engine
+// behind the onboarding wizard's "Test connection" and the admin Settings
+// Music-source test/save flow. Unlike ping() it never touches config.navidrome
+// and never mutates anything; callers pass exactly what to try. Never throws.
+//
+// One retry on ANY first failure — broader than ping()'s fast-fail-only rule,
+// deliberately. ping()'s 30s timeout makes a slow retry expensive; this probe
+// is 5s-bounded, so the retry costs at most ~5.5s against a truly-dead server.
+// It covers both failure shapes of a warm-but-stale connection pool: the
+// instant reset on reusing a stale socket, AND the full-timeout stall seen
+// when the Navidrome process restarts under pooled connections (the aborted
+// attempt's teardown is what un-wedges the pool, so the second try connects
+// fresh). A Test button reporting either blip as "unreachable" sends the
+// operator chasing a config that actually works.
+export async function pingWith(target: {
+  url: string;
+  user: string;
+  pass: string;
+  client?: string;
+}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; error?: string }> {
+  const first = await pingWithOnce(target);
+  if (first.ok) return first;
+  await new Promise(resolve => setTimeout(resolve, 500));
+  return pingWithOnce(target);
+}
+
+async function pingWithOnce({
+  url,
+  user,
+  pass,
+  client = 'sub-wave-admin',
+}: {
+  url: string;
+  user: string;
+  pass: string;
+  client?: string;
+}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; error?: string }> {
+  try {
+    const salt = crypto.randomBytes(8).toString('hex');
+    const token = crypto.createHash('md5').update(pass + salt).digest('hex');
+    const probeUrl = new URL(`${url.replace(/\/$/, '')}/rest/ping`);
+    probeUrl.searchParams.set('u', user);
+    probeUrl.searchParams.set('t', token);
+    probeUrl.searchParams.set('s', salt);
+    probeUrl.searchParams.set('v', '1.16.1');
+    probeUrl.searchParams.set('c', client);
+    probeUrl.searchParams.set('f', 'json');
+
+    const res = await fetch(probeUrl.toString(), { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return { ok: false, error: `Subsonic ping returned HTTP ${res.status}` };
+
+    const body: any = await res.json();
+    const sub = body?.['subsonic-response'];
+    if (sub?.status !== 'ok') {
+      return { ok: false, error: sub?.error?.message || 'Subsonic responded but auth failed' };
+    }
+    return { ok: true, serverVersion: sub.version, serverType: sub.type || 'unknown' };
+  } catch (err: any) {
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+      return { ok: false, error: 'Navidrome did not respond within 5s' };
+    }
+    return { ok: false, error: err?.message || 'Navidrome unreachable' };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Station-archive guard
 // ---------------------------------------------------------------------------

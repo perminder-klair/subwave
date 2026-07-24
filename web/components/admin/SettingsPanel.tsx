@@ -2,7 +2,7 @@
 
 import type { ChangeEvent } from 'react';
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { notify, errorMessage } from '../../lib/notify';
 import { normalizeStationLocale } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -20,7 +20,7 @@ import ArchivesPanel from './ArchivesPanel';
 import BackupPanel from './BackupPanel';
 import {
   Radio, Palette, Cpu, Mic, Library, Search,
-  Activity, Archive, Save, AlertTriangle, Heart,
+  Activity, Archive, Save, AlertTriangle, Heart, Music2,
 } from 'lucide-react';
 import {
   SectionHeader, ELEVENLABS_VS_DEFAULTS,
@@ -35,9 +35,11 @@ import { StationSection } from './settings/StationSection';
 import { ThemeSection } from './settings/ThemeSection';
 import { ScrobbleSection } from './settings/ScrobbleSection';
 import { LikesSection } from './settings/LikesSection';
+import { NavidromeSection } from './settings/NavidromeSection';
 
 const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
+  { id: 'music',    label: 'Music source', hint: 'navidrome · subsonic', icon: Music2 },
   { id: 'theme',    label: 'Skin & Themes', hint: 'player skin · palette', icon: Palette },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine', icon: Mic },
@@ -87,14 +89,20 @@ export default function SettingsPanel() {
   //
   // Jingles / SFX / Beds left Settings for /admin/imaging — send their old
   // ?section deep-links on to the matching tab so existing bookmarks survive.
+  //
+  // useSearchParams (not a one-shot window.location read) so client-side
+  // navigations to ?section=… land too — the NavidromeBanner links here from
+  // every admin page INCLUDING /admin/settings itself, where the panel is
+  // already mounted and only the query changes.
+  const searchParams = useSearchParams();
   useEffect(() => {
-    const s = new URLSearchParams(window.location.search).get('section');
+    const s = searchParams.get('section');
     if (s === 'jingles' || s === 'sfx' || s === 'beds') {
       router.replace(`/admin/imaging?tab=${s}`);
       return;
     }
     if (s && SECTIONS.some(x => x.id === s)) setActiveSection(s as SectionId);
-  }, [router]);
+  }, [router, searchParams]);
 
   useEffect(() => {
     if (!data?.values || form) return;
@@ -450,6 +458,9 @@ export default function SettingsPanel() {
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings}
               />
+            )}
+            {activeSection === 'music' && (
+              <NavidromeSection data={data} adminFetch={adminFetch} refresh={refresh} />
             )}
             {activeSection === 'theme' && (
               <ThemeSection

@@ -93,6 +93,14 @@ async function memo(key, ttl, fn) {
   return val;
 }
 
+// Drop every memoised Subsonic result. Called when the admin points the
+// station at different Navidrome creds — the cached playlists/albums carry
+// song ids from the OLD server, which would feed the picker junk for up to
+// CACHE_TTL_MS otherwise.
+export function clearPoolCache() {
+  cache.clear();
+}
+
 // --- Tempo / harmonic compatibility (Stage B, soft re-rank only) -----------
 // These bias the pool ordering toward smoother transitions; they are NEVER a
 // hard filter, and a track with NULL bpm/key contributes a 0 bonus (so it

@@ -494,6 +494,13 @@ export async function navidromeConnectivity(): Promise<{
   return { ...navidromeCache.result, url: config.navidrome.url };
 }
 
+// Drop the cached ping so the banner/Doctor re-probe immediately — called when
+// the admin saves new Navidrome creds, where a stale "down" result would keep
+// the red banner up for the TTL even though the fix just landed.
+export function clearNavidromeCache() {
+  navidromeCache = null;
+}
+
 async function checkBroadcast(): Promise<Finding[]> {
   const out: Finding[] = [];
 
