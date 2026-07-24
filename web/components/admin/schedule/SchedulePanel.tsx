@@ -2,8 +2,8 @@
 
 // The Rundown — /admin/shows/schedule. The dedicated full-screen show-plan
 // view: a live header, the On air / Up next / After that band with the
-// takeover control, the board (7 × 24 kanban), the on-air listing, and the
-// persistent right rail with the sentence-based order editor.
+// takeover control, the full-width board (7 × 24 kanban), and the order desk
+// beneath it with the sentence-based order editor.
 //
 // The data model is unchanged: the controller's 7×24 `schedule` grid from
 // GET /settings, persisted with PUT /schedule ("Save the week"). Every edit
@@ -25,9 +25,8 @@ import { SkeletonRows } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import { Card } from '../ui';
 import Board from './Board';
-import Listing from './Listing';
-import RightRail from './RightRail';
-import type { EditorLine, Suggestion } from './RightRail';
+import EditorBand from './EditorBand';
+import type { EditorLine, Suggestion } from './EditorBand';
 import AddShowDialog from './AddShowDialog';
 import { ColorChip, Mu, SegBtn, SlotMenu } from './bits';
 import type { Block, Schedule, ScheduleShow } from './lib';
@@ -108,9 +107,11 @@ export default function SchedulePanel() {
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
-  // Board / listing folds, keyed by storage day (0=Sun..6=Sat).
+  // Board folds, keyed by storage day (0=Sun..6=Sat).
   const [folded, setFolded] = useState<Record<number, boolean>>({});
-  const [listFolded, setListFolded] = useState<Record<number, boolean>>({});
+  // The order desk below the board — scrolled into view when a board pick
+  // loads it, since it can sit below the fold.
+  const bandRef = useRef<HTMLDivElement>(null);
 
   // The sentence editor — the line being edited plus the show the sentence
   // would place and the day set it applies to.
@@ -222,6 +223,9 @@ export default function SchedulePanel() {
     setLine({ day: b.day, start: b.start, end: b.start + b.span });
     setLineDays([b.day]);
     setLineShowId(b.showId ?? lineShowId ?? shows[0]?.id ?? null);
+    // Bring the order desk into view when picking from the board — no-op when
+    // it is already visible (block: 'nearest').
+    bandRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   };
 
   const applyLine = (value: string | null) => {
@@ -236,11 +240,6 @@ export default function SchedulePanel() {
     setLine({ day: b.day, start: b.start, end: b.start + b.span });
     setLineDays([b.day]);
     setLineShowId(showId);
-  };
-
-  const jumpToDay = (day: number) => {
-    setListFolded(f => ({ ...f, [day]: false }));
-    document.getElementById(`listing-day-${day}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
   // Where the edited line would sit in the week's order stack.
@@ -615,39 +614,25 @@ export default function SchedulePanel() {
         </div>
       </div>
 
-      {/* ── Main: board + listing, right rail ──────────────────────────── */}
-      <div className="grid flex-1 grid-cols-[minmax(0,1fr)_452px] items-start">
-        <div className="min-w-0 px-[30px] pt-[22px] pb-[34px]">
-          <Board
-            schedule={schedule}
-            shows={shows}
-            folded={folded}
-            onToggleFold={d => setFolded(f => ({ ...f, [d]: !f[d] }))}
-            onOpenAll={() => setFolded({})}
-            onFoldWeekdays={() => setFolded({ 1: true, 2: true, 3: true, 4: true })}
-            todayKey={nowDay}
-            colorOf={colorOf}
-            hoursOf={hoursOf}
-            onPick={pick}
-            onDropShow={dropShow}
-            onArmShow={setLineShowId}
-          />
-          <Listing
-            schedule={schedule}
-            shows={shows}
-            metaOf={metaOf}
-            todayKey={nowDay}
-            nowHour={nowHour}
-            colorOf={colorOf}
-            listFolded={listFolded}
-            onToggleFold={d => setListFolded(f => ({ ...f, [d]: !f[d] }))}
-            onOpenAll={() => setListFolded({})}
-            onFoldAll={() => setListFolded({ 0: true, 1: true, 2: true, 3: true, 4: true, 5: true, 6: true })}
-            onPick={pick}
-            bookedTotal={booked}
-          />
-        </div>
-        <RightRail
+      {/* ── Main: full-width board, order desk beneath ─────────────────── */}
+      <div className="min-w-0 px-[30px] pt-[22px] pb-[30px]">
+        <Board
+          schedule={schedule}
+          shows={shows}
+          folded={folded}
+          onToggleFold={d => setFolded(f => ({ ...f, [d]: !f[d] }))}
+          onOpenAll={() => setFolded({})}
+          onFoldWeekdays={() => setFolded({ 1: true, 2: true, 3: true, 4: true })}
+          todayKey={nowDay}
+          colorOf={colorOf}
+          hoursOf={hoursOf}
+          onPick={pick}
+          onDropShow={dropShow}
+          onArmShow={setLineShowId}
+        />
+      </div>
+      <div ref={bandRef} className="flex-1 scroll-mt-4">
+        <EditorBand
           shows={shows}
           line={line}
           lineShowId={lineShowId}
@@ -667,7 +652,6 @@ export default function SchedulePanel() {
           onAir={() => applyLine(lineShowId)}
           onQuiet={() => applyLine(null)}
           orderNo={orderNo}
-          onJumpToDay={jumpToDay}
           orders={dayBlocks(schedule, line.day).filter(b => b.showId)}
           showById={showById}
           onPickOrder={pick}

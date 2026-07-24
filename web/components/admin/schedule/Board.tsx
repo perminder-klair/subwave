@@ -152,7 +152,7 @@ function DayColumn({
   const showById = (id: string | null) => shows.find(s => s.id === id) ?? null;
   const booked = blocks.reduce((a, b) => a + (b.showId ? b.span : 0), 0);
   return (
-    <div className="flex w-[188px] flex-none flex-col border border-ink bg-[var(--page-bg)]">
+    <div className="flex min-w-[188px] flex-1 flex-col border border-ink bg-[var(--page-bg)]">
       <button
         type="button"
         onClick={onToggleFold}
