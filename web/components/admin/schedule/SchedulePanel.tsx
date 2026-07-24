@@ -107,6 +107,8 @@ export default function SchedulePanel() {
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
+  // Board columns collapsed to rails, keyed by storage day (0=Sun..6=Sat).
+  const [folded, setFolded] = useState<Record<number, boolean>>({});
   // The line editor above the board — scrolled into view when a pick from
   // deep in the board loads it, since it can sit above the fold.
   const bandRef = useRef<HTMLDivElement>(null);
@@ -463,44 +465,44 @@ export default function SchedulePanel() {
   return (
     <div className="flex min-h-full min-w-0 flex-1 flex-col bg-[var(--card-bg)]">
       {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-3 border-b border-ink px-[30px] pt-4 pb-3.5">
-        <div className="flex min-w-0 flex-col gap-1.5">
-          <div className="flex items-center gap-3">
+      <div className="border-b border-ink px-[30px] pt-4 pb-3.5">
+        <div className="flex items-center justify-between gap-x-6">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
             <span className="eyebrow text-vermilion">Show plan · The Rundown</span>
             <span aria-hidden="true" className="h-px w-[18px] bg-[color-mix(in_oklab,var(--ink)_28%,transparent)]" />
             <span className="font-mono text-[11.5px] font-bold tracking-[0.06em] text-ink">{clockLabel}</span>
             <Mu className="text-[9px]">{zoneLabel}</Mu>
           </div>
-          <h1 className="m-0 font-display text-[30px] leading-none font-semibold tracking-[-0.015em]">
-            Programme the week, one hour at a time.
-          </h1>
-          <Mu className="text-[9px] tracking-[0.1em]">
-            Empty hours run autonomously · every change goes live on save
-          </Mu>
+          <div className="ml-auto flex flex-none items-center gap-3">
+            <span className="flex flex-none items-center gap-2">
+              {dirty > 0 && <span aria-hidden="true" className="size-1.5 bg-[var(--accent)]" />}
+              <Mu className={cn('text-[9px] whitespace-nowrap', dirty > 0 && 'text-ink')}>
+                {dirty > 0 ? `${dirty} unsaved edit${dirty === 1 ? '' : 's'}` : 'all changes saved'}
+              </Mu>
+              {dirty > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setReviewOpen(true)}
+                  className="cursor-pointer border-0 bg-transparent p-0 font-mono text-[9px] tracking-[0.16em] text-muted uppercase underline hover:text-ink"
+                >
+                  Review
+                </button>
+              )}
+            </span>
+            <Button variant="default" size="sm" onClick={() => setAddOpen(true)}>
+              + Add a show
+            </Button>
+            <Button variant="accent" size="sm" onClick={saveWeek} disabled={busy || dirty === 0}>
+              {busy ? 'Saving…' : 'Save the week'}
+            </Button>
+          </div>
         </div>
-        <div className="ml-auto flex flex-none items-center justify-end gap-3">
-          <span className="flex flex-none items-center gap-2">
-            {dirty > 0 && <span aria-hidden="true" className="size-1.5 bg-[var(--accent)]" />}
-            <Mu className={cn('text-[9px] whitespace-nowrap', dirty > 0 && 'text-ink')}>
-              {dirty > 0 ? `${dirty} unsaved edit${dirty === 1 ? '' : 's'}` : 'all changes saved'}
-            </Mu>
-            {dirty > 0 && (
-              <button
-                type="button"
-                onClick={() => setReviewOpen(true)}
-                className="cursor-pointer border-0 bg-transparent p-0 font-mono text-[9px] tracking-[0.16em] text-muted uppercase underline hover:text-ink"
-              >
-                Review
-              </button>
-            )}
-          </span>
-          <Button variant="default" size="sm" onClick={() => setAddOpen(true)}>
-            + Add a show
-          </Button>
-          <Button variant="accent" size="sm" onClick={saveWeek} disabled={busy || dirty === 0}>
-            {busy ? 'Saving…' : 'Save the week'}
-          </Button>
-        </div>
+        <h1 className="mt-2 mb-0 font-display text-[28px] leading-[1.05] font-semibold tracking-[-0.015em]">
+          Programme the week, one hour at a time.
+        </h1>
+        <Mu className="mt-1.5 block text-[9px] tracking-[0.1em]">
+          Empty hours run autonomously · every change goes live on save
+        </Mu>
       </div>
 
       {/* ── Now band ───────────────────────────────────────────────────── */}
@@ -630,6 +632,8 @@ export default function SchedulePanel() {
         <Board
           schedule={schedule}
           shows={shows}
+          folded={folded}
+          onToggleFold={d => setFolded(f => ({ ...f, [d]: !f[d] }))}
           todayKey={nowDay}
           colorOf={colorOf}
           hoursOf={hoursOf}

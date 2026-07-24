@@ -25,6 +25,8 @@ function readDraggedShow(e: DragEvent): string {
 export interface BoardProps {
   schedule: Schedule;
   shows: ScheduleShow[];
+  folded: Record<number, boolean>;
+  onToggleFold: (day: number) => void;
   todayKey: number;
   colorOf: (id: string | null | undefined) => string;
   hoursOf: (id: string) => number;
@@ -34,7 +36,8 @@ export interface BoardProps {
 }
 
 export default function Board({
-  schedule, shows, todayKey, colorOf, hoursOf, onPick, onDropShow, onArmShow,
+  schedule, shows, folded, onToggleFold, todayKey,
+  colorOf, hoursOf, onPick, onDropShow, onArmShow,
 }: BoardProps) {
   return (
     <section>
@@ -97,18 +100,30 @@ export default function Board({
             ))}
           </div>
 
-          {DAYS.map(d => (
-            <DayColumn
-              key={d.key}
-              label={d.label}
-              today={d.key === todayKey}
-              blocks={dayBlocks(schedule, d.key)}
-              colorOf={colorOf}
-              shows={shows}
-              onPick={onPick}
-              onDropShow={onDropShow}
-            />
-          ))}
+          {DAYS.map(d =>
+            folded[d.key] ? (
+              <FoldedRail
+                key={d.key}
+                label={d.label}
+                name={d.name}
+                count={dayBlocks(schedule, d.key).filter(b => b.showId).length}
+                onClick={() => onToggleFold(d.key)}
+              />
+            ) : (
+              <DayColumn
+                key={d.key}
+                label={d.label}
+                name={d.name}
+                today={d.key === todayKey}
+                blocks={dayBlocks(schedule, d.key)}
+                colorOf={colorOf}
+                shows={shows}
+                onToggleFold={() => onToggleFold(d.key)}
+                onPick={onPick}
+                onDropShow={onDropShow}
+              />
+            ),
+          )}
         </div>
         <ScrollBar orientation="horizontal" />
       </ScrollArea>
@@ -120,14 +135,16 @@ export default function Board({
 }
 
 function DayColumn({
-  label, today, blocks, colorOf, shows,
-  onPick, onDropShow,
+  label, name, today, blocks, colorOf, shows,
+  onToggleFold, onPick, onDropShow,
 }: {
   label: string;
+  name: string;
   today: boolean;
   blocks: Block[];
   colorOf: (id: string | null | undefined) => string;
   shows: ScheduleShow[];
+  onToggleFold: () => void;
   onPick: (b: Block) => void;
   onDropShow: (b: Block, showId: string) => void;
 }) {
@@ -135,7 +152,12 @@ function DayColumn({
   const booked = blocks.reduce((a, b) => a + (b.showId ? b.span : 0), 0);
   return (
     <div className="flex min-w-[188px] flex-1 flex-col border border-ink bg-[var(--page-bg)]">
-      <div className="flex h-[38px] items-center gap-2 border-b border-ink px-2.5">
+      <button
+        type="button"
+        onClick={onToggleFold}
+        title={`Fold ${name} out of the way`}
+        className="flex h-[38px] cursor-pointer items-center gap-2 border-0 border-b border-solid border-b-ink bg-transparent px-2.5 hover:bg-[var(--ink-soft)]"
+      >
         <span
           aria-hidden="true"
           className={cn('size-[7px] rounded-full', today ? 'bg-[var(--accent)]' : 'bg-ink')}
@@ -144,7 +166,7 @@ function DayColumn({
         <span className="ml-auto flex h-5 min-w-5 items-center justify-center border border-ink bg-[var(--card-bg)] px-1 font-mono text-[9px] font-bold text-ink">
           {blocks.filter(b => b.showId).length}
         </span>
-      </div>
+      </button>
       <div className="flex flex-col gap-1 p-[5px]">
         {blocks.map(b =>
           b.showId ? (
@@ -163,8 +185,35 @@ function DayColumn({
       </div>
       <div className="flex items-center gap-2 border-t border-separator-strong px-2.5 py-2">
         <Mu className="text-[8px]">{booked} h booked</Mu>
+        <Mu className="ml-auto text-[8px]">Fold</Mu>
       </div>
     </div>
+  );
+}
+
+// A folded day — a slim vertical rail; click to reopen the column.
+function FoldedRail({
+  label, name, count, onClick,
+}: {
+  label: string;
+  name: string;
+  count: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`Open ${name}`}
+      className="flex w-12 flex-none cursor-pointer flex-col items-center gap-3 self-stretch border border-ink bg-[var(--card-bg)] py-2.5 hover:bg-[var(--page-bg)]"
+    >
+      <span className="flex h-5 min-w-5 items-center justify-center border border-ink bg-[var(--card-bg)] px-1 font-mono text-[9px] font-bold text-ink">
+        {count}
+      </span>
+      <span className="font-mono text-[11px] font-bold tracking-[0.18em] text-ink uppercase [writing-mode:vertical-rl]">
+        {label}
+      </span>
+    </button>
   );
 }
 
