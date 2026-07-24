@@ -10,9 +10,9 @@ import { useRef } from 'react';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
 import { cn } from '../../../lib/cn';
 import { Button } from '../../ui/button';
-import { ColorChip, DayPills, Mu, SlotMenu } from './bits';
-import type { Block, ScheduleShow } from './lib';
-import { HOURS, dayLabel, dayName, hhmm } from './lib';
+import { DayPills, Mu, SlotMenu } from './bits';
+import type { ScheduleShow } from './lib';
+import { HOURS, dayName, hhmm } from './lib';
 
 export interface EditorLine {
   day: number;
@@ -39,7 +39,7 @@ export interface AirtimeRow {
   under: boolean;
 }
 
-export interface EditorBandProps {
+export interface LineEditorProps {
   shows: ScheduleShow[];
   line: EditorLine;
   lineShowId: string | null;
@@ -53,9 +53,82 @@ export interface EditorBandProps {
   onAir: () => void;
   onQuiet: () => void;
   orderNo: number;
-  orders: Block[];
-  showById: (id: string | null) => ScheduleShow | null;
-  onPickOrder: (b: Block) => void;
+}
+
+/** The sentence-based order editor — rendered above the board. */
+export function LineEditor({
+  shows, line, lineShowId, lineDays, currentName, colorOf,
+  onLineChange, onLineShow, onToggleLineDay, onAir, onQuiet, orderNo,
+}: LineEditorProps) {
+  const lineShow = shows.find(s => s.id === lineShowId) ?? null;
+  return (
+    <div className="min-w-0">
+      <div className="mb-0.5 flex items-baseline gap-3">
+        <span className="eyebrow text-ink">Editing this line</span>
+        <Mu className="tracking-[0.08em]">
+          {dayName(line.day)} {hhmm(line.start)} → {hhmm(line.end)} ·{' '}
+          {currentName ? `currently ${currentName}` : 'currently silent'}
+        </Mu>
+        <Mu className="ml-auto text-[8.5px]">Becomes order №{orderNo}</Mu>
+      </div>
+      <div className="mt-2 border border-ink bg-[var(--page-bg)] p-[15px]">
+        <div className="flex flex-wrap items-center gap-2 text-[14.5px] text-ink">
+          <span>Put</span>
+          <SlotMenu
+            ariaLabel="Show to put on the air"
+            label={lineShow ? lineShow.name : 'a show…'}
+            chipColor={lineShow ? colorOf(lineShow.id) : null}
+            options={shows.map(s => ({ key: s.id, label: s.name, chipColor: colorOf(s.id) }))}
+            onSelect={onLineShow}
+            disabled={shows.length === 0}
+          />
+          <span>on</span>
+          <SlotMenu
+            ariaLabel="Day"
+            label={dayName(line.day)}
+            options={[
+              { key: '1', label: 'Monday' }, { key: '2', label: 'Tuesday' },
+              { key: '3', label: 'Wednesday' }, { key: '4', label: 'Thursday' },
+              { key: '5', label: 'Friday' }, { key: '6', label: 'Saturday' },
+              { key: '0', label: 'Sunday' },
+            ]}
+            onSelect={k => onLineChange({ day: Number(k) })}
+          />
+          <span>from</span>
+          <SlotMenu
+            ariaLabel="From hour"
+            label={hhmm(line.start)}
+            options={HOURS.map(h => ({ key: String(h), label: hhmm(h) }))}
+            onSelect={k => {
+              const start = Number(k);
+              onLineChange({ start, end: Math.max(line.end, start + 1) });
+            }}
+          />
+          <span>until</span>
+          <SlotMenu
+            ariaLabel="Until hour"
+            label={hhmm(line.end)}
+            options={HOURS.filter(h => h > line.start).concat(24).map(h => ({ key: String(h), label: hhmm(h) }))}
+            onSelect={k => onLineChange({ end: Number(k) })}
+          />
+          <span className="mx-1 hidden h-5 w-px bg-separator-strong sm:block" />
+          <span className="eyebrow text-muted">Also apply to</span>
+          <DayPills selected={lineDays} onToggle={onToggleLineDay} />
+          <span className="ml-auto flex gap-2">
+            <Button variant="accent" size="sm" onClick={onAir} disabled={!lineShow}>
+              Put it on air
+            </Button>
+            <Button variant="ghost" size="sm" onClick={onQuiet}>
+              Leave it quiet
+            </Button>
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export interface EditorBandProps {
   stats: { booked: number; showCount: number; orderCount: number };
   suggestions: Suggestion[];
   onDismissSuggestion: (key: string) => void;
@@ -65,175 +138,66 @@ export interface EditorBandProps {
 }
 
 export default function EditorBand({
-  shows, line, lineShowId, lineDays, currentName, colorOf,
-  onLineChange, onLineShow, onToggleLineDay, onAir, onQuiet,
-  orderNo, orders, showById, onPickOrder,
   stats, suggestions, onDismissSuggestion, airtime, tickPct, target,
 }: EditorBandProps) {
-  const lineShow = shows.find(s => s.id === lineShowId) ?? null;
+  const hasSuggestions = suggestions.length > 0;
   return (
     <section className="border-t border-ink bg-[var(--page-bg)] px-[30px] py-[22px]">
-      <div className="grid items-start gap-x-9 gap-y-7 xl:grid-cols-[minmax(430px,1.25fr)_1fr_1fr_1fr]">
-        {/* ── Editing this line ─────────────────────────────────────────── */}
-        <div className="min-w-0">
-          <div className="mb-0.5">
-            <span className="eyebrow text-ink">Editing this line</span>
-          </div>
-          <Mu className="mb-3 block tracking-[0.08em]">
-            {dayName(line.day)} {hhmm(line.start)} → {hhmm(line.end)} ·{' '}
-            {currentName ? `currently ${currentName}` : 'currently silent'}
-          </Mu>
-          <div className="border border-ink bg-[var(--card-bg)] p-[15px]">
-            <div className="flex flex-wrap items-center gap-2 text-[14.5px] text-ink">
-              <span>Put</span>
-              <SlotMenu
-                ariaLabel="Show to put on the air"
-                label={lineShow ? lineShow.name : 'a show…'}
-                chipColor={lineShow ? colorOf(lineShow.id) : null}
-                options={shows.map(s => ({ key: s.id, label: s.name, chipColor: colorOf(s.id) }))}
-                onSelect={onLineShow}
-                disabled={shows.length === 0}
-              />
-              <span>on</span>
-              <SlotMenu
-                ariaLabel="Day"
-                label={dayName(line.day)}
-                options={[
-                  { key: '1', label: 'Monday' }, { key: '2', label: 'Tuesday' },
-                  { key: '3', label: 'Wednesday' }, { key: '4', label: 'Thursday' },
-                  { key: '5', label: 'Friday' }, { key: '6', label: 'Saturday' },
-                  { key: '0', label: 'Sunday' },
-                ]}
-                onSelect={k => onLineChange({ day: Number(k) })}
-              />
-              <span>from</span>
-              <SlotMenu
-                ariaLabel="From hour"
-                label={hhmm(line.start)}
-                options={HOURS.map(h => ({ key: String(h), label: hhmm(h) }))}
-                onSelect={k => {
-                  const start = Number(k);
-                  onLineChange({ start, end: Math.max(line.end, start + 1) });
-                }}
-              />
-              <span>until</span>
-              <SlotMenu
-                ariaLabel="Until hour"
-                label={hhmm(line.end)}
-                options={HOURS.filter(h => h > line.start).concat(24).map(h => ({ key: String(h), label: hhmm(h) }))}
-                onSelect={k => onLineChange({ end: Number(k) })}
-              />
+      <div className={cn('grid items-start gap-x-9 gap-y-7', hasSuggestions && 'xl:grid-cols-[minmax(360px,1fr)_2fr]')}>
+        {/* ── Worth a look ──────────────────────────────────────────────── */}
+        {hasSuggestions && (
+          <div className="min-w-0">
+            <div className="mb-2.5">
+              <span className="eyebrow text-ink">Worth a look</span>
             </div>
-            <div className="mt-3 flex items-center gap-2 border-t border-separator-strong pt-2.5">
-              <span className="eyebrow text-muted">Also apply to</span>
-              <DayPills selected={lineDays} onToggle={onToggleLineDay} />
-            </div>
-            <div className="mt-3 flex gap-2">
-              <Button variant="accent" size="sm" onClick={onAir} disabled={!lineShow}>
-                Put it on air
-              </Button>
-              <Button variant="ghost" size="sm" onClick={onQuiet}>
-                Leave it quiet
-              </Button>
-            </div>
-          </div>
-          <div className="mt-2.5">
-            <span className="eyebrow text-muted">Becomes order №{orderNo}</span>
-          </div>
-
-          {/* ── Worth a look ──────────────────────────────────────────── */}
-          {suggestions.length > 0 && (
-            <div className="mt-6">
-              <div className="mb-2.5">
-                <span className="eyebrow text-ink">Worth a look</span>
-              </div>
-              <div className="grid gap-[7px]">
-                {suggestions.map(sug => (
-                  <div key={sug.key} className="grid gap-2 border border-separator-strong bg-[var(--card-bg)] p-3 hover:border-ink">
-                    <div className="flex items-center gap-2">
-                      <span className={cn('eyebrow', sug.kind === 'Gap' ? 'text-vermilion' : 'text-ink')}>
-                        {sug.kind}
-                      </span>
-                      <span className="text-[12.5px] text-ink">{sug.text}</span>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button variant="solid" size="sm" onClick={sug.onAction}>
-                        {sug.actionLabel}
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={() => onDismissSuggestion(sug.key)}>
-                        {sug.dismissLabel}
-                      </Button>
-                    </div>
+            <div className="grid gap-[7px]">
+              {suggestions.map(sug => (
+                <div key={sug.key} className="grid gap-2 border border-separator-strong bg-[var(--card-bg)] p-3 hover:border-ink">
+                  <div className="flex items-center gap-2">
+                    <span className={cn('eyebrow', sug.kind === 'Gap' ? 'text-vermilion' : 'text-ink')}>
+                      {sug.kind}
+                    </span>
+                    <span className="text-[12.5px] text-ink">{sug.text}</span>
                   </div>
-                ))}
-              </div>
+                  <div className="flex gap-2">
+                    <Button variant="solid" size="sm" onClick={sug.onAction}>
+                      {sug.actionLabel}
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={() => onDismissSuggestion(sug.key)}>
+                      {sug.dismissLabel}
+                    </Button>
+                  </div>
+                </div>
+              ))}
             </div>
-          )}
-        </div>
-
-        {/* ── Orders behind this day ────────────────────────────────────── */}
-        <div className="min-w-0 xl:border-l xl:border-separator-strong xl:pl-9">
-          <div className="mb-0.5">
-            <span className="eyebrow text-ink">Orders behind this day</span>
           </div>
-          <Mu className="mb-2.5 block tracking-[0.08em]">
-            The {orders.length === 1 ? 'one' : orders.length} that shape {dayName(line.day)}
-          </Mu>
-          <div className="flex flex-col gap-1">
-            {orders.length === 0 && (
-              <Mu className="text-[9px] normal-case">Nothing scheduled yet — the station runs itself.</Mu>
-            )}
-            {orders.map(b => {
-              const s = showById(b.showId);
-              return (
-                <button
-                  key={`${b.day}-${b.start}`}
-                  type="button"
-                  onClick={() => onPickOrder(b)}
-                  className="grid cursor-pointer grid-cols-[9px_1fr_auto_44px] items-center gap-3 border border-separator-strong bg-[var(--card-bg)] px-[11px] py-[9px] text-left hover:border-ink"
-                >
-                  <ColorChip color={colorOf(b.showId)} />
-                  <span className="truncate text-[12.5px] font-semibold text-ink">
-                    {s?.name ?? 'unknown show'}
-                  </span>
-                  <Mu className="text-[9px] tracking-[0.1em]">
-                    {dayLabel(b.day)} {b.start} → {b.start + b.span}
-                  </Mu>
-                  <span className="text-right font-mono text-[10.5px] font-bold text-ink">
-                    {b.span}h
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
+        )}
 
-        {/* ── The week in numbers ───────────────────────────────────────── */}
-        <div className="min-w-0 xl:border-l xl:border-separator-strong xl:pl-9">
+        {/* ── The week in numbers + airtime ─────────────────────────────── */}
+        <div className={cn('min-w-0', hasSuggestions && 'xl:border-l xl:border-separator-strong xl:pl-9')}>
           <div className="mb-2.5">
             <span className="eyebrow text-ink">The week in numbers</span>
           </div>
-          <div className="grid grid-cols-2 gap-[11px]">
+          <div className="grid grid-cols-2 gap-[11px] sm:grid-cols-4">
             <BandStat n={stats.booked} label="hours booked" />
             <BandStat n={168 - stats.booked} label="hours of dead air" accent />
             <BandStat n={stats.showCount} label="shows on rotation" />
             <BandStat n={stats.orderCount} label="standing orders" />
           </div>
-        </div>
 
-        {/* ── Airtime against your target ───────────────────────────────── */}
-        <div className="min-w-0 xl:border-l xl:border-separator-strong xl:pl-9">
-          <div className="mb-[11px] flex items-baseline gap-2">
-            <span className="eyebrow text-ink">Airtime against your target</span>
-            <Mu className="text-[9px] tracking-[0.1em]">tick = {target} h</Mu>
-          </div>
-          <div className="grid gap-2">
-            {airtime.length === 0 && (
-              <Mu className="text-[9px] normal-case">No shows yet.</Mu>
-            )}
-            {airtime.map(row => (
-              <AirtimeBar key={row.id} row={row} tickPct={tickPct} />
-            ))}
+          <div className="mt-4 border border-separator-strong bg-[var(--card-bg)] p-4">
+            <div className="mb-[11px] flex items-baseline gap-2">
+              <span className="eyebrow text-ink">Airtime against your target</span>
+              <Mu className="text-[9px] tracking-[0.1em]">tick = {target} h</Mu>
+            </div>
+            <div className="grid gap-2">
+              {airtime.length === 0 && (
+                <Mu className="text-[9px] normal-case">No shows yet.</Mu>
+              )}
+              {airtime.map(row => (
+                <AirtimeBar key={row.id} row={row} tickPct={tickPct} />
+              ))}
+            </div>
           </div>
         </div>
       </div>

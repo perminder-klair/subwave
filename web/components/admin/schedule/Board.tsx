@@ -11,6 +11,7 @@ import { useRef, useState } from 'react';
 import Link from 'next/link';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
 import { cn } from '../../../lib/cn';
+import { ScrollArea, ScrollBar } from '../../ui/scroll-area';
 import { ColorChip, Mu } from './bits';
 import type { Block, Schedule, ScheduleShow } from './lib';
 import { DAYS, HOURS, dayBlocks, hh } from './lib';
@@ -37,20 +38,18 @@ export default function Board({
 }: BoardProps) {
   return (
     <section>
-      <div className="mb-4 flex items-baseline gap-3.5 border-b border-ink pb-2">
-        <h2 className="m-0 font-display text-[24px] leading-none font-semibold">The board</h2>
-        <Mu className="text-[9px]">Seven days, twenty-four hours — drag to schedule</Mu>
-      </div>
-
-      <div className="mb-3 flex flex-wrap items-center gap-3.5">
+      <div className="mb-3 flex flex-wrap items-center gap-3.5 px-[30px]">
         <Mu className="tracking-[0.08em]">
           Drag a show onto an hour and the order writes itself — click any card to edit the order behind it
         </Mu>
       </div>
 
-      {/* The shelf — one draggable chip per show */}
-      <div className="mb-3.5 flex flex-wrap items-center gap-2 border border-ink bg-[var(--page-bg)] px-3 py-2.5">
-        <span className="eyebrow mr-1 text-ink">The shelf</span>
+      {/* The shelf — one draggable chip per show, a single scrolling tray so
+          any number of shows stays one line tall */}
+      <div className="mx-[30px] mb-3.5 border border-ink bg-[var(--page-bg)]">
+        <ScrollArea>
+          <div className="flex w-max min-w-full items-center gap-2 px-3 py-2.5">
+            <span className="eyebrow mr-1 flex-none text-ink">The shelf</span>
         {shows.length === 0 && (
           <Mu className="text-[9px] normal-case">
             No shows yet —{' '}
@@ -72,42 +71,48 @@ export default function Board({
             }}
             onClick={() => onArmShow(s.id)}
             title={`Drag onto the board, or click to load “${s.name}” into the order editor`}
-            className="flex cursor-grab items-center gap-1.5 border border-separator-strong bg-[var(--card-bg)] px-2.5 py-1.5 hover:border-ink active:cursor-grabbing"
+            className="flex flex-none cursor-grab items-center gap-1.5 border border-separator-strong bg-[var(--card-bg)] px-2.5 py-1.5 hover:border-ink active:cursor-grabbing"
           >
             <ColorChip color={colorOf(s.id)} />
-            <span className="text-[11.5px] font-semibold text-ink">{s.name}</span>
+            <span className="text-[11.5px] font-semibold whitespace-nowrap text-ink">{s.name}</span>
             <Mu className="text-[8px]">{hoursOf(s.id)}h</Mu>
           </button>
-        ))}
+            ))}
+          </div>
+          <ScrollBar orientation="horizontal" />
+        </ScrollArea>
       </div>
 
-      <div className="flex items-start gap-2.5 overflow-x-auto pb-2.5">
-        {/* Hour gutter — pt clears the 38px column headers (+border+padding) */}
-        <div className="w-[42px] flex-none pt-[43px]">
-          {HOURS.map(h => (
-            <div
-              key={h}
-              className="flex h-[34px] items-start justify-end pr-[7px] font-mono text-[9px] font-bold text-muted opacity-80"
-            >
-              {hh(h)}
-            </div>
+      <ScrollArea>
+        <div className="flex w-max min-w-full items-start gap-2.5 pb-1.5">
+          {/* Hour gutter — pt clears the 38px column headers (+border+padding) */}
+          <div className="w-[42px] flex-none pt-[43px]">
+            {HOURS.map(h => (
+              <div
+                key={h}
+                className="flex h-[34px] items-start justify-end pr-[7px] font-mono text-[9px] font-bold text-muted opacity-80"
+              >
+                {hh(h)}
+              </div>
+            ))}
+          </div>
+
+          {DAYS.map(d => (
+            <DayColumn
+              key={d.key}
+              label={d.label}
+              today={d.key === todayKey}
+              blocks={dayBlocks(schedule, d.key)}
+              colorOf={colorOf}
+              shows={shows}
+              onPick={onPick}
+              onDropShow={onDropShow}
+            />
           ))}
         </div>
-
-        {DAYS.map(d => (
-          <DayColumn
-            key={d.key}
-            label={d.label}
-            today={d.key === todayKey}
-            blocks={dayBlocks(schedule, d.key)}
-            colorOf={colorOf}
-            shows={shows}
-            onPick={onPick}
-            onDropShow={onDropShow}
-          />
-        ))}
-      </div>
-      <Mu className="mt-1 block tracking-[0.08em]">
+        <ScrollBar orientation="horizontal" />
+      </ScrollArea>
+      <Mu className="mt-1 block px-[30px] tracking-[0.08em]">
         Hatched hours are silent — drop something in, or leave the station to run itself
       </Mu>
     </section>

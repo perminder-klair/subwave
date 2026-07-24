@@ -25,7 +25,7 @@ import { SkeletonRows } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import { Card } from '../ui';
 import Board from './Board';
-import EditorBand from './EditorBand';
+import EditorBand, { LineEditor } from './EditorBand';
 import type { EditorLine, Suggestion } from './EditorBand';
 import AddShowDialog from './AddShowDialog';
 import { ColorChip, Mu, SegBtn, SlotMenu } from './bits';
@@ -107,8 +107,8 @@ export default function SchedulePanel() {
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
-  // The order desk below the board — scrolled into view when a board pick
-  // loads it, since it can sit below the fold.
+  // The line editor above the board — scrolled into view when a pick from
+  // deep in the board loads it, since it can sit above the fold.
   const bandRef = useRef<HTMLDivElement>(null);
 
   // The sentence editor — the line being edited plus the show the sentence
@@ -478,10 +478,10 @@ export default function SchedulePanel() {
             Empty hours run autonomously · every change goes live on save
           </Mu>
         </div>
-        <div className="ml-auto flex flex-none flex-wrap items-center justify-end gap-3">
-          <span className="flex items-center gap-2">
+        <div className="ml-auto flex flex-none items-center justify-end gap-3">
+          <span className="flex flex-none items-center gap-2">
             {dirty > 0 && <span aria-hidden="true" className="size-1.5 bg-[var(--accent)]" />}
-            <Mu className={cn('text-[9px]', dirty > 0 && 'text-ink')}>
+            <Mu className={cn('text-[9px] whitespace-nowrap', dirty > 0 && 'text-ink')}>
               {dirty > 0 ? `${dirty} unsaved edit${dirty === 1 ? '' : 's'}` : 'all changes saved'}
             </Mu>
             {dirty > 0 && (
@@ -536,12 +536,12 @@ export default function SchedulePanel() {
         </div>
 
         {/* Takeover strip */}
-        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-separator-strong px-[22px] py-[11px]">
-          <span className="eyebrow text-ink">Takeover</span>
-          <Mu className="text-[9px]">
+        <div className="flex flex-wrap items-center gap-x-3.5 gap-y-2 border-t border-separator-strong bg-[color-mix(in_oklab,var(--ink)_5%,var(--page-bg))] px-[22px] py-[11px]">
+          <span className="eyebrow flex-none text-ink">Takeover</span>
+          <Mu className="min-w-0 flex-1 truncate text-[9px]">
             Jump a show to the front of the queue — the schedule picks up again after
           </Mu>
-          <div className="ml-auto flex flex-wrap items-center gap-2.5">
+          <div className="ml-auto flex flex-none items-center gap-2.5">
             {liveOverride && pinnedShow ? (
               <>
                 <ColorChip color={colorOf(pinnedShow.id)} />
@@ -600,8 +600,33 @@ export default function SchedulePanel() {
         </div>
       </div>
 
-      {/* ── Main: full-width board, order desk beneath ─────────────────── */}
-      <div className="min-w-0 px-[30px] pt-[22px] pb-[30px]">
+      {/* ── Main: line editor, edge-to-edge board, order desk beneath ──── */}
+      <div className="min-w-0 px-[30px] pt-[22px]">
+        <div ref={bandRef} className="mb-5 scroll-mt-4">
+          <LineEditor
+            shows={shows}
+            line={line}
+            lineShowId={lineShowId}
+            lineDays={lineDays.includes(line.day) ? lineDays : [...lineDays, line.day]}
+            currentName={showById(lineCurrent.showId)?.name ?? null}
+            colorOf={colorOf}
+            onLineChange={patch => {
+              setLine(cur => ({ ...cur, ...patch }));
+              if (patch.day != null) setLineDays([patch.day]);
+            }}
+            onLineShow={setLineShowId}
+            onToggleLineDay={d => setLineDays(cur =>
+              cur.includes(d)
+                ? (d === line.day ? cur : cur.filter(x => x !== d))
+                : [...cur, d],
+            )}
+            onAir={() => applyLine(lineShowId)}
+            onQuiet={() => applyLine(null)}
+            orderNo={orderNo}
+          />
+        </div>
+      </div>
+      <div className="min-w-0 pb-[30px]">
         <Board
           schedule={schedule}
           shows={shows}
@@ -613,30 +638,8 @@ export default function SchedulePanel() {
           onArmShow={setLineShowId}
         />
       </div>
-      <div ref={bandRef} className="flex-1 scroll-mt-4">
+      <div className="flex-1">
         <EditorBand
-          shows={shows}
-          line={line}
-          lineShowId={lineShowId}
-          lineDays={lineDays.includes(line.day) ? lineDays : [...lineDays, line.day]}
-          currentName={showById(lineCurrent.showId)?.name ?? null}
-          colorOf={colorOf}
-          onLineChange={patch => {
-            setLine(cur => ({ ...cur, ...patch }));
-            if (patch.day != null) setLineDays([patch.day]);
-          }}
-          onLineShow={setLineShowId}
-          onToggleLineDay={d => setLineDays(cur =>
-            cur.includes(d)
-              ? (d === line.day ? cur : cur.filter(x => x !== d))
-              : [...cur, d],
-          )}
-          onAir={() => applyLine(lineShowId)}
-          onQuiet={() => applyLine(null)}
-          orderNo={orderNo}
-          orders={dayBlocks(schedule, line.day).filter(b => b.showId)}
-          showById={showById}
-          onPickOrder={pick}
           stats={{
             booked,
             showCount: new Set(orders.map(o => o.showId)).size,
