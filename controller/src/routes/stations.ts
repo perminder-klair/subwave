@@ -136,10 +136,19 @@ router.post('/stations', requireAdmin, async (req, res) => {
   }
 });
 
-router.patch('/stations/:id', requireAdmin, (req, res) => {
+router.patch('/stations/:id', requireAdmin, async (req, res) => {
   try {
-    manager.renameStation(STATE_ROOT, String(req.params.id), String(req.body?.name || ''));
-    res.json({ ok: true });
+    const id = String(req.params.id);
+    const resolved = manager.renameStation(STATE_ROOT, id, String(req.body?.name || ''));
+    // The active station's settings live in the running process, not just on
+    // disk — route the name through settings.update() so /state (the player's
+    // name source) flips immediately. It also rewrites settings.json from
+    // memory, which is why renameStation's fs patch alone can't cover this.
+    let requiresRestart = false;
+    if (manager.activeIdOnDisk(STATE_ROOT) === id) {
+      ({ requiresRestart } = await settings.update({ station: resolved }));
+    }
+    res.json({ ok: true, requiresRestart });
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
   }
