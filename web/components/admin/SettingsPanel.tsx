@@ -2,7 +2,7 @@
 
 import type { ChangeEvent } from 'react';
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { notify, errorMessage } from '../../lib/notify';
 import { normalizeStationLocale } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -89,14 +89,20 @@ export default function SettingsPanel() {
   //
   // Jingles / SFX / Beds left Settings for /admin/imaging — send their old
   // ?section deep-links on to the matching tab so existing bookmarks survive.
+  //
+  // useSearchParams (not a one-shot window.location read) so client-side
+  // navigations to ?section=… land too — the NavidromeBanner links here from
+  // every admin page INCLUDING /admin/settings itself, where the panel is
+  // already mounted and only the query changes.
+  const searchParams = useSearchParams();
   useEffect(() => {
-    const s = new URLSearchParams(window.location.search).get('section');
+    const s = searchParams.get('section');
     if (s === 'jingles' || s === 'sfx' || s === 'beds') {
       router.replace(`/admin/imaging?tab=${s}`);
       return;
     }
     if (s && SECTIONS.some(x => x.id === s)) setActiveSection(s as SectionId);
-  }, [router]);
+  }, [router, searchParams]);
 
   useEffect(() => {
     if (!data?.values || form) return;
