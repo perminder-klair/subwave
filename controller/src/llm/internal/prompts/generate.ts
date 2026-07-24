@@ -7,7 +7,7 @@
 // generated draft round-trips through Save without surprises.
 
 import { z } from 'zod';
-import { FREQUENCIES, SCRIPT_LENGTHS, SHOW_MOODS, SHOW_ENERGY, SOUL_MAX } from '../../../settings.js';
+import { FREQUENCIES, SCRIPT_LENGTHS, moodVocab, SHOW_ENERGY, SOUL_MAX } from '../../../settings.js';
 import { THEME_TOKEN_KEYS } from '../../../themes.js';
 import { djObject } from '../strategy/object.js';
 import { buildContextLines } from './context.js';
@@ -61,10 +61,11 @@ interface ShowCtx {
 // personaId / themeId / mood / energy / filtersStrict against the live lists
 // (routes/generate.ts) — that normalisation only runs because parse no longer
 // throws here.
-const SHOW_SCHEMA = z.object({
+// The mood field is added per-call in generateShow() from the LIVE vocabulary
+// (settings.moods is operator-editable), so a module-load z.enum can't bake it.
+const SHOW_SCHEMA_BASE = z.object({
   name: z.string().min(1).max(60).describe('the show name shown in the schedule — punchy, 1-4 words').catch('New show'),
   topic: z.string().max(1000).describe('the brief the AI DJ reads before the slot: genres, eras, moods, artists, time of day, listener type, host tone. 1-4 sentences, max 1000 chars.').catch(''),
-  mood: z.enum(SHOW_MOODS as [string, ...string[]]).describe('the single closest music mood for this show').catch(SHOW_MOODS[0]),
   genre: z.string().max(64).describe('a music genre lean if one fits (e.g. "jazz", "gospel", "lofi"); "" for no lean. Prefer a genre present in the supplied library list when relevant.').catch(''),
   filtersStrict: z.boolean().describe('true ONLY when the description demands exclusivity ("only plays hip-hop", "strictly 80s", "nothing but calm tracks") — hard-locks every pick to ALL the filters set (mood, genre, era, energy). false for normal soft leans. Requires at least one filter; leave false when none is set.').catch(false),
   fromYear: z.number().int().nullable().describe('start year of an era window if the show targets a decade (e.g. 1970), else null').catch(null),
@@ -77,6 +78,10 @@ const SHOW_SCHEMA = z.object({
 const SHOW_SYSTEM = `You design radio shows for a personal internet radio station. Given a free-text description, produce a single show definition: a name, a DJ brief (topic), a music mood, an optional genre lean and era window, an energy steer, and the best-matching persona and (optional) theme from the supplied lists. Pick personaId / themeId ONLY from the ids given; use null when nothing clearly fits. The mood MUST be one of the listed moods. Set filtersStrict=true only when the description signals exclusivity ("only", "strictly", "nothing but", "pure <genre>") — it hard-locks every pick to ALL the set filters (mood, genre, era, energy); otherwise keep them soft leans (filtersStrict=false). Keep the topic concrete and useful as a brief — name the kind of music, the moment of day, and the tone.`;
 
 export async function generateShow(description: string, ctx: ShowCtx = {}) {
+  const moods = moodVocab();
+  const showSchema = SHOW_SCHEMA_BASE.extend({
+    mood: z.enum(moods as [string, ...string[]]).describe('the single closest music mood for this show').catch(moods[0]),
+  });
   const lines: string[] = [];
   if (ctx.personas?.length) {
     lines.push('Available personas (id — name):');
@@ -89,12 +94,12 @@ export async function generateShow(description: string, ctx: ShowCtx = {}) {
   if (ctx.genres?.length) {
     lines.push(`Genres present in the library (sample): ${ctx.genres.slice(0, 40).join(', ')}`);
   }
-  lines.push(`Allowed moods: ${SHOW_MOODS.join(', ')}`);
+  lines.push(`Allowed moods: ${moods.join(', ')}`);
 
   return djObject({
     system: SHOW_SYSTEM,
     prompt: `Description of the show the operator wants:\n"${description}"\n\n${lines.join('\n')}\n\nDesign the show.`,
-    schema: SHOW_SCHEMA,
+    schema: showSchema,
     temperature: 0.7,
     kind: 'generateShow',
   });

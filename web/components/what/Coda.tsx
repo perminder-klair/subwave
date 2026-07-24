@@ -39,6 +39,15 @@ export default function Coda() {
         >
           Google Play <span aria-hidden="true">↗</span>
         </a>
+        <span aria-hidden>·</span>
+        <a
+          href="https://github.com/getsubwave/subwave-desktop/releases/latest"
+          target="_blank"
+          rel="noreferrer"
+          className="bs-link font-semibold tracking-[inherit] text-ink"
+        >
+          Desktop <span aria-hidden="true">↗</span>
+        </a>
       </p>
     </EditorialReveal>
   );

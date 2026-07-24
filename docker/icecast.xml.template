@@ -35,12 +35,17 @@
              512 KB was ~22s at 192k but ~66s at 64k). Deriving it keeps the
              depth the operator picked the depth every bitrate gets.
 
-             This is also precisely how far behind the live edge every listener
-             sits, so /now-playing publishes the same number as stream.
-             bufferSeconds and players subtract it to align the now-playing
-             title and elapsed clock with the audio actually in someone's ears
-             (issue #1114). Changing the depth here without updating that
-             pairing reintroduces the drift. -->
+             This is also roughly how far behind the live edge a listener
+             sits, so /now-playing publishes stream.bufferSeconds and players
+             use it to align the now-playing title and elapsed clock with the
+             audio actually in someone's ears (issue #1114) — the web player
+             prefers its own measured lag (buffered.end − currentTime) and
+             falls back to the advertised figure when it isn't the thing
+             playing the audio.
+
+             These <limits> values are sized for the MP3 mount and act as the
+             default; every stream mount below carries its own burst/queue
+             sized for its own bitrate. -->
         <burst-size>${ICECAST_BURST_SIZE}</burst-size>
     </limits>
 
@@ -59,12 +64,15 @@
 
     <fileserve>1</fileserve>
 
-    <!-- Listener auth (#478): when state/icecast_listener_auth.txt is 'true',
-         the entrypoint replaces the marker below with one <mount> block per
-         stream mount, each carrying <authentication type="url"> pointing at
-         the controller's POST /listener-auth. Otherwise the marker is simply
-         dropped and every mount stays public. -->
-    <!--@LISTENER_AUTH_MOUNTS@-->
+    <!-- Stream mounts: the entrypoint replaces the marker below with one
+         <mount> block per stream mount, always rendered. Each carries its own
+         <burst-size>/<queue-size> sized from settings.stream.bufferSeconds x
+         THAT mount's bitrate — the global <limits> values above are sized for
+         the MP3 mount only, and a byte count that means 22s of MP3 is ~43s of
+         Opus or ~6s of FLAC. When state/icecast_listener_auth.txt is 'true'
+         (#478), each block additionally carries <authentication type="url">
+         pointing at the controller's POST /listener-auth. -->
+    <!--@STREAM_MOUNTS@-->
 
 
     <paths>

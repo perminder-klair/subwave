@@ -266,6 +266,10 @@ router.get('/now-playing', async (req, res) => {
         // expected to subtract this to render listener-time — without it the
         // title and elapsed clock run this far ahead of the audio, which is
         // the "Now Spinning is ahead of real time" report (issue #1114).
+        // This is the ADVERTISED depth; a player that can measure its real
+        // per-connection lag (web: buffered.end − currentTime) should prefer
+        // the measurement and use this only as the fallback — the true lag
+        // varies with the mount's byte rate and the burst actually received.
         // Operator surfaces (admin dash, MCP) intentionally keep live edge.
         bufferSeconds: stationSettings.stream?.bufferSeconds ?? 22,
         opusEnabled: stationSettings.stream?.opusEnabled === true,

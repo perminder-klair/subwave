@@ -429,10 +429,9 @@ export default function PlaylistBuilderPanel() {
 
   // Fill the viewport: measure where the frame actually starts (header height,
   // Navidrome banner, breadcrumb wrap all vary) and stretch it to the bottom,
-  // leaving the shell's 24px page gutter. When the shell NAV column is taller
-  // than that (short windows), match the nav's bottom instead — otherwise the
-  // grid row stretches past the frame and page-scrolling reveals a dead zone
-  // under the deck. The class-based calc() is only the first-paint estimate.
+  // leaving the shell's 24px page gutter. The class-based calc() is only the
+  // first-paint estimate. (The sidebar is a fixed full-height rail now, so it
+  // no longer dictates a minimum frame height the way the old nav column did.)
   const frameRef = useRef<HTMLDivElement>(null);
   const [frameH, setFrameH] = useState<number | null>(null);
   useEffect(() => {
@@ -442,9 +441,7 @@ export default function PlaylistBuilderPanel() {
       if (window.innerWidth < 1024) { setFrameH(null); return; }
       const top = el.getBoundingClientRect().top + window.scrollY;
       const fit = window.innerHeight - top - 24;
-      const nav = document.querySelector('.shell-nav');
-      const navFill = nav ? nav.getBoundingClientRect().bottom + window.scrollY - top : 0;
-      setFrameH(Math.max(480, Math.round(Math.max(fit, navFill))));
+      setFrameH(Math.max(480, Math.round(fit)));
     };
     measure();
     window.addEventListener('resize', measure);

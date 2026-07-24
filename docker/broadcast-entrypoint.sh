@@ -166,6 +166,16 @@ case "$STREAM_BITRATE" in *[!0-9]*|'') STREAM_BITRATE=192 ;; esac
 case "$BUFFER_SECONDS" in *[!0-9]*|'') BUFFER_SECONDS=22 ;; esac
 [ "$BUFFER_SECONDS" -gt 60 ] && BUFFER_SECONDS=60
 
+# Per-mount bitrates for the optional encoders, same sources as above. FLAC is
+# VBR with no bitrate setting — 900 kbps is a typical average for 44.1/16
+# stereo at default compression, close enough for a buffer depth (the players
+# align their displays to MEASURED lag, not this figure).
+OPUS_BITRATE="${ICECAST_OPUS_BITRATE:-$(read_state_num liquidsoap_opus_bitrate.txt 96)}"
+AAC_BITRATE="${ICECAST_AAC_BITRATE:-$(read_state_num liquidsoap_aac_bitrate.txt 192)}"
+case "$OPUS_BITRATE" in *[!0-9]*|'') OPUS_BITRATE=96 ;; esac
+case "$AAC_BITRATE" in *[!0-9]*|'') AAC_BITRATE=192 ;; esac
+FLAC_BITRATE_EST=900
+
 # kbps → bytes/sec is bitrate * 1000 / 8 = bitrate * 125.
 ICECAST_BURST_SIZE=$(( BUFFER_SECONDS * STREAM_BITRATE * 125 ))
 
@@ -177,8 +187,8 @@ ICECAST_BURST_SIZE=$(( BUFFER_SECONDS * STREAM_BITRATE * 125 ))
 ICECAST_QUEUE_SIZE=$(( ICECAST_BURST_SIZE * 4 ))
 [ "$ICECAST_QUEUE_SIZE" -lt 2097152 ] && ICECAST_QUEUE_SIZE=2097152
 
-echo "broadcast: listener buffer ${BUFFER_SECONDS}s @ ${STREAM_BITRATE}kbps" \
-     "→ burst-size ${ICECAST_BURST_SIZE}B, queue-size ${ICECAST_QUEUE_SIZE}B" >&2
+echo "broadcast: listener buffer ${BUFFER_SECONDS}s @ mp3 ${STREAM_BITRATE}kbps" \
+     "/ opus ${OPUS_BITRATE}kbps / aac ${AAC_BITRATE}kbps / flac ~${FLAC_BITRATE_EST}kbps" >&2
 
 # Listener auth (#478). The controller writes state/icecast_listener_auth.txt
 # ('true'/'false') from settings.privacy.listenerAuth; only the literal value
@@ -191,33 +201,62 @@ echo "broadcast: listener buffer ${BUFFER_SECONDS}s @ ${STREAM_BITRATE}kbps" \
 # (which the admin UI routes through the existing restart-mixer flow).
 LISTENER_AUTH_FLAG=/var/sub-wave/icecast_listener_auth.txt
 LISTENER_AUTH_URL="${LISTENER_AUTH_URL:-http://controller:7701/listener-auth}"
-MOUNTS_XML=/etc/icecast2/listener-auth-mounts.xml
-: > "$MOUNTS_XML"
+LISTENER_AUTH=false
 if [ "$(cat "$LISTENER_AUTH_FLAG" 2>/dev/null | tr -d '[:space:]')" = "true" ]; then
+    LISTENER_AUTH=true
     echo "broadcast: listener auth ON — mounts require credentials via $LISTENER_AUTH_URL" >&2
-    for MOUNT in /stream.mp3 /stream.opus /stream.flac /stream.aac; do
-        cat >> "$MOUNTS_XML" <<EOF
-    <mount type="normal">
-        <mount-name>$MOUNT</mount-name>
-        <authentication type="url">
-            <option name="listener_add" value="$LISTENER_AUTH_URL"/>
-            <option name="auth_header" value="icecast-auth-user: 1"/>
-        </authentication>
-    </mount>
-EOF
-    done
-    # Channel mounts (/ch/<id>/stream.mp3) are spawned at runtime by the
-    # channel supervisor — possibly AFTER this render — so they can't be
-    # enumerated here. A default mount carries the same auth for every mount
-    # without an explicit block above, present or future.
-    cat >> "$MOUNTS_XML" <<EOF
-    <mount type="default">
-        <authentication type="url">
-            <option name="listener_add" value="$LISTENER_AUTH_URL"/>
-            <option name="auth_header" value="icecast-auth-user: 1"/>
-        </authentication>
-    </mount>
-EOF
+fi
+
+# One <mount> block per stream mount, ALWAYS rendered (not just under listener
+# auth): burst-size is a BYTE count, so the global <limits> value — sized for
+# the MP3 bitrate — lands wildly wrong on the other mounts (the same 528 KB
+# that means 22s at mp3-192k is ~43s at opus-96k and ~6s of FLAC), and the
+# whole point of sizing in seconds (#1114) is that the operator's chosen depth
+# is the depth every listener gets. queue-size scales with each mount's burst
+# for the same reason it does globally: a client must never be evicted for
+# falling behind its own primed buffer.
+MOUNTS_XML=/etc/icecast2/stream-mounts.xml
+: > "$MOUNTS_XML"
+emit_mount() {
+    # $1 = mount path, $2 = kbps used to size this mount's burst
+    _burst=$(( BUFFER_SECONDS * $2 * 125 ))
+    _queue=$(( _burst * 4 ))
+    [ "$_queue" -lt 2097152 ] && _queue=2097152
+    echo "broadcast:   $1 @ ${2}kbps → burst-size ${_burst}B, queue-size ${_queue}B" >&2
+    {
+        echo '    <mount type="normal">'
+        echo "        <mount-name>$1</mount-name>"
+        echo "        <burst-size>$_burst</burst-size>"
+        echo "        <queue-size>$_queue</queue-size>"
+        if [ "$LISTENER_AUTH" = true ]; then
+            echo '        <authentication type="url">'
+            echo "            <option name=\"listener_add\" value=\"$LISTENER_AUTH_URL\"/>"
+            echo '            <option name="auth_header" value="icecast-auth-user: 1"/>'
+            echo '        </authentication>'
+        fi
+        echo '    </mount>'
+    } >> "$MOUNTS_XML"
+}
+emit_mount /stream.mp3  "$STREAM_BITRATE"
+emit_mount /stream.opus "$OPUS_BITRATE"
+emit_mount /stream.flac "$FLAC_BITRATE_EST"
+emit_mount /stream.aac  "$AAC_BITRATE"
+
+# Channel mounts (/ch/<id>/stream.*) are spawned at runtime by the channel
+# supervisor below — possibly long AFTER this render — so they can't be
+# enumerated as explicit <mount> blocks. A default mount covers every mount
+# without one, present or future: it carries the listener-auth block when the
+# lock is on, and leaves burst/queue to the global <limits> values (sized from
+# the MP3 bitrate, which is what a channel's own /stream.mp3 serves).
+if [ "$LISTENER_AUTH" = true ]; then
+    {
+        echo '    <mount type="default">'
+        echo '        <authentication type="url">'
+        echo "            <option name=\"listener_add\" value=\"$LISTENER_AUTH_URL\"/>"
+        echo '            <option name="auth_header" value="icecast-auth-user: 1"/>'
+        echo '        </authentication>'
+        echo '    </mount>'
+    } >> "$MOUNTS_XML"
 fi
 
 # `r` splices the generated mount blocks (empty file = nothing) where the
@@ -229,8 +268,8 @@ sed \
     -e "s|\${ICECAST_MAX_CLIENTS}|$ICECAST_MAX_CLIENTS|g" \
     -e "s|\${ICECAST_BURST_SIZE}|$ICECAST_BURST_SIZE|g" \
     -e "s|\${ICECAST_QUEUE_SIZE}|$ICECAST_QUEUE_SIZE|g" \
-    -e "/<!--@LISTENER_AUTH_MOUNTS@-->/r $MOUNTS_XML" \
-    -e "/<!--@LISTENER_AUTH_MOUNTS@-->/d" \
+    -e "/<!--@STREAM_MOUNTS@-->/r $MOUNTS_XML" \
+    -e "/<!--@STREAM_MOUNTS@-->/d" \
     "$TEMPLATE" > "$RENDERED"
 chown icecast2 "$RENDERED" 2>/dev/null || true
 

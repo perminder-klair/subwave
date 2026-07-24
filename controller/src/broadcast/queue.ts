@@ -15,6 +15,8 @@ import { speak, voiceGainDb } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import * as sfx from './sfx.js';
+import * as beds from './beds.js';
+import * as bedPolicy from './bed-policy.js';
 import * as session from './session.js';
 import type { TurnMeta, SessionStore } from './session.js';
 import { getFullContext, energyForDaypart } from '../context.js';
@@ -96,6 +98,17 @@ interface QueueItem {
   linkPrev?: { id: string | null; title: string | null; artist: string | null } | null;
   introWav?: string | null;
   introAired?: boolean;
+  // Set at drain time when a bed was pushed into dj_queue immediately ahead of
+  // this item, meaning its link airs over the BED rather than over this track
+  // (broadcast/bed-policy.ts). The bed's own start is what fires airIntro — see
+  // onBedStarted — so this is how that event finds the item it belongs to.
+  // Both bed fields ride persist()'s wholesale item snapshot, which is what
+  // makes the maybePushBed re-drain guard hold across a controller restart.
+  bedded?: boolean;
+  // The predecessor's exit canvas the bed fades in under. The bed's marker
+  // fires at cross-FEED time, this many seconds before the bed is dominant —
+  // onBedStarted holds the link for what remains of it.
+  bedEntrySec?: number;
   queuedAt?: string;
   sent?: boolean;
   confirmedInLiquidsoap?: boolean;
@@ -217,6 +230,7 @@ export interface QueueOpts {
     liquidsoap: {
       queueFile: string; sayFile: string; introFile: string; sfxFile: string;
       autoPlaylist: string; nowPlayingFile: string; jinglePlayingFile: string;
+      bedPlayingFile: string;
     };
     queue: { file: string; recentPlaysFile: string };
   };
@@ -276,6 +290,8 @@ class Queue {
   autoLink = true;             // toggle: random DJ links between auto tracks
   tracksUntilLink = pickLinkInterval();
   _transitionsSinceSfx = 999;  // DJ-mode transition-FX spacing counter (see drainToLiquidsoap)
+  _lastBed: string | null = null;      // last bed aired — anti-repeat for bed-policy.pickBed
+  _lastBedStartedAt = 0;               // bed-playing.json's last-seen startedAt — the edge onBedStarted fires on
   _recentEffects: string[] = [];  // the model's last few transition CHOICES — anti-streak guard + fed back into the pick event turn
   _persistTimer: NodeJS.Timeout | null = null; // debounce for the queue.json snapshot
   _recentPlaysTimer: NodeJS.Timeout | null = null; // debounce for the recent-plays.json sidecar
@@ -747,6 +763,110 @@ class Queue {
   // persona is in DJ mode. Stashes a per-transition crossfade length on the
   // track (read by subsonic.getAnnotatedUri → liq_cross_duration) and, on a
   // notable upward tempo jump, fires a rate-limited riser across the blend.
+  // Beds — push an instrumental bed into dj_queue ahead of `item` when its link
+  // would outlast the song's own intro, so the DJ talks over the bed instead of
+  // over the song. Sets item.bedded, which is how the bed's start event (see
+  // onBedStarted) finds the item whose link it should air.
+  //
+  // Everything this needs already exists at this point in the drain: the link's
+  // WAV was rendered a few lines up, so its real length is readable NOW, before
+  // the track URI is written. That ordering is what makes the whole feature a
+  // controller-side change rather than a mixer one.
+  //
+  // Silent no-op on every path that isn't a bedded link — beds off, a request
+  // intro (heavy duck by design, see the design doc), no script, a script that
+  // fits the intro, or no bed long enough. All of them leave today's behaviour
+  // untouched.
+  async maybePushBed(item: QueueItem) {
+    const cfg = settings.get()?.beds;
+    if (!cfg?.enabled) return;
+    // Already bedded: a crash between the bed push and the track write leaves
+    // this item unsent, and the recovery re-drain would otherwise queue a
+    // SECOND bed ahead of it (~bedSec of voiceless filler between them).
+    if (item.bedded) return;
+    // v1 is links only. Request intros ride the HEAVY duck by design, and a bed
+    // under a heavy duck is inaudible — bedding them means reworking the duck
+    // routing, which is its own change.
+    if (item.introKind !== 'link') return;
+    if (!item.introWav || !item.introScript || item.introAired) return;
+
+    // Whatever plays right before this item is what the bed crosses in under —
+    // the item just ahead in the (FIFO) queue, else the track on air now.
+    const idx = this.upcoming.indexOf(item);
+    const predecessor = (idx > 0 ? this.upcoming[idx - 1]?.track : null) ?? this.current?.track ?? null;
+
+    // airIntro will drop a link whose rendered script names a predecessor that
+    // no longer holds (shouldDropStaleLink) — and by then the bed is committed
+    // and airs naked. The predecessor is final once this item drains (later
+    // pushes append behind it), so evaluate the same drop here first.
+    if (shouldDropStaleLink(item, predecessor)) return;
+
+    try {
+      const voiceMs = speechDurationMs(item.introWav, item.introScript);
+      // The ramp budget is a property of the INCOMING track: how long may the
+      // DJ talk before trampling its vocal? Analysis rides the track object when
+      // present, else the library row (queued items hold only id/title/artist).
+      const rec = item.track?.id ? library.get(item.track.id) : null;
+      const budgetMs = bedPolicy.rampBudgetMs({
+        vocalRanges: item.track?.vocalRanges ?? rec?.vocalRanges ?? null,
+      });
+      if (!bedPolicy.bedWanted(voiceMs, budgetMs, cfg)) return;
+
+      // The bed's marker (and its cue_out clock) starts at cross-FEED time, a
+      // full predecessor-exit-canvas before the bed is dominant — so that
+      // entry cross is dead time the bed must be sized to carry, and the link
+      // is held for it in onBedStarted. The predecessor's own crossSec stamp
+      // (applyMixTransition's ending-aware canvas) is exactly that length;
+      // fall back to the operator's crossfade setting like getAnnotatedUri.
+      // 0 is a legitimate value (a hard-cut station has NO entry canvas), so
+      // guard with isFinite rather than `||` — `|| 10` would turn crossfade 0
+      // into 10s of phantom dead time the listener hears as bare bed.
+      const rawCross = Number(predecessor?.crossSec ?? settings.get()?.crossfadeDuration);
+      const entryCrossSec = Math.min(15, Math.max(0, Number.isFinite(rawCross) ? rawCross : 10));
+
+      const { bedSec, crossSec } = bedPolicy.bedLengthFor(voiceMs, cfg, entryCrossSec);
+      const pick = bedPolicy.pickBed(await beds.catalog(), bedSec, this._lastBed, Math.random());
+      if (!pick) {
+        this.log('beds', `no bed long enough for a ${bedSec}s link — talking over "${item.track?.title}" instead`);
+        return;
+      }
+      const path = await beds.getPath(pick.name);
+      if (!path) return;
+
+      await writeHandoff(this.paths.liquidsoap.queueFile, beds.bedUri(path, { bedSec, crossSec }));
+      item.bedded = true;
+      item.bedEntrySec = entryCrossSec;
+      this._lastBed = pick.name;
+
+      // The entry-side transition effects applyMixTransition armed on this
+      // track (sweep/dissolve/chop/blend, validated for the predecessor→item
+      // pair) would now be applied to the OUTGOING bed at the bed→item cross —
+      // radio.liq reads them off the incoming track's metadata. Same for the
+      // armed transition stinger, which onTrackStarted fires at this item's
+      // start, i.e. mid-ramp under the DJ's closing words. The bed replaced
+      // the seam they were validated for, so they all come off. Exit-side
+      // stamps (washout/loop/crossSec) govern this track's OWN ending and stay.
+      if (item.track && (item.track.sweep || item.track.blend || item.track.dissolve || item.track.chop)) {
+        const kind = item.track.sweep ? 'sweep' : item.track.blend ? 'blend' : item.track.dissolve ? 'dissolve' : 'chop';
+        delete item.track.sweep;
+        delete item.track.blend;
+        delete item.track.dissolve;
+        delete item.track.chop;
+        delete item.track.chopPeriod;
+        this.log('mix', `${kind} dropped (a bed replaced the transition it was validated for)`);
+      }
+      if (item.transitionSfx) delete item.transitionSfx;
+
+      const why = budgetMs == null ? `no vocal onset, over ${cfg.thresholdSec}s`
+        : budgetMs === Infinity ? 'instrumental'
+          : `vocals at ${Math.round(budgetMs / 1000)}s`;
+      this.log('beds', `bed "${pick.name}" ${bedSec}s (${entryCrossSec}s entry cross) → ${crossSec}s ramp into "${item.track?.title}" (${Math.round(voiceMs / 1000)}s link, ${why})`);
+    } catch (err) {
+      // A bed is a garnish — never let it cost the station a track.
+      this.log('error', `Bed push failed: ${(err as Error).message}`);
+    }
+  }
+
   applyMixTransition(item: QueueItem) {
     const persona: Persona | null = settings.getEffectivePersona();
     if (!item?.track) return;
@@ -1049,6 +1169,15 @@ class Queue {
         // cuts an over-length autonomous pick mid-air. Explicit listener requests
         // (requestedBy set) stay exempt — a requested long mix plays in full,
         // mirroring the request path's selection-cap exemption in picker-tools.
+        // Beds: if this item's link would outlast the song's own intro, push an
+        // instrumental bed into dj_queue AHEAD of the track. The DJ then talks
+        // over the bed and the track ramps in under the closing words, instead
+        // of the link being talked over the song it's introducing.
+        //
+        // Order matters and dj_queue is FIFO, so the bed must be handed over
+        // before the track URI below.
+        await this.maybePushBed(item);
+
         const maxDurationSec = item.requestedBy ? null : settings.effectiveMaxTrackSec();
         const uri = subsonic.getAnnotatedUri(item.track, { maxDurationSec });
         await writeHandoff(this.paths.liquidsoap.queueFile, uri);
@@ -1212,7 +1341,7 @@ class Queue {
   // this just writes the path to the duck channel and mirrors the bookkeeping
   // announce() does (djLog feeds the opener anti-repeat; session + webhook).
   async airIntro(item: QueueItem, predecessor: Track | null = null) {
-    if (!item?.introWav || item.introAired || !existsSync(item.introWav)) return;
+    if (!item?.introWav || item.introAired) return;
     item.introAired = true;
     // Stale back-announce safety-net. Links are written forward-looking (intro
     // the pick, never name the just-played track), so this normally never fires.
@@ -1227,6 +1356,21 @@ class Queue {
         `Dropped stale link before "${item.track?.title}" — it named "${item.linkPrev!.title}" but "${predecessor?.title || 'another track'}" actually played first`);
       this.persist();
       return;
+    }
+    // The WAV was rendered at drain time, and the voice reaper deletes clips
+    // older than ~1h — a predecessor longer than that (long-form mixes are
+    // supported) outlives the file. A silent return here used to be a lost
+    // link; for a bedded item the bed is already committed and airing, so it
+    // would air naked. The script is still on the item: render it again.
+    // introAired is already set above, so the re-render can't double-air.
+    if (!existsSync(item.introWav)) {
+      if (!item.introScript) return;
+      try {
+        item.introWav = await speak(item.introScript, { kind: item.introKind || 'dj-speak' });
+      } catch (err) {
+        this.log('error', `Intro WAV was reaped and re-render failed: ${(err as Error).message}`);
+        return;
+      }
     }
     const kind = item.introKind || 'dj-speak';
     const targetFile = kind === 'link'
@@ -1662,9 +1806,18 @@ class Queue {
     if (!item) return { ok: false, reason: 'not-queued' };
 
     if (item.sent) {
-      const rid = await liquidsoapControl.resolveDjQueueRid(trackId, this.telnetPort);
+      const { rid, bedRid } = await liquidsoapControl.resolveDjQueueRidWithBed(trackId, this.telnetPort);
       if (!rid || !(await liquidsoapControl.removeFromDjQueue(rid, this.telnetPort))) {
         return { ok: false, reason: 'already-playing' };
+      }
+      // The bed queued ahead of this track (item.bedded) is its own dj_queue
+      // entry with no subsonic_id — the id-keyed removal above can't see it,
+      // and left behind it airs as a voiceless instrumental. Best-effort: the
+      // cancel itself already succeeded.
+      if (item.bedded && bedRid) {
+        const removed = await liquidsoapControl.removeFromDjQueue(bedRid, this.telnetPort).catch(() => false);
+        if (removed) this.log('beds', `removed the bed queued ahead of cancelled "${item.track?.title}"`);
+        else this.log('error', `orphan bed left in dj_queue after cancelling "${item.track?.title}"`);
       }
     }
 
@@ -1787,6 +1940,55 @@ class Queue {
     return out;
   }
 
+  // A bed started feeding the music chain — air the link it was pushed for.
+  //
+  // Unlike waitForJingleClear (which computes a deadline on demand and sleeps
+  // it out), this genuinely has to be an event: the bed is pushed minutes
+  // before it airs, and the link must land ON it. radio.liq writes
+  // bed-playing.json the moment the bed's metadata fires; a new startedAt is
+  // the edge. Dedupe on that value, exactly as onTrackStarted dedupes on the
+  // track key — the file is never deleted, so a stale marker must not re-fire.
+  //
+  // Song B's own onTrackStarted will also call airIntro for the same item a bed
+  // later; airIntro sets introAired before any await, so the double-call is
+  // already idempotent and no guard is needed here.
+  onBedStarted() {
+    // The bed is pushed immediately ahead of its item, so the item a marker
+    // belongs to is the first bedded one still waiting to speak. No such item
+    // (the overwhelmingly common tick) → nothing to do, skip the disk read.
+    const item = this.upcoming.find(i => i.bedded && i.sent && !i.introAired);
+    if (!item) return;
+
+    let startedAt = 0;
+    try {
+      const m = JSON.parse(readFileSync(this.paths.liquidsoap.bedPlayingFile, 'utf8'));
+      startedAt = Number(m?.startedAt) || 0;
+    } catch {
+      return; // no marker — nothing has ever bedded
+    }
+    if (!startedAt || startedAt === this._lastBedStartedAt) return;
+    this._lastBedStartedAt = startedAt;
+
+    // _lastBedStartedAt doesn't survive a restart but the marker file (and the
+    // recovered bedded item) does — an old startedAt seen on the first ticks
+    // of a new process is the PREVIOUS bed, not this item's, and firing on it
+    // would air the link over whatever is playing now. Only a marker fresh
+    // enough to have been written since the last tick is an edge.
+    const startedMs = startedAt * 1000; // liquidsoap time() is unix seconds
+    if (Date.now() - startedMs > BED_MARKER_FRESH_MS) return;
+
+    // The marker fires at cross-FEED time — the predecessor's whole exit
+    // canvas plays out before the bed is dominant, and the bed was sized to
+    // carry it (item.bedEntrySec). Hold the link for what remains, so the
+    // DJ's first words land on the solo bed, not the outgoing song's fade.
+    const waitMs = Math.max(0, startedMs + (item.bedEntrySec || 0) * 1000 - Date.now());
+    this.log('beds', `bed on air → airing the link for "${item.track?.title}"${
+      waitMs > 0 ? ` in ${(waitMs / 1000).toFixed(1)}s (entry cross)` : ''}`);
+    const fire = () => void this.airIntro(item, this.current?.track || null);
+    if (waitMs > 0) setTimeout(fire, waitMs);
+    else fire();
+  }
+
   // Poll now-playing.json every 1.5s and dispatch track changes. Each tick
   // also refreshes the in-memory copy getNowPlaying() serves, so the
   // per-listener /now-playing poll never has to touch the disk.
@@ -1798,6 +2000,10 @@ class Queue {
       this._nowPlaying = await this.readNowPlayingFromDisk();
       this._nowPlayingFresh = true;
       this.onTrackStarted(this._nowPlaying);
+      // Beds ride the same tick rather than a poller of their own — a bed's
+      // start is a track-boundary event like any other, and the 1.5s cadence is
+      // already inside the head budget bed-policy sizes the bed with.
+      this.onBedStarted();
     };
     void tick();
     this._watcherHandle = setInterval(tick, 1500);
@@ -2042,6 +2248,12 @@ async function airVoice(
 const JINGLE_FALLBACK_MS = 15_000; // clip length when the WAV can't be parsed
 const JINGLE_TAIL_MS = 1_000;      // fade tail + poll slack
 const JINGLE_WAIT_MAX_MS = 60_000; // never wedge the voice chain on a bad marker
+
+// How recent a bed-playing.json startedAt must be to count as a live edge in
+// onBedStarted. Detection latency is one 1.5s watcher tick; anything much
+// older is the previous bed's marker surviving a controller restart (the file
+// is never deleted, and the in-memory dedupe baseline doesn't persist).
+const BED_MARKER_FRESH_MS = 10_000;
 
 function jingleClearAtMs(jingleFile: string): number {
   try {

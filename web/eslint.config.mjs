@@ -119,6 +119,7 @@ export default defineConfig([
             '^nav-section$',
             '^nav-section-label$',
             '^nav-item$',
+            '^nav-support$',
             '^nav-ext$',
             '^nav-icon$',
             '^nav-label$',
@@ -189,6 +190,20 @@ export default defineConfig([
       'better-tailwindcss/enforce-consistent-class-order': 'off',
       'better-tailwindcss/no-duplicate-classes': 'off',
       'better-tailwindcss/no-conflicting-classes': 'off',
+    },
+  },
+
+  // Exemption for the global error boundary. app/global-error.tsx REPLACES the
+  // root layout when it renders, so globals.css — which the root layout imports
+  // — is not loaded. It therefore has to ship its own self-contained stylesheet
+  // and its own ge-* class names, which by design exist nowhere else. Adding
+  // them to globals.css to satisfy the linter would be dead CSS in the one file
+  // that can never reach them.
+  {
+    files: ['app/global-error.tsx'],
+    rules: {
+      'better-tailwindcss/no-unknown-classes': 'off',
+      'better-tailwindcss/enforce-consistent-class-order': 'off',
     },
   },
 

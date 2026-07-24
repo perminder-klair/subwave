@@ -22,12 +22,105 @@ resolved through the Hugging Face cache (HF_HOME), pre-warmed at image build.
 
 import json
 import os
+import re
 import sys
 import traceback
 from pathlib import Path
 
 DEVICE = os.environ.get("CHATTERBOX_DEVICE", "cpu").lower()
 DEFAULT_REFERENCE = os.environ.get("CHATTERBOX_REFERENCE_WAV", "")
+
+# --- long-input chunking (issue #1130) -------------------------------------
+# Chatterbox is autoregressive: one generate() over a long block accumulates
+# drift and comes out jumbled/garbled somewhere past ~2 sentences (~300 chars),
+# with NO error thrown — the well-known Chatterbox long-input failure mode, not
+# anything SUB/WAVE-specific. Piper/Kokoro don't hit it (they aren't
+# autoregressive). The mitigation is to synthesise long segments a chunk at a
+# time so the model never sees a block long enough to drift, then stitch the
+# audio back together. Short lines (station IDs, one-line links — the common
+# case) stay a single chunk, so their output is byte-identical to before.
+MAX_CHUNK_CHARS = int(os.environ.get("CHATTERBOX_MAX_CHUNK_CHARS", "280"))
+# Silence inserted between stitched chunks (milliseconds) so a sentence boundary
+# breathes instead of butting straight into the next chunk. Kept short — this is
+# a within-segment pause, not a between-segment one.
+CHUNK_GAP_MS = int(os.environ.get("CHATTERBOX_CHUNK_GAP_MS", "160"))
+
+# Sentence boundary: a .!? followed by whitespace. Clause boundary (fallback for
+# a single sentence longer than the cap): comma / semicolon / colon / dash
+# followed by whitespace — where a speaker would naturally pause.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+_CLAUSE_SPLIT = re.compile(r"(?<=[,;:—-])\s+")
+
+
+def _hard_wrap(fragment, max_chars):
+    """Last-resort split for a fragment longer than max_chars with no usable
+    punctuation boundary — break on the last space before the cap, else split
+    mid-word. Only reached by pathological input (a single unpunctuated run
+    past the cap); normal DJ copy never gets here."""
+    out = []
+    s = fragment.strip()
+    while len(s) > max_chars:
+        cut = s.rfind(" ", 0, max_chars)
+        if cut <= 0:
+            cut = max_chars
+        out.append(s[:cut].strip())
+        s = s[cut:].strip()
+    if s:
+        out.append(s)
+    return out
+
+
+def chunk_text(text, max_chars=MAX_CHUNK_CHARS):
+    """Pack a spoken segment into <=max_chars chunks on sentence boundaries.
+
+    Never cuts mid-sentence unless a single sentence itself exceeds max_chars —
+    then it falls back to clause boundaries, then a hard word wrap. A line at or
+    under the cap comes back as a single unchanged chunk (the common case, no
+    behaviour change). Pure string logic — no torch/audio deps — so it is
+    unit-testable without loading the model (see test_chatterbox_chunk.py).
+    """
+    text = (text or "").strip()
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks = []
+    current = ""
+
+    def flush():
+        nonlocal current
+        if current:
+            chunks.append(current)
+            current = ""
+
+    def add(piece):
+        nonlocal current
+        piece = piece.strip()
+        if not piece:
+            return
+        if not current:
+            current = piece
+        elif len(current) + 1 + len(piece) <= max_chars:
+            current = f"{current} {piece}"
+        else:
+            flush()
+            current = piece
+
+    for sentence in (s.strip() for s in _SENTENCE_SPLIT.split(text) if s.strip()):
+        if len(sentence) <= max_chars:
+            add(sentence)
+            continue
+        # Sentence alone busts the cap — break it on clause boundaries, and hard
+        # wrap any clause that is still too long, before packing the pieces.
+        for clause in (c.strip() for c in _CLAUSE_SPLIT.split(sentence) if c.strip()):
+            if len(clause) <= max_chars:
+                add(clause)
+            else:
+                for piece in _hard_wrap(clause, max_chars):
+                    add(piece)
+    flush()
+    return chunks
 
 
 def emit(obj):
@@ -43,6 +136,7 @@ def log(msg):
 
 def main():
     try:
+        import numpy as np
         import torch
         import soundfile as sf
         from chatterbox.tts_turbo import ChatterboxTurboTTS
@@ -96,6 +190,23 @@ def main():
         sys.exit(1)
 
     sample_rate = model.sr
+
+    def to_mono_f32(wav):
+        """Reduce a generate() tensor [channels, samples] to a numpy float32
+        array — mono [samples], or [samples, channels] for the rare multichannel
+        case — ready for concatenate + soundfile.write."""
+        if hasattr(wav, "detach"):
+            wav = wav.detach()
+        if hasattr(wav, "cpu"):
+            wav = wav.cpu()
+        samples = wav.numpy() if hasattr(wav, "numpy") else wav
+        if getattr(samples, "ndim", 1) == 2:
+            # [channels, samples] -> mono [samples] or [samples, channels]
+            samples = samples[0] if samples.shape[0] == 1 else samples.T
+        if hasattr(samples, "astype") and getattr(samples, "dtype", None) != "float32":
+            samples = samples.astype("float32")
+        return samples
+
     log("ready")
     emit({"id": None, "ready": True})
 
@@ -119,28 +230,41 @@ def main():
                 reference_wav = ""
             Path(out).parent.mkdir(parents=True, exist_ok=True)
 
+            # Chunk long input so Chatterbox never sees a block long enough to
+            # drift (issue #1130), synthesise each chunk, and stitch. A short
+            # line is a single chunk, so this is a no-op for the common case.
             # Voice cloning is opt-in per request: passing audio_prompt_path
-            # clones the reference clip; omitting it uses the built-in voice.
-            if reference_wav:
-                wav = model.generate(text, audio_prompt_path=reference_wav)
-            else:
-                wav = model.generate(text)
+            # clones the reference clip — the SAME clip on every chunk, so the
+            # cloned voice stays consistent across the stitch; omitting it uses
+            # the built-in voice.
+            pieces = []
+            gap = None
+            for chunk in chunk_text(text):
+                if reference_wav:
+                    wav = model.generate(chunk, audio_prompt_path=reference_wav)
+                else:
+                    wav = model.generate(chunk)
+                samples = to_mono_f32(wav)
+                if pieces:
+                    if gap is None:
+                        gap_len = max(0, int(sample_rate * CHUNK_GAP_MS / 1000.0))
+                        gap = (
+                            np.zeros((gap_len, samples.shape[1]), dtype="float32")
+                            if samples.ndim == 2
+                            else np.zeros(gap_len, dtype="float32")
+                        )
+                    if gap.size:
+                        pieces.append(gap)
+                pieces.append(samples)
 
-            # generate() returns a torch tensor shaped [channels, samples].
-            # Write via soundfile (libsndfile) rather than torchaudio.save:
-            # torch >= 2.8 routes torchaudio.save through torchcodec — an extra
-            # native dep that isn't in the image and whose libnvrtc mismatches
-            # the cu128 wheels on the GPU build. soundfile is already present
-            # (librosa depends on it) and writes the same WAV. It wants a numpy
-            # array shaped [samples] (mono) or [samples, channels].
-            if hasattr(wav, "detach"):
-                wav = wav.detach()
-            if hasattr(wav, "cpu"):
-                wav = wav.cpu()
-            samples = wav.numpy() if hasattr(wav, "numpy") else wav
-            if getattr(samples, "ndim", 1) == 2:
-                # [channels, samples] -> mono [samples] or [samples, channels]
-                samples = samples[0] if samples.shape[0] == 1 else samples.T
+            # Each piece is already a numpy [samples] (mono) or [samples,
+            # channels] float32 array (see to_mono_f32). Write via soundfile
+            # (libsndfile) rather than torchaudio.save: torch >= 2.8 routes
+            # torchaudio.save through torchcodec — an extra native dep that isn't
+            # in the image and whose libnvrtc mismatches the cu128 wheels on the
+            # GPU build. soundfile is already present (librosa depends on it) and
+            # writes the same WAV.
+            samples = np.concatenate(pieces, axis=0) if len(pieces) > 1 else pieces[0]
             sf.write(out, samples, sample_rate)
 
             duration = float(samples.shape[0]) / float(sample_rate)

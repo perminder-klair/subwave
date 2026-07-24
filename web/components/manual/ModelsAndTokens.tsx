@@ -143,7 +143,7 @@ export default function ModelsAndTokens() {
             calls per hour.
           </li>
           <li>
-            <strong>Sound FX off</strong> (Admin &rarr; Sound FX) — with the effects
+            <strong>Sound FX off</strong> (Admin &rarr; Imaging &rarr; SFX) — with the effects
             library disabled, the DJ is no longer shown the catalogue of stingers when it
             plans a segment, which trims that prompt.
           </li>

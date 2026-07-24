@@ -6,7 +6,9 @@ import { m } from 'motion/react';
 import { notify, errorMessage } from '../../../lib/notify';
 import { cn } from '../../../lib/cn';
 import type { StationLocale } from '../../../lib/format';
+import { Play } from 'lucide-react';
 import { Btn, Eyebrow, Metric } from '../ui';
+import { Button } from '../../ui/button';
 
 export const KEY_HINTS: Record<string, string> = {
   ANTHROPIC_API_KEY: 'sk-ant-...',
@@ -198,7 +200,6 @@ export interface PrivacyForm {
 }
 
 export interface FormState {
-  jingleRatio: string;
   crossfadeDuration: string;
   maxTrackSeconds: string;
   archive: ArchiveForm;
@@ -226,20 +227,6 @@ export interface JingleEntry {
   createdAt?: string;
   builtin?: boolean;
   source?: string;
-}
-
-export interface SfxEntry {
-  name: string;
-  description?: string;
-  size?: number;
-  durationSec?: number;
-  builtin?: boolean;
-  source?: string;
-}
-
-export interface SfxData {
-  sfx?: SfxEntry[];
-  generatorReady?: boolean;
 }
 
 export interface SettingsData {
@@ -302,6 +289,7 @@ export interface SettingsData {
       enrichment?: Partial<EmbeddingEnrichmentForm>;
     };
     sfx?: { enabled?: boolean };
+    beds?: { enabled?: boolean; thresholdSec?: number; crossSec?: number };
     ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
     privacy?: { privatePlayer?: boolean; listenerAuth?: boolean; password?: string };
     scrobble?: {
@@ -361,18 +349,8 @@ export interface SettingsData {
   serverTimezone?: string;
 }
 
-export interface SfxForm {
-  name: string;
-  description: string;
-  prompt: string;
-  durationSec: string;
-}
-
 export type Patch = Record<string, unknown>;
 export type SaveSettings = (patch: Patch) => Promise<void>;
-
-export type JingleImportFailure = { name: string; reason: string };
-export type JingleImportResult = { ok: number; total: number; failures: JingleImportFailure[]; aborted: boolean };
 
 export type FormUpdater = (updater: (f: FormState) => FormState) => void;
 
@@ -597,11 +575,28 @@ export function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButto
     }
   };
 
-  const text = state === 'playing' ? 'Stop' : state === 'loading' ? '…' : label;
-
+  // Icon-ghost preview (Imaging.dc.html): a filled play triangle that swaps to
+  // animated EQ bars while the clip is on air. `label` is the accessible name.
   return (
-    <Btn sm onClick={onClick} title="Preview audio">
-      {text}
-    </Btn>
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      onClick={onClick}
+      aria-label={state === 'playing' ? 'Stop preview' : label}
+      title={state === 'playing' ? 'Stop preview' : 'Preview audio'}
+    >
+      {state === 'playing' ? (
+        <span className="flex h-3.5 items-center gap-[2px]" aria-hidden>
+          <span className="h-3 w-[2px] origin-bottom animate-[skin-eq_.7s_ease-in-out_infinite] bg-[var(--accent)]" />
+          <span className="h-3 w-[2px] origin-bottom animate-[skin-eq_.7s_ease-in-out_.15s_infinite] bg-[var(--accent)]" />
+          <span className="h-3 w-[2px] origin-bottom animate-[skin-eq_.7s_ease-in-out_.3s_infinite] bg-[var(--accent)]" />
+        </span>
+      ) : state === 'loading' ? (
+        <span className="font-mono text-[13px] leading-none" aria-hidden>…</span>
+      ) : (
+        <Play className="fill-current" aria-hidden />
+      )}
+    </Button>
   );
 }

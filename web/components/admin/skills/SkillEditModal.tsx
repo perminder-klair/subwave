@@ -21,6 +21,7 @@ import { notify, errorMessage } from '../../../lib/notify';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { EditorDialog } from '../../ui/editor-dialog';
+import { SkeletonForm } from '@/components/ui/skeleton';
 import { Eyebrow } from '../ui';
 import { CONTEXT_FIELD_LABELS, CONTEXT_FIELDS_FALLBACK, splitContext } from './contextFields';
 import { skillSubmitUrl } from '../../../lib/repo';
@@ -557,7 +558,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
       className="sw-seg"
     >
       {!loaded ? (
-        <div style={{ padding: '40px 0', textAlign: 'center', color: 'var(--muted)', fontStyle: 'italic', fontSize: 13 }}>loading…</div>
+        <SkeletonForm fields={4} />
       ) : (
         <div style={{ opacity: isEdit && !enabled ? 0.6 : 1, transition: 'opacity .2s ease' }}>
 
