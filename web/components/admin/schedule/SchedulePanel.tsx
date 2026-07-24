@@ -107,8 +107,6 @@ export default function SchedulePanel() {
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => new Date());
 
-  // Board folds, keyed by storage day (0=Sun..6=Sat).
-  const [folded, setFolded] = useState<Record<number, boolean>>({});
   // The order desk below the board — scrolled into view when a board pick
   // loads it, since it can sit below the fold.
   const bandRef = useRef<HTMLDivElement>(null);
@@ -465,55 +463,43 @@ export default function SchedulePanel() {
   return (
     <div className="flex min-h-full min-w-0 flex-1 flex-col bg-[var(--card-bg)]">
       {/* ── Header ─────────────────────────────────────────────────────── */}
-      <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-4 border-b border-ink px-[30px] pt-4 pb-3.5">
-        <div className="flex min-w-0 flex-col gap-2">
+      <div className="flex flex-wrap items-end justify-between gap-x-10 gap-y-3 border-b border-ink px-[30px] pt-4 pb-3.5">
+        <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex items-center gap-3">
             <span className="eyebrow text-vermilion">Show plan · The Rundown</span>
             <span aria-hidden="true" className="h-px w-[18px] bg-[color-mix(in_oklab,var(--ink)_28%,transparent)]" />
             <span className="font-mono text-[11.5px] font-bold tracking-[0.06em] text-ink">{clockLabel}</span>
             <Mu className="text-[9px]">{zoneLabel}</Mu>
           </div>
-          <h1 className="m-0 font-display text-[33px] leading-none font-semibold tracking-[-0.015em]">
+          <h1 className="m-0 font-display text-[30px] leading-none font-semibold tracking-[-0.015em]">
             Programme the week, one hour at a time.
           </h1>
           <Mu className="text-[9px] tracking-[0.1em]">
             Empty hours run autonomously · every change goes live on save
           </Mu>
         </div>
-        <div className="flex flex-none items-end gap-6">
-          <div className="flex gap-5">
-            <HeaderStat n={booked} label="hours scheduled" />
-            <HeaderStat n={168 - booked} label="silent" accent />
-            <HeaderStat n={orders.length} label="standing orders" />
-          </div>
-          <div className="flex flex-col items-end gap-2">
-            <div className="flex items-center gap-2">
-              {dirty > 0 && <span aria-hidden="true" className="size-1.5 bg-[var(--accent)]" />}
-              <Mu className={cn('text-[9px]', dirty > 0 && 'text-ink')}>
-                {dirty > 0 ? `${dirty} unsaved edit${dirty === 1 ? '' : 's'}` : 'all changes saved'}
-              </Mu>
-              {dirty > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setReviewOpen(true)}
-                  className="cursor-pointer border-0 bg-transparent p-0 font-mono text-[9px] tracking-[0.16em] text-muted uppercase underline hover:text-ink"
-                >
-                  Review
-                </button>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <Button variant="ghost" size="sm" onClick={() => window.print()}>
-                Print / share
-              </Button>
-              <Button variant="default" size="sm" onClick={() => setAddOpen(true)}>
-                + Add a show
-              </Button>
-              <Button variant="accent" size="sm" onClick={saveWeek} disabled={busy || dirty === 0}>
-                {busy ? 'Saving…' : 'Save the week'}
-              </Button>
-            </div>
-          </div>
+        <div className="ml-auto flex flex-none flex-wrap items-center justify-end gap-3">
+          <span className="flex items-center gap-2">
+            {dirty > 0 && <span aria-hidden="true" className="size-1.5 bg-[var(--accent)]" />}
+            <Mu className={cn('text-[9px]', dirty > 0 && 'text-ink')}>
+              {dirty > 0 ? `${dirty} unsaved edit${dirty === 1 ? '' : 's'}` : 'all changes saved'}
+            </Mu>
+            {dirty > 0 && (
+              <button
+                type="button"
+                onClick={() => setReviewOpen(true)}
+                className="cursor-pointer border-0 bg-transparent p-0 font-mono text-[9px] tracking-[0.16em] text-muted uppercase underline hover:text-ink"
+              >
+                Review
+              </button>
+            )}
+          </span>
+          <Button variant="default" size="sm" onClick={() => setAddOpen(true)}>
+            + Add a show
+          </Button>
+          <Button variant="accent" size="sm" onClick={saveWeek} disabled={busy || dirty === 0}>
+            {busy ? 'Saving…' : 'Save the week'}
+          </Button>
         </div>
       </div>
 
@@ -619,10 +605,6 @@ export default function SchedulePanel() {
         <Board
           schedule={schedule}
           shows={shows}
-          folded={folded}
-          onToggleFold={d => setFolded(f => ({ ...f, [d]: !f[d] }))}
-          onOpenAll={() => setFolded({})}
-          onFoldWeekdays={() => setFolded({ 1: true, 2: true, 3: true, 4: true })}
           todayKey={nowDay}
           colorOf={colorOf}
           hoursOf={hoursOf}
@@ -740,17 +722,6 @@ export default function SchedulePanel() {
   );
 }
 
-function HeaderStat({ n, label, accent }: { n: number; label: string; accent?: boolean }) {
-  return (
-    <div className="text-right">
-      <div className={cn('font-display text-[30px] leading-none font-semibold', accent ? 'text-vermilion' : 'text-ink')}>
-        {n}
-      </div>
-      <Mu className={cn('mt-1 block text-[8.5px]', accent && 'text-vermilion')}>{label}</Mu>
-    </div>
-  );
-}
-
 function NowCell({
   label, live, time, left, name, color, meta, pct, last,
 }: {
@@ -767,8 +738,8 @@ function NowCell({
   const barRef = useRef<HTMLDivElement>(null);
   useDynamicStyle(barRef, { width: `${pct ?? 0}%` });
   return (
-    <div className={cn('min-w-0 px-[22px] pt-3 pb-3', !last && 'border-r border-separator-strong')}>
-      <div className="mb-2 flex items-center gap-2">
+    <div className={cn('min-w-0 px-[22px] py-2', !last && 'border-r border-separator-strong')}>
+      <div className="mb-1 flex items-center gap-2">
         {live && <span aria-hidden="true" className="size-[7px] flex-none rounded-full bg-[var(--accent)]" />}
         <span className={cn('eyebrow', live ? 'text-vermilion' : 'text-muted')}>{label}</span>
         {left && <Mu className="ml-auto text-[8.5px]">{left}</Mu>}
@@ -776,20 +747,20 @@ function NowCell({
           {time}
         </span>
       </div>
-      <div className="flex items-center gap-2.5">
-        <ColorChip color={color} className="size-[13px]" />
-        <span className="overflow-hidden font-display text-[20px] leading-none font-semibold text-ellipsis whitespace-nowrap text-ink">
+      <div className="flex items-baseline gap-2">
+        <ColorChip color={color} className="size-[11px] self-center" />
+        <span className="max-w-[70%] flex-none overflow-hidden font-display text-[17px] leading-none font-semibold text-ellipsis whitespace-nowrap text-ink">
           {name}
         </span>
+        <Mu className="min-w-0 truncate text-[8.5px]">{meta}</Mu>
       </div>
-      <Mu className="mt-2 block text-[8.5px]">{meta}</Mu>
       {pct != null ? (
-        <div className="mt-2 flex h-1 gap-0.5">
+        <div className="mt-1.5 flex h-[3px] gap-0.5">
           <div ref={barRef} className="bg-ink" />
           <div className="flex-1 bg-[color-mix(in_oklab,var(--ink)_16%,transparent)]" />
         </div>
       ) : (
-        <div className="mt-2 h-1 bg-[var(--ink-soft)]" />
+        <div className="mt-1.5 h-[3px] bg-[var(--ink-soft)]" />
       )}
     </div>
   );
