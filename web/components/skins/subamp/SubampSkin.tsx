@@ -8,7 +8,8 @@
 // only ▶ is lit accent. One click starts the stream and the analyzer jumps.
 // Double-click a titlebar to roll its window up.
 
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { AnimatePresence, m, useReducedMotion } from 'motion/react';
 import styles from './Subamp.module.css';
 import Analyzer from './Analyzer';
 import {
@@ -38,8 +39,38 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
-import { useRequestSlip, useTrackLike, useVolumeNudge } from '../sharedHooks';
+import { useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
+
+/* LCD re-latch. A 1998 player doesn't crossfade — the readout blinks twice and
+   the new value is simply there. Opacity only, no transform, and no exit: the
+   old reading isn't leaving, it's being overwritten.
+
+   Because it IS opacity-only, MotionConfig's reducedMotion="user" won't touch
+   it (that setting drops transforms and deliberately preserves opacity), so a
+   listener who asked for less motion would still get a strobe. This is the one
+   skin that has to check useReducedMotion() for itself. */
+const LATCH = { opacity: [1, 0.25, 1, 0.4, 1] };
+const LATCH_TRANSITION = { duration: 0.18, times: [0, 0.2, 0.45, 0.7, 1] };
+const STEADY = { opacity: 1 };
+/* The cover is a bitmap, not a photograph fading into another — swap it fast
+   enough that it reads as the panel repainting rather than a dissolve. */
+const ART_FLASH = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1 },
+  exit: { opacity: 0 },
+  transition: { duration: 0.09 },
+};
+/* Lite: mount straight at rest — a zero-duration transition still paints
+   `initial` for a frame, flashing an empty art panel on every change. */
+const ART_CUT = {
+  initial: false,
+  animate: { opacity: 1 },
+  // Nothing on the way out either — a fade-to-zero on the outgoing
+  // node is still an animation, however brief.
+  exit: {},
+  transition: { duration: 0 },
+};
 
 function Grip() {
   return (
@@ -133,6 +164,20 @@ export default function SubampSkin(_props: SkinProps) {
 
   const digits = showTuneIn || offline ? '--:--' : fmtTime(elapsed);
 
+  // The latch fires when the keyed plate remounts, which would include the
+  // skin's own first paint — suppress that one so tuning in doesn't blink.
+  const painted = useRef(false);
+  useEffect(() => { painted.current = true; }, []);
+  // Lite mode's CSS kill can't reach motion; reduced motion can't reach an
+  // opacity-only animation. Both have to be asked here (see LATCH above), and
+  // both unconditionally — short-circuiting these into one && would make the
+  // second a conditional hook call.
+  const mayAnimate = useSkinMotion();
+  const reduced = useReducedMotion();
+  const latching = mayAnimate && !reduced;
+  const latch = latching && painted.current ? LATCH : STEADY;
+  const artSwap = latching ? ART_FLASH : ART_CUT;
+
   return (
     <div className={cn('absolute inset-0 overflow-hidden font-mono text-ink lg:overflow-y-auto', styles.shell)}>
       <div
@@ -165,22 +210,37 @@ export default function SubampSkin(_props: SkinProps) {
               <div className="h-16 min-w-0 flex-1 border border-soft-border px-2 py-1.5">
                 <Analyzer audioRef={audioRef} active={playing} />
               </div>
-              <div className="hidden h-16 w-16 flex-none self-center border border-soft-border sm:block">
+              <div className="relative hidden h-16 w-16 flex-none self-center border border-soft-border sm:block">
                 {nowPlaying?.subsonic_id && !offline ? (
-                  <img src={client.coverUrl(nowPlaying.subsonic_id)} alt="" className="h-full w-full object-cover" />
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    <m.img
+                      key={nowPlaying.subsonic_id}
+                      src={client.coverUrl(nowPlaying.subsonic_id)}
+                      alt=""
+                      {...artSwap}
+                      className="absolute inset-0 h-full w-full object-cover"
+                    />
+                  </AnimatePresence>
                 ) : (
                   <div className="grid h-full w-full place-items-center text-[8px] text-muted">art</div>
                 )}
               </div>
             </div>
 
-            {/* marquee plate */}
-            <div className="overflow-hidden border border-soft-border bg-[var(--field)] px-0 py-1.5">
+            {/* marquee plate — keyed on the copy so the whole plate remounts and
+                re-latches; the inner key stays because it's what restarts the
+                CSS scroll from the left if this wrapper ever loses its own. */}
+            <m.div
+              key={marqueeText}
+              animate={latch}
+              transition={LATCH_TRANSITION}
+              className="overflow-hidden border border-soft-border bg-[var(--field)] px-0 py-1.5"
+            >
               <div key={marqueeText} className={styles.marqueeTrack}>
                 <span className="px-2.5 text-[12px] tracking-[0.12em]">{marqueeText}</span>
                 <span className="px-2.5 text-[12px] tracking-[0.12em]" aria-hidden="true">{marqueeText}</span>
               </div>
-            </div>
+            </m.div>
 
             <div className="flex flex-wrap items-center gap-2">
               {meta.facts.map(f => (

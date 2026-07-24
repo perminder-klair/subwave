@@ -13,6 +13,7 @@
 // touches React.
 
 import { useCallback, useRef } from 'react';
+import { AnimatePresence, m } from 'motion/react';
 import styles from './Platter.module.css';
 import {
   usePlayerActions,
@@ -38,8 +39,46 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
-import { useRequestSlip, useTrackLike, useVolumeNudge } from '../sharedHooks';
+import { useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
+
+/* A record change. The sleeve lifts and settles, then the label becomes
+   legible a beat later — record down, then read it.
+
+   The easing is deliberately the tonearm's own curve (Platter.module.css), so
+   the deck reads as one mechanism rather than two things that happen to move
+   near each other. */
+const DECK_EASE = [0.22, 1, 0.36, 1] as const;
+const SLEEVE_DROP = {
+  initial: { opacity: 0, scale: 1.04, y: -6 },
+  animate: { opacity: 1, scale: 1, y: 0 },
+  exit: { opacity: 0 },
+  transition: { duration: 0.32, ease: DECK_EASE },
+};
+/* Lite: mount straight at rest — a zero-duration transition still paints
+   `initial` for a frame, flashing a blank sleeve on every change. */
+const SLEEVE_CUT = {
+  initial: false,
+  animate: { opacity: 1, scale: 1, y: 0 },
+  // Nothing on the way out either — a fade-to-zero on the outgoing
+  // node is still an animation, however brief.
+  exit: {},
+  transition: { duration: 0 },
+};
+const LABEL_SETTLE = {
+  initial: { opacity: 0, y: 10 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -6 },
+  transition: { duration: 0.28, delay: 0.06, ease: DECK_EASE },
+};
+const LABEL_CUT = {
+  initial: false,
+  animate: { opacity: 1, y: 0 },
+  // Nothing on the way out either — a fade-to-zero on the outgoing
+  // node is still an animation, however brief.
+  exit: {},
+  transition: { duration: 0 },
+};
 
 /** The spinning platter itself — rim, vinyl + printed label, light sheen,
  *  spindle cap and the tonearm. Sized to fill its square container so it
@@ -159,6 +198,21 @@ export default function PlatterSkin(_props: SkinProps) {
 
   const title = offline ? '— off air —' : (nowPlaying?.title ?? 'Scanning the dial…');
   const artist = offline ? '' : (nowPlaying?.artist ?? '');
+
+  // One key per airing — offline and the scanning placeholder collapse to
+  // constants (as classic/CenterStage does) so a transient null from the 5s
+  // /state poll can't re-drop the sleeve mid-track.
+  const trackKey = offline
+    ? 'offline'
+    : nowPlaying?.subsonic_id
+      ? `s:${nowPlaying.subsonic_id}`
+      : nowPlaying?.title
+        ? `t:${nowPlaying.title}`
+        : 'placeholder';
+  // Lite mode's CSS kill can't reach motion — gate the change ourselves.
+  const spins = useSkinMotion();
+  const sleeveSwap = spins ? SLEEVE_DROP : SLEEVE_CUT;
+  const labelSwap = spins ? LABEL_SETTLE : LABEL_CUT;
 
   const adjustVolume = useVolumeNudge();
   const like = useTrackLike();
@@ -315,9 +369,17 @@ export default function PlatterSkin(_props: SkinProps) {
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2.5 overflow-hidden p-4 lg:gap-4 lg:overflow-hidden lg:p-6">
           {/* now playing */}
           <div className="flex items-start gap-5">
-            <div className="size-[84px] flex-none border border-ink bg-[var(--field)] sm:size-[104px]">
+            <div className="relative size-[84px] flex-none border border-ink bg-[var(--field)] sm:size-[104px]">
               {nowPlaying?.subsonic_id && !offline ? (
-                <img src={client.coverUrl(nowPlaying.subsonic_id)} alt="" className="h-full w-full object-cover" />
+                <AnimatePresence mode="popLayout" initial={false}>
+                  <m.img
+                    key={nowPlaying.subsonic_id}
+                    src={client.coverUrl(nowPlaying.subsonic_id)}
+                    alt=""
+                    {...sleeveSwap}
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
+                </AnimatePresence>
               ) : (
                 <div className="grid h-full w-full place-items-center font-mono text-[9px] text-muted">Sleeve</div>
               )}
@@ -326,17 +388,21 @@ export default function PlatterSkin(_props: SkinProps) {
               <span className="font-mono text-[10px] font-bold tracking-[0.22em] text-[var(--accent)] uppercase">
                 now spinning
               </span>
-              <span className="truncate font-display text-[clamp(30px,5vw,54px)] leading-[0.98] font-extrabold italic">
-                {title}
-              </span>
-              {artist && (
-                <span className="truncate font-mono text-[14px] tracking-[0.14em] uppercase">{artist}</span>
-              )}
-              {!offline && (nowPlaying?.album || nowPlaying?.year) && (
-                <span className="truncate font-mono text-[11px] tracking-[0.12em] text-muted uppercase">
-                  {[nowPlaying.album, nowPlaying.year].filter(Boolean).join(' · ')}
-                </span>
-              )}
+              <AnimatePresence mode="popLayout" initial={false}>
+                <m.div key={trackKey} {...labelSwap} className="flex min-w-0 flex-col gap-0.5">
+                  <span className="truncate font-display text-[clamp(30px,5vw,54px)] leading-[0.98] font-extrabold italic">
+                    {title}
+                  </span>
+                  {artist && (
+                    <span className="truncate font-mono text-[14px] tracking-[0.14em] uppercase">{artist}</span>
+                  )}
+                  {!offline && (nowPlaying?.album || nowPlaying?.year) && (
+                    <span className="truncate font-mono text-[11px] tracking-[0.12em] text-muted uppercase">
+                      {[nowPlaying.album, nowPlaying.year].filter(Boolean).join(' · ')}
+                    </span>
+                  )}
+                </m.div>
+              </AnimatePresence>
             </div>
           </div>
 
