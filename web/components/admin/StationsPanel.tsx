@@ -19,6 +19,7 @@ import { CONVERT_SENTINEL, useStationSwitchPoll } from '../../hooks/useStationSw
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
 import { cn } from '../../lib/cn';
+import { Plus } from 'lucide-react';
 import { Btn } from './ui';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
@@ -307,6 +308,7 @@ export default function StationsPanel() {
             ) : null}
             <Btn
               tone="solid"
+              lg
               disabled={busy || loading || atCap}
               onClick={() => {
                 setCreateName('');
@@ -314,6 +316,7 @@ export default function StationsPanel() {
                 setCreateOpen(true);
               }}
             >
+              <Plus />
               New station
             </Btn>
           </div>
