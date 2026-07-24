@@ -13,6 +13,7 @@
 
 import type { ChangeEvent } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { notify, errorMessage } from '../../../lib/notify';
 import { fmtClock, normalizeStationLocale, zonedDayHour } from '../../../lib/format';
@@ -27,7 +28,6 @@ import { Card } from '../ui';
 import Board from './Board';
 import EditorBand, { LineEditor } from './EditorBand';
 import type { EditorLine, Suggestion } from './EditorBand';
-import AddShowDialog from './AddShowDialog';
 import { ColorChip, Mu, SegBtn, SlotMenu } from './bits';
 import type { Block, Schedule, ScheduleShow } from './lib';
 import {
@@ -69,11 +69,6 @@ interface ScheduleOverride {
   showId: string;
   startedAt: number;
   expiresAt: number;
-}
-
-function clientMintId() {
-  const b = crypto.getRandomValues(new Uint8Array(3));
-  return 's_' + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 
 // The slice of a persisted show this screen needs; legacy singular fields
@@ -120,7 +115,6 @@ export default function SchedulePanel() {
   const [lineDays, setLineDays] = useState<number[]>([6]);
 
   const [dismissed, setDismissed] = useState<string[]>([]);
-  const [addOpen, setAddOpen] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
 
   // Takeover (#930).
@@ -202,12 +196,13 @@ export default function SchedulePanel() {
   };
   const showById = (id: string | null) => shows.find(s => s.id === id) ?? null;
   const personaName = (id: string) => personas.find(p => p.id === id)?.name || '—';
+  // Bare values only — "Saaya · night · low", no field labels.
   const metaOf = (id: string | null): string => {
     const s = showById(id);
     if (!s) return 'the station runs itself';
-    const bits = [`persona · ${personaName(s.personaId)}`, `mood · ${s.moods.join(', ') || 'any'}`];
+    const bits = [personaName(s.personaId), s.moods.join(', ')];
     if (s.energies.length) bits.push(s.energies.join(', '));
-    return bits.join(' · ');
+    return bits.filter(Boolean).join(' · ');
   };
   const hoursOf = (id: string) => (schedule ? showHours(schedule, id) : 0);
 
@@ -272,42 +267,6 @@ export default function SchedulePanel() {
       notify.err(errorMessage(e));
       return false;
     } finally { setBusy(false); }
-  };
-
-  // Create a brand-new show inline (the add-show dialog's "Brand new show"
-  // row) — a minimal definition owned by the first persona; everything else
-  // is tuned on the Shows page.
-  const createShow = async (name: string): Promise<ScheduleShow | null> => {
-    const personaId = personas[0]?.id || '';
-    if (!personaId) {
-      notify.err('Create a persona first — every show needs a host.');
-      return null;
-    }
-    try {
-      const r = await adminFetch('/shows', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          show: {
-            id: clientMintId(), name, topic: '', personaId,
-            guestPersonaIds: [], banter: false, moods: [], themeId: '',
-            genres: [], eras: [], energies: [], filtersStrict: false,
-            maxTrackSeconds: null, playlistIds: [], playlistStrict: false,
-            excludedPlaylistIds: [], programme: false, segmentSkill: '',
-          },
-        }),
-      });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; show?: Record<string, unknown> | null };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      const saved = j.show ? hydrateShow(j.show) : null;
-      if (!saved) throw new Error('unexpected response');
-      setShows(cur => [...cur, saved]);
-      notify.ok(`“${saved.name}” created — hosted by ${personaName(personaId)}. Fine-tune it on the Shows page.`);
-      return saved;
-    } catch (e) {
-      notify.err(`Create failed: ${errorMessage(e)}`);
-      return null;
-    }
   };
 
   // ── takeover ─────────────────────────────────────────────────────────────
@@ -489,8 +448,8 @@ export default function SchedulePanel() {
                 </button>
               )}
             </span>
-            <Button variant="default" size="sm" onClick={() => setAddOpen(true)}>
-              + Add a show
+            <Button asChild variant="default" size="sm">
+              <Link href="/admin/shows">New show →</Link>
             </Button>
             <Button variant="accent" size="sm" onClick={saveWeek} disabled={busy || dirty === 0}>
               {busy ? 'Saving…' : 'Save the week'}
@@ -656,21 +615,6 @@ export default function SchedulePanel() {
           target={WEEKLY_TARGET}
         />
       </div>
-
-      <AddShowDialog
-        open={addOpen}
-        onOpenChange={setAddOpen}
-        shows={shows}
-        schedule={schedule}
-        todayKey={nowDay}
-        colorOf={colorOf}
-        hoursOf={hoursOf}
-        target={WEEKLY_TARGET}
-        onApply={({ showId, days, start, end }) => {
-          setSchedule(cur => cur ? setRange(cur, days, start, end, showId) : cur);
-        }}
-        onCreateShow={createShow}
-      />
 
       {/* Review — the unsaved edits behind the header count */}
       <Modal
