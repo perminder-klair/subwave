@@ -15,7 +15,7 @@ import * as musicbrainz from '../music/musicbrainz.js';
 import * as settings from '../settings.js';
 import * as embeddings from '../music/embeddings.js';
 import { buildGenreSuggest } from '../music/genre-suggest.js';
-import { tagBatch, TAGGER_BATCH_SYSTEM } from '../music/tagger-core.js';
+import { tagBatch, taggerBatchSystem } from '../music/tagger-core.js';
 import { promptVocabHash } from '../music/embeddings.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
@@ -78,7 +78,7 @@ router.get('/library/browse', requireAdmin, async (req, res) => {
     const stats = library.stats();
     res.json({
       ...result,
-      moodVocab: settings.SHOW_MOODS,
+      moodVocab: settings.moodVocab(),
       stats: {
         total: stats.total,
         byMood: stats.byMood,
@@ -302,7 +302,7 @@ router.get('/library/observatory', requireAdmin, async (req, res) => {
       // Sound-map provenance — lets the UI say whether nodes sit by sound
       // (projection done) or by genre (fallback), and show job progress.
       mapProjection: mapProjection.projectionStatus(),
-      moodVocab: settings.SHOW_MOODS,
+      moodVocab: settings.moodVocab(),
       stats: {
         total: stats.total,
         distinctArtists: stats.distinctArtists,
@@ -718,7 +718,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       moods,
       energy,
       source: 'llm',
-      promptHash: promptVocabHash(TAGGER_BATCH_SYSTEM),
+      promptHash: promptVocabHash(taggerBatchSystem()),
       model: activeModelLabel(),
     });
     await library.save();
@@ -739,8 +739,9 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
 // `applyToAlbum` resolves the whole album server-side from the track id
 // (subsonic.getSong → albumId → getAlbum) and applies the same tags to every
 // track — this is the "tag an album/folder for targeted queuing" path
-// (discussion #336). Moods are restricted to settings.SHOW_MOODS so manual
-// rows feed songsByMood()/MOOD_NEIGHBOURS exactly like LLM-tagged ones.
+// (discussion #336). Moods are restricted to the live vocabulary
+// (settings.moodVocab()) so manual rows feed songsByMood()/MOOD_NEIGHBOURS
+// exactly like LLM-tagged ones.
 // ---------------------------------------------------------------------------
 router.post('/library/manual-tag', requireAdmin, async (req, res) => {
   const id = req.body?.id;
@@ -750,7 +751,7 @@ router.post('/library/manual-tag', requireAdmin, async (req, res) => {
     return res.status(400).json({ error: 'moods must be an array of strings' });
   }
   if (moods.length > 3) return res.status(400).json({ error: 'at most 3 moods per track' });
-  const unknown = moods.filter((m: string) => !settings.SHOW_MOODS.includes(m));
+  const unknown = moods.filter((m: string) => !settings.moodVocab().includes(m));
   if (unknown.length) {
     return res.status(400).json({ error: `unknown mood(s): ${unknown.join(', ')}` });
   }

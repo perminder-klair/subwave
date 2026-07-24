@@ -61,6 +61,18 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
+  /* shadcn Sidebar token family (admin console). Values are newsprint-derived
+     and live under `.admin-root` below, so every theme palette + dark mode
+     flow through with no per-theme cases. */
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
   /* Brutalist sharp-corner radius (pinned to 0). */
   --radius-sm: var(--radius);
   --radius-md: var(--radius);
@@ -146,6 +158,25 @@
     --line: color-mix(in oklab, var(--ink) 70%, var(--bg));
     --accent-2: var(--accent);
     --accent-soft: color-mix(in oklab, var(--accent) 14%, var(--bg));
+    /* Admin surface + sidebar tokens — promoted to :root (not .admin-root) so
+       the @theme `--color-sidebar` bridge, which resolves var(--sidebar) at
+       :root, gets a real value, and so the admin sidebar's mobile drawer
+       resolves its fills even though Radix portals it to <body>, outside
+       .admin-root. --page-bg deepens slightly in dark mode below. */
+    --card-bg: var(--bg);
+    --page-bg: color-mix(in oklab, var(--bg) 90%, var(--ink));
+    /* The sidebar rail sits ~12% darker than the admin page so it reads as its
+       own chrome. "Darker" flips direction per theme: toward --ink in light
+       (preserves the paper warmth), toward black in the dark overrides below
+       (where --ink is light and mixing toward it would lighten instead). */
+    --sidebar: color-mix(in oklab, var(--page-bg), var(--ink) 12%);
+    --sidebar-foreground: var(--ink);
+    --sidebar-primary: var(--ink);
+    --sidebar-primary-foreground: var(--bg);
+    --sidebar-accent: color-mix(in oklab, var(--card-bg) 90%, var(--ink));
+    --sidebar-accent-foreground: var(--ink);
+    --sidebar-border: var(--line);
+    --sidebar-ring: var(--accent);
     /* Default display + mono faces; the --display-font / --mono-font tokens (a
      curated id resolved to a family stack in lib/theme) override them, and the
      font-display / font-mono utilities follow them. */
@@ -170,6 +201,10 @@
         --grain-color: 0.55 0.5 0.45;
         --grain-alpha: 0.25;
         --grain-blend: screen;
+        /* Admin page deepens slightly in dark mode. */
+        --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
+        /* Sidebar darker than the page — toward black, since --ink is light here. */
+        --sidebar: color-mix(in oklab, var(--page-bg), #000 15%);
         color-scheme: dark;
     }
 }
@@ -189,6 +224,9 @@
     --grain-color: 0.55 0.5 0.45;
     --grain-alpha: 0.25;
     --grain-blend: screen;
+    --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
+    /* Sidebar darker than the page — toward black, since --ink is light here. */
+    --sidebar: color-mix(in oklab, var(--page-bg), #000 15%);
     color-scheme: dark;
 }
 
@@ -2881,23 +2919,9 @@ html.lite .sw-ripple-circle {
        from --ink/--bg so it tracks the palette and flips in dark mode. */
     --muted: color-mix(in oklab, var(--ink) 55%, var(--bg));
     --muted-2: color-mix(in oklab, var(--muted) 70%, var(--bg));
-    /* Two-tone surface split so cards always read as panels instead of
-     dissolving into the page. Light mode keeps cards at the bright cream and
-     darkens the page beneath them; dark mode keeps cards at the deep charcoal
-     and lifts the page around them — cards sit darker than the page. */
-    --card-bg: var(--bg);
-    --page-bg: color-mix(in oklab, var(--bg) 90%, var(--ink));
-}
-
-:root[data-theme="dark"] .admin-root {
-    --card-bg: var(--bg);
-    --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
-}
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .admin-root {
-        --card-bg: var(--bg);
-        --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
-    }
+    /* Two-tone surface split (--card-bg / --page-bg) and the shadcn --sidebar-*
+       family live at :root now — see the note there. The admin subtree just
+       inherits them; only the higher-contrast --muted override stays local. */
 }
 
 .admin-root.paper {
@@ -2908,6 +2932,31 @@ html.lite .sw-ripple-circle {
        (not `hidden`) keeps vertical page scroll intact and still lets the
        weekly-schedule grid scroll inside its own `overflow-x:auto` wrapper. */
     overflow-x: clip;
+}
+
+/* Keep the page scrollbar permanently present across the admin console. Panels
+   vary wildly in height (Dash fits the viewport, Settings doesn't), and the
+   120ms route cross-fade unmounts the outgoing panel before the incoming one
+   measures — so on a classic (space-taking) scrollbar the viewport width jumps
+   ~15px on every navigation and the fixed sidebar + content visibly snap
+   sideways. `overflow-y: scroll` holds the bar (and its width) whether or not
+   the page actually scrolls, so nothing moves.
+   NOT `scrollbar-gutter: stable`, which is the tidier tool but is inert here:
+   the `overflow-x: clip` this file sets on <html>/<body> (the mobile
+   horizontal-overflow catch-all) stops the gutter from ever being reserved —
+   measured in Chrome, the 15px jump survives it on html, on body, and with the
+   clip lifted. Scoped via :has() rather than set globally because the player
+   skins are full-bleed 100vh surfaces where a permanent bar is dead weight;
+   browsers without :has() just fall back to today's behaviour.
+   The .v3-scroll treatment (thin thumb over a transparent track) keeps the
+   always-on bar quiet, and the background match is what lets the track read as
+   part of the admin surface instead of a pale stripe down the edge — <html>
+   paints it, and it sits outside .admin-root's own background. */
+html:has(.admin-root.paper) {
+    overflow-y: scroll;
+    background: var(--page-bg);
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar) transparent;
 }
 
 /* ── Type ── */
@@ -2928,230 +2977,11 @@ html.lite .sw-ripple-circle {
     font-variant-numeric: tabular-nums;
 }
 
-/* ── Shell ── */
-.admin-root .shell-header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 10px 28px;
-    /* Lift the header off the (darker) page body onto the same off-white card
-       fill as the rest of the console, so the bar reads as a distinct chrome
-       strip instead of dissolving into the page. */
-    background: var(--card-bg);
-    border-bottom: 1px solid var(--ink);
-    flex-wrap: wrap;
-}
-.admin-root .shell-header .wordmark {
-    font-size: 14px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    font-weight: 800;
-}
-.admin-root .shell-header .crumb {
-    font-size: 10px;
-    letter-spacing: 0.28em;
-    text-transform: uppercase;
-    color: var(--muted);
-}
-.admin-root .shell-header .crumb b {
-    color: var(--ink);
-}
-.admin-root .shell-header .right {
-    margin-left: auto;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px 12px;
-    align-items: center;
-    font-size: 10px;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    /* Full ink so the toolbar icons/labels read as controls, not faint chrome. */
-    color: var(--ink);
-}
-.admin-root .live-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--accent) 20%, transparent);
-}
-.admin-root .sign-out {
-    border: 1px solid var(--ink);
-    background: transparent;
-    color: var(--ink);
-    padding: 5px 12px;
-    font-size: 9px;
-    letter-spacing: 0.25em;
-    text-transform: uppercase;
-    font-weight: 700;
-    cursor: pointer;
-    font-family: inherit;
-}
-.admin-root .sign-out:hover {
-    background: var(--ink);
-    color: var(--bg);
-}
-
-.admin-root .shell-body {
-    display: grid;
-    grid-template-columns: 200px 1fr;
-    gap: 20px;
-    padding: 16px 20px;
-    max-width: 1440px;
-    margin: 0 auto;
-}
-.admin-root .shell-nav {
-    border-right: 1px solid var(--line);
-    padding-right: 18px;
-    display: flex;
-    flex-direction: column;
-    gap: 18px;
-}
-.admin-root .shell-nav .nav-section {
-    display: flex;
-    flex-direction: column;
-    gap: 3px;
-}
-.admin-root .shell-nav .nav-section-label {
-    font-size: 9px;
-    letter-spacing: 0.22em;
-    text-transform: uppercase;
-    color: var(--muted);
-    padding: 0 2px 5px;
-    margin-bottom: 1px;
-}
-.admin-root .shell-nav .nav-item {
-    position: relative; /* hosts the motion.span layoutId background */
-    border: 1px solid var(--line);
-    /* Sit on the same card fill as the rest of the console (--card-bg, the
-       off-white that lifts off the darker --page-bg) with a crisp hairline, so
-       each item reads as a button matching the other panels instead of a faint
-       outline dissolving into the page. The .active item's black fill comes from
-       the motion layoutId span, so its own background stays transparent. */
-    background: var(--card-bg);
-    color: var(--ink);
-    padding: 8px 10px;
-    font-size: 11px;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    text-align: left;
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    text-decoration: none;
-    cursor: pointer;
-    transition:
-        color 0.12s ease,
-        border-color 0.12s ease;
-}
-.admin-root .shell-nav .nav-item .nav-icon {
-    flex: 0 0 auto;
-    opacity: 0.72;
-    transition: opacity 0.12s ease;
-    position: relative; /* above the absolute motion bg */
-    z-index: 1;
-}
-.admin-root .shell-nav .nav-item .nav-label {
-    flex: 1 1 auto;
-    position: relative;
-    z-index: 1;
-}
-.admin-root .shell-nav .nav-item:hover {
-    /* Darken the card fill slightly on hover (keeps the lifted-card feel) and
-       firm the border to full ink. */
-    background: color-mix(in oklab, var(--card-bg) 90%, var(--ink));
-    border-color: var(--ink);
-}
-.admin-root .shell-nav .nav-item:hover .nav-icon {
-    opacity: 0.9;
-}
-/* Active state: motion owns the background (layoutId morphs it between tabs);
-   the link only owns the text color and border. */
-.admin-root .shell-nav .nav-item.active {
-    color: var(--bg);
-    border-color: var(--ink);
-    background: transparent;
-}
-.admin-root .shell-nav .nav-item.active .nav-icon {
-    opacity: 1;
-}
-.admin-root .shell-nav .nav-item .pill {
-    font-size: 9px;
-    letter-spacing: 0.16em;
-    padding: 1px 6px;
-    border: 1px solid currentColor;
-    opacity: 0.7;
-    position: relative;
-    z-index: 1;
-}
-.admin-root .shell-nav .nav-item.active .pill {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: #fff;
-    opacity: 1;
-}
-/* External links (Manual / app stores) sit at the bottom of the rail, grouped
-   with the foot — margin-top:auto absorbs the free space so the group and the
-   footer hug the bottom. .nav-section gives them the tight 3px intra-group gap. */
-.admin-root .shell-nav .nav-ext {
-    margin-top: auto;
-}
-.admin-root .shell-nav .nav-foot {
-    padding-top: 14px;
-    border-top: 1px dashed var(--separator-strong);
-    font-size: 10px;
-    letter-spacing: 0.18em;
-    color: var(--muted);
-    text-transform: uppercase;
-    line-height: 1.7;
-}
-.admin-root .shell-nav .nav-foot .nav-foot-version {
-    opacity: 0.7;
-    letter-spacing: 0.12em;
-}
-
-@media (max-width: 860px) {
-    .admin-root .shell-body {
-        grid-template-columns: 1fr;
-        gap: 18px;
-        padding: 18px;
-    }
-    .admin-root .shell-nav {
-        border-right: none;
-        padding-right: 0;
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-        gap: 6px;
-    }
-    /* Flatten the desktop section grouping so every nav item flows into one
-       even grid — the per-section flex rows leave lonely stretched items. */
-    .admin-root .shell-nav .nav-section {
-        display: contents;
-    }
-    .admin-root .shell-nav .nav-section-label {
-        display: none;
-    }
-    .admin-root .shell-nav .nav-foot {
-        display: none;
-    }
-}
 
 /* Mobile — collapse the panels' multi-column inline-grid layouts so every
    admin page reads as a single column. `!important` is required because the
    panels set `grid-template-columns` via inline styles. */
 @media (max-width: 640px) {
-    /* Header — tighten padding and let the live-station strip drop onto its
-       own full-width line instead of cramming against the wordmark. */
-    .admin-root .shell-header {
-        padding: 12px 16px;
-        gap: 8px 10px;
-    }
-    .admin-root .shell-header .right {
-        width: 100%;
-        margin-left: 0;
-        gap: 8px 10px;
-    }
-
     .admin-root .stack-mobile {
         grid-template-columns: 1fr !important;
     }

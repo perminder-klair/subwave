@@ -16,7 +16,8 @@ import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
-import { V3Alert } from '../ui/alert';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/ui/error-state';
 import { Card, Btn, Pill, Eyebrow, Seg } from './ui';
 import { ScrollArea } from '../ui/scroll-area';
 import { cn } from '../../lib/cn';
@@ -723,7 +724,7 @@ export default function StatsPanel() {
         </div>
       </section>
 
-      {err && <V3Alert tone="error" title="controller error">{err}</V3Alert>}
+      {err && <ErrorState error={err} />}
 
       {/* ── AUDIENCE ────────────────────────────────────────────────────── */}
       <Card
@@ -741,7 +742,7 @@ export default function StatsPanel() {
           <div className="p-3.5">
             {listeners == null ? (
               <div className="flex h-[130px] items-center justify-center">
-                <span className="field-hint italic">loading…</span>
+                <Skeleton className="h-4 w-16" />
               </div>
             ) : (
               <ListenerChart samples={samples} />
@@ -754,7 +755,7 @@ export default function StatsPanel() {
             </div>
             {listeners == null ? (
               <div className="flex h-[110px] items-center justify-center">
-                <span className="field-hint italic">loading…</span>
+                <Skeleton className="h-4 w-16" />
               </div>
             ) : (
               <HourOfDayChart buckets={hourBuckets} />
@@ -790,7 +791,7 @@ export default function StatsPanel() {
             {connErr ? (
               <span className="field-hint italic">{connErr}</span>
             ) : connections == null ? (
-              <span className="field-hint italic">loading…</span>
+              <Skeleton className="h-4 w-16" />
             ) : deviceGroups.length === 0 ? (
               <span className="field-hint italic">nobody connected right now</span>
             ) : (
@@ -811,7 +812,7 @@ export default function StatsPanel() {
               selected range. */}
           {audience == null ? (
             <div className="p-3.5">
-              <span className="field-hint italic">loading…</span>
+              <Skeleton className="h-4 w-16" />
             </div>
           ) : (audSessions ?? 0) === 0 ? (
             <div className="p-3.5">
@@ -931,7 +932,7 @@ export default function StatsPanel() {
                   <div className="border-r border-separator-soft p-3.5">
                     <div className="caption mb-2">by call kind</div>
                     <Table<ByKindRow>
-                      empty="no calls"
+                      empty="No calls"
                       rows={llm.byKind}
                       cols={[
                         { key: 'kind', label: 'Kind', render: r => r.kind.replace(/^sdk\./, '') },
@@ -949,7 +950,7 @@ export default function StatsPanel() {
                   <div className="p-3.5">
                     <div className="caption mb-2">by model</div>
                     <Table<ByModelRow>
-                      empty="no calls"
+                      empty="No calls"
                       rows={llm.byModel}
                       cols={[
                         { key: 'model', label: 'Model' },
@@ -990,7 +991,7 @@ export default function StatsPanel() {
                   <div className="border-r border-separator-soft p-3.5">
                     <div className="caption mb-2">by engine</div>
                     <Table<ByEngineRow>
-                      empty="no segments"
+                      empty="No segments"
                       rows={tts.byEngine}
                       cols={[
                         { key: 'engine', label: 'Engine' },
@@ -1006,7 +1007,7 @@ export default function StatsPanel() {
                   <div className="p-3.5">
                     <div className="caption mb-2">by segment kind</div>
                     <Table<ByTtsKindRow>
-                      empty="no segments"
+                      empty="No segments"
                       rows={tts.byKind}
                       cols={[
                         { key: 'kind', label: 'Kind' },
@@ -1066,7 +1067,7 @@ export default function StatsPanel() {
                       <div className="caption mb-2">by pick source</div>
                       <ScrollBox>
                         <Table<ByPickSourceRow>
-                          empty="no pick sources"
+                          empty="No pick sources"
                           rows={requests.byPickSource}
                           cols={[
                             { key: 'source', label: 'Source' },
@@ -1079,7 +1080,7 @@ export default function StatsPanel() {
                     <div>
                       <div className="caption mb-2">top requesters</div>
                       <Table<TopRequesterRow>
-                        empty="no requesters"
+                        empty="No requesters"
                         rows={requests.topRequesters}
                         cols={[
                           { key: 'requester', label: 'Listener' },
@@ -1118,7 +1119,7 @@ export default function StatsPanel() {
         sub="CPU + memory for the SUB/WAVE containers on this host"
       >
         {systemRes == null ? (
-          <span className="field-hint italic">loading…</span>
+          <Skeleton className="h-4 w-16" />
         ) : (
           <div className="grid gap-0">
             <MetricStrip>
@@ -1145,7 +1146,7 @@ export default function StatsPanel() {
               ) : (
                 <ScrollBox>
                   <Table<ContainerUsage>
-                    empty="no containers"
+                    empty="No containers"
                     rows={sysContainers}
                     cols={[
                       { key: 'service', label: 'Service' },

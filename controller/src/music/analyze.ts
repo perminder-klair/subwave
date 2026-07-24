@@ -13,8 +13,10 @@ import { readFile, rm } from 'node:fs/promises';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
 import * as stemCacheStore from './stem-cache.js';
+import * as subsonic from './subsonic.js';
 import * as settings from '../settings.js';
 import { config } from '../config.js';
+import { deriveVocalFromLyrics, type LyricVocalResult } from './lyric-vocal.js';
 import { runAudioMoodPass } from './audio-moods.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
 import { quietGateDecision, type QuietState } from './analyze-quiet-pure.js';
@@ -396,20 +398,47 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       // doesn't have ANALYZE_AUDIO_EMBEDDING (the admin-toggle path); omitted
       // when audio is off so the backend keeps its env-driven default.
       const embed = audioBackfill ? true : undefined;
-      // vocal:true forces the Demucs pass for this track (admin/backfill path),
-      // mirroring embed; omitted when vocal activity is off.
-      const vocal = vocalBackfill ? true : undefined;
+      // Lyric-first vocal ranges (#1125): when vocal activity is wanted, try the
+      // track's timed Navidrome lyrics before spending a Demucs separation. A
+      // synced-lyric or explicit-instrumental track is decided here — accurately,
+      // with no separation bleed — and skips Demucs. Anything inconclusive (no
+      // lyrics, or unsynced text) still runs Demucs (now with the mix floor).
+      // Best-effort: a lyric-fetch failure just falls through to Demucs.
+      let lyricVocal: LyricVocalResult | null = null;
+      if (vocalBackfill) {
+        try {
+          lyricVocal = deriveVocalFromLyrics(await subsonic.getStructuredLyrics(id));
+        } catch {
+          lyricVocal = null;
+        }
+      }
       // stems_dir asks the worker to persist the stems it separates anyway —
       // wire-named (spread verbatim into the worker request). Implies the
       // separation even when the vocal toggle is off.
       const stems_dir = stemCache ? stemCacheStore.dirFor(id) : undefined;
+      // vocal:true forces the Demucs pass for this track (admin/backfill path),
+      // mirroring embed. A lyric-decided track sends an EXPLICIT false — the
+      // worker only skips Demucs on undefined when its OWN env has vocal off,
+      // and the analyzer service/AIO can carry ANALYZE_VOCAL_ACTIVITY, which
+      // would pay the whole separation just to have its result overridden
+      // below. Omitted when vocal activity is off.
+      // …unless this track is caching stems: explicit false wins over stems_dir
+      // in the worker, and the stem cache IS the separation, so skipping it to
+      // save a Demucs pass we're paying for anyway would just lose the stems.
+      // Lyrics still override the stored ranges below either way.
+      const vocal = vocalBackfill ? (lyricVocal && !stems_dir ? false : true) : undefined;
       const a = localPath
         ? await analyzer.analyzePath(localPath, { embed, vocal, complete: localComplete, stems_dir })
         : await analyzer.analyze(id, { embed, vocal, stems_dir });
+      // Lyrics win over the worker's vocal output when present: the ranges are
+      // ground truth, and a synced onset is a truer intro than the energy
+      // heuristic the worker returns once Demucs is skipped. An instrumental
+      // marker (introMs null) keeps the energy-based intro.
+      const vocalRanges = lyricVocal ? lyricVocal.vocalRanges : a.vocalRanges;
       db.upsertTrackAnalysis(id, {
         bpm: a.bpm,
         musicalKey: a.musicalKey,
-        introMs: a.introMs,
+        introMs: lyricVocal?.introMs != null ? lyricVocal.introMs : a.introMs,
         confidence: a.confidence,
         loudnessLufs: a.loudnessLufs,
         peakDb: a.peakDb,
@@ -418,16 +447,17 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         beats: a.beats,
         bars: a.bars,
         keyRanges: a.keyRanges,
-        vocalRanges: a.vocalRanges,
+        vocalRanges,
         outro: a.outro,
       });
-      if (a.vocalRanges != null) vocalAnalyzed += 1;
+      if (vocalRanges != null) vocalAnalyzed += 1;
       // Stuck-case telemetry (vocal-aware transitions): a vocal pass that
       // produced head ranges but NO outro (incomplete download — the file
       // grew past ANALYZE_MAX_BYTES since its outro was stored) can't write
       // tail vocal data, and the upsert's COALESCE keeps the old tail-missing
       // outro — so the widened backfill will re-target this track every pass.
-      // Say so instead of churning silently.
+      // Say so instead of churning silently. Keyed off the WORKER's ranges,
+      // not the lyric-resolved ones: it's the Demucs tail pass that's stuck.
       if (vocal && a.vocalRanges != null && a.outro == null) {
         const prior = db.getTrack(id);
         if (prior?.outro && prior.outro.vocalRanges == null) {

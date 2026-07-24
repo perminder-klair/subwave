@@ -45,13 +45,14 @@ export interface CandidateFilterState {
   maxPerArtist?: number;
   cap?: number;
   // Whether a starved result may relax the recent-ARTIST guard. Default true
-  // preserves the pool picker's "never return empty" behaviour. The agent's
-  // per-tool collect() passes false: a single-artist tool (topSongsByArtist /
-  // similarSongs narrowed to one recent artist) then returns empty instead of
-  // handing the just-played artist straight back — the agent reaches for one of
-  // its other six discovery tools. This closes the artist-fixation bypass that
-  // let one artist re-air every ~1.2h despite the 2h artist window. Tracks may
-  // still relax as a last resort, but only for FRESH (non-recent) artists.
+  // preserves the pool picker's "never return empty" behaviour. Only the pool
+  // picker (music/picker.ts) passes recentArtists today, so this flag only bites
+  // there; the agent's per-tool collect() no longer filters by artist at all
+  // (#618 — an artist strip gutted the similarity tools to ~1 survivor on niche
+  // catalogues), which is why it defaults true and is inert on that path.
+  // Back-to-back artist variety on the AGENT path is instead enforced at the
+  // point of choice: dj-agent.pickViaAgent re-picks from other-artist
+  // candidates when a pick would repeat the on-air artist (#1124).
   allowArtistRelaxation?: boolean;
 }
 

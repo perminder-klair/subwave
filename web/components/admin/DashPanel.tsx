@@ -21,7 +21,8 @@ import type {
   StationLocale,
 } from '../../lib/types';
 import { V3AlertDialog } from '../ui/alert-dialog';
-import { V3Alert } from '../ui/alert';
+import { SkeletonText } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/ui/error-state';
 import { Card, Btn, Pill, Seg, Toggle } from './ui';
 import {
   Queue,
@@ -572,11 +573,7 @@ export default function DashPanel() {
         onSkip={() => setConfirmSkip(true)}
       />
 
-      {err && (
-        <V3Alert tone="error" title="controller error">
-          {err}
-        </V3Alert>
-      )}
+      {err && <ErrorState error={err} />}
 
       {/* ── 2-COL OPS ──────────────────────────────────────────────────── */}
       <div className="stack-mobile grid grid-cols-[1.4fr_1fr] gap-4">
@@ -880,7 +877,7 @@ export default function DashPanel() {
         {connErr ? (
           <div className="text-muted italic">can’t reach Icecast admin: {connErr}</div>
         ) : !conns ? (
-          <div className="text-muted italic">loading…</div>
+          <SkeletonText lines={2} />
         ) : conns.connections.length === 0 ? (
           <div className="text-muted italic">nobody listening right now</div>
         ) : (
@@ -1090,7 +1087,7 @@ function RequestsCard({
       {err ? (
         <div className="text-muted italic">can’t load requests: {err}</div>
       ) : !requests ? (
-        <div className="text-muted italic">loading…</div>
+        <SkeletonText lines={2} />
       ) : requests.length === 0 ? (
         <div className="text-muted italic">no requests yet</div>
       ) : (
@@ -1136,11 +1133,9 @@ function LikesCard({
       {err ? (
         <div className="text-muted italic">can’t load likes: {err}</div>
       ) : !likes ? (
-        <div className="text-muted italic">loading…</div>
+        <SkeletonText lines={2} />
       ) : recent.length === 0 ? (
-        <div className="text-muted italic">
-          no likes yet — the heart button on the player feeds this
-        </div>
+        <span className="text-[12px] text-muted">No likes yet — the heart on the player feeds this.</span>
       ) : (
         <div className="grid gap-3">
           {top.length > 0 && (

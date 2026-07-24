@@ -25,7 +25,7 @@ import {
   embeddingTextPrefixes,
 } from '../llm/provider.js';
 import type { EmbeddingCfg, EmbeddingTextPrefixes } from '../llm/provider.js';
-import { SHOW_MOODS as MOOD_VOCAB } from '../settings.js';
+import { moodVocab } from '../settings.js';
 import crypto from 'node:crypto';
 
 const LYRIC_EXCERPT_CHARS = 400; // cap lyrics before they bloat the embedding text
@@ -491,7 +491,7 @@ export function promptVocabHash(systemPrompt: string): string {
     .createHash('sha256')
     .update(systemPrompt)
     .update('|')
-    .update(MOOD_VOCAB.join(','))
+    .update(moodVocab().join(','))
     .digest('hex')
     .slice(0, 16);
 }

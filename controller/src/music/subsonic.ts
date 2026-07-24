@@ -572,6 +572,39 @@ export async function getLyrics(songId) {
   }
 }
 
+// Timed lyrics via the same getLyricsBySongId call, but PRESERVING the per-line
+// start offsets getLyrics() throws away (#1125). Returns { synced, lines } — the
+// raw material for lyric-derived vocal ranges (music/lyric-vocal.ts) — or null
+// when no lyrics are indexed. Line `start` is milliseconds from track start; the
+// entry-level `offset` (a global shift) is folded in — per OpenSubsonic
+// "positive means lyrics appear sooner", i.e. effective start = start − offset —
+// and negatives clamped to 0.
+// synced=false marks unsynced/plain-text lyrics whose line timings are absent.
+export async function getStructuredLyrics(
+  songId,
+): Promise<{ synced: boolean; lines: Array<{ startMs: number; text: string }> } | null> {
+  try {
+    const r = await call('getLyricsBySongId', { id: songId });
+    const structured = r.lyricsList?.structuredLyrics;
+    if (!Array.isArray(structured) || structured.length === 0) return null;
+    // A track may carry several versions (languages, synced + unsynced) — prefer
+    // a synced one, since only that has the timings we're after.
+    const chosen = structured.find((s) => s?.synced === true) ?? structured[0];
+    const synced = chosen?.synced === true;
+    const offset = Number.isFinite(chosen?.offset) ? Number(chosen.offset) : 0;
+    const lineArr = Array.isArray(chosen?.line) ? chosen.line : [];
+    const lines = lineArr.map((l) => {
+      const text = typeof l?.value === 'string' ? l.value : '';
+      const rawStart = Number(l?.start);
+      const startMs = Number.isFinite(rawStart) ? Math.max(0, rawStart - offset) : NaN;
+      return { startMs, text };
+    });
+    return { synced, lines };
+  } catch {
+    return null;
+  }
+}
+
 // Async iterator over every song in the library. Walks albums in batches.
 // Each yielded song is annotated with the album-level era signals Navidrome
 // only exposes on the album record (issue #842): `albumIsCompilation`

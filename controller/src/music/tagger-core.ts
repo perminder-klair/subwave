@@ -5,7 +5,7 @@
 // bulk tag-library.ts script. Both produce identical shapes per track.
 
 import { z } from 'zod';
-import { SHOW_MOODS as MOOD_VOCAB } from '../settings.js';
+import { moodVocab } from '../settings.js';
 import { djObject } from '../llm/sdk.js';
 import { songGenres } from './subsonic.js';
 
@@ -18,11 +18,15 @@ export const BatchTagSchema = z.object({
   results: z.array(TagSchema),
 });
 
-export const TAGGER_SYSTEM = `You tag music tracks with mood and energy for a personal radio station.
+// System prompts are FUNCTIONS, not consts: the mood list is operator-editable
+// (settings.moods) and read live, so the prompt — and the promptVocabHash the
+// tagger keys re-tagging on — reflect the current vocabulary each call.
+export function taggerSystem(): string {
+  return `You tag music tracks with mood and energy for a personal radio station.
 
 For each track, output ONLY a JSON object:
 {
-  "moods": [1-3 strings, each from this exact list: ${MOOD_VOCAB.join(', ')}],
+  "moods": [1-3 strings, each from this exact list: ${moodVocab().join(', ')}],
   "energy": "low" | "medium" | "high"
 }
 
@@ -32,8 +36,10 @@ A high-BPM dance track is "energetic" and "workout" — not "celebratory" unless
 A slow rainy-day instrumental is "calm" and "rainy" — not "evening" just because it's chill.
 
 If you genuinely cannot tell from the title/artist/album, return {"moods":[],"energy":"medium"}. Do not invent.`;
+}
 
-export const TAGGER_BATCH_SYSTEM = `You tag music tracks with mood and energy for a personal radio station.
+export function taggerBatchSystem(): string {
+  return `You tag music tracks with mood and energy for a personal radio station.
 
 You will be given a numbered list of tracks. Return ONLY a JSON object of the form:
 {
@@ -46,7 +52,7 @@ You will be given a numbered list of tracks. Return ONLY a JSON object of the fo
 The results array MUST have exactly one entry per input track, in the same order as the numbered list. Entry 1 in results corresponds to track 1, entry 2 to track 2, and so on.
 
 For each entry:
-- moods: 1-3 strings, each from this exact list: ${MOOD_VOCAB.join(', ')}
+- moods: 1-3 strings, each from this exact list: ${moodVocab().join(', ')}
 - energy: "low" | "medium" | "high"
 
 Choose moods that reflect how the track FEELS to listen to, not just its genre.
@@ -55,6 +61,7 @@ A high-BPM dance track is "energetic" and "workout" — not "celebratory" unless
 A slow rainy-day instrumental is "calm" and "rainy" — not "evening" just because it's chill.
 
 If you genuinely cannot tell from the title/artist/album for a track, return {"moods":[],"energy":"medium"} for that entry. Do not invent.`;
+}
 
 export interface TaggableSong {
   title?: string;
@@ -73,9 +80,10 @@ export interface TagResult {
 }
 
 function sanitizeTag(parsed: { moods?: unknown; energy?: unknown }): TagResult {
+  const vocab = moodVocab();
   const moods = Array.isArray(parsed.moods)
     ? (parsed.moods as unknown[])
-        .filter((m): m is string => typeof m === 'string' && MOOD_VOCAB.includes(m))
+        .filter((m): m is string => typeof m === 'string' && vocab.includes(m))
         .slice(0, 3)
     : [];
   const energy = ['low', 'medium', 'high'].includes(parsed.energy as string)
@@ -110,7 +118,7 @@ export async function tagOne(song: TaggableSong, opts: TagOpts = {}): Promise<Ta
     `Genre: ${songGenres(song).join(', ') || '?'}`;
 
   const parsed = await djObject({
-    system: TAGGER_SYSTEM,
+    system: taggerSystem(),
     prompt: userPrompt,
     schema: TagSchema,
     temperature: 0.2,
@@ -127,7 +135,7 @@ export async function tagBatch(songs: TaggableSong[], opts: TagOpts = {}): Promi
     `Tag these ${songs.length} tracks. Return one entry per track in the same order.\n\n${lines}`;
 
   const parsed = await djObject({
-    system: TAGGER_BATCH_SYSTEM,
+    system: taggerBatchSystem(),
     prompt: userPrompt,
     schema: BatchTagSchema,
     temperature: 0.2,

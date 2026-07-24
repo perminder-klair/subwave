@@ -585,30 +585,118 @@ export const TTS_CLOUD_PROVIDERS = ['openai', 'elevenlabs', 'openai-compatible']
 // meta-search via settings.search.baseUrl.
 export const SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'brave', 'searxng'] as const;
 
-// Canonical mood vocabulary. Shared by the library tagger (music/tag-library.js
-// imports this as MOOD_VOCAB) and the Shows scheduler — a show's `moods` (lead
-// entry) override the autonomous dominantMood, so every entry must come from
-// this list. An empty list means "Any": the show pins no mood and the
-// autonomous chain (festival > weather > time) applies while it's on air.
-export const SHOW_MOODS = [
-  'energetic',
-  'calm',
-  'reflective',
-  'celebratory',
-  'romantic',
-  'spiritual',
-  'focus',
-  'workout',
-  'driving',
-  'cooking',
-  'rainy',
-  'sunny',
-  'night',
-  'morning',
-  'evening',
-  'festival',
-  'cultural',
+// Canonical mood vocabulary + each mood's CLAP sound-prompt. This is the SEED:
+// the operator edits the live list from /admin/moods (settings.moods), and every
+// consumer reads it through the moodVocab()/moodEntries()/moodPromptFor()
+// accessors below — NOT this constant. `clapPrompt` is the zero-shot audio
+// sound-description (music/audio-moods.ts); '' falls back to `${name} music`.
+// A show's `moods` (lead entry) override the autonomous dominantMood; every
+// entry must come from the live vocabulary. Empty show moods means "Any".
+export const MOOD_DEFAULTS: Array<{ name: string; clapPrompt: string }> = [
+  { name: 'energetic', clapPrompt: 'high-energy, upbeat, powerful music with a strong driving beat' },
+  { name: 'calm', clapPrompt: 'calm, peaceful, soft, soothing, gentle music' },
+  { name: 'reflective', clapPrompt: 'reflective, introspective, melancholic, emotional music' },
+  { name: 'celebratory', clapPrompt: 'joyful, festive, celebratory party music' },
+  { name: 'romantic', clapPrompt: 'romantic, intimate, tender, loving music' },
+  { name: 'spiritual', clapPrompt: 'spiritual, devotional, sacred, meditative music' },
+  { name: 'focus', clapPrompt: 'minimal, unobtrusive, ambient instrumental background music for concentration' },
+  { name: 'workout', clapPrompt: 'intense, pounding, adrenaline-pumping workout music' },
+  { name: 'driving', clapPrompt: 'steady, groovy, mid-tempo cruising music for a road trip' },
+  { name: 'cooking', clapPrompt: 'light, cheerful, breezy, feel-good easy-listening music' },
+  { name: 'rainy', clapPrompt: 'mellow, wistful, cozy music for a rainy day' },
+  { name: 'sunny', clapPrompt: 'bright, warm, sunny, feel-good summer music' },
+  { name: 'night', clapPrompt: 'dark, atmospheric, moody late-night music' },
+  { name: 'morning', clapPrompt: 'fresh, gentle, optimistic early-morning music' },
+  { name: 'evening', clapPrompt: 'smooth, warm, relaxed evening music' },
+  { name: 'festival', clapPrompt: 'big, anthemic, euphoric festival crowd music' },
+  { name: 'cultural', clapPrompt: 'traditional folk music with regional acoustic instruments' },
 ];
+
+// Back-compat: the default mood NAMES. Kept for the community catalog (shared
+// configs validate against the canonical set, not a local custom vocab) and as
+// the accessor fallback before load(). Live reads go through moodVocab().
+export const SHOW_MOODS = MOOD_DEFAULTS.map((m) => m.name);
+
+// The 8 fixed day-periods (context.ts getTimeContext) and their seed moods.
+// Operators re-point each period's mood from /admin/moods (settings.moodSchedule);
+// the hour ranges + vibe/show labels stay in code.
+export const MOOD_PERIODS = [
+  'early-morning', 'morning', 'midday', 'afternoon',
+  'drive-time', 'evening', 'late-evening', 'after-hours',
+] as const;
+export const PERIOD_MOOD_DEFAULTS: Record<string, string> = {
+  'early-morning': 'morning',
+  morning: 'morning',
+  midday: 'energetic',
+  afternoon: 'focus',
+  'drive-time': 'driving',
+  evening: 'evening',
+  'late-evening': 'night',
+  'after-hours': 'reflective',
+};
+
+// The 6 fixed weather conditions (context.ts mapWeatherCode) and their seed
+// moods. '' = no mood steer for that condition. Editable via settings.weatherMoods.
+export const WEATHER_CONDITIONS = [
+  'clear', 'cloudy', 'foggy', 'rainy', 'snowy', 'stormy',
+] as const;
+export const WEATHER_MOOD_DEFAULTS: Record<string, string> = {
+  clear: 'sunny',
+  cloudy: '',
+  foggy: 'rainy',
+  rainy: 'rainy',
+  snowy: 'reflective',
+  stormy: 'rainy',
+};
+
+// --- Mood vocabulary validation (the seeded-but-editable pattern) ---
+export const MOODS_LIMIT = 40;
+const MOOD_NAME_MAX = 40;
+const MOOD_PROMPT_MAX = 200;
+
+// Normalise a raw mood name to the canonical id form (lowercase, [a-z0-9-]).
+function normalizeMoodName(raw: unknown): string {
+  return String(raw ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+// Lenient on-load pass: never throws, drops malformed/duplicate entries so a
+// hand-edited settings.json can't wedge boot. Empty → the seed defaults (an
+// empty vocabulary is unusable — shows, festivals, and the tagger all need it).
+function normalizeMoods(raw: any): Array<{ name: string; clapPrompt: string }> {
+  if (!Array.isArray(raw)) return MOOD_DEFAULTS;
+  const out: Array<{ name: string; clapPrompt: string }> = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (out.length >= MOODS_LIMIT) break;
+    if (!item || typeof item !== 'object') continue;
+    const name = normalizeMoodName(item.name);
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    const clapPrompt = typeof item.clapPrompt === 'string'
+      ? item.clapPrompt.trim().slice(0, MOOD_PROMPT_MAX)
+      : '';
+    out.push({ name, clapPrompt });
+  }
+  return out.length ? out : MOOD_DEFAULTS;
+}
+
+// Lenient on-load pass for the fixed-key mood maps: fills every known key from
+// the stored value when it's a string, else from the seed default.
+function normalizeMoodMap(
+  raw: any,
+  keys: readonly string[],
+  defaults: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of keys) {
+    out[k] = typeof raw?.[k] === 'string' ? raw[k] : defaults[k];
+  }
+  return out;
+}
 
 // Energy bands a show can pin as a soft music-steering filter. Mirrors the
 // tagger's per-track energy classes and the `tracksByMood` agent-tool filter.
@@ -874,8 +962,13 @@ function coerceShowList<T>(
 }
 
 function coerceShowMoods(item: unknown): string[] {
+  // Lenient on load: keep any non-empty string (moods are now operator-editable,
+  // so the effective vocabulary isn't known while the cache is still being
+  // built — filtering against the seed defaults here would strip an operator's
+  // custom moods). update()'s validateShowsStrict enforces the live vocabulary
+  // on save; a stale mood string just matches nothing at runtime.
   return coerceShowList(item, 'moods', 'mood',
-    (v) => (typeof v === 'string' && SHOW_MOODS.includes(v) ? v : null),
+    (v) => (typeof v === 'string' && v.trim() ? v.trim() : null),
     (v) => v);
 }
 
@@ -1234,6 +1327,14 @@ const DEFAULTS = {
   // so operators can add/edit/remove entries from the admin UI. Fall back to
   // FESTIVAL_DEFAULTS when empty/absent.
   festivals: FESTIVAL_DEFAULTS,
+  // Operator-editable mood system (/admin/moods). `moods` is the vocabulary +
+  // per-mood CLAP prompt; `moodSchedule` maps each fixed day-period to a mood;
+  // `weatherMoods` maps each fixed weather condition to a mood ('' = no steer).
+  // All read live via the moodVocab()/moodScheduleFor()/weatherMoodFor()
+  // accessors. Seeded here; the operator's edits replace them.
+  moods: MOOD_DEFAULTS,
+  moodSchedule: PERIOD_MOOD_DEFAULTS,
+  weatherMoods: WEATHER_MOOD_DEFAULTS,
   // Listener-player UI toggles — purely presentational, station-wide. The web
   // player reads these via GET /state (alongside the theme) and applies them
   // live; no restart. `boothBuddy` gates the DJ-line mascot — OFF by default,
@@ -2213,6 +2314,12 @@ export async function load() {
     // when the key is absent/invalid — a persisted empty array means the
     // operator deleted every entry and must stay empty (calendar off).
     festivals: Array.isArray(stored.festivals) ? stored.festivals : FESTIVAL_DEFAULTS,
+    // Mood system loaded from settings.json (lenient normalise — never wedges
+    // boot). An empty/absent vocabulary reseeds MOOD_DEFAULTS (unusable when
+    // empty); the two maps fill missing keys from their seed defaults.
+    moods: normalizeMoods(stored.moods),
+    moodSchedule: normalizeMoodMap(stored.moodSchedule, MOOD_PERIODS, PERIOD_MOOD_DEFAULTS),
+    weatherMoods: normalizeMoodMap(stored.weatherMoods, WEATHER_CONDITIONS, WEATHER_MOOD_DEFAULTS),
     ui: {
       boothBuddy:
         typeof stored.ui?.boothBuddy === 'boolean'
@@ -2652,6 +2759,30 @@ export function getDefaults() {
   return DEFAULTS;
 }
 
+// --- Live mood accessors — the single seam every consumer reads through, so an
+// operator edit takes effect with no restart. Pre-load, get() returns DEFAULTS,
+// so these still answer with the seed vocabulary (keeps the standalone
+// audio-moods unit test working without a settings.load()). ---
+export function moodEntries(): Array<{ name: string; clapPrompt: string }> {
+  const m = get().moods;
+  return Array.isArray(m) && m.length ? m : MOOD_DEFAULTS;
+}
+export function moodVocab(): string[] {
+  return moodEntries().map((m) => m.name);
+}
+export function moodPromptFor(name: string): string {
+  const e = moodEntries().find((m) => m.name === name);
+  return e?.clapPrompt ? e.clapPrompt : `${name} music`;
+}
+export function moodScheduleFor(period: string): string {
+  const s = get().moodSchedule || {};
+  return s[period] ?? PERIOD_MOOD_DEFAULTS[period] ?? '';
+}
+export function weatherMoodFor(condition: string): string {
+  const w = get().weatherMoods || {};
+  return (w[condition] ?? WEATHER_MOOD_DEFAULTS[condition] ?? '') || '';
+}
+
 // Resolve the operator-entered inline API key for a provider from the
 // per-provider map (issue #657). Returns '' when none is stored, in which case
 // the registry/embedding layer falls through to the provider's env var
@@ -2910,7 +3041,7 @@ export function validatePersonasStrict(raw) {
   });
 }
 
-function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
+export function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>, moodNames: string[] = SHOW_MOODS) {
   if (!Array.isArray(raw)) throw new Error('shows must be an array');
   if (raw.length > SHOWS_LIMIT) throw new Error(`shows must be at most ${SHOWS_LIMIT} entries`);
   const personaIds = personas.map(p => p.id);
@@ -2936,21 +3067,32 @@ function validateShowsStrict(raw, personas, allowedThemeIds: Set<string>) {
       throw new Error(`shows[${i}].moods must have at most ${SHOW_FILTER_VALUES_MAX} entries`);
     }
     for (const m of rawMoods) {
-      if (typeof m !== 'string' || !SHOW_MOODS.includes(m)) {
-        throw new Error(`shows[${i}].moods entries must be one of: ${SHOW_MOODS.join(', ')}`);
+      if (typeof m !== 'string' || !moodNames.includes(m)) {
+        throw new Error(`shows[${i}].moods entries must be one of: ${moodNames.join(', ')}`);
       }
     }
     const moods = coerceShowMoods({ moods: rawMoods });
     // Optional per-show theme override. Empty/missing means "fall back to the
     // station default while this show is on air". The allow-set is built once
     // by update() so we stay sync here.
+    //
+    // A stale id (a retired built-in like the old "sunset"/"neon" palettes,
+    // renamed in 58c3782b, or a custom theme file deleted under our feet) is
+    // DROPPED to "" rather than throwing — same tolerance as the lenient load
+    // path and the serve-time getTheme() fallback. Throwing here bricked EVERY
+    // shows/schedule save and full restore for any install still carrying one
+    // retired id on one show, because update() re-validates the whole array
+    // (issue #917 is the theme.active twin of this). Self-heals: the dead id
+    // is gone the next time the array is persisted. This never discards a fresh
+    // operator pick — those come from the live theme list — only a dead one.
     let themeId = '';
     if (item.themeId !== undefined && item.themeId !== null && item.themeId !== '') {
       const v = String(item.themeId).trim();
-      if (!allowedThemeIds.has(v)) {
-        throw new Error(`shows[${i}].themeId "${v}" is not a known theme id`);
+      if (allowedThemeIds.has(v)) {
+        themeId = v;
+      } else {
+        console.warn(`[shows] dropping unknown themeId "${v}" from "${name}" — falling back to the station theme`);
       }
-      themeId = v;
     }
     // Optional music-steering filters — all default to "no constraint" and all
     // multi-value lists (#929, legacy singular fields still accepted). Genres
@@ -3206,9 +3348,94 @@ function validateWebhooksStrict(raw: unknown, existing: Webhook[] = []) {
   });
 }
 
+// --- Strict update() validators for the mood system (the validateFestivalsStrict
+// shape: whole-value replace, indexed throws, rebuilt objects strip unknown
+// keys). `moodNames` is the effective vocabulary being saved, so a schedule /
+// weather / festival entry may reference a mood added in the SAME patch. ---
+// Exported for unit tests (scripts/moods.test.ts) — the pure validation/guard
+// logic that keeps the mood system consistent on every save.
+export function validateMoodsStrict(raw: any): Array<{ name: string; clapPrompt: string }> {
+  if (!Array.isArray(raw)) throw new Error('moods must be an array');
+  if (raw.length < 1) throw new Error('moods must have at least one entry');
+  if (raw.length > MOODS_LIMIT) throw new Error(`moods must be at most ${MOODS_LIMIT} entries`);
+  const seen = new Set<string>();
+  return raw.map((item, i) => {
+    if (!item || typeof item !== 'object') throw new Error(`moods[${i}] must be an object`);
+    const name = normalizeMoodName(item.name);
+    if (name.length < 1 || name.length > MOOD_NAME_MAX) {
+      throw new Error(`moods[${i}].name must be 1-${MOOD_NAME_MAX} chars (letters, digits, dashes)`);
+    }
+    if (seen.has(name)) throw new Error(`moods[${i}].name "${name}" is a duplicate`);
+    seen.add(name);
+    const clapPrompt = typeof item.clapPrompt === 'string'
+      ? item.clapPrompt.trim().slice(0, MOOD_PROMPT_MAX)
+      : '';
+    return { name, clapPrompt };
+  });
+}
+
+export function validateMoodScheduleStrict(raw: any, moodNames: string[]): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('moodSchedule must be an object');
+  }
+  const names = new Set(moodNames);
+  const out: Record<string, string> = {};
+  for (const period of MOOD_PERIODS) {
+    const v = String(raw[period] ?? '').trim();
+    if (!names.has(v)) {
+      throw new Error(`moodSchedule.${period} must be one of: ${moodNames.join(', ')}`);
+    }
+    out[period] = v;
+  }
+  return out;
+}
+
+export function validateWeatherMoodsStrict(raw: any, moodNames: string[]): Record<string, string> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('weatherMoods must be an object');
+  }
+  const names = new Set(moodNames);
+  const out: Record<string, string> = {};
+  for (const cond of WEATHER_CONDITIONS) {
+    const v = String(raw[cond] ?? '').trim();
+    if (v && !names.has(v)) {
+      throw new Error(`weatherMoods.${cond} must be a mood (${moodNames.join(', ')}) or empty`);
+    }
+    out[cond] = v;
+  }
+  return out;
+}
+
+// Reject a vocabulary edit that would orphan a mood still referenced by the
+// festival calendar, either mood map, or a scheduled show. Renames are a
+// two-step (add the new name, repoint the referrers, remove the old) — this is
+// the guard that names exactly what still points at a removed mood.
+export function assertNoOrphanMoods(next: any): void {
+  const names = new Set<string>((next.moods || []).map((m: any) => m.name));
+  const refs: string[] = [];
+  for (const [period, mood] of Object.entries(next.moodSchedule || {})) {
+    if (mood && !names.has(mood as string)) refs.push(`the ${period} time-of-day slot`);
+  }
+  for (const [cond, mood] of Object.entries(next.weatherMoods || {})) {
+    if (mood && !names.has(mood as string)) refs.push(`the ${cond} weather slot`);
+  }
+  for (const f of next.festivals || []) {
+    if (f.mood && !names.has(f.mood)) refs.push(`festival "${f.name}"`);
+  }
+  for (const s of next.shows || []) {
+    for (const m of s.moods || []) {
+      if (!names.has(m)) refs.push(`show "${s.name}"`);
+    }
+  }
+  if (refs.length) {
+    const uniq = [...new Set(refs)];
+    throw new Error(`can't remove that mood — still used by ${uniq.join(', ')}. Reassign those first.`);
+  }
+}
+
 const FESTIVALS_LIMIT = 50;
 
-function validateFestivalsStrict(raw) {
+function validateFestivalsStrict(raw, moodNames: string[] = SHOW_MOODS) {
   if (!Array.isArray(raw)) throw new Error('festivals must be an array');
   if (raw.length > FESTIVALS_LIMIT) {
     throw new Error(`festivals must be at most ${FESTIVALS_LIMIT} entries`);
@@ -3229,8 +3456,8 @@ function validateFestivalsStrict(raw) {
       throw new Error(`festivals[${i}].day must be an integer 1-${daysInMonth} for month ${month}`);
     }
     const mood = String(item.mood ?? '').trim();
-    if (!SHOW_MOODS.includes(mood)) {
-      throw new Error(`festivals[${i}].mood must be one of: ${SHOW_MOODS.join(', ')}`);
+    if (!moodNames.includes(mood)) {
+      throw new Error(`festivals[${i}].mood must be one of: ${moodNames.join(', ')}`);
     }
     const description = typeof item.description === 'string' ? item.description.trim().slice(0, 200) : '';
     const windowDays = Number(item.windowDays ?? 0);
@@ -3525,14 +3752,34 @@ export async function update(patch) {
     if (t.active !== undefined) {
       const v = String(t.active ?? '').trim();
       if (!v) throw new Error('theme.active must be a theme id');
-      if (!(await isValidThemeId(v))) {
-        throw new Error(`theme.active "${v}" is not a known theme id`);
+      // A stale active theme (a retired built-in renamed in 58c3782b, or a
+      // custom theme that isn't on disk) falls back to the built-in default
+      // rather than failing the save — same tolerance as shows[].themeId above
+      // and the serve-time getTheme() fallback, and the same precedent as the
+      // activeDjPromptId reset. Throwing here aborted the whole restore for any
+      // install whose active theme id had since been retired (issue #917).
+      next.theme.active = (await isValidThemeId(v)) ? v : DEFAULT_THEME_ID;
+      if (next.theme.active !== v) {
+        console.warn(`[theme] active theme "${v}" is not a known theme id — falling back to "${DEFAULT_THEME_ID}"`);
       }
-      next.theme.active = v;
     }
   }
+  // Mood system (context-only — no Liquidsoap restart). Validate the vocabulary
+  // first so the maps + festivals in the same patch can reference a newly-added
+  // mood. The in-use removal guard (assertNoOrphanMoods) runs after shows are
+  // validated below, so a same-patch show edit is seen.
+  if ('moods' in patch) {
+    next.moods = validateMoodsStrict(patch.moods);
+  }
+  const moodNames = (next.moods || []).map((m: any) => m.name);
+  if ('moodSchedule' in patch) {
+    next.moodSchedule = validateMoodScheduleStrict(patch.moodSchedule, moodNames);
+  }
+  if ('weatherMoods' in patch) {
+    next.weatherMoods = validateWeatherMoodsStrict(patch.weatherMoods, moodNames);
+  }
   if ('festivals' in patch) {
-    next.festivals = validateFestivalsStrict(patch.festivals);
+    next.festivals = validateFestivalsStrict(patch.festivals, moodNames);
   }
   // Prompt-template library. `djPrompts` replaces the whole library;
   // `activeDjPromptId` switches which entry renders ('' = built-in default).
@@ -3593,13 +3840,19 @@ export async function update(patch) {
     // listThemes() returns built-ins + cached user themes (30 s TTL) — same
     // source the picker reads.
     const allowedThemeIds = new Set((await listThemes()).map(t => t.id));
-    next.shows = validateShowsStrict(patch.shows, next.personas, allowedThemeIds);
+    next.shows = validateShowsStrict(patch.shows, next.personas, allowedThemeIds, moodNames);
   }
   if ('schedule' in patch) {
     next.schedule = validateScheduleStrict(patch.schedule, next.shows);
   }
   if ('scheduleOverride' in patch) {
     next.scheduleOverride = validateScheduleOverrideStrict(patch.scheduleOverride, next.shows);
+  }
+  // In-use removal guard: run once the vocabulary AND any same-patch shows are
+  // validated, so a mood dropped from the vocab is rejected only if something
+  // still references it.
+  if ('moods' in patch) {
+    assertNoOrphanMoods(next);
   }
   if ('activePersonaId' in patch) {
     if (!next.personas.some(p => p.id === patch.activePersonaId)) {

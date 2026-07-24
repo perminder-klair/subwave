@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
+import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import { isIOSDevice } from '@/lib/platform';
 import { useStationOrigin } from '@/lib/stationOrigin';
 import { withStreamAuth } from '@/lib/stationAuth';
@@ -47,6 +47,14 @@ export interface Player {
   // consumer should explain why and offer a one-tap resume. Cleared on the
   // next tune().
   idleStopped: boolean;
+  /** Measured seconds-behind-the-live-edge of THIS tab's audio, in ms, or
+   *  null when the tab isn't audibly playing the stream. buffered.end is the
+   *  freshest audio the connection has delivered (≈ the live edge, since
+   *  Icecast serves in real time after the connect burst), so end − currentTime
+   *  is exactly how far behind it this listener's ears are — whatever mount
+   *  they're on and however much of the burst they actually got. Stable
+   *  identity; safe in effect deps. */
+  getListenerLagMs: () => number | null;
 }
 
 export interface UsePlayerOptions {
@@ -337,5 +345,29 @@ export function usePlayer({ initialVolume = 1 }: UsePlayerOptions = {}): Player 
     }
   };
 
-  return { audioRef, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted: volume === 0, idleStopped };
+  // How far behind the live edge this tab's audio actually is. The flat
+  // stream.bufferSeconds from /now-playing is only the depth Icecast *tries*
+  // to burst on the MP3 mount — the real per-connection lag differs whenever
+  // the mount's byte rate differs (Opus/FLAC/AAC), the ring was short at
+  // connect, or playback paused and drifted. The element knows the truth:
+  // buffered.end − currentTime. Null (→ callers fall back to bufferSeconds)
+  // unless this tab is tuned in and audibly playing, since a paused element's
+  // stale ranges say nothing about what the viewer is hearing elsewhere.
+  const getListenerLagMs = useCallback((): number | null => {
+    const el = audioRef.current;
+    if (!el || !tunedInRef.current || el.paused) return null;
+    try {
+      const n = el.buffered.length;
+      if (n === 0) return null;
+      const lag = el.buffered.end(n - 1) - el.currentTime;
+      if (!Number.isFinite(lag) || lag <= 0) return null;
+      // Cap at 2 minutes: beyond that the ranges describe a wedged element,
+      // not a live listener, and a huge hold would freeze the display.
+      return Math.min(lag, 120) * 1000;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  return { audioRef, tunedIn, status, volume, setVolume, tune, stop, toggleMute, muted: volume === 0, idleStopped, getListenerLagMs };
 }

@@ -14,7 +14,12 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { notify, errorMessage } from '../../../lib/notify';
-import { Card, Btn, Eyebrow, Seg } from '../ui';
+import type { LucideIcon } from 'lucide-react';
+import { Braces, Boxes, Cable, Webhook } from 'lucide-react';
+import { SkeletonRows } from '@/components/ui/skeleton';
+import { ErrorState } from '@/components/ui/error-state';
+import { Card, Btn, Eyebrow } from '../ui';
+import { SectionTabs } from '../SectionTabs';
 import type { Catalog } from './types';
 import EndpointsTab from './EndpointsTab';
 import McpTab from './McpTab';
@@ -23,11 +28,11 @@ import WebhooksPanel from '../WebhooksPanel';
 
 type TabId = 'endpoints' | 'mcp' | 'integrations' | 'webhooks';
 
-const TABS: { id: TabId; label: string }[] = [
-  { id: 'endpoints', label: 'Endpoints' },
-  { id: 'mcp', label: 'MCP' },
-  { id: 'integrations', label: 'Integrations' },
-  { id: 'webhooks', label: 'Webhooks' },
+const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
+  { id: 'endpoints', label: 'Endpoints', icon: Braces },
+  { id: 'mcp', label: 'MCP', icon: Boxes },
+  { id: 'integrations', label: 'Integrations', icon: Cable },
+  { id: 'webhooks', label: 'Webhooks', icon: Webhook },
 ];
 
 export default function ConnectPanel() {
@@ -92,14 +97,14 @@ export default function ConnectPanel() {
   if (err) {
     return (
       <div className="grid gap-4">
-        <Card title="Connect"><div className="text-[13px] text-[var(--danger)]">controller error: {err}</div></Card>
+        <Card title="Connect"><ErrorState error={err} /></Card>
       </div>
     );
   }
   if (!catalog) {
     return (
       <div className="grid gap-4">
-        <Card title="Connect"><div className="text-[13px] text-muted italic">loading…</div></Card>
+        <Card title="Connect"><SkeletonRows rows={3} /></Card>
       </div>
     );
   }
@@ -107,28 +112,23 @@ export default function ConnectPanel() {
   return (
     <div className="grid gap-4">
       <section className="card">
-        <div className="border-b border-ink p-4">
-          <Eyebrow className="text-vermilion">connect</Eyebrow>
-          <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
-            Everything wired to {catalog.station}.
+        <div className="flex flex-wrap items-start justify-between gap-4 border-b border-ink p-4">
+          <div className="min-w-0">
+            <Eyebrow className="text-vermilion">connect</Eyebrow>
+            <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
+              Everything wired to {catalog.station}.
+            </div>
+            <div className="mt-1 text-[11px] leading-[1.6] text-muted">
+              Discover the HTTP API, try it live, wire up an MCP client, or point a speaker at the stream.
+              All URLs below are the real addresses for this station (<code>{catalog.origin}</code>).
+            </div>
           </div>
-          <div className="mt-1 text-[11px] leading-[1.6] text-muted">
-            Discover the HTTP API, try it live, wire up an MCP client, or point a speaker at the stream.
-            All URLs below are the real addresses for this station (<code>{catalog.origin}</code>).
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-3 bg-[var(--ink-softer)] p-3.5">
-          <Seg
-            value={tab}
-            options={TABS.map(t => ({ id: t.id, label: t.label }))}
-            accent
-            onChange={selectTab}
-          />
-          <span className="ml-auto" />
-          <Btn sm onClick={downloadOpenApi} title="Download an OpenAPI 3.1 spec for this station">
+          <Btn sm onClick={downloadOpenApi} className="flex-none" title="Download an OpenAPI 3.1 spec for this station">
             Download OpenAPI
           </Btn>
         </div>
+        {/* Shared editorial section-tabs, edge-to-edge along the card's foot. */}
+        <SectionTabs tabs={TABS} value={tab} onChange={selectTab} label="Connect sections" />
       </section>
 
       {tab === 'endpoints' && <EndpointsTab catalog={catalog} adminFetch={adminFetch} />}

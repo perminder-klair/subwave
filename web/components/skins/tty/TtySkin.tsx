@@ -6,6 +6,7 @@
 // bare "terminal" readout (the registry aliases terminal → tty).
 
 import { useEffect, useRef, useState } from 'react';
+import { m, steps } from 'motion/react';
 import styles from './Tty.module.css';
 import {
   usePlayerActions,
@@ -31,11 +32,60 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
-import { useRequestSlip, useTrackLike, useVolumeNudge } from '../sharedHooks';
+import { useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
 
 const PROGRESS_CELLS = 16;
 const VOL_CELLS = 8;
+
+/* Print cadence. 14ms a cell reads as a fast local terminal; past ~32 cells
+   the step compresses so even a very long title lands inside the cap rather
+   than holding the pane for a second. */
+const PRINT_STEP_MS = 14;
+const PRINT_CAP_MS = 450;
+
+/** A line that prints. A terminal doesn't fade text in — it writes it, one
+ *  cell at a time — so the reveal is a clip-path wipe stepped to the character
+ *  count, not an opacity ramp. Keyed on its own text, so changing the text
+ *  remounts and reprints.
+ *
+ *  There is deliberately no exit animation: a terminal line isn't removed, it
+ *  is overwritten. That's also why this needs no AnimatePresence. */
+function Printed({
+  text, printing, delay = 0, className, children,
+}: {
+  /** The line's plain text — sets the cadence, and keys the reprint. */
+  text: string;
+  printing: boolean;
+  delay?: number;
+  className?: string;
+  /** What to actually render, when the line carries markup (a muted tail, a
+   *  highlight). The wipe reveals whatever is inside. Defaults to `text`. */
+  children?: React.ReactNode;
+}) {
+  const cells = Math.max(text.length, 1);
+  // Not printing (lite mode) means no motion element at all. A zero-duration
+  // transition would still paint `initial` for a frame, and here `initial` is a
+  // full-width clip — a blank line flashing on every track change.
+  if (!printing) {
+    return <span className={cn('inline-block', className)}>{children ?? text}</span>;
+  }
+  const duration = Math.min(cells * PRINT_STEP_MS, PRINT_CAP_MS) / 1000;
+  return (
+    <m.span
+      key={text}
+      // Units match across both keyframes (all four values percent) so motion
+      // interpolates the inset rather than snapping between two strings it
+      // can't line up.
+      initial={{ clipPath: 'inset(0% 100% 0% 0%)' }}
+      animate={{ clipPath: 'inset(0% 0% 0% 0%)' }}
+      transition={{ duration, delay, ease: steps(cells) }}
+      className={cn('inline-block', className)}
+    >
+      {children ?? text}
+    </m.span>
+  );
+}
 
 function Rule({ children }: { children: React.ReactNode }) {
   return (
@@ -117,6 +167,14 @@ export default function TtySkin(_props: SkinProps) {
   const volFilled = Math.round(volume * VOL_CELLS);
   const coverId = nowPlaying?.subsonic_id;
 
+  // Lite mode's CSS kill can't reach motion — gate the print ourselves. The
+  // skin's own boot log already covers "the terminal is starting", so the
+  // first paint doesn't also print: two boot animations is worse than one.
+  const mayPrint = useSkinMotion();
+  const painted = useRef(false);
+  useEffect(() => { painted.current = true; }, []);
+  const printing = mayPrint && painted.current;
+
   return (
     <div className="absolute inset-0 overflow-hidden p-4 font-mono text-[13px] leading-relaxed text-ink sm:p-7">
       <div className="flex h-full w-full flex-col gap-3.5">
@@ -147,16 +205,33 @@ export default function TtySkin(_props: SkinProps) {
             <div className="flex min-w-0 flex-row items-start gap-4 sm:gap-6">
               <div className="flex min-w-0 flex-1 flex-col gap-3">
                 <div className="text-[clamp(22px,4vw,46px)] leading-[1.05] font-extrabold tracking-[0.06em] uppercase">
-                  {offline ? <span className="text-muted">— OFF AIR —</span> : (nowPlaying?.title ?? 'SCANNING…')}
+                  {offline ? (
+                    <span className="text-muted">— OFF AIR —</span>
+                  ) : (
+                    <Printed text={nowPlaying?.title ?? 'SCANNING…'} printing={printing} />
+                  )}
                 </div>
                 {!offline && nowPlaying?.artist && (
                   <div className="text-[15px] tracking-[0.08em] uppercase">
-                    {nowPlaying.artist}
-                    {(nowPlaying.album || nowPlaying.year) && (
-                      <span className="text-muted">
-                        {' '}— {[nowPlaying.album, nowPlaying.year].filter(Boolean).join(' · ')}
-                      </span>
-                    )}
+                    {/* The artist prints after the title finishes — the pane
+                        writes top-down, the way a real one would. */}
+                    <Printed
+                      text={
+                        nowPlaying.artist
+                        + ((nowPlaying.album || nowPlaying.year)
+                          ? ` — ${[nowPlaying.album, nowPlaying.year].filter(Boolean).join(' · ')}`
+                          : '')
+                      }
+                      printing={printing}
+                      delay={0.12}
+                    >
+                      {nowPlaying.artist}
+                      {(nowPlaying.album || nowPlaying.year) && (
+                        <span className="text-muted">
+                          {' '}— {[nowPlaying.album, nowPlaying.year].filter(Boolean).join(' · ')}
+                        </span>
+                      )}
+                    </Printed>
                   </div>
                 )}
                 {!offline && (meta.facts.length > 0 || meta.moods.length > 0) && (

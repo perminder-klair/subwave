@@ -10,6 +10,9 @@ import { useAdminAuth } from '../../lib/adminAuth';
 import { fmtSize, relTime } from '../../lib/format';
 import { Card, Btn, Eyebrow, Pill } from './ui';
 import { V3AlertDialog } from '../ui/alert-dialog';
+import { SkeletonRows } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { ErrorState } from '@/components/ui/error-state';
 
 interface ArchiveEntry {
   path: string;
@@ -94,14 +97,14 @@ export default function ArchivesPanel() {
   if (err) {
     return (
       <div className="grid gap-4">
-        <Card title="Archives"><div className="text-[13px] text-[var(--danger)]">controller error: {err}</div></Card>
+        <ErrorState error={err} onRetry={load} />
       </div>
     );
   }
   if (!entries) {
     return (
       <div className="grid gap-4">
-        <Card title="Archives"><div className="text-[13px] text-muted italic">loading…</div></Card>
+        <SkeletonRows rows={4} />
       </div>
     );
   }
@@ -174,11 +177,16 @@ export default function ArchivesPanel() {
       )}
 
       {byDate.length === 0 && (
-        <Card title="No recordings yet">
-          <div className="text-[12px] leading-[1.6] text-muted">
-            The first hour writes once the clock crosses the next <code>HH:00</code>. If you started the
-            station mid-hour, you&rsquo;ll see the first file after the next top of the hour.
-          </div>
+        <Card>
+          <EmptyState
+            title="No recordings yet"
+            description={
+              <>
+                The first hour writes once the clock crosses the next <code>HH:00</code>. If you started the
+                station mid-hour, you&rsquo;ll see the first file after the next top of the hour.
+              </>
+            }
+          />
         </Card>
       )}
 
