@@ -353,6 +353,15 @@ export interface SettingsData {
   };
   tagger?: { running?: boolean };
   env?: Record<string, unknown>;
+  // Navidrome connection read state (Settings → Music source). passSet only —
+  // the password value never reaches the browser. Env flags are per-field:
+  // url can be env-managed while user/pass come from the wizard/admin.
+  navidrome?: {
+    url?: string;
+    user?: string;
+    passSet?: boolean;
+    env?: { url?: boolean; user?: boolean; pass?: boolean };
+  };
   streamOnAir?: boolean;
   // What timezone '' (Auto) resolves to — the controller's own zone.
   serverTimezone?: string;

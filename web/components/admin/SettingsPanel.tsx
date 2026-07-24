@@ -20,7 +20,7 @@ import ArchivesPanel from './ArchivesPanel';
 import BackupPanel from './BackupPanel';
 import {
   Radio, Palette, Cpu, Mic, Library, Search,
-  Activity, Archive, Save, AlertTriangle, Heart,
+  Activity, Archive, Save, AlertTriangle, Heart, Music2,
 } from 'lucide-react';
 import {
   SectionHeader, ELEVENLABS_VS_DEFAULTS,
@@ -35,9 +35,11 @@ import { StationSection } from './settings/StationSection';
 import { ThemeSection } from './settings/ThemeSection';
 import { ScrobbleSection } from './settings/ScrobbleSection';
 import { LikesSection } from './settings/LikesSection';
+import { NavidromeSection } from './settings/NavidromeSection';
 
 const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
+  { id: 'music',    label: 'Music source', hint: 'navidrome · subsonic', icon: Music2 },
   { id: 'theme',    label: 'Skin & Themes', hint: 'player skin · palette', icon: Palette },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine', icon: Mic },
@@ -450,6 +452,9 @@ export default function SettingsPanel() {
                 data={data} form={form} setForm={updateForm} busy={busy}
                 saveSettings={saveSettings}
               />
+            )}
+            {activeSection === 'music' && (
+              <NavidromeSection data={data} adminFetch={adminFetch} refresh={refresh} />
             )}
             {activeSection === 'theme' && (
               <ThemeSection

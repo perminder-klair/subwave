@@ -5,6 +5,11 @@ import express from 'express';
 import { readFile, unlink } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { config } from '../config.js';
+import * as subsonic from '../music/subsonic.js';
+import { clearPoolCache } from '../music/picker.js';
+import { clearNavidromeCache } from '../doctor.js';
+import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
+import { applyNavidromeToLiveConfig, saveSetupConfig } from '../setup/config.js';
 import * as library from '../music/library.js';
 import * as jingles from '../broadcast/jingles.js';
 import * as settings from '../settings.js';
@@ -81,6 +86,20 @@ router.get('/settings', requireAdmin, async (req, res) => {
       // this is soft/hard (LLM steps will spend more, or fail until UTC midnight).
       budget: { mode: budgetCurrentMode() },
       ollama: { url: config.ollama.url, model: config.ollama.model },
+      // Navidrome connection — read state for the Settings "Music source"
+      // section. The password never leaves the process (passSet only). Env
+      // flags are per-field because server.ts applies setup-config per-field:
+      // url can be env-managed while user/pass come from the wizard/admin.
+      navidrome: {
+        url: config.navidrome.url,
+        user: config.navidrome.user,
+        passSet: !!config.navidrome.password,
+        env: {
+          url: !!process.env.NAVIDROME_URL,
+          user: !!process.env.NAVIDROME_USER,
+          pass: !!process.env.NAVIDROME_PASS,
+        },
+      },
       // What the configured zone resolves to when timezone is '' (Auto) —
       // lets the UI label the Auto option with the actual server zone.
       serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
@@ -267,6 +286,93 @@ router.post('/settings/secrets', requireAdmin, async (req, res) => {
     console.error('[settings/secrets]', err);
     res.status(400).json({ error: 'Failed to save secrets' });
   }
+});
+
+// ---------------------------------------------------------------------------
+// POST /settings/navidrome — change the Navidrome connection from the admin
+// Settings "Music source" section. Persists to state/setup-config.json (the
+// same overlay the wizard and `subwave setup` write — settings.json is NOT
+// the store for these; see setup/config.ts) and applies live, so Subsonic
+// calls use the new creds with no restart.
+//
+// Body { url?, user?, pass? } — submitted fields are validated merged over the
+// currently-effective values (blank pass = keep the one on file), but only the
+// submitted fields are persisted, so an env-shadowed value never gets copied
+// into setup-config.json. Env-managed fields are rejected outright rather than
+// silently persisting a value env would shadow again on next boot.
+// ---------------------------------------------------------------------------
+router.post('/settings/navidrome', requireAdmin, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const submitted: { url?: string; user?: string; pass?: string } = {};
+    if (typeof b.url === 'string') submitted.url = b.url.trim().replace(/\/$/, '');
+    if (typeof b.user === 'string') submitted.user = b.user.trim();
+    if (typeof b.pass === 'string' && b.pass !== '') submitted.pass = b.pass;
+
+    const ENV_LOCKS = [
+      ['url', 'NAVIDROME_URL'],
+      ['user', 'NAVIDROME_USER'],
+      ['pass', 'NAVIDROME_PASS'],
+    ] as const;
+    for (const [field, envVar] of ENV_LOCKS) {
+      if (submitted[field] !== undefined && process.env[envVar]) {
+        return res.status(400).json({
+          ok: false,
+          error: `${field} is managed by ${envVar} in the root .env — env always wins on boot; remove it there to manage it here`,
+        });
+      }
+    }
+
+    // Validate the MERGED result — the connection must stay complete. A blank
+    // submitted url/user is a cleared field, not "keep", and is rejected here.
+    const merged = {
+      url: submitted.url ?? config.navidrome.url,
+      user: submitted.user ?? config.navidrome.user,
+      pass: submitted.pass ?? config.navidrome.password,
+    };
+    if (!merged.url || !merged.user || !merged.pass) {
+      return res.status(400).json({ ok: false, error: 'url, user, and pass are all required' });
+    }
+
+    await saveSetupConfig({ navidrome: submitted });
+    applyNavidromeToLiveConfig(submitted);
+    // The doctor's cached ping and the picker's memoised Subsonic pools both
+    // describe the OLD server — drop them so the banner clears promptly and
+    // the picker can't draw song ids that no longer resolve.
+    clearNavidromeCache();
+    clearPoolCache();
+    queue.log('scheduler', `Navidrome connection updated → ${merged.url} (user ${merged.user})`);
+    // auto.m3u entries carry annotated URIs whose auth tokens derive from the
+    // old password — rebuild it with the new connection. Fire-and-forget so
+    // the save response isn't held up by Navidrome round-trips.
+    refreshAutoPlaylist().catch(err =>
+      queue.log('error', `Post-save playlist refresh failed: ${err.message}`),
+    );
+    res.json({ ok: true });
+  } catch (err: any) {
+    res.status(400).json({ ok: false, error: err.message || 'save failed' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /settings/navidrome/test — non-mutating connection test. Merges the
+// body over the effective values exactly like save, so "Test" works with the
+// stored password without the browser ever seeing it. (The wizard keeps its
+// own /onboarding/test-navidrome, which deliberately has NO stored-cred
+// fallback — it tests creds that aren't saved anywhere yet.)
+// ---------------------------------------------------------------------------
+router.post('/settings/navidrome/test', requireAdmin, async (req, res) => {
+  const b = req.body || {};
+  const url =
+    typeof b.url === 'string' && b.url.trim()
+      ? b.url.trim().replace(/\/$/, '')
+      : config.navidrome.url;
+  const user = typeof b.user === 'string' && b.user.trim() ? b.user.trim() : config.navidrome.user;
+  const pass = typeof b.pass === 'string' && b.pass ? b.pass : config.navidrome.password;
+  if (!url || !user || !pass) {
+    return res.json({ ok: false, error: 'url, user, and pass are required' });
+  }
+  res.json(await subsonic.pingWith({ url, user, pass, client: 'sub-wave-admin' }));
 });
 
 // ---------------------------------------------------------------------------
