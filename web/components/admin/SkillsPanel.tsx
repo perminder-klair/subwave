@@ -16,12 +16,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
 import { notify, errorMessage } from '../../lib/notify';
 import { useAdminAuth } from '../../lib/adminAuth';
-import {
-  RefreshCw, Plus, Users, Upload, Search, X,
-  CloudSun, Newspaper, TrafficCone, Lightbulb, Cake, Disc3, Globe, Sparkles,
-} from 'lucide-react';
-import type { LucideIcon } from 'lucide-react';
-import { Card, Btn, Pill, Eyebrow, MetaChip, Toggle } from './ui';
+import { useRosterView } from '../../lib/adminView';
+import { RefreshCw, Plus, Users, Upload, Search, X } from 'lucide-react';
+import { Card, Btn, Pill, Eyebrow, MetaChip, Toggle, Seg } from './ui';
 import { V3Alert } from '../ui/alert';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -33,22 +30,9 @@ import {
 } from '../ui/select';
 import SkillEditModal from './skills/SkillEditModal';
 import type { PersonaLite } from './skills/SkillEditModal';
-
-interface Skill {
-  name: string;
-  label?: string;
-  kind?: string;
-  description?: string;
-  enabled?: boolean;
-  ready?: boolean;
-  requiresKey?: string;
-  keyUrl?: string;
-  cooldownMs?: number;
-  custom?: boolean;
-  feed?: string | null;
-  feedMaxItems?: number | null;
-  tags?: string[];
-}
+import SkillsTable from './skills/SkillsTable';
+import { cooldownLabel, iconFor } from './skills/shared';
+import type { Skill, SortMode, StatusFilter } from './skills/shared';
 
 // Slim show shape from GET /settings — enough for the "filter by show" option
 // (a show's skills are its HOST persona's, plus its pinned feature segment).
@@ -63,9 +47,6 @@ interface ShowLite {
 function personaHasSkill(p: PersonaLite, name: string): boolean {
   return p.skills === null || p.skills.includes(name);
 }
-
-type StatusFilter = 'all' | 'enabled' | 'disabled' | 'needs-key' | 'custom' | 'builtin';
-type SortMode = 'az' | 'enabled' | 'cooldown';
 
 // One entry in the shipped community catalog (GET /dj/skills/community).
 interface CommunitySkill {
@@ -102,27 +83,6 @@ interface SkillRunResponse {
 
 // Which skill the modal is editing/creating, if any.
 type ModalState = { mode: 'create' } | { mode: 'edit'; skill: Skill };
-
-function cooldownLabel(ms?: number): string {
-  if (!ms) return 'no cooldown';
-  const min = Math.round(ms / 60000);
-  if (min < 60) return `${min} min cooldown`;
-  const h = Math.round(min / 6) / 10;
-  return `${h} h cooldown`;
-}
-
-// A glyph for each of the seven built-in segment kinds — fills the slate card's
-// "face" slot where personas/shows have an avatar. Custom skills (and any
-// unmapped kind) fall back to Sparkles, so this is not a maintenance trap.
-const KIND_ICONS: Record<string, LucideIcon> = {
-  weather: CloudSun,
-  news: Newspaper,
-  traffic: TrafficCone,
-  curiosity: Lightbulb,
-  'album-anniversary': Cake,
-  'library-deep-cut': Disc3,
-  'web-search': Globe,
-};
 
 interface SkillDescriptionProps {
   text?: string;
@@ -175,6 +135,9 @@ export default function SkillsPanel() {
   const [tagSel, setTagSel] = useState<string[]>([]);
   const [status, setStatus] = useState<StatusFilter>('all');
   const [sort, setSort] = useState<SortMode>('az');
+
+  // Cards (default) or the dense table. Remembered per surface in localStorage.
+  const [view, setView] = useRosterView('skills');
 
   // Pull the slim persona/show roster out of GET /settings. Reused after the
   // modal saves DJ assignments, so the filter + pills stay accurate.
@@ -416,6 +379,11 @@ export default function SkillsPanel() {
     return n === personas.length ? 'All DJs' : `${n} of ${personas.length} DJs`;
   };
 
+  // The show's pinned feature segment — only meaningful while the DJ/show
+  // filter is sitting on a show.
+  const isPinned = (s: Skill): boolean =>
+    who.startsWith('s:') && shows.find(x => x.id === who.slice(2))?.segmentSkill === s.name;
+
   return (
     <div className="grid gap-4">
       {/* ── HERO ─────────────────────────────────────────────────────────── */}
@@ -546,6 +514,15 @@ export default function SkillsPanel() {
               <X size={14} /> Clear
             </Btn>
           )}
+          {/* Cards stay the default; the list is the second gear for a roster
+              that has outgrown a card stack. Filters/sort drive both views. */}
+          <div className="ml-auto">
+            <Seg
+              value={view}
+              options={[{ id: 'cards', label: 'Cards' }, { id: 'list', label: 'List' }]}
+              onChange={v => setView(v === 'list' ? 'list' : 'cards')}
+            />
+          </div>
         </div>
         {allTags.length > 0 && (
           <div className="mt-2.5 flex flex-wrap items-center gap-1">
@@ -585,13 +562,26 @@ export default function SkillsPanel() {
           />
         </Card>
       )}
-      {visible.map(s => {
-        const Icon = KIND_ICONS[s.kind || s.name] ?? Sparkles;
+      {view === 'list' && visible.length > 0 && (
+        <SkillsTable
+          skills={visible}
+          busy={busy}
+          assignmentLabel={assignmentLabel}
+          isPinned={isPinned}
+          sort={sort}
+          onSort={setSort}
+          onEdit={s => setModal({ mode: 'edit', skill: s })}
+          onToggle={toggle}
+          onRunNow={runNow}
+        />
+      )}
+
+      {view === 'cards' && visible.map(s => {
+        const Icon = iconFor(s);
         // Spine keyed to enabled state — the same signal the toggle carries.
         const spine = s.enabled ? 'bg-[var(--accent)]' : 'bg-separator-strong';
         const assign = assignmentLabel(s);
-        const pinned = who.startsWith('s:')
-          && shows.find(x => x.id === who.slice(2))?.segmentSkill === s.name;
+        const pinned = isPinned(s);
         return (
           // The whole card opens the edit sheet; the Toggle, Run now, and the
           // API-key link stopPropagation so they act in place. The onKeyDown

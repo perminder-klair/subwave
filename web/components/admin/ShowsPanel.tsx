@@ -29,7 +29,7 @@ import { Field } from '../ui/field';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from '../ui/select';
-import { Card, Btn, Pill, Eyebrow, Metric, MetaChip, Toggle } from './ui';
+import { Card, Btn, Pill, Eyebrow, Metric, MetaChip, Toggle, Seg } from './ui';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -39,7 +39,10 @@ import { Modal } from '../ui/modal';
 import { AiFill } from './AiFill';
 import GenreSuggest from './GenreSuggest';
 import { PersonaPicker, GuestPersonaPicker, ThemePicker } from './ShowPickers';
+import ShowsTable from './ShowsTable';
+import type { ShowFacet, ShowRow } from './ShowsTable';
 import { cn } from '../../lib/cn';
+import { useRosterView } from '../../lib/adminView';
 import { showSubmitUrl } from '../../lib/repo';
 
 const NAME_MAX = 60;
@@ -455,6 +458,8 @@ export default function ShowsPanel() {
   // Community show catalog + install state (best-effort; null = still loading).
   const [community, setCommunity] = useState<CommunityShow[] | null>(null);
   const [communityOpen, setCommunityOpen] = useState(false);          // catalog modal open?
+  // Show definitions as cards (default) or a dense table. Per-surface pref.
+  const [view, setView] = useRosterView('shows');
   const [installing, setInstalling] = useState<string | null>(null);  // community slug installing, or null
 
   // Inline editor: `focusIdx` is the show open in the editor below the list
@@ -1300,6 +1305,11 @@ export default function ShowsPanel() {
       <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
         <span className="caption">show definitions · {form.shows.length}/{SHOWS_MAX} shows</span>
         <div className="flex items-center gap-2">
+          <Seg
+            value={view}
+            options={[{ id: 'cards', label: 'Cards' }, { id: 'list', label: 'List' }]}
+            onChange={v => setView(v === 'list' ? 'list' : 'cards')}
+          />
           <Btn
             onClick={() => setCommunityOpen(true)}
             disabled={!community}
@@ -1326,7 +1336,14 @@ export default function ShowsPanel() {
         />
       )}
 
-      {form.shows.map((s, i) => {
+      {view === 'list' && form.shows.length > 0 && (
+        <ShowsTable
+          rows={form.shows.map((s, i) => showRow(s, i, personas, apiBase, countHours(s.id)))}
+          onEdit={r => focusShow(r.index)}
+        />
+      )}
+
+      {view === 'cards' && form.shows.map((s, i) => {
         const ok = showValid(s);
         const hrs = countHours(s.id);
         const host = personas.find(p => p.id === s.personaId) ?? null;
@@ -2285,10 +2302,68 @@ function ShowAvatar({
   );
 }
 
+// "What it plays" facets — moods, genres, eras, energies as chips, plus the
+// hard-lock / playlist / length flags. The visual counterpart to the text
+// showFilterSummary() the strip cards still use. Shared by the slate card and
+// the table row so the two views can't drift.
+function showFacets(s: Show): ShowFacet[] {
+  const facets: ShowFacet[] = [];
+  if (s.moods.length) s.moods.forEach(m => facets.push({ key: `mood-${m}`, label: m }));
+  else facets.push({ key: 'mood-any', label: 'any mood' });
+  s.genres.forEach(g => facets.push({ key: `genre-${g}`, label: g }));
+  s.eras.forEach((e, idx) => facets.push({ key: `era-${idx}`, label: eraLabelOf(e) }));
+  s.energies.forEach(en => facets.push({ key: `energy-${en}`, label: en }));
+  if (s.filtersStrict && hasAnyMusicFilter(s)) facets.push({ key: 'strict', label: 'strict', accent: true });
+  const nPl = s.playlistIds?.length ?? 0;
+  if (nPl) facets.push({ key: 'playlists', label: `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' · strict' : ''}` });
+  const nEx = s.excludedPlaylistIds?.length ?? 0;
+  if (nEx) facets.push({ key: 'excluded', label: `${nEx} excluded` });
+  if (s.maxTrackSeconds != null) {
+    facets.push({ key: 'length', label: s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s` });
+  }
+  return facets;
+}
+
 // Grammatical name join: "Kai", "Kai & Rae", "Kai, Rae & Sol".
 function joinNames(names: string[]): string {
   if (names.length <= 1) return names[0] ?? '';
   return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
+}
+
+// A persona as a table face — resolved avatar URL plus the initials to fall
+// back to. `index` is carried on the row because the panel keys colour and
+// editing off the show's position in the array.
+function faceOf(p: Persona, apiBase: string) {
+  return {
+    key: p.id,
+    initials: abbrev(p.name?.trim() || ''),
+    src: p.avatar ? `${apiBase}/persona-avatar/${encodeURIComponent(p.id)}` : null,
+  };
+}
+
+// Flatten one show into the table's view-model. Everything the row needs is
+// derived here, so ShowsTable never has to know the `Show` shape.
+function showRow(s: Show, index: number, personas: Persona[], apiBase: string, hrs: number): ShowRow {
+  const host = personas.find(p => p.id === s.personaId) ?? null;
+  const guests = (s.guestPersonaIds || [])
+    .map(id => personas.find(p => p.id === id))
+    .filter((p): p is Persona => Boolean(p));
+  return {
+    id: s.id,
+    index,
+    name: s.name.trim(),
+    colour: SHOW_COLORS[index % SHOW_COLORS.length] ?? '#000',
+    programme: !!s.programme,
+    skillPin: s.programme && s.segmentSkill ? s.segmentSkill : '',
+    banter: !!s.banter,
+    host: host ? faceOf(host, apiBase) : null,
+    hostName: host ? (host.name?.trim() || 'Unnamed') : (s.personaId ? 'Unnamed' : ''),
+    guests: guests.map(g => faceOf(g, apiBase)),
+    guestNames: joinNames(guests.map(g => g.name?.trim() || 'Unnamed')),
+    facets: showFacets(s),
+    hrs,
+    ok: showValid(s),
+  };
 }
 
 interface ShowDefRowProps {
@@ -2315,23 +2390,7 @@ function ShowDefRow({ show: s, index: i, ok, hrs, host, guests, apiBase, onEdit 
   const guestNames = guests.map(g => g.name?.trim() || 'Unnamed');
   const skillPin = s.programme && s.segmentSkill ? s.segmentSkill : '';
 
-  // "What it plays" facets — moods, genres, eras, energies as chips, plus the
-  // hard-lock / playlist / length flags. The visual counterpart to the text
-  // showFilterSummary() the strip cards still use.
-  const facets: { key: string; label: string; accent?: boolean }[] = [];
-  if (s.moods.length) s.moods.forEach(m => facets.push({ key: `mood-${m}`, label: m }));
-  else facets.push({ key: 'mood-any', label: 'any mood' });
-  s.genres.forEach(g => facets.push({ key: `genre-${g}`, label: g }));
-  s.eras.forEach((e, idx) => facets.push({ key: `era-${idx}`, label: eraLabelOf(e) }));
-  s.energies.forEach(en => facets.push({ key: `energy-${en}`, label: en }));
-  if (s.filtersStrict && hasAnyMusicFilter(s)) facets.push({ key: 'strict', label: 'strict', accent: true });
-  const nPl = s.playlistIds?.length ?? 0;
-  if (nPl) facets.push({ key: 'playlists', label: `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' · strict' : ''}` });
-  const nEx = s.excludedPlaylistIds?.length ?? 0;
-  if (nEx) facets.push({ key: 'excluded', label: `${nEx} excluded` });
-  if (s.maxTrackSeconds != null) {
-    facets.push({ key: 'length', label: s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s` });
-  }
+  const facets = showFacets(s);
 
   return (
     <article
