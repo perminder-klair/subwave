@@ -112,7 +112,6 @@ export function LineEditor({
             onSelect={k => onLineChange({ end: Number(k) })}
           />
           <span className="mx-1 hidden h-5 w-px bg-separator-strong sm:block" />
-          <span className="eyebrow text-muted">Also apply to</span>
           <DayPills selected={lineDays} onToggle={onToggleLineDay} />
           <span className="ml-auto flex gap-2">
             <Button variant="accent" size="sm" onClick={onAir} disabled={!lineShow}>
