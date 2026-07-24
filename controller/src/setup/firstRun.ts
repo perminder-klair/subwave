@@ -16,16 +16,23 @@ export interface SetupStatus {
   navidromeSource: 'env' | 'setup-config' | 'unset';
 }
 
-export async function getSetupStatus(): Promise<SetupStatus> {
-  // config.navidrome.* is populated from env at boot; setup-config.json is the
-  // wizard's persistence layer. If env supplies values, env wins.
-  const envHasNavidrome = Boolean(
+// Env-supplied Navidrome creds configure the whole INSTALL, not one station —
+// env always wins at boot no matter which station dir is active. The stations
+// listing uses this to mark every station configured on env-driven installs
+// (which never write setup-config.json, so the per-dir check alone reads as
+// "needs setup" on a perfectly healthy station).
+export function envHasNavidrome(): boolean {
+  return Boolean(
     process.env.NAVIDROME_URL &&
       process.env.NAVIDROME_USER &&
       process.env.NAVIDROME_PASS,
   );
+}
 
-  if (envHasNavidrome) {
+export async function getSetupStatus(): Promise<SetupStatus> {
+  // config.navidrome.* is populated from env at boot; setup-config.json is the
+  // wizard's persistence layer. If env supplies values, env wins.
+  if (envHasNavidrome()) {
     return {
       needsSetup: false,
       setupCompletedAt: null,
@@ -48,12 +55,7 @@ export async function getSetupStatus(): Promise<SetupStatus> {
 // Falls back to the env check if the cache hasn't loaded yet, which keeps the
 // /state response safe even on the first request after a cold start.
 export function getSetupStatusSync(): SetupStatus {
-  const envHasNavidrome = Boolean(
-    process.env.NAVIDROME_URL &&
-      process.env.NAVIDROME_USER &&
-      process.env.NAVIDROME_PASS,
-  );
-  if (envHasNavidrome) {
+  if (envHasNavidrome()) {
     return { needsSetup: false, setupCompletedAt: null, navidromeSource: 'env' };
   }
   // Read the config we already loaded into memory rather than touching disk.

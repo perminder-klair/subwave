@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import { STATE_ROOT } from '../config.js';
+import { envHasNavidrome } from '../setup/firstRun.js';
 import { MAX_STATIONS } from '../stations/pure.js';
 import * as settings from '../settings.js';
 import * as manager from '../stations/manager.js';
@@ -92,7 +93,7 @@ router.get('/stations', requireAdmin, (req, res) => {
       multiStation: manager.isMultiStation(STATE_ROOT),
       activeId: manager.activeIdOnDisk(STATE_ROOT),
       limit: MAX_STATIONS,
-      stations: manager.listStations(STATE_ROOT, currentName()),
+      stations: manager.listStations(STATE_ROOT, currentName(), envHasNavidrome()),
     });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });

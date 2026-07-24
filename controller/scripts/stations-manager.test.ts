@@ -51,6 +51,11 @@ try {
   assert.equal(night?.configured, false);
   assert.equal(night?.name, 'Night Shift');
 
+  // Env-configured installs (NAVIDROME_* in env, no setup-config.json anywhere)
+  // mark EVERY station configured — env creds are install-level.
+  const envList = manager.listStations(root, 'x', true);
+  assert.ok(envList.every((s) => s.configured));
+
   // Duplicate: allowlist copies, runtime skipped, library.db via callback.
   writeFileSync(join(root, 'stations', 'main', 'library.db'), 'not-really-sqlite');
   const backups: string[] = [];

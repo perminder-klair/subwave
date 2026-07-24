@@ -33,7 +33,7 @@ export class StationCreateError extends Error {
 export interface StationInfo {
   id: string | null;          // null = unconverted single-station root
   name: string;
-  configured: boolean;        // has setup-config.json (mirrors needsSetup)
+  configured: boolean;        // has setup-config.json, OR env creds cover the install
   createdAt: string | null;
   active: boolean;
 }
@@ -70,12 +70,21 @@ function readCard(dir: string): { name?: string; createdAt?: string } {
   }
 }
 
-export function listStations(root: string, fallbackName: string): StationInfo[] {
+// envConfigured: env-supplied Navidrome creds apply to EVERY station (env wins
+// at each boot regardless of the active dir), and env-driven installs never
+// write setup-config.json — without this flag they'd all read "needs setup".
+// Threaded in from the route (setup/firstRun.envHasNavidrome) so this module
+// stays fs-only and cycle-free.
+export function listStations(
+  root: string,
+  fallbackName: string,
+  envConfigured = false,
+): StationInfo[] {
   if (!isMultiStation(root)) {
     return [{
       id: null,
       name: fallbackName,
-      configured: existsSync(join(root, 'setup-config.json')),
+      configured: envConfigured || existsSync(join(root, 'setup-config.json')),
       createdAt: null,
       active: true,
     }];
@@ -89,7 +98,7 @@ export function listStations(root: string, fallbackName: string): StationInfo[] 
       return {
         id: e.name,
         name: typeof card.name === 'string' && card.name ? card.name : e.name,
-        configured: existsSync(join(dir, 'setup-config.json')),
+        configured: envConfigured || existsSync(join(dir, 'setup-config.json')),
         createdAt: card.createdAt || null,
         active: e.name === active,
       };
