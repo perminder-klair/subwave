@@ -10,7 +10,7 @@ import { SITE_URL } from '@/lib/site';
 import { GA_ID } from '@/lib/ga';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import MotionProvider from '@/components/MotionProvider';
-import ThemeProvider from '@/components/ThemeBootstrap';
+import ThemeProvider from '@/components/ThemeProvider';
 import JsonLd from '@/components/JsonLd';
 import { Toaster } from '@/components/ui/toaster';
 

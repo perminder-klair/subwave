@@ -475,7 +475,7 @@ export default function ShowsPanel() {
   // cell is destructive enough to gate behind a yes/no.
   const [confirmClearWeek, setConfirmClearWeek] = useState(false);
   // Theme list for the per-show override dropdown. Public endpoint, no auth
-  // needed — same source the player ThemeBootstrap reads.
+  // needed — same source the player ThemeProvider reads.
   const [themes, setThemes] = useState<ThemeOption[]>([]);
   const [skills, setSkills] = useState<SkillOption[]>([]);
   const [activeThemeId, setActiveThemeId] = useState('');

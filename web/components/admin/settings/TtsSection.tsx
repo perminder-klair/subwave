@@ -950,7 +950,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                     <div className="flex items-stretch gap-2">
                       <Input
                         type="password"
-                        autoComplete="new-password"
+                        autoComplete="off"
                         value={cloudKeyInput}
                         placeholder={data.env?.[cloudKeyVar] ? '•••••• (on file)' : (KEY_HINTS[cloudKeyVar] ?? '')}
                         onChange={(e: ChangeEvent<HTMLInputElement>) => setCloudKeyInput(e.target.value)}
@@ -981,7 +981,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <Label>API key</Label>
                 <Input
                   type="password"
-                  autoComplete="new-password"
+                  autoComplete="off"
                   value={compatKeyInput}
                   placeholder={savedCloud.apiKey === 'set' ? '•••••• (on file)' : 'Optional'}
                   onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}

@@ -6,7 +6,7 @@ import { LayoutTemplate, Moon, Palette, Sun, Zap } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useDynamicStyle } from '../hooks/useDynamicStyle';
 import { useLiteMode } from '../hooks/useLiteMode';
-import { useThemeSwitcher } from './ThemeBootstrap';
+import { useThemeSwitcher } from './ThemeProvider';
 import { useSkinSelection } from './skins/SkinContext';
 import { SWATCH_KEYS } from '@/lib/theme-tokens.generated';
 
@@ -70,10 +70,13 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
   // nothing useful to open.
   if (!ctx || ctx.themes.length === 0) return null;
 
-  const { themes, stationActiveId, overrideId, effectiveId, mode, toggleMode } = ctx;
-  // Reflect the current rendering: the explicit override if the listener set
-  // one, otherwise the effective palette's own mode.
-  const isDark = mode ? mode === 'dark' : themes.find(t => t.id === effectiveId)?.mode === 'dark';
+  const { themes, stationActiveId, overrideId, effectiveId, paintedId, mode, renderedMode, cycleMode } =
+    ctx;
+  const isDark = renderedMode === 'dark';
+  // A pinned mode the active palette wasn't authored for pauses that palette in
+  // favour of the built-in base (see resolveAppearance) — say so rather than
+  // leaving the picker highlighting a row that isn't on screen.
+  const palettePaused = mode !== null && paintedId === null;
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
@@ -166,15 +169,17 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
               )}
             </button>
 
-            {/* Explicit light/dark toggle — independent of which palette is
-                active, and the on-screen twin of the `d` keyboard shortcut.
-                Pins the choice per-browser (wins over the palette + system
-                preference); tapping again flips it. Stays open so the flip is
-                visible. */}
+            {/* Light/dark control — independent of which palette is active, and
+                the on-screen twin of the `d` keyboard shortcut. Three states,
+                not two: AUTO follows the palette (and the system preference
+                when there is no palette), LIGHT/DARK pin it per-browser.
+                Flipping back off a pin returns to AUTO rather than pinning the
+                opposite, so a stray press can't detach the listener from the
+                operator's palette for good. Stays open so the flip is visible. */}
             <button
               type="button"
-              aria-pressed={isDark}
-              onClick={() => toggleMode()}
+              onClick={() => cycleMode()}
+              aria-label={`Appearance: ${mode ? `${mode} (pinned)` : `auto, currently ${renderedMode}`}. Activate to switch to ${isDark ? 'light' : 'dark'}.`}
               className="v3-focus mt-2 flex w-full cursor-pointer items-center gap-2 border border-soft-border bg-bg px-2 py-1.5 text-left hover:bg-[var(--overlay)]"
             >
               {isDark ? (
@@ -184,20 +189,24 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
               )}
               <span className="grid min-w-0 flex-1 gap-0.5">
                 <span className="truncate text-[11px] font-bold tracking-[0.12em] uppercase">
-                  Dark mode
+                  Light / dark
                 </span>
                 <span className="truncate text-[10px] leading-[1.3] text-muted">
-                  Toggle light / dark — shortcut: D
+                  {palettePaused
+                    ? 'Palette paused while pinned — shortcut: D'
+                    : mode
+                      ? 'Pinned — press again for auto · shortcut: D'
+                      : 'Following the palette — shortcut: D'}
                 </span>
               </span>
               <span
                 className={cn(
                   'shrink-0 text-[10px] font-bold tracking-[0.2em] uppercase',
-                  isDark ? 'text-vermilion' : 'text-muted',
+                  mode ? 'text-vermilion' : 'text-muted',
                 )}
                 aria-hidden="true"
               >
-                {isDark ? 'On' : 'Off'}
+                {mode ?? 'Auto'}
               </span>
             </button>
 

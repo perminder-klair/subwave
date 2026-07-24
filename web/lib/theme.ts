@@ -14,8 +14,7 @@ const TOKEN_KEY_SET = new Set<string>(THEME_TOKEN_KEYS);
 const TOKEN_CACHE_KEY = 'subwave-theme-tokens';
 const OVERRIDE_KEY = 'subwave-theme-override';
 // A listener's explicit light/dark choice, independent of which palette is
-// active. When set it wins over the palette's own mode and the system
-// preference — see applyMode / ThemeBootstrap.
+// active. When set it steers which palette is picked — see resolveAppearance.
 const MODE_KEY = 'subwave-mode-override';
 
 // A theme stores --display-font / --mono-font as a curated id; resolve it to a
@@ -91,27 +90,93 @@ function syncDarkClass(mode: ThemeMode): void {
   document.documentElement.classList.toggle('dark', mode === 'dark');
 }
 
-/** Force the document into an explicit light/dark mode. This is the listener's
- *  dark-mode toggle: it sets `data-theme` (which drives every themed token +
- *  the Tailwind `dark:` variant) and mirrors the `.dark` class, overriding both
- *  the active palette's own mode and the system preference. */
-export function applyMode(mode: ThemeMode): void {
+/** Drop every palette token from the document root so the built-in light/dark
+ *  base in globals.css (`:root` / `:root[data-theme="dark"]`) paints instead.
+ *
+ *  This is the load-bearing half of the mode override. `applyTheme` writes the
+ *  palette as *inline* styles on <html>, and an inline `--bg` beats the
+ *  `:root[data-theme="dark"]` rule — so flipping the attribute alone leaves the
+ *  surfaces at the palette's own mode while `dark:` utilities and the
+ *  `[data-theme="dark"]` grain/frame rules flip underneath them. Half-dark.
+ *  Clearing the tokens first is what makes the flip whole. */
+function clearThemeTokens(): void {
+  if (typeof document === 'undefined') return;
+  const html = document.documentElement;
+  for (const key of THEME_TOKEN_KEYS) html.style.removeProperty(key);
+}
+
+/** Force the document into an explicit light/dark mode: sets `data-theme`
+ *  (which drives the built-in token blocks, the Tailwind `dark:` variant, and
+ *  the grain/frame rules) and mirrors the `.dark` class. Only meaningful once
+ *  the palette's inline tokens are out of the way — see `clearThemeTokens`. */
+function applyMode(mode: ThemeMode): void {
   if (typeof document === 'undefined') return;
   document.documentElement.setAttribute('data-theme', mode);
   syncDarkClass(mode);
 }
 
-/** The mode the document is currently rendering — the explicit `data-theme`
- *  attribute if present, otherwise the system preference. */
-export function resolveCurrentMode(): ThemeMode {
-  if (typeof document === 'undefined') return 'light';
-  const attr = document.documentElement.getAttribute('data-theme');
-  if (attr === 'dark') return 'dark';
-  if (attr === 'light') return 'light';
-  return typeof window !== 'undefined' &&
-    window.matchMedia?.('(prefers-color-scheme: dark)').matches
-    ? 'dark'
-    : 'light';
+/** Hand the document back to `prefers-color-scheme`: drop the explicit
+ *  `data-theme` so the media-query block in globals.css applies. */
+function clearMode(): void {
+  if (typeof document === 'undefined') return;
+  document.documentElement.removeAttribute('data-theme');
+  syncDarkClass(systemMode());
+}
+
+/** What `prefers-color-scheme` currently reports. */
+export function systemMode(): ThemeMode {
+  if (typeof window === 'undefined') return 'light';
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+/** What the document should end up rendering, given the registry and the
+ *  listener's two independent overrides. */
+export interface ResolvedAppearance {
+  /** The palette to paint, or null to fall back to the built-in base — which
+   *  happens when a mode is pinned and no registry palette renders in it. */
+  theme: Theme | null;
+  /** The mode to pin, or null to follow `prefers-color-scheme`. */
+  mode: ThemeMode | null;
+}
+
+/** Resolve palette + mode together. Pure — `applyAppearance` does the DOM work.
+ *
+ *  Palette precedence is unchanged: the listener's override beats the station's
+ *  active palette beats the first registry entry. A pinned light/dark mode then
+ *  decides whether that palette survives — it does if it was authored for that
+ *  mode, and is otherwise *paused* in favour of the built-in base, which ships
+ *  a complete and coherent light/dark pair.
+ *
+ *  Pausing rather than recolouring is deliberate: a palette is a hand-picked
+ *  set of surfaces, ink, and accents that only holds together in the mode it
+ *  was written for. Repainting one into the other mode produces mud, and
+ *  silently swapping in a *different* palette would leave the picker
+ *  highlighting a row that isn't on screen. A listener who wants a dark palette
+ *  picks one — the picker is in the same menu as this toggle. */
+export function resolveAppearance(
+  registry: Theme[],
+  stationId: string | null,
+  override: string | null,
+  modeOverride: ThemeMode | null,
+): ResolvedAppearance {
+  const byId = (id: string | null) => (id ? registry.find(t => t.id === id) : undefined);
+  const base = byId(override) ?? byId(stationId) ?? registry[0] ?? null;
+
+  if (!modeOverride) return { theme: base, mode: base ? base.mode : null };
+  if (base && base.mode === modeOverride) return { theme: base, mode: modeOverride };
+  return { theme: null, mode: modeOverride };
+}
+
+/** Paint a resolved appearance onto the document root. */
+export function applyAppearance(resolved: ResolvedAppearance): void {
+  if (typeof document === 'undefined') return;
+  if (resolved.theme) {
+    applyTheme(resolved.theme);
+    return;
+  }
+  clearThemeTokens();
+  if (resolved.mode) applyMode(resolved.mode);
+  else clearMode();
 }
 
 /** Read the listener's explicit light/dark override, or null when unset. */
@@ -142,6 +207,20 @@ export function cacheTheme(theme: Theme): void {
   if (typeof window === 'undefined') return;
   try {
     window.localStorage.setItem(TOKEN_CACHE_KEY, JSON.stringify(theme));
+  } catch { /* private mode / quota — non-fatal */ }
+}
+
+/** Cache whatever was actually painted, so the pre-paint script reproduces it
+ *  exactly. A resolution that lands on the built-in base drops the cache
+ *  entirely rather than leaving a stale palette for the script to apply. */
+export function cacheAppearance(resolved: ResolvedAppearance): void {
+  if (typeof window === 'undefined') return;
+  if (resolved.theme) {
+    cacheTheme(resolved.theme);
+    return;
+  }
+  try {
+    window.localStorage.removeItem(TOKEN_CACHE_KEY);
   } catch { /* private mode / quota — non-fatal */ }
 }
 
@@ -182,28 +261,35 @@ export function saveThemeOverride(id: string | null): void {
 export const THEME_INIT_SCRIPT = `
   try {
     var html = document.documentElement;
+    var mode = localStorage.getItem('${MODE_KEY}');
+    if (mode !== 'light' && mode !== 'dark') mode = null;
     var raw = localStorage.getItem('${TOKEN_CACHE_KEY}');
-    if (raw) {
-      var t = JSON.parse(raw);
-      if (t && t.tokens) {
-        var keys = ${JSON.stringify([...THEME_TOKEN_KEYS])};
-        var fonts = ${JSON.stringify(FONT_STACKS)};
-        for (var i = 0; i < keys.length; i++) {
-          var k = keys[i];
-          var v = t.tokens[k];
-          if (typeof v === 'string') {
-            if ((k === '--display-font' || k === '--mono-font') && fonts[v]) v = fonts[v];
-            html.style.setProperty(k, v);
-          }
+    var t = raw ? JSON.parse(raw) : null;
+    // Mirror resolveAppearance's rule: a pinned mode only keeps the cached
+    // palette if that palette was authored for it. Otherwise skip the tokens
+    // entirely and let the built-in base paint — applying them and then
+    // flipping data-theme would leave inline light surfaces under dark rules.
+    var usePalette = t && t.tokens && (!mode || t.mode === mode);
+    if (usePalette) {
+      var keys = ${JSON.stringify([...THEME_TOKEN_KEYS])};
+      var fonts = ${JSON.stringify(FONT_STACKS)};
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        var v = t.tokens[k];
+        if (typeof v === 'string') {
+          if ((k === '--display-font' || k === '--mono-font') && fonts[v]) v = fonts[v];
+          html.style.setProperty(k, v);
         }
-        if (t.mode === 'light' || t.mode === 'dark') html.setAttribute('data-theme', t.mode);
       }
     }
-    // The listener's explicit light/dark toggle wins over the palette's own
-    // mode — apply it (and mirror the .dark class) before paint so there is no
-    // flash of the palette default.
-    var mode = localStorage.getItem('${MODE_KEY}');
-    if (mode === 'light' || mode === 'dark') html.setAttribute('data-theme', mode);
-    html.classList.toggle('dark', html.getAttribute('data-theme') === 'dark');
+    var resolved = mode || (usePalette && (t.mode === 'light' || t.mode === 'dark') ? t.mode : null);
+    if (resolved) html.setAttribute('data-theme', resolved);
+    else html.removeAttribute('data-theme');
+    html.classList.toggle(
+      'dark',
+      resolved
+        ? resolved === 'dark'
+        : !!(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches),
+    );
   } catch (e) {}
 `;

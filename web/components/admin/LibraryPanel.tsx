@@ -1363,8 +1363,11 @@ export default function LibraryPanel() {
               <InputGroup>
                 <InputGroupAddon><Search /></InputGroupAddon>
                 <InputGroupInput
+                  // `required` only; deliberately no minLength — one-character
+                  // queries are legitimate here (an album called "1", an artist
+                  // filed under "M") and a length floor would reject them with a
+                  // native validation bubble.
                   required
-                  minLength={2}
                   placeholder={searchMode === 'sound'
                     ? 'dusty late-night jazz with brushed drums, warm acoustic fingerpicking…'
                     : 'floating points, kingdoms in colour, 2018…'}
@@ -1887,45 +1890,68 @@ function BlockMenu({ track, busy, disabled, onBlock }: {
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const pick = (type: BlockType) => { setOpen(false); onBlock(track, type); };
 
-  // Dismiss on outside pointer-down or Escape via a document listener rather
-  // than a full-screen click-catcher div: the backdrop approach relies on a
-  // non-semantic clickable element with no keyboard path, whereas this closes
-  // for keyboard users too and keeps focus handling to the real menu buttons.
+  // Dismiss on an outside pointer/touch, on focus leaving the group, or on
+  // Escape — via document listeners rather than a full-screen click-catcher
+  // div, which relies on a non-semantic clickable element with no keyboard
+  // path. `pointerdown` covers mouse, touch, and pen in one listener.
+  //
+  // The disclosed panel is deliberately a plain group of <button>s and NOT
+  // role="menu"/"menuitem": that role pair is a contract for the full menu
+  // keyboard pattern (arrow-key roving focus, Home/End, focus into the first
+  // item on open). Announcing a menu we don't implement leaves screen-reader
+  // users pressing arrow keys at something that only answers to Tab, which is
+  // worse than the plain buttons they'd otherwise get.
   useEffect(() => {
     if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
-    };
+    const outside = (target: EventTarget | null) =>
+      !!rootRef.current && !rootRef.current.contains(target as Node);
+    const onPointer = (e: PointerEvent) => { if (outside(e.target)) setOpen(false); };
+    const onFocusIn = (e: FocusEvent) => { if (outside(e.target)) setOpen(false); };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      // Escape returns focus to the control that opened the panel, so keyboard
+      // users don't get dropped back to the top of the document.
+      triggerRef.current?.focus();
     };
-    document.addEventListener('mousedown', onDoc);
+    document.addEventListener('pointerdown', onPointer);
+    document.addEventListener('focusin', onFocusIn);
     document.addEventListener('keydown', onKey);
     return () => {
-      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('pointerdown', onPointer);
+      document.removeEventListener('focusin', onFocusIn);
       document.removeEventListener('keydown', onKey);
     };
   }, [open]);
 
   return (
     <div ref={rootRef} className="relative">
-      <Btn sm onClick={() => setOpen(o => !o)} disabled={disabled} title="Never play this on air">
+      <Btn
+        ref={triggerRef}
+        sm
+        onClick={() => setOpen(o => !o)}
+        disabled={disabled}
+        title="Never play this on air"
+        aria-expanded={open}
+        aria-haspopup="true"
+      >
         {busy ? '…' : <Ban size={12} />}
       </Btn>
       {open && (
-        <div role="menu" className="absolute top-full right-0 z-50 mt-1 min-w-[200px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
-          <button type="button" role="menuitem" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('track')}>
+        <div className="absolute top-full right-0 z-50 mt-1 min-w-[200px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+          <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('track')}>
             Never play this track
           </button>
           {track.album && (
-            <button type="button" role="menuitem" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('album')}>
+            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('album')}>
               Never play this album
             </button>
           )}
           {track.artist && (
-            <button type="button" role="menuitem" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('artist')}>
+            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('artist')}>
               Never play this artist
               <span className="block text-[10px] text-muted">primary credit only — collabs filed under other artists still play</span>
             </button>

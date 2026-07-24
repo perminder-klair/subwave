@@ -350,7 +350,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings }: Sect
             <Label>Station password</Label>
             <Input
               type="password"
-              autoComplete="current-password"
+              autoComplete="new-password"
               value={form.privacy.password === 'set' ? '' : form.privacy.password}
               placeholder={passwordOnFile ? '••••••••  (saved)' : 'shared station password'}
               onChange={(e: ChangeEvent<HTMLInputElement>) =>

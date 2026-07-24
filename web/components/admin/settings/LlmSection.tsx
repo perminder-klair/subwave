@@ -422,7 +422,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 <div className="flex items-stretch gap-2">
                   <Input
                     type="password"
-                    autoComplete="new-password"
+                    autoComplete="off"
                     value={compatKeyInput}
                     onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatKeyInput(e.target.value)}
                     placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.[form.llm.provider] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
@@ -490,7 +490,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                   <div className="flex items-stretch gap-2">
                     <Input
                       type="password"
-                      autoComplete="new-password"
+                      autoComplete="off"
                       value={primaryKeyInput}
                       placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
                       onChange={(e: ChangeEvent<HTMLInputElement>) => setPrimaryKeyInput(e.target.value)}
@@ -739,7 +739,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                     <div className="flex items-stretch gap-2">
                       <Input
                         type="password"
-                        autoComplete="new-password"
+                        autoComplete="off"
                         value={compatFallbackKeyInput}
                         onChange={(e: ChangeEvent<HTMLInputElement>) => setCompatFallbackKeyInput(e.target.value)}
                         placeholder={(data.values?.llm as { keys?: Record<string, unknown> })?.keys?.[form.llm.fallback.provider] === 'set' ? '•••••• (on file)' : 'Bearer token (optional)'}
@@ -802,7 +802,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                       <div className="flex items-stretch gap-2">
                         <Input
                           type="password"
-                          autoComplete="new-password"
+                          autoComplete="off"
                           value={fallbackKeyInput}
                           placeholder={data.env?.[keyVar] ? '•••••• (on file)' : (KEY_HINTS[keyVar] ?? '')}
                           onChange={(e: ChangeEvent<HTMLInputElement>) => setFallbackKeyInput(e.target.value)}

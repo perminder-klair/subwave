@@ -457,12 +457,24 @@ export default function PlaylistBuilderPanel() {
     toastTimer.current = window.setTimeout(() => setToast(''), 4200);
   }, []);
 
-  // Escape closes whichever modal is up.
+  // Escape closes whichever modal is up. Document-level rather than on the
+  // dialog markup, so it fires wherever focus happens to be.
   useEffect(() => {
     if (!modal) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setModal(null); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
+  }, [modal]);
+
+  // Move focus into the dialog when it opens and hand it back to whatever
+  // opened it on close. Without this the modal is only reachable by tabbing
+  // through the page behind it, and closing leaves focus on <body>.
+  const modalPanelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!modal) return;
+    const restoreTo = document.activeElement as HTMLElement | null;
+    modalPanelRef.current?.focus();
+    return () => restoreTo?.focus?.();
   }, [modal]);
 
   // Energy-bar → track-row jump: center the row inside the LIST's own scroll
@@ -1485,30 +1497,28 @@ export default function PlaylistBuilderPanel() {
       {/* OPEN-EXISTING MODAL */}
       {modal === 'open' && (
         <div
-          role="button"
-          tabIndex={0}
-          aria-label="Close dialog"
+          // Backdrop only — no role, no tabIndex. Making it a `role="button"`
+          // would put a full-viewport control in the tab order *and* wrap the
+          // dialog in a role whose children are presentational, hiding the real
+          // controls from assistive tech. Escape is handled once at the document
+          // level (see the effect above) so it works wherever focus sits.
           className="fixed inset-0 z-[80] flex items-start justify-center bg-[rgba(20,18,14,0.42)] p-5 pt-16"
           // Close on a click landing on the backdrop itself (not bubbled from
           // the panel), so the panel needs no onClick stopPropagation of its own.
           onClick={e => { if (e.target === e.currentTarget) setModal(null); }}
-          // Escape closes from anywhere in the dialog; Enter/Space only when the
-          // backdrop itself is focused, so typing inside a field isn't hijacked.
-          onKeyDown={e => {
-            if (e.key === 'Escape') { setModal(null); return; }
-            if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
-              e.preventDefault();
-              setModal(null);
-            }
-          }}
         >
           <div
-            className="flex max-h-[78vh] w-full max-w-[560px] flex-col border border-ink bg-bg shadow-drawer"
+            ref={modalPanelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pb-open-title"
+            tabIndex={-1}
+            className="flex max-h-[78vh] w-full max-w-[560px] flex-col border border-ink bg-bg shadow-drawer outline-none"
           >
             <div className="flex items-center justify-between border-b border-ink px-5 py-4">
               <div>
                 <div className="font-mono text-[10px] font-bold tracking-[0.18em] text-muted uppercase">Music server</div>
-                <h3 className="mt-0.5 font-display text-xl font-bold">Open a playlist</h3>
+                <h3 id="pb-open-title" className="mt-0.5 font-display text-xl font-bold">Open a playlist</h3>
               </div>
               <IconBtn onClick={() => setModal(null)} title="close"><X className="size-4" /></IconBtn>
             </div>
@@ -1579,26 +1589,25 @@ export default function PlaylistBuilderPanel() {
       {/* SAVE MODAL */}
       {modal === 'save' && (
         <div
-          role="button"
-          tabIndex={0}
-          aria-label="Close dialog"
+          // See the OPEN modal above: backdrop stays a plain div; Escape is
+          // owned by the document-level handler.
           className="fixed inset-0 z-[80] flex items-start justify-center bg-[rgba(20,18,14,0.42)] p-5 pt-16"
           onClick={e => { if (e.target === e.currentTarget) setModal(null); }}
-          onKeyDown={e => {
-            if (e.key === 'Escape') { setModal(null); return; }
-            if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
-              e.preventDefault();
-              setModal(null);
-            }
-          }}
         >
-          <div className="w-full max-w-[480px] border border-ink bg-bg shadow-drawer">
+          <div
+            ref={modalPanelRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pb-save-title"
+            tabIndex={-1}
+            className="w-full max-w-[480px] border border-ink bg-bg shadow-drawer outline-none"
+          >
             <div className="flex items-center justify-between border-b border-ink px-5 py-4">
               <div>
                 <div className="font-mono text-[10px] font-bold tracking-[0.18em] text-muted uppercase">
                   {tracks.length} tracks · {fmtRun(totalSec)}
                 </div>
-                <h3 className="mt-0.5 font-display text-xl font-bold">Save playlist</h3>
+                <h3 id="pb-save-title" className="mt-0.5 font-display text-xl font-bold">Save playlist</h3>
               </div>
               <IconBtn onClick={() => setModal(null)} title="close"><X className="size-4" /></IconBtn>
             </div>

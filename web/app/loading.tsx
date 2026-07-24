@@ -12,7 +12,7 @@ export default function RootLoading() {
       <div role="status" className="flex items-center gap-2 text-sm text-muted">
         <span
           aria-hidden
-          className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent"
+          className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-muted border-t-transparent"
         />
         Loading…
       </div>

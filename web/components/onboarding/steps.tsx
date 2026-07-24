@@ -247,7 +247,7 @@ export function LlmStep({ w }: { w: WizardController }) {
           <Field label="API key" hint="Stored in state/secrets.env (mode 0600), not in settings.json">
             <TextInput
               type="password"
-              autoComplete="new-password"
+              autoComplete="off"
               value={w.data.llm.apiKey}
               onChange={e =>
                 w.patch(d => ({ llm: { ...d.llm, apiKey: e.target.value }, llmTest: { ok: null } }))
@@ -408,7 +408,7 @@ export function TtsStep({ w }: { w: WizardController }) {
             <Field label="API key">
               <TextInput
                 type="password"
-                autoComplete="new-password"
+                autoComplete="off"
                 value={w.data.tts.cloud.apiKey}
                 onChange={e =>
                   w.patch(d => ({

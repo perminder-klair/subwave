@@ -530,7 +530,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
               <Label>Bearer token</Label>
               <Input
                 type="password"
-                autoComplete="current-password"
+                autoComplete="off"
                 value={compatEmbedKeyInput}
                 onChange={(ev: ChangeEvent<HTMLInputElement>) => setCompatEmbedKeyInput(ev.target.value)}
                 placeholder={
@@ -579,7 +579,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 <Label>Embedding API key override</Label>
                 <Input
                   type="password"
-                  autoComplete="new-password"
+                  autoComplete="off"
                   value={embeddingKeyInput}
                   placeholder={embedKeyPresent ? '•••••• (reusing your DJ key)' : `${embedKeyVar} — or set it in .env`}
                   onChange={(ev: ChangeEvent<HTMLInputElement>) => setEmbeddingKeyInput(ev.target.value)}

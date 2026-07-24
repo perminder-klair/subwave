@@ -705,6 +705,7 @@ export default function SkillsPanel() {
                       on={s.enabled}
                       disabled={busy === s.name}
                       onClick={() => toggle(s.name, !s.enabled)}
+                      ariaLabel={`Enable ${s.label || s.name}`}
                     />
                   </span>
                   <span className="caption">{s.enabled ? 'enabled' : 'disabled'}</span>

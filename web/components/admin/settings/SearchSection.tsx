@@ -179,7 +179,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
                 <div className="flex items-stretch gap-2">
                   <Input
                     type="password"
-                    autoComplete="new-password"
+                    autoComplete="off"
                     value={form.search.apiKey === 'set' ? '' : form.search.apiKey}
                     placeholder={form.search.apiKey === 'set' ? '•••••• (key on file)' : keyed.placeholder}
                     onChange={(e: ChangeEvent<HTMLInputElement>) =>

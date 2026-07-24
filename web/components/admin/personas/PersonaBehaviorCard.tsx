@@ -51,6 +51,7 @@ export function PersonaBehaviorCard({ persona, update }: PersonaBehaviorCardProp
             <Toggle
               on={persona.djMode}
               onClick={() => update({ djMode: !persona.djMode })}
+              ariaLabel="Work the desk like a real DJ"
             />
           </div>
         </div>

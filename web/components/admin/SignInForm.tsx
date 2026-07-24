@@ -32,7 +32,9 @@ export default function SignInForm({ onSubmit }: SignInFormProps) {
   };
 
   return (
-    <form onSubmit={submit} className="mx-auto max-w-[420px] border border-ink">
+    // aria-busy lives here, on the element that owns the pending state, rather
+    // than being duplicated into every gate that renders this form.
+    <form onSubmit={submit} aria-busy={busy} className="mx-auto max-w-[420px] border border-ink">
       <div className="border-b border-ink px-4 py-2">
         <span className="v3-eyebrow text-[11px]">Admin sign-in</span>
       </div>
@@ -61,7 +63,6 @@ export default function SignInForm({ onSubmit }: SignInFormProps) {
               placeholder="password"
               aria-label="Password"
               required
-              minLength={1}
               value={pass}
               onChange={e => setPass(e.target.value)}
               aria-invalid={err ? true : undefined}
