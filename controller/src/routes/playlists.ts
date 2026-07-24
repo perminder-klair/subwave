@@ -8,6 +8,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
 import { queue } from '../broadcast/queue.js';
 import { generatePlaylist, type GenerateInput } from '../music/playlist-gen.js';
+import * as genJobs from '../music/playlist-jobs.js';
 import * as recipes from '../music/playlist-recipes.js';
 import { syncRecipe } from '../music/playlist-sync.js';
 
@@ -129,12 +130,9 @@ router.post('/playlists/:id/sync', requireAdmin, async (req, res) => {
   }
 });
 
-// POST /playlists/generate — { prompt?, seedTrackIds?, seedArtist?, knobs?,
-// sources?, excludeTrackIds? } → an UNSAVED, ordered candidate list. The
-// operator edits it, then saves via POST /playlists. Never mutates Navidrome.
-router.post('/playlists/generate', requireAdmin, async (req, res) => {
-  const b = req.body || {};
-  const input: GenerateInput = {
+function readGenerateInput(body: any): GenerateInput {
+  const b = body || {};
+  return {
     prompt: typeof b.prompt === 'string' ? b.prompt : undefined,
     seedTrackIds: parseIds(b.seedTrackIds),
     seedArtist: typeof b.seedArtist === 'string' ? b.seedArtist : undefined,
@@ -142,7 +140,10 @@ router.post('/playlists/generate', requireAdmin, async (req, res) => {
     sources: b.sources && typeof b.sources === 'object' ? b.sources : {},
     excludeTrackIds: parseIds(b.excludeTrackIds),
   };
-  const hasIntent = Boolean(
+}
+
+function hasGenerateIntent(input: GenerateInput): boolean {
+  return Boolean(
     input.prompt?.trim() ||
     input.seedTrackIds?.length ||
     input.seedArtist?.trim() ||
@@ -156,20 +157,65 @@ router.post('/playlists/generate', requireAdmin, async (req, res) => {
     input.knobs?.maxBpm ||
     input.knobs?.instrumentalOnly,
   );
-  if (!hasIntent) {
+}
+
+// A finished generation, shaped for the response: empty results carry the
+// "loosen the filters" hint, non-empty ones are logged.
+function finishGenerate(result: Awaited<ReturnType<typeof generatePlaylist>>) {
+  if (!result.tracks.length) {
+    return { ...result, message: 'nothing matched — try loosening the filters, removing seeds, or a broader vibe' };
+  }
+  queue.log('info', `playlist generated (${result.tracks.length} tracks, pool ${result.poolSize}${result.usedFallback ? ', deterministic fallback' : ''})`);
+  return result;
+}
+
+// POST /playlists/generate — { prompt?, seedTrackIds?, seedArtist?, knobs?,
+// sources?, excludeTrackIds? } → an UNSAVED, ordered candidate list. The
+// operator edits it, then saves via POST /playlists. Never mutates Navidrome.
+// Synchronous: the response holds until the generation lands, which can be
+// minutes — anything proxying through Cloudflare should use the jobs flow
+// below instead (CF cuts origin responses off at ~100s).
+router.post('/playlists/generate', requireAdmin, async (req, res) => {
+  const input = readGenerateInput(req.body);
+  if (!hasGenerateIntent(input)) {
     return res.status(400).json({ error: 'give a prompt, seeds, a source, or at least one knob to generate from' });
   }
   try {
-    const result = await generatePlaylist(input);
-    if (!result.tracks.length) {
-      return res.json({ ...result, message: 'nothing matched — try loosening the filters, removing seeds, or a broader vibe' });
-    }
-    queue.log('info', `playlist generated (${result.tracks.length} tracks, pool ${result.poolSize}${result.usedFallback ? ', deterministic fallback' : ''})`);
-    res.json(result);
+    res.json(finishGenerate(await generatePlaylist(input)));
   } catch (err: any) {
     queue.log('error', `playlist generate failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
+});
+
+// POST /playlists/generate/jobs — same body as /generate, returns { jobId }
+// immediately; the run continues server-side. Poll the job to collect it.
+router.post('/playlists/generate/jobs', requireAdmin, (req, res) => {
+  const input = readGenerateInput(req.body);
+  if (!hasGenerateIntent(input)) {
+    return res.status(400).json({ error: 'give a prompt, seeds, a source, or at least one knob to generate from' });
+  }
+  const job = genJobs.create();
+  if (!job) return res.status(429).json({ error: 'too many generations already running — collect or wait for one first' });
+  generatePlaylist(input).then(
+    (result) => genJobs.complete(job.id, finishGenerate(result)),
+    (err: any) => {
+      queue.log('error', `playlist generate failed: ${err.message}`);
+      genJobs.fail(job.id, err.message);
+    },
+  );
+  res.status(202).json({ jobId: job.id });
+});
+
+// GET /playlists/generate/jobs/:id — { status: 'running' } | { status: 'done',
+// result } | { status: 'error', error }. 404 once expired (or after a
+// controller restart — the store is in-memory).
+router.get('/playlists/generate/jobs/:id', requireAdmin, (req, res) => {
+  const job = genJobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'unknown or expired generation job — start a new one' });
+  if (job.status === 'running') return res.json({ status: 'running' });
+  if (job.status === 'error') return res.json({ status: 'error', error: job.error || 'generation failed' });
+  res.json({ status: 'done', result: job.result });
 });
 
 // POST /playlists/:id/tracks — { songIds } → append.
