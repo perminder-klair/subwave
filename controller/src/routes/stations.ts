@@ -1,6 +1,8 @@
 // Multi-station profile management (spec §4/§5). Offline stations are inert:
 // list / rename / delete / make-live only — editing one means switching to it.
 
+import { utimesSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import { STATE_ROOT } from '../config.js';
@@ -23,6 +25,20 @@ function scheduleSwitchExit(): void {
       console.error('[stations] mixer restart failed:', (err as Error).message);
     }
     console.log('[stations] exiting for station switch — supervisor restarts us');
+    // Dev runs under `tsx watch`, which does NOT respawn a cleanly-exited
+    // child — and the watch parent keeps the container alive, so docker's
+    // restart policy never fires either. Bump this module's own mtime so the
+    // watcher relaunches the server against the new pointer; the watcher's
+    // debounce fires after exit(0) below, so the port is already free. Prod
+    // (PID-1 node + restart policy) needs none of this and is gated out.
+    if (process.env.NODE_ENV !== 'production') {
+      try {
+        const now = new Date();
+        utimesSync(fileURLToPath(import.meta.url), now, now);
+      } catch {
+        // best-effort — worst case is the documented manual restart
+      }
+    }
     process.exit(0);
   });
 }

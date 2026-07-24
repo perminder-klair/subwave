@@ -69,18 +69,22 @@ including things you might not expect, like `library.db` — is per-station.
 
 ## Dev mode
 
-Under `docker-compose.dev.yml`, a station switch always leaves the controller
-down. The switch works by having the controller call `process.exit(0)` so its
-supervisor restarts it against the new station dir — but in dev the
-controller runs under `tsx watch`, and `tsx watch` only respawns the process
-on a crash or a watched-file change, not on a clean exit. The compose restart
-policy doesn't help either, because the `tsx watch` parent process itself
-never dies. Bring it back manually after every switch:
+The switch works by having the controller call `process.exit(0)` so its
+supervisor restarts it against the new station dir. In dev the controller
+runs under `tsx watch`, which only respawns the process on a crash or a
+watched-file change — not on a clean exit — and the compose restart policy
+doesn't help either, because the `tsx watch` parent process itself never
+dies. To compensate, the switch-exit path in non-production bumps the mtime
+of one of its own source files right before exiting: `tsx watch` treats that
+as a file change and relaunches the server against the new pointer, so dev
+switches complete hands-free just like prod (~4s).
+
+If that self-respawn ever fails (the try/catch around it is best-effort),
+the fallback is the manual restart:
 
 ```bash
 docker compose -f docker-compose.dev.yml restart controller
 ```
 
 Running the controller natively (`cd controller && npm run dev`, outside
-compose) hits the same `tsx watch` behavior — a switch leaves it exited, and
-it needs the same manual restart (stop it and run `npm run dev` again).
+compose) relies on the same mtime-bump self-respawn.
