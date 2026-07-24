@@ -161,7 +161,17 @@ const NAV_SECTIONS: NavSection[] = [
           { href: '/observatory', id: 'observatory', label: 'Observatory', icon: Telescope },
         ],
       },
-      { href: '/admin/shows', id: 'shows', label: 'Shows', icon: CalendarClock },
+      // Shows → Schedule: the definitions live on /admin/shows; the weekly
+      // plan (The Rundown) is its own full-bleed page.
+      {
+        href: '/admin/shows',
+        id: 'shows',
+        label: 'Shows',
+        icon: CalendarClock,
+        children: [
+          { href: '/admin/shows/schedule', id: 'shows-schedule', label: 'Schedule', icon: CalendarDays },
+        ],
+      },
       { href: '/admin/personas', id: 'personas', label: 'Personas', icon: Drama },
       { href: '/admin/skills', id: 'skills', label: 'Skills', icon: Sparkles },
       // Imaging + Moods are single pages with ?tab= sections; the submenu
@@ -236,6 +246,7 @@ const FOOTER_LINKS: { href: string; label: string; icon: NavIcon; pill: string }
 // on Playlists, so the crumb mirrors that with the Programming section.
 function resolveCrumb(pathname: string | null): { section?: string; page: string } {
   if (pathname?.startsWith('/admin/playlists')) return { section: 'Programming', page: 'Playlists' };
+  if (pathname?.startsWith('/admin/shows/schedule')) return { section: 'Programming', page: 'Schedule' };
   if (pathname?.startsWith('/admin/doctor')) return { section: 'Monitor', page: 'DJ Doc' };
   if (pathname?.startsWith('/admin/stations')) return { section: 'System', page: 'Stations' };
   for (const section of NAV_SECTIONS) {
@@ -255,10 +266,16 @@ export interface AdminShellProps {
 // Wraps every page under /admin. Renders the newsprint shell (shadcn Sidebar +
 // sticky top bar) behind a sign-in gate. Children are admin panels that
 // re-call useAdminAuth themselves to avoid prop-drilling the adminFetch.
+// Routes that take the whole inset — no max-width, no padding — so a screen
+// like the Rundown can own its full width and height (its own header bands
+// run edge to edge and the page stretches to the viewport bottom).
+const FULL_BLEED_ROUTES = ['/admin/shows/schedule'];
+
 export default function AdminShell({ children, defaultOpen = true }: AdminShellProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { auth, needsAuth, hydrated, signIn, signOut, adminFetch } = useAdminAuth();
+  const fullBleed = !!pathname && FULL_BLEED_ROUTES.some(r => pathname.startsWith(r));
 
   const handleSignIn = useCallback(
     async (user: string, pass: string): Promise<SignInResult> => {
@@ -332,7 +349,13 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
               whenever the live station can't reach Navidrome. Renders nothing
               when healthy. */}
           <NavidromeBanner adminFetch={adminFetch} />
-          <div className="mx-auto w-full max-w-[1440px] min-w-0 px-5 py-4">
+          <div
+            className={
+              fullBleed
+                ? 'flex w-full min-w-0 flex-1 flex-col overflow-x-auto'
+                : 'mx-auto w-full max-w-[1440px] min-w-0 px-5 py-4'
+            }
+          >
             {/* Panel route transitions — 120 ms cross-fade between admin pages
                 keyed on pathname. No y translate (operator surface, vertical
                 drift would feel twitchy on a list of panels). */}
@@ -343,6 +366,7 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.12 }}
+                className={fullBleed ? 'flex min-h-full flex-1 flex-col' : undefined}
               >
                 {children}
               </m.div>
