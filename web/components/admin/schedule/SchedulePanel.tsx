@@ -7,9 +7,10 @@
 //
 // The data model is unchanged: the controller's 7×24 `schedule` grid from
 // GET /settings, persisted with PUT /schedule ("Save the week"). Every edit
-// on this screen — sentence editor, drag-and-drop, suggestions, the add-show
-// dialog — is a local range write until the week is saved. The takeover strip
-// drives the same /schedule/override endpoints the shows page used (#930).
+// on this screen — sentence editor, board clicks (silent slot books a show,
+// a card's × takes one off the air), drag-and-drop, suggestions — is a local
+// range write until the week is saved. The takeover strip drives the same
+// /schedule/override endpoints the shows page used (#930).
 
 import type { ChangeEvent } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -218,8 +219,8 @@ export default function SchedulePanel() {
     setLine({ day: b.day, start: b.start, end: b.start + b.span });
     setLineDays([b.day]);
     setLineShowId(b.showId ?? lineShowId ?? shows[0]?.id ?? null);
-    // Bring the order desk into view when picking from the board — no-op when
-    // it is already visible (block: 'nearest').
+    // Bring the order desk into view when picking from the board or a
+    // suggestion — no-op when it is already visible (block: 'nearest').
     bandRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   };
 
@@ -235,6 +236,20 @@ export default function SchedulePanel() {
     setLine({ day: b.day, start: b.start, end: b.start + b.span });
     setLineDays([b.day]);
     setLineShowId(showId);
+  };
+
+  // The × on a board card: take the run off the air (a local edit). The
+  // removed line lands in the order desk with the show preselected, so a
+  // mis-click is one "Add to schedule" away from restored.
+  const removeRun = (b: Block) => {
+    if (!schedule || !b.showId) return;
+    setSchedule(setRange(schedule, [b.day], b.start, b.start + b.span, null));
+    setLine({ day: b.day, start: b.start, end: b.start + b.span });
+    setLineDays([b.day]);
+    setLineShowId(b.showId);
+    notify.ok(
+      `“${showById(b.showId)?.name ?? 'show'}” off ${dayName(b.day)} ${hhmm(b.start)} – ${hhmm(b.start + b.span)} — unsaved until you save the week.`,
+    );
   };
 
   // Where the edited line would sit in the week's order stack.
@@ -597,6 +612,7 @@ export default function SchedulePanel() {
           colorOf={colorOf}
           hoursOf={hoursOf}
           onPick={pick}
+          onRemove={removeRun}
           onDropShow={dropShow}
           onArmShow={setLineShowId}
         />
@@ -692,9 +708,14 @@ function NowCell({
     <div className={cn('min-w-0 px-[22px] py-2', !last && 'border-r border-separator-strong')}>
       <div className="mb-1 flex items-center gap-2">
         {live && <span aria-hidden="true" className="size-[7px] flex-none rounded-full bg-[var(--accent)]" />}
-        <span className={cn('eyebrow', live ? 'text-vermilion' : 'text-muted')}>{label}</span>
-        {left && <Mu className="ml-auto text-[8.5px]">{left}</Mu>}
-        <span className={cn('font-mono text-[11px] font-bold tracking-[0.06em] text-ink', !left && 'ml-auto')}>
+        <span className={cn('eyebrow min-w-0 truncate', live ? 'text-vermilion' : 'text-muted')}>{label}</span>
+        {left && <Mu className="ml-auto flex-none text-[8.5px] whitespace-nowrap">{left}</Mu>}
+        <span
+          className={cn(
+            'flex-none font-mono text-[11px] font-bold tracking-[0.06em] whitespace-nowrap text-ink',
+            !left && 'ml-auto',
+          )}
+        >
           {time}
         </span>
       </div>

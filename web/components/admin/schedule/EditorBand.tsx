@@ -55,7 +55,9 @@ export interface LineEditorProps {
   orderNo: number;
 }
 
-/** The sentence-based order editor — rendered above the board. */
+/** The sentence-based order editor — rendered above the board. A board-card
+ *  click loads its order here; the card's × removes directly. This line is
+ *  the tool for finer ranges, other shows, and multi-day writes. */
 export function LineEditor({
   shows, line, lineShowId, lineDays, currentName, colorOf,
   onLineChange, onLineShow, onToggleLineDay, onAir, onQuiet, orderNo,
@@ -64,12 +66,12 @@ export function LineEditor({
   return (
     <div className="min-w-0">
       <div className="mb-0.5 flex items-baseline gap-3">
-        <span className="eyebrow text-ink">Editing this line</span>
-        <Mu className="tracking-[0.08em]">
-          {dayName(line.day)} {hhmm(line.start)} → {hhmm(line.end)} ·{' '}
-          {currentName ? `currently ${currentName}` : 'currently silent'}
+        <span className="eyebrow flex-none whitespace-nowrap text-ink">Write an order</span>
+        <Mu className="min-w-0 flex-1 truncate tracking-[0.08em]">
+          Fill in the sentence, then add it to the schedule · {dayName(line.day)} {hhmm(line.start)} → {hhmm(line.end)}{' '}
+          {currentName ? `is currently ${currentName}` : 'is currently silent'}
         </Mu>
-        <Mu className="ml-auto text-[8.5px]">Becomes order №{orderNo}</Mu>
+        <Mu className="ml-auto flex-none text-[8.5px] whitespace-nowrap">Becomes order №{orderNo}</Mu>
       </div>
       <div className="mt-2 border border-ink bg-[var(--page-bg)] p-[15px]">
         <div className="flex flex-wrap items-center gap-2 text-[14.5px] text-ink">
@@ -115,10 +117,10 @@ export function LineEditor({
           <DayPills selected={lineDays} onToggle={onToggleLineDay} />
           <span className="ml-auto flex gap-2">
             <Button variant="accent" size="sm" onClick={onAir} disabled={!lineShow}>
-              Put it on air
+              Add to schedule
             </Button>
             <Button variant="ghost" size="sm" onClick={onQuiet}>
-              Leave it quiet
+              Remove
             </Button>
           </span>
         </div>
