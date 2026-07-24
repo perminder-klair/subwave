@@ -29,7 +29,8 @@ import { Field } from '../ui/field';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup,
 } from '../ui/select';
-import { Card, Btn, Pill, Eyebrow, Metric, MetaChip, Toggle, Seg } from './ui';
+import { Card, Btn, Pill, Eyebrow, Metric, MetaChip, Toggle } from './ui';
+import RosterViewToggle from './RosterViewToggle';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
@@ -1305,11 +1306,7 @@ export default function ShowsPanel() {
       <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
         <span className="caption">show definitions · {form.shows.length}/{SHOWS_MAX} shows</span>
         <div className="flex items-center gap-2">
-          <Seg
-            value={view}
-            options={[{ id: 'cards', label: 'Cards' }, { id: 'list', label: 'List' }]}
-            onChange={v => setView(v === 'list' ? 'list' : 'cards')}
-          />
+          <RosterViewToggle view={view} onChange={setView} />
           <Btn
             onClick={() => setCommunityOpen(true)}
             disabled={!community}

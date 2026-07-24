@@ -18,7 +18,8 @@ import { notify, errorMessage } from '../../lib/notify';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { useRosterView } from '../../lib/adminView';
 import { RefreshCw, Plus, Users, Upload, Search, X } from 'lucide-react';
-import { Card, Btn, Pill, Eyebrow, MetaChip, Toggle, Seg } from './ui';
+import { Card, Btn, Pill, Eyebrow, MetaChip, Toggle } from './ui';
+import RosterViewToggle from './RosterViewToggle';
 import { V3Alert } from '../ui/alert';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -517,11 +518,7 @@ export default function SkillsPanel() {
           {/* Cards stay the default; the list is the second gear for a roster
               that has outgrown a card stack. Filters/sort drive both views. */}
           <div className="ml-auto">
-            <Seg
-              value={view}
-              options={[{ id: 'cards', label: 'Cards' }, { id: 'list', label: 'List' }]}
-              onChange={v => setView(v === 'list' ? 'list' : 'cards')}
-            />
+            <RosterViewToggle view={view} onChange={setView} />
           </div>
         </div>
         {allTags.length > 0 && (

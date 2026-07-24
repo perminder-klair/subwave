@@ -11,8 +11,9 @@ import { API_BASE, PERSONA_MAX } from './constants';
 import { initialsFor, personaValid } from './helpers';
 import { cn } from '../../../lib/cn';
 import { useRosterView } from '../../../lib/adminView';
-import { Btn, Pill, MetaChip, Seg } from '../ui';
+import { Btn, Pill, MetaChip } from '../ui';
 import PersonaTable from './PersonaTable';
+import RosterViewToggle from '../RosterViewToggle';
 
 interface PersonaRosterProps {
   personas: Persona[];
@@ -43,11 +44,7 @@ export function PersonaRoster({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="caption">roster · {personas.length} / {PERSONA_MAX}</span>
         <div className="flex flex-wrap items-center gap-2">
-          <Seg
-            value={view}
-            options={[{ id: 'cards', label: 'Cards' }, { id: 'list', label: 'List' }]}
-            onChange={v => setView(v === 'list' ? 'list' : 'cards')}
-          />
+          <RosterViewToggle view={view} onChange={setView} />
           <Btn
             onClick={onCommunity}
             disabled={communityCount === null}
