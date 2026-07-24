@@ -415,7 +415,12 @@ function AdminSidebar({
             when the rail is collapsed to icons. */}
         <SidebarMenu className="gap-1.5">
           <SidebarMenuItem>
-            <DropdownMenu>
+            {/* Non-modal: a modal Radix menu locks body scroll, and the lock
+                compensates for the removed scrollbar with a 15px right margin
+                on <body> — which pulls the sticky top bar off the right edge
+                for as long as the menu is open. A nav menu has no reason to
+                trap scroll, so opt out and the shift never happens. */}
+            <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <SidebarMenuButton title="More">
                   <MoreHorizontal
@@ -722,7 +727,9 @@ function TopBar({ pathname }: { pathname: string | null }) {
         </Link>
         <ThemeSwitcher variant="admin" />
         {/* Listen — a menu grouping the in-browser player with the native apps. */}
-        <DropdownMenu>
+        {/* modal={false} for the same reason as the sidebar's More menu — no
+            body scroll lock, so no scrollbar-compensation margin shift. */}
+        <DropdownMenu modal={false}>
           <DropdownMenuTrigger
             className="caption inline-flex cursor-pointer items-center gap-1 text-muted focus:outline-none"
             aria-label="Listen and get the app"
