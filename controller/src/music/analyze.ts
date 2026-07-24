@@ -471,7 +471,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
 
   // Best-effort sweep of the staging dir in case a prefetch left an orphan
   // (e.g. a download that resolved after its analyze slot already errored).
-  await rm(`${config.stateDir}/analyze-tmp`, { recursive: true, force: true }).catch(() => {});
+  await rm(`${config.stateRoot}/analyze-tmp`, { recursive: true, force: true }).catch(() => {});
 
   // Zero-shot audio moods over the vectors this pass (and past passes) wrote —
   // one CLAP text-tower round-trip + in-process cosines (music/audio-moods.ts).

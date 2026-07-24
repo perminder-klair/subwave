@@ -38,6 +38,7 @@ import {
   Music,
   AudioLines,
   Waves,
+  RadioTower,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -186,6 +187,7 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'System',
     items: [
       { href: '/admin/connect', id: 'connect', label: 'Connect', icon: Plug },
+      { href: '/admin/stations', id: 'stations', label: 'Stations', icon: RadioTower },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],
