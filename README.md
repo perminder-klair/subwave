@@ -11,7 +11,15 @@ It's *radio*, not a playlist. No per-listener shuffle, no skip button, no
 
 ## Showreel
 
+<table>
+<tr>
+<td width="480">
+
 https://github.com/user-attachments/assets/0a2ba78a-eda3-44c1-adce-bfa78ae992cd
+
+</td>
+</tr>
+</table>
 
 ## Live demo
 
@@ -28,26 +36,26 @@ https://github.com/user-attachments/assets/0a2ba78a-eda3-44c1-adce-bfa78ae992cd
 
 **The listener player.** One shared broadcast, with in-app song requests.
 
-<img src="web/public/screenshots/listen.webp" alt="Player — the listener player on /listen" width="640">
-
-<img src="web/public/screenshots/player-request-song.webp" alt="Player — request a song" width="260">
+<p>
+  <a href="web/public/screenshots/listen.webp"><img src="web/public/screenshots/listen.webp" alt="Player — the listener player on /listen" width="400"></a>
+  <a href="web/public/screenshots/player-request-song.webp"><img src="web/public/screenshots/player-request-song.webp" alt="Player — request a song" width="128"></a>
+</p>
 
 **The admin console.** Where the operator runs the station.
 
-| | |
-|---|---|
-| <img src="web/public/screenshots/admin-dash.webp" alt="Admin — Dash: live status, queue, booth log" width="100%"> | <img src="web/public/screenshots/admin-personas.webp" alt="Admin — Personas: the DJ roster" width="100%"> |
-| **Dash** — live status, the queue, the booth log | **Personas** — the DJ roster, each with its own voice |
-| <img src="web/public/screenshots/admin-shows.webp" alt="Admin — Weekly schedule grid" width="100%"> | <img src="web/public/screenshots/admin-skills.webp" alt="Admin — Skills: what the DJ does between tracks" width="100%"> |
-| **Shows** — a 24×7 schedule you paint | **Skills** — what the DJ does between tracks |
-| <img src="web/public/screenshots/admin-stats.webp" alt="Admin — Stats: LLM and TTS usage" width="100%"> | <img src="web/public/screenshots/admin-debug.webp" alt="Admin — Debug: health, logs, LLM calls" width="100%"> |
-| **Stats** — LLM and TTS usage at a glance | **Debug** — health, logs, recent LLM calls |
+| | | |
+|---|---|---|
+| <a href="web/public/screenshots/admin-dash.webp"><img src="web/public/screenshots/admin-dash.webp" alt="Admin — Dash: live status, queue, booth log" width="100%"></a> | <a href="web/public/screenshots/admin-personas.webp"><img src="web/public/screenshots/admin-personas.webp" alt="Admin — Personas: the DJ roster" width="100%"></a> | <a href="web/public/screenshots/admin-shows.webp"><img src="web/public/screenshots/admin-shows.webp" alt="Admin — Weekly schedule grid" width="100%"></a> |
+| **Dash** — live status, the queue, the booth log | **Personas** — the DJ roster, each with its own voice | **Shows** — a 24×7 schedule you paint |
+| <a href="web/public/screenshots/admin-skills.webp"><img src="web/public/screenshots/admin-skills.webp" alt="Admin — Skills: what the DJ does between tracks" width="100%"></a> | <a href="web/public/screenshots/admin-stats.webp"><img src="web/public/screenshots/admin-stats.webp" alt="Admin — Stats: LLM and TTS usage" width="100%"></a> | <a href="web/public/screenshots/admin-debug.webp"><img src="web/public/screenshots/admin-debug.webp" alt="Admin — Debug: health, logs, LLM calls" width="100%"></a> |
+| **Skills** — what the DJ does between tracks | **Stats** — LLM and TTS usage at a glance | **Debug** — health, logs, recent LLM calls |
 
 **The Library Observatory.** A data-art map of every track the DJ has tagged, placed by genre and lit by energy. Click a point for its full dossier: BPM, key, mood, embeddings, and nearest neighbours. Open it at `/observatory`.
 
-<img src="web/public/screenshots/observatory.webp" alt="Library Observatory — the full map of the tagged library with stat panels" width="640">
-
-<img src="web/public/screenshots/observatory-track.webp" alt="Library Observatory — a single track dossier" width="280">
+<p>
+  <a href="web/public/screenshots/observatory.webp"><img src="web/public/screenshots/observatory.webp" alt="Library Observatory — the full map of the tagged library with stat panels" width="400"></a>
+  <a href="web/public/screenshots/observatory-track.webp"><img src="web/public/screenshots/observatory-track.webp" alt="Library Observatory — a single track dossier" width="110"></a>
+</p>
 
 ## Features
 
@@ -61,13 +69,19 @@ https://github.com/user-attachments/assets/0a2ba78a-eda3-44c1-adce-bfa78ae992cd
 - **Multi-format broadcast.** MP3 always served (configurable bitrate) for Sonos, hardware radios, and cars; optional Opus, AAC, and lossless FLAC mounts, each toggleable from the admin UI. The web player picks automatically.
 - **Native apps and PWA.** Native iOS (on the App Store) and Android (on Google Play) players — background audio, lock-screen / CarPlay / Android Auto controls, multi-station — a [native desktop player](https://github.com/getsubwave/subwave-desktop) for macOS / Windows / Linux with a menu-bar mini player and live spectrum, plus an installable PWA on phone and desktop.
 - **Scheduled shows.** A 24×7 grid; each slot has its own persona, mood, and skills, or anchors to a Navidrome playlist. Ready-made show templates install from the [community catalog](https://www.getsubwave.com/shows).
+- **Programmes.** A show can air as a produced episode: the DJ drafts a per-episode plan — an angle, one feature beat each hour, an intro and an outro — so a three-hour slot hangs together instead of being three hours of unrelated links.
 - **Pluggable skills.** The DJ's between-track segments — weather, news, traffic, and your own — are skills. The built-ins are scaffolded as editable files under `state/skills/<kind>/` on first boot, so you can rewrite a brief or change the news feed (BBC → your own RSS) right from the admin console — no code, no redeploy. Add your own by dropping a `SKILL.md` (plus optional data-fetching code) into `state/skills/`, hitting Rescan, and enabling it — or write one in the admin UI's built-in editor, or install one other operators shared on the [community exchange](https://www.getsubwave.com/skills). See [`docs/custom-skills.md`](docs/custom-skills.md).
-- **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks.
-- **Hourly archives.** Every hour saved as MP3 for later replay.
+- **Mood-aware rotation.** Time of day, weather, and festival days bias what gets played and how the DJ talks — and the mood vocabulary itself is yours to edit on a dedicated admin page (words, "sounds like" descriptions, and which mood each moment of the day leans into).
+- **Ending-aware transitions.** The bundled analyzer measures BPM, key, loudness, and how every track actually ends, so crossfades size themselves to the material: a real fade rides out long, a cold ending cuts tight. Vocal detection keeps the DJ from talking over a sung intro, and opt-in stem blends mix the outgoing tail into the incoming head for a produced-sounding seam. DJ speech ducks the music and lifts it back up.
+- **Playlist builder.** Describe a playlist in plain language at `/admin/playlists` and the builder turns it into a recipe, resolves it against your library, and keeps recipe-backed playlists topped up as new music lands.
+- **Station imaging.** Jingles, SFX stingers, and instrumental talk-over beds on one admin page — render them through the DJ's voice, generate them from a text prompt, or upload your own audio.
+- **Player skins + themes.** Six player faces — Classic, Spool, Platter, Drift, Subamp, and TTY — with a station default and a per-listener override, plus a theme editor with live preview for colours and type.
+- **Private station mode.** Two independent locks over one station password: hide the web player behind a prompt, and/or require listener auth on every stream mount.
+- **Multi-station profiles.** Keep several stations in one install — each with its own library pool, DJ roster, schedule, and settings — and switch which one is live from the admin.
+- **Hourly archives (opt-in).** Save every hour as MP3 for later replay.
 - **Scrobbling.** Every spin can report to Last.fm and ListenBrainz, including self-hosted ListenBrainz instances.
 - **DJ Doc.** A built-in station check-up: runs diagnostics across the stack, then has your configured LLM review the findings.
-- **Crossfade + voice ducking.** Tracks blend smoothly; the music ducks under DJ speech and lifts back up.
-- **Admin console.** Live status, queue, booth log, personas, shows, skills, stats, and a debug view of recent LLM calls.
+- **Admin console.** Live status, queue, booth log, personas, shows, skills, playlists, moods, imaging, stations, stats, and a debug view of recent LLM calls.
 - **Library Observatory.** A full-screen, data-art map of every tagged track at `/observatory` — placed by genre, lit by energy, with a full dossier per track (BPM, key, mood, embedding fingerprints, and nearest-in-vector-space neighbours). Scales from a few hundred to tens of thousands of tracks.
 - **MCP server.** External agents (Claude Desktop, Cursor, etc.) can request songs and drive the DJ.
 - **Self-hosted.** One `docker compose up -d` on a single Linux host. Optional Cloudflare in front for TLS.
