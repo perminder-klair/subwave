@@ -327,7 +327,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             value={e.batchSize}
             onValueChange={v => setForm(f => ({ ...f, embedding: { ...f.embedding, batchSize: v } }))}
           >
-            <SelectTrigger className="max-w-[100px]"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="max-w-[100px]" aria-label="LLM batch size"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
                 {LLM_BATCH_SIZES.map(s => (
@@ -530,6 +530,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
               <Label>Bearer token</Label>
               <Input
                 type="password"
+                autoComplete="off"
                 value={compatEmbedKeyInput}
                 onChange={(ev: ChangeEvent<HTMLInputElement>) => setCompatEmbedKeyInput(ev.target.value)}
                 placeholder={
@@ -578,6 +579,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 <Label>Embedding API key override</Label>
                 <Input
                   type="password"
+                  autoComplete="off"
                   value={embeddingKeyInput}
                   placeholder={embedKeyPresent ? '•••••• (reusing your DJ key)' : `${embedKeyVar} — or set it in .env`}
                   onChange={(ev: ChangeEvent<HTMLInputElement>) => setEmbeddingKeyInput(ev.target.value)}
@@ -611,6 +613,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             </div>
             {probe && (
               <div
+                role="status"
                 className={cn(
                   'mt-2 max-w-[560px] rounded border bg-[var(--ink-softer)] px-3 py-2 text-[11px] leading-[1.6] whitespace-pre-wrap',
                   probe.ok

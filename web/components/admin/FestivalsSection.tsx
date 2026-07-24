@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
 import { Card, Btn } from './ui';
@@ -72,6 +72,8 @@ export default function FestivalsSection() {
   const [editing, setEditing] = useState<Festival | null>(null);
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
+  // Base id for wiring each field's <Label htmlFor> to its control's id.
+  const fieldId = useId();
 
   const load = useCallback(async () => {
     try {
@@ -301,8 +303,9 @@ export default function FestivalsSection() {
         {editing && (
           <div className="grid gap-4">
             <div className="field">
-              <Label>Name</Label>
+              <Label htmlFor={`${fieldId}-name`}>Name</Label>
               <Input
+                id={`${fieldId}-name`}
                 value={editing.name}
                 onChange={e => updateField('name', e.target.value)}
                 placeholder="e.g. New Year's Day"
@@ -312,7 +315,7 @@ export default function FestivalsSection() {
 
             <div className="grid grid-cols-2 gap-3">
               <div className="field">
-                <Label>Month</Label>
+                <Label htmlFor={`${fieldId}-month`}>Month</Label>
                 <Select
                   value={String(editing.month)}
                   onValueChange={v => {
@@ -326,7 +329,7 @@ export default function FestivalsSection() {
                     }));
                   }}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id={`${fieldId}-month`} aria-label="Month">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -338,12 +341,12 @@ export default function FestivalsSection() {
               </div>
 
               <div className="field">
-                <Label>Day</Label>
+                <Label htmlFor={`${fieldId}-day`}>Day</Label>
                 <Select
                   value={String(editing.day)}
                   onValueChange={v => updateField('day', Number(v))}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id={`${fieldId}-day`} aria-label="Day">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -356,8 +359,9 @@ export default function FestivalsSection() {
             </div>
 
             <div className="field">
-              <Label>Description <span className="text-muted">(optional)</span></Label>
+              <Label htmlFor={`${fieldId}-desc`}>Description <span className="text-muted">(optional)</span></Label>
               <Input
+                id={`${fieldId}-desc`}
                 value={editing.description || ''}
                 onChange={e => updateField('description', e.target.value)}
                 placeholder="Short note about the festival"
@@ -370,12 +374,12 @@ export default function FestivalsSection() {
 
             <div className="grid grid-cols-2 gap-3">
               <div className="field">
-                <Label>Mood</Label>
+                <Label htmlFor={`${fieldId}-mood`}>Mood</Label>
                 <Select
                   value={editing.mood}
                   onValueChange={v => updateField('mood', v)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger id={`${fieldId}-mood`} aria-label="Mood">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -387,8 +391,9 @@ export default function FestivalsSection() {
               </div>
 
               <div className="field">
-                <Label>Window <span className="text-muted">(days)</span></Label>
+                <Label htmlFor={`${fieldId}-window`}>Window <span className="text-muted">(days)</span></Label>
                 <Input
+                  id={`${fieldId}-window`}
                   type="number"
                   min={0}
                   max={14}

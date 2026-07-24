@@ -223,6 +223,7 @@ export default function LibraryPlaylistsTab({
         <div className="flex flex-wrap items-center gap-2 border-b border-dashed border-separator-strong bg-[var(--ink-softer)] px-4 py-3">
           <Input
             placeholder="playlist name"
+            aria-label="New playlist name"
             className="w-56"
             value={newName}
             autoFocus
@@ -283,6 +284,7 @@ export default function LibraryPlaylistsTab({
               <div className="flex flex-wrap items-center gap-3 border-t border-dashed border-separator-strong bg-[var(--ink-softer)] px-4 py-3">
                 <Input
                   className="w-56"
+                  aria-label="Playlist name"
                   value={editName}
                   autoFocus
                   onChange={(e: ChangeEvent<HTMLInputElement>) => setEditName(e.target.value)}

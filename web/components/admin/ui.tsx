@@ -9,7 +9,7 @@
    ToggleGroup, Switch) — retuned in components/ui/* to the newsprint look —
    keeping the original prop API so existing call sites need no changes. */
 
-import type { CSSProperties, ReactNode, MouseEvent } from 'react';
+import type { CSSProperties, ReactNode, MouseEvent, Ref } from 'react';
 import { useLayoutEffect, useRef } from 'react';
 import { cn } from '../../lib/cn';
 import { Button } from '../ui/button';
@@ -127,11 +127,33 @@ export interface BtnProps {
   type?: 'button' | 'submit' | 'reset';
   title?: string;
   className?: string;
+  /** React 19 passes `ref` as an ordinary prop — declared so callers that need
+   *  the element (returning focus to a disclosure trigger, measuring) can reach
+   *  it without dropping down to <Button>. */
+  ref?: Ref<HTMLButtonElement>;
+  /** Accessible name, for icon-only buttons whose label is the icon. */
+  'aria-label'?: string;
+  /** Disclosure state, when this button opens a panel/menu it owns. */
+  'aria-expanded'?: boolean;
+  'aria-haspopup'?: boolean | 'menu' | 'dialog' | 'listbox' | 'true';
 }
 
-export function Btn({ children, tone, sm, lg, onClick, disabled, type, title, className }: BtnProps) {
+export function Btn({
+  children,
+  tone,
+  sm,
+  lg,
+  onClick,
+  disabled,
+  type,
+  title,
+  className,
+  ref,
+  ...aria
+}: BtnProps) {
   return (
     <Button
+      ref={ref}
       variant={tone ? BTN_VARIANT[tone] : 'default'}
       size={sm ? 'sm' : lg ? 'lg' : 'default'}
       onClick={onClick}
@@ -139,6 +161,7 @@ export function Btn({ children, tone, sm, lg, onClick, disabled, type, title, cl
       type={type || 'button'}
       title={title}
       className={className}
+      {...aria}
     >
       {children}
     </Button>
@@ -200,14 +223,21 @@ export interface ToggleProps {
   on?: boolean;
   onClick?: () => void;
   disabled?: boolean;
+  /** Accessible name — the switch renders no text of its own, so pass the label
+   *  of the setting it controls (from the surrounding row). Required rather
+   *  than optional: an unlabelled switch reads as just "switch, off" to a
+   *  screen reader, and making it optional is what let the sweep go partial.
+   *  tsc now catches a new call site that forgets one. */
+  ariaLabel: string;
 }
 
-export function Toggle({ on, onClick, disabled }: ToggleProps) {
+export function Toggle({ on, onClick, disabled, ariaLabel }: ToggleProps) {
   return (
     <Switch
       checked={!!on}
       onCheckedChange={onClick ? () => onClick() : undefined}
       disabled={disabled}
+      aria-label={ariaLabel}
     />
   );
 }

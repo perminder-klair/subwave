@@ -522,7 +522,7 @@ export default function SettingsPanel() {
                           setForm(f => (f ? { ...f, archive: { ...f.archive, bitrate: v } } : f))
                         }
                       >
-                        <SelectTrigger className="w-32" disabled={!form.archive.enabled}>
+                        <SelectTrigger className="w-32" disabled={!form.archive.enabled} aria-label="Archive bitrate">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -557,6 +557,7 @@ export default function SettingsPanel() {
                     <div className="flex items-center gap-2">
                       <Input
                         className="mono-num w-28"
+                        aria-label="Keep recordings for (days)"
                         type="number"
                         min={0}
                         max={3650}
@@ -649,6 +650,7 @@ export default function SettingsPanel() {
                     <span className="text-[12px] text-muted">after</span>
                     <Input
                       className="mono-num w-24"
+                      aria-label="Pause after (minutes)"
                       type="number"
                       step={1}
                       min={1}
@@ -699,6 +701,7 @@ export default function SettingsPanel() {
                   <div className="flex items-center gap-2">
                     <Input
                       className="mono-num w-28"
+                      aria-label="Crossfade duration (seconds)"
                       type="number"
                       step={0.5}
                       max={30}
@@ -733,6 +736,7 @@ export default function SettingsPanel() {
                   <div className="flex items-center gap-2">
                     <Input
                       className="mono-num w-28"
+                      aria-label="Maximum track length (seconds)"
                       type="number"
                       step={1}
                       min={0}
@@ -783,7 +787,7 @@ export default function SettingsPanel() {
                         )
                       }
                     >
-                      <SelectTrigger className="w-64">
+                      <SelectTrigger className="w-64" aria-label="Loudness source">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -807,6 +811,7 @@ export default function SettingsPanel() {
                     <div className="flex items-center gap-2">
                       <Input
                         className="mono-num w-28"
+                        aria-label="Target loudness (LUFS)"
                         type="number"
                         step={1}
                         min={-23}
@@ -832,6 +837,7 @@ export default function SettingsPanel() {
                     <div className="flex items-center gap-2">
                       <Input
                         className="mono-num w-28"
+                        aria-label="Max boost (dB)"
                         type="number"
                         step={1}
                         min={0}
@@ -925,7 +931,7 @@ export default function SettingsPanel() {
                           setForm(f => (f ? { ...f, stream: { ...f.stream, opusBitrate: v } } : f))
                         }
                       >
-                        <SelectTrigger className="w-32">
+                        <SelectTrigger className="w-32" aria-label="Opus bitrate">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1114,7 +1120,7 @@ export default function SettingsPanel() {
                           setForm(f => (f ? { ...f, stream: { ...f.stream, aacBitrate: v } } : f))
                         }
                       >
-                        <SelectTrigger className="w-32">
+                        <SelectTrigger className="w-32" aria-label="AAC bitrate">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1160,7 +1166,7 @@ export default function SettingsPanel() {
                         setForm(f => (f ? { ...f, stream: { ...f.stream, bitrate: v } } : f))
                       }
                     >
-                      <SelectTrigger className="w-32">
+                      <SelectTrigger className="w-32" aria-label="MP3 stream bitrate">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>

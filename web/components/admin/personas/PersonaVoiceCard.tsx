@@ -188,7 +188,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                       if (first) updateTts({ voice: first });
                     }}
                   >
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectTrigger aria-label="Language"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
                         {Object.entries(kokoroLanguages).map(([k, v]) => (
@@ -342,6 +342,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                 )}
                 <Label>Remote voice</Label>
                 <Input
+                  aria-label="Remote voice"
                   value={persona.tts.voice}
                   maxLength={100}
                   placeholder="Server-specific (id, filename, or VoiceDesign prompt)"
@@ -368,7 +369,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
             return (
               <>
                 {cloudIssueText && (
-                  <div className="mb-3.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
+                  <div role="alert" className="mb-3.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
                     <strong>This cloud voice won’t play.</strong> {cloudIssueText}{' '}
                     Until that’s fixed, this persona falls back to <strong>{defaultEngine}</strong>.
                   </div>
@@ -401,6 +402,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                     {!hasList ? (
                       <>
                         <Input
+                          aria-label="Cloud voice"
                           value={persona.tts.voice}
                           maxLength={100}
                           placeholder="Server-specific (cloning ref or speaker id)"
@@ -436,6 +438,7 @@ export function PersonaVoiceCard({ persona, data, defaultEngine, cloudIssueText,
                             // A blank compat voice is legitimate — the server
                             // picks its own default — so don't flag it red.
                             className={cn('mt-2', voice || isCompat ? 'border-ink' : 'border-[var(--danger)]')}
+                            aria-label="Custom cloud voice id"
                             value={persona.tts.voice}
                             maxLength={100}
                             placeholder={isCompat ? 'Blank = server default' : 'Enter a custom voice id'}

@@ -13,8 +13,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { Toaster } from '@/components/ui/toaster';
-import { useThemeSwitcher } from '@/components/ThemeBootstrap';
+import { useThemeSwitcher } from '@/components/ThemeProvider';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { cn } from '@/lib/cn';
 import {
@@ -184,7 +183,7 @@ function ShellChrome({ skin, contained }: { skin?: SkinComponent; contained: boo
             <StationPasswordGate phase={auth.phase} unlock={auth.unlock} solid={false} />
           </>
         )}
-        {!contained && <Toaster />}
+        {/* Toaster is mounted once at the app shell (app/layout.tsx). */}
       </div>
     </SkinSelectionProvider>
   );

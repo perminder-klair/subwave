@@ -236,6 +236,7 @@ export default function MoodsPanel() {
                 {moods.map((m, idx) => (
                   <div key={idx} className="flex items-center gap-2">
                     <Input
+                      aria-label="Mood id"
                       value={m.name}
                       onChange={e => setMoods(list =>
                         (list ?? []).map((row, i) => i === idx ? { ...row, name: e.target.value } : row))}
@@ -244,6 +245,7 @@ export default function MoodsPanel() {
                       className="max-w-[160px] min-w-0 shrink-0"
                     />
                     <Input
+                      aria-label="Mood sound description"
                       value={m.clapPrompt}
                       onChange={e => setMoods(list =>
                         (list ?? []).map((row, i) => i === idx ? { ...row, clapPrompt: e.target.value } : row))}
@@ -297,7 +299,7 @@ export default function MoodsPanel() {
                     value={schedule[p.id] || (savedMoodNames[0] ?? '')}
                     onValueChange={v => setSchedule(s => ({ ...s, [p.id]: v }))}
                   >
-                    <SelectTrigger className="max-w-[200px]">
+                    <SelectTrigger className="max-w-[200px]" aria-label={`Mood for ${p.label}`}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -325,7 +327,7 @@ export default function MoodsPanel() {
                     value={weather[c.id] ? weather[c.id] : NONE}
                     onValueChange={v => setWeather(w => ({ ...w, [c.id]: v === NONE ? '' : v }))}
                   >
-                    <SelectTrigger className="max-w-[200px]">
+                    <SelectTrigger className="max-w-[200px]" aria-label={`Mood for ${c.label}`}>
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -366,6 +368,7 @@ export default function MoodsPanel() {
                 {corrections.map((c, idx) => (
                   <div key={idx} className="flex items-center gap-2">
                     <Input
+                      aria-label="Text on air"
                       value={c.from}
                       onChange={e => setCorrections(list =>
                         list.map((row, i) => i === idx ? { ...row, from: e.target.value } : row))}
@@ -375,6 +378,7 @@ export default function MoodsPanel() {
                     />
                     <span className="shrink-0 text-[11px] text-muted">reads as</span>
                     <Input
+                      aria-label="Spoken form"
                       value={c.to}
                       onChange={e => setCorrections(list =>
                         list.map((row, i) => i === idx ? { ...row, to: e.target.value } : row))}

@@ -10,8 +10,9 @@ import { SITE_URL } from '@/lib/site';
 import { GA_ID } from '@/lib/ga';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 import MotionProvider from '@/components/MotionProvider';
-import ThemeBootstrap from '@/components/ThemeBootstrap';
+import ThemeProvider from '@/components/ThemeProvider';
 import JsonLd from '@/components/JsonLd';
+import { Toaster } from '@/components/ui/toaster';
 
 // Visitor tracking. The gtag.js script only loads when a Measurement ID is
 // configured (see lib/ga — resolved from the runtime env so it works without a
@@ -235,10 +236,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       </head>
       <body suppressHydrationWarning>
         <MotionProvider>
-          <ThemeBootstrap>
+          <ThemeProvider>
             <ServiceWorkerRegister />
             {children}
-          </ThemeBootstrap>
+            {/* App-shell transient-feedback channel. Mounted once at the root so
+                every route (onboarding, observatory, landing, admin, player) has
+                somewhere for `notify()` (lib/notify → Sonner) to appear; the
+                per-shell mounts were removed to avoid a duplicate toaster. */}
+            <Toaster />
+          </ThemeProvider>
         </MotionProvider>
       </body>
       {GA_ID ? <GoogleAnalytics gaId={GA_ID} /> : null}

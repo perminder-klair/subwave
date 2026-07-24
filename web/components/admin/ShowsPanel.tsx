@@ -481,7 +481,7 @@ export default function ShowsPanel() {
   // cell is destructive enough to gate behind a yes/no.
   const [confirmClearWeek, setConfirmClearWeek] = useState(false);
   // Theme list for the per-show override dropdown. Public endpoint, no auth
-  // needed — same source the player ThemeBootstrap reads.
+  // needed — same source the player ThemeProvider reads.
   const [themes, setThemes] = useState<ThemeOption[]>([]);
   const [skills, setSkills] = useState<SkillOption[]>([]);
   const [activeThemeId, setActiveThemeId] = useState('');
@@ -1130,7 +1130,7 @@ export default function ShowsPanel() {
           ) : (
             <>
               <Select value={pinShowId} onValueChange={setPinShowId}>
-                <SelectTrigger className="h-8 w-52 text-[13px]">
+                <SelectTrigger className="h-8 w-52 text-[13px]" aria-label="Pin a show">
                   <SelectValue placeholder="pin a show…" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1685,6 +1685,7 @@ function ShowEditor({
                     on={show.banter && (show.guestPersonaIds?.length ?? 0) > 0}
                     disabled={(show.guestPersonaIds?.length ?? 0) === 0}
                     onClick={() => update({ banter: !show.banter })}
+                    ariaLabel="Banter breaks"
                   />
                 </div>
                 <div className="grid gap-0.5">
@@ -1708,6 +1709,7 @@ function ShowEditor({
                 <Toggle
                   on={show.programme}
                   onClick={() => update({ programme: !show.programme })}
+                  ariaLabel="Programme (produced episode)"
                 />
               </div>
               <div className="grid gap-0.5">
@@ -1726,7 +1728,7 @@ function ShowEditor({
                   value={show.segmentSkill || ANY_SENTINEL}
                   onValueChange={val => update({ segmentSkill: val === ANY_SENTINEL ? '' : val })}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="Feature segment skill">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -1874,7 +1876,7 @@ function ShowEditor({
               Up to {FILTER_VALUES_MAX}; a track matching any of them qualifies.
             </span>
             {unknownGenres.length > 0 && (
-              <span className="field-hint text-vermilion">
+              <span role="alert" className="field-hint text-vermilion">
                 No track in your library is tagged{' '}
                 {unknownGenres.map((g, i) => (
                   <span key={g}>{i > 0 ? ', ' : ''}&ldquo;{g}&rdquo;</span>
@@ -1899,6 +1901,7 @@ function ShowEditor({
                 on={show.filtersStrict}
                 disabled={!hasAnyMusicFilter(show)}
                 onClick={() => update({ filtersStrict: !show.filtersStrict })}
+                ariaLabel="Strict filter"
               />
             </div>
             <div className="grid gap-0.5">
@@ -1971,6 +1974,7 @@ function ShowEditor({
                 <Toggle
                   on={show.playlistStrict}
                   onClick={() => update({ playlistStrict: !show.playlistStrict })}
+                  ariaLabel="Playlist only (strict)"
                 />
               </div>
               <div className="grid gap-0.5">

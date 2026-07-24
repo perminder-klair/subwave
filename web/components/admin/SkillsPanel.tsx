@@ -692,6 +692,7 @@ export default function SkillsPanel() {
                       on={s.enabled}
                       disabled={busy === s.name}
                       onClick={() => toggle(s.name, !s.enabled)}
+                      ariaLabel={`Enable ${s.label || s.name}`}
                     />
                   </span>
                   <span className="caption">{s.enabled ? 'enabled' : 'disabled'}</span>
@@ -719,6 +720,7 @@ export default function SkillsPanel() {
               ref={fileInputRef}
               type="file"
               accept=".zip,application/zip"
+              aria-label="Import skill zip"
               className="hidden"
               onChange={e => {
                 const f = e.target.files?.[0];

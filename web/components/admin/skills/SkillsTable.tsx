@@ -135,6 +135,7 @@ export function SkillsTable({
             on={s.enabled}
             disabled={busy === s.name}
             onClick={() => onToggle(s.name, !s.enabled)}
+            ariaLabel={`Enable ${s.label || s.name}`}
           />
         </span>
       ),

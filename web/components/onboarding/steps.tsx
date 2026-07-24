@@ -66,6 +66,7 @@ function TestPill({ result }: { result: { ok: boolean | null; msg?: string } }) 
   if (result.ok === null) return null;
   return (
     <div
+      role="status"
       className={
         'mt-2 inline-block rounded px-2 py-0.5 text-xs ' +
         (result.ok ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900')
@@ -246,6 +247,7 @@ export function LlmStep({ w }: { w: WizardController }) {
           <Field label="API key" hint="Stored in state/secrets.env (mode 0600), not in settings.json">
             <TextInput
               type="password"
+              autoComplete="off"
               value={w.data.llm.apiKey}
               onChange={e =>
                 w.patch(d => ({ llm: { ...d.llm, apiKey: e.target.value }, llmTest: { ok: null } }))
@@ -268,6 +270,7 @@ export function LlmStep({ w }: { w: WizardController }) {
               />
             ) : (
               <TextInput
+                aria-label="Model"
                 value={w.data.llm.model}
                 onChange={e => w.patch(d => ({ llm: { ...d.llm, model: e.target.value }, llmTest: { ok: null } }))}
                 placeholder={isOllama ? 'glm-5.1:cloud' : (isCustom || isLocca) ? 'model filename or id' : 'e.g. claude-sonnet-4 · gpt-4o-mini'}
@@ -405,6 +408,7 @@ export function TtsStep({ w }: { w: WizardController }) {
             <Field label="API key">
               <TextInput
                 type="password"
+                autoComplete="off"
                 value={w.data.tts.cloud.apiKey}
                 onChange={e =>
                   w.patch(d => ({
@@ -508,7 +512,7 @@ export function ReviewStep({
           </div>
         ))}
       </dl>
-      {err && <p className="mt-3 text-sm text-red-700">{err}</p>}
+      {err && <p role="alert" className="mt-3 text-sm text-red-700">{err}</p>}
       <button
         type="button"
         onClick={onSave}
