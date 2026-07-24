@@ -225,7 +225,7 @@ const ANALYZE_MAX_BYTES = parseInt(process.env.ANALYZE_MAX_BYTES || String(12 * 
 // state dir (mounted at the same /var/sub-wave path in both the controller and
 // the tts-heavy sidecar), so the path string the controller writes resolves to
 // the same file inside the sidecar — that's what makes the path handoff work.
-const ANALYZE_TMP_DIR = `${config.stateDir}/analyze-tmp`;
+const ANALYZE_TMP_DIR = `${config.stateRoot}/analyze-tmp`;
 
 // ---------------------------------------------------------------------------
 // Local Python worker (persistent over stdio)

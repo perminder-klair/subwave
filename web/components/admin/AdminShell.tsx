@@ -38,12 +38,14 @@ import {
   Music,
   AudioLines,
   Waves,
+  RadioTower,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
 import NavidromeBanner from './NavidromeBanner';
+import StationSwitcher from './StationSwitcher';
 import OdometerNumber from '../OdometerNumber';
 import BoothBuddy from '../BoothBuddy';
 import ThemeSwitcher from '../ThemeSwitcher';
@@ -194,6 +196,7 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'System',
     items: [
       { href: '/admin/connect', id: 'connect', label: 'Connect', icon: Plug },
+      { href: '/admin/stations', id: 'stations', label: 'Stations', icon: RadioTower },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],
@@ -451,6 +454,10 @@ function AdminSidebar({
           </span>
         </Link>
         <span className="caption px-1 group-data-[collapsible=icon]:hidden">control center</span>
+        {/* Multi-station: the shadcn "Teams"-style switcher — active station
+            with a dropdown of the others; no-ops down to a single row on
+            single-station installs. */}
+        <StationSwitcher onNavigate={closeOnMobileNav} />
       </SidebarHeader>
 
       <SidebarContent className="gap-4 px-2 py-1">

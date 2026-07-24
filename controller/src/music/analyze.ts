@@ -527,7 +527,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
 
   // Best-effort sweep of the staging dir in case a prefetch left an orphan
   // (e.g. a download that resolved after its analyze slot already errored).
-  await rm(`${config.stateDir}/analyze-tmp`, { recursive: true, force: true }).catch(() => {});
+  await rm(`${config.stateRoot}/analyze-tmp`, { recursive: true, force: true }).catch(() => {});
 
   // Keep the stem cache inside the operator's byte budget after a pass that
   // may have written hundreds of new stem dirs (LRU by dir mtime; the hourly

@@ -317,7 +317,7 @@ async function resolveAdminPassword(): Promise<string | null> {
   if (process.env.ICECAST_ADMIN_PASSWORD) return process.env.ICECAST_ADMIN_PASSWORD;
   if (cachedAdminPassword) return cachedAdminPassword;
   try {
-    const raw = await readFile(join(config.stateDir, 'icecast-secrets.env'), 'utf8');
+    const raw = await readFile(join(config.stateRoot, 'icecast-secrets.env'), 'utf8');
     const m = raw.match(/^ICECAST_ADMIN_PASSWORD=(.*)$/m);
     if (m) {
       cachedAdminPassword = m[1].trim().replace(/^["']|["']$/g, '');

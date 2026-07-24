@@ -16,6 +16,16 @@ STATE_DIR="${STATE_DIR:-$(pwd)/state}"
 COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 COMPOSE="docker compose -f ${COMPOSE_FILE}"
 
+# Multi-station: jingles live in the ACTIVE station's dir, not the state root.
+CTR_STATE=/var/sub-wave
+if [ -f "$STATE_DIR/stations/active.json" ]; then
+    ACTIVE_ID=$(sed -n 's/.*"activeId"[[:space:]]*:[[:space:]]*"\([a-z0-9][a-z0-9-]\{0,40\}\)".*/\1/p' "$STATE_DIR/stations/active.json" | head -n1)
+    if [ -n "$ACTIVE_ID" ] && [ -d "$STATE_DIR/stations/$ACTIVE_ID" ]; then
+        STATE_DIR="$STATE_DIR/stations/$ACTIVE_ID"
+        CTR_STATE="/var/sub-wave/stations/$ACTIVE_ID"
+    fi
+fi
+
 JINGLES=(
   "You're listening to Subwave. Personal frequency from the homelab."
   "Subwave radio. The signal continues."
@@ -25,7 +35,7 @@ JINGLES=(
 )
 
 JINGLE_DIR_HOST="${STATE_DIR}/jingles"
-JINGLE_DIR_CTR="/var/sub-wave/jingles"
+JINGLE_DIR_CTR="$CTR_STATE/jingles"
 M3U_HOST="${STATE_DIR}/jingles.m3u"
 
 mkdir -p "$JINGLE_DIR_HOST"

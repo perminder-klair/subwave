@@ -2,7 +2,9 @@
 // queue state, the cover-art proxy, the persona-avatar proxy, and the
 // listener-facing weekly schedule.
 import express from 'express';
+import { existsSync } from 'node:fs';
 import { stat, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
@@ -22,8 +24,18 @@ import { lifetimeTokenCount } from '../llm/log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
 import { checkAuthRateLimit, clientIp } from '../middleware/ratelimit.js';
+import { STATE_ROOT } from '../config.js';
+import { activeStationId } from '../stations/resolve.js';
 
 export const router = express.Router();
+
+// Boot-frozen on purpose: /state must report the station this process is
+// ACTUALLY running, not the pointer file's current value. During a switch the
+// pointer flips first — the admin UI polls /state and treats "station.id ===
+// target" as "the new controller is up", which only works if this snapshot
+// is taken once at boot.
+const BOOT_STATION_ID = activeStationId(STATE_ROOT);
+const BOOT_MULTI_STATION = existsSync(join(STATE_ROOT, 'stations'));
 
 // 1×1 transparent PNG — served when a persona has no avatar so the listener
 // UI can render an <img> tag without a broken-image icon. Cheap, no shipped
@@ -464,6 +476,11 @@ router.get('/state', (req, res) => {
     privacy: {
       privatePlayer: s?.privacy?.privatePlayer === true,
       listenerAuth: s?.privacy?.listenerAuth === true,
+    },
+    station: {
+      id: BOOT_STATION_ID,
+      name: s?.station || 'SUB/WAVE',
+      multiStation: BOOT_MULTI_STATION,
     },
   });
 });

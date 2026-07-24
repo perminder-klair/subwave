@@ -23,6 +23,25 @@ SECRETS=/var/sub-wave/icecast-secrets.env
 TEMPLATE=/etc/icecast2/icecast.xml.template
 RENDERED=/etc/icecast2/icecast.xml
 
+# Multi-station pointer (see docker/broadcast-entrypoint.sh — kept in lockstep).
+# Called at the top of run_broadcast so every mixer relaunch re-resolves.
+STATE_ROOT=/var/sub-wave
+STATE_DIR="$STATE_ROOT"
+resolve_state_dir() {
+	STATE_DIR="$STATE_ROOT"
+	local active="$STATE_ROOT/stations/active.json" id=""
+	if [ -f "$active" ]; then
+		id=$(sed -n 's/.*"activeId"[[:space:]]*:[[:space:]]*"\([a-z0-9][a-z0-9-]\{0,40\}\)".*/\1/p' "$active" | head -n1)
+		if [ -n "$id" ] && [ -d "$STATE_ROOT/stations/$id" ]; then
+			STATE_DIR="$STATE_ROOT/stations/$id"
+			log "active station '$id' → $STATE_DIR"
+		else
+			log "WARNING stations/active.json unresolvable (id='$id') — using root"
+		fi
+	fi
+	export SUBWAVE_STATE_DIR="$STATE_DIR"
+}
+
 log() { echo "[subwave-aio] $*" >&2; }
 
 # ---------------------------------------------------------------------------
@@ -134,9 +153,9 @@ init_secrets() {
 # way the split stack's container restart re-runs its entrypoint.
 # ---------------------------------------------------------------------------
 read_state_num() {
-	# $1 = filename under /var/sub-wave, $2 = fallback. Non-numeric/missing → fallback.
+	# $1 = filename under $STATE_DIR, $2 = fallback. Non-numeric/missing → fallback.
 	local _v
-	_v=$(cat "/var/sub-wave/$1" 2>/dev/null || true)
+	_v=$(cat "$STATE_DIR/$1" 2>/dev/null || true)
 	case "$_v" in
 		''|*[!0-9]*) echo "$2" ;;
 		*) echo "$_v" ;;
@@ -183,7 +202,7 @@ render_icecast() {
 	# only a literal 'true' in the controller-written flag file enables, and
 	# each stream mount then gets an <authentication type="url"> block. The
 	# controller runs in-process here, so the callback goes over loopback.
-	local FLAG=/var/sub-wave/icecast_listener_auth.txt
+	local FLAG=$STATE_DIR/icecast_listener_auth.txt
 	local AUTH_URL="${LISTENER_AUTH_URL:-http://localhost:7701/listener-auth}"
 	local LISTENER_AUTH=false
 	if [ "$(cat "$FLAG" 2>/dev/null | tr -d '[:space:]')" = "true" ]; then
@@ -243,6 +262,34 @@ render_icecast() {
 # the pair). icecast runs as the icecast2 user; liquidsoap as the liquidsoap
 # user (uid 10000). `sudo -E` preserves the resolved ICECAST_* env.
 run_broadcast() {
+	# Re-resolve the active station on every pair launch — this is how a
+	# station switch takes effect in the AIO without a container bounce (the
+	# supervise loop re-runs run_broadcast after every mixer restart).
+	resolve_state_dir
+
+	# Bootstrap the resolved station dir's subdirs (mirrors init_state, but
+	# scoped to $STATE_DIR — the root case is already covered by init_state at
+	# boot, and a non-root station dir needs its own subdirs created here).
+	mkdir -p "$STATE_DIR" \
+	         "$STATE_DIR/voice" \
+	         "$STATE_DIR/voices" \
+	         "$STATE_DIR/archive" \
+	         "$STATE_DIR/jingles" \
+	         "$STATE_DIR/logs" \
+	         "$STATE_DIR/sessions" \
+	         "$STATE_DIR/sfx"
+	chmod 777 "$STATE_DIR" \
+	          "$STATE_DIR/voice" \
+	          "$STATE_DIR/voices" \
+	          "$STATE_DIR/archive" \
+	          "$STATE_DIR/jingles" \
+	          "$STATE_DIR/logs" \
+	          "$STATE_DIR/sessions" \
+	          "$STATE_DIR/sfx"
+	touch "$STATE_DIR/auto.m3u" "$STATE_DIR/jingles.m3u"
+	chmod 666 "$STATE_DIR/auto.m3u" "$STATE_DIR/jingles.m3u"
+	touch "$STATE_DIR/archive/.ndignore"
+
 	# Re-render on every pair launch so a flipped listener-auth flag lands
 	# after a restart-mixer (which bounces this pair, not the container).
 	render_icecast

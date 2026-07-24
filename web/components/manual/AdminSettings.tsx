@@ -36,9 +36,10 @@ export default function AdminSettings() {
             Everything that shapes what the station plays and who it sounds like.
           </li>
           <li>
-            <strong>System — Stats, Connect, Settings, Debug.</strong> How the station is
-            behaving under the hood, the ways to plug other tools into it, the engine-room
-            settings, and a live diagnostic view.
+            <strong>System — Stats, Connect, Stations, Settings, Debug.</strong> How the
+            station is behaving under the hood, the ways to plug other tools into it,
+            which of this install's stations is on air, the engine-room settings, and a
+            live diagnostic view.
           </li>
         </ul>
       </section>
@@ -159,6 +160,38 @@ export default function AdminSettings() {
             stream drops for a few seconds and comes back with the new values applied.
           </p>
         </div>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">STATIONS</p>
+        <h2>More than one station.</h2>
+        <p>
+          One install can hold several stations — each with its own library pool, DJ
+          roster, schedule, jingles, and settings — with exactly one on air at a time.
+          The <strong>Stations</strong> page lists them all, and the switcher at the top
+          of the sidebar swaps between them from anywhere in the console.
+        </p>
+        <ul className="bs-list">
+          <li>
+            <strong>New station</strong> — start fresh (the station walks through
+            onboarding when it first goes live) or duplicate the current one, which
+            copies settings, personas, schedule, and the analyzed library but starts a
+            clean play history. Creating your second station converts the install to the
+            multi-station layout automatically; the one already playing isn't touched. An
+            install holds up to eight stations.
+          </li>
+          <li>
+            <strong>Make live</strong> — switches the broadcast. The mixer and controller
+            restart against the new station's data, so every listener is dropped for
+            about ten seconds while it comes back up. Today exactly one station streams
+            at a time; broadcasting several at once is planned for later.
+          </li>
+          <li>
+            <strong>Rename and delete</strong> — offline stations can be renamed or
+            deleted (deletion erases that station's entire data folder and can't be
+            undone). The live station can only be renamed.
+          </li>
+        </ul>
       </section>
 
       <section className="bs-section">
