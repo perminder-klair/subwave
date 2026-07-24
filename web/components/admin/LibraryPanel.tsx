@@ -38,6 +38,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
 import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
+import { llmProviderLabel } from './llm/providerMeta';
 import { cn } from '../../lib/cn';
 import TaggingPanel, { num } from './LibraryTaggingPanel';
 import type { Coverage, TaggerState, LibraryStatsLite, Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
@@ -126,6 +127,11 @@ interface SettingsResponse {
       analyzeQuietOnly?: boolean;
       analyzeQuietMinutes?: number;
     };
+    // Provider attribution for the Tagging modal's cost preview (#1162): the
+    // mood/energy seed calls bill to the chat LLM, the embedding calls to the
+    // embedding provider (blank = follows the LLM provider).
+    llm?: { provider?: string; model?: string };
+    embedding?: { provider?: string; model?: string };
   };
   // Daily-token-budget tier — drives the "budget nearly/already used" warning in
   // the Tagging modal. Absent on an old controller → treated as 'normal'.
@@ -219,6 +225,11 @@ export default function LibraryPanel() {
   const [quietMins, setQuietMins] = useState<number | null>(null);
   // Daily-token-budget tier from /settings — null until the first slow poll lands.
   const [budgetMode, setBudgetMode] = useState<BudgetMode | null>(null);
+  // Provider attribution for the Tagging modal (#1162) — "Google · gemini-2.0-
+  // flash-lite" for the LLM seed calls, "OpenAI" for the embedding calls. Null
+  // until the slow poll lands (the modal omits the attribution).
+  const [llmLabel, setLlmLabel] = useState<string | null>(null);
+  const [embedLabel, setEmbedLabel] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
@@ -398,6 +409,18 @@ export default function LibraryPanel() {
         );
       }
       if (j.budget) setBudgetMode(j.budget.mode);
+      // Which provider each tagging cost bills to (#1162). The tag-moods seed
+      // calls always ride the chat LLM legs (tag-library resolveTagConsumers);
+      // a blank embedding provider follows the LLM provider. Embedding model is
+      // shown only when explicitly set — the provider-default resolution table
+      // lives in Settings → Library and isn't duplicated here.
+      if (j.values?.llm?.provider) {
+        const llm = j.values.llm;
+        setLlmLabel(llmProviderLabel(llm.provider) + (llm.model ? ` · ${llm.model}` : ''));
+        const emb = j.values.embedding || {};
+        const embProvider = emb.provider || llm.provider;
+        setEmbedLabel(llmProviderLabel(embProvider) + (emb.model ? ` · ${emb.model}` : ''));
+      }
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
@@ -1282,6 +1305,8 @@ export default function LibraryPanel() {
         onToggleQuiet={toggleQuiet}
         onQuietMinutes={saveQuietMinutes}
         budgetMode={budgetMode}
+        llmLabel={llmLabel}
+        embedLabel={embedLabel}
       />
 
       <Tabs tab={tab} setTab={setTab} />

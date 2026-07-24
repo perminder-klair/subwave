@@ -221,6 +221,11 @@ interface TaggingPanelProps {
   // Daily-token-budget tier from /settings — null until the first slow poll lands.
   // Forwarded to the modal for its pre-run spend warning.
   budgetMode: BudgetMode | null;
+  // Provider attribution forwarded to the modal's cost preview (#1162) — which
+  // provider the mood/energy LLM calls vs. the embedding calls actually bill to.
+  // Null until the settings poll lands.
+  llmLabel: string | null;
+  embedLabel: string | null;
 }
 
 // One friendly sentence per pipeline phase — shown under the live progress so
@@ -1170,6 +1175,8 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         // it — otherwise the acoustics steps are bpm/key-only (honest hints).
         soundsLikeActive={!analysisOff && audioStatus !== 'pending-heavy' && !!p.audioEnabled}
         budgetMode={p.budgetMode}
+        llmLabel={p.llmLabel}
+        embedLabel={p.embedLabel}
         onStart={p.onStart}
         onReconcile={p.onReconcile}
         onRescan={p.onRescan}
