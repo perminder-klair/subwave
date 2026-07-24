@@ -1851,17 +1851,26 @@ server.register(
   fun(arg) -> begin
     rid = string.trim(arg)
     q = dj_queue.queue()
-    kept = list.filter(fun(r) -> "#{request.id(r)}" != rid, q)
-    if list.length(kept) == list.length(q) then
+    matches = list.filter(fun(r) -> "#{request.id(r)}" == rid, q)
+    if list.length(matches) == 0 then
       "NOT_FOUND"
     else
-      dj_queue.set_queue(kept)
+      # Removal goes through the stdlib's remove(), which filters the pending
+      # list in place and only rebuilds the inner (prefetched) queue when the
+      # target actually sits there. The previous filter + set_queue(kept)
+      # rebuild looked equivalent but set_queue() FLUSHES request.dynamic's
+      # inner queue wholesale (s.set_queue([]) in stdlib request.liq) — and a
+      # request the source has already popped for prefetch at a track
+      # boundary is in NEITHER visible list while its download runs, so the
+      # flush orphaned it: cancelling rids 32+33 silently killed resolving
+      # rid 31 and the source fell to auto at the boundary (observed live,
+      # twice). That mid-prefetch request is equally invisible to queue()
+      # here, so it reads as NOT_FOUND — which the controller already treats
+      # as "too late to cancel", exactly right for a track about to air.
+      list.iter(fun(r) -> dj_queue.remove(r), matches)
       # Destroy the dropped request so its file/URI is released now instead of
       # lingering until Liquidsoap flags it as leaked.
-      list.iter(
-        fun(r) -> if "#{request.id(r)}" == rid then request.destroy(r) end,
-        q
-      )
+      list.iter(fun(r) -> request.destroy(r), matches)
       log("Removed request #{rid} from dj_queue via server command")
       "OK"
     end

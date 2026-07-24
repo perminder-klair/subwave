@@ -296,8 +296,10 @@ export async function resolveClipRid(subsonicId: string): Promise<string | null>
 
 // Remove a pending request from dj_queue via the custom "dj_queue_remove"
 // command in radio.liq. Returns false when Liquidsoap replies NOT_FOUND —
-// the request already left the queue (playing or played), so there is
-// nothing left to cancel.
+// the request already left the queue (playing, played, or mid-prefetch for
+// the next slot — a request the source has popped for resolution is
+// invisible to dj_queue.queue(), and refusing it is right: it's about to
+// air), so there is nothing left to cancel.
 export async function removeFromDjQueue(rid: string): Promise<boolean> {
   const res = await sendCommand(`dj_queue_remove ${rid}`, 2000);
   _djQueueCache = null; // the queue just changed under the cache
