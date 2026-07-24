@@ -657,12 +657,12 @@ export default function ShowsPanel() {
           <div>
             <Eyebrow className="text-vermilion">show plan · the rundown</Eyebrow>
             <div className="mt-1.5 text-[22px] font-extrabold tracking-[-0.02em]">
-              The weekly schedule has its own page now.
+              Build your shows here. Put them on the air on the Rundown.
             </div>
             <div className="mt-1 max-w-[62ch] text-[11px] leading-[1.6] text-muted">
-              The board, the on-air listing, takeovers, and the order editor all
-              live on the Rundown. The shows you define below are what you put
-              on the air there.
+              This page is the roster — each show&apos;s name, host, brief, and
+              sound. The Rundown is the week itself: the board, the on-air
+              listing, and takeovers, hour by hour.
             </div>
           </div>
           <div className="flex flex-none flex-col items-end gap-2.5">
