@@ -226,6 +226,10 @@ export default function ThemeProvider({ children }: { children?: ReactNode }) {
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
       if (e.key.toLowerCase() !== 'd') return;
       if (isTypingTarget(e.target)) return;
+      // Stand down while focus is inside an open modal, matching the player
+      // shell's s/t cycling — a keypress aimed at a dialog shouldn't restyle
+      // the app behind it.
+      if (e.target instanceof HTMLElement && e.target.closest('[role="dialog"]')) return;
       // Deliberately neither preventDefault nor act inline. Several listeners
       // share this keypress — each skin's shortcut map, and the "press any key"
       // tune-in gate that doubles as the browser's audio-unblock gesture — and

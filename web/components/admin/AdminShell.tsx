@@ -364,6 +364,9 @@ function AdminCommandMenu() {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // Toggling on auto-repeat would flicker the dialog while the chord is
+      // held — fire once per press, like every other shortcut.
+      if (e.repeat) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setOpen(o => !o);
