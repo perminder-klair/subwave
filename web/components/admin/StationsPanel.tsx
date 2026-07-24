@@ -193,8 +193,9 @@ export default function StationsPanel() {
           </div>
           <div className="mt-1 text-[11px] leading-[1.6] text-muted">
             Every station gets its own library pool, DJ roster, schedule, and settings under this
-            one install. Only one station is live at a time — switching restarts the mixer and
-            controller, so every listener is dropped for ~10 seconds while it comes back up.
+            one install. For now only one station can go live at a time — switching restarts the
+            mixer and controller, so every listener is dropped for ~10 seconds while it comes back
+            up. Broadcasting several stations at once, each on its own stream, is coming later.
           </div>
         </div>
       </section>
