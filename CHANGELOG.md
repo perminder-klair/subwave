@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.47.0](https://github.com/perminder-klair/subwave/compare/v0.46.0...v0.47.0) (2026-07-24)
+
+
+### Features
+
+* **admin:** configure Navidrome from Settings → Music source ([#1160](https://github.com/perminder-klair/subwave/issues/1160)) ([90bedfe](https://github.com/perminder-klair/subwave/commit/90bedfe57d54322a41d9a307781ef0b82abe34e9))
+* **broadcast:** vocal-aware + stem-blend transitions ([#1086](https://github.com/perminder-klair/subwave/issues/1086)) ([3014f7d](https://github.com/perminder-klair/subwave/commit/3014f7db521df16d197070b658d3db2b15127b60))
+* multi-station profiles — independent state dirs switchable from admin ([#1156](https://github.com/perminder-klair/subwave/issues/1156)) ([2d41c2e](https://github.com/perminder-klair/subwave/commit/2d41c2ef6f5d2c38447cb6ee6319d5629911e7bb))
+* **web:** accessibility & UI-fundamentals pass (shadscan 41→72), plus landing broadsheet polish ([#1149](https://github.com/perminder-klair/subwave/issues/1149)) ([5a2a170](https://github.com/perminder-klair/subwave/commit/5a2a17018090881cfef2cdd200c06f851dfb3e24))
+* **web:** list view option for the Skills, Shows and DJs rosters ([#1152](https://github.com/perminder-klair/subwave/issues/1152)) ([db6241f](https://github.com/perminder-klair/subwave/commit/db6241f28f838cfa505ecd4268a14c2e3b63d03f))
+* **web:** track-change transitions for the five CSS-only skins ([#1153](https://github.com/perminder-klair/subwave/issues/1153)) ([4a3da8c](https://github.com/perminder-klair/subwave/commit/4a3da8c8a680503164aba2a39ad2417cb8791499))
+
+
+### Bug Fixes
+
+* **stations:** env-configured badge + on-air name sync for station profiles ([#1161](https://github.com/perminder-klair/subwave/issues/1161)) ([e25bd84](https://github.com/perminder-klair/subwave/commit/e25bd841b42fc3054130b101e0cb9474612971a3))
+* **web:** say which provider bills tag-moods vs embeddings in the tagging UI ([#1163](https://github.com/perminder-klair/subwave/issues/1163)) ([cbb8db6](https://github.com/perminder-klair/subwave/commit/cbb8db6ad8d6cb6f26d8125d9209f6908c074728))
+* **web:** steady the admin scrollbar and drop the generic panel loader ([#1154](https://github.com/perminder-klair/subwave/issues/1154)) ([472498a](https://github.com/perminder-klair/subwave/commit/472498af7629b4454978cef94bb99c051e8f8b14))
+* **web:** stop admin dropdowns shifting the page by the scrollbar width ([#1151](https://github.com/perminder-klair/subwave/issues/1151)) ([338a1a6](https://github.com/perminder-klair/subwave/commit/338a1a64c4181b55b9e33d5947515cda6c8c8ffe))
+
+
+### Refactors
+
+* **web:** drop the Stations link from the admin System nav ([#1159](https://github.com/perminder-klair/subwave/issues/1159)) ([316c087](https://github.com/perminder-klair/subwave/commit/316c087eb64a6728216b180840baa82aafc43d32))
+
 ## [0.46.0](https://github.com/perminder-klair/subwave/compare/v0.45.0...v0.46.0) (2026-07-23)
 
 
