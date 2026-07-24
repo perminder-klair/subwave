@@ -776,8 +776,12 @@ export default function DashPanel() {
                   }
                 />
               </PromptInputBody>
-              <PromptInputFooter className="flex-wrap gap-3.5">
-                <PromptInputTools className="flex-wrap gap-3.5">
+              {/* Two deliberate rows: the mode/duck controls, then the send
+                  button as a full-width action bar. On the ~550px column the
+                  old single flex-wrap row broke unpredictably, leaving the
+                  button dangling half-attached under empty space. */}
+              <PromptInputFooter className="flex-col items-stretch gap-2.5">
+                <PromptInputTools className="flex-wrap items-center gap-x-5 gap-y-2">
                   <div className="flex items-center gap-1.5">
                     <span className="caption">mode</span>
                     <Seg value={sayMode} options={SAY_MODES} onChange={setSayMode} />
@@ -792,7 +796,7 @@ export default function DashPanel() {
                   variant="accent"
                   size="sm"
                   disabled={!!busy || !sayText.trim()}
-                  className="ml-auto rounded-none px-3"
+                  className="w-full rounded-none px-3"
                 >
                   {/* No children while in flight / erroring so the status
                       glyphs (spinner / ✕) take over from the label. */}

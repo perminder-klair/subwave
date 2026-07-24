@@ -339,7 +339,7 @@ export default function ImagingPanel() {
   ];
 
   return (
-    <div className="grid max-w-[1060px] gap-4">
+    <div className="grid gap-4">
       {/* Editorial masthead + tab row, on a lifted card surface so the header
           reads as a card like the rest of the admin (Moods / Skills / Shows)
           rather than floating on the page background. */}
