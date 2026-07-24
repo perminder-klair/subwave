@@ -10,7 +10,10 @@ import type { Persona } from './types';
 import { API_BASE, PERSONA_MAX } from './constants';
 import { initialsFor, personaValid } from './helpers';
 import { cn } from '../../../lib/cn';
+import { useRosterView } from '../../../lib/adminView';
 import { Btn, Pill, MetaChip } from '../ui';
+import PersonaTable from './PersonaTable';
+import RosterViewToggle from '../RosterViewToggle';
 
 interface PersonaRosterProps {
   personas: Persona[];
@@ -33,11 +36,15 @@ export function PersonaRoster({
   personas, activePersonaId, onAirPersonaId, avatarTick,
   onOpenPrompt, onAdd, onSelect, communityCount, onCommunity,
 }: PersonaRosterProps) {
+  // Cards (default) or a dense table. Remembered per surface in localStorage.
+  const [view, setView] = useRosterView('personas');
+
   return (
     <section className="grid gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <span className="caption">roster · {personas.length} / {PERSONA_MAX}</span>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <RosterViewToggle view={view} onChange={setView} />
           <Btn
             onClick={onCommunity}
             disabled={communityCount === null}
@@ -54,7 +61,17 @@ export function PersonaRoster({
           </Btn>
         </div>
       </div>
-      {personas.map((p, i) => {
+      {view === 'list' && personas.length > 0 && (
+        <PersonaTable
+          personas={personas}
+          activePersonaId={activePersonaId}
+          onAirPersonaId={onAirPersonaId}
+          avatarTick={avatarTick}
+          onSelect={onSelect}
+        />
+      )}
+
+      {view === 'cards' && personas.map((p, i) => {
         const isOnAir = p.id === onAirPersonaId;
         const isDefault = p.id === activePersonaId;
         const valid = personaValid(p);
