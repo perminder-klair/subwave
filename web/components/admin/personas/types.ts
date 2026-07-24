@@ -64,6 +64,9 @@ export interface SkillCatalogEntry {
   name: string;
   label?: string;
   description?: string;
+  // Station-wide toggle from the Skills page. Optional so the UI degrades
+  // against older controllers that don't send it.
+  enabled?: boolean;
   // Freeform organisation tags from the skill's SKILL.md frontmatter.
   tags?: string[];
 }
