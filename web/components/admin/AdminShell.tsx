@@ -38,7 +38,6 @@ import {
   Music,
   AudioLines,
   Waves,
-  RadioTower,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -196,7 +195,6 @@ const NAV_SECTIONS: NavSection[] = [
     label: 'System',
     items: [
       { href: '/admin/connect', id: 'connect', label: 'Connect', icon: Plug },
-      { href: '/admin/stations', id: 'stations', label: 'Stations', icon: RadioTower },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],
@@ -231,13 +229,15 @@ const FOOTER_LINKS: { href: string; label: string; icon: NavIcon; pill: string }
   { href: 'https://discord.gg/vjVbVKnMBa', label: 'Discord', icon: MessageCircle, pill: '↗' },
 ];
 
-// Section + page label for the top-bar breadcrumb. Playlists and DJ Doc aren't
-// sidebar items (Playlists lives under Library's doorway, DJ Doc in the header
-// strip), so they're resolved explicitly; Library stays lit in the rail while
+// Section + page label for the top-bar breadcrumb. Playlists, DJ Doc, and
+// Stations aren't sidebar items (Playlists lives under Library's doorway,
+// DJ Doc in the header strip, Stations behind the switcher at the top of the
+// rail), so they're resolved explicitly; Library stays lit in the rail while
 // on Playlists, so the crumb mirrors that with the Programming section.
 function resolveCrumb(pathname: string | null): { section?: string; page: string } {
   if (pathname?.startsWith('/admin/playlists')) return { section: 'Programming', page: 'Playlists' };
   if (pathname?.startsWith('/admin/doctor')) return { section: 'Monitor', page: 'DJ Doc' };
+  if (pathname?.startsWith('/admin/stations')) return { section: 'System', page: 'Stations' };
   for (const section of NAV_SECTIONS) {
     const item = section.items.find(n => pathname?.startsWith(n.href));
     if (item) return { section: section.label, page: item.label };
