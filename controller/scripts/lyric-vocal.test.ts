@@ -5,7 +5,7 @@
 // node:assert-via-tsx style, matching scripts/bed-policy.test.ts.
 
 import assert from 'node:assert/strict';
-import { deriveVocalFromLyrics } from '../src/music/lyric-vocal.js';
+import { deriveVocalFromLyrics, clipRangesToTail } from '../src/music/lyric-vocal.js';
 
 // ── inconclusive inputs → null (fall back to Demucs) ─────────────────────────
 
@@ -96,5 +96,37 @@ const badTs = deriveVocalFromLyrics({
   ],
 });
 assert.equal(badTs!.introMs, 12_000);
+
+// ── clipRangesToTail: the lyric counterpart of the worker's tail pass ────────
+
+// A 200s track, tail window at 180s. A verse ending mid-window is trimmed to
+// the window; a verse entirely before it drops; the closer's nominal tail is
+// capped at the track end.
+assert.deepEqual(
+  clipRangesToTail(
+    [
+      { startMs: 10_000, endMs: 60_000 },   // early verse — gone
+      { startMs: 170_000, endMs: 185_000 }, // straddles the window edge — trimmed
+      { startMs: 197_000, endMs: 201_000 }, // last line's tail outruns the track — capped
+    ],
+    180_000,
+    200_000,
+  ),
+  [
+    { startMs: 180_000, endMs: 185_000 },
+    { startMs: 197_000, endMs: 200_000 },
+  ],
+);
+
+// No sung line reaches the window → [] (instrumental tail), NOT null — the
+// distinct "analysed and empty" value that stops the backfill re-targeting.
+assert.deepEqual(clipRangesToTail([{ startMs: 0, endMs: 30_000 }], 180_000, 200_000), []);
+assert.deepEqual(clipRangesToTail([], 180_000, 200_000), []);
+
+// Unknown duration (no end cap): spans keep their natural end.
+assert.deepEqual(
+  clipRangesToTail([{ startMs: 190_000, endMs: 204_000 }], 180_000, null),
+  [{ startMs: 190_000, endMs: 204_000 }],
+);
 
 console.log('✓ lyric-vocal.test.ts passed');

@@ -486,8 +486,11 @@ function trimLinkToIntro(text: string | null | undefined, song: any): string | n
   if (!raw) return null;
   if (!settings.getEffectivePersona()?.djMode) return raw;
   // Same corrections as speak() so the word count matches the aired text.
+  // firstVocalMsFor arms the never-talk-over-a-singer drop: a MEASURED vocal
+  // entry under 2.5s drops the line outright (the <2500 leniency only exists
+  // because the energy heuristic is noise down there).
   const spoken = normalizeForSpeech(stripThinking(raw), settings.get().tts?.corrections);
-  return dj.enforceIntroBudget(spoken, introMsOf(song), speechPaceScale('link')) || null;
+  return dj.enforceIntroBudget(spoken, introMsOf(song), speechPaceScale('link'), dj.firstVocalMsFor(song)) || null;
 }
 
 // `link`, when present, is the between-track line to speak as this pick starts
@@ -910,7 +913,19 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
 // the matching `showAt` clock, so both pick paths follow the show that will
 // actually be on air when the pick plays. `showAt` null → resolve at now,
 // exactly the pre-look-ahead behaviour.
-export async function runTrackEvent(queue, ctx, { wantLink, showAt = null }: { wantLink: boolean; showAt?: Date | null }) {
+// `predecessor`/`prior` (feature: pair-aware transitions): when the pick is
+// fired by the pair-drain deadline, the track it will FOLLOW is the held
+// queue item — not queue.current, which is one track earlier at that moment.
+// The override flows everywhere the predecessor matters: the event text, the
+// mini-run anchor, the pool re-rank, and the link's back-announce target
+// (linkPrev). `prior` is the track before the predecessor (the on-air track
+// at deadline time). Omitted → queue.current/history, today's behaviour.
+export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, predecessor = null, prior = null }: {
+  wantLink: boolean;
+  showAt?: Date | null;
+  predecessor?: any | null;
+  prior?: any | null;
+}) {
   return withTrace({ kind: 'track-event', wantLink }, async () => {
     // Daily token cap. At the hard cap we make NO model call: skip the pick and
     // let Liquidsoap fall through to the LLM-free auto playlist (music keeps
@@ -923,8 +938,8 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null }: { w
     const cheap = budget.preferCheapPicker();
     wantLink = wantLink && !cheap;
 
-    const current = queue.current?.track || null;
-    const previous = queue.history[0]?.track || null;
+    const current = predecessor ?? queue.current?.track ?? null;
+    const previous = predecessor ? (prior ?? null) : (queue.history[0]?.track ?? null);
     const djMode = !!settings.getEffectivePersona()?.djMode;
 
     // Feature 4 + Phase 2 — advance/maybe-start a mini-run; get the tempo/key

@@ -7,7 +7,7 @@
 // node:assert-via-tsx style, matching scripts/mix-fx.test.ts.
 
 import assert from 'node:assert/strict';
-import { endingCrossSecondsFor, effectAllowedFor } from '../src/music/mix.js';
+import { endingCrossSecondsFor, effectAllowedFor, vocalTailFor } from '../src/music/mix.js';
 
 // ── endingCrossSecondsFor ────────────────────────────────────────────────────
 
@@ -137,6 +137,100 @@ assert.equal(
   effectAllowedFor('chop', { bpm: null, key: null }, { bpm: null, key: null }),
   true,
   'no outro signal → today\'s pass-through',
+);
+
+// ── vocalTailFor (feature: vocal-aware transitions) ──────────────────────────
+
+// Tri-state derivation: null data → null (unknown), [] → false (measured
+// instrumental tail), a span overlapping the wind-down → true.
+assert.equal(vocalTailFor(null, 200_000), null, 'no tail vocal data → unknown');
+assert.equal(vocalTailFor(undefined, 200_000), null, 'absent tail vocal data → unknown');
+assert.equal(vocalTailFor([], 200_000), false, 'measured instrumental tail → false');
+assert.equal(
+  vocalTailFor([{ startMs: 195_000, endMs: 208_000 }], 200_000),
+  true,
+  'vocal span crossing the wind-down start → sung ending',
+);
+// A span ENTIRELY inside the wind-down also counts (endMs past the start).
+assert.equal(
+  vocalTailFor([{ startMs: 203_000, endMs: 206_000 }], 200_000),
+  true,
+  'vocal span inside the wind-down → sung ending',
+);
+// Vocals that stop BEFORE the wind-down leave the ending instrumental.
+assert.equal(
+  vocalTailFor([{ startMs: 185_000, endMs: 195_000 }], 200_000),
+  false,
+  'vocals ending before the wind-down → not a sung ending',
+);
+// Ranges without a usable wind-down anchor stay unknown, never guessed.
+assert.equal(
+  vocalTailFor([{ startMs: 1_000, endMs: 2_000 }], null),
+  null,
+  'no wind-down anchor → unknown',
+);
+
+// ── endingCrossSecondsFor: vocal-tail shaping ────────────────────────────────
+
+// A sung fade is pulled to the 8s floor — a long overlap would put the next
+// track under a still-singing voice.
+assert.equal(
+  endingCrossSecondsFor({ bpm: null, key: null, ending: 'fade' }, 20, { vocalTail: true }),
+  8,
+  'sung fade pulls the canvas to the floor',
+);
+// A measured instrumental tail keeps the full wind-down ride.
+assert.equal(
+  endingCrossSecondsFor({ bpm: null, key: null, ending: 'fade' }, 20, { vocalTail: false }),
+  12,
+  'instrumental tail keeps the full canvas',
+);
+// Unknown (null) changes nothing — today's value.
+assert.equal(
+  endingCrossSecondsFor({ bpm: null, key: null, ending: 'fade' }, 20, { vocalTail: null }),
+  12,
+  'unknown vocal tail leaves the canvas unshaped',
+);
+// The vocal pull applies after (and overrides) the deep-drop LUFS ride.
+assert.equal(
+  endingCrossSecondsFor({ bpm: null, key: null, ending: 'fade' }, 20, { tailLufs: -25, bodyLufs: -10, vocalTail: true }),
+  8,
+  'vocal tail wins over the deep-drop full ride',
+);
+// Bar-snap still lands the pulled canvas on a musical unit (120 BPM → 2s bars,
+// 8s = 4 bars exactly).
+assert.equal(
+  endingCrossSecondsFor({ bpm: 120, key: null, ending: 'fade' }, 20, { vocalTail: true }),
+  8,
+  'sung fade stays bar-snapped',
+);
+// Cold endings are untouched — 4s is already tight.
+assert.equal(
+  endingCrossSecondsFor({ bpm: null, key: null, ending: 'cold' }, null, { vocalTail: true }),
+  4,
+  'cold canvas ignores the vocal tail',
+);
+
+// ── effectAllowedFor: chop-over-voice veto ───────────────────────────────────
+
+// A sung ending vetoes the chop even on a cold end across a clash — gating a
+// voice mid-word stutters it.
+assert.equal(
+  effectAllowedFor('chop', { bpm: 100, key: '8A', ending: 'cold', vocalTail: true }, { bpm: 150, key: '3B' }),
+  false,
+  'chop vetoed over a sung ending',
+);
+// A measured instrumental tail keeps the chop available (cold + clash).
+assert.equal(
+  effectAllowedFor('chop', { bpm: 100, key: '8A', ending: 'cold', vocalTail: false }, { bpm: 150, key: '3B' }),
+  true,
+  'chop allowed over an instrumental cold ending',
+);
+// Unknown vocal tail → unchanged behaviour.
+assert.equal(
+  effectAllowedFor('chop', { bpm: 100, key: '8A', ending: 'cold', vocalTail: null }, { bpm: 150, key: '3B' }),
+  true,
+  'unknown vocal tail keeps today\'s chop behaviour',
 );
 
 console.log('outro-mix: all assertions passed');

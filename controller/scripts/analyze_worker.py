@@ -126,6 +126,11 @@ def _env_float(name, default):
 # don't. Both tunable so operators can adapt to their masters' compression.
 VOCAL_STEM_REL = _env_float("VOCAL_STEM_REL", 0.15)  # x 90th-pct of vocal-stem RMS
 VOCAL_MIX_FLOOR = _env_float("VOCAL_MIX_FLOOR", 0.06)  # x 90th-pct of full-mix RMS
+# Absolute RMS floor for the TAIL detect() pass (feature: vocal-aware
+# transitions): a fading outro's separation bleed otherwise reads as artefact
+# "vocals". ~-40 dBFS — genuine sung tails sit well above it, bleed well
+# below. Tunable like the pair above and for the same reason.
+TAIL_VOCAL_MIN_LOUD = _env_float("TAIL_VOCAL_MIN_LOUD", 0.01)
 
 # Krumhansl-Kessler key profiles (major/minor), indexed from the tonic.
 MAJOR_PROFILE = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88]
@@ -783,10 +788,12 @@ class VocalActivityDetector:
         if "vocals" not in self.sources:
             raise RuntimeError(f"demucs model {DEMUCS_MODEL} has no 'vocals' stem")
 
-    def detect(self, stereo, sr, librosa):
-        """stereo: float32 array shaped (2, N) at DEMUCS_SR. Returns a list of
-        {startMs,endMs} where the isolated vocal stem is active — possibly empty
-        (an instrumental). Raises on failure; the caller degrades to None."""
+    def separate(self, stereo):
+        """stereo: float32 array shaped (2, N) at DEMUCS_SR. One apply_model
+        pass → {stem_name: float32 ndarray (channels, N)} for all model stems
+        (drums/bass/other/vocals for htdemucs). The single separation is
+        shared by vocal-activity detection AND the stem cache (feature:
+        stem-blend transitions) — never run Demucs twice on one window."""
         import numpy as np
         import torch
 
@@ -799,11 +806,39 @@ class VocalActivityDetector:
             # apply_model moves the model + chunks to the device itself (this
             # is how the demucs CLI's -d flag works), so no .to() here.
             est = apply_model(self.model, wav.unsqueeze(0), device=resolve_device())[0]
-        vocals = est[self.sources.index("vocals")].mean(dim=0).cpu().numpy()
-        mix = wav.mean(dim=0).cpu().numpy()
+        return {
+            name: est[i].cpu().numpy()
+            for i, name in enumerate(self.sources)
+        }
+
+    def detect(self, stereo, sr, librosa, min_loud=0.0, stems=None):
+        """stereo: float32 array shaped (2, N) at DEMUCS_SR. Returns a list of
+        {startMs,endMs} where the isolated vocal stem is active — possibly empty
+        (an instrumental). Raises on failure; the caller degrades to None.
+        `min_loud` is an absolute RMS floor on the stem's loud reference, on top
+        of the relative + mix-anchored gate in vocal_ranges_from_rms: both of
+        those self-scale to the window, so a window that is pure separation
+        bleed (a vocal-free fading outro) can still emit artefact ranges — the
+        absolute floor turns those into a clean []. 0.0 = off (the head window
+        keeps its historical behaviour).
+        `stems` (optional): a pre-computed separate() result for this window,
+        so a caller that also caches stems pays for one separation, not two."""
+        import numpy as np
+
+        if stems is None:
+            stems = self.separate(stereo)
+        vocals = stems["vocals"].mean(axis=0)
+        # Full-mix reference for the mix-anchored floor. separate() returns
+        # stems only, so the mix comes from the input window (mono-safe).
+        mix = np.asarray(stereo, dtype=np.float32)
+        mix = mix.mean(axis=0) if mix.ndim > 1 else mix
 
         hop = 512
         rms = librosa.feature.rms(y=vocals, frame_length=2048, hop_length=hop)[0]
+        if rms.size == 0:
+            return []
+        if float(np.percentile(rms, 90)) <= min_loud:
+            return []
         mix_rms = librosa.feature.rms(y=mix, frame_length=2048, hop_length=hop)[0]
         return vocal_ranges_from_rms(rms, mix_rms, sr, hop)
 
@@ -864,6 +899,207 @@ def get_vocal_detector(force=False):
             _vocal_failed = True
             return None
     return _vocal_detector
+
+
+def write_stems(stems, window, dest_dir):
+    """Persist a separate() result as 16-bit FLAC at DEMUCS_SR into dest_dir
+    as <window>-<stem>.flac (feature: stem-blend transitions — the cache that
+    makes transition renders a fast mix instead of a fresh separation).
+    tmp+rename per file so a crashed write never leaves a truncated stem for
+    the render op to trust. Raises on failure; callers degrade."""
+    import soundfile as sf
+
+    os.makedirs(dest_dir, exist_ok=True)
+    for name, data in stems.items():
+        path = os.path.join(dest_dir, f"{window}-{name}.flac")
+        tmp = path + ".tmp"
+        sf.write(tmp, data.T, DEMUCS_SR, subtype="PCM_16", format="FLAC")
+        os.replace(tmp, path)
+
+
+def write_tail_meta(dest_dir, tail_start_s, duration_s):
+    """Alignment sidecar for the cached tail stems. The tail window was cut at
+    DECODED duration - OUTRO_SECONDS; render_transition must slice the bar
+    grid against that exact offset. Re-deriving it from the library's tagged
+    duration (an integer from Subsonic) disagrees by up to ~1s, which shifts
+    the borrowed drum loop off the downbeat — so the true offset rides with
+    the stems and a render without it is a clean cache miss."""
+    path = os.path.join(dest_dir, "tail-meta.json")
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({
+            "tail_start_sec": round(float(tail_start_s), 3),
+            "duration_sec": round(float(duration_s), 3),
+        }, f)
+    os.replace(tmp, path)
+
+
+def render_transition(req):
+    """Pre-rendered stem-blend transition (feature: stem-blend transitions —
+    docs/stem-transitions-research.md Option B). Mixes the OUTGOING track's
+    cached tail stems with the INCOMING track's cached head stems into one
+    WAV that airs between them: [out cue_out at blend_start] → clip → [in
+    cue_in at in_cue]. CACHE-HIT-ONLY by design — this runs inside the drain
+    deadline window, so it must be a fast mix, never a fresh separation; any
+    missing stem file is a clean {ok:false} and the controller falls back to
+    a plain pair-aware crossfade.
+
+    v1 preset — "beat carry": the outgoing track's last full-energy bar of
+    drums (chosen from its measured tail bar grid, before the wind-down)
+    keeps looping under the incoming track's opening bars, retriggered on
+    the INCOMING grid so the borrowed groove locks to the new tempo; the
+    incoming drums drop in hard on a downbeat; two full-mix bars later the
+    clip hands off to the real track. blend_start lands on the END of the
+    loop source bar, so the loop audibly continues the bar the listener
+    just heard — the cut reads as a DJ move, not an edit."""
+    import numpy as np
+    import soundfile as sf
+
+    out_spec = req.get("out") or {}
+    in_spec = req.get("in") or {}
+    out_dir = req.get("out_dir")
+    clip_name = req.get("clip_name") or "transition.wav"
+    target_lufs = req.get("target_lufs")
+    if not out_dir or not out_spec.get("stems_dir") or not in_spec.get("stems_dir"):
+        return {"ok": False, "error": "missing out/in stems_dir or out_dir"}
+
+    stem_names = ("drums", "bass", "other", "vocals")
+
+    def load_window(stems_dir, window):
+        stems = {}
+        for name in stem_names:
+            p = os.path.join(stems_dir, f"{window}-{name}.flac")
+            if not os.path.exists(p):
+                return None
+            data, sr_f = sf.read(p, dtype="float32", always_2d=True)  # (N, ch)
+            if sr_f != DEMUCS_SR or data.shape[0] == 0:
+                return None
+            stems[name] = data
+        return stems
+
+    tail = load_window(out_spec["stems_dir"], "tail")
+    head = load_window(in_spec["stems_dir"], "head")
+    if tail is None or head is None:
+        return {"ok": False, "error": "stems-missing"}
+
+    sr = DEMUCS_SR
+    # Alignment comes from the meta sidecar written WITH the stems (decoded
+    # duration + the exact tail offset) — never from out_spec's duration_s,
+    # which is the library's tagged integer and can sit ~1s off the decoded
+    # timeline the bar grid was measured on. Stems without the sidecar (an
+    # older cache) are a clean miss; a re-analysis pass refreshes them.
+    try:
+        with open(os.path.join(out_spec["stems_dir"], "tail-meta.json")) as f:
+            tail_meta = json.load(f)
+        tail_start_s = float(tail_meta["tail_start_sec"])
+        dur_s = float(tail_meta["duration_sec"])
+    except Exception:
+        return {"ok": False, "error": "stems-meta-missing"}
+    if dur_s <= OUTRO_SECONDS + 1.0 or tail_start_s < 0.0:
+        return {"ok": False, "error": "out-track-too-short"}
+
+    def to_stereo(x, n):
+        """First n samples as (n, 2) float32, zero-padded if short."""
+        a = x[:n]
+        if a.shape[1] == 1:
+            a = np.repeat(a, 2, axis=1)
+        a = a[:, :2]
+        if a.shape[0] < n:
+            a = np.vstack([a, np.zeros((n - a.shape[0], 2), np.float32)])
+        return a
+
+    # --- Outgoing side: the drum-loop source bar + the blend start --------
+    outro = out_spec.get("outro") or {}
+    out_bars = [b / 1000.0 for b in (outro.get("bars") or [])]
+    wind_down_s = float(outro.get("start_ms") or (dur_s - 10.0) * 1000.0) / 1000.0
+    usable = [
+        (b1, b2)
+        for b1, b2 in zip(out_bars, out_bars[1:])
+        if b1 >= tail_start_s + 0.05 and b2 <= min(wind_down_s, dur_s) and 0.4 < (b2 - b1) < 4.0
+    ]
+    if not usable:
+        return {"ok": False, "error": "no-usable-out-bar"}
+    loop_b1, loop_b2 = usable[-1]  # last full-energy bar before the wind-down
+    blend_start_s = loop_b2        # out cue_out lands on this bar boundary
+    i1 = int((loop_b1 - tail_start_s) * sr)
+    i2 = int((loop_b2 - tail_start_s) * sr)
+    drum_loop = to_stereo(tail["drums"], tail["drums"].shape[0])[i1:i2]
+    if drum_loop.shape[0] < sr // 8:
+        return {"ok": False, "error": "loop-too-short"}
+
+    # --- Incoming side: bar grid, carry region, hand-off point ------------
+    CARRY_BARS = 4       # bars of borrowed groove under the new intro
+    TAIL_FULL_BARS = 2   # full-mix bars after the drop before the decoder hand-off
+    in_bars = [b / 1000.0 for b in (in_spec.get("bars") or []) if 0.0 <= b / 1000.0 <= ANALYZE_SECONDS - 1.0]
+    if len(in_bars) < CARRY_BARS + TAIL_FULL_BARS + 1:
+        return {"ok": False, "error": "no-in-grid"}
+    carry_end_s = in_bars[CARRY_BARS]
+    in_cue_s = in_bars[CARRY_BARS + TAIL_FULL_BARS]
+    head_len_s = min(h.shape[0] for h in head.values()) / sr
+    if in_cue_s > head_len_s - 0.25:
+        return {"ok": False, "error": "cue-past-window"}
+
+    n = int(in_cue_s * sr)
+    if n <= sr:  # a sub-second clip means the grids are degenerate
+        return {"ok": False, "error": "clip-too-short"}
+
+    # --- Per-source gains toward the station target (before summing, so the
+    # borrowed loop and the new track each land at their own corrected level;
+    # the brick-wall limiter upstream only ever sees sane material) ---------
+    def gain_toward(lufs):
+        if target_lufs is None or not isinstance(lufs, (int, float)):
+            return 1.0
+        g = 10.0 ** ((float(target_lufs) - float(lufs)) / 20.0)
+        return float(min(4.0, max(0.25, g)))  # ±12 dB sanity clamp
+
+    g_in = gain_toward(in_spec.get("lufs"))
+    g_out = gain_toward(out_spec.get("lufs")) * (10.0 ** (-3.0 / 20.0))  # loop sits under the new track
+
+    # --- Mix ---------------------------------------------------------------
+    mix_buf = np.zeros((n, 2), dtype=np.float32)
+    for name in ("bass", "other", "vocals"):
+        mix_buf += to_stereo(head[name], n) * g_in
+    dstart = int(carry_end_s * sr)
+    head_drums = to_stereo(head["drums"], n) * g_in
+    mix_buf[dstart:] += head_drums[dstart:]  # incoming beat drops on the downbeat
+
+    loop_len = drum_loop.shape[0]
+    for k in range(CARRY_BARS):
+        b1 = int(in_bars[k] * sr)
+        b2 = min(int(in_bars[k + 1] * sr), n)
+        m = b2 - b1
+        if m <= 0:
+            continue
+        reps = int(np.ceil(m / loop_len))
+        piece = np.tile(drum_loop, (reps, 1))[:m] * g_out  # wrap, never a gap
+        if k == CARRY_BARS - 1:  # ride out over the last carry bar
+            piece = piece * np.linspace(1.0, 0.0, m, dtype=np.float32)[:, None]
+        mix_buf[b1:b2] += piece
+
+    # Peak safety toward the bus limiter's comfort zone, then 10ms edge
+    # declicks (the clip meets its neighbours through ~0.3s crossfades, but a
+    # hard first/last sample still clicks through them).
+    peak = float(np.max(np.abs(mix_buf)))
+    ceiling = 10.0 ** (-1.0 / 20.0)
+    if peak > ceiling:
+        mix_buf *= ceiling / peak
+    e = max(1, int(0.01 * sr))
+    ramp = np.linspace(0.0, 1.0, e, dtype=np.float32)[:, None]
+    mix_buf[:e] *= ramp
+    mix_buf[-e:] *= ramp[::-1]
+
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, os.path.basename(clip_name))
+    tmp = out_path + ".tmp"
+    sf.write(tmp, mix_buf, sr, subtype="PCM_16", format="WAV")
+    os.replace(tmp, out_path)
+    return {
+        "ok": True,
+        "path": out_path,
+        "blend_start_sec": round(blend_start_s, 3),
+        "in_cue_sec": round(in_cue_s, 3),
+        "clip_sec": round(n / sr, 3),
+    }
 
 
 def fetch_audio(url):
@@ -977,7 +1213,7 @@ def measure_loudness(y, sr):
         return None, None
 
 
-def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None):
+def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None, stems_dir=None):
     import numpy as np
 
     # A controller-provided path is pre-fetched onto the shared volume and
@@ -1048,17 +1284,66 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None)
         # successful run with no detected vocals emits [] — the distinct "empty"
         # value tells the controller this track WAS analysed (an instrumental),
         # so the backfill scope doesn't keep re-targeting it.
-        detector = None if vocal is False else get_vocal_detector(force=vocal is True)
+        # A stems_dir request implies separation even when vocal detection
+        # wasn't asked for — the stem cache and vocal ranges share one
+        # apply_model pass per window. Explicit vocal=False still wins.
+        detector = None if vocal is False else get_vocal_detector(force=vocal is True or bool(stems_dir))
+        stems_cached = None
         if detector is not None:
             try:
                 ys, _srs = librosa.load(
                     path, sr=DEMUCS_SR, mono=False, duration=ANALYZE_SECONDS
                 )
                 if ys is not None and np.size(ys) > 0:
-                    vocal_ranges = detector.detect(ys, DEMUCS_SR, librosa)
+                    head_stems = detector.separate(ys)
+                    vocal_ranges = detector.detect(ys, DEMUCS_SR, librosa, stems=head_stems)
+                    if stems_dir:
+                        try:
+                            write_stems(head_stems, "head", stems_dir)
+                            stems_cached = True
+                        except Exception as e:  # noqa: BLE001 — cache is best-effort
+                            log(f"stem cache write (head) failed: {e}")
+                            stems_cached = False
             except Exception as e:  # noqa: BLE001 — vocal activity is best-effort
                 log(f"vocal activity failed: {e}")
                 vocal_ranges = None
+        # Tail vocal activity (feature: vocal-aware transitions) — the outro
+        # window gets its own Demucs pass so transitions know whether the
+        # ENDING is sung (the head pass above never sees the last 20s of a
+        # normal-length track). Gated on the same detector AND a computed
+        # outro: outro non-None already proves the file is complete and long
+        # enough for a distinct tail. Spans are shifted to ABSOLUTE ms like
+        # the outro's beat grid; [] = analysed instrumental tail, mirroring
+        # the head semantics. TAIL_VOCAL_MIN_LOUD (see its definition) guards
+        # against separation bleed on a fading outro.
+        if detector is not None and outro is not None:
+            try:
+                tail_offset = max(0.0, duration_s - OUTRO_SECONDS)
+                y_tail, _srt = librosa.load(
+                    path, sr=DEMUCS_SR, mono=False,
+                    offset=tail_offset, duration=OUTRO_SECONDS,
+                )
+                if y_tail is not None and np.size(y_tail) > 0:
+                    tail_stems = detector.separate(y_tail)
+                    tail_vocals = detector.detect(
+                        y_tail, DEMUCS_SR, librosa, min_loud=TAIL_VOCAL_MIN_LOUD, stems=tail_stems
+                    )
+                    if stems_dir:
+                        try:
+                            write_stems(tail_stems, "tail", stems_dir)
+                            write_tail_meta(stems_dir, tail_offset, duration_s)
+                        except Exception as e:  # noqa: BLE001 — cache is best-effort
+                            log(f"stem cache write (tail) failed: {e}")
+                    shift_ms = tail_offset * 1000.0
+                    outro["vocalRanges"] = [
+                        {
+                            "startMs": int(round(r["startMs"] + shift_ms)),
+                            "endMs": int(round(r["endMs"] + shift_ms)),
+                        }
+                        for r in tail_vocals
+                    ]
+            except Exception as e:  # noqa: BLE001 — tail vocals are best-effort
+                log(f"tail vocal activity failed: {e}")
     finally:
         if decoded_tmp is not None:
             try:
@@ -1165,6 +1450,10 @@ def analyze(librosa, url=None, path=None, embed=None, vocal=None, complete=None)
     # how every downstream consumer knows to behave as today.
     if audio_embedding is not None:
         result["audio_embedding"] = audio_embedding
+    # Stem-cache outcome (only when a stems_dir was requested): True = head
+    # stems written (tail rides along when the outro was computable).
+    if stems_cached is not None:
+        result["stems_cached"] = stems_cached
     return result
 
 
@@ -1218,6 +1507,11 @@ def main():
         "ready": True,
         "audio_embedding_capable": audio_capable,
         "vocal_activity_capable": vocal_capable,
+        # Version signal as much as a capability: only workers that compute
+        # tail vocal ranges (outro.vocalRanges) emit this key at all, so the
+        # controller can gate the tail-vocal backfill widening on `=== true`
+        # and a stale sidecar image never causes re-analysis churn.
+        "tail_vocal_capable": vocal_capable,
         "text_embedding_capable": text_capable,
     })
 
@@ -1231,6 +1525,14 @@ def main():
             emit({"id": None, "ok": False, "error": f"bad json: {e}"})
             continue
         rid = req.get("id")
+        # Transition render (feature: stem-blend transitions) — dispatched by
+        # op key; a pure mix of cached stems, seconds of CPU, no model.
+        if req.get("op") == "render_transition":
+            try:
+                emit({"id": rid, **render_transition(req)})
+            except Exception as e:  # noqa: BLE001 — one bad render never kills the worker
+                emit({"id": rid, "ok": False, "error": str(e)})
+            continue
         # Text-embedding request — {"texts": ["...", ...]} instead of url/path.
         # An explicit text request force-loads CLAP like embed:true does (the
         # caller asked for the shared audio-text space; env default irrelevant).
@@ -1272,7 +1574,7 @@ def main():
                 result = analyze(
                     librosa, url=url, path=path,
                     embed=req.get("embed"), vocal=req.get("vocal"),
-                    complete=req.get("complete"),
+                    complete=req.get("complete"), stems_dir=req.get("stems_dir"),
                 )
             _touch()
             emit({"id": rid, "ok": True, **result})

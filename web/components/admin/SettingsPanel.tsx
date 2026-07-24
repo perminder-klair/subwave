@@ -102,6 +102,11 @@ export default function SettingsPanel() {
     setForm({
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
       maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
+      transitions: {
+        pairDrain: v.transitions?.pairDrain ?? true,
+        stemBlends: v.transitions?.stemBlends ?? false,
+        stemCache: v.audio?.stemCache ?? false,
+      },
       archive: {
         enabled: v.archive?.enabled ?? false,
         bitrate: String(v.archive?.bitrate ?? 128),
@@ -724,6 +729,98 @@ export default function SettingsPanel() {
                   <div className="field-hint">
                     Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
                     Saving flags a pending restart. Apply it with the Mixer card below.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Stem transitions" sub="pair-aware scheduling + rendered blends">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <Label>Pair-aware transitions</Label>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.transitions.pairDrain ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, transitions: { ...f.transitions, pairDrain: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="field-hint">
+                      Holds each pick until its successor is known, so DJ-mode crossfades are
+                      sized for the actual pair instead of a blind default. Off reverts to the
+                      historical eager hand-off. Applies live; no restart.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <Label>Stem cache</Label>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.transitions.stemCache ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, transitions: { ...f.transitions, stemCache: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="field-hint">
+                      Keeps the drum/bass/vocal/other stems the heavy analyzer already separates
+                      during analysis (~25&nbsp;MB per track, oldest evicted past the budget).
+                      Needs the heavy analyzer image (Demucs) and a re-analysis pass to fill.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <Label>Stem-blend seams</Label>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.transitions.stemBlends ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, transitions: { ...f.transitions, stemBlends: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({
+                            transitions: {
+                              pairDrain: form.transitions.pairDrain,
+                              stemBlends: form.transitions.stemBlends,
+                            },
+                            audio: { stemCache: form.transitions.stemCache },
+                          })
+                        }
+                        disabled={busy}
+                      >
+                        Save transitions
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      When two tempo-compatible tracks meet and both have cached stems, the seam
+                      airs as a rendered blend — the outgoing track&rsquo;s drums carry under the
+                      incoming intro until its own beat drops. Falls back to a plain crossfade on
+                      any miss. Needs pair-aware transitions + the stem cache; the Doctor flags a
+                      config that can&rsquo;t deliver.
+                    </div>
                   </div>
                 </div>
               </Card>

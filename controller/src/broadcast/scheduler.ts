@@ -28,6 +28,8 @@ import { optionalSegmentsAllowed } from './dj-budget.js';
 import { agenticTick, skillCatalog } from '../skills/_agent.js';
 import { withTrace, pruneOldEvents } from '../observability/events.js';
 import * as archives from './archives.js';
+import * as stemCacheStore from '../music/stem-cache.js';
+import * as stemBlendStore from './stem-blend.js';
 import * as doctor from '../doctor.js';
 
 const TARGET_POOL = 30;
@@ -765,6 +767,28 @@ async function cleanup() {
     }
   } catch (err) {
     queue.log('error', `Archive retention failed: ${err.message}`);
+  }
+  // Stem cache LRU — keep the per-track Demucs stem windows inside the
+  // operator's byte budget (feature: stem-blend transitions). The analysis
+  // pass sweeps after itself too; this catches lazily-added dirs.
+  try {
+    const { removed, freedBytes } = await stemCacheStore.sweep();
+    if (removed) {
+      queue.log('scheduler',
+        `Stem cache: evicted ${removed} track dir(s) (${Math.round(freedBytes / 1_000_000)} MB freed)`);
+    }
+  } catch (err) {
+    queue.log('error', `Stem cache sweep failed: ${err.message}`);
+  }
+  // Rendered transition clips are single-use seam artifacts — anything older
+  // than an hour is an orphan (cancelled pair, crashed drain), EXCEPT clips
+  // still queued for a seam that hasn't aired (a clip behind a long outgoing
+  // track legitimately out-ages the window; the queue knows which).
+  try {
+    const removed = await stemBlendStore.cleanupOldClips(queue.pendingClipPaths());
+    if (removed) queue.log('scheduler', `Transitions: removed ${removed} orphaned clip(s)`);
+  } catch (err) {
+    queue.log('error', `Transition clip sweep failed: ${err.message}`);
   }
 }
 
