@@ -128,6 +128,74 @@ function relTime(iso: string): string {
   if (d < 30) return `${d}d ago`;
   return new Date(iso).toLocaleDateString();
 }
+// ── generation over a server-side job ────────────────────────────────────────
+// A generation legitimately runs for minutes, and Cloudflare cuts proxied
+// responses off at ~100s with an HTML error page — so the panel starts a job
+// (POST /playlists/generate/jobs) and polls it instead of holding one request
+// open. Bodies are also never parsed before checking they ARE JSON: WebKit
+// reports r.json() on that HTML page as the baffling "The string did not
+// match the expected pattern".
+
+type AdminFetch = (path: string, init?: RequestInit) => Promise<Response>;
+
+async function readJsonSafe(r: Response): Promise<any> {
+  const ct = r.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) {
+    throw new Error(`the curation service returned an unexpected response (HTTP ${r.status}) — is the controller reachable?`);
+  }
+  try {
+    return await r.json();
+  } catch {
+    throw new Error(`the curation service returned malformed JSON (HTTP ${r.status})`);
+  }
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const GEN_POLL_MS = 2000;
+const GEN_DEADLINE_MS = 10 * 60_000;
+const GEN_POLL_MISSES = 3; // consecutive transient poll failures tolerated
+
+// Resolves with the GenerateResult payload, throws with an operator-readable
+// message otherwise.
+async function runGenerationJob(adminFetch: AdminFetch, body: unknown): Promise<any> {
+  const init: RequestInit = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  };
+  const start = await adminFetch('/playlists/generate/jobs', init);
+  // A pre-jobs controller 404s here (mid-upgrade version skew) — fall back to
+  // the synchronous endpoint rather than failing the click.
+  if (start.status === 404) {
+    const r = await adminFetch('/playlists/generate', init);
+    const j = await readJsonSafe(r);
+    if (!r.ok) throw new Error(j.error || 'generation failed');
+    return j;
+  }
+  const started = await readJsonSafe(start);
+  if (!start.ok || !started.jobId) throw new Error(started.error || 'generation failed to start');
+  const deadline = Date.now() + GEN_DEADLINE_MS;
+  let misses = 0;
+  while (Date.now() < deadline) {
+    await sleep(GEN_POLL_MS);
+    let poll: any;
+    try {
+      const r = await adminFetch(`/playlists/generate/jobs/${started.jobId}`);
+      poll = await readJsonSafe(r);
+      if (!r.ok) throw new Error(poll.error || `poll failed (HTTP ${r.status})`);
+    } catch (err) {
+      if (++misses >= GEN_POLL_MISSES) throw err instanceof Error ? err : new Error('lost contact with the curation service');
+      continue;
+    }
+    misses = 0;
+    if (poll.status === 'running') continue;
+    if (poll.status === 'error') throw new Error(poll.error || 'generation failed');
+    return poll.result || {};
+  }
+  throw new Error('generation is taking unusually long — it may still land server-side; try again in a minute');
+}
+
 const energyPct = (e?: string | null): number => (e === 'low' ? 34 : e === 'high' ? 92 : 64);
 const energyColor = (e?: string | null): string => (e === 'low' ? EN_LOW : e === 'high' ? EN_HIGH : EN_MED);
 const energyBgClass = (e?: string | null): string => (e === 'low' ? EN_LOW_BG : e === 'high' ? EN_HIGH_BG : EN_MED_BG);
@@ -547,18 +615,7 @@ export default function PlaylistBuilderPanel() {
     const exclude = mode === 'fresh' ? [] : tracks.map(t => t.id);
     setView('generating');
     try {
-      const r = await adminFetch('/playlists/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildBody(exclude)),
-      });
-      const j = await r.json();
-      if (!r.ok) {
-        setErrorMsg(j.error || 'generation failed');
-        setView(mode === 'more' && tracks.length ? 'result' : 'error');
-        if (mode === 'more' && tracks.length) flash(j.error || 'could not fetch more');
-        return;
-      }
+      const j = await runGenerationJob(adminFetch, buildBody(exclude));
       const got: DraftTrack[] = j.tracks || [];
       if (!got.length) {
         setView(mode === 'more' && tracks.length ? 'result' : 'nomatch');
@@ -582,8 +639,10 @@ export default function PlaylistBuilderPanel() {
       }
       setView('result');
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'generation failed');
+      const msg = err instanceof Error ? err.message : 'generation failed';
+      setErrorMsg(msg);
       setView(mode === 'more' && tracks.length ? 'result' : 'error');
+      if (mode === 'more' && tracks.length) flash(msg);
     } finally {
       generatingRef.current = false;
     }
