@@ -7,6 +7,26 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { usePlayerActions, usePlayerFeed } from '@/components/player/PlayerCore';
+import { useLiteMode } from '@/hooks/useLiteMode';
+
+/** Whether a skin may run a JS-driven (motion) transition right now.
+ *
+ *  Lite mode's kill in globals.css is `animation: none !important`, which only
+ *  reaches CSS keyframes — motion animates from JS and sails straight through
+ *  it. So a skin that adds motion without this gate silently stops honouring
+ *  the listener's low-power toggle: no error, no lint failure, just a switch
+ *  that quietly does nothing. Every skin transition reads this and cuts
+ *  instantly when it's false.
+ *
+ *  Reduced motion is NOT this hook's job — MotionConfig's reducedMotion="user"
+ *  (components/MotionProvider.tsx) already drops transforms app-wide. The one
+ *  exception is a transition built from opacity alone, which that setting
+ *  deliberately preserves; such a skin must also call useReducedMotion()
+ *  itself (see subamp's LCD latch). */
+export function useSkinMotion(): boolean {
+  const { lite } = useLiteMode();
+  return !lite;
+}
 
 // Poll cadence + give-up window for a submitted request's outcome. Mirrors the
 // classic RequestDrawer (classic/drawers/RequestDrawer.tsx) so every skin gets

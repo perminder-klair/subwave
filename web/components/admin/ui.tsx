@@ -171,6 +171,10 @@ export function Btn({
 export interface SegOption {
   id: string;
   label: ReactNode;
+  /* Hover tooltip. Mainly for icon-only tabs, where the label carries no
+     readable text of its own (the accessible name comes from an `sr-only`
+     span inside `label`). */
+  title?: string;
 }
 
 export interface SegProps {
@@ -198,6 +202,7 @@ export function Seg({ value, options, accent, onChange }: SegProps) {
         <ToggleGroupItem
           key={o.id}
           value={o.id}
+          title={o.title}
           className={cn(
             'h-auto min-w-0 rounded-none border-0 px-[13px] py-[7px] text-[10px] font-bold tracking-[0.18em] text-ink uppercase',
             'hover:bg-[var(--ink-soft)] hover:text-ink',
