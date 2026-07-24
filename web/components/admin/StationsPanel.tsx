@@ -12,9 +12,10 @@
 //
 // See controller/src/routes/stations.ts for the API this panel drives.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { RadioTower } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { CONVERT_SENTINEL, useStationSwitchPoll } from '../../hooks/useStationSwitch';
 import { notify, errorMessage } from '../../lib/notify';
 import { Card, Btn, Pill, Eyebrow, Seg } from './ui';
 import { Input } from '../ui/input';
@@ -38,15 +39,6 @@ interface StationsResponse {
   stations: StationRow[];
 }
 
-// Shape of the bits of GET /state this panel actually reads while polling
-// through a switch — see controller/src/routes/public.ts for the full body.
-interface StateStationField {
-  station?: {
-    id?: string | null;
-    multiStation?: boolean;
-  };
-}
-
 const MODE_OPTIONS = [
   { id: 'fresh', label: 'Fresh (onboarding)' },
   { id: 'duplicate', label: 'Duplicate current' },
@@ -64,9 +56,9 @@ export default function StationsPanel() {
   const [renaming, setRenaming] = useState<StationRow | null>(null);
   const [renameValue, setRenameValue] = useState('');
   // Non-null while a switch is in flight: the target station id, or the
-  // '__convert__' sentinel for a fresh-install → multi-station conversion.
+  // CONVERT_SENTINEL for a fresh-install → multi-station conversion.
   const [switching, setSwitching] = useState<string | null>(null);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useStationSwitchPoll(switching);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -82,31 +74,6 @@ export default function StationsPanel() {
   useEffect(() => {
     if (hydrated && !needsAuth) void load();
   }, [hydrated, needsAuth, load]);
-
-  // While switching, poll /state until the NEW controller answers (its
-  // station.id is boot-frozen, so a response carrying the target id means the
-  // restart completed), then hard-reload so every hook in the app re-derives
-  // from the new station's settings.
-  useEffect(() => {
-    if (!switching) return;
-    pollRef.current = setInterval(async () => {
-      try {
-        const r = await adminFetch('/state');
-        if (!r.ok) return;
-        const j = (await r.json()) as StateStationField;
-        const arrived =
-          switching === '__convert__'
-            ? j?.station?.multiStation === true
-            : j?.station?.id === switching;
-        if (arrived) window.location.reload();
-      } catch {
-        /* controller still down mid-restart — keep polling */
-      }
-    }, 2000);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [switching, adminFetch]);
 
   const create = async () => {
     setBusy(true);
@@ -130,7 +97,7 @@ export default function StationsPanel() {
         if (j.switching) {
           notify.err(`Create failed: ${j.error || `failed (${r.status})`} — the controller is restarting anyway to finish converting to multi-station.`);
           setNewName('');
-          setSwitching('__convert__');
+          setSwitching(CONVERT_SENTINEL);
           return;
         }
         throw new Error(j.error || `failed (${r.status})`);
@@ -138,7 +105,7 @@ export default function StationsPanel() {
       setNewName('');
       if (j.switching) {
         notify.info('Converting to multi-station — the controller is restarting.');
-        setSwitching('__convert__');
+        setSwitching(CONVERT_SENTINEL);
       } else {
         notify.ok('Station created.');
         await load();

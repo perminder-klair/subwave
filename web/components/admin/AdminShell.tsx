@@ -45,6 +45,7 @@ import type { SignInResult } from '../../lib/adminAuth';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
 import NavidromeBanner from './NavidromeBanner';
+import StationSwitcher from './StationSwitcher';
 import OdometerNumber from '../OdometerNumber';
 import BoothBuddy from '../BoothBuddy';
 import ThemeSwitcher from '../ThemeSwitcher';
@@ -382,6 +383,10 @@ function AdminSidebar({
           </span>
         </Link>
         <span className="caption px-1 group-data-[collapsible=icon]:hidden">control center</span>
+        {/* Multi-station: the shadcn "Teams"-style switcher — active station
+            with a dropdown of the others; no-ops down to a single row on
+            single-station installs. */}
+        <StationSwitcher onNavigate={closeOnMobileNav} />
       </SidebarHeader>
 
       <SidebarContent className="gap-4 px-2 py-1">
