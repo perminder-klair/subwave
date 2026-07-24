@@ -1,0 +1,351 @@
+'use client';
+
+// The board — a kanban-style 7-column × 24-hour view of the week, all seven
+// days always open. Shows are cards whose height equals their duration (34px
+// per hour); silent runs are hatched slots. Direct manipulation everywhere:
+// click a silent slot (or drop a shelf chip on it) to book a show over those
+// hours, click a card to load its order into the Write-an-order line, click
+// a card's × to take the run off the air. Every write is a local edit —
+// Save the week persists.
+
+import type { DragEvent } from 'react';
+import { useRef, useState } from 'react';
+import Link from 'next/link';
+import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
+import { cn } from '../../../lib/cn';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../../ui/dropdown-menu';
+import { ScrollArea, ScrollBar } from '../../ui/scroll-area';
+import { ColorChip, Mu } from './bits';
+import type { Block, Schedule, ScheduleShow } from './lib';
+import { DAYS, HOURS, dayBlocks, hh } from './lib';
+
+const DND_TYPE = 'text/x-subwave-show';
+
+function readDraggedShow(e: DragEvent): string {
+  return e.dataTransfer.getData(DND_TYPE) || e.dataTransfer.getData('text/plain');
+}
+
+export interface BoardProps {
+  schedule: Schedule;
+  shows: ScheduleShow[];
+  folded: Record<number, boolean>;
+  onToggleFold: (day: number) => void;
+  todayKey: number;
+  colorOf: (id: string | null | undefined) => string;
+  hoursOf: (id: string) => number;
+  onPick: (b: Block) => void;
+  onRemove: (b: Block) => void;
+  onDropShow: (b: Block, showId: string) => void;
+  onArmShow: (id: string) => void;
+}
+
+export default function Board({
+  schedule, shows, folded, onToggleFold, todayKey,
+  colorOf, hoursOf, onPick, onRemove, onDropShow, onArmShow,
+}: BoardProps) {
+  return (
+    <section>
+      <div className="mb-3 flex flex-wrap items-center gap-3.5 px-[30px]">
+        <Mu className="tracking-[0.08em]">
+          Click a silent hour (or drag a show onto it) to book a show — click a card to edit its order, its × to take it off the air
+        </Mu>
+      </div>
+
+      {/* The shelf — one draggable chip per show, a single scrolling tray so
+          any number of shows stays one line tall */}
+      <div className="mx-[30px] mb-3.5 border border-ink bg-[var(--page-bg)]">
+        <ScrollArea>
+          <div className="flex w-max min-w-full items-center gap-2 px-3 py-2.5">
+            <span className="eyebrow mr-1 flex-none text-ink">The shelf</span>
+        {shows.length === 0 && (
+          <Mu className="text-[9px] normal-case">
+            No shows yet —{' '}
+            <Link href="/admin/shows" className="text-vermilion underline">
+              define one on the Shows page
+            </Link>{' '}
+            to start scheduling.
+          </Mu>
+        )}
+        {shows.map(s => (
+          <button
+            key={s.id}
+            type="button"
+            draggable
+            onDragStart={e => {
+              e.dataTransfer.setData(DND_TYPE, s.id);
+              e.dataTransfer.setData('text/plain', s.id);
+              e.dataTransfer.effectAllowed = 'copy';
+            }}
+            onClick={() => onArmShow(s.id)}
+            title={`Drag onto the board, or click to write an order for “${s.name}”`}
+            className="flex flex-none cursor-grab items-center gap-1.5 border border-separator-strong bg-[var(--card-bg)] px-2.5 py-1.5 hover:border-ink active:cursor-grabbing"
+          >
+            <ColorChip color={colorOf(s.id)} />
+            <span className="text-[11.5px] font-semibold whitespace-nowrap text-ink">{s.name}</span>
+            <Mu className="text-[8px]">{hoursOf(s.id)}h</Mu>
+          </button>
+            ))}
+          </div>
+          <ScrollBar orientation="horizontal" />
+        </ScrollArea>
+      </div>
+
+      <ScrollArea>
+        <div className="flex w-max min-w-full items-start gap-2.5 pb-1.5">
+          {/* Hour gutter — pt clears the 38px column headers (+border+padding) */}
+          <div className="w-[42px] flex-none pt-[43px]">
+            {HOURS.map(h => (
+              <div
+                key={h}
+                className="flex h-[34px] items-start justify-end pr-[7px] font-mono text-[9px] font-bold text-muted opacity-80"
+              >
+                {hh(h)}
+              </div>
+            ))}
+          </div>
+
+          {DAYS.map(d =>
+            folded[d.key] ? (
+              <FoldedRail
+                key={d.key}
+                label={d.label}
+                name={d.name}
+                count={dayBlocks(schedule, d.key).filter(b => b.showId).length}
+                onClick={() => onToggleFold(d.key)}
+              />
+            ) : (
+              <DayColumn
+                key={d.key}
+                label={d.label}
+                name={d.name}
+                today={d.key === todayKey}
+                blocks={dayBlocks(schedule, d.key)}
+                colorOf={colorOf}
+                shows={shows}
+                onToggleFold={() => onToggleFold(d.key)}
+                onPick={onPick}
+                onRemove={onRemove}
+                onDropShow={onDropShow}
+              />
+            ),
+          )}
+        </div>
+        <ScrollBar orientation="horizontal" />
+      </ScrollArea>
+      <Mu className="mt-1 block px-[30px] tracking-[0.08em]">
+        Hatched hours are silent — click one to book a show, or leave the station to run itself
+      </Mu>
+    </section>
+  );
+}
+
+function DayColumn({
+  label, name, today, blocks, colorOf, shows,
+  onToggleFold, onPick, onRemove, onDropShow,
+}: {
+  label: string;
+  name: string;
+  today: boolean;
+  blocks: Block[];
+  colorOf: (id: string | null | undefined) => string;
+  shows: ScheduleShow[];
+  onToggleFold: () => void;
+  onPick: (b: Block) => void;
+  onRemove: (b: Block) => void;
+  onDropShow: (b: Block, showId: string) => void;
+}) {
+  const showById = (id: string | null) => shows.find(s => s.id === id) ?? null;
+  const booked = blocks.reduce((a, b) => a + (b.showId ? b.span : 0), 0);
+  return (
+    <div className="flex min-w-[188px] flex-1 flex-col border border-ink bg-[var(--page-bg)]">
+      <button
+        type="button"
+        onClick={onToggleFold}
+        title={`Fold ${name} out of the way`}
+        className="flex h-[38px] cursor-pointer items-center gap-2 border-0 border-b border-solid border-b-ink bg-transparent px-2.5 hover:bg-[var(--ink-soft)]"
+      >
+        <span
+          aria-hidden="true"
+          className={cn('size-[7px] rounded-full', today ? 'bg-[var(--accent)]' : 'bg-ink')}
+        />
+        <span className="font-mono text-[11px] font-bold tracking-[0.16em] text-ink">{label}</span>
+        <span className="ml-auto flex h-5 min-w-5 items-center justify-center border border-ink bg-[var(--card-bg)] px-1 font-mono text-[9px] font-bold text-ink">
+          {blocks.filter(b => b.showId).length}
+        </span>
+      </button>
+      <div className="flex flex-col gap-1 p-[5px]">
+        {blocks.map(b =>
+          b.showId ? (
+            <BoardCard
+              key={`${b.start}`}
+              block={b}
+              name={showById(b.showId)?.name ?? 'unknown show'}
+              color={colorOf(b.showId)}
+              onPick={onPick}
+              onRemove={onRemove}
+              onDropShow={onDropShow}
+            />
+          ) : (
+            <DropSlot
+              key={`${b.start}`}
+              block={b}
+              shows={shows}
+              colorOf={colorOf}
+              onDropShow={onDropShow}
+            />
+          ),
+        )}
+      </div>
+      <div className="flex items-center gap-2 border-t border-separator-strong px-2.5 py-2">
+        <Mu className="text-[8px]">{booked} h booked</Mu>
+        <Mu className="ml-auto text-[8px]">Fold</Mu>
+      </div>
+    </div>
+  );
+}
+
+// A folded day — a slim vertical rail; click to reopen the column.
+function FoldedRail({
+  label, name, count, onClick,
+}: {
+  label: string;
+  name: string;
+  count: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`Open ${name}`}
+      className="flex w-12 flex-none cursor-pointer flex-col items-center gap-3 self-stretch border border-ink bg-[var(--card-bg)] py-2.5 hover:bg-[var(--page-bg)]"
+    >
+      <span className="flex h-5 min-w-5 items-center justify-center border border-ink bg-[var(--card-bg)] px-1 font-mono text-[9px] font-bold text-ink">
+        {count}
+      </span>
+      <span className="font-mono text-[11px] font-bold tracking-[0.18em] text-ink uppercase [writing-mode:vertical-rl]">
+        {label}
+      </span>
+    </button>
+  );
+}
+
+// One scheduled run as a card — height encodes duration (34px per hour).
+// Clicking the card loads its order into the Write-an-order line; the × in
+// the corner takes the run off the air (a local edit either way).
+function BoardCard({
+  block, name, color, onPick, onRemove, onDropShow,
+}: {
+  block: Block;
+  name: string;
+  color: string;
+  onPick: (b: Block) => void;
+  onRemove: (b: Block) => void;
+  onDropShow: (b: Block, showId: string) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [over, setOver] = useState(false);
+  useDynamicStyle(ref, {
+    height: `${block.span * 34 - 4}px`,
+    background: color,
+  });
+  return (
+    <div
+      ref={ref}
+      onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={e => {
+        e.preventDefault();
+        setOver(false);
+        const id = readDraggedShow(e);
+        if (id) onDropShow(block, id);
+      }}
+      className={cn(
+        'group relative overflow-hidden text-[#f6f2ea]',
+        'hover:outline-2 hover:-outline-offset-1 hover:outline-ink',
+        over && 'outline-2 -outline-offset-1 outline-ink',
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => onPick(block)}
+        title={`${name} · ${hh(block.start)} – ${hh(block.start + block.span)} — click to edit this order`}
+        className="flex size-full cursor-pointer flex-col justify-between overflow-hidden border-0 bg-transparent px-2 py-1.5 text-left text-inherit"
+      >
+        <span className="max-w-full overflow-hidden pr-4 font-mono text-[10.5px] font-bold tracking-[0.03em] text-ellipsis whitespace-nowrap uppercase">
+          {name}
+        </span>
+        <span className="font-mono text-[9px] tracking-[0.06em] whitespace-nowrap opacity-70">
+          {hh(block.start)} – {hh(block.start + block.span)}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={() => onRemove(block)}
+        aria-label={`Take “${name}” off the air`}
+        title={`Take “${name}” off the air`}
+        className="absolute top-[3px] right-[3px] flex size-[17px] cursor-pointer items-center justify-center border-0 bg-transparent p-0 font-mono text-[13px] leading-none font-bold text-inherit opacity-0 group-hover:opacity-100 hover:bg-[rgba(0,0,0,0.35)] focus-visible:opacity-100"
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
+// One silent run as a hatched slot — a drop target, and a click target that
+// opens a picker of shows to book over those hours (same write as a drop).
+function DropSlot({
+  block, shows, colorOf, onDropShow,
+}: {
+  block: Block;
+  shows: ScheduleShow[];
+  colorOf: (id: string | null | undefined) => string;
+  onDropShow: (b: Block, showId: string) => void;
+}) {
+  const ref = useRef<HTMLButtonElement>(null);
+  const [over, setOver] = useState(false);
+  useDynamicStyle(ref, { height: `${block.span * 34 - 4}px` });
+  return (
+    <DropdownMenu modal={false}>
+      <DropdownMenuTrigger asChild disabled={shows.length === 0}>
+        <button
+          ref={ref}
+          type="button"
+          onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setOver(true); }}
+          onDragLeave={() => setOver(false)}
+          onDrop={e => {
+            e.preventDefault();
+            setOver(false);
+            const id = readDraggedShow(e);
+            if (id) onDropShow(block, id);
+          }}
+          title={`Silent ${hh(block.start)} – ${hh(block.start + block.span)} — click to book a show here, or drop one in`}
+          className={cn(
+            'flex cursor-pointer flex-col items-center justify-center border border-dashed bg-[repeating-linear-gradient(45deg,transparent_0_5px,var(--ink-soft)_5px_10px)] font-mono text-[9px] tracking-[0.12em] uppercase',
+            over
+              ? 'border-ink text-ink'
+              : 'border-[color-mix(in_oklab,var(--ink)_32%,transparent)] text-muted hover:border-ink hover:text-ink',
+          )}
+        >
+          + Add a show
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="max-h-80 min-w-[10rem] overflow-y-auto">
+        <DropdownMenuGroup>
+          {shows.map(s => (
+            <DropdownMenuItem key={s.id} onClick={() => onDropShow(block, s.id)}>
+              <ColorChip color={colorOf(s.id)} />
+              {s.name}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
