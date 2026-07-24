@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import { STATE_ROOT } from '../config.js';
+import { envHasNavidrome } from '../setup/firstRun.js';
 import { MAX_STATIONS } from '../stations/pure.js';
 import * as settings from '../settings.js';
 import * as manager from '../stations/manager.js';
@@ -92,7 +93,7 @@ router.get('/stations', requireAdmin, (req, res) => {
       multiStation: manager.isMultiStation(STATE_ROOT),
       activeId: manager.activeIdOnDisk(STATE_ROOT),
       limit: MAX_STATIONS,
-      stations: manager.listStations(STATE_ROOT, currentName()),
+      stations: manager.listStations(STATE_ROOT, currentName(), envHasNavidrome()),
     });
   } catch (err) {
     res.status(500).json({ error: (err as Error).message });
@@ -135,10 +136,19 @@ router.post('/stations', requireAdmin, async (req, res) => {
   }
 });
 
-router.patch('/stations/:id', requireAdmin, (req, res) => {
+router.patch('/stations/:id', requireAdmin, async (req, res) => {
   try {
-    manager.renameStation(STATE_ROOT, String(req.params.id), String(req.body?.name || ''));
-    res.json({ ok: true });
+    const id = String(req.params.id);
+    const resolved = manager.renameStation(STATE_ROOT, id, String(req.body?.name || ''));
+    // The active station's settings live in the running process, not just on
+    // disk — route the name through settings.update() so /state (the player's
+    // name source) flips immediately. It also rewrites settings.json from
+    // memory, which is why renameStation's fs patch alone can't cover this.
+    let requiresRestart = false;
+    if (manager.activeIdOnDisk(STATE_ROOT) === id) {
+      ({ requiresRestart } = await settings.update({ station: resolved }));
+    }
+    res.json({ ok: true, requiresRestart });
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
   }

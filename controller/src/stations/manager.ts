@@ -33,7 +33,7 @@ export class StationCreateError extends Error {
 export interface StationInfo {
   id: string | null;          // null = unconverted single-station root
   name: string;
-  configured: boolean;        // has setup-config.json (mirrors needsSetup)
+  configured: boolean;        // has setup-config.json, OR env creds cover the install
   createdAt: string | null;
   active: boolean;
 }
@@ -70,12 +70,41 @@ function readCard(dir: string): { name?: string; createdAt?: string } {
   }
 }
 
-export function listStations(root: string, fallbackName: string): StationInfo[] {
+// Keep the ON-AIR name (settings.station — what the player and /state show) in
+// step with the identity card. Without this, a fresh station boots as the
+// default "SUB/WAVE" and a duplicate carries the source's name — the rack says
+// one thing, the player another. settings.load() merges over DEFAULTS, so a
+// seeded minimal {station} file is a valid settings.json. For the ACTIVE
+// station this fs write alone isn't enough (the live process has settings
+// cached in memory) — the rename route also pushes it through
+// settings.update(), which rewrites this same file from memory afterwards.
+function patchSettingsStation(dir: string, name: string): void {
+  const p = join(dir, 'settings.json');
+  let s: Record<string, unknown> = {};
+  try {
+    s = JSON.parse(readFileSync(p, 'utf8'));
+  } catch {
+    // absent or corrupt — seed minimal; load() fills the rest from DEFAULTS
+  }
+  s.station = name;
+  writeFileSync(p, JSON.stringify(s, null, 2));
+}
+
+// envConfigured: env-supplied Navidrome creds apply to EVERY station (env wins
+// at each boot regardless of the active dir), and env-driven installs never
+// write setup-config.json — without this flag they'd all read "needs setup".
+// Threaded in from the route (setup/firstRun.envHasNavidrome) so this module
+// stays fs-only and cycle-free.
+export function listStations(
+  root: string,
+  fallbackName: string,
+  envConfigured = false,
+): StationInfo[] {
   if (!isMultiStation(root)) {
     return [{
       id: null,
       name: fallbackName,
-      configured: existsSync(join(root, 'setup-config.json')),
+      configured: envConfigured || existsSync(join(root, 'setup-config.json')),
       createdAt: null,
       active: true,
     }];
@@ -89,7 +118,7 @@ export function listStations(root: string, fallbackName: string): StationInfo[] 
       return {
         id: e.name,
         name: typeof card.name === 'string' && card.name ? card.name : e.name,
-        configured: existsSync(join(dir, 'setup-config.json')),
+        configured: envConfigured || existsSync(join(dir, 'setup-config.json')),
         createdAt: card.createdAt || null,
         active: e.name === active,
       };
@@ -234,6 +263,9 @@ export async function createStation(root: string, opts: {
         }
       }
     }
+    // Fresh: seeds a minimal settings.json so first boot doesn't default to
+    // "SUB/WAVE". Duplicate: overwrites the name copied from the source.
+    patchSettingsStation(dest, name);
     return { id, converted };
   } catch (err) {
     if (destCreated) {
@@ -248,17 +280,19 @@ export async function createStation(root: string, opts: {
   }
 }
 
-export function renameStation(root: string, id: string, name: string): void {
+// Returns the resolved name so the route can mirror it into the live settings
+// layer when the renamed station is the active one.
+export function renameStation(root: string, id: string, name: string): string {
   const dir = stationPath(root, id);
   if (!existsSync(dir)) throw new Error('no such station');
+  const resolved = String(name || '').trim().slice(0, 80) || id;
   const card = readCard(dir);
   writeFileSync(
     join(dir, 'station.json'),
-    JSON.stringify(
-      { ...card, name: String(name || '').trim().slice(0, 80) || id },
-      null, 2,
-    ),
+    JSON.stringify({ ...card, name: resolved }, null, 2),
   );
+  patchSettingsStation(dir, resolved);
+  return resolved;
 }
 
 export function deleteStation(root: string, id: string): void {

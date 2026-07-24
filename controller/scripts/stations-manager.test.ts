@@ -46,10 +46,21 @@ try {
   });
   assert.equal(fresh.id, 'night-shift');
   assert.equal(fresh.converted, false);
+  // Fresh create seeds the ON-AIR name — without it the first boot defaults
+  // to "SUB/WAVE" while the rack card says otherwise.
+  assert.equal(
+    JSON.parse(readFileSync(join(root, 'stations', 'night-shift', 'settings.json'), 'utf8')).station,
+    'Night Shift',
+  );
   const list = manager.listStations(root, 'x');
   const night = list.find((s) => s.id === 'night-shift');
   assert.equal(night?.configured, false);
   assert.equal(night?.name, 'Night Shift');
+
+  // Env-configured installs (NAVIDROME_* in env, no setup-config.json anywhere)
+  // mark EVERY station configured — env creds are install-level.
+  const envList = manager.listStations(root, 'x', true);
+  assert.ok(envList.every((s) => s.configured));
 
   // Duplicate: allowlist copies, runtime skipped, library.db via callback.
   writeFileSync(join(root, 'stations', 'main', 'library.db'), 'not-really-sqlite');
@@ -65,11 +76,20 @@ try {
   assert.ok(existsSync(join(dupDir, 'jingles', 'a.wav')));
   assert.ok(!existsSync(join(dupDir, 'session.json')));
   assert.deepEqual(backups, [join(dupDir, 'library.db')]);
+  // Duplicate overwrites the on-air name copied from the source.
+  assert.equal(
+    JSON.parse(readFileSync(join(dupDir, 'settings.json'), 'utf8')).station,
+    'Night Shift',
+  );
 
-  // Rename touches only the identity card.
+  // Rename updates the identity card AND the dir's on-air name.
   manager.renameStation(root, 'night-shift', 'Graveyard');
   assert.equal(
     JSON.parse(readFileSync(join(root, 'stations', 'night-shift', 'station.json'), 'utf8')).name,
+    'Graveyard',
+  );
+  assert.equal(
+    JSON.parse(readFileSync(join(root, 'stations', 'night-shift', 'settings.json'), 'utf8')).station,
     'Graveyard',
   );
 
