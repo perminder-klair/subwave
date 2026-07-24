@@ -4281,6 +4281,18 @@ export async function update(patch) {
           throw new Error(`skills.enabled.${name} must be a boolean`);
         }
         next.skills.enabled[name] = on;
+        // Disabling a skill station-wide also revokes it from every persona
+        // that explicitly carries it, so a later re-enable is a fresh
+        // per-persona opt-in rather than a silent return. The `null` "all
+        // skills" sentinel stays untouched — it means "whatever the station
+        // enables", not a list to edit.
+        if (!on) {
+          for (const p of next.personas) {
+            if (Array.isArray(p.skills) && p.skills.includes(name)) {
+              p.skills = p.skills.filter((slug: string) => slug !== name);
+            }
+          }
+        }
       }
     }
   }
