@@ -5,12 +5,17 @@
 
 import assert from 'node:assert/strict';
 import {
+  MAX_STATIONS,
   STATION_ID_RE,
   parseActivePointer,
   slugifyStationName,
   duplicateAction,
   conversionAction,
 } from '../src/stations/pure.js';
+
+// The per-install station ceiling — the manager, the route's `limit` field,
+// and the admin UI all key off this one constant.
+assert.equal(MAX_STATIONS, 8);
 
 // --- station id validation -------------------------------------------------
 assert.ok(STATION_ID_RE.test('main'));

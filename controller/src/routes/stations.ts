@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import { STATE_ROOT } from '../config.js';
+import { MAX_STATIONS } from '../stations/pure.js';
 import * as settings from '../settings.js';
 import * as manager from '../stations/manager.js';
 import * as libraryDb from '../music/library-db.js';
@@ -50,6 +51,7 @@ router.get('/stations', requireAdmin, (req, res) => {
     res.json({
       multiStation: manager.isMultiStation(STATE_ROOT),
       activeId: manager.activeIdOnDisk(STATE_ROOT),
+      limit: MAX_STATIONS,
       stations: manager.listStations(STATE_ROOT, currentName()),
     });
   } catch (err) {

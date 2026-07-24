@@ -9,8 +9,8 @@ import {
 } from 'node:fs';
 import { join, resolve as pathResolve, sep } from 'node:path';
 import {
-  STATION_ID_RE, conversionAction, duplicateAction, parseActivePointer,
-  slugifyStationName,
+  MAX_STATIONS, STATION_ID_RE, conversionAction, duplicateAction,
+  parseActivePointer, slugifyStationName,
 } from './pure.js';
 
 // Thrown by createStation() when the failure happens AFTER the legacy-root
@@ -184,6 +184,14 @@ export async function createStation(root: string, opts: {
   if (!isMultiStation(root)) {
     convertToMultiStation(root, opts.currentName);
     converted = true;
+  }
+  // Cap check counts real station dirs, post-conversion (a fresh conversion
+  // yields exactly one, so `converted` can never coincide with a full rack —
+  // the flag is carried anyway so the route's restart guarantee holds).
+  const count = readdirSync(stationsDir(root), { withFileTypes: true })
+    .filter(e => e.isDirectory() && STATION_ID_RE.test(e.name)).length;
+  if (count >= MAX_STATIONS) {
+    throw new StationCreateError(`this install is capped at ${MAX_STATIONS} stations`, converted);
   }
   const sourceId = activeIdOnDisk(root);
   const id = uniqueStationId(root, name);

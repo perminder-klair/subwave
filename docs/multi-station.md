@@ -17,7 +17,10 @@ exactly as before, and nothing here changes how you run SUB/WAVE day to day.
 
 ## Creating a station
 
-**admin → Stations → New station**, name it, and pick a starting point:
+**admin → Stations → New station**, name it, and pick a starting point.
+An install holds up to **eight** stations — each is a complete state
+directory (its own `library.db`, jingles, archive), so the cap keeps the
+rack from silently eating the disk:
 
 - **Fresh** — an empty station. Once it's live, it lands in `/onboarding`
   just like a brand-new install, waiting for Navidrome + LLM + TTS + DJ setup.

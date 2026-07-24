@@ -6,6 +6,12 @@
 // guard's first line of defence (no dots, no slashes, no uppercase).
 export const STATION_ID_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
 
+// Hard ceiling on stations per install. Each station is a full state dir
+// (own library.db, jingles, archive), so the cap keeps a runaway "new
+// station" habit from silently eating the disk. Enforced in
+// manager.createStation and surfaced to the UI via GET /stations `limit`.
+export const MAX_STATIONS = 8;
+
 // stations/active.json is controller-written as {"activeId":"<id>"} but parsed
 // defensively — a hand-edited or truncated file must never crash a boot path.
 export function parseActivePointer(raw: string): string | null {

@@ -91,6 +91,18 @@ try {
   assert.ok(!existsSync(join(nightShiftDir, 'next.txt')));
   manager.deleteStation(root, 'night-shift-2');
   assert.ok(!existsSync(dupDir));
+
+  // MAX_STATIONS cap: fill the rack to 8 real station dirs, then the next
+  // create must refuse with a clear error (and no partial dir left behind).
+  for (let i = manager.listStations(root, 'x').length; i < 8; i++) {
+    await manager.createStation(root, { name: `Filler ${i}`, mode: 'fresh', currentName: 'L' });
+  }
+  assert.equal(manager.listStations(root, 'x').length, 8);
+  await assert.rejects(
+    manager.createStation(root, { name: 'One Too Many', mode: 'fresh', currentName: 'L' }),
+    /capped at 8/,
+  );
+  assert.ok(!existsSync(join(root, 'stations', 'one-too-many')));
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

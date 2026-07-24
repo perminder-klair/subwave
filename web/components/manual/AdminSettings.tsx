@@ -177,7 +177,8 @@ export default function AdminSettings() {
             onboarding when it first goes live) or duplicate the current one, which
             copies settings, personas, schedule, and the analyzed library but starts a
             clean play history. Creating your second station converts the install to the
-            multi-station layout automatically; the one already playing isn't touched.
+            multi-station layout automatically; the one already playing isn't touched. An
+            install holds up to eight stations.
           </li>
           <li>
             <strong>Make live</strong> — switches the broadcast. The mixer and controller
