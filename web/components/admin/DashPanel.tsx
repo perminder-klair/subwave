@@ -47,6 +47,7 @@ import {
   PromptInputTools,
   type PromptInputMessage,
 } from '../ai-elements/prompt-input';
+import { Suggestion, Suggestions } from '../ai-elements/suggestion';
 import {
   Conversation,
   ConversationContent,
@@ -730,51 +731,36 @@ export default function DashPanel() {
         {/* RIGHT */}
         <div className="grid gap-4">
           <Card title="Manual voice DJ" sub="speak now">
-            {/* Prompt list — clicking fills the textarea, never sends.
-                Prompts are directions for the DJ, not verbatim lines, so they
+            {/* Prompt chips — clicking fills the textarea, never sends.
+                Chips are directions for the DJ, not verbatim lines, so they
                 also flip the box to Styled (raw would air the instruction).
-                ↻ asks the station LLM for a fresh batch keyed to right now.
-                One truncated line per prompt (full text in the tooltip) — the
-                old nowrap chip strip clipped these sentences mid-word. */}
-            <div className="mb-3">
-              <div className="mb-1 flex items-center justify-between gap-2">
-                <span className="caption">prompt ideas — tap to fill</span>
-                <button
-                  type="button"
-                  onClick={refreshSuggestions}
-                  disabled={sayGenBusy}
-                  title="New prompts — written by the station LLM for right now"
-                  aria-label="Generate new prompts"
-                  className="shrink-0 cursor-pointer border border-separator-strong p-[5px] text-muted transition-colors hover:bg-[var(--overlay)] hover:text-ink disabled:pointer-events-none disabled:opacity-60"
-                >
-                  <RefreshCw className={cn('h-3 w-3', sayGenBusy && 'animate-spin')} />
-                </button>
-              </div>
-              <ul className="m-0 list-none p-0">
-                {saySuggestions.map(s => (
-                  <li
-                    key={s}
-                    className="border-b border-dashed border-separator-strong last:border-b-0"
-                  >
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSayText(s);
+                ↻ asks the station LLM for a fresh batch keyed to right now. */}
+            <div className="mb-2.5 flex items-center gap-1.5">
+              <div className="min-w-0 flex-1">
+                <Suggestions className="gap-1.5">
+                  {saySuggestions.map(s => (
+                    <Suggestion
+                      key={s}
+                      suggestion={s}
+                      onClick={text => {
+                        setSayText(text);
                         setSayMode('styled');
                       }}
-                      title={s}
-                      className="flex w-full min-w-0 cursor-pointer items-baseline gap-2 px-1 py-[5px] text-left transition-colors hover:bg-[var(--overlay)]"
-                    >
-                      <span aria-hidden className="text-[9px] text-vermilion">
-                        →
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[11px] leading-snug text-muted">
-                        {s}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
+                      className="h-auto rounded-none border-separator-strong px-2 py-[3px] text-[9px] font-medium tracking-[0.04em] text-muted normal-case hover:bg-[var(--overlay)] hover:text-ink"
+                    />
+                  ))}
+                </Suggestions>
+              </div>
+              <button
+                type="button"
+                onClick={refreshSuggestions}
+                disabled={sayGenBusy}
+                title="New prompts — written by the station LLM for right now"
+                aria-label="Generate new prompts"
+                className="shrink-0 border border-separator-strong p-[5px] text-muted transition-colors hover:bg-[var(--overlay)] hover:text-ink disabled:pointer-events-none disabled:opacity-60"
+              >
+                <RefreshCw className={cn('h-3 w-3', sayGenBusy && 'animate-spin')} />
+              </button>
             </div>
             <PromptInput onSubmit={onSaySubmit}>
               <PromptInputBody>
@@ -790,8 +776,12 @@ export default function DashPanel() {
                   }
                 />
               </PromptInputBody>
-              <PromptInputFooter className="flex-wrap gap-3.5">
-                <PromptInputTools className="flex-wrap gap-3.5">
+              {/* Two deliberate rows: the mode/duck controls, then the send
+                  button as a full-width action bar. On the ~550px column the
+                  old single flex-wrap row broke unpredictably, leaving the
+                  button dangling half-attached under empty space. */}
+              <PromptInputFooter className="flex-col items-stretch gap-2.5">
+                <PromptInputTools className="flex-wrap items-center gap-x-5 gap-y-2">
                   <div className="flex items-center gap-1.5">
                     <span className="caption">mode</span>
                     <Seg value={sayMode} options={SAY_MODES} onChange={setSayMode} />
@@ -806,7 +796,7 @@ export default function DashPanel() {
                   variant="accent"
                   size="sm"
                   disabled={!!busy || !sayText.trim()}
-                  className="ml-auto rounded-none px-3"
+                  className="w-full rounded-none px-3"
                 >
                   {/* No children while in flight / erroring so the status
                       glyphs (spinner / ✕) take over from the label. */}
