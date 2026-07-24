@@ -14,12 +14,14 @@ export default function ObservatoryPage() {
   if (!hydrated) {
     return (
       <div className="observatory-root" style={{ alignItems: 'center', justifyContent: 'center' }}>
-        <span className="t-caption ad-muted">loading…</span>
+        <span role="status" className="t-caption ad-muted">loading…</span>
       </div>
     );
   }
 
   if (!auth || needsAuth) {
+    // No pending state to mirror here — SignInForm owns `busy`, sets aria-busy
+    // on its own <form>, and disables the submit while a request is in flight.
     return (
       <div className="observatory-root" style={{ justifyContent: 'center' }}>
         <div style={{ width: '100%', maxWidth: 1440, margin: '0 auto', padding: '48px 28px' }}>

@@ -315,7 +315,7 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
 
   const choose = async (theme: ThemeDef) => {
     if (theme.id === activeId || busy) return;
-    // Save through the existing settings flow. ThemeBootstrap's 30 s poll
+    // Save through the existing settings flow. ThemeProvider's 30 s poll
     // would pick this up eventually, but the admin viewing this page wants
     // the swatch swap to feel instant — apply locally on click.
     applyTheme(theme);

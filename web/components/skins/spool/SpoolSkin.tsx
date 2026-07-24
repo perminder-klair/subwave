@@ -13,6 +13,7 @@
 // keyframe (Spool.module.css) so it never re-renders React.
 
 import { useCallback, useRef, useState, type RefObject } from 'react';
+import { AnimatePresence, m } from 'motion/react';
 import styles from './Spool.module.css';
 import {
   usePlayerActions,
@@ -37,8 +38,30 @@ import {
   trackMeta,
   turnClock,
 } from '../shared';
-import { useRequestSlip, useTrackLike, useVolumeNudge } from '../sharedHooks';
+import { useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
+
+/* Tape-slide — the printed index card being pulled through the deck. The old
+   label leaves upward as the next one arrives from below; nothing crossfades,
+   because tape moves. LABEL_CUT is the lite-mode form — same presence
+   machinery at zero duration, so the markup never branches on lite. */
+const LABEL_SLIDE = {
+  initial: { opacity: 0, y: 8 },
+  animate: { opacity: 1, y: 0 },
+  exit: { opacity: 0, y: -8 },
+  transition: { duration: 0.24 },
+};
+/* Lite: mount straight at rest. A zero-duration transition isn't enough — motion
+   still paints `initial` for a frame first, which flashes an empty label on every
+   track change. initial={false} skips the enter outright. */
+const LABEL_CUT = {
+  initial: false,
+  animate: { opacity: 1, y: 0 },
+  // Nothing on the way out either — a fade-to-zero on the outgoing
+  // node is still an animation, however brief.
+  exit: {},
+  transition: { duration: 0 },
+};
 
 /** One reel — a dark wound-tape disc (diameter rides --reel-l/--reel-r) with a
  *  toothed sprocket hub that turns while playing. */
@@ -116,6 +139,20 @@ export default function SpoolSkin(_props: SkinProps) {
 
   const title = offline ? '— off air —' : (nowPlaying?.title ?? 'Scanning the dial…');
   const artist = offline ? '' : (nowPlaying?.artist ?? '');
+
+  // One key per airing. Offline and the scanning placeholder collapse to
+  // constants (as classic/CenterStage does) so a transient null from the 5s
+  // /state poll can't re-fire the label swap mid-track; subsonic_id is the
+  // stable identity, title the fallback for segments that carry no id.
+  const trackKey = offline
+    ? 'offline'
+    : nowPlaying?.subsonic_id
+      ? `s:${nowPlaying.subsonic_id}`
+      : nowPlaying?.title
+        ? `t:${nowPlaying.title}`
+        : 'placeholder';
+  // Lite mode's CSS kill can't reach motion — gate the slide ourselves.
+  const swap = useSkinMotion() ? LABEL_SLIDE : LABEL_CUT;
 
   const [tab, setTab] = useState<MobileTab>('deck');
   const adjustVolume = useVolumeNudge();
@@ -391,12 +428,16 @@ export default function SpoolSkin(_props: SkinProps) {
                     <div className="absolute inset-y-0 left-0 w-2 bg-[var(--accent)]" aria-hidden="true" />
                     <div className="flex items-baseline justify-between gap-3 py-2 pr-3.5 pl-5">
                       <div className="min-w-0">
-                        <div className="truncate font-display text-[clamp(15px,2vw,24px)] leading-tight font-bold italic">
-                          {title}
-                        </div>
-                        <div className="mt-0.5 truncate font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
-                          {[artist, nowPlaying?.year].filter(Boolean).join(' · ') || 'live stream'}
-                        </div>
+                        <AnimatePresence mode="popLayout" initial={false}>
+                          <m.div key={trackKey} {...swap}>
+                            <div className="truncate font-display text-[clamp(15px,2vw,24px)] leading-tight font-bold italic">
+                              {title}
+                            </div>
+                            <div className="mt-0.5 truncate font-mono text-[10px] tracking-[0.14em] text-muted uppercase">
+                              {[artist, nowPlaying?.year].filter(Boolean).join(' · ') || 'live stream'}
+                            </div>
+                          </m.div>
+                        </AnimatePresence>
                       </div>
                       <span className="flex-none border border-ink px-2 font-mono text-[12px] font-bold">A</span>
                     </div>
@@ -550,10 +591,14 @@ export default function SpoolSkin(_props: SkinProps) {
                 </div>
 
                 <div className="flex-none">
-                  <div className="truncate font-display text-[26px] leading-tight font-bold italic">{title}</div>
-                  <div className="mt-1 truncate font-mono text-[11px] tracking-[0.14em] text-muted uppercase">
-                    {[artist, ...meta.facts].filter(Boolean).join(' · ') || 'live stream'}
-                  </div>
+                  <AnimatePresence mode="popLayout" initial={false}>
+                    <m.div key={trackKey} {...swap}>
+                      <div className="truncate font-display text-[26px] leading-tight font-bold italic">{title}</div>
+                      <div className="mt-1 truncate font-mono text-[11px] tracking-[0.14em] text-muted uppercase">
+                        {[artist, ...meta.facts].filter(Boolean).join(' · ') || 'live stream'}
+                      </div>
+                    </m.div>
+                  </AnimatePresence>
                 </div>
 
                 <div className="flex flex-none items-center gap-3 font-mono text-[11px]">

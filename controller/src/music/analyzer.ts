@@ -83,6 +83,10 @@ export interface AnalysisResult {
   // not computed (truncated download, short track, decode failure); consumers
   // treat null as "no outro signal, behave as today".
   outro: OutroInfo | null;
+  // Stem-cache outcome — true when the head stems were written to the
+  // requested stems_dir (tail rides along when the outro was computable).
+  // null = no stems_dir requested / backend predates the feature.
+  stemsCached: boolean | null;
 }
 
 // The outgoing track's measured ending — what actually decides whether a
@@ -94,6 +98,12 @@ export interface OutroInfo {
   bpm: number | null;          // tail tempo (outros drift/ritard vs the lead)
   beats: number[] | null;      // tail beat grid, absolute ms
   bars: number[] | null;       // tail downbeat (bar) grid, absolute ms
+  // Tail vocal-activity spans (Demucs over the outro window), absolute ms.
+  // [] = analysed instrumental tail (meaningful); ABSENT = not computed —
+  // the key must be omitted (not null) when detection didn't run, because
+  // outro_json is the JSON.stringify of this object and the vocal backfill
+  // probes the raw text for '"vocalRanges"' to find tail-missing tracks.
+  vocalRanges?: Section[];
 }
 
 // Coerce a worker numeric field to a finite number or null. The worker omits
@@ -178,6 +188,11 @@ function parseOutro(v: unknown): OutroInfo | null {
   const startMs = parseFinite(o?.startMs);
   const ending = o?.ending;
   if (startMs == null || startMs < 0 || (ending !== 'fade' && ending !== 'cold')) return null;
+  // Same []-vs-absent distinction as the head ranges: preserve a present-but-
+  // empty array (analysed instrumental tail); OMIT the key when the worker
+  // didn't compute it, so the stringified outro_json never carries a bare
+  // "vocalRanges" key for the backfill probe to misread.
+  const vocalRanges = parseVocalRanges(o?.vocalRanges);
   return {
     startMs: Math.round(startMs),
     ending,
@@ -185,6 +200,7 @@ function parseOutro(v: unknown): OutroInfo | null {
     bpm: parseFinite(o?.bpm),
     beats: parseMsList(o?.beats),
     bars: parseMsList(o?.bars),
+    ...(vocalRanges !== null ? { vocalRanges } : {}),
   };
 }
 
@@ -209,7 +225,7 @@ const ANALYZE_MAX_BYTES = parseInt(process.env.ANALYZE_MAX_BYTES || String(12 * 
 // state dir (mounted at the same /var/sub-wave path in both the controller and
 // the tts-heavy sidecar), so the path string the controller writes resolves to
 // the same file inside the sidecar — that's what makes the path handoff work.
-const ANALYZE_TMP_DIR = `${config.stateDir}/analyze-tmp`;
+const ANALYZE_TMP_DIR = `${config.stateRoot}/analyze-tmp`;
 
 // ---------------------------------------------------------------------------
 // Local Python worker (persistent over stdio)
@@ -235,6 +251,7 @@ interface WorkerMessage {
   // no model load). The sidecar surfaces the same fields via /health.
   audio_embedding_capable?: boolean;
   vocal_activity_capable?: boolean;
+  tail_vocal_capable?: boolean;
   text_embedding_capable?: boolean;
   bpm?: number | null;
   key?: string | null;
@@ -250,7 +267,13 @@ interface WorkerMessage {
   key_ranges?: unknown;
   audio_embedding?: unknown;
   outro?: unknown;
+  stems_cached?: boolean;
   text_embeddings?: unknown;
+  // render_transition op fields
+  path?: string;
+  blend_start_sec?: number;
+  in_cue_sec?: number;
+  clip_sec?: number;
 }
 
 type Pending = { resolve: (m: WorkerMessage) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
@@ -270,6 +293,7 @@ const pending = new Map<string, Pending>();
 // — issue #966's false "you're on the lean image" warning on subwave-aio-heavy.
 let _localAudioCapable: boolean | null = null;
 let _localVocalCapable: boolean | null = null;
+let _localTailVocalCapable: boolean | null = null;
 let _localTextCapable: boolean | null = null;
 
 function startWorker(): Promise<void> {
@@ -297,6 +321,7 @@ function startWorker(): Promise<void> {
           // can't see, so it always overwrites.
           if (typeof msg.audio_embedding_capable === 'boolean') _localAudioCapable = msg.audio_embedding_capable;
           if (typeof msg.vocal_activity_capable === 'boolean') _localVocalCapable = msg.vocal_activity_capable;
+          if (typeof msg.tail_vocal_capable === 'boolean') _localTailVocalCapable = msg.tail_vocal_capable;
           if (typeof msg.text_embedding_capable === 'boolean') _localTextCapable = msg.text_embedding_capable;
           clearTimeout(readyTimer);
           resolve();
@@ -337,6 +362,11 @@ export interface AnalyzeRequestOpts {
   // knows). false vetoes outro analysis — a truncated file's "tail" is
   // mid-song audio. Omitted on the url path: the backend's own fetch decides.
   complete?: boolean;
+  // Stem-cache target dir (feature: stem-blend transitions) — wire-named:
+  // both backends spread opts verbatim into the worker request. When set the
+  // worker persists its Demucs stems (head + tail) as FLAC into this dir on
+  // the shared volume; implies the separation even without `vocal`.
+  stems_dir?: string;
 }
 
 // Write a request to the local stdio worker and resolve its response. The
@@ -365,6 +395,7 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           keyRanges: parseKeyRanges(msg.key_ranges),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
           outro: parseOutro(msg.outro),
+          stemsCached: typeof msg.stems_cached === 'boolean' ? msg.stems_cached : null,
         }),
       reject,
       timer,
@@ -404,6 +435,9 @@ function probeLocalCapabilities(): Promise<void> {
         const caps = JSON.parse(out.trim()) as { audio?: boolean; vocal?: boolean; text?: boolean };
         if (_localAudioCapable === null && typeof caps.audio === 'boolean') _localAudioCapable = caps.audio;
         if (_localVocalCapable === null && typeof caps.vocal === 'boolean') _localVocalCapable = caps.vocal;
+        // The local worker script ships with the controller (same repo/image),
+        // so tail-vocal support is version-matched: capable iff vocal is.
+        if (_localTailVocalCapable === null && typeof caps.vocal === 'boolean') _localTailVocalCapable = caps.vocal;
         if (_localTextCapable === null && typeof caps.text === 'boolean') _localTextCapable = caps.text;
       } catch {
         _localProbe = null; // bad/empty output — stay unknown, allow retry
@@ -433,6 +467,10 @@ async function analyzeViaLocalPath(path: string, opts: AnalyzeRequestOpts = {}):
 let _sidecarAudioCapable: boolean | null = null;
 // Same, for vocal-activity (Demucs) support — null until probed/absent field.
 let _sidecarVocalCapable: boolean | null = null;
+// Same, for tail vocal ranges (outro.vocalRanges) — doubles as a worker-version
+// signal: sidecars predating the feature never emit the field, so this stays
+// null there and the backfill widening (which requires === true) can't churn.
+let _sidecarTailVocalCapable: boolean | null = null;
 // Same, for the CLAP TEXT tower (embed-text) — null until probed/absent field.
 let _sidecarTextCapable: boolean | null = null;
 // The candidate base URL that last reported the 'analyze' engine — the one
@@ -450,6 +488,7 @@ async function probeSidecar(url: string): Promise<boolean> {
       engines?: string[];
       analyze_audio_capable?: boolean | null;
       analyze_vocal_capable?: boolean | null;
+      analyze_tail_vocal_capable?: boolean | null;
       analyze_text_capable?: boolean | null;
     };
     const reachable = !!body.ok && Array.isArray(body.engines) && body.engines.includes('analyze');
@@ -457,6 +496,7 @@ async function probeSidecar(url: string): Promise<boolean> {
       _sidecarBase = url;
       _sidecarAudioCapable = typeof body.analyze_audio_capable === 'boolean' ? body.analyze_audio_capable : null;
       _sidecarVocalCapable = typeof body.analyze_vocal_capable === 'boolean' ? body.analyze_vocal_capable : null;
+      _sidecarTailVocalCapable = typeof body.analyze_tail_vocal_capable === 'boolean' ? body.analyze_tail_vocal_capable : null;
       _sidecarTextCapable = typeof body.analyze_text_capable === 'boolean' ? body.analyze_text_capable : null;
     }
     return reachable;
@@ -503,6 +543,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     keyRanges: parseKeyRanges(resBody.key_ranges),
     audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
     outro: parseOutro(resBody.outro),
+    stemsCached: typeof resBody.stems_cached === 'boolean' ? resBody.stems_cached : null,
   };
 }
 
@@ -555,6 +596,16 @@ export function audioEmbeddingAvailable(): boolean | null {
 export function vocalActivityAvailable(): boolean | null {
   if (_backend === 'sidecar') return _sidecarVocalCapable;
   if (_backend === 'local') return _localVocalCapable;
+  return null;
+}
+
+// Whether the active backend computes TAIL vocal ranges (outro.vocalRanges).
+// Doubles as a worker-version signal: backends predating the feature never
+// report it, so consumers must treat only `=== true` as capable — the vocal
+// backfill widening keys off exactly that, keeping stale sidecars churn-free.
+export function tailVocalAvailable(): boolean | null {
+  if (_backend === 'sidecar') return _sidecarTailVocalCapable;
+  if (_backend === 'local') return _localTailVocalCapable;
   return null;
 }
 
@@ -651,6 +702,96 @@ export async function embedTexts(
   } catch {
     return null;
   }
+}
+
+// --- Transition render (feature: stem-blend transitions) --------------------
+
+// What the render op needs to align and mix — straight from library.db, the
+// worker never re-detects. Wire-shaped (snake keys pass through verbatim).
+export interface RenderTransitionPayload {
+  out: {
+    stems_dir: string;
+    duration_s: number; // tagged duration, advisory — tail alignment comes from the stems' tail-meta.json
+    outro: { start_ms: number; bars: number[]; lufs?: number | null };
+    lufs?: number | null;
+  };
+  in: {
+    stems_dir: string;
+    bars: number[];
+    lufs?: number | null;
+  };
+  out_dir: string;
+  clip_name: string;
+  target_lufs?: number | null;
+}
+
+export interface RenderTransitionResult {
+  path: string;
+  blendStartSec: number; // absolute in the OUTGOING track — its liq_cue_out
+  inCueSec: number;      // absolute in the INCOMING track — its liq_cue_in
+  clipSec: number;
+}
+
+// Mix a pre-rendered transition WAV from two tracks' cached stems. Returns
+// null on ANY miss or failure (stems absent, degenerate grids, old sidecar
+// without the endpoint, timeout) — the caller falls back to a plain
+// pair-aware crossfade; the worker's own log carries the reason. Note the
+// render itself needs only numpy+soundfile, so it works on the LEAN image
+// too as long as the stems were cached by a heavy backend earlier.
+export async function renderTransition(
+  payload: RenderTransitionPayload,
+  opts: { timeoutMs?: number } = {},
+): Promise<RenderTransitionResult | null> {
+  const timeoutMs = opts.timeoutMs ?? config.analyzer.renderTimeoutMs;
+  const backend = await resolveBackend();
+  if (!backend) return null;
+  if (backend === 'sidecar') {
+    try {
+      const res = await fetchWithTimeout(`${_sidecarBase}/render-transition`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        timeoutMs,
+        bodyDeadline: true,
+      });
+      if (!res.ok) return null; // 404 = pre-render sidecar — silently no blend
+      const body = (await res.json()) as WorkerMessage & { ok?: boolean };
+      return coerceRenderResult(body);
+    } catch {
+      return null;
+    }
+  }
+  try {
+    if (!ready) await startWorker();
+    return await localRenderTransition(payload, timeoutMs);
+  } catch {
+    return null;
+  }
+}
+
+function coerceRenderResult(msg: WorkerMessage & { ok?: boolean }): RenderTransitionResult | null {
+  if (!msg?.ok || typeof msg.path !== 'string') return null;
+  const blendStartSec = parseFinite(msg.blend_start_sec);
+  const inCueSec = parseFinite(msg.in_cue_sec);
+  const clipSec = parseFinite(msg.clip_sec);
+  if (blendStartSec == null || inCueSec == null || clipSec == null) return null;
+  return { path: msg.path, blendStartSec, inCueSec, clipSec };
+}
+
+function localRenderTransition(payload: RenderTransitionPayload, timeoutMs: number): Promise<RenderTransitionResult | null> {
+  const id = `a${++reqSeq}`;
+  return new Promise<RenderTransitionResult | null>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id);
+      reject(new Error('render-transition request timed out'));
+    }, timeoutMs);
+    pending.set(id, {
+      resolve: (msg: WorkerMessage) => resolve(coerceRenderResult({ ...msg, ok: true })),
+      reject, // a worker {ok:false} rejects here — caller maps to null
+      timer,
+    });
+    proc?.stdin.write(JSON.stringify({ id, op: 'render_transition', ...payload }) + '\n');
+  });
 }
 
 // Analyse one track by id. Throws on failure — the caller (analyze pass) logs

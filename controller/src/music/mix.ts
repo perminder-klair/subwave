@@ -22,6 +22,10 @@ export interface Analysis {
   // silence, 'cold' = ends at level. Optional — absent/null means "no outro
   // signal" and every consumer behaves exactly as before.
   ending?: 'fade' | 'cold' | null;
+  // Whether the track's ENDING is sung (tail vocal ranges overlapping the
+  // measured wind-down): true = vocals ride the ending, false = measured
+  // instrumental tail, absent/null = unknown → consumers behave as before.
+  vocalTail?: boolean | null;
 }
 
 // --- Boundary keys (feature: key ranges) -------------------------------------
@@ -321,10 +325,28 @@ export function crossSecondsFor(
 export const FADE_DROP_SHALLOW_DB = 3;
 export const FADE_DROP_DEEP_DB = 12;
 
+// Derive Analysis.vocalTail from a track's measured tail vocal spans (outro
+// vocalRanges, absolute ms) and its wind-down start (outro.startMs): the
+// ending is "sung" when any vocal span reaches into the wind-down region.
+// A plain end-of-file cutoff ("ends within Ns of duration") false-negatives
+// on exactly the fades this targets — the detector's relative threshold loses
+// a fading voice seconds before the file ends — so overlap-with-wind-down is
+// the honest test. Duck-typed spans keep this module's no-imports invariant.
+// null = not measured (absent data) → consumers behave as before.
+export function vocalTailFor(
+  vocalRanges: Array<{ startMs: number; endMs: number }> | null | undefined,
+  windDownStartMs: number | null | undefined,
+): boolean | null {
+  if (vocalRanges == null) return null;
+  if (vocalRanges.length === 0) return false;
+  if (typeof windDownStartMs !== 'number' || !Number.isFinite(windDownStartMs)) return null;
+  return vocalRanges.some(r => r.endMs >= windDownStartMs);
+}
+
 export function endingCrossSecondsFor(
   a: Analysis,
   windDownSec: number | null,
-  opts: { maxSec?: number | null; tailLufs?: number | null; bodyLufs?: number | null } = {},
+  opts: { maxSec?: number | null; tailLufs?: number | null; bodyLufs?: number | null; vocalTail?: boolean | null } = {},
 ): number | null {
   const ending = a.ending;
   if (ending !== 'fade' && ending !== 'cold') return null;
@@ -343,6 +365,12 @@ export function endingCrossSecondsFor(
       const t = Math.max(0, Math.min(1, (drop - FADE_DROP_SHALLOW_DB) / (FADE_DROP_DEEP_DB - FADE_DROP_SHALLOW_DB)));
       secs = 8 + (secs - 8) * t;
     }
+    // Vocal-tail shaping (feature: vocal-aware transitions): a fade whose
+    // wind-down is still SUNG shouldn't earn the full wind-down ride — a long
+    // overlap puts the next track under a still-singing voice. Pull to the 8s
+    // floor (the same place shallow-drop shaping lands); the bar-snap below
+    // keeps it musical. Unknown (null/absent) changes nothing.
+    if (opts.vocalTail === true) secs = 8;
   } else {
     secs = 4; // tight, intentional cut — same length as a locked beat-blend
   }
@@ -459,6 +487,10 @@ export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve
   // (feature: outro analysis). Checked before the analysed() pass-through:
   // the ending is measured independently of bpm/key.
   if (kind === 'chop' && cur.ending === 'fade') return false;
+  // ...and over a SUNG ending the gate stutters a voice mid-word — broken,
+  // not percussive (feature: vocal-aware transitions). Same early check: the
+  // vocal tail is measured independently of bpm/key.
+  if (kind === 'chop' && cur.vocalTail === true) return false;
   if (!analysed(cur) || !analysed(next)) return true;
   const compat = mixCompat(cur, next);
   // blend (spectral handover) is the sweep's mirror: it makes COMPATIBLE

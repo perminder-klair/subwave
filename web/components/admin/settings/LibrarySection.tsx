@@ -281,10 +281,11 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         eyebrow="library tagger"
         title="Embedding-propagated mood tagging."
         sub={<>
-          The tagger embeds every track once, LLM-tags a small representative
-          seed set, then KNN-propagates moods + energy to the rest. Cuts LLM
-          call count ~10× vs. brute-force per-track tagging. Tune below;
-          changes apply the next time the bulk tagger runs.
+          The tagger embeds every track once (embedding provider below),
+          LLM-tags a small representative seed set using your DJ&rsquo;s LLM
+          (Settings → LLM), then KNN-propagates moods + energy to the rest.
+          Cuts LLM call count ~10× vs. brute-force per-track tagging. Tune
+          below; changes apply the next time the bulk tagger runs.
         </>}
         metrics={[
           {
@@ -327,7 +328,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             value={e.batchSize}
             onValueChange={v => setForm(f => ({ ...f, embedding: { ...f.embedding, batchSize: v } }))}
           >
-            <SelectTrigger className="max-w-[100px]"><SelectValue /></SelectTrigger>
+            <SelectTrigger className="max-w-[100px]" aria-label="LLM batch size"><SelectValue /></SelectTrigger>
             <SelectContent>
               <SelectGroup>
                 {LLM_BATCH_SIZES.map(s => (
@@ -354,11 +355,14 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             <div className="flex items-start gap-x-2 border border-[color-mix(in_oklab,var(--accent)_30%,transparent)] bg-[var(--accent-soft)] p-3 text-[11px] leading-[1.5] text-ink">
               <span className="flex-none text-[12px] leading-[1.5] text-[var(--accent)]">✓</span>
               <span className="min-w-0">
-                Ready to tag with defaults: <code>{llmProviderLabel(effectiveProvider)}</code>
+                Embeddings ready with defaults: <code>{llmProviderLabel(effectiveProvider)}</code>
                 {!e.provider && <span className="text-muted"> (your DJ&rsquo;s provider)</span>}
                 {' · '}<code>{effectiveModel}</code>
                 {effectiveDim != null && <span className="text-muted"> · {effectiveDim}-d</span>}.
-                <span className="text-muted"> Change the provider or model below to override.</span>
+                <span className="text-muted"> Change the provider or model below to override.
+                This provider makes the similarity vectors only — the per-track
+                mood &amp; energy calls bill to your DJ&rsquo;s LLM
+                (<code>{llmProviderLabel(llmProvider)}</code>, Settings → LLM).</span>
               </span>
             </div>
           )}
@@ -376,7 +380,10 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
               className="max-w-[560px]"
             />
             <div className="field-hint">
-              Where the text embeddings come from. Defaults to your DJ&rsquo;s
+              Where the text embeddings come from — used for the sounds-like
+              similarity and tag-propagation steps <em>only</em>. The mood &amp;
+              energy tagging calls themselves always use your DJ&rsquo;s LLM
+              provider (Settings → LLM), and bill there. Defaults to your DJ&rsquo;s
               provider, so Ollama-local users get <code>nomic-embed-text</code> free.
               Anthropic has no first-party embedding API; if your LLM is Anthropic,
               pick OpenAI here (needs <code>OPENAI_API_KEY</code>).
@@ -530,6 +537,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
               <Label>Bearer token</Label>
               <Input
                 type="password"
+                autoComplete="off"
                 value={compatEmbedKeyInput}
                 onChange={(ev: ChangeEvent<HTMLInputElement>) => setCompatEmbedKeyInput(ev.target.value)}
                 placeholder={
@@ -578,6 +586,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
                 <Label>Embedding API key override</Label>
                 <Input
                   type="password"
+                  autoComplete="off"
                   value={embeddingKeyInput}
                   placeholder={embedKeyPresent ? '•••••• (reusing your DJ key)' : `${embedKeyVar} — or set it in .env`}
                   onChange={(ev: ChangeEvent<HTMLInputElement>) => setEmbeddingKeyInput(ev.target.value)}
@@ -611,6 +620,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
             </div>
             {probe && (
               <div
+                role="status"
                 className={cn(
                   'mt-2 max-w-[560px] rounded border bg-[var(--ink-softer)] px-3 py-2 text-[11px] leading-[1.6] whitespace-pre-wrap',
                   probe.ok

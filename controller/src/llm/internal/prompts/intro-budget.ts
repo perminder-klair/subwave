@@ -14,6 +14,18 @@ export function introMsFor(track: any): number | null {
   return rec?.introMs ?? null;
 }
 
+// MEASURED first vocal entry (ms) from the track's Demucs vocal ranges, or
+// null when un-analysed / instrumental ([] — no vocal to clash with). The
+// single resolver behind the never-talk-over-a-singer rule (feature:
+// vocal-aware transitions) — both the budget phrase and the enforcement
+// funnel key off it.
+export function firstVocalMsFor(track: any): number | null {
+  const ranges = track?.id ? library.get(track.id)?.vocalRanges : null;
+  if (!Array.isArray(ranges) || ranges.length === 0) return null;
+  const first = Number(ranges[0]?.startMs);
+  return Number.isFinite(first) && first >= 0 ? first : null;
+}
+
 // Delegates to library.bpmKeyFor — the shared resolver that prefers the
 // analyzer's numbers and treats Navidrome's ID3-derived `bpm: 0` as unknown
 // rather than "carries analysis" (#862).
@@ -23,7 +35,17 @@ export function bpmKeyFor(track: any): { bpm: number | null; key: string | null 
 
 // Advisory spoken-line budget (Stage A.3 phase 1). Returns '' when there's no
 // usable runway, so un-analysed tracks are never constrained.
-export function introBudgetPhrase(introMs: number | null | undefined): string {
+//
+// `firstVocalMs` (feature: vocal-aware transitions) is the MEASURED first
+// vocal entry (Demucs vocal_ranges[0].startMs) when the track has one —
+// unlike the energy-heuristic intro_ms, a measured start below the 2.5s
+// floor is trustworthy, so instead of staying silent about it the phrase
+// tells the model to skip the line the deterministic backstop would drop
+// anyway. Omitted/null (un-analysed or instrumental) changes nothing.
+export function introBudgetPhrase(introMs: number | null | undefined, firstVocalMs?: number | null): string {
+  if (typeof firstVocalMs === 'number' && Number.isFinite(firstVocalMs) && firstVocalMs < 2500) {
+    return 'The vocals start almost immediately on this one — skip the spoken intro and let the track speak.';
+  }
   if (!introMs || introMs < 2500) return '';
   if (introMs >= 18000) return '';
   const sec = Math.floor(introMs / 1000);
@@ -48,12 +70,33 @@ export function introBudgetPhrase(introMs: number | null | undefined): string {
 // spoken intro" and the track just plays. Returns the text unchanged when
 // there's no usable runway (null, very short, or a long ≥18s intro) —
 // symmetric with introBudgetPhrase's guards.
-export function enforceIntroBudget(text: string, introMs: number | null | undefined, paceScale = 1): string {
+//
+// `firstVocalMs` (feature: vocal-aware transitions, additive 4th arg): the
+// MEASURED first vocal entry when the track has one. The <2500ms leniency
+// below exists because the energy-heuristic intro_ms is noise down there —
+// but a measured vocal start under 2.5s means the singer genuinely starts
+// immediately, and airing an un-budgeted line over them is the exact failure
+// this module exists to prevent. So: measured < 2500 → DROP the line ('').
+// When measured and ≥2500 it IS the runway (that's the definition of
+// "before the vocals"); un-measured (null/undefined — includes analysed
+// instrumentals) keeps today's behaviour byte-for-byte.
+export function enforceIntroBudget(
+  text: string,
+  introMs: number | null | undefined,
+  paceScale = 1,
+  firstVocalMs?: number | null,
+): string {
   const t = (text || '').trim();
-  if (!t || !introMs || introMs < 2500 || introMs >= 18000) return t;
+  if (!t) return t;
+  const measured = typeof firstVocalMs === 'number' && Number.isFinite(firstVocalMs) && firstVocalMs >= 0
+    ? firstVocalMs
+    : null;
+  if (measured != null && measured < 2500) return '';
+  const runway = measured ?? introMs;
+  if (!runway || runway < 2500 || runway >= 18000) return t;
   const BASE_WORDS_PER_SEC = 2.5;
   const pace = (Number.isFinite(paceScale) && paceScale > 0) ? paceScale : 1;
-  const maxWords = Math.max(3, Math.floor((introMs / 1000) * BASE_WORDS_PER_SEC * pace));
+  const maxWords = Math.max(3, Math.floor((runway / 1000) * BASE_WORDS_PER_SEC * pace));
   const words = t.split(/\s+/);
   if (words.length <= maxWords) return t;
 

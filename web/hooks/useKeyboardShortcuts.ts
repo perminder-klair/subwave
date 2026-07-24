@@ -48,22 +48,25 @@ export function useKeyboardShortcuts(
       // things.
       if (e.defaultPrevented) return;
 
-      const mod = e.metaKey || e.ctrlKey;
-
-      // Command palette chord — available even inside text fields.
-      if (mod && e.key.toLowerCase() === 'k') {
-        const run = handlersRef.current['mod+k'];
-        if (run) {
-          e.preventDefault();
-          run(e);
+      // Modifier chords are handled first and are exempt from the typing guard —
+      // a chord (Cmd/Ctrl+…) can't be produced by ordinary typing. Only the
+      // command-palette chord (Cmd/Ctrl+K) is claimed; every other combo is left
+      // to the browser (copy/paste/etc). Nothing past this block runs for a
+      // modified keypress.
+      if (e.metaKey || e.ctrlKey || e.altKey) {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+          const run = handlersRef.current['mod+k'];
+          if (run) {
+            e.preventDefault();
+            run(e);
+          }
         }
         return;
       }
 
-      // Leave every other modifier combo to the browser (copy/paste/etc).
-      if (mod || e.altKey) return;
-
-      // Bare keys: never while typing, or while a palette/dialog owns input.
+      // Bare keys ONLY reach here. Never fire while the user is typing in an
+      // input/textarea/select/contenteditable, or while a palette/dialog owns
+      // input via `disabled` — this guard precedes every bare-key comparison.
       if (disabledRef.current || isTextEntry(e.target)) return;
 
       const key = e.key === ' ' ? 'space' : e.key.toLowerCase();

@@ -32,7 +32,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Acoustic analysis (bpm/key/intro) — its own librosa venv, driven by the same
 # stdio worker the offline CLI uses (controller/scripts/analyze_worker.py).
@@ -250,6 +250,14 @@ async def health():
         "analyze_vocal_capable": (
             analyzer_worker.ready_meta.get("vocal_activity_capable") if analyzer_worker.ready else None
         ),
+        # Tail vocal ranges (outro.vocalRanges) — a worker-version signal as
+        # much as a capability: workers predating the feature never emit the
+        # key, so this stays None on stale images and the controller's
+        # backfill widening (which requires === true) can't churn against
+        # them. None until ready.
+        "analyze_tail_vocal_capable": (
+            analyzer_worker.ready_meta.get("tail_vocal_capable") if analyzer_worker.ready else None
+        ),
         # Whether the worker can embed TEXT through the CLAP text tower (same
         # 512-d space as the audio vectors) — powers "sounds like ..." search
         # and zero-shot mood scoring. Needs torch, so lean images report false.
@@ -276,6 +284,11 @@ class AnalyzeRequest(BaseModel):
     # knows). False vetoes outro analysis — a truncated file's "tail" is
     # mid-song audio. None = unknown; the worker's decode-length check guards.
     complete: bool | None = None
+    # Stem-cache target dir on the shared volume (feature: stem-blend
+    # transitions). When set, the worker persists the Demucs stems it already
+    # computes (head + tail windows) as FLAC into this dir. Implies the
+    # separation pass even when `vocal` wasn't requested.
+    stems_dir: str | None = None
 
 
 @app.post("/analyze")
@@ -292,6 +305,8 @@ async def analyze(req: AnalyzeRequest):
         payload["vocal"] = req.vocal
     if req.complete is not None:
         payload["complete"] = req.complete
+    if req.stems_dir is not None:
+        payload["stems_dir"] = req.stems_dir
     msg = await analyzer_worker.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")
@@ -307,7 +322,7 @@ async def analyze(req: AnalyzeRequest):
     # them to null.
     for k in (
         "loudness_lufs", "peak_db", "sections", "vocal_ranges",
-        "pace_curve", "beats", "bars", "key_ranges", "outro",
+        "pace_curve", "beats", "bars", "key_ranges", "outro", "stems_cached",
     ):
         if k in msg:
             out[k] = msg[k]
@@ -316,6 +331,51 @@ async def analyze(req: AnalyzeRequest):
     if "audio_embedding" in msg:
         out["audio_embedding"] = msg["audio_embedding"]
     return out
+
+
+class RenderTransitionRequest(BaseModel):
+    # Stem-blend transition render (feature: stem-blend transitions). The
+    # controller supplies per-track alignment data straight from library.db —
+    # the worker never re-detects. Cache-hit-only: missing stems → ok=false.
+    out: dict[str, Any]
+    in_: dict[str, Any] = Field(alias="in")
+    out_dir: str
+    clip_name: str | None = None
+    target_lufs: float | None = None
+
+    model_config = {"populate_by_name": True}
+
+
+@app.post("/render-transition")
+async def render_transition(req: RenderTransitionRequest):
+    """Mix a pre-rendered transition WAV from two tracks' cached stems onto
+    the shared volume. Fast (a mix, not a separation) but still serialized
+    behind the single worker lock — the controller's own render deadline
+    handles a render stuck behind a bulk analyze item."""
+    payload: dict[str, Any] = {
+        "id": "1",
+        "op": "render_transition",
+        "out": req.out,
+        "in": req.in_,
+        "out_dir": req.out_dir,
+    }
+    if req.clip_name is not None:
+        payload["clip_name"] = req.clip_name
+    if req.target_lufs is not None:
+        payload["target_lufs"] = req.target_lufs
+    msg = await analyzer_worker.request(payload)
+    if not msg.get("ok"):
+        # A clean miss (stems absent, degenerate grids) is an expected
+        # outcome, not a server fault — pass the reason through as 200 so the
+        # controller can distinguish fallback from failure.
+        return {"ok": False, "error": msg.get("error") or "render failed"}
+    return {
+        "ok": True,
+        "path": msg.get("path"),
+        "blend_start_sec": msg.get("blend_start_sec"),
+        "in_cue_sec": msg.get("in_cue_sec"),
+        "clip_sec": msg.get("clip_sec"),
+    }
 
 
 class EmbedTextRequest(BaseModel):

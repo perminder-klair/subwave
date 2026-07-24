@@ -9,6 +9,7 @@
 // chip; everything else is corners.
 
 import { useEffect, useRef, useState } from 'react';
+import { AnimatePresence, m } from 'motion/react';
 import { Headphones, Heart } from 'lucide-react';
 import styles from './Drift.module.css';
 import {
@@ -35,8 +36,35 @@ import {
   stationIdentity,
   turnClock,
 } from '../shared';
-import { useRequestSlip, useTrackLike, useVolumeNudge } from '../sharedHooks';
+import { useRequestSlip, useSkinMotion, useTrackLike, useVolumeNudge } from '../sharedHooks';
 import type { SkinProps } from '../types';
+
+/* Nothing here moves — the room already says everything with color, and the
+   type's job is to wait for it (see Drift.module.css). Pure opacity, and slow:
+   the washes take twenty seconds, so a 900ms dissolve still reads as the
+   hurried part of the transition. mode="wait" leaves a beat of empty page
+   between tracks, which suits a skin where nothing else is in a hurry. */
+const TYPE_DISSOLVE = {
+  initial: { opacity: 0 },
+  animate: { opacity: 1 },
+  exit: { opacity: 0 },
+  transition: { duration: 0.9 },
+};
+/* Lite: mount straight at rest. A zero-duration transition isn't enough — motion
+   still paints `initial` for a frame first, which flashes blank type. mode="wait"
+   happens to hide that most of the time; initial={false} removes it outright. */
+const TYPE_CUT = {
+  initial: false,
+  animate: { opacity: 1 },
+  // Nothing on the way out either — a fade-to-zero on the outgoing
+  // node is still an animation, however brief.
+  exit: {},
+  transition: { duration: 0 },
+};
+/* The cover overlaps itself instead of waiting — two stacked frames reading as
+   one true dissolve, over the longest beat in the skin. */
+const COVER_DISSOLVE = { ...TYPE_DISSOLVE, transition: { duration: 1.2 } };
+const COVER_CUT = TYPE_CUT;
 
 /** Lowercase weekday in the station's zone — "23:09 saturday". */
 function stationWeekday(now: Date, timezone: string | null): string {
@@ -88,6 +116,21 @@ export default function DriftSkin(_props: SkinProps) {
 
   const adjustVolume = useVolumeNudge();
   const like = useTrackLike();
+
+  // One key per airing — offline and the "somewhere on the dial" placeholder
+  // collapse to constants (as classic/CenterStage does) so a transient null
+  // from the 5s /state poll can't re-fire the dissolve mid-track.
+  const trackKey = offline
+    ? 'offline'
+    : coverId
+      ? `s:${coverId}`
+      : nowPlaying?.title
+        ? `t:${nowPlaying.title}`
+        : 'placeholder';
+  // Lite mode's CSS kill can't reach motion — gate the dissolve ourselves.
+  const animates = useSkinMotion();
+  const typeSwap = animates ? TYPE_DISSOLVE : TYPE_CUT;
+  const coverSwap = animates ? COVER_DISSOLVE : COVER_CUT;
 
   // The ··· chip: request + recent history in one quiet panel.
   const [panelOpen, setPanelOpen] = useState(false);
@@ -205,26 +248,44 @@ export default function DriftSkin(_props: SkinProps) {
       {!showOverlay && (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-4 px-6 text-center">
           {coverSrc && !offline && (
-            <div className="h-[128px] w-[128px] border border-soft-border sm:h-[152px] sm:w-[152px]">
-              <img src={coverSrc} alt="" className="h-full w-full object-cover" />
+            <div className="relative h-[128px] w-[128px] border border-soft-border sm:h-[152px] sm:w-[152px]">
+              <AnimatePresence mode="popLayout" initial={false}>
+                <m.img
+                  key={coverSrc}
+                  src={coverSrc}
+                  alt=""
+                  {...coverSwap}
+                  className="absolute inset-0 h-full w-full object-cover"
+                />
+              </AnimatePresence>
             </div>
           )}
           <div className="mt-2 font-mono text-[9px] tracking-[0.32em] text-muted uppercase">
             {offline ? 'off air' : tunedIn ? 'now playing' : 'now playing — tap to listen'}
           </div>
           {!offline && (
-            <button
-              type="button"
-              onClick={handleTune}
-              className="v3-focus pointer-events-auto max-w-full cursor-pointer border-0 bg-transparent p-0 font-display text-[clamp(26px,5vw,46px)] leading-[1.1] font-semibold text-ink"
-            >
-              {nowPlaying?.title ?? 'somewhere on the dial'}
-            </button>
+            <AnimatePresence mode="wait" initial={false}>
+              <m.button
+                key={trackKey}
+                type="button"
+                onClick={handleTune}
+                {...typeSwap}
+                className="v3-focus pointer-events-auto max-w-full cursor-pointer border-0 bg-transparent p-0 font-display text-[clamp(26px,5vw,46px)] leading-[1.1] font-semibold text-ink"
+              >
+                {nowPlaying?.title ?? 'somewhere on the dial'}
+              </m.button>
+            </AnimatePresence>
           )}
           {!offline && metaLine && (
-            <div className="max-w-full truncate font-mono text-[12px] tracking-[0.2em] text-muted uppercase">
-              {metaLine}
-            </div>
+            <AnimatePresence mode="wait" initial={false}>
+              <m.div
+                key={trackKey}
+                {...typeSwap}
+                className="max-w-full truncate font-mono text-[12px] tracking-[0.2em] text-muted uppercase"
+              >
+                {metaLine}
+              </m.div>
+            </AnimatePresence>
           )}
           {!offline && ratio != null && (
             <div className="mt-2 flex items-center gap-3">

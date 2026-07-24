@@ -173,6 +173,71 @@ export async function ping(): Promise<{ ok: boolean; reason?: string }> {
   }
 }
 
+// One-off connectivity + auth probe with ARBITRARY creds — the shared engine
+// behind the onboarding wizard's "Test connection" and the admin Settings
+// Music-source test/save flow. Unlike ping() it never touches config.navidrome
+// and never mutates anything; callers pass exactly what to try. Never throws.
+//
+// One retry on ANY first failure — broader than ping()'s fast-fail-only rule,
+// deliberately. ping()'s 30s timeout makes a slow retry expensive; this probe
+// is 5s-bounded, so the retry costs at most ~5.5s against a truly-dead server.
+// It covers both failure shapes of a warm-but-stale connection pool: the
+// instant reset on reusing a stale socket, AND the full-timeout stall seen
+// when the Navidrome process restarts under pooled connections (the aborted
+// attempt's teardown is what un-wedges the pool, so the second try connects
+// fresh). A Test button reporting either blip as "unreachable" sends the
+// operator chasing a config that actually works.
+export async function pingWith(target: {
+  url: string;
+  user: string;
+  pass: string;
+  client?: string;
+}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; error?: string }> {
+  const first = await pingWithOnce(target);
+  if (first.ok) return first;
+  await new Promise(resolve => setTimeout(resolve, 500));
+  return pingWithOnce(target);
+}
+
+async function pingWithOnce({
+  url,
+  user,
+  pass,
+  client = 'sub-wave-admin',
+}: {
+  url: string;
+  user: string;
+  pass: string;
+  client?: string;
+}): Promise<{ ok: boolean; serverVersion?: string; serverType?: string; error?: string }> {
+  try {
+    const salt = crypto.randomBytes(8).toString('hex');
+    const token = crypto.createHash('md5').update(pass + salt).digest('hex');
+    const probeUrl = new URL(`${url.replace(/\/$/, '')}/rest/ping`);
+    probeUrl.searchParams.set('u', user);
+    probeUrl.searchParams.set('t', token);
+    probeUrl.searchParams.set('s', salt);
+    probeUrl.searchParams.set('v', '1.16.1');
+    probeUrl.searchParams.set('c', client);
+    probeUrl.searchParams.set('f', 'json');
+
+    const res = await fetch(probeUrl.toString(), { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return { ok: false, error: `Subsonic ping returned HTTP ${res.status}` };
+
+    const body: any = await res.json();
+    const sub = body?.['subsonic-response'];
+    if (sub?.status !== 'ok') {
+      return { ok: false, error: sub?.error?.message || 'Subsonic responded but auth failed' };
+    }
+    return { ok: true, serverVersion: sub.version, serverType: sub.type || 'unknown' };
+  } catch (err: any) {
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+      return { ok: false, error: 'Navidrome did not respond within 5s' };
+    }
+    return { ok: false, error: err?.message || 'Navidrome unreachable' };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Station-archive guard
 // ---------------------------------------------------------------------------
@@ -767,7 +832,7 @@ export function getPlayableUri(song) {
 export function escAnnotate(s) {
   return String(s ?? '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
-export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } = {}) {
+export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cueOutSec?: number | null; cueInSec?: number | null } = {}) {
   const fields = [
     `title="${escAnnotate(song.title)}"`,
     `artist="${escAnnotate(song.artist)}"`,
@@ -839,8 +904,40 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null } =
   // (autonomous picks in queue.drainToLiquidsoap + the auto.m3u fallback);
   // explicit listener requests pass null and play in full. A cue_out past a
   // shorter track's end is a Liquidsoap no-op, so sub-cap tracks play untouched.
-  if (opts.maxDurationSec != null && opts.maxDurationSec > 0) {
-    fields.push(`liq_cue_out="${escAnnotate(opts.maxDurationSec)}"`);
+  // Stem-blend cue points (feature: stem-blend transitions): an explicit
+  // cueOutSec (the blend start in the OUTGOING track) folds with the length
+  // cap — whichever cuts earlier wins, so a blend can never resurrect audio
+  // past the operator's cap. cueInSec skips the INCOMING track past the head
+  // its rendered clip already played. Liquidsoap 2.4 honours both labels
+  // natively at request resolution; no radio.liq change.
+  const cueOut = [opts.maxDurationSec, opts.cueOutSec]
+    .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+  if (cueOut.length) {
+    fields.push(`liq_cue_out="${escAnnotate(Math.min(...cueOut))}"`);
+  }
+  if (opts.cueInSec != null && opts.cueInSec > 0) {
+    fields.push(`liq_cue_in="${escAnnotate(opts.cueInSec)}"`);
   }
   return `annotate:${fields.join(',')}:${getPlayableUri(song)}`;
+}
+
+// Annotate URI for a pre-rendered transition CLIP (stem-blend transitions).
+// The clip carries the INCOMING track's identity so now-playing flips to it
+// the moment the blend begins — a real DJ mix announces the next record as
+// it comes in — and the controller's lastSeenKey dedup swallows the second,
+// identical metadata fire when the real track takes over at its cue-in.
+// `subwave_clip="1"` marks the dj_queue entry so the telnet rid helpers
+// (liquidsoap-control.ts) never mistake the clip for the track itself.
+export function getClipUri(song, clipPath: string, crossSec: number) {
+  const fields = [
+    `title="${escAnnotate(song.title)}"`,
+    `artist="${escAnnotate(song.artist)}"`,
+    `album="${escAnnotate(song.album)}"`,
+    `subsonic_id="${escAnnotate(song.id)}"`,
+    'subwave_clip="1"',
+    `liq_cross_duration="${escAnnotate(crossSec)}"`,
+  ];
+  // No liq_amplify: the render already gain-matched both sources toward the
+  // station target — an amplify stamp here would double-apply.
+  return `annotate:${fields.join(',')}:${clipPath}`;
 }

@@ -41,6 +41,7 @@ export function PersonaSkillsCard({ persona, skillCatalog, setSkills }: PersonaS
                       ? persona.skills.filter(n => n !== s.name)
                       : [...persona.skills, s.name],
                   )}
+                  ariaLabel={`Allow ${s.label || s.name}`}
                 />
               </div>
             );

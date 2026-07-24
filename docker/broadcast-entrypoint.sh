@@ -30,7 +30,27 @@
 
 set -eu
 
-SECRETS=/var/sub-wave/icecast-secrets.env
+# ---- Multi-station pointer resolution ---------------------------------------
+# state/stations/active.json (controller-written, {"activeId":"<slug>"}) picks
+# which station dir this boot serves. Everything below reads from $STATE_DIR;
+# only install-level files (icecast secrets) stay at $STATE_ROOT. No jq in
+# this image — the sed matches the controller's canonical output and the slug
+# charset [a-z0-9-], so a hand-mangled file falls back to the root.
+STATE_ROOT=/var/sub-wave
+STATE_DIR="$STATE_ROOT"
+ACTIVE_FILE="$STATE_ROOT/stations/active.json"
+if [ -f "$ACTIVE_FILE" ]; then
+    ACTIVE_ID=$(sed -n 's/.*"activeId"[[:space:]]*:[[:space:]]*"\([a-z0-9][a-z0-9-]\{0,40\}\)".*/\1/p' "$ACTIVE_FILE" | head -n1)
+    if [ -n "$ACTIVE_ID" ] && [ -d "$STATE_ROOT/stations/$ACTIVE_ID" ]; then
+        STATE_DIR="$STATE_ROOT/stations/$ACTIVE_ID"
+        echo "broadcast: active station '$ACTIVE_ID' → $STATE_DIR" >&2
+    else
+        echo "broadcast: WARNING stations/active.json unresolvable (id='$ACTIVE_ID') — using root" >&2
+    fi
+fi
+export SUBWAVE_STATE_DIR="$STATE_DIR"
+
+SECRETS=$STATE_ROOT/icecast-secrets.env
 TEMPLATE=/etc/icecast2/icecast.xml.template
 RENDERED=/etc/icecast2/icecast.xml
 
@@ -39,30 +59,32 @@ RENDERED=/etc/icecast2/icecast.xml
 # this hands-off — operators don't have to chown bind-mount sources before
 # the first boot succeeds.
 
-mkdir -p /var/sub-wave \
-         /var/sub-wave/voice \
-         /var/sub-wave/voices \
-         /var/sub-wave/archive \
-         /var/sub-wave/jingles \
-         /var/sub-wave/logs \
-         /var/sub-wave/sessions \
-         /var/sub-wave/sfx
-chmod 777 /var/sub-wave \
-          /var/sub-wave/voice \
-          /var/sub-wave/voices \
-          /var/sub-wave/archive \
-          /var/sub-wave/jingles \
-          /var/sub-wave/logs \
-          /var/sub-wave/sessions \
-          /var/sub-wave/sfx
+mkdir -p "$STATE_ROOT" \
+         "$STATE_DIR" \
+         "$STATE_DIR/voice" \
+         "$STATE_DIR/voices" \
+         "$STATE_DIR/archive" \
+         "$STATE_DIR/jingles" \
+         "$STATE_DIR/logs" \
+         "$STATE_DIR/sessions" \
+         "$STATE_DIR/sfx"
+chmod 777 "$STATE_ROOT" \
+          "$STATE_DIR" \
+          "$STATE_DIR/voice" \
+          "$STATE_DIR/voices" \
+          "$STATE_DIR/archive" \
+          "$STATE_DIR/jingles" \
+          "$STATE_DIR/logs" \
+          "$STATE_DIR/sessions" \
+          "$STATE_DIR/sfx"
 # Bootstrap empty m3u files Liquidsoap's reload_mode="watch" needs to see.
-touch /var/sub-wave/auto.m3u /var/sub-wave/jingles.m3u
-chmod 666 /var/sub-wave/auto.m3u /var/sub-wave/jingles.m3u
+touch "$STATE_DIR/auto.m3u" "$STATE_DIR/jingles.m3u"
+chmod 666 "$STATE_DIR/auto.m3u" "$STATE_DIR/jingles.m3u"
 # Tell a co-located Navidrome to skip the archive dir — its hourly mixdowns are
 # the station's own recordings, not library tracks, and otherwise get scanned in
 # as junk "HH-00" entries that confuse the DJ (issue #273). Harmless when
 # Navidrome lives elsewhere / doesn't overlap this path.
-touch /var/sub-wave/archive/.ndignore
+touch "$STATE_DIR/archive/.ndignore"
 
 # Liquidsoap writes radio.log to /var/log/liquidsoap as uid 10000. Compose
 # usually bind-mounts ${STATE_DIR}/logs over this path; that bind mount lands
@@ -151,7 +173,7 @@ esac
 # compose edit.
 read_state_num() {
     # $1 = filename, $2 = fallback. Non-numeric or missing → fallback.
-    _v=$(cat "/var/sub-wave/$1" 2>/dev/null || true)
+    _v=$(cat "$STATE_DIR/$1" 2>/dev/null || true)
     case "$_v" in
         ''|*[!0-9]*) echo "$2" ;;
         *) echo "$_v" ;;
@@ -197,7 +219,7 @@ echo "broadcast: listener buffer ${BUFFER_SECONDS}s @ mp3 ${STREAM_BITRATE}kbps"
 # password itself lives ONLY in the controller's settings.json — password
 # changes apply live, and this render only matters when the toggle flips
 # (which the admin UI routes through the existing restart-mixer flow).
-LISTENER_AUTH_FLAG=/var/sub-wave/icecast_listener_auth.txt
+LISTENER_AUTH_FLAG=$STATE_DIR/icecast_listener_auth.txt
 LISTENER_AUTH_URL="${LISTENER_AUTH_URL:-http://controller:7701/listener-auth}"
 LISTENER_AUTH=false
 if [ "$(cat "$LISTENER_AUTH_FLAG" 2>/dev/null | tr -d '[:space:]')" = "true" ]; then

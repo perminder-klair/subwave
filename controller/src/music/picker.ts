@@ -93,6 +93,14 @@ async function memo(key, ttl, fn) {
   return val;
 }
 
+// Drop every memoised Subsonic result. Called when the admin points the
+// station at different Navidrome creds — the cached playlists/albums carry
+// song ids from the OLD server, which would feed the picker junk for up to
+// CACHE_TTL_MS otherwise.
+export function clearPoolCache() {
+  cache.clear();
+}
+
 // --- Tempo / harmonic compatibility (Stage B, soft re-rank only) -----------
 // These bias the pool ordering toward smoother transitions; they are NEVER a
 // hard filter, and a track with NULL bpm/key contributes a 0 bonus (so it
@@ -748,6 +756,13 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           // Mirrors the agent picker's `sections` (llm/tools.ts slim) so the
           // shared PICKER_CRITERIA holds for both pick strategies.
           sections: library.sectionCount(c) ?? library.sectionCount(rec) ?? undefined,
+          // Instrumental flag from measured vocal ranges ([] = no vocals) —
+          // the agent projection carried this (picker-tools.ts) while the
+          // pool candidates competed blind on PICKER_CRITERIA's "instrumental
+          // opener leaves room to talk" hint. Omitted when un-analysed.
+          instrumental: Array.isArray(rec?.vocalRanges)
+            ? rec.vocalRanges.length === 0
+            : undefined,
           source: c._source || null,
           // Cosine similarity to the current track for the KNN sources
           // (embedding-similar / audio-similar). Omitted for the other sources,

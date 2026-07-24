@@ -2,7 +2,7 @@
 
 import type { ChangeEvent } from 'react';
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { notify, errorMessage } from '../../lib/notify';
 import { normalizeStationLocale } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -20,7 +20,7 @@ import ArchivesPanel from './ArchivesPanel';
 import BackupPanel from './BackupPanel';
 import {
   Radio, Palette, Cpu, Mic, Library, Search,
-  Activity, Archive, Save, AlertTriangle, Heart,
+  Activity, Archive, Save, AlertTriangle, Heart, Music2,
 } from 'lucide-react';
 import {
   SectionHeader, ELEVENLABS_VS_DEFAULTS,
@@ -35,9 +35,11 @@ import { StationSection } from './settings/StationSection';
 import { ThemeSection } from './settings/ThemeSection';
 import { ScrobbleSection } from './settings/ScrobbleSection';
 import { LikesSection } from './settings/LikesSection';
+import { NavidromeSection } from './settings/NavidromeSection';
 
 const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
+  { id: 'music',    label: 'Music source', hint: 'navidrome · subsonic', icon: Music2 },
   { id: 'theme',    label: 'Skin & Themes', hint: 'player skin · palette', icon: Palette },
   { id: 'llm',      label: 'LLM provider', hint: 'model routing', icon: Cpu },
   { id: 'tts',      label: 'TTS voice', hint: 'default engine', icon: Mic },
@@ -87,14 +89,20 @@ export default function SettingsPanel() {
   //
   // Jingles / SFX / Beds left Settings for /admin/imaging — send their old
   // ?section deep-links on to the matching tab so existing bookmarks survive.
+  //
+  // useSearchParams (not a one-shot window.location read) so client-side
+  // navigations to ?section=… land too — the NavidromeBanner links here from
+  // every admin page INCLUDING /admin/settings itself, where the panel is
+  // already mounted and only the query changes.
+  const searchParams = useSearchParams();
   useEffect(() => {
-    const s = new URLSearchParams(window.location.search).get('section');
+    const s = searchParams.get('section');
     if (s === 'jingles' || s === 'sfx' || s === 'beds') {
       router.replace(`/admin/imaging?tab=${s}`);
       return;
     }
     if (s && SECTIONS.some(x => x.id === s)) setActiveSection(s as SectionId);
-  }, [router]);
+  }, [router, searchParams]);
 
   useEffect(() => {
     if (!data?.values || form) return;
@@ -102,6 +110,11 @@ export default function SettingsPanel() {
     setForm({
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
       maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
+      transitions: {
+        pairDrain: v.transitions?.pairDrain ?? true,
+        stemBlends: v.transitions?.stemBlends ?? false,
+        stemCache: v.audio?.stemCache ?? false,
+      },
       archive: {
         enabled: v.archive?.enabled ?? false,
         bitrate: String(v.archive?.bitrate ?? 128),
@@ -446,6 +459,9 @@ export default function SettingsPanel() {
                 saveSettings={saveSettings}
               />
             )}
+            {activeSection === 'music' && (
+              <NavidromeSection data={data} adminFetch={adminFetch} refresh={refresh} />
+            )}
             {activeSection === 'theme' && (
               <ThemeSection
                 data={data} busy={busy} saveSettings={saveSettings}
@@ -522,7 +538,7 @@ export default function SettingsPanel() {
                           setForm(f => (f ? { ...f, archive: { ...f.archive, bitrate: v } } : f))
                         }
                       >
-                        <SelectTrigger className="w-32" disabled={!form.archive.enabled}>
+                        <SelectTrigger className="w-32" disabled={!form.archive.enabled} aria-label="Archive bitrate">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -557,6 +573,7 @@ export default function SettingsPanel() {
                     <div className="flex items-center gap-2">
                       <Input
                         className="mono-num w-28"
+                        aria-label="Keep recordings for (days)"
                         type="number"
                         min={0}
                         max={3650}
@@ -649,6 +666,7 @@ export default function SettingsPanel() {
                     <span className="text-[12px] text-muted">after</span>
                     <Input
                       className="mono-num w-24"
+                      aria-label="Pause after (minutes)"
                       type="number"
                       step={1}
                       min={1}
@@ -699,6 +717,7 @@ export default function SettingsPanel() {
                   <div className="flex items-center gap-2">
                     <Input
                       className="mono-num w-28"
+                      aria-label="Crossfade duration (seconds)"
                       type="number"
                       step={0.5}
                       max={30}
@@ -727,12 +746,105 @@ export default function SettingsPanel() {
             )}
 
             {form && (
+              <Card title="Stem transitions" sub="pair-aware scheduling + rendered blends">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <Label>Pair-aware transitions</Label>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.transitions.pairDrain ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, transitions: { ...f.transitions, pairDrain: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="field-hint">
+                      Holds each pick until its successor is known, so DJ-mode crossfades are
+                      sized for the actual pair instead of a blind default. Off reverts to the
+                      historical eager hand-off. Applies live; no restart.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <Label>Stem cache</Label>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.transitions.stemCache ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, transitions: { ...f.transitions, stemCache: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                    </div>
+                    <div className="field-hint">
+                      Keeps the drum/bass/vocal/other stems the heavy analyzer already separates
+                      during analysis (~25&nbsp;MB per track, oldest evicted past the budget).
+                      Needs the heavy analyzer image (Demucs) and a re-analysis pass to fill.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <Label>Stem-blend seams</Label>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.transitions.stemBlends ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, transitions: { ...f.transitions, stemBlends: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({
+                            transitions: {
+                              pairDrain: form.transitions.pairDrain,
+                              stemBlends: form.transitions.stemBlends,
+                            },
+                            audio: { stemCache: form.transitions.stemCache },
+                          })
+                        }
+                        disabled={busy}
+                      >
+                        Save transitions
+                      </Btn>
+                    </div>
+                    <div className="field-hint">
+                      When two tempo-compatible tracks meet and both have cached stems, the seam
+                      airs as a rendered blend — the outgoing track&rsquo;s drums carry under the
+                      incoming intro until its own beat drops. Falls back to a plain crossfade on
+                      any miss. Needs pair-aware transitions + the stem cache; the Doctor flags a
+                      config that can&rsquo;t deliver.
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
               <Card title="Max track length" sub="cut over-length tracks on air">
                 <div className="field">
                   <Label>Maximum track length</Label>
                   <div className="flex items-center gap-2">
                     <Input
                       className="mono-num w-28"
+                      aria-label="Maximum track length (seconds)"
                       type="number"
                       step={1}
                       min={0}
@@ -783,7 +895,7 @@ export default function SettingsPanel() {
                         )
                       }
                     >
-                      <SelectTrigger className="w-64">
+                      <SelectTrigger className="w-64" aria-label="Loudness source">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -807,6 +919,7 @@ export default function SettingsPanel() {
                     <div className="flex items-center gap-2">
                       <Input
                         className="mono-num w-28"
+                        aria-label="Target loudness (LUFS)"
                         type="number"
                         step={1}
                         min={-23}
@@ -832,6 +945,7 @@ export default function SettingsPanel() {
                     <div className="flex items-center gap-2">
                       <Input
                         className="mono-num w-28"
+                        aria-label="Max boost (dB)"
                         type="number"
                         step={1}
                         min={0}
@@ -925,7 +1039,7 @@ export default function SettingsPanel() {
                           setForm(f => (f ? { ...f, stream: { ...f.stream, opusBitrate: v } } : f))
                         }
                       >
-                        <SelectTrigger className="w-32">
+                        <SelectTrigger className="w-32" aria-label="Opus bitrate">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1114,7 +1228,7 @@ export default function SettingsPanel() {
                           setForm(f => (f ? { ...f, stream: { ...f.stream, aacBitrate: v } } : f))
                         }
                       >
-                        <SelectTrigger className="w-32">
+                        <SelectTrigger className="w-32" aria-label="AAC bitrate">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -1160,7 +1274,7 @@ export default function SettingsPanel() {
                         setForm(f => (f ? { ...f, stream: { ...f.stream, bitrate: v } } : f))
                       }
                     >
-                      <SelectTrigger className="w-32">
+                      <SelectTrigger className="w-32" aria-label="MP3 stream bitrate">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>

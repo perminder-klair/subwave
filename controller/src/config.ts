@@ -2,14 +2,21 @@
 
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { resolveActiveStationDir } from './stations/resolve.js';
 
-// The shared state directory — every file-based IPC channel lives under here.
-// In Docker the compose files mount <repo>/state → /var/sub-wave and pass
-// STATE_DIR=/var/sub-wave. Native dev (`npm run dev` from controller/) has no
-// such mount, so it falls back to the repo-local state/ dir resolved relative
-// to this file (controller/src/config.js → ../../state).
-export const STATE_DIR = process.env.STATE_DIR
+// The shared state ROOT — the compose files mount <repo>/state → /var/sub-wave
+// and pass STATE_DIR=/var/sub-wave. Native dev (`npm run dev` from controller/)
+// has no such mount, so it falls back to the repo-local state/ dir resolved
+// relative to this file (controller/src/config.js → ../../state).
+export const STATE_ROOT = process.env.STATE_DIR
   || resolve(dirname(fileURLToPath(import.meta.url)), '../../state');
+
+// The ACTIVE station's state dir — every file-based IPC channel lives under
+// here. Multi-station installs (state/stations/active.json present) resolve to
+// stations/<activeId>/; single-station installs resolve to the root itself, so
+// every existing consumer of STATE_DIR keeps working unchanged. Resolution is
+// once-per-boot by design: switching stations restarts this process.
+export const STATE_DIR = resolveActiveStationDir(STATE_ROOT);
 
 // Repo-bundled static audio (studio bed, emergency clip, default sound
 // effects). In Docker the compose files mount <repo>/sounds → /sounds and
@@ -37,9 +44,11 @@ const VOICES_DIR = process.env.TTS_VOICE_DIR
 const LEGACY_VOICES_DIR = `${STATE_DIR}/chatterbox-voices`;
 
 export const config = {
-  // Absolute path to the shared state dir — modules build their own file
-  // paths from this rather than hardcoding /var/sub-wave.
+  // Absolute path to the ACTIVE station's state dir — modules build their own
+  // file paths from this rather than hardcoding /var/sub-wave.
   stateDir: STATE_DIR,
+  // The install-level state root (stations/, icecast-secrets.env live here).
+  stateRoot: STATE_ROOT,
   soundsDir: SOUNDS_DIR,
   navidrome: {
     url: process.env.NAVIDROME_URL || 'http://navidrome:4533',
@@ -86,6 +95,13 @@ export const config = {
     // and docker/analyzer/server.py.
     seconds: parseFloat(process.env.ANALYZE_SECONDS || '40'),
     requestTimeoutMs: parseInt(process.env.ANALYZE_REQUEST_TIMEOUT_MS || '120000', 10),
+    // Transition renders (stem-blend transitions) get their own, shorter
+    // deadline: they run inside the pair-drain window and must lose the race
+    // to the drain's hard fallback — a render past this is abandoned and the
+    // seam falls back to a plain pair-aware crossfade. Also what absorbs a
+    // render queued behind a long bulk-analyze item on the single-flight
+    // worker.
+    renderTimeoutMs: parseInt(process.env.ANALYZE_RENDER_TIMEOUT_MS || '60000', 10),
   },
   kokoro: {
     python: process.env.KOKORO_PYTHON || '/opt/kokoro/venv/bin/python',

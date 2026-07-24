@@ -1691,6 +1691,13 @@ const DEFAULTS = {
     // request is a clean no-op. ANALYZE_VOCAL_ACTIVITY=1 also enables it
     // regardless of this toggle (env wins on, never off). Expensive — opt-in.
     vocalActivity: false,
+    // Stem cache (feature: stem-blend transitions). When on, the analysis
+    // pass keeps the Demucs stems it already computes (head + tail windows)
+    // as FLAC under state/stems/<id>/ so transition renders are a fast mix
+    // instead of a fresh separation. Needs the demucs stack like
+    // vocalActivity; ~21-25 MB per track, LRU-swept to stemCacheGb.
+    stemCache: false,
+    stemCacheGb: 15,
     // Quiet-times gate (#1099): pause the analysis pass while anyone is
     // listening, resuming once the stream has been listener-free for
     // analyzeQuietMinutes. Checked between tracks inside runAnalysisPass, so
@@ -1700,6 +1707,19 @@ const DEFAULTS = {
     // enables it (env wins on, never off), mirroring the toggles above.
     analyzeQuietOnly: false,
     analyzeQuietMinutes: 10,
+  },
+  // Transition scheduling + stem-blend rendering (docs/stem-transitions-research.md).
+  transitions: {
+    // Pair-aware drains (the #749 fix): hold each queued pick unsent until
+    // its successor is known (or the on-air track nears its end), so its
+    // exit stamps — adaptive crossfade length, and stem-blend clips when
+    // enabled — can be sized for the actual pair. Kill-switch: off reverts
+    // to the historical eager drain, byte-for-byte.
+    pairDrain: true,
+    // Pre-rendered stem-blend transitions (needs pairDrain + the heavy
+    // analyzer with the stem cache warmed). Off by default — opt-in like
+    // every heavy audio feature.
+    stemBlends: false,
   },
   // Sound-effects library. When disabled, the segment-director agent is never
   // shown the effect catalogue, so it stops garnishing spoken breaks with
@@ -2600,6 +2620,10 @@ export async function load() {
     audio: {
       embeddings: typeof stored.audio?.embeddings === 'boolean' ? stored.audio.embeddings : DEFAULTS.audio.embeddings,
       vocalActivity: typeof stored.audio?.vocalActivity === 'boolean' ? stored.audio.vocalActivity : DEFAULTS.audio.vocalActivity,
+      stemCache: typeof stored.audio?.stemCache === 'boolean' ? stored.audio.stemCache : DEFAULTS.audio.stemCache,
+      stemCacheGb: Number.isFinite(stored.audio?.stemCacheGb) && stored.audio.stemCacheGb > 0
+        ? stored.audio.stemCacheGb
+        : DEFAULTS.audio.stemCacheGb,
       analyzeQuietOnly:
         typeof stored.audio?.analyzeQuietOnly === 'boolean'
           ? stored.audio.analyzeQuietOnly
@@ -2607,6 +2631,10 @@ export async function load() {
       analyzeQuietMinutes: Number.isFinite(stored.audio?.analyzeQuietMinutes)
         ? Math.max(1, Math.min(120, Math.floor(stored.audio.analyzeQuietMinutes)))
         : DEFAULTS.audio.analyzeQuietMinutes,
+    },
+    transitions: {
+      pairDrain: typeof stored.transitions?.pairDrain === 'boolean' ? stored.transitions.pairDrain : DEFAULTS.transitions.pairDrain,
+      stemBlends: typeof stored.transitions?.stemBlends === 'boolean' ? stored.transitions.stemBlends : DEFAULTS.transitions.stemBlends,
     },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
@@ -4264,6 +4292,13 @@ export async function update(patch) {
     if (au.vocalActivity !== undefined) {
       next.audio.vocalActivity = !!au.vocalActivity;
     }
+    if (au.stemCache !== undefined) {
+      next.audio.stemCache = !!au.stemCache;
+    }
+    if (au.stemCacheGb !== undefined) {
+      const gb = Number(au.stemCacheGb);
+      if (Number.isFinite(gb) && gb >= 1 && gb <= 500) next.audio.stemCacheGb = gb;
+    }
     if (au.analyzeQuietOnly !== undefined) {
       next.audio.analyzeQuietOnly = !!au.analyzeQuietOnly;
     }
@@ -4273,6 +4308,15 @@ export async function update(patch) {
         throw new Error('audio.analyzeQuietMinutes must be between 1 and 120');
       }
       next.audio.analyzeQuietMinutes = v;
+    }
+  }
+  if ('transitions' in patch) {
+    const tr = patch.transitions || {};
+    if (tr.pairDrain !== undefined) {
+      next.transitions.pairDrain = !!tr.pairDrain;
+    }
+    if (tr.stemBlends !== undefined) {
+      next.transitions.stemBlends = !!tr.stemBlends;
     }
   }
   if ('sfx' in patch) {

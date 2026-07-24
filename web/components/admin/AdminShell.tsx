@@ -44,10 +44,19 @@ import type { SignInResult } from '../../lib/adminAuth';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
 import NavidromeBanner from './NavidromeBanner';
+import StationSwitcher from './StationSwitcher';
 import OdometerNumber from '../OdometerNumber';
 import BoothBuddy from '../BoothBuddy';
 import ThemeSwitcher from '../ThemeSwitcher';
-import { Toaster } from '../ui/toaster';
+import {
+  CommandDialog,
+  CommandInput,
+  CommandList,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+  CommandShortcut,
+} from '../ui/command';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import {
   Sidebar,
@@ -220,13 +229,15 @@ const FOOTER_LINKS: { href: string; label: string; icon: NavIcon; pill: string }
   { href: 'https://discord.gg/vjVbVKnMBa', label: 'Discord', icon: MessageCircle, pill: '↗' },
 ];
 
-// Section + page label for the top-bar breadcrumb. Playlists and DJ Doc aren't
-// sidebar items (Playlists lives under Library's doorway, DJ Doc in the header
-// strip), so they're resolved explicitly; Library stays lit in the rail while
+// Section + page label for the top-bar breadcrumb. Playlists, DJ Doc, and
+// Stations aren't sidebar items (Playlists lives under Library's doorway,
+// DJ Doc in the header strip, Stations behind the switcher at the top of the
+// rail), so they're resolved explicitly; Library stays lit in the rail while
 // on Playlists, so the crumb mirrors that with the Programming section.
 function resolveCrumb(pathname: string | null): { section?: string; page: string } {
   if (pathname?.startsWith('/admin/playlists')) return { section: 'Programming', page: 'Playlists' };
   if (pathname?.startsWith('/admin/doctor')) return { section: 'Monitor', page: 'DJ Doc' };
+  if (pathname?.startsWith('/admin/stations')) return { section: 'System', page: 'Stations' };
   for (const section of NAV_SECTIONS) {
     const item = section.items.find(n => pathname?.startsWith(n.href));
     if (item) return { section: section.label, page: item.label };
@@ -339,8 +350,71 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
           </div>
         </SidebarInset>
       </SidebarProvider>
-      <Toaster />
+      <AdminCommandMenu />
+      {/* Toaster is mounted once at the app shell (app/layout.tsx). */}
     </div>
+  );
+}
+
+// ⌘K / Ctrl+K command menu for the admin console — jump between panels without
+// reaching for the sidebar. Reuses the shared cmdk-based CommandDialog, and is
+// mounted from the authenticated admin shell so it is available on every admin
+// route. The chord is a modifier combo, so it is safe to honour even while a
+// field is focused (it never intercepts a bare keystroke).
+function AdminCommandMenu() {
+  const router = useRouter();
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Toggling on auto-repeat would flicker the dialog while the chord is
+      // held — fire once per press, like every other shortcut.
+      if (e.repeat) return;
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setOpen(o => !o);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  const go = (href: string) => () => {
+    setOpen(false);
+    router.push(href);
+  };
+
+  // Flatten the sidebar nav (section items + their route/tab children) into one
+  // searchable jump list.
+  const targets: { href: string; label: string; group: string }[] = [];
+  for (const section of NAV_SECTIONS) {
+    for (const item of section.items) {
+      targets.push({ href: item.href, label: item.label, group: section.label });
+      for (const child of item.children ?? []) {
+        targets.push({
+          href: child.href,
+          label: `${item.label} → ${child.label}`,
+          group: section.label,
+        });
+      }
+    }
+  }
+
+  return (
+    <CommandDialog open={open} onOpenChange={setOpen} label="Admin command menu">
+      <CommandInput placeholder="Jump to a panel…" />
+      <CommandList>
+        <CommandEmpty>No matches.</CommandEmpty>
+        <CommandGroup heading="Go to">
+          {targets.map(t => (
+            <CommandItem key={`${t.href}::${t.label}`} value={t.label} onSelect={go(t.href)}>
+              <span>{t.label}</span>
+              <CommandShortcut>{t.group}</CommandShortcut>
+            </CommandItem>
+          ))}
+        </CommandGroup>
+      </CommandList>
+    </CommandDialog>
   );
 }
 
@@ -380,6 +454,10 @@ function AdminSidebar({
           </span>
         </Link>
         <span className="caption px-1 group-data-[collapsible=icon]:hidden">control center</span>
+        {/* Multi-station: the shadcn "Teams"-style switcher — active station
+            with a dropdown of the others; no-ops down to a single row on
+            single-station installs. */}
+        <StationSwitcher onNavigate={closeOnMobileNav} />
       </SidebarHeader>
 
       <SidebarContent className="gap-4 px-2 py-1">
@@ -415,7 +493,12 @@ function AdminSidebar({
             when the rail is collapsed to icons. */}
         <SidebarMenu className="gap-1.5">
           <SidebarMenuItem>
-            <DropdownMenu>
+            {/* Non-modal: a modal Radix menu locks body scroll, and the lock
+                compensates for the removed scrollbar with a 15px right margin
+                on <body> — which pulls the sticky top bar off the right edge
+                for as long as the menu is open. A nav menu has no reason to
+                trap scroll, so opt out and the shift never happens. */}
+            <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
                 <SidebarMenuButton title="More">
                   <MoreHorizontal
@@ -722,7 +805,9 @@ function TopBar({ pathname }: { pathname: string | null }) {
         </Link>
         <ThemeSwitcher variant="admin" />
         {/* Listen — a menu grouping the in-browser player with the native apps. */}
-        <DropdownMenu>
+        {/* modal={false} for the same reason as the sidebar's More menu — no
+            body scroll lock, so no scrollbar-compensation margin shift. */}
+        <DropdownMenu modal={false}>
           <DropdownMenuTrigger
             className="caption inline-flex cursor-pointer items-center gap-1 text-muted focus:outline-none"
             aria-label="Listen and get the app"

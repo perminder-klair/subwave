@@ -118,13 +118,14 @@ export function StationPasswordGate({
         </p>
         <input
           type="password"
+          aria-label="Station password"
           value={input}
           onChange={e => setInput(e.target.value)}
           placeholder="station password"
           autoComplete="current-password"
           className="mt-4 w-full border border-ink bg-bg px-3 py-2 text-sm text-ink outline-none placeholder:text-muted focus:border-vermilion"
         />
-        {error && <div className="mt-2 text-sm text-vermilion">{error}</div>}
+        {error && <div role="alert" className="mt-2 text-sm text-vermilion">{error}</div>}
         <button
           type="submit"
           disabled={busy || !input.trim()}

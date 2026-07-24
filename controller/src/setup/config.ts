@@ -13,7 +13,7 @@
 import { existsSync } from 'node:fs';
 import { mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
-import { STATE_DIR } from '../config.js';
+import { config, STATE_DIR } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 
 const PATH = `${STATE_DIR}/setup-config.json`;
@@ -59,3 +59,14 @@ export async function saveSetupConfig(patch: Partial<SetupConfig>): Promise<Setu
 // Kept for callers that previously invalidated the (now-removed) cache.
 // No-op — every read is fresh from disk.
 export function clearSetupConfigCache() {}
+
+// Apply freshly-saved Navidrome creds to the LIVE config so Subsonic calls use
+// them without a restart. Shared by the onboarding wizard's save and the admin
+// Settings Music-source save — one place, so live-apply behaviour can't drift.
+// Blank/absent fields keep their current live value (partial updates are fine,
+// and a blank password can never clobber a working live one).
+export function applyNavidromeToLiveConfig(nv: { url?: string; user?: string; pass?: string }) {
+  if (nv.url) config.navidrome.url = String(nv.url).trim().replace(/\/$/, '');
+  if (nv.user) config.navidrome.user = String(nv.user).trim();
+  if (nv.pass) config.navidrome.password = String(nv.pass);
+}

@@ -245,6 +245,7 @@ export default function BackupPanel() {
           type="file"
           accept=".zip,application/zip"
           onChange={onPick}
+          aria-label="Backup zip file"
           className="hidden"
         />
         <Btn

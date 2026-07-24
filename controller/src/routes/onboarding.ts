@@ -12,7 +12,6 @@
 // the request body's values and report success/failure. They never touch the
 // live settings or live config. Save is the only mutation path.
 
-import crypto from 'node:crypto';
 import express from 'express';
 import { generateText } from 'ai';
 import { createOllama } from 'ai-sdk-ollama';
@@ -24,15 +23,14 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 
 import { requireAdmin } from '../middleware/auth.js';
 import { DEFAULT_LOCCA_BASE_URL, DEFAULT_REQUESTY_BASE_URL, OPENROUTER_APP_HEADERS, noThinkFetch } from '../llm/provider.js';
-import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
 import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
-import { saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
+import { applyNavidromeToLiveConfig, saveSetupConfig, clearSetupConfigCache } from '../setup/config.js';
 import { saveSecrets, SECRET_ENV_KEYS } from '../setup/secrets.js';
 import { getSetupStatus } from '../setup/firstRun.js';
-import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { pingWith } from '../music/subsonic.js';
 
 export const router = express.Router();
 
@@ -72,38 +70,7 @@ router.post('/onboarding/test-navidrome', requireAdmin, async (req, res) => {
     return res.status(400).json({ ok: false, error: 'url, user, and pass are required' });
   }
 
-  try {
-    const salt = crypto.randomBytes(8).toString('hex');
-    const token = crypto.createHash('md5').update(pass + salt).digest('hex');
-    const probeUrl = new URL(`${url}/rest/ping`);
-    probeUrl.searchParams.set('u', user);
-    probeUrl.searchParams.set('t', token);
-    probeUrl.searchParams.set('s', salt);
-    probeUrl.searchParams.set('v', '1.16.1');
-    probeUrl.searchParams.set('c', 'sub-wave-wizard');
-    probeUrl.searchParams.set('f', 'json');
-
-    const r = await fetchWithTimeout(probeUrl.toString(), { timeoutMs: 5000 });
-
-    if (!r.ok) {
-      return res.json({ ok: false, error: `Subsonic ping returned HTTP ${r.status}` });
-    }
-    const body: any = await r.json();
-    const sub = body?.['subsonic-response'];
-    if (sub?.status !== 'ok') {
-      return res.json({
-        ok: false,
-        error: sub?.error?.message || 'Subsonic responded but auth failed',
-      });
-    }
-    res.json({
-      ok: true,
-      serverVersion: sub.version,
-      serverType: sub.type || 'unknown',
-    });
-  } catch (err: any) {
-    res.json({ ok: false, error: err.message || 'Navidrome unreachable' });
-  }
+  res.json(await pingWith({ url, user, pass, client: 'sub-wave-wizard' }));
 });
 
 // ---------------------------------------------------------------------------
@@ -216,9 +183,7 @@ router.post('/onboarding/save', requireAdmin, async (req, res) => {
         },
       });
       // Apply to the live config so subsonic calls work without a restart.
-      if (b.navidrome.url) config.navidrome.url = String(b.navidrome.url).trim().replace(/\/$/, '');
-      if (b.navidrome.user) config.navidrome.user = String(b.navidrome.user).trim();
-      if (b.navidrome.pass !== undefined) config.navidrome.password = String(b.navidrome.pass);
+      applyNavidromeToLiveConfig(b.navidrome);
       clearSetupConfigCache();
     }
 

@@ -356,6 +356,7 @@ export default function WebhooksPanel() {
             on={trackPlayListenerGated}
             onClick={() => saveGate(!trackPlayListenerGated)}
             disabled={busy}
+            ariaLabel="Gate track.play on listener count"
           />
         }
       >
@@ -397,7 +398,7 @@ export default function WebhooksPanel() {
                 <Pill tone={h.enabled ? 'accent' : 'default'} dot={h.enabled}>
                   {h.enabled ? 'enabled' : 'disabled'}
                 </Pill>
-                <Toggle on={h.enabled} onClick={() => update({ enabled: !h.enabled })} />
+                <Toggle on={h.enabled} onClick={() => update({ enabled: !h.enabled })} ariaLabel="Enable webhook" />
               </>
             }
           >
@@ -408,6 +409,7 @@ export default function WebhooksPanel() {
                   value={h.url}
                   onChange={e => update({ url: e.target.value })}
                   placeholder="https://discord.com/api/webhooks/…"
+                  aria-label="Webhook URL"
                   spellCheck={false}
                 />
               </div>
@@ -417,6 +419,7 @@ export default function WebhooksPanel() {
                   value={h.authHeader === 'set' ? '' : h.authHeader}
                   placeholder={h.authHeader === 'set' ? '(stored, leave blank to keep)' : 'Bearer …'}
                   onChange={e => update({ authHeader: e.target.value })}
+                  aria-label="Authorization header"
                   spellCheck={false}
                 />
                 <div className="mt-1 text-[10px] text-muted">

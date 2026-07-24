@@ -38,6 +38,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
 } from '../ui/select';
 import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
+import { llmProviderLabel } from './llm/providerMeta';
 import { cn } from '../../lib/cn';
 import TaggingPanel, { num } from './LibraryTaggingPanel';
 import type { Coverage, TaggerState, LibraryStatsLite, Batch, BudgetMode, RescanOpts, TagSteps } from './LibraryTaggingPanel';
@@ -126,6 +127,11 @@ interface SettingsResponse {
       analyzeQuietOnly?: boolean;
       analyzeQuietMinutes?: number;
     };
+    // Provider attribution for the Tagging modal's cost preview (#1162): the
+    // mood/energy seed calls bill to the chat LLM, the embedding calls to the
+    // embedding provider (blank = follows the LLM provider).
+    llm?: { provider?: string; model?: string };
+    embedding?: { provider?: string; model?: string };
   };
   // Daily-token-budget tier — drives the "budget nearly/already used" warning in
   // the Tagging modal. Absent on an old controller → treated as 'normal'.
@@ -219,6 +225,11 @@ export default function LibraryPanel() {
   const [quietMins, setQuietMins] = useState<number | null>(null);
   // Daily-token-budget tier from /settings — null until the first slow poll lands.
   const [budgetMode, setBudgetMode] = useState<BudgetMode | null>(null);
+  // Provider attribution for the Tagging modal (#1162) — "Google · gemini-2.0-
+  // flash-lite" for the LLM seed calls, "OpenAI" for the embedding calls. Null
+  // until the slow poll lands (the modal omits the attribution).
+  const [llmLabel, setLlmLabel] = useState<string | null>(null);
+  const [embedLabel, setEmbedLabel] = useState<string | null>(null);
   const [logOpen, setLogOpen] = useState(false);
   const [queuing, setQueuing] = useState<string | null>(null);
   const [retagging, setRetagging] = useState<string | null>(null);
@@ -398,6 +409,18 @@ export default function LibraryPanel() {
         );
       }
       if (j.budget) setBudgetMode(j.budget.mode);
+      // Which provider each tagging cost bills to (#1162). The tag-moods seed
+      // calls always ride the chat LLM legs (tag-library resolveTagConsumers);
+      // a blank embedding provider follows the LLM provider. Embedding model is
+      // shown only when explicitly set — the provider-default resolution table
+      // lives in Settings → Library and isn't duplicated here.
+      if (j.values?.llm?.provider) {
+        const llm = j.values.llm;
+        setLlmLabel(llmProviderLabel(llm.provider) + (llm.model ? ` · ${llm.model}` : ''));
+        const emb = j.values.embedding || {};
+        const embProvider = emb.provider || llm.provider;
+        setEmbedLabel(llmProviderLabel(embProvider) + (emb.model ? ` · ${emb.model}` : ''));
+      }
     } catch { /* transient */ }
   }, [adminFetch, ready]);
 
@@ -1282,6 +1305,8 @@ export default function LibraryPanel() {
         onToggleQuiet={toggleQuiet}
         onQuietMinutes={saveQuietMinutes}
         budgetMode={budgetMode}
+        llmLabel={llmLabel}
+        embedLabel={embedLabel}
       />
 
       <Tabs tab={tab} setTab={setTab} />
@@ -1363,6 +1388,11 @@ export default function LibraryPanel() {
               <InputGroup>
                 <InputGroupAddon><Search /></InputGroupAddon>
                 <InputGroupInput
+                  // `required` only; deliberately no minLength — one-character
+                  // queries are legitimate here (an album called "1", an artist
+                  // filed under "M") and a length floor would reject them with a
+                  // native validation bubble.
+                  required
                   placeholder={searchMode === 'sound'
                     ? 'dusty late-night jazz with brushed drums, warm acoustic fingerpicking…'
                     : 'floating points, kingdoms in colour, 2018…'}
@@ -1684,9 +1714,9 @@ function BrowseFilters(p: BrowseFiltersProps) {
         <div className="flex flex-col gap-2">
           <div className="caption">year</div>
           <div className="flex items-center gap-2">
-            <Input type="number" inputMode="numeric" placeholder="from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
+            <Input type="number" inputMode="numeric" placeholder="from" aria-label="year from" className="w-20" value={p.yearFrom} onChange={e => p.setYearFrom(e.target.value)} />
             <span className="text-[10px] text-muted">–</span>
-            <Input type="number" inputMode="numeric" placeholder="to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
+            <Input type="number" inputMode="numeric" placeholder="to" aria-label="year to" className="w-20" value={p.yearTo} onChange={e => p.setYearTo(e.target.value)} />
           </div>
         </div>
 
@@ -1884,33 +1914,74 @@ function BlockMenu({ track, busy, disabled, onBlock }: {
   onBlock: (t: Track, type: BlockType) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const pick = (type: BlockType) => { setOpen(false); onBlock(track, type); };
+
+  // Dismiss on an outside pointer/touch, on focus leaving the group, or on
+  // Escape — via document listeners rather than a full-screen click-catcher
+  // div, which relies on a non-semantic clickable element with no keyboard
+  // path. `pointerdown` covers mouse, touch, and pen in one listener.
+  //
+  // The disclosed panel is deliberately a plain group of <button>s and NOT
+  // role="menu"/"menuitem": that role pair is a contract for the full menu
+  // keyboard pattern (arrow-key roving focus, Home/End, focus into the first
+  // item on open). Announcing a menu we don't implement leaves screen-reader
+  // users pressing arrow keys at something that only answers to Tab, which is
+  // worse than the plain buttons they'd otherwise get.
+  useEffect(() => {
+    if (!open) return;
+    const outside = (target: EventTarget | null) =>
+      !!rootRef.current && !rootRef.current.contains(target as Node);
+    const onPointer = (e: PointerEvent) => { if (outside(e.target)) setOpen(false); };
+    const onFocusIn = (e: FocusEvent) => { if (outside(e.target)) setOpen(false); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setOpen(false);
+      // Escape returns focus to the control that opened the panel, so keyboard
+      // users don't get dropped back to the top of the document.
+      triggerRef.current?.focus();
+    };
+    document.addEventListener('pointerdown', onPointer);
+    document.addEventListener('focusin', onFocusIn);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onPointer);
+      document.removeEventListener('focusin', onFocusIn);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
   return (
-    <div className="relative">
-      <Btn sm onClick={() => setOpen(o => !o)} disabled={disabled} title="Never play this on air">
+    <div ref={rootRef} className="relative">
+      <Btn
+        ref={triggerRef}
+        sm
+        onClick={() => setOpen(o => !o)}
+        disabled={disabled}
+        title="Never play this on air"
+        aria-expanded={open}
+        aria-haspopup="true"
+      >
         {busy ? '…' : <Ban size={12} />}
       </Btn>
       {open && (
-        <>
-          {/* click-away backdrop */}
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden />
-          <div className="absolute top-full right-0 z-50 mt-1 min-w-[200px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
-            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('track')}>
-              Never play this track
+        <div className="absolute top-full right-0 z-50 mt-1 min-w-[200px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+          <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('track')}>
+            Never play this track
+          </button>
+          {track.album && (
+            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('album')}>
+              Never play this album
             </button>
-            {track.album && (
-              <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('album')}>
-                Never play this album
-              </button>
-            )}
-            {track.artist && (
-              <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('artist')}>
-                Never play this artist
-                <span className="block text-[10px] text-muted">primary credit only — collabs filed under other artists still play</span>
-              </button>
-            )}
-          </div>
-        </>
+          )}
+          {track.artist && (
+            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('artist')}>
+              Never play this artist
+              <span className="block text-[10px] text-muted">primary credit only — collabs filed under other artists still play</span>
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -2197,7 +2268,7 @@ function AddToPlaylistBar({ count, playlists, busy, onAdd, onClear }: {
           {count} track{count === 1 ? '' : 's'} selected
         </span>
         <Select value={target} onValueChange={setTarget}>
-          <SelectTrigger className="min-w-[180px]"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="min-w-[180px]" aria-label="Target playlist"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="__new">New playlist…</SelectItem>
             {(playlists || []).map(p => (
@@ -2210,6 +2281,7 @@ function AddToPlaylistBar({ count, playlists, busy, onAdd, onClear }: {
         {creating && (
           <Input
             placeholder="playlist name"
+            aria-label="New playlist name"
             className="w-48"
             value={name}
             onChange={(e: ChangeEvent<HTMLInputElement>) => setName(e.target.value)}

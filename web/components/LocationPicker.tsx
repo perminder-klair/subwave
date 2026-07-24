@@ -64,6 +64,8 @@ export function LocationPicker({
   const [failed, setFailed] = useState(false);
   const [manual, setManual] = useState(false);
   const listId = useId();
+  const latErrId = useId();
+  const lngErrId = useId();
   const rootRef = useRef<HTMLDivElement>(null);
 
   const rounded = variant === 'onboarding' ? 'rounded' : '';
@@ -155,6 +157,7 @@ export function LocationPicker({
         <Input
           type="text"
           role="combobox"
+          aria-label="Search for a city or place"
           aria-expanded={open}
           aria-controls={listId}
           aria-autocomplete="list"
@@ -261,12 +264,17 @@ export function LocationPicker({
               placeholder="lat"
               aria-label="latitude"
               aria-invalid={latErr}
+              aria-describedby={latErr ? latErrId : undefined}
               value={value.lat}
               onChange={(e: ChangeEvent<HTMLInputElement>) =>
                 onChange({ ...value, lat: e.target.value })
               }
             />
-            {latErr ? <span className="mt-0.5 text-xs text-destructive">−90 to 90</span> : null}
+            {latErr ? (
+              <span id={latErrId} className="mt-0.5 text-xs text-destructive">
+                −90 to 90
+              </span>
+            ) : null}
           </div>
           <div className="flex flex-col">
             <Input
@@ -276,12 +284,17 @@ export function LocationPicker({
               placeholder="lng"
               aria-label="longitude"
               aria-invalid={lngErr}
+              aria-describedby={lngErr ? lngErrId : undefined}
               value={value.lng}
               onChange={(e: ChangeEvent<HTMLInputElement>) =>
                 onChange({ ...value, lng: e.target.value })
               }
             />
-            {lngErr ? <span className="mt-0.5 text-xs text-destructive">−180 to 180</span> : null}
+            {lngErr ? (
+              <span id={lngErrId} className="mt-0.5 text-xs text-destructive">
+                −180 to 180
+              </span>
+            ) : null}
           </div>
         </div>
       ) : null}

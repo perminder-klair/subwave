@@ -50,6 +50,7 @@ export function PersonaAvatarPicker({ persona, tick, uploading, onPick, onGenera
         ref={inputRef}
         type="file"
         accept="image/png,image/jpeg,image/webp"
+        aria-label="Upload avatar image"
         className="hidden"
         onChange={e => {
           const file = e.target.files?.[0];

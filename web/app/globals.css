@@ -165,11 +165,11 @@
        .admin-root. --page-bg deepens slightly in dark mode below. */
     --card-bg: var(--bg);
     --page-bg: color-mix(in oklab, var(--bg) 90%, var(--ink));
-    /* The sidebar rail sits ~12% darker than the admin page so it reads as its
+    /* The sidebar rail sits ~6% darker than the admin page so it reads as its
        own chrome. "Darker" flips direction per theme: toward --ink in light
        (preserves the paper warmth), toward black in the dark overrides below
        (where --ink is light and mixing toward it would lighten instead). */
-    --sidebar: color-mix(in oklab, var(--page-bg), var(--ink) 12%);
+    --sidebar: color-mix(in oklab, var(--page-bg), var(--ink) 6%);
     --sidebar-foreground: var(--ink);
     --sidebar-primary: var(--ink);
     --sidebar-primary-foreground: var(--bg);
@@ -204,7 +204,7 @@
         /* Admin page deepens slightly in dark mode. */
         --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
         /* Sidebar darker than the page — toward black, since --ink is light here. */
-        --sidebar: color-mix(in oklab, var(--page-bg), #000 15%);
+        --sidebar: color-mix(in oklab, var(--page-bg), #000 8%);
         color-scheme: dark;
     }
 }
@@ -226,7 +226,7 @@
     --grain-blend: screen;
     --page-bg: color-mix(in oklab, var(--bg) 88%, var(--ink));
     /* Sidebar darker than the page — toward black, since --ink is light here. */
-    --sidebar: color-mix(in oklab, var(--page-bg), #000 15%);
+    --sidebar: color-mix(in oklab, var(--page-bg), #000 8%);
     color-scheme: dark;
 }
 
@@ -1586,8 +1586,8 @@ html.lite .sw-ripple-circle {
     border: 1px solid var(--ink);
     cursor: pointer;
     transition:
-        transform 80ms ease,
-        background 120ms;
+        transform 80ms cubic-bezier(0.2, 0.7, 0.2, 1),
+        background 120ms cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 .bs-tune:hover {
     background: var(--accent);
@@ -2045,19 +2045,28 @@ html.lite .sw-ripple-circle {
     }
 }
 
-.bs-dj-cards {
+/* The DJ's three habits — a broadsheet lead-plus-pair, deliberately NOT an
+   even three-up. The primary habit (picking tracks) runs as a wider lead
+   column; the two supporting habits stack in a narrower right rail, so the
+   row reads as an asymmetric feature rather than a templated feature grid. */
+.bs-dj-habits {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+    gap: clamp(24px, 4vw, 52px);
+    align-items: start;
+}
+.bs-dj-habits__rest {
+    display: flex;
+    flex-direction: column;
     gap: clamp(20px, 2.4vw, 28px);
 }
-@media (max-width: 900px) {
-    .bs-dj-cards {
-        grid-template-columns: repeat(2, 1fr);
-    }
-}
-@media (max-width: 600px) {
-    .bs-dj-cards {
+@media (max-width: 780px) {
+    .bs-dj-habits {
         grid-template-columns: 1fr;
+        gap: 28px;
+    }
+    .bs-dj-habits__rest {
+        gap: 28px;
     }
 }
 
@@ -2932,6 +2941,31 @@ html.lite .sw-ripple-circle {
        (not `hidden`) keeps vertical page scroll intact and still lets the
        weekly-schedule grid scroll inside its own `overflow-x:auto` wrapper. */
     overflow-x: clip;
+}
+
+/* Keep the page scrollbar permanently present across the admin console. Panels
+   vary wildly in height (Dash fits the viewport, Settings doesn't), and the
+   120ms route cross-fade unmounts the outgoing panel before the incoming one
+   measures — so on a classic (space-taking) scrollbar the viewport width jumps
+   ~15px on every navigation and the fixed sidebar + content visibly snap
+   sideways. `overflow-y: scroll` holds the bar (and its width) whether or not
+   the page actually scrolls, so nothing moves.
+   NOT `scrollbar-gutter: stable`, which is the tidier tool but is inert here:
+   the `overflow-x: clip` this file sets on <html>/<body> (the mobile
+   horizontal-overflow catch-all) stops the gutter from ever being reserved —
+   measured in Chrome, the 15px jump survives it on html, on body, and with the
+   clip lifted. Scoped via :has() rather than set globally because the player
+   skins are full-bleed 100vh surfaces where a permanent bar is dead weight;
+   browsers without :has() just fall back to today's behaviour.
+   The .v3-scroll treatment (thin thumb over a transparent track) keeps the
+   always-on bar quiet, and the background match is what lets the track read as
+   part of the admin surface instead of a pale stripe down the edge — <html>
+   paints it, and it sits outside .admin-root's own background. */
+html:has(.admin-root.paper) {
+    overflow-y: scroll;
+    background: var(--page-bg);
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar) transparent;
 }
 
 /* ── Type ── */

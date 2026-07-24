@@ -88,7 +88,7 @@ export default function StationFooter({ djName }: { djName?: string }) {
               <span>{page.tag}</span>
             </span>
 
-            <span className="[font-family:var(--font-display),Georgia,serif] text-[26px] leading-none font-black text-ink italic">
+            <span className="[font-family:var(--font-display),Georgia,serif] text-[26px] leading-none font-black text-ink">
               {page.title}
             </span>
 

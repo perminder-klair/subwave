@@ -1030,7 +1030,7 @@ function ToggleRow({ label, desc, on, disabled, onToggle }: ToggleRowProps) {
         <div className="text-[12px] font-bold">{label}</div>
         <div className="text-[10px] text-muted">{desc}</div>
       </div>
-      <Toggle on={on} disabled={disabled} onClick={onToggle} />
+      <Toggle on={on} disabled={disabled} onClick={onToggle} ariaLabel={label} />
     </div>
   );
 }

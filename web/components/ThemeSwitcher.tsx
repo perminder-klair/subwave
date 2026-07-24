@@ -2,11 +2,11 @@
 
 import { useCallback, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { LayoutTemplate, Palette, Zap } from 'lucide-react';
+import { LayoutTemplate, Moon, Palette, Sun, Zap } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useDynamicStyle } from '../hooks/useDynamicStyle';
 import { useLiteMode } from '../hooks/useLiteMode';
-import { useThemeSwitcher } from './ThemeBootstrap';
+import { useThemeSwitcher } from './ThemeProvider';
 import { useSkinSelection } from './skins/SkinContext';
 import { SWATCH_KEYS } from '@/lib/theme-tokens.generated';
 
@@ -70,7 +70,13 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
   // nothing useful to open.
   if (!ctx || ctx.themes.length === 0) return null;
 
-  const { themes, stationActiveId, overrideId, effectiveId } = ctx;
+  const { themes, stationActiveId, overrideId, effectiveId, paintedId, mode, renderedMode, cycleMode } =
+    ctx;
+  const isDark = renderedMode === 'dark';
+  // A pinned mode the active palette wasn't authored for pauses that palette in
+  // favour of the built-in base (see resolveAppearance) — say so rather than
+  // leaving the picker highlighting a row that isn't on screen.
+  const palettePaused = mode !== null && paintedId === null;
 
   return (
     <Dialog.Root open={open} onOpenChange={setOpen}>
@@ -161,6 +167,47 @@ export default function ThemeSwitcher({ variant = 'player' }: ThemeSwitcherProps
                   ({themes.find(t => t.id === stationActiveId)?.name ?? stationActiveId})
                 </span>
               )}
+            </button>
+
+            {/* Light/dark control — independent of which palette is active, and
+                the on-screen twin of the `d` keyboard shortcut. Three states,
+                not two: AUTO follows the palette (and the system preference
+                when there is no palette), LIGHT/DARK pin it per-browser.
+                Flipping back off a pin returns to AUTO rather than pinning the
+                opposite, so a stray press can't detach the listener from the
+                operator's palette for good. Stays open so the flip is visible. */}
+            <button
+              type="button"
+              onClick={() => cycleMode()}
+              aria-label={`Appearance: ${mode ? `${mode} (pinned)` : `auto, currently ${renderedMode}`}. Activate to switch to ${isDark ? 'light' : 'dark'}.`}
+              className="v3-focus mt-2 flex w-full cursor-pointer items-center gap-2 border border-soft-border bg-bg px-2 py-1.5 text-left hover:bg-[var(--overlay)]"
+            >
+              {isDark ? (
+                <Moon className="h-4 w-4 shrink-0" aria-hidden="true" />
+              ) : (
+                <Sun className="h-4 w-4 shrink-0" aria-hidden="true" />
+              )}
+              <span className="grid min-w-0 flex-1 gap-0.5">
+                <span className="truncate text-[11px] font-bold tracking-[0.12em] uppercase">
+                  Light / dark
+                </span>
+                <span className="truncate text-[10px] leading-[1.3] text-muted">
+                  {palettePaused
+                    ? 'Palette paused while pinned — shortcut: D'
+                    : mode
+                      ? 'Pinned — press again for auto · shortcut: D'
+                      : 'Following the palette — shortcut: D'}
+                </span>
+              </span>
+              <span
+                className={cn(
+                  'shrink-0 text-[10px] font-bold tracking-[0.2em] uppercase',
+                  mode ? 'text-vermilion' : 'text-muted',
+                )}
+                aria-hidden="true"
+              >
+                {mode ?? 'Auto'}
+              </span>
             </button>
 
             {/* Player-skin picker — a different face for the whole player, not

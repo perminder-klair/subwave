@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Card, Btn } from '@/components/admin/ui';
+import { Card } from '@/components/admin/ui';
+import { Button } from '@/components/ui/button';
 import { V3Alert } from '@/components/ui/alert';
 
 // Admin-scoped error boundary. It nests inside app/admin/layout.tsx, which
@@ -35,12 +36,6 @@ export default function AdminError({
     console.error('[subwave] admin panel error', error.digest ?? '', error);
   }, [error]);
 
-  function retry() {
-    setRetrying(true);
-    router.refresh();
-    reset();
-  }
-
   return (
     <Card>
       <V3Alert tone="error" title="Panel failed to render">
@@ -58,9 +53,20 @@ export default function AdminError({
         ) : null}
       </V3Alert>
       <div className="mt-3">
-        <Btn sm tone="accent" onClick={retry} disabled={retrying}>
+        <Button
+          variant="accent"
+          size="sm"
+          onClick={() => {
+            // Re-run the server render (router.refresh) *and* clear the error
+            // boundary (reset) — reset alone re-renders the same failed tree.
+            setRetrying(true);
+            router.refresh();
+            reset();
+          }}
+          disabled={retrying}
+        >
           {retrying ? 'Retrying…' : 'Retry panel'}
-        </Btn>
+        </Button>
       </div>
     </Card>
   );

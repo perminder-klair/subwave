@@ -57,14 +57,14 @@ export default function NavidromeBanner({
       <AlertTriangle size={14} className="shrink-0 text-[var(--danger)]" aria-hidden="true" />
       <span>
         <b>Can&rsquo;t reach Navidrome.</b> The DJ has no music source
-        {status.reason ? <> — {status.reason}</> : null}. Check the URL / username / password in
-        setup and that Navidrome is running.
+        {status.reason ? <> — {status.reason}</> : null}. Check the connection in Settings &rarr;
+        Music source and that Navidrome is running.
       </span>
       <Link
-        href="/admin/doctor"
+        href="/admin/settings?section=music"
         className="ml-auto font-bold text-[var(--danger)] underline-offset-2 hover:underline"
       >
-        DJ Doc &rarr;
+        Music source &rarr;
       </Link>
     </div>
   );
