@@ -33,6 +33,7 @@ import { config } from '../config.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
 import { runAnalysisPass } from './analyze.js';
+import { adoptAndPrune } from './id-rotation.js';
 import * as analyzer from './analyzer.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
 import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
@@ -149,11 +150,13 @@ async function main() {
     }
     logEvent('info', `Scanned ${walked.toLocaleString('en-GB')} tracks`);
 
-    // Reconcile: drop rows for tracks no longer in Navidrome so the analysis
-    // scope reflects the live catalogue, not orphans from past full rescans.
-    // Guarded on a non-empty walk (a complete, authoritative pass).
+    // Reconcile: adopt rows whose id was rotated by Navidrome's canonical-id
+    // migration (music/id-rotation.ts — analysis carries over instead of being
+    // recomputed), then drop rows for tracks genuinely no longer in Navidrome
+    // so the analysis scope reflects the live catalogue, not orphans from past
+    // full rescans. Guarded on a non-empty walk (a complete, authoritative pass).
     if (walked > 0) {
-      const pruned = db.pruneMissingTracks(liveIds);
+      const { pruned } = await adoptAndPrune(liveIds);
       if (pruned > 0) {
         console.log(`[analyze] pruned ${pruned} orphaned tracks no longer in Navidrome`);
       }

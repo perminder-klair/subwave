@@ -40,6 +40,7 @@ export * from './library-db/meta.js';
 export * from './library-db/tracks.js';
 export * from './library-db/vectors.js';
 export * from './library-db/audio-moods.js';
+export * from './library-db/id-adoption.js';
 export * from './library-db/queries.js';
 export * from './library-db/browse.js';
 export * from './library-db/plays.js';

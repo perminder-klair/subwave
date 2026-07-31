@@ -6,6 +6,7 @@
 import * as subsonic from '../subsonic.js';
 import * as db from '../library-db.js';
 import * as embeddings from '../embeddings.js';
+import { adoptAndPrune } from '../id-rotation.js';
 import { config } from '../../config.js';
 import { loadSecretsIntoEnv } from '../../setup/secrets.js';
 import { loadSetupConfig } from '../../setup/config.js';
@@ -182,8 +183,11 @@ export async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<st
 }
 
 // Standalone reconcile: diff library-db against the live Navidrome catalogue and
-// drop rows (and their vectors) for tracks that are gone. No embedding preflight
-// and no LLM — opens the existing DB at its stored dim so vectors are untouched.
+// drop rows (and their vectors) for tracks that are gone — after adopting any
+// rows whose id was rotated by Navidrome's canonical-id migration
+// (music/id-rotation.ts), which is what makes this button the one-click
+// recovery after that upgrade. No embedding preflight and no LLM — opens the
+// existing DB at its stored dim so vectors are untouched.
 //
 // The walk it shares with the full run is not read-only: it stamps
 // era_untrusted on suspect albums and clears their stale album-tag years
@@ -197,9 +201,10 @@ export async function reconcileOnly() {
   await db.open({ embeddingDim: embeddings.resolveEmbeddingDim(), adoptStoredDim: true });
   console.log('[tag] reconcile-only: walking Navidrome to prune orphaned rows');
   const { walked, liveIds } = await walkNavidrome();
+  let adopted = 0;
   let pruned = 0;
   if (walked > 0) {
-    pruned = db.pruneMissingTracks(liveIds);
+    ({ adopted, pruned } = await adoptAndPrune(liveIds));
     console.log(`[tag] reconcile pruned ${pruned} orphaned tracks no longer in Navidrome`);
     const resolved = await backfillOriginalYears(pendingOriginalYearIds(false), false, 4);
     if (resolved) console.log(`[tag] reconcile resolved ${resolved} original years via MusicBrainz`);
@@ -207,14 +212,16 @@ export async function reconcileOnly() {
     // A transient empty Navidrome response must never wipe the DB.
     console.warn('[tag] reconcile: Navidrome returned 0 tracks — skipping prune');
   }
+  const parts = [
+    adopted > 0 ? `Re-linked ${adopted} track${adopted === 1 ? '' : 's'} after a Navidrome ID migration` : '',
+    pruned > 0 ? `Removed ${pruned} track${pruned === 1 ? '' : 's'} no longer in Navidrome` : '',
+  ].filter(Boolean);
   reportProgress({
     phase: 'done',
-    label: pruned > 0
-      ? `Removed ${pruned} track${pruned === 1 ? '' : 's'} no longer in Navidrome`
-      : 'Library is in sync with Navidrome',
-    done: pruned,
+    label: parts.length ? parts.join('; ') : 'Library is in sync with Navidrome',
+    done: adopted + pruned,
   });
-  console.log(`[tag] reconcile complete (walked ${walked}, pruned ${pruned})`);
+  console.log(`[tag] reconcile complete (walked ${walked}, adopted ${adopted}, pruned ${pruned})`);
   process.exit(0);
 }
 

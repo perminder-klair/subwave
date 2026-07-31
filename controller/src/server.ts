@@ -239,6 +239,19 @@ app.listen(config.server.port, async () => {
   // (a corrupt file starts empty), so no try/catch needed.
   await blocklist.load();
 
+  // Apply a pending Navidrome ID-rotation manifest (music/id-rotation.ts) —
+  // covers a host-side tagger/reconcile run made while the controller was
+  // down. Normal boots see no manifest and skip in one stat call. Must run
+  // after blocklist.load() (the hook rewrites its in-memory index) and before
+  // anything can trigger a playlist sync against unmigrated recipe ids. A
+  // failure keeps the manifest for the next boot; never fatal.
+  try {
+    const { applyPendingRotation } = await import('./music/id-rotation.js');
+    await applyPendingRotation();
+  } catch (err: any) {
+    console.error('[id-rotation] boot apply failed (will retry next boot):', err.message);
+  }
+
   // Start the remote-TTS /health probe loop now that settings are loaded — its
   // URL lives in settings (not env), so it can't self-start at import time the
   // way the env-configured tts-heavy probe does. Best-effort; never fatal.

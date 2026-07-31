@@ -6,6 +6,7 @@ import { spawn, ChildProcess } from 'node:child_process';
 import { queue } from './queue.js';
 import * as coverage from '../music/library-coverage.js';
 import { syncAllAfterTag } from '../music/playlist-sync.js';
+import { applyPendingRotation } from '../music/id-rotation.js';
 import { PROGRESS_PREFIX, EVENT_PREFIX, type TaggerProgress, type TaggerEvent } from '../music/tagger-progress.js';
 import { writePidfile, clearPidfile, readPidfile, isPidAlive, MANAGED_ENV } from '../music/tagger-lock.js';
 
@@ -306,8 +307,19 @@ function spawnChild(mode: TaggerMode, args: string[], detail: string) {
     coverage.refresh().catch(() => {});
     // A clean tagging/reconcile run may have added new library songs — top up any
     // sync-enabled playlists (append-only, no-op when none exist). Fire-and-forget
-    // so a sync error never touches the tagger's own path.
-    if (outcome === 'ok') syncAllAfterTag().catch(() => {});
+    // so a sync error never touches the tagger's own path. The rotation apply MUST
+    // complete first: after a Navidrome ID migration the child leaves a manifest
+    // (music/id-rotation.ts), and until the recipe store is rewritten every
+    // syncRecipe() would see its playlist id as vanished and DELETE the recipe.
+    // On an apply failure the manifest stays for the next attempt and the sync
+    // is skipped this round.
+    if (outcome === 'ok') {
+      applyPendingRotation()
+        .then(() => syncAllAfterTag())
+        .catch((err) =>
+          queue.log('error', `id-rotation state migration failed — playlist sync skipped: ${err?.message || err}`),
+        );
+    }
     queue.log('scheduler', `${label} finished (${signal ? `signal ${signal}` : `exit ${code}`})`);
   });
   queue.log('scheduler', `${label} started${detail ? ` (${detail})` : ''}`);

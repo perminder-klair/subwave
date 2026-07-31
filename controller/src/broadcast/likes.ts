@@ -130,6 +130,32 @@ export async function load(): Promise<void> {
   return loadPromise;
 }
 
+// Rewrite record ids after a Navidrome ID rotation (music/id-rotation.ts),
+// via the adoption-confirmed old→new map only. The airingKey keeps its
+// `${songId}|${startedAt}` shape (split at the FIRST `|` — startedAt is an ISO
+// timestamp and never contains one before the offset marker). Flushes
+// synchronously — the caller deletes the rotation manifest right after, so the
+// rewrite must be on disk first, not sitting in the debounce window.
+export async function remapTrackIds(trackMap: ReadonlyMap<string, string>): Promise<number> {
+  await load();
+  let changed = 0;
+  for (const r of records) {
+    const bySong = trackMap.get(r.songId);
+    if (bySong) {
+      const rest = r.airingKey.startsWith(`${r.songId}|`)
+        ? r.airingKey.slice(r.songId.length + 1)
+        : null;
+      r.songId = bySong;
+      if (rest !== null) r.airingKey = `${bySong}|${rest}`;
+      changed++;
+    }
+    const byTrack = trackMap.get(r.track.id);
+    if (byTrack) r.track.id = byTrack;
+  }
+  if (changed) await flush();
+  return changed;
+}
+
 function countForSong(songId: string): number {
   let n = 0;
   for (const r of records) if (r.songId === songId) n++;

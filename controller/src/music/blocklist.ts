@@ -291,6 +291,32 @@ export async function removeMany(
   return { removed, missing };
 }
 
+// Rewrite entry ids after a Navidrome ID rotation (music/id-rotation.ts).
+// Track entries move ONLY via the adoption-confirmed map — an unmapped track
+// id stays as-is (the track is genuinely gone; by-id semantics unchanged).
+// Album/artist ids can't be validated against song liveIds, so they go through
+// the raw shape transform — hash-family ids are fixed points, and the
+// normalised-name fallback still covers anything the transform misses.
+export async function remapIds(
+  trackMap: ReadonlyMap<string, string>,
+  canonical: (id: string) => string,
+): Promise<number> {
+  await load();
+  let changed = 0;
+  for (const e of entries) {
+    const next = e.type === 'track' ? (trackMap.get(e.id) ?? e.id) : canonical(e.id);
+    if (next !== e.id) {
+      e.id = next;
+      changed++;
+    }
+  }
+  if (changed) {
+    rebuildIndex();
+    await persist();
+  }
+  return changed;
+}
+
 // Which entry blocks this row, or null. Accepts anything song-shaped — a raw
 // Subsonic song (id/albumId/artistId/artist/album) or a library-db row
 // (id/artist/album only). Synchronous and cheap; isEmpty() lets hot paths skip
