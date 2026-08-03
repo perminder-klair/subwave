@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { SlidersHorizontal } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useStationClient } from '@/lib/stationClient';
 import type { PublicLyricsPayload } from '@/lib/types';
@@ -13,6 +14,7 @@ export interface LyricsDrawerProps {
 }
 
 const OFFSET_STORAGE_KEY = 'subwave:lyrics-offset-ms';
+const OFFSET_VISIBLE_STORAGE_KEY = 'subwave:lyrics-offset-visible';
 const OFFSET_MIN_MS = -5000;
 const OFFSET_MAX_MS = 5000;
 const OFFSET_STEP_MS = 50;
@@ -48,12 +50,14 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
   const [failed, setFailed] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [offsetMs, setOffsetMs] = useState(0);
+  const [showOffset, setShowOffset] = useState(false);
   const activeRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem(OFFSET_STORAGE_KEY);
       if (stored != null) setOffsetMs(clampOffsetMs(Number(stored)));
+      setShowOffset(window.localStorage.getItem(OFFSET_VISIBLE_STORAGE_KEY) === '1');
     } catch {}
   }, []);
 
@@ -63,6 +67,16 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
     try {
       window.localStorage.setItem(OFFSET_STORAGE_KEY, String(clamped));
     } catch {}
+  };
+
+  const toggleOffset = () => {
+    setShowOffset(next => {
+      const visible = !next;
+      try {
+        window.localStorage.setItem(OFFSET_VISIBLE_STORAGE_KEY, visible ? '1' : '0');
+      } catch {}
+      return visible;
+    });
   };
 
   useEffect(() => {
@@ -149,8 +163,25 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
             <div className="truncate text-[16px] leading-tight font-semibold">{title || 'Now playing'}</div>
             {artist && <div className="mt-1 truncate text-[11px] tracking-[0.16em] text-muted uppercase">{artist}</div>}
           </div>
-          <div className="v3-tab-num shrink-0 text-[10px] tracking-[0.18em] text-vermilion uppercase">
-            {lyrics.synced ? 'Synced' : 'Plain'}
+          <div className="flex shrink-0 items-center gap-2">
+            <div className="v3-tab-num text-[10px] tracking-[0.18em] text-vermilion uppercase">
+              {lyrics.synced ? 'Synced' : 'Plain'}
+            </div>
+            {lyrics.synced && (
+              <button
+                type="button"
+                className={cn(
+                  'v3-focus grid h-8 w-8 place-items-center border border-separator-soft bg-transparent text-ink',
+                  showOffset && 'bg-ink text-bg',
+                )}
+                onClick={toggleOffset}
+                aria-pressed={showOffset}
+                aria-label="Lyrics offset controls"
+                title="Lyrics offset controls"
+              >
+                <SlidersHorizontal size={15} strokeWidth={1.7} />
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -176,8 +207,11 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
         })}
       </div>
 
-      {lyrics.synced && (
-        <div className="shrink-0 border-t border-separator-soft bg-[color-mix(in_oklab,var(--bg)_72%,transparent)] pt-3 [backdrop-filter:blur(18px)_saturate(1.4)] [-webkit-backdrop-filter:blur(18px)_saturate(1.4)]">
+      {lyrics.synced && showOffset && (
+        <div
+          className="shrink-0 px-4 pt-3 pb-4 [backdrop-filter:blur(18px)_saturate(1.4)] [-webkit-backdrop-filter:blur(18px)_saturate(1.4)] sm:px-5"
+          data-lyric-offset
+        >
           <div className="mb-2 flex items-center justify-between gap-3">
             <div className="text-[9px] tracking-[0.28em] text-muted uppercase">Lyric offset</div>
             <div className="v3-tab-num text-[11px] tracking-[0.1em] text-ink">{formatOffset(offsetMs)}</div>

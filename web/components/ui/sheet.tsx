@@ -117,7 +117,7 @@ export function Sheet({ open, onOpenChange, title, children, container }: SheetP
                 // lets the spread through; motion's own handler wins.
                 {...((gestureEnabled ? bind() : {}) as Record<string, unknown>)}
                 className={cn(
-                  'v3-drawer-content z-50 flex touch-pan-y flex-col border-x border-ink text-ink shadow-drawer',
+                  'v3-drawer-content relative z-50 flex touch-pan-y flex-col border border-ink text-ink shadow-drawer',
                   'bg-[color-mix(in_oklab,var(--bg)_30%,transparent)]',
                   '[backdrop-filter:blur(28px)_saturate(1.9)_brightness(1.07)]',
                   '[-webkit-backdrop-filter:blur(28px)_saturate(1.9)_brightness(1.07)]',
