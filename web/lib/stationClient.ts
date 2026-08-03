@@ -86,7 +86,9 @@ export interface StationClient {
   /** null on network error. */
   likeStatus(): Promise<LikeStatus | null>;
   /** Structured lyrics for the currently airing library track. null on network error. */
-  currentLyrics(): Promise<PublicLyricsPayload | null>;
+  currentLyrics(clientId?: string): Promise<PublicLyricsPayload | null>;
+  /** Persist this client's timing correction for the currently airing lyric track. */
+  setCurrentLyricOffset(songId: string, clientId: string, offsetMs: number): Promise<{ ok?: boolean; songId?: string | null; offsetMs?: number } | null>;
   /** One-shot audience beacon. Best-effort: never throws, never blocks. */
   beacon(payload: BeaconPayload): void;
   /** null on any failure; callers treat that as "configured" and stay put. */
@@ -152,10 +154,23 @@ export function createStationClient(origin: StationOrigin): StationClient {
         return null;
       }
     },
-    currentLyrics: async () => {
+    currentLyrics: async (clientId) => {
       try {
-        const r = await fetch(`${api}/lyrics/current`, { cache: 'no-store' });
+        const qs = clientId ? `?clientId=${encodeURIComponent(clientId)}` : '';
+        const r = await fetch(`${api}/lyrics/current${qs}`, { cache: 'no-store' });
         return r.ok ? await json<PublicLyricsPayload>(r) : null;
+      } catch {
+        return null;
+      }
+    },
+    setCurrentLyricOffset: async (songId, clientId, offsetMs) => {
+      try {
+        const r = await fetch(`${api}/lyrics/current/offset`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ songId, clientId, offsetMs }),
+        });
+        return r.ok ? await json<{ ok?: boolean; songId?: string | null; offsetMs?: number }>(r) : null;
       } catch {
         return null;
       }

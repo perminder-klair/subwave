@@ -28,6 +28,7 @@
 //   queries.ts      mood- and tag-keyed reads, genre centroids
 //   browse.ts       the admin browse filter + Observatory rows
 //   plays.ts        play history
+//   lyrics.ts       per-client lyric timing offsets
 
 export * from './library-db/handle.js';
 export * from './library-db/types.js';
@@ -43,3 +44,4 @@ export * from './library-db/audio-moods.js';
 export * from './library-db/queries.js';
 export * from './library-db/browse.js';
 export * from './library-db/plays.js';
+export * from './library-db/lyrics.js';

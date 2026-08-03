@@ -18,23 +18,29 @@ test('empty when there is no current library song', () => {
   assert.deepEqual(toPublicLyricsPayload(null, null), {
     songId: null,
     synced: false,
+    offsetMs: 0,
     lines: [],
   });
 });
 
 test('trims blank lines and preserves synced timing', () => {
   assert.deepEqual(
-    toPublicLyricsPayload('abc123', {
-      synced: true,
-      lines: [
-        { startMs: 1000, text: ' first line ' },
-        { startMs: 2000, text: '' },
-        { startMs: 3000, text: 'second line' },
-      ],
-    }),
+    toPublicLyricsPayload(
+      'abc123',
+      {
+        synced: true,
+        lines: [
+          { startMs: 1000, text: ' first line ' },
+          { startMs: 2000, text: '' },
+          { startMs: 3000, text: 'second line' },
+        ],
+      },
+      2500,
+    ),
     {
       songId: 'abc123',
       synced: true,
+      offsetMs: 2500,
       lines: [
         { startMs: 1000, text: 'first line' },
         { startMs: 3000, text: 'second line' },
@@ -45,13 +51,18 @@ test('trims blank lines and preserves synced timing', () => {
 
 test('unsynced lyrics publish null start offsets', () => {
   assert.deepEqual(
-    toPublicLyricsPayload('abc123', {
-      synced: false,
-      lines: [{ startMs: Number.NaN, text: 'plain lyric line' }],
-    }),
+    toPublicLyricsPayload(
+      'abc123',
+      {
+        synced: false,
+        lines: [{ startMs: Number.NaN, text: 'plain lyric line' }],
+      },
+      -400,
+    ),
     {
       songId: 'abc123',
       synced: false,
+      offsetMs: -400,
       lines: [{ startMs: null, text: 'plain lyric line' }],
     },
   );

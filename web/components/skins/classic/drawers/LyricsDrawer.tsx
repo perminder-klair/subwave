@@ -14,6 +14,7 @@ export interface LyricsDrawerProps {
 }
 
 const OFFSET_STORAGE_KEY = 'subwave:lyrics-offset-ms';
+const OFFSET_CLIENT_STORAGE_KEY = 'subwave:lyrics-offset-client-id';
 const OFFSET_VISIBLE_STORAGE_KEY = 'subwave:lyrics-offset-visible';
 const OFFSET_MIN_MS = -30000;
 const OFFSET_MAX_MS = 30000;
@@ -28,6 +29,26 @@ function clampOffsetMs(value: number): number {
 function formatOffset(ms: number): string {
   if (ms === 0) return '0.00s';
   return `${ms > 0 ? '+' : '-'}${(Math.abs(ms) / 1000).toFixed(2)}s`;
+}
+
+function offsetStorageKey(songId: string): string {
+  return `${OFFSET_STORAGE_KEY}:${songId}`;
+}
+
+function createFallbackClientId(): string {
+  return `sw_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function readLyricOffsetClientId(): string {
+  try {
+    const stored = window.localStorage.getItem(OFFSET_CLIENT_STORAGE_KEY);
+    if (stored) return stored;
+    const next = window.crypto?.randomUUID?.() ?? createFallbackClientId();
+    window.localStorage.setItem(OFFSET_CLIENT_STORAGE_KEY, next);
+    return next;
+  } catch {
+    return createFallbackClientId();
+  }
 }
 
 function activeLineIndex(lyrics: PublicLyricsPayload | null, elapsedMs: number, offsetMs: number): number {
@@ -52,11 +73,12 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
   const [offsetMs, setOffsetMs] = useState(0);
   const [showOffset, setShowOffset] = useState(false);
   const activeRef = useRef<HTMLDivElement | null>(null);
+  const clientIdRef = useRef<string>('');
+  const loadedOffsetSongRef = useRef<string | null>(null);
 
   useEffect(() => {
+    clientIdRef.current = readLyricOffsetClientId();
     try {
-      const stored = window.localStorage.getItem(OFFSET_STORAGE_KEY);
-      if (stored != null) setOffsetMs(clampOffsetMs(Number(stored)));
       setShowOffset(window.localStorage.getItem(OFFSET_VISIBLE_STORAGE_KEY) === '1');
     } catch {}
   }, []);
@@ -65,7 +87,7 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
     const clamped = clampOffsetMs(next);
     setOffsetMs(clamped);
     try {
-      window.localStorage.setItem(OFFSET_STORAGE_KEY, String(clamped));
+      if (songId) window.localStorage.setItem(offsetStorageKey(songId), String(clamped));
     } catch {}
   };
 
@@ -89,10 +111,22 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
     }
 
     setLoading(true);
-    client.currentLyrics()
+    const clientId = clientIdRef.current || readLyricOffsetClientId();
+    clientIdRef.current = clientId;
+    client.currentLyrics(clientId)
       .then((payload) => {
         if (cancelled) return;
-        setLyrics(payload?.songId === songId ? payload : null);
+        const nextLyrics = payload?.songId === songId ? payload : null;
+        setLyrics(nextLyrics);
+        if (nextLyrics) {
+          let nextOffset = clampOffsetMs(nextLyrics.offsetMs ?? 0);
+          try {
+            const stored = window.localStorage.getItem(offsetStorageKey(songId));
+            if (stored != null && nextOffset === 0) nextOffset = clampOffsetMs(Number(stored));
+          } catch {}
+          loadedOffsetSongRef.current = songId;
+          setOffsetMs(nextOffset);
+        }
         setFailed(payload == null);
       })
       .finally(() => {
@@ -101,6 +135,23 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
 
     return () => { cancelled = true; };
   }, [client, songId]);
+
+  useEffect(() => {
+    if (!songId || !lyrics?.synced || loadedOffsetSongRef.current !== songId) return;
+    const id = window.setTimeout(() => {
+      client.setCurrentLyricOffset(songId, clientIdRef.current, offsetMs)
+        .then((saved) => {
+          if (saved?.songId === songId && typeof saved.offsetMs === 'number') {
+            const clamped = clampOffsetMs(saved.offsetMs);
+            setOffsetMs(clamped);
+            try {
+              window.localStorage.setItem(offsetStorageKey(songId), String(clamped));
+            } catch {}
+          }
+        });
+    }, 350);
+    return () => window.clearTimeout(id);
+  }, [client, songId, lyrics?.synced, offsetMs]);
 
   useEffect(() => {
     if (!lyrics?.synced) return;
@@ -213,7 +264,7 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
           data-lyric-offset
         >
           <div className="mb-2 flex items-center justify-between gap-3">
-            <div className="text-[9px] tracking-[0.28em] text-muted uppercase">Lyric offset</div>
+            <div className="text-[9px] tracking-[0.28em] text-muted uppercase">Track offset</div>
             <div className="v3-tab-num shrink-0 text-[11px] tracking-[0.1em] text-ink">{formatOffset(offsetMs)}</div>
           </div>
           <div className="flex items-center gap-2">
@@ -232,7 +283,7 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
               step={OFFSET_STEP_MS}
               value={offsetMs}
               onChange={onOffsetInput}
-              aria-label="Lyric offset"
+              aria-label="Track lyric offset"
               className="h-8 min-w-0 flex-1 accent-[var(--accent)]"
             />
             <button
@@ -248,7 +299,7 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
               className="v3-focus h-8 shrink-0 cursor-pointer border border-separator-soft bg-transparent px-2 text-[9px] tracking-[0.18em] text-muted uppercase"
               onClick={() => updateOffset(0)}
             >
-              Zero
+              Reset
             </button>
           </div>
         </div>

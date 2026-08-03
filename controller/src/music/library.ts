@@ -239,6 +239,21 @@ export function getPlaybackMeta(songId: string): db.TrackLite | null {
   return loaded ? db.getTrackLite(songId) : null;
 }
 
+export async function getLyricOffset(songId: string, clientId: string): Promise<number> {
+  await load();
+  return db.getLyricOffset(clientId, songId);
+}
+
+export async function setLyricOffset(songId: string, clientId: string, offsetMs: number): Promise<number> {
+  await load();
+  return db.setLyricOffset(clientId, songId, offsetMs);
+}
+
+export async function clearLyricOffset(songId: string, clientId: string): Promise<void> {
+  await load();
+  db.clearLyricOffset(clientId, songId);
+}
+
 // When a track entered the library (its `taggedAt` ISO string), or null if it's
 // not in the tagged index. The playlist sync engine keys "new since last sync"
 // off this — a Subsonic-only track (not in the DB) reads null and is never
