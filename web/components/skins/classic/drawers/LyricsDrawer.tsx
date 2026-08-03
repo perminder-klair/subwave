@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { cn } from '@/lib/cn';
 import { useStationClient } from '@/lib/stationClient';
 import type { PublicLyricsPayload } from '@/lib/types';
@@ -12,13 +12,30 @@ export interface LyricsDrawerProps {
   trackStartedAt: number | null;
 }
 
-function activeLineIndex(lyrics: PublicLyricsPayload | null, elapsedMs: number): number {
+const OFFSET_STORAGE_KEY = 'subwave:lyrics-offset-ms';
+const OFFSET_MIN_MS = -5000;
+const OFFSET_MAX_MS = 5000;
+const OFFSET_STEP_MS = 50;
+const OFFSET_NUDGE_MS = 100;
+
+function clampOffsetMs(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(OFFSET_MAX_MS, Math.max(OFFSET_MIN_MS, Math.round(value)));
+}
+
+function formatOffset(ms: number): string {
+  if (ms === 0) return '0.00s';
+  return `${ms > 0 ? '+' : '-'}${(Math.abs(ms) / 1000).toFixed(2)}s`;
+}
+
+function activeLineIndex(lyrics: PublicLyricsPayload | null, elapsedMs: number, offsetMs: number): number {
   if (!lyrics?.synced) return -1;
+  const adjustedElapsedMs = Math.max(0, elapsedMs + offsetMs);
   let active = -1;
   for (let i = 0; i < lyrics.lines.length; i += 1) {
     const startMs = lyrics.lines[i]?.startMs;
     if (startMs == null) continue;
-    if (startMs > elapsedMs) break;
+    if (startMs > adjustedElapsedMs) break;
     active = i;
   }
   return active;
@@ -30,7 +47,23 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
+  const [offsetMs, setOffsetMs] = useState(0);
   const activeRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(OFFSET_STORAGE_KEY);
+      if (stored != null) setOffsetMs(clampOffsetMs(Number(stored)));
+    } catch {}
+  }, []);
+
+  const updateOffset = (next: number) => {
+    const clamped = clampOffsetMs(next);
+    setOffsetMs(clamped);
+    try {
+      window.localStorage.setItem(OFFSET_STORAGE_KEY, String(clamped));
+    } catch {}
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -62,7 +95,11 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
   }, [lyrics?.synced, trackStartedAt]);
 
   const elapsedMs = trackStartedAt == null ? 0 : Math.max(0, nowMs - trackStartedAt);
-  const active = useMemo(() => activeLineIndex(lyrics, elapsedMs), [lyrics, elapsedMs]);
+  const active = useMemo(() => activeLineIndex(lyrics, elapsedMs, offsetMs), [lyrics, elapsedMs, offsetMs]);
+
+  const onOffsetInput = (event: ChangeEvent<HTMLInputElement>) => {
+    updateOffset(Number(event.target.value));
+  };
 
   useEffect(() => {
     if (active < 0) return;
@@ -105,16 +142,64 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
   }
 
   return (
-    <div>
-      <div className="mb-4 border-b border-separator-soft pb-4">
-        <div className="truncate text-lg leading-tight font-semibold">{title || 'Now playing'}</div>
-        {artist && <div className="mt-0.5 truncate text-xs text-muted">{artist}</div>}
-        <div className="mt-3 text-[9px] tracking-[0.3em] text-muted uppercase">
-          {lyrics.synced ? 'Synced lyrics' : 'Lyrics'}
+    <div className="flex min-h-full flex-col">
+      <div className="border-y border-separator-soft py-3">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="truncate text-[16px] leading-tight font-semibold">{title || 'Now playing'}</div>
+            {artist && <div className="mt-1 truncate text-[11px] tracking-[0.16em] text-muted uppercase">{artist}</div>}
+          </div>
+          <div className="v3-tab-num shrink-0 text-[10px] tracking-[0.18em] text-vermilion uppercase">
+            {lyrics.synced ? 'Synced' : 'Plain'}
+          </div>
         </div>
       </div>
 
-      <div className="flex flex-col gap-1 pb-8">
+      {lyrics.synced && (
+        <div className="my-4 border border-separator-soft bg-[color-mix(in_oklab,var(--ink)_5%,transparent)] px-3 py-3">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div className="text-[9px] tracking-[0.28em] text-muted uppercase">Lyric offset</div>
+            <div className="v3-tab-num text-[11px] tracking-[0.1em] text-ink">{formatOffset(offsetMs)}</div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="v3-focus h-8 w-8 shrink-0 cursor-pointer border border-separator-soft bg-transparent text-[15px] leading-none text-ink"
+              onClick={() => updateOffset(offsetMs - OFFSET_NUDGE_MS)}
+              aria-label="Delay lyrics"
+            >
+              -
+            </button>
+            <input
+              type="range"
+              min={OFFSET_MIN_MS}
+              max={OFFSET_MAX_MS}
+              step={OFFSET_STEP_MS}
+              value={offsetMs}
+              onChange={onOffsetInput}
+              aria-label="Lyric offset"
+              className="h-8 min-w-0 flex-1 accent-[var(--accent)]"
+            />
+            <button
+              type="button"
+              className="v3-focus h-8 w-8 shrink-0 cursor-pointer border border-separator-soft bg-transparent text-[15px] leading-none text-ink"
+              onClick={() => updateOffset(offsetMs + OFFSET_NUDGE_MS)}
+              aria-label="Advance lyrics"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              className="v3-focus h-8 shrink-0 cursor-pointer border border-separator-soft bg-transparent px-2 text-[9px] tracking-[0.18em] text-muted uppercase"
+              onClick={() => updateOffset(0)}
+            >
+              Zero
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-col pb-8">
         {lyrics.lines.map((line, index) => {
           const isActive = index === active;
           return (
@@ -122,10 +207,10 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
               key={`${line.startMs ?? 'plain'}-${index}`}
               ref={isActive ? activeRef : undefined}
               className={cn(
-                'border-l-2 py-2 pr-3 pl-4 text-[15px] leading-relaxed transition-colors',
+                'border-l py-[9px] pr-3 pl-4 text-[15px] leading-relaxed transition-colors',
                 isActive
-                  ? 'border-vermilion bg-[rgba(197,48,42,0.08)] text-ink'
-                  : 'border-transparent text-muted',
+                  ? 'border-vermilion bg-[color-mix(in_oklab,var(--accent)_9%,transparent)] text-ink shadow-[inset_1px_0_0_var(--accent)]'
+                  : 'border-separator-soft text-muted',
                 !lyrics.synced && 'border-separator-soft text-ink',
               )}
             >
