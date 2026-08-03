@@ -142,8 +142,8 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
   }
 
   return (
-    <div className="flex min-h-full flex-col">
-      <div className="border-y border-separator-soft py-3">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="shrink-0 border-y border-separator-soft py-3">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="truncate text-[16px] leading-tight font-semibold">{title || 'Now playing'}</div>
@@ -155,9 +155,30 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
         </div>
       </div>
 
+      <div className="v3-scroll mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto pb-5">
+        {lyrics.lines.map((line, index) => {
+          const isActive = index === active;
+          return (
+            <div
+              key={`${line.startMs ?? 'plain'}-${index}`}
+              ref={isActive ? activeRef : undefined}
+              className={cn(
+                'border-l py-[9px] pr-3 pl-4 text-[15px] leading-relaxed transition-colors',
+                isActive
+                  ? 'border-vermilion bg-[color-mix(in_oklab,var(--accent)_9%,transparent)] text-ink shadow-[inset_1px_0_0_var(--accent)]'
+                  : 'border-separator-soft text-muted',
+                !lyrics.synced && 'border-separator-soft text-ink',
+              )}
+            >
+              {line.text}
+            </div>
+          );
+        })}
+      </div>
+
       {lyrics.synced && (
-        <div className="my-4 border border-separator-soft bg-[color-mix(in_oklab,var(--ink)_5%,transparent)] px-3 py-3">
-          <div className="mb-3 flex items-center justify-between gap-3">
+        <div className="shrink-0 border-t border-separator-soft bg-[color-mix(in_oklab,var(--bg)_72%,transparent)] pt-3 [backdrop-filter:blur(18px)_saturate(1.4)] [-webkit-backdrop-filter:blur(18px)_saturate(1.4)]">
+          <div className="mb-2 flex items-center justify-between gap-3">
             <div className="text-[9px] tracking-[0.28em] text-muted uppercase">Lyric offset</div>
             <div className="v3-tab-num text-[11px] tracking-[0.1em] text-ink">{formatOffset(offsetMs)}</div>
           </div>
@@ -198,27 +219,6 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
           </div>
         </div>
       )}
-
-      <div className="flex flex-col pb-8">
-        {lyrics.lines.map((line, index) => {
-          const isActive = index === active;
-          return (
-            <div
-              key={`${line.startMs ?? 'plain'}-${index}`}
-              ref={isActive ? activeRef : undefined}
-              className={cn(
-                'border-l py-[9px] pr-3 pl-4 text-[15px] leading-relaxed transition-colors',
-                isActive
-                  ? 'border-vermilion bg-[color-mix(in_oklab,var(--accent)_9%,transparent)] text-ink shadow-[inset_1px_0_0_var(--accent)]'
-                  : 'border-separator-soft text-muted',
-                !lyrics.synced && 'border-separator-soft text-ink',
-              )}
-            >
-              {line.text}
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }
