@@ -132,6 +132,26 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
       },
       {
         method: 'GET',
+        path: '/lyrics/current',
+        summary: 'Current track lyrics',
+        description:
+          'Lyrics for the currently airing library track, normalized from the ' +
+          'connected Subsonic server\'s structured lyrics response. Empty `lines` ' +
+          'means the current item is not a library track, no lyrics are indexed ' +
+          'for the track, or the upstream lyrics lookup failed. Timed lyrics keep ' +
+          'their `startMs`; unsynced/plain lyrics use `null` timings.',
+        auth: 'none',
+        responseExample: {
+          songId: 'a1b2c3',
+          synced: true,
+          lines: [
+            { startMs: 12500, text: 'First lyric line' },
+            { startMs: 15300, text: 'Second lyric line' },
+          ],
+        },
+      },
+      {
+        method: 'GET',
         path: '/state',
         summary: 'Queue, history & DJ log',
         description:

@@ -43,6 +43,8 @@ an admin credential:
   than `activePersonaId` behind the mic).
 - `GET /now-playing` — the current track, plus `context.activeShow` with the
   live show's host and guests already hydrated.
+- `GET /lyrics/current` — lyrics for the currently airing library track, when
+  the connected Subsonic server exposes them for that song.
 
 **Persona souls are opt-in.** A persona's `soul` is its system prompt rather
 than a written bio, so the roster-wide reads above publish it only when the
@@ -52,6 +54,30 @@ and `/personas` report which mode you're in via `soulsPublished`, so a client
 can hide the bio column instead of rendering blank cards. `tagline` is the field intended for
 public display and is always present. `GET /dj` publishes the on-air persona's
 soul regardless, as it always has.
+
+## Current-track lyrics
+
+`GET /lyrics/current` is an unauthenticated public read for listener-facing
+players and custom skins. It resolves the current on-air item to its
+`subsonic_id`, asks the connected Subsonic server for structured lyrics, and
+returns a small normalized payload:
+
+```json
+{
+  "songId": "abc123",
+  "synced": true,
+  "lines": [
+    { "startMs": 12500, "text": "First lyric line" },
+    { "startMs": 15300, "text": "Second lyric line" }
+  ]
+}
+```
+
+`songId` is `null` when the on-air item is not a library track. `lines` is empty
+when no lyrics are indexed for the current track, when the current item is not a
+library track, or when the upstream lyrics lookup fails. Synced lyrics preserve
+line timing in `startMs`; unsynced/plain lyrics use `null` for `startMs` and set
+`synced` to `false`.
 
 ## OpenAPI
 

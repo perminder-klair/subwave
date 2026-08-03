@@ -32,6 +32,7 @@ import { resolveThemeProvenance } from '../util/theme-provenance.js';
 import { checkAuthRateLimit, clientIp, listenerAuthFailureDelayMs } from '../middleware/ratelimit.js';
 import { STATE_ROOT } from '../config.js';
 import { activeStationId } from '../stations/resolve.js';
+import { toPublicLyricsPayload } from '../music/lyrics-public.js';
 
 export const router = express.Router();
 
@@ -354,6 +355,21 @@ router.get('/now-playing', async (req, res) => {
     });
   } catch (err) {
     publicError(res, '/now-playing', err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /lyrics/current — lyrics for the currently airing library track.
+// ---------------------------------------------------------------------------
+router.get('/lyrics/current', async (_req, res) => {
+  try {
+    const nowPlaying = await queue.getNowPlaying();
+    const songId = nowPlaying?.subsonic_id ? String(nowPlaying.subsonic_id) : null;
+    const lyrics = songId ? await subsonic.getStructuredLyrics(songId) : null;
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(toPublicLyricsPayload(songId, lyrics));
+  } catch (err) {
+    publicError(res, '/lyrics/current', err);
   }
 });
 
