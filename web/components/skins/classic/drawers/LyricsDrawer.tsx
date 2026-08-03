@@ -15,8 +15,8 @@ export interface LyricsDrawerProps {
 
 const OFFSET_STORAGE_KEY = 'subwave:lyrics-offset-ms';
 const OFFSET_VISIBLE_STORAGE_KEY = 'subwave:lyrics-offset-visible';
-const OFFSET_MIN_MS = -5000;
-const OFFSET_MAX_MS = 5000;
+const OFFSET_MIN_MS = -30000;
+const OFFSET_MAX_MS = 30000;
 const OFFSET_STEP_MS = 50;
 const OFFSET_NUDGE_MS = 100;
 
@@ -28,6 +28,13 @@ function clampOffsetMs(value: number): number {
 function formatOffset(ms: number): string {
   if (ms === 0) return '0.00s';
   return `${ms > 0 ? '+' : '-'}${(Math.abs(ms) / 1000).toFixed(2)}s`;
+}
+
+function formatLineTime(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 function activeLineIndex(lyrics: PublicLyricsPayload | null, elapsedMs: number, offsetMs: number): number {
@@ -51,7 +58,8 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [offsetMs, setOffsetMs] = useState(0);
   const [showOffset, setShowOffset] = useState(false);
-  const activeRef = useRef<HTMLDivElement | null>(null);
+  const [selectedLineIndex, setSelectedLineIndex] = useState<number | null>(null);
+  const activeRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     try {
@@ -83,6 +91,7 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
     let cancelled = false;
     setLyrics(null);
     setFailed(false);
+    setSelectedLineIndex(null);
     if (!songId) {
       setLoading(false);
       return;
@@ -110,9 +119,20 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
 
   const elapsedMs = trackStartedAt == null ? 0 : Math.max(0, nowMs - trackStartedAt);
   const active = useMemo(() => activeLineIndex(lyrics, elapsedMs, offsetMs), [lyrics, elapsedMs, offsetMs]);
+  const selectedLine = selectedLineIndex == null ? null : lyrics?.lines[selectedLineIndex] ?? null;
+  const canSyncSelectedLine = lyrics?.synced && selectedLine?.startMs != null && trackStartedAt != null;
 
   const onOffsetInput = (event: ChangeEvent<HTMLInputElement>) => {
     updateOffset(Number(event.target.value));
+  };
+
+  const syncSelectedLine = () => {
+    if (selectedLine?.startMs == null || trackStartedAt == null) return;
+    updateOffset(elapsedMs - selectedLine.startMs);
+    setShowOffset(true);
+    try {
+      window.localStorage.setItem(OFFSET_VISIBLE_STORAGE_KEY, '1');
+    } catch {}
   };
 
   useEffect(() => {
@@ -189,20 +209,33 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
       <div className="v3-scroll mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto pb-5">
         {lyrics.lines.map((line, index) => {
           const isActive = index === active;
+          const isSelectable = lyrics.synced && line.startMs != null;
+          const isSelected = index === selectedLineIndex;
           return (
-            <div
+            <button
               key={`${line.startMs ?? 'plain'}-${index}`}
               ref={isActive ? activeRef : undefined}
+              type="button"
+              disabled={!isSelectable}
+              onClick={() => {
+                if (!isSelectable) return;
+                setSelectedLineIndex(index);
+                if (!showOffset) toggleOffset();
+              }}
               className={cn(
-                'border-l py-[9px] pr-3 pl-4 text-[15px] leading-relaxed transition-colors',
+                'w-full border-l py-[9px] pr-3 pl-4 text-left text-[15px] leading-relaxed transition-colors',
+                isSelectable && 'v3-focus cursor-pointer hover:border-ink hover:text-ink',
                 isActive
                   ? 'border-vermilion bg-[color-mix(in_oklab,var(--accent)_9%,transparent)] text-ink shadow-[inset_1px_0_0_var(--accent)]'
                   : 'border-separator-soft text-muted',
+                isSelected && 'border-ink bg-[color-mix(in_oklab,var(--ink)_7%,transparent)] text-ink shadow-[inset_1px_0_0_var(--ink)]',
                 !lyrics.synced && 'border-separator-soft text-ink',
               )}
+              aria-pressed={isSelectable ? isSelected : undefined}
+              aria-label={isSelectable ? `Select lyric line at ${formatLineTime(line.startMs ?? 0)}` : undefined}
             >
               {line.text}
-            </div>
+            </button>
           );
         })}
       </div>
@@ -213,8 +246,15 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
           data-lyric-offset
         >
           <div className="mb-2 flex items-center justify-between gap-3">
-            <div className="text-[9px] tracking-[0.28em] text-muted uppercase">Lyric offset</div>
-            <div className="v3-tab-num text-[11px] tracking-[0.1em] text-ink">{formatOffset(offsetMs)}</div>
+            <div className="min-w-0">
+              <div className="text-[9px] tracking-[0.28em] text-muted uppercase">Lyric offset</div>
+              {selectedLine?.startMs != null && (
+                <div className="mt-1 truncate text-[10px] tracking-[0.08em] text-muted uppercase">
+                  Line {formatLineTime(selectedLine.startMs)}
+                </div>
+              )}
+            </div>
+            <div className="v3-tab-num shrink-0 text-[11px] tracking-[0.1em] text-ink">{formatOffset(offsetMs)}</div>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -249,6 +289,14 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
               onClick={() => updateOffset(0)}
             >
               Zero
+            </button>
+            <button
+              type="button"
+              className="v3-focus h-8 shrink-0 cursor-pointer border border-separator-soft bg-transparent px-2 text-[9px] tracking-[0.18em] text-ink uppercase disabled:cursor-not-allowed disabled:opacity-35"
+              onClick={syncSelectedLine}
+              disabled={!canSyncSelectedLine}
+            >
+              Sync
             </button>
           </div>
         </div>
