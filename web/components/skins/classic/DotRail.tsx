@@ -15,6 +15,7 @@ const ITEMS: readonly RailItem[] = [
   { k: 'schedule', l: 'Schedule' },
   { k: 'timeline', l: 'Timeline' },
   { k: 'booth',    l: 'Booth' },
+  { k: 'lyrics',   l: 'Lyrics' },
   { k: 'request',  l: 'Request' },
 ];
 

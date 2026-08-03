@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
-import { CalendarClock, History, Mic } from 'lucide-react';
+import { CalendarClock, Captions, History, Mic } from 'lucide-react';
 import TopBar from './TopBar';
 import CenterStage from './CenterStage';
 import Waveform from './Waveform';
@@ -20,6 +20,7 @@ import TimelineDrawer from './drawers/TimelineDrawer';
 import BoothDrawer from './drawers/BoothDrawer';
 import RequestDrawer from './drawers/RequestDrawer';
 import ScheduleDrawer from './drawers/ScheduleDrawer';
+import LyricsDrawer from './drawers/LyricsDrawer';
 import { Sheet } from '@/components/ui/sheet';
 import {
   usePlayerActions,
@@ -40,6 +41,7 @@ const DRAWER_TITLES: Record<PlayerDrawer, string> = {
   booth: 'Booth feed',
   request: 'Make a request',
   schedule: 'Schedule',
+  lyrics: 'Lyrics',
 };
 
 // Hoisted so the DotRail counts memo below keeps stable element references —
@@ -47,6 +49,7 @@ const DRAWER_TITLES: Record<PlayerDrawer, string> = {
 const TIMELINE_ICON = <History size={18} strokeWidth={1.5} />;
 const BOOTH_ICON = <Mic size={18} strokeWidth={1.5} />;
 const SCHEDULE_ICON = <CalendarClock size={18} strokeWidth={1.5} />;
+const LYRICS_ICON = <Captions size={18} strokeWidth={1.5} />;
 
 export default function ClassicSkin({ portalNode }: SkinProps) {
   const client = useStationClient();
@@ -91,6 +94,7 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
       timeline: upcomingCount || TIMELINE_ICON,
       booth: BOOTH_ICON,
       schedule: SCHEDULE_ICON,
+      lyrics: LYRICS_ICON,
     }),
     [upcomingCount],
   );
@@ -150,6 +154,8 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
       '2': () => setDrawer('booth'),
       '3': () => setDrawer('request'),
       '4': () => setDrawer('schedule'),
+      '5': () => setDrawer('lyrics'),
+      l: () => setDrawer('lyrics'),
       r: () => setDrawer('request'),
       '?': () => setShortcutsOpen(true),
       'mod+k': () => setPaletteOpen(o => !o),
@@ -251,6 +257,14 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
           />
         )}
         {drawer === 'schedule' && <ScheduleDrawer activeShow={activeShow} context={context} />}
+        {drawer === 'lyrics' && (
+          <LyricsDrawer
+            songId={nowPlaying?.subsonic_id}
+            title={nowPlaying?.title}
+            artist={nowPlaying?.artist}
+            trackStartedAt={trackStartedAt}
+          />
+        )}
       </Sheet>
 
       <AnimatePresence>

@@ -158,6 +158,17 @@ export interface QueueEntry {
   [key: string]: unknown;
 }
 
+export interface PublicLyricLine {
+  startMs: number | null;
+  text: string;
+}
+
+export interface PublicLyricsPayload {
+  songId: string | null;
+  synced: boolean;
+  lines: PublicLyricLine[];
+}
+
 /** Status returned by `/request/:id`. */
 export type RequestStatus = 'pending' | 'resolved' | 'failed' | 'unknown';
 

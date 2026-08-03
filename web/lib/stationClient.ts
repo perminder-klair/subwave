@@ -23,6 +23,7 @@ import type {
   SchedulePayload,
   SessionPayload,
   StationState,
+  PublicLyricsPayload,
 } from '@/lib/types';
 
 export interface ThemesPayload {
@@ -84,7 +85,9 @@ export interface StationClient {
   likeCurrent(songId: string): Promise<LikeResult | null>;
   /** null on network error. */
   likeStatus(): Promise<LikeStatus | null>;
-  /** Best-effort: never throws, never blocks. */
+  /** Structured lyrics for the currently airing library track. null on network error. */
+  currentLyrics(): Promise<PublicLyricsPayload | null>;
+  /** One-shot audience beacon. Best-effort: never throws, never blocks. */
   beacon(payload: BeaconPayload): void;
   /** null on any failure; callers treat that as "configured" and stay put. */
   onboardingStatus(): Promise<{ needsSetup?: boolean } | null>;
@@ -145,6 +148,14 @@ export function createStationClient(origin: StationOrigin): StationClient {
       try {
         const r = await fetch(`${api}/like`);
         return await json<LikeStatus>(r);
+      } catch {
+        return null;
+      }
+    },
+    currentLyrics: async () => {
+      try {
+        const r = await fetch(`${api}/lyrics/current`, { cache: 'no-store' });
+        return r.ok ? await json<PublicLyricsPayload>(r) : null;
       } catch {
         return null;
       }
