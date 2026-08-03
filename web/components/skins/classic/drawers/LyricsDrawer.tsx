@@ -1,10 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { SlidersHorizontal } from 'lucide-react';
 import { cn } from '@/lib/cn';
-import { useStationClient } from '@/lib/stationClient';
-import type { PublicLyricsPayload } from '@/lib/types';
+import {
+  LYRIC_OFFSET_MAX_MS,
+  LYRIC_OFFSET_MIN_MS,
+  LYRIC_OFFSET_NUDGE_MS,
+  LYRIC_OFFSET_STEP_MS,
+  formatLyricOffset,
+  useCurrentLyrics,
+} from '@/components/skins/lyrics';
 
 export interface LyricsDrawerProps {
   songId?: string | null;
@@ -13,83 +19,25 @@ export interface LyricsDrawerProps {
   trackStartedAt: number | null;
 }
 
-const OFFSET_STORAGE_KEY = 'subwave:lyrics-offset-ms';
-const OFFSET_CLIENT_STORAGE_KEY = 'subwave:lyrics-offset-client-id';
 const OFFSET_VISIBLE_STORAGE_KEY = 'subwave:lyrics-offset-visible';
-const OFFSET_MIN_MS = -30000;
-const OFFSET_MAX_MS = 30000;
-const OFFSET_STEP_MS = 50;
-const OFFSET_NUDGE_MS = 100;
-
-function clampOffsetMs(value: number): number {
-  if (!Number.isFinite(value)) return 0;
-  return Math.min(OFFSET_MAX_MS, Math.max(OFFSET_MIN_MS, Math.round(value)));
-}
-
-function formatOffset(ms: number): string {
-  if (ms === 0) return '0.00s';
-  return `${ms > 0 ? '+' : '-'}${(Math.abs(ms) / 1000).toFixed(2)}s`;
-}
-
-function offsetStorageKey(songId: string): string {
-  return `${OFFSET_STORAGE_KEY}:${songId}`;
-}
-
-function createFallbackClientId(): string {
-  return `sw_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
-}
-
-function readLyricOffsetClientId(): string {
-  try {
-    const stored = window.localStorage.getItem(OFFSET_CLIENT_STORAGE_KEY);
-    if (stored) return stored;
-    const next = window.crypto?.randomUUID?.() ?? createFallbackClientId();
-    window.localStorage.setItem(OFFSET_CLIENT_STORAGE_KEY, next);
-    return next;
-  } catch {
-    return createFallbackClientId();
-  }
-}
-
-function activeLineIndex(lyrics: PublicLyricsPayload | null, elapsedMs: number, offsetMs: number): number {
-  if (!lyrics?.synced) return -1;
-  const adjustedElapsedMs = Math.max(0, elapsedMs + offsetMs);
-  let active = -1;
-  for (let i = 0; i < lyrics.lines.length; i += 1) {
-    const startMs = lyrics.lines[i]?.startMs;
-    if (startMs == null) continue;
-    if (startMs > adjustedElapsedMs) break;
-    active = i;
-  }
-  return active;
-}
 
 export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: LyricsDrawerProps) {
-  const client = useStationClient();
-  const [lyrics, setLyrics] = useState<PublicLyricsPayload | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const [offsetMs, setOffsetMs] = useState(0);
   const [showOffset, setShowOffset] = useState(false);
   const activeRef = useRef<HTMLDivElement | null>(null);
-  const clientIdRef = useRef<string>('');
-  const loadedOffsetSongRef = useRef<string | null>(null);
+  const {
+    lyrics,
+    loading,
+    failed,
+    offsetMs,
+    activeLineIndex: active,
+    updateOffset,
+  } = useCurrentLyrics({ songId, trackStartedAt });
 
   useEffect(() => {
-    clientIdRef.current = readLyricOffsetClientId();
     try {
       setShowOffset(window.localStorage.getItem(OFFSET_VISIBLE_STORAGE_KEY) === '1');
     } catch {}
   }, []);
-
-  const updateOffset = (next: number) => {
-    const clamped = clampOffsetMs(next);
-    setOffsetMs(clamped);
-    try {
-      if (songId) window.localStorage.setItem(offsetStorageKey(songId), String(clamped));
-    } catch {}
-  };
 
   const toggleOffset = () => {
     setShowOffset(next => {
@@ -100,67 +48,6 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
       return visible;
     });
   };
-
-  useEffect(() => {
-    let cancelled = false;
-    setLyrics(null);
-    setFailed(false);
-    if (!songId) {
-      setLoading(false);
-      return;
-    }
-
-    setLoading(true);
-    const clientId = clientIdRef.current || readLyricOffsetClientId();
-    clientIdRef.current = clientId;
-    client.currentLyrics(clientId)
-      .then((payload) => {
-        if (cancelled) return;
-        const nextLyrics = payload?.songId === songId ? payload : null;
-        setLyrics(nextLyrics);
-        if (nextLyrics) {
-          let nextOffset = clampOffsetMs(nextLyrics.offsetMs ?? 0);
-          try {
-            const stored = window.localStorage.getItem(offsetStorageKey(songId));
-            if (stored != null && nextOffset === 0) nextOffset = clampOffsetMs(Number(stored));
-          } catch {}
-          loadedOffsetSongRef.current = songId;
-          setOffsetMs(nextOffset);
-        }
-        setFailed(payload == null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-
-    return () => { cancelled = true; };
-  }, [client, songId]);
-
-  useEffect(() => {
-    if (!songId || !lyrics?.synced || loadedOffsetSongRef.current !== songId) return;
-    const id = window.setTimeout(() => {
-      client.setCurrentLyricOffset(songId, clientIdRef.current, offsetMs)
-        .then((saved) => {
-          if (saved?.songId === songId && typeof saved.offsetMs === 'number') {
-            const clamped = clampOffsetMs(saved.offsetMs);
-            setOffsetMs(clamped);
-            try {
-              window.localStorage.setItem(offsetStorageKey(songId), String(clamped));
-            } catch {}
-          }
-        });
-    }, 350);
-    return () => window.clearTimeout(id);
-  }, [client, songId, lyrics?.synced, offsetMs]);
-
-  useEffect(() => {
-    if (!lyrics?.synced) return;
-    const id = window.setInterval(() => setNowMs(Date.now()), 500);
-    return () => window.clearInterval(id);
-  }, [lyrics?.synced, trackStartedAt]);
-
-  const elapsedMs = trackStartedAt == null ? 0 : Math.max(0, nowMs - trackStartedAt);
-  const active = useMemo(() => activeLineIndex(lyrics, elapsedMs, offsetMs), [lyrics, elapsedMs, offsetMs]);
 
   const onOffsetInput = (event: ChangeEvent<HTMLInputElement>) => {
     updateOffset(Number(event.target.value));
@@ -265,22 +152,22 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
         >
           <div className="mb-2 flex items-center justify-between gap-3">
             <div className="text-[9px] tracking-[0.28em] text-muted uppercase">Track offset</div>
-            <div className="v3-tab-num shrink-0 text-[11px] tracking-[0.1em] text-ink">{formatOffset(offsetMs)}</div>
+            <div className="v3-tab-num shrink-0 text-[11px] tracking-[0.1em] text-ink">{formatLyricOffset(offsetMs)}</div>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
               className="v3-focus h-8 w-8 shrink-0 cursor-pointer border border-separator-soft bg-transparent text-[15px] leading-none text-ink"
-              onClick={() => updateOffset(offsetMs - OFFSET_NUDGE_MS)}
+              onClick={() => updateOffset(offsetMs - LYRIC_OFFSET_NUDGE_MS)}
               aria-label="Delay lyrics"
             >
               -
             </button>
             <input
               type="range"
-              min={OFFSET_MIN_MS}
-              max={OFFSET_MAX_MS}
-              step={OFFSET_STEP_MS}
+              min={LYRIC_OFFSET_MIN_MS}
+              max={LYRIC_OFFSET_MAX_MS}
+              step={LYRIC_OFFSET_STEP_MS}
               value={offsetMs}
               onChange={onOffsetInput}
               aria-label="Track lyric offset"
@@ -289,7 +176,7 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
             <button
               type="button"
               className="v3-focus h-8 w-8 shrink-0 cursor-pointer border border-separator-soft bg-transparent text-[15px] leading-none text-ink"
-              onClick={() => updateOffset(offsetMs + OFFSET_NUDGE_MS)}
+              onClick={() => updateOffset(offsetMs + LYRIC_OFFSET_NUDGE_MS)}
               aria-label="Advance lyrics"
             >
               +

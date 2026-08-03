@@ -139,15 +139,47 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
           'connected Subsonic server\'s structured lyrics response. Empty `lines` ' +
           'means the current item is not a library track, no lyrics are indexed ' +
           'for the track, or the upstream lyrics lookup failed. Timed lyrics keep ' +
-          'their `startMs`; unsynced/plain lyrics use `null` timings.',
+          'their `startMs`; unsynced/plain lyrics use `null` timings. Pass a ' +
+          'stable opaque `clientId` query parameter to include that client\'s ' +
+          'saved per-track `offsetMs` correction.',
         auth: 'none',
+        queryParams: [
+          {
+            name: 'clientId',
+            description:
+              'Opaque listener/player id used only for that client\'s saved lyric timing corrections.',
+            example: 'player_7f2b9c',
+          },
+        ],
         responseExample: {
           songId: 'a1b2c3',
           synced: true,
+          offsetMs: 0,
           lines: [
             { startMs: 12500, text: 'First lyric line' },
             { startMs: 15300, text: 'Second lyric line' },
           ],
+        },
+      },
+      {
+        method: 'PUT',
+        path: '/lyrics/current/offset',
+        summary: 'Save lyric timing correction',
+        description:
+          'Stores this client\'s per-track lyric timing correction for the current ' +
+          'on-air library track. The client id is opaque and listener-scoped; this ' +
+          'does not alter station-wide lyric data or affect other players. The ' +
+          'request is rejected if `songId` no longer matches the current track.',
+        auth: 'none',
+        bodyExample: {
+          songId: 'a1b2c3',
+          clientId: 'player_7f2b9c',
+          offsetMs: 2900,
+        },
+        responseExample: {
+          ok: true,
+          songId: 'a1b2c3',
+          offsetMs: 2900,
         },
       },
       {
