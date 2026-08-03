@@ -120,15 +120,17 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
   const elapsedMs = trackStartedAt == null ? 0 : Math.max(0, nowMs - trackStartedAt);
   const active = useMemo(() => activeLineIndex(lyrics, elapsedMs, offsetMs), [lyrics, elapsedMs, offsetMs]);
   const selectedLine = selectedLineIndex == null ? null : lyrics?.lines[selectedLineIndex] ?? null;
-  const canSyncSelectedLine = lyrics?.synced && selectedLine?.startMs != null && trackStartedAt != null;
+  const activeLine = active < 0 ? null : lyrics?.lines[active] ?? null;
+  const syncTargetLine = selectedLine?.startMs != null ? selectedLine : activeLine;
+  const canSyncSelectedLine = lyrics?.synced && syncTargetLine?.startMs != null && trackStartedAt != null;
 
   const onOffsetInput = (event: ChangeEvent<HTMLInputElement>) => {
     updateOffset(Number(event.target.value));
   };
 
   const syncSelectedLine = () => {
-    if (selectedLine?.startMs == null || trackStartedAt == null) return;
-    updateOffset(elapsedMs - selectedLine.startMs);
+    if (syncTargetLine?.startMs == null || trackStartedAt == null) return;
+    updateOffset(syncTargetLine.startMs - elapsedMs);
     setShowOffset(true);
     try {
       window.localStorage.setItem(OFFSET_VISIBLE_STORAGE_KEY, '1');
