@@ -102,23 +102,23 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
             {artist && <div className="mt-1 truncate text-[10px] tracking-[0.16em] text-muted uppercase">{artist}</div>}
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <div className="v3-tab-num text-[9px] tracking-[0.18em] text-muted uppercase">
-              {lyrics.synced ? 'Synced' : 'Plain'}
-            </div>
             {lyrics.synced && (
-              <button
-                type="button"
-                className={cn(
-                  'v3-focus grid h-7 w-7 place-items-center border border-separator-soft bg-transparent text-muted transition-colors',
-                  showOffset && 'border-ink bg-ink text-bg',
-                )}
-                onClick={toggleOffset}
-                aria-pressed={showOffset}
-                aria-label="Lyrics offset controls"
-                title="Lyrics offset controls"
-              >
-                <SlidersHorizontal size={15} strokeWidth={1.7} />
-              </button>
+              <>
+                <div className="v3-tab-num text-[9px] tracking-[0.18em] text-muted uppercase">Synced</div>
+                <button
+                  type="button"
+                  className={cn(
+                    'v3-focus grid h-7 w-7 place-items-center border border-separator-soft bg-transparent text-muted transition-colors',
+                    showOffset && 'border-ink bg-ink text-bg',
+                  )}
+                  onClick={toggleOffset}
+                  aria-pressed={showOffset}
+                  aria-label="Lyrics offset controls"
+                  title="Lyrics offset controls"
+                >
+                  <SlidersHorizontal size={15} strokeWidth={1.7} />
+                </button>
+              </>
             )}
           </div>
         </div>
