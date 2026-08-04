@@ -139,15 +139,16 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
           'connected Subsonic server\'s structured lyrics response. Empty `lines` ' +
           'means the current item is not a library track, no lyrics are indexed ' +
           'for the track, or the upstream lyrics lookup failed. Timed lyrics keep ' +
-          'their `startMs`; unsynced/plain lyrics use `null` timings. Pass a ' +
-          'stable opaque `clientId` query parameter to include that client\'s ' +
-          'saved per-track `offsetMs` correction.',
+          'their source `startMs`; unsynced/plain lyrics use `null` timings. ' +
+          '`offsetMs` is returned separately: add it to measured playback elapsed ' +
+          'time before choosing the active line. Pass a stable opaque `clientId` ' +
+          'query parameter to include that client\'s saved per-track correction.',
         auth: 'none',
         queryParams: [
           {
             name: 'clientId',
             description:
-              'Opaque listener/player id used only for that client\'s saved lyric timing corrections.',
+              'Stable opaque listener/player id used only for that client\'s saved lyric timing corrections. Do not use an account id or other personal identifier.',
             example: 'player_7f2b9c',
           },
         ],
@@ -168,8 +169,9 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
         description:
           'Stores this client\'s per-track lyric timing correction for the current ' +
           'on-air library track. The client id is opaque and listener-scoped; this ' +
-          'does not alter station-wide lyric data or affect other players. The ' +
-          'request is rejected if `songId` no longer matches the current track.',
+          'does not alter station-wide lyric data or affect other players. Positive ' +
+          '`offsetMs` advances lyric highlighting sooner; negative values delay it. ' +
+          'The request is rejected if `songId` no longer matches the current track.',
         auth: 'none',
         bodyExample: {
           songId: 'a1b2c3',

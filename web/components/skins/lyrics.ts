@@ -13,7 +13,9 @@ const OFFSET_STORAGE_KEY = 'subwave:lyrics-offset-ms';
 const OFFSET_CLIENT_STORAGE_KEY = 'subwave:lyrics-offset-client-id';
 
 export interface UseCurrentLyricsOptions {
+  /** Current Subsonic/library song id from now-playing. */
   songId?: string | null;
+  /** Millisecond epoch timestamp from now-playing; used for player elapsed time. */
   trackStartedAt: number | null;
 }
 
@@ -21,6 +23,7 @@ export interface CurrentLyricsState {
   lyrics: PublicLyricsPayload | null;
   loading: boolean;
   failed: boolean;
+  /** Add this to measured elapsed time. Positive values advance lyrics sooner. */
   offsetMs: number;
   elapsedMs: number;
   activeLineIndex: number;
@@ -43,6 +46,8 @@ export function activeLyricLineIndex(
   offsetMs: number,
 ): number {
   if (!lyrics?.synced) return -1;
+  // Keep source lyric timestamps immutable; apply the player correction only
+  // when selecting the active line.
   const adjustedElapsedMs = Math.max(0, elapsedMs + offsetMs);
   let active = -1;
   for (let i = 0; i < lyrics.lines.length; i += 1) {

@@ -166,7 +166,7 @@ export interface PublicLyricLine {
 export interface PublicLyricsPayload {
   songId: string | null;
   synced: boolean;
-  /** Per-client correction in ms. Positive means lyrics advance sooner. */
+  /** Add this to measured playback elapsed time before choosing the active line. */
   offsetMs: number;
   lines: PublicLyricLine[];
 }

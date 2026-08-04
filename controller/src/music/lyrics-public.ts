@@ -6,6 +6,7 @@ export interface PublicLyricLine {
 export interface PublicLyricsPayload {
   songId: string | null;
   synced: boolean;
+  /** Add this to the player's measured elapsed time before choosing a line. */
   offsetMs: number;
   lines: PublicLyricLine[];
 }

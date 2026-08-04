@@ -62,7 +62,9 @@ players and custom skins. It resolves the current on-air item to its
 `subsonic_id`, asks the connected Subsonic server for structured lyrics, and
 returns a small normalized payload. Pass a stable opaque `clientId` query
 parameter when the player wants Subwave to include that listener/client's saved
-per-track timing correction.
+per-track timing correction. Generate the id inside the player and store it
+locally; it should not be an account id, email address, or other personal
+identifier.
 
 ```json
 {
@@ -79,9 +81,17 @@ per-track timing correction.
 `songId` is `null` when the on-air item is not a library track. `lines` is empty
 when no lyrics are indexed for the current track, when the current item is not a
 library track, or when the upstream lyrics lookup fails. Synced lyrics preserve
-line timing in `startMs`; unsynced/plain lyrics use `null` for `startMs` and set
-`synced` to `false`. `offsetMs` is a client-scoped correction for the current
-track; add it to elapsed playback time before selecting the active lyric line.
+source line timing in `startMs`; unsynced/plain lyrics use `null` for `startMs`
+and set `synced` to `false`.
+
+`offsetMs` is a client-scoped correction for the current track. It is not folded
+into each line's `startMs`; players apply it at render time:
+
+```text
+effectiveElapsedMs = measuredPlaybackElapsedMs + offsetMs
+```
+
+Positive values advance lyric highlighting sooner. Negative values delay it.
 
 `PUT /lyrics/current/offset` saves that correction for the current track and
 client:
@@ -96,7 +106,8 @@ client:
 
 The write is public but scoped by `clientId` and verified against the current
 on-air song, so one listener's correction does not change station-wide lyric
-data or affect other players.
+data or affect other players. The server rejects stale writes when the submitted
+`songId` no longer matches the current track.
 
 ## OpenAPI
 
