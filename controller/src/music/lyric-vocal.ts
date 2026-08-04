@@ -42,6 +42,13 @@ export interface LyricVocalResult {
 // whole string so a song that merely SINGS the word "instrumental" isn't caught.
 const INSTRUMENTAL_RE = /^\s*[[(]?\s*(?:au\s*:\s*)?instrumental\s*[)\]]?\s*$/i;
 
+// Exported so the public lyrics payload (`music/lyrics-public.ts`) screens the
+// same markers off the same `getStructuredLyrics()` shape. One owner for the
+// pattern — a second copy would drift the moment a new marker spelling shows up.
+export function isInstrumentalMarker(text: string): boolean {
+  return INSTRUMENTAL_RE.test(text);
+}
+
 // Consecutive sung lines closer than this merge into one vocal range; a wider
 // gap (a solo, an instrumental bridge) splits them so the ranges expose real
 // vocal-free stretches. 8s keeps a verse together but still surfaces breaks.
@@ -61,7 +68,7 @@ export function deriveVocalFromLyrics(lyrics: StructuredLyrics | null): LyricVoc
   const lines = lyrics.lines.filter((l) => l.text.trim().length > 0);
 
   // Explicit instrumental marker: every non-empty line is the marker text.
-  if (lines.length > 0 && lines.every((l) => INSTRUMENTAL_RE.test(l.text))) {
+  if (lines.length > 0 && lines.every((l) => isInstrumentalMarker(l.text))) {
     return { instrumental: true, vocalRanges: [], introMs: null };
   }
 

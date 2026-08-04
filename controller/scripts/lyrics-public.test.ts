@@ -68,6 +68,56 @@ test('unsynced lyrics publish null start offsets', () => {
   );
 });
 
+test('an all-marker instrumental body publishes as no lyrics', () => {
+  // Timed at 0 and left unfiltered, this single line would read as a synced
+  // lyric the player highlights for the whole track.
+  assert.deepEqual(
+    toPublicLyricsPayload('abc123', {
+      synced: true,
+      lines: [{ startMs: 0, text: '[au: instrumental]' }],
+    }),
+    { songId: 'abc123', synced: false, offsetMs: 0, lines: [] },
+  );
+});
+
+test('every instrumental marker spelling is screened off', () => {
+  for (const marker of ['Instrumental', 'INSTRUMENTAL', '(instrumental)', '[Instrumental]']) {
+    assert.deepEqual(
+      toPublicLyricsPayload('abc123', { synced: true, lines: [{ startMs: 0, text: marker }] }).lines,
+      [],
+      `expected ${marker} to be screened off`,
+    );
+  }
+});
+
+test('a lyric that merely sings the word instrumental survives', () => {
+  assert.deepEqual(
+    toPublicLyricsPayload('abc123', {
+      synced: true,
+      lines: [{ startMs: 500, text: 'this is instrumental to me' }],
+    }).lines,
+    [{ startMs: 500, text: 'this is instrumental to me' }],
+  );
+});
+
+test('markers are dropped without discarding the real lines around them', () => {
+  assert.deepEqual(
+    toPublicLyricsPayload('abc123', {
+      synced: true,
+      lines: [
+        { startMs: 0, text: 'Instrumental' },
+        { startMs: 4000, text: 'the words start here' },
+      ],
+    }),
+    {
+      songId: 'abc123',
+      synced: true,
+      offsetMs: 0,
+      lines: [{ startMs: 4000, text: 'the words start here' }],
+    },
+  );
+});
+
 if (failures) {
   console.error(`\n✗ ${failures} check(s) failed`);
   process.exit(1);

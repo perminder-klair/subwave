@@ -117,7 +117,12 @@ export function Sheet({ open, onOpenChange, title, children, container }: SheetP
                 // lets the spread through; motion's own handler wins.
                 {...((gestureEnabled ? bind() : {}) as Record<string, unknown>)}
                 className={cn(
-                  'v3-drawer-content relative z-50 flex touch-pan-y flex-col border border-ink text-ink shadow-drawer',
+                  // No border utility here: `.v3-drawer-content::before` paints
+                  // the frame (above the backdrop-filter, below the content).
+                  // Carrying both draws two 1px lines — the pseudo-element's
+                  // `inset: 0` resolves to the padding box, so it lands flush
+                  // inside this element's own border rather than over it.
+                  'v3-drawer-content relative z-50 flex touch-pan-y flex-col text-ink shadow-drawer',
                   'bg-[color-mix(in_oklab,var(--bg)_30%,transparent)]',
                   '[backdrop-filter:blur(28px)_saturate(1.9)_brightness(1.07)]',
                   '[-webkit-backdrop-filter:blur(28px)_saturate(1.9)_brightness(1.07)]',

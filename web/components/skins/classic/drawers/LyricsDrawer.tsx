@@ -28,6 +28,7 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
     lyrics,
     loading,
     failed,
+    stale,
     offsetMs,
     activeLineIndex: active,
     updateOffset,
@@ -66,7 +67,10 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
     );
   }
 
-  if (loading) {
+  // `stale` means the station is still answering for the previous track — we
+  // have no verdict for this one, so keep waiting rather than claiming it has
+  // no lyrics. The hook re-asks on its own.
+  if (loading || stale) {
     return (
       <div className="text-[13px] leading-relaxed text-muted">
         Pulling lyrics from the library…
