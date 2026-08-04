@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, type ChangeEvent } from 'react';
-import { SlidersHorizontal } from 'lucide-react';
+import { Minus, Plus, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import {
   LYRIC_OFFSET_MAX_MS,
@@ -95,22 +95,22 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="shrink-0 border-y border-separator-soft py-3">
-        <div className="flex items-start justify-between gap-4">
+      <div className="shrink-0 border-b border-separator-soft pb-3">
+        <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="truncate text-[16px] leading-tight font-semibold">{title || 'Now playing'}</div>
-            {artist && <div className="mt-1 truncate text-[11px] tracking-[0.16em] text-muted uppercase">{artist}</div>}
+            <div className="truncate text-[14px] leading-tight font-semibold">{title || 'Now playing'}</div>
+            {artist && <div className="mt-1 truncate text-[10px] tracking-[0.16em] text-muted uppercase">{artist}</div>}
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <div className="v3-tab-num text-[10px] tracking-[0.18em] text-vermilion uppercase">
+            <div className="v3-tab-num text-[9px] tracking-[0.18em] text-muted uppercase">
               {lyrics.synced ? 'Synced' : 'Plain'}
             </div>
             {lyrics.synced && (
               <button
                 type="button"
                 className={cn(
-                  'v3-focus grid h-8 w-8 place-items-center border border-separator-soft bg-transparent text-ink',
-                  showOffset && 'bg-ink text-bg',
+                  'v3-focus grid h-7 w-7 place-items-center border border-separator-soft bg-transparent text-muted transition-colors',
+                  showOffset && 'border-ink bg-ink text-bg',
                 )}
                 onClick={toggleOffset}
                 aria-pressed={showOffset}
@@ -124,7 +124,7 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
         </div>
       </div>
 
-      <div className="v3-scroll mt-4 flex min-h-0 flex-1 flex-col overflow-y-auto pb-5">
+      <div className="v3-scroll mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto pb-4">
         {lyrics.lines.map((line, index) => {
           const isActive = index === active;
           return (
@@ -132,9 +132,9 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
               key={`${line.startMs ?? 'plain'}-${index}`}
               ref={isActive ? activeRef : undefined}
               className={cn(
-                'border-l py-[9px] pr-3 pl-4 text-[15px] leading-relaxed transition-colors',
+                'border-l py-2 pr-3 pl-3 text-[14px] leading-relaxed transition-colors',
                 isActive
-                  ? 'border-vermilion bg-[color-mix(in_oklab,var(--accent)_9%,transparent)] text-ink shadow-[inset_1px_0_0_var(--accent)]'
+                  ? 'border-vermilion bg-[color-mix(in_oklab,var(--accent)_5%,transparent)] text-ink'
                   : 'border-separator-soft text-muted',
                 !lyrics.synced && 'border-separator-soft text-ink',
               )}
@@ -147,7 +147,7 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
 
       {lyrics.synced && showOffset && (
         <div
-          className="shrink-0 px-4 pt-3 pb-4 [backdrop-filter:blur(18px)_saturate(1.4)] [-webkit-backdrop-filter:blur(18px)_saturate(1.4)] sm:px-5"
+          className="shrink-0 border-t border-separator-soft pt-3"
           data-lyric-offset
         >
           <div className="mb-2 flex items-center justify-between gap-3">
@@ -157,11 +157,12 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
           <div className="flex items-center gap-2">
             <button
               type="button"
-              className="v3-focus h-8 w-8 shrink-0 cursor-pointer border border-separator-soft bg-transparent text-[15px] leading-none text-ink"
+              className="v3-focus grid h-8 w-8 shrink-0 cursor-pointer place-items-center border border-separator-soft bg-transparent text-ink"
               onClick={() => updateOffset(offsetMs - LYRIC_OFFSET_NUDGE_MS)}
               aria-label="Delay lyrics"
+              title="Delay lyrics"
             >
-              -
+              <Minus size={14} strokeWidth={1.8} />
             </button>
             <input
               type="range"
@@ -175,18 +176,21 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
             />
             <button
               type="button"
-              className="v3-focus h-8 w-8 shrink-0 cursor-pointer border border-separator-soft bg-transparent text-[15px] leading-none text-ink"
+              className="v3-focus grid h-8 w-8 shrink-0 cursor-pointer place-items-center border border-separator-soft bg-transparent text-ink"
               onClick={() => updateOffset(offsetMs + LYRIC_OFFSET_NUDGE_MS)}
               aria-label="Advance lyrics"
+              title="Advance lyrics"
             >
-              +
+              <Plus size={14} strokeWidth={1.8} />
             </button>
             <button
               type="button"
-              className="v3-focus h-8 shrink-0 cursor-pointer border border-separator-soft bg-transparent px-2 text-[9px] tracking-[0.18em] text-muted uppercase"
+              className="v3-focus grid h-8 w-8 shrink-0 cursor-pointer place-items-center border border-separator-soft bg-transparent text-muted"
               onClick={() => updateOffset(0)}
+              aria-label="Reset lyrics offset"
+              title="Reset lyrics offset"
             >
-              Reset
+              <RotateCcw size={14} strokeWidth={1.8} />
             </button>
           </div>
         </div>
