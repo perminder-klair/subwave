@@ -4,6 +4,11 @@ import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import { Minus, Plus, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
   LYRIC_OFFSET_MAX_MS,
   LYRIC_OFFSET_MIN_MS,
   LYRIC_OFFSET_NUDGE_MS,
@@ -19,8 +24,6 @@ export interface LyricsDrawerProps {
   trackStartedAt: number | null;
 }
 
-const OFFSET_VISIBLE_STORAGE_KEY = 'subwave:lyrics-offset-visible';
-
 export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: LyricsDrawerProps) {
   const [showOffset, setShowOffset] = useState(false);
   const activeRef = useRef<HTMLDivElement | null>(null);
@@ -33,22 +36,6 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
     activeLineIndex: active,
     updateOffset,
   } = useCurrentLyrics({ songId, trackStartedAt });
-
-  useEffect(() => {
-    try {
-      setShowOffset(window.localStorage.getItem(OFFSET_VISIBLE_STORAGE_KEY) === '1');
-    } catch {}
-  }, []);
-
-  const toggleOffset = () => {
-    setShowOffset(next => {
-      const visible = !next;
-      try {
-        window.localStorage.setItem(OFFSET_VISIBLE_STORAGE_KEY, visible ? '1' : '0');
-      } catch {}
-      return visible;
-    });
-  };
 
   const onOffsetInput = (event: ChangeEvent<HTMLInputElement>) => {
     updateOffset(Number(event.target.value));
@@ -109,78 +96,81 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
             {lyrics.synced && (
               <>
                 <div className="v3-tab-num text-[9px] tracking-[0.18em] text-muted uppercase">Synced</div>
-                <button
-                  type="button"
-                  className={cn(
-                    'v3-focus grid h-7 w-7 place-items-center border border-separator-soft bg-transparent text-muted transition-colors',
-                    showOffset && 'border-ink bg-ink text-bg',
-                  )}
-                  onClick={toggleOffset}
-                  aria-pressed={showOffset}
-                  aria-label="Lyrics offset controls"
-                  title="Lyrics offset controls"
-                >
-                  <SlidersHorizontal size={15} strokeWidth={1.7} />
-                </button>
+                <DropdownMenu open={showOffset} onOpenChange={setShowOffset}>
+                  <DropdownMenuTrigger asChild>
+                    <button
+                      type="button"
+                      className={cn(
+                        'v3-focus grid h-7 w-7 place-items-center border border-separator-soft bg-transparent text-muted transition-colors',
+                        showOffset && 'border-ink bg-ink text-bg',
+                      )}
+                      aria-label="Lyrics offset controls"
+                      title="Lyrics offset controls"
+                    >
+                      <SlidersHorizontal size={15} strokeWidth={1.7} />
+                    </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="end"
+                    side="top"
+                    sideOffset={8}
+                    className="z-[100] w-[min(420px,calc(100vw-2rem))] rounded-none border-separator-soft bg-[color-mix(in_oklab,var(--bg)_94%,black)] p-3 text-ink shadow-[0_18px_50px_rgba(0,0,0,0.45)]"
+                    data-lyric-offset
+                    onCloseAutoFocus={event => event.preventDefault()}
+                  >
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <div className="text-[9px] tracking-[0.28em] text-muted uppercase">Track offset</div>
+                      <div className="v3-tab-num shrink-0 text-[11px] tracking-[0.1em] text-ink">{formatLyricOffset(offsetMs)}</div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="v3-focus grid h-8 w-8 shrink-0 cursor-pointer place-items-center border border-separator-soft bg-transparent text-ink"
+                        onClick={() => updateOffset(offsetMs - LYRIC_OFFSET_NUDGE_MS)}
+                        aria-label="Delay lyrics"
+                        title="Delay lyrics"
+                      >
+                        <Minus size={14} strokeWidth={1.8} />
+                      </button>
+                      <input
+                        type="range"
+                        min={LYRIC_OFFSET_MIN_MS}
+                        max={LYRIC_OFFSET_MAX_MS}
+                        step={LYRIC_OFFSET_STEP_MS}
+                        value={offsetMs}
+                        onChange={onOffsetInput}
+                        aria-label="Track lyric offset"
+                        className="h-8 min-w-0 flex-1 accent-[var(--accent)]"
+                      />
+                      <button
+                        type="button"
+                        className="v3-focus grid h-8 w-8 shrink-0 cursor-pointer place-items-center border border-separator-soft bg-transparent text-ink"
+                        onClick={() => updateOffset(offsetMs + LYRIC_OFFSET_NUDGE_MS)}
+                        aria-label="Advance lyrics"
+                        title="Advance lyrics"
+                      >
+                        <Plus size={14} strokeWidth={1.8} />
+                      </button>
+                      <button
+                        type="button"
+                        className="v3-focus grid h-8 w-8 shrink-0 cursor-pointer place-items-center border border-separator-soft bg-transparent text-muted"
+                        onClick={() => updateOffset(0)}
+                        aria-label="Reset lyrics offset"
+                        title="Reset lyrics offset"
+                      >
+                        <RotateCcw size={14} strokeWidth={1.8} />
+                      </button>
+                    </div>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </>
             )}
           </div>
         </div>
       </div>
 
-      {lyrics.synced && showOffset && (
-        <div
-          className="shrink-0 border-b border-separator-soft py-3"
-          data-lyric-offset
-        >
-          <div className="mb-2 flex items-center justify-between gap-3">
-            <div className="text-[9px] tracking-[0.28em] text-muted uppercase">Track offset</div>
-            <div className="v3-tab-num shrink-0 text-[11px] tracking-[0.1em] text-ink">{formatLyricOffset(offsetMs)}</div>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              className="v3-focus grid h-8 w-8 shrink-0 cursor-pointer place-items-center border border-separator-soft bg-transparent text-ink"
-              onClick={() => updateOffset(offsetMs - LYRIC_OFFSET_NUDGE_MS)}
-              aria-label="Delay lyrics"
-              title="Delay lyrics"
-            >
-              <Minus size={14} strokeWidth={1.8} />
-            </button>
-            <input
-              type="range"
-              min={LYRIC_OFFSET_MIN_MS}
-              max={LYRIC_OFFSET_MAX_MS}
-              step={LYRIC_OFFSET_STEP_MS}
-              value={offsetMs}
-              onChange={onOffsetInput}
-              aria-label="Track lyric offset"
-              className="h-8 min-w-0 flex-1 accent-[var(--accent)]"
-            />
-            <button
-              type="button"
-              className="v3-focus grid h-8 w-8 shrink-0 cursor-pointer place-items-center border border-separator-soft bg-transparent text-ink"
-              onClick={() => updateOffset(offsetMs + LYRIC_OFFSET_NUDGE_MS)}
-              aria-label="Advance lyrics"
-              title="Advance lyrics"
-            >
-              <Plus size={14} strokeWidth={1.8} />
-            </button>
-            <button
-              type="button"
-              className="v3-focus grid h-8 w-8 shrink-0 cursor-pointer place-items-center border border-separator-soft bg-transparent text-muted"
-              onClick={() => updateOffset(0)}
-              aria-label="Reset lyrics offset"
-              title="Reset lyrics offset"
-            >
-              <RotateCcw size={14} strokeWidth={1.8} />
-            </button>
-          </div>
-        </div>
-      )}
-
       <div className="v3-scroll mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto pb-4">
-        {lyrics.synced && <div className="h-[35%] shrink-0" aria-hidden="true" />}
+        {lyrics.synced && <div className="h-[calc(50%-1.4rem)] shrink-0" aria-hidden="true" />}
         {lyrics.lines.map((line, index) => {
           const isActive = index === active;
           return (
@@ -199,7 +189,7 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
             </div>
           );
         })}
-        {lyrics.synced && <div className="h-[45%] shrink-0" aria-hidden="true" />}
+        {lyrics.synced && <div className="h-[calc(50%-1.4rem)] shrink-0" aria-hidden="true" />}
       </div>
     </div>
   );
