@@ -128,30 +128,9 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
         </div>
       </div>
 
-      <div className="v3-scroll mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto pb-4">
-        {lyrics.lines.map((line, index) => {
-          const isActive = index === active;
-          return (
-            <div
-              key={`${line.startMs ?? 'plain'}-${index}`}
-              ref={isActive ? activeRef : undefined}
-              className={cn(
-                'border-l py-2 pr-3 pl-3 text-[14px] leading-relaxed transition-colors',
-                isActive
-                  ? 'border-vermilion bg-[color-mix(in_oklab,var(--accent)_5%,transparent)] text-ink'
-                  : 'border-separator-soft text-muted',
-                !lyrics.synced && 'border-separator-soft text-ink',
-              )}
-            >
-              {line.text}
-            </div>
-          );
-        })}
-      </div>
-
       {lyrics.synced && showOffset && (
         <div
-          className="shrink-0 border-t border-separator-soft pt-3"
+          className="shrink-0 border-b border-separator-soft py-3"
           data-lyric-offset
         >
           <div className="mb-2 flex items-center justify-between gap-3">
@@ -199,6 +178,29 @@ export default function LyricsDrawer({ songId, title, artist, trackStartedAt }: 
           </div>
         </div>
       )}
+
+      <div className="v3-scroll mt-3 flex min-h-0 flex-1 flex-col overflow-y-auto pb-4">
+        {lyrics.synced && <div className="h-[35%] shrink-0" aria-hidden="true" />}
+        {lyrics.lines.map((line, index) => {
+          const isActive = index === active;
+          return (
+            <div
+              key={`${line.startMs ?? 'plain'}-${index}`}
+              ref={isActive ? activeRef : undefined}
+              className={cn(
+                'border-l py-2 pr-3 pl-3 text-[14px] leading-relaxed transition-colors',
+                isActive
+                  ? 'border-vermilion bg-[color-mix(in_oklab,var(--accent)_5%,transparent)] text-ink'
+                  : 'border-separator-soft text-muted',
+                !lyrics.synced && 'border-separator-soft text-ink',
+              )}
+            >
+              {line.text}
+            </div>
+          );
+        })}
+        {lyrics.synced && <div className="h-[45%] shrink-0" aria-hidden="true" />}
+      </div>
     </div>
   );
 }
