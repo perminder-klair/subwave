@@ -1,0 +1,12 @@
+Upstream project: https://github.com/perminder-klair/subwave
+Branch used for bundled production files: main
+Snapshot date: 2026-08-04
+
+docker-compose.yml SHA-256:
+e496ab48c548e4262fa074f455abe6a9d5cd115ba8c8e61947d35ee5d309ac97
+
+.env.example SHA-256:
+624ec82907d2872a1648fdb25c2a634eda19e07099b1ceebd5f19034363dcb9d
+
+LICENSE SHA-256:
+0735adbd0d3294cc8b3f498f345d22a3b605b9a5be6ddf28eebc6d96a62d3406

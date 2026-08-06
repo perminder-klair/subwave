@@ -1,0 +1,6 @@
+.env
+state/
+backups/
+diagnostics/
+*.log
+SUBWAVE-CREDENTIALS.txt
