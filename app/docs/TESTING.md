@@ -171,26 +171,47 @@ properly judged on a **physical device** — the remote-control wiring lives in
 `service.ts` (Play/Pause/Stop; Next/Seek intentionally omitted for a live
 stream).
 
-### CarPlay — Now-Playing in the car (iOS only)
+### CarPlay & Android Auto — launchable in-car apps
 
-Scope is **Tier 1**: control the *already-playing* stream from the dash (metadata,
-artwork, play/pause/stop). There is **no launchable in-car app icon** — start the
-stream in the phone app first, then connect the car. RNTP feeds the iOS surface
-(`MPNowPlayingInfoCenter`), so CarPlay needs **no extra app-side wiring**.
+Both car platforms now get a real SUB/WAVE app on the car screen: a Stations
+list (featured + saved recents, the same `carStations` view on both platforms)
+→ tap → tune → the system now-playing screen, fed by the metadata RNTP already
+pushes (`useNowPlayingInfo`). The shared tune path is `src/car/carTune.ts`
+(works from the headless service — a car cold start never mounts the phone UI);
+`usePlayer`'s station-change effect *adopts* a car-initiated switch instead of
+stopping it (`streamBelongsTo` guard).
 
-- **iOS** — run on a device, or use the **CarPlay Simulator** (Simulator app →
-  **I/O → External Displays → CarPlay**). Start the stream, open the CarPlay
-  screen → SUB/WAVE shows under **Now Playing** with title/artist/album + artwork;
-  Play/Pause work; no scrubber (the `isLiveStream` track hides it).
+- **iOS (CarPlay)** — `react-native-carplay` templates; `plugins/withCarPlay.js`
+  generates the scene manifest, `CarSceneDelegate`/`PhoneSceneDelegate` Swift
+  files, and the `com.apple.developer.carplay-audio` entitlement on prebuild.
+  Test in the **CarPlay Simulator** (Simulator app → **I/O → External Displays
+  → CarPlay**) — simulator builds skip provisioning, so this works **before**
+  Apple grants the entitlement. **Device builds fail codesigning until the
+  grant lands** (apply at <https://developer.apple.com/contact/carplay/>,
+  Account Holder, category Audio; then enable CarPlay on the App ID under
+  Additional Capabilities and regenerate profiles — EAS can't sync this
+  capability). Until then `eas.json` device profiles strip the entitlement via
+  `SUBWAVE_NO_CARPLAY_ENTITLEMENT=1`; delete those lines after the grant.
+  **SDK-upgrade caveat**: the generated `PhoneSceneDelegate` re-parents the
+  AppDelegate's React root into the scene window — re-verify against Expo's
+  AppDelegate template on every SDK bump.
+- **Android (Android Auto)** — the RNTP fork's Media3 `MediaLibraryService`
+  serves the browse tree (`src/car/browseTree.ts`; taps/voice land as
+  `Event.RemotePlayId`/`RemotePlaySearch` in `service.ts`);
+  `plugins/withAndroidAuto.js` supplies `automotive_app_desc.xml` + the car
+  meta-data. Test with the **Desktop Head Unit** (Android Studio; enable Auto
+  developer mode → "Unknown sources") or a real head unit.
 
-> **Android Auto is intentionally not declared.** The earlier
-> `plugins/withAndroidAuto.js` declaration (#444) was **rejected by Google Play**
-> (20 Jun 2026) under the Auto App Quality Guidelines: media apps that use a TTS
-> engine to read out content aren't permitted on Android Auto, which is exactly
-> what SUB/WAVE's AI DJ does. The declaration was removed so the Android build
-> stays Play-compliant. iOS CarPlay is unaffected (separate `MPNowPlayingInfoCenter`
-> path, no manifest declaration). Revisit only if Google's policy changes **and**
-> a compliant `MediaBrowserService` browse tree is added.
+> ⚠ **Android Auto must stay OFF Google Play.** The earlier manifest-only
+> declaration (#444) drew a Play **enforcement** on 20 Jun 2026 — *"Category
+> not permitted — media apps that use TTS engine readout for content are not
+> permitted at this time"* — and the build was pulled (#477). The AI DJ *is*
+> TTS readout, so the now-compliant browse tree does not cure the policy
+> objection. The `production` profile therefore sets `SUBWAVE_NO_ANDROID_AUTO=1`
+> to strip the declaration from Play-bound builds; dev / `preview` (internal
+> APK) / sideloaded builds keep Android Auto working. Revisit the gate only if
+> Google's "at this time" policy changes, or to attempt an appeal armed with
+> the compliant `MediaLibraryService` implementation.
 
 ---
 

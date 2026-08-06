@@ -12,6 +12,9 @@
 // can't scrub a live stream.
 import TrackPlayer, { Event } from 'react-native-track-player';
 import { getLastLiveMeta, loadAndPlay } from '@/audio/player';
+import { carStations, publishCarBrowseTree, stationForMediaId } from '@/car/browseTree';
+import { carTuneTo, matchStationQuery } from '@/car/carTune';
+import { featuredStation, loadStations } from '@/lib/station';
 
 export async function PlaybackService(): Promise<void> {
   // Pausing a live stream leaves a stale buffer behind. On a lock-screen /
@@ -34,4 +37,36 @@ export async function PlaybackService(): Promise<void> {
   });
   TrackPlayer.addEventListener(Event.RemotePause, () => TrackPlayer.pause());
   TrackPlayer.addEventListener(Event.RemoteStop, () => TrackPlayer.stop());
+
+  // --- Android Auto ---------------------------------------------------------
+  // Browse-tree taps and voice queries land here (Media3 MediaLibraryService in
+  // the RNTP fork → Event.RemotePlayId / RemotePlaySearch). Resolution goes
+  // through the persisted station store, not React state — on a car cold start
+  // this service is all that's running.
+  TrackPlayer.addEventListener(Event.RemotePlayId, async ({ id }) => {
+    try {
+      const store = await loadStations();
+      const ref = stationForMediaId(id, carStations(featuredStation(), store.recents));
+      if (ref) await carTuneTo(ref);
+    } catch {
+      /* headless best-effort — the car shows the session's error state */
+    }
+  });
+  TrackPlayer.addEventListener(Event.RemotePlaySearch, async ({ query }) => {
+    try {
+      const store = await loadStations();
+      const ref = matchStationQuery(
+        query ?? '',
+        carStations(featuredStation(), store.recents),
+        store.activeStation,
+      );
+      if (ref) await carTuneTo(ref);
+    } catch {
+      /* headless best-effort */
+    }
+  });
+
+  // Publish the station list even when the phone UI never mounts (car cold
+  // start). StationContext republishes with the live store on every change.
+  publishCarBrowseTree().catch(() => {});
 }

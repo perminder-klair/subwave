@@ -13,17 +13,23 @@
     },
     "development-device": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": { "SUBWAVE_NO_CARPLAY_ENTITLEMENT": "1" }
     },
     "preview": {
       "distribution": "internal",
       "channel": "preview",
       "ios": { "simulator": false },
-      "android": { "buildType": "apk" }
+      "android": { "buildType": "apk" },
+      "env": { "SUBWAVE_NO_CARPLAY_ENTITLEMENT": "1" }
     },
     "production": {
       "autoIncrement": true,
-      "channel": "production"
+      "channel": "production",
+      "env": {
+        "SUBWAVE_NO_CARPLAY_ENTITLEMENT": "1",
+        "SUBWAVE_NO_ANDROID_AUTO": "1"
+      }
     }
   },
   "submit": {
