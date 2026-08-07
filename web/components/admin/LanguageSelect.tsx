@@ -7,7 +7,7 @@
 // preset+custom pattern elsewhere in admin, kept lightweight (no search
 // dialog, no audio preview) since this list has no audition affordance and
 // is short enough for a plain <Select>.
-import type { ChangeEvent } from 'react';
+import { useState, type ChangeEvent } from 'react';
 import { Input } from '../ui/input';
 import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
@@ -35,17 +35,31 @@ export function LanguageSelect({
   value, onChange, languages, className, ariaLabel = 'Language',
 }: LanguageSelectProps) {
   const isKnown = value !== '' && languages.includes(value);
-  const isCustom = value !== '' && !isKnown;
-  const selectValue = value === '' ? ALL : isKnown ? value : CUSTOM;
+  // `value` alone can't distinguish "All languages" from "just switched to
+  // Custom, haven't typed anything yet" — both are ''. This flag is the
+  // difference: it's set the moment the operator explicitly picks "Custom…"
+  // and cleared the moment they pick anything else, so the Select can stay
+  // on "Custom…" (and the text input stay mounted) through an empty value.
+  const [pendingCustom, setPendingCustom] = useState(false);
+  const isSavedCustom = value !== '' && !isKnown;
+  const showCustom = pendingCustom || isSavedCustom;
+  const selectValue = showCustom ? CUSTOM : (value === '' ? ALL : value);
 
   return (
     <div className={className}>
       <Select
         value={selectValue}
         onValueChange={v => {
-          if (v === ALL) onChange('');
-          else if (v === CUSTOM) onChange(isCustom ? value : '');
-          else onChange(v);
+          if (v === ALL) { setPendingCustom(false); onChange(''); }
+          else if (v === CUSTOM) {
+            setPendingCustom(true);
+            // Only clear if switching FROM a known/all value — preserve
+            // already-typed custom text if there is any.
+            if (!isSavedCustom) onChange('');
+          } else {
+            setPendingCustom(false);
+            onChange(v);
+          }
         }}
       >
         <SelectTrigger aria-label={ariaLabel}>
