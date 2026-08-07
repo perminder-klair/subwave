@@ -164,9 +164,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
         pocketTtsVoices: settings.POCKET_TTS_VOICES,
         pocketTtsCustomVoices: customVoices,
         cloudProviders: settings.TTS_CLOUD_PROVIDERS,
-        // English display names for the admin correction-row / "Test
-        // corrections" language dropdowns (Moods → Speech tab). See
-        // audio/preview-text.ts for the canonical matching table.
+        // English display names for the admin "Test corrections" sample-
+        // language dropdown (Moods → Speech tab). See audio/preview-text.ts
+        // for the canonical table.
         speechLanguages: PREVIEW_LANGUAGES,
         frequencies: settings.FREQUENCIES,
         // The live mood NAMES, for the show/festival mood dropdowns. Now driven
