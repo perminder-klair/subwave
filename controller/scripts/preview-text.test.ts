@@ -6,7 +6,9 @@
 // Run: `npm test -- preview-text` (tsx scripts/preview-text.test.ts).
 
 import assert from 'node:assert/strict';
-import { localizedPreviewText } from '../src/audio/preview-text.js';
+import {
+  localizedPreviewText, correctionAppliesToLanguage, PREVIEW_LANGUAGES,
+} from '../src/audio/preview-text.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -53,6 +55,39 @@ async function main() {
       const sample = localizedPreviewText(lang);
       assert.ok(sample && sample.includes('SUB/WAVE'), `${lang} sample must mention SUB/WAVE verbatim`);
     }
+  });
+
+  console.log('correctionAppliesToLanguage:');
+  await test('empty correction language always applies', () => {
+    assert.equal(correctionAppliesToLanguage('', 'German'), true);
+    assert.equal(correctionAppliesToLanguage('', ''), true);
+    assert.equal(correctionAppliesToLanguage('   ', 'Japanese'), true);
+  });
+  await test('same language matches, case/diacritic-insensitive', () => {
+    assert.equal(correctionAppliesToLanguage('Turkish', 'Türkçe'), true);
+    assert.equal(correctionAppliesToLanguage('turkish', 'TR'), true);
+  });
+  await test('different languages do not match', () => {
+    assert.equal(correctionAppliesToLanguage('German', 'French'), false);
+    assert.equal(correctionAppliesToLanguage('Spanish', 'es-MX-not-a-real-code'), false);
+  });
+  await test('empty persona language is treated as English', () => {
+    assert.equal(correctionAppliesToLanguage('English', ''), true);
+    assert.equal(correctionAppliesToLanguage('German', ''), false);
+  });
+  await test('an unrecognized custom value only matches an identical custom value', () => {
+    assert.equal(correctionAppliesToLanguage('Klingon', 'Klingon'), true);
+    assert.equal(correctionAppliesToLanguage('Klingon', 'klingon'), true);
+    assert.equal(correctionAppliesToLanguage('Klingon', 'Vulcan'), false);
+  });
+
+  console.log('PREVIEW_LANGUAGES:');
+  await test('is a sorted, non-empty list of display names including English', () => {
+    assert.ok(PREVIEW_LANGUAGES.length > 20);
+    assert.ok(PREVIEW_LANGUAGES.includes('English'));
+    assert.ok(PREVIEW_LANGUAGES.includes('Spanish'));
+    const sorted = [...PREVIEW_LANGUAGES].sort((a, b) => a.localeCompare(b));
+    assert.deepEqual(PREVIEW_LANGUAGES, sorted);
   });
 
   process.exit(failures ? 1 : 0);
