@@ -12,7 +12,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  normalizeForDisplay, normalizeForSpeech, spokenWordScale,
+  normalizeForDisplay, normalizeForSpeech, spokenWordScale, sanitizeSpeechCorrections,
 } from '../src/audio/speech-text.js';
 
 let failures = 0;
@@ -168,6 +168,51 @@ async function main() {
     const rules = [{ from: 'drum and bass', to: 'drum n bass' }];
     assert.equal(normalizeForSpeech('classic drum and bass hour', rules),
       'classic drum n bass hour');
+  });
+
+  console.log('sanitizeSpeechCorrections (preview override):');
+  await test('non-array input returns an empty list', () => {
+    assert.deepEqual(sanitizeSpeechCorrections(undefined), []);
+    assert.deepEqual(sanitizeSpeechCorrections(null), []);
+    assert.deepEqual(sanitizeSpeechCorrections('nope'), []);
+    assert.deepEqual(sanitizeSpeechCorrections({}), []);
+  });
+  await test('valid rows pass through unchanged', () => {
+    assert.deepEqual(
+      sanitizeSpeechCorrections([{ from: 'GHz', to: 'gigahertz' }]),
+      [{ from: 'GHz', to: 'gigahertz' }],
+    );
+  });
+  await test('rows with a blank/missing `from` are dropped', () => {
+    assert.deepEqual(sanitizeSpeechCorrections([{ from: '', to: 'x' }]), []);
+    assert.deepEqual(sanitizeSpeechCorrections([{ to: 'x' }]), []);
+    assert.deepEqual(sanitizeSpeechCorrections([{ from: '   ', to: 'x' }]), []);
+  });
+  await test('non-string `to` becomes an empty string, not dropped', () => {
+    assert.deepEqual(
+      sanitizeSpeechCorrections([{ from: 'literally', to: 42 }]),
+      [{ from: 'literally', to: '' }],
+    );
+  });
+  await test('malformed rows (non-object, null) are skipped, not thrown', () => {
+    assert.deepEqual(
+      sanitizeSpeechCorrections([null, 'x', 42, { from: 'ok', to: 'yes' }]),
+      [{ from: 'ok', to: 'yes' }],
+    );
+  });
+  await test('`from` is truncated at 80 chars, `to` at 160', () => {
+    const longFrom = 'a'.repeat(90);
+    const longTo = 'b'.repeat(200);
+    const result = sanitizeSpeechCorrections([{ from: longFrom, to: longTo }]);
+    assert.equal(result[0].from.length, 80);
+    assert.equal(result[0].to.length, 160);
+  });
+  await test('capped at 100 rows, extras dropped', () => {
+    const rows = Array.from({ length: 120 }, (_, i) => ({ from: `w${i}`, to: `x${i}` }));
+    assert.equal(sanitizeSpeechCorrections(rows).length, 100);
+    // the FIRST 100 survive, not an arbitrary subset
+    assert.equal(sanitizeSpeechCorrections(rows)[0].from, 'w0');
+    assert.equal(sanitizeSpeechCorrections(rows)[99].from, 'w99');
   });
 
   // --- the display pass (#1186) -------------------------------------------

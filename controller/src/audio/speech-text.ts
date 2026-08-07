@@ -64,6 +64,32 @@ function applyCorrections(text: string, corrections: readonly SpeechCorrection[]
   return t;
 }
 
+// Sanitizes an UNTRUSTED corrections array for the admin "Test corrections"
+// preview (routes/settings/tts.ts POST /settings/tts/preview) — the operator
+// can send the tab's UNSAVED working rows, so this can't reuse
+// settings/validate.ts's persistence-path validator (which throws). Lenient
+// like normalizeForSpeech's own per-row skip: a malformed row is dropped,
+// never a 400, because this never gets written to disk.
+const PREVIEW_CORRECTIONS_MAX = 100;
+const CORRECTION_FROM_MAX = 80;
+const CORRECTION_TO_MAX = 160;
+
+export function sanitizeSpeechCorrections(input: unknown): SpeechCorrection[] {
+  if (!Array.isArray(input)) return [];
+  const out: SpeechCorrection[] = [];
+  for (const row of input) {
+    if (out.length >= PREVIEW_CORRECTIONS_MAX) break;
+    if (!row || typeof row !== 'object') continue;
+    const rawFrom = (row as Record<string, unknown>).from;
+    const rawTo = (row as Record<string, unknown>).to;
+    const from = typeof rawFrom === 'string' ? rawFrom.slice(0, CORRECTION_FROM_MAX) : '';
+    if (!from.trim()) continue;
+    const to = typeof rawTo === 'string' ? rawTo.slice(0, CORRECTION_TO_MAX) : '';
+    out.push({ from, to });
+  }
+  return out;
+}
+
 // Magnitude words that ride between a $ amount and the spoken "dollars":
 // "$5 million" must become "5 million dollars", not "5 dollars million".
 // The \b keeps "millionaire" from prefix-matching ("5 million dollarsaire").
