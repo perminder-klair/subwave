@@ -22,7 +22,8 @@ export const router = express.Router();
 // sentence is rendered in that language. `corrections` is an UNSAVED
 // {from,to}[] override (admin "Test corrections" button, Speech tab) — when
 // present it replaces settings.tts.corrections for this call, sanitized
-// server-side by sanitizeSpeechCorrections. voiceSettings carries UNSAVED ElevenLabs
+// server-side by settings.normalizeTtsCorrections (the same helper the
+// persisted operator settings run through). voiceSettings carries UNSAVED ElevenLabs
 // slider values (issue #696) so the operator can tune the expressive knobs by
 // ear before saving; fishSettings does the same for temperature/top-p/latency.
 // synthesizeSample clamps them like settings.update() does.

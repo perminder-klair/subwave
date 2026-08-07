@@ -11,7 +11,7 @@ import * as chatterbox from './chatterbox.js';
 import * as pocketTts from './pocketTts.js';
 import { heavyEnabledEngines } from './ttsHeavyClient.js';
 import * as remoteTts from './remoteTts.js';
-import { normalizeForSpeech, sanitizeSpeechCorrections } from './speech-text.js';
+import { normalizeForSpeech } from './speech-text.js';
 import {
   configuredSlot, fallbackTextFor, orderedFallbacks, type RescueSlot,
 } from './tts-fallback.js';
@@ -321,8 +321,10 @@ export async function synthesizeSample(
     text?: string;
     // Unsaved corrections override (admin "Test corrections" button, Speech
     // tab) — when present, used INSTEAD of settings.tts.corrections for this
-    // one synth call. Sanitized by sanitizeSpeechCorrections; malformed input
-    // degrades to no corrections rather than throwing.
+    // one synth call. Sanitized by settings.normalizeTtsCorrections (the same
+    // helper the persisted operator settings run through) so the preview can
+    // never drift from what actually saves and airs; malformed input degrades
+    // to no corrections rather than throwing.
     corrections?: unknown;
     // Unsaved provider controls to audition — same field names as
     // settings.tts.cloud so they merge straight into cloudOverride in
@@ -346,7 +348,7 @@ export async function synthesizeSample(
     ? text.trim()
     : (localizedPreviewText(language) ?? DEFAULT_PREVIEW_TEXT);
   const activeCorrections = corrections !== undefined
-    ? sanitizeSpeechCorrections(corrections)
+    ? settings.normalizeTtsCorrections(corrections)
     : settings.get().tts?.corrections;
   const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), activeCorrections);
   const scale = settings.clampTtsSpeed(speed);

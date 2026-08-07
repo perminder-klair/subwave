@@ -178,6 +178,7 @@ export {
   clampTtsSpeed,
   coerceShowVocals,
   normalizeDial,
+  normalizeTtsCorrections,
   personaToneDirectives,
 } from './settings/vocab.js';
 export { cloudVoiceSettingsAreDefault } from './settings/defaults.js';
