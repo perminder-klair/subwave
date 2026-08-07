@@ -15,7 +15,7 @@ import { normalizeForSpeech } from './speech-text.js';
 import {
   configuredSlot, fallbackTextFor, orderedFallbacks, type RescueSlot,
 } from './tts-fallback.js';
-import { localizedPreviewText } from './preview-text.js';
+import { localizedPreviewText, correctionAppliesToLanguage } from './preview-text.js';
 import * as cloud from '../llm/speech.js';
 import { stripThinking } from '../llm/sdk.js';
 import * as settings from '../settings.js';
@@ -347,9 +347,14 @@ export async function synthesizeSample(
   const raw = (typeof text === 'string' && text.trim())
     ? text.trim()
     : (localizedPreviewText(language) ?? DEFAULT_PREVIEW_TEXT);
-  const activeCorrections = corrections !== undefined
+  // Same `language` value that picks the localized sample sentence above
+  // also scopes which corrections apply — one selector, two effects (see
+  // docs/superpowers/specs/2026-08-08-corrections-language-scoping-design.md).
+  const previewLanguage = language || '';
+  const activeCorrections = (corrections !== undefined
     ? settings.normalizeTtsCorrections(corrections)
-    : settings.get().tts?.corrections;
+    : settings.get().tts?.corrections || []
+  ).filter(c => correctionAppliesToLanguage(c.language || '', previewLanguage));
   const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), activeCorrections);
   const scale = settings.clampTtsSpeed(speed);
   let previewCloudModel: string | undefined;
@@ -405,6 +410,14 @@ export async function speak(
   text: string,
   { kind = 'default', outPath, speedScale, persona }: { kind?: string; outPath?: string; speedScale?: number; persona?: any } = {},
 ) {
+  // Persona on-air language (e.g. "French") — resolved FIRST because it now
+  // also scopes which operator corrections apply below, in addition to its
+  // original job as a pronunciation hint the cloud engine reads later in
+  // this function (issue #558). DJ-voiced kinds only — never jingles — and
+  // '' for the default English persona.
+  const language = GLOBAL_VOICE_KINDS.has(kind)
+    ? ''
+    : String(personaFor(persona)?.language || '').trim();
   // Belt-and-suspenders scrub of any leaked reasoning at the single point every
   // booth-bound string converges (follow-up to #949). The free-text generators
   // already stripThinking their output, but a reasoning model that leaks a
@@ -413,8 +426,12 @@ export async function speak(
   // literals never appear in a real script — so every non-LLM caller (jingles,
   // idents, request intros) is unaffected. Operator speech corrections
   // (settings.tts.corrections) ride along — read live, so a saved rule
-  // applies to the very next spoken line, no restart.
-  const speakText = normalizeForSpeech(stripThinking(text), settings.get().tts?.corrections);
+  // applies to the very next spoken line, no restart — filtered to rows
+  // whose `language` matches this call's `language` (or is untagged).
+  const activeCorrections = (settings.get().tts?.corrections || []).filter(
+    c => correctionAppliesToLanguage(c.language || '', language),
+  );
+  const speakText = normalizeForSpeech(stripThinking(text), activeCorrections);
   // `persona` overrides the clock-driven effective persona so the persona-handoff
   // mic-pass can voice the outgoing DJ (engine, voice, language, soul, speed)
   // after the hour has flipped. Absent → getEffectivePersona(), i.e. today.
@@ -441,15 +458,6 @@ export async function speak(
     : '';
   const rescueText = fallbackTextFor(requested, cloudCueFamily, speakText);
   const primaryText = requested === primary ? speakText : rescueText;
-  // Persona on-air language (e.g. "French") rides along to the cloud engine as a
-  // pronunciation hint so a non-English script isn't read with English phonetics
-  // (issue #558). DJ-voiced kinds only — never jingles — and '' (ignored) for
-  // the default English persona. Local engines ignore the field; only
-  // cloud-speech.ts reads it (the voice model carries the language for piper /
-  // kokoro / pocket-tts).
-  const language = GLOBAL_VOICE_KINDS.has(kind)
-    ? ''
-    : String(personaFor(persona)?.language || '').trim();
   // The persona's soul (e.g. "thoughtful and a little wistful") rides the same
   // path so the voice delivery carries the same character as the writing (issue
   // #579). DJ-voiced kinds only, like `language`; only the OpenAI gpt-4o*-tts
