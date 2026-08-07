@@ -1,7 +1,5 @@
 // Unit tests for the corrections normalizers (settings/vocab.ts) — the
-// lenient load-path pass and the strict update()/PUT-settings pass. Both
-// gained a `language` field (empty = "All languages") alongside the
-// pre-existing `from`/`to`.
+// lenient load-path pass and the strict update()/PUT-settings pass.
 // Run: `npm test -- tts-corrections` (tsx scripts/tts-corrections.test.ts).
 
 import assert from 'node:assert/strict';
@@ -24,28 +22,42 @@ async function main() {
     assert.deepEqual(normalizeTtsCorrections(null), []);
     assert.deepEqual(normalizeTtsCorrections('nope'), []);
   });
-  await test('a row with no language key defaults to empty string', () => {
+  await test('a well-formed row passes through, trimmed', () => {
     assert.deepEqual(
-      normalizeTtsCorrections([{ from: 'GHz', to: 'gigahertz' }]),
-      [{ from: 'GHz', to: 'gigahertz', language: '' }],
+      normalizeTtsCorrections([{ from: '  GHz  ', to: '  gigahertz  ' }]),
+      [{ from: 'GHz', to: 'gigahertz' }],
     );
   });
-  await test('a row with a language string keeps it, trimmed', () => {
+  await test('a row with a blank/missing `from` is dropped', () => {
+    assert.deepEqual(normalizeTtsCorrections([{ from: '', to: 'x' }]), []);
+    assert.deepEqual(normalizeTtsCorrections([{ to: 'x' }]), []);
+    assert.deepEqual(normalizeTtsCorrections([{ from: '   ', to: 'x' }]), []);
+  });
+  await test('non-string `to` becomes an empty string, not dropped', () => {
     assert.deepEqual(
-      normalizeTtsCorrections([{ from: 'Ke$ha', to: 'Kesha', language: '  German  ' }]),
-      [{ from: 'Ke$ha', to: 'Kesha', language: 'German' }],
+      normalizeTtsCorrections([{ from: 'literally', to: 42 }]),
+      [{ from: 'literally', to: '' }],
     );
   });
-  await test('a non-string language becomes empty string, not dropped', () => {
+  await test('malformed rows (non-object, null) are skipped, not thrown', () => {
     assert.deepEqual(
-      normalizeTtsCorrections([{ from: 'x', to: 'y', language: 42 }]),
-      [{ from: 'x', to: 'y', language: '' }],
+      normalizeTtsCorrections([null, 'x', 42, { from: 'ok', to: 'yes' }]),
+      [{ from: 'ok', to: 'yes' }],
     );
   });
-  await test('language is truncated at 80 chars', () => {
-    const longLang = 'a'.repeat(90);
-    const result = normalizeTtsCorrections([{ from: 'x', to: 'y', language: longLang }]);
-    assert.equal(result[0].language.length, 80);
+  await test('`from` is truncated at 80 chars, `to` at 160', () => {
+    const longFrom = 'a'.repeat(90);
+    const longTo = 'b'.repeat(200);
+    const result = normalizeTtsCorrections([{ from: longFrom, to: longTo }]);
+    assert.equal(result[0].from.length, 80);
+    assert.equal(result[0].to.length, 160);
+  });
+  await test('capped at 100 rows, the first 100 survive', () => {
+    const rows = Array.from({ length: 120 }, (_, i) => ({ from: `w${i}`, to: `x${i}` }));
+    const result = normalizeTtsCorrections(rows);
+    assert.equal(result.length, 100);
+    assert.equal(result[0].from, 'w0');
+    assert.equal(result[99].from, 'w99');
   });
 
   console.log('validateTtsCorrectionsStrict (strict update() path):');
@@ -56,30 +68,28 @@ async function main() {
     const rows = Array.from({ length: TTS_CORRECTIONS_LIMIT + 1 }, (_, i) => ({ from: `w${i}`, to: `x${i}` }));
     assert.throws(() => validateTtsCorrectionsStrict(rows), /at most/);
   });
-  await test('a row with no language key strict-validates to empty string', () => {
+  await test('a well-formed row validates, trimmed', () => {
     assert.deepEqual(
-      validateTtsCorrectionsStrict([{ from: 'GHz', to: 'gigahertz' }]),
-      [{ from: 'GHz', to: 'gigahertz', language: '' }],
+      validateTtsCorrectionsStrict([{ from: '  GHz  ', to: '  gigahertz  ' }]),
+      [{ from: 'GHz', to: 'gigahertz' }],
     );
   });
-  await test('a valid language rides through, trimmed', () => {
-    assert.deepEqual(
-      validateTtsCorrectionsStrict([{ from: 'x', to: 'y', language: '  Spanish  ' }]),
-      [{ from: 'x', to: 'y', language: 'Spanish' }],
-    );
-  });
-  await test('throws when language exceeds the cap', () => {
-    const longLang = 'a'.repeat(81);
+  await test('throws when `from` is empty or exceeds the cap', () => {
+    assert.throws(() => validateTtsCorrectionsStrict([{ from: '', to: 'x' }]), /from must be/);
     assert.throws(
-      () => validateTtsCorrectionsStrict([{ from: 'x', to: 'y', language: longLang }]),
-      /language must be at most/,
+      () => validateTtsCorrectionsStrict([{ from: 'a'.repeat(81), to: 'x' }]),
+      /from must be/,
     );
   });
-  await test('a non-string language coerces via String(), does not throw for a short value', () => {
-    assert.deepEqual(
-      validateTtsCorrectionsStrict([{ from: 'x', to: 'y', language: 42 }]),
-      [{ from: 'x', to: 'y', language: '42' }],
+  await test('throws when `to` exceeds the cap', () => {
+    assert.throws(
+      () => validateTtsCorrectionsStrict([{ from: 'x', to: 'b'.repeat(161) }]),
+      /to must be at most/,
     );
+  });
+  await test('throws when a row is not an object', () => {
+    assert.throws(() => validateTtsCorrectionsStrict([null]), /must be an object/);
+    assert.throws(() => validateTtsCorrectionsStrict(['x']), /must be an object/);
   });
 
   console.log(failures ? `\n${failures} failing` : '\nall passing');

@@ -182,16 +182,12 @@ export function normalizeTtsSpeedMap(raw: unknown): Record<string, number> {
 export const TTS_CORRECTIONS_LIMIT = 100;
 const TTS_CORRECTION_FROM_MAX = 80;
 const TTS_CORRECTION_TO_MAX = 160;
-const TTS_CORRECTION_LANGUAGE_MAX = 80;
 
 // Lenient on-load pass: never throws, drops malformed entries so a
-// hand-edited settings.json can't wedge boot. `language`: '' = "All
-// languages" (matches every persona) — every pre-existing row (no
-// `language` key) normalizes to '', so a settings.json written before this
-// field existed is byte-identical in behavior.
-export function normalizeTtsCorrections(raw: any): Array<{ from: string; to: string; language: string }> {
+// hand-edited settings.json can't wedge boot.
+export function normalizeTtsCorrections(raw: any): Array<{ from: string; to: string }> {
   if (!Array.isArray(raw)) return [];
-  const out: Array<{ from: string; to: string; language: string }> = [];
+  const out: Array<{ from: string; to: string }> = [];
   for (const item of raw) {
     if (out.length >= TTS_CORRECTIONS_LIMIT) break;
     if (!item || typeof item !== 'object') continue;
@@ -202,17 +198,14 @@ export function normalizeTtsCorrections(raw: any): Array<{ from: string; to: str
     const to = typeof item.to === 'string'
       ? item.to.trim().slice(0, TTS_CORRECTION_TO_MAX)
       : '';
-    const language = typeof item.language === 'string'
-      ? item.language.trim().slice(0, TTS_CORRECTION_LANGUAGE_MAX)
-      : '';
-    out.push({ from, to, language });
+    out.push({ from, to });
   }
   return out;
 }
 
 // Strict update() validator — whole-array replace, indexed throws, rebuilt
 // objects so unknown keys are stripped (the validateFestivalsStrict shape).
-export function validateTtsCorrectionsStrict(raw: any): Array<{ from: string; to: string; language: string }> {
+export function validateTtsCorrectionsStrict(raw: any): Array<{ from: string; to: string }> {
   if (!Array.isArray(raw)) throw new Error('tts.corrections must be an array');
   if (raw.length > TTS_CORRECTIONS_LIMIT) {
     throw new Error(`tts.corrections must be at most ${TTS_CORRECTIONS_LIMIT} entries`);
@@ -229,11 +222,7 @@ export function validateTtsCorrectionsStrict(raw: any): Array<{ from: string; to
     if (to.length > TTS_CORRECTION_TO_MAX) {
       throw new Error(`tts.corrections[${i}].to must be at most ${TTS_CORRECTION_TO_MAX} chars`);
     }
-    const language = String(item.language ?? '').trim();
-    if (language.length > TTS_CORRECTION_LANGUAGE_MAX) {
-      throw new Error(`tts.corrections[${i}].language must be at most ${TTS_CORRECTION_LANGUAGE_MAX} chars`);
-    }
-    return { from, to, language };
+    return { from, to };
   });
 }
 

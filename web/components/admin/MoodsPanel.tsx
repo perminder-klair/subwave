@@ -25,7 +25,6 @@ interface MoodEntry {
 interface Correction {
   from: string;
   to: string;
-  language: string;
 }
 interface TestVoiceDefaults {
   engine: string;
@@ -205,12 +204,10 @@ export default function MoodsPanel() {
   const scheduleDirty = JSON.stringify(schedule) !== JSON.stringify(savedSchedule);
   const weatherDirty = JSON.stringify(weather) !== JSON.stringify(savedWeather);
   const effectiveCorr = corrections
-    .map(c => ({ from: c.from.trim(), to: c.to.trim(), language: (c.language ?? '').trim() }))
+    .map(c => ({ from: c.from.trim(), to: c.to.trim() }))
     .filter(c => c.from);
   const correctionsDirty =
-    JSON.stringify(effectiveCorr) !== JSON.stringify(savedCorrections.map(
-      c => ({ from: c.from ?? '', to: c.to ?? '', language: c.language ?? '' }),
-    ));
+    JSON.stringify(effectiveCorr) !== JSON.stringify(savedCorrections.map(c => ({ from: c.from ?? '', to: c.to ?? '' })));
 
   const saveMoods = () => {
     const payload = (moods ?? []).map(m => ({ name: m.name, clapPrompt: m.clapPrompt }));
@@ -412,50 +409,41 @@ export default function MoodsPanel() {
               <ScrollArea className="max-h-[360px]">
                 <div className="flex flex-col gap-2 pr-2">
                   {corrections.map((c, idx) => (
-                    <div key={idx} className="flex flex-col gap-1.5 border-b border-ink/10 pb-2.5 last:border-b-0 last:pb-0">
-                      {/* Mobile: "on air" + bin on row one, "reads as" + spoken form on
-                          row two — 220/260px inputs plus a label never fit the 320px a
-                          card body leaves at 390px. `sm:justify-start` keeps the auto
-                          tracks at content width. */}
-                      <div
-                        className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[220px_auto_260px_auto] sm:justify-start"
-                      >
-                        <Input
-                          aria-label="Text on air"
-                          value={c.from}
-                          onChange={e => setCorrections(list =>
-                            list.map((row, i) => i === idx ? { ...row, from: e.target.value } : row))}
-                          placeholder="text on air (e.g. GHz)"
-                          maxLength={80}
-                          className="col-span-2 col-start-1 row-start-1 min-w-0 sm:col-span-1"
-                        />
-                        <span className="col-start-1 row-start-2 shrink-0 text-[11px] text-muted sm:col-start-2 sm:row-start-1">reads as</span>
-                        <Input
-                          aria-label="Spoken form"
-                          value={c.to}
-                          onChange={e => setCorrections(list =>
-                            list.map((row, i) => i === idx ? { ...row, to: e.target.value } : row))}
-                          placeholder="spoken form (e.g. gigahertz)"
-                          maxLength={160}
-                          className="col-start-2 row-start-2 min-w-0 sm:col-start-3 sm:row-start-1"
-                        />
-                        <Btn
-                          sm
-                          title="Remove correction"
-                          className="col-start-3 row-start-1 size-9 shrink-0 sm:col-start-4 sm:size-auto"
-                          onClick={() => setCorrections(list => list.filter((_, i) => i !== idx))}
-                        >
-                          <Trash2 size={12} />
-                        </Btn>
-                      </div>
-                      <LanguageSelect
-                        value={c.language ?? ''}
-                        onChange={v => setCorrections(list =>
-                          list.map((row, i) => i === idx ? { ...row, language: v } : row))}
-                        languages={speechLanguages}
-                        className="max-w-[260px]"
-                        ariaLabel="Language this correction applies to"
+                    /* Mobile: "on air" + bin on row one, "reads as" + spoken form on
+                       row two — 220/260px inputs plus a label never fit the 320px a
+                       card body leaves at 390px. `sm:justify-start` keeps the auto
+                       tracks at content width. */
+                    <div
+                      key={idx}
+                      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[220px_auto_260px_auto] sm:justify-start"
+                    >
+                      <Input
+                        aria-label="Text on air"
+                        value={c.from}
+                        onChange={e => setCorrections(list =>
+                          list.map((row, i) => i === idx ? { ...row, from: e.target.value } : row))}
+                        placeholder="text on air (e.g. GHz)"
+                        maxLength={80}
+                        className="col-span-2 col-start-1 row-start-1 min-w-0 sm:col-span-1"
                       />
+                      <span className="col-start-1 row-start-2 shrink-0 text-[11px] text-muted sm:col-start-2 sm:row-start-1">reads as</span>
+                      <Input
+                        aria-label="Spoken form"
+                        value={c.to}
+                        onChange={e => setCorrections(list =>
+                          list.map((row, i) => i === idx ? { ...row, to: e.target.value } : row))}
+                        placeholder="spoken form (e.g. gigahertz)"
+                        maxLength={160}
+                        className="col-start-2 row-start-2 min-w-0 sm:col-start-3 sm:row-start-1"
+                      />
+                      <Btn
+                        sm
+                        title="Remove correction"
+                        className="col-start-3 row-start-1 size-9 shrink-0 sm:col-start-4 sm:size-auto"
+                        onClick={() => setCorrections(list => list.filter((_, i) => i !== idx))}
+                      >
+                        <Trash2 size={12} />
+                      </Btn>
                     </div>
                   ))}
                 </div>
@@ -464,7 +452,7 @@ export default function MoodsPanel() {
                 <Btn
                   className="min-h-9 sm:min-h-0"
                   disabled={corrections.length >= 100}
-                  onClick={() => setCorrections(list => [...list, { from: '', to: '', language: '' }])}
+                  onClick={() => setCorrections(list => [...list, { from: '', to: '' }])}
                 >
                   Add correction
                 </Btn>
@@ -485,8 +473,9 @@ export default function MoodsPanel() {
               <div className="field-hint">
                 Uses the corrections list above exactly as it stands right now, unsaved
                 changes included, spoken by the station&apos;s default voice
-                ({previewVoice.engine}), filtered to rules matching{' '}
-                {testLanguage ? <strong>{testLanguage}</strong> : 'all languages'}.
+                ({previewVoice.engine}). Type a line using a word you corrected, or leave
+                it blank and pick a language below to hear a localized sample sentence
+                instead.
               </div>
               <Input
                 aria-label="Test sentence"
@@ -500,7 +489,7 @@ export default function MoodsPanel() {
                 onChange={setTestLanguage}
                 languages={speechLanguages}
                 className="mt-2 max-w-[260px]"
-                ariaLabel="Language to test against"
+                ariaLabel="Sample sentence language"
               />
               <VoicePreviewButton
                 className="mt-3"
@@ -512,7 +501,7 @@ export default function MoodsPanel() {
                 text={testText}
                 language={testLanguage}
                 corrections={effectiveCorr}
-                disabled={!testText.trim()}
+                disabled={!testText.trim() && !testLanguage}
                 adminFetch={adminFetch}
               />
             </div>

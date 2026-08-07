@@ -101,35 +101,10 @@ export function localizedPreviewText(language?: string): string | null {
   return LOOKUP.get(normalizeLanguage(language)) ?? null;
 }
 
-// Does a correction tagged `correctionLanguage` apply when speaking in
-// `personaLanguage`? Empty `correctionLanguage` always applies (the "All
-// languages" default). Otherwise compares normalized keys — the same
-// diacritic/case-insensitive, name-or-code matching normalizeLanguage
-// already does for persona.language. An empty personaLanguage is treated
-// as "english", mirroring the persona convention (empty = English).
-export function correctionAppliesToLanguage(
-  correctionLanguage: string,
-  personaLanguage: string,
-): boolean {
-  const c = (correctionLanguage || '').trim();
-  if (!c) return true;
-  const targetLang = (personaLanguage || '').trim() || 'english';
-  const normalizedCorrection = normalizeLanguage(c);
-  const normalizedTarget = normalizeLanguage(targetLang);
-  // Get the sample text for both languages
-  const correctionSample = LOOKUP.get(normalizedCorrection);
-  const targetSample = LOOKUP.get(normalizedTarget);
-  // If both are recognized, they must map to the same entry
-  if (correctionSample !== undefined && targetSample !== undefined) {
-    return correctionSample === targetSample;
-  }
-  // If either is unrecognized, compare normalized strings
-  return normalizedCorrection === normalizedTarget;
-}
-
 // English display name for each recognized language, for the admin
-// correction-row / "Test corrections" language dropdowns
-// (web/components/admin/LanguageSelect.tsx) — GET /settings surfaces this
+// "Test corrections" language dropdown (web/components/admin/LanguageSelect.tsx,
+// used to pick the localized sample sentence — not a correction-scoping
+// filter, corrections stay language-agnostic) — GET /settings surfaces this
 // as tts.speechLanguages. Sorted for a stable, alphabetical dropdown.
 export const PREVIEW_LANGUAGES: string[] = ENTRIES
   .map(e => {

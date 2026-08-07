@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import {
-  localizedPreviewText, correctionAppliesToLanguage, PREVIEW_LANGUAGES,
+  localizedPreviewText, PREVIEW_LANGUAGES,
 } from '../src/audio/preview-text.js';
 
 let failures = 0;
@@ -55,30 +55,6 @@ async function main() {
       const sample = localizedPreviewText(lang);
       assert.ok(sample && sample.includes('SUB/WAVE'), `${lang} sample must mention SUB/WAVE verbatim`);
     }
-  });
-
-  console.log('correctionAppliesToLanguage:');
-  await test('empty correction language always applies', () => {
-    assert.equal(correctionAppliesToLanguage('', 'German'), true);
-    assert.equal(correctionAppliesToLanguage('', ''), true);
-    assert.equal(correctionAppliesToLanguage('   ', 'Japanese'), true);
-  });
-  await test('same language matches, case/diacritic-insensitive', () => {
-    assert.equal(correctionAppliesToLanguage('Turkish', 'Türkçe'), true);
-    assert.equal(correctionAppliesToLanguage('turkish', 'TR'), true);
-  });
-  await test('different languages do not match', () => {
-    assert.equal(correctionAppliesToLanguage('German', 'French'), false);
-    assert.equal(correctionAppliesToLanguage('Spanish', 'es-MX-not-a-real-code'), false);
-  });
-  await test('empty persona language is treated as English', () => {
-    assert.equal(correctionAppliesToLanguage('English', ''), true);
-    assert.equal(correctionAppliesToLanguage('German', ''), false);
-  });
-  await test('an unrecognized custom value only matches an identical custom value', () => {
-    assert.equal(correctionAppliesToLanguage('Klingon', 'Klingon'), true);
-    assert.equal(correctionAppliesToLanguage('Klingon', 'klingon'), true);
-    assert.equal(correctionAppliesToLanguage('Klingon', 'Vulcan'), false);
   });
 
   console.log('PREVIEW_LANGUAGES:');
