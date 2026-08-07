@@ -17,9 +17,12 @@ export const router = express.Router();
 // POST /settings/tts/preview — synthesize a short sample in an EXPLICIT engine +
 // voice (not the on-air persona) so the admin "Play sample" button can audition
 // a voice/speed before saving. Body: { engine, voice?, cloudProvider?, cloudModel?, speed?,
-// lang?, language?, text?, voiceSettings?, fishSettings? } — `language` is the persona's
+// lang?, language?, text?, corrections?, voiceSettings?, fishSettings? } — `language` is the persona's
 // free-text on-air language; when set (and no explicit text), the sample
-// sentence is rendered in that language. voiceSettings carries UNSAVED ElevenLabs
+// sentence is rendered in that language. `corrections` is an UNSAVED
+// {from,to}[] override (admin "Test corrections" button, Speech tab) — when
+// present it replaces settings.tts.corrections for this call, sanitized
+// server-side by sanitizeSpeechCorrections. voiceSettings carries UNSAVED ElevenLabs
 // slider values (issue #696) so the operator can tune the expressive knobs by
 // ear before saving; fishSettings does the same for temperature/top-p/latency.
 // synthesizeSample clamps them like settings.update() does.
@@ -56,6 +59,7 @@ router.post('/settings/tts/preview', requireAdmin, async (req, res) => {
       lang: typeof body.lang === 'string' ? body.lang : undefined,
       language: typeof body.language === 'string' ? body.language : undefined,
       text: typeof body.text === 'string' ? body.text : undefined,
+      corrections: Array.isArray(body.corrections) ? body.corrections : undefined,
       voiceSettings: (body.voiceSettings && typeof body.voiceSettings === 'object')
         ? body.voiceSettings
         : undefined,
