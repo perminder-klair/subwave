@@ -15,6 +15,8 @@ import {
 import { SkeletonCards } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import FestivalsSection from './FestivalsSection';
+import { VoicePreviewButton } from './tts/VoicePreviewButton';
+import { LanguageSelect } from './LanguageSelect';
 
 interface MoodEntry {
   name: string;
@@ -23,6 +25,13 @@ interface MoodEntry {
 interface Correction {
   from: string;
   to: string;
+}
+interface TestVoiceDefaults {
+  engine: string;
+  voice: string;
+  cloudProvider?: string;
+  cloudModel?: string;
+  speed?: number;
 }
 
 // The 8 fixed day-periods (controller context.ts getTimeContext) — only each
@@ -79,6 +88,10 @@ export default function MoodsPanel() {
   const [savedWeather, setSavedWeather] = useState<Record<string, string>>({});
   const [corrections, setCorrections] = useState<Correction[]>([]);
   const [savedCorrections, setSavedCorrections] = useState<Correction[]>([]);
+  const [previewVoice, setPreviewVoice] = useState<TestVoiceDefaults>({ engine: 'piper', voice: '' });
+  const [testText, setTestText] = useState('');
+  const [testLanguage, setTestLanguage] = useState('');
+  const [speechLanguages, setSpeechLanguages] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     try {
@@ -89,7 +102,18 @@ export default function MoodsPanel() {
           moods?: unknown;
           moodSchedule?: unknown;
           weatherMoods?: unknown;
-          tts?: { corrections?: unknown };
+          tts?: {
+            corrections?: unknown;
+            defaultEngine?: string;
+            kokoro?: { voice?: string };
+            chatterbox?: { referenceVoice?: string };
+            pocketTts?: { voice?: string };
+            cloud?: { provider?: string; model?: string; voice?: string };
+            speed?: Record<string, number>;
+          };
+        };
+        tts?: {
+          speechLanguages?: string[];
         };
       } | null;
       const v = j?.values || {};
@@ -100,6 +124,16 @@ export default function MoodsPanel() {
         ? v.weatherMoods : {}) as Record<string, string>;
       const loadedCorr = Array.isArray(v.tts?.corrections)
         ? (v.tts!.corrections as Correction[]) : [];
+      const rawTts = v.tts || {};
+      const loadedSpeechLanguages = Array.isArray(j?.tts?.speechLanguages)
+        ? (j!.tts!.speechLanguages as string[]) : [];
+      const previewEngine = rawTts.defaultEngine || 'piper';
+      const previewVoiceValue =
+        previewEngine === 'kokoro' ? (rawTts.kokoro?.voice || '')
+        : previewEngine === 'chatterbox' ? (rawTts.chatterbox?.referenceVoice || '')
+        : previewEngine === 'pocket-tts' ? (rawTts.pocketTts?.voice || '')
+        : previewEngine === 'cloud' ? (rawTts.cloud?.voice || '')
+        : '';
       setMoods(loadedMoods);
       setSavedMoods(loadedMoods);
       setSchedule(loadedSchedule);
@@ -108,6 +142,14 @@ export default function MoodsPanel() {
       setSavedWeather(loadedWeather);
       setCorrections(loadedCorr);
       setSavedCorrections(loadedCorr);
+      setSpeechLanguages(loadedSpeechLanguages);
+      setPreviewVoice({
+        engine: previewEngine,
+        voice: previewVoiceValue,
+        cloudProvider: rawTts.cloud?.provider,
+        cloudModel: previewEngine === 'cloud' ? rawTts.cloud?.model : undefined,
+        speed: rawTts.speed?.[previewEngine],
+      });
       setErr(null);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -354,76 +396,117 @@ export default function MoodsPanel() {
       {tab === 'festivals' && <FestivalsSection />}
 
       {tab === 'speech' && moods !== null && (
-        <Card title="Speech corrections" sub="how names and tricky words should sound">
-          <div className="field">
-            <div className="field-hint">
-              Find-and-replace rules we apply to every line before it’s spoken, for names and
-              words the voice tends to get wrong (<em>GHz</em> →<em> gigahertz</em>, <em>Hozier</em>{' '}
-              → <em>Ho-zeer</em>). Case doesn’t matter, and it matches whole words and phrases;
-              leave the spoken form empty to drop a word entirely. New rules kick in from the next
-              line — no restart needed.
-            </div>
-            <ScrollArea className="max-h-[360px]">
-              <div className="flex flex-col gap-2 pr-2">
-                {corrections.map((c, idx) => (
-                  /* Mobile: "on air" + bin on row one, "reads as" + spoken form on
-                     row two — 220/260px inputs plus a label never fit the 320px a
-                     card body leaves at 390px. `sm:justify-start` keeps the auto
-                     tracks at content width. */
-                  <div
-                    key={idx}
-                    className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[220px_auto_260px_auto] sm:justify-start"
-                  >
-                    <Input
-                      aria-label="Text on air"
-                      value={c.from}
-                      onChange={e => setCorrections(list =>
-                        list.map((row, i) => i === idx ? { ...row, from: e.target.value } : row))}
-                      placeholder="text on air (e.g. GHz)"
-                      maxLength={80}
-                      className="col-span-2 col-start-1 row-start-1 min-w-0 sm:col-span-1"
-                    />
-                    <span className="col-start-1 row-start-2 shrink-0 text-[11px] text-muted sm:col-start-2 sm:row-start-1">reads as</span>
-                    <Input
-                      aria-label="Spoken form"
-                      value={c.to}
-                      onChange={e => setCorrections(list =>
-                        list.map((row, i) => i === idx ? { ...row, to: e.target.value } : row))}
-                      placeholder="spoken form (e.g. gigahertz)"
-                      maxLength={160}
-                      className="col-start-2 row-start-2 min-w-0 sm:col-start-3 sm:row-start-1"
-                    />
-                    <Btn
-                      sm
-                      title="Remove correction"
-                      className="col-start-3 row-start-1 size-9 shrink-0 sm:col-start-4 sm:size-auto"
-                      onClick={() => setCorrections(list => list.filter((_, i) => i !== idx))}
-                    >
-                      <Trash2 size={12} />
-                    </Btn>
-                  </div>
-                ))}
+        <>
+          <Card title="Speech corrections" sub="how names and tricky words should sound">
+            <div className="field">
+              <div className="field-hint">
+                Find-and-replace rules we apply to every line before it’s spoken, for names and
+                words the voice tends to get wrong (<em>GHz</em> →<em> gigahertz</em>, <em>Hozier</em>{' '}
+                → <em>Ho-zeer</em>). Case doesn’t matter, and it matches whole words and phrases;
+                leave the spoken form empty to drop a word entirely. New rules kick in from the next
+                line — no restart needed.
               </div>
-            </ScrollArea>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <Btn
-                className="min-h-9 sm:min-h-0"
-                disabled={corrections.length >= 100}
-                onClick={() => setCorrections(list => [...list, { from: '', to: '' }])}
-              >
-                Add correction
-              </Btn>
-              <Btn
-                tone="accent"
-                className="min-h-9 sm:min-h-0"
-                disabled={!correctionsDirty || busy === 'corrections'}
-                onClick={saveCorrections}
-              >
-                {busy === 'corrections' ? 'Saving…' : 'Save corrections'}
-              </Btn>
+              <ScrollArea className="max-h-[360px]">
+                <div className="flex flex-col gap-2 pr-2">
+                  {corrections.map((c, idx) => (
+                    /* Mobile: "on air" + bin on row one, "reads as" + spoken form on
+                       row two — 220/260px inputs plus a label never fit the 320px a
+                       card body leaves at 390px. `sm:justify-start` keeps the auto
+                       tracks at content width. */
+                    <div
+                      key={idx}
+                      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:grid-cols-[220px_auto_260px_auto] sm:justify-start"
+                    >
+                      <Input
+                        aria-label="Text on air"
+                        value={c.from}
+                        onChange={e => setCorrections(list =>
+                          list.map((row, i) => i === idx ? { ...row, from: e.target.value } : row))}
+                        placeholder="text on air (e.g. GHz)"
+                        maxLength={80}
+                        className="col-span-2 col-start-1 row-start-1 min-w-0 sm:col-span-1"
+                      />
+                      <span className="col-start-1 row-start-2 shrink-0 text-[11px] text-muted sm:col-start-2 sm:row-start-1">reads as</span>
+                      <Input
+                        aria-label="Spoken form"
+                        value={c.to}
+                        onChange={e => setCorrections(list =>
+                          list.map((row, i) => i === idx ? { ...row, to: e.target.value } : row))}
+                        placeholder="spoken form (e.g. gigahertz)"
+                        maxLength={160}
+                        className="col-start-2 row-start-2 min-w-0 sm:col-start-3 sm:row-start-1"
+                      />
+                      <Btn
+                        sm
+                        title="Remove correction"
+                        className="col-start-3 row-start-1 size-9 shrink-0 sm:col-start-4 sm:size-auto"
+                        onClick={() => setCorrections(list => list.filter((_, i) => i !== idx))}
+                      >
+                        <Trash2 size={12} />
+                      </Btn>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <Btn
+                  className="min-h-9 sm:min-h-0"
+                  disabled={corrections.length >= 100}
+                  onClick={() => setCorrections(list => [...list, { from: '', to: '' }])}
+                >
+                  Add correction
+                </Btn>
+                <Btn
+                  tone="accent"
+                  className="min-h-9 sm:min-h-0"
+                  disabled={!correctionsDirty || busy === 'corrections'}
+                  onClick={saveCorrections}
+                >
+                  {busy === 'corrections' ? 'Saving…' : 'Save corrections'}
+                </Btn>
+              </div>
             </div>
-          </div>
-        </Card>
+          </Card>
+
+          <Card title="Test corrections" sub="hear a rule before saving, with the station's default voice">
+            <div className="field">
+              <div className="field-hint">
+                Uses the corrections list above exactly as it stands right now, unsaved
+                changes included, spoken by the station&apos;s default voice
+                ({previewVoice.engine}). Type a line using a word you corrected, or leave
+                it blank and pick a language below to hear a localized sample sentence
+                instead.
+              </div>
+              <Input
+                aria-label="Test sentence"
+                value={testText}
+                onChange={e => setTestText(e.target.value)}
+                placeholder="Type a line using a word you corrected…"
+                maxLength={200}
+              />
+              <LanguageSelect
+                value={testLanguage}
+                onChange={setTestLanguage}
+                languages={speechLanguages}
+                className="mt-2 max-w-[260px]"
+                ariaLabel="Sample sentence language"
+              />
+              <VoicePreviewButton
+                className="mt-3"
+                engine={previewVoice.engine}
+                voice={previewVoice.voice}
+                cloudProvider={previewVoice.cloudProvider}
+                cloudModel={previewVoice.cloudModel}
+                speed={previewVoice.speed}
+                text={testText}
+                language={testLanguage}
+                corrections={effectiveCorr}
+                disabled={!testText.trim() && !testLanguage}
+                adminFetch={adminFetch}
+              />
+            </div>
+          </Card>
+        </>
       )}
     </div>
   );

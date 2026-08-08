@@ -18,6 +18,7 @@ import * as tts from '../../audio/tts.js';
 import * as remoteTts from '../../audio/remoteTts.js';
 import * as chatterbox from '../../audio/chatterbox.js';
 import * as piper from '../../audio/piper.js';
+import { PREVIEW_LANGUAGES } from '../../audio/preview-text.js';
 import * as llmProvider from '../../llm/provider.js';
 import { queue } from '../../broadcast/queue.js';
 import { streamStatus } from '../../broadcast/liquidsoap-control.js';
@@ -164,6 +165,10 @@ router.get('/settings', requireAdmin, async (req, res) => {
         pocketTtsVoices: settings.POCKET_TTS_VOICES,
         pocketTtsCustomVoices: customVoices,
         cloudProviders: settings.TTS_CLOUD_PROVIDERS,
+        // English display names for the admin "Test corrections" sample-
+        // language dropdown (Moods → Speech tab). See audio/preview-text.ts
+        // for the canonical table.
+        speechLanguages: PREVIEW_LANGUAGES,
         frequencies: settings.FREQUENCIES,
         // The live mood NAMES, for the show/festival mood dropdowns. Now driven
         // by the operator-editable vocabulary rather than the static default.

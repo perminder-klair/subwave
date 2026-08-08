@@ -305,7 +305,7 @@ const PREVIEW_TEXT_MAX = 200;
 const DEFAULT_PREVIEW_TEXT = "You're listening to SUB/WAVE. This is a voice preview.";
 
 export async function synthesizeSample(
-  { engine, voice = '', cloudProvider = 'openai', cloudModel, speed, lang, language, text, voiceSettings, fishSettings: requestedFishSettings, signal }: {
+  { engine, voice = '', cloudProvider = 'openai', cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings: requestedFishSettings, signal }: {
     engine: string;
     voice?: string;
     cloudProvider?: string;
@@ -319,6 +319,13 @@ export async function synthesizeSample(
     // sounds like on air; unrecognized/empty falls back to the English line.
     language?: string;
     text?: string;
+    // Unsaved corrections override (admin "Test corrections" button, Speech
+    // tab) — when present, used INSTEAD of settings.tts.corrections for this
+    // one synth call. Sanitized by settings.normalizeTtsCorrections (the same
+    // helper the persisted operator settings run through) so the preview can
+    // never drift from what actually saves and airs; malformed input degrades
+    // to no corrections rather than throwing.
+    corrections?: unknown;
     // Unsaved provider controls to audition — same field names as
     // settings.tts.cloud so they merge straight into cloudOverride in
     // speakWith(). Sanitized here, like `speed`.
@@ -340,7 +347,10 @@ export async function synthesizeSample(
   const raw = (typeof text === 'string' && text.trim())
     ? text.trim()
     : (localizedPreviewText(language) ?? DEFAULT_PREVIEW_TEXT);
-  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), settings.get().tts?.corrections);
+  const activeCorrections = corrections !== undefined
+    ? settings.normalizeTtsCorrections(corrections)
+    : settings.get().tts?.corrections;
+  const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), activeCorrections);
   const scale = settings.clampTtsSpeed(speed);
   let previewCloudModel: string | undefined;
   if (engine === 'cloud' && cloudModel !== undefined) {

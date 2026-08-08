@@ -30,6 +30,10 @@ interface VoicePreviewButtonProps {
   // Persona's free-text on-air language ("Turkish", "Türkçe") — the server
   // renders the sample sentence in this language when it recognizes it.
   language?: string;
+  // Explicit sample text (overrides the default/localized sentence).
+  text?: string;
+  // Unsaved corrections override — tests rules that haven't been saved yet.
+  corrections?: { from: string; to: string }[];
   // Unsaved ElevenLabs sliders (issue #696), so the sample auditions the CURRENT
   // positions. Only meaningful for cloud + elevenlabs; ignored server-side otherwise.
   voiceSettings?: {
@@ -51,7 +55,7 @@ interface VoicePreviewButtonProps {
 type PreviewState = 'idle' | 'loading' | 'error';
 
 export function VoicePreviewButton({
-  engine, voice, cloudProvider, cloudModel, speed, lang, language, voiceSettings, fishSettings, adminFetch, disabled, className,
+  engine, voice, cloudProvider, cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings, adminFetch, disabled, className,
 }: VoicePreviewButtonProps) {
   const [state, setState] = useState<PreviewState>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -88,7 +92,7 @@ export function VoicePreviewButton({
     try {
       const res = await fetchPreviewSample(
         adminFetch,
-        { engine, voice, cloudProvider, cloudModel, speed, lang, language, voiceSettings, fishSettings },
+        { engine, voice, cloudProvider, cloudModel, speed, lang, language, text, corrections, voiceSettings, fishSettings },
         ac.signal,
       );
       if (ac.signal.aborted) return;

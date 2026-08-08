@@ -17,6 +17,12 @@ export interface PreviewParams {
   // Free-text on-air language ("Turkish", "Türkçe"); the server renders the sample
   // sentence in it, falling back to English when it doesn't recognize it.
   language?: string;
+  // Explicit sample text, overriding both the default sentence and the
+  // language-localized one. Truncated server-side at PREVIEW_TEXT_MAX (200).
+  text?: string;
+  // Unsaved corrections override (admin "Test corrections" button, Moods →
+  // Speech tab) — tests the tab's CURRENT rows, saved or not.
+  corrections?: { from: string; to: string }[];
   // Unsaved ElevenLabs sliders (issue #696), so the sample auditions the CURRENT
   // positions rather than the last-saved values.
   voiceSettings?: {
