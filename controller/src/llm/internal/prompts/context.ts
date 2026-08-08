@@ -3,6 +3,8 @@
 // (skills/_agent.js) — so they all show the model the same picture of the moment.
 import { CONTEXT_FIELDS, type ContextField } from '../../../schemas/skill.js';
 
+import { speakClockAllowed } from '../../../broadcast/clock-policy.js';
+
 // Narrative angles per call type. One is picked at random and injected into the
 // user prompt as "Tone for this segment:" so consecutive generations don't fall
 // back to the same shape. Only the generate* callers consume these — the segment
@@ -138,7 +140,17 @@ export function buildContextLines(
     // speaks whatever clock shape it sees, so raw 24-hour hhmm here put
     // "thirteen oh five" on air for AM/PM stations. hhmm kept as fallback for
     // callers that build a bare clock object.
-    lines.push(`Local time: ${context.clock.display || context.clock.hhmm}${tags.length ? ' · ' + tags.join(' · ') : ''}`);
+    //
+    // With the clock switched off (broadcast/clock-policy.ts) the numerals go
+    // but the tags stay: they are daypart colour rather than a clock reading,
+    // and isDark is what stops the DJ describing daylight after sunset. The
+    // heading moves with them, because "Local time:" carrying no time reads as
+    // a bug rather than as a setting.
+    if (!speakClockAllowed()) {
+      if (tags.length) lines.push(`Vibe: ${tags.join(' · ')}`);
+    } else {
+      lines.push(`Local time: ${context.clock.display || context.clock.hhmm}${tags.length ? ' · ' + tags.join(' · ') : ''}`);
+    }
   }
   if (on('time') && context?.time) {
     // A show's pinned mood overrides the autonomous mood chain (context.ts),

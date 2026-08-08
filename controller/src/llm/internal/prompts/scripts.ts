@@ -7,6 +7,7 @@ import * as settings from '../../../settings.js';
 import { djText } from '../strategy/text.js';
 import { djSystem, lengthPhrase } from './system.js';
 import { buildContextLines, decoratePrompt, randomSeed } from './context.js';
+import { speakClockAllowed } from '../../../broadcast/clock-policy.js';
 import { introBudgetPhrase, introMsFor, firstVocalMsFor, bpmKeyFor } from './intro-budget.js';
 
 // Real-world context the generic between-track generators are allowed to weave
@@ -113,7 +114,14 @@ export async function generateStationId({ recap = null, context = null, recentOp
   // Loose clock only: an ident is generated at the cron tick but airs after
   // LLM + TTS + voice-queue latency — an exact "18:15" routinely lands on air
   // minutes late (issue #864). Time-of-day colour is fine; minutes are not.
-  ctxLines.push(`Task: ${lengthPhrase('stationId', speaker)} for ${stationName} with ${djName}. A little understated. If you nod to the clock, keep it loose — the time of day, never the exact minutes (this airs a few minutes after you write it).`);
+  //
+  // The nudge has to move with the field, not just alongside it: withholding
+  // the Local time line while still telling the model to nod at the clock is
+  // how you get an invented one (broadcast/clock-policy.ts).
+  const clockNudge = speakClockAllowed()
+    ? ` If you nod to the clock, keep it loose — the time of day, never the exact minutes (this airs a few minutes after you write it).`
+    : '';
+  ctxLines.push(`Task: ${lengthPhrase('stationId', speaker)} for ${stationName} with ${djName}. A little understated.${clockNudge}`);
   return djText({
     system: djSystem(speaker),
     prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'station_id', recap, recentOpeners }),
@@ -195,12 +203,21 @@ export async function generateLink({ previous, current, context, clockIsAirTime 
   // expected AIR time (the queue watcher's look-ahead, or the manual runLink
   // that airs immediately): only then may the model speak the clock; otherwise
   // the Local time line is withheld entirely so it can't leak on air.
-  const contextFields = clockIsAirTime
+  // Two independent reasons to withhold the clock, and they answer different
+  // questions: `clockIsAirTime` is about ACCURACY (is ctx's clock the moment
+  // this line airs), the policy is about whether the station speaks the clock
+  // at all. Off wins over accurate — a clock that is never spoken can never be
+  // wrong — and it gets its own clause, because the staleness wording explains
+  // a reason that no longer applies.
+  const clockOff = !speakClockAllowed();
+  const contextFields = clockIsAirTime && !clockOff
     ? SCRIPT_CONTEXT_FIELDS
     : SCRIPT_CONTEXT_FIELDS.filter((f) => f !== 'clock');
-  const clockClause = clockIsAirTime
-    ? ` If you mention the clock, "Local time" below is the moment this link airs — use that, never an earlier time.`
-    : ` Never state the clock time — this line airs when the next track starts, and you can't know exactly when that is.`;
+  const clockClause = clockOff
+    ? ` Never state the clock time, the hour, or the time of day.`
+    : clockIsAirTime
+      ? ` If you mention the clock, "Local time" below is the moment this link airs — use that, never an earlier time.`
+      : ` Never state the clock time — this line airs when the next track starts, and you can't know exactly when that is.`;
   const ctxLines = buildContextLines(context, { recentTracks, contextFields });
   // Forward-looking only: the link is written when the pick is made but doesn't
   // air until that pick actually starts — and a listener request can slip ahead

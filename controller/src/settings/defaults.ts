@@ -228,6 +228,15 @@ export const DEFAULTS = {
   // (agentPersonaPreamble), which the djPrompt template never reaches
   // (issue #1182). '' = off; default installs stay byte-identical.
   djHouseRules: '',
+  // Station clock switch. false = the wall clock stays off air: no time of day
+  // in links, idents, hand-overs, ad-libs, banter or programme beats, and the
+  // automatic top-of-the-hour time check stands down. Daypart colour survives
+  // ("after dark", "weekend", "late night", and the Period line) because that
+  // is atmosphere rather than a clock reading. Manual /dj/segment triggers stay
+  // exempt, so the operator's "Time check" pad still fires and still speaks the
+  // time: off means "stop doing this unprompted". Policy lives in exactly one
+  // place — broadcast/clock-policy.ts. Applies live; no restart.
+  djSpeakClock: true,
   // The persona roster. One persona is "active" at a time (activePersonaId);
   // a scheduled show can override which persona is on-air for its hour.
   personas: SEED_PERSONAS,

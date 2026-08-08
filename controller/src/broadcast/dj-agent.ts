@@ -40,6 +40,7 @@ import { ARTIST_VARIETY_WINDOW, alternativeCandidates } from './dj-agent/artist-
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
+import { speakClockAllowed } from './clock-policy.js';
 import { pickerAgent, requestAgent } from './dj-agent/agents.js';
 import { pickerScope } from '../llm/tools.js';
 import {
@@ -686,12 +687,23 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
     // of the on-air track is left that this round may not land before the
     // seam, the forecast is a coin flip and a link that names a time would
     // name the wrong one for a whole filler track.
-    const airAt = linkClockAt(showAt, Date.now());
+    //
+    // The station may also be set to keep the clock out entirely
+    // (broadcast/clock-policy.ts). That is a different question from the
+    // accuracy cases above: off wins over accurate, and it gets its own clause,
+    // because "you can't know when it airs" explains a reason that no longer
+    // applies. This clause and the `say` schema description are the ONLY clock
+    // the agent path ever sees — it never builds context lines — so the ban has
+    // to be stated here or it does not reach the model at all.
+    const clockOff = !speakClockAllowed();
+    const airAt = clockOff ? null : linkClockAt(showAt, Date.now());
     const airClock = airAt && ctx?.clock?.hhmm ? getClockContext(airAt) : null;
     const clockClause = wantLink
-      ? (airClock
-          ? ` The link airs at about ${airClock.display || airClock.hhmm} — if you mention the clock, that is the time to use, never an earlier one.`
-          : ` Never state the clock time in the link — you can't know exactly when it airs.`)
+      ? (clockOff
+          ? ` Never state the clock time, the hour, or the time of day in the link.`
+          : airClock
+            ? ` The link airs at about ${airClock.display || airClock.hhmm} — if you mention the clock, that is the time to use, never an earlier one.`
+            : ` Never state the clock time in the link — you can't know exactly when it airs.`)
       : '';
     const varietyClause = wantLink
       ? ` Approach for this link: ${linkAngle} Vary your first words — don't default to "here's", "this is", or "coming up".`

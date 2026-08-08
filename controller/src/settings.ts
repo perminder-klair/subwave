@@ -469,6 +469,13 @@ export async function load() {
       typeof stored.djHouseRules === 'string'
         ? stored.djHouseRules.trim().slice(0, DJ_HOUSE_RULES_MAX)
         : '',
+    // Station clock switch. Coerce missing/non-boolean (every settings.json
+    // written before this key existed) to the default `true`, so an upgrade is
+    // byte-identical. See DEFAULTS.djSpeakClock.
+    djSpeakClock:
+      typeof stored.djSpeakClock === 'boolean'
+        ? stored.djSpeakClock
+        : DEFAULTS.djSpeakClock,
     station:
       typeof stored.station === 'string' && stored.station.trim()
         ? stored.station.trim().slice(0, 80)
@@ -1275,6 +1282,14 @@ export async function update(patch) {
   // (issue #1182). Empty = off, so there's no minimum length.
   if ('djHouseRules' in patch) {
     next.djHouseRules = parseSettingsPatchKey<string>('djHouseRules', patch.djHouseRules);
+  }
+  // Station clock switch. Applies live — the policy module reads it on every
+  // call, so there is no restart and nothing to re-render.
+  if ('djSpeakClock' in patch) {
+    if (typeof patch.djSpeakClock !== 'boolean') {
+      throw new Error('djSpeakClock must be a boolean');
+    }
+    next.djSpeakClock = patch.djSpeakClock;
   }
   if ('personas' in patch) {
     next.personas = validatePersonasStrict(patch.personas);

@@ -13,6 +13,7 @@
 import * as settings from '../settings.js';
 import { zonedParts } from '../time.js';
 import { autoVoiceAllowed } from './voice-policy.js';
+import { autoTimeCheckAllowed } from './clock-policy.js';
 
 export function shouldFire(kind, now = new Date()) {
   // Station-wide voice switch (settings.tts.enabled). Sits above the frequency
@@ -42,6 +43,15 @@ export function shouldFire(kind, now = new Date()) {
   }
 
   if (kind === 'hourly') {
+    // Station clock switch (settings.djSpeakClock). A segment whose whole
+    // purpose is reading the time cannot honour "keep the clock off air" by
+    // rewording, so it stands down instead. Gated HERE rather than inside
+    // generateHourlyTime on purpose: manual /dj/segment runners never call
+    // shouldFire, so the operator's own "Time check" pad keeps working and
+    // still speaks the time — the same exemption 'silent' and the voice switch
+    // already carry. Above the frequency ladder for the same reason as the
+    // voice switch: it isn't a cadence, it's off.
+    if (!autoTimeCheckAllowed()) return false;
     // Station-zone hour — the every-other-hour cadence follows the operator's
     // clock. The minute slots above stay on process time on purpose: they
     // must align with when the crons actually fire.
