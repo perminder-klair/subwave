@@ -9,6 +9,7 @@
 // live in globals.css under `.admin-root .hs-*`. Collapses under
 // prefers-reduced-motion.
 import { useEffect, useRef } from 'react';
+import { Ban } from 'lucide-react';
 import type { NowPlayingTrack } from '../../lib/types';
 import { Btn } from './ui';
 
@@ -163,6 +164,9 @@ export interface StationHeaderProps {
   pickerBusy: boolean;
   busy: string | null;
   onSkip: () => void;
+  /** Block the current track (SUB/WAVE + Navidrome's own library) and skip
+   *  it now — strictly more than onSkip does, never less. */
+  onNeverPlayAgain: () => void;
 }
 
 export default function StationHeader({
@@ -174,6 +178,7 @@ export default function StationHeader({
   pickerBusy,
   busy,
   onSkip,
+  onNeverPlayAgain,
 }: StationHeaderProps) {
   // Latest targets, read by the animation loop without re-subscribing.
   const targets = useRef(metrics);
@@ -290,6 +295,28 @@ export default function StationHeader({
         <div className="flex gap-2">
           <Btn lg tone="danger" disabled={!!busy || !np?.title} onClick={onSkip}>
             {busy === 'skip' ? 'skipping…' : 'Skip track'}
+          </Btn>
+          {/* Same size/shape as Skip (the theme's most severe existing button
+              style) plus a heavier border and a prohibition glyph — this does
+              strictly more than Skip (permanent blocklist + Navidrome
+              exclusion, not just this one play), and needs to read as a step
+              up from it, not a sibling action. Colour is a deliberate
+              deviation from the shared danger/red token: approved green,
+              darkening on hover/focus/press as the "about to fire" cue.
+              Scoped to this one button via className (twMerge overrides the
+              destructive variant's bg/border) rather than touching the
+              shared Btn/Button variants, which every other danger button in
+              the admin still uses unchanged. */}
+          <Btn
+            lg
+            tone="danger"
+            disabled={!!busy || !np?.title}
+            onClick={onNeverPlayAgain}
+            title="Block this track everywhere (SUB/WAVE + Navidrome) and skip it now"
+            className="border-2 border-[#2e7d32] bg-[#2e7d32] hover:border-[#1b5e20] hover:bg-[#1b5e20] focus-visible:border-[#1b5e20] focus-visible:bg-[#1b5e20] active:border-[#1b5e20] active:bg-[#1b5e20]"
+          >
+            <Ban aria-hidden />
+            {busy === 'never-play-again' ? 'BLOCKING…' : 'NEVER PLAY AGAIN'}
           </Btn>
         </div>
       </div>

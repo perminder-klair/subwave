@@ -528,6 +528,15 @@ export function LibraryProvider({
     } catch (error) {
       if (!(error instanceof AdminResponseError) || error.status !== 404) throw error;
     }
+    // 200 (rather than the usual 204) means the SUB/WAVE-side unblock
+    // succeeded but reversing a never-play-again Navidrome exclusion
+    // degraded — surface it distinctly instead of letting it stay a
+    // server-log-only failure (mirrors how the block path's own `warning`
+    // rides its 200 response).
+    if (r.status === 200) {
+      const j = await r.json().catch(() => ({})) as { warning?: string };
+      if (j.warning) notify.info(j.warning);
+    }
     // The Blocked tab's list is a query like any other — invalidating reaches
     // it whether or not that tab is mounted, which is what registerBlockList
     // existed to do.

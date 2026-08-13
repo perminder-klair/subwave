@@ -6,6 +6,8 @@ import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import * as library from '../music/library.js';
 import * as blocklist from '../music/blocklist.js';
+import * as neverPlayIgnore from '../music/never-play-ignore.js';
+import { reverseNeverPlayIgnore } from '../broadcast/never-play-again.js';
 import * as likes from '../broadcast/likes.js';
 import * as db from '../music/library-db.js';
 import * as analyzer from '../music/analyzer.js';
@@ -1211,9 +1213,31 @@ router.delete('/library/blocklist/:type/:id', requireAdmin, async (req, res) => 
     return res.status(400).json({ error: "type must be 'track', 'album' or 'artist'" });
   }
   try {
+    // Read before remove() drops it — the only place a track entry's
+    // libraryPath (never-play-again's Navidrome-side exclusion, if it set
+    // one) is recoverable, so the .ndignore line below can be found again.
+    const entry = blocklist.getEntry(type as blocklist.BlockType, id);
     const removed = await blocklist.remove(type as blocklist.BlockType, id);
     if (!removed) return res.status(404).json({ error: 'not on the blocklist' });
     queue.log('blocked', `${type} ${id} removed from the never-play blocklist`);
+    // Reverse the Navidrome-side half too, best-effort — see
+    // broadcast/never-play-again.ts's reverseNeverPlayIgnore() for the full
+    // contract. The SUB/WAVE-side unblock above has already fully succeeded
+    // regardless of what happens here, so a reversal failure is reported,
+    // never turned into a failed unblock. `warning` stays null (and the
+    // response stays the original 204/no-body) for every unblock that never
+    // touched Navidrome — still the overwhelming majority — so this only
+    // becomes a richer response for the specific case that couldn't exist
+    // before never-play-again: an entry that really did write a `.ndignore`
+    // line and whose reversal didn't fully land, which previously failed
+    // silently (logged server-side only, never surfaced to the caller).
+    const { warning } = await reverseNeverPlayIgnore({
+      ignoreEnabled: () => neverPlayIgnore.isEnabled(),
+      ignoreRemove: (rel) => neverPlayIgnore.remove(rel),
+      startScan: () => subsonic.startScan(),
+      log: (kind, message) => queue.log(kind, message),
+    }, entry?.libraryPath ?? null);
+    if (warning) return res.status(200).json({ removed: true, warning });
     res.status(204).end();
   } catch (err) {
     queue.log('error', `/library/blocklist delete failed: ${err.message}`);

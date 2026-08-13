@@ -116,6 +116,10 @@ services:
       - "${BIND_ADDRESS:-0.0.0.0}:${CONTROLLER_PORT:-7701}:7701"
     volumes:
       - *state-mount
+      # Optional, for "Never Play Again"'s Navidrome-wide exclusion (see
+      # NEVER_PLAY_LIBRARY_PATH in .env.example) — same guidance as the
+      # default docker-compose.yml's controller service.
+      # - ${HOST_MUSIC_PATH}:/music
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:7701/health > /dev/null"]
       interval: 10s

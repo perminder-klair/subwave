@@ -35,6 +35,8 @@ import { join, resolve } from 'node:path';
 import { STATE_DIR } from '../config.js';
 import { skipTrack } from '../broadcast/liquidsoap-control.js';
 import { getFullContext } from '../context.js';
+import { runNeverPlayAgain, NeverPlayAgainError } from '../broadcast/never-play-again.js';
+import * as neverPlayIgnore from '../music/never-play-ignore.js';
 
 export const router = express.Router();
 
@@ -851,6 +853,64 @@ router.post('/dj/skip', requireAdmin, async (req, res) => {
   } catch (err) {
     queue.log('error', `/dj/skip failed: ${err.message}`);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /dj/never-play-again — block the current track (SUB/WAVE-side,
+// immediate) and, when NEVER_PLAY_LIBRARY_PATH is configured, best-effort
+// exclude it from Navidrome's own catalog too — then skip it. See
+// broadcast/never-play-again.ts for the full ordering/failure-semantics
+// contract this route implements.
+//
+// Body: { expectedSubsonicId } — the track id the admin UI's confirmation
+// dialog was showing when the operator confirmed. Required: this is a
+// destructive action, and without it the request would act on whatever
+// happens to be on air the MOMENT this handler runs, not the track the
+// operator actually looked at and approved (the on-air track can change
+// between the dialog opening and this landing — a short jingle, a fast
+// transition, or just hesitation on the modal). A malformed/missing body
+// is a 400 (a client bug); a well-formed id that no longer matches what's
+// actually playing is the 409 runNeverPlayAgain() itself reports — the two
+// are kept distinct rather than folded into one generic error.
+//
+// 409 when there is no current track (boot, stream idle, a bed/jingle on
+// air — none of those reach now-playing.json) OR the current track no
+// longer matches expectedSubsonicId. Any failure short of the final skip
+// itself degrades to a 200 with `warning` naming what didn't land — the
+// operator's core intent ("stop this track, don't play it again") must
+// succeed even when the Navidrome-side half can't. A failed skip propagates
+// as a plain 500, same as the existing POST /dj/skip above, deliberately
+// NOT a multi-status shape — see never-play-again.ts's NeverPlayAgainError
+// doc comment.
+// ---------------------------------------------------------------------------
+router.post('/dj/never-play-again', requireAdmin, async (req, res) => {
+  const expectedSubsonicId = req.body?.expectedSubsonicId;
+  if (typeof expectedSubsonicId !== 'string' || !expectedSubsonicId) {
+    return res.status(400).json({ error: 'expectedSubsonicId is required' });
+  }
+  try {
+    const result = await runNeverPlayAgain({
+      getNowPlaying: () => queue.getNowPlaying(),
+      getSong: (id) => subsonic.getSong(id),
+      blocklistAdd: (input) => blocklist.add(input),
+      blocklistMatch: (song) => blocklist.matchOf(song),
+      blocklistSetLibraryPath: (type, id, libraryPath) => blocklist.setLibraryPath(type, id, libraryPath),
+      purgeBlocked: () => queue.purgeBlocked(),
+      refreshAutoPlaylist: () => refreshAutoPlaylist(),
+      ignoreEnabled: () => neverPlayIgnore.isEnabled(),
+      resolveWithinRoot: (rel) => neverPlayIgnore.resolveWithinRoot(rel),
+      ignoreAdd: (rel) => neverPlayIgnore.add(rel),
+      startScan: () => subsonic.startScan(),
+      commitBeforeSkip: () => queue.commitBeforeSkip(),
+      skipTrack: () => skipTrack(),
+      log: (kind, message) => queue.log(kind, message),
+    }, expectedSubsonicId);
+    res.json(result);
+  } catch (err: any) {
+    const status = err instanceof NeverPlayAgainError ? err.status : 500;
+    if (status >= 500) queue.log('error', `/dj/never-play-again failed: ${err.message}`);
+    res.status(status).json({ error: err.message });
   }
 });
 

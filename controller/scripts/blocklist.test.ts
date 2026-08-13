@@ -175,6 +175,59 @@ try {
   assert.equal(await blocklist.removeRule(rule.id), false, 'second remove is a miss');
   assert.equal(blocklist.isBlocked(tagged), false, 'rule gone, track pickable again');
 
+  // ── libraryPath (never-play-again's Navidrome-side exclusion marker) ──────
+  // Absent from an ordinary block (the ONLY existing add() call sites never
+  // pass it) — must default to null, not undefined, so it round-trips
+  // predictably through JSON.
+  await blocklist.add({ type: 'track', id: 'trk-plain', name: 'Plain Block' });
+  assert.equal(blocklist.getEntry('track', 'trk-plain')?.libraryPath, null);
+
+  // Set when the caller (never-play-again) supplies one.
+  await blocklist.add({ type: 'track', id: 'trk-np', name: 'Never Play', libraryPath: 'Artist/Album/03 Track.flac' });
+  assert.equal(blocklist.getEntry('track', 'trk-np')?.libraryPath, 'Artist/Album/03 Track.flac');
+
+  // getEntry(): exact (type, id) lookup, unlike matchOf()'s song-shaped
+  // precedence walk — a miss on a wrong type or an absent id is null, not a
+  // throw, and it does not match by name the way the artist/album fallback
+  // does.
+  assert.equal(blocklist.getEntry('album', 'trk-np'), null, 'type must match too');
+  assert.equal(blocklist.getEntry('track', 'nonexistent'), null);
+
+  // Persists and reloads: libraryPath survives a fresh load() from disk.
+  const withLibraryPath = JSON.parse(readFileSync(join(stateDir, 'blocklist.json'), 'utf8'));
+  const npEntry = withLibraryPath.entries.find((e: any) => e.id === 'trk-np');
+  assert.equal(npEntry.libraryPath, 'Artist/Album/03 Track.flac');
+  const plainEntry = withLibraryPath.entries.find((e: any) => e.id === 'trk-plain');
+  assert.equal(plainEntry.libraryPath, null);
+
+  // ── setLibraryPath(): narrow update, never a remove()+add() round trip ────
+  // (never-play-again's "upgrade an already-blocked entry" path — see
+  // broadcast/never-play-again.ts.)
+  const beforeUpgrade = blocklist.getEntry('track', 'trk-plain')!;
+  const upgraded = await blocklist.setLibraryPath('track', 'trk-plain', 'Plain/Block/Track.mp3');
+  assert.equal(upgraded?.libraryPath, 'Plain/Block/Track.mp3');
+  assert.equal(upgraded?.addedAt, beforeUpgrade.addedAt, 'addedAt is untouched');
+  assert.equal(upgraded?.name, beforeUpgrade.name, 'name is untouched');
+  assert.equal(upgraded, blocklist.getEntry('track', 'trk-plain'), 'mutates and returns the SAME entry object, not a replacement');
+  assert.equal(blocklist.isBlocked({ id: 'trk-plain' }), true, 'the track is still (and was always) blocked throughout the update — no remove()+add() gap');
+
+  // Persists.
+  const afterUpgrade = JSON.parse(readFileSync(join(stateDir, 'blocklist.json'), 'utf8'));
+  assert.equal(afterUpgrade.entries.find((e: any) => e.id === 'trk-plain').libraryPath, 'Plain/Block/Track.mp3');
+
+  // Setting the SAME value again is a no-op — same object, same addedAt, and
+  // (can't directly observe "no write happened" here, but the value is
+  // unchanged either way) idempotent.
+  const noopUpgrade = await blocklist.setLibraryPath('track', 'trk-plain', 'Plain/Block/Track.mp3');
+  assert.equal(noopUpgrade, upgraded);
+
+  // Clearing back to null is a normal update too, not a special case.
+  assert.equal((await blocklist.setLibraryPath('track', 'trk-plain', null))?.libraryPath, null);
+
+  // Unknown (type, id) → null, not a throw.
+  assert.equal(await blocklist.setLibraryPath('track', 'nonexistent', 'x'), null);
+  assert.equal(await blocklist.setLibraryPath('album', 'trk-np', 'x'), null, 'type must match too, same as getEntry()');
+
   console.log('blocklist.test.ts: all assertions passed');
 } finally {
   rmSync(stateDir, { recursive: true, force: true });

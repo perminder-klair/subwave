@@ -54,6 +54,7 @@ import type {
   ConnectionsState,
   DashStatus,
   HealthStats,
+  NeverPlayAgainResponse,
   QueueState,
   RequestEntry,
   SortState,
@@ -96,6 +97,16 @@ export default function DashPanel() {
   // Drives the PromptInputSubmit glyph: ready → submitted → error flash → ready.
   const [sayStatus, setSayStatus] = useState<ChatStatus>('ready');
   const [confirmSkip, setConfirmSkip] = useState(false);
+  const [confirmNeverPlayAgain, setConfirmNeverPlayAgain] = useState(false);
+  // Captured at the moment the Never Play Again button is pressed (dialog
+  // OPEN time, not confirm time) — the id/name/artist the operator actually
+  // looked at and approved. The backend re-checks this id against the live
+  // on-air track immediately before acting and 409s on a mismatch, but that
+  // check is only as good as what we send it: capturing at open time (rather
+  // than re-reading `np` fresh when the dialog is confirmed, which could be
+  // seconds later and already reflect a DIFFERENT track under the modal
+  // overlay) gives the safety check its widest, most honest window.
+  const [neverPlayAgainTarget, setNeverPlayAgainTarget] = useState<{ id: string; title: string | null; artist: string | null } | null>(null);
 
   // Hardcoded set until the controller has a generated batch. The GET on mount
   // never calls a model; the ↻ button's POST does.
@@ -179,16 +190,27 @@ export default function DashPanel() {
     onDone: (_data, _vars, client) => client.invalidateQueries({ queryKey: dashKeys.status() }),
   });
 
-  const act = async (
+  // `formatSuccess` is optional so every existing call site (skip, segments,
+  // toggles, manual voice) keeps its identical default behaviour — only
+  // never-play-again below passes one, to surface the blocked track's
+  // name/artist instead of the generic "<label> done". The generic <T>
+  // (defaulting to ActResponse) lets that one call site read the richer
+  // never-play-again response shape without a second copy of this
+  // busy/fetch/error-toast plumbing. `runDashAction`'s declared return type
+  // is the narrower ActResponse, but the JSON body it hands back is whatever
+  // the route actually sent — the cast to T just lets TS see the fields the
+  // never-play-again route adds on top.
+  const act = async <T extends ActResponse = ActResponse>(
     key: string,
     path: string,
     body: Record<string, unknown> | null,
     label: string,
-  ): Promise<ActResponse | null> => {
+    formatSuccess?: (j: T) => string,
+  ): Promise<T | null> => {
     setBusy(key);
     try {
-      const j = await actionMutation.mutateAsync({ path, body });
-      notify.ok(j.spoken ? `on air: “${j.spoken}”` : `${label} done`);
+      const j = (await actionMutation.mutateAsync({ path, body })) as T;
+      notify.ok(formatSuccess ? formatSuccess(j) : j.spoken ? `on air: “${j.spoken}”` : `${label} done`);
       return j;
     } catch (e) {
       notify.err(`${label}: ${errorMessage(e)}`);
@@ -220,6 +242,45 @@ export default function DashPanel() {
 
   // Runs only after the confirm dialog — a skip cuts the track for every listener.
   const doSkip = () => act('skip', '/dj/skip', {}, 'skip track');
+
+  // Names who got blocked, since the generic "<label> done" toast tells the
+  // operator nothing they can't already see — the whole point of a
+  // never-play-again toast is confirming WHICH track just left the air for
+  // good. Falls back to a plain confirmation if the response ever omits
+  // `blocked` (defensive; the route always sets it).
+  const formatNeverPlayAgainSuccess = (j: NeverPlayAgainResponse): string => {
+    const name = j.blocked?.name;
+    const artist = j.blocked?.artist;
+    const who = name ? (artist ? `“${name}” — ${artist}` : `“${name}”`) : 'current track';
+    return `Never Play Again: ${who} blocked & skipped`;
+  };
+
+  // Runs only after the confirm dialog — same gate as skip, and this does
+  // strictly more (permanent blocklist + Navidrome exclusion + an immediate
+  // skip), never less. Sends the id captured when the dialog opened
+  // (neverPlayAgainTarget) as expectedSubsonicId — the backend re-checks it
+  // against the live on-air track immediately before touching anything and
+  // 409s (via the shared act() error path) if the track already moved on, so
+  // a slow confirm can never block/skip a DIFFERENT track than the one the
+  // operator actually approved. A `warning` on an otherwise-ok response means
+  // the SUB/WAVE-side block and the skip both still landed but the
+  // Navidrome-side half degraded (see the route's Failure semantics) —
+  // surfaced as a separate, non-alarming toast rather than folded into the
+  // success message, so the operator sees both without one burying the other.
+  const doNeverPlayAgain = async () => {
+    if (!neverPlayAgainTarget?.id) {
+      notify.err('never play again: no track was captured when the dialog opened — try again');
+      return;
+    }
+    const j = await act<NeverPlayAgainResponse>(
+      'never-play-again',
+      '/dj/never-play-again',
+      { expectedSubsonicId: neverPlayAgainTarget.id },
+      'never play again',
+      formatNeverPlayAgainSuccess,
+    );
+    if (j?.ok && j.warning) notify.info(j.warning);
+  };
 
   // No confirm: nothing on-air changes, worst case a 409 because the track went
   // on air first. The row drops optimistically; the poll confirms.
@@ -340,6 +401,14 @@ export default function DashPanel() {
         pickerBusy={!!q.pickerBusy}
         busy={busy}
         onSkip={() => setConfirmSkip(true)}
+        onNeverPlayAgain={() => {
+          if (np?.subsonic_id) {
+            setNeverPlayAgainTarget({ id: np.subsonic_id, title: np.title ?? null, artist: np.artist ?? null });
+            setConfirmNeverPlayAgain(true);
+          } else {
+            notify.err('never play again: no track id available for the current track');
+          }
+        }}
       />
 
       {err && <ErrorState error={err} />}
@@ -763,6 +832,21 @@ export default function DashPanel() {
         confirmLabel="skip track"
         danger
         onConfirm={doSkip}
+      />
+
+      <V3AlertDialog
+        open={confirmNeverPlayAgain}
+        onOpenChange={setConfirmNeverPlayAgain}
+        title="Never play this track again"
+        description={
+          (neverPlayAgainTarget?.title
+            ? `Block “${neverPlayAgainTarget.title}”${neverPlayAgainTarget.artist ? ` — ${neverPlayAgainTarget.artist}` : ''} `
+            : 'Block the current track ')
+          + 'in SUB/WAVE, exclude it from Navidrome’s own library, and skip it immediately for all listeners. This is more than a skip — the track won’t be picked or found again until it’s removed from the Blocked list. If a different track ends up on air before this completes, it’s refused rather than applied to the wrong one.'
+        }
+        confirmLabel="never play again"
+        danger
+        onConfirm={doNeverPlayAgain}
       />
     </div>
   );

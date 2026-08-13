@@ -321,6 +321,18 @@ export const config = {
   server: {
     port: envInt('PORT', 7701, { min: 1, max: 65_535 }),
   },
+  // "Never Play Again" Navidrome-side exclusion (music/never-play-ignore.ts) —
+  // a controller-only bind mount of the Navidrome music-library ROOT, used
+  // solely to maintain <libraryPath>/.ndignore. Deliberately separate from
+  // MUSIC_LIBRARY_PATH above: that one re-routes PLAYBACK and its resolved
+  // path has to exist inside the broadcast container too (Liquidsoap reads
+  // it); this one is read only by the controller, only to write one ignore
+  // file, and never touches what Liquidsoap plays. Empty (default) disables
+  // the Navidrome-side half of never-play-again — the SUB/WAVE-side blocklist
+  // and skip still work unconditionally either way.
+  neverPlay: {
+    libraryPath: envStr('NEVER_PLAY_LIBRARY_PATH', ''),
+  },
   show: {
     autoQueueRefreshMinutes: envInt('AUTO_QUEUE_REFRESH_MINUTES', 60),
   },

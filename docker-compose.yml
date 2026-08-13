@@ -133,6 +133,15 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - *state-mount
+      # Optional, for "Never Play Again"'s Navidrome-wide exclusion (see
+      # NEVER_PLAY_LIBRARY_PATH in .env.example) — mount your Navidrome
+      # music-library root here, READ-WRITE, pointed at the SAME directory
+      # Navidrome itself scans. Uncomment and set HOST_MUSIC_PATH in .env,
+      # then set NEVER_PLAY_LIBRARY_PATH=/music to match. Leave both unset
+      # and the feature still works — "Never Play Again" still permanently
+      # blocks a track inside SUB/WAVE and skips it immediately either way;
+      # this mount only extends that to Navidrome's own catalog too.
+      # - ${HOST_MUSIC_PATH}:/music
     # curl is in the controller image; /health is served at the router root.
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:7701/health > /dev/null"]
