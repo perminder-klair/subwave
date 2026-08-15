@@ -15,7 +15,7 @@
 // Run: `tsx scripts/never-play-ignore.test.ts` or via `npm test`.
 
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, rmSync, readFileSync, existsSync, readdirSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -189,12 +189,63 @@ try {
   assert.equal(await npi.remove('never added this one'), false);
   assert.deepEqual(npi.list(), ['Other Artist/Other Album/02 Track.mp3'], 'unaffected by the two no-op removes');
 
-  // Removing the last entry leaves an empty (not absent) file.
+  // Removing the LAST entry must DELETE the file, never leave a zero-byte
+  // one behind: an empty .ndignore is Navidrome's "skip this whole directory"
+  // marker (the same semantic docker/broadcast-entrypoint.sh relies on when
+  // it touches an empty state/archive/.ndignore to hide the archive), so a
+  // zero-byte file at the library ROOT would hide the operator's entire
+  // catalog on the very next scan — which the unblock route then triggers.
   assert.equal(await npi.remove('Other Artist/Other Album/02 Track.mp3'), true);
   assert.deepEqual(npi.list(), []);
-  assert.equal(readFileSync(ndignorePath, 'utf8'), '');
+  assert.ok(!existsSync(ndignorePath), 'emptying the list removes .ndignore rather than writing an empty one');
 
   console.log('never-play-ignore.test.ts: remove() assertions passed');
+
+  // ── an escaped trailing space survives the disk round trip ──────────────
+  // gitignore strips trailing whitespace unless it is backslash-escaped, and
+  // toIgnorePattern emits exactly that escape. Nothing this module WRITES can
+  // currently produce one (resolveWithinRoot trims song.path before the
+  // pattern is derived), so the line that matters here is an operator's own:
+  // a hand-written entry for a file whose name really does end in a space.
+  // Re-reading must not `.trim()` it back to a dangling `\`, because the
+  // rewrite below would then persist the corruption — an exclusion the
+  // operator can no longer express and this module can no longer match.
+  writeFileSync(ndignorePath, 'Operator/Track Name \\ \n');
+  assert.equal(await npi.add('Artist/Album/03 Track.flac'), true);
+  assert.deepEqual(
+    readFileSync(ndignorePath, 'utf8').split('\n').filter(Boolean),
+    ['Operator/Track Name \\ ', 'Artist/Album/03 Track.flac'],
+    "the operator's escaped trailing space round-tripped byte-identical through the rewrite",
+  );
+  assert.equal(await npi.remove('Artist/Album/03 Track.flac'), true);
+  assert.equal(
+    readFileSync(ndignorePath, 'utf8'),
+    'Operator/Track Name \\ \n',
+    'and it is still intact after the removal rewrite',
+  );
+
+  console.log('never-play-ignore.test.ts: trailing-whitespace round-trip assertions passed');
+
+  // ── a hand edit between mutations is preserved ───────────────────────────
+  // .ndignore lives in the operator's OWN music tree and Navidrome documents
+  // it as hand-editable, so this process is not its only writer. A mutation
+  // computed from a stale in-memory snapshot would rewrite the whole file and
+  // silently drop the operator's line.
+  assert.equal(await npi.add('Artist/Album/04 Track.flac'), true);
+  writeFileSync(ndignorePath, 'Artist/Album/04 Track.flac\nOperator/Hand Edited.flac\n');
+  assert.equal(await npi.add('Artist/Album/05 Track.flac'), true);
+  assert.deepEqual(
+    readFileSync(ndignorePath, 'utf8').split('\n').filter(Boolean).sort(),
+    ['Artist/Album/04 Track.flac', 'Artist/Album/05 Track.flac', 'Operator/Hand Edited.flac'].sort(),
+    "the operator's hand-added line survived the next mutation's whole-file rewrite",
+  );
+  // Clear back down for the failed-persist section below.
+  assert.equal(await npi.remove('Artist/Album/04 Track.flac'), true);
+  assert.equal(await npi.remove('Artist/Album/05 Track.flac'), true);
+  assert.equal(await npi.remove('Operator/Hand Edited.flac'), true);
+  assert.ok(!existsSync(ndignorePath));
+
+  console.log('never-play-ignore.test.ts: hand-edit preservation assertions passed');
 
   // ── failed persist must not corrupt in-memory state, and a retry must
   //    genuinely re-attempt the disk write ──────────────────────────────────

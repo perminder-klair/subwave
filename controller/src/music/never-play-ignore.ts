@@ -35,7 +35,14 @@
 //   - `load()` is single-flighted through one shared promise rather than a
 //     boolean flag, so two callers racing on the very first add()/remove()
 //     both await the SAME completed read instead of the second one
-//     proceeding against a still-empty `ignoredPaths`.
+//     proceeding against a still-empty `ignoredPaths`. It populates the
+//     in-memory VIEW only (list()); it is not what a mutation trusts.
+//   - Every mutation RE-READS the file from disk inside the lock and computes
+//     from that, never from `ignoredPaths`. `.ndignore` lives in the
+//     OPERATOR's music tree, not in state/, and Navidrome documents it as
+//     hand-editable — so this process is not its only writer, and a
+//     whole-file rewrite computed from a snapshot taken minutes ago would
+//     silently delete lines the operator added by hand in between.
 //   - Every mutation (after its own load()) additionally serialises through
 //     `withLock()`, a plain promise chain — compute-then-persist-then-publish
 //     needs it: two concurrent add()/remove() calls targeting DIFFERENT paths
@@ -47,7 +54,7 @@
 //     whole point of the compute→persist→publish order is to never mutate
 //     ahead of a persist that might fail.
 
-import { readFile } from 'node:fs/promises';
+import { readFile, unlink } from 'node:fs/promises';
 import { join, resolve, sep } from 'node:path';
 import { config } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
@@ -135,26 +142,54 @@ export function toIgnorePattern(rel: string): string {
 let ignoredPaths: string[] = [];
 let loadPromise: Promise<void> | null = null;
 
+/**
+ * Read and parse `.ndignore` from disk. ENOENT is the normal first-use case
+ * (no track ever blocked yet, or the mount was only just added) and yields an
+ * empty list; any OTHER read error THROWS, because the callers that matter
+ * are the mutators, and there "assume empty" is the destructive answer: this
+ * module rewrites the file WHOLE, so one transient EIO / stale NFS handle on
+ * a network-mounted library would turn a file full of exclusions into a
+ * single line. A mutation that refuses is recoverable; one that silently
+ * truncates the operator's file is not.
+ *
+ * Lines are NOT `.trim()`ed. toIgnorePattern() deliberately backslash-escapes
+ * TRAILING whitespace so gitignore keeps it, and trimming on the way back in
+ * would strip the escaped space and leave a dangling `\` — the pattern would
+ * then no longer match the one remove() re-derives, so the entry could never
+ * be unblocked again. Only a trailing `\r` is stripped (CRLF-written files),
+ * and blank/whitespace-only lines are dropped as before.
+ */
+async function readList(): Promise<string[]> {
+  if (!IGNORE_FILE) return [];
+  try {
+    const raw = await readFile(IGNORE_FILE, 'utf8');
+    return raw.split('\n').map((l) => l.replace(/\r+$/, '')).filter((l) => l.trim() !== '');
+  } catch (err: any) {
+    if (err?.code === 'ENOENT') return [];
+    throw err;
+  }
+}
+
 // Single-flighted: the FIRST caller kicks off the read; every caller —
 // including ones that arrive while it's still in flight — awaits that same
 // promise, so nobody ever proceeds against a not-yet-populated
-// `ignoredPaths`. Never re-runs after its first (successful or failed)
-// resolution — same "loaded once" contract music/blocklist.ts's own load()
-// has, just race-safe across the await.
+// `ignoredPaths`. This only populates the in-memory VIEW (list()); mutations
+// re-read from disk under the lock and never trust this snapshot. A FAILED
+// load clears `loadPromise` so the next caller genuinely retries — caching a
+// failure for the process lifetime would leave list() permanently lying about
+// a file the module can read fine a second later.
 function load(): Promise<void> {
   if (!IGNORE_FILE) return Promise.resolve();
   if (!loadPromise) {
     loadPromise = (async () => {
       try {
-        const raw = await readFile(IGNORE_FILE, 'utf8');
-        ignoredPaths = raw.split('\n').map((l) => l.trim()).filter(Boolean);
+        ignoredPaths = await readList();
       } catch (err: any) {
-        // Missing file is the normal first-use case (no track ever blocked
-        // yet, or the mount was only just added) — anything else (a real
-        // I/O error) is worth a log line, but never fatal: the module starts
-        // empty rather than refusing to serve add()/remove() at all.
-        if (err?.code !== 'ENOENT') console.error('[never-play-ignore] .ndignore load failed:', err.message);
+        // Never fatal here: the VIEW starts empty rather than the module
+        // refusing to serve at all. The mutators are the strict half.
+        console.error('[never-play-ignore] .ndignore load failed:', err?.message ?? err);
         ignoredPaths = [];
+        loadPromise = null;
       }
     })();
   }
@@ -236,8 +271,10 @@ export async function add(rel: string): Promise<boolean> {
   const pattern = toIgnorePattern(safe);
   await load();
   return withLock(async () => {
-    if (ignoredPaths.includes(pattern)) return false;
-    const next = [...ignoredPaths, pattern];
+    const current = await readList();
+    ignoredPaths = current;
+    if (current.includes(pattern)) return false;
+    const next = [...current, pattern];
     await persistList(next);
     ignoredPaths = next; // only published once the write actually succeeded
     return true;
@@ -256,11 +293,25 @@ export async function add(rel: string): Promise<boolean> {
  */
 export async function remove(rel: string): Promise<boolean> {
   if (!ROOT || typeof rel !== 'string' || !rel) return false;
-  const pattern = toIgnorePattern(rel);
+  // Normalise EXACTLY as add() does before deriving the pattern. add() goes
+  // through resolveWithinRoot() (which trims and validates) and remove() used
+  // to skip it, so the two agreed only because every current caller happens
+  // to pass a value resolveWithinRoot() already produced. One hand-edited
+  // blocklist.json entry — or one new call site — and the asymmetry becomes a
+  // remove() that reports "not present" and leaves the line on disk forever.
+  // A rejection here is a miss, not an error, per this function's contract.
+  let pattern: string;
+  try {
+    pattern = toIgnorePattern(resolveWithinRoot(rel));
+  } catch {
+    return false;
+  }
   await load();
   return withLock(async () => {
-    if (!ignoredPaths.includes(pattern)) return false;
-    const next = ignoredPaths.filter((p) => p !== pattern);
+    const current = await readList();
+    ignoredPaths = current;
+    if (!current.includes(pattern)) return false;
+    const next = current.filter((p) => p !== pattern);
     await persistList(next);
     ignoredPaths = next;
     return true;
@@ -278,12 +329,29 @@ export function list(): string[] {
 
 async function persistList(list: string[]): Promise<void> {
   if (!IGNORE_FILE) return;
+  // An EMPTY list must DELETE the file, never write a zero-byte one: to
+  // Navidrome an empty `.ndignore` means "skip this ENTIRE directory", which
+  // at the library ROOT would hide the operator's whole catalog. That is not
+  // a guess about Navidrome's semantics — it is the behaviour this repo
+  // relies on deliberately elsewhere (`docker/broadcast-entrypoint.sh` and
+  // the AIO supervisor `touch` an empty `state/archive/.ndignore` precisely
+  // to hide the archive dir from a co-located Navidrome). Unblocking the last
+  // remaining track is the ordinary path into this branch, and the unblock
+  // route then triggers a scan, so getting it wrong wipes the library one
+  // scan later. ENOENT is a success: the file is already absent (nothing was
+  // ever persisted, or the operator removed it by hand).
+  if (!list.length) {
+    try {
+      await unlink(IGNORE_FILE);
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') throw err;
+    }
+    return;
+  }
   // Whole-file rewrite via the repo's existing atomic-write primitive —
   // there is no atomic *append*, so every mutation recomputes the full
   // contents and writeFileAtomic()s it, the same pattern music/blocklist.ts
-  // uses for blocklist.json. A trailing newline on a non-empty file is the
-  // conventional POSIX text-file ending; an empty list persists as an empty
-  // file rather than a lone newline.
-  const body = list.length ? list.join('\n') + '\n' : '';
-  await writeFileAtomic(IGNORE_FILE, body);
+  // uses for blocklist.json. A trailing newline is the conventional POSIX
+  // text-file ending.
+  await writeFileAtomic(IGNORE_FILE, list.join('\n') + '\n');
 }
