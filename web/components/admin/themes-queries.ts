@@ -42,6 +42,15 @@ function normalizeThemes(response: AdminThemesResponse): AdminThemesData {
   };
 }
 
+export async function fetchAdminThemes(
+  adminFetch: AdminFetch,
+  signal: AbortSignal,
+): Promise<AdminThemesData> {
+  return normalizeThemes(
+    await adminJson<AdminThemesResponse>(adminFetch, '/themes', undefined, signal),
+  );
+}
+
 // Theme mutation receipts intentionally omit `active`. Always replace the
 // shared entry with the authoritative GET before another route can consume it;
 // preserving the previous id can leave Shows pointing at a removed theme.
@@ -51,10 +60,7 @@ export async function refetchAdminThemes(
 ): Promise<AdminThemesData> {
   const options: FetchQueryOptions<AdminThemesData> = {
     queryKey: adminThemeKeys.detail(),
-    queryFn: async ({ signal }) => normalizeThemes(
-      // admin-query-owned: GET /themes
-      await adminJson<AdminThemesResponse>(adminFetch, '/themes', undefined, signal),
-    ),
+    queryFn: ({ signal }) => fetchAdminThemes(adminFetch, signal),
     staleTime: 0,
   };
   // A settings save can re-render/unmount ThemeSection while this read is in
@@ -66,7 +72,10 @@ export async function refetchAdminThemes(
     { queryKey: adminThemeKeys.detail(), exact: true },
     { silent: true },
   );
-  const observer = new QueryObserver(client, { ...options, enabled: false });
+  const observer = new QueryObserver<AdminThemesData>(client, {
+    queryKey: adminThemeKeys.detail(),
+    enabled: false,
+  });
   const unsubscribe = observer.subscribe(() => {});
   try {
     return await client.fetchQuery<AdminThemesData>(options);
@@ -80,9 +89,7 @@ export function useAdminThemesQuery(adminFetch: AdminFetch, enabled: boolean) {
     key: adminThemeKeys.detail(),
     adminFetch,
     enabled,
-    request: async (fetcher, signal) => normalizeThemes(
-      await adminJson<AdminThemesResponse>(fetcher, '/themes', undefined, signal),
-    ),
+    request: fetchAdminThemes,
     toastOnError: false,
   });
 }

@@ -752,6 +752,22 @@ and requires every imperative allowlist entry to match callee, method, and path.
 Focused RED checks caught all three prior behaviours, and the fresh complete local
 matrix above passed with the admin total increased to 52.
 
+Review round 3 hardened the remaining scheduling and reconciliation edges.
+Authenticated 401 handling now consults `localStorage` before the external-store
+snapshot and re-checks the captured value immediately before removal, so a B
+request rejected after another tab has stored C cannot erase C even before the C
+storage event is delivered; storage-denied sessions deliberately retain the
+matching in-memory fallback. A failed theme save now awaits public-provider
+rollback, while a committed save followed by a failed authoritative admin GET
+drops the exact admin cache, catches and reports that error, and awaits public
+provider reconciliation. Query-owned comments no longer authorize anything:
+shared helpers use an exact structural registry binding exported function,
+callee/method/path, forwarded signal parameter, and real query consumer. Fresh
+focused checks passed, the strict audit self-tests passed, and the complete
+isolated matrix passed with the admin total increased to 53; query-cache 6/6,
+Library 8/8, hooks 22/22, destructive forms 13/13, playlist DnD all checks, and
+schedule booking 9/9 also passed.
+
 - [x] **Step 5: Commit final documentation and verification fixes**
 
 ```bash
@@ -761,6 +777,10 @@ git commit -m "docs(web): document admin query ownership"
 # Review round 2 follow-up
 git add web docs/superpowers
 git commit -m "fix(web): close admin ownership races"
+
+# Review round 3 follow-up
+git add web docs/superpowers
+git commit -m "fix(web): harden credential and theme reconciliation"
 ```
 
 - [ ] **Step 6: Rebase and re-run risk-proportionate checks**

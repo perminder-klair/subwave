@@ -24,6 +24,7 @@ import {
   type SettingsData, type SaveSettings, type SettingsFieldErrors,
 } from './shared';
 import {
+  adminThemeKeys,
   refetchAdminThemes,
   useAdminThemesQuery,
   type AdminTheme,
@@ -396,13 +397,28 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
     applyTheme(theme);
     cacheTheme(theme);
     const saved = await saveSettings({ theme: { active: theme.id } });
-    if (!saved) return;
-    await refetchAdminThemes(queryClient, adminFetch);
+    if (!saved) {
+      // POST rejection (or a failed redacted settings reconcile) must not leave
+      // an unsaved optimistic palette in the DOM or pre-paint cache.
+      await themeCtx?.refreshThemes();
+      return;
+    }
+    try {
+      await refetchAdminThemes(queryClient, adminFetch);
+    } catch (e) {
+      // The setting is already committed, but this exact admin read is not
+      // authoritative. Drop its old data, report the real failure, and let the
+      // independent public provider reconcile the painted/cached palette.
+      queryClient.removeQueries({ queryKey: adminThemeKeys.detail(), exact: true });
+      await themeCtx?.refreshThemes();
+      notify.err(`Theme saved, but refresh failed: ${errorMessage(e)}`);
+      return;
+    }
     // Re-read provenance now rather than up to 30s from now: if a show is
     // pinning its own theme, this save has just set a default that won't be
     // visible until the show ends, and the operator should learn that here — not
     // from the palette flipping back on ThemeProvider's next poll.
-    themeCtx?.refreshThemes();
+    await themeCtx?.refreshThemes();
   };
 
   // Re-apply when the edited theme is the one on air, so the admin page updates now.

@@ -27,6 +27,10 @@ interface AuthSnapshot {
 
 const SERVER_SNAPSHOT: AuthSnapshot = { auth: null, needsAuth: false, hydrated: false };
 let authSnapshot: AuthSnapshot = SERVER_SNAPSHOT;
+// True only when the snapshot's non-null token is known to have been read
+// from or successfully written to localStorage. If storage is unavailable,
+// the in-memory snapshot remains a deliberate session-only fallback.
+let authSnapshotPersisted = false;
 let browserStoreStarted = false;
 const authListeners = new Set<() => void>();
 
@@ -40,18 +44,30 @@ function publishAuth(next: AuthSnapshot): void {
   for (const listener of authListeners) listener();
 }
 
+type StoredAuth = { available: true; auth: string | null } | { available: false; auth: null };
+
+function readStoredAuthState(): StoredAuth {
+  if (typeof window === 'undefined') return { available: false, auth: null };
+  try {
+    return { available: true, auth: localStorage.getItem(STORAGE_KEY) };
+  } catch {
+    return { available: false, auth: null };
+  }
+}
+
 function readStoredAuth(): string | null {
-  if (typeof window === 'undefined') return null;
-  try { return localStorage.getItem(STORAGE_KEY); } catch { return null; }
+  return readStoredAuthState().auth;
 }
 
 function startBrowserStore(): void {
   if (typeof window === 'undefined' || browserStoreStarted) return;
   browserStoreStarted = true;
-  const stored = readStoredAuth();
-  publishAuth({ auth: stored, needsAuth: false, hydrated: true });
+  const stored = readStoredAuthState();
+  authSnapshotPersisted = stored.available && stored.auth != null;
+  publishAuth({ auth: stored.auth, needsAuth: false, hydrated: true });
   window.addEventListener('storage', event => {
     if (event.key !== STORAGE_KEY) return;
+    authSnapshotPersisted = event.newValue != null;
     publishAuth({
       auth: event.newValue,
       needsAuth: event.newValue == null,
@@ -96,13 +112,19 @@ export function useAdminAuth(): AdminAuth {
     }
     if (r.status === 401) return { ok: false, error: 'wrong username or password' };
     if (!r.ok) return { ok: false, error: `controller error (${r.status})` };
-    try { localStorage.setItem(STORAGE_KEY, token); } catch {}
+    try {
+      localStorage.setItem(STORAGE_KEY, token);
+      authSnapshotPersisted = localStorage.getItem(STORAGE_KEY) === token;
+    } catch {
+      authSnapshotPersisted = false;
+    }
     publishAuth({ auth: token, needsAuth: false, hydrated: true });
     return { ok: true };
   }, []);
 
   const signOut = useCallback(() => {
     try { localStorage.removeItem(STORAGE_KEY); } catch {}
+    authSnapshotPersisted = false;
     publishAuth({ auth: null, needsAuth: true, hydrated: true });
   }, []);
 
@@ -114,16 +136,34 @@ export function useAdminAuth(): AdminAuth {
     if (token) headers.Authorization = `Basic ${token}`;
     const r = await fetch(`${API_URL}${path}`, { ...init, headers });
     if (r.status === 401) {
-      // The request may have outlived the credential that started it. A late
-      // 401 for A must never sign out B after a same-tab login or cross-tab
-      // storage update; only the credential that is still current owns the
-      // rejection. `readStoredAuth` covers the hydration edge before the
-      // external store has observed localStorage.
-      const current = authSnapshot.auth ?? readStoredAuth();
-      if (current === token) {
-        if (token) {
-          try { localStorage.removeItem(STORAGE_KEY); } catch {}
+      // localStorage is the cross-tab source of truth even before scheduling
+      // delivers its StorageEvent. Read it first: a delayed B rejection cannot
+      // remove an already-committed C merely because the external-store
+      // snapshot still says B. Re-read immediately before removal to narrow
+      // the check/clear window as far as synchronous browser storage permits.
+      const stored = readStoredAuthState();
+      const memoryOnlyOwner = stored.available
+        && stored.auth == null
+        && !authSnapshotPersisted
+        && authSnapshot.auth === token;
+      if ((stored.available && stored.auth === token) || memoryOnlyOwner) {
+        if (token && stored.auth === token) {
+          try {
+            if (localStorage.getItem(STORAGE_KEY) !== token) return r;
+            localStorage.removeItem(STORAGE_KEY);
+          } catch {
+            // Storage became unavailable between check and clear. The browser
+            // offers no atomic compare-and-delete, so fall back to the still-
+            // matching in-memory owner and leave persistence best-effort.
+            if (authSnapshot.auth !== token) return r;
+          }
         }
+        authSnapshotPersisted = false;
+        publishAuth({ auth: null, needsAuth: true, hydrated: true });
+      } else if (!stored.available && authSnapshot.auth === token) {
+        // Private-mode/storage-denied sessions still need ordinary page-owned
+        // 401 teardown even though no cross-tab source can be consulted.
+        authSnapshotPersisted = false;
         publishAuth({ auth: null, needsAuth: true, hydrated: true });
       }
     } else if (token && authSnapshot.auth === token && authSnapshot.needsAuth) {

@@ -11,7 +11,6 @@ export const debugKeys = {
 };
 
 export function fetchDebug(fetcher: AdminFetch, signal: AbortSignal): Promise<DebugData> {
-  // admin-query-owned: GET /debug
   return adminJson(fetcher, '/debug', undefined, signal);
 }
 
@@ -37,6 +36,5 @@ export function fetchStateListing(
   path: string,
   signal: AbortSignal,
 ): Promise<StateListing> {
-  // admin-query-owned: GET /debug/state-tree?path=${}
   return adminJson(fetcher, `/debug/state-tree?path=${encodeURIComponent(path)}`, undefined, signal);
 }

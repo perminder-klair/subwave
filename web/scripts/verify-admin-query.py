@@ -674,10 +674,11 @@ def page_query_401_tears_down_shell_cache(page):
 
 @check
 def credential_change_remounts_cache_and_ignores_stale_401(page):
-    """Credential A cache dies under B, and A's late 401 cannot sign B out."""
+    """Storage C beats delayed B 401 before its cross-tab event reaches the store."""
     page.set_default_timeout(5000)
     token_a = AUTH
     token_b = base64.b64encode(b"test:rotated").decode()
+    token_c = base64.b64encode(b"test:cross-tab").decode()
     stub_dashboard(page)
     station_auth = []
     state_auth = []
@@ -698,7 +699,11 @@ def credential_change_remounts_cache_and_ignores_stale_401(page):
     def state_tree_route(route):
         authorization = route.request.headers.get("authorization")
         state_auth.append(authorization)
-        marker = "cold-b" if authorization == f"Basic {token_b}" else "warm-a"
+        marker = (
+            "cold-c" if authorization == f"Basic {token_c}"
+            else "cold-b" if authorization == f"Basic {token_b}"
+            else "warm-a"
+        )
         fulfill_json(route, {
             "root": "/verify/state", "path": "", "shown": 1, "total": 1,
             "entries": [{
@@ -742,29 +747,51 @@ def credential_change_remounts_cache_and_ignores_stale_401(page):
     page.get_by_text("warm-a", exact=True).wait_for(state="visible")
     assert "warm-a" in json.dumps(query_cache_snapshot(page))
 
-    page.evaluate("window.__delayNextStateTree = true")
-    page.get_by_text("/verify/state", exact=True).locator("..").get_by_role(
-        "button", name="Refresh",
-    ).click()
-    page.wait_for_function("() => typeof window.__releaseDelayedAdmin401 === 'function'")
+    # Cross-tab A -> B has already reached this tab, so B owns both the shell
+    # provider and the request that is about to be delayed.
     page.evaluate("""({ key, oldValue, newValue }) => {
       localStorage.setItem(key, newValue);
       window.dispatchEvent(new StorageEvent('storage', {
         key, oldValue, newValue, storageArea: localStorage,
       }));
-      window.__releaseDelayedAdmin401();
     }""", {"key": "subwave_admin_auth", "oldValue": token_a, "newValue": token_b})
-
     page.get_by_text("cold-b", exact=True).wait_for(state="visible")
-    page.wait_for_timeout(200)
-    assert page.evaluate("localStorage.getItem('subwave_admin_auth')") == token_b
-    assert page.get_by_text("Admin sign-in", exact=True).count() == 0
-    assert page.evaluate("window.__delayedAdminCount") == 1
-    assert page.evaluate("window.__delayedAdminAuthorization") == f"Basic {token_a}"
-    assert f"Basic {token_b}" in station_auth, station_auth
-    assert f"Basic {token_b}" in state_auth, state_auth
     cache_dump = json.dumps(query_cache_snapshot(page))
     assert "cold-b" in cache_dump and "warm-a" not in cache_dump, cache_dump
+
+    page.evaluate("window.__delayNextStateTree = true")
+    page.get_by_text("/verify/state", exact=True).locator("..").get_by_role(
+        "button", name="Refresh",
+    ).click()
+    page.wait_for_function("() => typeof window.__releaseDelayedAdmin401 === 'function'")
+    # Another tab has committed C to storage, but scheduling has not delivered
+    # its StorageEvent yet. B's delayed rejection must consult storage itself
+    # and leave C untouched even though the external-store snapshot still says B.
+    page.evaluate("""({ key, newValue }) => {
+      localStorage.setItem(key, newValue);
+      window.__releaseDelayedAdmin401();
+    }""", {"key": "subwave_admin_auth", "newValue": token_c})
+
+    page.wait_for_timeout(200)
+    assert page.evaluate("localStorage.getItem('subwave_admin_auth')") == token_c
+    assert page.get_by_text("Admin sign-in", exact=True).count() == 0
+    assert page.evaluate("window.__delayedAdminCount") == 1
+    assert page.evaluate("window.__delayedAdminAuthorization") == f"Basic {token_b}"
+
+    # Delivery of the queued event now advances the shared store and keys the
+    # provider to C. C must start cold; no B cache may cross that boundary.
+    page.evaluate("""({ key, oldValue, newValue }) => {
+      window.dispatchEvent(new StorageEvent('storage', {
+        key, oldValue, newValue, storageArea: localStorage,
+      }));
+    }""", {"key": "subwave_admin_auth", "oldValue": token_b, "newValue": token_c})
+    page.get_by_text("cold-c", exact=True).wait_for(state="visible")
+    assert f"Basic {token_b}" in station_auth, station_auth
+    assert f"Basic {token_c}" in station_auth, station_auth
+    assert f"Basic {token_b}" in state_auth, state_auth
+    assert f"Basic {token_c}" in state_auth, state_auth
+    cache_dump = json.dumps(query_cache_snapshot(page))
+    assert "cold-c" in cache_dump and "cold-b" not in cache_dump, cache_dump
 
 
 @check
@@ -1006,6 +1033,133 @@ def themes_active_is_authoritative_after_settings_and_delete(page):
 
 
 @check
+def theme_choose_failures_reconcile_provider(page):
+    """Failed theme saves roll back; failed post-save reads reconcile safely."""
+    page.set_default_timeout(5000)
+    settings = copy.deepcopy(SETTINGS_FIXTURE)
+    settings["values"].update({
+        "theme": {"active": "verify-dark"},
+        "ui": {"skin": "classic"},
+    })
+    themes = [
+        {
+            "id": "verify-dark", "name": "Verify Dark", "description": "saved",
+            "mode": "dark", "tokens": {"--bg": "#101010"}, "builtin": True,
+        },
+        {
+            "id": "verify-fresh", "name": "Verify Fresh", "description": "candidate",
+            "mode": "light", "tokens": {"--bg": "#fafafa"}, "builtin": True,
+        },
+    ]
+    active = "verify-dark"
+    post_mode = {"value": "fail"}
+    fail_next_admin_themes = {"value": False}
+    public_theme_gets = 0
+    admin_theme_gets = 0
+    page_errors = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+    stub_dashboard(page)
+
+    def settings_route(route):
+        nonlocal active
+        if route.request.method == "POST":
+            if post_mode["value"] == "fail":
+                fulfill_json(route, {"error": "theme save rejected"}, status=500)
+                return
+            active = "verify-fresh"
+            settings["values"]["theme"]["active"] = active
+            # The public provider response deliberately differs from the
+            # optimistic swatch so the assertion proves a real reconcile.
+            themes[1]["tokens"]["--bg"] = "#eeeeee"
+            fulfill_json(route, {"ok": True})
+            return
+        fulfill_json(route, settings)
+
+    def themes_route(route):
+        nonlocal public_theme_gets, admin_theme_gets
+        if route.request.method != "GET":
+            route.continue_()
+            return
+        if route.request.headers.get("authorization"):
+            admin_theme_gets += 1
+            if fail_next_admin_themes["value"]:
+                fail_next_admin_themes["value"] = False
+                fulfill_json(route, {"error": "authoritative themes unavailable"}, status=503)
+                return
+        else:
+            public_theme_gets += 1
+        fulfill_json(route, {
+            "themes": themes,
+            "active": active,
+            "activeSource": "station",
+            "stationDefault": active,
+            "activeShow": None,
+        })
+
+    page.route("http://localhost:7791/settings", settings_route)
+    page.route("http://localhost:7791/themes**", themes_route)
+    page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
+    page.get_by_role("button", name="Skin & Themes", exact=False).click()
+    page.get_by_text("Verify Fresh", exact=True).wait_for(state="visible")
+    page.wait_for_function(
+        "() => document.documentElement.style.getPropertyValue('--bg') === '#101010'"
+    )
+    initial_public_gets = public_theme_gets
+    initial_admin_gets = admin_theme_gets
+
+    # POST failure: the optimistic light palette and pre-paint cache must both
+    # return to the still-authoritative dark provider response.
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/settings", "POST")
+    ) as failed_post:
+        page.get_by_text("Verify Fresh", exact=True).locator("..").locator("..").click()
+    assert failed_post.value.status == 500, failed_post.value.status
+    page.wait_for_function(
+        "() => document.documentElement.style.getPropertyValue('--bg') === '#101010'"
+    )
+    cached = page.evaluate(
+        "() => JSON.parse(localStorage.getItem('subwave-theme-tokens') || 'null')"
+    )
+    assert cached["id"] == "verify-dark" and cached["tokens"]["--bg"] == "#101010", cached
+    assert public_theme_gets == initial_public_gets + 1, public_theme_gets
+    assert admin_theme_gets == initial_admin_gets, admin_theme_gets
+    assert not page_errors, page_errors
+
+    # The POST now succeeds, but its exact authenticated themes read fails.
+    # The provider's public read must reconcile the real saved palette, the
+    # rejected promise must be caught, and no old active id may remain dressed
+    # up as authoritative in the shared admin cache.
+    post_mode["value"] = "succeed"
+    fail_next_admin_themes["value"] = True
+    public_before_reconcile = public_theme_gets
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/themes", "GET")
+        and response.status == 503
+    ):
+        with page.expect_response(
+            lambda response: is_admin_request(response.request, "/settings", "POST")
+        ) as saved_post:
+            page.get_by_text("Verify Fresh", exact=True).locator("..").locator("..").click()
+    assert saved_post.value.status == 200, saved_post.value.status
+    page.wait_for_function(
+        "() => document.documentElement.style.getPropertyValue('--bg') === '#eeeeee'"
+    )
+    page.get_by_text("authoritative themes unavailable", exact=False).wait_for(state="visible")
+    cached = page.evaluate(
+        "() => JSON.parse(localStorage.getItem('subwave-theme-tokens') || 'null')"
+    )
+    assert cached["id"] == "verify-fresh" and cached["tokens"]["--bg"] == "#eeeeee", cached
+    assert public_theme_gets == public_before_reconcile + 1, public_theme_gets
+    theme_entries = [
+        query for query in query_cache_snapshot(page)
+        if query["queryKey"] == ["themes", "admin"]
+    ]
+    assert all(query.get("data", {}).get("active") != "verify-dark" for query in theme_entries), theme_entries
+    assert page.get_by_text("Admin sign-in", exact=True).count() == 0
+    assert not page_errors, page_errors
+
+
+@check
 def audit_rejects_direct_cacheable_reads(_page):
     """The static ownership gate resists aliases, members, and false allowlists."""
     repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -1063,7 +1217,7 @@ def audit_rejects_direct_cacheable_reads(_page):
 }\n""",
     }
 
-    def audit_fixture(extra=None, override=None):
+    def audit_fixture(extra=None, override=None, ownership_registry=None):
         with tempfile.TemporaryDirectory(prefix="subwave-admin-audit-") as root:
             files = {**valid_allowlist, **(extra or {}), **(override or {})}
             for relative, contents in files.items():
@@ -1073,8 +1227,14 @@ def audit_rejects_direct_cacheable_reads(_page):
                     os.makedirs(parent, exist_ok=True)
                 with open(target, "w", encoding="utf-8") as source:
                     source.write(contents)
+            registry_path = os.path.join(root, "ownership.json")
+            with open(registry_path, "w", encoding="utf-8") as registry_file:
+                json.dump(ownership_registry or [], registry_file)
             result = subprocess.run(
-                ["node", "web/scripts/audit-admin-query.mjs", "--root", root],
+                [
+                    "node", "web/scripts/audit-admin-query.mjs", "--root", root,
+                    "--ownership-registry", registry_path,
+                ],
                 cwd=repo, text=True, capture_output=True, check=False,
             )
         return result.returncode, result.stdout + result.stderr
@@ -1115,15 +1275,66 @@ export async function bad(fetcher) { return second(fetcher, '/settings'); }\n"""
         assert code != 0, output
         assert "AdminShell.tsx" in output, output
 
-    valid_owned = """import { adminJson as readJson } from './admin-query';
+    fraudulent_marker = """export async function stray(fetcher, signal) {
+  // admin-query-owned: GET /themes
+  return adminJson(fetcher, '/themes', undefined, signal);
+}\n"""
+    code, output = audit_fixture(extra={"FraudulentMarker.tsx": fraudulent_marker})
+    assert code != 0, output
+    assert "FraudulentMarker.tsx" in output, output
+
+    owned_helper = """import { adminJson as readJson } from './admin-query';
+export function fetchThemes(fetcher, signal) {
+  return readJson(fetcher, '/themes', undefined, signal);
+}\n"""
+    valid_owned = """import { fetchThemes } from './OwnedHelper';
 export function useThemes(adminFetch) {
   return useAdminQuery({
     key: ['themes'], adminFetch,
-    request: (fetcher, signal) => readJson(fetcher, '/themes', undefined, signal),
+    request: (fetcher, signal) => fetchThemes(fetcher, signal),
   });
 }\n"""
-    code, output = audit_fixture(extra={"Owned.tsx": valid_owned})
+    ownership = [{
+        "file": "OwnedHelper.ts",
+        "function": "fetchThemes",
+        "reads": [{
+            "callee": "adminJson", "method": "GET", "path": "/themes", "signal": "signal",
+        }],
+        "consumers": [{
+            "file": "Owned.tsx", "owner": "useAdminQuery", "property": "request", "count": 1,
+        }],
+    }]
+    code, output = audit_fixture(
+        extra={"OwnedHelper.ts": owned_helper, "Owned.tsx": valid_owned},
+        ownership_registry=ownership,
+    )
     assert code == 0, output
+
+    wrong_registries = [
+        [{**ownership[0], "function": "fetchOtherThemes"}],
+        [{**ownership[0], "consumers": [{
+            "file": "WrongConsumer.tsx", "owner": "useAdminQuery",
+            "property": "request", "count": 1,
+        }]}],
+        ownership,
+        ownership,
+    ]
+    wrong_sources = [
+        owned_helper,
+        owned_helper,
+        owned_helper.replace("undefined, signal", "undefined, undefined"),
+        owned_helper.replace(
+            "fetchThemes(fetcher, signal) {",
+            "fetchThemes(fetcher) { const signal = new AbortController().signal;",
+        ),
+    ]
+    for registry, helper_source in zip(wrong_registries, wrong_sources):
+        code, output = audit_fixture(
+            extra={"OwnedHelper.ts": helper_source, "Owned.tsx": valid_owned},
+            ownership_registry=registry,
+        )
+        assert code != 0, output
+        assert "OwnedHelper.ts" in output or "WrongConsumer.tsx" in output, output
 
     code, output = audit_fixture()
     assert code == 0, output
@@ -1201,7 +1412,7 @@ def stations_mutations_refresh(page):
     page.get_by_text("Verify Renamed", exact=True).first.wait_for(state="detached")
     assert request_count(page, "/stations", authenticated=True) == initial_gets + 3, page.request_log
 
-    page.locator('a[href="/admin/settings"]').first.click()
+    page.get_by_role("link", name="Settings", exact=True).click()
     page.wait_for_url("**/admin/settings**")
     page.go_back(wait_until="domcontentloaded")
     page.get_by_text("Verify Main", exact=True).first.wait_for(state="visible")
@@ -1435,8 +1646,24 @@ def backup_restore_invalidates_admin_cache(page):
     initial_settings_gets = request_count(page, "/settings", authenticated=True)
     assert initial_archive_gets >= 1 and initial_settings_gets >= 1, page.request_log
 
+    # Clear the legacy redirect's `section=archives` before changing the local
+    # Settings section. Otherwise the 3s settings-query rerender can replay the
+    # still-present search param and switch back to Archives while Backup is
+    # loading, which made this full-suite fixture timing-dependent.
+    page.locator('a[href="/admin/settings"]').first.click()
+    page.wait_for_function(
+        "() => location.pathname === '/admin/settings' && location.search === ''"
+    )
     page.locator("aside button").filter(has_text="Backup").click()
-    page.get_by_text(candidate["name"], exact=True).wait_for(state="visible")
+    try:
+        page.get_by_text(candidate["name"], exact=True).wait_for(state="visible")
+    except Exception as error:
+        raise AssertionError({
+            "url": page.url,
+            "backup_gets": request_count(page, "/backup/restorable", authenticated=True),
+            "requests": page.request_log,
+            "body": page.locator("body").inner_text()[:4000],
+        }) from error
     page.get_by_role("button", name="Restore", exact=True).click()
     with page.expect_response(
         lambda response: is_admin_request(response.request, "/backup/import-file", "POST")

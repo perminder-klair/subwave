@@ -42,7 +42,7 @@ interface ThemeContextValue {
   setOverride: (id: string | null) => void;
   /** Re-read /themes now instead of waiting out the poll. For a caller that
    *  just changed something the next poll would otherwise report 30s late. */
-  refreshThemes: () => void;
+  refreshThemes: () => Promise<void>;
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
