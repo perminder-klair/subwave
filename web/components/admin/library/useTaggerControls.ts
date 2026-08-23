@@ -135,7 +135,7 @@ export function useTaggerControls() {
   // Each opens the log and refreshes the tagger snapshot; failures toast
   // through useAdminMutation's shared onError.
 
-  const startM = useAdminMutation<TagSteps | undefined, void>({
+  const startM = useAdminMutation<void, TagSteps | undefined>({
     request: (steps, fetcher) => {
       const limit = batch === 'all' ? null : parseInt(batch, 10);
       const body: Record<string, unknown> = limit && limit > 0 ? { limit } : {};
@@ -158,7 +158,7 @@ export function useTaggerControls() {
   // Each opt maps to a tag-library CLI flag (reseed / reEnrich / reAnalyze /
   // upgrade). Sends no limit — a partial reseed leaves the library in a mixed
   // state KNN can't use, and `thenTag` continues into a full forward pass.
-  const rescanM = useAdminMutation<RescanOpts, void>({
+  const rescanM = useAdminMutation<void, RescanOpts>({
     request: (opts, fetcher) => startRun('/tag-library', opts, 're-scan failed')(fetcher),
     onDone: () => { notify.ok('re-scan started…'); setLogOpen(true); void reloadTagger(); },
   });

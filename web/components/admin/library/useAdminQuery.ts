@@ -1,18 +1,20 @@
 'use client';
 
+import type { QueryClient, UseMutationResult, UseQueryResult } from '@tanstack/react-query';
 import {
-  useMutation, useQuery, useQueryClient,
-  type QueryClient, type UseMutationResult, type UseQueryResult,
-} from '@tanstack/react-query';
-import { errorMessage, notify } from '../../../lib/notify';
+  adminJson,
+  useAdminMutation as useSharedAdminMutation,
+  useAdminQuery as useSharedAdminQuery,
+  type AdminFetch,
+  type AdminMutationOpts as SharedMutationOpts,
+} from '../../../lib/admin-query';
 import { useLibrary } from './LibraryContext';
-import { useQueryErrorToast } from './queries';
 
 // The two hooks that bind TanStack to the page's ONE adminFetch. Split from
 // queries.ts so the key factory and the cache helpers stay importable from
 // LibraryContext without an import cycle.
 
-export type AdminFetch = (path: string, init?: RequestInit) => Promise<Response>;
+export type { AdminFetch } from '../../../lib/admin-query';
 
 export interface AdminQueryOpts<T> {
   key: readonly unknown[];
@@ -38,19 +40,12 @@ export function useAdminQuery<T>({
   key, path, enabled = true, staleTime, refetchInterval, toastOnError = false, parse,
 }: AdminQueryOpts<T>): UseQueryResult<T> {
   const { adminFetch, ready } = useLibrary();
-  const q = useQuery({
-    queryKey: key,
-    // adminFetch is NOT in the key: its identity changes whenever auth or
-    // needsAuth flips (lib/adminAuth.ts), which would evict the whole cache on
-    // a token refresh. It is read fresh inside the fn instead.
-    queryFn: async () => {
+  return useSharedAdminQuery({
+    key,
+    adminFetch,
+    request: async (fetcher, signal) => {
       const p = typeof path === 'function' ? path() : path;
-      const r = await adminFetch(p);
-      if (!r.ok) {
-        const j = await r.json().catch(() => ({})) as { error?: string };
-        throw new Error(j.error || `${p} failed (${r.status})`);
-      }
-      const raw = await r.json() as unknown;
+      const raw = await adminJson<unknown>(fetcher, p, undefined, signal);
       return (parse ? parse(raw) : raw) as T;
     },
     enabled: enabled && ready,
@@ -61,28 +56,17 @@ export function useAdminQuery<T>({
     // reuse this change exists to get.
     ...(staleTime !== undefined ? { staleTime } : {}),
     ...(refetchInterval !== undefined ? { refetchInterval } : {}),
+    toastOnError,
   });
-  useQueryErrorToast(q.error, toastOnError);
-  return q;
 }
 
-export interface AdminMutationOpts<TVars, TData> {
+export interface AdminMutationOpts<TData, TVars> {
   request: (vars: TVars, fetcher: AdminFetch) => Promise<TData>;
   onDone?: (data: TData, vars: TVars, qc: QueryClient) => void | Promise<void>;
+  toastOnError?: boolean;
 }
 
-export function useAdminMutation<TVars, TData>({
-  request, onDone,
-}: AdminMutationOpts<TVars, TData>): UseMutationResult<TData, Error, TVars> {
+export function useAdminMutation<TData, TVars>(opts: AdminMutationOpts<TData, TVars>): UseMutationResult<TData, Error, TVars> {
   const { adminFetch } = useLibrary();
-  const qc = useQueryClient();
-  return useMutation<TData, Error, TVars>({
-    mutationFn: (vars: TVars) => request(vars, adminFetch),
-    onSuccess: (data, vars) => onDone?.(data, vars, qc),
-    // Every hand-rolled predecessor ended in `catch (err) { notify.err(...) }`,
-    // so the toast lives here once rather than at eleven call sites. Mutations
-    // that need bespoke recovery (the like toggle's rollback) do it in their own
-    // wrapper — this only replaces the uniform half.
-    onError: err => { notify.err(errorMessage(err)); },
-  });
+  return useSharedAdminMutation({ ...opts, adminFetch } satisfies SharedMutationOpts<TData, TVars>);
 }

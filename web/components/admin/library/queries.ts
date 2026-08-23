@@ -1,8 +1,6 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
 import type { InfiniteData, QueryClient } from '@tanstack/react-query';
-import { errorMessage, notify } from '../../../lib/notify';
 import type { BlockRef, Energy, LikedSort, SearchMode, Sort, TagEvent, Track, Vocal } from './types';
 
 // The query-key factory and the cache-wide row operations. Deliberately imports
@@ -48,19 +46,6 @@ export const libraryKeys = {
  * (coverage, tagger, settings, likeIndex) pass enabled=false. A global
  * QueryCache onError would toast all of them.
  */
-export function useQueryErrorToast(error: unknown, enabled: boolean): void {
-  const lastRef = useRef<string | null>(null);
-  useEffect(() => {
-    // Resetting on a cleared error is load-bearing: without it a
-    // failure → success → same failure sequence toasts only once.
-    if (!enabled || !error) { lastRef.current = null; return; }
-    const msg = errorMessage(error);
-    if (lastRef.current === msg) return;
-    lastRef.current = msg;
-    notify.err(msg);
-  }, [error, enabled]);
-}
-
 // --- cross-list cache patching ----------------------------------------------
 // The three shapes below are the whole contract between the row lists and the
 // operations that reach across them. All three are real and all three must be

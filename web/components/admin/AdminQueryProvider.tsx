@@ -3,14 +3,11 @@
 import { useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-// Scoped to the Library page for now, not mounted in AdminShell: converting the
-// other admin panels is a later PR, and a provider in the shell would put every
-// one of those conversions behind this PR's review. Hoisting it is a two-line
-// move when the second panel converts.
-//
-// Created in a useState initialiser, not at module scope: a module-level client
-// is shared across requests during SSR, which leaks one render pass's cached
-// admin data into another.
+// Mounted by AdminShell only after its authenticated checks pass, so one client
+// survives navigation between admin panels but is destroyed with the signed-out
+// branch. Created in a useState initializer, not at module scope: a module-level
+// client is shared across requests during SSR, which leaks one render pass's
+// cached admin data into another.
 export default function AdminQueryProvider({ children }: { children: ReactNode }) {
   const [client] = useState(() => new QueryClient({
     defaultOptions: {

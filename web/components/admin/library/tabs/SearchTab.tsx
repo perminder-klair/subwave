@@ -10,7 +10,8 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '../../../ui/input-
 import { Card, Btn, Seg } from '../../ui';
 import { RowsTable } from '../RowsTable';
 import { useLibrary } from '../LibraryContext';
-import { libraryKeys, useQueryErrorToast } from '../queries';
+import { libraryKeys } from '../queries';
+import { useQueryErrorToast } from '../../../../lib/admin-query';
 import type { SearchMode, Track } from '../types';
 import { SEARCH_PAGE } from '../types';
 

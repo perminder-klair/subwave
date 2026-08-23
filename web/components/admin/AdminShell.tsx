@@ -42,6 +42,7 @@ import {
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
+import AdminQueryProvider from './AdminQueryProvider';
 import { useStationFeed } from '../../hooks/useStationFeed';
 import SignInForm from './SignInForm';
 import NavidromeBanner from './NavidromeBanner';
@@ -275,6 +276,7 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
     let cancelled = false;
     (async () => {
       try {
+        // admin-query-imperative: authentication-probe
         await adminFetch('/settings');
       } catch {}
       if (cancelled) return;
@@ -317,40 +319,42 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
   }
 
   return (
-    <div className="admin-root paper">
-      {/* Narrower than the shadcn 16rem default — the nav is short labels. */}
-      <SidebarProvider defaultOpen={defaultOpen} style={{ '--sidebar-width': '13rem' } as CSSProperties}>
-        <AdminSidebar pathname={pathname} onSignOut={signOut} />
-        <SidebarInset className="min-w-0 bg-transparent">
-          <TopBar pathname={pathname} />
-          <NavidromeBanner adminFetch={adminFetch} onStatus={setNavidromeOk} />
-          <MusicStarvedBanner adminFetch={adminFetch} suppressed={!navidromeOk} />
-          <div
-            className={
-              fullBleed
-                ? 'flex w-full min-w-0 flex-1 flex-col'
-                : 'mx-auto w-full max-w-[1440px] min-w-0 px-6 py-6'
-            }
-          >
-            {/* No y translate — vertical drift feels twitchy on a list of panels. */}
-            <AnimatePresence mode="wait" initial={false}>
-              <m.div
-                key={pathname}
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.12 }}
-                className={fullBleed ? 'flex min-h-full flex-1 flex-col' : undefined}
-              >
-                {children}
-              </m.div>
-            </AnimatePresence>
-          </div>
-        </SidebarInset>
-      </SidebarProvider>
-      <AdminCommandMenu />
-      {/* Toaster is mounted once at the app shell (app/layout.tsx). */}
-    </div>
+    <AdminQueryProvider>
+      <div className="admin-root paper">
+        {/* Narrower than the shadcn 16rem default — the nav is short labels. */}
+        <SidebarProvider defaultOpen={defaultOpen} style={{ '--sidebar-width': '13rem' } as CSSProperties}>
+          <AdminSidebar pathname={pathname} onSignOut={signOut} />
+          <SidebarInset className="min-w-0 bg-transparent">
+            <TopBar pathname={pathname} />
+            <NavidromeBanner adminFetch={adminFetch} onStatus={setNavidromeOk} />
+            <MusicStarvedBanner adminFetch={adminFetch} suppressed={!navidromeOk} />
+            <div
+              className={
+                fullBleed
+                  ? 'flex w-full min-w-0 flex-1 flex-col'
+                  : 'mx-auto w-full max-w-[1440px] min-w-0 px-6 py-6'
+              }
+            >
+              {/* No y translate — vertical drift feels twitchy on a list of panels. */}
+              <AnimatePresence mode="wait" initial={false}>
+                <m.div
+                  key={pathname}
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.12 }}
+                  className={fullBleed ? 'flex min-h-full flex-1 flex-col' : undefined}
+                >
+                  {children}
+                </m.div>
+              </AnimatePresence>
+            </div>
+          </SidebarInset>
+        </SidebarProvider>
+        <AdminCommandMenu />
+        {/* Toaster is mounted once at the app shell (app/layout.tsx). */}
+      </div>
+    </AdminQueryProvider>
   );
 }
 
@@ -827,4 +831,3 @@ function SignedOutHeader() {
     </header>
   );
 }
-

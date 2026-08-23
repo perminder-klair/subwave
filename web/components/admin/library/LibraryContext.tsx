@@ -10,8 +10,8 @@ import type { PlaylistSummary } from './types';
 import type { Coverage, TaggerState } from '../LibraryTaggingPanel';
 import {
   applyBlockMarks, applyLikeChange, applyTagEvent, libraryKeys, rowsOf,
-  useQueryErrorToast,
 } from './queries';
+import { useQueryErrorToast } from '../../../lib/admin-query';
 import type {
   BlockEntry, BlockRef, BlockType, BrowseResponse, LikeIndex, Track,
 } from './types';

@@ -3,7 +3,6 @@
 import { useEffect } from 'react';
 import { ListMusic, Telescope, ArrowRight } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
-import AdminQueryProvider from './AdminQueryProvider';
 import TaggingPanel from './LibraryTaggingPanel';
 import { LibraryProvider, useLibrary } from './library/LibraryContext';
 import { useLibraryUrlState } from './library/useLibraryUrlState';
@@ -16,16 +15,8 @@ import BlockedTabContainer from './library/tabs/BlockedTabContainer';
 import { Tabs } from './library/Tabs';
 import { AddToPlaylistBar } from './library/AddToPlaylistBar';
 
-// The QueryClient is mounted here rather than in AdminShell: this PR converts
-// the Library page only, and a provider in the shell would put every other
-// panel's future conversion behind this PR's review. Hoisting it is a two-line
-// move when the second panel converts.
 export default function LibraryPanel() {
-  return (
-    <AdminQueryProvider>
-      <LibraryPanelInner />
-    </AdminQueryProvider>
-  );
+  return <LibraryPanelInner />;
 }
 
 // Owns the ONE useAdminAuth instance for the page. Split from the body purely

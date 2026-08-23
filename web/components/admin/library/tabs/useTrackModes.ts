@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
 import { useLibrary } from '../LibraryContext';
-import { libraryKeys, useQueryErrorToast } from '../queries';
+import { libraryKeys } from '../queries';
+import { useQueryErrorToast } from '../../../../lib/admin-query';
 import { useAdminQuery } from '../useAdminQuery';
 import type { LikedResponse, LikedSort, Track, UntaggedResponse } from '../types';
 import { PAGE_SIZE } from '../types';

@@ -31,7 +31,7 @@ export default function BlockedTabContainer() {
     }
   };
 
-  const bulkUnblock = useAdminMutation<BlockEntry[], number>({
+  const bulkUnblock = useAdminMutation<number, BlockEntry[]>({
     // One request, not N concurrent DELETEs: the controller rewrites
     // blocklist.json once, so parallel removes could persist a stale snapshot.
     request: async (batch, fetcher) => {
