@@ -971,6 +971,124 @@ def settings_save_propagates(page):
 
 
 @check
+def settings_save_serializes_after_inflight_get(page):
+    """A save cannot dedupe its authoritative read onto a pre-write GET."""
+    initial = copy.deepcopy(api("/settings"))
+    initial["values"]["stationDescription"] = "old server description"
+    operator_value = "operator write during an overlapping poll"
+    authoritative_value = "server-normalised post-write description"
+    authoritative = copy.deepcopy(initial)
+    authoritative["values"]["stationDescription"] = authoritative_value
+    raw_saved = copy.deepcopy(initial["values"])
+    raw_saved["stationDescription"] = operator_value
+    state = {
+        "initial_gets": 0,
+        "posted": False,
+        "post_write_gets": 0,
+    }
+
+    def settings_route(route):
+        if route.request.method == "POST":
+            state["posted"] = True
+            fulfill_json(route, {"saved": raw_saved, "requiresRestart": False})
+            return
+        if state["initial_gets"] == 0:
+            state["initial_gets"] += 1
+            fulfill_json(route, initial)
+            return
+        if state["posted"]:
+            state["post_write_gets"] += 1
+            fulfill_json(route, authoritative)
+            return
+        fulfill_json(route, initial)
+
+    # Resolve the polling GET at the network boundary, but hold its fetch
+    # promise in the browser until either its AbortSignal fires or the RED run
+    # releases it. This exercises the real TanStack/adminFetch cancellation
+    # path without leaving a Playwright route callback pending.
+    page.add_init_script("""
+      (() => {
+        const nativeFetch = window.fetch.bind(window);
+        const race = {
+          holdNext: false,
+          held: false,
+          aborted: false,
+          released: false,
+          release: null,
+        };
+        window.__subwaveSettingsRace = race;
+        window.__subwaveHoldSettingsGet = () => { race.holdNext = true; };
+        window.__subwaveReleaseSettingsGet = () => race.release?.();
+        window.fetch = async (input, init = {}) => {
+          const response = await nativeFetch(input, init);
+          const url = typeof input === 'string' ? input : input.url;
+          const method = (init.method || (typeof input === 'string' ? 'GET' : input.method) || 'GET').toUpperCase();
+          if (!race.holdNext || method !== 'GET' || new URL(url, location.href).pathname !== '/settings') {
+            return response;
+          }
+          race.holdNext = false;
+          race.held = true;
+          await new Promise((resolve, reject) => {
+            const signal = init.signal;
+            let settled = false;
+            const finish = (kind) => {
+              if (settled) return;
+              settled = true;
+              signal?.removeEventListener('abort', onAbort);
+              if (kind === 'abort') {
+                race.aborted = true;
+                reject(new DOMException('Aborted', 'AbortError'));
+              } else {
+                race.released = true;
+                resolve();
+              }
+            };
+            const onAbort = () => finish('abort');
+            race.release = () => finish('release');
+            if (signal?.aborted) onAbort();
+            else signal?.addEventListener('abort', onAbort, { once: true });
+          });
+          return response;
+        };
+      })();
+    """)
+    install_poll_clock(page)
+    page.route("http://localhost:7791/settings", settings_route)
+    page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
+    description = page.get_by_placeholder("A short line describing your station…")
+    description.wait_for(state="visible")
+    initial_gets = request_count(page, "/settings", authenticated=True)
+
+    with page.expect_request(
+        lambda request: is_admin_request(request, "/settings", "GET")
+    ):
+        page.evaluate("window.__subwaveHoldSettingsGet()")
+        settle_clock(page, 3_000)
+    page.wait_for_function("window.__subwaveSettingsRace.held")
+
+    description.fill(operator_value)
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/settings", "POST")
+    ):
+        page.get_by_role("button", name="Save station settings").click()
+
+    # Give a serialized implementation time to cancel the old request and
+    # start its exact post-write GET. The old implementation is waiting on the
+    # held request, so release it only to let the RED run terminate cleanly.
+    page.wait_for_timeout(250)
+    if state["post_write_gets"] == 0:
+        page.evaluate("window.__subwaveReleaseSettingsGet()")
+    page.wait_for_timeout(300)
+
+    race = page.evaluate("window.__subwaveSettingsRace")
+    assert race["aborted"], race
+    assert not race["released"], "save waited for and accepted the pre-write GET"
+    assert state["post_write_gets"] == 1, state
+    assert request_count(page, "/settings", authenticated=True) == initial_gets + 2, page.request_log
+    assert description.input_value() == authoritative_value, description.input_value()
+
+
+@check
 def settings_mutation_cache_redacts_secrets(page):
     """Settings MutationCache retains neither secret variables nor raw POST data."""
     initial = copy.deepcopy(api("/settings"))

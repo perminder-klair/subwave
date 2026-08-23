@@ -80,6 +80,13 @@ export function useSettingsMutation<TSettings>({
         });
         posted = true;
         receiptRef.current = { requiresRestart: result.requiresRestart };
+        // A 3s settings poll may already be in flight with a pre-write
+        // envelope. Await its exact cancellation before starting the
+        // authoritative read so fetchQuery cannot dedupe onto that promise.
+        await client.cancelQueries(
+          { queryKey: settingsKeys.detail(), exact: true },
+          { silent: true },
+        );
         await client.fetchQuery<TSettings>({
           queryKey: settingsKeys.detail(),
           queryFn: ({ signal }) => adminJson<TSettings>(adminFetch, '/settings', undefined, signal),
