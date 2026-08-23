@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCopyToClipboard } from 'usehooks-ts';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
@@ -12,50 +13,26 @@ import { Task, TaskContent, TaskItem, TaskTrigger } from '../ai-elements/task';
 import { Shimmer } from '../ai-elements/shimmer';
 import { Reasoning, ReasoningContent, ReasoningTrigger } from '../ai-elements/reasoning';
 import { MessageResponse } from '../ai-elements/message';
+import { adminResponse } from '../../lib/admin-query';
+import {
+  doctorKeys,
+  finishReport,
+  useDoctorFixMutation,
+  useDoctorLastQuery,
+  useDoctorReviewMutation,
+  type DoctorFixAction,
+  type DoctorFixId,
+  type DoctorLast,
+  type DoctorReport,
+  type DoctorReview,
+  type DoctorSection,
+  type DoctorStatus,
+} from './doctor-queries';
 
 // Shapes mirror controller/src/doctor.ts.
 
-type Status = 'ok' | 'warn' | 'fail' | 'skip';
-type FixId = 'refresh-playlist' | 'restart-mixer' | 'generate-jingles' | 'tag-library' | 'subsonic-reset';
-
-interface FixAction {
-  id: FixId;
-  label: string;
-}
-interface Finding {
-  label: string;
-  status: Status;
-  detail?: string;
-  hint?: string;
-  fix?: FixAction;
-}
-interface DoctorSection {
-  name: string;
-  findings: Finding[];
-}
-interface DoctorReport {
-  t: string;
-  sections: DoctorSection[];
-  counts: { ok: number; warn: number; fail: number; skip: number };
-}
-interface ReviewPriority {
-  title: string;
-  severity: 'low' | 'med' | 'high';
-  why: string;
-  suggestedFix: string;
-  // Only rendered as a button when the id appears in the report's findings.
-  fixId?: FixId | null;
-}
-interface DoctorReview {
-  available: boolean;
-  reason?: string;
-  overall?: 'healthy' | 'attention' | 'critical';
-  summary?: string;
-  priorities?: ReviewPriority[];
-}
-
 // All are admin-gated POSTs that accept an empty body.
-const FIX_ENDPOINTS: Record<FixId, string> = {
+const FIX_ENDPOINTS: Record<DoctorFixId, string> = {
   'refresh-playlist': '/dj/refresh-playlist',
   'restart-mixer': '/restart-mixer',
   'generate-jingles': '/onboarding/generate-jingles',
@@ -114,48 +91,28 @@ function parseSseFrame(frame: string): { event: string | null; data: unknown } {
 
 export default function DoctorPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
+  const queryClient = useQueryClient();
   const [, copyToClipboard] = useCopyToClipboard();
-  const [report, setReport] = useState<DoctorReport | null>(null);
-  const [review, setReview] = useState<DoctorReview | null>(null);
   const [running, setRunning] = useState(false);
   const [reviewing, setReviewing] = useState(false);
   const [busyFix, setBusyFix] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  // Suppresses the intro hero flashing before a cached report loads in.
-  const [hydrating, setHydrating] = useState(true);
 
   const ready = hydrated && !needsAuth;
-
-  const hydratedRef = useRef(false);
-  useEffect(() => {
-    if (!ready || hydratedRef.current) return;
-    hydratedRef.current = true;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/doctor/last');
-        const j = (await r.json().catch(() => null)) as
-          | { report?: DoctorReport | null; review?: DoctorReview | null }
-          | null;
-        if (!cancelled && j?.report) {
-          setReport(j.report);
-          if (j.review) setReview(j.review);
-        }
-      } catch {
-        /* no cached run — the intro hero shows instead */
-      } finally {
-        if (!cancelled) setHydrating(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [ready, adminFetch]);
+  const lastQuery = useDoctorLastQuery(adminFetch, ready);
+  const reviewMutation = useDoctorReviewMutation(adminFetch);
+  const fixMutation = useDoctorFixMutation(adminFetch);
+  const cached = lastQuery.data ?? { report: null, review: null };
+  const [inFlightReport, setInFlightReport] = useState<DoctorReport | null>(null);
+  const report = inFlightReport ?? cached.report;
+  const review = cached.review;
+  // Suppresses the intro hero flashing before a cached report loads in.
+  const hydrating = lastQuery.isPending;
 
   // Fix actions present in the current report. A fixId not in this map is never
   // surfaced as a button.
   const fixById = useMemo(() => {
-    const m = new Map<FixId, FixAction>();
+    const m = new Map<DoctorFixId, DoctorFixAction>();
     report?.sections.forEach((s) =>
       s.findings.forEach((f) => {
         if (f.fix && !m.has(f.fix.id)) m.set(f.fix.id, f.fix);
@@ -172,12 +129,13 @@ export default function DoctorPanel() {
 
   // One-shot batch run — the fallback when SSE streaming isn't available.
   const runBatch = async (): Promise<DoctorReport | null> => {
-    const r = await adminFetch('/doctor');
+    const r = await adminResponse(adminFetch, '/doctor');
     const j = (await r.json().catch(() => null)) as DoctorReport | { error?: string } | null;
-    if (!r.ok || !j || !('sections' in j)) {
-      throw new Error((j as { error?: string })?.error || `failed (${r.status})`);
+    if (!j || !('sections' in j)) {
+      throw new Error((j as { error?: string })?.error || 'doctor returned no report');
     }
-    setReport(j);
+    finishReport(queryClient, j, null);
+    setInFlightReport(null);
     return j;
   };
 
@@ -185,17 +143,22 @@ export default function DoctorPanel() {
     setRunning(true);
     setErr(null);
     // A fresh run invalidates the previous review (it described the old report).
-    setReview(null);
+    queryClient.setQueryData<DoctorLast>(doctorKeys.last(), previous => ({
+      report: previous?.report ?? null,
+      review: null,
+    }));
     try {
-      const r = await adminFetch('/doctor/stream', { headers: { Accept: 'text/event-stream' } });
-      if (!r.ok || !r.body) throw new Error(`stream unavailable (${r.status})`);
+      const r = await adminResponse(adminFetch, '/doctor/stream', {
+        headers: { Accept: 'text/event-stream' },
+      });
+      if (!r.body) throw new Error('stream unavailable (empty body)');
       const reader = r.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
       const sections: DoctorSection[] = [];
       let final: DoctorReport | null = null;
       // Empty shell first so the intro hero yields to the progressive report.
-      setReport({ t: new Date().toISOString(), sections: [], counts: tallyCounts([]) });
+      setInFlightReport({ t: new Date().toISOString(), sections: [], counts: tallyCounts([]) });
       for (;;) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -206,16 +169,23 @@ export default function DoctorPanel() {
           buf = buf.slice(idx + 2);
           if (event === 'section' && data) {
             sections.push(data as DoctorSection);
-            setReport({ t: new Date().toISOString(), sections: [...sections], counts: tallyCounts(sections) });
+            setInFlightReport({ t: new Date().toISOString(), sections: [...sections], counts: tallyCounts(sections) });
           } else if (event === 'done' && data) {
             final = data as DoctorReport;
-            setReport(final);
+            setInFlightReport(final);
           } else if (event === 'error') {
             throw new Error((data as { error?: string })?.error || 'doctor failed');
           }
         }
       }
-      return final ?? (sections.length ? { t: new Date().toISOString(), sections, counts: tallyCounts(sections) } : null);
+      const completed = final ?? (
+        sections.length ? { t: new Date().toISOString(), sections, counts: tallyCounts(sections) } : null
+      );
+      if (completed) {
+        finishReport(queryClient, completed, null);
+        setInFlightReport(null);
+      }
+      return completed;
     } catch {
       // Streaming failed (proxy, older controller, aborted body).
       try {
@@ -236,16 +206,9 @@ export default function DoctorPanel() {
     if (!target) return;
     setReviewing(true);
     try {
-      const r = await adminFetch('/doctor/review', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ report: target }),
-      });
-      const j = (await r.json().catch(() => null)) as DoctorReview | { error?: string } | null;
-      if (!r.ok || !j) throw new Error((j as { error?: string })?.error || `failed (${r.status})`);
-      setReview(j as DoctorReview);
-      if (!(j as DoctorReview).available) {
-        notify.info((j as DoctorReview).reason || 'review unavailable');
+      const nextReview = await reviewMutation.mutateAsync(target);
+      if (!nextReview.available) {
+        notify.info(nextReview.reason || 'review unavailable');
       }
     } catch (e) {
       notify.err(`buddy review: ${errorMessage(e)}`);
@@ -259,16 +222,10 @@ export default function DoctorPanel() {
     if (rep) await askReview(rep);
   };
 
-  const runFix = async (fix: FixAction) => {
+  const runFix = async (fix: DoctorFixAction) => {
     setBusyFix(fix.id);
     try {
-      const r = await adminFetch(FIX_ENDPOINTS[fix.id], {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{}',
-      });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await fixMutation.mutateAsync({ id: fix.id, path: FIX_ENDPOINTS[fix.id] });
       notify.ok(`${fix.label} done`);
       await run(); // re-assess so the finding clears (or shows what's left)
     } catch (e) {
@@ -566,7 +523,7 @@ export default function DoctorPanel() {
                         )}
                         {f.fix && (
                           <span className="ml-auto">
-                            <Btn sm onClick={() => runFix(f.fix as FixAction)} disabled={busyFix === f.fix.id}>
+                            <Btn sm onClick={() => runFix(f.fix as DoctorFixAction)} disabled={busyFix === f.fix.id}>
                               {busyFix === f.fix.id ? '…' : f.fix.label}
                             </Btn>
                           </span>
@@ -596,7 +553,7 @@ export default function DoctorPanel() {
   );
 }
 
-function StatusPill({ status }: { status: Status }) {
+function StatusPill({ status }: { status: DoctorStatus }) {
   if (status === 'fail') {
     return (
       <Pill tone="accent" dot className="border-[var(--accent)] bg-[var(--accent)] text-white">

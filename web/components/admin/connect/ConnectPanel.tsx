@@ -7,17 +7,18 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { notify, errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import type { LucideIcon } from 'lucide-react';
 import { Braces, Boxes, Cable, Webhook } from 'lucide-react';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import { Card, Btn, Eyebrow } from '../ui';
 import { SectionTabs } from '../SectionTabs';
-import type { Catalog } from './types';
 import EndpointsTab from './EndpointsTab';
 import McpTab from './McpTab';
 import IntegrationsTab from './IntegrationsTab';
 import WebhooksPanel from '../WebhooksPanel';
+import { useConnectCatalogQuery } from './queries';
 
 type TabId = 'endpoints' | 'mcp' | 'integrations' | 'webhooks';
 
@@ -30,9 +31,9 @@ const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
 
 export default function ConnectPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [catalog, setCatalog] = useState<Catalog | null>(null);
-  const [err, setErr] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>('endpoints');
+  const catalogQuery = useConnectCatalogQuery(adminFetch, hydrated && !needsAuth);
+  const catalog = catalogQuery.data ?? null;
 
   // Deep-link: /admin/connect?tab=mcp opens that tab directly
   useEffect(() => {
@@ -40,22 +41,6 @@ export default function ConnectPanel() {
     const t = new URLSearchParams(window.location.search).get('tab');
     if (t === 'endpoints' || t === 'mcp' || t === 'integrations' || t === 'webhooks') setTab(t);
   }, []);
-
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/connect/catalog');
-        if (!r.ok) throw new Error(`controller error (${r.status})`);
-        const data = (await r.json()) as Catalog;
-        if (!cancelled) { setCatalog(data); setErr(null); }
-      } catch (e) {
-        if (!cancelled) setErr(errorMessage(e));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth, adminFetch]);
 
   const selectTab = useCallback((id: string) => {
     setTab(id as TabId);
@@ -69,8 +54,7 @@ export default function ConnectPanel() {
   const downloadOpenApi = useCallback(async () => {
     if (!catalog) return;
     try {
-      const r = await adminFetch(catalog.openapiPath);
-      if (!r.ok) throw new Error(`controller error (${r.status})`);
+      const r = await adminResponse(adminFetch, catalog.openapiPath);
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -86,10 +70,10 @@ export default function ConnectPanel() {
     }
   }, [adminFetch, catalog]);
 
-  if (err) {
+  if (catalogQuery.error) {
     return (
       <div className="grid gap-4">
-        <Card title="Connect"><ErrorState error={err} /></Card>
+        <Card title="Connect"><ErrorState error={errorMessage(catalogQuery.error)} /></Card>
       </div>
     );
   }

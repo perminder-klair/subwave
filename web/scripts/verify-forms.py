@@ -684,6 +684,14 @@ def skills(page):
         "brief": "Seeded by verify-forms.py's skills() check — collision fixture, torn down at the end of the same run.",
     })
 
+    skill_gets = []
+    page.on(
+        "request",
+        lambda request: skill_gets.append(request.url)
+        if request.method == "GET" and request.url.split("?", 1)[0].endswith("/dj/skills")
+        else None,
+    )
+
     try:
         page.goto(f"{WEB}/admin/skills")
         page.get_by_role("button", name="New skill").click()
@@ -711,6 +719,19 @@ def skills(page):
         # aria-describedby pointing at unrelated text — the associated node's own
         # text must be the "already exists" message.
         assert_field_error(page, slug, "already exists")
+
+        # A failed create is still a TanStack mutation, but it must leave the
+        # fresh installed-skills resource reusable. Closing the refused form,
+        # visiting another panel, and returning should neither evict nor refetch
+        # the roster inside the shared 30-second stale window.
+        dialog.get_by_text("Close", exact=True).click()
+        dialog.wait_for(state="detached")
+        page.get_by_role("link", name="Connect", exact=True).click()
+        page.wait_for_url("**/admin/connect**")
+        page.get_by_role("link", name="Skills", exact=True).click()
+        page.wait_for_url("**/admin/skills**")
+        page.get_by_text("Verify Dup Skill", exact=True).first.wait_for(state="visible")
+        assert len(skill_gets) == 1, f"failed create evicted/refetched /dj/skills: {skill_gets}"
     finally:
         # Runs whether the assertions above passed or raised — a failed run
         # must not leave the fixture behind to poison the NEXT run. 200 is

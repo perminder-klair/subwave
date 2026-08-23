@@ -11,7 +11,7 @@
 // The on/off toggle and Run now are LIVE operator actions (/dj/skill-toggle,
 // /dj/skill) — they don't participate in the Save/dirty flow, which only writes
 // the SKILL.md file fields.
-import { useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   Controller, useWatch,
@@ -20,6 +20,12 @@ import {
 import type { z } from 'zod';
 import { notify, errorMessage } from '../../../lib/notify';
 import { useAdminAuth } from '../../../lib/adminAuth';
+import {
+  AdminResponseError,
+  adminJson,
+  adminResponse,
+  useAdminMutation,
+} from '../../../lib/admin-query';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { EditorDialog, EditorFooter } from '../../ui/editor-dialog';
 import { SkeletonForm } from '@/components/ui/skeleton';
@@ -36,17 +42,20 @@ import { skillSubmitUrl } from '../../../lib/repo';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField, TextareaField } from '@/lib/form-fields';
 import { Switch } from '@/components/ui/switch';
+import {
+  skillKeys,
+  useSkillFileQuery,
+  writeInstalledSkills,
+  type SkillConfigField,
+  type SkillDefaults,
+  type SkillFileResponse,
+  type SkillLike,
+  type SkillsResponse,
+} from './queries';
 
 // Only what this modal needs from GET /dj/skills; the full list type lives in
 // SkillsPanel.
-export interface SkillLike {
-  name: string;
-  kind?: string;
-  label?: string;
-  custom?: boolean;
-  enabled?: boolean;
-  cooldownMs?: number;
-}
+export type { SkillLike } from './queries';
 
 // `skills: null` is the "all skills" sentinel (controller
 // settings.ts:validatePersonasStrict).
@@ -62,59 +71,6 @@ interface SkillEditModalProps {
   personas?: PersonaLite[];          // roster for the DJ assignment checklist
   tagSuggestions?: string[];         // tags already used elsewhere in the catalog
   onClose: () => void;
-  onSkillsChange: (skills: SkillLike[]) => void;  // refresh the panel list after any mutation
-  onRosterChange?: () => void;       // re-fetch personas after assignments change
-}
-
-// The shipped defaults for a built-in, used only to gate the "Reset to default"
-// button — the reset itself is server-side.
-interface SkillDefaults {
-  label?: string;
-  cooldown?: string;
-  context?: string;
-  brief?: string;
-}
-
-// A knob the skill declares for itself in its tool.mjs (`configFields`, see the
-// controller's skills/config-fields.ts). The form renders whatever the skill
-// declares — nothing here is keyed on the skill's NAME, which is what let a
-// renamed copy of News keep its feed field (#1300).
-export interface SkillConfigField {
-  key: string;
-  type: 'text' | 'url' | 'number';
-  label: string;
-  placeholder?: string;
-  hint?: string;
-  min?: number;
-  max?: number;
-  /** number fields only — whole numbers only, so the stepper moves by 1. */
-  integer?: boolean;
-}
-
-// GET /dj/skills/:kind/file — covers built-in and custom responses.
-interface SkillFileResponse {
-  kind: string;
-  custom?: boolean;
-  configFields?: SkillConfigField[];
-  config?: Record<string, string | number>;
-  label?: string;
-  cooldown?: string;
-  cron?: string | null;
-  // Set when the file on disk carries an expression node-cron can't register.
-  // Only a hand-edited SKILL.md can produce one — every save route refuses it —
-  // and the scheduler's skip is logged where the operator won't see it, so the
-  // editor is the surface that has to say so.
-  cronInvalid?: boolean;
-  cronOnly?: boolean;
-  context?: string;
-  knownContextFields?: string[];
-  window?: 'any' | 'commute';
-  requiresKey?: string;
-  hasTool?: boolean;
-  tags?: string[];
-  brief?: string;
-  defaults?: SkillDefaults | null;
-  error?: string;
 }
 
 const COOLDOWN_PRESETS = ['15m', '25m', '45m', '1h', '6h'];
@@ -180,13 +136,14 @@ function titleCase(slug: string): string {
   return slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-export default function SkillEditModal({ mode, skill, personas, tagSuggestions, onClose, onSkillsChange, onRosterChange }: SkillEditModalProps) {
+export default function SkillEditModal({ mode, skill, personas, tagSuggestions, onClose }: SkillEditModalProps) {
   const { adminFetch } = useAdminAuth();
 
   const isEdit = mode === 'edit';
   // File id for GET/PUT — the kind (built-in) or slug (custom). For toggle/run/
   // delete the controller keys off the skill name.
   const fileId = skill ? (skill.kind || skill.name) : '';
+  const fileQuery = useSkillFileQuery(adminFetch, fileId, isEdit);
 
   const [loaded, setLoaded] = useState(!isEdit);   // create starts ready
   const [kind, setKind] = useState(skill?.kind || skill?.name || '');
@@ -236,6 +193,40 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   );
   const control = form.control as unknown as Control<SkillFormValues>;
   const uid = useId();
+  const fileHydratedRef = useRef(false);
+  const fileErrorRef = useRef<unknown>(null);
+
+  const applyFile = useCallback((j: SkillFileResponse) => {
+    form.reset(fileToFormValues(j) as DefaultValues<z.input<typeof schema>>);
+    const cfg = configValues(j);
+    setConfig(cfg);
+    setConfigSnapshot(configKey(cfg));
+    setKind(j.kind || fileId);
+    setCustom(!!j.custom);
+    setConfigFields(Array.isArray(j.configFields) ? j.configFields : []);
+    setHasTool(!!j.hasTool);
+    setCronInvalid(!!j.cronInvalid);
+    setDefaults(j.defaults || null);
+    setKnownContext(
+      Array.isArray(j.knownContextFields) && j.knownContextFields.length
+        ? j.knownContextFields
+        : CONTEXT_FIELDS_FALLBACK,
+    );
+    setLoaded(true);
+  }, [fileId, form]);
+
+  useEffect(() => {
+    if (!isEdit || !fileQuery.data || fileHydratedRef.current) return;
+    fileHydratedRef.current = true;
+    applyFile(fileQuery.data);
+  }, [applyFile, fileQuery.data, isEdit]);
+
+  useEffect(() => {
+    if (!isEdit || !fileQuery.error || fileErrorRef.current === fileQuery.error) return;
+    fileErrorRef.current = fileQuery.error;
+    notify.err(`Couldn't load skill: ${errorMessage(fileQuery.error)}`);
+    onClose();
+  }, [fileQuery.error, isEdit, onClose]);
 
   // `custom` can flip after mount (the file GET below corrects the list row's
   // guess), swapping `schema`. RHF picks up the new resolver on the next render
@@ -266,42 +257,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     setFlash(msg);
     window.setTimeout(() => setFlash(cur => (cur === msg ? null : cur)), 2000);
   };
-
-  useEffect(() => {
-    if (!isEdit || !fileId) return;
-    let cancelled = false;
-    setLoaded(false);
-    (async () => {
-      try {
-        const r = await adminFetch(`/dj/skills/${fileId}/file`);
-        const j = (await r.json().catch(() => ({}))) as SkillFileResponse;
-        if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-        if (cancelled) return;
-        form.reset(fileToFormValues(j) as DefaultValues<z.input<typeof schema>>);
-        const cfg = configValues(j);
-        setConfig(cfg);
-        setConfigSnapshot(configKey(cfg));
-        setKind(j.kind || fileId);
-        setCustom(!!j.custom);
-        setConfigFields(Array.isArray(j.configFields) ? j.configFields : []);
-        setHasTool(!!j.hasTool);
-        setCronInvalid(!!j.cronInvalid);
-        setDefaults(j.defaults || null);
-        setKnownContext(
-          Array.isArray(j.knownContextFields) && j.knownContextFields.length
-            ? j.knownContextFields
-            : CONTEXT_FIELDS_FALLBACK,
-        );
-        setLoaded(true);
-      } catch (e) {
-        if (cancelled) return;
-        notify.err(`Couldn't load skill: ${errorMessage(e)}`);
-        onClose();
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isEdit, fileId, adminFetch]);
 
   // Escape-to-close and scroll-lock come from EditorDialog (Radix). No manual key
   // listener: that is what lets the nested delete confirm get Escape first.
@@ -334,6 +289,79 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const windowValue = (useWatch({ control, name: 'window' }) as 'any' | 'commute' | undefined) || 'any';
   const displayName = labelValue || (isEdit ? titleCase(kind) : (nameValue ? titleCase(nameValue) : 'New skill'));
 
+  const saveMutation = useAdminMutation<SkillsResponse, {
+    path: string;
+    method: 'POST' | 'PUT';
+    body: Record<string, unknown>;
+    fileId: string | null;
+  }>({
+    adminFetch,
+    request: ({ path, method, body }, fetcher) => adminJson(fetcher, path, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+    onDone: async (response, vars, client) => {
+      writeInstalledSkills(client, response);
+      if (vars.fileId) {
+        await client.invalidateQueries({
+          queryKey: skillKeys.file(vars.fileId), exact: true, refetchType: 'none',
+        });
+      }
+    },
+    toastOnError: false,
+  });
+  const rosterMutation = useAdminMutation<unknown, { slug: string; personaIds: string[] }>({
+    adminFetch,
+    request: ({ slug, personaIds }, fetcher) => adminJson(
+      fetcher,
+      `/dj/skills/${encodeURIComponent(slug)}/personas`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ personaIds }),
+      },
+    ),
+    // The assignment endpoint returns only a roster receipt. Never put that
+    // partial response (or a raw /settings POST) in the redacted settings cache.
+    onDone: async (_response, _vars, client) => {
+      await client.invalidateQueries({ queryKey: skillKeys.roster(), exact: true });
+    },
+    toastOnError: false,
+  });
+  const toggleMutation = useAdminMutation<SkillsResponse, { name: string; on: boolean }>({
+    adminFetch,
+    request: (vars, fetcher) => adminJson(fetcher, '/dj/skill-toggle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(vars),
+    }),
+    onDone: (response, _vars, client) => writeInstalledSkills(client, response),
+    toastOnError: false,
+  });
+  const removeMutation = useAdminMutation<SkillsResponse, { name: string }>({
+    adminFetch,
+    request: ({ name }, fetcher) => adminJson(
+      fetcher, `/dj/skills/${encodeURIComponent(name)}`, { method: 'DELETE' },
+    ),
+    onDone: (response, vars, client) => {
+      writeInstalledSkills(client, response);
+      client.removeQueries({ queryKey: skillKeys.file(vars.name), exact: true });
+    },
+    toastOnError: false,
+  });
+  const resetMutation = useAdminMutation<SkillsResponse, { fileId: string }>({
+    adminFetch,
+    request: ({ fileId: id }, fetcher) => adminJson(
+      fetcher, `/dj/skills/${encodeURIComponent(id)}/reset`, { method: 'POST' },
+    ),
+    onDone: async (response, vars, client) => {
+      writeInstalledSkills(client, response);
+      await client.invalidateQueries({
+        queryKey: skillKeys.file(vars.fileId), exact: true, refetchType: 'none',
+      });
+    },
+    toastOnError: false,
+  });
+
   const onSubmit = form.handleSubmit(async (values) => {
     setBusy(true);
     try {
@@ -351,33 +379,12 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         );
       }
 
-      let r: Response;
-      if (mode === 'create') {
-        r = await adminFetch('/dj/skills', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-      } else {
-        r = await adminFetch(`/dj/skills/${fileId}/file`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-        });
-      }
-      const j = (await r.json().catch(() => ({}))) as {
-        skills?: SkillLike[];
-        error?: string;
-        fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        // A server-side name rule (reserved slug, slug already on disk) comes
-        // back as fieldErrors.name. Typing a different slug is the way out, so
-        // land it on the input rather than only in a toast.
-        applyServerFieldErrors(form, j.fieldErrors);
-        throw new Error(j.error || `failed (${r.status})`);
-      }
-      onSkillsChange(Array.isArray(j.skills) ? j.skills : []);
+      await saveMutation.mutateAsync({
+        path: mode === 'create' ? '/dj/skills' : `/dj/skills/${encodeURIComponent(fileId)}/file`,
+        method: mode === 'create' ? 'POST' : 'PUT',
+        body,
+        fileId: mode === 'create' ? null : fileId,
+      });
 
       if (mode === 'create') {
         notify.ok(`Created "${values.name}" — disabled until you enable it`);
@@ -389,15 +396,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         // stood, so a failure here reports on its own.
         if (assignDirty && skill) {
           try {
-            const ar = await adminFetch(`/dj/skills/${skill.name}/personas`, {
-              method: 'PUT',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ personaIds: assigned }),
-            });
-            const aj = (await ar.json().catch(() => ({}))) as { error?: string };
-            if (!ar.ok) throw new Error(aj.error || `failed (${ar.status})`);
+            await rosterMutation.mutateAsync({ slug: skill.name, personaIds: assigned });
             setAssignSnapshot(JSON.stringify([...assigned].sort()));
-            onRosterChange?.();
           } catch (e) {
             notify.err(`Skill saved, but updating DJ assignments failed: ${errorMessage(e)}`);
           }
@@ -405,6 +405,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         flashFor('SAVED TO BOOTH');
       }
     } catch (e) {
+      if (e instanceof AdminResponseError) applyServerFieldErrors(form, e.body.fieldErrors);
       notify.err(`${mode === 'create' ? 'Create' : 'Save'} failed: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
@@ -416,15 +417,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     setActing(true);
     const next = !enabled;
     try {
-      const r = await adminFetch('/dj/skill-toggle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: skill.name, on: next }),
-      });
-      const j = (await r.json().catch(() => ({}))) as { skills?: SkillLike[]; error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await toggleMutation.mutateAsync({ name: skill.name, on: next });
       setEnabled(next);
-      onSkillsChange(Array.isArray(j.skills) ? j.skills : []);
       flashFor(next ? 'ON AIR' : 'OFF AIR');
     } catch (e) {
       notify.err(`Toggle failed: ${errorMessage(e)}`);
@@ -435,7 +429,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     if (!isEdit || !skill) return;
     setActing(true);
     try {
-      const r = await adminFetch('/dj/skill', {
+      const r = await adminResponse(adminFetch, '/dj/skill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: skill.name }),
@@ -443,7 +437,6 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
       const j = (await r.json().catch(() => ({}))) as {
         spoken?: string | null; aired?: boolean; reason?: string | null; error?: string;
       };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       // The skill can run and decide it has nothing usable to speak from — a
       // 200 with `aired: false` (issue #1412). Flashing "QUEUED TO BOOTH" at
       // that would tell the operator something aired when nothing did.
@@ -465,10 +458,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     setConfirmDelete(false);
     setActing(true);
     try {
-      const r = await adminFetch(`/dj/skills/${skill.name}`, { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as { skills?: SkillLike[]; error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      onSkillsChange(Array.isArray(j.skills) ? j.skills : []);
+      await removeMutation.mutateAsync({ name: skill.name });
       notify.ok(`Deleted “${skill.name}”`);
       onClose();
     } catch (e) {
@@ -481,11 +471,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   // carry the Basic-auth header.
   const exportZip = async () => {
     try {
-      const r = await adminFetch(`/dj/skills/${fileId}/export`);
-      if (!r.ok) {
-        const j = (await r.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      const r = await adminResponse(adminFetch, `/dj/skills/${encodeURIComponent(fileId)}/export`);
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -522,21 +508,9 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     if (custom || !isEdit || busy) return;
     setBusy(true);
     try {
-      const r = await adminFetch(`/dj/skills/${fileId}/reset`, { method: 'POST' });
-      const j = (await r.json().catch(() => ({}))) as { skills?: SkillLike[]; error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      onSkillsChange(Array.isArray(j.skills) ? j.skills : []);
-
-      const fr = await adminFetch(`/dj/skills/${fileId}/file`);
-      const fj = (await fr.json().catch(() => ({}))) as SkillFileResponse;
-      if (fr.ok) {
-        form.reset(fileToFormValues(fj) as DefaultValues<z.input<typeof schema>>);
-        const cfg = configValues(fj);
-        setConfig(cfg);
-        setConfigSnapshot(configKey(cfg));
-        setConfigFields(Array.isArray(fj.configFields) ? fj.configFields : []);
-        setHasTool(!!fj.hasTool);
-      }
+      await resetMutation.mutateAsync({ fileId });
+      const refreshed = await fileQuery.refetch();
+      if (refreshed.data) applyFile(refreshed.data);
       flashFor('RESET TO SHIPPED DEFAULT');
       notify.ok(`Reset “${kind}” to default`);
     } catch (e) {

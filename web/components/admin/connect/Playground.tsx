@@ -6,6 +6,7 @@ import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { Textarea } from '../../ui/textarea';
 import { notify } from '../../../lib/notify';
+import { AdminResponseError, adminResponse } from '../../../lib/admin-query';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { CodeBlock, CodeBlockCopyButton } from '../../ai-elements/code-block';
 import { Snippet, SnippetAddon, SnippetCopyButton, SnippetInput } from '../../ai-elements/snippet';
@@ -120,7 +121,7 @@ export default function Playground({ endpoint, apiBase, adminFetch }: Props) {
     setSending(true);
     const started = performance.now();
     try {
-      const r = await adminFetch(relPath, {
+      const r = await adminResponse(adminFetch, relPath, {
         method: endpoint.method,
         ...(parsedBody !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: parsedBody } : {}),
       });
@@ -129,7 +130,15 @@ export default function Playground({ endpoint, apiBase, adminFetch }: Props) {
       try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch { /* non-JSON (image/text) — show raw */ }
       setResult({ status: r.status, ms: Math.round(performance.now() - started), body: pretty.slice(0, 20000) });
     } catch (e) {
-      setResult({ status: 0, ms: Math.round(performance.now() - started), body: e instanceof Error ? e.message : String(e) });
+      if (e instanceof AdminResponseError) {
+        setResult({
+          status: e.status,
+          ms: Math.round(performance.now() - started),
+          body: JSON.stringify(e.body, null, 2),
+        });
+      } else {
+        setResult({ status: 0, ms: Math.round(performance.now() - started), body: e instanceof Error ? e.message : String(e) });
+      }
     } finally {
       setSending(false);
     }

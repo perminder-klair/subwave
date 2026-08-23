@@ -73,6 +73,8 @@ DESTRUCTIVE_CHECKS = {
     "show_install_refresh",
     "schedule_save_refresh",
     "playlist_sync_refresh",
+    "skills_mutations_refresh",
+    "doctor_report_updates",
 }
 
 
@@ -1895,6 +1897,255 @@ def playlist_show_catalogue_refresh(page):
 
     # One initial read plus one exact refresh per write, never a request storm.
     assert request_count(page, "/dj/playlists", authenticated=True) == 5, page.request_log
+
+
+def task6_skill(name, label, enabled=False, custom=False):
+    return {
+        "name": name,
+        "kind": name,
+        "label": label,
+        "description": f"{label} description",
+        "enabled": enabled,
+        "ready": True,
+        "custom": custom,
+        "cooldownMs": 900000,
+        "tags": ["verify"],
+    }
+
+
+@check
+def skills_mutations_refresh(page):
+    """Skill writes update exact cached lists and settings-backed roster data."""
+    skills = [task6_skill("task-6-verify", "Task 6 Verify")]
+    community = [{
+        "slug": "task-6-community",
+        "label": "Task 6 Community",
+        "brief": "A deterministic community fixture.",
+        "cooldown": "15m",
+        "installed": False,
+        "reserved": False,
+    }]
+    mutation_hits = {"toggle": 0, "rescan": 0, "import": 0, "install": 0}
+
+    def task6_routes(route):
+        path = urllib.parse.urlparse(route.request.url).path
+        method = route.request.method
+        if path == "/dj/skills" and method == "GET":
+            fulfill_json(route, {"skills": skills})
+        elif path == "/dj/skills/community" and method == "GET":
+            fulfill_json(route, {"community": community})
+        elif path == "/dj/skill-toggle" and method == "POST":
+            mutation_hits["toggle"] += 1
+            body = route.request.post_data_json
+            for item in skills:
+                if item["name"] == body["name"]:
+                    item["enabled"] = body["on"]
+            fulfill_json(route, {"skills": skills})
+        elif path == "/dj/skills/rescan" and method == "POST":
+            mutation_hits["rescan"] += 1
+            if not any(item["name"] == "task-6-rescanned" for item in skills):
+                skills.append(task6_skill("task-6-rescanned", "Task 6 Rescanned", custom=True))
+            fulfill_json(route, {"skills": skills, "custom": 1})
+        elif path == "/dj/skills/import" and method == "POST":
+            mutation_hits["import"] += 1
+            if not any(item["name"] == "task-6-imported" for item in skills):
+                skills.append(task6_skill("task-6-imported", "Task 6 Imported", custom=True))
+            fulfill_json(route, {"skills": skills, "slug": "task-6-imported", "hasTool": False})
+        elif path == "/dj/skills/community/task-6-community/install" and method == "POST":
+            mutation_hits["install"] += 1
+            community[0]["installed"] = True
+            if not any(item["name"] == "task-6-community" for item in skills):
+                skills.append(task6_skill("task-6-community", "Task 6 Community", custom=True))
+            fulfill_json(route, {"skills": skills})
+        else:
+            route.continue_()
+
+    page.route("http://localhost:7791/**", task6_routes)
+
+    def leave_and_return():
+        click_admin_link(page, "Connect", "/admin/connect")
+        click_admin_link(page, "Skills", "/admin/skills")
+        page.get_by_text("What the DJ does between tracks.", exact=True).wait_for(state="visible")
+
+    page.goto(f"{WEB}/admin/skills", wait_until="domcontentloaded")
+    page.get_by_text("Task 6 Verify", exact=True).wait_for(state="visible")
+    leave_and_return()
+
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/dj/skill-toggle", "POST")
+    ):
+        page.get_by_label("Enable Task 6 Verify").click()
+    leave_and_return()
+    page.get_by_text("1 enabled", exact=True).wait_for(state="visible")
+
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/dj/skills/rescan", "POST")
+    ):
+        page.get_by_title("Rescan state/skills").click()
+    page.get_by_text("Task 6 Rescanned", exact=True).wait_for(state="visible")
+    leave_and_return()
+
+    page.get_by_role("button", name="Community", exact=False).click()
+    dialog = page.get_by_role("dialog")
+    dialog.wait_for(state="visible")
+    with tempfile.NamedTemporaryFile(suffix=".zip") as bundle:
+        bundle.write(b"PK\x05\x06" + b"\x00" * 18)
+        bundle.flush()
+        with page.expect_response(
+            lambda response: is_admin_request(response.request, "/dj/skills/import", "POST")
+        ):
+            dialog.get_by_label("Import skill zip").set_input_files(bundle.name)
+    page.get_by_text("Task 6 Imported", exact=True).wait_for(state="visible")
+    dialog.get_by_role("button", name="Install", exact=True).click()
+    page.get_by_text("installed", exact=True).wait_for(state="visible")
+    page.keyboard.press("Escape")
+    dialog.wait_for(state="detached")
+    leave_and_return()
+    page.get_by_text("Task 6 Community", exact=True).wait_for(state="visible")
+
+    assert mutation_hits == {"toggle": 1, "rescan": 1, "import": 1, "install": 1}, mutation_hits
+    assert request_count(page, "/dj/skills", authenticated=True) == 1, page.request_log
+    # Initial catalog plus one exact refresh after import and install.
+    assert request_count(page, "/dj/skills/community", authenticated=True) == 3, page.request_log
+    # Skills reuses the settings owner rather than creating a second roster key.
+    assert request_count(page, "/settings", authenticated=True) == 1, page.request_log
+
+
+@check
+def connect_cache_reuse(page):
+    """Connect metadata survives tab changes and a client-side route round trip."""
+    catalog = {
+        "station": "Task 6 Station",
+        "apiBase": "http://localhost:7791",
+        "origin": "http://localhost:7793",
+        "version": "task-6",
+        "groups": [],
+        "mcpTools": [],
+        "mcpHttpPath": "/mcp",
+        "streamMounts": [{
+            "mount": "/stream.mp3", "format": "MP3", "codec": "mp3",
+            "description": "Universal stream", "settingFlag": None,
+            "alwaysOn": True, "enabled": True,
+        }],
+        "openapiPath": "/connect/openapi.json",
+    }
+    page.route(
+        "http://localhost:7791/connect/catalog",
+        lambda route: fulfill_json(route, catalog),
+    )
+    page.goto(f"{WEB}/admin/connect", wait_until="domcontentloaded")
+    page.get_by_text("Everything wired to Task 6 Station.", exact=True).wait_for(state="visible")
+    page.get_by_role("tab", name="Integrations").click()
+    page.get_by_text("Stream URLs", exact=True).wait_for(state="visible")
+    page.get_by_role("tab", name="MCP").click()
+    page.get_by_label("MCP endpoint URL").wait_for(state="visible")
+    click_admin_link(page, "Skills", "/admin/skills")
+    click_admin_link(page, "Connect", "/admin/connect")
+    page.get_by_text("Everything wired to Task 6 Station.", exact=True).wait_for(state="visible")
+    assert request_count(page, "/connect/catalog", authenticated=True) == 1, page.request_log
+
+
+def task6_doctor_report(label, fix=False):
+    finding = {"label": label, "status": "warn", "detail": f"{label} detail"}
+    if fix:
+        finding["fix"] = {"id": "refresh-playlist", "label": "Refresh playlist"}
+    return {
+        "t": f"2026-08-23T12:00:0{1 if fix else 2}.000Z",
+        "sections": [{"name": "Content", "findings": [finding]}],
+        "counts": {"ok": 0, "warn": 1, "fail": 0, "skip": 0},
+    }
+
+
+@check
+def doctor_report_updates(page):
+    """Batch fallback, review, and a fix replace the exact last-report cache."""
+    old_report = task6_doctor_report("Old cached report")
+    first_report = task6_doctor_report("Batch fallback report", fix=True)
+    fixed_report = task6_doctor_report("After fix report")
+    old_review = {"available": True, "overall": "attention", "summary": "Old cached review", "priorities": []}
+    first_review = {
+        "available": True,
+        "overall": "attention",
+        "summary": "Batch fallback review",
+        "priorities": [{
+            "title": "Refresh it", "severity": "med", "why": "The fixture says so.",
+            "suggestedFix": "Refresh the playlist.", "fixId": "refresh-playlist",
+        }],
+    }
+    server_last = {"report": old_report, "review": old_review}
+    batch_runs = []
+
+    def doctor_routes(route):
+        path = urllib.parse.urlparse(route.request.url).path
+        method = route.request.method
+        if path == "/doctor/last" and method == "GET":
+            fulfill_json(route, server_last)
+        elif path == "/doctor/stream" and method == "GET":
+            fulfill_json(route, {"error": "SSE unavailable in fallback fixture"}, status=503)
+        elif path == "/doctor" and method == "GET":
+            report = first_report if not batch_runs else fixed_report
+            batch_runs.append(report)
+            server_last.update({"report": report, "review": None})
+            fulfill_json(route, report)
+        elif path == "/doctor/review" and method == "POST":
+            server_last["review"] = first_review
+            fulfill_json(route, first_review)
+        elif path == "/dj/refresh-playlist" and method == "POST":
+            fulfill_json(route, {"ok": True})
+        else:
+            route.continue_()
+
+    page.route("http://localhost:7791/**", doctor_routes)
+    page.goto(f"{WEB}/admin/doctor", wait_until="domcontentloaded")
+    page.get_by_text("Old cached report", exact=True).wait_for(state="visible")
+    page.get_by_role("button", name="Re-run Doctor").click()
+    page.get_by_text("Batch fallback review", exact=True).wait_for(state="visible")
+
+    click_admin_link(page, "Connect", "/admin/connect")
+    page.get_by_role("link", name="DJ Doc", exact=True).click()
+    page.wait_for_url("**/admin/doctor")
+    page.get_by_text("Batch fallback report", exact=True).wait_for(state="visible")
+    page.get_by_text("Batch fallback review", exact=True).wait_for(state="visible")
+
+    page.get_by_role("button", name="Refresh playlist").first.click()
+    page.get_by_text("After fix report", exact=True).wait_for(state="visible")
+    click_admin_link(page, "Connect", "/admin/connect")
+    page.get_by_role("link", name="DJ Doc", exact=True).click()
+    page.wait_for_url("**/admin/doctor")
+    page.get_by_text("After fix report", exact=True).wait_for(state="visible")
+    assert page.get_by_text("Batch fallback review", exact=True).count() == 0
+
+    assert request_count(page, "/doctor/last", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/doctor/stream", authenticated=True) == 2, page.request_log
+    assert request_count(page, "/doctor", authenticated=True) == 2, page.request_log
+    assert request_count(page, "/doctor/review", method="POST", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/dj/refresh-playlist", method="POST", authenticated=True) == 1, page.request_log
+
+
+@check
+def doctor_stream_not_retried(page):
+    """A diagnosis opens one imperative SSE request and falls back once."""
+    report = task6_doctor_report("Single stream fallback")
+    page.route(
+        "http://localhost:7791/doctor/last",
+        lambda route: fulfill_json(route, {"report": None, "review": None}),
+    )
+    page.route(
+        "http://localhost:7791/doctor/stream",
+        lambda route: fulfill_json(route, {"error": "stream unavailable"}, status=503),
+    )
+    page.route("http://localhost:7791/doctor", lambda route: fulfill_json(route, report))
+    page.route(
+        "http://localhost:7791/doctor/review",
+        lambda route: fulfill_json(route, {"available": False, "reason": "review disabled in fixture"}),
+    )
+    page.goto(f"{WEB}/admin/doctor", wait_until="domcontentloaded")
+    page.get_by_role("button", name="Let's go").click()
+    page.get_by_text("Single stream fallback", exact=True).wait_for(state="visible")
+    page.get_by_text("review disabled in fixture", exact=True).wait_for(state="visible")
+    page.wait_for_timeout(500)
+    assert request_count(page, "/doctor/stream", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/doctor", authenticated=True) == 1, page.request_log
 
 
 def main():

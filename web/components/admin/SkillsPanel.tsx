@@ -5,10 +5,11 @@
 // override: it bypasses the enable toggle, the persona assignment, the
 // frequency gate and the cooldown.
 import type { ReactNode } from 'react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
 import { notify, errorMessage } from '../../lib/notify';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { adminJson, adminResponse, useAdminMutation } from '../../lib/admin-query';
 import { useRosterView } from '../../lib/adminView';
 import { RefreshCw, Plus, Users, Upload, Search, X } from 'lucide-react';
 import { Card, Btn, Pill, Eyebrow, MetaChip, Toggle } from './ui';
@@ -27,6 +28,13 @@ import type { PersonaLite } from './skills/SkillEditModal';
 import SkillsTable from './skills/SkillsTable';
 import { cooldownLabel, iconFor } from './skills/shared';
 import type { Skill, SortMode, StatusFilter } from './skills/shared';
+import { useSettingsQuery } from './settings/queries';
+import {
+  skillKeys,
+  useCommunitySkillsQuery,
+  useInstalledSkillsQuery,
+  writeInstalledSkills,
+} from './skills/queries';
 
 // A show's skills are its HOST persona's, plus its pinned feature segment.
 interface ShowLite {
@@ -39,28 +47,6 @@ interface ShowLite {
 // Does this persona run the skill? `skills: null` is the "all skills" sentinel.
 function personaHasSkill(p: PersonaLite, name: string): boolean {
   return p.skills === null || p.skills.includes(name);
-}
-
-interface CommunitySkill {
-  slug: string;
-  label: string;
-  brief: string;
-  cooldown?: string;
-  window?: 'any' | 'commute';
-  context?: string;
-  submittedBy?: string;  // GitHub login of the contributor who submitted it
-  dateAdded?: string;    // ISO date (YYYY-MM-DD) it first entered the catalog
-  dateModified?: string; // ISO date (YYYY-MM-DD) of the last catalog change
-  installed?: boolean;   // a state/skills/<slug>/ folder already exists
-  reserved?: boolean;    // slug shadows a built-in kind — can't be installed
-}
-
-interface SkillsResponse {
-  skills?: Skill[];
-}
-
-interface CommunityResponse {
-  community?: CommunitySkill[];
 }
 
 interface SkillToggleResponse {
@@ -108,21 +94,83 @@ function SkillDescription({ text, keyUrl }: SkillDescriptionProps): ReactNode {
 
 export default function SkillsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [skills, setSkills] = useState<Skill[] | null>(null);
-  const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);   // skill name currently mutating, or null
-  const [rescanning, setRescanning] = useState(false);
   const [modal, setModal] = useState<ModalState | null>(null); // open editor sheet, or null
-  const [community, setCommunity] = useState<CommunitySkill[] | null>(null);
-  const [installing, setInstalling] = useState<string | null>(null); // community slug installing, or null
   const [communityOpen, setCommunityOpen] = useState(false);         // community catalog modal open?
-  const [importing, setImporting] = useState(false);                 // zip import in flight?
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const queryEnabled = hydrated && !needsAuth;
+  const skillsQuery = useInstalledSkillsQuery(adminFetch, queryEnabled);
+  const communityQuery = useCommunitySkillsQuery(adminFetch, queryEnabled);
+  const settingsQuery = useSettingsQuery<{
+    values?: {
+      personas?: Array<{ id?: string; name?: string; skills?: string[] | null }>;
+      shows?: Array<{ id?: string; name?: string; personaId?: string; segmentSkill?: string }>;
+    };
+  }>({ adminFetch, enabled: queryEnabled });
+  const skills = skillsQuery.data ?? null;
+  // Catalog failures have always degraded to an empty optional browser while
+  // the installed roster stays usable.
+  const community = communityQuery.data ?? (communityQuery.isError ? [] : null);
 
-  // Best-effort: when the roster fetch fails the DJ/show filter and assignment
-  // pills simply don't render.
-  const [personas, setPersonas] = useState<PersonaLite[]>([]);
-  const [shows, setShows] = useState<ShowLite[]>([]);
+  // Best-effort organisation metadata shares the one redacted /settings owner.
+  const { personas, shows } = useMemo(() => {
+    const values = settingsQuery.data?.values;
+    const ps = Array.isArray(values?.personas) ? values.personas : [];
+    const sh = Array.isArray(values?.shows) ? values.shows : [];
+    return {
+      personas: ps.map(p => ({
+        id: String(p.id || ''),
+        name: String(p.name || ''),
+        skills: Array.isArray(p.skills) ? p.skills.map(String) : null,
+      })).filter(p => p.id) as PersonaLite[],
+      shows: sh.map(s => ({
+        id: String(s.id || ''),
+        name: String(s.name || ''),
+        personaId: String(s.personaId || ''),
+        segmentSkill: typeof s.segmentSkill === 'string' ? s.segmentSkill : '',
+      })).filter(s => s.id) as ShowLite[],
+    };
+  }, [settingsQuery.data]);
+
+  const toggleMutation = useAdminMutation<SkillToggleResponse, { name: string; on: boolean }>({
+    adminFetch,
+    request: (vars, fetcher) => adminJson(fetcher, '/dj/skill-toggle', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(vars),
+    }),
+    onDone: (response, _vars, client) => writeInstalledSkills(client, response),
+    toastOnError: false,
+  });
+  const rescanMutation = useAdminMutation<SkillToggleResponse & { custom?: number }, void>({
+    adminFetch,
+    request: (_vars, fetcher) => adminJson(fetcher, '/dj/skills/rescan', { method: 'POST' }),
+    onDone: (response, _vars, client) => writeInstalledSkills(client, response),
+    toastOnError: false,
+  });
+  const importMutation = useAdminMutation<
+    SkillToggleResponse & { slug?: string; hasTool?: boolean }, FormData
+  >({
+    adminFetch,
+    request: (body, fetcher) => adminJson(fetcher, '/dj/skills/import', { method: 'POST', body }),
+    onDone: async (response, _vars, client) => {
+      writeInstalledSkills(client, response);
+      await client.invalidateQueries({ queryKey: skillKeys.community(), exact: true });
+    },
+    toastOnError: false,
+  });
+  const installMutation = useAdminMutation<SkillToggleResponse, { slug: string }>({
+    adminFetch,
+    request: ({ slug }, fetcher) => adminJson(
+      fetcher, `/dj/skills/community/${encodeURIComponent(slug)}/install`, { method: 'POST' },
+    ),
+    onDone: async (response, _vars, client) => {
+      writeInstalledSkills(client, response);
+      await client.invalidateQueries({ queryKey: skillKeys.community(), exact: true });
+    },
+    toastOnError: false,
+  });
+  const rescanning = rescanMutation.isPending;
+  const importing = importMutation.isPending;
+  const installing = installMutation.isPending ? installMutation.variables?.slug ?? null : null;
 
   const [query, setQuery] = useState('');
   const [who, setWho] = useState('all');            // 'all' | 'p:<personaId>' | 's:<showId>'
@@ -132,109 +180,33 @@ export default function SkillsPanel() {
 
   const [view, setView] = useRosterView('skills');
 
-  // Re-run after the modal saves DJ assignments, so the filter + pills stay
-  // accurate.
-  const refreshRoster = useCallback(async () => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) return;
-      const j = (await r.json().catch(() => ({}))) as {
-        values?: {
-          personas?: Array<{ id?: string; name?: string; skills?: string[] | null }>;
-          shows?: Array<{ id?: string; name?: string; personaId?: string; segmentSkill?: string }>;
-        };
-      };
-      const ps = Array.isArray(j.values?.personas) ? j.values.personas : [];
-      setPersonas(ps
-        .map(p => ({
-          id: String(p.id || ''),
-          name: String(p.name || ''),
-          skills: Array.isArray(p.skills) ? p.skills.map(String) : null,
-        }))
-        .filter(p => p.id));
-      const sh = Array.isArray(j.values?.shows) ? j.values.shows : [];
-      setShows(sh
-        .map(s => ({
-          id: String(s.id || ''),
-          name: String(s.name || ''),
-          personaId: String(s.personaId || ''),
-          segmentSkill: typeof s.segmentSkill === 'string' ? s.segmentSkill : '',
-        }))
-        .filter(s => s.id));
-    } catch { /* organisation tools degrade gracefully */ }
-  }, [adminFetch]);
-
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/dj/skills');
-        if (!r.ok) throw new Error(`failed (${r.status})`);
-        const j = (await r.json()) as SkillsResponse;
-        if (cancelled) return;
-        setSkills(Array.isArray(j.skills) ? j.skills : []);
-        setErr(null);
-      } catch (e) {
-        if (cancelled) return;
-        setErr(e instanceof Error ? e.message : String(e));
-      }
-    })();
-    // Fetched independently so a catalog failure can't blank the roster.
-    (async () => {
-      try {
-        const r = await adminFetch('/dj/skills/community');
-        if (!r.ok) throw new Error(`failed (${r.status})`);
-        const j = (await r.json()) as CommunityResponse;
-        if (cancelled) return;
-        setCommunity(Array.isArray(j.community) ? j.community : []);
-      } catch {
-        if (!cancelled) setCommunity([]);
-      }
-    })();
-    refreshRoster();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth, adminFetch, refreshRoster]);
-
   const toggle = async (name: string, on: boolean) => {
     setBusy(name);
     try {
-      const r = await adminFetch('/dj/skill-toggle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, on }),
-      });
-      const j = (await r.json().catch(() => ({}))) as SkillToggleResponse;
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      if (Array.isArray(j.skills)) setSkills(j.skills);
+      await toggleMutation.mutateAsync({ name, on });
     } catch (e) {
       notify.err(`Toggle failed: ${errorMessage(e)}`);
     } finally { setBusy(null); }
   };
 
   const rescan = async () => {
-    setRescanning(true);
     try {
-      const r = await adminFetch('/dj/skills/rescan', { method: 'POST' });
-      const j = (await r.json().catch(() => ({}))) as SkillToggleResponse & { custom?: number };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      if (Array.isArray(j.skills)) setSkills(j.skills);
+      const j = await rescanMutation.mutateAsync();
       notify.ok(`Rescanned, ${j.custom ?? 0} custom skill${j.custom === 1 ? '' : 's'} loaded`);
     } catch (e) {
       notify.err(`Rescan failed: ${errorMessage(e)}`);
-    } finally { setRescanning(false); }
+    }
   };
 
   const runNow = async (name: string) => {
     setBusy(name);
     try {
-      const r = await adminFetch('/dj/skill', {
+      const r = await adminResponse(adminFetch, '/dj/skill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
       });
       const j = (await r.json().catch(() => ({}))) as SkillRunResponse;
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       // A stand-down is reported as-is rather than as a success: the operator
       // pressed Run now and nothing went to air, and the reason is the whole
       // point of the answer (issue #1412).
@@ -248,29 +220,13 @@ export default function SkillsPanel() {
     } finally { setBusy(null); }
   };
 
-  // An import may have flipped an entry's installed flag. Best-effort: leaves
-  // the list as-is on failure.
-  const refreshCommunity = async () => {
-    try {
-      const r = await adminFetch('/dj/skills/community');
-      if (!r.ok) return;
-      const j = (await r.json()) as CommunityResponse;
-      if (Array.isArray(j.community)) setCommunity(j.community);
-    } catch { /* keep current list */ }
-  };
-
   // An imported bundle arrives disabled, and one carrying a tool.mjs runs code
   // once enabled — the toast says so.
   const importZip = async (file: File) => {
-    setImporting(true);
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const r = await adminFetch('/dj/skills/import', { method: 'POST', body: fd });
-      const j = (await r.json().catch(() => ({}))) as SkillToggleResponse & { slug?: string; hasTool?: boolean };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      if (Array.isArray(j.skills)) setSkills(j.skills);
-      await refreshCommunity();
+      const j = await importMutation.mutateAsync(fd);
       notify.ok(
         j.hasTool
           ? `Imported “${j.slug}” — includes a data tool that runs code; review it before enabling`
@@ -278,32 +234,25 @@ export default function SkillsPanel() {
       );
     } catch (e) {
       notify.err(`Import failed: ${errorMessage(e)}`);
-    } finally {
-      setImporting(false);
     }
   };
 
   // Installs into state/skills, disabled. The route returns the refreshed
-  // roster; the catalog entry is flipped to installed here.
+  // roster; the catalog is then invalidated so its installed bit is authoritative.
   const install = async (slug: string) => {
-    setInstalling(slug);
     try {
-      const r = await adminFetch(`/dj/skills/community/${slug}/install`, { method: 'POST' });
-      const j = (await r.json().catch(() => ({}))) as SkillToggleResponse;
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      if (Array.isArray(j.skills)) setSkills(j.skills);
-      setCommunity(cur => cur?.map(c => (c.slug === slug ? { ...c, installed: true } : c)) ?? cur);
+      await installMutation.mutateAsync({ slug });
       notify.ok(`Installed “${slug}” — disabled until you enable it`);
     } catch (e) {
       notify.err(`Install failed: ${errorMessage(e)}`);
-    } finally { setInstalling(null); }
+    }
   };
 
-  if (err) {
+  if (skillsQuery.error) {
     return (
       <div className="grid gap-4">
         <Card title="Skills">
-          <ErrorState error={err} />
+          <ErrorState error={errorMessage(skillsQuery.error)} />
         </Card>
       </div>
     );
@@ -799,8 +748,6 @@ export default function SkillsPanel() {
           personas={personas}
           tagSuggestions={allTags}
           onClose={() => setModal(null)}
-          onSkillsChange={next => { if (Array.isArray(next)) setSkills(next as Skill[]); }}
-          onRosterChange={refreshRoster}
         />
       )}
     </div>
