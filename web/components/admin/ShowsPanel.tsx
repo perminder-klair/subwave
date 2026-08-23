@@ -21,6 +21,7 @@ import {
 import { Users, Share2 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { notify, errorMessage } from '../../lib/notify';
+import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin-query';
 import { useZodForm, applyServerFieldErrors } from '@/lib/form';
 import { showSchema, type ShowSchemaContext } from '@/lib/schemas.generated';
 import { Button } from '../ui/button';
@@ -49,6 +50,14 @@ import type {
   ThemeOption,
 } from './shows/types';
 import { SHOWS_MAX } from './shows/types';
+import { useSettingsQuery } from './settings/queries';
+import {
+  patchShowSettings,
+  useCommunityShowsQuery,
+  useShowGenresQuery,
+  useShowPlaylistsQuery,
+  useShowSkillsQuery,
+} from './shows/queries';
 
 // `showSchema` is a factory (a show can't be validated against itself — it has
 // to name a real persona, mood and theme), so the resolver is rebuilt whenever
@@ -59,17 +68,20 @@ function showsFormSchema(ctx: ShowSchemaContext) {
   return z.object({ shows: z.array(showSchema(ctx)) });
 }
 
+function showWriteError(error: unknown): string {
+  if (error instanceof AdminResponseError) {
+    return typeof error.body.error === 'string' && error.body.error
+      ? error.body.error
+      : `failed (${error.status})`;
+  }
+  return errorMessage(error);
+}
+
 export default function ShowsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [data, setData] = useState<SettingsResponse | null>(null);
   const [schedule, setSchedule] = useState<Schedule>(emptyWeek());
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  // Best-effort; null = still loading.
-  const [community, setCommunity] = useState<CommunityShow[] | null>(null);
   const [communityOpen, setCommunityOpen] = useState(false);          // catalog modal open?
   const [view, setView] = useRosterView('shows');
-  const [installing, setInstalling] = useState<string | null>(null);  // community slug installing, or null
 
   // Shows are edited in place — no modal, no draft copy; edits land straight on
   // the RHF field array and persist on Save show. null = none open.
@@ -83,17 +95,27 @@ export default function ShowsPanel() {
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
   // Public endpoint, no auth needed — same source the player ThemeProvider reads.
   const [themes, setThemes] = useState<ThemeOption[]>([]);
-  const [skills, setSkills] = useState<SkillOption[]>([]);
   const [activeThemeId, setActiveThemeId] = useState('');
-  // Admin-gated, so it runs after sign-in; failures are silent (the field still
-  // accepts free text).
-  const [genres, setGenres] = useState<string[]>([]);
-  // Admin-gated. A failure is no longer silent in the picker — see below.
-  const [playlists, setPlaylists] = useState<{ id: string; name: string; songCount: number | null }[]>([]);
-  // A pending or failed fetch leaves `playlists` empty too, so the editor needs
-  // to tell those apart from a genuinely empty Navidrome before it calls a show's
-  // pinned id missing (or tells the operator they have no playlists).
-  const [playlistsStatus, setPlaylistsStatus] = useState<PlaylistIndexStatus>('loading');
+  const queryEnabled = hydrated && !needsAuth;
+  const settingsQuery = useSettingsQuery<SettingsResponse>({ adminFetch, enabled: queryEnabled });
+  const skillsQuery = useShowSkillsQuery(adminFetch, queryEnabled);
+  const genresQuery = useShowGenresQuery(adminFetch, queryEnabled);
+  const playlistsQuery = useShowPlaylistsQuery(adminFetch, queryEnabled);
+  const communityQuery = useCommunityShowsQuery(adminFetch, queryEnabled);
+  const data = settingsQuery.data ?? null;
+  const err = settingsQuery.error ? errorMessage(settingsQuery.error) : null;
+  const skills: SkillOption[] = skillsQuery.data ?? [];
+  const genres = genresQuery.data ?? [];
+  const playlists = playlistsQuery.data ?? [];
+  const playlistsStatus: PlaylistIndexStatus = playlistsQuery.isPending
+    ? 'loading'
+    : playlistsQuery.isError
+      ? 'error'
+      : 'ready';
+  // Best-effort: a failed community catalog is the same empty, usable modal as
+  // before; only the initial request keeps the button disabled.
+  const community: CommunityShow[] | null = communityQuery.data
+    ?? (communityQuery.isError ? [] : null);
   // Guarded by scrollToEditorRef so unrelated re-renders don't yank the page.
   useEffect(() => {
     if (!scrollToEditorRef.current) return;
@@ -102,13 +124,8 @@ export default function ShowsPanel() {
   }, [focusIdx]);
 
   const load = async (): Promise<SettingsResponse | null> => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) return null;
-      const j = (await r.json()) as SettingsResponse;
-      setData(j); setErr(null);
-      return j;
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); return null; }
+    const result = await settingsQuery.refetch();
+    return result.data ?? null;
   };
 
   // Memoised because `x || []` is a fresh array every render, and showCtx
@@ -147,9 +164,8 @@ export default function ShowsPanel() {
   const { append: appendShowField, remove: removeShowField } =
     useFieldArray({ control, name: 'shows', keyName: '_rhfKey' });
 
-  // `showCtx` changes after mount: personas/moods and themes come from separate
-  // fetches, and `resetForm({shows})` below runs in the same callback as
-  // `setData(j)`, before the render that produces the fresh ctx. Re-validating
+  // `showCtx` changes after mount as personas/moods and themes arrive from
+  // separate queries. Re-validating
   // from an effect (rather than remounting the form) is enough — RHF rewrites
   // `control._options` on every render, so by the time this runs `trigger()`
   // reads the current resolver. Without it every valid show reads as
@@ -159,43 +175,25 @@ export default function ShowsPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCtx]);
 
+  // Server cache revisions must not reset a half-edited show. A remount starts
+  // from the latest cache entry; this mounted form hydrates exactly once.
+  const formHydratedRef = useRef(false);
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    (async () => {
-      const j = await load();
-      if (j?.values) {
-        const week = emptyWeek();
-        const sched: Schedule | Record<string, (string | null)[]> = j.values.schedule || {};
-        for (let d = 0; d < 7; d++) {
-          const day = (sched as Record<number, (string | null)[] | undefined>)[d];
-          if (Array.isArray(day)) for (let h = 0; h < 24; h++) week[d]![h] = day[h] ?? null;
-        }
-        setSchedule(week);
-        const shows: Show[] = (j.values.shows || []).map(hydrateShow);
-        resetForm({ shows });
-        // No trigger() here: the ctx-effect above fires on this same render
-        // (personas/moods derive from the `data` just set) and runs after the
-        // shows are populated, validating both in one pass.
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, needsAuth]);
-
-  // Skill catalogue for the programme feature-segment pin. Failures are silent:
-  // the picker falls back to "Producer's choice" with no pin options.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/dj/skills');
-        if (!r.ok || cancelled) return;
-        const j = (await r.json()) as { skills?: SkillOption[] };
-        if (Array.isArray(j.skills)) setSkills(j.skills.filter(s => s.enabled !== false));
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!data?.values || formHydratedRef.current) return;
+    formHydratedRef.current = true;
+    const week = emptyWeek();
+    const sched: Schedule | Record<string, (string | null)[]> = data.values.schedule || {};
+    for (let d = 0; d < 7; d++) {
+      const day = (sched as Record<number, (string | null)[] | undefined>)[d];
+      if (Array.isArray(day)) for (let h = 0; h < 24; h++) week[d]![h] = day[h] ?? null;
+    }
+    setSchedule(week);
+    resetForm({ shows: (data.values.shows || []).map(hydrateShow) });
+    // Unlike the old imperative loader, the query data and its showCtx land in
+    // the same render. The ctx effect above therefore runs before this reset;
+    // validate the newly-hydrated rows once with that render's current schema.
+    void trigger();
+  }, [data, resetForm, trigger]);
 
   // Themes for the per-show override. Public endpoint, so it runs before
   // sign-in; on failure the picker offers only "Station default".
@@ -215,66 +213,61 @@ export default function ShowsPanel() {
     return () => { cancelled = true; };
   }, [hydrated]);
 
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/library/genres');
-        if (!r.ok || cancelled) return;
-        const j = (await r.json()) as { genres?: { value: string }[] };
-        if (Array.isArray(j.genres)) setGenres(j.genres.map(g => g.value).filter(Boolean));
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      // Every exit that isn't a well-formed list lands on 'error', including a
-      // 200 with no `results` array — the index is unknown either way, and
-      // 'loading' would spin forever.
-      try {
-        const r = await adminFetch('/dj/playlists');
-        if (cancelled) return;
-        if (!r.ok) { setPlaylistsStatus('error'); return; }
-        const j = (await r.json()) as { results?: { id: string; name: string; songCount: number | null }[] };
-        if (cancelled) return;
-        if (Array.isArray(j.results)) {
-          setPlaylists(j.results);
-          setPlaylistsStatus('ready');
-        } else {
-          setPlaylistsStatus('error');
-        }
-      } catch {
-        if (!cancelled) setPlaylistsStatus('error');
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Best-effort: a failure leaves the catalog empty so the Community button
-  // still opens to the empty state.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/shows/community');
-        if (!r.ok) throw new Error(`failed (${r.status})`);
-        const j = (await r.json()) as { community?: CommunityShow[] };
-        if (!cancelled) setCommunity(Array.isArray(j.community) ? j.community : []);
-      } catch {
-        if (!cancelled) setCommunity([]);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const apiBase = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
   const personaName = (id: string): string => personas.find(p => p.id === id)?.name || '—';
+
+  const deleteShowMutation = useAdminMutation<{
+    shows: Array<Partial<Show>>;
+    schedule: Schedule;
+  } | null, string>({
+    adminFetch,
+    request: async (id, fetcher) => {
+      try {
+        return await adminJson(fetcher, `/shows/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      } catch (error) {
+        if (error instanceof AdminResponseError && error.status === 404) return null;
+        throw error;
+      }
+    },
+    onDone: (result, _id, client) => {
+      if (result) patchShowSettings(client, result);
+    },
+    toastOnError: false,
+  });
+
+  const installShowMutation = useAdminMutation<{
+    shows?: Array<Partial<Show>>;
+    show?: Partial<Show> | null;
+  }, string>({
+    adminFetch,
+    request: (slug, fetcher) => adminJson(
+      fetcher,
+      `/shows/community/${encodeURIComponent(slug)}/install`,
+      { method: 'POST' },
+    ),
+    onDone: (result, _slug, client) => {
+      if (result.shows) patchShowSettings(client, { shows: result.shows });
+    },
+    toastOnError: false,
+  });
+
+  const saveShowMutation = useAdminMutation<{
+    shows?: Array<Partial<Show>>;
+    show?: Partial<Show> | null;
+  }, { show: Show }>({
+    adminFetch,
+    request: ({ show }, fetcher) => adminJson(fetcher, '/shows', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ show: showPayload(show) }),
+    }),
+    onDone: (result, _vars, client) => {
+      if (result.shows) patchShowSettings(client, { shows: result.shows });
+    },
+    toastOnError: false,
+  });
+  const installing = installShowMutation.isPending ? installShowMutation.variables : null;
+  const busy = saveShowMutation.isPending;
 
   const focusShow = (i: number) => { scrollToEditorRef.current = true; setCreatingId(null); setFocusIdx(i); };
 
@@ -316,13 +309,9 @@ export default function ShowsPanel() {
     // Persisted immediately, not deferred to Save schedule. A 404 means a
     // locally-added show never saved server-side, so the local splice is enough.
     try {
-      const r = await adminFetch(`/shows/${encodeURIComponent(target.id)}`, { method: 'DELETE' });
-      if (!r.ok && r.status !== 404) {
-        const j = (await r.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      await deleteShowMutation.mutateAsync(target.id);
     } catch (e) {
-      notify.err(`Delete failed: ${errorMessage(e)}`);
+      notify.err(`Delete failed: ${showWriteError(e)}`);
       return;
     }
     // Splice by id, resolved at call time — the await may have elapsed and
@@ -346,11 +335,8 @@ export default function ShowsPanel() {
   // persona); the returned show is appended to the local form as well so
   // unsaved edits to other shows survive.
   const install = async (slug: string) => {
-    setInstalling(slug);
     try {
-      const r = await adminFetch(`/shows/community/${encodeURIComponent(slug)}/install`, { method: 'POST' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; shows?: Array<Partial<Show>>; show?: Partial<Show> | null };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const j = await installShowMutation.mutateAsync(slug);
       const added = j.show ? hydrateShow(j.show) : null;
       if (added) {
         appendShowField(added);
@@ -359,8 +345,8 @@ export default function ShowsPanel() {
       const host = added?.personaId ? personaName(added.personaId) : 'your active DJ';
       notify.ok(`Installed “${added?.name || slug}” — added unscheduled with ${host} as host. Assign a persona/guests, then schedule it on the Rundown.`);
     } catch (e) {
-      notify.err(`Install failed: ${errorMessage(e)}`);
-    } finally { setInstalling(null); }
+      notify.err(`Install failed: ${showWriteError(e)}`);
+    }
   };
 
   const scheduledHours = Object.values(schedule).flat().filter(Boolean).length;
@@ -372,36 +358,27 @@ export default function ShowsPanel() {
   const saveShow = async (index: number): Promise<boolean> => {
     const s = getValues(`shows.${index}`);
     if (!s || form.formState.errors.shows?.[index]) return false;
-    setBusy(true);
     try {
-      const r = await adminFetch('/shows', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ show: showPayload(s) }),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        error?: string; show?: Partial<Show> | null; fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        // POST /shows sends ONE show, so refusals come back keyed `show.<field>`
-        // and need remapping onto this row's own field-array path.
-        if (j.fieldErrors) {
-          const remapped: Record<string, string> = {};
-          for (const [k, v] of Object.entries(j.fieldErrors)) {
-            remapped[k.replace(/^show\./, `shows.${index}.`)] = v;
-          }
-          applyServerFieldErrors(form, remapped);
-        }
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      const j = await saveShowMutation.mutateAsync({ show: s });
       const saved = j.show ? hydrateShow(j.show) : null;
       if (saved) setValue(`shows.${index}`, saved, { shouldDirty: true, shouldValidate: true });
       notify.ok('Show saved.');
       return true;
     } catch (e) {
-      notify.err(errorMessage(e));
+      if (e instanceof AdminResponseError && e.body.fieldErrors) {
+        // POST /shows sends ONE show, so refusals come back keyed `show.<field>`
+        // and need remapping onto this row's own field-array path.
+        const remapped: Record<string, string> = {};
+        for (const [key, value] of Object.entries(e.body.fieldErrors)) {
+          if (typeof value === 'string') {
+            remapped[key.replace(/^show\./, `shows.${index}.`)] = value;
+          }
+        }
+        applyServerFieldErrors(form, remapped);
+      }
+      notify.err(showWriteError(e));
       return false;
-    } finally { setBusy(false); }
+    }
   };
 
   if (err) {

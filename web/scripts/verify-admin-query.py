@@ -70,6 +70,9 @@ DESTRUCTIVE_CHECKS = {
     "settings_save_propagates",
     "imaging_mutations_refresh",
     "personas_mutations_refresh",
+    "show_install_refresh",
+    "schedule_save_refresh",
+    "playlist_sync_refresh",
 }
 
 
@@ -1454,6 +1457,273 @@ def personas_mutations_refresh(page):
         )
     finally:
         remove_fixture()
+
+
+def programming_fixture():
+    """A complete settings envelope with one deterministic programming show."""
+    settings = copy.deepcopy(api("/settings"))
+    personas = settings.get("values", {}).get("personas", [])
+    assert personas, "verify settings need a seeded persona"
+    show = {
+        "id": "s_task5_verify",
+        "name": "Task 5 Verify Show",
+        "topic": "A deterministic programming fixture.",
+        "personaId": personas[0]["id"],
+        "guestPersonaIds": [],
+        "banter": False,
+        "moods": [],
+        "themeId": "",
+        "genres": [],
+        "eras": [],
+        "energies": [],
+        "vocals": "",
+        "filtersStrict": False,
+        "maxTrackSeconds": None,
+        "playlistIds": [],
+        "playlistStrict": False,
+        "excludedPlaylistIds": [],
+        "programme": False,
+        "segmentSkill": "",
+    }
+    week = {str(day): [None] * 24 for day in range(7)}
+    settings["values"]["shows"] = [show]
+    settings["values"]["schedule"] = week
+    return settings, show, week
+
+
+@check
+def shows_cache_reuse(page):
+    """Shows and Rundown reuse the shell's one fresh settings envelope."""
+    page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
+    page.get_by_placeholder("A short line describing your station…").wait_for(state="visible")
+    click_admin_link(page, "Shows", "/admin/shows")
+    page.get_by_text("Build your shows here.", exact=False).wait_for(state="visible")
+    page.get_by_role("link", name="Open the schedule →").click()
+    page.wait_for_url("**/admin/shows/schedule")
+    page.get_by_text("Empty hours run autonomously", exact=False).wait_for(state="visible")
+    assert request_count(page, "/settings", authenticated=True) == 1, page.request_log
+
+
+@check
+def show_install_refresh(page):
+    """An authoritative install response reaches Rundown without another GET."""
+    settings, show, week = programming_fixture()
+    settings["values"]["shows"] = []
+    community = {
+        "slug": "task-5-verify-show",
+        "name": show["name"],
+        "topic": show["topic"],
+        "moods": [],
+        "genres": [],
+        "eras": [],
+        "energies": [],
+        "filtersStrict": False,
+        "banter": False,
+        "programme": False,
+        "segmentSkill": "",
+        "maxTrackSeconds": None,
+    }
+
+    page.route("http://localhost:7791/settings", lambda route: fulfill_json(route, settings))
+    page.route(
+        "http://localhost:7791/shows/community",
+        lambda route: fulfill_json(route, {"community": [community]}),
+    )
+    page.route(
+        "http://localhost:7791/shows/community/task-5-verify-show/install",
+        lambda route: fulfill_json(route, {"shows": [show], "show": show}),
+    )
+
+    page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
+    page.get_by_placeholder("A short line describing your station…").wait_for(state="visible")
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/shows/community")
+    ):
+        click_admin_link(page, "Shows", "/admin/shows")
+    community_button = page.get_by_role("button", name="Community", exact=False)
+    community_button.get_by_text("1", exact=True).wait_for(state="visible")
+    # AdminShell keeps the outgoing route above the incoming subtree during its
+    # crossfade; wait until this click reaches the live Shows panel.
+    page.wait_for_timeout(250)
+    community_button.click()
+    dialog = page.get_by_role("dialog")
+    dialog.wait_for(state="visible")
+    dialog.get_by_text(show["name"], exact=True).wait_for(state="visible")
+    with page.expect_response(
+        lambda response: is_admin_request(
+            response.request, "/shows/community/task-5-verify-show/install", "POST",
+        )
+    ):
+        dialog.get_by_role("button", name="Install").click()
+    page.keyboard.press("Escape")
+    dialog.wait_for(state="detached")
+    page.get_by_role("link", name="Open the schedule →").click()
+    page.wait_for_url("**/admin/shows/schedule")
+    page.get_by_text(show["name"], exact=True).first.wait_for(state="visible")
+    assert request_count(page, "/settings", authenticated=True) == 1, page.request_log
+    assert week == settings["values"]["schedule"]
+
+
+@check
+def schedule_save_refresh(page):
+    """Saving the week patches settings and refreshes the mounted override key."""
+    settings, show, _week = programming_fixture()
+    saved = {"schedule": None}
+
+    page.route("http://localhost:7791/settings", lambda route: fulfill_json(route, settings))
+
+    def schedule_route(route):
+        if route.request.method == "PUT":
+            body = route.request.post_data_json
+            saved["schedule"] = body["schedule"]
+            fulfill_json(route, {"schedule": body["schedule"], "dropped": 0})
+        else:
+            fulfill_json(route, {
+                "shows": [show],
+                "schedule": saved["schedule"] or settings["values"]["schedule"],
+                "override": None,
+            })
+
+    page.route("http://localhost:7791/schedule", schedule_route)
+    page.goto(f"{WEB}/admin/shows/schedule", wait_until="domcontentloaded")
+    brush = page.locator('button[title*="Click to arm"]').first
+    brush.wait_for(state="visible")
+    brush.click()
+    page.locator("button", has_text="+").filter(has_not_text="Add show").first.click()
+    initial_live_reads = request_count(page, "/schedule", authenticated=True)
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/schedule", "PUT")
+    ):
+        page.get_by_role("button", name="Save the week").first.click()
+    page.wait_for_timeout(200)
+    assert saved["schedule"] is not None
+    assert request_count(page, "/schedule", authenticated=True) == initial_live_reads + 1, page.request_log
+
+    page.get_by_role("link", name="New show →").click()
+    page.wait_for_url("**/admin/shows")
+    metric = page.locator(".metric").filter(has_text="hours scheduled")
+    scheduled_hours = sum(
+        1 for day in saved["schedule"].values() for show_id in day if show_id
+    )
+    assert scheduled_hours > 0
+    metric.locator(".n").get_by_text(str(scheduled_hours), exact=True).wait_for(state="visible")
+    assert request_count(page, "/settings", authenticated=True) == 1, page.request_log
+
+
+def stub_playlist_programming(page):
+    settings, _show, _week = programming_fixture()
+    playlist = {
+        "id": "task5-playlist",
+        "name": "Task 5 Playlist",
+        "songCount": 1,
+        "synced": True,
+        "lastSyncedAt": None,
+    }
+    tracks = [
+        {"id": "task5-track-1", "title": "Task 5 One", "artist": "Task Artist", "durationSec": 180},
+    ]
+    state = {"synced": False}
+
+    page.route("http://localhost:7791/settings", lambda route: fulfill_json(route, settings))
+    page.route(
+        "http://localhost:7791/library/genres",
+        lambda route: fulfill_json(route, {"genres": [{"value": "Verify", "songCount": 1}]}),
+    )
+    page.route(
+        "http://localhost:7791/playlists",
+        lambda route: fulfill_json(route, {"playlists": [playlist]}),
+    )
+
+    def detail_route(route):
+        body = list(tracks)
+        if state["synced"]:
+            body.append({
+                "id": "task5-track-2", "title": "Task 5 Two",
+                "artist": "Task Artist", "durationSec": 200,
+            })
+        fulfill_json(route, {"entries": body})
+
+    page.route("http://localhost:7791/playlists/task5-playlist", detail_route)
+
+    def sync_route(route):
+        state["synced"] = True
+        fulfill_json(route, {"added": 1})
+
+    page.route("http://localhost:7791/playlists/task5-playlist/sync", sync_route)
+    page.route(
+        "http://localhost:7791/dj/search**",
+        lambda route: fulfill_json(route, {"results": tracks}),
+    )
+    return playlist
+
+
+def repeat_debounced_search(page, label, term):
+    field = page.get_by_label(label)
+    field.fill(term)
+    page.wait_for_timeout(350)
+    field.fill("")
+    page.wait_for_timeout(20)
+    field.fill(term)
+    page.wait_for_timeout(350)
+    field.fill("")
+
+
+@check
+def playlist_search_dedup(page):
+    """Purpose keys isolate shapes while same-purpose remounts reuse results."""
+    playlist = stub_playlist_programming(page)
+    page.goto(f"{WEB}/admin/playlists", wait_until="domcontentloaded")
+    page.get_by_text("Nothing in the set yet.", exact=True).wait_for(state="visible")
+
+    repeat_debounced_search(page, "Search seeds", "task")
+    repeat_debounced_search(page, "Add an artist", "task")
+
+    page.get_by_role("button", name="Browse").click()
+    page.get_by_text(playlist["name"], exact=True).click()
+    page.get_by_text("Task 5 One", exact=True).wait_for(state="visible")
+    page.get_by_role("button", name="Open", exact=True).click()
+    page.get_by_text(playlist["name"], exact=True).click()
+    page.locator("[data-row]").filter(has_text="Task 5 One").wait_for(state="visible")
+    repeat_debounced_search(page, "Add a track", "task")
+
+    assert request_count(page, "/dj/search", query="q=task&limit=8", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/dj/search", query="q=task&limit=20", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/dj/search", query="q=task&limit=10", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/playlists/task5-playlist", authenticated=True) == 1, page.request_log
+
+
+@check
+def playlist_sync_refresh(page):
+    """Sync refreshes only the active detail and playlist index families."""
+    playlist = stub_playlist_programming(page)
+    page.goto(f"{WEB}/admin/playlists", wait_until="domcontentloaded")
+    page.get_by_role("button", name="Browse").click()
+    page.get_by_text(playlist["name"], exact=True).click()
+    page.get_by_text("Task 5 One", exact=True).wait_for(state="visible")
+    initial_settings = request_count(page, "/settings", authenticated=True)
+    initial_index = request_count(page, "/playlists", authenticated=True)
+    initial_detail = request_count(page, "/playlists/task5-playlist", authenticated=True)
+
+    with page.expect_response(
+        lambda response: is_admin_request(
+            response.request, "/playlists/task5-playlist/sync", "POST",
+        )
+    ):
+        page.get_by_role("button", name="sync now").click()
+    page.get_by_text("Task 5 Two", exact=True).wait_for(state="visible")
+    assert request_count(page, "/playlists/task5-playlist", authenticated=True) == initial_detail + 1, page.request_log
+
+    page.get_by_role("button", name="Open", exact=True).click()
+    page.get_by_text(playlist["name"], exact=True).wait_for(state="visible")
+    assert request_count(page, "/playlists", authenticated=True) == initial_index + 1, page.request_log
+    assert request_count(page, "/settings", authenticated=True) == initial_settings, page.request_log
+    page.get_by_text(playlist["name"], exact=True).click()
+    page.locator("[data-row]").filter(has_text="Task 5 Two").wait_for(state="visible")
+    assert request_count(page, "/playlists/task5-playlist", authenticated=True) == initial_detail + 1, page.request_log
+
+    page.get_by_role("button", name="Open", exact=True).click()
+    page.get_by_text(playlist["name"], exact=True).wait_for(state="visible")
+    assert request_count(page, "/playlists", authenticated=True) == initial_index + 1, page.request_log
 
 
 def main():

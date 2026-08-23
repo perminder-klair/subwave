@@ -7,7 +7,7 @@
 // AiFill box and the local genreDraft buffer — neither is form data).
 
 import type { ChangeEvent, ReactNode, RefObject } from 'react';
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useController, type Control, type FieldErrors, type UseFormTrigger } from 'react-hook-form';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
@@ -46,6 +46,7 @@ import type { EraWindow, Persona, PlaylistIndexStatus, Show, ShowsFormValues, Sk
 import { hasAnyMusicFilter, showPayload } from './lib';
 import { ChipRow } from './ChipRow';
 import { displayedMatchingTracks, type CandidateDiagnostic } from './candidate-diagnostic';
+import { fetchShowCandidates, useShowBlocklistQuery } from './queries';
 
 // The footer names the field the schema objected to; the schema's own keys are
 // developer-facing, so the common ones get an operator-facing label.
@@ -168,9 +169,7 @@ export function ShowEditor({
   const calculateCandidates = async () => {
     setCandidateBusy(true); setCandidateError(null);
     try {
-      const r = await adminFetch('/shows/candidates', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ show: showPayload(show) }) });
-      const j = await r.json().catch(() => ({})) as CandidateDiagnostic & { error?: string };
-      if (!r.ok) throw new Error(j.error || 'failed (' + r.status + ')');
+      const j = await fetchShowCandidates(adminFetch, show);
       setCandidateReport({ key: candidateKey, value: j });
     } catch (err) { setCandidateError(err instanceof Error ? err.message : String(err)); }
     finally { setCandidateBusy(false); }
@@ -201,20 +200,9 @@ export function ShowEditor({
   // Discoverability hint only: blocklist rules scoped to this show are edited
   // on Library → Blocked, not here — but a filter that silently loses to a rule
   // there would be baffling without a pointer. Best-effort, 0 hides the line.
-  const [scopedRuleCount, setScopedRuleCount] = useState(0);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/library/blocklist');
-        if (!r.ok || cancelled) return;
-        const j = await r.json() as { rules?: Array<{ showIds?: string[] }> };
-        if (cancelled) return;
-        setScopedRuleCount((j.rules || []).filter(ru => ru.showIds?.includes(show.id)).length);
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [adminFetch, show.id]);
+  const blocklistQuery = useShowBlocklistQuery(adminFetch, true);
+  const scopedRuleCount = (blocklistQuery.data || [])
+    .filter(rule => rule.showIds?.includes(show.id)).length;
 
   const guestIds: string[] = guestsCtl.field.value ?? [];
   const eras: EraWindow[] = erasCtl.field.value ?? [];

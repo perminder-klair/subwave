@@ -1722,6 +1722,71 @@ def shows(page):
             api_write("DELETE", f"/shows/{leftover['id']}", ok_statuses=(200, 404))
 
 
+@check
+def schedule(page):
+    """Rundown board — local booking survives until one authoritative save.
+
+    The board is intentionally not an RHF form, but it is a programming
+    surface exercised beside Shows and Playlists.  Stub the controller edge so
+    the check can assert the exact PUT payload, the mounted live-schedule
+    refresh, and the shared settings-cache patch without altering the isolated
+    fixture's real week.
+    """
+    settings = json.loads(api("/settings"))
+    personas = settings.get("values", {}).get("personas", [])
+    assert personas, "verify stack needs a seeded persona"
+    show = {
+        "id": "s_verify_schedule", "name": "Verify Schedule Show",
+        "personaId": personas[0]["id"], "moods": [], "energies": [],
+    }
+    week = {str(day): [None] * 24 for day in range(7)}
+    settings["values"]["shows"] = [show]
+    settings["values"]["schedule"] = week
+    saved = {"schedule": None}
+
+    page.route(
+        f"{API}/settings",
+        lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps(settings),
+        ) if route.request.method == "GET" else route.continue_(),
+    )
+
+    def schedule_route(route):
+        if route.request.method == "PUT":
+            saved["schedule"] = json.loads(route.request.post_data or "{}").get("schedule")
+            route.fulfill(
+                status=200, content_type="application/json",
+                body=json.dumps({"schedule": saved["schedule"], "dropped": 0}),
+            )
+            return
+        route.fulfill(
+            status=200, content_type="application/json",
+            body=json.dumps({"schedule": saved["schedule"] or week, "override": None}),
+        )
+
+    page.route(f"{API}/schedule", schedule_route)
+    page.goto(f"{WEB}/admin/shows/schedule")
+    brush = page.locator('button[title*="Click to arm"]').first
+    brush.wait_for(state="visible")
+    brush.click()
+    page.locator("button", has_text="+").filter(has_not_text="Add show").first.click()
+
+    save = page.get_by_role("button", name="Save the week").first
+    assert not save.is_disabled(), "Save the week stayed disabled after a booking"
+    save.click()
+    page.get_by_text("Week saved", exact=False).wait_for(state="visible")
+    assert saved["schedule"], "Rundown save sent no schedule"
+    booked = sum(1 for day in saved["schedule"].values() for show_id in day if show_id)
+    assert booked > 0, f"Rundown save carried no booked cells: {saved['schedule']}"
+
+    # The authoritative write patches settingsKeys.detail(), so navigation to
+    # the roster observes the saved hour count without another settings GET.
+    page.get_by_role("link", name="New show →").click()
+    page.wait_for_url("**/admin/shows")
+    metric = page.locator(".metric").filter(has_text="hours scheduled")
+    metric.locator(".n").get_by_text(str(booked), exact=True).wait_for(state="visible")
+
+
 PLAYLIST_NAME_MAX = 120  # controller/src/schemas/playlist.ts
 PLAYLIST_VERIFY_NAME = "Verify Playlist"
 

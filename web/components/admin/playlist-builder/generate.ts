@@ -27,17 +27,17 @@ const GEN_DEADLINE_MS = 10 * 60_000;
 const GEN_POLL_MISSES = 3; // consecutive transient poll failures tolerated
 
 // Throws with an operator-readable message.
-export async function runGenerationJob(adminFetch: AdminFetch, body: unknown): Promise<any> {
+export async function runGenerationJob(fetcher: AdminFetch, body: unknown): Promise<any> {
   const init: RequestInit = {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   };
-  const start = await adminFetch('/playlists/generate/jobs', init);
+  const start = await fetcher('/playlists/generate/jobs', init);
   // A pre-jobs controller 404s here (mid-upgrade version skew) — fall back to
   // the synchronous endpoint rather than failing the click.
   if (start.status === 404) {
-    const r = await adminFetch('/playlists/generate', init);
+    const r = await fetcher('/playlists/generate', init);
     const j = await readJsonSafe(r);
     if (!r.ok) throw new Error(j.error || 'generation failed');
     return j;
@@ -50,7 +50,7 @@ export async function runGenerationJob(adminFetch: AdminFetch, body: unknown): P
     await sleep(GEN_POLL_MS);
     let poll: any;
     try {
-      const r = await adminFetch(`/playlists/generate/jobs/${started.jobId}`);
+      const r = await fetcher(`/playlists/generate/jobs/${started.jobId}`);
       poll = await readJsonSafe(r);
       if (!r.ok) throw new Error(poll.error || `poll failed (HTTP ${r.status})`);
     } catch (err) {
@@ -66,4 +66,3 @@ export async function runGenerationJob(adminFetch: AdminFetch, body: unknown): P
 }
 
 export const energyPct = (e?: string | null): number => (e === 'low' ? 34 : e === 'high' ? 92 : 64);
-

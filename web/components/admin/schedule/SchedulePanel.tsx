@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAdminAuth } from '../../../lib/adminAuth';
+import { AdminResponseError, adminJson, useAdminMutation } from '../../../lib/admin-query';
 import { BOARD_HOUR_PX, useBoardDensity } from '../../../lib/adminView';
 import { notify, errorMessage } from '../../../lib/notify';
 import { fmtClock, normalizeStationLocale, zonedDayHour } from '../../../lib/format';
@@ -34,9 +35,20 @@ import {
   dayName, diffCells, diffRanges, emptyWeek, fillDayToggle, fillHourToggle,
   hhmm, resizeBlock, setRange, showHours, weekOrders,
 } from './lib';
+import { settingsKeys, useSettingsQuery } from '../settings/queries';
+import { scheduleKeys, useScheduleOverrideQuery } from './queries';
 
 /** The airtime-bar tick — hours a show "should" get in a week. */
 const WEEKLY_TARGET = 12;
+
+function scheduleWriteError(error: unknown): string {
+  if (error instanceof AdminResponseError) {
+    return typeof error.body.error === 'string' && error.body.error
+      ? error.body.error
+      : `failed (${error.status})`;
+  }
+  return errorMessage(error);
+}
 
 interface Persona {
   id: string;
@@ -52,13 +64,6 @@ interface SettingsResponse {
     locale?: StationLocale;
   };
   serverTimezone?: string;
-}
-
-/** Timed takeover (#930): one show pinned over the grid until `expiresAt`. */
-interface ScheduleOverride {
-  showId: string;
-  startedAt: number;
-  expiresAt: number;
 }
 
 // Legacy singular fields still hydrate as one-element lists (same coercion as
@@ -83,15 +88,17 @@ function hydrateShow(raw: Record<string, unknown>): ScheduleShow | null {
 export default function SchedulePanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const router = useRouter();
-  const [err, setErr] = useState<string | null>(null);
   const [shows, setShows] = useState<ScheduleShow[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [serverSchedule, setServerSchedule] = useState<Schedule | null>(null);
   const [tz, setTz] = useState<string | undefined>(undefined);
   const [locale, setLocale] = useState<StationLocale>(normalizeStationLocale(undefined));
-  const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => new Date());
+  const queryEnabled = hydrated && !needsAuth;
+  const settingsQuery = useSettingsQuery<SettingsResponse>({ adminFetch, enabled: queryEnabled });
+  const overrideQuery = useScheduleOverrideQuery(adminFetch, queryEnabled);
+  const err = settingsQuery.error ? errorMessage(settingsQuery.error) : null;
 
   // Board columns collapsed to rails, keyed by storage day (0=Sun..6=Sat).
   const [folded, setFolded] = useState<Record<number, boolean>>({});
@@ -114,18 +121,15 @@ export default function SchedulePanel() {
   const [pendingHref, setPendingHref] = useState<string | null>(null);
 
   // The live takeover (#930), read-only here — pinning and cancelling live on the dash.
-  const [override, setOverride] = useState<ScheduleOverride | null>(null);
+  const override = overrideQuery.data?.override ?? null;
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(id);
   }, []);
 
-  const load = async () => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) throw new Error(`failed (${r.status})`);
-      const j = (await r.json()) as SettingsResponse;
+  const applySettings = (j: SettingsResponse) => {
+    if (!j.values) return;
       const week = emptyWeek();
       const sched = j.values?.schedule || {};
       for (let d = 0; d < 7; d++) {
@@ -141,35 +145,26 @@ export default function SchedulePanel() {
       setLocale(normalizeStationLocale(j.values?.locale));
       setSchedule(week);
       setServerSchedule(cloneWeek(week));
-      setErr(null);
       const { dow, hour } = zonedDayHour(new Date(), j.values?.timezone || j.serverTimezone);
       const b = blockAt(week, dow, hour);
       setLine({ day: b.day, start: b.start, end: b.start + b.span });
       setLineDays([b.day]);
       setLineShowId(b.showId ?? loaded[0]?.id ?? null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
   };
 
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    load();
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+  const load = async () => {
+    const result = await settingsQuery.refetch();
+    if (result.data && !schedule) applySettings(result.data);
+  };
 
+  // A query refresh may update roster metadata, but it cannot overwrite this
+  // mount's unsaved week. Navigation remounts from the newest cache entry.
+  const settingsAppliedRef = useRef(false);
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/schedule');
-        if (!r.ok || cancelled) return;
-        const j = (await r.json()) as { override?: ScheduleOverride | null };
-        if (j.override) setOverride(j.override);
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!settingsQuery.data || settingsAppliedRef.current) return;
+    settingsAppliedRef.current = true;
+    applySettings(settingsQuery.data);
+  }, [settingsQuery.data]);
 
   const { dow: nowDay, hour: nowHour } = zonedDayHour(now, tz);
   const stationMinute = useMemo(() => {
@@ -316,26 +311,44 @@ export default function SchedulePanel() {
     ).length + 1;
   }, [orders, line]);
 
+  const saveScheduleMutation = useAdminMutation<{
+    schedule: Schedule;
+    dropped?: number;
+  }, Schedule>({
+    adminFetch,
+    request: (week, fetcher) => adminJson(fetcher, '/schedule', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ schedule: week }),
+    }),
+    onDone: async (result, _week, client) => {
+      client.setQueryData<SettingsResponse>(settingsKeys.detail(), previous => {
+        if (!previous?.values) return previous;
+        return {
+          ...previous,
+          values: { ...previous.values, schedule: result.schedule },
+        };
+      });
+      await client.invalidateQueries({ queryKey: scheduleKeys.override(), exact: true });
+    },
+    toastOnError: false,
+  });
+  const busy = saveScheduleMutation.isPending;
+
   const saveWeek = async (): Promise<boolean> => {
     if (!schedule) return false;
-    setBusy(true);
     try {
-      const r = await adminFetch('/schedule', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schedule }),
-      });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; dropped?: number };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setServerSchedule(cloneWeek(schedule));
+      const j = await saveScheduleMutation.mutateAsync(cloneWeek(schedule));
+      setSchedule(cloneWeek(j.schedule));
+      setServerSchedule(cloneWeek(j.schedule));
       notify.ok(j.dropped
         ? `Week saved — ${j.dropped} slot(s) skipped (unsaved shows). The current hour applies on the next pick.`
         : 'Week saved — the current hour applies on the next pick.');
       return true;
     } catch (e) {
-      notify.err(errorMessage(e));
+      notify.err(scheduleWriteError(e));
       return false;
-    } finally { setBusy(false); }
+    }
   };
 
   const discardEdits = () => {
