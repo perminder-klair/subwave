@@ -35,6 +35,13 @@ export async function adminResponse(
   init?: RequestInit,
   signal?: AbortSignal,
 ): Promise<Response> {
+  // React StrictMode immediately tears down and remounts effects once in
+  // development. Yield before starting I/O so TanStack can abort that
+  // throwaway observer without sending a duplicate request to the controller.
+  if (signal) {
+    await Promise.resolve();
+    signal.throwIfAborted();
+  }
   const response = await adminFetch(path, { ...init, ...(signal ? { signal } : {}) });
   if (response.ok) return response;
 

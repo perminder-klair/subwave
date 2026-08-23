@@ -923,13 +923,12 @@ def imaging(page):
     never an API prefix.
 
     The persistence round trip is proven through the IMPORT modal, not a real
-    generation — this verify stack's ElevenLabs key reports `generatorReady:
-    true` but has 0 credits remaining (confirmed by actually attempting a
-    create: POST /sfx answered 500 `quota_exceeded`), so a real create() call
-    cannot succeed here and would be a flaky, costed round trip even on a
-    stack that does have credit. Import needs no external API — a real WAV
-    upload through /sfx/upload — and shares the same imagingImportSchema
-    name/description fields.
+    generation. Verification runs with every TTS credential neutralised, so
+    the browser stubs only GET /sfx's `generatorReady` capability to expose
+    the create form's submit state; POSTs remain real and no costed provider
+    call is made. Import needs no external API — a real WAV upload through
+    /sfx/upload — and shares the same imagingImportSchema name/description
+    fields.
 
     Also covers ImagingPanel's own 3s TanStack Query `refetchInterval` — ten
     times faster than TakeoverCard's 30s, and the panel most likely to exhibit
@@ -949,6 +948,20 @@ def imaging(page):
         api_write("DELETE", f"/sfx/{SFX_FIXTURE_NAME}", ok_statuses=(200, 400, 404))
 
     try:
+        # The isolated stack deliberately has no ElevenLabs credential. Keep
+        # the real controller list but expose the create form's validation
+        # path without enabling or calling an external generator.
+        sfx_fixture = json.loads(api("/sfx"))
+        sfx_fixture["generatorReady"] = True
+        page.route(
+            f"{API}/sfx",
+            lambda route: route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(sfx_fixture),
+            ) if route.request.method == "GET" else route.continue_(),
+        )
+
         # Installed BEFORE goto — like takeover()'s clock — so the query's
         # refetch timer is one this test controls from the moment ImagingPanel
         # mounts, not one already ticking on real wall-clock time.

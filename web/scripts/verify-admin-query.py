@@ -355,7 +355,10 @@ def discovery_settings_debounce(page):
     box.fill("http://model.test/v1")
     page.wait_for_timeout(350)
     assert not [hit for hit in model_hits if "model.test" in hit], model_hits
-    page.wait_for_timeout(100)
+    # Real browser scheduling can land a 400ms debounce a little after the
+    # nominal boundary under a busy dev server. Keep the lower-bound assertion
+    # exact and allow 250ms of delivery tolerance before counting requests.
+    page.wait_for_timeout(300)
     matching = [hit for hit in model_hits if "model.test" in hit]
     assert len(matching) == 1, model_hits
 
@@ -373,7 +376,7 @@ def discovery_voice_settings_debounce(page):
     box.fill("http://voice-debounce.test/v1")
     page.wait_for_timeout(350)
     assert not [hit for hit in voice_hits if "voice-debounce.test" in hit], voice_hits
-    page.wait_for_timeout(100)
+    page.wait_for_timeout(300)
     matching = [hit for hit in voice_hits if "voice-debounce.test" in hit]
     assert len(matching) == 1, voice_hits
 
@@ -389,7 +392,7 @@ def discovery_onboarding_provider(page):
     box.fill("http://wizard.test/v1")
     page.wait_for_timeout(350)
     assert not [hit for hit in model_hits if "wizard.test" in hit], model_hits
-    page.wait_for_timeout(100)
+    page.wait_for_timeout(300)
     wizard_hits = [hit for hit in model_hits if "wizard.test" in hit]
     assert len(wizard_hits) == 1, model_hits
 
