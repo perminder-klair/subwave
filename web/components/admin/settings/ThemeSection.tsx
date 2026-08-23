@@ -455,17 +455,27 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
         const remainingThemes = Array.isArray(receipt.themes)
           ? receipt.themes.filter(candidate => candidate.id !== theme.id)
           : [];
-        const fallback = remainingThemes[0];
+        const validActiveId = remainingThemes.some(candidate => candidate.id === activeId)
+          ? activeId
+          : undefined;
+        const validStationDefault = remainingThemes.some(
+          candidate => candidate.id === themeCtx?.stationDefault,
+        )
+          ? themeCtx?.stationDefault
+          : undefined;
+        const persistedFallbackId = validActiveId ?? validStationDefault;
+        const fallback = remainingThemes.find(candidate => candidate.id === persistedFallbackId)
+          ?? remainingThemes[0];
         const removedResolvedTheme = theme.id === activeId
           || theme.id === themeCtx?.stationActiveId
           || theme.id === themeCtx?.stationDefault
           || theme.id === themeCtx?.activeShow?.themeId;
         let fallbackSaved = false;
-        if (removedResolvedTheme && fallback) {
+        if (removedResolvedTheme && !validActiveId && fallback) {
           // DELETE returns the freshly-listed safe registry even though it
-          // omits `active`. Persist a known remaining id before the public
-          // provider reconciles; otherwise the settings pointer can keep
-          // naming the deleted file when the authoritative GET is unavailable.
+          // omits `active`. Preserve a still-valid persisted station default;
+          // only choose and save the first remaining id when that pointer was
+          // itself deleted or invalid.
           fallbackSaved = await saveSettings({ theme: { active: fallback.id } });
         }
         // Removing the failed entry can wake its still-mounted observer. Stop
@@ -477,7 +487,7 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
           { queryKey: adminThemeKeys.detail(), exact: true },
           { silent: true },
         );
-        if (fallbackSaved && fallback) {
+        if (removedResolvedTheme && fallback && (validActiveId || fallbackSaved)) {
           queryClient.setQueryData(adminThemeKeys.detail(), {
             themes: remainingThemes,
             active: fallback.id,

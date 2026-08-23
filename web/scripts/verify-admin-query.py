@@ -1351,6 +1351,130 @@ def theme_mutation_refresh_failures_reconcile_provider(page):
 
 
 @check
+def theme_show_pin_delete_preserves_station_default_on_refresh_failure(page):
+    """Deleting only a show pin cannot replace a still-valid station default."""
+    page.set_default_timeout(7000)
+    settings = copy.deepcopy(SETTINGS_FIXTURE)
+    settings["values"].update({
+        "theme": {"active": "verify-b"},
+        "ui": {"skin": "classic"},
+    })
+    themes = [
+        {
+            "id": "verify-a", "name": "Verify A", "description": "first registry theme",
+            "mode": "dark", "tokens": {"--bg": "#111111"}, "builtin": True,
+        },
+        {
+            "id": "verify-b", "name": "Verify B", "description": "station default",
+            "mode": "dark", "tokens": {"--bg": "#222222"}, "builtin": True,
+        },
+        {
+            "id": "verify-c", "name": "Verify C", "description": "show pin",
+            "mode": "dark", "tokens": {"--bg": "#333333"}, "builtin": False,
+        },
+    ]
+    active = "verify-c"
+    station_default = "verify-b"
+    active_source = "show"
+    active_show = {
+        "id": "verify-show", "name": "Verify Show", "themeId": "verify-c",
+    }
+    fail_next_admin_get = False
+    failed_admin_gets = 0
+    public_gets = 0
+    settings_posts = []
+    page_errors = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+    stub_dashboard(page)
+
+    def settings_route(route):
+        nonlocal active, station_default, active_source, active_show
+        if route.request.method == "POST":
+            body = route.request.post_data_json
+            settings_posts.append(body)
+            next_default = body.get("theme", {}).get("active")
+            if next_default:
+                settings["values"]["theme"]["active"] = next_default
+                station_default = next_default
+                active = next_default
+                active_source = "station"
+                active_show = None
+        fulfill_json(route, settings)
+
+    def themes_route(route):
+        nonlocal themes, active, active_source, active_show
+        nonlocal fail_next_admin_get, failed_admin_gets, public_gets
+        path = urllib.parse.urlparse(route.request.url).path
+        method = route.request.method
+        if method == "GET" and path == "/themes":
+            if route.request.headers.get("authorization"):
+                if fail_next_admin_get:
+                    fail_next_admin_get = False
+                    failed_admin_gets += 1
+                    fulfill_json(route, {"error": "authoritative themes unavailable"}, status=503)
+                    return
+            else:
+                public_gets += 1
+            fulfill_json(route, {
+                "themes": themes, "active": active, "activeSource": active_source,
+                "stationDefault": station_default, "activeShow": active_show,
+            })
+            return
+        if method == "DELETE" and path == "/themes/verify-c":
+            themes = [theme for theme in themes if theme["id"] != "verify-c"]
+            active = station_default
+            active_source = "station"
+            active_show = None
+            fail_next_admin_get = True
+            fulfill_json(route, {"ok": True, "themes": themes})
+            return
+        route.continue_()
+
+    page.route("http://localhost:7791/settings", settings_route)
+    page.route("http://localhost:7791/themes**", themes_route)
+    page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
+    page.get_by_role("button", name="Skin & Themes", exact=False).click()
+    page.get_by_text("Verify C", exact=True).wait_for(state="visible")
+    page.wait_for_function(
+        "() => document.documentElement.style.getPropertyValue('--bg') === '#333333'"
+    )
+
+    public_before = public_gets
+    page.locator('button[title="Remove this custom theme"]').click()
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/themes", "GET")
+        and response.status == 503
+    ):
+        page.get_by_role("alertdialog").get_by_role(
+            "button", name="remove", exact=True,
+        ).click()
+    page.get_by_text("removed", exact=False).filter(has_text="refresh failed").wait_for(
+        state="visible"
+    )
+    page.wait_for_function(
+        "() => document.documentElement.style.getPropertyValue('--bg') === '#222222'"
+    )
+
+    assert not settings_posts or all(
+        post == {"theme": {"active": "verify-b"}} for post in settings_posts
+    ), settings_posts
+    assert settings["values"]["theme"]["active"] == "verify-b", settings
+    assert station_default == "verify-b", station_default
+    assert active == "verify-b", active
+    theme_cache = next(
+        query for query in query_cache_snapshot(page)
+        if query["queryKey"] == ["themes", "admin"]
+    )
+    assert theme_cache["data"]["active"] == "verify-b", theme_cache
+    assert [theme["id"] for theme in theme_cache["data"]["themes"]] == [
+        "verify-a", "verify-b",
+    ], theme_cache
+    assert public_gets == public_before + 1, public_gets
+    assert failed_admin_gets == 1, failed_admin_gets
+    assert not page_errors, page_errors
+
+
+@check
 def audit_rejects_direct_cacheable_reads(_page):
     """The static ownership gate resists aliases, members, and false allowlists."""
     repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
