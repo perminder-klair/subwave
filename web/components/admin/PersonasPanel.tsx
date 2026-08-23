@@ -95,7 +95,8 @@ export default function PersonasPanel() {
   // changes focus too but shouldn't yank the page around.
   const scrollToEditorRef = useRef(false);
   const baselineRef = useRef<ReturnType<typeof formFromSettings>>(null);
-  const hydratedRevisionRef = useRef(0);
+  const appliedRevisionRef = useRef(0);
+  const pendingSettingsRef = useRef<{ revision: number; data: SettingsResponse } | null>(null);
 
   const form = useZodForm(formSchema, { personas: [], djPrompts: [] });
   // Every field in these schemas is a z.unknown().transform() (they double as
@@ -125,7 +126,7 @@ export default function PersonasPanel() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     }),
-    onDone: (result, _patch, client) => applySettingsSave<SettingsResponse>(client, result),
+    onDone: (result, _patch, client) => applySettingsSave(client, result),
     toastOnError: false,
   });
 
@@ -154,13 +155,13 @@ export default function PersonasPanel() {
       setLoaded(true);
       return;
     }
-    // Form state changes cause renders too. Hydration belongs to a server
-    // revision, not to those renders; otherwise removing an array row can be
-    // immediately undone during RHF's brief clean-state transition.
-    if (!settingsQuery.dataUpdatedAt
-      || hydratedRevisionRef.current === settingsQuery.dataUpdatedAt) return;
-    hydratedRevisionRef.current = settingsQuery.dataUpdatedAt;
-    const next = formFromSettings(settingsQuery.data ?? null);
+    const revision = settingsQuery.dataUpdatedAt;
+    if (settingsQuery.data && revision && appliedRevisionRef.current !== revision) {
+      pendingSettingsRef.current = { revision, data: settingsQuery.data };
+    }
+    const pending = pendingSettingsRef.current;
+    if (!pending) return;
+    const next = formFromSettings(pending.data);
     if (!next) return;
     const baseline = baselineRef.current;
     const currentPlainIsDirty = !!baseline && (
@@ -168,13 +169,14 @@ export default function PersonasPanel() {
       || activeDjPromptId !== baseline.activeDjPromptId
       || djHouseRules !== baseline.djHouseRules
     );
-    if (!loaded || (!form.formState.isDirty && !currentPlainIsDirty)) {
-      resetForm({ personas: next.personas, djPrompts: next.djPrompts });
-      setActivePersonaId(next.activePersonaId);
-      setActiveDjPromptId(next.activeDjPromptId);
-      setDjHouseRules(next.djHouseRules);
-      baselineRef.current = next;
-    }
+    if (loaded && (form.formState.isDirty || currentPlainIsDirty)) return;
+    resetForm({ personas: next.personas, djPrompts: next.djPrompts });
+    setActivePersonaId(next.activePersonaId);
+    setActiveDjPromptId(next.activeDjPromptId);
+    setDjHouseRules(next.djHouseRules);
+    baselineRef.current = next;
+    appliedRevisionRef.current = pending.revision;
+    pendingSettingsRef.current = null;
     setErr(null);
     setLoaded(true);
   }, [
@@ -413,10 +415,10 @@ export default function PersonasPanel() {
           activeDjPromptId,
           djHouseRules: djHouseRules.trim(),
         };
-      const result = await saveMutation.mutateAsync(patch);
-      const authoritative = result.saved
-        ? formFromSettings({ ...(data || {}), values: result.saved as SettingsResponse['values'] })
-        : null;
+      await saveMutation.mutateAsync(patch);
+      const authoritative = formFromSettings(
+        queryClient.getQueryData<SettingsResponse>(settingsKeys.detail()) ?? null,
+      );
       if (authoritative) {
         resetForm({ personas: authoritative.personas, djPrompts: authoritative.djPrompts });
         setActivePersonaId(authoritative.activePersonaId);

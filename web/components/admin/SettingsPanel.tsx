@@ -106,6 +106,57 @@ function mergePatchErrors(
 
 const sameForm = (a: FormState, b: FormState) => JSON.stringify(a) === JSON.stringify(b);
 
+/** Mark only the fields represented by a successful patch as clean. */
+function rebaselineSavedPatch(
+  baseline: FormState,
+  current: FormState,
+  patch: Record<string, unknown>,
+): FormState {
+  const next = JSON.parse(JSON.stringify(baseline)) as FormState;
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    !!value && typeof value === 'object' && !Array.isArray(value);
+  const adopt = (
+    target: Record<string, unknown>,
+    source: Record<string, unknown>,
+    shape: Record<string, unknown>,
+  ) => {
+    for (const [key, value] of Object.entries(shape)) {
+      if (!(key in source)) continue;
+      if (isRecord(value) && isRecord(target[key]) && isRecord(source[key])) {
+        adopt(target[key], source[key], value);
+      } else {
+        target[key] = source[key];
+      }
+    }
+  };
+
+  const nextRecord = next as unknown as Record<string, unknown>;
+  const currentRecord = current as unknown as Record<string, unknown>;
+  for (const [key, value] of Object.entries(patch)) {
+    if (key === 'audio' && isRecord(value)) {
+      adopt(
+        next.transitions as unknown as Record<string, unknown>,
+        current.transitions as unknown as Record<string, unknown>,
+        value,
+      );
+      continue;
+    }
+    if (key === 'tts' && isRecord(value)) {
+      adopt(
+        next.tts as unknown as Record<string, unknown>,
+        current.tts as unknown as Record<string, unknown>,
+        value,
+      );
+      if (isRecord(value.kokoro) && 'lang' in value.kokoro) {
+        next.kokoroLang = current.kokoroLang;
+      }
+      continue;
+    }
+    adopt(nextRecord, currentRecord, { [key]: value });
+  }
+  return next;
+}
+
 export default function SettingsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const settingsQuery = useSettingsQuery<SettingsData>({
@@ -118,6 +169,8 @@ export default function SettingsPanel() {
   const [commandBusy, setBusy] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
   const formBaselineRef = useRef<FormState | null>(null);
+  const appliedRevisionRef = useRef(0);
+  const pendingFormRevisionRef = useRef<{ revision: number; form: FormState } | null>(null);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -134,7 +187,7 @@ export default function SettingsPanel() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     }),
-    onDone: (result, _patch, client) => applySettingsSave<SettingsData>(client, result),
+    onDone: (result, _patch, client) => applySettingsSave(client, result),
     toastOnError: false,
   });
   const busy = commandBusy || saveMutation.isPending;
@@ -387,15 +440,33 @@ export default function SettingsPanel() {
         windowDays: String(v.likes?.windowDays ?? 30),
       },
     };
+    const revision = settingsQuery.dataUpdatedAt;
+    if (revision && appliedRevisionRef.current !== revision) {
+      pendingFormRevisionRef.current = { revision, form: nextForm };
+    }
+    const pending = pendingFormRevisionRef.current;
+    if (!pending) return;
     const baseline = formBaselineRef.current;
-    if (!form) setForm(nextForm);
-    else if (!sameForm(form, nextForm) && baseline && sameForm(form, baseline)) setForm(nextForm);
-    formBaselineRef.current = nextForm;
-  }, [data, form]);
+    const clean = !form || !baseline || sameForm(form, baseline);
+    if (!clean) return;
+    if (!form || !sameForm(form, pending.form)) setForm(pending.form);
+    formBaselineRef.current = pending.form;
+    appliedRevisionRef.current = pending.revision;
+    pendingFormRevisionRef.current = null;
+  }, [data, form, settingsQuery.dataUpdatedAt]);
 
   const saveSettings: SaveSettings = async (patch) => {
     try {
       const j = await saveMutation.mutateAsync(patch);
+      // The refetch may resolve while this local form is still dirty against
+      // its old baseline. Mark only submitted fields clean: an edit in another
+      // settings section must continue to hold the queued revision back.
+      if (form) {
+        const baseline = formBaselineRef.current;
+        formBaselineRef.current = baseline
+          ? rebaselineSavedPatch(baseline, form, patch)
+          : form;
+      }
       setFieldErrors((prev) => mergePatchErrors(prev, patch, undefined));
       if (j.requiresRestart) setPendingRestart(true);
       notify.ok(j.requiresRestart ? 'saved, restart the mixer to apply' : 'saved');

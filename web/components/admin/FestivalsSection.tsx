@@ -42,6 +42,10 @@ import {
 type FestivalsArray = z.output<ReturnType<typeof festivalsSchema>>;
 type FestivalsFormValues = { festivals: FestivalsArray };
 type Festival = FestivalsArray[number];
+type FestivalSettingsData = {
+  values?: { festivals?: unknown };
+  tts?: { moods?: unknown };
+};
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -217,10 +221,10 @@ function FestivalModalFields({
 
 export default function FestivalsSection() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const settingsQuery = useSettingsQuery<{
-    values?: { festivals?: unknown };
-    tts?: { moods?: unknown };
-  }>({ adminFetch, enabled: hydrated && !needsAuth });
+  const settingsQuery = useSettingsQuery<FestivalSettingsData>({
+    adminFetch,
+    enabled: hydrated && !needsAuth,
+  });
   const [loaded, setLoaded] = useState(false);
   const [moods, setMoods] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -234,6 +238,8 @@ export default function FestivalsSection() {
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
   const editSnapshot = useRef<Festival | null>(null);
+  const appliedRevisionRef = useRef(0);
+  const pendingSettingsRef = useRef<{ revision: number; data: FestivalSettingsData } | null>(null);
   const fieldId = useId();
 
   // moodNames is nullable on the shared context, where null means "this caller
@@ -273,19 +279,29 @@ export default function FestivalsSection() {
       setErr(errorMessage(settingsQuery.error));
       return;
     }
-    const j = settingsQuery.data;
-    if (!j || (loaded && form.formState.isDirty)) return;
-      // validateFestivalsStrict normalises on every save, so trust the shape here.
-      const vals = j?.values?.festivals;
-      const loadedList = Array.isArray(vals) ? (vals as Festival[]) : [];
-      form.reset({ festivals: sortFestivals(loadedList) });
-      setLoaded(true);
-      // Vocabulary comes from the server so the dropdown can't drift from what
-      // the controller will accept.
-      const moodVals = j?.tts?.moods;
-      setMoods(Array.isArray(moodVals) ? (moodVals as string[]) : []);
-      setErr(null);
-  }, [settingsQuery.data, settingsQuery.error, loaded, form]);
+    const revision = settingsQuery.dataUpdatedAt;
+    if (settingsQuery.data && revision && appliedRevisionRef.current !== revision) {
+      pendingSettingsRef.current = { revision, data: settingsQuery.data };
+    }
+    const pending = pendingSettingsRef.current;
+    if (!pending || (loaded && form.formState.isDirty)) return;
+    const j = pending.data;
+    // validateFestivalsStrict normalises on every save, so trust the shape here.
+    const vals = j?.values?.festivals;
+    const loadedList = Array.isArray(vals) ? (vals as Festival[]) : [];
+    form.reset({ festivals: sortFestivals(loadedList) });
+    setLoaded(true);
+    // Vocabulary comes from the server so the dropdown can't drift from what
+    // the controller will accept.
+    const moodVals = j?.tts?.moods;
+    setMoods(Array.isArray(moodVals) ? (moodVals as string[]) : []);
+    setErr(null);
+    appliedRevisionRef.current = pending.revision;
+    pendingSettingsRef.current = null;
+  }, [
+    settingsQuery.data, settingsQuery.dataUpdatedAt, settingsQuery.error,
+    loaded, form, form.formState.isDirty,
+  ]);
 
   const load = useCallback(async () => { await settingsQuery.refetch(); }, [settingsQuery]);
 

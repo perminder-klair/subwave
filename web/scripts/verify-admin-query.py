@@ -4,6 +4,7 @@ Runs only against the isolated controller and web servers documented in
 .claude/skills/verify/SKILL.md.  It intentionally refuses any other ports.
 """
 import base64
+import copy
 import json
 import os
 import sys
@@ -56,18 +57,29 @@ def api_write(method, path, body=None, ok_statuses=(200, 204)):
         raise
 
 
-def assert_throwaway_stack():
-    if os.environ.get(ALLOW_DESTRUCTIVE_ENV) != "1":
-        sys.exit(
-            f"refusing destructive checks: set {ALLOW_DESTRUCTIVE_ENV}=1 only "
-            "for the isolated verify stack"
-        )
+def assert_verify_stack():
     if API != "http://localhost:7791" or WEB != "http://localhost:7793":
         sys.exit("refusing to run: API/WEB are not the verify stack's ports")
     try:
         api("/health")
     except Exception as error:
         sys.exit(f"verify stack not reachable at {API}: {error}")
+
+
+DESTRUCTIVE_CHECKS = {
+    "settings_save_propagates",
+    "imaging_mutations_refresh",
+    "personas_mutations_refresh",
+}
+
+
+def assert_destructive_opt_in(names):
+    selected = DESTRUCTIVE_CHECKS.intersection(names)
+    if selected and os.environ.get(ALLOW_DESTRUCTIVE_ENV) != "1":
+        sys.exit(
+            f"refusing destructive checks ({', '.join(sorted(selected))}): set "
+            f"{ALLOW_DESTRUCTIVE_ENV}=1 only for the isolated verify stack"
+        )
 
 
 def needs_stubbed_browse():
@@ -833,34 +845,203 @@ def settings_cache_shared(page):
     click_admin_link(page, "Settings", "/admin/settings")
     page.get_by_placeholder("A short line describing your station…").wait_for(state="visible")
     assert request_count(page, "/settings", authenticated=True) == 1, page.request_log
+    # StationSwitcher owns the authenticated shell read. A second standalone
+    # auth probe would duplicate both the normal request and a revoked-token 401.
+    assert request_count(page, "/stations", authenticated=True) == 1, page.request_log
 
 
 @check
 def settings_save_propagates(page):
-    """A returned `saved` snapshot updates the shared key without a reload storm."""
-    original = api("/settings").get("values", {}).get("stationDescription", "")
+    """One safe GET propagates a save without caching POST secrets or stale derived data."""
+    initial = copy.deepcopy(api("/settings"))
     fixture = "Task 4 shared settings cache fixture"
-    try:
-        page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
-        description = page.get_by_placeholder("A short line describing your station…")
-        description.wait_for(state="visible")
-        initial_gets = request_count(page, "/settings", authenticated=True)
-        description.fill(fixture)
-        with page.expect_response(
-            lambda response: is_admin_request(response.request, "/settings", "POST")
-        ):
-            page.get_by_role("button", name="Save station settings").click()
-        assert api("/settings").get("values", {}).get("stationDescription") == fixture
+    secret = "task4-raw-post-secret-must-not-cache"
+    unsaved_key = "operator-unsaved-search-key"
+    mood = "task4-derived-mood"
+    initial_values = copy.deepcopy(initial.get("values", {}))
+    personas = initial_values.get("personas", [])
+    assert len(personas) >= 2, "verify settings need two seeded personas"
+    on_air_id = personas[1]["id"]
 
-        click_admin_link(page, "Moods", "/admin/moods")
-        page.get_by_text("Moods & moments.", exact=True).wait_for(state="visible")
-        click_admin_link(page, "Settings", "/admin/settings")
-        description = page.get_by_placeholder("A short line describing your station…")
-        description.wait_for(state="visible")
-        assert description.input_value() == fixture, description.input_value()
-        assert request_count(page, "/settings", authenticated=True) == initial_gets, page.request_log
-    finally:
-        api_write("POST", "/settings", {"stationDescription": original})
+    # Make the secret-bearing Search control deterministic without persisting a
+    # credential. GET stays redacted; only the mocked POST carries raw material.
+    initial_values["search"] = {
+        **initial_values.get("search", {}), "provider": "tavily", "apiKey": "set",
+    }
+    initial["values"] = initial_values
+    raw_saved = copy.deepcopy(initial_values)
+    raw_saved["stationDescription"] = fixture
+    raw_saved["search"] = {**raw_saved["search"], "apiKey": secret}
+    raw_saved["moods"] = [*raw_saved.get("moods", []), {"name": mood, "clapPrompt": ""}]
+    raw_saved["activePersonaId"] = on_air_id
+
+    authoritative = copy.deepcopy(initial)
+    authoritative["values"] = copy.deepcopy(raw_saved)
+    authoritative["values"]["search"]["apiKey"] = "set"
+    authoritative.setdefault("tts", {})["moods"] = [
+        entry.get("name") for entry in authoritative["values"]["moods"]
+    ]
+    authoritative["onAir"] = {"personaId": on_air_id, "show": None}
+    state = {"saved": False}
+
+    def settings_route(route):
+        if route.request.method == "POST":
+            state["saved"] = True
+            fulfill_json(route, {"saved": raw_saved, "requiresRestart": False})
+        else:
+            fulfill_json(route, authoritative if state["saved"] else initial)
+
+    page.route("http://localhost:7791/settings", settings_route)
+    page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
+    description = page.get_by_placeholder("A short line describing your station…")
+    description.wait_for(state="visible")
+    initial_gets = request_count(page, "/settings", authenticated=True)
+    description.fill(fixture)
+    # Keep an unrelated section dirty while Station saves. The authoritative
+    # revision must not use that save as permission to erase this edit.
+    page.get_by_role("button", name="Web search", exact=False).click()
+    page.locator('input[type="password"]:visible').first.fill(unsaved_key)
+    page.get_by_role("button", name="Station", exact=False).click()
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/settings", "POST")
+    ):
+        page.get_by_role("button", name="Save station settings").click()
+    page.wait_for_timeout(300)
+    assert request_count(page, "/settings", authenticated=True) == initial_gets + 1, page.request_log
+    page.get_by_role("button", name="Web search", exact=False).click()
+    search_key = page.locator('input[type="password"]:visible').first
+    search_key.wait_for(state="visible")
+    assert search_key.input_value() == unsaved_key, search_key.input_value()
+
+    # Remount from the still-fresh shared entry: there is no third GET, the
+    # saved description propagates, and the raw POST secret never reaches DOM.
+    click_admin_link(page, "Moods", "/admin/moods")
+    page.get_by_text("Moods & moments.", exact=True).wait_for(state="visible")
+    click_admin_link(page, "Settings", "/admin/settings")
+    description = page.get_by_placeholder("A short line describing your station…")
+    description.wait_for(state="visible")
+    assert description.input_value() == fixture, description.input_value()
+    page.get_by_role("button", name="Web search", exact=False).click()
+    search_key = page.locator('input[type="password"]:visible').first
+    search_key.wait_for(state="visible")
+    assert search_key.input_value() != secret, search_key.input_value()
+    assert "key on file" in (search_key.get_attribute("placeholder") or "")
+
+    # The same authoritative GET refreshes top-level derived fields consumed by
+    # Festivals and Personas; retaining the old envelope would miss both.
+    click_admin_link(page, "Moods", "/admin/moods")
+    page.get_by_role("tab", name="Festivals").click()
+    page.get_by_role("button", name="Add festival").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Mood").click()
+    page.get_by_role("option", name=mood).wait_for(state="visible")
+    page.keyboard.press("Escape")
+    dialog.get_by_role("button", name="Cancel").click()
+    dialog.wait_for(state="detached")
+    click_admin_link(page, "Personas", "/admin/personas")
+    hero = page.locator("section.card").filter(has_text="● on air").first
+    hero.get_by_text(personas[1]["name"], exact=True).wait_for(state="visible")
+    assert request_count(page, "/settings", authenticated=True) == initial_gets + 1, page.request_log
+
+
+def reconnect_stale_query(page):
+    settle_clock(page, 31_000)
+    page.context.set_offline(True)
+    page.context.set_offline(False)
+
+
+@check
+def settings_dirty_revision_deferred(page):
+    """A server revision waits behind dirty RHF edits, then hydrates once clean."""
+    page.clock.install()
+    seed = copy.deepcopy(api("/settings"))
+
+    def run_stage(path, initial, revised, open_input):
+        state = {"body": initial}
+
+        def route_settings(route):
+            fulfill_json(route, state["body"])
+
+        page.route("http://localhost:7791/settings", route_settings)
+        page.goto(f"{WEB}{path}", wait_until="domcontentloaded")
+        field, baseline, dirty, server = open_input(page)
+        field.fill(dirty)
+        state["body"] = revised
+        before = request_count(page, "/settings", authenticated=True)
+        reconnect_stale_query(page)
+        page.wait_for_timeout(100)
+        assert request_count(page, "/settings", authenticated=True) == before + 1, page.request_log
+        assert field.input_value() == dirty, field.input_value()
+        field.fill(baseline)
+        field.wait_for(state="visible")
+        page.wait_for_timeout(100)
+        assert field.input_value() == server, field.input_value()
+        page.unroute("http://localhost:7791/settings", route_settings)
+
+    mood_initial = copy.deepcopy(seed)
+    mood_initial["values"]["moods"] = [{"name": "baseline-mood", "clapPrompt": ""}]
+    mood_initial["values"]["moodSchedule"] = {}
+    mood_initial["values"]["weatherMoods"] = {}
+    mood_initial.setdefault("tts", {})["moods"] = ["baseline-mood"]
+    mood_revised = copy.deepcopy(mood_initial)
+    mood_revised["values"]["moods"] = [{"name": "server-mood", "clapPrompt": ""}]
+    mood_revised["tts"]["moods"] = ["server-mood"]
+    run_stage(
+        "/admin/moods?tab=vocab", mood_initial, mood_revised,
+        lambda p: (p.get_by_label("Mood id").first, "baseline-mood", "operator-mood", "server-mood"),
+    )
+
+    festival_initial = copy.deepcopy(seed)
+    festival_initial["values"]["festivals"] = [{
+        "month": 1, "day": 1, "name": "Baseline Festival", "mood": "festival",
+        "description": "", "windowDays": 0,
+    }]
+    festival_revised = copy.deepcopy(festival_initial)
+    festival_revised["values"]["festivals"][0]["name"] = "Server Festival"
+
+    def open_festival(p):
+        p.get_by_role("button", name="Baseline Festival", exact=False).click()
+        return p.get_by_role("dialog").get_by_label("Name"), "Baseline Festival", "Operator Festival", "Server Festival"
+
+    run_stage(
+        "/admin/moods?tab=festivals", festival_initial, festival_revised, open_festival,
+    )
+
+    persona_initial = copy.deepcopy(seed)
+    persona = persona_initial["values"]["personas"][1]
+    persona_revised = copy.deepcopy(persona_initial)
+    persona_revised["values"]["personas"][1]["name"] = "Server Wren"
+
+    def open_persona(p):
+        p.get_by_role("button", name=f"Edit {persona['name']}").click()
+        return p.get_by_role("dialog").get_by_label("On-air name"), persona["name"], "Operator Wren", "Server Wren"
+
+    run_stage("/admin/personas", persona_initial, persona_revised, open_persona)
+
+
+@check
+def response_message_error_preserved(page):
+    """Imperative settings commands retain actionable `{message}` failures."""
+    settings = copy.deepcopy(SETTINGS_FIXTURE)
+    settings["values"]["scrobble"] = {
+        "lastfm": {
+            "enabled": True, "apiKey": "set", "apiSecret": "set",
+            "sessionKey": "set", "username": "verify",
+        },
+        "listenbrainz": {"enabled": False, "userToken": "", "username": "", "baseUrl": ""},
+    }
+    page.route(
+        "http://localhost:7791/settings",
+        lambda route: fulfill_json(route, settings),
+    )
+    message = "Last.fm already has an authorization waiting"
+    page.route(
+        "http://localhost:7791/scrobble/lastfm/connect",
+        lambda route: fulfill_json(route, {"message": message}, status=409),
+    )
+    page.goto(f"{WEB}/admin/settings?section=scrobble", wait_until="domcontentloaded")
+    page.get_by_role("button", name="Connect to Last.fm").click()
+    page.get_by_text(message, exact=False).wait_for(state="visible")
 
 
 @check
@@ -931,7 +1112,7 @@ def imaging_mutations_refresh(page):
 
 @check
 def personas_mutations_refresh(page):
-    """Roster saves propagate through settings cache and remount without a GET."""
+    """Roster saves refetch the safe envelope once, then remount from cache."""
     fixture = "Task 4 Cache Persona"
 
     def remove_fixture():
@@ -956,13 +1137,14 @@ def personas_mutations_refresh(page):
             persona.get("name") == fixture
             for persona in api("/settings").get("values", {}).get("personas", [])
         )
-        assert request_count(page, "/settings", authenticated=True) == initial_gets, page.request_log
+        authoritative_gets = initial_gets + 1
+        assert request_count(page, "/settings", authenticated=True) == authoritative_gets, page.request_log
 
         click_admin_link(page, "Imaging", "/admin/imaging")
         page.get_by_text("The sounds between the songs.", exact=True).wait_for(state="visible")
         click_admin_link(page, "Personas", "/admin/personas")
         page.get_by_role("button", name=f"Edit {fixture}").wait_for(state="visible")
-        assert request_count(page, "/settings", authenticated=True) == initial_gets, page.request_log
+        assert request_count(page, "/settings", authenticated=True) == authoritative_gets, page.request_log
 
         # AdminShell crossfades route children. The incoming roster is visible
         # before the exiting Imaging subtree has finished leaving; wait out
@@ -996,11 +1178,12 @@ def personas_mutations_refresh(page):
 
 
 def main():
-    assert_throwaway_stack()
     names = sys.argv[1:] or list(CHECKS)
     unknown = [name for name in names if name not in CHECKS]
     if unknown:
         sys.exit(f"unknown check(s): {', '.join(unknown)} — have {', '.join(CHECKS)}")
+    assert_verify_stack()
+    assert_destructive_opt_in(names)
     failed = []
     with sync_playwright() as playwright:
         for name in names:

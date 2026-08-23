@@ -39,17 +39,17 @@ export function useSettingsQuery<T>({
   });
 }
 
-/** POST /settings returns the complete authoritative values object on success. */
-export function applySettingsSave<TData extends { values?: unknown }>(
+/**
+ * POST /settings may contain raw write-only secrets and omits GET-only derived
+ * fields. Never cache it: one redacted GET refreshes the complete envelope.
+ */
+export async function applySettingsSave(
   client: QueryClient,
-  result: SettingsSaveResult,
-): void {
-  if (!result.saved) {
-    void client.invalidateQueries({ queryKey: settingsKeys.all });
-    return;
-  }
-  client.setQueryData<TData>(settingsKeys.detail(), current => ({
-    ...(current || {} as TData),
-    values: result.saved,
-  }) as TData);
+  _result: SettingsSaveResult,
+): Promise<void> {
+  await client.invalidateQueries({
+    queryKey: settingsKeys.detail(),
+    exact: true,
+    refetchType: 'active',
+  });
 }

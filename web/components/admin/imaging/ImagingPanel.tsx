@@ -90,7 +90,7 @@ export default function ImagingPanel() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(patch),
     }),
-    onDone: (result, _patch, client) => applySettingsSave<SettingsData>(client, result),
+    onDone: (result, _patch, client) => applySettingsSave(client, result),
     toastOnError: false,
   });
 

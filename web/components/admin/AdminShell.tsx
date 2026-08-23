@@ -269,25 +269,6 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
     [signIn, pathname, router],
   );
 
-  // Probe an admin endpoint on first paint so a revoked token surfaces the
-  // sign-in form proactively.
-  useEffect(() => {
-    if (!hydrated || !auth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        // Keep the auth probe separate from the shared /settings cache: every
-        // curation screen owns that response through settingsKeys.detail().
-        // admin-query-imperative: authentication-probe
-        await adminFetch('/stations');
-      } catch {}
-      if (cancelled) return;
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [hydrated, auth, adminFetch]);
-
   // First-run redirect into the wizard. Public endpoint, no auth needed.
   useEffect(() => {
     if (!hydrated) return;

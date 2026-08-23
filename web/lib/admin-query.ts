@@ -14,7 +14,11 @@ import { errorMessage, notify } from './notify';
 
 export type AdminFetch = (path: string, init?: RequestInit) => Promise<Response>;
 
-export class AdminResponseError<TBody = { error?: unknown }> extends Error {
+export class AdminResponseError<TBody = {
+  error?: unknown;
+  message?: unknown;
+  fieldErrors?: Record<string, string>;
+}> extends Error {
   constructor(
     message: string,
     readonly status: number,
@@ -34,8 +38,13 @@ export async function adminResponse(
   const response = await adminFetch(path, { ...init, ...(signal ? { signal } : {}) });
   if (response.ok) return response;
 
-  const body = await response.json().catch(() => ({})) as { error?: unknown };
-  const detail = typeof body.error === 'string' && body.error ? `: ${body.error}` : '';
+  const body = await response.json().catch(() => ({})) as { error?: unknown; message?: unknown };
+  const actionable = typeof body.error === 'string' && body.error
+    ? body.error
+    : typeof body.message === 'string' && body.message
+      ? body.message
+      : '';
+  const detail = actionable ? `: ${actionable}` : '';
   throw new AdminResponseError(`${path} failed (${response.status})${detail}`, response.status, body);
 }
 

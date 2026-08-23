@@ -6,9 +6,7 @@ const rootArg = process.argv.indexOf('--root');
 const root = rootArg === -1
   ? path.resolve(import.meta.dirname, '..', 'components', 'admin')
   : path.resolve(process.argv[rootArg + 1]);
-const allowed = new Map([
-  ['AdminShell.tsx', new Set(['authentication-probe'])],
-]);
+const allowed = new Map();
 const marker = '// admin-query-imperative: ';
 const incomplete = process.argv.includes('--allow-incomplete');
 const used = new Map([...allowed].map(([file]) => [file, new Set()]));
