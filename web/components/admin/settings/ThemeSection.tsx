@@ -24,8 +24,7 @@ import {
   type SettingsData, type SaveSettings, type SettingsFieldErrors,
 } from './shared';
 import {
-  adminThemeKeys,
-  refetchAdminThemes,
+  reconcileAdminThemesAfterWrite,
   useAdminThemesQuery,
   type AdminTheme,
   type AdminThemesResponse,
@@ -108,6 +107,8 @@ function ThemeEditorModal({
   onSaved: (themes: ThemeDef[], savedId?: string) => void;
 }) {
   const isEdit = editing != null;
+  const queryClient = useQueryClient();
+  const themeCtx = useThemeSwitcher();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [mode, setMode] = useState<'light' | 'dark'>('dark');
@@ -120,9 +121,6 @@ function ThemeEditorModal({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
-    onDone: async (_response, _body, client) => {
-      await refetchAdminThemes(client, adminFetch);
-    },
     toastOnError: false,
   });
 
@@ -162,8 +160,20 @@ function ThemeEditorModal({
       const body: Record<string, unknown> = { name: name.trim(), description: description.trim(), mode, tokens: cleaned };
       // Keeps the same file even if the operator renamed the theme.
       if (isEdit && editing) body.id = editing.id;
-      const j = await saveMutation.mutateAsync(body);
-      onSaved(j.themes ?? [], isEdit && editing ? editing.id : undefined);
+      await saveMutation.mutateAsync(body);
+      const reconciled = await reconcileAdminThemesAfterWrite(
+        queryClient,
+        adminFetch,
+        themeCtx?.refreshThemes,
+      );
+      if (!reconciled.ok) {
+        notify.err(
+          `Theme "${name.trim()}" ${isEdit ? 'updated' : 'saved'}, but refresh failed: ${errorMessage(reconciled.error)}`,
+        );
+        onOpenChange(false);
+        return;
+      }
+      onSaved(reconciled.data.themes, isEdit && editing ? editing.id : undefined);
       notify.ok(`${isEdit ? 'updated' : 'saved'} "${name.trim()}"`);
       onOpenChange(false);
     } catch (e) {
@@ -359,9 +369,6 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
   const refreshMutation = useAdminMutation<AdminThemesResponse, void>({
     adminFetch,
     request: (_unused, fetcher) => adminJson(fetcher, '/themes/refresh', { method: 'POST' }),
-    onDone: async (_response, _unused, client) => {
-      await refetchAdminThemes(client, adminFetch);
-    },
     toastOnError: false,
   });
   const removeMutation = useAdminMutation<AdminThemesResponse, ThemeDef>({
@@ -371,19 +378,25 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
       `/themes/${encodeURIComponent(theme.id)}`,
       { method: 'DELETE' },
     ),
-    onDone: async (_response, _theme, client) => {
-      await refetchAdminThemes(client, adminFetch);
-    },
     toastOnError: false,
   });
 
   const refresh = async () => {
     try {
-      const j = await refreshMutation.mutateAsync();
-      const next = j.themes ?? [];
+      await refreshMutation.mutateAsync();
+      const reconciled = await reconcileAdminThemesAfterWrite(
+        queryClient,
+        adminFetch,
+        themeCtx?.refreshThemes,
+      );
+      if (!reconciled.ok) {
+        notify.err(`Themes reloaded, but refresh failed: ${errorMessage(reconciled.error)}`);
+        return;
+      }
       // A file dropped in can make a show's previously-dead themeId resolve, so
       // the answer to "who's winning" may have just changed too.
-      themeCtx?.refreshThemes();
+      await themeCtx?.refreshThemes();
+      const next = reconciled.data.themes;
       notify.ok(`reloaded, ${next.length} theme${next.length === 1 ? '' : 's'}`);
     } catch (e) {
       notify.err(`Refresh failed: ${errorMessage(e)}`);
@@ -403,15 +416,13 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
       await themeCtx?.refreshThemes();
       return;
     }
-    try {
-      await refetchAdminThemes(queryClient, adminFetch);
-    } catch (e) {
-      // The setting is already committed, but this exact admin read is not
-      // authoritative. Drop its old data, report the real failure, and let the
-      // independent public provider reconcile the painted/cached palette.
-      queryClient.removeQueries({ queryKey: adminThemeKeys.detail(), exact: true });
-      await themeCtx?.refreshThemes();
-      notify.err(`Theme saved, but refresh failed: ${errorMessage(e)}`);
+    const reconciled = await reconcileAdminThemesAfterWrite(
+      queryClient,
+      adminFetch,
+      themeCtx?.refreshThemes,
+    );
+    if (!reconciled.ok) {
+      notify.err(`Theme saved, but refresh failed: ${errorMessage(reconciled.error)}`);
       return;
     }
     // Re-read provenance now rather than up to 30s from now: if a show is
@@ -433,11 +444,22 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
   // the list), so nothing points at a now-missing id.
   const remove = async (theme: ThemeDef) => {
     try {
-      const j = await removeMutation.mutateAsync(theme);
-      const next = j.themes ?? [];
+      await removeMutation.mutateAsync(theme);
+      const reconciled = await reconcileAdminThemesAfterWrite(
+        queryClient,
+        adminFetch,
+        themeCtx?.refreshThemes,
+      );
+      if (!reconciled.ok) {
+        notify.err(
+          `Theme "${theme.name}" removed, but refresh failed: ${errorMessage(reconciled.error)}`,
+        );
+        return;
+      }
+      const next = reconciled.data.themes;
       // Deleting the theme a show pinned makes that pin unresolvable, so the
       // station default silently takes over — provenance just changed.
-      themeCtx?.refreshThemes();
+      await themeCtx?.refreshThemes();
       notify.ok(`removed "${theme.name}"`);
       if (theme.id === activeId && next[0]) await choose(next[0]);
     } catch (e) {

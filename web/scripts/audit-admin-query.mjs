@@ -461,26 +461,53 @@ function helperLocalNames(sourceFile, consumerFile, spec) {
   return names;
 }
 
-function countHelperReferences(node, names) {
-  let count = 0;
-  function visit(current) {
-    if (ts.isIdentifier(current) && names.has(current.text)) count += 1;
-    ts.forEachChild(current, visit);
-  }
-  visit(node);
-  return count;
+function nodeKey(file, node) {
+  return `${file}:${node.pos}:${node.end}`;
 }
 
-function consumerCount(spec, consumer) {
-  const parsed = sourceFor(consumer.file);
-  if (!parsed) {
-    violations.push(`${consumer.file}: missing registered query consumer for ${spec.function}`);
-    return 0;
+function registeredHelperSignalIndex(spec, sourceFile) {
+  const declaration = sourceFile.statements.find(statement =>
+    ts.isFunctionDeclaration(statement) && statement.name?.text === spec.function);
+  if (!declaration || !ts.isFunctionDeclaration(declaration)) return -1;
+  const signals = new Set(spec.reads.map(read => read.signal));
+  if (signals.size !== 1) return -1;
+  const [signal] = signals;
+  return declaration.parameters.findIndex(parameter =>
+    ts.isIdentifier(parameter.name) && parameter.name.text === signal);
+}
+
+function callbackSignalBinding(callback, property) {
+  const parameter = callback.parameters[property === 'request' ? 1 : 0];
+  if (!parameter) return null;
+  if (property === 'request') {
+    return ts.isIdentifier(parameter.name)
+      ? { kind: 'identifier', name: parameter.name.text }
+      : null;
   }
-  const { file, sourceFile } = parsed;
-  const { aliases, initializers } = buildBindings(sourceFile);
-  const names = helperLocalNames(sourceFile, file, spec);
-  let count = 0;
+  if (ts.isIdentifier(parameter.name)) {
+    return { kind: 'property', name: parameter.name.text };
+  }
+  if (!ts.isObjectBindingPattern(parameter.name)) return null;
+  const signal = parameter.name.elements.find(element =>
+    propertyName(element.propertyName ?? element.name) === 'signal');
+  return signal && ts.isIdentifier(signal.name)
+    ? { kind: 'identifier', name: signal.name.text }
+    : null;
+}
+
+function isCallbackSignal(node, binding) {
+  if (!node || !binding) return false;
+  if (binding.kind === 'identifier') {
+    return ts.isIdentifier(node) && node.text === binding.name;
+  }
+  return ts.isPropertyAccessExpression(node)
+    && ts.isIdentifier(node.expression)
+    && node.expression.text === binding.name
+    && node.name.text === 'signal';
+}
+
+function consumerPropertyValues(sourceFile, aliases, initializers, consumer) {
+  const values = [];
   function visit(node) {
     if (ts.isCallExpression(node) && canonicalCallee(node, aliases) === consumer.owner) {
       for (const argument of node.arguments) {
@@ -491,8 +518,7 @@ function consumerCount(spec, consumer) {
             (ts.isPropertyAssignment(current) || ts.isShorthandPropertyAssignment(current))
             && propertyName(current.name) === consumer.property
           ) {
-            const value = ts.isShorthandPropertyAssignment(current) ? current.name : current.initializer;
-            count += countHelperReferences(value, names);
+            values.push(ts.isShorthandPropertyAssignment(current) ? current.name : current.initializer);
             return;
           }
           ts.forEachChild(current, visitOptions);
@@ -503,7 +529,91 @@ function consumerCount(spec, consumer) {
     ts.forEachChild(node, visit);
   }
   visit(sourceFile);
+  return values;
+}
+
+function validateConsumer(spec, consumer, signalIndex, allowedReferences) {
+  const parsed = sourceFor(consumer.file);
+  if (!parsed) {
+    violations.push(`${consumer.file}: missing registered query consumer for ${spec.function}`);
+    return 0;
+  }
+  const { file, sourceFile } = parsed;
+  const { aliases, initializers } = buildBindings(sourceFile);
+  const names = helperLocalNames(sourceFile, file, spec);
+  let count = 0;
+  for (const value of consumerPropertyValues(sourceFile, aliases, initializers, consumer)) {
+    if (ts.isIdentifier(value) && names.has(value.text)) {
+      allowedReferences.add(nodeKey(file, value));
+      count += 1;
+      if (consumer.property !== 'request' || signalIndex !== 1) {
+        violations.push(
+          `${consumer.file}: direct ${spec.function} callback does not receive TanStack AbortSignal in its registered position`,
+        );
+      }
+      continue;
+    }
+    if (!ts.isArrowFunction(value) && !ts.isFunctionExpression(value)) continue;
+    const signalBinding = callbackSignalBinding(value, consumer.property);
+    function visitCallback(node) {
+      if (node !== value && (ts.isArrowFunction(node) || ts.isFunctionExpression(node))) return;
+      if (
+        ts.isCallExpression(node)
+        && ts.isIdentifier(node.expression)
+        && names.has(node.expression.text)
+      ) {
+        allowedReferences.add(nodeKey(file, node.expression));
+        count += 1;
+        if (!isCallbackSignal(node.arguments[signalIndex], signalBinding)) {
+          violations.push(
+            `${location(file, sourceFile, node)}: ${spec.function} must receive the callback's TanStack AbortSignal in argument ${signalIndex + 1}`,
+          );
+        }
+      }
+      ts.forEachChild(node, visitCallback);
+    }
+    visitCallback(value.body);
+  }
   return count;
+}
+
+function isHelperDefinitionReference(node, names) {
+  const parent = node.parent;
+  if (ts.isImportSpecifier(parent)) return true;
+  if (ts.isFunctionDeclaration(parent) && parent.name === node) return true;
+  if (ts.isVariableDeclaration(parent) && parent.name === node) return true;
+  if (
+    ts.isVariableDeclaration(parent)
+    && parent.initializer === node
+    && ts.isIdentifier(parent.name)
+    && names.has(parent.name.text)
+  ) return true;
+  return false;
+}
+
+function rejectOutsideHelperReferences(spec, allowedReferences) {
+  for (const file of filesAt(root)) {
+    const relative = path.relative(root, file);
+    const parsed = sourceFor(relative);
+    if (!parsed) continue;
+    const { sourceFile } = parsed;
+    const names = helperLocalNames(sourceFile, file, spec);
+    if (names.size === 0) continue;
+    function visit(node) {
+      if (
+        ts.isIdentifier(node)
+        && names.has(node.text)
+        && !isHelperDefinitionReference(node, names)
+        && !allowedReferences.has(nodeKey(file, node))
+      ) {
+        violations.push(
+          `${location(file, sourceFile, node)}: ${spec.function} reference outside registered query consumer; use it as the exact callback or an actual call`,
+        );
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(sourceFile);
+  }
 }
 
 for (let specIndex = 0; specIndex < ownershipRegistry.length; specIndex += 1) {
@@ -512,6 +622,8 @@ for (let specIndex = 0; specIndex < ownershipRegistry.length; specIndex += 1) {
   if (!parsed || !isExportedFunction(parsed.sourceFile, spec.function)) {
     violations.push(`${spec.file}: missing exported registered query helper ${spec.function}`);
   }
+  const signalIndex = parsed ? registeredHelperSignalIndex(spec, parsed.sourceFile) : -1;
+  const allowedReferences = new Set();
   for (let readIndex = 0; readIndex < spec.reads.length; readIndex += 1) {
     const read = spec.reads[readIndex];
     if (ownedReadUse[specIndex][readIndex] !== 1) {
@@ -521,13 +633,14 @@ for (let specIndex = 0; specIndex < ownershipRegistry.length; specIndex += 1) {
     }
   }
   for (const consumer of spec.consumers) {
-    const actual = consumerCount(spec, consumer);
+    const actual = validateConsumer(spec, consumer, signalIndex, allowedReferences);
     if (actual !== consumer.count) {
       violations.push(
         `${consumer.file}: ${spec.function} expected ${consumer.count} ${consumer.owner}.${consumer.property} consumer(s), found ${actual}`,
       );
     }
   }
+  rejectOutsideHelperReferences(spec, allowedReferences);
 }
 
 for (const [file, classifications] of allowed) {

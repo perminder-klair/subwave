@@ -768,6 +768,21 @@ isolated matrix passed with the admin total increased to 53; query-cache 6/6,
 Library 8/8, hooks 22/22, destructive forms 13/13, playlist DnD all checks, and
 schedule booking 9/9 also passed.
 
+Review round 4 made helper ownership and theme write reconciliation end to end.
+Registry consumers now count only an exact helper callback or an actual helper
+call inside the declared request/query function; they prove that callback's
+TanStack `AbortSignal` reaches the helper's registered parameter position and
+reject decoy references, replacement/manual signals, wrong positions, and any
+helper invocation outside a declared consumer. The standalone Node audit suite
+now uses an isolated registry, expects current diagnostics, and passes 7/7.
+Create/edit, refresh, delete, and Settings choose all share one committed-write
+reconciler: a failed authoritative GET removes exact stale admin state, awaits
+the public provider, and reports that the write succeeded but refresh failed.
+Focused auth/themes/audit/debounce checks passed 10/10. The fresh complete
+isolated matrix passed admin-query 54/54, query-cache 6/6, Library 8/8, hooks
+22/22, destructive forms 13/13, playlist DnD all checks, and schedule booking
+9/9.
+
 - [x] **Step 5: Commit final documentation and verification fixes**
 
 ```bash
@@ -781,6 +796,10 @@ git commit -m "fix(web): close admin ownership races"
 # Review round 3 follow-up
 git add web docs/superpowers
 git commit -m "fix(web): harden credential and theme reconciliation"
+
+# Review round 4 follow-up
+git add web docs/superpowers
+git commit -m "fix(web): prove query ownership end to end"
 ```
 
 - [ ] **Step 6: Rebase and re-run risk-proportionate checks**

@@ -84,6 +84,26 @@ export async function refetchAdminThemes(
   }
 }
 
+export async function reconcileAdminThemesAfterWrite(
+  client: QueryClient,
+  adminFetch: AdminFetch,
+  refreshPublic: (() => Promise<void>) | undefined,
+): Promise<
+  | { ok: true; data: AdminThemesData }
+  | { ok: false; error: unknown }
+> {
+  try {
+    return { ok: true, data: await refetchAdminThemes(client, adminFetch) };
+  } catch (error) {
+    // The write has committed, but the old exact entry is no longer truthful.
+    // Public ThemeProvider owns the painted/listener-facing reconciliation and
+    // deliberately swallows network errors while retaining its last good CSS.
+    client.removeQueries({ queryKey: adminThemeKeys.detail(), exact: true });
+    await refreshPublic?.();
+    return { ok: false, error };
+  }
+}
+
 export function useAdminThemesQuery(adminFetch: AdminFetch, enabled: boolean) {
   return useAdminQuery<AdminThemesData>({
     key: adminThemeKeys.detail(),
