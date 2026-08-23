@@ -30,12 +30,14 @@ export const libraryKeys = {
   likedAll: ['library', 'rows', 'liked'] as const,
   history: (page: number) => ['library', 'history', page] as const,
   blocked: () => ['library', 'blocked'] as const,
+  blockRules: () => ['library', 'block-rules'] as const,
   likeIndex: () => ['library', 'likeIndex'] as const,
   coverage: () => ['library', 'coverage'] as const,
   tagger: () => ['library', 'tagger'] as const,
   settings: () => ['library', 'settings'] as const,
   genres: () => ['library', 'genres'] as const,
   playlists: () => ['library', 'playlists'] as const,
+  rulePlaylists: () => ['library', 'rule-playlists'] as const,
 };
 
 /**

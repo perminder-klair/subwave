@@ -5,22 +5,18 @@
 // can exceed Cloudflare's 100 MB upload cap and bounce with a 413 — the disk
 // restore skips the upload entirely (#612).
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { AdminResponseError, adminResponse } from '../../lib/admin-query';
 import { Card, Btn, Eyebrow, Pill } from './ui';
 import { V3AlertDialog } from '../ui/alert-dialog';
+import { useRestorableBackupsQuery } from './operations-queries';
 
 interface ImportResult {
   ok?: boolean;
   restored?: string[];
   requiresRestart?: boolean;
   error?: string;
-}
-
-interface RestorableFile {
-  name: string;
-  size: number;
-  mtime: string;
 }
 
 // One dialog + one runner serve both restore paths.
@@ -37,6 +33,7 @@ function fmtSize(bytes: number): string {
 
 export default function BackupPanel() {
   const { adminFetch, hydrated, needsAuth } = useAdminAuth();
+  const backupsQuery = useRestorableBackupsQuery(adminFetch, hydrated && !needsAuth);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [exporting, setExporting] = useState(false);
@@ -50,20 +47,18 @@ export default function BackupPanel() {
 
   const [restarting, setRestarting] = useState(false);
 
-  const [diskFiles, setDiskFiles] = useState<RestorableFile[] | null>(null);
-  const [stateDir, setStateDir] = useState<string | null>(null);
-  const [loadingDisk, setLoadingDisk] = useState(false);
-  const [diskErr, setDiskErr] = useState<string | null>(null);
+  const diskFiles = backupsQuery.data?.files ?? null;
+  const stateDir = backupsQuery.data?.stateDir ?? null;
+  const loadingDisk = backupsQuery.isFetching;
+  const diskErr = backupsQuery.error instanceof Error
+    ? backupsQuery.error.message
+    : backupsQuery.error ? String(backupsQuery.error) : null;
 
   const exportBackup = async () => {
     setExporting(true);
     setExportErr(null);
     try {
-      const r = await adminFetch('/backup/export');
-      if (!r.ok) {
-        const j = (await r.json().catch(() => ({}))) as { error?: string };
-        throw new Error(j.error || `export failed (${r.status})`);
-      }
+      const r = await adminResponse(adminFetch, '/backup/export');
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
       const stamp = new Date().toISOString().slice(0, 10);
@@ -80,34 +75,6 @@ export default function BackupPanel() {
       setExporting(false);
     }
   };
-
-  const loadDiskFiles = useCallback(async () => {
-    setLoadingDisk(true);
-    setDiskErr(null);
-    try {
-      const r = await adminFetch('/backup/restorable');
-      const j = (await r.json().catch(() => ({}))) as {
-        files?: RestorableFile[];
-        stateDir?: string;
-        error?: string;
-      };
-      if (!r.ok) throw new Error(j.error || `couldn't list backups (${r.status})`);
-      setDiskFiles(j.files || []);
-      setStateDir(j.stateDir || null);
-    } catch (e) {
-      setDiskErr(e instanceof Error ? e.message : String(e));
-      setDiskFiles(null);
-    } finally {
-      setLoadingDisk(false);
-    }
-  }, [adminFetch]);
-
-  // Wait for the cached token to hydrate: an unauthenticated fetch gets a 401
-  // carrying `WWW-Authenticate: Basic`, which pops the browser's login dialog.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    loadDiskFiles();
-  }, [hydrated, needsAuth, loadDiskFiles]);
 
   const onPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] || null;
@@ -133,31 +100,29 @@ export default function BackupPanel() {
     try {
       const r =
         p.kind === 'upload'
-          ? await adminFetch('/backup/import', {
+          ? await adminResponse(adminFetch, '/backup/import', {
               method: 'POST',
               headers: { 'Content-Type': 'application/zip' },
               body: p.file,
             })
-          : await adminFetch('/backup/import-file', {
+          : await adminResponse(adminFetch, '/backup/import-file', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ file: p.name }),
             });
       const j = (await r.json().catch(() => ({}))) as ImportResult;
-      if (!r.ok) {
-        // 413 means a proxy (e.g. Cloudflare, 100 MB cap) rejected the upload
-        // before it reached the station — point the operator at the disk path.
-        if (p.kind === 'upload' && r.status === 413) {
-          throw new Error(
-            'Backup too large to upload — a proxy in front of the station (Cloudflare caps uploads at 100 MB) rejected it. ' +
-              "Copy the zip into the station's state/ folder, then restore it from “Restore from the station folder” below.",
-          );
-        }
-        throw new Error(j.error || `restore failed (${r.status})`);
-      }
       setResult(j);
     } catch (e) {
-      setImportErr(e instanceof Error ? e.message : String(e));
+      // 413 means a proxy (e.g. Cloudflare, 100 MB cap) rejected the upload
+      // before it reached the station — point the operator at the disk path.
+      if (p.kind === 'upload' && e instanceof AdminResponseError && e.status === 413) {
+        setImportErr(
+          'Backup too large to upload — a proxy in front of the station (Cloudflare caps uploads at 100 MB) rejected it. ' +
+            "Copy the zip into the station's state/ folder, then restore it from “Restore from the station folder” below.",
+        );
+      } else {
+        setImportErr(e instanceof Error ? e.message : String(e));
+      }
     } finally {
       setImporting(false);
       setPending(null);
@@ -168,7 +133,7 @@ export default function BackupPanel() {
   const restartMixer = async () => {
     setRestarting(true);
     try {
-      await adminFetch('/restart-mixer', { method: 'POST' });
+      await adminResponse(adminFetch, '/restart-mixer', { method: 'POST' });
     } catch {
       /* surfaced elsewhere; best-effort */
     } finally {
@@ -251,7 +216,7 @@ export default function BackupPanel() {
         title="Restore from the station folder"
         sub="For backups too large to upload through your proxy."
         right={
-          <Btn sm tone="solid" onClick={loadDiskFiles} disabled={loadingDisk}>
+          <Btn sm tone="solid" onClick={() => { void backupsQuery.refetch(); }} disabled={loadingDisk}>
             {loadingDisk ? 'Scanning…' : 'Refresh'}
           </Btn>
         }

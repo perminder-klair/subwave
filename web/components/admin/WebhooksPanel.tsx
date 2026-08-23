@@ -8,12 +8,12 @@ import { useEffect, useState } from 'react';
 import { Controller, useFieldArray } from 'react-hook-form';
 import { z } from 'zod';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import {
   webhooksSchema,
   WEBHOOKS_LIMIT,
-  type Webhook,
   type WebhookEvent,
 } from '@/lib/schemas.generated';
 import { Input } from '../ui/input';
@@ -22,20 +22,20 @@ import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { Card, Btn, Pill, Eyebrow, Toggle } from './ui';
+import {
+  patchWebhooks,
+  useWebhooksQuery,
+  type WebhooksResponse,
+} from './operations-queries';
 
 // The form owns the list; the patch shape the route accepts is wider.
 const formSchema = z.object({ webhooks: webhooksSchema });
 type FormValues = z.input<typeof formSchema>;
+type SavedWebhooks = z.output<typeof formSchema>['webhooks'];
 // A row as the FORM sees it. This is z.input, so `enabled` and `authHeader`
 // are optional here — the schema .default()s them — even though blank() and
 // every server response populate both.
 type WebhookRow = FormValues['webhooks'][number];
-
-interface WebhooksResponse {
-  events: WebhookEvent[];
-  webhooks: Webhook[];
-  trackPlayListenerGated?: boolean;
-}
 
 function clientMintId() {
   const b = crypto.getRandomValues(new Uint8Array(3));
@@ -277,9 +277,9 @@ function ExamplesSection() {
 
 export default function WebhooksPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [events, setEvents] = useState<WebhookEvent[] | null>(null);
+  const webhooksQuery = useWebhooksQuery(adminFetch, hydrated && !needsAuth);
+  const events = webhooksQuery.data?.events ?? null;
   const [trackPlayListenerGated, setTrackPlayListenerGated] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const form = useZodForm(formSchema, { webhooks: [] });
@@ -293,49 +293,47 @@ export default function WebhooksPanel() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/webhooks');
-        if (!r.ok) throw new Error(`failed (${r.status})`);
-        const j = (await r.json()) as WebhooksResponse;
-        if (cancelled) return;
-        setEvents(j.events);
-        form.reset({ webhooks: j.webhooks || [] });
-        setLoaded(true);
-        setTrackPlayListenerGated(!!j.trackPlayListenerGated);
-      } catch (e) {
-        if (cancelled) return;
-        setErr(errorMessage(e));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated, needsAuth, adminFetch, form]);
+    if (loaded || !webhooksQuery.data) return;
+    form.reset({ webhooks: webhooksQuery.data.webhooks });
+    setTrackPlayListenerGated(!!webhooksQuery.data.trackPlayListenerGated);
+    setLoaded(true);
+  }, [form, loaded, webhooksQuery.data]);
+
+  const saveMutation = useAdminMutation<Partial<WebhooksResponse>, SavedWebhooks>({
+    adminFetch,
+    request: (webhooks, fetcher) => adminJson<Partial<WebhooksResponse>>(fetcher, '/webhooks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhooks }),
+    }),
+    onDone: (receipt, _webhooks, client) => {
+      if (Array.isArray(receipt.webhooks)) patchWebhooks(client, { webhooks: receipt.webhooks });
+    },
+    toastOnError: false,
+  });
+  const gateMutation = useAdminMutation<Partial<WebhooksResponse>, boolean>({
+    adminFetch,
+    request: (next, fetcher) => adminJson<Partial<WebhooksResponse>>(fetcher, '/webhooks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trackPlayListenerGated: next }),
+    }),
+    onDone: (receipt, _next, client) => {
+      patchWebhooks(client, { trackPlayListenerGated: !!receipt.trackPlayListenerGated });
+    },
+    toastOnError: false,
+  });
 
   const save = form.handleSubmit(async (values) => {
     setBusy(true);
     try {
-      const r = await adminFetch('/webhooks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ webhooks: values.webhooks }),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        webhooks?: Webhook[];
-        error?: string;
-        fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        // A rule only the server can check still lands on the right input.
-        applyServerFieldErrors(form, j.fieldErrors);
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      const j = await saveMutation.mutateAsync(values.webhooks);
       // Re-seed from the server response so redacted authHeaders come back as
       // the 'set' sentinel rather than the value we just sent.
       form.reset({ webhooks: j.webhooks || [] });
       notify.ok('Webhooks saved.');
     } catch (e) {
+      if (e instanceof AdminResponseError) applyServerFieldErrors(form, e.body.fieldErrors);
       notify.err(`Save failed: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
@@ -348,16 +346,7 @@ export default function WebhooksPanel() {
   const saveGate = async (next: boolean) => {
     setBusy(true);
     try {
-      const r = await adminFetch('/webhooks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trackPlayListenerGated: next }),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        trackPlayListenerGated?: boolean;
-        error?: string;
-      };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const j = await gateMutation.mutateAsync(next);
       setTrackPlayListenerGated(!!j.trackPlayListenerGated);
       notify.ok(`track.play listener gate ${j.trackPlayListenerGated ? 'on' : 'off'}.`);
     } catch (e) {
@@ -369,18 +358,17 @@ export default function WebhooksPanel() {
 
   const fireTest = async (id: string) => {
     try {
-      const r = await adminFetch(`/webhooks/${id}/test`, { method: 'POST' });
-      if (!r.ok) throw new Error(`failed (${r.status})`);
+      await adminJson(adminFetch, `/webhooks/${id}/test`, { method: 'POST' });
       notify.ok('Test payload sent.');
     } catch (e) {
       notify.err(`Test failed: ${errorMessage(e)}`);
     }
   };
 
-  if (err) {
+  if (webhooksQuery.error) {
     return (
       <div className="grid gap-4">
-        <Card title="Webhooks"><ErrorState error={err} /></Card>
+        <Card title="Webhooks"><ErrorState error={errorMessage(webhooksQuery.error)} /></Card>
       </div>
     );
   }

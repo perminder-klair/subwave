@@ -7,8 +7,9 @@
 // /state reports the new station booted (boot-frozen station.id).
 // API: controller/src/routes/stations.ts.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin-query';
 import { CONVERT_SENTINEL, useStationSwitchPoll } from '../../hooks/useStationSwitch';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../lib/notify';
@@ -27,20 +28,16 @@ import { Field, FieldLabel, FieldDescription, FieldError } from '@/components/ui
 import { Modal } from '../ui/modal';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import styles from './StationsPanel.module.css';
+import {
+  operationKeys,
+  useStationsQuery,
+  type StationRow,
+} from './operations-queries';
 
-interface StationRow {
-  id: string | null;
-  name: string;
-  configured: boolean;
-  createdAt: string | null;
-  active: boolean;
-}
-
-interface StationsResponse {
-  multiStation: boolean;
-  activeId: string | null;
-  limit?: number;
-  stations: StationRow[];
+interface StationCreateReceipt {
+  switching?: boolean;
+  error?: string;
+  fieldErrors?: Record<string, string>;
 }
 
 // A stable pseudo-frequency on the 88–108 FM band, hashed from the station id
@@ -111,8 +108,9 @@ function OnAirChip() {
 
 export default function StationsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [data, setData] = useState<StationsResponse | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const stationsQuery = useStationsQuery(adminFetch, hydrated && !needsAuth);
+  const data = stationsQuery.data ?? null;
+  const err = stationsQuery.error ? errorMessage(stationsQuery.error) : null;
   const [busy, setBusy] = useState(false);
   const [confirm, setConfirm] = useState<{ type: 'live' | 'del'; s: StationRow } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
@@ -139,20 +137,44 @@ export default function StationsPanel() {
   const [switchingLabel, setSwitchingLabel] = useState('');
   useStationSwitchPoll(switching);
 
-  const load = useCallback(async () => {
-    setErr(null);
-    try {
-      const r = await adminFetch('/stations');
-      if (!r.ok) throw new Error(`failed (${r.status})`);
-      setData((await r.json()) as StationsResponse);
-    } catch (e) {
-      setErr(errorMessage(e));
-    }
-  }, [adminFetch]);
-
-  useEffect(() => {
-    if (hydrated && !needsAuth) void load();
-  }, [hydrated, needsAuth, load]);
+  const createMutation = useAdminMutation<StationCreateReceipt, { name: string; mode: StationCreateMode }>({
+    adminFetch,
+    request: (values, fetcher) => adminJson<StationCreateReceipt>(fetcher, '/stations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(values),
+    }),
+    onDone: async (receipt, _values, client) => {
+      if (!receipt.switching) {
+        await client.invalidateQueries({ queryKey: operationKeys.stations(), exact: true });
+      }
+    },
+    toastOnError: false,
+  });
+  const deleteMutation = useAdminMutation<void, string>({
+    adminFetch,
+    request: async (id, fetcher) => {
+      await adminJson(fetcher, `/stations/${id}`, { method: 'DELETE' });
+    },
+    onDone: async (_receipt, _id, client) => {
+      await client.invalidateQueries({ queryKey: operationKeys.stations(), exact: true });
+    },
+    toastOnError: false,
+  });
+  const renameMutation = useAdminMutation<void, { id: string; name: string }>({
+    adminFetch,
+    request: async ({ id, name }, fetcher) => {
+      await adminJson(fetcher, `/stations/${id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+    },
+    onDone: async (_receipt, _vars, client) => {
+      await client.invalidateQueries({ queryKey: operationKeys.stations(), exact: true });
+    },
+    toastOnError: false,
+  });
 
   const stations = useMemo(() => data?.stations ?? [], [data]);
   const freqs = useMemo(() => assignFrequencies(stations), [stations]);
@@ -164,22 +186,13 @@ export default function StationsPanel() {
   const create = createForm.handleSubmit(async (values) => {
     setBusy(true);
     try {
-      const r = await adminFetch('/stations', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(values),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        switching?: boolean;
-        error?: string;
-        fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
+      const j = await createMutation.mutateAsync(values);
+      if (j.error) {
         // Converted-but-create-failed wedge: the conversion is durable and the
         // controller restarts regardless — enter the re-tuning state anyway.
         if (j.switching) {
           notify.err(
-            `Create failed: ${j.error || `failed (${r.status})`} — the controller is restarting anyway to finish converting to multi-station.`,
+            `Create failed: ${j.error} — the controller is restarting anyway to finish converting to multi-station.`,
           );
           setCreateOpen(false);
           setSwitchingLabel('converting install to multi-station');
@@ -191,7 +204,7 @@ export default function StationsPanel() {
         // to `mode` and lands under the Fresh/Duplicate picker, where the fix
         // (choose Fresh) actually is.
         applyServerFieldErrors(createForm, j.fieldErrors);
-        throw new Error(j.error || `failed (${r.status})`);
+        throw new Error(j.error);
       }
       setCreateOpen(false);
       createForm.reset({ name: '', mode: 'fresh' });
@@ -201,9 +214,19 @@ export default function StationsPanel() {
         setSwitching(CONVERT_SENTINEL);
       } else {
         notify.ok('Station racked — offline until you make it live.');
-        await load();
       }
     } catch (e) {
+      const body = e instanceof AdminResponseError ? e.body as StationCreateReceipt : null;
+      if (body?.switching) {
+        notify.err(
+          `Create failed: ${body.error || errorMessage(e)} — the controller is restarting anyway to finish converting to multi-station.`,
+        );
+        setCreateOpen(false);
+        setSwitchingLabel('converting install to multi-station');
+        setSwitching(CONVERT_SENTINEL);
+        return;
+      }
+      if (body?.fieldErrors) applyServerFieldErrors(createForm, body.fieldErrors);
       notify.err(`Create failed: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
@@ -214,9 +237,7 @@ export default function StationsPanel() {
     if (!s.id) return;
     setBusy(true);
     try {
-      const r = await adminFetch(`/stations/${s.id}/activate`, { method: 'POST' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await adminJson(adminFetch, `/stations/${s.id}/activate`, { method: 'POST' });
       setSwitchingLabel(`tuning to ${s.name}`);
       setSwitching(s.id);
     } catch (e) {
@@ -229,11 +250,8 @@ export default function StationsPanel() {
     if (!s.id) return;
     setBusy(true);
     try {
-      const r = await adminFetch(`/stations/${s.id}`, { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await deleteMutation.mutateAsync(s.id);
       notify.ok(`“${s.name}” deleted — data directory erased.`);
-      await load();
     } catch (e) {
       notify.err(`Delete failed: ${errorMessage(e)}`);
     } finally {
@@ -245,24 +263,14 @@ export default function StationsPanel() {
     if (!renaming?.id) return;
     setBusy(true);
     try {
-      const r = await adminFetch(`/stations/${renaming.id}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(values),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        error?: string;
-        fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        applyServerFieldErrors(renameForm, j.fieldErrors);
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      await renameMutation.mutateAsync({ id: renaming.id, name: values.name });
       // The schema trimmed it, so this is the name the card actually carries.
       notify.ok(`Renamed to “${values.name}”.`);
       setRenaming(null);
-      await load();
     } catch (e) {
+      if (e instanceof AdminResponseError) {
+        applyServerFieldErrors(renameForm, e.body.fieldErrors);
+      }
       notify.err(`Rename failed: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
@@ -405,7 +413,7 @@ export default function StationsPanel() {
             — this is only the admin view failing to reach them.
           </p>
           <div className="mt-2.5">
-            <Btn tone="solid" onClick={() => void load()}>
+            <Btn tone="solid" onClick={() => void stationsQuery.refetch()}>
               Retry scan
             </Btn>
           </div>

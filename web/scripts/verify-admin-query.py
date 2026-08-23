@@ -75,6 +75,10 @@ DESTRUCTIVE_CHECKS = {
     "playlist_sync_refresh",
     "skills_mutations_refresh",
     "doctor_report_updates",
+    "stations_mutations_refresh",
+    "webhooks_mutations_refresh",
+    "archives_clear_refresh",
+    "backup_index_refresh",
 }
 
 
@@ -561,6 +565,205 @@ def unauthorised_shell_signs_out(page):
     assert page.evaluate(
         "typeof window.__subwaveAdminMutationCacheSnapshot"
     ) == "undefined"
+
+
+@check
+def stations_mutations_refresh(page):
+    """Station writes refresh one shared rack and remount from that cache."""
+    state = {
+        "multiStation": True,
+        "activeId": "main",
+        "limit": 8,
+        "stations": [{
+            "id": "main", "name": "Verify Main", "configured": True,
+            "createdAt": "2026-08-23T10:00:00.000Z", "active": True,
+        }],
+    }
+    next_id = {"value": 1}
+
+    def stations_route(route):
+        method = route.request.method
+        path = urllib.parse.urlparse(route.request.url).path
+        if method == "GET" and path == "/stations":
+            fulfill_json(route, state)
+            return
+        if method == "POST" and path == "/stations":
+            body = route.request.post_data_json
+            station_id = f"verify-{next_id['value']}"
+            next_id["value"] += 1
+            state["stations"].append({
+                "id": station_id, "name": body["name"], "configured": False,
+                "createdAt": "2026-08-23T10:01:00.000Z", "active": False,
+            })
+            fulfill_json(route, {
+                "ok": True, "id": station_id, "converted": False, "switching": False,
+            }, status=201)
+            return
+        if method == "PATCH" and path.startswith("/stations/"):
+            station_id = path.rsplit("/", 1)[-1]
+            body = route.request.post_data_json
+            for station in state["stations"]:
+                if station["id"] == station_id:
+                    station["name"] = body["name"]
+            fulfill_json(route, {"ok": True, "requiresRestart": False})
+            return
+        if method == "DELETE" and path.startswith("/stations/"):
+            station_id = path.rsplit("/", 1)[-1]
+            state["stations"] = [s for s in state["stations"] if s["id"] != station_id]
+            fulfill_json(route, {"ok": True})
+            return
+        route.continue_()
+
+    page.route("http://localhost:7791/stations**", stations_route)
+    page.goto(f"{WEB}/admin/stations", wait_until="domcontentloaded")
+    page.get_by_text("Verify Main", exact=True).first.wait_for(state="visible")
+    initial_gets = request_count(page, "/stations", authenticated=True)
+    assert initial_gets >= 1, page.request_log
+
+    page.get_by_role("button", name="New station").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Station name").fill("Verify Standby")
+    dialog.get_by_role("button", name="Create station").click()
+    page.get_by_text("Verify Standby", exact=True).first.wait_for(state="visible")
+    assert request_count(page, "/stations", authenticated=True) == initial_gets + 1, page.request_log
+
+    page.get_by_role("button", name="Rename").last.click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Station name").fill("Verify Renamed")
+    dialog.get_by_role("button", name="Save", exact=True).click()
+    page.get_by_text("Verify Renamed", exact=True).first.wait_for(state="visible")
+    assert request_count(page, "/stations", authenticated=True) == initial_gets + 2, page.request_log
+
+    page.get_by_role("button", name="Delete").click()
+    page.get_by_role("alertdialog").get_by_role("button", name="Delete forever").click()
+    page.get_by_text("Verify Renamed", exact=True).first.wait_for(state="detached")
+    assert request_count(page, "/stations", authenticated=True) == initial_gets + 3, page.request_log
+
+    page.locator('a[href="/admin/settings"]').first.click()
+    page.wait_for_url("**/admin/settings**")
+    page.go_back(wait_until="domcontentloaded")
+    page.get_by_text("Verify Main", exact=True).first.wait_for(state="visible")
+    assert request_count(page, "/stations", authenticated=True) == initial_gets + 3, page.request_log
+
+
+@check
+def webhooks_mutations_refresh(page):
+    """Webhook saves own the cached envelope, including removal and remount."""
+    state = {
+        "events": ["track.play", "request.received"],
+        "webhooks": [],
+        "trackPlayListenerGated": False,
+    }
+
+    def webhooks_route(route):
+        if route.request.method == "GET":
+            fulfill_json(route, state)
+            return
+        if route.request.method == "POST":
+            body = route.request.post_data_json
+            if "webhooks" in body:
+                state["webhooks"] = body["webhooks"]
+            if "trackPlayListenerGated" in body:
+                state["trackPlayListenerGated"] = body["trackPlayListenerGated"]
+            fulfill_json(route, {
+                "webhooks": state["webhooks"],
+                "trackPlayListenerGated": state["trackPlayListenerGated"],
+                "requiresRestart": False,
+            })
+
+    page.route("http://localhost:7791/webhooks", webhooks_route)
+    page.goto(f"{WEB}/admin/webhooks", wait_until="domcontentloaded")
+    page.get_by_text("No webhooks yet", exact=True).first.wait_for(state="visible")
+    initial_gets = request_count(page, "/webhooks", authenticated=True)
+    assert initial_gets >= 1, page.request_log
+
+    page.get_by_role("button", name="Add webhook").click()
+    page.get_by_label("Webhook URL").fill("https://verify.invalid/subwave")
+    page.get_by_role("button", name="Save", exact=True).click()
+    page.get_by_text("https://verify.invalid/subwave", exact=True).wait_for(state="visible")
+    assert request_count(page, "/webhooks", authenticated=True) == initial_gets, page.request_log
+
+    page.get_by_role("button", name="Remove").click()
+    page.get_by_role("button", name="Save", exact=True).click()
+    page.get_by_text("No webhooks yet", exact=True).first.wait_for(state="visible")
+    assert request_count(page, "/webhooks", authenticated=True) == initial_gets, page.request_log
+
+    page.locator('a[href="/admin/dash"]').first.click()
+    page.wait_for_url("**/admin/dash**")
+    page.go_back(wait_until="domcontentloaded")
+    page.get_by_text("No webhooks yet", exact=True).first.wait_for(state="visible")
+    assert request_count(page, "/webhooks", authenticated=True) == initial_gets, page.request_log
+
+
+@check
+def archives_clear_refresh(page):
+    """Archive clear invalidates once and the empty index survives remount."""
+    state = {"archives": [{
+        "path": "2026-08-23/12-00.mp3", "date": "2026-08-23", "hour": 12,
+        "bytes": 4096, "mtime": "2026-08-23T12:59:00.000Z",
+    }]}
+
+    def archives_route(route):
+        if route.request.method == "GET":
+            fulfill_json(route, state)
+            return
+        if route.request.method == "DELETE":
+            state["archives"] = []
+            fulfill_json(route, {"ok": True, "deleted": 1})
+
+    page.route("http://localhost:7791/archives", archives_route)
+    page.goto(f"{WEB}/admin/archives", wait_until="domcontentloaded")
+    page.get_by_text("12:00", exact=True).wait_for(state="visible")
+    initial_gets = request_count(page, "/archives", authenticated=True)
+    assert initial_gets >= 1, page.request_log
+
+    page.get_by_role("button", name="Clear archive").click()
+    page.get_by_role("alertdialog").get_by_role("button", name="clear archive").click()
+    page.get_by_text("No recordings yet", exact=True).wait_for(state="visible")
+    assert request_count(page, "/archives", authenticated=True) == initial_gets + 1, page.request_log
+
+    page.locator('a[href="/admin/dash"]').first.click()
+    page.wait_for_url("**/admin/dash**")
+    page.go_back(wait_until="domcontentloaded")
+    page.get_by_text("No recordings yet", exact=True).wait_for(state="visible")
+    assert request_count(page, "/archives", authenticated=True) == initial_gets + 1, page.request_log
+
+
+@check
+def backup_index_refresh(page):
+    """A refreshed disk candidate remains cached after it is selected."""
+    refreshed = {"value": False}
+    candidate = {
+        "name": "verify-backup.zip", "size": 8192,
+        "mtime": "2026-08-23T13:00:00.000Z",
+    }
+
+    def backups_route(route):
+        fulfill_json(route, {
+            "stateDir": "/tmp/subwave-task7/state",
+            "files": [candidate] if refreshed["value"] else [],
+        })
+
+    page.route("http://localhost:7791/backup/restorable", backups_route)
+    page.goto(f"{WEB}/admin/backup", wait_until="domcontentloaded")
+    page.get_by_text("No .zip backups found", exact=False).wait_for(state="visible")
+    initial_gets = request_count(page, "/backup/restorable", authenticated=True)
+    assert initial_gets >= 1, page.request_log
+
+    refreshed["value"] = True
+    page.get_by_role("button", name="Refresh", exact=True).click()
+    page.get_by_text(candidate["name"], exact=True).wait_for(state="visible")
+    assert request_count(page, "/backup/restorable", authenticated=True) == initial_gets + 1, page.request_log
+
+    page.get_by_role("button", name="Restore", exact=True).click()
+    page.get_by_role("alertdialog").get_by_text(candidate["name"], exact=False).wait_for(state="visible")
+    page.get_by_role("alertdialog").get_by_role("button", name="Cancel").click()
+
+    page.locator('a[href="/admin/dash"]').first.click()
+    page.wait_for_url("**/admin/dash**")
+    page.go_back(wait_until="domcontentloaded")
+    page.get_by_text(candidate["name"], exact=True).wait_for(state="visible")
+    assert request_count(page, "/backup/restorable", authenticated=True) == initial_gets + 1, page.request_log
 
 
 @check

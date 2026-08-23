@@ -3,6 +3,7 @@
 // bypasses the on-air persona AND the silent engine fallback, so an unavailable
 // engine returns a real error rather than quietly playing Piper. No React, no DOM.
 import type { AdminAuth } from '../../../lib/adminAuth';
+import { AdminResponseError, adminResponse } from '../../../lib/admin-query';
 
 export interface PreviewParams {
   engine: string;
@@ -52,19 +53,19 @@ export async function fetchPreviewSample(
   signal?: AbortSignal,
 ): Promise<PreviewResult> {
   try {
-    const r = await adminFetch('/settings/tts/preview', {
+    const r = await adminResponse(adminFetch, '/settings/tts/preview', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(params),
       signal,
     });
-    if (!r.ok) {
-      const j = await r.json().catch(() => ({})) as { message?: string };
-      return { ok: false, message: j.message || `Preview failed (${r.status})` };
-    }
     return { ok: true, blob: await r.blob() };
   } catch (e) {
     if (signal?.aborted) throw e;
+    if (e instanceof AdminResponseError) {
+      const body = e.body as { message?: string };
+      return { ok: false, message: body.message || `Preview failed (${e.status})` };
+    }
     return { ok: false, message: e instanceof Error ? e.message : 'Preview failed' };
   }
 }

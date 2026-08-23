@@ -3,26 +3,16 @@
 // No playback controls: these MP3s are an hour long each and the browser audio
 // element doesn't seek well into them.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { adminJson, adminResponse, useAdminMutation } from '../../lib/admin-query';
 import { fmtSize, relTime } from '../../lib/format';
 import { Card, Btn, Eyebrow, Pill } from './ui';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
-
-interface ArchiveEntry {
-  path: string;
-  date: string;
-  hour: number;
-  bytes: number;
-  mtime: string;
-}
-
-interface ArchivesResponse {
-  archives?: ArchiveEntry[];
-}
+import { operationKeys, useArchivesQuery, type ArchiveEntry } from './operations-queries';
 
 function hourLabel(h: number): string {
   return `${String(h).padStart(2, '0')}:00`;
@@ -30,30 +20,24 @@ function hourLabel(h: number): string {
 
 export default function ArchivesPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [entries, setEntries] = useState<ArchiveEntry[] | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const archivesQuery = useArchivesQuery(adminFetch, hydrated && !needsAuth);
+  const entries = archivesQuery.data ?? null;
   const [downloading, setDownloading] = useState<string | null>(null);
   const [dlErr, setDlErr] = useState<string | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [clearErr, setClearErr] = useState<string | null>(null);
 
-  const load = useCallback(async (): Promise<void> => {
-    try {
-      const r = await adminFetch('/archives');
-      if (!r.ok) throw new Error(`failed (${r.status})`);
-      const j = (await r.json()) as ArchivesResponse;
-      setEntries(Array.isArray(j.archives) ? j.archives : []);
-      setErr(null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
-  }, [adminFetch]);
-
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    void load();
-  }, [hydrated, needsAuth, load]);
+  const clearMutation = useAdminMutation<void, void>({
+    adminFetch,
+    request: async (_unused, fetcher) => {
+      await adminJson(fetcher, '/archives', { method: 'DELETE' });
+    },
+    onDone: async (_receipt, _unused, client) => {
+      await client.invalidateQueries({ queryKey: operationKeys.archives(), exact: true });
+    },
+    toastOnError: false,
+  });
 
   // The only delete affordance — per-file delete isn't worth the UI for
   // hour-long mixdowns.
@@ -61,10 +45,7 @@ export default function ArchivesPanel() {
     setClearing(true);
     setClearErr(null);
     try {
-      const r = await adminFetch('/archives', { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      await load();
+      await clearMutation.mutateAsync();
     } catch (e) {
       setClearErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -89,10 +70,13 @@ export default function ArchivesPanel() {
       }));
   }, [entries]);
 
-  if (err) {
+  if (archivesQuery.error) {
     return (
       <div className="grid gap-4">
-        <ErrorState error={err} onRetry={load} />
+        <ErrorState
+          error={archivesQuery.error instanceof Error ? archivesQuery.error.message : String(archivesQuery.error)}
+          onRetry={() => { void archivesQuery.refetch(); }}
+        />
       </div>
     );
   }
@@ -113,8 +97,7 @@ export default function ArchivesPanel() {
     setDownloading(path);
     setDlErr(null);
     try {
-      const r = await adminFetch(`/archives/file/${path}`);
-      if (!r.ok) throw new Error(`download failed (${r.status})`);
+      const r = await adminResponse(adminFetch, `/archives/file/${path}`);
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

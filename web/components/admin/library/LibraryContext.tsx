@@ -11,7 +11,13 @@ import type { Coverage, TaggerState } from '../LibraryTaggingPanel';
 import {
   applyBlockMarks, applyLikeChange, applyTagEvent, libraryKeys, rowsOf,
 } from './queries';
-import { useQueryErrorToast } from '../../../lib/admin-query';
+import {
+  AdminResponseError,
+  adminJson,
+  adminResponse,
+  useQueryErrorToast,
+  type AdminFetch,
+} from '../../../lib/admin-query';
 import type {
   BlockEntry, BlockRef, BlockType, BrowseResponse, LikeIndex, Track,
 } from './types';
@@ -24,8 +30,6 @@ const CHECK_CHUNK = 500;
 // literal per render would change the context value's identity every time.
 const EMPTY_LIKES: LikeIndex = {};
 const EMPTY_PLAYLISTS: PlaylistSummary[] = [];
-
-type AdminFetch = (path: string, init?: RequestInit) => Promise<Response>;
 
 export interface LibraryShared {
   // The ONE useAdminAuth instance for the whole library page, passed down
@@ -113,10 +117,10 @@ export function LibraryProvider({
   // blip would bury the console.
   const taggerQuery = useQuery({
     queryKey: libraryKeys.tagger(),
-    queryFn: async () => {
-      const r = await adminFetch('/library/tagger');
-      if (!r.ok) throw new Error(`tagger failed (${r.status})`);
-      const j = await r.json() as { tagger?: TaggerState };
+    queryFn: async ({ signal }) => {
+      const j = await adminJson<{ tagger?: TaggerState }>(
+        adminFetch, '/library/tagger', undefined, signal,
+      );
       return j.tagger ?? null;
     },
     enabled: ready,
@@ -127,11 +131,9 @@ export function LibraryProvider({
 
   const coverageQuery = useQuery({
     queryKey: libraryKeys.coverage(),
-    queryFn: async () => {
-      const r = await adminFetch('/library/coverage');
-      if (!r.ok) throw new Error(`coverage failed (${r.status})`);
-      return await r.json() as Coverage;
-    },
+    queryFn: ({ signal }) => adminJson<Coverage>(
+      adminFetch, '/library/coverage', undefined, signal,
+    ),
     enabled: ready,
     staleTime: 0,
     // While a run is live, poll faster so the % visibly climbs.
@@ -162,13 +164,15 @@ export function LibraryProvider({
       const marks: Record<string, BlockRef | null> = {};
       // Chunked to stay under the endpoint's per-call cap.
       for (let i = 0; i < rows.length; i += CHECK_CHUNK) {
-        const r = await adminFetch('/library/blocklist/check', {
+        const j = await adminJson<{ blocked?: Record<string, BlockRef | null> }>(
+          adminFetch,
+          '/library/blocklist/check',
+          {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ tracks: rows.slice(i, i + CHECK_CHUNK) }),
-        });
-        if (!r.ok) return;
-        const j = await r.json() as { blocked?: Record<string, BlockRef | null> };
+          },
+        );
         Object.assign(marks, j.blocked || {});
       }
       applyBlockMarks(qc, marks);
@@ -183,10 +187,10 @@ export function LibraryProvider({
 
   const likeIndexQuery = useQuery({
     queryKey: libraryKeys.likeIndex(),
-    queryFn: async () => {
-      const r = await adminFetch('/likes/index');
-      if (!r.ok) throw new Error(`likes failed (${r.status})`);
-      const j = await r.json() as { songs?: LikeIndex };
+    queryFn: async ({ signal }) => {
+      const j = await adminJson<{ songs?: LikeIndex }>(
+        adminFetch, '/likes/index', undefined, signal,
+      );
       return j.songs || {};
     },
     enabled: ready,
@@ -220,18 +224,24 @@ export function LibraryProvider({
       operator: !isLiked,
     });
     try {
-      const r = isLiked
-        ? await adminFetch(`/likes/song/${encodeURIComponent(track.id)}/operator`, { method: 'DELETE' })
-        : await adminFetch(`/likes/song/${encodeURIComponent(track.id)}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            title: track.title, artist: track.artist, album: track.album,
-            genre: track.genre, year: track.year, duration: track.duration,
-          }),
-        });
-      const j = await r.json().catch(() => ({})) as { count?: number; error?: string };
-      if (!r.ok) throw new Error(j.error || `like failed (${r.status})`);
+      const j = isLiked
+        ? await adminJson<{ count?: number }>(
+          adminFetch,
+          `/likes/song/${encodeURIComponent(track.id)}/operator`,
+          { method: 'DELETE' },
+        )
+        : await adminJson<{ count?: number }>(
+          adminFetch,
+          `/likes/song/${encodeURIComponent(track.id)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              title: track.title, artist: track.artist, album: track.album,
+              genre: track.genre, year: track.year, duration: track.duration,
+            }),
+          },
+        );
       // Settle on the server's count — it folds in listener likes that landed
       // between render and click.
       patchLike(track.id, { count: j.count ?? 0, operator: !isLiked });
@@ -248,9 +258,9 @@ export function LibraryProvider({
   const clearLikes = useCallback(async (track: Track) => {
     setLiking(track.id);
     try {
-      const r = await adminFetch(`/likes/song/${encodeURIComponent(track.id)}`, { method: 'DELETE' });
-      const j = await r.json().catch(() => ({})) as { removed?: number; error?: string };
-      if (!r.ok) throw new Error(j.error || `clear failed (${r.status})`);
+      const j = await adminJson<{ removed?: number }>(
+        adminFetch, `/likes/song/${encodeURIComponent(track.id)}`, { method: 'DELETE' },
+      );
       patchLike(track.id, null);
       notify.ok(`Cleared ${j.removed ?? 0} like${j.removed === 1 ? '' : 's'} on “${track.title || track.id}”`);
     } catch (err) {
@@ -269,10 +279,10 @@ export function LibraryProvider({
   // old "if selected.size > 0 && playlists === null" effect said.
   const playlistsQuery = useQuery({
     queryKey: libraryKeys.playlists(),
-    queryFn: async () => {
-      const r = await adminFetch('/playlists');
-      const j = await r.json().catch(() => ({})) as { playlists?: PlaylistSummary[]; error?: string };
-      if (!r.ok) throw new Error(j.error || `playlists failed (${r.status})`);
+    queryFn: async ({ signal }) => {
+      const j = await adminJson<{ playlists?: PlaylistSummary[] }>(
+        adminFetch, '/playlists', undefined, signal,
+      );
       return j.playlists || [];
     },
     enabled: ready && selected.size > 0,
@@ -318,19 +328,19 @@ export function LibraryProvider({
     if (songIds.length === 0) return;
     setPlBusy(true);
     try {
-      const r = target.playlistId
-        ? await adminFetch(`/playlists/${encodeURIComponent(target.playlistId)}/tracks`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ songIds }),
-          })
-        : await adminFetch('/playlists', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: target.name, songIds }),
-          });
-      const j = await r.json().catch(() => ({})) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `add to playlist failed (${r.status})`);
+      if (target.playlistId) {
+        await adminJson(adminFetch, `/playlists/${encodeURIComponent(target.playlistId)}/tracks`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ songIds }),
+        });
+      } else {
+        await adminJson(adminFetch, '/playlists', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: target.name, songIds }),
+        });
+      }
       const plName = target.name
         || playlists?.find(p => p.id === target.playlistId)?.name
         || 'playlist';
@@ -352,9 +362,7 @@ export function LibraryProvider({
   const ensureVocab = useCallback(async () => {
     if (vocab.length) return;
     try {
-      const r = await adminFetch('/library/browse?limit=1');
-      if (!r.ok) return;
-      const j = (await r.json()) as BrowseResponse;
+      const j = await adminJson<BrowseResponse>(adminFetch, '/library/browse?limit=1');
       if (j.moodVocab?.length) setVocab(j.moodVocab);
     } catch { /* editor shows a "loading moods…" hint until this lands */ }
   }, [vocab.length, adminFetch]);
@@ -375,13 +383,11 @@ export function LibraryProvider({
   const queueTrack = useCallback(async (track: Track) => {
     setQueuing(track.id);
     try {
-      const r = await adminFetch('/dj/queue-track', {
+      const j = await adminJson<{ queuePosition?: number }>(adminFetch, '/dj/queue-track', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(track),
       });
-      const j = await r.json().catch(() => ({})) as { queuePosition?: number; error?: string };
-      if (!r.ok) throw new Error(j.error || `queue failed (${r.status})`);
       notify.ok(`queued “${track.title}” · position ${j.queuePosition}`);
     } catch (err) {
       notify.err(errorMessage(err));
@@ -393,13 +399,11 @@ export function LibraryProvider({
   const retagTrack = useCallback(async (track: Track) => {
     setRetagging(track.id);
     try {
-      const r = await adminFetch('/library/retag', {
+      const j = await adminJson<{ moods?: string[]; energy?: string | null }>(adminFetch, '/library/retag', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(track),
       });
-      const j = await r.json() as { moods?: string[]; energy?: string | null; error?: string };
-      if (!r.ok) throw new Error(j.error || `retag failed (${r.status})`);
       const tagStr = j.moods?.length ? j.moods.join(', ') : '—';
       notify.ok(`retagged · ${tagStr} [${j.energy || '?'}]`);
       flash(track.id);
@@ -431,14 +435,15 @@ export function LibraryProvider({
   ) => {
     setManualBusy(track.id);
     try {
-      const r = await adminFetch('/library/manual-tag', {
+      const j = await adminJson<{ ok?: boolean; updated?: number; cleared?: boolean }>(
+        adminFetch,
+        '/library/manual-tag',
+        {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: track.id, moods, energy, applyToAlbum }),
-      });
-      const j = (await r.json().catch(() => ({}))) as
-        { ok?: boolean; updated?: number; cleared?: boolean; error?: string };
-      if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
+        },
+      );
       const cleared = !!j.cleared;
       const n = j.updated ?? 1;
       const scope = applyToAlbum ? `${n} album track${n === 1 ? '' : 's'}` : 'track';
@@ -461,10 +466,14 @@ export function LibraryProvider({
     e: { type: BlockType; id: string; name?: string | null },
     { quiet = false }: { quiet?: boolean } = {},
   ) => {
-    const r = await adminFetch(`/library/blocklist/${e.type}/${encodeURIComponent(e.id)}`, { method: 'DELETE' });
-    if (!r.ok && r.status !== 404) {
-      const j = await r.json().catch(() => ({})) as { error?: string };
-      throw new Error(j.error || `unblock failed (${r.status})`);
+    try {
+      await adminResponse(
+        adminFetch,
+        `/library/blocklist/${e.type}/${encodeURIComponent(e.id)}`,
+        { method: 'DELETE' },
+      );
+    } catch (error) {
+      if (!(error instanceof AdminResponseError) || error.status !== 404) throw error;
     }
     // The Blocked tab's list is a query like any other — invalidating reaches
     // it whether or not that tab is mounted, which is what registerBlockList
@@ -477,13 +486,11 @@ export function LibraryProvider({
   const blockTrack = useCallback(async (track: Track, type: BlockType) => {
     setBlocking(track.id);
     try {
-      const r = await adminFetch('/library/blocklist', {
+      const j = await adminJson<{ entry?: BlockEntry; purged?: number }>(adminFetch, '/library/blocklist', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ type, trackId: track.id }),
       });
-      const j = await r.json().catch(() => ({})) as { entry?: BlockEntry; purged?: number; error?: string };
-      if (!r.ok) throw new Error(j.error || `block failed (${r.status})`);
       const what = type === 'track' ? `“${track.title}”` : type === 'album' ? `album “${track.album}”` : track.artist;
       const entry = j.entry;
       // Undo rather than a confirm dialog: the row badge keeps a wrong scope

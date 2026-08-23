@@ -11,7 +11,7 @@ import { Card, Btn, Seg } from '../../ui';
 import { RowsTable } from '../RowsTable';
 import { useLibrary } from '../LibraryContext';
 import { libraryKeys } from '../queries';
-import { useQueryErrorToast } from '../../../../lib/admin-query';
+import { adminJson, useQueryErrorToast } from '../../../../lib/admin-query';
 import type { SearchMode, Track } from '../types';
 import { SEARCH_PAGE } from '../types';
 
@@ -42,22 +42,26 @@ export default function SearchTab({
     queryKey: libraryKeys.search(submitted?.q ?? '', submitted?.mode ?? 'library'),
     enabled: ready && !!submitted?.q,
     initialPageParam: 0,
-    queryFn: async ({ pageParam }) => {
+    queryFn: async ({ pageParam, signal }) => {
       // `enabled` already gates on submitted?.q, so this is unreachable — but
       // the queryFn's own types don't know that.
       if (!submitted?.q) return { rows: [], hasMore: false };
       const { q: text, mode } = submitted;
       if (mode === 'sound') {
-        const r = await adminFetch(`/library/search-sound?q=${encodeURIComponent(text)}&limit=${SEARCH_PAGE}`);
-        const j = await r.json().catch(() => ({})) as { results?: Track[]; error?: string };
-        if (!r.ok) throw new Error(j.error || `sound search failed (${r.status})`);
+        const j = await adminJson<{ results?: Track[] }>(
+          adminFetch,
+          `/library/search-sound?q=${encodeURIComponent(text)}&limit=${SEARCH_PAGE}`,
+          undefined,
+          signal,
+        );
         return { rows: j.results || [], hasMore: false };
       }
-      const r = await adminFetch(
-        `/dj/search?q=${encodeURIComponent(text)}&limit=${SEARCH_PAGE}&offset=${pageParam as number}`);
-      const j = await r.json().catch(() => ({})) as
-        { results?: Track[]; hasMore?: boolean; error?: string };
-      if (!r.ok) throw new Error(j.error || `search failed (${r.status})`);
+      const j = await adminJson<{ results?: Track[]; hasMore?: boolean }>(
+        adminFetch,
+        `/dj/search?q=${encodeURIComponent(text)}&limit=${SEARCH_PAGE}&offset=${pageParam as number}`,
+        undefined,
+        signal,
+      );
       // Absent on an old controller (fixed 12 rows) → no Load more, as before.
       return { rows: j.results || [], hasMore: !!j.hasMore };
     },

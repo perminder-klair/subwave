@@ -3,6 +3,7 @@
 import { useCallback, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { notify } from '../../../lib/notify';
+import { AdminResponseError, adminJson, adminResponse } from '../../../lib/admin-query';
 import { llmProviderLabel } from '../llm/providerMeta';
 import { useLibrary } from './LibraryContext';
 import { libraryKeys } from './queries';
@@ -29,26 +30,30 @@ import type { SettingsResponse } from './types';
 async function postAudioSetting(
   fetcher: AdminFetch, patch: Record<string, unknown>,
 ): Promise<void> {
-  const r = await fetcher('/settings', {
+  await adminJson(fetcher, '/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ audio: patch }),
   });
-  const j = await r.json().catch(() => ({})) as { error?: string };
-  if (!r.ok) throw new Error(j.error || `save failed (${r.status})`);
 }
 
 // POST a tagger/analysis start. They differ only in path, body and the message
 // their failure carries.
 function startRun(path: string, body: unknown, what: string) {
   return async (fetcher: AdminFetch): Promise<void> => {
-    const r = await fetcher(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    const j = await r.json().catch(() => ({})) as { error?: string };
-    if (!r.ok) throw new Error(j.error || `${what} (${r.status})`);
+    try {
+      await adminJson(fetcher, path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      if (error instanceof AdminResponseError) {
+        const detail = typeof error.body.error === 'string' ? error.body.error : null;
+        throw new Error(detail || `${what} (${error.status})`);
+      }
+      throw error;
+    }
   };
 }
 
@@ -109,9 +114,9 @@ export function useTaggerControls() {
   const loadFailures = useCallback(async () => {
     if (!ready) return;
     try {
-      const r = await adminFetch('/library/analysis-failures?limit=200');
-      if (!r.ok) return;
-      const j = (await r.json()) as { failures?: AnalysisFailure[] };
+      const j = await adminJson<{ failures?: AnalysisFailure[] }>(
+        adminFetch, '/library/analysis-failures?limit=200',
+      );
       setFailures(j.failures || []);
     } catch { /* transient */ }
   }, [adminFetch, ready]);
@@ -122,8 +127,7 @@ export function useTaggerControls() {
   const clearFailures = useCallback(async () => {
     if (!ready) return;
     try {
-      const r = await adminFetch('/library/analysis-failures/clear', { method: 'POST' });
-      if (!r.ok) return;
+      await adminResponse(adminFetch, '/library/analysis-failures/clear', { method: 'POST' });
       setFailures([]);
       void reloadCoverage();
     } catch { /* transient */ }
@@ -148,9 +152,7 @@ export function useTaggerControls() {
 
   const stopM = useAdminMutation<void, void>({
     request: async (_v, fetcher) => {
-      const r = await fetcher('/tag-library/stop', { method: 'POST' });
-      const j = await r.json().catch(() => ({})) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `tagger stop failed (${r.status})`);
+      await adminResponse(fetcher, '/tag-library/stop', { method: 'POST' });
     },
     onDone: () => { notify.ok('stopping tagger…'); void reloadTagger(); },
   });

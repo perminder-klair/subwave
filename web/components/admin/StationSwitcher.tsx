@@ -6,9 +6,9 @@
 // (useStationSwitchPoll). Renders nothing until the station list loads.
 
 import Link from 'next/link';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { ChevronsUpDown, Plus, RadioTower } from 'lucide-react';
-import type { AdminFetch } from '../../lib/admin-query';
+import { adminJson, type AdminFetch } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useStationSwitchPoll } from '../../hooks/useStationSwitch';
 import { Pill } from './ui';
@@ -23,20 +23,7 @@ import {
   DropdownMenuTrigger,
 } from '../ui/dropdown-menu';
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from '../ui/sidebar';
-
-interface StationRow {
-  id: string | null;
-  name: string;
-  configured: boolean;
-  createdAt: string | null;
-  active: boolean;
-}
-
-interface StationsResponse {
-  multiStation: boolean;
-  activeId: string | null;
-  stations: StationRow[];
-}
+import { useStationsQuery, type StationRow } from './operations-queries';
 
 export default function StationSwitcher({
   adminFetch,
@@ -45,33 +32,15 @@ export default function StationSwitcher({
   adminFetch: AdminFetch;
   onNavigate?: () => void;
 }) {
-  const [data, setData] = useState<StationsResponse | null>(null);
-  const initialLoadStartedRef = useRef(false);
+  const stationsQuery = useStationsQuery(adminFetch);
+  const data = stationsQuery.data ?? null;
   const [confirmLive, setConfirmLive] = useState<StationRow | null>(null);
   const [switching, setSwitching] = useState<string | null>(null);
   useStationSwitchPoll(switching);
 
-  const load = useCallback(async () => {
-    try {
-      const r = await adminFetch('/stations');
-      if (!r.ok) return;
-      setData((await r.json()) as StationsResponse);
-    } catch {
-      /* sidebar chrome — fail quiet; the switcher just doesn't render */
-    }
-  }, [adminFetch]);
-
-  useEffect(() => {
-    if (initialLoadStartedRef.current) return;
-    initialLoadStartedRef.current = true;
-    void load();
-  }, [load]);
-
   const activate = async (id: string) => {
     try {
-      const r = await adminFetch(`/stations/${id}/activate`, { method: 'POST' });
-      const j = (await r.json()) as { error?: string };
-      if (!r.ok) throw new Error(j?.error || `failed (${r.status})`);
+      await adminJson(adminFetch, `/stations/${id}/activate`, { method: 'POST' });
       setSwitching(id);
     } catch (e) {
       notify.err(`Switch failed: ${errorMessage(e)}`);
@@ -87,7 +56,7 @@ export default function StationSwitcher({
     <>
       <SidebarMenu>
         <SidebarMenuItem>
-          <DropdownMenu modal={false} onOpenChange={o => { if (o) void load(); }}>
+          <DropdownMenu modal={false} onOpenChange={o => { if (o) void stationsQuery.refetch(); }}>
             <DropdownMenuTrigger asChild>
               <SidebarMenuButton size="lg" tooltip="Switch station">
                 <span className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-sm border border-ink">

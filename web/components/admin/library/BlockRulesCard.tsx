@@ -7,13 +7,13 @@
 // against /library/blocklist/rules, modelled on FestivalsSection) so
 // LibraryPanel only mounts it and re-marks rows after a change.
 
-import { useCallback, useEffect, useId, useState } from 'react';
+import { useId, useState } from 'react';
 import { CalendarRange, Plus, ShieldBan, Snowflake } from 'lucide-react';
 import {
   Controller, useWatch, type Control, type DefaultValues,
 } from 'react-hook-form';
 import type { z } from 'zod';
-import { useAdminAuth } from '../../../lib/adminAuth';
+import { AdminResponseError, adminJson, adminResponse } from '../../../lib/admin-query';
 import { notify, errorMessage } from '../../../lib/notify';
 import { Card, Btn } from '../ui';
 import { Input } from '../../ui/input';
@@ -31,6 +31,11 @@ import { blockRuleSchema, RULE_TEXT_MAX } from '@/lib/schemas.generated';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField } from '@/lib/form-fields';
 import type { BlockRuleStat, RuleField, SeasonWindow } from './types';
+import { libraryKeys } from './queries';
+import { useAdminMutation, useAdminQuery } from './useAdminQuery';
+import { settingsKeys } from '../settings/queries';
+import { showKeys } from '../shows/queries';
+import type { SettingsResponse as ShowSettingsResponse } from '../shows/types';
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -143,8 +148,6 @@ function ValuesInput({ id, values, onChange, placeholder, suggestions }: {
 }
 
 export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
-  const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [rules, setRules] = useState<BlockRuleStat[] | null>(null);
   const [busy, setBusy] = useState(false);
   // Whether the editor modal is open — separate from the form's own state
   // now that the rule being edited lives in react-hook-form rather than a
@@ -154,9 +157,6 @@ export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   // Picker vocab, loaded once alongside the rules. Failures degrade to free
   // text (genres) / an empty list with a hint (shows, playlists).
-  const [genres, setGenres] = useState<string[]>([]);
-  const [shows, setShows] = useState<Array<{ id: string; name: string }>>([]);
-  const [playlists, setPlaylists] = useState<Array<{ id: string; name: string; songCount: number | null }>>([]);
   const fieldId = useId();
 
   const form = useZodForm(
@@ -167,46 +167,69 @@ export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
   const fieldWatch = useWatch({ control, name: 'field' });
   const labelWatch = useWatch({ control, name: 'label' });
 
-  const load = useCallback(async () => {
-    try {
-      const r = await adminFetch('/library/blocklist');
-      if (!r.ok) throw new Error(`blocklist load failed (${r.status})`);
-      const j = await r.json() as { rules?: BlockRuleStat[] };
-      setRules(j.rules || []);
-    } catch (e) {
-      notify.err(errorMessage(e));
-      setRules(prev => prev ?? []);
-    }
-  }, [adminFetch]);
+  const rulesQuery = useAdminQuery<BlockRuleStat[]>({
+    key: libraryKeys.blockRules(),
+    path: '/library/blocklist',
+    parse: raw => (raw as { rules?: BlockRuleStat[] }).rules || [],
+    toastOnError: true,
+  });
+  const genresQuery = useAdminQuery<string[]>({
+    key: libraryKeys.genres(),
+    path: '/library/genres',
+    parse: raw => ((raw as { genres?: Array<{ value: string }> }).genres || [])
+      .map(genre => genre.value).filter(Boolean),
+  });
+  const showsQuery = useAdminQuery<ShowSettingsResponse>({
+    key: settingsKeys.detail(),
+    path: '/settings',
+  });
+  const playlistsQuery = useAdminQuery<Array<{ id: string; name: string; songCount: number | null }>>({
+    key: libraryKeys.rulePlaylists(),
+    path: '/dj/playlists',
+    parse: raw => (raw as { results?: Array<{ id: string; name: string; songCount: number | null }> })
+      .results || [],
+  });
+  const rules = rulesQuery.data ?? (rulesQuery.error ? [] : null);
+  const genres = genresQuery.data ?? [];
+  const shows = (showsQuery.data?.values?.shows || []).flatMap(show => (
+    show.id && show.name ? [{ id: show.id, name: show.name }] : []
+  ));
+  const playlists = playlistsQuery.data ?? [];
 
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    void load();
-    // Vocabulary for the editor's pickers — best-effort, never blocking.
-    void (async () => {
+  type SaveVars = { id: string | null; values: RuleForm };
+  type SaveReceipt = { rule?: BlockRuleStat; purged?: number };
+  const saveMutation = useAdminMutation<SaveReceipt, SaveVars>({
+    request: ({ id, values }, fetcher) => adminJson<SaveReceipt>(
+      fetcher,
+      id ? `/library/blocklist/rules/${encodeURIComponent(id)}` : '/library/blocklist/rules',
+      {
+        method: id ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(values),
+      },
+    ),
+    onDone: async (_receipt, _vars, client) => {
+      await client.invalidateQueries({ queryKey: libraryKeys.blockRules(), exact: true });
+      await client.invalidateQueries({ queryKey: showKeys.blocklist(), exact: true });
+    },
+    toastOnError: false,
+  });
+  const deleteMutation = useAdminMutation<void, string>({
+    request: async (id, fetcher) => {
       try {
-        const r = await adminFetch('/library/genres');
-        if (r.ok) {
-          const j = await r.json() as { genres?: Array<{ value: string }> };
-          setGenres((j.genres || []).map(g => g.value).filter(Boolean));
-        }
-      } catch {}
-      try {
-        const r = await adminFetch('/settings');
-        if (r.ok) {
-          const j = await r.json() as { values?: { shows?: Array<{ id: string; name: string }> } };
-          setShows((j.values?.shows || []).map(s => ({ id: s.id, name: s.name })));
-        }
-      } catch {}
-      try {
-        const r = await adminFetch('/dj/playlists');
-        if (r.ok) {
-          const j = await r.json() as { results?: Array<{ id: string; name: string; songCount: number | null }> };
-          setPlaylists(j.results || []);
-        }
-      } catch {}
-    })();
-  }, [hydrated, needsAuth, load, adminFetch]);
+        await adminResponse(fetcher, `/library/blocklist/rules/${encodeURIComponent(id)}`, {
+          method: 'DELETE',
+        });
+      } catch (error) {
+        if (!(error instanceof AdminResponseError) || error.status !== 404) throw error;
+      }
+    },
+    onDone: async (_receipt, _id, client) => {
+      await client.invalidateQueries({ queryKey: libraryKeys.blockRules(), exact: true });
+      await client.invalidateQueries({ queryKey: showKeys.blocklist(), exact: true });
+    },
+    toastOnError: false,
+  });
 
   // The form is bound to blockRuleSchema via react-hook-form/zodResolver —
   // the SAME schema the route runs (validateBody(blockRuleSchema) on both
@@ -222,34 +245,16 @@ export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
   const onSubmit = form.handleSubmit(async (values) => {
     setBusy(true);
     try {
-      const r = await adminFetch(editId ? `/library/blocklist/rules/${encodeURIComponent(editId)}` : '/library/blocklist/rules', {
-        method: editId ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // `values` is the TRANSFORMED (z.output) payload — trimmed label,
-        // blank values dropped, duplicates collapsed — so what the operator
-        // sees accepted is what gets stored.
-        body: JSON.stringify(values),
-      });
-      const j = await r.json().catch(() => ({})) as {
-        rule?: BlockRuleStat;
-        purged?: number;
-        error?: string;
-        fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        // Both sides run the same schema (client via zodResolver, server via
-        // validateBody), so this should be unreachable for a body the client
-        // accepted — but the server stays authoritative, and a controller a
-        // version ahead can refuse something this build allows.
-        applyServerFieldErrors(form, j.fieldErrors);
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      // `values` is the TRANSFORMED (z.output) payload — trimmed label,
+      // blank values dropped, duplicates collapsed — so what the operator
+      // sees accepted is what gets stored.
+      const j = await saveMutation.mutateAsync({ id: editId, values });
       setFormOpen(false);
       setEditId(null);
       notify.ok(`Rule ${editId ? 'updated' : 'added'}${j.purged ? ` — ${j.purged} queued track${j.purged === 1 ? '' : 's'} dropped` : ''}`);
-      await load();
       onChanged?.();
     } catch (e) {
+      if (e instanceof AdminResponseError) applyServerFieldErrors(form, e.body.fieldErrors);
       notify.err(`Save failed: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
@@ -259,12 +264,10 @@ export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
   const remove = async (id: string) => {
     setBusy(true);
     try {
-      const r = await adminFetch(`/library/blocklist/rules/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      if (!r.ok && r.status !== 404) throw new Error(`failed (${r.status})`);
+      await deleteMutation.mutateAsync(id);
       setFormOpen(false);
       setEditId(null);
       notify.ok('Rule removed');
-      await load();
       onChanged?.();
     } catch (e) {
       notify.err(`Remove failed: ${errorMessage(e)}`);
@@ -287,8 +290,6 @@ export function BlockRulesCard({ onChanged }: { onChanged?: () => void }) {
 
   const playlistNameOf = (id: string) => playlists.find(p => p.id === id)?.name || `(missing) ${id}`;
   const showNameOf = (id: string) => shows.find(s => s.id === id)?.name || `(deleted show) ${id}`;
-
-  if (!hydrated || needsAuth) return null;
 
   const rows = rules || [];
 
