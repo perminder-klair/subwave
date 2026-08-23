@@ -84,6 +84,168 @@ def new_page(playwright):
     return browser, page
 
 
+def model_response(models):
+    return {
+        "content_type": "application/json",
+        "body": json.dumps({"ok": True, "models": models}),
+    }
+
+
+def voice_response(voices):
+    return {
+        "content_type": "application/json",
+        "body": json.dumps({"ok": True, "voices": voices}),
+    }
+
+
+SETTINGS_FIXTURE = {
+    "values": {
+        "llm": {
+            "provider": "ollama", "model": "", "ollamaUrl": "http://ollama.test",
+            "providerBaseUrls": {}, "fallback": {"enabled": False, "provider": "ollama"},
+        },
+        "tts": {
+            "enabled": True, "defaultEngine": "piper",
+            "cloud": {
+                "provider": "openai-compatible", "model": "", "voice": "", "baseUrl": "",
+                "compatParams": [],
+            },
+        },
+    },
+    "llm": {"providers": ["ollama", "openai-compatible", "openrouter"]},
+    "tts": {
+        "engines": ["piper", "cloud"],
+        "cloudProviders": ["openai-compatible", "elevenlabs"],
+        "available": {"cloud": True, "cloudByProvider": {"openai-compatible": True, "elevenlabs": True}},
+    },
+    "env": {},
+}
+
+
+def stub_settings(page):
+    page.route(
+        "**/settings",
+        lambda route: route.fulfill(content_type="application/json", body=json.dumps(SETTINGS_FIXTURE)),
+    )
+
+
+def open_settings_llm(page):
+    stub_settings(page)
+    page.goto(f"{WEB}/admin/settings?section=llm", wait_until="domcontentloaded")
+    page.get_by_role("radio", name="OpenAI-compatible").click()
+    return page.get_by_placeholder("http://192.168.1.101:8080/v1")
+
+
+def enter_onboarding_llm(page):
+    page.route(
+        "**/onboarding/status",
+        lambda route: route.fulfill(
+            content_type="application/json",
+            body=json.dumps({"needsSetup": True, "setupCompletedAt": None}),
+        ),
+    )
+    page.goto(f"{WEB}/onboarding", wait_until="domcontentloaded")
+    page.get_by_role("button", name="Next →").click()
+    page.get_by_role("radio", name="OpenAI-compatible").click()
+    return page.get_by_label("Base URL")
+
+
+@check
+def discovery_settings_debounce(page):
+    model_hits = []
+    page.route(
+        "**/settings/llm/models**",
+        lambda route: (model_hits.append(route.request.url), route.fulfill(**model_response(["fresh-model"])))[1],
+    )
+    box = open_settings_llm(page)
+    box.fill("http://model.test/v1")
+    page.wait_for_timeout(350)
+    assert not [hit for hit in model_hits if "model.test" in hit], model_hits
+    page.wait_for_timeout(100)
+    matching = [hit for hit in model_hits if "model.test" in hit]
+    assert len(matching) == 1, model_hits
+
+
+@check
+def discovery_onboarding_provider(page):
+    model_hits = []
+    page.route(
+        "**/settings/llm/models**",
+        lambda route: (model_hits.append(route.request.url), route.fulfill(**model_response(["wizard-model"])))[1],
+    )
+    box = enter_onboarding_llm(page)
+    box.fill("http://wizard.test/v1")
+    page.wait_for_timeout(450)
+    wizard_hits = [hit for hit in model_hits if "wizard.test" in hit]
+    assert len(wizard_hits) == 1, model_hits
+
+    # The LLM step unmounts on navigation. Returning within the query client's
+    # 30-second stale window must reuse its discovery result instead of making
+    # an effect-backed request a second time.
+    page.get_by_role("button", name="Next →").click()
+    page.get_by_role("button", name="← Back").click()
+    page.wait_for_timeout(450)
+    wizard_hits = [hit for hit in model_hits if "wizard.test" in hit]
+    assert len(wizard_hits) == 1, model_hits
+
+
+@check
+def discovery_refresh_is_immediate(page):
+    model_hits = []
+    page.route(
+        "**/settings/llm/models**",
+        lambda route: (model_hits.append(route.request.url), route.fulfill(**model_response(["refresh-model"])))[1],
+    )
+    box = open_settings_llm(page)
+    box.fill("http://refresh.test/v1")
+    page.get_by_title("Refresh model list").first.click()
+    page.wait_for_timeout(0)
+    refresh_hits = [hit for hit in model_hits if "refresh.test" in hit]
+    assert len(refresh_hits) == 1, model_hits
+    # Once the debounce catches up it observes the same raw-key cache entry;
+    # the manual refresh must not turn into a duplicate automatic request.
+    page.wait_for_timeout(450)
+    refresh_hits = [hit for hit in model_hits if "refresh.test" in hit]
+    assert len(refresh_hits) == 1, model_hits
+
+
+@check
+def discovery_stale_response_isolated(page):
+    model_hits = []
+
+    def models(route):
+        url = route.request.url
+        model_hits.append(url)
+        if "old.test" in url:
+            route.fulfill(**model_response(["old-model"]))
+            return
+        route.fulfill(**model_response(["new-model"]))
+
+    page.route("**/settings/llm/models**", models)
+    page.route("**/settings/tts/voices**", lambda route: route.fulfill(**voice_response([
+        {"id": "old-voice", "label": "Old voice"},
+    ])))
+    box = open_settings_llm(page)
+    box.fill("http://old.test/v1")
+    page.wait_for_timeout(450)
+    box.fill("http://new.test/v1")
+    page.wait_for_timeout(450)
+    assert any("old.test" in hit for hit in model_hits), model_hits
+    assert any("new.test" in hit for hit in model_hits), model_hits
+
+    # Voice discovery lives in the TTS cloud panel. Its old list must disappear
+    # synchronously when the provider changes, before the next provider can
+    # finish discovery.
+    page.goto(f"{WEB}/admin/settings?section=tts", wait_until="domcontentloaded")
+    page.get_by_role("radio", name="Cloud").click()
+    page.get_by_role("radio", name="OpenAI-compatible").click()
+    voice_url = page.get_by_placeholder("http://192.168.1.101:5000/v1")
+    voice_url.fill("http://voice.test/v1")
+    page.wait_for_timeout(450)
+    page.get_by_role("radiogroup", name="Cloud TTS provider").get_by_role("radio", name="ElevenLabs").click()
+    assert "Old voice" not in page.locator("body").inner_text()
+
+
 @check
 def cache_survives_admin_navigation(page):
     stub_browse_when_needed(page)
