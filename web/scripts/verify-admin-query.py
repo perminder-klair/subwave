@@ -1726,6 +1726,177 @@ def playlist_sync_refresh(page):
     assert request_count(page, "/playlists", authenticated=True) == initial_index + 1, page.request_log
 
 
+@check
+def playlist_show_catalogue_refresh(page):
+    """Playlist writes refresh the prewarmed Shows playlist catalogue once."""
+    settings, show, _week = programming_fixture()
+    summaries = {
+        "task5-source": {
+            "id": "task5-source", "name": "Task 5 Source", "songCount": 1,
+            "synced": True, "lastSyncedAt": None,
+        },
+    }
+    details = {
+        "task5-source": [
+            {"id": "task5-track-1", "title": "Task 5 One", "artist": "Task Artist", "durationSec": 180},
+        ],
+    }
+
+    page.route("http://localhost:7791/settings", lambda route: fulfill_json(route, settings))
+    page.route(
+        "http://localhost:7791/dj/playlists",
+        lambda route: fulfill_json(route, {"results": list(summaries.values())}),
+    )
+    page.route(
+        "http://localhost:7791/library/genres",
+        lambda route: fulfill_json(route, {"genres": []}),
+    )
+
+    def playlist_item_route(route):
+        path = urllib.parse.urlparse(route.request.url).path
+        parts = path.strip("/").split("/")
+        playlist_id = parts[1]
+        if route.request.method == "POST" and parts[-1] == "sync":
+            details[playlist_id].append({
+                "id": "task5-track-2", "title": "Task 5 Two",
+                "artist": "Task Artist", "durationSec": 200,
+            })
+            summaries[playlist_id]["songCount"] = len(details[playlist_id])
+            fulfill_json(route, {"added": 1})
+        elif route.request.method == "DELETE":
+            summaries.pop(playlist_id, None)
+            details.pop(playlist_id, None)
+            fulfill_json(route, {"ok": True})
+        else:
+            fulfill_json(route, {"entries": details[playlist_id]})
+
+    page.route("http://localhost:7791/playlists/**", playlist_item_route)
+
+    def playlist_index_route(route):
+        if route.request.method == "POST":
+            body = route.request.post_data_json
+            playlist_id = body.get("playlistId") or "task5-created"
+            details[playlist_id] = [
+                next(
+                    track for tracks in details.values() for track in tracks
+                    if track["id"] == song_id
+                )
+                for song_id in body["songIds"]
+            ]
+            summaries[playlist_id] = {
+                "id": playlist_id,
+                "name": body["name"],
+                "songCount": len(details[playlist_id]),
+                "synced": bool(body.get("keepInSync")),
+                "lastSyncedAt": None,
+            }
+            fulfill_json(route, {"playlist": {"id": playlist_id}, "added": len(details[playlist_id])})
+        else:
+            fulfill_json(route, {"playlists": list(summaries.values())})
+
+    # Register the exact collection route last so it wins over the item glob.
+    page.route("http://localhost:7791/playlists", playlist_index_route)
+
+    def open_show_catalogue(expected, absent=()):
+        page.get_by_text("Build your shows here.", exact=False).wait_for(state="visible")
+        page.wait_for_timeout(250)  # let AdminShell's incoming route own clicks
+        page.get_by_role("button", name=f"Edit {show['name']}").click()
+        dialog = page.get_by_role("dialog")
+        dialog.wait_for(state="visible")
+        anchor = dialog.get_by_label("playlist anchor")
+        for name, count in expected:
+            row = anchor.locator("label").filter(has_text=name)
+            row.wait_for(state="visible")
+            assert f"({count})" in row.inner_text(), row.inner_text()
+        for name in absent:
+            assert anchor.locator("label").filter(has_text=name).count() == 0, anchor.inner_text()
+        dialog.get_by_role("button", name="Close").last.click()
+        dialog.wait_for(state="detached")
+
+    def go_to_playlists():
+        toggle = page.get_by_role("button", name="Toggle Library submenu")
+        if toggle.get_attribute("data-state") != "open":
+            toggle.click()
+        click_admin_link(page, "Playlists", "/admin/playlists")
+        page.get_by_text("Describe the set", exact=False).wait_for(state="visible")
+        page.wait_for_timeout(250)
+
+    def load_playlist(name):
+        page.get_by_role("button", name="Browse", exact=True).click()
+        page.get_by_text(name, exact=True).click()
+        page.get_by_text("Task 5 One", exact=True).wait_for(state="visible")
+
+    def return_to_shows():
+        click_admin_link(page, "Shows", "/admin/shows")
+        page.wait_for_url("**/admin/shows")
+
+    # Prewarm showKeys.playlists() before any Playlist Builder write.
+    page.goto(f"{WEB}/admin/shows", wait_until="domcontentloaded")
+    open_show_catalogue([("Task 5 Source", 1)])
+    assert request_count(page, "/dj/playlists", authenticated=True) == 1, page.request_log
+
+    # Rename (overwrite save) must make the fresh name visible on return.
+    go_to_playlists()
+    load_playlist("Task 5 Source")
+    page.get_by_role("button", name="Update", exact=True).click()
+    save_dialog = page.get_by_role("dialog")
+    save_dialog.get_by_label("Name").fill("Task 5 Renamed")
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/playlists", "POST")
+    ):
+        save_dialog.get_by_role("button", name="Save playlist").click()
+    save_dialog.wait_for(state="detached")
+    return_to_shows()
+    open_show_catalogue([("Task 5 Renamed", 1)], absent=("Task 5 Source",))
+
+    # Create from the same deck; both playlists must reach Shows.
+    go_to_playlists()
+    load_playlist("Task 5 Renamed")
+    page.get_by_role("button", name="Update", exact=True).click()
+    save_dialog = page.get_by_role("dialog")
+    save_dialog.get_by_role("button", name="Create a new playlist").click()
+    save_dialog.get_by_label("Name").fill("Task 5 Created")
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/playlists", "POST")
+    ):
+        save_dialog.get_by_role("button", name="Save playlist").click()
+    save_dialog.wait_for(state="detached")
+    return_to_shows()
+    open_show_catalogue([("Task 5 Renamed", 1), ("Task 5 Created", 1)])
+
+    # Sync changes songCount, which is part of the Shows picker summary.
+    go_to_playlists()
+    load_playlist("Task 5 Renamed")
+    with page.expect_response(
+        lambda response: is_admin_request(
+            response.request, "/playlists/task5-source/sync", "POST",
+        )
+    ):
+        page.get_by_role("button", name="sync now").click()
+    page.get_by_text("Task 5 Two", exact=True).wait_for(state="visible")
+    return_to_shows()
+    open_show_catalogue([("Task 5 Renamed", 2), ("Task 5 Created", 1)])
+
+    # Deleting the created copy must remove it from the cached Show picker.
+    go_to_playlists()
+    page.get_by_role("button", name="Browse", exact=True).click()
+    created_row = page.locator('[role="button"]').filter(has_text="Task 5 Created")
+    created_row.get_by_title("delete playlist").click()
+    with page.expect_response(
+        lambda response: is_admin_request(
+            response.request, "/playlists/task5-created", "DELETE",
+        )
+    ):
+        created_row.get_by_title("click again to delete from Navidrome").click()
+    page.get_by_text("Task 5 Created", exact=True).wait_for(state="detached")
+    page.keyboard.press("Escape")
+    return_to_shows()
+    open_show_catalogue([("Task 5 Renamed", 2)], absent=("Task 5 Created",))
+
+    # One initial read plus one exact refresh per write, never a request storm.
+    assert request_count(page, "/dj/playlists", authenticated=True) == 5, page.request_log
+
+
 def main():
     names = sys.argv[1:] or list(CHECKS)
     unknown = [name for name in names if name not in CHECKS]

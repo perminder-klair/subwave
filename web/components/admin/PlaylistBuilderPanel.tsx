@@ -81,6 +81,7 @@ import {
   playlistSaveSchema,
 } from '@/lib/schemas.generated';
 import { useSettingsQuery } from './settings/queries';
+import { showKeys } from './shows/queries';
 import {
   fetchPlaylistDetail,
   playlistKeys,
@@ -559,10 +560,11 @@ export default function PlaylistBuilderPanel() {
       `/playlists/${encodeURIComponent(playlist.id)}`,
       { method: 'DELETE' },
     ),
-    onDone: (_result, playlist, client) => {
+    onDone: async (_result, playlist, client) => {
       client.setQueryData<PlaylistSummary[]>(playlistKeys.index(), previous =>
         previous?.filter(item => item.id !== playlist.id));
       client.removeQueries({ queryKey: playlistKeys.detail(playlist.id), exact: true });
+      await client.invalidateQueries({ queryKey: showKeys.playlists(), exact: true });
     },
     toastOnError: false,
   });
@@ -637,6 +639,7 @@ export default function PlaylistBuilderPanel() {
           exact: true,
         });
       }
+      await client.invalidateQueries({ queryKey: showKeys.playlists(), exact: true });
     },
     toastOnError: false,
   });
@@ -683,6 +686,7 @@ export default function PlaylistBuilderPanel() {
       await Promise.all([
         client.invalidateQueries({ queryKey: playlistKeys.index(), exact: true }),
         client.invalidateQueries({ queryKey: playlistKeys.detail(id), exact: true }),
+        client.invalidateQueries({ queryKey: showKeys.playlists(), exact: true }),
       ]);
     },
     toastOnError: false,
