@@ -59,6 +59,13 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   useEffect(() => {
     if (takeoverQuery.dataUpdatedAt) setNow(Date.now());
   }, [takeoverQuery.dataUpdatedAt]);
+  // Query polling stops in hidden tabs and a failed poll has no dataUpdatedAt.
+  // Advance the local display clock independently so minutes-left and expiry
+  // cannot freeze on the last successful schedule response.
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(Date.now()), 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   // Same index-into-the-roster colour the board and the shows page paint with.
   const colorOf = (id: string): string => {

@@ -601,6 +601,67 @@ def stats_pause_and_poll(page):
 
 
 @check
+def stats_range_failure_retains_last_good(page):
+    """Catches a failed new range replacing the last visible listener rollups."""
+    install_poll_clock(page)
+    stub_dashboard(page)
+    stats = {
+        "llm": {
+            "window": 0, "count": 0, "ok": 0, "failed": 0,
+            "latency": {}, "agent": {"calls": 0}, "byKind": [], "byModel": [],
+        },
+        "tts": {
+            "window": 0, "count": 0, "ok": 0, "failed": 0,
+            "latency": {}, "fellBack": 0, "byEngine": [], "byKind": [],
+        },
+        "djLog": {"count": 0, "byKind": []},
+        "requests": {
+            "window": 0, "count": 0, "resolved": 0, "failed": 0,
+            "latency": {}, "artistMiss": {"count": 0}, "byPath": [],
+            "byPickSource": [], "topRequesters": [],
+        },
+    }
+
+    def range_routes(route):
+        parsed = urllib.parse.urlparse(route.request.url)
+        if parsed.path == "/stats":
+            fulfill_json(route, stats)
+        elif parsed.path == "/listeners" and parsed.query == "sinceMinutes=1440":
+            fulfill_json(route, {"current": 7, "samples": [{"t": "2026-08-23T12:00:00Z", "count": 7}]})
+        elif parsed.path == "/audience" and parsed.query == "sinceMinutes=1440":
+            fulfill_json(route, {
+                "sessions": 13,
+                "referrers": [{"source": "Direct", "count": 13}],
+                "countries": [{"country": "GB", "count": 13}],
+                "paths": [],
+            })
+        elif parsed.path in ("/listeners", "/audience") and parsed.query == "sinceMinutes=10080":
+            fulfill_json(route, {"error": "verification failure"}, status=503)
+        elif parsed.path == "/listeners/connections":
+            fulfill_json(route, {"count": 0, "connections": []})
+        elif parsed.path == "/system":
+            fulfill_json(route, {"containers": []})
+        else:
+            route.fallback()
+    page.route("http://localhost:7791/**", range_routes)
+
+    with page.expect_request(lambda request: is_admin_request(request, "/stats")):
+        page.goto(f"{WEB}/admin/stats", wait_until="domcontentloaded")
+    page.get_by_text("Sessions", exact=True).locator("..").get_by_text("13", exact=True).wait_for(state="visible")
+    page.get_by_text("Now", exact=True).locator("..").get_by_text("7", exact=True).wait_for(state="visible")
+
+    with page.expect_response(
+        lambda response: urllib.parse.urlparse(response.url).path == "/audience"
+        and urllib.parse.urlparse(response.url).query == "sinceMinutes=10080"
+    ):
+        page.get_by_text("7d", exact=True).click()
+    settle_clock(page)
+
+    page.get_by_text("Now", exact=True).locator("..").get_by_text("7", exact=True).wait_for(state="visible")
+    page.get_by_text("Sessions", exact=True).locator("..").get_by_text("13", exact=True).wait_for(state="visible")
+
+
+@check
 def debug_pause_and_poll(page):
     """Catches overlap-prone Debug timing, pause drift, or hidden polling."""
     install_poll_clock(page)
@@ -673,6 +734,45 @@ def banner_poll_silence(page):
     hidden_schedule = request_count(page, "/schedule")
     settle_clock(page, 30_000)
     assert request_count(page, "/schedule") == hidden_schedule, page.request_log
+
+
+@check
+def takeover_expiry_survives_failed_poll(page):
+    """Catches an expired takeover frozen on air by a failed schedule poll."""
+    install_poll_clock(page)
+    stub_dashboard(page)
+    now = page.evaluate("Date.now()")
+    schedule_hits = 0
+
+    def schedule_route(route):
+        nonlocal schedule_hits
+        schedule_hits += 1
+        if schedule_hits == 1:
+            fulfill_json(route, {
+                "shows": [{"id": "review-show", "name": "Review takeover show"}],
+                "override": {
+                    "showId": "review-show",
+                    "startedAt": now,
+                    "expiresAt": now + 30_000,
+                },
+            })
+        else:
+            fulfill_json(route, {"error": "verification failure"}, status=503)
+    page.route("http://localhost:7791/schedule", schedule_route)
+
+    with page.expect_request(lambda request: is_admin_request(request, "/schedule")):
+        page.goto(f"{WEB}/admin/dash", wait_until="domcontentloaded")
+    page.get_by_role("button", name="Cancel takeover").wait_for(state="visible")
+
+    with page.expect_response(
+        lambda response: urllib.parse.urlparse(response.url).path == "/schedule"
+        and response.status == 503
+    ):
+        settle_clock(page, 30_000)
+    settle_clock(page)
+
+    page.get_by_role("button", name="Pin to air →").wait_for(state="visible")
+    assert schedule_hits == 2, schedule_hits
 
 
 def main():

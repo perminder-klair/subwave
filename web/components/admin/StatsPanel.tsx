@@ -7,7 +7,7 @@
      state/listeners.jsonl (24h–7d), drawn as the Audience trend chart. */
 
 import type { ReactNode } from 'react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { adminJson, useAdminQuery } from '../../lib/admin-query';
 import { errorMessage } from '../../lib/notify';
@@ -552,6 +552,17 @@ export default function StatsPanel() {
     placeholderData: previous => previous,
     request: (fetcher, signal) => adminJson(fetcher, `/audience?sinceMinutes=${range}`, undefined, signal),
   });
+  // Range is part of both cache keys. Keep a range-independent last success so
+  // a first-request failure for a newly selected range cannot blank the charts
+  // after TanStack releases the previous range's placeholder.
+  const [lastListeners, setLastListeners] = useState<ListenersResponse | null>(null);
+  const [lastAudience, setLastAudience] = useState<AudienceResponse | null>(null);
+  useEffect(() => {
+    if (listenersQuery.data) setLastListeners(listenersQuery.data);
+  }, [listenersQuery.data]);
+  useEffect(() => {
+    if (audienceQuery.data) setLastAudience(audienceQuery.data);
+  }, [audienceQuery.data]);
 
   // /listeners/connections — 30s, range-independent ("connected right now").
   // A 502 is stored as an error rather than dropped, so the card can say "live
@@ -576,8 +587,8 @@ export default function StatsPanel() {
 
   const data = statsQuery.error instanceof StatsShapeError ? null : (statsQuery.data ?? null);
   const err = statsQuery.error ? errorMessage(statsQuery.error) : null;
-  const listeners = listenersQuery.data ?? null;
-  const audience = audienceQuery.data ?? null;
+  const listeners = listenersQuery.data ?? lastListeners;
+  const audience = audienceQuery.data ?? lastAudience;
   const connections = connectionsQuery.data ?? null;
   const systemRes = systemQuery.data ?? null;
 
