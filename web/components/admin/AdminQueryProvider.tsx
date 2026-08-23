@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // Mounted by AdminShell only after its authenticated checks pass, so one client
@@ -26,5 +26,24 @@ export default function AdminQueryProvider({ children }: { children: ReactNode }
       },
     },
   }));
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'production') return;
+    const observable = window as typeof window & {
+      __subwaveAdminMutationCacheSnapshot?: () => Array<Record<string, unknown>>;
+    };
+    observable.__subwaveAdminMutationCacheSnapshot = () =>
+      client.getMutationCache().getAll().map(mutation => ({
+        mutationKey: mutation.options.mutationKey ?? null,
+        status: mutation.state.status,
+        variables: mutation.state.variables ?? null,
+        data: mutation.state.data ?? null,
+        error: mutation.state.error instanceof Error
+          ? { name: mutation.state.error.name, message: mutation.state.error.message }
+          : mutation.state.error ?? null,
+      }));
+    return () => {
+      delete observable.__subwaveAdminMutationCacheSnapshot;
+    };
+  }, [client]);
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }

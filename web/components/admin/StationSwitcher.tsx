@@ -6,9 +6,9 @@
 // (useStationSwitchPoll). Renders nothing until the station list loads.
 
 import Link from 'next/link';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ChevronsUpDown, Plus, RadioTower } from 'lucide-react';
-import { useAdminAuth } from '../../lib/adminAuth';
+import type { AdminFetch } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useStationSwitchPoll } from '../../hooks/useStationSwitch';
 import { Pill } from './ui';
@@ -38,9 +38,15 @@ interface StationsResponse {
   stations: StationRow[];
 }
 
-export default function StationSwitcher({ onNavigate }: { onNavigate?: () => void }) {
-  const { adminFetch, needsAuth, hydrated } = useAdminAuth();
+export default function StationSwitcher({
+  adminFetch,
+  onNavigate,
+}: {
+  adminFetch: AdminFetch;
+  onNavigate?: () => void;
+}) {
   const [data, setData] = useState<StationsResponse | null>(null);
+  const initialLoadStartedRef = useRef(false);
   const [confirmLive, setConfirmLive] = useState<StationRow | null>(null);
   const [switching, setSwitching] = useState<string | null>(null);
   useStationSwitchPoll(switching);
@@ -56,8 +62,10 @@ export default function StationSwitcher({ onNavigate }: { onNavigate?: () => voi
   }, [adminFetch]);
 
   useEffect(() => {
-    if (hydrated && !needsAuth) void load();
-  }, [hydrated, needsAuth, load]);
+    if (initialLoadStartedRef.current) return;
+    initialLoadStartedRef.current = true;
+    void load();
+  }, [load]);
 
   const activate = async (id: string) => {
     try {
@@ -73,7 +81,7 @@ export default function StationSwitcher({ onNavigate }: { onNavigate?: () => voi
   const active = data?.stations.find(s => s.active) ?? null;
   const others = data?.stations.filter(s => !s.active) ?? [];
 
-  if (!hydrated || needsAuth || !active) return null;
+  if (!active) return null;
 
   return (
     <>

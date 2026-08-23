@@ -8,9 +8,7 @@ import { normalizeStationLocale } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
 import {
   AdminResponseError,
-  adminJson,
   adminResponse,
-  useAdminMutation,
 } from '../../lib/admin-query';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { Input } from '../ui/input';
@@ -48,9 +46,8 @@ import { ScrobbleSection } from './settings/ScrobbleSection';
 import { LikesSection } from './settings/LikesSection';
 import { NavidromeSection } from './settings/NavidromeSection';
 import {
-  applySettingsSave,
+  useSettingsMutation,
   useSettingsQuery,
-  type SettingsSaveResult,
 } from './settings/queries';
 
 const SECTIONS = [
@@ -180,16 +177,7 @@ export default function SettingsPanel() {
 
   const refresh = async () => { await settingsQuery.refetch(); };
 
-  const saveMutation = useAdminMutation<SettingsSaveResult, Record<string, unknown>>({
-    adminFetch,
-    request: (patch, fetcher) => adminJson<SettingsSaveResult>(fetcher, '/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    }),
-    onDone: (result, _patch, client) => applySettingsSave(client, result),
-    toastOnError: false,
-  });
+  const saveMutation = useSettingsMutation<SettingsData>({ adminFetch });
   const busy = commandBusy || saveMutation.isPending;
 
   // Jingles / SFX / Beds now live on /admin/imaging; their old ?section

@@ -41,10 +41,9 @@ import { orderPersonaRoster } from './personas/roster-order';
 import { PersonaEditor } from './personas/PersonaEditor';
 import { useCommunityPersonas } from './personas/queries';
 import {
-  applySettingsSave,
   settingsKeys,
+  useSettingsMutation,
   useSettingsQuery,
-  type SettingsSaveResult,
 } from './settings/queries';
 
 // The RHF resolver is the two shared schemas the controller validates against,
@@ -119,16 +118,7 @@ export default function PersonasPanel() {
     replace: replacePromptFields,
   } = useFieldArray({ control, name: 'djPrompts', keyName: '_rhfKey' });
 
-  const saveMutation = useAdminMutation<SettingsSaveResult, Record<string, unknown>>({
-    adminFetch,
-    request: (patch, fetcher) => adminJson<SettingsSaveResult>(fetcher, '/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    }),
-    onDone: (result, _patch, client) => applySettingsSave(client, result),
-    toastOnError: false,
-  });
+  const saveMutation = useSettingsMutation<SettingsResponse>({ adminFetch });
 
   const personaMutation = useAdminMutation<Record<string, unknown>, {
     path: string;
@@ -151,8 +141,13 @@ export default function PersonasPanel() {
 
   useEffect(() => {
     if (settingsQuery.error) {
-      setErr(errorMessage(settingsQuery.error));
-      setLoaded(true);
+      // A failed background refresh must not replace a loaded, dirty editor
+      // with the page-level error state. The save path reports that failure;
+      // keep the last safe envelope and operator edits visible for retry.
+      if (!loaded) {
+        setErr(errorMessage(settingsQuery.error));
+        setLoaded(true);
+      }
       return;
     }
     const revision = settingsQuery.dataUpdatedAt;

@@ -306,7 +306,7 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
       <div className="admin-root paper">
         {/* Narrower than the shadcn 16rem default — the nav is short labels. */}
         <SidebarProvider defaultOpen={defaultOpen} style={{ '--sidebar-width': '13rem' } as CSSProperties}>
-          <AdminSidebar pathname={pathname} onSignOut={signOut} />
+          <AdminSidebar pathname={pathname} onSignOut={signOut} adminFetch={adminFetch} />
           <SidebarInset className="min-w-0 bg-transparent">
             <TopBar pathname={pathname} />
             <NavidromeBanner adminFetch={adminFetch} onStatus={setNavidromeOk} />
@@ -400,9 +400,11 @@ function AdminCommandMenu() {
 function AdminSidebar({
   pathname,
   onSignOut,
+  adminFetch,
 }: {
   pathname: string | null;
   onSignOut: () => void;
+  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }) {
   const { setOpenMobile, isMobile } = useSidebar();
   const [confirmingSignOut, setConfirmingSignOut] = useState(false);
@@ -427,7 +429,7 @@ function AdminSidebar({
           </span>
         </Link>
         <span className="caption px-1 group-data-[collapsible=icon]:hidden">control center</span>
-        <StationSwitcher onNavigate={closeOnMobileNav} />
+        <StationSwitcher adminFetch={adminFetch} onNavigate={closeOnMobileNav} />
       </SidebarHeader>
 
       <SidebarContent className="gap-4 px-2 py-1">

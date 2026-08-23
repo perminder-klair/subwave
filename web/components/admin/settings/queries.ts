@@ -1,11 +1,18 @@
 'use client';
 
-import type { QueryClient, UseQueryOptions, UseQueryResult } from '@tanstack/react-query';
+import { useCallback, useRef } from 'react';
+import {
+  useMutation,
+  useQueryClient,
+  type UseQueryOptions,
+  type UseQueryResult,
+} from '@tanstack/react-query';
 import {
   adminJson,
   type AdminFetch,
 } from '@/lib/admin-query';
 import { useAdminQuery } from '@/lib/admin-query';
+import { errorMessage } from '@/lib/notify';
 
 export const settingsKeys = {
   all: ['settings'] as const,
@@ -39,17 +46,65 @@ export function useSettingsQuery<T>({
   });
 }
 
+export interface SettingsSaveReceipt {
+  requiresRestart?: boolean;
+}
+
 /**
- * POST /settings may contain raw write-only secrets and omits GET-only derived
- * fields. Never cache it: one redacted GET refreshes the complete envelope.
+ * Sensitive settings writes keep both the patch and the raw POST response out
+ * of TanStack state. MutationCache sees void variables/data; the short-lived
+ * refs are cleared in finally after one mandatory, throwing redacted GET.
  */
-export async function applySettingsSave(
-  client: QueryClient,
-  _result: SettingsSaveResult,
-): Promise<void> {
-  await client.invalidateQueries({
-    queryKey: settingsKeys.detail(),
-    exact: true,
-    refetchType: 'active',
+export function useSettingsMutation<TSettings>({
+  adminFetch,
+}: {
+  adminFetch: AdminFetch;
+}): {
+  isPending: boolean;
+  mutateAsync: (patch: Record<string, unknown>) => Promise<SettingsSaveReceipt>;
+} {
+  const client = useQueryClient();
+  const patchRef = useRef<Record<string, unknown> | null>(null);
+  const receiptRef = useRef<SettingsSaveReceipt | null>(null);
+  const mutation = useMutation<void, Error, void>({
+    mutationKey: ['settings', 'save'],
+    mutationFn: async () => {
+      const patch = patchRef.current;
+      if (!patch) throw new Error('settings save payload unavailable');
+      let posted = false;
+      try {
+        const result = await adminJson<SettingsSaveResult>(adminFetch, '/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        posted = true;
+        receiptRef.current = { requiresRestart: result.requiresRestart };
+        await client.fetchQuery<TSettings>({
+          queryKey: settingsKeys.detail(),
+          queryFn: ({ signal }) => adminJson<TSettings>(adminFetch, '/settings', undefined, signal),
+          staleTime: 0,
+        });
+      } catch (error) {
+        if (posted) {
+          throw new Error(`settings were saved, but refresh failed: ${errorMessage(error)}`);
+        }
+        throw error;
+      }
+    },
   });
+  const runMutation = mutation.mutateAsync;
+  const mutateAsync = useCallback(async (patch: Record<string, unknown>) => {
+    if (patchRef.current) throw new Error('settings save already in progress');
+    patchRef.current = patch;
+    receiptRef.current = null;
+    try {
+      await runMutation();
+      return receiptRef.current ?? {};
+    } finally {
+      patchRef.current = null;
+      receiptRef.current = null;
+    }
+  }, [runMutation]);
+  return { isPending: mutation.isPending, mutateAsync };
 }

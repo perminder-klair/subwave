@@ -8,7 +8,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Music, AudioLines, Waves, Mic } from 'lucide-react';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import {
-  AdminResponseError, adminJson, adminResponse, useAdminMutation,
+  AdminResponseError, adminResponse, useAdminMutation,
 } from '../../../lib/admin-query';
 import { notify, errorMessage } from '../../../lib/notify';
 import { SectionTabs } from '../SectionTabs';
@@ -32,9 +32,8 @@ import {
   useVoicesQuery,
 } from './queries';
 import {
-  applySettingsSave,
+  useSettingsMutation,
   useSettingsQuery,
-  type SettingsSaveResult,
 } from '../settings/queries';
 
 type TabId = 'jingles' | 'sfx' | 'beds' | 'voices';
@@ -83,16 +82,7 @@ export default function ImagingPanel() {
 
   const refresh = async () => { await settingsQuery.refetch(); };
 
-  const saveMutation = useAdminMutation<SettingsSaveResult, Record<string, unknown>>({
-    adminFetch,
-    request: (patch, fetcher) => adminJson<SettingsSaveResult>(fetcher, '/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    }),
-    onDone: (result, _patch, client) => applySettingsSave(client, result),
-    toastOnError: false,
-  });
+  const saveMutation = useSettingsMutation<SettingsData>({ adminFetch });
 
   const resourceMutation = useAdminMutation<Record<string, unknown>, {
     path: string;

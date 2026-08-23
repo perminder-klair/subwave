@@ -6,7 +6,7 @@ import {
 } from 'react-hook-form';
 import { z } from 'zod';
 import { useAdminAuth } from '../../lib/adminAuth';
-import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin-query';
+import { AdminResponseError } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField, SelectField } from '@/lib/form-fields';
@@ -23,9 +23,8 @@ import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import {
-  applySettingsSave,
+  useSettingsMutation,
   useSettingsQuery,
-  type SettingsSaveResult,
 } from './settings/queries';
 import {
   festivalsSchema,
@@ -263,16 +262,7 @@ export default function FestivalsSection() {
   });
   const watchedFestivals = useWatch({ control: arrayControl, name: 'festivals' }) ?? [];
 
-  const saveMutation = useAdminMutation<SettingsSaveResult, Festival[]>({
-    adminFetch,
-    request: (list, fetcher) => adminJson<SettingsSaveResult>(fetcher, '/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ festivals: list }),
-    }),
-    onDone: (result, _list, client) => applySettingsSave(client, result),
-    toastOnError: false,
-  });
+  const saveMutation = useSettingsMutation<FestivalSettingsData>({ adminFetch });
 
   useEffect(() => {
     if (settingsQuery.error) {
@@ -315,7 +305,7 @@ export default function FestivalsSection() {
   const persist = useCallback(async (list: Festival[]) => {
     setBusy(true);
     try {
-      await saveMutation.mutateAsync(list);
+      await saveMutation.mutateAsync({ festivals: list });
       form.reset({ festivals: sortFestivals(list) });
       setEditIdx(null);
       setEditing(false);

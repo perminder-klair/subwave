@@ -9,7 +9,7 @@ import {
 } from 'react-hook-form';
 import { z } from 'zod';
 import { useAdminAuth } from '../../lib/adminAuth';
-import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin-query';
+import { AdminResponseError } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField, SelectField, type Option } from '@/lib/form-fields';
@@ -36,10 +36,9 @@ import { VoicePreviewButton } from './tts/VoicePreviewButton';
 import { defaultEngineVoice } from './tts/defaultVoice';
 import { ENGINE_META } from './tts/engineMeta';
 import {
-  applySettingsSave,
   settingsKeys,
+  useSettingsMutation,
   useSettingsQuery,
-  type SettingsSaveResult,
 } from './settings/queries';
 
 interface MoodEntry {
@@ -249,16 +248,7 @@ export default function MoodsPanel() {
   // sample without a save round trip first.
   const liveCorrections = useWatch({ control: arrayControl, name: 'corrections' }) ?? [];
 
-  const saveMutation = useAdminMutation<SettingsSaveResult, Record<string, unknown>>({
-    adminFetch,
-    request: (patch, fetcher) => adminJson<SettingsSaveResult>(fetcher, '/settings', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch),
-    }),
-    onDone: (result, _patch, client) => applySettingsSave(client, result),
-    toastOnError: false,
-  });
+  const saveMutation = useSettingsMutation<MoodSettingsData>({ adminFetch });
 
   // Swapping the resolver doesn't re-run it against already-computed error
   // state, so re-validate whenever the schema is rebuilt from a fresh
@@ -345,15 +335,9 @@ export default function MoodsPanel() {
     [router, pathname, searchParams],
   );
 
-  // POST one settings slice, then re-baseline the WHOLE form with a plain
-  // `form.reset(values)`. `reset(next, {keepDirtyValues: true})` looks like the
-  // right tool but does NOT recompute dirtyFields/isValid against the new
-  // defaults, so the just-saved card's Save button stayed wrongly enabled.
-  //
-  // Tradeoff: adopting the live value for every key also clears the dirty flag
-  // of an unsaved edit on another card. The VALUE is untouched — only the
-  // "unsaved changes" signal resets — which is the safer failure direction, and
-  // RHF offers no option that recomputes one key's dirtiness alone.
+  // POST one settings slice, then advance only that top-level field's default.
+  // Other cards keep both their live values and dirty/default comparison while
+  // the safe server revision stays queued behind them.
   const persistPatch = useCallback(
     async (
       card: string,
@@ -367,8 +351,7 @@ export default function MoodsPanel() {
       setBusy(card);
       try {
         await saveMutation.mutateAsync(patch);
-        const current = form.getValues() as unknown as MoodsFormValues;
-        form.reset({ ...current, [key]: nextValue });
+        form.resetField(key as never, { defaultValue: nextValue as never });
         onSuccess?.(queryClient.getQueryData<MoodSettingsData>(settingsKeys.detail())?.values);
         notify.ok(okMsg);
       } catch (e) {

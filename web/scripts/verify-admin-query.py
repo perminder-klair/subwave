@@ -145,6 +145,15 @@ def request_count(page, path, method="GET", query=None, authenticated=None):
     return len([entry for entry in page.request_log if matches(entry)])
 
 
+def mutation_cache_snapshot(page):
+    return page.evaluate("""() => {
+      if (typeof window.__subwaveAdminMutationCacheSnapshot !== 'function') {
+        throw new Error('admin mutation cache observable is unavailable');
+      }
+      return window.__subwaveAdminMutationCacheSnapshot();
+    }""")
+
+
 def install_poll_clock(page):
     """Freeze browser timers and expose a deterministic visibility switch."""
     page.clock.install()
@@ -530,6 +539,23 @@ def unauthorised_query_is_not_retried(page):
     page.goto(f"{WEB}/admin/stations", wait_until="domcontentloaded")
     page.wait_for_timeout(1500)
     assert len(hits) == 1, hits
+
+
+@check
+def unauthorised_shell_signs_out(page):
+    """The one StationSwitcher 401 tears down the shell-owned query provider."""
+    hits = []
+    page.route(
+        "**/stations",
+        lambda route: (hits.append(route.request.url), route.fulfill(status=401, body='{}'))[1],
+    )
+    page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
+    page.get_by_text("Admin sign-in", exact=True).wait_for(state="visible")
+    assert len(hits) == 1, hits
+    assert page.evaluate("localStorage.getItem('subwave_admin_auth')") is None
+    assert page.evaluate(
+        "typeof window.__subwaveAdminMutationCacheSnapshot"
+    ) == "undefined"
 
 
 @check
@@ -942,6 +968,141 @@ def settings_save_propagates(page):
     hero = page.locator("section.card").filter(has_text="● on air").first
     hero.get_by_text(personas[1]["name"], exact=True).wait_for(state="visible")
     assert request_count(page, "/settings", authenticated=True) == initial_gets + 1, page.request_log
+
+
+@check
+def settings_mutation_cache_redacts_secrets(page):
+    """Settings MutationCache retains neither secret variables nor raw POST data."""
+    initial = copy.deepcopy(api("/settings"))
+    secret = "task4-mutation-cache-secret"
+    initial["values"]["search"] = {
+        **initial["values"].get("search", {}), "provider": "tavily", "apiKey": "set",
+    }
+    raw_saved = copy.deepcopy(initial["values"])
+    raw_saved["search"]["apiKey"] = secret
+    authoritative = copy.deepcopy(initial)
+    state = {"saved": False}
+
+    def settings_route(route):
+        if route.request.method == "POST":
+            state["saved"] = True
+            fulfill_json(route, {"saved": raw_saved, "requiresRestart": False})
+        else:
+            fulfill_json(route, authoritative if state["saved"] else initial)
+
+    page.route("http://localhost:7791/settings", settings_route)
+    page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
+    page.get_by_placeholder("A short line describing your station…").wait_for(state="visible")
+    initial_gets = request_count(page, "/settings", authenticated=True)
+    page.get_by_role("button", name="Web search", exact=False).click()
+    page.locator('input[type="password"]:visible').first.fill(secret)
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/settings", "POST")
+    ):
+        page.get_by_role("button", name="Save web search").click()
+    page.wait_for_timeout(200)
+    assert request_count(page, "/settings", authenticated=True) == initial_gets + 1, page.request_log
+    settings_mutations = mutation_cache_snapshot(page)
+    assert settings_mutations, mutation_cache_snapshot(page)
+    serialized = json.dumps(settings_mutations)
+    assert secret not in serialized, serialized
+    assert all(mutation.get("variables") is None for mutation in settings_mutations), settings_mutations
+    assert all(mutation.get("data") is None for mutation in settings_mutations), settings_mutations
+
+
+@check
+def moods_cross_card_save_preserves_dirty(page):
+    """Saving Moments card A keeps card B's value and dirty/default state."""
+    initial = copy.deepcopy(api("/settings"))
+    moods = [
+        {"name": "baseline-mood", "clapPrompt": ""},
+        {"name": "alternate-mood", "clapPrompt": ""},
+    ]
+    initial["values"]["moods"] = moods
+    initial["values"]["moodSchedule"] = {"early-morning": "baseline-mood"}
+    initial["values"]["weatherMoods"] = {"clear": "baseline-mood"}
+    initial.setdefault("tts", {})["moods"] = ["baseline-mood", "alternate-mood"]
+    authoritative = copy.deepcopy(initial)
+    authoritative["values"]["moodSchedule"]["early-morning"] = "alternate-mood"
+    state = {"saved": False}
+
+    def settings_route(route):
+        if route.request.method == "POST":
+            state["saved"] = True
+            fulfill_json(route, {"saved": authoritative["values"], "requiresRestart": False})
+        else:
+            fulfill_json(route, authoritative if state["saved"] else initial)
+
+    def choose(field, option):
+        field.click()
+        page.get_by_role("option", name=option, exact=True).click()
+
+    page.route("http://localhost:7791/settings", settings_route)
+    page.goto(f"{WEB}/admin/moods?tab=moments", wait_until="domcontentloaded")
+    schedule = page.get_by_label("Early morning · 05–09")
+    weather = page.get_by_label("Clear")
+    schedule.wait_for(state="visible")
+    choose(weather, "alternate-mood")
+    choose(schedule, "alternate-mood")
+    weather_save = page.get_by_role("button", name="Save weather moods")
+    assert not weather_save.is_disabled()
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/settings", "POST")
+    ):
+        page.get_by_role("button", name="Save time-of-day moods").click()
+    page.wait_for_timeout(200)
+    assert "alternate-mood" in weather.inner_text(), weather.inner_text()
+    assert not weather_save.is_disabled(), "saving schedule cleared the weather card's dirty state"
+
+
+def install_settings_refresh_failure(page, initial):
+    state = {"posted": False}
+
+    def settings_route(route):
+        if route.request.method == "POST":
+            state["posted"] = True
+            fulfill_json(route, {"saved": initial["values"], "requiresRestart": False})
+        elif state["posted"]:
+            fulfill_json(route, {"error": "redacted settings refresh unavailable"}, status=503)
+        else:
+            fulfill_json(route, initial)
+
+    page.route("http://localhost:7791/settings", settings_route)
+
+
+@check
+def moods_save_refresh_failure_preserves_edit(page):
+    """A successful Mood POST plus failed safe GET stays dirty and reports failure."""
+    initial = copy.deepcopy(api("/settings"))
+    initial["values"]["moods"] = [{"name": "baseline-mood", "clapPrompt": "baseline"}]
+    initial["values"]["moodSchedule"] = {}
+    initial["values"]["weatherMoods"] = {}
+    initial.setdefault("tts", {})["moods"] = ["baseline-mood"]
+    install_settings_refresh_failure(page, initial)
+    page.goto(f"{WEB}/admin/moods?tab=vocab", wait_until="domcontentloaded")
+    prompt = page.get_by_label("Sound description").first
+    prompt.fill("operator edit survives refresh failure")
+    page.get_by_role("button", name="Save vocabulary").click()
+    page.get_by_text("settings were saved, but refresh failed", exact=False).wait_for(state="visible")
+    assert prompt.input_value() == "operator edit survives refresh failure"
+    assert not page.get_by_role("button", name="Save vocabulary").is_disabled()
+
+
+@check
+def personas_save_refresh_failure_preserves_edit(page):
+    """A successful Persona POST plus failed safe GET keeps the editor and edit open."""
+    initial = copy.deepcopy(api("/settings"))
+    persona = initial["values"]["personas"][1]
+    install_settings_refresh_failure(page, initial)
+    page.goto(f"{WEB}/admin/personas", wait_until="domcontentloaded")
+    page.get_by_role("button", name=f"Edit {persona['name']}").click()
+    dialog = page.get_by_role("dialog")
+    name = dialog.get_by_label("On-air name")
+    name.fill("Operator Persona After Refresh Failure")
+    dialog.get_by_role("button", name="Save persona").click()
+    page.get_by_text("settings were saved, but refresh failed", exact=False).wait_for(state="visible")
+    dialog.wait_for(state="visible")
+    assert name.input_value() == "Operator Persona After Refresh Failure"
 
 
 def reconnect_stale_query(page):
