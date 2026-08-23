@@ -30,6 +30,7 @@ export default function AdminQueryProvider({ children }: { children: ReactNode }
     if (process.env.NODE_ENV === 'production') return;
     const observable = window as typeof window & {
       __subwaveAdminMutationCacheSnapshot?: () => Array<Record<string, unknown>>;
+      __subwaveAdminQueryCacheSnapshot?: () => Array<Record<string, unknown>>;
     };
     observable.__subwaveAdminMutationCacheSnapshot = () =>
       client.getMutationCache().getAll().map(mutation => ({
@@ -41,8 +42,18 @@ export default function AdminQueryProvider({ children }: { children: ReactNode }
           ? { name: mutation.state.error.name, message: mutation.state.error.message }
           : mutation.state.error ?? null,
       }));
+    observable.__subwaveAdminQueryCacheSnapshot = () =>
+      client.getQueryCache().getAll().map(query => ({
+        queryKey: query.queryKey,
+        status: query.state.status,
+        data: query.state.data ?? null,
+        error: query.state.error instanceof Error
+          ? { name: query.state.error.name, message: query.state.error.message }
+          : query.state.error ?? null,
+      }));
     return () => {
       delete observable.__subwaveAdminMutationCacheSnapshot;
+      delete observable.__subwaveAdminQueryCacheSnapshot;
     };
   }, [client]);
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;

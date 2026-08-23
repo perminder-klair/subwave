@@ -24,6 +24,7 @@ import { ErrorState } from '@/components/ui/error-state';
 import { Card, Btn, Pill, Eyebrow, Toggle } from './ui';
 import {
   patchWebhooks,
+  useSensitiveWebhooksMutation,
   useWebhooksQuery,
   type WebhooksResponse,
 } from './operations-queries';
@@ -299,18 +300,7 @@ export default function WebhooksPanel() {
     setLoaded(true);
   }, [form, loaded, webhooksQuery.data]);
 
-  const saveMutation = useAdminMutation<Partial<WebhooksResponse>, SavedWebhooks>({
-    adminFetch,
-    request: (webhooks, fetcher) => adminJson<Partial<WebhooksResponse>>(fetcher, '/webhooks', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ webhooks }),
-    }),
-    onDone: (receipt, _webhooks, client) => {
-      if (Array.isArray(receipt.webhooks)) patchWebhooks(client, { webhooks: receipt.webhooks });
-    },
-    toastOnError: false,
-  });
+  const saveMutation = useSensitiveWebhooksMutation<SavedWebhooks[number]>(adminFetch);
   const gateMutation = useAdminMutation<Partial<WebhooksResponse>, boolean>({
     adminFetch,
     request: (next, fetcher) => adminJson<Partial<WebhooksResponse>>(fetcher, '/webhooks', {

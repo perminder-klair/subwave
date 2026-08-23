@@ -79,6 +79,8 @@ DESTRUCTIVE_CHECKS = {
     "webhooks_mutations_refresh",
     "archives_clear_refresh",
     "backup_index_refresh",
+    "webhooks_secret_leaves_no_cache_trace",
+    "backup_restore_invalidates_admin_cache",
 }
 
 
@@ -160,6 +162,15 @@ def mutation_cache_snapshot(page):
         throw new Error('admin mutation cache observable is unavailable');
       }
       return window.__subwaveAdminMutationCacheSnapshot();
+    }""")
+
+
+def query_cache_snapshot(page):
+    return page.evaluate("""() => {
+      if (typeof window.__subwaveAdminQueryCacheSnapshot !== 'function') {
+        throw new Error('admin query cache observable is unavailable');
+      }
+      return window.__subwaveAdminQueryCacheSnapshot();
     }""")
 
 
@@ -696,6 +707,68 @@ def webhooks_mutations_refresh(page):
 
 
 @check
+def webhooks_secret_leaves_no_cache_trace(page):
+    """A saved authorization secret survives only in the outbound request."""
+    secret = "task7-webhook-secret-9f23a"
+    state = {
+        "events": ["track.play", "request.received"],
+        "webhooks": [],
+        "trackPlayListenerGated": False,
+    }
+
+    def webhooks_route(route):
+        if route.request.method == "GET":
+            fulfill_json(route, state)
+            return
+        body = route.request.post_data_json
+        assert body["webhooks"][0]["authHeader"] == secret, body
+        saved = [{**hook, "authHeader": "set"} for hook in body["webhooks"]]
+        state["webhooks"] = saved
+        fulfill_json(route, {
+            "webhooks": saved,
+            "trackPlayListenerGated": False,
+            "requiresRestart": False,
+        })
+
+    page.route("http://localhost:7791/webhooks", webhooks_route)
+    page.goto(f"{WEB}/admin/webhooks", wait_until="domcontentloaded")
+    page.get_by_text("No webhooks yet", exact=True).first.wait_for(state="visible")
+    page.get_by_role("button", name="Add webhook").click()
+    page.get_by_label("Webhook URL").fill("https://verify.invalid/secret-hook")
+    page.get_by_label("Authorization header").fill(secret)
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/webhooks", "POST")
+    ):
+        page.get_by_role("button", name="Save", exact=True).click()
+    page.get_by_text("https://verify.invalid/secret-hook", exact=True).wait_for(state="visible")
+
+    mutations = mutation_cache_snapshot(page)
+    assert mutations, mutations
+    mutation_dump = json.dumps(mutations)
+    assert secret not in mutation_dump, mutation_dump
+    assert all(mutation.get("variables") is None for mutation in mutations), mutations
+    assert all(mutation.get("data") is None for mutation in mutations), mutations
+
+    query_dump = json.dumps(query_cache_snapshot(page))
+    assert secret not in query_dump, query_dump
+    dom_dump = page.locator("input").evaluate_all(
+        "els => els.map(el => ({value: el.value, placeholder: el.placeholder}))"
+    )
+    assert secret not in json.dumps(dom_dump), dom_dump
+
+    page.locator('a[href="/admin/dash"]').first.click()
+    page.wait_for_url("**/admin/dash**")
+    page.go_back(wait_until="domcontentloaded")
+    page.get_by_text("https://verify.invalid/secret-hook", exact=True).wait_for(state="visible")
+    assert page.get_by_label("Authorization header").input_value() == ""
+    assert secret not in json.dumps(query_cache_snapshot(page))
+    assert secret not in json.dumps(mutation_cache_snapshot(page))
+    dom_dump = page.locator("input").evaluate_all(
+        "els => els.map(el => ({value: el.value, placeholder: el.placeholder}))"
+    )
+    assert secret not in json.dumps(dom_dump), dom_dump
+
+@check
 def archives_clear_refresh(page):
     """Archive clear invalidates once and the empty index survives remount."""
     state = {"archives": [{
@@ -765,6 +838,72 @@ def backup_index_refresh(page):
     page.get_by_text(candidate["name"], exact=True).wait_for(state="visible")
     assert request_count(page, "/backup/restorable", authenticated=True) == initial_gets + 1, page.request_log
 
+
+@check
+def backup_restore_invalidates_admin_cache(page):
+    """A completed restore refreshes active queries and stales inactive ones."""
+    initial_settings = copy.deepcopy(api("/settings"))
+    restored_settings = copy.deepcopy(initial_settings)
+    initial_settings["values"]["stationDescription"] = "Before restore cache"
+    restored_settings["values"]["stationDescription"] = "After restore cache"
+    state = {"restored": False}
+    candidate = {
+        "name": "verify-restored-state.zip", "size": 16384,
+        "mtime": "2026-08-23T14:00:00.000Z",
+    }
+
+    def settings_route(route):
+        fulfill_json(route, restored_settings if state["restored"] else initial_settings)
+
+    def archives_route(route):
+        hour = 10 if state["restored"] else 9
+        fulfill_json(route, {"archives": [{
+            "path": f"2026-08-23/{hour:02d}-00.mp3",
+            "date": "2026-08-23", "hour": hour, "bytes": 4096,
+            "mtime": "2026-08-23T14:00:00.000Z",
+        }]})
+
+    def restore_route(route):
+        assert route.request.post_data_json == {"file": candidate["name"]}
+        state["restored"] = True
+        fulfill_json(route, {
+            "ok": True, "restored": ["settings", "library"],
+            "requiresRestart": False,
+        })
+
+    page.route("http://localhost:7791/settings", settings_route)
+    page.route("http://localhost:7791/archives", archives_route)
+    page.route("http://localhost:7791/backup/restorable", lambda route: fulfill_json(route, {
+        "stateDir": "/tmp/subwave-task7-review/state", "files": [candidate],
+    }))
+    page.route("http://localhost:7791/backup/import-file", restore_route)
+
+    page.goto(f"{WEB}/admin/archives", wait_until="domcontentloaded")
+    page.get_by_text("09:00", exact=True).wait_for(state="visible")
+    initial_archive_gets = request_count(page, "/archives", authenticated=True)
+    initial_settings_gets = request_count(page, "/settings", authenticated=True)
+    assert initial_archive_gets >= 1 and initial_settings_gets >= 1, page.request_log
+
+    page.locator("aside button").filter(has_text="Backup").click()
+    page.get_by_text(candidate["name"], exact=True).wait_for(state="visible")
+    page.get_by_role("button", name="Restore", exact=True).click()
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/backup/import-file", "POST")
+    ):
+        page.get_by_role("alertdialog").get_by_role("button", name="restore").click()
+    page.get_by_text("settings, library", exact=False).wait_for(state="visible")
+    page.wait_for_timeout(300)
+
+    assert request_count(page, "/settings", authenticated=True) == initial_settings_gets + 1, page.request_log
+    assert request_count(page, "/archives", authenticated=True) == initial_archive_gets, page.request_log
+
+    page.locator("aside button").filter(has_text="Station").click()
+    description = page.get_by_placeholder("A short line describing your station…")
+    assert description.input_value() == "After restore cache", description.input_value()
+
+    page.locator("aside button").filter(has_text="Archives").click()
+    page.get_by_text("10:00", exact=True).wait_for(state="visible")
+    assert request_count(page, "/archives", authenticated=True) == initial_archive_gets + 1, page.request_log
 
 @check
 def dashboard_poll_cadences(page):

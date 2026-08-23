@@ -6,6 +6,7 @@
 // restore skips the upload entirely (#612).
 
 import { useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { AdminResponseError, adminResponse } from '../../lib/admin-query';
 import { Card, Btn, Eyebrow, Pill } from './ui';
@@ -33,6 +34,7 @@ function fmtSize(bytes: number): string {
 
 export default function BackupPanel() {
   const { adminFetch, hydrated, needsAuth } = useAdminAuth();
+  const queryClient = useQueryClient();
   const backupsQuery = useRestorableBackupsQuery(adminFetch, hydrated && !needsAuth);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -111,6 +113,13 @@ export default function BackupPanel() {
               body: JSON.stringify({ file: p.name }),
             });
       const j = (await r.json().catch(() => ({}))) as ImportResult;
+      if (j.ok) {
+        // Restore replaces settings, tags, themes, skills, and operator media
+        // in one shot. This is the one write boundary broad enough to
+        // invalidate every admin family: active observers refetch now;
+        // inactive ones stay stale until their next mount.
+        await queryClient.invalidateQueries({ refetchType: 'active' });
+      }
       setResult(j);
     } catch (e) {
       // 413 means a proxy (e.g. Cloudflare, 100 MB cap) rejected the upload
