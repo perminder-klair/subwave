@@ -783,6 +783,19 @@ isolated matrix passed admin-query 54/54, query-cache 6/6, Library 8/8, hooks
 22/22, destructive forms 13/13, playlist DnD all checks, and schedule booking
 9/9.
 
+Review round 5 closed the final two Important gaps. When deleting an active or
+show-pinned theme, a failed authoritative GET now retains DELETE's safe theme
+list, persists a remaining id through the secure settings mutation before the
+public provider refresh, cancels an observer refetch race, and caches only that
+receipt plus the persisted fallback. The audit no longer recursively accepts a
+matching property below query options: ordinary query owners use only their
+direct request/queryFn, while `useQueries` uses only direct `queries` entries
+and each entry's direct queryFn. RED checks caught both old behaviours. Focused
+checks passed 12/12, the standalone audit passed 9/9, and the fresh complete
+neutral matrix passed admin-query 54/54, query-cache 6/6, Library 8/8, hooks
+22/22, destructive forms 13/13, playlist DnD all checks, and schedule booking
+9/9; strict audit, lint, and the 33-page production build also passed.
+
 - [x] **Step 5: Commit final documentation and verification fixes**
 
 ```bash
@@ -800,6 +813,10 @@ git commit -m "fix(web): harden credential and theme reconciliation"
 # Review round 4 follow-up
 git add web docs/superpowers
 git commit -m "fix(web): prove query ownership end to end"
+
+# Review round 5 follow-up
+git add web docs/superpowers
+git commit -m "fix(web): finalize theme fallback ownership"
 ```
 
 - [ ] **Step 6: Rebase and re-run risk-proportionate checks**

@@ -1186,11 +1186,22 @@ def theme_mutation_refresh_failures_reconcile_provider(page):
     fail_next_admin_get = False
     failed_admin_gets = 0
     public_gets = 0
+    settings_posts = []
     page_errors = []
     page.on("pageerror", lambda error: page_errors.append(str(error)))
     stub_dashboard(page)
 
     def settings_route(route):
+        nonlocal active, active_source, active_show
+        if route.request.method == "POST":
+            body = route.request.post_data_json
+            settings_posts.append(body)
+            fallback_id = body.get("theme", {}).get("active")
+            if fallback_id:
+                settings["values"]["theme"]["active"] = fallback_id
+                active = fallback_id
+                active_source = "station"
+                active_show = None
         fulfill_json(route, settings)
 
     def themes_route(route):
@@ -1239,9 +1250,6 @@ def theme_mutation_refresh_failures_reconcile_provider(page):
             return
         if method == "DELETE" and path == "/themes/verify-custom":
             themes = [theme for theme in themes if theme["id"] != "verify-custom"]
-            active = "verify-dark"
-            active_source = "station"
-            active_show = None
             fail_next_admin_get = True
             fulfill_json(route, {"ok": True, "themes": themes})
             return
@@ -1334,6 +1342,9 @@ def theme_mutation_refresh_failures_reconcile_provider(page):
         lambda data: data.get("active") == "verify-custom"
         or any(theme["id"] == "verify-custom" for theme in data.get("themes", []))
     )
+    assert settings_posts[-1] == {"theme": {"active": "verify-dark"}}, settings_posts
+    assert settings["values"]["theme"]["active"] == "verify-dark", settings
+    assert active == "verify-dark", active
     assert public_gets == public_before + 1, public_gets
     assert failed_admin_gets == 4, failed_admin_gets
     assert not page_errors, page_errors
@@ -1528,6 +1539,15 @@ export function useThemes(adminFetch) {
     request: (fetcher, signal) => fetchThemes(signal, fetcher),
   });
 }\n""",
+        """import { fetchThemes } from './OwnedHelper';
+export function useThemes(adminFetch) {
+  const otherRequest = () => Promise.resolve({});
+  return useAdminQuery({
+    key: ['themes'], adminFetch,
+    request: otherRequest,
+    meta: { request: (fetcher, signal) => fetchThemes(fetcher, signal) },
+  });
+}\n""",
     ]
     for consumer_source in invalid_consumers:
         code, output = audit_fixture(
@@ -1536,6 +1556,28 @@ export function useThemes(adminFetch) {
         )
         assert code != 0, output
         assert "fetchThemes" in output, output
+
+    use_queries_ownership = [{
+        **ownership[0],
+        "consumers": [{
+            "file": "Owned.tsx", "owner": "useQueries",
+            "property": "queryFn", "count": 1,
+        }],
+    }]
+    valid_use_queries = """import { fetchThemes } from './OwnedHelper';
+export function useThemes(adminFetch, ids) {
+  return useQueries({
+    queries: ids.map(id => ({
+      queryKey: ['themes', id],
+      queryFn: ({ signal }) => fetchThemes(adminFetch, signal),
+    })),
+  });
+}\n"""
+    code, output = audit_fixture(
+        extra={"OwnedHelper.ts": owned_helper, "Owned.tsx": valid_use_queries},
+        ownership_registry=use_queries_ownership,
+    )
+    assert code == 0, output
 
     wrong_registries = [
         [{**ownership[0], "function": "fetchOtherThemes"}],

@@ -264,24 +264,6 @@ function markerFor(sourceFile, call, prefix) {
   return previous.startsWith(prefix) ? previous.slice(prefix.length) : null;
 }
 
-function isInsideOwnedOperation(node, aliases) {
-  const properties = new Set();
-  for (let parent = node.parent; parent; parent = parent.parent) {
-    if (ts.isPropertyAssignment(parent)) {
-      const name = propertyName(parent.name);
-      if (name) properties.add(name);
-    }
-    if (!ts.isCallExpression(parent)) continue;
-    const owner = canonicalCallee(parent, aliases);
-    if (owner === 'useAdminQuery' && properties.has('request')) return true;
-    if (
-      ['useQuery', 'useQueries', 'useInfiniteQuery', 'fetchQuery'].includes(owner)
-      && properties.has('queryFn')
-    ) return true;
-  }
-  return false;
-}
-
 function location(file, sourceFile, call) {
   const line = sourceFile.getLineAndCharacterOfPosition(call.getStart(sourceFile)).line + 1;
   return `${path.relative(process.cwd(), file)}:${line}`;
@@ -382,7 +364,7 @@ for (const file of filesAt(root)) {
         } else if (
           method === 'GET'
           && ['adminJson', 'adminResponse', 'rawFetcher', 'nativeFetch'].includes(canonical)
-          && !isInsideOwnedOperation(node, aliases)
+          && !isInsideOwnedOperation(node, aliases, initializers)
           && !validateRegisteredRead(file, sourceFile, node, canonical, method, endpoint)
         ) {
           violations.push(
@@ -506,25 +488,106 @@ function isCallbackSignal(node, binding) {
     && node.name.text === 'signal';
 }
 
+function unwrappedExpression(node) {
+  let current = node;
+  while (
+    current
+    && (ts.isParenthesizedExpression(current)
+      || ts.isAsExpression(current)
+      || ts.isTypeAssertionExpression(current)
+      || ts.isSatisfiesExpression(current))
+  ) current = current.expression;
+  return current;
+}
+
+function directPropertyValues(expression, name, initializers) {
+  const object = unwrappedExpression(resolvedInitializer(expression, initializers));
+  if (!object || !ts.isObjectLiteralExpression(object)) return [];
+  return object.properties.flatMap(property => {
+    if (
+      (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property))
+      || propertyName(property.name) !== name
+    ) return [];
+    const value = ts.isShorthandPropertyAssignment(property) ? property.name : property.initializer;
+    return [unwrappedExpression(resolvedInitializer(value, initializers))];
+  });
+}
+
+function returnedExpressions(callback) {
+  if (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback)) return [];
+  if (!ts.isBlock(callback.body)) return [unwrappedExpression(callback.body)];
+  const values = [];
+  function visit(node) {
+    if (node !== callback.body && (ts.isArrowFunction(node) || ts.isFunctionExpression(node))) return;
+    if (ts.isReturnStatement(node) && node.expression) {
+      values.push(unwrappedExpression(node.expression));
+      return;
+    }
+    ts.forEachChild(node, visit);
+  }
+  visit(callback.body);
+  return values;
+}
+
+function useQueriesEntries(expression, initializers) {
+  const queries = unwrappedExpression(resolvedInitializer(expression, initializers));
+  if (!queries) return [];
+  if (ts.isArrayLiteralExpression(queries)) {
+    return queries.elements.map(entry =>
+      unwrappedExpression(resolvedInitializer(entry, initializers)));
+  }
+  if (
+    ts.isCallExpression(queries)
+    && ts.isPropertyAccessExpression(queries.expression)
+    && queries.expression.name.text === 'map'
+  ) {
+    return returnedExpressions(queries.arguments[0]);
+  }
+  return [];
+}
+
+function queryPropertyValues(call, owner, property, initializers) {
+  const options = call.arguments[0];
+  if (!options) return [];
+  if (owner !== 'useQueries') {
+    return directPropertyValues(options, property, initializers);
+  }
+  if (property !== 'queryFn') return [];
+  return directPropertyValues(options, 'queries', initializers).flatMap(queries =>
+    useQueriesEntries(queries, initializers).flatMap(entry =>
+      directPropertyValues(entry, 'queryFn', initializers)));
+}
+
+function isInsideOwnedOperation(node, aliases, initializers) {
+  for (let parent = node.parent; parent; parent = parent.parent) {
+    if (!ts.isCallExpression(parent)) continue;
+    const owner = canonicalCallee(parent, aliases);
+    const property = owner === 'useAdminQuery'
+      ? 'request'
+      : ['useQuery', 'useQueries', 'useInfiniteQuery', 'fetchQuery'].includes(owner)
+        ? 'queryFn'
+        : null;
+    if (!property) continue;
+    for (const value of queryPropertyValues(parent, owner, property, initializers)) {
+      if (!value || node.pos < value.pos || node.end > value.end) continue;
+      if (!ts.isArrowFunction(value) && !ts.isFunctionExpression(value)) continue;
+      let nearestFunction = node.parent;
+      while (
+        nearestFunction
+        && !ts.isArrowFunction(nearestFunction)
+        && !ts.isFunctionExpression(nearestFunction)
+      ) nearestFunction = nearestFunction.parent;
+      if (nearestFunction === value) return true;
+    }
+  }
+  return false;
+}
+
 function consumerPropertyValues(sourceFile, aliases, initializers, consumer) {
   const values = [];
   function visit(node) {
     if (ts.isCallExpression(node) && canonicalCallee(node, aliases) === consumer.owner) {
-      for (const argument of node.arguments) {
-        const options = resolvedInitializer(argument, initializers);
-        function visitOptions(current) {
-          if (!current) return;
-          if (
-            (ts.isPropertyAssignment(current) || ts.isShorthandPropertyAssignment(current))
-            && propertyName(current.name) === consumer.property
-          ) {
-            values.push(ts.isShorthandPropertyAssignment(current) ? current.name : current.initializer);
-            return;
-          }
-          ts.forEachChild(current, visitOptions);
-        }
-        visitOptions(options);
-      }
+      values.push(...queryPropertyValues(node, consumer.owner, consumer.property, initializers));
     }
     ts.forEachChild(node, visit);
   }

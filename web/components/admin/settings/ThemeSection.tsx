@@ -24,6 +24,7 @@ import {
   type SettingsData, type SaveSettings, type SettingsFieldErrors,
 } from './shared';
 import {
+  adminThemeKeys,
   reconcileAdminThemesAfterWrite,
   useAdminThemesQuery,
   type AdminTheme,
@@ -444,13 +445,47 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
   // the list), so nothing points at a now-missing id.
   const remove = async (theme: ThemeDef) => {
     try {
-      await removeMutation.mutateAsync(theme);
+      const receipt = await removeMutation.mutateAsync(theme);
       const reconciled = await reconcileAdminThemesAfterWrite(
         queryClient,
         adminFetch,
-        themeCtx?.refreshThemes,
+        undefined,
       );
       if (!reconciled.ok) {
+        const remainingThemes = Array.isArray(receipt.themes)
+          ? receipt.themes.filter(candidate => candidate.id !== theme.id)
+          : [];
+        const fallback = remainingThemes[0];
+        const removedResolvedTheme = theme.id === activeId
+          || theme.id === themeCtx?.stationActiveId
+          || theme.id === themeCtx?.stationDefault
+          || theme.id === themeCtx?.activeShow?.themeId;
+        let fallbackSaved = false;
+        if (removedResolvedTheme && fallback) {
+          // DELETE returns the freshly-listed safe registry even though it
+          // omits `active`. Persist a known remaining id before the public
+          // provider reconciles; otherwise the settings pointer can keep
+          // naming the deleted file when the authoritative GET is unavailable.
+          fallbackSaved = await saveSettings({ theme: { active: fallback.id } });
+        }
+        // Removing the failed entry can wake its still-mounted observer. Stop
+        // that race before either installing the receipt+persisted pointer or
+        // leaving the exact cache absent. The combined entry is authoritative:
+        // DELETE owns the remaining list and the secure settings write owns
+        // the new active id.
+        await queryClient.cancelQueries(
+          { queryKey: adminThemeKeys.detail(), exact: true },
+          { silent: true },
+        );
+        if (fallbackSaved && fallback) {
+          queryClient.setQueryData(adminThemeKeys.detail(), {
+            themes: remainingThemes,
+            active: fallback.id,
+          });
+        } else {
+          queryClient.removeQueries({ queryKey: adminThemeKeys.detail(), exact: true });
+        }
+        await themeCtx?.refreshThemes();
         notify.err(
           `Theme "${theme.name}" removed, but refresh failed: ${errorMessage(reconciled.error)}`,
         );

@@ -160,6 +160,23 @@ export function useThemes(adminFetch) {
   assert.match(result.stderr, /fetchThemes.*TanStack AbortSignal/);
 });
 
+test('rejects a matching request nested below the direct query options', () => {
+  const result = runAudit({
+    'OwnedHelper.ts': helper,
+    'Owned.tsx': `import { fetchThemes } from './OwnedHelper';
+export function useThemes(adminFetch) {
+  const otherRequest = () => Promise.resolve({});
+  return useAdminQuery({
+    key: ['themes'], adminFetch,
+    request: otherRequest,
+    meta: { request: (fetcher, signal) => fetchThemes(fetcher, signal) },
+  });
+}\n`,
+  }, registry);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /fetchThemes.*outside registered query consumer|expected 1.*found 0/);
+});
+
 test('accepts a registered helper as the exact request callback', () => {
   const result = runAudit({
     'OwnedHelper.ts': helper,
@@ -184,6 +201,27 @@ export function useThemes(adminFetch) {
   return useQuery({
     queryKey: ['themes'],
     queryFn: ({ signal: querySignal }) => fetchThemes(adminFetch, querySignal),
+  });
+}\n`,
+  }, queryRegistry);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /admin query audit passed/);
+});
+
+test('accepts a direct useQueries entry queryFn', () => {
+  const queryRegistry = [{
+    ...registry[0],
+    consumers: [{ file: 'Owned.tsx', owner: 'useQueries', property: 'queryFn', count: 1 }],
+  }];
+  const result = runAudit({
+    'OwnedHelper.ts': helper,
+    'Owned.tsx': `import { fetchThemes } from './OwnedHelper';
+export function useThemes(adminFetch, ids) {
+  return useQueries({
+    queries: ids.map(id => ({
+      queryKey: ['themes', id],
+      queryFn: ({ signal }) => fetchThemes(adminFetch, signal),
+    })),
   });
 }\n`,
   }, queryRegistry);
