@@ -143,7 +143,10 @@ export default function SkillsPanel() {
   const rescanMutation = useAdminMutation<SkillToggleResponse & { custom?: number }, void>({
     adminFetch,
     request: (_vars, fetcher) => adminJson(fetcher, '/dj/skills/rescan', { method: 'POST' }),
-    onDone: (response, _vars, client) => writeInstalledSkills(client, response),
+    onDone: async (response, _vars, client) => {
+      writeInstalledSkills(client, response);
+      await client.invalidateQueries({ queryKey: skillKeys.files(), refetchType: 'all' });
+    },
     toastOnError: false,
   });
   const importMutation = useAdminMutation<

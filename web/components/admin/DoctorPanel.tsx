@@ -178,19 +178,16 @@ export default function DoctorPanel() {
           }
         }
       }
-      const completed = final ?? (
-        sections.length ? { t: new Date().toISOString(), sections, counts: tallyCounts(sections) } : null
-      );
-      if (completed) {
-        finishReport(queryClient, completed, null);
-        setInFlightReport(null);
-      }
-      return completed;
+      if (!final) throw new Error('doctor stream ended before completion');
+      finishReport(queryClient, final, null);
+      setInFlightReport(null);
+      return final;
     } catch {
       // Streaming failed (proxy, older controller, aborted body).
       try {
         return await runBatch();
       } catch (e2) {
+        setInFlightReport(null);
         setErr(errorMessage(e2));
         return null;
       }

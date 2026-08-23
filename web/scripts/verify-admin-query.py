@@ -2012,6 +2012,79 @@ def skills_mutations_refresh(page):
 
 
 @check
+def skills_rescan_refreshes_files(page):
+    """Rescan invalidates primed SKILL.md queries as well as the installed list."""
+    skills = [task6_skill("task-6-file", "Task 6 File", custom=True)]
+    current_brief = {"value": "Brief before disk rescan"}
+
+    def skill_file():
+        return {
+            "kind": "task-6-file",
+            "custom": True,
+            "configFields": [],
+            "config": {},
+            "label": "Task 6 File",
+            "cooldown": "15m",
+            "cron": None,
+            "cronInvalid": False,
+            "cronOnly": False,
+            "context": "",
+            "knownContextFields": ["time"],
+            "window": "any",
+            "requiresKey": "",
+            "hasTool": False,
+            "tags": ["verify"],
+            "brief": current_brief["value"],
+            "defaults": None,
+        }
+
+    def task6_routes(route):
+        path = urllib.parse.urlparse(route.request.url).path
+        method = route.request.method
+        if path == "/dj/skills" and method == "GET":
+            fulfill_json(route, {"skills": skills})
+        elif path == "/dj/skills/community" and method == "GET":
+            fulfill_json(route, {"community": []})
+        elif path == "/dj/skills/task-6-file/file" and method == "GET":
+            fulfill_json(route, skill_file())
+        elif path == "/dj/skills/rescan" and method == "POST":
+            current_brief["value"] = "Brief changed on disk"
+            fulfill_json(route, {"skills": skills, "custom": 1})
+        else:
+            route.continue_()
+
+    page.route("http://localhost:7791/**", task6_routes)
+    page.goto(f"{WEB}/admin/skills", wait_until="domcontentloaded")
+    page.get_by_text("Task 6 File", exact=True).first.wait_for(state="visible")
+
+    page.get_by_label("Edit Task 6 File").click()
+    dialog = page.get_by_role("dialog")
+    brief = dialog.get_by_label("The brief")
+    brief.wait_for(state="visible")
+    assert brief.input_value() == "Brief before disk rescan", brief.input_value()
+    dialog.get_by_text("Close", exact=True).click()
+    dialog.wait_for(state="detached")
+    file_gets_before_rescan = request_count(
+        page, "/dj/skills/task-6-file/file", authenticated=True,
+    )
+
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/dj/skills/rescan", "POST")
+    ):
+        page.get_by_title("Rescan state/skills").click()
+    page.get_by_text("Rescanned, 1 custom skill loaded", exact=True).wait_for(state="visible")
+
+    page.get_by_label("Edit Task 6 File").click()
+    dialog = page.get_by_role("dialog")
+    brief = dialog.get_by_label("The brief")
+    brief.wait_for(state="visible")
+    assert brief.input_value() == "Brief changed on disk", brief.input_value()
+    assert request_count(
+        page, "/dj/skills/task-6-file/file", authenticated=True,
+    ) == file_gets_before_rescan + 1, page.request_log
+
+
+@check
 def connect_cache_reuse(page):
     """Connect metadata survives tab changes and a client-side route round trip."""
     catalog = {
@@ -2146,6 +2219,108 @@ def doctor_stream_not_retried(page):
     page.wait_for_timeout(500)
     assert request_count(page, "/doctor/stream", authenticated=True) == 1, page.request_log
     assert request_count(page, "/doctor", authenticated=True) == 1, page.request_log
+
+
+def run_doctor_clean_eof_fallback(page, stream_body, partial_label=None):
+    """A clean transport EOF is not the Doctor protocol's completion marker."""
+    fallback_report = task6_doctor_report("Completed fallback after EOF")
+    reviewed_labels = []
+
+    def doctor_routes(route):
+        path = urllib.parse.urlparse(route.request.url).path
+        method = route.request.method
+        if path == "/doctor/last" and method == "GET":
+            fulfill_json(route, {"report": None, "review": None})
+        elif path == "/doctor/stream" and method == "GET":
+            route.fulfill(status=200, content_type="text/event-stream", body=stream_body)
+        elif path == "/doctor" and method == "GET":
+            fulfill_json(route, fallback_report)
+        elif path == "/doctor/review" and method == "POST":
+            body = route.request.post_data_json
+            reviewed_labels.append(
+                body["report"]["sections"][0]["findings"][0]["label"]
+            )
+            fulfill_json(route, {
+                "available": True,
+                "overall": "healthy",
+                "summary": "Reviewed completed fallback",
+                "priorities": [],
+            })
+        else:
+            route.continue_()
+
+    page.route("http://localhost:7791/**", doctor_routes)
+    page.goto(f"{WEB}/admin/doctor", wait_until="domcontentloaded")
+    page.get_by_role("button", name="Let's go").click()
+    page.get_by_text("Completed fallback after EOF", exact=True).wait_for(timeout=5000)
+    page.get_by_text("Reviewed completed fallback", exact=True).wait_for(timeout=5000)
+    if partial_label:
+        assert page.get_by_text(partial_label, exact=True).count() == 0
+
+    click_admin_link(page, "Connect", "/admin/connect")
+    page.get_by_role("link", name="DJ Doc", exact=True).click()
+    page.wait_for_url("**/admin/doctor")
+    page.get_by_text("Completed fallback after EOF", exact=True).wait_for(state="visible")
+    assert reviewed_labels == ["Completed fallback after EOF"], reviewed_labels
+    assert request_count(page, "/doctor/last", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/doctor/stream", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/doctor", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/doctor/review", method="POST", authenticated=True) == 1, page.request_log
+
+
+@check
+def doctor_partial_eof_falls_back(page):
+    """A section followed by EOF falls back; the partial is not cached/reviewed."""
+    partial = task6_doctor_report("Partial stream must not complete")["sections"][0]
+    run_doctor_clean_eof_fallback(
+        page,
+        f"event: section\ndata: {json.dumps(partial)}\n\n",
+        partial_label="Partial stream must not complete",
+    )
+
+
+@check
+def doctor_empty_eof_falls_back(page):
+    """An empty 200 SSE body also falls back exactly once."""
+    run_doctor_clean_eof_fallback(page, "")
+
+
+@check
+def doctor_partial_eof_failed_fallback_clears_progress(page):
+    """If the one fallback also fails, progressive sections disappear with an error."""
+    partial = task6_doctor_report("Partial stream must be cleared")["sections"][0]
+
+    def doctor_routes(route):
+        path = urllib.parse.urlparse(route.request.url).path
+        method = route.request.method
+        if path == "/doctor/last" and method == "GET":
+            fulfill_json(route, {"report": None, "review": None})
+        elif path == "/doctor/stream" and method == "GET":
+            route.fulfill(
+                status=200,
+                content_type="text/event-stream",
+                body=f"event: section\ndata: {json.dumps(partial)}\n\n",
+            )
+        elif path == "/doctor" and method == "GET":
+            fulfill_json(route, {"error": "batch diagnosis failed"}, status=503)
+        elif path == "/doctor/review" and method == "POST":
+            fulfill_json(route, {
+                "available": True,
+                "overall": "attention",
+                "summary": "partial was reviewed",
+                "priorities": [],
+            })
+        else:
+            route.continue_()
+
+    page.route("http://localhost:7791/**", doctor_routes)
+    page.goto(f"{WEB}/admin/doctor", wait_until="domcontentloaded")
+    page.get_by_role("button", name="Let's go").click()
+    page.get_by_text("batch diagnosis failed", exact=False).wait_for(timeout=5000)
+    assert page.get_by_text("Partial stream must be cleared", exact=True).count() == 0
+    assert request_count(page, "/doctor/stream", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/doctor", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/doctor/review", method="POST", authenticated=True) == 0, page.request_log
 
 
 def main():
