@@ -24,14 +24,18 @@ export const dashKeys = {
 
 export async function fetchDashStatus(fetcher: AdminFetch, signal: AbortSignal): Promise<DashStatus> {
   const [nowPlaying, state, session] = await Promise.all([
+    // admin-query-owned: GET /now-playing
     adminJson<Partial<DashStatus>>(fetcher, '/now-playing', undefined, signal),
+    // admin-query-owned: GET /state
     adminJson<QueueState>(fetcher, '/state', undefined, signal),
+    // admin-query-owned: GET /session
     adminJson<{ messages?: SessionTurn[] }>(fetcher, '/session', undefined, signal),
   ]);
   return { ...nowPlaying, queue: state, sessionMessages: session.messages ?? [] };
 }
 
 export async function fetchConnections(fetcher: AdminFetch, signal: AbortSignal): Promise<ConnectionsState> {
+  // admin-query-owned: GET /listeners/connections
   const body = await adminJson<Partial<ConnectionsState>>(
     fetcher, '/listeners/connections', undefined, signal,
   );
@@ -39,10 +43,12 @@ export async function fetchConnections(fetcher: AdminFetch, signal: AbortSignal)
 }
 
 export function fetchHealthStats(fetcher: AdminFetch, signal: AbortSignal): Promise<HealthStats> {
+  // admin-query-owned: GET /stats
   return adminJson(fetcher, '/stats', undefined, signal);
 }
 
 export async function fetchRequests(fetcher: AdminFetch, signal: AbortSignal): Promise<RequestEntry[]> {
+  // admin-query-owned: GET /requests
   const body = await adminJson<{ requests?: RequestEntry[] }>(
     fetcher, '/requests', undefined, signal,
   );
@@ -50,6 +56,7 @@ export async function fetchRequests(fetcher: AdminFetch, signal: AbortSignal): P
 }
 
 export async function fetchSuggestions(fetcher: AdminFetch, signal: AbortSignal): Promise<string[] | null> {
+  // admin-query-owned: GET /generate/say-suggestions
   const body = await adminJson<{ suggestions?: string[] | null }>(
     fetcher, '/generate/say-suggestions', undefined, signal,
   );
@@ -82,6 +89,7 @@ export interface TakeoverData {
 }
 
 export async function fetchTakeover(fetcher: AdminFetch, signal: AbortSignal): Promise<TakeoverData> {
+  // admin-query-owned: GET /schedule
   const body = await adminJson<{
     shows?: TakeoverShow[];
     override?: ScheduleOverride | null;
@@ -101,10 +109,12 @@ export interface NavidromeStatus {
 }
 
 export function fetchNavidromeStatus(fetcher: AdminFetch, signal: AbortSignal): Promise<NavidromeStatus> {
+  // admin-query-owned: GET /doctor/navidrome
   return adminJson(fetcher, '/doctor/navidrome', undefined, signal);
 }
 
 export async function fetchMusicStarved(fetcher: AdminFetch, signal: AbortSignal): Promise<boolean> {
+  // admin-query-owned: GET /state
   const body = await adminJson<{ musicStarved?: boolean }>(fetcher, '/state', undefined, signal);
   return body.musicStarved === true;
 }

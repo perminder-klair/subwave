@@ -303,7 +303,7 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
   }
 
   return (
-    <AdminQueryProvider>
+    <AdminQueryProvider key={auth}>
       <div className="admin-root paper">
         {/* Narrower than the shadcn 16rem default — the nav is short labels. */}
         <SidebarProvider defaultOpen={defaultOpen} style={{ '--sidebar-width': '13rem' } as CSSProperties}>

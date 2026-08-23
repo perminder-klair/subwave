@@ -673,6 +673,101 @@ def page_query_401_tears_down_shell_cache(page):
 
 
 @check
+def credential_change_remounts_cache_and_ignores_stale_401(page):
+    """Credential A cache dies under B, and A's late 401 cannot sign B out."""
+    page.set_default_timeout(5000)
+    token_a = AUTH
+    token_b = base64.b64encode(b"test:rotated").decode()
+    stub_dashboard(page)
+    station_auth = []
+    state_auth = []
+    station = {
+        "multiStation": False,
+        "activeId": "main",
+        "limit": 8,
+        "stations": [{
+            "id": "main", "name": "Verify Main", "configured": True,
+            "createdAt": "2026-08-23T10:00:00.000Z", "active": True,
+        }],
+    }
+
+    def stations_route(route):
+        station_auth.append(route.request.headers.get("authorization"))
+        fulfill_json(route, station)
+
+    def state_tree_route(route):
+        authorization = route.request.headers.get("authorization")
+        state_auth.append(authorization)
+        marker = "cold-b" if authorization == f"Basic {token_b}" else "warm-a"
+        fulfill_json(route, {
+            "root": "/verify/state", "path": "", "shown": 1, "total": 1,
+            "entries": [{
+                "name": marker, "isDir": False, "isSymlink": False, "size": 1,
+            }],
+        })
+
+    page.route("http://localhost:7791/stations", stations_route)
+    page.route("http://localhost:7791/settings", lambda route: fulfill_json(route, SETTINGS_FIXTURE))
+    page.route("http://localhost:7791/debug", lambda route: fulfill_json(route, {
+        "queue": {"current": None, "upcoming": [], "djLog": [], "djLogCount": 0},
+        "config": {}, "nowPlaying": None, "context": {}, "liquidsoapLog": "",
+        "llm": {"provider": "verify", "activeModel": "verify", "recentCalls": []},
+        "subsonic": {"recentCalls": [], "endpoints": []},
+    }))
+    page.route("http://localhost:7791/debug/state-tree**", state_tree_route)
+    page.add_init_script("""
+      (() => {
+        const nativeFetch = window.fetch.bind(window);
+        window.__delayNextStateTree = false;
+        window.__delayedAdminCount = 0;
+        window.fetch = (input, init = {}) => {
+          const url = typeof input === 'string' ? input : input.url;
+          if (url.includes('/debug/state-tree') && window.__delayNextStateTree) {
+            window.__delayNextStateTree = false;
+            window.__delayedAdminCount += 1;
+            window.__delayedAdminAuthorization = new Headers(init.headers).get('authorization');
+            return new Promise(resolve => {
+              window.__releaseDelayedAdmin401 = () => resolve(new Response(
+                JSON.stringify({ error: 'expired A' }),
+                { status: 401, headers: { 'Content-Type': 'application/json' } },
+              ));
+            });
+          }
+          return nativeFetch(input, init);
+        };
+      })();
+    """)
+
+    page.goto(f"{WEB}/admin/debug", wait_until="domcontentloaded")
+    page.get_by_text("warm-a", exact=True).wait_for(state="visible")
+    assert "warm-a" in json.dumps(query_cache_snapshot(page))
+
+    page.evaluate("window.__delayNextStateTree = true")
+    page.get_by_text("/verify/state", exact=True).locator("..").get_by_role(
+        "button", name="Refresh",
+    ).click()
+    page.wait_for_function("() => typeof window.__releaseDelayedAdmin401 === 'function'")
+    page.evaluate("""({ key, oldValue, newValue }) => {
+      localStorage.setItem(key, newValue);
+      window.dispatchEvent(new StorageEvent('storage', {
+        key, oldValue, newValue, storageArea: localStorage,
+      }));
+      window.__releaseDelayedAdmin401();
+    }""", {"key": "subwave_admin_auth", "oldValue": token_a, "newValue": token_b})
+
+    page.get_by_text("cold-b", exact=True).wait_for(state="visible")
+    page.wait_for_timeout(200)
+    assert page.evaluate("localStorage.getItem('subwave_admin_auth')") == token_b
+    assert page.get_by_text("Admin sign-in", exact=True).count() == 0
+    assert page.evaluate("window.__delayedAdminCount") == 1
+    assert page.evaluate("window.__delayedAdminAuthorization") == f"Basic {token_a}"
+    assert f"Basic {token_b}" in station_auth, station_auth
+    assert f"Basic {token_b}" in state_auth, state_auth
+    cache_dump = json.dumps(query_cache_snapshot(page))
+    assert "cold-b" in cache_dump and "warm-a" not in cache_dump, cache_dump
+
+
+@check
 def themes_cache_reuse_and_mutation_refresh(page):
     """Shows prewarms one admin themes query reused and patched by Settings."""
     page.set_default_timeout(5000)
@@ -707,46 +802,331 @@ def themes_cache_reuse_and_mutation_refresh(page):
     assert request_count(page, "/themes", authenticated=True) == 1, page.request_log
 
     with page.expect_response(
-        lambda response: is_admin_request(response.request, "/themes/refresh", "POST")
-    ) as refresh_response:
-        page.get_by_role("button", name="Refresh", exact=True).evaluate("button => button.click()")
+        lambda response: is_admin_request(response.request, "/themes", "GET")
+    ):
+        with page.expect_response(
+            lambda response: is_admin_request(response.request, "/themes/refresh", "POST")
+        ) as refresh_response:
+            page.wait_for_function("""() => {
+              const button = [...document.querySelectorAll('button')]
+                .find(item => item.textContent?.trim() === 'Refresh');
+              if (!button?.isConnected) return false;
+              button.click();
+              return true;
+            }""")
     assert "verify-fresh" in json.dumps(refresh_response.value.json()), refresh_response.value.text()
-    page.wait_for_function(
-        "() => JSON.stringify(window.__subwaveAdminQueryCacheSnapshot?.() || []).includes('verify-fresh')"
-    )
+    try:
+        page.wait_for_function(
+            "() => JSON.stringify(window.__subwaveAdminQueryCacheSnapshot?.() || []).includes('verify-fresh')"
+        )
+    except Exception as error:
+        raise AssertionError((query_cache_snapshot(page), page.request_log)) from error
     cache_dump = json.dumps(query_cache_snapshot(page))
     assert "verify-fresh" in cache_dump, cache_dump
+    # Mutation receipts omit `active`, so refresh performs one authoritative
+    # GET before publishing the exact shared entry.
+    assert request_count(page, "/themes", authenticated=True) == 2, page.request_log
 
     click_admin_link(page, "Shows", "/admin/shows")
     page.get_by_text("Build your shows here.", exact=False).wait_for(state="visible")
+    route_theme_cache = next(
+        query for query in query_cache_snapshot(page)
+        if query["queryKey"] == ["themes", "admin"]
+    )
+    assert route_theme_cache["data"]["active"] == "verify-dark", route_theme_cache
+    assert next(
+        theme for theme in route_theme_cache["data"]["themes"]
+        if theme["id"] == "verify-fresh"
+    )["tokens"]["--bg"] == "#fafafa", route_theme_cache
     route_cache_dump = json.dumps(query_cache_snapshot(page))
     assert "verify-fresh" in route_cache_dump, route_cache_dump
-    assert request_count(page, "/themes", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/themes", authenticated=True) == 2, page.request_log
+
+
+@check
+def themes_active_is_authoritative_after_settings_and_delete(page):
+    """Theme writes refetch active so Shows never consumes a removed/stale id."""
+    page.set_default_timeout(7000)
+    settings = copy.deepcopy(SETTINGS_FIXTURE)
+    settings["values"].update({
+        "theme": {"active": "verify-dark"},
+        "ui": {"skin": "classic"},
+        "personas": [{
+            "id": "verify-persona", "name": "Verify Persona", "tagline": "",
+            "frequency": "moderate", "scriptLength": "concise", "soul": "verify",
+            "tts": {"engine": "piper", "voice": "verify"},
+        }],
+        "shows": [{
+            "id": "verify-show", "name": "Verify Show", "topic": "verify",
+            "personaId": "verify-persona", "guestPersonaIds": [], "banter": False,
+            "moods": [], "themeId": "", "genres": [], "eras": [], "energies": [],
+            "vocals": "", "filtersStrict": False, "maxTrackSeconds": 0,
+            "programme": False, "segmentSkill": "",
+        }],
+        "schedule": {}, "minTrackSeconds": 30,
+    })
+    settings["tts"]["moods"] = ["calm"]
+    themes = [
+        {
+            "id": "verify-dark", "name": "Verify Dark", "description": "initial",
+            "mode": "dark", "tokens": {"--bg": "#101010"}, "builtin": True,
+        },
+        {
+            "id": "verify-fresh", "name": "Verify Fresh", "description": "custom",
+            "mode": "light", "tokens": {"--bg": "#fafafa"}, "builtin": False,
+        },
+    ]
+    active = "verify-dark"
+    admin_theme_gets = 0
+    stub_dashboard(page)
+
+    def settings_route(route):
+        nonlocal active
+        if route.request.method == "POST":
+            body = route.request.post_data_json
+            next_active = body.get("theme", {}).get("active")
+            if next_active:
+                active = next_active
+                settings["values"]["theme"]["active"] = next_active
+            fulfill_json(route, {"ok": True})
+            return
+        fulfill_json(route, settings)
+
+    def themes_route(route):
+        nonlocal active, admin_theme_gets, themes
+        path = urllib.parse.urlparse(route.request.url).path
+        if route.request.method == "GET" and path == "/themes":
+            if route.request.headers.get("authorization"):
+                admin_theme_gets += 1
+            fulfill_json(route, {"themes": themes, "active": active})
+            return
+        if route.request.method == "DELETE" and path == "/themes/verify-fresh":
+            themes = [theme for theme in themes if theme["id"] != "verify-fresh"]
+            if active == "verify-fresh":
+                active = "verify-dark"
+            # Real mutation receipts intentionally omit active.
+            fulfill_json(route, {"ok": True, "themes": themes})
+            return
+        route.continue_()
+
+    page.route("http://localhost:7791/settings", settings_route)
+    page.route("http://localhost:7791/themes**", themes_route)
+    page.goto(f"{WEB}/admin/shows", wait_until="domcontentloaded")
+    page.get_by_text("Build your shows here.", exact=False).wait_for(state="visible")
+    assert admin_theme_gets == 1, admin_theme_gets
+
+    click_admin_link(page, "Settings", "/admin/settings")
+    page.get_by_role("button", name="Skin & Themes", exact=False).click()
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/themes", "GET")
+    ):
+        with page.expect_request(
+            lambda request: is_admin_request(request, "/settings", "POST")
+            and request.post_data_json.get("theme", {}).get("active") == "verify-fresh"
+        ):
+            page.wait_for_function("""() => {
+              const button = [...document.querySelectorAll('button')]
+                .find(item => item.textContent?.includes('Verify Fresh'));
+              if (!button?.isConnected) return false;
+              button.click();
+              return true;
+            }""")
+    try:
+        page.wait_for_function("""() => {
+          const theme = window.__subwaveAdminQueryCacheSnapshot?.()
+            .find(query => JSON.stringify(query.queryKey) === '["themes","admin"]');
+          return theme?.data?.active === 'verify-fresh';
+        }""")
+    except Exception as error:
+        raise AssertionError((admin_theme_gets, query_cache_snapshot(page), page.request_log)) from error
+    assert admin_theme_gets == 2, admin_theme_gets
+
+    click_admin_link(page, "Shows", "/admin/shows")
+    page.get_by_text("Build your shows here.", exact=False).wait_for(state="visible")
+    route_theme_cache = next(
+        query for query in query_cache_snapshot(page)
+        if query["queryKey"] == ["themes", "admin"]
+    )
+    assert route_theme_cache["data"]["active"] == "verify-fresh", route_theme_cache
+    assert next(
+        theme for theme in route_theme_cache["data"]["themes"]
+        if theme["id"] == "verify-fresh"
+    )["tokens"]["--bg"] == "#fafafa", route_theme_cache
+    page.get_by_role("button", name="Edit Verify Show", exact=True).press("Enter")
+    page.get_by_role("button", name="Station default", exact=True).wait_for(state="visible")
+    try:
+        page.wait_for_function("""() => {
+          const button = [...document.querySelectorAll('button')]
+            .find(item => item.textContent?.trim() === 'Station default');
+          return button && [...button.querySelectorAll('[aria-hidden=true]')]
+            .some(element => getComputedStyle(element).backgroundColor === 'rgb(250, 250, 250)');
+        }""")
+    except Exception as error:
+        default_cards = page.locator('button[title="follows the station palette"]').all()
+        raise AssertionError([card.evaluate("button => button.outerHTML") for card in default_cards]) from error
+    page.keyboard.press("Escape")
+
+    click_admin_link(page, "Settings", "/admin/settings")
+    page.get_by_role("button", name="Skin & Themes", exact=False).click()
+    page.wait_for_function("""() => {
+      const button = document.querySelector('button[title="Remove this custom theme"]');
+      if (!button?.isConnected) return false;
+      button.click();
+      return true;
+    }""")
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/themes", "GET")
+    ):
+        with page.expect_request(
+            lambda request: is_admin_request(request, "/themes/verify-fresh", "DELETE")
+        ):
+            page.wait_for_function("""() => {
+              const dialog = document.querySelector('[role=alertdialog]');
+              const button = dialog && [...dialog.querySelectorAll('button')]
+                .find(item => item.textContent?.trim() === 'remove');
+              if (!button?.isConnected) return false;
+              button.click();
+              return true;
+            }""")
+    page.wait_for_function("""() => {
+      const theme = window.__subwaveAdminQueryCacheSnapshot?.()
+        .find(query => JSON.stringify(query.queryKey) === '["themes","admin"]');
+      return theme?.data?.active === 'verify-dark'
+        && !theme?.data?.themes?.some(item => item.id === 'verify-fresh');
+    }""")
+    # Initial load + active-theme save + delete refresh. The authoritative
+    # delete GET already reports the fallback, so no redundant fourth read.
+    assert admin_theme_gets == 3, admin_theme_gets
+    theme_cache = next(
+        query for query in query_cache_snapshot(page)
+        if query["queryKey"] == ["themes", "admin"]
+    )
+    assert theme_cache["data"]["active"] == "verify-dark", theme_cache
+    assert all(theme["id"] != "verify-fresh" for theme in theme_cache["data"]["themes"])
 
 
 @check
 def audit_rejects_direct_cacheable_reads(_page):
-    """The static ownership gate rejects native and admin-helper component reads."""
+    """The static ownership gate resists aliases, members, and false allowlists."""
     repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-    with tempfile.TemporaryDirectory(prefix="subwave-admin-audit-") as root:
-        with open(os.path.join(root, "NativeRead.tsx"), "w", encoding="utf-8") as source:
-            source.write("export async function NativeRead() { return fetch('/api/themes'); }\n")
-        with open(os.path.join(root, "HelperRead.tsx"), "w", encoding="utf-8") as source:
-            source.write(
-                "export async function HelperRead(adminFetch) {\n"
-                "  return adminResponse(adminFetch, '/themes');\n"
-                "}\n"
+    valid_allowlist = {
+        "AdminShell.tsx": """export async function run() {
+  // admin-query-imperative: first-run-redirect
+  return fetch('/api/onboarding/status');
+}\n""",
+        "ArchivesPanel.tsx": """export async function run(adminFetch) {
+  // admin-query-imperative: archive-download
+  return adminResponse(adminFetch, `/archives/file/${'x'}`);
+}\n""",
+        "BackupPanel.tsx": """export async function run(adminFetch) {
+  // admin-query-imperative: backup-export
+  return adminResponse(adminFetch, '/backup/export');
+}\n""",
+        "DoctorPanel.tsx": """export async function run(adminFetch) {
+  // admin-query-imperative: diagnosis-command
+  await adminResponse(adminFetch, '/doctor');
+  // admin-query-imperative: diagnosis-stream
+  return adminResponse(adminFetch, '/doctor/stream', { headers: { Accept: 'text/event-stream' } });
+}\n""",
+        "connect/ConnectPanel.tsx": """export async function run(adminFetch, catalog) {
+  // admin-query-imperative: openapi-download
+  return adminResponse(adminFetch, catalog.openapiPath);
+}\n""",
+        "connect/Playground.tsx": """export async function run(adminFetch, relPath, endpoint) {
+  // admin-query-imperative: operator-api-command
+  return adminResponse(adminFetch, relPath, { method: endpoint.method });
+}\n""",
+        "personas/helpers.ts": """export async function run(style, seed, size) {
+  // admin-query-imperative: random-avatar-download
+  return fetch(`https://api.dicebear.com/9.x/${style}/png?seed=${seed}&size=${size}`);
+}\n""",
+        "playlist-builder/generate.ts": """export async function run(fetcher, id) {
+  const init = { method: 'POST' };
+  // admin-query-imperative: generation-job-start
+  await fetcher('/playlists/generate/jobs', init);
+  // admin-query-imperative: generation-sync-fallback
+  await fetcher('/playlists/generate', init);
+  // admin-query-imperative: generation-job-poll
+  return fetcher(`/playlists/generate/jobs/${id}`);
+}\n""",
+        "settings/LibrarySection.tsx": """export async function run(adminFetch, url) {
+  // admin-query-imperative: locca-discovery-probe
+  return adminResponse(adminFetch, `/settings/llm/discover?baseUrl=${url}`);
+}\n""",
+        "settings/shared.tsx": """export async function run(adminFetch, path) {
+  // admin-query-imperative: protected-audio-preview
+  return adminResponse(adminFetch, path);
+}\n""",
+        "skills/SkillEditModal.tsx": """export async function run(adminFetch, id) {
+  // admin-query-imperative: skill-export
+  return adminResponse(adminFetch, `/dj/skills/${id}/export`);
+}\n""",
+    }
+
+    def audit_fixture(extra=None, override=None):
+        with tempfile.TemporaryDirectory(prefix="subwave-admin-audit-") as root:
+            files = {**valid_allowlist, **(extra or {}), **(override or {})}
+            for relative, contents in files.items():
+                target = os.path.join(root, relative)
+                parent = os.path.dirname(target)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                with open(target, "w", encoding="utf-8") as source:
+                    source.write(contents)
+            result = subprocess.run(
+                ["node", "web/scripts/audit-admin-query.mjs", "--root", root],
+                cwd=repo, text=True, capture_output=True, check=False,
             )
-        result = subprocess.run(
-            ["node", "web/scripts/audit-admin-query.mjs", "--root", root],
-            cwd=repo,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-    output = result.stdout + result.stderr
-    assert result.returncode != 0, output
-    assert "NativeRead.tsx" in output and "HelperRead.tsx" in output, output
+        return result.returncode, result.stdout + result.stderr
+
+    invalid = {
+        "RenamedRead.tsx": """import { adminJson as readJson } from './admin-query';
+export async function bad(fetcher) { return readJson(fetcher, '/themes'); }\n""",
+        "AliasedRead.tsx": """const first = adminResponse; const second = first;
+export async function bad(fetcher) { return second(fetcher, '/settings'); }\n""",
+        "MemberFetch.tsx": """export async function bad() {
+  await window.fetch('/api/themes'); return globalThis.fetch('/api/settings');
+}\n""",
+        "queries.ts": """export async function stray(fetcher) {
+  return adminJson(fetcher, '/themes');
+}\n""",
+    }
+    for relative, contents in invalid.items():
+        code, output = audit_fixture(extra={relative: contents})
+        assert code != 0, (relative, output)
+        assert relative in output, (relative, output)
+
+    wrong_allowlist = [
+        """export async function run() {
+  // admin-query-imperative: first-run-redirect
+  return fetch('/api/settings');
+}\n""",
+        """export async function run() {
+  // admin-query-imperative: first-run-redirect
+  return fetch('/api/onboarding/status', { method: 'POST' });
+}\n""",
+        """export async function run(adminFetch) {
+  // admin-query-imperative: first-run-redirect
+  return adminResponse(adminFetch, '/onboarding/status');
+}\n""",
+    ]
+    for contents in wrong_allowlist:
+        code, output = audit_fixture(override={"AdminShell.tsx": contents})
+        assert code != 0, output
+        assert "AdminShell.tsx" in output, output
+
+    valid_owned = """import { adminJson as readJson } from './admin-query';
+export function useThemes(adminFetch) {
+  return useAdminQuery({
+    key: ['themes'], adminFetch,
+    request: (fetcher, signal) => readJson(fetcher, '/themes', undefined, signal),
+  });
+}\n"""
+    code, output = audit_fixture(extra={"Owned.tsx": valid_owned})
+    assert code == 0, output
+
+    code, output = audit_fixture()
+    assert code == 0, output
 
 
 @check

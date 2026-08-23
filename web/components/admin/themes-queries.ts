@@ -1,6 +1,10 @@
 'use client';
 
-import type { QueryClient } from '@tanstack/react-query';
+import {
+  QueryObserver,
+  type FetchQueryOptions,
+  type QueryClient,
+} from '@tanstack/react-query';
 import {
   adminJson,
   type AdminFetch,
@@ -31,24 +35,44 @@ export const adminThemeKeys = {
   detail: () => ['themes', 'admin'] as const,
 };
 
-function normalizeThemes(
-  response: AdminThemesResponse,
-  previous?: AdminThemesData,
-): AdminThemesData {
+function normalizeThemes(response: AdminThemesResponse): AdminThemesData {
   return {
     themes: Array.isArray(response.themes) ? response.themes : [],
-    active: typeof response.active === 'string' ? response.active : (previous?.active ?? ''),
+    active: typeof response.active === 'string' ? response.active : '',
   };
 }
 
-export function patchAdminThemes(
+// Theme mutation receipts intentionally omit `active`. Always replace the
+// shared entry with the authoritative GET before another route can consume it;
+// preserving the previous id can leave Shows pointing at a removed theme.
+export async function refetchAdminThemes(
   client: QueryClient,
-  response: AdminThemesResponse,
-): void {
-  client.setQueryData<AdminThemesData>(
-    adminThemeKeys.detail(),
-    previous => normalizeThemes(response, previous),
+  adminFetch: AdminFetch,
+): Promise<AdminThemesData> {
+  const options: FetchQueryOptions<AdminThemesData> = {
+    queryKey: adminThemeKeys.detail(),
+    queryFn: async ({ signal }) => normalizeThemes(
+      // admin-query-owned: GET /themes
+      await adminJson<AdminThemesResponse>(adminFetch, '/themes', undefined, signal),
+    ),
+    staleTime: 0,
+  };
+  // A settings save can re-render/unmount ThemeSection while this read is in
+  // flight. Keep one disabled observer attached so TanStack does not abort the
+  // exact-key fetch when the UI observer disappears; the request still owns
+  // and consumes Query's AbortSignal. Cancel first so a pre-write GET cannot be
+  // deduped as the mutation's authoritative result.
+  await client.cancelQueries(
+    { queryKey: adminThemeKeys.detail(), exact: true },
+    { silent: true },
   );
+  const observer = new QueryObserver(client, { ...options, enabled: false });
+  const unsubscribe = observer.subscribe(() => {});
+  try {
+    return await client.fetchQuery<AdminThemesData>(options);
+  } finally {
+    unsubscribe();
+  }
 }
 
 export function useAdminThemesQuery(adminFetch: AdminFetch, enabled: boolean) {

@@ -733,7 +733,7 @@ display/expiry clocks. Review fixes added a shared same-tab/cross-tab auth store
 with page-owned 401 teardown coverage, one exact abort-aware
 `['themes','admin']` query shared across Shows and Settings, and controlled-clock
 399/400ms debounce checks (an intentional 600ms mutation made all three fail).
-The isolated browser suites passed 50/50 admin-query, 6/6 query-cache, 8/8
+The isolated browser suites passed 52/52 admin-query, 6/6 query-cache, 8/8
 Library, 22/22 hooks, 13/13 destructive forms, all playlist DnD checks, and all
 nine schedule-booking checks. Web lint exited 0 with the five baseline warnings
 recorded in the SDD ledger, the production build exited 0, and both branch and
@@ -741,11 +741,26 @@ working-tree whitespace checks exited 0. Steps 6–8 remain unchecked because
 rebase, push, and PR delivery are intentionally delegated to the final delivery
 stage.
 
+Review round 2 closed three further ownership gaps. Credential changes now key
+the shell provider, and a stale 401 can clear only its still-current token. Theme
+mutation receipts no longer preserve an old `active`: every write performs one
+authoritative exact-key GET that remains abort-aware and survives Settings
+rerenders, while a Settings default change refreshes the same entry before Shows
+can reuse it. The audit has no query-filename exemption; it resolves renamed and
+transitive aliases, covers member fetch calls, validates exact ownership markers,
+and requires every imperative allowlist entry to match callee, method, and path.
+Focused RED checks caught all three prior behaviours, and the fresh complete local
+matrix above passed with the admin total increased to 52.
+
 - [x] **Step 5: Commit final documentation and verification fixes**
 
 ```bash
 git add web docs/superpowers
 git commit -m "docs(web): document admin query ownership"
+
+# Review round 2 follow-up
+git add web docs/superpowers
+git commit -m "fix(web): close admin ownership races"
 ```
 
 - [ ] **Step 6: Rebase and re-run risk-proportionate checks**

@@ -87,6 +87,7 @@ export function fetchPlaylistDetail(
   id: string,
   signal: AbortSignal,
 ): Promise<PlaylistDetail> {
+  // admin-query-owned: GET /playlists/${}
   return adminJson<PlaylistDetail>(
     adminFetch, `/playlists/${encodeURIComponent(id)}`, undefined, signal,
   ).then(body => ({ entries: Array.isArray(body.entries) ? body.entries : [] }));

@@ -2,6 +2,7 @@
 
 import type { ChangeEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../../lib/notify';
 import { adminJson, useAdminMutation } from '../../../lib/admin-query';
@@ -23,7 +24,7 @@ import {
   type SettingsData, type SaveSettings, type SettingsFieldErrors,
 } from './shared';
 import {
-  patchAdminThemes,
+  refetchAdminThemes,
   useAdminThemesQuery,
   type AdminTheme,
   type AdminThemesResponse,
@@ -118,7 +119,9 @@ function ThemeEditorModal({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
-    onDone: (response, _body, client) => patchAdminThemes(client, response),
+    onDone: async (_response, _body, client) => {
+      await refetchAdminThemes(client, adminFetch);
+    },
     toastOnError: false,
   });
 
@@ -325,6 +328,7 @@ function EffectiveThemeNotice({
 }
 
 export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSectionProps) {
+  const queryClient = useQueryClient();
   // Which level decided the theme actually on screen. ThemeProvider is the one
   // place that resolves all three — it owns the browser override (localStorage,
   // never seen by the server) and it polls /themes for the other two, painting
@@ -354,7 +358,9 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
   const refreshMutation = useAdminMutation<AdminThemesResponse, void>({
     adminFetch,
     request: (_unused, fetcher) => adminJson(fetcher, '/themes/refresh', { method: 'POST' }),
-    onDone: (response, _unused, client) => patchAdminThemes(client, response),
+    onDone: async (_response, _unused, client) => {
+      await refetchAdminThemes(client, adminFetch);
+    },
     toastOnError: false,
   });
   const removeMutation = useAdminMutation<AdminThemesResponse, ThemeDef>({
@@ -364,7 +370,9 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
       `/themes/${encodeURIComponent(theme.id)}`,
       { method: 'DELETE' },
     ),
-    onDone: (response, _theme, client) => patchAdminThemes(client, response),
+    onDone: async (_response, _theme, client) => {
+      await refetchAdminThemes(client, adminFetch);
+    },
     toastOnError: false,
   });
 
@@ -387,7 +395,9 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
     // swatch swap is instant.
     applyTheme(theme);
     cacheTheme(theme);
-    await saveSettings({ theme: { active: theme.id } });
+    const saved = await saveSettings({ theme: { active: theme.id } });
+    if (!saved) return;
+    await refetchAdminThemes(queryClient, adminFetch);
     // Re-read provenance now rather than up to 30s from now: if a show is
     // pinning its own theme, this save has just set a default that won't be
     // visible until the show ends, and the operator should learn that here — not

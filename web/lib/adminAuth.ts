@@ -114,10 +114,18 @@ export function useAdminAuth(): AdminAuth {
     if (token) headers.Authorization = `Basic ${token}`;
     const r = await fetch(`${API_URL}${path}`, { ...init, headers });
     if (r.status === 401) {
-      if (token) {
-        try { localStorage.removeItem(STORAGE_KEY); } catch {}
+      // The request may have outlived the credential that started it. A late
+      // 401 for A must never sign out B after a same-tab login or cross-tab
+      // storage update; only the credential that is still current owns the
+      // rejection. `readStoredAuth` covers the hydration edge before the
+      // external store has observed localStorage.
+      const current = authSnapshot.auth ?? readStoredAuth();
+      if (current === token) {
+        if (token) {
+          try { localStorage.removeItem(STORAGE_KEY); } catch {}
+        }
+        publishAuth({ auth: null, needsAuth: true, hydrated: true });
       }
-      publishAuth({ auth: null, needsAuth: true, hydrated: true });
     } else if (token && authSnapshot.auth === token && authSnapshot.needsAuth) {
       // A late response for credentials already rejected must not undo the
       // shared sign-out; only the store's current token may clear this flag.
