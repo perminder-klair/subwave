@@ -246,12 +246,33 @@ def discovery_voice_refresh_is_immediate(page):
             {"id": "refresh-voice", "label": "Refresh voice"},
         ])))[1],
     )
-    box = open_settings_tts(page)
+    settings = json.loads(json.dumps(SETTINGS_FIXTURE))
+    settings["env"]["ELEVENLABS_API_KEY"] = True
+    page.route(
+        "**/settings",
+        lambda route: route.fulfill(content_type="application/json", body=json.dumps(settings)),
+    )
+    page.goto(f"{WEB}/admin/settings?section=tts", wait_until="domcontentloaded")
+    page.get_by_role("radio", name="Cloud").click()
+    page.get_by_role("radiogroup", name="Cloud TTS provider").get_by_role("radio", name="OpenAI-compatible").click()
+    box = page.get_by_placeholder("http://192.168.1.101:5000/v1")
     box.fill("http://voice-refresh.test/v1")
-    page.get_by_title("Refresh voice list").click()
+    page.wait_for_timeout(600)
+    refresh_button = page.get_by_title("Refresh voice list")
+    refresh_button.wait_for(state="visible")
+    refresh_button.scroll_into_view_if_needed()
+    page.get_by_role("radiogroup", name="Cloud TTS provider").get_by_role("radio", name="ElevenLabs").click()
+    # ElevenLabs has curated choices, so the picker remains rendered while its
+    # fresh discovery request is pending. Rachel proves the new provider input
+    # is committed before the refresh handler reads it.
+    page.get_by_role("button", name="Rachel").wait_for(state="visible")
+    refresh_button.click()
     page.wait_for_timeout(0)
-    refresh_hits = [hit for hit in voice_hits if "voice-refresh.test" in hit]
-    assert refresh_hits, voice_hits
+    refresh_hits = [hit for hit in voice_hits if "provider=elevenlabs" in hit]
+    assert len(refresh_hits) == 1, voice_hits
+    page.wait_for_timeout(450)
+    refresh_hits = [hit for hit in voice_hits if "provider=elevenlabs" in hit]
+    assert len(refresh_hits) == 1, voice_hits
 
 
 @check
@@ -281,12 +302,15 @@ def discovery_stale_response_isolated(page):
         route.fulfill(**model_response(["new-model"]))
 
     page.route("**/settings/llm/models**", models)
-    page.route(
-        "**/settings/tts/voices**",
-        lambda route: (voice_hits.append(route.request.url), route.fulfill(**voice_response([
-            {"id": "old-voice", "label": "Old voice"},
-        ])))[1],
-    )
+    def voices(route):
+        voice_hits.append(route.request.url)
+        # Keep the new provider pending so the reopened picker can only expose
+        # local ElevenLabs choices. A stale old-provider result must not leak
+        # back into that list while its replacement is still loading.
+        if "provider=elevenlabs" not in route.request.url:
+            route.fulfill(**voice_response([{"id": "old-voice", "label": "Old voice"}]))
+
+    page.route("**/settings/tts/voices**", voices)
     box = open_settings_llm(page)
     box.fill("http://old.test/v1")
     page.wait_for_timeout(450)
@@ -318,7 +342,10 @@ def discovery_stale_response_isolated(page):
     assert page.get_by_text("Old voice", exact=True).is_visible()
     page.keyboard.press("Escape")
     page.get_by_role("radiogroup", name="Cloud TTS provider").get_by_role("radio", name="ElevenLabs").click()
-    assert "Old voice" not in page.locator("body").inner_text()
+    voice_picker = page.get_by_role("button", name="Rachel")
+    voice_picker.scroll_into_view_if_needed()
+    voice_picker.click()
+    assert not page.get_by_text("Old voice", exact=True).is_visible()
 
 
 @check
