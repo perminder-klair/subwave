@@ -910,13 +910,12 @@ def imaging(page):
     upload through /sfx/upload — and shares the same imagingImportSchema
     name/description fields.
 
-    Also covers ImagingPanel's own 3s poll (`setInterval(…, 3000)` — ten times
-    faster than TakeoverCard's 30s, and the panel most likely to exhibit the
-    clobber bug `assert_survives_poll` exists to catch). The Jingle ratio
-    input is the right target: it's a real on-page control fed by the SAME
-    `data` state the poll refetches, guarded by `jingleRatio == null` in
-    ImagingPanel's hydrate-once effect so an in-progress edit is meant to
-    survive every tick. `seconds=3` matches THIS panel's real interval —
+    Also covers ImagingPanel's own 3s TanStack Query `refetchInterval` — ten
+    times faster than TakeoverCard's 30s, and the panel most likely to exhibit
+    the clobber bug `assert_survives_poll` exists to catch. The Jingle ratio
+    input is the right target: it's a real on-page control hydrated from the
+    shared settings query only while clean, so an in-progress edit must
+    survive every background revision. `seconds=3` matches THIS panel's real interval —
     `assert_survives_poll`'s `seconds=35` default is calibrated for
     TakeoverCard's 30s poll and would prove nothing here (it'd fast-forward
     past 11 ticks instead of exercising one real one).
@@ -929,8 +928,8 @@ def imaging(page):
         api_write("DELETE", f"/sfx/{SFX_FIXTURE_NAME}", ok_statuses=(200, 400, 404))
 
     try:
-        # Installed BEFORE goto — like takeover()'s clock — so the poll's
-        # setInterval is one this test controls from the moment ImagingPanel
+        # Installed BEFORE goto — like takeover()'s clock — so the query's
+        # refetch timer is one this test controls from the moment ImagingPanel
         # mounts, not one already ticking on real wall-clock time.
         page.clock.install()
         page.goto(f"{WEB}/admin/imaging?tab=jingles")

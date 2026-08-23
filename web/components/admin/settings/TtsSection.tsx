@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { notify, errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import { useModelDiscovery } from '@/hooks/useModelDiscovery';
 import { useVoiceDiscovery } from '@/hooks/useVoiceDiscovery';
 import { CLOUD_VOICES, CLOUD_MODELS } from '../../../lib/cloudVoices';
@@ -520,7 +521,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
   const saveKey = async (envVar: string, value: string): Promise<boolean> => {
     if (!value.trim()) return true;
     try {
-      const r = await adminFetch('/settings/secrets', {
+      const r = await adminResponse(adminFetch, '/settings/secrets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ [envVar]: value.trim() }),
@@ -543,7 +544,7 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
     setCloudKeyTesting(true);
     setCloudKeyTest(null);
     try {
-      const r = await adminFetch('/settings/secrets/test', {
+      const r = await adminResponse(adminFetch, '/settings/secrets/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: cloudKeyVar, value: cloudKeyInput.trim() }),

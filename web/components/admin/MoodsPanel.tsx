@@ -8,6 +8,7 @@ import {
 } from 'react-hook-form';
 import { z } from 'zod';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField, SelectField, type Option } from '@/lib/form-fields';
@@ -33,6 +34,11 @@ import {
 import { VoicePreviewButton } from './tts/VoicePreviewButton';
 import { defaultEngineVoice } from './tts/defaultVoice';
 import { ENGINE_META } from './tts/engineMeta';
+import {
+  applySettingsSave,
+  useSettingsQuery,
+  type SettingsSaveResult,
+} from './settings/queries';
 
 interface MoodEntry {
   name: string;
@@ -57,6 +63,23 @@ interface TestVoiceDefaults {
   // Kokoro's language code, so the test sample auditions the same voice the
   // Settings → TTS "Play sample" button does.
   lang?: string;
+}
+
+interface MoodSettingsData {
+  values?: {
+    moods?: unknown;
+    moodSchedule?: unknown;
+    weatherMoods?: unknown;
+    tts?: {
+      corrections?: unknown;
+      defaultEngine?: string;
+      kokoro?: { voice?: string; lang?: string };
+      chatterbox?: { referenceVoice?: string };
+      pocketTts?: { voice?: string };
+      cloud?: { provider?: string; model?: string; voice?: string };
+      speed?: Record<string, number>;
+    };
+  };
 }
 
 // The 8 fixed day-periods (controller context.ts getTimeContext) — only each
@@ -151,6 +174,10 @@ function WeatherMoodSelect({
 
 export default function MoodsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
+  const settingsQuery = useSettingsQuery<MoodSettingsData>({
+    adminFetch,
+    enabled: hydrated && !needsAuth,
+  });
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState<string | null>(null); // which card is saving
@@ -217,6 +244,17 @@ export default function MoodsPanel() {
   // sample without a save round trip first.
   const liveCorrections = useWatch({ control: arrayControl, name: 'corrections' }) ?? [];
 
+  const saveMutation = useAdminMutation<SettingsSaveResult, Record<string, unknown>>({
+    adminFetch,
+    request: (patch, fetcher) => adminJson<SettingsSaveResult>(fetcher, '/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+    onDone: (result, _patch, client) => applySettingsSave<MoodSettingsData>(client, result),
+    toastOnError: false,
+  });
+
   // Swapping the resolver doesn't re-run it against already-computed error
   // state, so re-validate whenever the schema is rebuilt from a fresh
   // `savedMoodNames`.
@@ -224,26 +262,8 @@ export default function MoodsPanel() {
     void form.trigger();
   }, [schema, form]);
 
-  const load = useCallback(async () => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) throw new Error(`failed (${r.status})`);
-      const j = (await r.json()) as {
-        values?: {
-          moods?: unknown;
-          moodSchedule?: unknown;
-          weatherMoods?: unknown;
-          tts?: {
-            corrections?: unknown;
-            defaultEngine?: string;
-            kokoro?: { voice?: string; lang?: string };
-            chatterbox?: { referenceVoice?: string };
-            pocketTts?: { voice?: string };
-            cloud?: { provider?: string; model?: string; voice?: string };
-            speed?: Record<string, number>;
-          };
-        };
-      } | null;
+  const hydrateSettings = useCallback((j: MoodSettingsData | null | undefined) => {
+      if (!j || (loaded && form.formState.isDirty)) return;
       const v = j?.values || {};
       const loadedMoods = Array.isArray(v.moods) ? (v.moods as MoodEntry[]) : [];
       const rawSchedule = (v.moodSchedule && typeof v.moodSchedule === 'object'
@@ -285,16 +305,17 @@ export default function MoodsPanel() {
         lang: rawTts.kokoro?.lang || undefined,
       });
       setErr(null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
+    // `form` is stable; loaded/isDirty are the guards that prevent a background
+    // query revision replacing an operator's in-progress edits.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [adminFetch]);
+  }, [loaded]);
 
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    void load();
-  }, [hydrated, needsAuth, load]);
+    if (settingsQuery.error) setErr(errorMessage(settingsQuery.error));
+    else hydrateSettings(settingsQuery.data);
+  }, [settingsQuery.data, settingsQuery.error, hydrateSettings]);
+
+  const load = useCallback(async () => { await settingsQuery.refetch(); }, [settingsQuery]);
 
   // Routed through the Next router so a soft nav re-derives `tab`.
   const selectTab = useCallback(
@@ -327,35 +348,21 @@ export default function MoodsPanel() {
     ) => {
       setBusy(card);
       try {
-        const r = await adminFetch('/settings', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(patch),
-        });
-        const j = (await r.json().catch(() => ({}))) as {
-          error?: string;
-          fieldErrors?: Record<string, string>;
-          saved?: Record<string, unknown>;
-        };
-        if (!r.ok) {
-          // Only carries field paths for a SHAPE-level failure (duplicate or
-          // over-long name), which the route catches with moodNames: null. A
-          // membership failure is judged inside update() and throws a plain
-          // Error with no path, so it surfaces via notify.err below instead.
-          applyServerFieldErrors(form, j.fieldErrors);
-          throw new Error(j.error || `failed (${r.status})`);
-        }
+        const j = await saveMutation.mutateAsync(patch);
         const current = form.getValues() as unknown as MoodsFormValues;
         form.reset({ ...current, [key]: nextValue });
         onSuccess?.(j.saved);
         notify.ok(okMsg);
       } catch (e) {
+        if (e instanceof AdminResponseError) {
+          applyServerFieldErrors(form, (e.body as { fieldErrors?: Record<string, string> }).fieldErrors);
+        }
         notify.err(`Save failed: ${errorMessage(e)}`);
       } finally {
         setBusy(null);
       }
     },
-    [adminFetch, form],
+    [form, saveMutation],
   );
 
   const saveMoods = async () => {

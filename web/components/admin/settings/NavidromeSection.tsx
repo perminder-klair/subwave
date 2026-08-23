@@ -3,6 +3,7 @@
 import type { ChangeEvent } from 'react';
 import { useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { Btn, Card } from '../ui';
@@ -51,7 +52,7 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
     setTesting(true);
     setResult(null);
     try {
-      const r = await adminFetch('/settings/navidrome/test', {
+      const r = await adminResponse(adminFetch, '/settings/navidrome/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body()),
@@ -70,7 +71,7 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
     if (!env.pass && !pass && !passSet) return notify.err('Password is required');
     setBusy(true);
     try {
-      const r = await adminFetch('/settings/navidrome', {
+      const r = await adminResponse(adminFetch, '/settings/navidrome', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body()),

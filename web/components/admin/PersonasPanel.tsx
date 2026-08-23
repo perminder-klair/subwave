@@ -6,6 +6,7 @@
 // and applies live — no mixer restart.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { z } from 'zod';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   useFieldArray,
   type Control,
@@ -15,6 +16,7 @@ import {
   type UseFormWatch,
 } from 'react-hook-form';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useZodForm, applyServerFieldErrors } from '@/lib/form';
 import { personaSchema, djPromptSchema } from '@/lib/schemas.generated';
@@ -37,6 +39,13 @@ import { SystemPromptModal } from './personas/SystemPromptModal';
 import { PersonaRoster } from './personas/PersonaRoster';
 import { orderPersonaRoster } from './personas/roster-order';
 import { PersonaEditor } from './personas/PersonaEditor';
+import { useCommunityPersonas } from './personas/queries';
+import {
+  applySettingsSave,
+  settingsKeys,
+  useSettingsQuery,
+  type SettingsSaveResult,
+} from './settings/queries';
 
 // The RHF resolver is the two shared schemas the controller validates against,
 // so this editor and the controller cannot disagree about what's saveable.
@@ -49,7 +58,13 @@ const formSchema = z.object({
 
 export default function PersonasPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [data, setData] = useState<SettingsResponse | null>(null);
+  const queryClient = useQueryClient();
+  const settingsQuery = useSettingsQuery<SettingsResponse>({
+    adminFetch,
+    enabled: hydrated && !needsAuth,
+  });
+  const communityQuery = useCommunityPersonas(adminFetch, hydrated && !needsAuth);
+  const data = settingsQuery.data ?? null;
   const [err, setErr] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -66,7 +81,9 @@ export default function PersonasPanel() {
   // Raised when the editor is closed by ×/Escape with the focused persona dirty.
   const [confirmDiscard, setConfirmDiscard] = useState(false);
   // Best-effort; null = still loading.
-  const [community, setCommunity] = useState<CommunityPersona[] | null>(null);
+  const community: CommunityPersona[] | null = communityQuery.isPending
+    ? null
+    : (communityQuery.data ?? []);
   const [communityOpen, setCommunityOpen] = useState(false); // catalog modal open?
   const [installing, setInstalling] = useState<string | null>(null); // community slug installing, or null
   // Not array rows — plain state, not RHF (see the schema comment above).
@@ -77,6 +94,8 @@ export default function PersonasPanel() {
   // Set by addPersona so the focus-change effect scrolls; a plain roster click
   // changes focus too but shouldn't yank the page around.
   const scrollToEditorRef = useRef(false);
+  const baselineRef = useRef<ReturnType<typeof formFromSettings>>(null);
+  const hydratedRevisionRef = useRef(0);
 
   const form = useZodForm(formSchema, { personas: [], djPrompts: [] });
   // Every field in these schemas is a z.unknown().transform() (they double as
@@ -92,49 +111,76 @@ export default function PersonasPanel() {
   // their own `id`, which RHF's default keyName ('id') would clobber. `fields`
   // goes unused: consumers key off the persona's own id, and this component
   // reads live values via `watch('personas')`.
-  const { append: appendPersonaField, remove: removePersonaField } =
+  const { append: appendPersonaField, remove: removePersonaField, replace: replacePersonaFields } =
     useFieldArray({ control, name: 'personas', keyName: '_rhfKey' });
   const {
     fields: promptFields, append: appendPromptField, remove: removePromptFieldAt,
     replace: replacePromptFields,
   } = useFieldArray({ control, name: 'djPrompts', keyName: '_rhfKey' });
 
+  const saveMutation = useAdminMutation<SettingsSaveResult, Record<string, unknown>>({
+    adminFetch,
+    request: (patch, fetcher) => adminJson<SettingsSaveResult>(fetcher, '/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+    onDone: (result, _patch, client) => applySettingsSave<SettingsResponse>(client, result),
+    toastOnError: false,
+  });
+
+  const personaMutation = useAdminMutation<Record<string, unknown>, {
+    path: string;
+    init: RequestInit;
+  }>({
+    adminFetch,
+    request: (vars, fetcher) => adminJson<Record<string, unknown>>(fetcher, vars.path, vars.init),
+    toastOnError: false,
+  });
+
   const load = async () => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) return null;
-      const j = (await r.json()) as SettingsResponse;
-      setData(j); setErr(null);
-      return j;
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); return null; }
+    const result = await settingsQuery.refetch();
+    if (result.error) {
+      setErr(errorMessage(result.error));
+      return null;
+    }
+    setErr(null);
+    return result.data ?? null;
   };
 
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    (async () => {
-      const j = await load();
-      const next = formFromSettings(j);
-      if (next) {
-        resetForm({ personas: next.personas, djPrompts: next.djPrompts });
-        setActivePersonaId(next.activePersonaId);
-        setActiveDjPromptId(next.activeDjPromptId);
-        setDjHouseRules(next.djHouseRules);
-      }
+    if (settingsQuery.error) {
+      setErr(errorMessage(settingsQuery.error));
       setLoaded(true);
-    })();
-    // Fetched independently so a catalog failure can't blank the roster.
-    (async () => {
-      try {
-        const r = await adminFetch('/personas/community');
-        if (!r.ok) throw new Error(`failed (${r.status})`);
-        const j = (await r.json()) as { community?: CommunityPersona[] };
-        setCommunity(Array.isArray(j.community) ? j.community : []);
-      } catch {
-        setCommunity([]);
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hydrated, needsAuth, adminFetch]);
+      return;
+    }
+    // Form state changes cause renders too. Hydration belongs to a server
+    // revision, not to those renders; otherwise removing an array row can be
+    // immediately undone during RHF's brief clean-state transition.
+    if (!settingsQuery.dataUpdatedAt
+      || hydratedRevisionRef.current === settingsQuery.dataUpdatedAt) return;
+    hydratedRevisionRef.current = settingsQuery.dataUpdatedAt;
+    const next = formFromSettings(settingsQuery.data ?? null);
+    if (!next) return;
+    const baseline = baselineRef.current;
+    const currentPlainIsDirty = !!baseline && (
+      activePersonaId !== baseline.activePersonaId
+      || activeDjPromptId !== baseline.activeDjPromptId
+      || djHouseRules !== baseline.djHouseRules
+    );
+    if (!loaded || (!form.formState.isDirty && !currentPlainIsDirty)) {
+      resetForm({ personas: next.personas, djPrompts: next.djPrompts });
+      setActivePersonaId(next.activePersonaId);
+      setActiveDjPromptId(next.activeDjPromptId);
+      setDjHouseRules(next.djHouseRules);
+      baselineRef.current = next;
+    }
+    setErr(null);
+    setLoaded(true);
+  }, [
+    settingsQuery.data, settingsQuery.dataUpdatedAt, settingsQuery.error, loaded, form.formState.isDirty,
+    activePersonaId, activeDjPromptId, djHouseRules, resetForm,
+  ]);
 
   // Guarded by scrollToEditorRef so ordinary roster clicks don't scroll.
   useEffect(() => {
@@ -183,9 +229,10 @@ export default function PersonasPanel() {
   const installCommunity = async (slug: string) => {
     setInstalling(slug);
     try {
-      const r = await adminFetch(`/personas/community/${encodeURIComponent(slug)}/install`, { method: 'POST' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; persona?: Partial<Persona> | null };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const j = await personaMutation.mutateAsync({
+        path: `/personas/community/${encodeURIComponent(slug)}/install`,
+        init: { method: 'POST' },
+      }) as { persona?: Partial<Persona> | null };
       const p = j.persona;
       if (p && typeof p.id === 'string') {
         const allSkills = (data?.skills?.catalog || []).map(s => s.name);
@@ -200,6 +247,7 @@ export default function PersonasPanel() {
         appendPersonaField(installed);
         void form.trigger(); // see the comment on addPersona's own trigger() call
       }
+      void queryClient.invalidateQueries({ queryKey: settingsKeys.all });
       notify.ok(`Installed “${p?.name || slug}” — off air until you put them on the desk`);
     } catch (e) {
       notify.err(`Install failed: ${errorMessage(e)}`);
@@ -211,7 +259,11 @@ export default function PersonasPanel() {
     if (currentPersonas.length <= 1) return;
     const target = currentPersonas[i];
     if (!target) return;
-    removePersonaField(i);
+    // Replace with the complete remaining value array. `remove(i)` unregisters
+    // the open editor's inputs before RHF commits its field-array update; a
+    // save opened immediately afterwards can otherwise retain a shell of the
+    // deleted row with its registered `id` missing.
+    replacePersonaFields(currentPersonas.filter((_, idx) => idx !== i));
     setActivePersonaId(cur => {
       if (target.id !== cur) return cur;
       const remaining = currentPersonas.filter((_, idx) => idx !== i);
@@ -225,16 +277,18 @@ export default function PersonasPanel() {
     setUploadingId(personaId);
     try {
       const dataUrl = await fileToAvatarDataUrl(file);
-      const r = await adminFetch(`/personas/${encodeURIComponent(personaId)}/avatar`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataUrl }),
-      });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; avatar?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const j = await personaMutation.mutateAsync({
+        path: `/personas/${encodeURIComponent(personaId)}/avatar`,
+        init: {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataUrl }),
+        },
+      }) as { avatar?: string };
       const filename = j.avatar || '';
       const idx = getValues('personas').findIndex(p => p.id === personaId);
       if (idx !== -1) setValue(`personas.${idx}.avatar`, filename, { shouldDirty: true, shouldValidate: true });
+      void queryClient.invalidateQueries({ queryKey: settingsKeys.all });
       setAvatarTick(t => t + 1);
       notify.ok('avatar uploaded');
     } catch (e) {
@@ -248,16 +302,18 @@ export default function PersonasPanel() {
     setUploadingId(personaId);
     try {
       const dataUrl = await fetchDicebearAvatar();
-      const r = await adminFetch(`/personas/${encodeURIComponent(personaId)}/avatar`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ dataUrl }),
-      });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; avatar?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const j = await personaMutation.mutateAsync({
+        path: `/personas/${encodeURIComponent(personaId)}/avatar`,
+        init: {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ dataUrl }),
+        },
+      }) as { avatar?: string };
       const filename = j.avatar || '';
       const idx = getValues('personas').findIndex(p => p.id === personaId);
       if (idx !== -1) setValue(`personas.${idx}.avatar`, filename, { shouldDirty: true, shouldValidate: true });
+      void queryClient.invalidateQueries({ queryKey: settingsKeys.all });
       setAvatarTick(t => t + 1);
       notify.ok('avatar generated');
     } catch (e) {
@@ -270,13 +326,13 @@ export default function PersonasPanel() {
   const clearAvatar = async (personaId: string) => {
     setUploadingId(personaId);
     try {
-      const r = await adminFetch(`/personas/${encodeURIComponent(personaId)}/avatar`, {
-        method: 'DELETE',
+      await personaMutation.mutateAsync({
+        path: `/personas/${encodeURIComponent(personaId)}/avatar`,
+        init: { method: 'DELETE' },
       });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       const idx = getValues('personas').findIndex(p => p.id === personaId);
       if (idx !== -1) setValue(`personas.${idx}.avatar`, '', { shouldDirty: true, shouldValidate: true });
+      void queryClient.invalidateQueries({ queryKey: settingsKeys.all });
       setAvatarTick(t => t + 1);
       notify.ok('avatar removed');
     } catch (e) {
@@ -325,10 +381,7 @@ export default function PersonasPanel() {
     setBusy(true);
     try {
       const values = getValues();
-      const r = await adminFetch('/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
+      const patch = {
           personas: values.personas.map(p => ({
             id: p.id,
             name: p.name.trim(),
@@ -359,19 +412,24 @@ export default function PersonasPanel() {
           djPrompts: values.djPrompts.map(p => ({ id: p.id, name: p.name.trim(), text: p.text.trim() })),
           activeDjPromptId,
           djHouseRules: djHouseRules.trim(),
-        }),
-      });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; fieldErrors?: Record<string, string> };
-      if (!r.ok) {
-        // The controller emits `personas.<i>.tts` etc., which is already the
-        // field-array path this form binds through — no remapping needed.
-        applyServerFieldErrors(form, j.fieldErrors);
-        throw new Error(j.error || `failed (${r.status})`);
+        };
+      const result = await saveMutation.mutateAsync(patch);
+      const authoritative = result.saved
+        ? formFromSettings({ ...(data || {}), values: result.saved as SettingsResponse['values'] })
+        : null;
+      if (authoritative) {
+        resetForm({ personas: authoritative.personas, djPrompts: authoritative.djPrompts });
+        setActivePersonaId(authoritative.activePersonaId);
+        setActiveDjPromptId(authoritative.activeDjPromptId);
+        setDjHouseRules(authoritative.djHouseRules);
+        baselineRef.current = authoritative;
       }
       notify.ok('personas saved, applies on the next spoken line');
-      await load();
       return true;
     } catch (e) {
+      if (e instanceof AdminResponseError) {
+        applyServerFieldErrors(form, (e.body as { fieldErrors?: Record<string, string> }).fieldErrors);
+      }
       notify.err(errorMessage(e));
       return false;
     } finally { setBusy(false); }

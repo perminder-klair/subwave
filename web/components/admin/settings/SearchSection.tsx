@@ -3,6 +3,7 @@
 import type { ChangeEvent } from 'react';
 import { useState } from 'react';
 import { errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
@@ -44,7 +45,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
     setTestingSearxng(true);
     setSearxngTestResult(null);
     try {
-      const res = await adminFetch('/settings/search/test-searxng', {
+      const res = await adminResponse(adminFetch, '/settings/search/test-searxng', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ baseUrl: form.search.baseUrl }),
@@ -91,7 +92,7 @@ export function SearchSection({ data, form, setForm, busy, saveSettings, adminFe
     setKeyTesting(true);
     setKeyTest(null);
     try {
-      const r = await adminFetch('/settings/secrets/test', {
+      const r = await adminResponse(adminFetch, '/settings/secrets/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         // `provider` tells the controller which endpoint to probe — the same

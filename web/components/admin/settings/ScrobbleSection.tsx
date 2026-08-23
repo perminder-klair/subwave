@@ -3,6 +3,7 @@
 import type { ChangeEvent } from 'react';
 import { useState } from 'react';
 import { notify, errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { Card, Btn, Pill, Seg } from '../ui';
@@ -62,7 +63,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
 
   const sendTest = async (provider: 'lastfm' | 'listenbrainz') => {
     try {
-      const r = await adminFetch('/scrobble/test', {
+      const r = await adminResponse(adminFetch, '/scrobble/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ provider }),
@@ -81,7 +82,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
   const connectLastfm = async () => {
     setConnecting(true);
     try {
-      const r = await adminFetch('/scrobble/lastfm/connect', { method: 'POST' });
+      const r = await adminResponse(adminFetch, '/scrobble/lastfm/connect', { method: 'POST' });
       const j = (await r.json().catch(() => ({}))) as {
         ok?: boolean; token?: string; authUrl?: string; message?: string;
       };
@@ -105,7 +106,7 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
     if (!authToken) return;
     setConnecting(true);
     try {
-      const r = await adminFetch('/scrobble/lastfm/complete', {
+      const r = await adminResponse(adminFetch, '/scrobble/lastfm/complete', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token: authToken }),

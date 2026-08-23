@@ -1,11 +1,17 @@
 'use client';
 
 import type { ChangeEvent } from 'react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { notify, errorMessage } from '../../lib/notify';
 import { normalizeStationLocale } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
+import {
+  AdminResponseError,
+  adminJson,
+  adminResponse,
+  useAdminMutation,
+} from '../../lib/admin-query';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
@@ -41,6 +47,11 @@ import { ThemeSection } from './settings/ThemeSection';
 import { ScrobbleSection } from './settings/ScrobbleSection';
 import { LikesSection } from './settings/LikesSection';
 import { NavidromeSection } from './settings/NavidromeSection';
+import {
+  applySettingsSave,
+  useSettingsQuery,
+  type SettingsSaveResult,
+} from './settings/queries';
 
 const SECTIONS = [
   { id: 'station',  label: 'Station', hint: 'name · location · locale', icon: Radio },
@@ -93,12 +104,20 @@ function mergePatchErrors(
   return out;
 }
 
+const sameForm = (a: FormState, b: FormState) => JSON.stringify(a) === JSON.stringify(b);
+
 export default function SettingsPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [data, setData] = useState<SettingsData | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const settingsQuery = useSettingsQuery<SettingsData>({
+    adminFetch,
+    enabled: hydrated && !needsAuth,
+    refetchInterval: 3_000,
+  });
+  const data = settingsQuery.data ?? null;
+  const err = settingsQuery.error ? errorMessage(settingsQuery.error) : null;
+  const [commandBusy, setBusy] = useState(false);
   const [form, setForm] = useState<FormState | null>(null);
+  const formBaselineRef = useRef<FormState | null>(null);
   const [pendingRestart, setPendingRestart] = useState(false);
   const [confirmRestart, setConfirmRestart] = useState(false);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -106,14 +125,19 @@ export default function SettingsPanel() {
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const router = useRouter();
 
-  const refresh = async () => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) return;
-      const j = (await r.json()) as SettingsData;
-      setData(j); setErr(null);
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-  };
+  const refresh = async () => { await settingsQuery.refetch(); };
+
+  const saveMutation = useAdminMutation<SettingsSaveResult, Record<string, unknown>>({
+    adminFetch,
+    request: (patch, fetcher) => adminJson<SettingsSaveResult>(fetcher, '/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+    onDone: (result, _patch, client) => applySettingsSave<SettingsData>(client, result),
+    toastOnError: false,
+  });
+  const busy = commandBusy || saveMutation.isPending;
 
   // Jingles / SFX / Beds now live on /admin/imaging; their old ?section
   // deep-links are forwarded so existing bookmarks survive. Read through
@@ -131,9 +155,9 @@ export default function SettingsPanel() {
   }, [router, searchParams]);
 
   useEffect(() => {
-    if (!data?.values || form) return;
+    if (!data?.values) return;
     const v = data.values;
-    setForm({
+    const nextForm: FormState = {
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
       maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
       transitions: {
@@ -362,56 +386,34 @@ export default function SettingsPanel() {
         maxTracks: String(v.likes?.maxTracks ?? 10),
         windowDays: String(v.likes?.windowDays ?? 30),
       },
-    });
+    };
+    const baseline = formBaselineRef.current;
+    if (!form) setForm(nextForm);
+    else if (!sameForm(form, nextForm) && baseline && sameForm(form, baseline)) setForm(nextForm);
+    formBaselineRef.current = nextForm;
   }, [data, form]);
 
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    refresh();
-    const id = setInterval(() => { refresh(); }, 3000);
-    return () => clearInterval(id);
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const saveSettings: SaveSettings = async (patch) => {
-    setBusy(true);
     try {
-      const r = await adminFetch('/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        error?: string;
-        requiresRestart?: boolean;
-        fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        // Land the failure on the inputs it belongs to. The toast still fires —
-        // a save button can be off-screen from the control that failed — but
-        // the operator now also sees WHICH field, without decoding a dotted
-        // path out of a sentence.
-        //
-        // Only the keys THIS patch carried are replaced, so a stale error from
-        // an unrelated section can't linger and a section that saved cleanly
-        // can't be blamed for another's failure.
-        setFieldErrors((prev) => mergePatchErrors(prev, patch, j.fieldErrors));
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      const j = await saveMutation.mutateAsync(patch);
       setFieldErrors((prev) => mergePatchErrors(prev, patch, undefined));
       if (j.requiresRestart) setPendingRestart(true);
       notify.ok(j.requiresRestart ? 'saved, restart the mixer to apply' : 'saved');
-      await refresh();
       return true;
     } catch (e) {
+      const body = e instanceof AdminResponseError
+        ? e.body as { fieldErrors?: Record<string, string> }
+        : undefined;
+      setFieldErrors((prev) => mergePatchErrors(prev, patch, body?.fieldErrors));
       notify.err(errorMessage(e));
       return false;
-    } finally { setBusy(false); }
+    }
   };
 
   const restartMixer = async () => {
     setBusy(true);
     try {
-      const r = await adminFetch('/restart-mixer', { method: 'POST' });
+      const r = await adminResponse(adminFetch, '/restart-mixer', { method: 'POST' });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       setPendingRestart(false);
@@ -424,7 +426,7 @@ export default function SettingsPanel() {
   const stopStream = async () => {
     setBusy(true);
     try {
-      const r = await adminFetch('/stream-stop', { method: 'POST' });
+      const r = await adminResponse(adminFetch, '/stream-stop', { method: 'POST' });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       notify.ok('stream stopped, station is off air');
@@ -437,7 +439,7 @@ export default function SettingsPanel() {
   const startStream = async () => {
     setBusy(true);
     try {
-      const r = await adminFetch('/stream-start', { method: 'POST' });
+      const r = await adminResponse(adminFetch, '/stream-start', { method: 'POST' });
       const j = (await r.json().catch(() => ({}))) as { error?: string };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       notify.ok('stream started, station is on air');

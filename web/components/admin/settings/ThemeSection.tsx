@@ -4,6 +4,7 @@ import type { ChangeEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import { applyTheme, cacheTheme, resolveFont } from '../../../lib/theme';
 import { useThemeSwitcher } from '../../ThemeProvider';
 import { V3AlertDialog } from '../../ui/alert-dialog';
@@ -149,7 +150,7 @@ function ThemeEditorModal({
       const body: Record<string, unknown> = { name: name.trim(), description: description.trim(), mode, tokens: cleaned };
       // Keeps the same file even if the operator renamed the theme.
       if (isEdit && editing) body.id = editing.id;
-      const r = await adminFetch('/themes', {
+      const r = await adminResponse(adminFetch, '/themes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -370,7 +371,7 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
   const refresh = async () => {
     setRefreshing(true);
     try {
-      const r = await adminFetch('/themes/refresh', { method: 'POST' });
+      const r = await adminResponse(adminFetch, '/themes/refresh', { method: 'POST' });
       const j = (await r.json().catch(() => ({}))) as { error?: string; themes?: ThemeDef[] };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       const next = j.themes ?? [];
@@ -413,7 +414,7 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
   // the list), so nothing points at a now-missing id.
   const remove = async (theme: ThemeDef) => {
     try {
-      const r = await adminFetch(`/themes/${encodeURIComponent(theme.id)}`, { method: 'DELETE' });
+      const r = await adminResponse(adminFetch, `/themes/${encodeURIComponent(theme.id)}`, { method: 'DELETE' });
       const j = (await r.json().catch(() => ({}))) as { error?: string; themes?: ThemeDef[] };
       if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       const next = j.themes ?? [];

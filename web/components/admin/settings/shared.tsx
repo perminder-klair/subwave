@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
 import { m } from 'motion/react';
 import { notify, errorMessage } from '../../../lib/notify';
+import { adminResponse } from '../../../lib/admin-query';
 import { cn } from '../../../lib/cn';
 import type { StationLocale } from '../../../lib/format';
 import type { EngineAvailability } from '../tts/engineMeta';
@@ -732,8 +733,7 @@ export function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButto
     if (state === 'loading') return;
     setState('loading');
     try {
-      const r = await adminFetch(path);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const r = await adminResponse(adminFetch, path);
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);
       const audio = new Audio(url);

@@ -5,17 +5,21 @@ Runs only against the isolated controller and web servers documented in
 """
 import base64
 import json
+import os
 import sys
+import tempfile
 import traceback
 import urllib.error
 import urllib.parse
 import urllib.request
+import wave
 
 from playwright.sync_api import sync_playwright
 
 WEB = "http://localhost:7793"
 API = "http://localhost:7791"
 AUTH = base64.b64encode(b"test:test").decode()
+ALLOW_DESTRUCTIVE_ENV = "SUBWAVE_VERIFY_ALLOW_DESTRUCTIVE"
 
 CHECKS = {}
 
@@ -33,7 +37,31 @@ def api(path):
         return json.loads(response.read())
 
 
+def api_write(method, path, body=None, ok_statuses=(200, 204)):
+    payload = None if body is None else json.dumps(body).encode()
+    headers = {"Authorization": f"Basic {AUTH}"}
+    if payload is not None:
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(
+        f"{API}{path}", data=payload, headers=headers, method=method,
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            raw = response.read()
+            assert response.status in ok_statuses, (method, path, response.status, raw)
+            return json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as error:
+        if error.code in ok_statuses:
+            return {}
+        raise
+
+
 def assert_throwaway_stack():
+    if os.environ.get(ALLOW_DESTRUCTIVE_ENV) != "1":
+        sys.exit(
+            f"refusing destructive checks: set {ALLOW_DESTRUCTIVE_ENV}=1 only "
+            "for the isolated verify stack"
+        )
     if API != "http://localhost:7791" or WEB != "http://localhost:7793":
         sys.exit("refusing to run: API/WEB are not the verify stack's ports")
     try:
@@ -75,7 +103,10 @@ def stub_browse_when_needed(page):
 
 def new_page(playwright):
     browser = playwright.chromium.launch()
-    context = browser.new_context(viewport={"width": 1440, "height": 900})
+    context = browser.new_context(
+        viewport={"width": 1440, "height": 900},
+        reduced_motion="reduce",
+    )
     context.add_init_script(
         f"localStorage.setItem('subwave_admin_auth', '{AUTH}')",
     )
@@ -145,6 +176,19 @@ def is_admin_request(request, path, method="GET"):
         and urllib.parse.urlparse(request.url).path == path
         and bool(request.headers.get("authorization"))
     )
+
+
+def click_admin_link(page, name, path):
+    page.get_by_role("link", name=name, exact=True).click()
+    page.wait_for_url(f"**{path}**")
+
+
+def write_silent_wav(path, seconds, rate=8000):
+    with wave.open(path, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(rate)
+        output.writeframes(b"\x00\x00" * int(rate * seconds))
 
 
 def stub_dashboard(page, queue_track=False):
@@ -773,6 +817,182 @@ def takeover_expiry_survives_failed_poll(page):
 
     page.get_by_role("button", name="Pin to air →").wait_for(state="visible")
     assert schedule_hits == 2, schedule_hits
+
+
+@check
+def settings_cache_shared(page):
+    """Every admin curation surface observes one fresh /settings cache entry."""
+    page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
+    page.get_by_placeholder("A short line describing your station…").wait_for(state="visible")
+    click_admin_link(page, "Moods", "/admin/moods")
+    page.get_by_text("Moods & moments.", exact=True).wait_for(state="visible")
+    click_admin_link(page, "Personas", "/admin/personas")
+    page.get_by_text("The voices on your station.", exact=True).wait_for(state="visible")
+    click_admin_link(page, "Imaging", "/admin/imaging")
+    page.get_by_text("The sounds between the songs.", exact=True).wait_for(state="visible")
+    click_admin_link(page, "Settings", "/admin/settings")
+    page.get_by_placeholder("A short line describing your station…").wait_for(state="visible")
+    assert request_count(page, "/settings", authenticated=True) == 1, page.request_log
+
+
+@check
+def settings_save_propagates(page):
+    """A returned `saved` snapshot updates the shared key without a reload storm."""
+    original = api("/settings").get("values", {}).get("stationDescription", "")
+    fixture = "Task 4 shared settings cache fixture"
+    try:
+        page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
+        description = page.get_by_placeholder("A short line describing your station…")
+        description.wait_for(state="visible")
+        initial_gets = request_count(page, "/settings", authenticated=True)
+        description.fill(fixture)
+        with page.expect_response(
+            lambda response: is_admin_request(response.request, "/settings", "POST")
+        ):
+            page.get_by_role("button", name="Save station settings").click()
+        assert api("/settings").get("values", {}).get("stationDescription") == fixture
+
+        click_admin_link(page, "Moods", "/admin/moods")
+        page.get_by_text("Moods & moments.", exact=True).wait_for(state="visible")
+        click_admin_link(page, "Settings", "/admin/settings")
+        description = page.get_by_placeholder("A short line describing your station…")
+        description.wait_for(state="visible")
+        assert description.input_value() == fixture, description.input_value()
+        assert request_count(page, "/settings", authenticated=True) == initial_gets, page.request_log
+    finally:
+        api_write("POST", "/settings", {"stationDescription": original})
+
+
+@check
+def imaging_mutations_refresh(page):
+    """SFX/bed mutations invalidate only their resource and keep the fresh list cached."""
+    sfx_name = "task4-cache-sfx"
+    bed_name = "task4-cache-bed"
+    api_write("DELETE", f"/sfx/{sfx_name}", ok_statuses=(200, 400, 404))
+    api_write("DELETE", f"/beds/{bed_name}", ok_statuses=(200, 400, 404))
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+        sfx_wav_path = handle.name
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+        bed_wav_path = handle.name
+    write_silent_wav(sfx_wav_path, seconds=0.3)
+    write_silent_wav(bed_wav_path, seconds=31)
+    try:
+        page.clock.install()
+        page.goto(f"{WEB}/admin/imaging?tab=sfx", wait_until="domcontentloaded")
+        page.get_by_text("Sound effects", exact=True).wait_for(state="visible")
+        sfx_initial = request_count(page, "/sfx", authenticated=True)
+        page.get_by_role("button", name="Import", exact=True).click()
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_label("Name").fill(sfx_name)
+        dialog.locator('input[aria-label="Import SFX audio file"]').set_input_files(sfx_wav_path)
+        dialog.get_by_role("button", name="Import", exact=True).click()
+        dialog.wait_for(state="detached")
+        page.get_by_text(sfx_name, exact=True).wait_for(state="visible")
+        assert request_count(page, "/sfx", authenticated=True) == sfx_initial + 1, page.request_log
+
+        page.get_by_role("tab", name="Beds").click()
+        page.get_by_text("when to use a bed", exact=True).wait_for(state="visible")
+        beds_initial = request_count(page, "/beds", authenticated=True)
+        page.get_by_role("button", name="Import", exact=True).click()
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_label("Name").fill(bed_name)
+        dialog.locator('input[aria-label="Import bed audio file"]').set_input_files(bed_wav_path)
+        dialog.get_by_role("button", name="Import", exact=True).click()
+        dialog.wait_for(state="detached")
+        page.get_by_text(bed_name, exact=True).wait_for(state="visible")
+        assert request_count(page, "/beds", authenticated=True) == beds_initial + 1, page.request_log
+
+        click_admin_link(page, "Settings", "/admin/settings")
+        page.get_by_placeholder("A short line describing your station…").wait_for(state="visible")
+        click_admin_link(page, "Imaging", "/admin/imaging")
+        page.get_by_text("The sounds between the songs.", exact=True).wait_for(state="visible")
+
+        page.get_by_role("tab", name="SFX").click()
+        page.get_by_text(sfx_name, exact=True).wait_for(state="visible")
+        assert request_count(page, "/sfx", authenticated=True) == sfx_initial + 1, page.request_log
+        row = page.get_by_text(sfx_name, exact=True).locator("xpath=ancestor::div[contains(@class,'grid-cols-1')][1]")
+        row.get_by_role("button", name="Delete effect").click()
+        page.get_by_role("alertdialog").get_by_role("button", name="Delete").click()
+        page.get_by_text(sfx_name, exact=True).wait_for(state="detached")
+
+        page.get_by_role("tab", name="Beds").click()
+        page.get_by_text(bed_name, exact=True).wait_for(state="visible")
+        assert request_count(page, "/beds", authenticated=True) == beds_initial + 1, page.request_log
+        row = page.get_by_text(bed_name, exact=True).locator("xpath=ancestor::div[contains(@class,'grid-cols-1')][1]")
+        row.get_by_role("button", name="Delete bed").click()
+        page.get_by_role("alertdialog").get_by_role("button", name="Delete").click()
+        page.get_by_text(bed_name, exact=True).wait_for(state="detached")
+    finally:
+        api_write("DELETE", f"/sfx/{sfx_name}", ok_statuses=(200, 400, 404))
+        api_write("DELETE", f"/beds/{bed_name}", ok_statuses=(200, 400, 404))
+        os.unlink(sfx_wav_path)
+        os.unlink(bed_wav_path)
+
+
+@check
+def personas_mutations_refresh(page):
+    """Roster saves propagate through settings cache and remount without a GET."""
+    fixture = "Task 4 Cache Persona"
+
+    def remove_fixture():
+        settings = api("/settings")
+        personas = settings.get("values", {}).get("personas", [])
+        remaining = [persona for persona in personas if persona.get("name") != fixture]
+        if len(remaining) != len(personas):
+            api_write("POST", "/settings", {"personas": remaining})
+
+    remove_fixture()
+    try:
+        page.goto(f"{WEB}/admin/personas", wait_until="domcontentloaded")
+        page.get_by_text("The voices on your station.", exact=True).wait_for(state="visible")
+        initial_gets = request_count(page, "/settings", authenticated=True)
+        page.get_by_role("button", name="+ Add persona").click()
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_label("On-air name").fill(fixture)
+        dialog.get_by_label("Soul").fill("Temporary persona for the Task 4 shared-cache browser check.")
+        dialog.get_by_role("button", name="Save persona").click()
+        dialog.wait_for(state="detached")
+        assert any(
+            persona.get("name") == fixture
+            for persona in api("/settings").get("values", {}).get("personas", [])
+        )
+        assert request_count(page, "/settings", authenticated=True) == initial_gets, page.request_log
+
+        click_admin_link(page, "Imaging", "/admin/imaging")
+        page.get_by_text("The sounds between the songs.", exact=True).wait_for(state="visible")
+        click_admin_link(page, "Personas", "/admin/personas")
+        page.get_by_role("button", name=f"Edit {fixture}").wait_for(state="visible")
+        assert request_count(page, "/settings", authenticated=True) == initial_gets, page.request_log
+
+        # AdminShell crossfades route children. The incoming roster is visible
+        # before the exiting Imaging subtree has finished leaving; wait out
+        # that 120ms transition so the card receives a real operator click.
+        page.wait_for_timeout(250)
+        page.get_by_role("button", name=f"Edit {fixture}").click()
+        dialog = page.get_by_role("dialog")
+        dialog.wait_for(state="visible")
+        dialog.get_by_label("On-air name").wait_for(state="visible")
+        assert dialog.get_by_label("On-air name").input_value() == fixture
+        # The full-screen editor swaps its keyed persona subtree as focus moves;
+        # dispatch to the current control without waiting for animation stability.
+        dialog.get_by_role("button", name="Remove").dispatch_event("click")
+        confirm = page.get_by_role("alertdialog")
+        confirm.wait_for(state="visible")
+        confirm.get_by_role("button", name="Delete").dispatch_event("click")
+        confirm.wait_for(state="detached")
+        dialog.wait_for(state="detached")
+        page.wait_for_timeout(100)
+        assert page.get_by_role("button", name=f"Edit {fixture}").count() == 0
+        page.get_by_role("button", name="Edit Marlowe").click()
+        dialog = page.get_by_role("dialog")
+        dialog.get_by_role("button", name="Save persona").click()
+        dialog.wait_for(state="detached")
+        assert not any(
+            persona.get("name") == fixture
+            for persona in api("/settings").get("values", {}).get("personas", [])
+        )
+    finally:
+        remove_fixture()
 
 
 def main():

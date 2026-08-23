@@ -276,8 +276,10 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
     let cancelled = false;
     (async () => {
       try {
+        // Keep the auth probe separate from the shared /settings cache: every
+        // curation screen owns that response through settingsKeys.detail().
         // admin-query-imperative: authentication-probe
-        await adminFetch('/settings');
+        await adminFetch('/stations');
       } catch {}
       if (cancelled) return;
     })();

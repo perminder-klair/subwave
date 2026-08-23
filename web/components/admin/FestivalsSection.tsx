@@ -6,6 +6,7 @@ import {
 } from 'react-hook-form';
 import { z } from 'zod';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useZodForm, applyServerFieldErrors, fieldAria } from '@/lib/form';
 import { TextField, SelectField } from '@/lib/form-fields';
@@ -21,6 +22,11 @@ import { V3AlertDialog } from '../ui/alert-dialog';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
+import {
+  applySettingsSave,
+  useSettingsQuery,
+  type SettingsSaveResult,
+} from './settings/queries';
 import {
   festivalsSchema,
   SETTINGS_FESTIVAL_DESCRIPTION_MAX,
@@ -211,6 +217,10 @@ function FestivalModalFields({
 
 export default function FestivalsSection() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
+  const settingsQuery = useSettingsQuery<{
+    values?: { festivals?: unknown };
+    tts?: { moods?: unknown };
+  }>({ adminFetch, enabled: hydrated && !needsAuth });
   const [loaded, setLoaded] = useState(false);
   const [moods, setMoods] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
@@ -247,14 +257,24 @@ export default function FestivalsSection() {
   });
   const watchedFestivals = useWatch({ control: arrayControl, name: 'festivals' }) ?? [];
 
-  const load = useCallback(async () => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) throw new Error(`failed (${r.status})`);
-      const j = (await r.json()) as {
-        values?: { festivals?: unknown };
-        tts?: { moods?: unknown };
-      } | null;
+  const saveMutation = useAdminMutation<SettingsSaveResult, Festival[]>({
+    adminFetch,
+    request: (list, fetcher) => adminJson<SettingsSaveResult>(fetcher, '/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ festivals: list }),
+    }),
+    onDone: (result, _list, client) => applySettingsSave(client, result),
+    toastOnError: false,
+  });
+
+  useEffect(() => {
+    if (settingsQuery.error) {
+      setErr(errorMessage(settingsQuery.error));
+      return;
+    }
+    const j = settingsQuery.data;
+    if (!j || (loaded && form.formState.isDirty)) return;
       // validateFestivalsStrict normalises on every save, so trust the shape here.
       const vals = j?.values?.festivals;
       const loadedList = Array.isArray(vals) ? (vals as Festival[]) : [];
@@ -265,15 +285,9 @@ export default function FestivalsSection() {
       const moodVals = j?.tts?.moods;
       setMoods(Array.isArray(moodVals) ? (moodVals as string[]) : []);
       setErr(null);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    }
-  }, [adminFetch, form]);
+  }, [settingsQuery.data, settingsQuery.error, loaded, form]);
 
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    void load();
-  }, [hydrated, needsAuth, load]);
+  const load = useCallback(async () => { await settingsQuery.refetch(); }, [settingsQuery]);
 
   // `moods` (and so the schema's vocabulary) arrives asynchronously. Once the
   // real list lands, re-validate rather than remounting the form, which would
@@ -285,30 +299,20 @@ export default function FestivalsSection() {
   const persist = useCallback(async (list: Festival[]) => {
     setBusy(true);
     try {
-      const r = await adminFetch('/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ festivals: list }),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        error?: string;
-        fieldErrors?: Record<string, string>;
-      };
-      if (!r.ok) {
-        // A rule only the server can check still lands on the right input.
-        applyServerFieldErrors(form, j.fieldErrors);
-        throw new Error(j.error || `failed (${r.status})`);
-      }
+      await saveMutation.mutateAsync(list);
       form.reset({ festivals: sortFestivals(list) });
       setEditIdx(null);
       setEditing(false);
       notify.ok(`${list.length} festival${list.length === 1 ? '' : 's'} saved`);
     } catch (e) {
+      if (e instanceof AdminResponseError) {
+        applyServerFieldErrors(form, (e.body as { fieldErrors?: Record<string, string> }).fieldErrors);
+      }
       notify.err(`Save failed: ${errorMessage(e)}`);
     } finally {
       setBusy(false);
     }
-  }, [adminFetch, form]);
+  }, [form, saveMutation]);
 
   const commit = form.handleSubmit(values => persist(values.festivals));
 

@@ -5,6 +5,7 @@ import { useId, useState } from 'react';
 import { Textarea } from '../ui/textarea';
 import { Btn } from './ui';
 import { errorMessage } from '../../lib/notify';
+import { adminJson } from '../../lib/admin-query';
 
 interface AiFillProps<T> {
   // e.g. '/generate/persona'
@@ -39,13 +40,11 @@ export function AiFill<T = unknown>({
     setBusy(true);
     setErr(null);
     try {
-      const r = await adminFetch(endpoint, {
+      const j = await adminJson<Record<string, unknown>>(adminFetch, endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ description, ...(extra || {}) }),
       });
-      const j = (await r.json().catch(() => ({}))) as Record<string, unknown> & { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
       const value = j[resultKey] as T | undefined;
       if (!value) throw new Error('no draft returned');
       onApply(value);

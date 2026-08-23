@@ -3,10 +3,13 @@
 /* Owns the state and handlers the Jingles / SFX / Beds / Voices sections need.
    Tab pattern mirrors ConnectPanel (Seg control + ?tab= deep-link). */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { Music, AudioLines, Waves, Mic } from 'lucide-react';
 import { useAdminAuth } from '../../../lib/adminAuth';
+import {
+  AdminResponseError, adminJson, adminResponse, useAdminMutation,
+} from '../../../lib/admin-query';
 import { notify, errorMessage } from '../../../lib/notify';
 import { SectionTabs } from '../SectionTabs';
 import { V3AlertDialog } from '../../ui/alert-dialog';
@@ -21,17 +24,44 @@ import { SfxSection } from './SfxSection';
 import { BedsSection } from './BedsSection';
 import { VoicesSection } from './VoicesSection';
 import { MonoLabel, TabMetric, pad2 } from './parts';
+import {
+  imagingKeys,
+  useBedsQuery,
+  useJinglesQuery,
+  useSfxQuery,
+  useVoicesQuery,
+} from './queries';
+import {
+  applySettingsSave,
+  useSettingsQuery,
+  type SettingsSaveResult,
+} from '../settings/queries';
 
 type TabId = 'jingles' | 'sfx' | 'beds' | 'voices';
 const TAB_IDS: TabId[] = ['jingles', 'sfx', 'beds', 'voices'];
 
 export default function ImagingPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [data, setData] = useState<SettingsData | null>(null);
-  const [sfxData, setSfxData] = useState<SfxData | null>(null);
-  const [bedsData, setBedsData] = useState<BedsData | null>(null);
-  const [voicesData, setVoicesData] = useState<VoiceData | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const enabled = hydrated && !needsAuth;
+  const settingsQuery = useSettingsQuery<SettingsData>({
+    adminFetch,
+    enabled,
+    refetchInterval: 3_000,
+  });
+  const jinglesQuery = useJinglesQuery(adminFetch, enabled);
+  const sfxQuery = useSfxQuery(adminFetch, enabled);
+  const bedsQuery = useBedsQuery(adminFetch, enabled);
+  const voicesQuery = useVoicesQuery(adminFetch, enabled);
+  const data = useMemo(
+    () => settingsQuery.data
+      ? { ...settingsQuery.data, jingles: jinglesQuery.data?.jingles }
+      : null,
+    [settingsQuery.data, jinglesQuery.data],
+  );
+  const sfxData: SfxData | null = sfxQuery.data ?? null;
+  const bedsData: BedsData | null = bedsQuery.data ?? null;
+  const voicesData: VoiceData | null = voicesQuery.data ?? null;
+  const err = settingsQuery.error ? errorMessage(settingsQuery.error) : null;
   const [busy, setBusy] = useState(false);
 
   // Active tab lives in the URL (?tab=…), shared by the in-page SectionTabs and the
@@ -51,45 +81,37 @@ export default function ImagingPanel() {
   const [confirmDeleteBed, setConfirmDeleteBed] = useState<string | null>(null);
   const [confirmDeleteVoice, setConfirmDeleteVoice] = useState<string | null>(null);
 
-  const refresh = async () => {
-    try {
-      const r = await adminFetch('/settings');
-      if (!r.ok) return;
-      const j = (await r.json()) as SettingsData;
-      setData(j); setErr(null);
-    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
-  };
+  const refresh = async () => { await settingsQuery.refetch(); };
 
-  const refreshSfx = async () => {
-    try {
-      const r = await adminFetch('/sfx');
-      if (!r.ok) return;
-      setSfxData((await r.json()) as SfxData);
-    } catch { /* non-fatal */ }
-  };
+  const saveMutation = useAdminMutation<SettingsSaveResult, Record<string, unknown>>({
+    adminFetch,
+    request: (patch, fetcher) => adminJson<SettingsSaveResult>(fetcher, '/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    }),
+    onDone: (result, _patch, client) => applySettingsSave<SettingsData>(client, result),
+    toastOnError: false,
+  });
 
-  const refreshBeds = async () => {
-    try {
-      const r = await adminFetch('/beds');
-      if (!r.ok) return;
-      setBedsData((await r.json()) as BedsData);
-    } catch { /* non-fatal */ }
-  };
+  const resourceMutation = useAdminMutation<Record<string, unknown>, {
+    path: string;
+    init: RequestInit;
+    key: readonly unknown[];
+  }>({
+    adminFetch,
+    request: async (vars, fetcher) => {
+      const response = await adminResponse(fetcher, vars.path, vars.init);
+      return response.json().catch(() => ({})) as Promise<Record<string, unknown>>;
+    },
+    onDone: (_result, vars, client) =>
+      client.invalidateQueries({ queryKey: vars.key }),
+    toastOnError: false,
+  });
 
-  const refreshVoices = async () => {
-    try {
-      const r = await adminFetch('/voices');
-      if (!r.ok) return;
-      setVoicesData((await r.json()) as VoiceData);
-    } catch { /* non-fatal */ }
-  };
-
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    refresh(); refreshSfx(); refreshBeds(); refreshVoices();
-    const id = setInterval(() => { refresh(); refreshSfx(); refreshBeds(); refreshVoices(); }, 3000);
-    return () => clearInterval(id);
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+  const mutationFieldErrors = (error: unknown) => error instanceof AdminResponseError
+    ? (error.body as { fieldErrors?: Record<string, string> }).fieldErrors
+    : undefined;
 
   useEffect(() => {
     if (data?.values && jingleRatio == null) setJingleRatio(String(data.values.jingleRatio ?? ''));
@@ -108,30 +130,16 @@ export default function ImagingPanel() {
   const saveSettings: SaveSettings = async (patch) => {
     setBusy(true);
     try {
-      const r = await adminFetch('/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      });
-      const j = (await r.json().catch(() => ({}))) as {
-        error?: string;
-        fieldErrors?: Record<string, string>;
-        requiresRestart?: boolean;
-      };
-      // POST /settings answers with `fieldErrors` for the keys on the shared
-      // schema (#1348). These toggles are inline controls rather than a
-      // react-hook-form form, so there is no applyServerFieldErrors to call —
-      // the field message is simply the more specific of the two strings.
-      if (!r.ok) {
-        const field = Object.values(j.fieldErrors || {})[0];
-        throw new Error(field || j.error || `failed (${r.status})`);
-      }
+      const j = await saveMutation.mutateAsync(patch);
       // A jingle-ratio change needs a mixer restart (control in Settings → Danger zone).
       notify.ok(j.requiresRestart ? 'saved, restart the mixer to apply' : 'saved');
-      await refresh();
       return true;
     } catch (e) {
-      notify.err(errorMessage(e));
+      const body = e instanceof AdminResponseError
+        ? e.body as { fieldErrors?: Record<string, string> }
+        : undefined;
+      const field = Object.values(body?.fieldErrors || {})[0];
+      notify.err(field || errorMessage(e));
       return false;
     } finally { setBusy(false); }
   };
@@ -144,31 +152,30 @@ export default function ImagingPanel() {
   const createJingle = async (values: { text: string }): Promise<ImagingSubmitResult> => {
     setBusy(true);
     try {
-      const r = await adminFetch('/jingles', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
+      await resourceMutation.mutateAsync({
+        path: '/jingles',
+        init: {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(values),
+        },
+        key: imagingKeys.jingles(),
       });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; fieldErrors?: Record<string, string> };
-      if (!r.ok) {
-        notify.err(`Jingle creation failed: ${j.error || `failed (${r.status})`}`);
-        return { ok: false, fieldErrors: j.fieldErrors };
-      }
-      await refresh();
       return { ok: true };
     } catch (e) {
       notify.err(`Jingle creation failed: ${errorMessage(e)}`);
-      return { ok: false };
+      return { ok: false, fieldErrors: mutationFieldErrors(e) };
     } finally { setBusy(false); }
   };
 
   const deleteJingle = async (filename: string) => {
     setBusy(true);
     try {
-      const r = await adminFetch(`/jingles/${encodeURIComponent(filename)}`, { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      await refresh();
+      await resourceMutation.mutateAsync({
+        path: `/jingles/${encodeURIComponent(filename)}`,
+        init: { method: 'DELETE' },
+        key: imagingKeys.jingles(),
+      });
     } catch (e) { notify.err(`Delete failed: ${errorMessage(e)}`); }
     finally { setBusy(false); }
   };
@@ -197,9 +204,7 @@ export default function ImagingPanel() {
           const fd = new FormData();
           fd.append('file', file);
           if (total === 1 && label) fd.append('label', label);
-          const r = await adminFetch('/jingles/upload', { method: 'POST', body: fd, signal });
-          const j = (await r.json().catch(() => ({}))) as { error?: string };
-          if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+          await adminResponse(adminFetch, '/jingles/upload', { method: 'POST', body: fd }, signal);
           ok++;
         } catch (e) {
           if (signal?.aborted) { aborted = true; break; }
@@ -207,7 +212,7 @@ export default function ImagingPanel() {
         }
         onProgress?.(i + 1, total);
       }
-      if (ok) await refresh();
+      if (ok) await jinglesQuery.refetch();
       if (aborted) {
         notify.info(`Import stopped — ${ok}/${total} imported`);
       } else if (total === 1) {
@@ -227,31 +232,30 @@ export default function ImagingPanel() {
   }): Promise<ImagingSubmitResult> => {
     setBusy(true);
     try {
-      const r = await adminFetch('/sfx', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
+      await resourceMutation.mutateAsync({
+        path: '/sfx',
+        init: {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(values),
+        },
+        key: imagingKeys.sfx(),
       });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; fieldErrors?: Record<string, string> };
-      if (!r.ok) {
-        notify.err(`Sound effect creation failed: ${j.error || `failed (${r.status})`}`);
-        return { ok: false, fieldErrors: j.fieldErrors };
-      }
-      await refreshSfx();
       return { ok: true };
     } catch (e) {
       notify.err(`Sound effect creation failed: ${errorMessage(e)}`);
-      return { ok: false };
+      return { ok: false, fieldErrors: mutationFieldErrors(e) };
     } finally { setBusy(false); }
   };
 
   const deleteSfx = async (name: string) => {
     setBusy(true);
     try {
-      const r = await adminFetch(`/sfx/${encodeURIComponent(name)}`, { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      await refreshSfx();
+      await resourceMutation.mutateAsync({
+        path: `/sfx/${encodeURIComponent(name)}`,
+        init: { method: 'DELETE' },
+        key: imagingKeys.sfx(),
+      });
     } catch (e) { notify.err(`Delete failed: ${errorMessage(e)}`); }
     finally { setBusy(false); }
   };
@@ -265,18 +269,14 @@ export default function ImagingPanel() {
       fd.append('file', file);
       fd.append('name', values.name);
       if (values.description) fd.append('description', values.description);
-      const r = await adminFetch('/sfx/upload', { method: 'POST', body: fd });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; fieldErrors?: Record<string, string> };
-      if (!r.ok) {
-        notify.err(`Sound effect import failed: ${j.error || `failed (${r.status})`}`);
-        return { ok: false, fieldErrors: j.fieldErrors };
-      }
-      await refreshSfx();
+      await resourceMutation.mutateAsync({
+        path: '/sfx/upload', init: { method: 'POST', body: fd }, key: imagingKeys.sfx(),
+      });
       notify.ok('sound effect imported');
       return { ok: true };
     } catch (e) {
       notify.err(`Sound effect import failed: ${errorMessage(e)}`);
-      return { ok: false };
+      return { ok: false, fieldErrors: mutationFieldErrors(e) };
     } finally { setBusy(false); }
   };
 
@@ -286,22 +286,20 @@ export default function ImagingPanel() {
   }): Promise<ImagingSubmitResult> => {
     setBusy(true);
     try {
-      const r = await adminFetch('/beds', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
+      await resourceMutation.mutateAsync({
+        path: '/beds',
+        init: {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(values),
+        },
+        key: imagingKeys.beds(),
       });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; fieldErrors?: Record<string, string> };
-      if (!r.ok) {
-        notify.err(`Bed generation failed: ${j.error || `failed (${r.status})`}`);
-        return { ok: false, fieldErrors: j.fieldErrors };
-      }
-      await refreshBeds();
       notify.ok('bed generated');
       return { ok: true };
     } catch (e) {
       notify.err(`Bed generation failed: ${errorMessage(e)}`);
-      return { ok: false };
+      return { ok: false, fieldErrors: mutationFieldErrors(e) };
     } finally { setBusy(false); }
   };
 
@@ -312,18 +310,14 @@ export default function ImagingPanel() {
       fd.append('file', file);
       fd.append('name', values.name);
       if (values.description) fd.append('description', values.description);
-      const r = await adminFetch('/beds/upload', { method: 'POST', body: fd });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; fieldErrors?: Record<string, string> };
-      if (!r.ok) {
-        notify.err(`Bed import failed: ${j.error || `failed (${r.status})`}`);
-        return { ok: false, fieldErrors: j.fieldErrors };
-      }
-      await refreshBeds();
+      await resourceMutation.mutateAsync({
+        path: '/beds/upload', init: { method: 'POST', body: fd }, key: imagingKeys.beds(),
+      });
       notify.ok('bed imported');
       return { ok: true };
     } catch (e) {
       notify.err(`Bed import failed: ${errorMessage(e)}`);
-      return { ok: false };
+      return { ok: false, fieldErrors: mutationFieldErrors(e) };
     } finally { setBusy(false); }
   };
 
@@ -331,10 +325,11 @@ export default function ImagingPanel() {
     if (busy) return;
     setBusy(true);
     try {
-      const r = await adminFetch(`/beds/${encodeURIComponent(name)}`, { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      await refreshBeds();
+      await resourceMutation.mutateAsync({
+        path: `/beds/${encodeURIComponent(name)}`,
+        init: { method: 'DELETE' },
+        key: imagingKeys.beds(),
+      });
       notify.ok('bed deleted');
     } catch (e) { notify.err(`Bed delete failed: ${errorMessage(e)}`); }
     finally { setBusy(false); }
@@ -347,18 +342,14 @@ export default function ImagingPanel() {
       const fd = new FormData();
       fd.append('file', file);
       fd.append('name', values.name);
-      const r = await adminFetch('/voices/upload', { method: 'POST', body: fd });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; fieldErrors?: Record<string, string> };
-      if (!r.ok) {
-        notify.err(`Voice import failed: ${j.error || `failed (${r.status})`}`);
-        return { ok: false, fieldErrors: j.fieldErrors };
-      }
-      await refreshVoices();
+      await resourceMutation.mutateAsync({
+        path: '/voices/upload', init: { method: 'POST', body: fd }, key: imagingKeys.voices(),
+      });
       notify.ok('voice imported');
       return { ok: true };
     } catch (e) {
       notify.err(`Voice import failed: ${errorMessage(e)}`);
-      return { ok: false };
+      return { ok: false, fieldErrors: mutationFieldErrors(e) };
     } finally { setBusy(false); }
   };
 
@@ -366,10 +357,11 @@ export default function ImagingPanel() {
     if (busy) return;
     setBusy(true);
     try {
-      const r = await adminFetch(`/voices/${encodeURIComponent(file)}`, { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      await refreshVoices();
+      await resourceMutation.mutateAsync({
+        path: `/voices/${encodeURIComponent(file)}`,
+        init: { method: 'DELETE' },
+        key: imagingKeys.voices(),
+      });
       notify.ok('voice deleted');
     } catch (e) { notify.err(`Voice delete failed: ${errorMessage(e)}`); }
     finally { setBusy(false); }
