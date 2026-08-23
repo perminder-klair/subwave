@@ -19,10 +19,8 @@ export default function LibraryPanel() {
   return <LibraryPanelInner />;
 }
 
-// Owns the ONE useAdminAuth instance for the page. Split from the body purely
-// so the body can consume its own provider — useAdminAuth is a per-instance
-// hook, and a second caller inside a tab would race a second hydration
-// (lib/adminAuth.ts:80).
+// Owns the Library feature boundary. Split from the body so every tab consumes
+// the same LibraryProvider while useAdminAuth mirrors the shell's shared store.
 function LibraryPanelInner() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   return (

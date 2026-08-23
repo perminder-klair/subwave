@@ -9,7 +9,7 @@
 import type { ReactNode } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
-import { adminJson, useAdminQuery } from '../../lib/admin-query';
+import { AdminResponseError, adminJson, useAdminQuery } from '../../lib/admin-query';
 import { errorMessage } from '../../lib/notify';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -571,9 +571,17 @@ export default function StatsPanel() {
     key: statsKeys.connections(), adminFetch, enabled, staleTime: 0,
     refetchInterval: () => 30_000,
     request: async (fetcher, signal) => {
-      const response = await fetcher('/listeners/connections', { signal });
-      const body = await response.json().catch(() => ({})) as ConnectionsResponse;
-      return response.ok ? body : { error: body.error || 'live connection detail unavailable' };
+      try {
+        return await adminJson<ConnectionsResponse>(
+          fetcher, '/listeners/connections', undefined, signal,
+        );
+      } catch (error) {
+        if (error instanceof AdminResponseError) {
+          const detail = typeof error.body.error === 'string' ? error.body.error : null;
+          return { error: detail || 'live connection detail unavailable' };
+        }
+        throw error;
+      }
     },
   });
 

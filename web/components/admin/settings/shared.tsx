@@ -733,6 +733,7 @@ export function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButto
     if (state === 'loading') return;
     setState('loading');
     try {
+      // admin-query-imperative: protected-audio-preview
       const r = await adminResponse(adminFetch, path);
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);

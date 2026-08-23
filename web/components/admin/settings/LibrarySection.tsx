@@ -218,6 +218,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
       let model = 'nomic-embed-text';
       try {
         const d = await (
+          // admin-query-imperative: locca-discovery-probe
           await adminResponse(adminFetch, `/settings/llm/discover?baseUrl=${encodeURIComponent(url)}`)
         ).json();
         if (d.reachable && Array.isArray(d.models) && d.models.length) model = d.models[0];

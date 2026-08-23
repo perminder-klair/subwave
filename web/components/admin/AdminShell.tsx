@@ -274,6 +274,7 @@ export default function AdminShell({ children, defaultOpen = true }: AdminShellP
     if (!hydrated) return;
     if (pathname?.startsWith('/onboarding')) return;
     const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
+    // admin-query-imperative: first-run-redirect
     fetch(`${API}/onboarding/status`)
       .then(r => (r.ok ? r.json() : null))
       .then((j: { needsSetup?: boolean } | null) => {

@@ -32,11 +32,9 @@ export async function fetchDashStatus(fetcher: AdminFetch, signal: AbortSignal):
 }
 
 export async function fetchConnections(fetcher: AdminFetch, signal: AbortSignal): Promise<ConnectionsState> {
-  const response = await fetcher('/listeners/connections', { signal });
-  const body = await response.json().catch(() => null) as
-    | (Partial<ConnectionsState> & { error?: string })
-    | null;
-  if (!response.ok) throw new Error(body?.error || `failed (${response.status})`);
+  const body = await adminJson<Partial<ConnectionsState>>(
+    fetcher, '/listeners/connections', undefined, signal,
+  );
   return { count: body?.count ?? 0, connections: body?.connections ?? [] };
 }
 
@@ -45,18 +43,16 @@ export function fetchHealthStats(fetcher: AdminFetch, signal: AbortSignal): Prom
 }
 
 export async function fetchRequests(fetcher: AdminFetch, signal: AbortSignal): Promise<RequestEntry[]> {
-  const response = await fetcher('/requests', { signal });
-  const body = await response.json().catch(() => null) as
-    | { requests?: RequestEntry[]; error?: string }
-    | null;
-  if (!response.ok) throw new Error(body?.error || `failed (${response.status})`);
+  const body = await adminJson<{ requests?: RequestEntry[] }>(
+    fetcher, '/requests', undefined, signal,
+  );
   return body?.requests ?? [];
 }
 
 export async function fetchSuggestions(fetcher: AdminFetch, signal: AbortSignal): Promise<string[] | null> {
-  const response = await fetcher('/generate/say-suggestions', { signal });
-  if (!response.ok) throw new Error(`failed (${response.status})`);
-  const body = await response.json().catch(() => null) as { suggestions?: string[] | null } | null;
+  const body = await adminJson<{ suggestions?: string[] | null }>(
+    fetcher, '/generate/say-suggestions', undefined, signal,
+  );
   return Array.isArray(body?.suggestions) && body.suggestions.length ? body.suggestions : null;
 }
 
@@ -86,12 +82,10 @@ export interface TakeoverData {
 }
 
 export async function fetchTakeover(fetcher: AdminFetch, signal: AbortSignal): Promise<TakeoverData> {
-  const response = await fetcher('/schedule', { signal });
-  if (!response.ok) throw new Error(`failed (${response.status})`);
-  const body = await response.json() as {
+  const body = await adminJson<{
     shows?: TakeoverShow[];
     override?: ScheduleOverride | null;
-  };
+  }>(fetcher, '/schedule', undefined, signal);
   return {
     shows: Array.isArray(body.shows)
       ? body.shows.filter(show => show && typeof show.id === 'string' && show.id)

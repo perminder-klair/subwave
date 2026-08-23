@@ -129,6 +129,7 @@ export default function DoctorPanel() {
 
   // One-shot batch run — the fallback when SSE streaming isn't available.
   const runBatch = async (): Promise<DoctorReport | null> => {
+    // admin-query-imperative: diagnosis-command
     const r = await adminResponse(adminFetch, '/doctor');
     const j = (await r.json().catch(() => null)) as DoctorReport | { error?: string } | null;
     if (!j || !('sections' in j)) {
@@ -148,6 +149,7 @@ export default function DoctorPanel() {
       review: null,
     }));
     try {
+      // admin-query-imperative: diagnosis-stream
       const r = await adminResponse(adminFetch, '/doctor/stream', {
         headers: { Accept: 'text/event-stream' },
       });

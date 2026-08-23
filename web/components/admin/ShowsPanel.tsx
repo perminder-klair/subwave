@@ -47,7 +47,6 @@ import type {
   Show,
   ShowsFormValues,
   SkillOption,
-  ThemeOption,
 } from './shows/types';
 import { SHOWS_MAX } from './shows/types';
 import { useSettingsQuery } from './settings/queries';
@@ -58,6 +57,7 @@ import {
   useShowPlaylistsQuery,
   useShowSkillsQuery,
 } from './shows/queries';
+import { useAdminThemesQuery } from './themes-queries';
 
 // `showSchema` is a factory (a show can't be validated against itself — it has
 // to name a real persona, mood and theme), so the resolver is rebuilt whenever
@@ -93,16 +93,16 @@ export default function ShowsPanel() {
   // Both the list ✕ and the editor's Remove route through this, so deletes
   // always need confirming.
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
-  // Public endpoint, no auth needed — same source the player ThemeProvider reads.
-  const [themes, setThemes] = useState<ThemeOption[]>([]);
-  const [activeThemeId, setActiveThemeId] = useState('');
   const queryEnabled = hydrated && !needsAuth;
   const settingsQuery = useSettingsQuery<SettingsResponse>({ adminFetch, enabled: queryEnabled });
+  const themesQuery = useAdminThemesQuery(adminFetch, queryEnabled);
   const skillsQuery = useShowSkillsQuery(adminFetch, queryEnabled);
   const genresQuery = useShowGenresQuery(adminFetch, queryEnabled);
   const playlistsQuery = useShowPlaylistsQuery(adminFetch, queryEnabled);
   const communityQuery = useCommunityShowsQuery(adminFetch, queryEnabled);
   const data = settingsQuery.data ?? null;
+  const themes = useMemo(() => themesQuery.data?.themes ?? [], [themesQuery.data?.themes]);
+  const activeThemeId = themesQuery.data?.active ?? '';
   const err = settingsQuery.error ? errorMessage(settingsQuery.error) : null;
   const skills: SkillOption[] = skillsQuery.data ?? [];
   const genres = genresQuery.data ?? [];
@@ -194,24 +194,6 @@ export default function ShowsPanel() {
     // validate the newly-hydrated rows once with that render's current schema.
     void trigger();
   }, [data, resetForm, trigger]);
-
-  // Themes for the per-show override. Public endpoint, so it runs before
-  // sign-in; on failure the picker offers only "Station default".
-  useEffect(() => {
-    if (!hydrated) return;
-    const API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch(`${API}/themes`);
-        if (!r.ok || cancelled) return;
-        const j = (await r.json()) as { themes?: ThemeOption[]; active?: string };
-        if (Array.isArray(j.themes)) setThemes(j.themes);
-        if (typeof j.active === 'string') setActiveThemeId(j.active);
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, [hydrated]);
 
   const apiBase = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
   const personaName = (id: string): string => personas.find(p => p.id === id)?.name || '—';

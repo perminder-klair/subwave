@@ -97,6 +97,7 @@ export default function ArchivesPanel() {
     setDownloading(path);
     setDlErr(null);
     try {
+      // admin-query-imperative: archive-download
       const r = await adminResponse(adminFetch, `/archives/file/${path}`);
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);

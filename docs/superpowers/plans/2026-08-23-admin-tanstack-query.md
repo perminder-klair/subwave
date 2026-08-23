@@ -726,15 +726,20 @@ git status --short
 
 Expected: audit, lint, build, and diff check exit 0; status contains only the intended plan checkbox update if it has not yet been committed.
 
-Local completion result (2026-08-23): the strict audit passed with zero direct
-`adminFetch(...)` calls; the three remaining intervals are browser-only display
-clocks. The isolated browser suites passed 47/47 admin-query, 6/6 query-cache,
-8/8 Library, 22/22 hooks, 13/13 destructive forms, all playlist DnD checks,
-and all nine schedule-booking checks. Web lint exited 0 with the five baseline
-warnings recorded in the SDD ledger, the production build exited 0, and both
-branch and working-tree whitespace checks exited 0. Steps 6–8 remain unchecked
-because rebase, push, and PR delivery are intentionally delegated to the final
-delivery stage.
+Local completion result (2026-08-23): the strengthened TypeScript AST audit
+passed with zero unclassified cacheable component reads; `rg` found zero direct
+`adminFetch(...)` calls, and the three remaining intervals are browser-only
+display/expiry clocks. Review fixes added a shared same-tab/cross-tab auth store
+with page-owned 401 teardown coverage, one exact abort-aware
+`['themes','admin']` query shared across Shows and Settings, and controlled-clock
+399/400ms debounce checks (an intentional 600ms mutation made all three fail).
+The isolated browser suites passed 50/50 admin-query, 6/6 query-cache, 8/8
+Library, 22/22 hooks, 13/13 destructive forms, all playlist DnD checks, and all
+nine schedule-booking checks. Web lint exited 0 with the five baseline warnings
+recorded in the SDD ledger, the production build exited 0, and both branch and
+working-tree whitespace checks exited 0. Steps 6–8 remain unchecked because
+rebase, push, and PR delivery are intentionally delegated to the final delivery
+stage.
 
 - [x] **Step 5: Commit final documentation and verification fixes**
 

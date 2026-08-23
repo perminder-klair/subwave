@@ -33,10 +33,12 @@ export async function runGenerationJob(fetcher: AdminFetch, body: unknown): Prom
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   };
+  // admin-query-imperative: generation-job-start
   const start = await fetcher('/playlists/generate/jobs', init);
   // A pre-jobs controller 404s here (mid-upgrade version skew) — fall back to
   // the synchronous endpoint rather than failing the click.
   if (start.status === 404) {
+    // admin-query-imperative: generation-sync-fallback
     const r = await fetcher('/playlists/generate', init);
     const j = await readJsonSafe(r);
     if (!r.ok) throw new Error(j.error || 'generation failed');
@@ -50,6 +52,7 @@ export async function runGenerationJob(fetcher: AdminFetch, body: unknown): Prom
     await sleep(GEN_POLL_MS);
     let poll: any;
     try {
+      // admin-query-imperative: generation-job-poll
       const r = await fetcher(`/playlists/generate/jobs/${started.jobId}`);
       poll = await readJsonSafe(r);
       if (!r.ok) throw new Error(poll.error || `poll failed (HTTP ${r.status})`);

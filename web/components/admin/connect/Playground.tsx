@@ -121,6 +121,7 @@ export default function Playground({ endpoint, apiBase, adminFetch }: Props) {
     setSending(true);
     const started = performance.now();
     try {
+      // admin-query-imperative: operator-api-command
       const r = await adminResponse(adminFetch, relPath, {
         method: endpoint.method,
         ...(parsedBody !== undefined ? { headers: { 'Content-Type': 'application/json' }, body: parsedBody } : {}),

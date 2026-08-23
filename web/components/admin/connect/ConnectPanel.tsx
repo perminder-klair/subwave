@@ -54,6 +54,7 @@ export default function ConnectPanel() {
   const downloadOpenApi = useCallback(async () => {
     if (!catalog) return;
     try {
+      // admin-query-imperative: openapi-download
       const r = await adminResponse(adminFetch, catalog.openapiPath);
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);

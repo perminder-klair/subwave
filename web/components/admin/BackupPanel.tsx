@@ -60,6 +60,7 @@ export default function BackupPanel() {
     setExporting(true);
     setExportErr(null);
     try {
+      // admin-query-imperative: backup-export
       const r = await adminResponse(adminFetch, '/backup/export');
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);

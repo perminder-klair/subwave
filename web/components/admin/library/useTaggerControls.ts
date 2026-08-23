@@ -61,7 +61,6 @@ export function useTaggerControls() {
   const { adminFetch, ready, coverage, reloadCoverage, tagger } = useLibrary();
   const qc = useQueryClient();
 
-  const [failures, setFailures] = useState<AnalysisFailure[] | null>(null);
   const [batch, setBatch] = useState<Batch>('500');
   const [logOpen, setLogOpen] = useState(false);
 
@@ -74,6 +73,12 @@ export function useTaggerControls() {
     staleTime: 0,
   });
   const settings = settingsQuery.data;
+  const failuresQuery = useAdminQuery<{ failures?: AnalysisFailure[] }>({
+    key: libraryKeys.analysisFailures(),
+    path: '/library/analysis-failures?limit=200',
+    enabled: false,
+  });
+  const failures = failuresQuery.data?.failures ?? null;
 
   const libStats: LibraryStatsLite | null = settings?.libraryStats ?? null;
   const audio = settings?.values?.audio;
@@ -108,18 +113,13 @@ export function useTaggerControls() {
     [qc],
   );
 
-  // Per-track analysis failures (#1300 bug 3c). Fetched on demand and kept off
-  // the query cache: `coverage.analysisFailed` already says whether there is
+  // Per-track analysis failures (#1300 bug 3c). The disabled query is fetched
+  // only on demand: `coverage.analysisFailed` already says whether there is
   // anything to look at, and on a healthy station that is zero forever.
   const loadFailures = useCallback(async () => {
     if (!ready) return;
-    try {
-      const j = await adminJson<{ failures?: AnalysisFailure[] }>(
-        adminFetch, '/library/analysis-failures?limit=200',
-      );
-      setFailures(j.failures || []);
-    } catch { /* transient */ }
-  }, [adminFetch, ready]);
+    await failuresQuery.refetch();
+  }, [failuresQuery, ready]);
 
   // Forget the failure history so the next run retries these tracks — the
   // operator's move after fixing the cause. Refreshes coverage so the banner
@@ -128,10 +128,10 @@ export function useTaggerControls() {
     if (!ready) return;
     try {
       await adminResponse(adminFetch, '/library/analysis-failures/clear', { method: 'POST' });
-      setFailures([]);
+      qc.setQueryData(libraryKeys.analysisFailures(), { failures: [] });
       void reloadCoverage();
     } catch { /* transient */ }
-  }, [adminFetch, ready, reloadCoverage]);
+  }, [adminFetch, qc, ready, reloadCoverage]);
 
   const remaining = coverage?.total != null ? Math.max(0, coverage.total - coverage.tagged) : null;
 

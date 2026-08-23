@@ -4,7 +4,7 @@ import type { ChangeEvent } from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
 import { notify, errorMessage } from '../../../lib/notify';
-import { adminResponse } from '../../../lib/admin-query';
+import { adminJson, useAdminMutation } from '../../../lib/admin-query';
 import { applyTheme, cacheTheme, resolveFont } from '../../../lib/theme';
 import { useThemeSwitcher } from '../../ThemeProvider';
 import { V3AlertDialog } from '../../ui/alert-dialog';
@@ -22,6 +22,12 @@ import {
   SectionHeader,
   type SettingsData, type SaveSettings, type SettingsFieldErrors,
 } from './shared';
+import {
+  patchAdminThemes,
+  useAdminThemesQuery,
+  type AdminTheme,
+  type AdminThemesResponse,
+} from '../themes-queries';
 
 interface ThemeSectionProps {
   data: SettingsData;
@@ -32,16 +38,9 @@ interface ThemeSectionProps {
   fieldErrors: SettingsFieldErrors;
 }
 
-interface ThemeDef {
-  id: string;
-  name: string;
-  description?: string;
-  mode: 'light' | 'dark';
-  tokens: Record<string, string>;
-  // Set by the controller's /themes responses. Built-ins ship in the image and
-  // can't be removed; only user themes (state/themes/*.json) show Edit/Remove.
-  builtin?: boolean;
-}
+// Set by the controller's /themes responses. Built-ins ship in the image and
+// can't be removed; only user themes (state/themes/*.json) show Edit/Remove.
+type ThemeDef = AdminTheme;
 
 // SWATCH_KEYS + THEME_TOKENS come from the generated registry mirror, so this
 // form, the controller validator and the no-flash bootstrap can't drift.
@@ -111,8 +110,17 @@ function ThemeEditorModal({
   const [description, setDescription] = useState('');
   const [mode, setMode] = useState<'light' | 'dark'>('dark');
   const [tokens, setTokens] = useState<Record<string, string>>({});
-  const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const saveMutation = useAdminMutation<AdminThemesResponse, Record<string, unknown>>({
+    adminFetch,
+    request: (body, fetcher) => adminJson(fetcher, '/themes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+    onDone: (response, _body, client) => patchAdminThemes(client, response),
+    toastOnError: false,
+  });
 
   // Keyed on `open` so re-opening always starts clean.
   useEffect(() => {
@@ -141,8 +149,8 @@ function ThemeEditorModal({
   };
 
   const save = async () => {
-    if (!name.trim() || saving) return;
-    setSaving(true); setErr(null);
+    if (!name.trim() || saveMutation.isPending) return;
+    setErr(null);
     try {
       // Drop blank tokens — an omitted token derives from the base palette in
       // globals.css, and an empty value would fail the typed validator.
@@ -150,20 +158,12 @@ function ThemeEditorModal({
       const body: Record<string, unknown> = { name: name.trim(), description: description.trim(), mode, tokens: cleaned };
       // Keeps the same file even if the operator renamed the theme.
       if (isEdit && editing) body.id = editing.id;
-      const r = await adminResponse(adminFetch, '/themes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; themes?: ThemeDef[] };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const j = await saveMutation.mutateAsync(body);
       onSaved(j.themes ?? [], isEdit && editing ? editing.id : undefined);
       notify.ok(`${isEdit ? 'updated' : 'saved'} "${name.trim()}"`);
       onOpenChange(false);
     } catch (e) {
       setErr(errorMessage(e));
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -177,9 +177,9 @@ function ThemeEditorModal({
       footer={
         <>
           {err && <span className="mr-auto text-[12px] text-[var(--danger)]">{err}</span>}
-          <Btn onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Btn>
-          <Btn tone="accent" onClick={save} disabled={saving || !name.trim()}>
-            {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Save theme'}
+          <Btn onClick={() => onOpenChange(false)} disabled={saveMutation.isPending}>Cancel</Btn>
+          <Btn tone="accent" onClick={save} disabled={saveMutation.isPending || !name.trim()}>
+            {saveMutation.isPending ? 'Saving…' : isEdit ? 'Save changes' : 'Save theme'}
           </Btn>
         </>
       }
@@ -331,15 +331,14 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
   // from the same response the provenance comes in. Reading it here instead of
   // snapshotting a second fetch is what keeps the notice in step with the paint.
   const themeCtx = useThemeSwitcher();
-  const [themes, setThemes] = useState<ThemeDef[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
   const [confirmRemove, setConfirmRemove] = useState<ThemeDef | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<ThemeDef | null>(null);
+  const themesQuery = useAdminThemesQuery(adminFetch, true);
+  const themes = themesQuery.data?.themes ?? null;
+  const error = themesQuery.error ? errorMessage(themesQuery.error) : null;
 
   const activeId = data.values?.theme?.active;
-  const PUBLIC_API = (process.env.NEXT_PUBLIC_API_URL as string | undefined) || '/api';
 
   // Skin = the player's full-screen layout (ui.skin); the theme is the palette. The
   // player picks a change up on its next /state poll.
@@ -349,41 +348,36 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
   const activeSkinName = SKINS.find(s => s.id === activeSkinId)?.name ?? 'Classic';
   const chooseSkin = (id: string) => { if (!busy) saveSettings({ ui: { skin: id } }); };
 
-  // Unauthenticated /themes, so a signed-out admin still sees swatches while
-  // signing in. This is the editing list (it carries `builtin`, which decides
-  // Edit/Remove); the provenance behind the notice comes from ThemeProvider.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch(`${PUBLIC_API}/themes`);
-        if (!r.ok || cancelled) return;
-        const j = (await r.json()) as { themes: ThemeDef[] };
-        setThemes(j.themes);
-        setError(null);
-      } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [PUBLIC_API]);
+  // The editing list carries `builtin`, which decides Edit/Remove. ShowsPanel
+  // consumes the same exact query key for show overrides; mutations below
+  // patch that one shared response rather than maintaining route-local copies.
+  const refreshMutation = useAdminMutation<AdminThemesResponse, void>({
+    adminFetch,
+    request: (_unused, fetcher) => adminJson(fetcher, '/themes/refresh', { method: 'POST' }),
+    onDone: (response, _unused, client) => patchAdminThemes(client, response),
+    toastOnError: false,
+  });
+  const removeMutation = useAdminMutation<AdminThemesResponse, ThemeDef>({
+    adminFetch,
+    request: (theme, fetcher) => adminJson(
+      fetcher,
+      `/themes/${encodeURIComponent(theme.id)}`,
+      { method: 'DELETE' },
+    ),
+    onDone: (response, _theme, client) => patchAdminThemes(client, response),
+    toastOnError: false,
+  });
 
   const refresh = async () => {
-    setRefreshing(true);
     try {
-      const r = await adminResponse(adminFetch, '/themes/refresh', { method: 'POST' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; themes?: ThemeDef[] };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const j = await refreshMutation.mutateAsync();
       const next = j.themes ?? [];
-      setThemes(next);
       // A file dropped in can make a show's previously-dead themeId resolve, so
       // the answer to "who's winning" may have just changed too.
       themeCtx?.refreshThemes();
       notify.ok(`reloaded, ${next.length} theme${next.length === 1 ? '' : 's'}`);
     } catch (e) {
       notify.err(`Refresh failed: ${errorMessage(e)}`);
-    } finally {
-      setRefreshing(false);
     }
   };
 
@@ -403,7 +397,6 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
 
   // Re-apply when the edited theme is the one on air, so the admin page updates now.
   const onSaved = (next: ThemeDef[], savedId?: string) => {
-    setThemes(next);
     if (savedId && savedId === activeId) {
       const saved = next.find(t => t.id === savedId);
       if (saved) { applyTheme(saved); cacheTheme(saved); }
@@ -414,11 +407,8 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
   // the list), so nothing points at a now-missing id.
   const remove = async (theme: ThemeDef) => {
     try {
-      const r = await adminResponse(adminFetch, `/themes/${encodeURIComponent(theme.id)}`, { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string; themes?: ThemeDef[] };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const j = await removeMutation.mutateAsync(theme);
       const next = j.themes ?? [];
-      setThemes(next);
       // Deleting the theme a show pinned makes that pin unresolvable, so the
       // station default silently takes over — provenance just changed.
       themeCtx?.refreshThemes();
@@ -460,8 +450,8 @@ export function ThemeSection({ data, busy, saveSettings, adminFetch }: ThemeSect
             <Btn sm tone="accent" onClick={() => { setEditing(null); setEditorOpen(true); }}>
               Create theme
             </Btn>
-            <Btn sm onClick={refresh} disabled={refreshing || busy}>
-              {refreshing ? 'Refreshing…' : 'Refresh'}
+            <Btn sm onClick={refresh} disabled={refreshMutation.isPending || busy}>
+              {refreshMutation.isPending ? 'Refreshing…' : 'Refresh'}
             </Btn>
           </div>
           <div className="field-hint">

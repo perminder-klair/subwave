@@ -471,6 +471,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   // carry the Basic-auth header.
   const exportZip = async () => {
     try {
+      // admin-query-imperative: skill-export
       const r = await adminResponse(adminFetch, `/dj/skills/${encodeURIComponent(fileId)}/export`);
       const blob = await r.blob();
       const url = URL.createObjectURL(blob);

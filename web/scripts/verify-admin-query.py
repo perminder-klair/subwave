@@ -7,6 +7,7 @@ import base64
 import copy
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import traceback
@@ -203,6 +204,11 @@ def settle_clock(page, milliseconds=0):
     page.evaluate("() => Promise.resolve()")
 
 
+def pause_clock_now(page):
+    """Freeze at the browser's current wall clock without numeric unit ambiguity."""
+    page.clock.pause_at(page.evaluate("new Date(Date.now() + 1000).toISOString()"))
+
+
 def fulfill_json(route, body, status=200):
     route.fulfill(
         status=status,
@@ -346,25 +352,27 @@ def enter_onboarding_llm(page):
 
 @check
 def discovery_settings_debounce(page):
+    page.clock.install()
     model_hits = []
     page.route(
         "**/settings/llm/models**",
         lambda route: (model_hits.append(route.request.url), route.fulfill(**model_response(["fresh-model"])))[1],
     )
     box = open_settings_llm(page)
+    settle_clock(page, 400)
+    model_hits.clear()
+    pause_clock_now(page)
     box.fill("http://model.test/v1")
-    page.wait_for_timeout(350)
+    settle_clock(page, 399)
     assert not [hit for hit in model_hits if "model.test" in hit], model_hits
-    # Real browser scheduling can land a 400ms debounce a little after the
-    # nominal boundary under a busy dev server. Keep the lower-bound assertion
-    # exact and allow 250ms of delivery tolerance before counting requests.
-    page.wait_for_timeout(300)
+    settle_clock(page, 1)
     matching = [hit for hit in model_hits if "model.test" in hit]
     assert len(matching) == 1, model_hits
 
 
 @check
 def discovery_voice_settings_debounce(page):
+    page.clock.install()
     voice_hits = []
     page.route(
         "**/settings/tts/voices**",
@@ -373,26 +381,33 @@ def discovery_voice_settings_debounce(page):
         ])))[1],
     )
     box = open_settings_tts(page)
+    settle_clock(page, 400)
+    voice_hits.clear()
+    pause_clock_now(page)
     box.fill("http://voice-debounce.test/v1")
-    page.wait_for_timeout(350)
+    settle_clock(page, 399)
     assert not [hit for hit in voice_hits if "voice-debounce.test" in hit], voice_hits
-    page.wait_for_timeout(300)
+    settle_clock(page, 1)
     matching = [hit for hit in voice_hits if "voice-debounce.test" in hit]
     assert len(matching) == 1, voice_hits
 
 
 @check
 def discovery_onboarding_provider(page):
+    page.clock.install()
     model_hits = []
     page.route(
         "**/settings/llm/models**",
         lambda route: (model_hits.append(route.request.url), route.fulfill(**model_response(["wizard-model"])))[1],
     )
     box = enter_onboarding_llm(page)
+    settle_clock(page, 400)
+    model_hits.clear()
+    pause_clock_now(page)
     box.fill("http://wizard.test/v1")
-    page.wait_for_timeout(350)
+    settle_clock(page, 399)
     assert not [hit for hit in model_hits if "wizard.test" in hit], model_hits
-    page.wait_for_timeout(300)
+    settle_clock(page, 1)
     wizard_hits = [hit for hit in model_hits if "wizard.test" in hit]
     assert len(wizard_hits) == 1, model_hits
 
@@ -582,6 +597,159 @@ def unauthorised_shell_signs_out(page):
 
 
 @check
+def page_query_401_tears_down_shell_cache(page):
+    """A page-owned query signs out the shell and destroys its shared cache."""
+    page.set_default_timeout(5000)
+    stub_dashboard(page)
+    station = {
+        "multiStation": False,
+        "activeId": "main",
+        "limit": 8,
+        "stations": [{
+            "id": "main", "name": "Verify Main", "configured": True,
+            "createdAt": "2026-08-23T10:00:00.000Z", "active": True,
+        }],
+    }
+    page.route("http://localhost:7791/stations", lambda route: fulfill_json(route, station))
+    page.route("http://localhost:7791/settings", lambda route: fulfill_json(route, SETTINGS_FIXTURE))
+
+    debug = {
+        "queue": {"current": None, "upcoming": [], "djLog": [], "djLogCount": 0},
+        "config": {}, "nowPlaying": None, "context": {}, "liquidsoapLog": "",
+        "llm": {"provider": "verify", "activeModel": "verify", "recentCalls": []},
+        "subsonic": {"recentCalls": [], "endpoints": []},
+    }
+    page.route("http://localhost:7791/debug", lambda route: fulfill_json(route, debug))
+    root_hits = 0
+
+    def state_tree_route(route):
+        nonlocal root_hits
+        query = urllib.parse.parse_qs(
+            urllib.parse.urlparse(route.request.url).query,
+            keep_blank_values=True,
+        )
+        path = query.get("path", [""])[0]
+        if path == "":
+            root_hits += 1
+            if root_hits == 2:
+                fulfill_json(route, {"error": "expired"}, status=401)
+                return
+        fulfill_json(route, {
+            "root": "/verify/state",
+            "path": path,
+            "entries": ([] if path else [{
+                "name": "cold-marker" if root_hits >= 3 else "warm-marker",
+                "isDir": False,
+                "isSymlink": False,
+                "size": 1,
+            }]),
+            "shown": 0 if path else 1,
+            "total": 0 if path else 1,
+        })
+
+    page.route("http://localhost:7791/debug/state-tree**", state_tree_route)
+    page.goto(f"{WEB}/admin/debug", wait_until="domcontentloaded")
+    page.get_by_text("warm-marker", exact=True).wait_for(state="visible")
+    assert request_count(page, "/stations", authenticated=True) == 1, page.request_log
+    warm_dump = json.dumps(query_cache_snapshot(page))
+    assert "warm-marker" in warm_dump and "state-files" in warm_dump, warm_dump
+
+    state_header = page.get_by_text("/verify/state", exact=True).locator("..")
+    state_header.get_by_role("button", name="Refresh").click()
+    page.get_by_text("Admin sign-in", exact=True).wait_for(state="visible")
+    page.wait_for_timeout(500)
+    assert root_hits == 2, root_hits
+    assert page.evaluate("localStorage.getItem('subwave_admin_auth')") is None
+    assert page.evaluate("typeof window.__subwaveAdminQueryCacheSnapshot") == "undefined"
+
+    page.get_by_label("Username").fill("test")
+    page.get_by_label("Password").fill("test")
+    page.get_by_role("button", name="sign in").click()
+    page.wait_for_url("**/admin/dash")
+    click_admin_link(page, "Debug", "/admin/debug")
+    page.get_by_text("cold-marker", exact=True).wait_for(state="visible")
+    assert root_hits >= 3, root_hits
+    assert request_count(page, "/stations", authenticated=True) == 2, page.request_log
+
+
+@check
+def themes_cache_reuse_and_mutation_refresh(page):
+    """Shows prewarms one admin themes query reused and patched by Settings."""
+    page.set_default_timeout(5000)
+    themes = [{
+        "id": "verify-dark", "name": "Verify Dark", "description": "initial",
+        "mode": "dark", "tokens": {"--bg": "#101010"}, "builtin": True,
+    }]
+
+    def theme_routes(route):
+        path = urllib.parse.urlparse(route.request.url).path
+        if path == "/themes" and route.request.method == "GET":
+            fulfill_json(route, {"themes": themes, "active": "verify-dark"})
+        elif path == "/themes/refresh" and route.request.method == "POST":
+            themes.append({
+                "id": "verify-fresh", "name": "Verify Fresh", "description": "refreshed",
+                "mode": "light", "tokens": {"--bg": "#fafafa"}, "builtin": False,
+            })
+            fulfill_json(route, {"themes": themes, "active": "verify-dark"})
+        else:
+            route.continue_()
+
+    page.route("http://localhost:7791/**", theme_routes)
+    page.goto(f"{WEB}/admin/shows", wait_until="domcontentloaded")
+    page.get_by_text("Build your shows here.", exact=False).wait_for(state="visible")
+    page.wait_for_timeout(0)
+    assert request_count(page, "/themes", authenticated=True) == 1, page.request_log
+    assert '"themes"' in json.dumps(query_cache_snapshot(page)), query_cache_snapshot(page)
+
+    click_admin_link(page, "Settings", "/admin/settings")
+    page.get_by_role("button", name="Skin & Themes", exact=False).click()
+    page.get_by_text("Verify Dark", exact=True).wait_for(state="visible")
+    assert request_count(page, "/themes", authenticated=True) == 1, page.request_log
+
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/themes/refresh", "POST")
+    ) as refresh_response:
+        page.get_by_role("button", name="Refresh", exact=True).evaluate("button => button.click()")
+    assert "verify-fresh" in json.dumps(refresh_response.value.json()), refresh_response.value.text()
+    page.wait_for_function(
+        "() => JSON.stringify(window.__subwaveAdminQueryCacheSnapshot?.() || []).includes('verify-fresh')"
+    )
+    cache_dump = json.dumps(query_cache_snapshot(page))
+    assert "verify-fresh" in cache_dump, cache_dump
+
+    click_admin_link(page, "Shows", "/admin/shows")
+    page.get_by_text("Build your shows here.", exact=False).wait_for(state="visible")
+    route_cache_dump = json.dumps(query_cache_snapshot(page))
+    assert "verify-fresh" in route_cache_dump, route_cache_dump
+    assert request_count(page, "/themes", authenticated=True) == 1, page.request_log
+
+
+@check
+def audit_rejects_direct_cacheable_reads(_page):
+    """The static ownership gate rejects native and admin-helper component reads."""
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    with tempfile.TemporaryDirectory(prefix="subwave-admin-audit-") as root:
+        with open(os.path.join(root, "NativeRead.tsx"), "w", encoding="utf-8") as source:
+            source.write("export async function NativeRead() { return fetch('/api/themes'); }\n")
+        with open(os.path.join(root, "HelperRead.tsx"), "w", encoding="utf-8") as source:
+            source.write(
+                "export async function HelperRead(adminFetch) {\n"
+                "  return adminResponse(adminFetch, '/themes');\n"
+                "}\n"
+            )
+        result = subprocess.run(
+            ["node", "web/scripts/audit-admin-query.mjs", "--root", root],
+            cwd=repo,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    output = result.stdout + result.stderr
+    assert result.returncode != 0, output
+    assert "NativeRead.tsx" in output and "HelperRead.tsx" in output, output
+
+
+@check
 def stations_mutations_refresh(page):
     """Station writes refresh one shared rack and remount from that cache."""
     state = {
@@ -686,12 +854,12 @@ def webhooks_mutations_refresh(page):
             })
 
     page.route("http://localhost:7791/webhooks", webhooks_route)
-    page.goto(f"{WEB}/admin/webhooks", wait_until="domcontentloaded")
+    page.goto(f"{WEB}/admin/connect?tab=webhooks", wait_until="domcontentloaded")
     page.get_by_text("No webhooks yet", exact=True).first.wait_for(state="visible")
     initial_gets = request_count(page, "/webhooks", authenticated=True)
     assert initial_gets >= 1, page.request_log
 
-    page.get_by_role("button", name="Add webhook").click()
+    page.get_by_role("button", name="Add webhook").evaluate("button => button.click()")
     page.get_by_label("Webhook URL").fill("https://verify.invalid/subwave")
     page.get_by_role("button", name="Save", exact=True).click()
     page.get_by_text("https://verify.invalid/subwave", exact=True).wait_for(state="visible")
@@ -734,9 +902,9 @@ def webhooks_secret_leaves_no_cache_trace(page):
         })
 
     page.route("http://localhost:7791/webhooks", webhooks_route)
-    page.goto(f"{WEB}/admin/webhooks", wait_until="domcontentloaded")
+    page.goto(f"{WEB}/admin/connect?tab=webhooks", wait_until="domcontentloaded")
     page.get_by_text("No webhooks yet", exact=True).first.wait_for(state="visible")
-    page.get_by_role("button", name="Add webhook").click()
+    page.get_by_role("button", name="Add webhook").evaluate("button => button.click()")
     page.get_by_label("Webhook URL").fill("https://verify.invalid/secret-hook")
     page.get_by_label("Authorization header").fill(secret)
     with page.expect_response(
@@ -821,13 +989,13 @@ def backup_index_refresh(page):
         })
 
     page.route("http://localhost:7791/backup/restorable", backups_route)
-    page.goto(f"{WEB}/admin/backup", wait_until="domcontentloaded")
+    page.goto(f"{WEB}/admin/settings?section=backup", wait_until="domcontentloaded")
     page.get_by_text("No .zip backups found", exact=False).wait_for(state="visible")
     initial_gets = request_count(page, "/backup/restorable", authenticated=True)
     assert initial_gets >= 1, page.request_log
 
     refreshed["value"] = True
-    page.get_by_role("button", name="Refresh", exact=True).click()
+    page.get_by_role("button", name="Refresh", exact=True).evaluate("button => button.click()")
     page.get_by_text(candidate["name"], exact=True).wait_for(state="visible")
     assert request_count(page, "/backup/restorable", authenticated=True) == initial_gets + 1, page.request_log
 
@@ -1175,17 +1343,18 @@ def takeover_expiry_survives_failed_poll(page):
     stub_dashboard(page)
     now = page.evaluate("Date.now()")
     schedule_hits = 0
+    fail_polls = False
 
     def schedule_route(route):
-        nonlocal schedule_hits
+        nonlocal schedule_hits, fail_polls
         schedule_hits += 1
-        if schedule_hits == 1:
+        if not fail_polls:
             fulfill_json(route, {
                 "shows": [{"id": "review-show", "name": "Review takeover show"}],
                 "override": {
                     "showId": "review-show",
                     "startedAt": now,
-                    "expiresAt": now + 30_000,
+                    "expiresAt": now + 60_000,
                 },
             })
         else:
@@ -1194,6 +1363,18 @@ def takeover_expiry_survives_failed_poll(page):
 
     with page.expect_request(lambda request: is_admin_request(request, "/schedule")):
         page.goto(f"{WEB}/admin/dash", wait_until="domcontentloaded")
+    page.get_by_role("button", name="Cancel takeover").wait_for(state="visible")
+    initial_hits = schedule_hits
+    assert 1 <= initial_hits <= 2, schedule_hits
+    pause_clock_now(page)
+    fail_polls = True
+
+    with page.expect_response(
+        lambda response: urllib.parse.urlparse(response.url).path == "/schedule"
+        and response.status == 503
+    ):
+        settle_clock(page, 30_000)
+    settle_clock(page)
     page.get_by_role("button", name="Cancel takeover").wait_for(state="visible")
 
     with page.expect_response(
@@ -1204,7 +1385,7 @@ def takeover_expiry_survives_failed_poll(page):
     settle_clock(page)
 
     page.get_by_role("button", name="Pin to air →").wait_for(state="visible")
-    assert schedule_hits == 2, schedule_hits
+    assert schedule_hits == initial_hits + 2, schedule_hits
 
 
 @check

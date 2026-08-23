@@ -107,6 +107,7 @@ export async function fetchDicebearAvatar(): Promise<string> {
   // Random seed so two clicks never produce the same face.
   const seed = Math.random().toString(36).slice(2) + Date.now().toString(36);
   const url = `https://api.dicebear.com/9.x/${style}/png?seed=${encodeURIComponent(seed)}&size=${AVATAR_TARGET_PX}`;
+  // admin-query-imperative: random-avatar-download
   const res = await fetch(url);
   if (!res.ok) throw new Error(`DiceBear fetch failed (${res.status})`);
   const blob = await res.blob();

@@ -32,11 +32,9 @@ const EMPTY_LIKES: LikeIndex = {};
 const EMPTY_PLAYLISTS: PlaylistSummary[] = [];
 
 export interface LibraryShared {
-  // The ONE useAdminAuth instance for the whole library page, passed down
-  // rather than re-created per tab: useAdminAuth is a per-instance hook
-  // holding its own hydration state, so N callers race N hydrations and an
-  // unauthenticated first request can wipe a sibling's token
-  // (see lib/adminAuth.ts:80).
+  // Passed down from the page owner so every Library resource shares one
+  // feature boundary. useAdminAuth itself observes the module-owned auth store,
+  // so a 401 here also tears down the shell provider and its QueryClient.
   adminFetch: AdminFetch;
   ready: boolean;
 
@@ -355,17 +353,27 @@ export function LibraryProvider({
   }, [adminFetch, selected, playlists, reloadPlaylists]);
 
   // --- mood vocab ----------------------------------------------------------
-  const [vocab, setVocab] = useState<string[]>([]);
+  const vocabQuery = useQuery({
+    queryKey: libraryKeys.moodVocab(),
+    queryFn: async ({ signal }) => {
+      const response = await adminJson<BrowseResponse>(
+        adminFetch, '/library/browse?limit=1', undefined, signal,
+      );
+      return response.moodVocab ?? [];
+    },
+    enabled: false,
+  });
+  const vocab = useMemo(() => vocabQuery.data ?? [], [vocabQuery.data]);
   const seedVocab = useCallback((v: string[]) => {
-    if (v.length) setVocab(prev => (prev.length ? prev : v));
-  }, []);
+    if (v.length) qc.setQueryData<string[]>(
+      libraryKeys.moodVocab(),
+      previous => previous?.length ? previous : v,
+    );
+  }, [qc]);
   const ensureVocab = useCallback(async () => {
     if (vocab.length) return;
-    try {
-      const j = await adminJson<BrowseResponse>(adminFetch, '/library/browse?limit=1');
-      if (j.moodVocab?.length) setVocab(j.moodVocab);
-    } catch { /* editor shows a "loading moods…" hint until this lands */ }
-  }, [vocab.length, adminFetch]);
+    await vocabQuery.refetch();
+  }, [vocab.length, vocabQuery]);
 
   // --- per-row actions -----------------------------------------------------
   const [queuing, setQueuing] = useState<string | null>(null);
