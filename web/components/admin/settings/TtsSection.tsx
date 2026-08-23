@@ -1281,29 +1281,32 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                   return (
                     <div className="field">
                       <Label>Default voice</Label>
-                      <VoicePicker
-                        value={isPreset ? voice : CUSTOM_VOICE_ID}
-                        onChange={val => {
-                          // Clearing the preset flips isPreset false, revealing the
-                          // free-text input below.
-                          setVoice(val === CUSTOM_VOICE_ID ? '' : val);
-                        }}
-                        groups={buildCloudVoiceGroups(provider, discoveredVoices)}
-                        title="Default cloud voice"
-                        preview={{
-                          engine: 'cloud',
-                          cloudProvider: provider,
-                          cloudModel: form.tts.cloud.model,
-                          fishSettings: provider === 'fish-audio'
-                            ? {
-                              temperature: form.tts.cloud.temperature,
-                              topP: form.tts.cloud.topP,
-                              latency: form.tts.cloud.latency,
-                            }
-                            : undefined,
-                          adminFetch,
-                        }}
-                      />
+                      <div className="flex items-stretch gap-2">
+                        <VoicePicker
+                          value={isPreset ? voice : CUSTOM_VOICE_ID}
+                          onChange={val => {
+                            // Clearing the preset flips isPreset false, revealing the
+                            // free-text input below.
+                            setVoice(val === CUSTOM_VOICE_ID ? '' : val);
+                          }}
+                          groups={buildCloudVoiceGroups(provider, discoveredVoices)}
+                          title="Default cloud voice"
+                          preview={{
+                            engine: 'cloud',
+                            cloudProvider: provider,
+                            cloudModel: form.tts.cloud.model,
+                            fishSettings: provider === 'fish-audio'
+                              ? {
+                                temperature: form.tts.cloud.temperature,
+                                topP: form.tts.cloud.topP,
+                                latency: form.tts.cloud.latency,
+                              }
+                              : undefined,
+                            adminFetch,
+                          }}
+                        />
+                        <Btn onClick={voiceDiscovery.refresh} title="Refresh voice list">↻</Btn>
+                      </div>
                       {!isPreset && (
                         <Input
                           // A blank compat voice is legitimate — the server picks

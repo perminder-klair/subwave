@@ -75,12 +75,14 @@ export function useModelDiscoveryQuery(rawInput: ModelDiscoveryInput, enabled: b
     key: discoveryKeys.models(input), adminFetch,
     request: (fetcher, signal) => fetchModels(fetcher, input, signal),
     enabled: enabled && !!input.provider,
+    staleTime: 30_000,
     placeholderData: previous => previous,
   });
   const refresh = useCallback(() => {
     if (!enabled || !raw.provider) return;
     const next = refreshInput();
-    void client.fetchQuery({ queryKey: discoveryKeys.models(next), queryFn: ({ signal }) => fetchModels(adminFetch, next, signal), staleTime: 0 }).catch(() => {});
+    const queryKey = discoveryKeys.models(next);
+    void client.fetchQuery({ queryKey, queryFn: ({ signal }) => fetchModels(adminFetch, next, signal), staleTime: 0 }).catch(() => {});
   }, [adminFetch, client, enabled, raw.provider, refreshInput]);
   return {
     models: enabled && query.data?.ok ? (Array.isArray(query.data.models) ? query.data.models : []) : [],
@@ -99,11 +101,13 @@ export function useVoiceDiscoveryQuery(rawInput: VoiceDiscoveryInput, enabled: b
     key: discoveryKeys.voices(input), adminFetch,
     request: (fetcher, signal) => fetchVoices(fetcher, input, signal),
     enabled: enabled && !!input.provider,
+    staleTime: 30_000,
   });
   const refresh = useCallback(() => {
     if (!enabled || !raw.provider) return;
     const next = refreshInput();
-    void client.fetchQuery({ queryKey: discoveryKeys.voices(next), queryFn: ({ signal }) => fetchVoices(adminFetch, next, signal), staleTime: 0 }).catch(() => {});
+    const queryKey = discoveryKeys.voices(next);
+    void client.fetchQuery({ queryKey, queryFn: ({ signal }) => fetchVoices(adminFetch, next, signal), staleTime: 0 }).catch(() => {});
   }, [adminFetch, client, enabled, raw.provider, refreshInput]);
   return {
     voices: enabled && !isRawTransition && query.data?.ok && Array.isArray(query.data.voices) ? query.data.voices : [],

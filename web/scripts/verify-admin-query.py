@@ -136,6 +136,14 @@ def open_settings_llm(page):
     return page.get_by_placeholder("http://192.168.1.101:8080/v1")
 
 
+def open_settings_tts(page):
+    stub_settings(page)
+    page.goto(f"{WEB}/admin/settings?section=tts", wait_until="domcontentloaded")
+    page.get_by_role("radio", name="Cloud").click()
+    page.get_by_role("radiogroup", name="Cloud TTS provider").get_by_role("radio", name="OpenAI-compatible").click()
+    return page.get_by_placeholder("http://192.168.1.101:5000/v1")
+
+
 def enter_onboarding_llm(page):
     page.route(
         "**/onboarding/status",
@@ -167,6 +175,24 @@ def discovery_settings_debounce(page):
 
 
 @check
+def discovery_voice_settings_debounce(page):
+    voice_hits = []
+    page.route(
+        "**/settings/tts/voices**",
+        lambda route: (voice_hits.append(route.request.url), route.fulfill(**voice_response([
+            {"id": "debounced-voice", "label": "Debounced voice"},
+        ])))[1],
+    )
+    box = open_settings_tts(page)
+    box.fill("http://voice-debounce.test/v1")
+    page.wait_for_timeout(350)
+    assert not [hit for hit in voice_hits if "voice-debounce.test" in hit], voice_hits
+    page.wait_for_timeout(100)
+    matching = [hit for hit in voice_hits if "voice-debounce.test" in hit]
+    assert len(matching) == 1, voice_hits
+
+
+@check
 def discovery_onboarding_provider(page):
     model_hits = []
     page.route(
@@ -175,7 +201,9 @@ def discovery_onboarding_provider(page):
     )
     box = enter_onboarding_llm(page)
     box.fill("http://wizard.test/v1")
-    page.wait_for_timeout(450)
+    page.wait_for_timeout(350)
+    assert not [hit for hit in model_hits if "wizard.test" in hit], model_hits
+    page.wait_for_timeout(100)
     wizard_hits = [hit for hit in model_hits if "wizard.test" in hit]
     assert len(wizard_hits) == 1, model_hits
 
@@ -210,8 +238,39 @@ def discovery_refresh_is_immediate(page):
 
 
 @check
+def discovery_voice_refresh_is_immediate(page):
+    voice_hits = []
+    page.route(
+        "**/settings/tts/voices**",
+        lambda route: (voice_hits.append(route.request.url), route.fulfill(**voice_response([
+            {"id": "refresh-voice", "label": "Refresh voice"},
+        ])))[1],
+    )
+    box = open_settings_tts(page)
+    box.fill("http://voice-refresh.test/v1")
+    page.get_by_title("Refresh voice list").click()
+    page.wait_for_timeout(0)
+    refresh_hits = [hit for hit in voice_hits if "voice-refresh.test" in hit]
+    assert refresh_hits, voice_hits
+
+
+@check
 def discovery_stale_response_isolated(page):
     model_hits = []
+    voice_hits = []
+
+    # The endpoint can answer the old key immediately, but keep its browser
+    # fetch promise pending until after the new key renders. This reproduces
+    # the real race without adding a second server or touching the controller.
+    page.add_init_script("""
+      const nativeFetch = window.fetch;
+      window.fetch = async (...args) => {
+        const response = await nativeFetch(...args);
+        const url = typeof args[0] === 'string' ? args[0] : args[0].url;
+        if (url.includes('old.test')) await new Promise(resolve => setTimeout(resolve, 900));
+        return response;
+      };
+    """)
 
     def models(route):
         url = route.request.url
@@ -222,9 +281,12 @@ def discovery_stale_response_isolated(page):
         route.fulfill(**model_response(["new-model"]))
 
     page.route("**/settings/llm/models**", models)
-    page.route("**/settings/tts/voices**", lambda route: route.fulfill(**voice_response([
-        {"id": "old-voice", "label": "Old voice"},
-    ])))
+    page.route(
+        "**/settings/tts/voices**",
+        lambda route: (voice_hits.append(route.request.url), route.fulfill(**voice_response([
+            {"id": "old-voice", "label": "Old voice"},
+        ])))[1],
+    )
     box = open_settings_llm(page)
     box.fill("http://old.test/v1")
     page.wait_for_timeout(450)
@@ -232,16 +294,29 @@ def discovery_stale_response_isolated(page):
     page.wait_for_timeout(450)
     assert any("old.test" in hit for hit in model_hits), model_hits
     assert any("new.test" in hit for hit in model_hits), model_hits
+    picker = page.get_by_role("button", name="Select a model")
+    picker.scroll_into_view_if_needed()
+    picker.click()
+    assert page.get_by_text("new-model", exact=True).is_visible()
+    picker.click()
+    page.wait_for_timeout(450)
+    picker.scroll_into_view_if_needed()
+    picker.click()
+    assert page.get_by_text("new-model", exact=True).is_visible()
+    picker.click()
 
     # Voice discovery lives in the TTS cloud panel. Its old list must disappear
     # synchronously when the provider changes, before the next provider can
     # finish discovery.
-    page.goto(f"{WEB}/admin/settings?section=tts", wait_until="domcontentloaded")
-    page.get_by_role("radio", name="Cloud").click()
-    page.get_by_role("radio", name="OpenAI-compatible").click()
-    voice_url = page.get_by_placeholder("http://192.168.1.101:5000/v1")
+    voice_url = open_settings_tts(page)
     voice_url.fill("http://voice.test/v1")
-    page.wait_for_timeout(450)
+    page.wait_for_timeout(600)
+    assert any("voice.test" in hit for hit in voice_hits), voice_hits
+    voice_picker = page.get_by_role("button", name="Custom voice id…")
+    voice_picker.scroll_into_view_if_needed()
+    voice_picker.click()
+    assert page.get_by_text("Old voice", exact=True).is_visible()
+    page.keyboard.press("Escape")
     page.get_by_role("radiogroup", name="Cloud TTS provider").get_by_role("radio", name="ElevenLabs").click()
     assert "Old voice" not in page.locator("body").inner_text()
 
