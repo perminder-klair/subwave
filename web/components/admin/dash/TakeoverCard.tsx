@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { Controller } from 'react-hook-form';
 import Link from 'next/link';
 import { useAdminAuth } from '../../../lib/adminAuth';
+import { useAdminMutation, useAdminQuery } from '../../../lib/admin-query';
 import { notify, errorMessage } from '../../../lib/notify';
 import { fmtClock } from '../../../lib/format';
 import type { StationLocale } from '../../../lib/types';
@@ -27,11 +28,7 @@ import {
   OVERRIDE_MAX_MINUTES,
   type ScheduleOverride,
 } from '@/lib/schemas.generated';
-
-interface TakeoverShow {
-  id: string;
-  name: string;
-}
+import { dashKeys, fetchTakeover, type TakeoverData } from './queries';
 
 const PRESETS = [
   { minutes: 60, label: '1h' },
@@ -41,42 +38,27 @@ const PRESETS = [
 
 export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLocale }) {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [shows, setShows] = useState<TakeoverShow[]>([]);
-  const [override, setOverride] = useState<ScheduleOverride | null>(null);
-  const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(() => Date.now());
 
   const form = useZodForm(scheduleOverrideRequestSchema, { showId: '', minutes: 60 });
   // The 30s tick refreshes `shows` and `override`, never the form — a poll must
   // not clobber a half-typed window. This is why there is no `values` prop here.
 
-  // GET /schedule carries the roster and the pin in force (expired or dangling ones
-  // already report as null). The 30s beat doubles as the clock behind "min left", so a
-  // pin made in another tab or lapsing on its own lands here without a reload.
+  // GET /schedule carries the roster and the pin in force (expired or dangling
+  // ones already report as null). Query success also advances the "min left" clock.
+  const takeoverQuery = useAdminQuery<TakeoverData>({
+    key: dashKeys.takeover(),
+    adminFetch,
+    enabled: hydrated && !needsAuth,
+    staleTime: 0,
+    refetchInterval: () => 30_000,
+    request: fetchTakeover,
+  });
+  const shows = takeoverQuery.data?.shows ?? [];
+  const override = takeoverQuery.data?.override ?? null;
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    const tick = async () => {
-      setNow(Date.now());
-      try {
-        const r = await adminFetch('/schedule');
-        if (!r.ok || cancelled) return;
-        const j = (await r.json()) as { shows?: TakeoverShow[]; override?: ScheduleOverride | null };
-        setShows(
-          Array.isArray(j.shows)
-            ? j.shows.filter(s => s && typeof s.id === 'string' && s.id)
-            : [],
-        );
-        setOverride(j.override ?? null);
-      } catch {}
-    };
-    tick();
-    const id = setInterval(tick, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [hydrated, needsAuth]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (takeoverQuery.dataUpdatedAt) setNow(Date.now());
+  }, [takeoverQuery.dataUpdatedAt]);
 
   // Same index-into-the-roster colour the board and the shows page paint with.
   const colorOf = (id: string): string => {
@@ -89,48 +71,72 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   const pinned = live ? showById(live.showId) : null;
   const minutesLeft = live ? Math.max(1, Math.ceil((live.expiresAt - now) / 60_000)) : 0;
 
-  const pin = form.handleSubmit(async (values) => {
-    setBusy(true);
-    try {
-      const r = await adminFetch('/schedule/override', {
+  interface PinResult {
+    override?: ScheduleOverride;
+  }
+  class TakeoverError extends Error {
+    constructor(message: string, readonly fieldErrors?: Record<string, string>) {
+      super(message);
+    }
+  }
+  const pinMutation = useAdminMutation<PinResult, { showId: string; minutes: number }>({
+    adminFetch,
+    toastOnError: false,
+    request: async (values, fetcher) => {
+      const response = await fetcher('/schedule/override', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(values),
       });
-      const j = (await r.json().catch(() => ({}))) as {
+      const body = await response.json().catch(() => ({})) as PinResult & {
         error?: string;
         fieldErrors?: Record<string, string>;
-        override?: ScheduleOverride;
       };
-      if (!r.ok) {
-        // A show id that isn't in the roster 404s from the handler, not the
-        // schema — that answer needs server state, so it lands on showId here.
-        applyServerFieldErrors(form, j.fieldErrors);
-        throw new Error(j.error || `failed (${r.status})`);
+      if (!response.ok) {
+        throw new TakeoverError(body.error || `failed (${response.status})`, body.fieldErrors);
       }
-      setOverride(j.override ?? null);
-      // This callback only runs on submit, never during render, but it's a
-      // function literal passed into form.handleSubmit — an indirection the
-      // purity check can't see through — so it conservatively flags Date.now()
-      // as if it executed during render.
-      // eslint-disable-next-line react-hooks/purity
-      setNow(Date.now());
+      return body;
+    },
+    onDone: async (data, _values, client) => {
+      client.setQueryData<TakeoverData>(dashKeys.takeover(), current => ({
+        shows: current?.shows ?? [],
+        override: data.override ?? null,
+      }));
+      await client.invalidateQueries({ queryKey: dashKeys.takeover() });
+    },
+  });
+  const cancelMutation = useAdminMutation<void, void>({
+    adminFetch,
+    toastOnError: false,
+    request: async (_vars, fetcher) => {
+      const response = await fetcher('/schedule/override', { method: 'DELETE' });
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(body.error || `failed (${response.status})`);
+    },
+    onDone: async (_data, _vars, client) => {
+      client.setQueryData<TakeoverData>(dashKeys.takeover(), current => ({
+        shows: current?.shows ?? [],
+        override: null,
+      }));
+      await client.invalidateQueries({ queryKey: dashKeys.takeover() });
+    },
+  });
+  const busy = pinMutation.isPending || cancelMutation.isPending;
+
+  const pin = form.handleSubmit(async (values) => {
+    try {
+      await pinMutation.mutateAsync(values);
       const name = showById(values.showId)?.name || 'show';
       notify.ok(`“${name}” takes over — the switch airs on the next track.`);
     } catch (e) {
+      if (e instanceof TakeoverError) applyServerFieldErrors(form, e.fieldErrors);
       notify.err(errorMessage(e));
-    } finally {
-      setBusy(false);
     }
   });
 
   const cancel = async () => {
-    setBusy(true);
     try {
-      const r = await adminFetch('/schedule/override', { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
-      setOverride(null);
+      await cancelMutation.mutateAsync();
       // Back to a clean picker rather than re-showing the just-cancelled pick:
       // one form stands behind both branches of the ternary, so a stale value
       // would otherwise survive the remount.
@@ -138,8 +144,6 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
       notify.ok('Takeover cancelled — back to the weekly schedule.');
     } catch (e) {
       notify.err(errorMessage(e));
-    } finally {
-      setBusy(false);
     }
   };
 

@@ -8,6 +8,7 @@ import json
 import sys
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from playwright.sync_api import sync_playwright
@@ -80,8 +81,108 @@ def new_page(playwright):
     )
     page = context.new_page()
     page.requests = []
-    page.on("request", lambda request: page.requests.append(request.url))
+    page.request_log = []
+    def record_request(request):
+        page.requests.append(request.url)
+        page.request_log.append((request.method, request.url, bool(request.headers.get("authorization"))))
+    page.on("request", record_request)
     return browser, page
+
+
+def request_count(page, path, method="GET", query=None, authenticated=None):
+    def matches(entry):
+        entry_method, url, has_auth = entry
+        parsed = urllib.parse.urlparse(url)
+        return (
+            entry_method == method
+            and parsed.path == path
+            and (query is None or parsed.query == query)
+            and (authenticated is None or has_auth == authenticated)
+        )
+    return len([entry for entry in page.request_log if matches(entry)])
+
+
+def install_poll_clock(page):
+    """Freeze browser timers and expose a deterministic visibility switch."""
+    page.clock.install()
+    page.add_init_script("""
+      window.__subwaveVerifyHidden = false;
+      Object.defineProperty(Document.prototype, 'hidden', {
+        configurable: true,
+        get: () => window.__subwaveVerifyHidden,
+      });
+      Object.defineProperty(Document.prototype, 'visibilityState', {
+        configurable: true,
+        get: () => window.__subwaveVerifyHidden ? 'hidden' : 'visible',
+      });
+    """)
+
+
+def set_page_hidden(page, hidden):
+    page.evaluate(
+        "hidden => { window.__subwaveVerifyHidden = hidden; "
+        "document.dispatchEvent(new Event('visibilitychange')); }",
+        hidden,
+    )
+
+
+def settle_clock(page, milliseconds=0):
+    page.clock.fast_forward(milliseconds)
+    page.evaluate("() => Promise.resolve()")
+
+
+def fulfill_json(route, body, status=200):
+    route.fulfill(
+        status=status,
+        content_type="application/json",
+        body=json.dumps(body),
+    )
+
+
+def is_admin_request(request, path, method="GET"):
+    return (
+        request.method == method
+        and urllib.parse.urlparse(request.url).path == path
+        and bool(request.headers.get("authorization"))
+    )
+
+
+def stub_dashboard(page, queue_track=False):
+    state = {
+        "upcoming": ([{
+            "subsonic_id": "verify-queue-track",
+            "title": "Verify queue track",
+            "artist": "SUB/WAVE",
+        }] if queue_track else []),
+        "history": [],
+        "autoPick": True,
+        "autoLink": True,
+        "musicStarved": False,
+    }
+    fixtures = {
+        "/now-playing": {},
+        "/state": state,
+        "/session": {"messages": []},
+        "/listeners/connections": {"count": 0, "connections": []},
+        "/stats": {"llm": {"count": 0, "latency": {}}, "tts": {"count": 0}},
+        "/requests": {"requests": []},
+        "/generate/say-suggestions": {"suggestions": []},
+        "/schedule": {"shows": [], "override": None},
+        "/doctor/navidrome": {"ok": True},
+    }
+
+    def route_fixture(route):
+        path = urllib.parse.urlparse(route.request.url).path
+        if route.request.method == "DELETE" and path == "/dj/queue/verify-queue-track":
+            fulfill_json(route, {"ok": True})
+            return
+        body = fixtures.get(path)
+        if body is None:
+            route.continue_()
+            return
+        fulfill_json(route, body)
+
+    page.route("http://localhost:7791/**", route_fixture)
 
 
 def model_response(models):
@@ -373,6 +474,205 @@ def unauthorised_query_is_not_retried(page):
     page.goto(f"{WEB}/admin/stations", wait_until="domcontentloaded")
     page.wait_for_timeout(1500)
     assert len(hits) == 1, hits
+
+
+@check
+def dashboard_poll_cadences(page):
+    """Catches a changed cadence or a Dashboard interval that runs while hidden."""
+    install_poll_clock(page)
+    stub_dashboard(page)
+    with page.expect_request(lambda request: is_admin_request(request, "/requests")):
+        page.goto(f"{WEB}/admin/dash", wait_until="domcontentloaded")
+    page.get_by_text("queue empty, auto-playlist fallback", exact=True).wait_for(state="visible")
+    settle_clock(page)
+    initial = {
+        path: request_count(page, path, authenticated=True)
+        for path in ("/session", "/listeners/connections", "/stats", "/requests")
+    }
+    assert all(count > 0 for count in initial.values()), (initial, page.request_log)
+
+    settle_clock(page, 2_900)
+    assert request_count(page, "/session", authenticated=True) == initial["/session"], page.request_log
+    with page.expect_request(lambda request: is_admin_request(request, "/session")):
+        settle_clock(page, 100)
+    assert request_count(page, "/session", authenticated=True) == initial["/session"] + 1, page.request_log
+
+    with page.expect_request(lambda request: is_admin_request(request, "/listeners/connections")):
+        with page.expect_request(lambda request: is_admin_request(request, "/requests")):
+            settle_clock(page, 7_000)
+    assert request_count(page, "/listeners/connections", authenticated=True) == initial["/listeners/connections"] + 1, page.request_log
+    assert request_count(page, "/requests", authenticated=True) == initial["/requests"] + 1, page.request_log
+    with page.expect_request(lambda request: is_admin_request(request, "/stats")):
+        settle_clock(page, 5_000)
+    assert request_count(page, "/stats", authenticated=True) == initial["/stats"] + 1, page.request_log
+
+    before = {
+        path: request_count(page, path, authenticated=True)
+        for path in ("/session", "/listeners/connections", "/stats", "/requests")
+    }
+    set_page_hidden(page, True)
+    settle_clock(page, 30_000)
+    after = {path: request_count(page, path, authenticated=True) for path in before}
+    assert after == before, (before, after)
+
+
+@check
+def dashboard_mutation_refresh(page):
+    """Catches queue cancellation that waits for the next status/request polls."""
+    install_poll_clock(page)
+    stub_dashboard(page, queue_track=True)
+    page.goto(f"{WEB}/admin/dash", wait_until="domcontentloaded")
+    remove = page.get_by_role("button", name="Remove Verify queue track from queue")
+    remove.wait_for(state="visible")
+    before_status = request_count(page, "/session", authenticated=True)
+    before_requests = request_count(page, "/requests", authenticated=True)
+    remove.click()
+    settle_clock(page, 50)
+    assert request_count(page, "/dj/queue/verify-queue-track", "DELETE", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/session", authenticated=True) == before_status + 1, page.request_log
+    assert request_count(page, "/requests", authenticated=True) == before_requests + 1, page.request_log
+
+
+@check
+def stats_pause_and_poll(page):
+    """Catches incorrect Stats cadences, range keys, pause, or hidden polling."""
+    install_poll_clock(page)
+    stub_dashboard(page)
+    stats = {
+        "llm": {
+            "window": 0, "count": 0, "ok": 0, "failed": 0,
+            "latency": {}, "agent": {"calls": 0}, "byKind": [], "byModel": [],
+        },
+        "tts": {
+            "window": 0, "count": 0, "ok": 0, "failed": 0,
+            "latency": {}, "fellBack": 0, "byEngine": [], "byKind": [],
+        },
+        "djLog": {"count": 0, "byKind": []},
+        "requests": {
+            "window": 0, "count": 0, "resolved": 0, "failed": 0,
+            "latency": {}, "artistMiss": {"count": 0}, "byPath": [],
+            "byPickSource": [], "topRequesters": [],
+        },
+    }
+    fixtures = {
+        "/stats": stats,
+        "/listeners": {"current": 0, "samples": []},
+        "/audience": {"sessions": 0, "referrers": [], "countries": [], "paths": []},
+        "/listeners/connections": {"count": 0, "connections": []},
+        "/system": {"containers": []},
+    }
+    def stats_routes(route):
+        parsed = urllib.parse.urlparse(route.request.url)
+        body = fixtures.get(parsed.path)
+        if body is None:
+            route.fallback()
+            return
+        fulfill_json(route, body)
+    page.route("http://localhost:7791/**", stats_routes)
+
+    with page.expect_request(lambda request: is_admin_request(request, "/stats")):
+        page.goto(f"{WEB}/admin/stats", wait_until="domcontentloaded")
+    pause = page.get_by_role("button", name="Pause")
+    pause.wait_for(state="visible")
+    paths = ("/stats", "/listeners", "/audience", "/listeners/connections", "/system")
+    initial = {path: request_count(page, path) for path in paths}
+    assert all(count > 0 for count in initial.values()), (initial, page.request_log)
+    settle_clock(page, 5_000)
+    assert request_count(page, "/stats") == initial["/stats"] + 1, page.request_log
+    assert all(request_count(page, path) == initial[path] for path in paths[1:]), page.request_log
+
+    pause.click()
+    paused = {path: request_count(page, path) for path in paths}
+    page.get_by_text("7d", exact=True).click()
+    settle_clock(page, 30_000)
+    settle_clock(page)
+    assert {path: request_count(page, path) for path in paths} == paused, page.request_log
+
+    page.get_by_role("button", name="Resume").click()
+    settle_clock(page)
+    assert request_count(page, "/listeners", query="sinceMinutes=10080") == 1, page.request_log
+    assert request_count(page, "/audience", query="sinceMinutes=10080") == 1, page.request_log
+
+    before_hidden = {path: request_count(page, path) for path in paths}
+    set_page_hidden(page, True)
+    settle_clock(page, 30_000)
+    after_hidden = {path: request_count(page, path) for path in paths}
+    assert after_hidden == before_hidden, (before_hidden, after_hidden)
+
+
+@check
+def debug_pause_and_poll(page):
+    """Catches overlap-prone Debug timing, pause drift, or hidden polling."""
+    install_poll_clock(page)
+    stub_dashboard(page)
+    debug = {
+        "queue": {"current": None, "upcoming": [], "djLog": [], "djLogCount": 0},
+        "config": {}, "nowPlaying": None, "context": {}, "liquidsoapLog": "",
+        "llm": {"provider": "verify", "activeModel": "verify", "recentCalls": []},
+        "subsonic": {"recentCalls": [], "endpoints": []},
+    }
+    page.route("http://localhost:7791/debug", lambda route: fulfill_json(route, debug))
+    with page.expect_request(lambda request: is_admin_request(request, "/debug")):
+        page.goto(f"{WEB}/admin/debug", wait_until="domcontentloaded")
+    pause = page.get_by_role("button", name="Pause")
+    pause.wait_for(state="visible")
+    settle_clock(page)
+    initial_debug = request_count(page, "/debug")
+    assert initial_debug > 0, page.request_log
+    settle_clock(page, 1_000)
+    assert request_count(page, "/debug") == initial_debug, page.request_log
+    settle_clock(page, 1_000)
+    assert request_count(page, "/debug") == initial_debug + 1, page.request_log
+
+    pause.click()
+    paused = request_count(page, "/debug")
+    settle_clock(page, 4_000)
+    assert request_count(page, "/debug") == paused, page.request_log
+    page.get_by_role("button", name="Resume").click()
+    settle_clock(page)
+    assert request_count(page, "/debug") == paused + 1, page.request_log
+
+    set_page_hidden(page, True)
+    hidden = request_count(page, "/debug")
+    settle_clock(page, 4_000)
+    assert request_count(page, "/debug") == hidden, page.request_log
+    set_page_hidden(page, False)
+    settle_clock(page)
+    assert request_count(page, "/debug") == hidden + 1, page.request_log
+
+
+@check
+def banner_poll_silence(page):
+    """Catches changed 30s banner/takeover beats or hidden-tab traffic."""
+    install_poll_clock(page)
+    stub_dashboard(page)
+    page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
+    page.get_by_role("link", name="Dash", exact=True).wait_for(state="visible")
+    initial_doctor = request_count(page, "/doctor/navidrome", authenticated=True)
+    assert initial_doctor > 0, page.request_log
+    initial_state = request_count(page, "/state", authenticated=True)
+    settle_clock(page, 30_000)
+    assert request_count(page, "/doctor/navidrome", authenticated=True) == initial_doctor + 1, page.request_log
+    assert request_count(page, "/state", authenticated=True) == initial_state + 1, page.request_log
+
+    hidden_doctor = request_count(page, "/doctor/navidrome", authenticated=True)
+    hidden_state = request_count(page, "/state", authenticated=True)
+    set_page_hidden(page, True)
+    settle_clock(page, 30_000)
+    assert request_count(page, "/doctor/navidrome", authenticated=True) == hidden_doctor, page.request_log
+    assert request_count(page, "/state", authenticated=True) == hidden_state, page.request_log
+
+    set_page_hidden(page, False)
+    page.get_by_role("link", name="Dash", exact=True).click()
+    page.wait_for_url("**/admin/dash")
+    page.get_by_text("queue empty, auto-playlist fallback", exact=True).wait_for(state="visible")
+    initial_schedule = request_count(page, "/schedule")
+    settle_clock(page, 30_000)
+    assert request_count(page, "/schedule") == initial_schedule + 1, page.request_log
+    set_page_hidden(page, True)
+    hidden_schedule = request_count(page, "/schedule")
+    settle_clock(page, 30_000)
+    assert request_count(page, "/schedule") == hidden_schedule, page.request_log
 
 
 def main():

@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { AnimatePresence, m } from 'motion/react';
 import { fmtClock } from '../../lib/format';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { useAdminQuery } from '../../lib/admin-query';
+import { errorMessage } from '../../lib/notify';
 import { Checkbox } from '../ui/checkbox';
 import { Label } from '../ui/label';
 import { Card, Btn, Pill, Eyebrow } from './ui';
@@ -22,65 +24,44 @@ import { TtsRouting } from './debug/TtsPanels';
 import { HealthCell, KvTable } from './debug/bits';
 import { fmtListeners, kindTone } from './debug/format';
 import type { DebugData } from './debug/types';
+import { debugKeys, fetchDebug } from './debug/queries';
+
+class DebugShapeError extends Error {}
 
 export default function DebugPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [data, setData] = useState<DebugData | null>(null);
-  const [err, setErr] = useState<string | null>(null);
   const [paused, setPaused] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
+  const enabled = hydrated && !needsAuth && !paused;
+  const debugQuery = useAdminQuery<DebugData>({
+    key: debugKeys.status(),
+    adminFetch,
+    enabled,
+    staleTime: 0,
+    // TanStack resets the interval after each result, preserving the existing
+    // completion-to-next gap and preventing overlap on this expensive endpoint.
+    refetchInterval: () => 2_000,
+    request: async (fetcher, signal) => {
+      const body = await fetchDebug(fetcher, signal);
+      if (!body || typeof body !== 'object' || !body.queue) {
+        throw new DebugShapeError(body?.error || 'unexpected response shape from /debug');
+      }
+      return body;
+    },
+  });
+  const data = debugQuery.error instanceof DebugShapeError ? null : (debugQuery.data ?? null);
+  const err = debugQuery.error ? errorMessage(debugQuery.error) : null;
+  const refetchDebug = debugQuery.refetch;
 
+  // refetchOnWindowFocus stays false globally. Debug historically refreshed at
+  // once on visibility return, so preserve that one panel-specific contract.
   useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    let running = false;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const tick = async () => {
-      // Single-flight: /debug can take seconds, and overlapping requests pile up
-      // on the single-threaded controller, starving /api/* into edge 524s.
-      if (cancelled || running) return;
-      running = true;
-      try {
-        // Skip the fetch when paused or hidden, but keep the loop alive.
-        if (!paused && !(typeof document !== 'undefined' && document.hidden)) {
-          const r = await adminFetch('/debug');
-          if (r.status === 401) {
-            if (!cancelled) setData(null);
-          } else {
-            const j = (await r.json()) as DebugData;
-            if (!cancelled) {
-              if (!j || typeof j !== 'object' || !j.queue) {
-                setErr(j?.error || 'unexpected response shape from /debug');
-                setData(null);
-              } else {
-                setData(j);
-                setErr(null);
-              }
-            }
-          }
-        }
-      } catch (e) {
-        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
-      } finally {
-        running = false;
-        // Gap measured from completion, not from start, so no overlap is possible.
-        if (!cancelled) timer = setTimeout(tick, 2000);
-      }
-    };
-    tick();
     const onVisible = () => {
-      if (!cancelled && !document.hidden) {
-        if (timer) { clearTimeout(timer); timer = null; }
-        tick();
-      }
+      if (enabled && !document.hidden) void refetchDebug();
     };
     document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
-  }, [paused, needsAuth, hydrated, adminFetch]);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [enabled, refetchDebug]);
 
   return (
     <div className="grid gap-4">

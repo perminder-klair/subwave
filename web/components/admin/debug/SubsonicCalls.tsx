@@ -2,17 +2,29 @@
 
 import { useState } from 'react';
 import { useAdminAuth } from '../../../lib/adminAuth';
+import { useAdminMutation } from '../../../lib/admin-query';
 import { Card, Btn } from '../ui';
 import { ScrollArea } from '../../ui/scroll-area';
 import { cn } from '../../../lib/cn';
 import type { DebugSubsonic } from './types';
 import { oneLine } from './format';
 import { CallSection, FilterChip, JsonBlock } from './bits';
+import { debugKeys } from './queries';
 
 export function SubsonicCalls({ subsonic }: { subsonic: DebugSubsonic | undefined }) {
   const { adminFetch } = useAdminAuth();
   const [filter, setFilter] = useState('all');
-  const [resetting, setResetting] = useState(false);
+  const resetMutation = useAdminMutation<void, void>({
+    adminFetch,
+    toastOnError: false,
+    request: async (_vars, fetcher) => {
+      // Reset has always been best-effort: any answer or network failure is
+      // silent, and the next /debug reading is authoritative.
+      await fetcher('/debug/subsonic/reset', { method: 'POST' });
+    },
+    onDone: (_data, _vars, client) =>
+      client.invalidateQueries({ queryKey: debugKeys.status() }),
+  });
 
   if (!subsonic || subsonic.error) {
     return (
@@ -30,9 +42,7 @@ export function SubsonicCalls({ subsonic }: { subsonic: DebugSubsonic | undefine
   const shown = filter === 'all' ? calls : calls.filter(c => c.endpoint === filter);
 
   const reset = async () => {
-    setResetting(true);
-    try { await adminFetch('/debug/subsonic/reset', { method: 'POST' }); } catch {}
-    setResetting(false);
+    try { await resetMutation.mutateAsync(); } catch {}
   };
 
   return (
@@ -40,8 +50,8 @@ export function SubsonicCalls({ subsonic }: { subsonic: DebugSubsonic | undefine
       title="Subsonic API calls"
       sub={`${calls.length} recent · ${totalCalls} total`}
       right={
-        <Btn sm onClick={reset} disabled={resetting}>
-          {resetting ? 'Resetting…' : 'Reset'}
+        <Btn sm onClick={reset} disabled={resetMutation.isPending}>
+          {resetMutation.isPending ? 'Resetting…' : 'Reset'}
         </Btn>
       }
     >
@@ -109,5 +119,4 @@ export function SubsonicCalls({ subsonic }: { subsonic: DebugSubsonic | undefine
     </Card>
   );
 }
-
 

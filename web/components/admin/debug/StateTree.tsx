@@ -1,9 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
+import { useQueries, useQueryClient } from '@tanstack/react-query';
 import { File, Link2 } from 'lucide-react';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { fmtSize } from '../../../lib/format';
+import { errorMessage } from '../../../lib/notify';
 import { Btn } from '../ui';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import {
@@ -13,6 +15,12 @@ import {
   FileTreeIcon,
   FileTreeName,
 } from '@/components/ai-elements/file-tree';
+import {
+  debugKeys,
+  fetchStateListing,
+  type StateEntry,
+  type StateListing,
+} from './queries';
 
 // Read-only browser for the station's state dir, backed by GET /debug/state-tree.
 //
@@ -27,27 +35,10 @@ import {
 // `total`, which is what the truncation row renders; state/stems routinely holds
 // tens of thousands of dirs.
 
-type Entry = {
-  name: string;
-  isDir: boolean;
-  isSymlink: boolean;
-  size?: number;
-  mtime?: string;
-};
-
-type Listing = {
-  root?: string;
-  path?: string;
-  entries?: Entry[];
-  shown?: number;
-  total?: number;
-  error?: string;
-};
-
 type DirState =
   | { status: 'loading' }
   | { status: 'error'; error: string }
-  | { status: 'ready'; entries: Entry[]; shown: number; total: number };
+  | { status: 'ready'; entries: StateEntry[]; shown: number; total: number };
 
 /** voice/ was its own card before this tree existed — keep the DJ voice WAVs one
  *  glance away rather than one expand away. */
@@ -68,61 +59,54 @@ function fmtWhen(mtime?: string): string {
 
 export function StateTree() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [dirs, setDirs] = useState<Record<string, DirState>>({});
+  const queryClient = useQueryClient();
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(DEFAULT_EXPANDED));
-  const [root, setRoot] = useState<string | null>(null);
-  // Guards a directory already in flight — expanding, collapsing and re-expanding
-  // in quick succession would otherwise fire the same listing twice.
-  const inFlight = useRef<Set<string>>(new Set());
-  const cancelled = useRef(false);
-
-  const load = useCallback(async (path: string) => {
-    if (inFlight.current.has(path)) return;
-    inFlight.current.add(path);
-    setDirs(prev => ({ ...prev, [path]: { status: 'loading' } }));
-    try {
-      const r = await adminFetch(`/debug/state-tree?path=${encodeURIComponent(path)}`);
-      const j = (await r.json()) as Listing;
-      if (cancelled.current) return;
-      if (j.root) setRoot(j.root);
-      const entries = Array.isArray(j.entries) ? j.entries : null;
-      if (j.error || !entries) {
-        setDirs(prev => ({ ...prev, [path]: { status: 'error', error: j.error || 'unexpected response' } }));
+  const [queried, setQueried] = useState<Set<string>>(
+    () => new Set(['', ...DEFAULT_EXPANDED]),
+  );
+  const paths = useMemo(() => [...queried], [queried]);
+  const listings = useQueries({
+    queries: paths.map(path => ({
+      queryKey: debugKeys.stateFile(path),
+      enabled: hydrated && !needsAuth,
+      staleTime: 0,
+      queryFn: ({ signal }: { signal: AbortSignal }) => fetchStateListing(adminFetch, path, signal),
+    })),
+  });
+  const dirs = useMemo<Record<string, DirState>>(() => {
+    const next: Record<string, DirState> = {};
+    paths.forEach((path, index) => {
+      const query = listings[index];
+      const listing = query?.data as StateListing | undefined;
+      if (query?.error) {
+        next[path] = { status: 'error', error: errorMessage(query.error) };
+      } else if (!listing) {
+        next[path] = { status: 'loading' };
+      } else if (listing.error || !Array.isArray(listing.entries)) {
+        next[path] = { status: 'error', error: listing.error || 'unexpected response' };
       } else {
-        setDirs(prev => ({
-          ...prev,
-          [path]: {
-            status: 'ready',
-            entries,
-            shown: j.shown ?? entries.length,
-            total: j.total ?? entries.length,
-          },
-        }));
+        next[path] = {
+          status: 'ready',
+          entries: listing.entries,
+          shown: listing.shown ?? listing.entries.length,
+          total: listing.total ?? listing.entries.length,
+        };
       }
-    } catch (e) {
-      if (!cancelled.current) {
-        setDirs(prev => ({ ...prev, [path]: { status: 'error', error: e instanceof Error ? e.message : String(e) } }));
-      }
-    } finally {
-      inFlight.current.delete(path);
-    }
-  }, [adminFetch]);
+    });
+    return next;
+  }, [listings, paths]);
+  const root = (listings[paths.indexOf('')]?.data as StateListing | undefined)?.root ?? null;
 
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    cancelled.current = false;
-    // Two requests on open: the root, plus the default-expanded voice/.
-    void load('');
-    for (const p of DEFAULT_EXPANDED) void load(p);
-    return () => { cancelled.current = true; };
-  }, [hydrated, needsAuth, load]);
+  const load = useCallback((path: string) => {
+    setQueried(current => current.has(path) ? current : new Set([...current, path]));
+  }, []);
 
   /** The lazy-load hook: a path that has just been expanded and was never fetched
    *  gets its one listing here. A cached one re-opens with no request at all. */
   const onExpandedChange = useCallback((next: Set<string>) => {
     setExpanded(next);
     for (const p of next) {
-      if (!dirs[p]) void load(p);
+      if (!dirs[p]) load(p);
     }
   }, [dirs, load]);
 
@@ -150,17 +134,14 @@ export function StateTree() {
       next.delete(path);
     } else {
       next.add(path);
-      if (!dirs[path]) void load(path);
+      if (!dirs[path]) load(path);
     }
     setExpanded(next);
   }, [dirPaths, expanded, dirs, load]);
 
   const refresh = useCallback(() => {
-    const open = Object.keys(dirs);
-    setDirs({});
-    inFlight.current.clear();
-    for (const p of open) void load(p);
-  }, [dirs, load]);
+    void queryClient.invalidateQueries({ queryKey: debugKeys.stateFiles() });
+  }, [queryClient]);
 
   const rootState = dirs[''];
 

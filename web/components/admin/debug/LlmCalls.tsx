@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useAdminAuth } from '../../../lib/adminAuth';
+import { useAdminMutation } from '../../../lib/admin-query';
 import { Checkbox } from '../../ui/checkbox';
 import { Label } from '../../ui/label';
 import { Card } from '../ui';
@@ -14,6 +15,7 @@ import type { DebugLlm } from './types';
 import { oneLine } from './format';
 import { CallSection, FilterChip, JsonBlock, JsonOrText } from './bits';
 import { mapChatRole } from './TtsPanels';
+import { debugKeys } from './queries';
 
 function MessageList({ messages }: { messages: Array<{ role?: string; content?: unknown }> }) {
   return (
@@ -98,16 +100,27 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
   const [override, setOverride] = useState<boolean | null>(null);
   const enabled = override ?? !!dbg?.enabled;
   useEffect(() => { setOverride(null); }, [dbg?.enabled]);
+  const toggleRawMutation = useAdminMutation<void, boolean>({
+    adminFetch,
+    toastOnError: false,
+    request: async (next, fetcher) => {
+      // Preserve the old posture: only a network failure rolls the optimistic
+      // switch back; an HTTP answer is reconciled by the next /debug result.
+      await fetcher('/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ llm: { debugRawRequests: next } }),
+      });
+    },
+    onDone: (_data, _next, client) =>
+      client.invalidateQueries({ queryKey: debugKeys.status() }),
+  });
 
   const toggleRaw = async (next: boolean) => {
     if (viaEnv) return; // LLM_DEBUG_RAW forces it on — can't change from here
     setOverride(next);
     try {
-      await adminFetch('/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ llm: { debugRawRequests: next } }),
-      });
+      await toggleRawMutation.mutateAsync(next);
     } catch {
       setOverride(null);
     }
@@ -234,5 +247,4 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
     </Card>
   );
 }
-
 

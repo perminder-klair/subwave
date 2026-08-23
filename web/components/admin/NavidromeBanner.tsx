@@ -1,14 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect } from 'react';
 import { AlertTriangle } from 'lucide-react';
-
-interface NavidromeStatus {
-  ok: boolean;
-  reason?: string;
-  url?: string;
-}
+import { useAdminQuery, type AdminFetch } from '../../lib/admin-query';
+import { dashKeys, fetchNavidromeStatus } from './dash/queries';
 
 // Polls the same Navidrome ping the DJ Doc reads, so the two never disagree.
 // Renders nothing until a failing result arrives.
@@ -16,43 +12,24 @@ export default function NavidromeBanner({
   adminFetch,
   onStatus,
 }: {
-  adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
+  adminFetch: AdminFetch;
   // Lets the shell suppress the broader starve banner while this more specific
   // one is up — a Navidrome outage raises both, and two stacked red bars
   // saying overlapping things is worse than one.
   onStatus?: (ok: boolean) => void;
 }) {
-  const [status, setStatus] = useState<NavidromeStatus | null>(null);
-  // adminFetch's identity changes as auth state ticks; hold the latest in a ref
-  // so the poll interval mounts once instead of tearing down every render.
-  const fetchRef = useRef(adminFetch);
-  fetchRef.current = adminFetch;
-  const onStatusRef = useRef(onStatus);
-  onStatusRef.current = onStatus;
+  const statusQuery = useAdminQuery({
+    key: dashKeys.navidrome(),
+    adminFetch,
+    staleTime: 0,
+    refetchInterval: () => 30_000,
+    request: fetchNavidromeStatus,
+  });
+  const status = statusQuery.data ?? null;
 
   useEffect(() => {
-    let cancelled = false;
-    const check = async () => {
-      try {
-        const r = await fetchRef.current('/doctor/navidrome');
-        if (!r.ok) return; // 401 / 5xx — don't flip the banner on an auth blip
-        const j = (await r.json()) as NavidromeStatus;
-        if (!cancelled) {
-          setStatus(j);
-          onStatusRef.current?.(j.ok);
-        }
-      } catch {
-        // Controller unreachable — leave the last known state rather than
-        // flapping; a dead controller has its own, louder failure modes.
-      }
-    };
-    check();
-    const id = setInterval(check, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
+    if (status) onStatus?.(status.ok);
+  }, [onStatus, status]);
 
   if (!status || status.ok) return null;
 

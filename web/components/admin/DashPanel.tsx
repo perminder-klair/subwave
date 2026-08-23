@@ -2,13 +2,14 @@
 
 // DJ command center — /admin/dash. Speak custom text on air, fire voice segments,
 // flip the autonomous toggles, watch live status + the booth log.
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAdminAuth } from '../../lib/adminAuth';
+import { useAdminMutation, useAdminQuery } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { turnClass, turnKey } from '../../lib/sessionFeed';
 import { fmtClock } from '../../lib/format';
 import { clientLabel, fmtConnected } from '../../lib/clientLabel';
-import type { SessionTurn } from '../../lib/types';
 import type { QueueEntry } from '../../lib/types';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { SkeletonText } from '@/components/ui/skeleton';
@@ -65,6 +66,15 @@ import {
   maskIp,
   sortConnections,
 } from './dash/types';
+import {
+  dashKeys,
+  fetchConnections,
+  fetchDashStatus,
+  fetchHealthStats,
+  fetchRequests,
+  fetchSuggestions,
+  runDashAction,
+} from './dash/queries';
 
 // Listeners-table header cells. `sticky top-0` resolves against the ScrollArea
 // viewport, and the opaque card-bg stops rows showing through underneath. The
@@ -76,8 +86,7 @@ const STICKY_TH =
 
 export default function DashPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [status, setStatus] = useState<DashStatus | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const queryClient = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
 
   const [sayText, setSayText] = useState('');
@@ -89,162 +98,85 @@ export default function DashPanel() {
 
   // Hardcoded set until the controller has a generated batch. The GET on mount
   // never calls a model; the ↻ button's POST does.
-  const [saySuggestions, setSaySuggestions] = useState<string[]>(SAY_SUGGESTIONS);
-  const [sayGenBusy, setSayGenBusy] = useState(false);
-
-  const [conns, setConns] = useState<ConnectionsState | null>(null);
-  const [connErr, setConnErr] = useState<string | null>(null);
-  const [stats, setStats] = useState<HealthStats | null>(null);
-  const [requests, setRequests] = useState<RequestEntry[] | null>(null);
-  const [reqErr, setReqErr] = useState<string | null>(null);
   // Longest-connected first by default — the most stable listeners on top.
   const [sort, setSort] = useState<SortState>({ key: 'connectedSeconds', dir: 'desc' });
   const [revealIps, setRevealIps] = useState(false);
 
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const [npR, stR, seR] = await Promise.all([
-          adminFetch('/now-playing'),
-          adminFetch('/state'),
-          adminFetch('/session'),
-        ]);
-        if (cancelled) return;
-        const np = (await npR.json().catch(() => null)) as Partial<DashStatus> | null;
-        const st = (await stR.json().catch(() => null)) as QueueState | null;
-        const se = (await seR.json().catch(() => null)) as { messages?: SessionTurn[] } | null;
-        setStatus({
-          ...(np || {}),
-          queue: st || {},
-          sessionMessages: se?.messages || [],
-        });
-        setErr(null);
-      } catch (e) {
-        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
-      }
-    };
-    tick();
-    const id = setInterval(tick, 3000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [hydrated, needsAuth, adminFetch]);
-
+  const ready = hydrated && !needsAuth;
+  const statusQuery = useAdminQuery<DashStatus>({
+    key: dashKeys.status(), adminFetch, enabled: ready, staleTime: 0,
+    refetchInterval: () => 3_000,
+    request: fetchDashStatus,
+  });
   // Polled slower than status because it hits Icecast's admin interface.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const r = await adminFetch('/listeners/connections');
-        const j = (await r.json().catch(() => null)) as
-          | (ConnectionsState & { error?: string })
-          | null;
-        if (cancelled) return;
-        if (!r.ok) throw new Error(j?.error || `failed (${r.status})`);
-        setConns({ count: j?.count ?? 0, connections: j?.connections ?? [] });
-        setConnErr(null);
-      } catch (e) {
-        if (!cancelled) setConnErr(e instanceof Error ? e.message : String(e));
-      }
-    };
-    tick();
-    const id = setInterval(tick, 10000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [hydrated, needsAuth, adminFetch]);
+  const connectionsQuery = useAdminQuery<ConnectionsState>({
+    key: dashKeys.connections(), adminFetch, enabled: ready, staleTime: 0,
+    refetchInterval: () => 10_000,
+    request: fetchConnections,
+  });
+  // A miss freezes the health meters rather than erroring the dash.
+  const statsQuery = useAdminQuery<HealthStats>({
+    key: dashKeys.stats(), adminFetch, enabled: ready, staleTime: 0,
+    refetchInterval: () => 15_000,
+    request: fetchHealthStats,
+  });
+  // A review surface, not a live ticker — keep the existing 10s cadence.
+  const requestsQuery = useAdminQuery<RequestEntry[]>({
+    key: dashKeys.requests(), adminFetch, enabled: ready, staleTime: 0,
+    refetchInterval: () => 10_000,
+    request: fetchRequests,
+  });
+  const suggestionsQuery = useAdminQuery<string[] | null>({
+    key: dashKeys.suggestions(), adminFetch, enabled: ready,
+    request: fetchSuggestions,
+  });
 
-  // Health-strip rollups. /stats is heavy and both figures move slowly, hence
-  // the slower cadence; a miss freezes the meters rather than erroring the dash.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const r = await adminFetch('/stats');
-        const j = (await r.json().catch(() => null)) as HealthStats | null;
-        if (!cancelled && r.ok && j) setStats(j);
-      } catch {
-        /* leave last reading in place */
-      }
-    };
-    tick();
-    const id = setInterval(tick, 15000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [hydrated, needsAuth, adminFetch]);
+  const status = statusQuery.data ?? null;
+  const err = statusQuery.error ? errorMessage(statusQuery.error) : null;
+  const conns = connectionsQuery.data ?? null;
+  const connErr = connectionsQuery.error ? errorMessage(connectionsQuery.error) : null;
+  const stats = statsQuery.data ?? null;
+  const requests = requestsQuery.data ?? null;
+  const reqErr = requestsQuery.error ? errorMessage(requestsQuery.error) : null;
+  const saySuggestions = suggestionsQuery.data ?? SAY_SUGGESTIONS;
 
-  // A review surface, not a live ticker — hence the slower cadence.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const r = await adminFetch('/requests');
-        const j = (await r.json().catch(() => null)) as
-          | { requests?: RequestEntry[]; error?: string }
-          | null;
-        if (cancelled) return;
-        if (!r.ok) throw new Error(j?.error || `failed (${r.status})`);
-        setRequests(j?.requests ?? []);
-        setReqErr(null);
-      } catch (e) {
-        if (!cancelled) setReqErr(e instanceof Error ? e.message : String(e));
+  const refreshSuggestionsMutation = useAdminMutation<{ suggestions?: string[] }, void>({
+    adminFetch,
+    toastOnError: false,
+    request: async (_vars, fetcher) => {
+      const response = await fetcher('/generate/say-suggestions', { method: 'POST' });
+      const body = await response.json().catch(() => null) as
+        | { suggestions?: string[]; error?: string }
+        | null;
+      if (!response.ok) throw new Error(body?.error || `failed (${response.status})`);
+      return body ?? {};
+    },
+    onDone: (data, _vars, client) => {
+      if (Array.isArray(data.suggestions) && data.suggestions.length) {
+        client.setQueryData(dashKeys.suggestions(), data.suggestions);
       }
-    };
-    tick();
-    const id = setInterval(tick, 10000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [hydrated, needsAuth, adminFetch]);
-
-  // Last generated batch, once on mount. Any miss leaves the hardcoded set.
-  useEffect(() => {
-    if (!hydrated || needsAuth) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await adminFetch('/generate/say-suggestions');
-        const j = (await r.json().catch(() => null)) as { suggestions?: string[] | null } | null;
-        if (!cancelled && r.ok && Array.isArray(j?.suggestions) && j.suggestions.length) {
-          setSaySuggestions(j.suggestions);
-        }
-      } catch {
-        /* hardcoded set stays */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [hydrated, needsAuth, adminFetch]);
+    },
+  });
 
   // Asks the station LLM for a fresh batch; failure leaves the current chips.
   const refreshSuggestions = async () => {
-    setSayGenBusy(true);
     try {
-      const r = await adminFetch('/generate/say-suggestions', { method: 'POST' });
-      const j = (await r.json().catch(() => null)) as
-        | { suggestions?: string[]; error?: string }
-        | null;
-      if (!r.ok) throw new Error(j?.error || `failed (${r.status})`);
-      if (Array.isArray(j?.suggestions) && j.suggestions.length) {
-        setSaySuggestions(j.suggestions);
-      }
+      await refreshSuggestionsMutation.mutateAsync();
     } catch (e) {
       notify.err(`new prompts: ${errorMessage(e)}`);
-    } finally {
-      setSayGenBusy(false);
     }
   };
+
+  interface DashAction {
+    path: string;
+    body: Record<string, unknown> | null;
+  }
+  const actionMutation = useAdminMutation<ActResponse, DashAction>({
+    adminFetch,
+    toastOnError: false,
+    request: ({ path, body }, fetcher) => runDashAction(fetcher, path, body),
+    onDone: (_data, _vars, client) => client.invalidateQueries({ queryKey: dashKeys.status() }),
+  });
 
   const act = async (
     key: string,
@@ -254,13 +186,7 @@ export default function DashPanel() {
   ): Promise<ActResponse | null> => {
     setBusy(key);
     try {
-      const r = await adminFetch(path, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body || {}),
-      });
-      const j = (await r.json().catch(() => ({}))) as ActResponse;
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      const j = await actionMutation.mutateAsync({ path, body });
       notify.ok(j.spoken ? `on air: “${j.spoken}”` : `${label} done`);
       return j;
     } catch (e) {
@@ -296,27 +222,42 @@ export default function DashPanel() {
 
   // No confirm: nothing on-air changes, worst case a 409 because the track went
   // on air first. The row drops optimistically; the poll confirms.
+  const cancelQueueItem = useAdminMutation<ActResponse, string>({
+    adminFetch,
+    toastOnError: false,
+    request: async (id, fetcher) => {
+      const response = await fetcher(`/dj/queue/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const body = await response.json().catch(() => ({})) as ActResponse;
+      if (!response.ok) throw new Error(body.error || `failed (${response.status})`);
+      return body;
+    },
+    onDone: async (_data, _id, client) => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: dashKeys.status() }),
+        client.invalidateQueries({ queryKey: dashKeys.requests() }),
+      ]);
+    },
+  });
+
   const cancelQueued = async (t: QueueEntry) => {
     const id = typeof t.subsonic_id === 'string' ? t.subsonic_id : '';
     if (!id) return;
     setBusy(`cancel:${id}`);
+    const previous = queryClient.getQueryData<DashStatus>(dashKeys.status());
+    queryClient.setQueryData<DashStatus>(dashKeys.status(), current => current
+      ? {
+          ...current,
+          queue: {
+            ...(current.queue || {}),
+            upcoming: (current.queue?.upcoming || []).filter(item => item.subsonic_id !== id),
+          },
+        }
+      : current);
     try {
-      const r = await adminFetch(`/dj/queue/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      const j = (await r.json().catch(() => ({}))) as ActResponse;
-      if (!r.ok) throw new Error(j.error || `failed (${r.status})`);
+      await cancelQueueItem.mutateAsync(id);
       notify.ok(`removed from queue: ${t.title || 'track'}`);
-      setStatus(s =>
-        s
-          ? {
-              ...s,
-              queue: {
-                ...(s.queue || {}),
-                upcoming: (s.queue?.upcoming || []).filter(u => u.subsonic_id !== id),
-              },
-            }
-          : s,
-      );
     } catch (e) {
+      queryClient.setQueryData(dashKeys.status(), previous);
       notify.err(`cancel: ${errorMessage(e)}`);
     } finally {
       setBusy(null);
@@ -592,12 +533,12 @@ export default function DashPanel() {
               <button
                 type="button"
                 onClick={refreshSuggestions}
-                disabled={sayGenBusy}
+                disabled={refreshSuggestionsMutation.isPending}
                 title="New prompts — written by the station LLM for right now"
                 aria-label="Generate new prompts"
                 className="shrink-0 border border-separator-strong p-3 text-muted transition-colors hover:bg-[var(--overlay)] hover:text-ink disabled:pointer-events-none disabled:opacity-60 sm:p-[5px]"
               >
-                <RefreshCw className={cn('h-3 w-3', sayGenBusy && 'animate-spin')} />
+                <RefreshCw className={cn('h-3 w-3', refreshSuggestionsMutation.isPending && 'animate-spin')} />
               </button>
             </div>
             <PromptInput onSubmit={onSaySubmit}>
