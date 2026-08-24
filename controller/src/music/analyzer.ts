@@ -582,6 +582,36 @@ async function sidecarReachable(): Promise<boolean> {
 
 // POST the sidecar a request body of either {url} (it downloads) or {path}
 // (a file on the shared volume the controller pre-fetched).
+class AnalyzerPathUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AnalyzerPathUnavailableError';
+  }
+}
+
+async function sidecarFailure(res: Response): Promise<never> {
+  const raw = await res.text().catch(() => '');
+  let detail: unknown = null;
+  try {
+    detail = JSON.parse(raw)?.detail;
+  } catch {
+    // Non-JSON responses retain the previous status + raw-body error shape.
+  }
+  if (
+    res.status === 422
+    && detail != null
+    && typeof detail === 'object'
+    && (detail as Record<string, unknown>).code === 'path_unavailable'
+  ) {
+    const message = (detail as Record<string, unknown>).message;
+    throw new AnalyzerPathUnavailableError(
+      typeof message === 'string' ? message : 'analyzer cannot read controller path',
+    );
+  }
+  const message = typeof detail === 'string' ? detail : raw;
+  throw new Error(`analyze sidecar ${res.status}: ${message}`);
+}
+
 async function sidecarRequest(body: ({ url: string } | { path: string }) & AnalyzeRequestOpts): Promise<AnalysisResult> {
   const base = _sidecarBase;
   const res = await fetchWithTimeout(`${base}/analyze`, {
@@ -591,7 +621,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     timeoutMs: config.analyzer.requestTimeoutMs,
     bodyDeadline: true,
   });
-  if (!res.ok) throw new Error(`analyze sidecar ${res.status}: ${await res.text().catch(() => '')}`);
+  if (!res.ok) return sidecarFailure(res);
   const resBody = (await res.json()) as WorkerMessage;
   if (!resBody.ok) throw new Error(resBody.error || 'analysis failed');
   return {
@@ -1025,6 +1055,38 @@ export async function analyzePath(localPath: string, opts: AnalyzeRequestOpts = 
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
   return backend === 'sidecar' ? analyzeViaSidecarPath(localPath, opts) : analyzeViaLocalPath(localPath, opts);
+}
+
+let pathFallbackWarned = false;
+
+// Prefer the one-ahead shared-path handoff, but degrade a sidecar that cannot
+// see the controller's state mount to its existing URL input. Only the
+// sidecar's machine-readable path-unavailable response earns the retry: a
+// decode/model failure is real analysis work failing and must not be doubled.
+// `complete` describes the controller's staged file, while `stems_dir` is a
+// controller-local output path; neither is valid when the sidecar downloads
+// its own temporary copy.
+export async function analyzePathWithUrlFallback(
+  songId: string,
+  localPath: string,
+  opts: AnalyzeRequestOpts = {},
+): Promise<AnalysisResult> {
+  try {
+    return await analyzePath(localPath, opts);
+  } catch (err) {
+    if (!(err instanceof AnalyzerPathUnavailableError)) throw err;
+    if (!pathFallbackWarned) {
+      pathFallbackWarned = true;
+      console.error(
+        '[analyze] analyzer cannot read controller staging paths; using URL downloads ' +
+        '(slower, and stem caching still requires shared state)',
+      );
+    }
+    const urlOpts = { ...opts };
+    delete urlOpts.complete;
+    delete urlOpts.stems_dir;
+    return analyze(songId, urlOpts);
+  }
 }
 
 export function shutdown(): void {

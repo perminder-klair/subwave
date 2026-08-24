@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 
 const SUITES = [
+  'analyzer_sidecar_contract_test.py', // typed missing-path response for URL fallback (#1331)
   'analyzer_embedding_test.py', // batched CLAP + embedding-only backfills (#1426)
   'idle_release_test.py', // idle model release + heavy clock (#1099/#1204)
   'vocal_gate_test.py', // vocal-stem gate thresholds (#1125)
