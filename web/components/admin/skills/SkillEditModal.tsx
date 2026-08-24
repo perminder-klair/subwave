@@ -176,6 +176,10 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const [confirmDelete, setConfirmDelete] = useState(false);  // delete confirm dialog
   const [defaults, setDefaults] = useState<SkillDefaults | null>(null); // built-in shipped defaults
 
+  const requestClose = useCallback(() => {
+    if (!busy) onClose();
+  }, [busy, onClose]);
+
   // The same schema the controller runs, so a bad cooldown is caught at the
   // input rather than coming back as a 400. Declared as the widened ZodType
   // rather than the create/edit union: several fields are z.preprocess-wrapped,
@@ -225,8 +229,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     if (!isEdit || !fileQuery.error || fileErrorRef.current === fileQuery.error) return;
     fileErrorRef.current = fileQuery.error;
     notify.err(`Couldn't load skill: ${errorMessage(fileQuery.error)}`);
-    onClose();
-  }, [fileQuery.error, isEdit, onClose]);
+    requestClose();
+  }, [fileQuery.error, isEdit, requestClose]);
 
   // `custom` can flip after mount (the file GET below corrects the list row's
   // guess), swapping `schema`. RHF picks up the new resolver on the next render
@@ -635,7 +639,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         },
       ]}
       primary={[
-        { id: 'close', label: 'Close', onClick: onClose },
+        { id: 'close', label: 'Close', onClick: requestClose, disabled: busy },
         {
           id: 'save',
           label: busy
@@ -652,7 +656,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   return (
     <EditorDialog
       open
-      onOpenChange={(o) => { if (!o) onClose(); }}
+      onOpenChange={(o) => { if (!o) requestClose(); }}
+      busy={busy}
       title={headerTitle}
       sub={headerSub}
       footer={footer}

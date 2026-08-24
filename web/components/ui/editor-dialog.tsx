@@ -33,6 +33,7 @@ import {
 export interface EditorDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  busy?: boolean;
   title?: ReactNode;
   sub?: ReactNode;
   footer?: ReactNode;
@@ -44,6 +45,7 @@ export interface EditorDialogProps {
 export function EditorDialog({
   open,
   onOpenChange,
+  busy = false,
   title,
   sub,
   footer,
@@ -73,6 +75,7 @@ export function EditorDialog({
             </Dialog.Overlay>
             <Dialog.Content asChild forceMount aria-describedby={undefined}>
               <m.div
+                aria-busy={busy || undefined}
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: 12 }}
@@ -88,6 +91,7 @@ export function EditorDialog({
                       {sub && <div className="flex-none">{sub}</div>}
                     </div>
                     <Dialog.Close
+                      disabled={busy}
                       className="v3-focus flex-none cursor-pointer border-0 bg-transparent p-0 text-[22px] leading-none text-muted"
                       aria-label="Close"
                     >

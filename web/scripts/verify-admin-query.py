@@ -4002,9 +4002,56 @@ def skills_rescan_refreshes_files(page):
 
 @check
 def skill_file_save_close_reopen_is_authoritative(page):
-    """A hydrate-once editor reopened inside 30s consumes the saved file."""
+    """A pending save refresh cannot be dismissed and leave the old file cached."""
     skills = [task6_skill("task-6-saved-file", "Task 6 Saved File", enabled=True, custom=True)]
     current_brief = {"value": "Brief before save"}
+    page_errors = []
+    page.on("pageerror", lambda error: page_errors.append(str(error)))
+
+    # Let the real authenticated GET resolve at the network boundary, then hold
+    # its fetch promise until the modal either aborts it or this check releases
+    # it. A paused Playwright route deadlocks if it is fulfilled from the same
+    # sync callback, so keep the delay in the browser where TanStack's real
+    # AbortSignal remains observable.
+    page.add_init_script("""
+      (() => {
+        const nativeFetch = window.fetch.bind(window);
+        const race = { holdNext: false, held: false, aborted: false, release: null };
+        window.__subwaveSkillFileRace = race;
+        window.__subwaveHoldSkillFileGet = () => { race.holdNext = true; };
+        window.__subwaveReleaseSkillFileGet = () => race.release?.();
+        window.fetch = async (input, init = {}) => {
+          const response = await nativeFetch(input, init);
+          const url = typeof input === 'string' ? input : input.url;
+          const method = (init.method || (typeof input === 'string' ? 'GET' : input.method) || 'GET').toUpperCase();
+          if (!race.holdNext || method !== 'GET' || new URL(url, location.href).pathname !== '/dj/skills/task-6-saved-file/file') {
+            return response;
+          }
+          race.holdNext = false;
+          race.held = true;
+          await new Promise((resolve, reject) => {
+            const signal = init.signal;
+            let settled = false;
+            const finish = (aborted) => {
+              if (settled) return;
+              settled = true;
+              signal?.removeEventListener('abort', onAbort);
+              if (aborted) {
+                race.aborted = true;
+                reject(new DOMException('Aborted', 'AbortError'));
+              } else {
+                resolve();
+              }
+            };
+            const onAbort = () => finish(true);
+            race.release = () => finish(false);
+            if (signal?.aborted) onAbort();
+            else signal?.addEventListener('abort', onAbort, { once: true });
+          });
+          return response;
+        };
+      })();
+    """)
 
     def skill_file():
         return {
@@ -4040,14 +4087,33 @@ def skill_file_save_close_reopen_is_authoritative(page):
     brief = dialog.get_by_label("The brief")
     brief.wait_for(state="visible")
     brief.fill("Brief after save")
+    page.evaluate("window.__subwaveHoldSkillFileGet()")
     with page.expect_response(
         lambda response: is_admin_request(
             response.request, "/dj/skills/task-6-saved-file/file", "PUT",
         )
     ):
         dialog.get_by_role("button", name="Save", exact=True).click()
+    page.wait_for_function("window.__subwaveSkillFileRace.held")
+
+    # All three real dismissal routes must stay closed while the authoritative
+    # GET is attached to this modal: Radix open-change (Escape and the header
+    # close control) plus the footer's direct Close callback.
+    page.keyboard.press("Escape")
+    assert dialog.is_visible(), "Escape dismissed the editor during the save refresh"
+    close_buttons = dialog.get_by_role("button", name="Close", exact=True)
+    assert close_buttons.count() == 2, close_buttons.count()
+    assert close_buttons.first.is_disabled(), "header Close stayed enabled during the save refresh"
+    assert dialog.is_visible(), "header Close dismissed the editor during the save refresh"
+    assert close_buttons.last.is_disabled(), "footer Close stayed enabled during the save refresh"
+    assert dialog.is_visible(), "footer Close dismissed the editor during the save refresh"
+    assert dialog.get_attribute("aria-busy") == "true", dialog.get_attribute("aria-busy")
+    assert page.evaluate("window.__subwaveSkillFileRace.aborted") is False
+
+    page.evaluate("window.__subwaveReleaseSkillFileGet()")
     dialog.get_by_text("SAVED TO BOOTH", exact=False).wait_for(state="visible")
-    dialog.get_by_text("Close", exact=True).click()
+    assert dialog.get_attribute("aria-busy") is None, dialog.get_attribute("aria-busy")
+    dialog.get_by_role("button", name="Close", exact=True).last.click()
     dialog.wait_for(state="detached")
 
     page.get_by_label("Edit Task 6 Saved File").click()
@@ -4057,6 +4123,10 @@ def skill_file_save_close_reopen_is_authoritative(page):
     assert request_count(
         page, "/dj/skills/task-6-saved-file/file", authenticated=True,
     ) == 2, page.request_log
+    assert request_count(
+        page, "/dj/skills/task-6-saved-file/file", method="PUT", authenticated=True,
+    ) == 1, page.request_log
+    assert page_errors == [], page_errors
 
 
 @check
