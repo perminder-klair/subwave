@@ -519,8 +519,9 @@ export function LibraryProvider({
     e: { type: BlockType; id: string; name?: string | null },
     { quiet = false }: { quiet?: boolean } = {},
   ) => {
+    let r: Response | undefined;
     try {
-      await adminResponse(
+      r = await adminResponse(
         adminFetch,
         `/library/blocklist/${e.type}/${encodeURIComponent(e.id)}`,
         { method: 'DELETE' },
@@ -533,7 +534,7 @@ export function LibraryProvider({
     // degraded — surface it distinctly instead of letting it stay a
     // server-log-only failure (mirrors how the block path's own `warning`
     // rides its 200 response).
-    if (r.status === 200) {
+    if (r?.status === 200) {
       const j = await r.json().catch(() => ({})) as { warning?: string };
       if (j.warning) notify.info(j.warning);
     }
