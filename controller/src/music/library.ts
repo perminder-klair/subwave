@@ -14,6 +14,7 @@ import * as blocklist from './blocklist.js';
 import { resolveEmbeddingDim } from './embeddings.js';
 import { openingKeyFrom, endingKeyFrom } from './mix.js';
 import { DEEP_CUT_DAYS, EMPTY_AIRED_INDEX, type AiredIndex } from './airing.js';
+import { trackKey, type CandidateLike } from './recency.js';
 
 let loaded = false;
 
@@ -494,6 +495,15 @@ const AIRED_WARN_THROTTLE_MS = 10 * 60 * 1000;
 function invalidateAiredIndex(): void {
   airedIndexCache = null;
   invalidateArtistPlayStats();
+}
+
+export function trackPlayStatsFor(song: CandidateLike): db.TrackPlayStats | null {
+  const index = lastAiredInfo();
+  if (song?.id != null) {
+    const byId = index.playStatsById?.get(song.id);
+    if (byId) return byId;
+  }
+  return song?.title ? (index.playStatsByKey?.get(trackKey(song)) ?? null) : null;
 }
 
 // Same staleness/failure posture as lastAiredInfo, over the artist-grouped

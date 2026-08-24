@@ -40,6 +40,8 @@ export const EXPLORE_SEED_PROBABILITY = 0.25;
 export interface AiredIndex {
   byId: Map<string, number>;
   byKey: Map<string, number>;
+  playStatsById?: Map<string, { count: number; lastPlayedAtMs: number }>;
+  playStatsByKey?: Map<string, { count: number; lastPlayedAtMs: number }>;
 }
 
 export const EMPTY_AIRED_INDEX: AiredIndex = { byId: new Map(), byKey: new Map() };

@@ -61,7 +61,7 @@ export function slim(s: any) {
   // Play-frequency signal (#1382-adjacent): without this the model has no way
   // to tell "never aired" from "aired constantly" from "aired once, ages ago"
   // — it was observed treating every candidate as equally novel. Song-level
-  // counts ride the same library.get() lookup slim() already does (rec);
+  // counts come from the same durable plays table as the artist-level stats;
   // artist-level comes from library.artistPlayStatsFor, keyed on the free-text
   // artist name since candidates carry no artist id. Days-ago, not raw
   // timestamps — the model reasons about recency, not clock time, and this
@@ -69,8 +69,7 @@ export function slim(s: any) {
   // Omitted entirely for a track/artist with no play on record, mirroring
   // `unaired` — silence means "never", not "0 days ago".
   const daysAgo = (ms: number) => Math.max(0, Math.round((Date.now() - ms) / 86400000));
-  const songPlayCount = rec?.playCount ?? null;
-  const songLastPlayedAt = rec?.lastPlayedAt ? Date.parse(rec.lastPlayedAt) : null;
+  const songStats = library.trackPlayStatsFor(s);
   const artistStats = library.artistPlayStatsFor(s.artist);
   return {
     ...base,
@@ -84,8 +83,7 @@ export function slim(s: any) {
     ...(pace != null ? { pace } : {}),
     ...(sections != null ? { sections } : {}),
     ...(unaired ? { unaired: true } : {}),
-    ...(songPlayCount ? { play_count: songPlayCount } : {}),
-    ...(songLastPlayedAt != null && Number.isFinite(songLastPlayedAt) ? { last_played_days_ago: daysAgo(songLastPlayedAt) } : {}),
+    ...(songStats ? { play_count: songStats.count, last_played_days_ago: daysAgo(songStats.lastPlayedAtMs) } : {}),
     ...(artistStats ? { artist_play_count: artistStats.count, artist_last_played_days_ago: daysAgo(artistStats.lastPlayedAtMs) } : {}),
   };
 }
