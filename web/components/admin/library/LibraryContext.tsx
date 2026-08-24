@@ -21,6 +21,7 @@ import {
 import type {
   BlockEntry, BlockRef, BlockType, BrowseResponse, LikeIndex, Track,
 } from './types';
+import { refreshPlaylistCatalogues } from '../playlist-cache';
 
 // Per-call cap on POST /library/blocklist/check, matching the controller's.
 // A Search tab paged deep with Load more can hold more rows than that.
@@ -293,10 +294,6 @@ export function LibraryProvider({
     () => playlistsQuery.data ?? (playlistsQuery.error ? EMPTY_PLAYLISTS : null),
     [playlistsQuery.data, playlistsQuery.error],
   );
-  const reloadPlaylists = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: libraryKeys.playlists() });
-  }, [qc]);
-
   // Selection is per-view: ids from another tab would be invisible, and
   // "Add 12" with 9 off-screen rows is a foot-gun. The panel calls this on
   // every tab change — the provider cannot see `tab`.
@@ -326,31 +323,34 @@ export function LibraryProvider({
     if (songIds.length === 0) return;
     setPlBusy(true);
     try {
+      let detailId: string | undefined;
       if (target.playlistId) {
         await adminJson(adminFetch, `/playlists/${encodeURIComponent(target.playlistId)}/tracks`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ songIds }),
         });
+        detailId = target.playlistId;
       } else {
-        await adminJson(adminFetch, '/playlists', {
+        const result = await adminJson<{ playlist?: { id?: string } }>(adminFetch, '/playlists', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: target.name, songIds }),
         });
+        detailId = result.playlist?.id;
       }
+      await refreshPlaylistCatalogues(qc, detailId ? [detailId] : []);
       const plName = target.name
         || playlists?.find(p => p.id === target.playlistId)?.name
         || 'playlist';
       notify.ok(`added ${songIds.length} track${songIds.length === 1 ? '' : 's'} to “${plName}”`);
       setSelected(new Set());
-      reloadPlaylists();
     } catch (err) {
       notify.err(errorMessage(err));
     } finally {
       setPlBusy(false);
     }
-  }, [adminFetch, selected, playlists, reloadPlaylists]);
+  }, [adminFetch, selected, playlists, qc]);
 
   // --- mood vocab ----------------------------------------------------------
   const vocabQuery = useQuery({

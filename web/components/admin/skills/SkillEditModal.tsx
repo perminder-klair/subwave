@@ -305,8 +305,14 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
       writeInstalledSkills(client, response);
       if (vars.fileId) {
         await client.invalidateQueries({
-          queryKey: skillKeys.file(vars.fileId), exact: true, refetchType: 'none',
+          queryKey: skillKeys.file(vars.fileId), exact: true, refetchType: 'active',
         });
+        // The modal hydrates the file exactly once. If the authoritative read
+        // failed, do not leave its older successful payload for a quick reopen
+        // to consume before the next background attempt settles.
+        if (client.getQueryState(skillKeys.file(vars.fileId))?.status === 'error') {
+          client.removeQueries({ queryKey: skillKeys.file(vars.fileId), exact: true });
+        }
       }
     },
     toastOnError: false,

@@ -1,3 +1,4 @@
+import type { QueryClient } from '@tanstack/react-query';
 import type { SessionTurn } from '../../../lib/types';
 import { adminJson, type AdminFetch } from '../../../lib/admin-query';
 import type { ScheduleOverride } from '../../../lib/schemas.generated';
@@ -9,6 +10,7 @@ import type {
   QueueState,
   RequestEntry,
 } from './types';
+import { scheduleKeys, type ScheduleLiveData } from '../schedule/queries';
 
 export const dashKeys = {
   all: ['dash'] as const,
@@ -79,6 +81,33 @@ export interface TakeoverShow {
 export interface TakeoverData {
   shows: TakeoverShow[];
   override: ScheduleOverride | null;
+}
+
+/** One `/schedule/override` write owns both route-specific views of the pin. */
+export function writeTakeoverOverride(
+  client: QueryClient,
+  override: ScheduleOverride | null,
+): void {
+  client.setQueryData<TakeoverData>(dashKeys.takeover(), current => ({
+    shows: current?.shows ?? [],
+    override,
+  }));
+  client.setQueryData<ScheduleLiveData>(scheduleKeys.override(), { override });
+}
+
+/** Patch the Dashboard picker when Shows returns its authoritative roster. */
+export function writeTakeoverShows(
+  client: QueryClient,
+  rawShows: Array<{ id?: string; name?: string }>,
+): void {
+  const shows = rawShows.flatMap(show => (
+    typeof show?.id === 'string' && show.id
+      ? [{ id: show.id, name: typeof show.name === 'string' ? show.name : '' }]
+      : []
+  ));
+  client.setQueryData<TakeoverData>(dashKeys.takeover(), current => (
+    current ? { ...current, shows } : current
+  ));
 }
 
 export async function fetchTakeover(fetcher: AdminFetch, signal: AbortSignal): Promise<TakeoverData> {

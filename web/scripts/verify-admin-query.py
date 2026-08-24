@@ -422,6 +422,88 @@ def discovery_onboarding_provider(page):
 
 
 @check
+def onboarding_credential_change_isolates_discovery_cache(page):
+    """A delayed A 401 cannot own B's onboarding discovery or sign B out."""
+    page.set_default_timeout(5000)
+    token_a = AUTH
+    token_b = base64.b64encode(b"test:onboarding-b").decode()
+    model_auth = []
+
+    page.add_init_script(f"""
+      (() => {{
+        const nativeFetch = window.fetch.bind(window);
+        const tokenA = 'Basic {token_a}';
+        let delayStaleOnce = true;
+        window.__onboardingDelayed = [];
+        window.__releaseOnboardingDelayed = () => {{
+          for (const release of window.__onboardingDelayed.splice(0)) release();
+        }};
+        window.fetch = async (input, init = {{}}) => {{
+          const url = typeof input === 'string' ? input : input.url;
+          const authorization = new Headers(init.headers).get('authorization');
+          const response = await nativeFetch(input, init);
+          if (url.includes('stale-401.test') && delayStaleOnce) {{
+            delayStaleOnce = false;
+            await new Promise(resolve => window.__onboardingDelayed.push(resolve));
+          }}
+          return response;
+        }};
+      }})();
+    """)
+
+    def models(route):
+        authorization = route.request.headers.get("authorization")
+        model_auth.append(authorization)
+        url = route.request.url
+        if authorization == f"Basic {token_a}" and "stale-401.test" in url:
+            fulfill_json(route, {"error": "expired A"}, status=401)
+        elif authorization == f"Basic {token_a}":
+            route.fulfill(**model_response(["model-a-delayed"]))
+        else:
+            route.fulfill(**model_response(["model-b-current"]))
+
+    page.route("**/settings/llm/models**", models)
+    box = enter_onboarding_llm(page)
+    box.fill("http://stale-401.test/v1")
+    page.wait_for_timeout(450)
+    page.wait_for_function("() => window.__onboardingDelayed.length === 1")
+
+    # Deliver the same StorageEvent a second tab would produce. The wizard
+    # itself must stay on the LLM step, but the credential-scoped client must
+    # be replaced before B renders or starts discovery.
+    page.evaluate("""({ key, oldValue, newValue }) => {
+      localStorage.setItem(key, newValue);
+      window.dispatchEvent(new StorageEvent('storage', {
+        key, oldValue, newValue, storageArea: localStorage,
+      }));
+    }""", {
+        "key": "subwave_admin_auth", "oldValue": token_a, "newValue": token_b,
+    })
+
+    page.get_by_text("Step 2 of 5", exact=True).wait_for(state="visible")
+    page.wait_for_function("""() => {
+      const queries = window.__subwaveAdminQueryCacheSnapshot?.() || [];
+      return queries.some(query =>
+        query.queryKey?.[0] === 'discovery'
+        && query.data?.models?.includes('model-b-current')
+      );
+    }""")
+
+    page.evaluate("window.__releaseOnboardingDelayed()")
+    page.wait_for_timeout(200)
+    assert page.evaluate("localStorage.getItem('subwave_admin_auth')") == token_b
+    assert page.get_by_text("Admin sign-in", exact=True).count() == 0
+    cached_models = page.evaluate("""() =>
+      (window.__subwaveAdminQueryCacheSnapshot?.() || [])
+        .filter(query => query.queryKey?.[0] === 'discovery')
+        .flatMap(query => query.data?.models || [])
+    """)
+    assert cached_models == ["model-b-current"], cached_models
+    assert f"Basic {token_a}" in model_auth, model_auth
+    assert f"Basic {token_b}" in model_auth, model_auth
+
+
+@check
 def discovery_refresh_is_immediate(page):
     model_hits = []
     page.route(
@@ -3093,6 +3175,126 @@ def show_install_refresh(page):
 
 
 @check
+def shows_dashboard_takeover_roster_reconciliation(page):
+    """Show save/create/install/delete patches Dashboard's prewarmed roster."""
+    settings, original, _week = programming_fixture()
+    shows = [copy.deepcopy(original)]
+    installed = {**copy.deepcopy(original), "id": "s_task5_installed", "name": "Task 5 Installed"}
+    stub_dashboard(page)
+
+    def settings_route(route):
+        body = copy.deepcopy(settings)
+        body["values"]["shows"] = copy.deepcopy(shows)
+        fulfill_json(route, body)
+
+    page.route("http://localhost:7791/settings", settings_route)
+    page.route(
+        "http://localhost:7791/schedule",
+        lambda route: fulfill_json(route, {"shows": shows, "override": None}),
+    )
+    page.route(
+        "http://localhost:7791/shows/community",
+        lambda route: fulfill_json(route, {"community": [{
+            "slug": "task-5-installed", "name": installed["name"],
+            "topic": installed["topic"], "moods": [], "genres": [], "eras": [],
+            "energies": [], "filtersStrict": False, "banter": False,
+            "programme": False, "segmentSkill": "", "maxTrackSeconds": None,
+        }]}),
+    )
+
+    def save_route(route):
+        saved = route.request.post_data_json["show"]
+        at = next((i for i, show in enumerate(shows) if show["id"] == saved["id"]), None)
+        if at is None:
+            shows.append(saved)
+        else:
+            shows[at] = saved
+        fulfill_json(route, {"shows": shows, "show": saved})
+
+    page.route("http://localhost:7791/shows", save_route)
+
+    def install_route(route):
+        if not any(show["id"] == installed["id"] for show in shows):
+            shows.append(copy.deepcopy(installed))
+        fulfill_json(route, {"shows": shows, "show": installed})
+
+    page.route(
+        "http://localhost:7791/shows/community/task-5-installed/install", install_route,
+    )
+
+    def delete_route(route):
+        show_id = urllib.parse.urlparse(route.request.url).path.rsplit("/", 1)[-1]
+        shows[:] = [show for show in shows if show["id"] != show_id]
+        fulfill_json(route, {"shows": shows, "schedule": settings["values"]["schedule"]})
+
+    page.route("http://localhost:7791/shows/s_*", delete_route)
+
+    def cached_names():
+        hits = [
+            query["data"] for query in query_cache_snapshot(page)
+            if query["queryKey"] == ["dash", "takeover"]
+        ]
+        assert len(hits) == 1, hits
+        return [show["name"] for show in hits[0]["shows"]]
+
+    page.goto(f"{WEB}/admin/dash", wait_until="domcontentloaded")
+    page.get_by_label("Pin a show").wait_for(state="visible")
+    assert cached_names() == [original["name"]], cached_names()
+    initial_schedule_reads = request_count(page, "/schedule", authenticated=True)
+
+    click_admin_link(page, "Shows", "/admin/shows")
+    page.get_by_text("Build your shows here.", exact=False).wait_for(state="visible")
+    page.wait_for_timeout(250)
+    page.get_by_role("button", name=f"Edit {original['name']}").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("show name").fill("Task 5 Renamed Show")
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/shows", "POST")
+    ):
+        dialog.get_by_role("button", name="Save show").click()
+    dialog.wait_for(state="detached")
+    assert cached_names() == ["Task 5 Renamed Show"], cached_names()
+
+    page.get_by_role("button", name="+ Add show").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("show name").fill("Task 5 Created Show")
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/shows", "POST")
+    ):
+        dialog.get_by_role("button", name="Save show").click()
+    dialog.wait_for(state="detached")
+    assert cached_names() == ["Task 5 Renamed Show", "Task 5 Created Show"], cached_names()
+
+    page.get_by_role("button", name="Community", exact=False).click()
+    community_dialog = page.get_by_role("dialog")
+    with page.expect_response(
+        lambda response: is_admin_request(
+            response.request, "/shows/community/task-5-installed/install", "POST",
+        )
+    ):
+        community_dialog.get_by_role("button", name="Install").click()
+    page.keyboard.press("Escape")
+    community_dialog.wait_for(state="detached")
+    assert cached_names() == [
+        "Task 5 Renamed Show", "Task 5 Created Show", "Task 5 Installed",
+    ], cached_names()
+
+    page.get_by_role("button", name="Edit Task 5 Created Show").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_role("button", name="Remove").click()
+    confirm = page.get_by_role("alertdialog")
+    with page.expect_response(
+        lambda response: response.request.method == "DELETE"
+        and urllib.parse.urlparse(response.url).path.startswith("/shows/"),
+    ):
+        confirm.get_by_role("button", name="Delete").click()
+    confirm.wait_for(state="detached")
+    assert cached_names() == ["Task 5 Renamed Show", "Task 5 Installed"], cached_names()
+    # Mutations patch the dormant dashboard key without polling it in the background.
+    assert request_count(page, "/schedule", authenticated=True) == initial_schedule_reads, page.request_log
+
+
+@check
 def schedule_save_refresh(page):
     """Saving the week patches settings and refreshes the mounted override key."""
     settings, show, _week = programming_fixture()
@@ -3136,6 +3338,72 @@ def schedule_save_refresh(page):
     assert scheduled_hours > 0
     metric.locator(".n").get_by_text(str(scheduled_hours), exact=True).wait_for(state="visible")
     assert request_count(page, "/settings", authenticated=True) == 1, page.request_log
+
+
+@check
+def schedule_dashboard_override_reconciliation(page):
+    """Dashboard pin/cancel reaches the prewarmed Rundown cache immediately."""
+    settings, show, _week = programming_fixture()
+    current = {"override": None}
+    stub_dashboard(page)
+    page.route("http://localhost:7791/settings", lambda route: fulfill_json(route, settings))
+
+    def schedule_route(route):
+        if route.request.method == "POST":
+            now = 1_900_000_000_000
+            current["override"] = {
+                "showId": route.request.post_data_json["showId"],
+                "startedAt": now,
+                "expiresAt": now + 3_600_000,
+            }
+            fulfill_json(route, {"override": current["override"]})
+        elif route.request.method == "DELETE":
+            current["override"] = None
+            fulfill_json(route, {"ok": True})
+        else:
+            fulfill_json(route, {
+                "shows": [show],
+                "schedule": settings["values"]["schedule"],
+                "override": current["override"],
+            })
+
+    # Exact route registered after stub_dashboard so the stateful fixture wins.
+    page.route("http://localhost:7791/schedule", schedule_route)
+    page.route("http://localhost:7791/schedule/override", schedule_route)
+    page.goto(f"{WEB}/admin/shows/schedule", wait_until="domcontentloaded")
+    page.get_by_text("Empty hours run autonomously", exact=False).wait_for(state="visible")
+    initial_reads = request_count(page, "/schedule", authenticated=True)
+
+    click_admin_link(page, "Dash", "/admin/dash")
+    page.wait_for_timeout(250)  # incoming route must own the click after the shell crossfade
+    page.get_by_label("Pin a show").click()
+    page.locator("[role=menuitem], [role=option]").first.click()
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/schedule/override", "POST")
+    ):
+        page.get_by_role("button", name="Pin to air →").click()
+    page.get_by_role("button", name="Cancel takeover").wait_for(state="visible")
+    reads_after_pin = request_count(page, "/schedule", authenticated=True)
+
+    click_admin_link(page, "Schedule", "/admin/shows/schedule")
+    page.get_by_text("On air · takeover", exact=True).wait_for(state="visible")
+    # Dashboard owns a live query and may perform its exact post-write refresh;
+    # returning within the stale window must add no request or wait for a poll.
+    assert request_count(page, "/schedule", authenticated=True) == reads_after_pin, page.request_log
+
+    click_admin_link(page, "Dash", "/admin/dash")
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/schedule/override", "DELETE")
+    ):
+        page.get_by_role("button", name="Cancel takeover").click()
+    page.get_by_label("Pin a show").wait_for(state="visible")
+    reads_after_cancel = request_count(page, "/schedule", authenticated=True)
+    click_admin_link(page, "Schedule", "/admin/shows/schedule")
+    page.get_by_text("On air", exact=True).wait_for(state="visible")
+    assert page.get_by_text("On air · takeover", exact=True).count() == 0
+    assert request_count(page, "/schedule", authenticated=True) == reads_after_cancel, page.request_log
+    assert reads_after_pin - initial_reads <= 3, page.request_log
+    assert reads_after_cancel - reads_after_pin <= 2, page.request_log
 
 
 def stub_playlist_programming(page):
@@ -3279,12 +3547,31 @@ def playlist_show_catalogue_refresh(page):
         "http://localhost:7791/library/genres",
         lambda route: fulfill_json(route, {"genres": []}),
     )
+    page.route(
+        "http://localhost:7791/library/browse**",
+        lambda route: fulfill_json(route, {
+            "rows": [{
+                "id": "task5-track-3", "title": "Task 5 Three",
+                "artist": "Task Artist", "duration": 180,
+            }],
+            "total": 1, "stats": {"byMood": {}, "byEnergy": {}}, "moodVocab": [],
+        }),
+    )
 
     def playlist_item_route(route):
         path = urllib.parse.urlparse(route.request.url).path
         parts = path.strip("/").split("/")
         playlist_id = parts[1]
-        if route.request.method == "POST" and parts[-1] == "sync":
+        if route.request.method == "POST" and parts[-1] == "tracks":
+            for song_id in route.request.post_data_json["songIds"]:
+                if not any(track["id"] == song_id for track in details[playlist_id]):
+                    details[playlist_id].append({
+                        "id": song_id, "title": "Task 5 Three",
+                        "artist": "Task Artist", "durationSec": 210,
+                    })
+            summaries[playlist_id]["songCount"] = len(details[playlist_id])
+            fulfill_json(route, {"added": 1})
+        elif route.request.method == "POST" and parts[-1] == "sync":
             details[playlist_id].append({
                 "id": "task5-track-2", "title": "Task 5 Two",
                 "artist": "Task Artist", "durationSec": 200,
@@ -3358,10 +3645,36 @@ def playlist_show_catalogue_refresh(page):
         click_admin_link(page, "Shows", "/admin/shows")
         page.wait_for_url("**/admin/shows")
 
-    # Prewarm showKeys.playlists() before any Playlist Builder write.
-    page.goto(f"{WEB}/admin/shows", wait_until="domcontentloaded")
+    def cached_catalogue(key):
+        hits = [
+            query["data"] for query in query_cache_snapshot(page)
+            if query["queryKey"] == key
+        ]
+        assert len(hits) == 1, (key, hits)
+        return [(item["name"], item["songCount"]) for item in hits[0]]
+
+    def visit_library_catalogues(expected):
+        click_admin_link(page, "Library", "/admin/library")
+        page.wait_for_timeout(250)
+        page.locator(".lib-tab", has_text="Browse").click()
+        page.get_by_text("Task 5 Three", exact=True).wait_for(state="visible")
+        page.get_by_label("select Task 5 Three").click()
+        page.get_by_label("Target playlist").wait_for(state="visible")
+        assert cached_catalogue(["library", "playlists"]) == expected
+        page.locator(".lib-tab", has_text="Blocked").click()
+        page.get_by_text("Blocking rules", exact=True).wait_for(state="visible")
+        assert cached_catalogue(["library", "rule-playlists"]) == expected
+
+    # Prewarm both `/playlists` and `/dj/playlists` consumers before a write.
+    page.goto(f"{WEB}/admin/library?tab=browse", wait_until="domcontentloaded")
+    page.get_by_text("Task 5 Three", exact=True).wait_for(state="visible")
+    page.get_by_label("select Task 5 Three").click()
+    page.get_by_label("Target playlist").wait_for(state="visible")
+    page.locator(".lib-tab", has_text="Blocked").click()
+    page.get_by_text("Blocking rules", exact=True).wait_for(state="visible")
+    return_to_shows()
     open_show_catalogue([("Task 5 Source", 1)])
-    assert request_count(page, "/dj/playlists", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/dj/playlists", authenticated=True) == 2, page.request_log
 
     # Rename (overwrite save) must make the fresh name visible on return.
     go_to_playlists()
@@ -3376,6 +3689,7 @@ def playlist_show_catalogue_refresh(page):
     save_dialog.wait_for(state="detached")
     return_to_shows()
     open_show_catalogue([("Task 5 Renamed", 1)], absent=("Task 5 Source",))
+    visit_library_catalogues([("Task 5 Renamed", 1)])
 
     # Create from the same deck; both playlists must reach Shows.
     go_to_playlists()
@@ -3421,8 +3735,46 @@ def playlist_show_catalogue_refresh(page):
     return_to_shows()
     open_show_catalogue([("Task 5 Renamed", 2)], absent=("Task 5 Created",))
 
-    # One initial read plus one exact refresh per write, never a request storm.
-    assert request_count(page, "/dj/playlists", authenticated=True) == 5, page.request_log
+    # Library append invalidates the Builder detail and both `/dj/playlists`
+    # catalogues; returning to Builder reads the added track immediately.
+    visit_library_catalogues([("Task 5 Renamed", 2)])
+    page.locator(".lib-tab", has_text="Browse").click()
+    page.get_by_text("Task 5 Three", exact=True).wait_for(state="visible")
+    page.get_by_label("select Task 5 Three").click()
+    page.get_by_label("Target playlist").click()
+    page.get_by_role("option").filter(has_text="Task 5 Renamed").click()
+    with page.expect_response(
+        lambda response: is_admin_request(
+            response.request, "/playlists/task5-source/tracks", "POST",
+        )
+    ):
+        page.get_by_role("button", name="Add to playlist", exact=True).click()
+    page.get_by_text("added 1 track", exact=False).wait_for(state="visible")
+    go_to_playlists()
+    load_playlist("Task 5 Renamed")
+    page.get_by_text("Task 5 Three", exact=True).wait_for(state="visible")
+
+    # Library create must surface in Builder, Shows and Block Rules too.
+    click_admin_link(page, "Library", "/admin/library")
+    page.locator(".lib-tab", has_text="Browse").click()
+    page.get_by_text("Task 5 Three", exact=True).wait_for(state="visible")
+    page.get_by_label("select Task 5 Three").click()
+    page.get_by_label("New playlist name").fill("Task 5 Library Created")
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/playlists", "POST")
+    ):
+        page.get_by_role("button", name="Create playlist", exact=True).click()
+    go_to_playlists()
+    page.get_by_role("button", name="Browse", exact=True).click()
+    page.get_by_text("Task 5 Library Created", exact=True).wait_for(state="visible")
+    page.keyboard.press("Escape")
+    return_to_shows()
+    open_show_catalogue([("Task 5 Renamed", 3), ("Task 5 Library Created", 1)])
+    visit_library_catalogues([("Task 5 Renamed", 3), ("Task 5 Library Created", 1)])
+
+    # Each mounted envelope reads at most once per write/return; no broad-key storm.
+    assert request_count(page, "/dj/playlists", authenticated=True) == 10, page.request_log
+    assert request_count(page, "/playlists", authenticated=True) == 11, page.request_log
 
 
 def task6_skill(name, label, enabled=False, custom=False):
@@ -3441,7 +3793,7 @@ def task6_skill(name, label, enabled=False, custom=False):
 
 @check
 def skills_mutations_refresh(page):
-    """Skill writes update exact cached lists and settings-backed roster data."""
+    """Skill writes patch both Skills and the prewarmed Shows enabled subset."""
     skills = [task6_skill("task-6-verify", "Task 6 Verify")]
     community = [{
         "slug": "task-6-community",
@@ -3470,18 +3822,24 @@ def skills_mutations_refresh(page):
         elif path == "/dj/skills/rescan" and method == "POST":
             mutation_hits["rescan"] += 1
             if not any(item["name"] == "task-6-rescanned" for item in skills):
-                skills.append(task6_skill("task-6-rescanned", "Task 6 Rescanned", custom=True))
+                skills.append(task6_skill(
+                    "task-6-rescanned", "Task 6 Rescanned", enabled=True, custom=True,
+                ))
             fulfill_json(route, {"skills": skills, "custom": 1})
         elif path == "/dj/skills/import" and method == "POST":
             mutation_hits["import"] += 1
             if not any(item["name"] == "task-6-imported" for item in skills):
-                skills.append(task6_skill("task-6-imported", "Task 6 Imported", custom=True))
+                skills.append(task6_skill(
+                    "task-6-imported", "Task 6 Imported", enabled=True, custom=True,
+                ))
             fulfill_json(route, {"skills": skills, "slug": "task-6-imported", "hasTool": False})
         elif path == "/dj/skills/community/task-6-community/install" and method == "POST":
             mutation_hits["install"] += 1
             community[0]["installed"] = True
             if not any(item["name"] == "task-6-community" for item in skills):
-                skills.append(task6_skill("task-6-community", "Task 6 Community", custom=True))
+                skills.append(task6_skill(
+                    "task-6-community", "Task 6 Community", enabled=True, custom=True,
+                ))
             fulfill_json(route, {"skills": skills})
         else:
             route.continue_()
@@ -3493,7 +3851,23 @@ def skills_mutations_refresh(page):
         click_admin_link(page, "Skills", "/admin/skills")
         page.get_by_text("What the DJ does between tracks.", exact=True).wait_for(state="visible")
 
-    page.goto(f"{WEB}/admin/skills", wait_until="domcontentloaded")
+    def show_skill_names():
+        hits = [
+            query["data"] for query in query_cache_snapshot(page)
+            if query["queryKey"] == ["shows", "skills"]
+        ]
+        assert len(hits) == 1, hits
+        return [item["kind"] for item in hits[0]]
+
+    # Prewarm the separate Shows consumer before entering Skills.
+    page.goto(f"{WEB}/admin/shows", wait_until="domcontentloaded")
+    page.get_by_text("Build your shows here.", exact=False).wait_for(state="visible")
+    page.wait_for_function("""() =>
+      (window.__subwaveAdminQueryCacheSnapshot?.() || [])
+        .some(query => JSON.stringify(query.queryKey) === '["shows","skills"]')
+    """)
+    assert show_skill_names() == [], show_skill_names()
+    click_admin_link(page, "Skills", "/admin/skills")
     page.get_by_text("Task 6 Verify", exact=True).wait_for(state="visible")
     leave_and_return()
 
@@ -3503,12 +3877,14 @@ def skills_mutations_refresh(page):
         page.get_by_label("Enable Task 6 Verify").click()
     leave_and_return()
     page.get_by_text("1 enabled", exact=True).wait_for(state="visible")
+    assert show_skill_names() == ["task-6-verify"], show_skill_names()
 
     with page.expect_response(
         lambda response: is_admin_request(response.request, "/dj/skills/rescan", "POST")
     ):
         page.get_by_title("Rescan state/skills").click()
     page.get_by_text("Task 6 Rescanned", exact=True).wait_for(state="visible")
+    assert show_skill_names() == ["task-6-verify", "task-6-rescanned"], show_skill_names()
     leave_and_return()
 
     page.get_by_role("button", name="Community", exact=False).click()
@@ -3522,15 +3898,29 @@ def skills_mutations_refresh(page):
         ):
             dialog.get_by_label("Import skill zip").set_input_files(bundle.name)
     page.get_by_text("Task 6 Imported", exact=True).wait_for(state="visible")
+    assert show_skill_names() == [
+        "task-6-verify", "task-6-rescanned", "task-6-imported",
+    ], show_skill_names()
     dialog.get_by_role("button", name="Install", exact=True).click()
     page.get_by_text("installed", exact=True).wait_for(state="visible")
     page.keyboard.press("Escape")
     dialog.wait_for(state="detached")
     leave_and_return()
     page.get_by_text("Task 6 Community", exact=True).wait_for(state="visible")
+    assert show_skill_names() == [
+        "task-6-verify", "task-6-rescanned", "task-6-imported", "task-6-community",
+    ], show_skill_names()
 
-    assert mutation_hits == {"toggle": 1, "rescan": 1, "import": 1, "install": 1}, mutation_hits
-    assert request_count(page, "/dj/skills", authenticated=True) == 1, page.request_log
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/dj/skill-toggle", "POST")
+    ):
+        page.get_by_label("Enable Task 6 Verify").click()
+    assert show_skill_names() == [
+        "task-6-rescanned", "task-6-imported", "task-6-community",
+    ], show_skill_names()
+
+    assert mutation_hits == {"toggle": 2, "rescan": 1, "import": 1, "install": 1}, mutation_hits
+    assert request_count(page, "/dj/skills", authenticated=True) == 2, page.request_log
     # Initial catalog plus one exact refresh after import and install.
     assert request_count(page, "/dj/skills/community", authenticated=True) == 3, page.request_log
     # Skills reuses the settings owner rather than creating a second roster key.
@@ -3608,6 +3998,171 @@ def skills_rescan_refreshes_files(page):
     assert request_count(
         page, "/dj/skills/task-6-file/file", authenticated=True,
     ) == file_gets_before_rescan + 1, page.request_log
+
+
+@check
+def skill_file_save_close_reopen_is_authoritative(page):
+    """A hydrate-once editor reopened inside 30s consumes the saved file."""
+    skills = [task6_skill("task-6-saved-file", "Task 6 Saved File", enabled=True, custom=True)]
+    current_brief = {"value": "Brief before save"}
+
+    def skill_file():
+        return {
+            "kind": "task-6-saved-file", "custom": True,
+            "configFields": [], "config": {}, "label": "Task 6 Saved File",
+            "cooldown": "15m", "cron": None, "cronInvalid": False,
+            "cronOnly": False, "context": "", "knownContextFields": ["time"],
+            "window": "any", "requiresKey": "", "hasTool": False,
+            "tags": ["verify"], "brief": current_brief["value"], "defaults": None,
+        }
+
+    def routes(route):
+        path = urllib.parse.urlparse(route.request.url).path
+        method = route.request.method
+        if path == "/dj/skills" and method == "GET":
+            fulfill_json(route, {"skills": skills})
+        elif path == "/dj/skills/community" and method == "GET":
+            fulfill_json(route, {"community": []})
+        elif path == "/dj/skills/task-6-saved-file/file" and method == "GET":
+            fulfill_json(route, skill_file())
+        elif path == "/dj/skills/task-6-saved-file/file" and method == "PUT":
+            current_brief["value"] = route.request.post_data_json["brief"]
+            # The write endpoint owns the installed roster, not a complete file envelope.
+            fulfill_json(route, {"skills": skills})
+        else:
+            route.continue_()
+
+    page.route("http://localhost:7791/**", routes)
+    page.goto(f"{WEB}/admin/skills", wait_until="domcontentloaded")
+    page.get_by_text("Task 6 Saved File", exact=True).first.wait_for(state="visible")
+    page.get_by_label("Edit Task 6 Saved File").click()
+    dialog = page.get_by_role("dialog")
+    brief = dialog.get_by_label("The brief")
+    brief.wait_for(state="visible")
+    brief.fill("Brief after save")
+    with page.expect_response(
+        lambda response: is_admin_request(
+            response.request, "/dj/skills/task-6-saved-file/file", "PUT",
+        )
+    ):
+        dialog.get_by_role("button", name="Save", exact=True).click()
+    dialog.get_by_text("SAVED TO BOOTH", exact=False).wait_for(state="visible")
+    dialog.get_by_text("Close", exact=True).click()
+    dialog.wait_for(state="detached")
+
+    page.get_by_label("Edit Task 6 Saved File").click()
+    reopened = page.get_by_role("dialog").get_by_label("The brief")
+    reopened.wait_for(state="visible")
+    assert reopened.input_value() == "Brief after save", reopened.input_value()
+    assert request_count(
+        page, "/dj/skills/task-6-saved-file/file", authenticated=True,
+    ) == 2, page.request_log
+
+
+@check
+def skills_modal_mutations_reconcile_show_picker(page):
+    """Edit, reset and delete share the enabled Shows projection handler."""
+    skills = [
+        task6_skill("task-6-custom-edit", "Task 6 Custom Edit", enabled=True, custom=True),
+        task6_skill("task-6-built-in", "Task 6 Built In", enabled=True, custom=False),
+    ]
+    file_labels = {
+        "task-6-custom-edit": "Task 6 Custom Edit",
+        "task-6-built-in": "Task 6 Built In",
+    }
+
+    def file_body(kind):
+        custom = kind == "task-6-custom-edit"
+        return {
+            "kind": kind, "custom": custom, "configFields": [], "config": {},
+            "label": file_labels[kind], "cooldown": "15m", "cron": None,
+            "cronInvalid": False, "cronOnly": False, "context": "",
+            "knownContextFields": ["time"], "window": "any", "requiresKey": "",
+            "hasTool": False, "tags": ["verify"], "brief": "A valid skill brief.",
+            "defaults": None if custom else {
+                "label": "Task 6 Built In Reset", "cooldown": "15m",
+                "context": "", "brief": "A valid shipped brief.",
+            },
+        }
+
+    def routes(route):
+        path = urllib.parse.urlparse(route.request.url).path
+        method = route.request.method
+        if path == "/dj/skills" and method == "GET":
+            fulfill_json(route, {"skills": skills})
+        elif path == "/dj/skills/community" and method == "GET":
+            fulfill_json(route, {"community": []})
+        elif path.endswith("/file") and method == "GET":
+            kind = path.split("/")[3]
+            fulfill_json(route, file_body(kind))
+        elif path.endswith("/file") and method == "PUT":
+            kind = path.split("/")[3]
+            file_labels[kind] = route.request.post_data_json["label"]
+            next(item for item in skills if item["name"] == kind)["label"] = file_labels[kind]
+            fulfill_json(route, {"skills": skills})
+        elif path == "/dj/skills/task-6-built-in/reset" and method == "POST":
+            file_labels["task-6-built-in"] = "Task 6 Built In Reset"
+            skills[0 if skills[0]["name"] == "task-6-built-in" else 1]["label"] = file_labels["task-6-built-in"]
+            fulfill_json(route, {"skills": skills})
+        elif path == "/dj/skills/task-6-custom-edit" and method == "DELETE":
+            skills[:] = [item for item in skills if item["name"] != "task-6-custom-edit"]
+            fulfill_json(route, {"skills": skills})
+        else:
+            route.continue_()
+
+    page.route("http://localhost:7791/**", routes)
+
+    def show_projection():
+        data = next(
+            query["data"] for query in query_cache_snapshot(page)
+            if query["queryKey"] == ["shows", "skills"]
+        )
+        return [(item["kind"], item.get("label")) for item in data]
+
+    page.goto(f"{WEB}/admin/shows", wait_until="domcontentloaded")
+    page.get_by_text("Build your shows here.", exact=False).wait_for(state="visible")
+    page.wait_for_function("""() =>
+      (window.__subwaveAdminQueryCacheSnapshot?.() || [])
+        .some(query => JSON.stringify(query.queryKey) === '["shows","skills"]')
+    """)
+    click_admin_link(page, "Skills", "/admin/skills")
+    page.wait_for_timeout(250)
+    page.get_by_label("Edit Task 6 Custom Edit").click()
+    dialog = page.get_by_role("dialog")
+    dialog.get_by_label("Skill name").fill("Task 6 Custom Edited")
+    with page.expect_response(
+        lambda response: is_admin_request(
+            response.request, "/dj/skills/task-6-custom-edit/file", "PUT",
+        )
+    ):
+        dialog.get_by_role("button", name="Save", exact=True).click()
+    dialog.get_by_text("SAVED TO BOOTH", exact=False).wait_for(state="visible")
+    assert show_projection()[0] == ("task-6-custom-edit", "Task 6 Custom Edited"), show_projection()
+
+    dialog.get_by_role("button", name="Delete", exact=True).click()
+    confirm = page.get_by_role("alertdialog")
+    with page.expect_response(
+        lambda response: is_admin_request(
+            response.request, "/dj/skills/task-6-custom-edit", "DELETE",
+        )
+    ):
+        confirm.get_by_role("button", name="delete skill", exact=True).click()
+    dialog.wait_for(state="detached")
+    assert show_projection() == [("task-6-built-in", "Task 6 Built In")], show_projection()
+
+    page.get_by_label("Edit Task 6 Built In").click()
+    dialog = page.get_by_role("dialog")
+    with page.expect_response(
+        lambda response: is_admin_request(
+            response.request, "/dj/skills/task-6-built-in/reset", "POST",
+        )
+    ):
+        dialog.get_by_text("Reset to default", exact=False).click()
+    dialog.get_by_text("RESET TO SHIPPED DEFAULT", exact=False).wait_for(state="visible")
+    assert show_projection() == [
+        ("task-6-built-in", "Task 6 Built In Reset"),
+    ], show_projection()
+    assert request_count(page, "/dj/skills", authenticated=True) == 2, page.request_log
 
 
 @check

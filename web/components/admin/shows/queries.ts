@@ -13,6 +13,7 @@ import type {
 } from './types';
 import type { CandidateDiagnostic } from './candidate-diagnostic';
 import { showPayload } from './lib';
+import { writeTakeoverShows } from '../dash/queries';
 
 export interface ShowPlaylist {
   id: string;
@@ -38,6 +39,18 @@ export function patchShowSettings(
     if (!previous?.values) return previous;
     return { ...previous, values: { ...previous.values, ...patch } };
   });
+  if (patch.shows) writeTakeoverShows(client, patch.shows);
+}
+
+/** The Shows picker accepts only enabled skills with a stable runtime kind. */
+export function showSkillsOf(skills: Array<Partial<SkillOption>> | undefined): SkillOption[] {
+  if (!Array.isArray(skills)) return [];
+  return skills.flatMap(skill => {
+    const kind = typeof skill?.kind === 'string' && skill.kind
+      ? skill.kind
+      : typeof skill?.name === 'string' ? skill.name : '';
+    return kind && skill.enabled !== false ? [{ ...skill, kind }] : [];
+  });
 }
 
 export function useShowSkillsQuery(adminFetch: AdminFetch, enabled: boolean) {
@@ -49,7 +62,7 @@ export function useShowSkillsQuery(adminFetch: AdminFetch, enabled: boolean) {
       const body = await adminJson<{ skills?: SkillOption[] }>(
         fetcher, '/dj/skills', undefined, signal,
       );
-      return Array.isArray(body.skills) ? body.skills.filter(skill => skill.enabled !== false) : [];
+      return showSkillsOf(body.skills);
     },
     toastOnError: false,
   });

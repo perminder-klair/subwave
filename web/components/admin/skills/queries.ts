@@ -5,6 +5,7 @@ import { adminJson, type AdminFetch } from '@/lib/admin-query';
 import { useAdminQuery } from '@/lib/admin-query';
 import type { Skill } from './shared';
 import { settingsKeys } from '../settings/queries';
+import { showKeys, showSkillsOf } from '../shows/queries';
 
 export interface CommunitySkill {
   slug: string;
@@ -87,8 +88,13 @@ export function installedSkillsOf(response: SkillsResponse): Skill[] {
 }
 
 export function writeInstalledSkills(client: QueryClient, response: SkillsResponse): void {
-  if (!Array.isArray(response.skills)) return;
+  if (!Array.isArray(response.skills)) {
+    void client.invalidateQueries({ queryKey: skillKeys.installed(), exact: true });
+    void client.invalidateQueries({ queryKey: showKeys.skills(), exact: true });
+    return;
+  }
   client.setQueryData(skillKeys.installed(), response.skills);
+  client.setQueryData(showKeys.skills(), showSkillsOf(response.skills));
 }
 
 export function useInstalledSkillsQuery(adminFetch: AdminFetch, enabled: boolean) {

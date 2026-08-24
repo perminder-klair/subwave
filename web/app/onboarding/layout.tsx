@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
-import AdminQueryProvider from '@/components/admin/AdminQueryProvider';
 
 // Operator-only and per-request; nothing durable to index, so keep it out of
 // search results (already absent from the sitemap).
@@ -12,5 +11,5 @@ export const metadata: Metadata = {
 };
 
 export default function OnboardingLayout({ children }: { children: ReactNode }) {
-  return <AdminQueryProvider>{children}</AdminQueryProvider>;
+  return children;
 }

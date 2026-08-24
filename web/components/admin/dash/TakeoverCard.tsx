@@ -28,7 +28,7 @@ import {
   OVERRIDE_MAX_MINUTES,
   type ScheduleOverride,
 } from '@/lib/schemas.generated';
-import { dashKeys, fetchTakeover, type TakeoverData } from './queries';
+import { dashKeys, fetchTakeover, writeTakeoverOverride, type TakeoverData } from './queries';
 
 const PRESETS = [
   { minutes: 60, label: '1h' },
@@ -105,10 +105,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
       return body;
     },
     onDone: async (data, _values, client) => {
-      client.setQueryData<TakeoverData>(dashKeys.takeover(), current => ({
-        shows: current?.shows ?? [],
-        override: data.override ?? null,
-      }));
+      writeTakeoverOverride(client, data.override ?? null);
       await client.invalidateQueries({ queryKey: dashKeys.takeover() });
     },
   });
@@ -121,10 +118,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
       if (!response.ok) throw new Error(body.error || `failed (${response.status})`);
     },
     onDone: async (_data, _vars, client) => {
-      client.setQueryData<TakeoverData>(dashKeys.takeover(), current => ({
-        shows: current?.shows ?? [],
-        override: null,
-      }));
+      writeTakeoverOverride(client, null);
       await client.invalidateQueries({ queryKey: dashKeys.takeover() });
     },
   });

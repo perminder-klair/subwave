@@ -81,7 +81,10 @@ import {
   playlistSaveSchema,
 } from '@/lib/schemas.generated';
 import { useSettingsQuery } from './settings/queries';
-import { showKeys } from './shows/queries';
+import {
+  refreshPlaylistCatalogues,
+  removePlaylistFromCatalogues,
+} from './playlist-cache';
 import {
   fetchPlaylistDetail,
   playlistKeys,
@@ -561,10 +564,7 @@ export default function PlaylistBuilderPanel() {
       { method: 'DELETE' },
     ),
     onDone: async (_result, playlist, client) => {
-      client.setQueryData<PlaylistSummary[]>(playlistKeys.index(), previous =>
-        previous?.filter(item => item.id !== playlist.id));
-      client.removeQueries({ queryKey: playlistKeys.detail(playlist.id), exact: true });
-      await client.invalidateQueries({ queryKey: showKeys.playlists(), exact: true });
+      removePlaylistFromCatalogues(client, playlist.id);
     },
     toastOnError: false,
   });
@@ -631,15 +631,9 @@ export default function PlaylistBuilderPanel() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     }),
-    onDone: async (_result, vars, client) => {
-      await client.invalidateQueries({ queryKey: playlistKeys.index(), exact: true });
-      if (vars.playlistId) {
-        await client.invalidateQueries({
-          queryKey: playlistKeys.detail(vars.playlistId),
-          exact: true,
-        });
-      }
-      await client.invalidateQueries({ queryKey: showKeys.playlists(), exact: true });
+    onDone: async (result, vars, client) => {
+      const detailId = vars.playlistId || result.playlist?.id;
+      await refreshPlaylistCatalogues(client, detailId ? [detailId] : []);
     },
     toastOnError: false,
   });
@@ -683,11 +677,7 @@ export default function PlaylistBuilderPanel() {
       { method: 'POST' },
     ),
     onDone: async (_result, id, client) => {
-      await Promise.all([
-        client.invalidateQueries({ queryKey: playlistKeys.index(), exact: true }),
-        client.invalidateQueries({ queryKey: playlistKeys.detail(id), exact: true }),
-        client.invalidateQueries({ queryKey: showKeys.playlists(), exact: true }),
-      ]);
+      await refreshPlaylistCatalogues(client, [id]);
     },
     toastOnError: false,
   });
