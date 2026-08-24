@@ -23,7 +23,9 @@ export async function phaseEmbed(
 ): Promise<void> {
   // Embed any track in scope that doesn't already have a vector. Includes
   // already-tagged tracks (legacy v1) so they can serve as KNN neighbours.
-  const needsEmbed: string[] = [];
+  // A dirty vector remains searchable until this pass replaces it, so it must
+  // be included even though hasVector(id) is true.
+  const needsEmbed: string[] = db.textVectorDirtyIds();
   for (const id of targetIds) {
     if (!db.hasVector(id)) needsEmbed.push(id);
   }
@@ -45,13 +47,16 @@ export async function phaseEmbed(
   for (let i = 0; i < unique.length; i += embedBatchSize) {
     const batch = unique.slice(i, i + embedBatchSize);
     const songs = batch.map(id => db.getTrack(id)).filter((t): t is db.TrackRecord => !!t);
-    const texts = songs.map(t =>
+    const eraYears = songs.map(t =>
+      resolveEraYear(t.year, t.originalYear, t.yearUntrusted),
+    );
+    const texts = songs.map((t, index) =>
       embeddings.formatTrackText(
         {
           title: t.title, artist: t.artist, album: t.album, year: t.year, genres: t.genres,
           // Era precedence lives in ONE place (show-filter, #842) — never raw
           // year, whose digits on a compilation are the compilation's date.
-          eraYear: resolveEraYear(t.year, t.originalYear, t.isCompilation),
+          eraYear: eraYears[index],
         },
         { lastfmTags: t.lastfmTags, lyricExcerpt: t.lyricExcerpt },
         // Measured acoustics (#1246) — whatever the analyze pass has already
@@ -75,7 +80,7 @@ export async function phaseEmbed(
       throw err;
     }
     for (let j = 0; j < songs.length; j++) {
-      db.upsertTrackVector(songs[j].id, vecs[j]);
+      db.upsertTrackVector(songs[j].id, vecs[j], eraYears[j]);
     }
     if ((i + batch.length) % 500 === 0 || i + batch.length === unique.length) {
       console.log(`[tag] embedded ${i + batch.length}/${unique.length}`);
@@ -83,4 +88,3 @@ export async function phaseEmbed(
     }
   }
 }
-

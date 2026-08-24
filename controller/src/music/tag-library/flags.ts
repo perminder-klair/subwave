@@ -11,6 +11,7 @@ import { loadSecretsIntoEnv } from '../../setup/secrets.js';
 import { loadSetupConfig } from '../../setup/config.js';
 import { reportProgress } from '../tagger-progress.js';
 import { logEvent } from './log.js';
+import { backfillOriginalYears, pendingOriginalYearIds } from './enrich.js';
 
 
 // ---------------------------------------------------------------------------
@@ -101,26 +102,60 @@ export function parseFlags(): CliFlags {
 // tracks table and collecting the live id set. Shared by the full tagger run
 // (Phase A) and the standalone --reconcile-only path. Cheap: metadata only, no
 // embeddings or LLM calls.
+// The album tag's year, but only when it actually says something (#1418).
+// See the call site for why each half matters.
+function informativeAlbumYear(song: {
+  albumEraUntrusted?: boolean | null;
+  albumOriginalYear?: number | null;
+  year?: number | null;
+}): number | null {
+  if (song.albumEraUntrusted) return null;
+  const ord = song.albumOriginalYear ?? null;
+  if (ord == null) return null;
+  return ord === (song.year ?? null) ? null : ord;
+}
+
 export async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }> {
   reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
   let walked = 0;
   const liveIds = new Set<string>();
+  // Blast radius of the widened era gate, reported once at the end. An
+  // operator who sees a third of their library go era-suspect should be able
+  // to see that from the log rather than from a show that stopped picking —
+  // the detector is precision-tuned, and this is the number that says whether
+  // it stayed that way on a real catalogue (#1418).
+  const eraReasons = new Map<string, number>();
   for await (const song of subsonic.iterateAllSongs()) {
     db.upsertTrackMeta(song.id, {
       title: song.title,
       artist: song.artist,
       album: song.album,
       year: song.year,
-      // Album-level era signals (issue #842). The album's originalReleaseDate
-      // is each track's original year ONLY on a non-compilation album — a
-      // compilation's original date is the compilation's own, so its tracks
-      // stay unresolved here and phase-0 asks MusicBrainz per track instead.
-      originalYear: song.albumIsCompilation ? null : song.albumOriginalYear ?? null,
+      // Album-level era signals (issues #842, #1418). The album's
+      // originalReleaseDate is a track's original year only when it is
+      // INFORMATIVE, which needs two things to be true:
+      //
+      //  - the album is not era-suspect. On a reissue anthology the album's
+      //    "original" date is the reissue's own (both reported examples read
+      //    originalReleaseDate == releaseDate == year), so recording it states
+      //    the wrong year with full confidence AND hides the track from the
+      //    MusicBrainz pass, which skips anything already resolved.
+      //  - it differs from the file's `year`. When the two are equal the tag
+      //    has told us nothing — that was 18,492 rows of the reported library,
+      //    every one of them looking resolved. Leaving it NULL is
+      //    behaviour-neutral (resolveEraYear falls through to the identical
+      //    `year` for a trusted album) and makes the track eligible for a
+      //    lookup that can actually answer.
+      originalYear: informativeAlbumYear(song),
       isCompilation: song.albumIsCompilation ?? null,
+      eraUntrusted: song.albumEraUntrusted ?? null,
       genres: subsonic.songGenres(song),
       duration: song.duration,
     });
     liveIds.add(song.id);
+    if (song.albumEraUntrusted && song.albumEraReason) {
+      eraReasons.set(song.albumEraReason, (eraReasons.get(song.albumEraReason) ?? 0) + 1);
+    }
     walked += 1;
     if (walked % 500 === 0) {
       console.log(`[tag] walked ${walked} tracks`);
@@ -128,12 +163,31 @@ export async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<st
     }
   }
   logEvent('info', `Scanned ${walked.toLocaleString('en-GB')} tracks`);
+  const suspect = [...eraReasons.values()].reduce((a, b) => a + b, 0);
+  if (suspect) {
+    const breakdown = [...eraReasons.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([reason, n]) => `${reason} ${n.toLocaleString('en-GB')}`)
+      .join(', ');
+    logEvent('info',
+      `${suspect.toLocaleString('en-GB')} tracks on era-suspect albums (${breakdown})` +
+      ' — their release year is treated as the reissue\'s, and they are queued for an original-year lookup');
+  }
   return { walked, liveIds };
 }
 
 // Standalone reconcile: diff library-db against the live Navidrome catalogue and
 // drop rows (and their vectors) for tracks that are gone. No embedding preflight
 // and no LLM — opens the existing DB at its stored dim so vectors are untouched.
+//
+// The walk it shares with the full run is not read-only: it stamps
+// era_untrusted on suspect albums and clears their stale album-tag years
+// (#1418), which makes those tracks read as unknown-year until something asks
+// MusicBrainz. That something used to be only phase-0 of a full tag pass —
+// which nothing schedules — so a reconcile could open an unbounded window of
+// unknown-year tracks. Hence the backfill below: keyless, checked_at-stamped
+// (incremental — later reconciles skip straight past answered tracks), and
+// throttled at MB's 1 req/s, so only the first pass after an upgrade is slow.
 export async function reconcileOnly() {
   await db.open({ embeddingDim: embeddings.resolveEmbeddingDim(), adoptStoredDim: true });
   console.log('[tag] reconcile-only: walking Navidrome to prune orphaned rows');
@@ -142,6 +196,8 @@ export async function reconcileOnly() {
   if (walked > 0) {
     pruned = db.pruneMissingTracks(liveIds);
     console.log(`[tag] reconcile pruned ${pruned} orphaned tracks no longer in Navidrome`);
+    const resolved = await backfillOriginalYears(pendingOriginalYearIds(false), false, 4);
+    if (resolved) console.log(`[tag] reconcile resolved ${resolved} original years via MusicBrainz`);
   } else {
     // A transient empty Navidrome response must never wipe the DB.
     console.warn('[tag] reconcile: Navidrome returned 0 tracks — skipping prune');

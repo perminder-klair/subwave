@@ -16,10 +16,10 @@ export function RowsTable({ tab, rows, loading }: {
   loading: boolean;
 }) {
   const {
-    queuing, retagging, flashId, blocking, vocab, editingId, manualBusy,
+    queuing, retagging, flashId, blocking, vocab, editingId, manualBusy, eraBusy,
     selected, likeIndex, liking,
     queueTrack, retagTrack, blockTrack, unblockRow,
-    onEditTrack, saveManualTag, cancelEdit,
+    onEditTrack, saveManualTag, saveEraYear, cancelEdit,
     toggleSelect, toggleAllRows, toggleLike, clearLikes,
   } = useLibrary();
 
@@ -39,8 +39,10 @@ export function RowsTable({ tab, rows, loading }: {
       vocab={vocab}
       editingId={editingId}
       manualBusy={manualBusy}
+      eraBusy={eraBusy}
       onEdit={onEditTrack}
       onSaveManual={saveManualTag}
+      onSaveEraYear={saveEraYear}
       onCancelEdit={cancelEdit}
       selected={selected}
       onToggleSelect={toggleSelect}

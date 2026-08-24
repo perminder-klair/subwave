@@ -26,10 +26,11 @@ import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import * as mapProjection from '../music/map-projection.js';
 import { validateBody, validateBodyAsync } from '../middleware/validate.js';
 import { blockEntrySchema, blockRuleSchema } from '../schemas/blocklist.js';
-import { manualTagSchema } from '../schemas/library.js';
+import { manualTagSchema, originalYearSchema } from '../schemas/library.js';
 import type { z } from 'zod';
 
 type ManualTagBody = z.output<ReturnType<typeof manualTagSchema>>;
+type OriginalYearBody = z.output<ReturnType<typeof originalYearSchema>>;
 
 export const router = express.Router();
 
@@ -42,6 +43,10 @@ interface LibrarySong {
   artist?: string | null;
   album?: string | null;
   year?: number | string | null;
+  originalYear?: number | null;
+  originalYearSource?: string | null;
+  isCompilation?: boolean | null;
+  eraUntrusted?: boolean | null;
   genre?: string | null;
   duration?: number | null;
 }
@@ -152,6 +157,10 @@ router.get('/library/liked', requireAdmin, async (req, res) => {
         artist: rec?.artist ?? snap.artist ?? null,
         album: rec?.album ?? snap.album ?? null,
         year: rec?.year ?? snap.year ?? null,
+        originalYear: rec?.originalYear ?? null,
+        originalYearSource: rec?.originalYearSource ?? null,
+        isCompilation: rec?.isCompilation ?? null,
+        eraUntrusted: rec?.eraUntrusted ?? null,
         genre: rec?.genre ?? snap.genre ?? null,
         // The snapshot names it `duration`, library.db `durationSec`; the table
         // reads `duration`, so normalise here rather than at the call site.
@@ -234,6 +243,10 @@ router.get('/library/search-sound', requireAdmin, async (req, res) => {
         artist: t.artist ?? null,
         album: t.album ?? null,
         year: t.year ?? null,
+        originalYear: t.originalYear ?? null,
+        originalYearSource: t.originalYearSource ?? null,
+        isCompilation: t.isCompilation ?? null,
+        eraUntrusted: t.eraUntrusted ?? null,
         genre: t.genre ?? null,
         duration: t.durationSec ?? null,
         moods: t.moods ?? [],
@@ -554,12 +567,17 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
           const s = songs[j];
           visited++;
           if (library.has(s.id)) continue;
+          const era = library.get(s.id);
           rows.push({
             id: s.id,
             title: s.title,
             artist: s.artist,
             album: s.album,
             year: s.year ?? null,
+            originalYear: era?.originalYear ?? null,
+            originalYearSource: era?.originalYearSource ?? null,
+            isCompilation: era?.isCompilation ?? null,
+            eraUntrusted: era?.eraUntrusted ?? null,
             genre: s.genre ?? null,
             duration: s.duration ?? null,
           });
@@ -809,6 +827,9 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
         // the SAME text as phaseEmbed would, or this one track drifts in the
         // KNN space exactly like a task-prefix mismatch would.
         const rec = db.getTrack(id);
+        const eraYear = resolveEraYear(
+          rec?.year ?? song.year, rec?.originalYear ?? null, rec?.yearUntrusted ?? null,
+        );
         const text = embeddings.formatTrackText(
           {
             title: song.title,
@@ -816,9 +837,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
             album: song.album,
             year: song.year ?? null,
             genres: subsonic.songGenres(song),
-            eraYear: resolveEraYear(
-              rec?.year ?? song.year, rec?.originalYear ?? null, rec?.isCompilation ?? null,
-            ),
+            eraYear,
           },
           { lastfmTags, lyricExcerpt },
           rec
@@ -835,7 +854,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
           db.vectorCount(),
         );
         const [vec] = await embeddings.embedDocTexts([text], textMode);
-        if (vec) db.upsertTrackVector(id, vec);
+        if (vec) db.upsertTrackVector(id, vec, eraYear);
       } catch (err) {
         queue.log('warn', `/library/retag embed ${id}: ${err.message}`);
       }
@@ -953,6 +972,95 @@ router.post(
       });
     } catch (err) {
       queue.log('error', `/library/manual-tag failed: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /library/original-year — the operator's manual era override (#1418).
+// Body: { id, originalYear: number | null, applyToAlbum?: boolean }
+//
+// The automatic resolution reads the album's `originalReleaseDate` at walk time
+// and asks MusicBrainz per track — but only for albums Navidrome flags as
+// compilations, which reissue anthologies do not set. On those records the tag
+// carries the REISSUE's date and the lookup never runs, so the pipeline is
+// confidently wrong with no way in. This is the way in.
+//
+// `originalYear: null` clears the override and returns the track to the
+// automatic pipeline. `applyToAlbum` is the common case rather than the
+// exception here: an anthology is wrong a whole album at a time.
+// ---------------------------------------------------------------------------
+router.post(
+  '/library/original-year',
+  requireAdmin,
+  // The factory form, not a schema built once at module load: the upper bound
+  // is "next year", and a controller that has been up since December would
+  // otherwise spend January refusing a year it should accept. Nothing
+  // operator-editable here — unlike manual-tag, it is the CLOCK that moves.
+  validateBodyAsync(() => originalYearSchema(), { messages: 'verbatim' }),
+  async (req, res) => {
+    const { id, originalYear, applyToAlbum } = req.body as OriginalYearBody;
+
+    try {
+      await library.load();
+
+      // Same two-step resolve as manual-tag: Subsonic first (it carries
+      // albumId), the library-db row as fallback so an indexed track still
+      // works when Navidrome can't answer.
+      let song: LibrarySong | null = null;
+      try { song = await subsonic.getSong(id); } catch {}
+      if (!song) {
+        const row = db.getTrack(id);
+        if (row) song = { id: row.id, title: row.title, artist: row.artist, album: row.album, year: row.year, genre: row.genre, duration: row.durationSec };
+      }
+      if (!song) return res.status(404).json({ error: 'track not found' });
+
+      let targets: LibrarySong[] = [song];
+      if (applyToAlbum) {
+        if (!song.albumId) return res.status(404).json({ error: 'album not resolvable for this track' });
+        targets = await subsonic.getAlbum(song.albumId);
+        if (!targets.length) return res.status(404).json({ error: 'album has no tracks' });
+      }
+
+      for (const t of targets) {
+        // An album sibling may be new to library-db — the row has to exist
+        // before there is an original_year column to set on it.
+        db.upsertTrackMeta(t.id, {
+          title: t.title,
+          artist: t.artist,
+          album: t.album,
+          year: t.year ?? null,
+          genres: subsonic.songGenres(t),
+          duration: t.duration ?? null,
+        });
+        db.setManualOriginalYear(t.id, originalYear);
+      }
+
+      const scope = applyToAlbum ? `album "${song.album}" (${targets.length} tracks)` : `"${song.title}"`;
+      queue.log('info', originalYear == null
+        ? `original-year: cleared the override on ${scope} — back to automatic resolution`
+        : `original-year: ${scope} → ${originalYear}`);
+
+      res.json({
+        ok: true,
+        updated: targets.length,
+        originalYear,
+        cleared: originalYear == null,
+        album: applyToAlbum ? (song.album ?? null) : null,
+        tracks: targets.map((t) => ({
+          id: t.id,
+          title: t.title,
+          artist: t.artist,
+          year: t.year ?? null,
+          // What era filtering, the DJ line and the picker will read from now
+          // on — echoed back so the editor can show the effect rather than the
+          // input, which is the whole point of the override.
+          eraYear: db.resolvedEraYearForTrack(t.id),
+        })),
+      });
+    } catch (err) {
+      queue.log('error', `/library/original-year failed: ${err.message}`);
       res.status(500).json({ error: err.message });
     }
   },

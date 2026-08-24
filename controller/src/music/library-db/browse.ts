@@ -45,11 +45,15 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: TrackRecor
   } else if (vocal === 'vocal') {
     where.push('vocal_ranges_json IS NOT NULL AND json_array_length(vocal_ranges_json) > 0');
   }
-  // Era-year semantics (issue #842): the resolved original year wins; a plain
-  // `year` only counts when the track is NOT on a compilation album, whose
-  // year is the compilation's own release date. Mirrors show-filter's
-  // trackEraYear so SQL-side and JS-side era filtering agree.
-  const ERA_YEAR_SQL = `COALESCE(original_year, CASE WHEN is_compilation = 1 THEN NULL ELSE year END)`;
+  // Era-year semantics (issue #842/#1418): the resolved original year wins; a
+  // plain `year` only counts when the album's own year is TRUSTED — i.e. it is
+  // neither flagged a compilation nor judged an anthology by
+  // music/era-suspect.ts at walk time. Mirrors show-filter's resolveEraYear
+  // (which reads the composed `yearUntrusted`) so SQL-side and JS-side era
+  // filtering agree; the OR here IS that composition, and the two must move
+  // together.
+  const ERA_YEAR_SQL =
+    `COALESCE(original_year, CASE WHEN is_compilation = 1 OR era_untrusted = 1 THEN NULL ELSE year END)`;
   if (yearFrom != null) { where.push(`${ERA_YEAR_SQL} >= ?`); params.push(yearFrom); }
   if (yearTo != null) { where.push(`${ERA_YEAR_SQL} <= ?`); params.push(yearTo); }
   if (q) {

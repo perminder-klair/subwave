@@ -91,13 +91,18 @@ RUN mkdir -p /opt/piper/voices && \
 # this base (Debian trixie) ships 3.13 — so provision a standalone CPython 3.12
 # via uv for THIS venv only (the analyzer venv stays on system python3). The
 # import check mirrors the worker's import block so a broken combo fails the
-# build instead of silently falling back to Piper at runtime.
+# build instead of silently falling back to Piper at runtime. pyopenjtalk-plus
+# provides Python 3.12 wheels for amd64 and arm64 with its dictionary bundled,
+# so Japanese synthesis needs neither a compiler nor a first-use download.
 COPY --from=ghcr.io/astral-sh/uv:0.11.27 /uv /usr/local/bin/uv
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv/python
 RUN uv venv --python 3.12 /opt/kokoro/venv && \
     uv pip install --python /opt/kokoro/venv/bin/python --no-cache \
-      kokoro-onnx==0.5.0 soundfile==0.12.1 misaki==0.9.4 && \
-    /opt/kokoro/venv/bin/python -c "import kokoro_onnx, misaki; from misaki import espeak"
+      kokoro-onnx==0.5.0 soundfile==0.12.1 misaki==0.9.4 \
+      pyopenjtalk-plus==0.4.1.post8 \
+      cn2an==0.5.24 jieba==0.42.1 ordered-set==4.1.0 pypinyin==0.55.0 pypinyin-dict==0.9.0 && \
+    /opt/kokoro/venv/bin/python -c \
+      "import kokoro_onnx, misaki; from misaki import espeak; from misaki.ja import JAG2P; from misaki.zh import ZHG2P; assert JAG2P(version='pyopenjtalk')('生ビール')[0]; assert ZHG2P()('中文')[0]"
 RUN mkdir -p /opt/kokoro/models && \
     wget -q ${WGET_RETRY} -O /opt/kokoro/models/kokoro-v1.0.onnx \
       https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx && \
@@ -165,6 +170,8 @@ COPY controller/package*.json controller/.npmrc ./
 RUN npm ci --omit=dev
 COPY controller/src ./src
 COPY controller/scripts ./scripts
+RUN /opt/kokoro/venv/bin/python -c \
+      "from scripts.kokoro_worker import build_g2p; from misaki import espeak, ja, zh; raw, _ = ja.JAG2P(version='pyopenjtalk')('生ビール'); phonemes, _ = build_g2p('ja', espeak, ja, zh)('生ビール'); assert phonemes == raw[:len(raw) // 2]"
 
 # --- Web app (standalone build from the webbuild stage) ---------------------
 # Mirrors web/Dockerfile's runner layout, rooted at /web instead of /app.

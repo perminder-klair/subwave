@@ -21,6 +21,7 @@ import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
 import { listCommunitySkills } from '../skills/loader.js';
 import { listCommunityPersonas } from '../personas/community.js';
 import { listCommunityShows } from '../shows/community.js';
+import { resolveEraYear } from '../music/show-filter.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
@@ -219,7 +220,14 @@ router.get('/now-playing', async (req, res) => {
         nowPlaying.musicalKey = rec.musicalKey ?? null;
         nowPlaying.moods = Array.isArray(rec.moods) ? rec.moods : [];
         nowPlaying.energy = rec.energy ?? null;
-        if (nowPlaying.year == null && rec.year != null) nowPlaying.year = rec.year;
+        // Era year, never the raw `year` (issue #1418). now-playing.json
+        // carries no year of its own — radio.liq writes title/artist/album/id
+        // only — so this line IS the year every skin renders in its metadata
+        // strip, and a reissue anthology showed listeners the reissue's date.
+        // #842 precedence; unknown leaves the field null and the skins, which
+        // all render it conditionally, simply omit it.
+        const eraYear = resolveEraYear(rec.year, rec.originalYear, rec.yearUntrusted);
+        if (nowPlaying.year == null && eraYear != null) nowPlaying.year = eraYear;
       }
       // Duration isn't in the annotate metadata Liquidsoap reports, so the
       // player's track clock / up-next tease would never fire without help.

@@ -103,6 +103,26 @@ export function applyBlockMarks(qc: QueryClient, marks: Record<string, BlockRef 
 }
 
 /**
+ * A manual era-year override landed (#1418). The endpoint returns every track
+ * id it actually updated, so cache targeting uses those ids rather than album
+ * titles — album titles are not identities, and unrelated artists commonly
+ * publish namesakes. `originalYear: null` is the CLEAR: the source goes back to
+ * null too, which returns the row to "the file's own year" in eraSourceNote.
+ */
+export function applyEraYearEvent(qc: QueryClient, ev: {
+  originalYear: number | null;
+  trackIds: string[];
+}) {
+  const trackIds = new Set(ev.trackIds);
+
+  patchAllRows(qc, r => (!trackIds.has(r.id) ? r : {
+    ...r,
+    originalYear: ev.originalYear,
+    originalYearSource: ev.originalYear == null ? null : 'manual',
+  }));
+}
+
+/**
  * A manual tag save or a single-track retag landed. Each list means something
  * different by it, so the plain patch is followed by the two exceptions.
  * `source` mirrors what the server stamped: 'manual' for the inline editor,

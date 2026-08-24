@@ -12,6 +12,7 @@ import * as pocketTts from './pocketTts.js';
 import { heavyEnabledEngines } from './ttsHeavyClient.js';
 import * as remoteTts from './remoteTts.js';
 import { normalizeForSpeech } from './speech-text.js';
+import { scrubCjkForSpeech } from './spoken-script-policy.js';
 import {
   configuredSlot, fallbackTextFor, orderedFallbacks, sameTtsTarget,
   type RescueSlot, type TtsTarget,
@@ -454,6 +455,12 @@ export async function speak(
   text: string,
   { kind = 'default', outPath, speedScale, persona }: { kind?: string; outPath?: string; speedScale?: number; persona?: any } = {},
 ) {
+  // Resolve the persona language before normalising the text: the same value
+  // owns both the cloud pronunciation hint and the final unsupported-script
+  // safety boundary. An unset persona language is the default English station.
+  const language = GLOBAL_VOICE_KINDS.has(kind)
+    ? ''
+    : String(personaFor(persona)?.language || '').trim();
   // Belt-and-suspenders scrub of any leaked reasoning at the single point every
   // booth-bound string converges (follow-up to #949). The free-text generators
   // already stripThinking their output, but a reasoning model that leaks a
@@ -463,7 +470,10 @@ export async function speak(
   // idents, request intros) is unaffected. Operator speech corrections
   // (settings.tts.corrections) ride along — read live, so a saved rule
   // applies to the very next spoken line, no restart.
-  const speakText = normalizeForSpeech(stripThinking(text), settings.get().tts?.corrections);
+  const normalizedText = normalizeForSpeech(stripThinking(text), settings.get().tts?.corrections);
+  const speakText = GLOBAL_VOICE_KINDS.has(kind)
+    ? normalizedText
+    : scrubCjkForSpeech(normalizedText, language);
   // `persona` overrides the clock-driven effective persona so the persona-handoff
   // mic-pass can voice the outgoing DJ (engine, voice, language, soul, speed)
   // after the hour has flipped. Absent → getEffectivePersona(), i.e. today.
@@ -499,9 +509,6 @@ export async function speak(
   // the default English persona. Local engines ignore the field; only
   // cloud-speech.ts reads it (the voice model carries the language for piper /
   // kokoro / pocket-tts).
-  const language = GLOBAL_VOICE_KINDS.has(kind)
-    ? ''
-    : String(personaFor(persona)?.language || '').trim();
   // The persona's soul (e.g. "thoughtful and a little wistful") rides the same
   // path so the voice delivery carries the same character as the writing (issue
   // #579). DJ-voiced kinds only, like `language`; only the OpenAI gpt-4o*-tts

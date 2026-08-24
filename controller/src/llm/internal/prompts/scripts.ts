@@ -10,6 +10,7 @@ import { buildContextLines, decoratePrompt, randomSeed } from './context.js';
 import { speakClockAllowed } from '../../../broadcast/clock-policy.js';
 import { isNamedRequester } from '../../../util/request-guard.js';
 import { introBudgetPhrase, introMsFor, firstVocalMsFor, bpmKeyFor } from './intro-budget.js';
+import { trackEraYear } from '../../../music/show-filter.js';
 import { trackFeelSuffix } from './track-feel.js';
 
 // The feel note appended to a track line (track-feel.ts) is a STEER, not copy.
@@ -99,8 +100,15 @@ export async function generateIntro({ track, context, requestedBy = null, reques
   if (artistMiss) {
     ctxLines.push(`IMPORTANT: We do NOT have "${artistMiss}" in the library. The track now starting is NOT by them — it's a fitting substitute for the moment. Do not imply or claim the track is by "${artistMiss}".`);
   }
+  // Era year, never the raw `year` (issue #1418) — this line is what the DJ
+  // reads on air, so a reissue anthology's date here has the station announce
+  // "2012" over a 1964 Stax single. trackEraYear applies the #842 precedence
+  // and falls back to the plain year off-library. Unknown says nothing at all:
+  // omitting the year is the #842 "leave it out rather than assert the wrong
+  // decade" rule reaching the microphone.
+  const eraYear = trackEraYear(track);
   const feelSuffix = trackFeelSuffix(track);
-  ctxLines.push(`Now starting: "${track.title}" by ${track.artist}${track.album ? ` from ${track.album}` : ''}${track.year ? ` (${track.year})` : ''}${feelSuffix}`);
+  ctxLines.push(`Now starting: "${track.title}" by ${track.artist}${track.album ? ` from ${track.album}` : ''}${eraYear ? ` (${eraYear})` : ''}${feelSuffix}`);
 
   // Talk-within-the-intro (A.3 phase 1): when the track's intro runway is
   // known, budget the line to land before the vocals. Advisory + additive —

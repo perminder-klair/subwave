@@ -42,7 +42,7 @@ async function main() {
     // Tagger probes the real dim (1024) on a NORMAL run — no --reseed.
     await db.open({ embeddingDim: 1024, reseed: false });
     // The empty 768 table is recreated at 1024, and 1024-d inserts succeed.
-    assert.doesNotThrow(() => db.upsertTrackVector('t1', vec(1024)));
+    assert.doesNotThrow(() => db.upsertTrackVector('t1', vec(1024), db.resolvedEraYearForTrack('t1')));
     assert.equal(db.hasVector('t1'), true);
     db.close();
   });
@@ -61,7 +61,7 @@ async function main() {
   await test('--reseed drops a populated index and recreates at the new dim', async () => {
     await db.open({ embeddingDim: 512, reseed: true });
     assert.equal(db.hasVector('t1'), false); // old vectors dropped
-    assert.doesNotThrow(() => db.upsertTrackVector('t2', vec(512)));
+    assert.doesNotThrow(() => db.upsertTrackVector('t2', vec(512), db.resolvedEraYearForTrack('t2')));
     db.close();
   });
 
@@ -69,7 +69,7 @@ async function main() {
     // Table is 512 on disk (from the reseed above); controller boots guessing 768.
     await db.open({ embeddingDim: 768, adoptStoredDim: true });
     // It adopts 512 rather than wiping — the populated index keeps working.
-    assert.doesNotThrow(() => db.upsertTrackVector('t3', vec(512)));
+    assert.doesNotThrow(() => db.upsertTrackVector('t3', vec(512), db.resolvedEraYearForTrack('t3')));
     assert.equal(db.hasVector('t2'), true);
     db.close();
   });
@@ -84,7 +84,7 @@ async function main() {
     await db.open({ embeddingDim: 768, reseed: false });
     for (const id of ['a', 'b', 'c']) {
       db.upsertTrackMeta(id, { title: id, artist: 'x', album: 'y', year: 2020, genre: 'z' });
-      db.upsertTrackVector(id, vec(768));
+      db.upsertTrackVector(id, vec(768), db.resolvedEraYearForTrack(id));
     }
     assert.equal(db.embeddedIds().length, 3);
     db.close();
@@ -98,7 +98,9 @@ async function main() {
     // The fix's fallback source yields the whole library to re-embed instead.
     const reembed = db.unembeddedIds();
     assert.deepEqual([...reembed].sort(), ['a', 'b', 'c']);
-    for (const id of reembed) db.upsertTrackVector(id, vec(1024));
+    for (const id of reembed) {
+      db.upsertTrackVector(id, vec(1024), db.resolvedEraYearForTrack(id));
+    }
     assert.equal(db.embeddedIds().length, 3);
     db.close();
   });

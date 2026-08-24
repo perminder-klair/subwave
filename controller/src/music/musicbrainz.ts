@@ -115,22 +115,34 @@ export function earliestOriginalYear(
 }
 
 // Which tracks are worth an MB round-trip (shared by phase-0 enrichment and
-// the single-track retag route so the two can't drift). Only compilation-album
-// tracks — their plain `year` is the compilation's date, so era filtering
-// treats them as unknown until resolved. Non-compilation reissues are covered
-// by the walk-time album-tag path; everything else keeps its `year`. A prior
-// checked-but-missed stamp skips the track unless the operator asked for a
-// re-enrich.
+// the single-track retag route so the two can't drift; `idsNeedingOriginalYear`
+// is the SQL twin and must agree).
+//
+// The gate is era SUSPICION, not Navidrome's compilation flag (#1418). Keying
+// it on the flag limited the pass to 27 tracks out of 27,860 on the reported
+// library, because the reissue anthologies it exists for arrive as
+// `isCompilation: false` — see music/era-suspect.ts for what counts instead.
+// `yearUntrusted` is composed once in the row mapper (flag OR derived
+// judgement); a caller passing the raw flag would silently reopen the gap, so
+// this reads only the composed field.
+//
+// A resolved year (from anywhere — album tag, a previous lookup, or the
+// operator) means there is nothing to ask. A prior checked-but-missed stamp
+// skips the track unless the operator asked for a re-enrich; a MANUAL answer
+// is never re-asked at all, since it is not something MusicBrainz can improve
+// on.
 export function needsOriginalYearLookup(
   t: {
-    isCompilation?: boolean | null;
+    yearUntrusted?: boolean | null;
     originalYear?: number | null;
+    originalYearSource?: string | null;
     originalYearCheckedAt?: string | null;
   },
   reEnrich = false,
 ): boolean {
-  if (t.isCompilation !== true) return false;
+  if (t.yearUntrusted !== true) return false;
   if (t.originalYear != null) return false;
+  if (t.originalYearSource === 'manual') return false;
   return reEnrich || !t.originalYearCheckedAt;
 }
 

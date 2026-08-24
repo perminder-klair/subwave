@@ -185,9 +185,9 @@ async function main() {
       v[0] = 1; v[1] = x;
       return v;
     };
-    db.upsertTrackVector('t1', vec(0));
-    db.upsertTrackVector('t2', vec(0.1));
-    db.upsertTrackVector('t3', vec(0.3));
+    db.upsertTrackVector('t1', vec(0), db.resolvedEraYearForTrack('t1'));
+    db.upsertTrackVector('t2', vec(0.1), db.resolvedEraYearForTrack('t2'));
+    db.upsertTrackVector('t3', vec(0.3), db.resolvedEraYearForTrack('t3'));
     assert.deepEqual(db.knnById('t1', 1).map((h) => h.id), ['t2']);
     assert.deepEqual(
       db.knnById('t1', 1, { excludeIds: new Set(['t2']) }).map((h) => h.id),
@@ -215,7 +215,7 @@ async function main() {
       const v = new Float32Array(768);
       v[0] = 1; v[1] = 0.11 + i * 0.001;
       db.upsertTrackMeta(`n${i}`, { title: `Near ${i}`, artist: 'A', album: 'B', duration: 200 });
-      db.upsertTrackVector(`n${i}`, v);
+      db.upsertTrackVector(`n${i}`, v, db.resolvedEraYearForTrack(`n${i}`));
     }
     const near = new Set(['t2', ...Array.from({ length: 8 }, (_, i) => `n${i}`)]);
     assert.deepEqual(db.knnById('t1', 1, { excludeIds: near }).map((h) => h.id), ['t3']);

@@ -26,15 +26,11 @@ export async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<voi
   const hasKey = lastfm.hasLastfmKey();
   const lastfmEnabled = lastfm.lastfmEnrichEnabled(enrichCfg.lastfmTags, hasKey);
   const lyricsEnabled = enrichCfg.lyrics !== false;
-  // Original-year resolution for compilation-album tracks (issue #842) —
-  // keyless MusicBrainz, so default-on; disable via
-  // settings.embedding.enrichment.originalYear = false.
-  const originalYearEnabled = enrichCfg.originalYear !== false;
   // The original-year backfill scopes itself in SQL (compilation tracks with
   // no resolved year), NOT by the tagger's untagged/enriched id set — the
   // column landed after most libraries were tagged, and gating on the enrich
   // scope (or enrichedAt) would never backfill an already-tagged library.
-  const yearIds = originalYearEnabled ? db.idsNeedingOriginalYear(reEnrich) : [];
+  const yearIds = pendingOriginalYearIds(reEnrich);
   if (ids.length === 0 && yearIds.length === 0) return;
   if (!lastfmEnabled && !lyricsEnabled && yearIds.length === 0) {
     console.log('[tag] phase-0 skipped: lastfmTags and lyrics disabled, no original-year lookups pending');
@@ -110,41 +106,65 @@ export async function phaseEnrich(ids: string[], reEnrich: boolean): Promise<voi
     }
   });
 
-  // Original-year backfill (issue #842): compilation-album tracks whose plain
-  // `year` is the compilation's own release date. Resolved via MusicBrainz
-  // (music/musicbrainz.ts — earliest first-release-date across matching
-  // recordings, exact-MBID first). Effectively serial regardless of pool width
-  // (the client's 1 req/s throttle), so a big compilation-heavy library takes
-  // a while on the first pass — hence the per-track checked_at stamp (hit OR
-  // miss) that makes every later pass skip straight past it. The per-song
-  // Navidrome fetch just recovers the recording MBID (not stored in
-  // library.db); it's dwarfed by the MB throttle.
-  if (yearIds.length) {
-    console.log(`[tag] phase-0 original years: ${yearIds.length} compilation tracks to resolve via MusicBrainz (~1/s)`);
-    reportProgress({ phase: 'enrich', label: 'Resolving original years', done: 0, total: yearIds.length });
-    let checkedYears = 0;
-    await mapPool(yearIds, Math.min(concurrency, 4), async (id) => {
-      const t = db.getTrack(id);
-      if (!t || !musicbrainz.needsOriginalYearLookup(t, reEnrich)) return;
-      let mbid: string | null = null;
-      try {
-        mbid = (await subsonic.getSong(id))?.musicBrainzId || null;
-      } catch { /* MBID is optional — the search path covers it */ }
-      const year = await musicbrainz.lookupOriginalYear({ title: t.title, artist: t.artist, mbid, year: t.year });
-      db.setOriginalYear(id, year);
-      if (year != null) enrichedYears += 1;
-      checkedYears += 1;
-      if (checkedYears % 25 === 0) {
-        console.log(`[tag] original years ${checkedYears}/${yearIds.length} (${enrichedYears} resolved)`);
-        reportProgress({ phase: 'enrich', label: 'Resolving original years', done: checkedYears, total: yearIds.length });
-      }
-    });
-  }
+  enrichedYears = await backfillOriginalYears(yearIds, reEnrich, concurrency);
 
   logEvent(
     'info',
     `Metadata fetched for ${enrichedTracks.toLocaleString('en-GB')} tracks ` +
       `(${enrichedTags} Last.fm, ${enrichedLyrics} lyrics, ${enrichedYears} original years)`,
   );
+}
+
+// Ids still owed a MusicBrainz original-year lookup. Original-year resolution
+// is keyless (issue #842), so default-on; [] when the operator disabled it via
+// settings.embedding.enrichment.originalYear = false.
+export function pendingOriginalYearIds(retryMisses: boolean): string[] {
+  const enrichCfg = (settings.get() as any).embedding?.enrichment ?? {};
+  if (enrichCfg.originalYear === false) return [];
+  return db.idsNeedingOriginalYear(retryMisses);
+}
+
+// Original-year backfill (issue #842): era-suspect tracks whose plain `year`
+// is the compilation's/reissue's own release date. Resolved via MusicBrainz
+// (music/musicbrainz.ts — earliest first-release-date across matching
+// recordings, exact-MBID first). Effectively serial regardless of pool width
+// (the client's 1 req/s throttle), so a big compilation-heavy library takes
+// a while on the first pass — hence the per-track checked_at stamp (hit OR
+// miss) that makes every later pass skip straight past it. The per-song
+// Navidrome fetch just recovers the recording MBID (not stored in
+// library.db); it's dwarfed by the MB throttle.
+//
+// Shared by phase-0 and the standalone reconcile (--reconcile-only): the
+// reconcile WALK is what stamps era_untrusted and clears stale album-tag
+// years, so it must also run the lookup that can re-answer them — otherwise
+// those tracks read as unknown-year until someone happens to run a full tag
+// pass (#1418 follow-up). Returns the number of years resolved.
+export async function backfillOriginalYears(
+  yearIds: string[],
+  retryMisses: boolean,
+  concurrency: number,
+): Promise<number> {
+  if (!yearIds.length) return 0;
+  let resolvedYears = 0;
+  console.log(`[tag] original years: ${yearIds.length} era-suspect tracks to resolve via MusicBrainz (~1/s)`);
+  reportProgress({ phase: 'enrich', label: 'Resolving original years', done: 0, total: yearIds.length });
+  let checkedYears = 0;
+  await mapPool(yearIds, Math.min(concurrency, 4), async (id) => {
+    const t = db.getTrack(id);
+    if (!t || !musicbrainz.needsOriginalYearLookup(t, retryMisses)) return;
+    let mbid: string | null = null;
+    try {
+      mbid = (await subsonic.getSong(id))?.musicBrainzId || null;
+    } catch { /* MBID is optional — the search path covers it */ }
+    const year = await musicbrainz.lookupOriginalYear({ title: t.title, artist: t.artist, mbid, year: t.year });
+    db.setOriginalYear(id, year);
+    if (year != null) resolvedYears += 1;
+    checkedYears += 1;
+    if (checkedYears % 25 === 0) {
+      console.log(`[tag] original years ${checkedYears}/${yearIds.length} (${resolvedYears} resolved)`);
+      reportProgress({ phase: 'enrich', label: 'Resolving original years', done: checkedYears, total: yearIds.length });
+    }
+  });
+  return resolvedYears;
 }
 

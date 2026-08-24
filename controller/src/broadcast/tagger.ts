@@ -209,8 +209,11 @@ export function startAnalyzer(opts: { limit?: number; audio?: boolean; vocal?: b
 }
 
 // Spawn the standalone reconcile pass: walk Navidrome and prune library rows
-// for tracks it no longer contains. No embeddings, no LLM — the cheap "clear
+// for tracks it no longer contains. No embeddings, no LLM — the "clear
 // orphaned entries" path behind the admin "Reconcile with Navidrome" button.
+// The walk stamps era verdicts (#1418), so the pass also chains the keyless
+// MusicBrainz original-year backfill; that is incremental (checked_at-stamped),
+// so only a first pass with a large pending set is slow.
 // Same single-flight slot as the tagger/analyzer; caller rejects when running.
 export function startReconcile() {
   spawnChild('reconcile', ['src/music/tag-library.ts', '--reconcile-only'], '');

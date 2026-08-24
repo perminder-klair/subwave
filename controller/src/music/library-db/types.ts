@@ -19,9 +19,19 @@ export interface TrackRecord {
   // albums). null = unresolved; era filtering falls back to `year` (except on
   // compilations, whose plain year is the compilation's own date — untrusted).
   originalYear: number | null;
-  originalYearSource: string | null;      // 'album-tag' | 'musicbrainz'
+  originalYearSource: string | null;      // 'album-tag' | 'musicbrainz' | 'manual'
   originalYearCheckedAt: string | null;   // last lookup attempt, hit or miss
-  isCompilation: boolean | null;          // Navidrome album flag; null = unknown
+  isCompilation: boolean | null;          // Navidrome album FLAG; null = unknown
+  // Derived era suspicion (issue #1418, music/era-suspect.ts): "this album's
+  // year is the reissue's, not the recordings'". Kept SEPARATE from
+  // isCompilation, which stays the raw Navidrome fact — the flag is false on
+  // exactly the reissue anthologies this exists for, so one column cannot be
+  // both. null = not yet walked since the migration.
+  eraUntrusted: boolean | null;
+  // What era resolution actually consults: the flag OR the derived judgement.
+  // Composed HERE, once, so no call site re-decides it — resolveEraYear takes
+  // this, never `isCompilation`.
+  yearUntrusted: boolean | null;
   // Every genre tag on the file (OpenSubsonic multi-value genres). The single
   // source of truth — `genre` below is a generated column over genres[0]
   // (the "primary" tag), kept for the scalar consumers and indexes.
@@ -127,6 +137,8 @@ export interface TrackRow {
   original_year_source: string | null;
   original_year_checked_at: string | null;
   is_compilation: number | null;
+  era_untrusted: number | null;
+  text_vector_dirty: number;
   genres: string | null; // JSON array; `genre` is generated from genres[0]
   genre: string | null;
   duration_sec: number | null;
@@ -167,13 +179,17 @@ export interface TrackMeta {
   year?: number | string | null;
   genres?: string[] | null;
   duration?: number | null;
-  // Walk-time original-year surface (issue #842). `originalYear` here is the
-  // ALBUM's originalReleaseDate.year (source 'album-tag'); the walk passes it
-  // only for non-compilation albums (a compilation's original date is the
-  // compilation's own, not its songs'). Never overwrites a per-track
-  // 'musicbrainz' resolution — see upsertTrackMeta.
+  // Walk-time original-year surface (issue #842/#1418). `originalYear` here is
+  // the ALBUM's originalReleaseDate.year (source 'album-tag'), and the walk
+  // passes it only when it is INFORMATIVE — not on an era-suspect album, and
+  // not when it merely echoes the release year, which tells us nothing and
+  // would hide the track from the lookup that can actually answer. Never
+  // overwrites a per-track 'musicbrainz' or 'manual' value — see
+  // upsertTrackMeta.
   originalYear?: number | null;
   isCompilation?: boolean | null;
+  /** music/era-suspect.albumEraSuspect's verdict for this track's album. */
+  eraUntrusted?: boolean | null;
 }
 
 export interface TrackEnrichment {
@@ -222,5 +238,4 @@ export interface LibraryStats {
   withAudioEmbedding: number;
   updatedAt: string | null;
 }
-
 

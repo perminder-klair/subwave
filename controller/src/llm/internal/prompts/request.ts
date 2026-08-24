@@ -106,6 +106,30 @@ export const REQUEST_SCHEMA_TOLERANT = modelTolerant(REQUEST_SCHEMA, {
   objectFallbacks: { kind: 'track' },
 });
 
+// Full system prompt for the legacy request-matcher fallback. Exported pure so
+// the spoken `ack` policy is tested on the prompt that actually reaches the
+// model, not only on the shared fragment a caller could forget to append.
+export function requestMatcherSystem(persona: unknown): string {
+  const p = persona as { name?: unknown; soul?: unknown; language?: unknown } | null | undefined;
+  // The `ack` is the one field here that AIRS — without this clause it was
+  // the only spoken line in the system written with no persona voice at all
+  // (the librarian framing above owns every other field).
+  const personaSuffix = p?.name
+    ? `\n\nThe "ack" line is read on air by ${p.name}, the station's DJ${p.soul ? ` — ${p.soul}` : ''}. Write the ack in their voice; every other field stays plain and functional.`
+    : '';
+  // The on-air persona's language always anchors the spoken `ack` — unset
+  // defaults to English rather than omitting the clause, so a default station
+  // is never left with no language anchor at all (raid 2026-07-28: with no
+  // anchor, session-history mimicry flipped the station's language; see
+  // settings/persona.ts languageDirective for the full incident). Every
+  // search-facing field must stay in English / canonical names regardless, so
+  // it still matches an English-tagged library. Language comes LAST (after the
+  // persona clause) — repeating it last is what makes it stick.
+  const lang = String(p?.language || '').trim() || 'English';
+  const langSuffix = `\n\nThe on-air DJ speaks ${lang}: write the "ack" field in ${lang}. For that spoken field only: ${settings.spokenProperNounDirective(persona)} Every OTHER field (search_terms, artist, genre, mood, sort, intent, language) stays in English / canonical names exactly as the library is tagged — translate nothing there, even when the listener wrote in ${lang}.`;
+  return REQUEST_SYSTEM + personaSuffix + langSuffix;
+}
+
 export async function matchRequest(
   userQuery: string,
   { listenerName = null, nowPlaying = null }: { listenerName?: string | null; nowPlaying?: any } = {},
@@ -121,25 +145,9 @@ export async function matchRequest(
   ].filter(Boolean).join(' ');
 
   const persona = settings.getEffectivePersona();
-  // The `ack` is the one field here that AIRS — without this clause it was
-  // the only spoken line in the system written with no persona voice at all
-  // (the librarian framing above owns every other field).
-  const personaSuffix = persona?.name
-    ? `\n\nThe "ack" line is read on air by ${persona.name}, the station's DJ${persona.soul ? ` — ${persona.soul}` : ''}. Write the ack in their voice; every other field stays plain and functional.`
-    : '';
-  // The on-air persona's language always anchors the spoken `ack` — unset
-  // defaults to English rather than omitting the clause, so a default station
-  // is never left with no language anchor at all (raid 2026-07-28: with no
-  // anchor, session-history mimicry flipped the station's language; see
-  // settings/persona.ts languageDirective for the full incident). Every
-  // search-facing field must stay in English / canonical names regardless, so
-  // it still matches an English-tagged library. Language comes LAST (after the
-  // persona clause) — repeating it last is what makes it stick.
-  const lang = String(persona?.language || '').trim() || 'English';
-  const langSuffix = `\n\nThe on-air DJ speaks ${lang}: write the "ack" field in ${lang}. Every OTHER field (search_terms, artist, genre, mood, sort, intent, language) stays in English / canonical names exactly as the library is tagged — translate nothing there, even when the listener wrote in ${lang}.`;
 
   return djObject({
-    system: REQUEST_SYSTEM + personaSuffix + langSuffix,
+    system: requestMatcherSystem(persona),
     prompt: userPrompt,
     schema: REQUEST_SCHEMA_TOLERANT,
     temperature: 0.4,

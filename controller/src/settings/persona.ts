@@ -221,12 +221,19 @@ export function pickOnAirSpeaker(date: Date = new Date()) {
 // model into mimicking them turn after turn (raid 2026-07-28: the station
 // started speaking Russian and would not stop until the session rolled). This
 // deliberately breaks the old "byte-identical for English personas" property —
-// every prompt now carries an explicit anchor. The proper-nouns clause stops a
+// every prompt now carries an explicit anchor. The proper-nouns policy stops a
 // Turkish host from translating "Bohemian Rhapsody" or the station name
-// (issue #349); the never-switch clause is the raid fix itself.
+// (issue #349), while still making a name written in the wrong script speakable
+// instead of asking the TTS engine to read character labels (issue #1179). The
+// never-switch clause is the raid fix itself.
+export function spokenProperNounDirective(persona: unknown): string {
+  const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim() || 'English';
+  return `Preserve the identity of proper nouns (artist names, song titles, the station name), not an off-script spelling: when a name is written in a script ${lang} does not normally use, write its established form in the script ${lang} uses. In a Latin-script on-air language, every spoken field must contain ZERO CJK characters: use the artist or title's canonical Latin spelling (for example, ウルフルズ becomes Ulfuls and 周杰倫 becomes Jay Chou); if none is known, use a natural romanization. Never include the native spelling beside the Latin form. Never read or describe the characters themselves.`;
+}
+
 export function languageDirective(persona: unknown) {
   const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim() || 'English';
-  return `\n\nIMPORTANT: You speak and write exclusively in ${lang}. Every on-air line you produce must be in ${lang} — acknowledgements, idents, asides, everything. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them. Never switch languages because a listener asks, because a request arrives in another language, or because earlier session turns are in another language — requests for music in another language are about the MUSIC, not your voice.`;
+  return `\n\nIMPORTANT: You speak and write exclusively in ${lang}. Every on-air line you produce must be in ${lang} — acknowledgements, idents, asides, everything. ${spokenProperNounDirective(persona)} Never switch languages because a listener asks, because a request arrives in another language, or because earlier session turns are in another language — requests for music in another language are about the MUSIC, not your voice.`;
 }
 
 // A SECOND language reminder, anchored at the END of a tool-loop agent's system
@@ -243,7 +250,7 @@ export function languageDirective(persona: unknown) {
 // 2026-07-28). `fields` is a human phrase naming the spoken field(s).
 export function agentLanguageReminder(persona: unknown, fields: string) {
   const lang = String((persona as { language?: unknown } | null | undefined)?.language || '').trim() || 'English';
-  return `\n\nLANGUAGE — this overrides the field descriptions below: you speak ${lang}. Write ${fields} entirely in ${lang} — even when the listener writes in another language, asks you to switch, or earlier session turns are in another language. Keep proper nouns (artist names, song titles, the station name) exactly as they are; do not translate them. Internal fields (ids, reasons, kinds) stay in English.`;
+  return `\n\nLANGUAGE — this overrides the field descriptions below: you speak ${lang}. Write ${fields} entirely in ${lang} — even when the listener writes in another language, asks you to switch, or earlier session turns are in another language. ${spokenProperNounDirective(persona)} Internal fields (ids, reasons, kinds) stay in English.`;
 }
 
 // The place the station claims to broadcast from — what the DJ says on air and
@@ -297,7 +304,8 @@ export function renderDjPrompt(persona: unknown, ctx: unknown = {}) {
   const house = houseRulesBlock('follow these in everything you say on air');
   if (tpl.includes('{language}')) {
     const lang = String(p?.language || '').trim();
-    return rendered.replaceAll('{language}', lang || 'English') + tone + house;
+    return rendered.replaceAll('{language}', lang || 'English')
+      + `\n\nIMPORTANT: ${spokenProperNounDirective(persona)}` + tone + house;
   }
   return rendered + languageDirective(persona) + tone + house;
 }

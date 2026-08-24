@@ -39,12 +39,42 @@ def log(msg):
     sys.stderr.flush()
 
 
+class JapaneseG2P:
+    """Adapt Misaki's phoneme+pitch output for kokoro-onnx v1.0."""
+
+    def __init__(self, frontend):
+        self.frontend = frontend
+
+    def __call__(self, text):
+        annotated, tokens = self.frontend(text)
+        if len(annotated) % 2:
+            raise ValueError("Japanese G2P returned mismatched phoneme and pitch lengths")
+        return annotated[: len(annotated) // 2], tokens
+
+
+def build_g2p(lang, espeak, japanese, chinese):
+    """Build the phonemizer that actually understands ``lang``.
+
+    espeak-ng can pronounce kana but has no morphological dictionary for
+    context-dependent kanji readings; for those codepoints it falls back to
+    spoken character descriptions. Misaki's native frontends carry the
+    language-specific segmentation and dictionaries Kokoro expects.
+    """
+    if lang == "ja":
+        # pyopenjtalk-plus ships the Open JTalk dictionary inside amd64 and
+        # arm64 wheels, so kanji works offline without a first-use download.
+        return JapaneseG2P(japanese.JAG2P(version="pyopenjtalk"))
+    if lang == "cmn":
+        return chinese.ZHG2P()
+    return espeak.EspeakG2P(language=lang)
+
+
 def main():
     try:
         from kokoro_onnx import Kokoro
         import soundfile as sf
         import misaki
-        from misaki import espeak
+        from misaki import espeak, ja, zh
     except Exception as e:
         emit({"id": None, "ok": False, "fatal": True, "error": f"import failed: {e}"})
         sys.exit(1)
@@ -96,7 +126,7 @@ def main():
             lang = lang_mapping.get(voice_code[0], "en-gb")  # british english fallback
         g2p = g2p_cache.get(lang)
         if g2p is None:
-            g2p = espeak.EspeakG2P(language=lang)
+            g2p = build_g2p(lang, espeak, ja, zh)
             g2p_cache[lang] = g2p
         return g2p
 

@@ -894,6 +894,10 @@ function toAdminRow(s: AdminSong) {
     artist: s.artist,
     album: s.album,
     year: s.year ?? null,
+    originalYear: tag?.originalYear ?? null,
+    originalYearSource: tag?.originalYearSource ?? null,
+    isCompilation: tag?.isCompilation ?? null,
+    eraUntrusted: tag?.eraUntrusted ?? null,
     genre: s.genre ?? null,
     duration: s.duration ?? null,
     // path lets getLocalPath() use the on-disk file when MUSIC_LIBRARY_PATH

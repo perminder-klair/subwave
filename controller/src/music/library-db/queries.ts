@@ -155,11 +155,19 @@ export function embeddedIds(): string[] {
 }
 
 // Bucket every untagged track by (genre, decade). Used by seed-selector to
-// stratify so rare-mood corners of the library each get a seed pick.
+// stratify so rare-mood corners of the library each get a seed pick. The CASE
+// is the SQL twin of era-year.resolveEraYear: original wins, an unresolved
+// compilation/anthology is unknown, then a trusted file year may fall through.
 export function trackIdsByGenreDecade(): Map<string, string[]> {
   const rows = requireDb()
     .prepare(
-      `SELECT id, COALESCE(genre, '') AS g, (COALESCE(original_year, year, 0) / 10) * 10 AS decade
+      `SELECT id, COALESCE(genre, '') AS g,
+              CASE
+                WHEN original_year > 0 THEN (original_year / 10) * 10
+                WHEN is_compilation = 1 OR era_untrusted = 1 THEN 0
+                WHEN year > 0 THEN (year / 10) * 10
+                ELSE 0
+              END AS decade
        FROM tracks WHERE moods IS NULL`,
     )
     .all() as Array<{ id: string; g: string; decade: number }>;
@@ -214,9 +222,6 @@ export function genreCentroids(): Array<{ genre: string; count: number; centroid
   }
   return out;
 }
-
-
-
 // Lean, whole-library projection for the explicit Show-editor candidate
 // diagnostic. It avoids the heavyweight analysis JSON that full track reads
 // carry while retaining every field used by the strict show locks.
@@ -227,6 +232,7 @@ export function candidateFilterTracks(): Array<{
   year: number | null;
   originalYear: number | null;
   isCompilation: boolean | null;
+  yearUntrusted: boolean | null;
   genres: string[];
   genre: string | null;
   moods: string[];
@@ -241,6 +247,7 @@ export function candidateFilterTracks(): Array<{
     year: number | null;
     original_year: number | null;
     is_compilation: number | null;
+    era_untrusted: number | null;
     genres: string | null;
     genre: string | null;
     moods: string | null;
@@ -249,7 +256,7 @@ export function candidateFilterTracks(): Array<{
     vocal_range_count: number | null;
   };
   const rows = requireDb().prepare(`SELECT id, title, artist, year, original_year,
-    is_compilation, genres, genre, moods, audio_moods, energy,
+    is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy,
     CASE
       WHEN vocal_ranges_json IS NULL THEN NULL
       WHEN json_valid(vocal_ranges_json) AND json_type(vocal_ranges_json) = 'array'
@@ -264,6 +271,9 @@ export function candidateFilterTracks(): Array<{
     year: row.year ?? null,
     originalYear: row.original_year ?? null,
     isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
+    yearUntrusted: (row.is_compilation === 1 || row.era_untrusted === 1)
+      ? true
+      : (row.is_compilation == null && row.era_untrusted == null ? null : false),
     genres: row.genres ? safeParseArray(row.genres) : [],
     genre: row.genre ?? null,
     moods: row.moods ? safeParseArray(row.moods) : [],

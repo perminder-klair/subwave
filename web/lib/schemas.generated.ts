@@ -370,9 +370,10 @@ export const voiceImportSchema = z.object({
 // ─── from controller/src/schemas/library.ts ──────────────────────────────
 
 // Shared library-maintenance schemas — the operator-facing bodies under
-// /library that carry typed input rather than a bare id. Today that is
-// `POST /library/manual-tag`, the "tag this track (or its whole album) by hand,
-// no LLM involved" path behind the library row editor.
+// /library that carry typed input rather than a bare id: `POST
+// /library/manual-tag` (tag this track, or its whole album, by hand — no LLM
+// involved) and `POST /library/original-year` (the operator's own answer to
+// "what year was this actually recorded", behind the same row editor).
 //
 // HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
 // the web bundle, so a project import or a node builtin here breaks the mirror.
@@ -447,6 +448,60 @@ export function manualTagSchema(ctx: ManualTagContext) {
         .nullable(),
     ),
     // `=== true`, so anything else reads as off — unchanged.
+    applyToAlbum: z.unknown().optional().transform((v) => v === true),
+  });
+}
+
+// ── POST /library/original-year ──────────────────────────────────────────────
+// The operator's manual era override (issue #1418). The automatic pipeline
+// resolves an original year from the album tag or MusicBrainz, and on a reissue
+// anthology both are wrong by construction — the tag carries the reissue's date
+// and MB is never asked, because the lookup is gated on a compilation flag
+// those albums do not set. This is the escape hatch: someone holding the sleeve
+// types the real year.
+
+/** Floor for a plausible recording year — mirrors musicbrainz.ts MIN_YEAR.
+ *  Duplicated rather than imported: this file may import only 'zod'. */
+export const ORIGINAL_YEAR_MIN = 1900;
+
+export function originalYearSchema() {
+  // Evaluated per request, not at module load: a schema frozen at boot would
+  // start refusing next January.
+  const max = new Date().getUTCFullYear() + 1;
+  return z.object({
+    // Same wording and same blank-string refusal as manualTagSchema — one
+    // editor posts to both routes and must not get two dialects of "no id".
+    id: z.unknown().optional().transform((raw, c) => {
+      if (typeof raw !== 'string' || !raw) {
+        c.addIssue({ code: 'custom', message: 'id is required' });
+        return z.NEVER;
+      }
+      return raw;
+    }),
+    // null CLEARS the override and hands the track back to the automatic
+    // pipeline, so it is a real value here rather than an omission: a missing
+    // key is a malformed request, not "clear it". Numeric strings are accepted
+    // because the field is typed into an <input>, but a non-integer or an
+    // out-of-window year is refused rather than rounded — a silently repaired
+    // year is indistinguishable on air from a correct one.
+    originalYear: z.unknown().transform((raw, c) => {
+      if (raw === null) return null;
+      const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
+      if (typeof n !== 'number' || !Number.isInteger(n)) {
+        c.addIssue({ code: 'custom', message: 'originalYear must be a whole year or null' });
+        return z.NEVER;
+      }
+      if (n < ORIGINAL_YEAR_MIN || n > max) {
+        c.addIssue({
+          code: 'custom',
+          message: `originalYear must be between ${ORIGINAL_YEAR_MIN} and ${max}, or null`,
+        });
+        return z.NEVER;
+      }
+      return n;
+    }),
+    // `=== true`, matching manualTagSchema. An anthology is wrong a whole album
+    // at a time, so this is the common case here rather than the exception.
     applyToAlbum: z.unknown().optional().transform((v) => v === true),
   });
 }

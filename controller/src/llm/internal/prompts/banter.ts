@@ -35,8 +35,10 @@ function castBlock(host: any, guests: any[]): string {
 // programme.ts's exchangeSystem: the station house rules have to be PROVABLY
 // on this path (issue #1420 — they weren't), and a test that only asserts the
 // block builder exists is exactly the regression it fails to catch.
-export function banterSystem({ host, guests, show = null, langClause = '' }: any): string {
+export function banterSystem({ host, guests, show = null }: any): string {
   const showClause = show?.name ? ` of "${show.name}"` : '';
+  const lang = String(host?.language || '').trim() || 'English';
+  const langClause = ` Everyone speaks ${lang} on air. ${settings.spokenProperNounDirective(host)}`;
   return `You write short on-air exchanges between the hosts${showClause} on a personal internet radio station, mid-show. This is people who know each other talking in one studio: quick, warm, a little loose — real speech, not sketch comedy or a scripted bit.
 
 The cast (persona id — name (role): voice notes):
@@ -69,11 +71,9 @@ export async function generateBanter({
   });
 
   // The host's on-air language governs the room — co-hosts on one show share
-  // a broadcast language, same rule as the rest of the station.
-  const lang = String(host?.language || '').trim();
-  const langClause = lang ? ` Everyone speaks ${lang} on air; keep proper nouns (artist names, track titles, the station name) untranslated.` : '';
-
-  const system = banterSystem({ host, guests, show, langClause });
+  // a broadcast language, same rule as the rest of the station. banterSystem
+  // owns the language and spoken-name policy so pure prompt tests cover it.
+  const system = banterSystem({ host, guests, show });
 
   const ctxLines = buildContextLines(context, { contextFields: BANTER_CONTEXT_FIELDS });
   if (current?.title) ctxLines.push(`On air right now: "${current.title}" by ${current.artist || 'unknown'}`);

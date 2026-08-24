@@ -107,14 +107,31 @@ await test('primaryArtist takes the first credit before feat./ft./&/,/x', () => 
 });
 
 console.log('needsOriginalYearLookup (enrichment scope, shared with retag):');
-await test('only compilation tracks without a resolved year qualify', () => {
-  assert.equal(needsOriginalYearLookup({ isCompilation: true, originalYear: null, originalYearCheckedAt: null }), true);
-  assert.equal(needsOriginalYearLookup({ isCompilation: false, originalYear: null, originalYearCheckedAt: null }), false);
-  assert.equal(needsOriginalYearLookup({ isCompilation: null, originalYear: null, originalYearCheckedAt: null }), false);
-  assert.equal(needsOriginalYearLookup({ isCompilation: true, originalYear: 1976, originalYearCheckedAt: '2026-01-01' }), false);
+// The gate reads `yearUntrusted` — the composed flag (Navidrome's compilation
+// flag OR the derived anthology verdict), not the raw flag (#1418). Composition
+// happens once, in the library-db row mappers.
+await test('only era-untrusted tracks without a resolved year qualify', () => {
+  assert.equal(needsOriginalYearLookup({ yearUntrusted: true, originalYear: null, originalYearCheckedAt: null }), true);
+  assert.equal(needsOriginalYearLookup({ yearUntrusted: false, originalYear: null, originalYearCheckedAt: null }), false);
+  assert.equal(needsOriginalYearLookup({ yearUntrusted: null, originalYear: null, originalYearCheckedAt: null }), false);
+  assert.equal(needsOriginalYearLookup({ yearUntrusted: true, originalYear: 1976, originalYearCheckedAt: '2026-01-01' }), false);
+});
+await test('the RAW compilation flag is not read here', () => {
+  // Deliberate: the flag is false on exactly the reissue anthologies this gate
+  // exists for, so a call site that passed it instead of the composed value
+  // would silently reopen the #1418 gap. Better to answer "no" than to accept
+  // the field that caused the bug.
+  assert.equal(needsOriginalYearLookup({ isCompilation: true, originalYear: null } as never), false);
+});
+await test('a manual answer is never re-asked, even on re-enrich', () => {
+  // MusicBrainz has nothing to add to an operator reading the sleeve. Belt and
+  // braces beside the SQL guard in setOriginalYear.
+  const manual = { yearUntrusted: true, originalYear: null, originalYearSource: 'manual', originalYearCheckedAt: null };
+  assert.equal(needsOriginalYearLookup(manual), false);
+  assert.equal(needsOriginalYearLookup(manual, true), false);
 });
 await test('a checked-but-missed track is skipped unless re-enriching', () => {
-  const missed = { isCompilation: true, originalYear: null, originalYearCheckedAt: '2026-01-01T00:00:00Z' };
+  const missed = { yearUntrusted: true, originalYear: null, originalYearCheckedAt: '2026-01-01T00:00:00Z' };
   assert.equal(needsOriginalYearLookup(missed), false);
   assert.equal(needsOriginalYearLookup(missed, true), true);
 });

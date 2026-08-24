@@ -140,7 +140,7 @@ console.log('\n[4] library-db honours the stored dim');
 await db.open({ embeddingDim: 768, reseed: false });
 db.setEmbeddingMeta('ollama:nomic-embed-text', 768);
 db.upsertTrackMeta('t1', { title: 'x', artist: 'y' });
-db.upsertTrackVector('t1', new Array(768).fill(0.01));
+db.upsertTrackVector('t1', new Array(768).fill(0.01), db.resolvedEraYearForTrack('t1'));
 ok('seed: 768-d vector accepted', true);
 db.close();
 
@@ -150,13 +150,13 @@ await db.open({ embeddingDim: 1536, adoptStoredDim: true });
 ok('adopt: stored meta still 768 (index not wiped)', db.getEmbeddingMeta()?.dim === 768);
 let accepted768 = false;
 try {
-  db.upsertTrackVector('t1', new Array(768).fill(0.02));
+  db.upsertTrackVector('t1', new Array(768).fill(0.02), db.resolvedEraYearForTrack('t1'));
   accepted768 = true;
 } catch { /* table width wrong */ }
 ok('adopt: table really is 768 (768-d upsert accepted)', accepted768);
 let rejected1536 = false;
 try {
-  db.upsertTrackVector('t1', new Array(1536).fill(0.02));
+  db.upsertTrackVector('t1', new Array(1536).fill(0.02), db.resolvedEraYearForTrack('t1'));
 } catch {
   rejected1536 = true;
 }
@@ -181,7 +181,7 @@ await db.open({ embeddingDim: 1536, reseed: true });
 db.setEmbeddingMeta('other:model-1536', 1536);
 let accepted1536 = false;
 try {
-  db.upsertTrackVector('t1', new Array(1536).fill(0.03));
+  db.upsertTrackVector('t1', new Array(1536).fill(0.03), db.resolvedEraYearForTrack('t1'));
   accepted1536 = true;
 } catch { /* */ }
 ok('reseed: table rebuilt at 1536', accepted1536);

@@ -151,7 +151,7 @@ Loudness: both sides of a rendered seam are gained by `music/loudness.ts` `resol
 ### Library and picker rules
 
 - **Write `genres`, never `genre`** — the scalar column is GENERATED from `genres[0]`. `subsonic.songGenres()` is the single ingest normaliser. Genre matching is **one-directional**: a track's tag may refine a show's genre, never broaden it.
-- **Judge era by `show-filter.resolveEraYear`, never raw `year`** — a compilation's own release date is untrusted. Keep the JS and SQL era filters in agreement.
+- **Judge era by `show-filter.resolveEraYear`, never raw `year`** — a reissue's own release date is untrusted. Pass it `yearUntrusted` (composed once in the library-db row mappers), never the raw `isCompilation`: that flag is `false` on exactly the reissue anthologies the guard exists for (#1418). Keep the JS and SQL era filters in agreement, and route every listener-facing year — annotation, DJ line, picker, `/now-playing` — through the resolver.
 - **Use `getAnnotatedUri` for anything going to Liquidsoap** — raw URLs lose metadata until ID3 arrives, and `on_metadata` needs `subsonic_id` for `/cover/:id` artwork.
 - **The tagger's own `moods`/`energy` must never enter the embed text.** Phases run enrich → embed → seed → propagate, so those are decided *from* the vectors; feeding them back is circular. → [`docs/internals/music.md`](docs/internals/music.md)
 - **CLAP cosines are not comparable across moods** — each prompt sits at its own baseline, so picking a track's top raw scores ranks *prompts*, not tracks. Calibrate per mood (`music/audio-calibration.ts`), and stamp `UNCALIBRATED_VERSION` when a pass could not calibrate. → [`docs/internals/music.md`](docs/internals/music.md)

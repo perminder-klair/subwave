@@ -39,8 +39,10 @@ interface TrackTableProps {
   vocab: string[];
   editingId: string | null;
   manualBusy: string | null;
+  eraBusy: string | null;
   onEdit: (t: Track) => void;
   onSaveManual: (t: Track, moods: string[], energy: string | null, applyToAlbum: boolean) => void;
+  onSaveEraYear: (t: Track, originalYear: number | null, applyToAlbum: boolean) => void;
   onCancelEdit: () => void;
   selected: Set<string>;
   onToggleSelect: (id: string) => void;
@@ -279,7 +281,9 @@ export function TrackTable(p: TrackTableProps) {
               track={t}
               vocab={p.vocab}
               busy={p.manualBusy === t.id}
+              eraBusy={p.eraBusy === t.id}
               onSave={(moods, energy, applyToAlbum) => p.onSaveManual(t, moods, energy, applyToAlbum)}
+              onSaveEraYear={(originalYear, applyToAlbum) => p.onSaveEraYear(t, originalYear, applyToAlbum)}
               onCancel={p.onCancelEdit}
             />
           )}

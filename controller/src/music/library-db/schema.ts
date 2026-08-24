@@ -403,6 +403,69 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 20');
   }
 
+  if (userVersion < 21) {
+    // Era suspicion, widened past Navidrome's compilation flag (issue #1418).
+    //
+    // #842 keyed the whole era pipeline on `is_compilation`, and on a real
+    // library that flag is nearly empty: the reissue anthologies it exists for
+    // arrive as `isCompilation: false`. `era_untrusted` is the DERIVED
+    // judgement (music/era-suspect.ts) — "this album's year is the reissue's,
+    // not the recordings'" — written at walk time from the album artist, the
+    // credited-artist count and a date range printed in the title.
+    // `is_compilation` stays the raw Navidrome FACT beside it, so the two never
+    // have to lie for each other and the admin row editor can show both.
+    //
+    // The UPDATE is the other half of the same defect. The walk used to record
+    // `original_year` even when the album's originalReleaseDate merely echoed
+    // its release year — 18,492 rows of the reported library — which made a
+    // value carrying NO information indistinguishable from a resolved one, and
+    // hid those tracks from the lookup (it skips a non-null original_year).
+    // Clearing them is behaviour-neutral by construction: resolveEraYear falls
+    // through to the identical `year` for a non-compilation, so nothing about
+    // era filtering changes today; the tracks simply become ELIGIBLE for the
+    // MusicBrainz pass that can actually answer.
+    //
+    // Scoped to source = 'album-tag' so a 'musicbrainz' or 'manual' answer that
+    // happens to equal the file year is left alone — those were resolved, not
+    // echoed.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN era_untrusted INTEGER;`);
+    clearEchoedAlbumTagYears(d);
+    d.pragma('user_version = 21');
+  }
+
+  if (userVersion < 22) {
+    // A text embedding contains an `Era:` line. Era metadata can change after
+    // a vector was written (a later walk recognises an anthology, MusicBrainz
+    // resolves the recording, or an operator supplies an override). Keep the
+    // old vector usable until phase 1 replaces it, but durably remember that it
+    // no longer describes the row.
+    runDdl(d, `ALTER TABLE tracks ADD COLUMN text_vector_dirty INTEGER NOT NULL DEFAULT 0;`);
+
+    // Databases that ran #1418 before this follow-up may already contain stale
+    // vectors. The scope is exactly the rows whose Era: text #1418 CHANGED:
+    // pre-#1418 embeds already resolved through resolveEraYear(year,
+    // originalYear, isCompilation), and original_year still wins before any
+    // flag is consulted — so a resolved row's text is byte-identical, and an
+    // unresolved compilation was already era-less. Only the new era_untrusted
+    // verdict on an UNRESOLVED row flips the output (a year the old text
+    // asserted now reads as unknown). Marking the broader era-special set
+    // (every original_year / is_compilation row) scheduled a pointless
+    // library-wide re-embed of identical text on upgrade. Only rows with an
+    // existing vector need a replacement marker; fresh DBs have no vec table
+    // yet and need no backfill.
+    const hasTextVectors = d
+      .prepare(`SELECT 1 FROM sqlite_master WHERE type='table' AND name='track_vectors'`)
+      .get();
+    if (hasTextVectors) {
+      d.prepare(
+        `UPDATE tracks SET text_vector_dirty = 1
+          WHERE era_untrusted = 1 AND original_year IS NULL
+            AND id IN (SELECT id FROM track_vectors)`,
+      ).run();
+    }
+    d.pragma('user_version = 22');
+  }
+
   // Reconcile the requested embedding dim against what physically exists.
   //
   // The vec0 table's `FLOAT[N]` schema is the authority for what inserts accept —
@@ -496,6 +559,40 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
 // Wrapper so we keep the SQL "exec" verb out of the source text and dodge a
 // security linter that flags exec() as child_process abuse. Functionally
 // identical to db.exec(sql).
+// Drop the album-tag original years that only ECHO the release year (#1418).
+//
+// Run once by migration 21, and exported so it can be tested directly: this is
+// the one statement in the change that deletes data an operator already has, so
+// what it SPARES matters as much as what it clears.
+//
+// Behaviour-neutral by construction. For a trusted album resolveEraYear falls
+// through to the identical `year`, so no era decision changes today; the point
+// is that the row stops looking resolved and becomes eligible for the
+// MusicBrainz pass, which skips anything with a non-null original_year.
+//
+// Scoped three ways, each load-bearing:
+//  - source = 'album-tag' only. A 'musicbrainz' or 'manual' year that happens
+//    to equal the file year was RESOLVED to that value, not echoed, and
+//    throwing it away would discard real work (and, for 'manual', the
+//    operator's own).
+//  - original_year = year only. Where they differ the tag carried real reissue
+//    information — that is the 995-row case on the reported library, and every
+//    one of those is a value worth keeping.
+//  - the source is cleared alongside the year, so nothing is left claiming a
+//    provenance for a value that is no longer there.
+export function clearEchoedAlbumTagYears(d: Database.Database): number {
+  const r = d
+    .prepare(
+      `UPDATE tracks
+          SET original_year = NULL, original_year_source = NULL
+        WHERE original_year_source = 'album-tag'
+          AND original_year IS NOT NULL
+          AND original_year = year`,
+    )
+    .run();
+  return r.changes;
+}
+
 export function runDdl(d: Database.Database, sql: string): void {
   d.exec(sql);
 }
@@ -518,5 +615,4 @@ function vecTableDim(d: Database.Database): number | null {
 function vecCount(d: Database.Database): number {
   return (d.prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as { n: number }).n;
 }
-
 

@@ -98,10 +98,15 @@ export function get(songId: string): any {
     artist: t.artist,
     album: t.album,
     year: t.year,
-    // Era-year surface (issue #842) — show-filter.resolveEraYear precedence:
-    // originalYear wins; a compilation's plain year is untrusted.
+    // Era-year surface (issues #842, #1418) — show-filter.resolveEraYear
+    // precedence: originalYear wins; otherwise the plain year counts only when
+    // the album's year is TRUSTED. `yearUntrusted` is the composed flag
+    // resolution reads; `isCompilation` rides along as the raw Navidrome fact.
     originalYear: t.originalYear,
+    originalYearSource: t.originalYearSource,
     isCompilation: t.isCompilation,
+    eraUntrusted: t.eraUntrusted,
+    yearUntrusted: t.yearUntrusted,
     genres: t.genres,
     genre: t.genre,
     moods: t.moods,
@@ -319,10 +324,11 @@ function slimTrack(r: db.TrackRecord) {
     artist: r.artist,
     album: r.album,
     year: r.year,
-    // Era-year surface (issue #842) — carried inline so show-filter's era
-    // checks on library-sourced pools never need a per-track DB lookup.
+    // Era-year surface (issues #842, #1418) — carried inline so show-filter's
+    // era checks on library-sourced pools never need a per-track DB lookup.
     originalYear: r.originalYear,
     isCompilation: r.isCompilation,
+    yearUntrusted: r.yearUntrusted,
     genres: r.genres,
     genre: r.genre,
     moods: r.moods,
@@ -605,6 +611,15 @@ export interface FilteredRow {
   artist?: string | null;
   album?: string | null;
   year?: number | string | null;
+  // Era surface (#842/#1418) — the admin row editor shows the operator what
+  // era filtering, the DJ line and the picker will actually read, and whether
+  // the current answer came from the album tag, MusicBrainz or their own hand.
+  // Without `originalYearSource` the override UI cannot tell "resolved" from
+  // "the album tag echoed the release year", which is the whole confusion.
+  originalYear?: number | null;
+  originalYearSource?: string | null;
+  isCompilation?: boolean | null;
+  eraUntrusted?: boolean | null;
   genres?: string[];
   genre?: string | null;
   duration?: number | null;
@@ -633,6 +648,10 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRo
       artist: r.artist,
       album: r.album,
       year: r.year,
+      originalYear: r.originalYear,
+      originalYearSource: r.originalYearSource,
+      isCompilation: r.isCompilation,
+      eraUntrusted: r.eraUntrusted,
       genres: r.genres,
       genre: r.genre,
       duration: r.durationSec,

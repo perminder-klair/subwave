@@ -47,6 +47,7 @@ import StationHeader, { type HealthMetrics } from './StationHeader';
 import { cn } from '../../lib/cn';
 import { RequestsCard } from './dash/RequestsCard';
 import { TakeoverCard } from './dash/TakeoverCard';
+import QueueHeldBadge from './dash/QueueHeldBadge';
 import { BoothTurnText, SegmentButton, SortableTh, ToggleRow, classTone } from './dash/bits';
 import type {
   ActResponse,
@@ -388,6 +389,7 @@ export default function DashPanel() {
                             Stem blend
                           </span>
                         ) : null}
+                        <QueueHeldBadge sent={t.sent} />
                         <span className="mono-num text-[10px] whitespace-nowrap text-muted">
                           {typeof t.duration === 'number' || typeof t.duration === 'string'
                             ? t.duration
