@@ -103,7 +103,7 @@ export default function ShowsPanel() {
   const data = settingsQuery.data ?? null;
   const themes = useMemo(() => themesQuery.data?.themes ?? [], [themesQuery.data?.themes]);
   const activeThemeId = themesQuery.data?.active ?? '';
-  const err = settingsQuery.error ? errorMessage(settingsQuery.error) : null;
+  const err = settingsQuery.error && !data ? errorMessage(settingsQuery.error) : null;
   const skills: SkillOption[] = skillsQuery.data ?? [];
   const genres = genresQuery.data ?? [];
   const playlists = playlistsQuery.data ?? [];

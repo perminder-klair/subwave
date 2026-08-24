@@ -36,7 +36,6 @@ export const libraryKeys = {
   tagger: () => ['library', 'tagger'] as const,
   analysisFailures: () => ['library', 'analysis-failures'] as const,
   moodVocab: () => ['library', 'mood-vocab'] as const,
-  settings: () => ['library', 'settings'] as const,
   genres: () => ['library', 'genres'] as const,
   playlists: () => ['library', 'playlists'] as const,
   rulePlaylists: () => ['library', 'rule-playlists'] as const,

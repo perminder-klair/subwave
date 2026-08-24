@@ -410,10 +410,18 @@ export default function PersonasPanel() {
           activeDjPromptId,
           djHouseRules: djHouseRules.trim(),
         };
-      await saveMutation.mutateAsync(patch);
-      const authoritative = formFromSettings(
-        queryClient.getQueryData<SettingsResponse>(settingsKeys.detail()) ?? null,
-      );
+      const receipt = await saveMutation.mutateAsync(patch);
+      const authoritative = receipt.refreshError
+        ? {
+            personas: patch.personas,
+            activePersonaId: patch.activePersonaId,
+            djPrompts: patch.djPrompts,
+            activeDjPromptId: patch.activeDjPromptId,
+            djHouseRules: patch.djHouseRules,
+          }
+        : formFromSettings(
+            queryClient.getQueryData<SettingsResponse>(settingsKeys.detail()) ?? null,
+          );
       if (authoritative) {
         resetForm({ personas: authoritative.personas, djPrompts: authoritative.djPrompts });
         setActivePersonaId(authoritative.activePersonaId);
@@ -421,7 +429,11 @@ export default function PersonasPanel() {
         setDjHouseRules(authoritative.djHouseRules);
         baselineRef.current = authoritative;
       }
-      notify.ok('personas saved, applies on the next spoken line');
+      if (receipt.refreshError) {
+        notify.err(`personas saved, but refresh failed: ${receipt.refreshError}`);
+      } else {
+        notify.ok('personas saved, applies on the next spoken line');
+      }
       return true;
     } catch (e) {
       if (e instanceof AdminResponseError) {

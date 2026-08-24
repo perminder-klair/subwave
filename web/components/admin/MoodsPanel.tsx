@@ -350,10 +350,13 @@ export default function MoodsPanel() {
     ) => {
       setBusy(card);
       try {
-        await saveMutation.mutateAsync(patch);
+        const receipt = await saveMutation.mutateAsync(patch);
         form.resetField(key as never, { defaultValue: nextValue as never });
-        onSuccess?.(queryClient.getQueryData<MoodSettingsData>(settingsKeys.detail())?.values);
-        notify.ok(okMsg);
+        onSuccess?.(receipt.refreshError
+          ? patch
+          : queryClient.getQueryData<MoodSettingsData>(settingsKeys.detail())?.values);
+        if (receipt.refreshError) notify.err(`${okMsg}, but refresh failed: ${receipt.refreshError}`);
+        else notify.ok(okMsg);
       } catch (e) {
         if (e instanceof AdminResponseError) {
           applyServerFieldErrors(form, (e.body as { fieldErrors?: Record<string, string> }).fieldErrors);

@@ -96,9 +96,13 @@ export default function SchedulePanel() {
   const [locale, setLocale] = useState<StationLocale>(normalizeStationLocale(undefined));
   const [now, setNow] = useState(() => new Date());
   const queryEnabled = hydrated && !needsAuth;
-  const settingsQuery = useSettingsQuery<SettingsResponse>({ adminFetch, enabled: queryEnabled });
+  const settingsQuery = useSettingsQuery<SettingsResponse>({
+    adminFetch,
+    enabled: queryEnabled,
+    refetchOnMount: 'always',
+  });
   const overrideQuery = useScheduleOverrideQuery(adminFetch, queryEnabled);
-  const err = settingsQuery.error ? errorMessage(settingsQuery.error) : null;
+  const err = settingsQuery.error && !schedule ? errorMessage(settingsQuery.error) : null;
 
   // Board columns collapsed to rails, keyed by storage day (0=Sun..6=Sat).
   const [folded, setFolded] = useState<Record<number, boolean>>({});
@@ -154,17 +158,22 @@ export default function SchedulePanel() {
 
   const load = async () => {
     const result = await settingsQuery.refetch();
-    if (result.data && !schedule) applySettings(result.data);
+    if (result.data && !result.error && !schedule) applySettings(result.data);
   };
 
   // A query refresh may update roster metadata, but it cannot overwrite this
   // mount's unsaved week. Navigation remounts from the newest cache entry.
   const settingsAppliedRef = useRef(false);
   useEffect(() => {
-    if (!settingsQuery.data || settingsAppliedRef.current) return;
+    if (
+      !settingsQuery.data
+      || settingsQuery.error
+      || settingsQuery.isFetching
+      || settingsAppliedRef.current
+    ) return;
     settingsAppliedRef.current = true;
     applySettings(settingsQuery.data);
-  }, [settingsQuery.data]);
+  }, [settingsQuery.data, settingsQuery.error, settingsQuery.isFetching]);
 
   const { dow: nowDay, hour: nowHour } = zonedDayHour(now, tz);
   const stationMinute = useMemo(() => {

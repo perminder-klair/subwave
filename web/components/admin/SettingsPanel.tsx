@@ -457,7 +457,8 @@ export default function SettingsPanel() {
       }
       setFieldErrors((prev) => mergePatchErrors(prev, patch, undefined));
       if (j.requiresRestart) setPendingRestart(true);
-      notify.ok(j.requiresRestart ? 'saved, restart the mixer to apply' : 'saved');
+      if (j.refreshError) notify.err(`saved, but refresh failed: ${j.refreshError}`);
+      else notify.ok(j.requiresRestart ? 'saved, restart the mixer to apply' : 'saved');
       return true;
     } catch (e) {
       const body = e instanceof AdminResponseError

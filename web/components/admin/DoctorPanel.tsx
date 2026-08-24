@@ -180,7 +180,17 @@ export default function DoctorPanel() {
           }
         }
       }
-      if (!final) throw new Error('doctor stream ended before completion');
+      if (!final) {
+        if (!sections.length) throw new Error('doctor stream ended before completion');
+        const partial = {
+          t: new Date().toISOString(),
+          sections,
+          counts: tallyCounts(sections),
+        };
+        finishReport(queryClient, partial, null);
+        setInFlightReport(null);
+        return partial;
+      }
       finishReport(queryClient, final, null);
       setInFlightReport(null);
       return final;

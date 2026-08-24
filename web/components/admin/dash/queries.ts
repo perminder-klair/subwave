@@ -1,6 +1,6 @@
 import type { QueryClient } from '@tanstack/react-query';
 import type { SessionTurn } from '../../../lib/types';
-import { adminJson, type AdminFetch } from '../../../lib/admin-query';
+import { AdminResponseError, adminJson, type AdminFetch } from '../../../lib/admin-query';
 import type { ScheduleOverride } from '../../../lib/schemas.generated';
 import type {
   ActResponse,
@@ -24,13 +24,25 @@ export const dashKeys = {
   musicStarved: () => ['dash', 'banner', 'music-starved'] as const,
 };
 
+async function degradedJson<T>(request: Promise<T>): Promise<T | null> {
+  try {
+    return await request;
+  } catch (error) {
+    // Dashboard status is deliberately best-effort across three independently
+    // rolling resources. Preserve a controller error envelope as that slice's
+    // data; transport and abort failures still reject the combined poll.
+    if (error instanceof AdminResponseError) return error.body as T;
+    throw error;
+  }
+}
+
 export async function fetchDashStatus(fetcher: AdminFetch, signal: AbortSignal): Promise<DashStatus> {
   const [nowPlaying, state, session] = await Promise.all([
-    adminJson<Partial<DashStatus>>(fetcher, '/now-playing', undefined, signal),
-    adminJson<QueueState>(fetcher, '/state', undefined, signal),
-    adminJson<{ messages?: SessionTurn[] }>(fetcher, '/session', undefined, signal),
+    degradedJson(adminJson<Partial<DashStatus>>(fetcher, '/now-playing', undefined, signal)),
+    degradedJson(adminJson<QueueState>(fetcher, '/state', undefined, signal)),
+    degradedJson(adminJson<{ messages?: SessionTurn[] }>(fetcher, '/session', undefined, signal)),
   ]);
-  return { ...nowPlaying, queue: state, sessionMessages: session.messages ?? [] };
+  return { ...nowPlaying, queue: state ?? {}, sessionMessages: session?.messages ?? [] };
 }
 
 export async function fetchConnections(fetcher: AdminFetch, signal: AbortSignal): Promise<ConnectionsState> {

@@ -122,7 +122,8 @@ export default function ImagingPanel() {
     try {
       const j = await saveMutation.mutateAsync(patch);
       // A jingle-ratio change needs a mixer restart (control in Settings → Danger zone).
-      notify.ok(j.requiresRestart ? 'saved, restart the mixer to apply' : 'saved');
+      if (j.refreshError) notify.err(`saved, but refresh failed: ${j.refreshError}`);
+      else notify.ok(j.requiresRestart ? 'saved, restart the mixer to apply' : 'saved');
       return true;
     } catch (e) {
       const body = e instanceof AdminResponseError

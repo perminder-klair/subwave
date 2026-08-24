@@ -1,7 +1,12 @@
 'use client';
 
 import { useCallback, useRef } from 'react';
-import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQueryClient,
+  type QueryClient,
+  type UseQueryOptions,
+} from '@tanstack/react-query';
 import { adminJson, type AdminFetch } from '@/lib/admin-query';
 import { useAdminQuery } from '@/lib/admin-query';
 import type { Webhook, WebhookEvent } from '@/lib/schemas.generated';
@@ -66,11 +71,16 @@ export function useStationsQuery(adminFetch: AdminFetch, enabled = true) {
   });
 }
 
-export function useWebhooksQuery(adminFetch: AdminFetch, enabled = true) {
+export function useWebhooksQuery(
+  adminFetch: AdminFetch,
+  enabled = true,
+  refetchOnMount?: UseQueryOptions<WebhooksResponse>['refetchOnMount'],
+) {
   return useAdminQuery<WebhooksResponse>({
     key: operationKeys.webhooks(),
     adminFetch,
     enabled,
+    ...(refetchOnMount !== undefined ? { refetchOnMount } : {}),
     request: async (fetcher, signal) => {
       const response = await adminJson<WebhooksResponse>(fetcher, '/webhooks', undefined, signal);
       return {

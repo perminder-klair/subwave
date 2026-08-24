@@ -305,11 +305,13 @@ export default function FestivalsSection() {
   const persist = useCallback(async (list: Festival[]) => {
     setBusy(true);
     try {
-      await saveMutation.mutateAsync({ festivals: list });
+      const receipt = await saveMutation.mutateAsync({ festivals: list });
       form.reset({ festivals: sortFestivals(list) });
       setEditIdx(null);
       setEditing(false);
-      notify.ok(`${list.length} festival${list.length === 1 ? '' : 's'} saved`);
+      const saved = `${list.length} festival${list.length === 1 ? '' : 's'} saved`;
+      if (receipt.refreshError) notify.err(`${saved}, but refresh failed: ${receipt.refreshError}`);
+      else notify.ok(saved);
     } catch (e) {
       if (e instanceof AdminResponseError) {
         applyServerFieldErrors(form, (e.body as { fieldErrors?: Record<string, string> }).fieldErrors);

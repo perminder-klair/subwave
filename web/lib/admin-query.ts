@@ -73,6 +73,7 @@ export interface AdminQueryOpts<T> {
   staleTime?: number;
   refetchInterval?: UseQueryOptions<T>['refetchInterval'];
   placeholderData?: UseQueryOptions<T>['placeholderData'];
+  refetchOnMount?: UseQueryOptions<T>['refetchOnMount'];
   toastOnError?: boolean;
 }
 
@@ -99,6 +100,7 @@ export function useAdminQuery<T>(opts: AdminQueryOpts<T>): UseQueryResult<T> {
     ...(opts.staleTime !== undefined ? { staleTime: opts.staleTime } : {}),
     ...(opts.refetchInterval !== undefined ? { refetchInterval: opts.refetchInterval } : {}),
     ...(opts.placeholderData !== undefined ? { placeholderData: opts.placeholderData } : {}),
+    ...(opts.refetchOnMount !== undefined ? { refetchOnMount: opts.refetchOnMount } : {}),
   });
   useQueryErrorToast(query.error, opts.toastOnError ?? false);
   return query;

@@ -244,7 +244,10 @@ export default function DashPanel() {
     const id = typeof t.subsonic_id === 'string' ? t.subsonic_id : '';
     if (!id) return;
     setBusy(`cancel:${id}`);
-    const previous = queryClient.getQueryData<DashStatus>(dashKeys.status());
+    await queryClient.cancelQueries(
+      { queryKey: dashKeys.status(), exact: true },
+      { silent: true },
+    );
     queryClient.setQueryData<DashStatus>(dashKeys.status(), current => current
       ? {
           ...current,
@@ -258,7 +261,12 @@ export default function DashPanel() {
       await cancelQueueItem.mutateAsync(id);
       notify.ok(`removed from queue: ${t.title || 'track'}`);
     } catch (e) {
-      queryClient.setQueryData(dashKeys.status(), previous);
+      // A 409 usually means the row crossed the live boundary. Never restore
+      // the old full envelope over a newer poll; ask both owners for truth.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: dashKeys.status() }),
+        queryClient.invalidateQueries({ queryKey: dashKeys.requests() }),
+      ]);
       notify.err(`cancel: ${errorMessage(e)}`);
     } finally {
       setBusy(null);

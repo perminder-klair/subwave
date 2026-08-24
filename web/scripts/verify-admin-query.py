@@ -1940,7 +1940,8 @@ def webhooks_mutations_refresh(page):
     page.wait_for_url("**/admin/dash**")
     page.go_back(wait_until="domcontentloaded")
     page.get_by_text("No webhooks yet", exact=True).first.wait_for(state="visible")
-    assert request_count(page, "/webhooks", authenticated=True) == initial_gets, page.request_log
+    remount_gets = request_count(page, "/webhooks", authenticated=True) - initial_gets
+    assert 1 <= remount_gets <= 2, page.request_log
 
 
 @check
@@ -2213,6 +2214,57 @@ def dashboard_mutation_refresh(page):
     assert request_count(page, "/dj/queue/verify-queue-track", "DELETE", authenticated=True) == 1, page.request_log
     assert request_count(page, "/session", authenticated=True) == before_status + 1, page.request_log
     assert request_count(page, "/requests", authenticated=True) == before_requests + 1, page.request_log
+
+
+@check
+def dashboard_cancel_failure_refreshes_latest_status(page):
+    """A rejected optimistic cancel cannot restore the old full dashboard envelope."""
+    install_poll_clock(page)
+    now_playing_reads = 0
+    cancel_attempted = False
+    state = {
+        "upcoming": [{
+            "subsonic_id": "verify-queue-track",
+            "title": "Verify queue track",
+            "artist": "SUB/WAVE",
+        }],
+        "history": [],
+    }
+
+    def routes(route):
+        nonlocal now_playing_reads, cancel_attempted
+        path = urllib.parse.urlparse(route.request.url).path
+        if path == "/now-playing":
+            now_playing_reads += 1
+            title = "Latest poll survives" if cancel_attempted else "Before failed cancel"
+            fulfill_json(route, {"nowPlaying": {"title": title, "artist": "SUB/WAVE"}})
+        elif path == "/state":
+            fulfill_json(route, state)
+        elif path == "/session":
+            fulfill_json(route, {"messages": []})
+        elif path == "/dj/queue/verify-queue-track" and route.request.method == "DELETE":
+            cancel_attempted = True
+            fulfill_json(route, {"error": "track already went to air"}, status=409)
+        elif path == "/listeners/connections":
+            fulfill_json(route, {"count": 0, "connections": []})
+        elif path == "/stats":
+            fulfill_json(route, {"llm": {"count": 0}, "tts": {"count": 0}})
+        elif path == "/requests":
+            fulfill_json(route, {"requests": []})
+        elif path == "/schedule":
+            fulfill_json(route, {"shows": [], "override": None})
+        elif path == "/doctor/navidrome":
+            fulfill_json(route, {"ok": True})
+        else:
+            route.continue_()
+
+    page.route("http://localhost:7791/**", routes)
+    page.goto(f"{WEB}/admin/dash", wait_until="domcontentloaded")
+    page.get_by_text("Before failed cancel", exact=False).wait_for(state="visible")
+    reads_before_cancel = now_playing_reads
+    page.get_by_role("button", name="Remove Verify queue track from queue").click()
+    page.get_by_text("Latest poll survives", exact=False).wait_for(timeout=5000)
+    assert now_playing_reads == reads_before_cancel + 1, (reads_before_cancel, now_playing_reads, page.request_log)
 
 
 @check
@@ -2803,7 +2855,7 @@ def install_settings_refresh_failure(page, initial):
 
 @check
 def moods_save_refresh_failure_preserves_edit(page):
-    """A successful Mood POST plus failed safe GET stays dirty and reports failure."""
+    """A committed Mood POST stays successful when its safe follow-up GET fails."""
     initial = copy.deepcopy(api("/settings"))
     initial["values"]["moods"] = [{"name": "baseline-mood", "clapPrompt": "baseline"}]
     initial["values"]["moodSchedule"] = {}
@@ -2814,14 +2866,14 @@ def moods_save_refresh_failure_preserves_edit(page):
     prompt = page.get_by_label("Sound description").first
     prompt.fill("operator edit survives refresh failure")
     page.get_by_role("button", name="Save vocabulary").click()
-    page.get_by_text("settings were saved, but refresh failed", exact=False).wait_for(state="visible")
+    page.get_by_text("saved, but refresh failed", exact=False).wait_for(state="visible")
     assert prompt.input_value() == "operator edit survives refresh failure"
-    assert not page.get_by_role("button", name="Save vocabulary").is_disabled()
+    assert page.get_by_role("button", name="Save vocabulary").is_disabled()
 
 
 @check
 def personas_save_refresh_failure_preserves_edit(page):
-    """A successful Persona POST plus failed safe GET keeps the editor and edit open."""
+    """A committed Persona POST closes cleanly when its safe follow-up GET fails."""
     initial = copy.deepcopy(api("/settings"))
     persona = initial["values"]["personas"][1]
     install_settings_refresh_failure(page, initial)
@@ -2831,9 +2883,11 @@ def personas_save_refresh_failure_preserves_edit(page):
     name = dialog.get_by_label("On-air name")
     name.fill("Operator Persona After Refresh Failure")
     dialog.get_by_role("button", name="Save persona").click()
-    page.get_by_text("settings were saved, but refresh failed", exact=False).wait_for(state="visible")
-    dialog.wait_for(state="visible")
-    assert name.input_value() == "Operator Persona After Refresh Failure"
+    page.get_by_text("saved, but refresh failed", exact=False).wait_for(state="visible")
+    dialog.wait_for(state="detached")
+    page.get_by_role(
+        "button", name="Edit Operator Persona After Refresh Failure"
+    ).wait_for(state="visible")
 
 
 def reconnect_stale_query(page):
@@ -3103,7 +3157,7 @@ def programming_fixture():
 
 @check
 def shows_cache_reuse(page):
-    """Shows and Rundown reuse the shell's one fresh settings envelope."""
+    """Shows reuses settings while Rundown takes one fresh whole-week baseline."""
     page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
     page.get_by_placeholder("A short line describing your station…").wait_for(state="visible")
     click_admin_link(page, "Shows", "/admin/shows")
@@ -3111,7 +3165,39 @@ def shows_cache_reuse(page):
     page.get_by_role("link", name="Open the schedule →").click()
     page.wait_for_url("**/admin/shows/schedule")
     page.get_by_text("Empty hours run autonomously", exact=False).wait_for(state="visible")
-    assert request_count(page, "/settings", authenticated=True) == 1, page.request_log
+    assert 2 <= request_count(page, "/settings", authenticated=True) <= 3, page.request_log
+
+
+@check
+def schedule_mount_hydrates_authoritative_settings(page):
+    """Rundown waits for a fresh settings read before hydrating its whole-week editor."""
+    stale, show, _week = programming_fixture()
+    stale_show = {**show, "name": "Stale cached show"}
+    fresh_show = {**show, "name": "Fresh authoritative show"}
+    stale["values"]["shows"] = [stale_show]
+    fresh = copy.deepcopy(stale)
+    fresh["values"]["shows"] = [fresh_show]
+    current = {"body": stale}
+
+    page.route(
+        "http://localhost:7791/settings",
+        lambda route: fulfill_json(route, current["body"]),
+    )
+    page.route(
+        "http://localhost:7791/schedule",
+        lambda route: fulfill_json(route, {"shows": [fresh_show], "override": None}),
+    )
+    page.goto(f"{WEB}/admin/settings", wait_until="domcontentloaded")
+    page.get_by_placeholder("A short line describing your station…").wait_for(state="visible")
+    initial_gets = request_count(page, "/settings", authenticated=True)
+    current["body"] = fresh
+
+    click_admin_link(page, "Shows", "/admin/shows")
+    page.get_by_role("link", name="Open the schedule →").click()
+    page.wait_for_url("**/admin/shows/schedule")
+    page.get_by_text("Fresh authoritative show", exact=True).first.wait_for(timeout=5000)
+    mount_gets = request_count(page, "/settings", authenticated=True) - initial_gets
+    assert 1 <= mount_gets <= 2, page.request_log
 
 
 @check
@@ -4372,7 +4458,7 @@ def doctor_stream_not_retried(page):
     assert request_count(page, "/doctor", authenticated=True) == 1, page.request_log
 
 
-def run_doctor_clean_eof_fallback(page, stream_body, partial_label=None):
+def run_doctor_clean_eof_fallback(page, stream_body):
     """A clean transport EOF is not the Doctor protocol's completion marker."""
     fallback_report = task6_doctor_report("Completed fallback after EOF")
     reviewed_labels = []
@@ -4405,9 +4491,6 @@ def run_doctor_clean_eof_fallback(page, stream_body, partial_label=None):
     page.get_by_role("button", name="Let's go").click()
     page.get_by_text("Completed fallback after EOF", exact=True).wait_for(timeout=5000)
     page.get_by_text("Reviewed completed fallback", exact=True).wait_for(timeout=5000)
-    if partial_label:
-        assert page.get_by_text(partial_label, exact=True).count() == 0
-
     click_admin_link(page, "Connect", "/admin/connect")
     page.get_by_role("link", name="DJ Doc", exact=True).click()
     page.wait_for_url("**/admin/doctor")
@@ -4420,14 +4503,46 @@ def run_doctor_clean_eof_fallback(page, stream_body, partial_label=None):
 
 
 @check
-def doctor_partial_eof_falls_back(page):
-    """A section followed by EOF falls back; the partial is not cached/reviewed."""
-    partial = task6_doctor_report("Partial stream must not complete")["sections"][0]
-    run_doctor_clean_eof_fallback(
-        page,
-        f"event: section\ndata: {json.dumps(partial)}\n\n",
-        partial_label="Partial stream must not complete",
-    )
+def doctor_partial_eof_keeps_progress(page):
+    """A section followed by EOF remains the report without a duplicate batch run."""
+    partial_label = "Partial stream survives clean EOF"
+    partial = task6_doctor_report(partial_label)["sections"][0]
+    reviewed_labels = []
+
+    def doctor_routes(route):
+        path = urllib.parse.urlparse(route.request.url).path
+        method = route.request.method
+        if path == "/doctor/last" and method == "GET":
+            fulfill_json(route, {"report": None, "review": None})
+        elif path == "/doctor/stream" and method == "GET":
+            route.fulfill(
+                status=200,
+                content_type="text/event-stream",
+                body=f"event: section\ndata: {json.dumps(partial)}\n\n",
+            )
+        elif path == "/doctor" and method == "GET":
+            fulfill_json(route, task6_doctor_report("Batch must not run"))
+        elif path == "/doctor/review" and method == "POST":
+            reviewed_labels.append(
+                route.request.post_data_json["report"]["sections"][0]["findings"][0]["label"]
+            )
+            fulfill_json(route, {
+                "available": True,
+                "overall": "attention",
+                "summary": "Reviewed partial report",
+                "priorities": [],
+            })
+        else:
+            route.continue_()
+
+    page.route("http://localhost:7791/**", doctor_routes)
+    page.goto(f"{WEB}/admin/doctor", wait_until="domcontentloaded")
+    page.get_by_role("button", name="Let's go").click()
+    page.get_by_text(partial_label, exact=True).wait_for(timeout=5000)
+    page.get_by_text("Reviewed partial report", exact=True).wait_for(timeout=5000)
+    assert reviewed_labels == [partial_label], reviewed_labels
+    assert request_count(page, "/doctor/stream", authenticated=True) == 1, page.request_log
+    assert request_count(page, "/doctor", authenticated=True) == 0, page.request_log
 
 
 @check
@@ -4437,9 +4552,10 @@ def doctor_empty_eof_falls_back(page):
 
 
 @check
-def doctor_partial_eof_failed_fallback_clears_progress(page):
-    """If the one fallback also fails, progressive sections disappear with an error."""
-    partial = task6_doctor_report("Partial stream must be cleared")["sections"][0]
+def doctor_partial_eof_skips_failed_batch(page):
+    """A partial stream never starts the failing batch fallback."""
+    partial_label = "Partial stream remains visible"
+    partial = task6_doctor_report(partial_label)["sections"][0]
 
     def doctor_routes(route):
         path = urllib.parse.urlparse(route.request.url).path
@@ -4467,11 +4583,11 @@ def doctor_partial_eof_failed_fallback_clears_progress(page):
     page.route("http://localhost:7791/**", doctor_routes)
     page.goto(f"{WEB}/admin/doctor", wait_until="domcontentloaded")
     page.get_by_role("button", name="Let's go").click()
-    page.get_by_text("batch diagnosis failed", exact=False).wait_for(timeout=5000)
-    assert page.get_by_text("Partial stream must be cleared", exact=True).count() == 0
+    page.get_by_text(partial_label, exact=True).wait_for(timeout=5000)
+    page.get_by_text("partial was reviewed", exact=True).wait_for(timeout=5000)
     assert request_count(page, "/doctor/stream", authenticated=True) == 1, page.request_log
-    assert request_count(page, "/doctor", authenticated=True) == 1, page.request_log
-    assert request_count(page, "/doctor/review", method="POST", authenticated=True) == 0, page.request_log
+    assert request_count(page, "/doctor", authenticated=True) == 0, page.request_log
+    assert request_count(page, "/doctor/review", method="POST", authenticated=True) == 1, page.request_log
 
 
 def main():

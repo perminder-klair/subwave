@@ -278,7 +278,7 @@ function ExamplesSection() {
 
 export default function WebhooksPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const webhooksQuery = useWebhooksQuery(adminFetch, hydrated && !needsAuth);
+  const webhooksQuery = useWebhooksQuery(adminFetch, hydrated && !needsAuth, 'always');
   const events = webhooksQuery.data?.events ?? null;
   const [trackPlayListenerGated, setTrackPlayListenerGated] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -294,11 +294,22 @@ export default function WebhooksPanel() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    if (loaded || !webhooksQuery.data) return;
+    if (
+      loaded
+      || !webhooksQuery.data
+      || webhooksQuery.error
+      || webhooksQuery.isFetching
+    ) return;
     form.reset({ webhooks: webhooksQuery.data.webhooks });
     setTrackPlayListenerGated(!!webhooksQuery.data.trackPlayListenerGated);
     setLoaded(true);
-  }, [form, loaded, webhooksQuery.data]);
+  }, [
+    form,
+    loaded,
+    webhooksQuery.data,
+    webhooksQuery.error,
+    webhooksQuery.isFetching,
+  ]);
 
   const saveMutation = useSensitiveWebhooksMutation<SavedWebhooks[number]>(adminFetch);
   const gateMutation = useAdminMutation<Partial<WebhooksResponse>, boolean>({
@@ -355,7 +366,7 @@ export default function WebhooksPanel() {
     }
   };
 
-  if (webhooksQuery.error) {
+  if (webhooksQuery.error && !loaded) {
     return (
       <div className="grid gap-4">
         <Card title="Webhooks"><ErrorState error={errorMessage(webhooksQuery.error)} /></Card>

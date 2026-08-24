@@ -1,7 +1,12 @@
 'use client';
 
 import { useCallback, useMemo, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import {
+  useQueryClient,
+  type QueryClient,
+  type QueryFunction,
+  type QueryKey,
+} from '@tanstack/react-query';
 import { useDebounceValue } from 'usehooks-ts';
 import { adminJson, useAdminQuery, type AdminFetch } from '@/lib/admin-query';
 
@@ -52,6 +57,15 @@ export function fetchVoices(adminFetch: AdminFetch, input: VoiceDiscoveryInput, 
   return adminJson(adminFetch, `/settings/tts/voices?${queryString(input)}`, undefined, signal);
 }
 
+export async function refreshDiscoveryQuery<T>(
+  client: QueryClient,
+  queryKey: QueryKey,
+  queryFn: QueryFunction<T>,
+): Promise<T> {
+  await client.cancelQueries({ queryKey, exact: true }, { silent: true });
+  return client.fetchQuery({ queryKey, queryFn, staleTime: 0 });
+}
+
 function useDiscoveryInput<T>(raw: T) {
   const [debounced] = useDebounceValue(raw, 400);
   const [refreshed, setRefreshed] = useState<T | null>(null);
@@ -82,7 +96,11 @@ export function useModelDiscoveryQuery(rawInput: ModelDiscoveryInput, enabled: b
     if (!enabled || !raw.provider) return;
     const next = refreshInput();
     const queryKey = discoveryKeys.models(next);
-    void client.fetchQuery({ queryKey, queryFn: ({ signal }) => fetchModels(adminFetch, next, signal), staleTime: 0 }).catch(() => {});
+    void refreshDiscoveryQuery(
+      client,
+      queryKey,
+      ({ signal }) => fetchModels(adminFetch, next, signal),
+    ).catch(() => {});
   }, [adminFetch, client, enabled, raw.provider, refreshInput]);
   return {
     models: enabled && query.data?.ok ? (Array.isArray(query.data.models) ? query.data.models : []) : [],
@@ -107,7 +125,11 @@ export function useVoiceDiscoveryQuery(rawInput: VoiceDiscoveryInput, enabled: b
     if (!enabled || !raw.provider) return;
     const next = refreshInput();
     const queryKey = discoveryKeys.voices(next);
-    void client.fetchQuery({ queryKey, queryFn: ({ signal }) => fetchVoices(adminFetch, next, signal), staleTime: 0 }).catch(() => {});
+    void refreshDiscoveryQuery(
+      client,
+      queryKey,
+      ({ signal }) => fetchVoices(adminFetch, next, signal),
+    ).catch(() => {});
   }, [adminFetch, client, enabled, raw.provider, refreshInput]);
   return {
     voices: enabled && !isRawTransition && query.data?.ok && Array.isArray(query.data.voices) ? query.data.voices : [],

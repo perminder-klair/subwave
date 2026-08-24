@@ -5,6 +5,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { notify } from '../../../lib/notify';
 import { AdminResponseError, adminJson, adminResponse } from '../../../lib/admin-query';
 import { llmProviderLabel } from '../llm/providerMeta';
+import { patchSettingsAudio, settingsKeys } from '../settings/queries';
 import { useLibrary } from './LibraryContext';
 import { libraryKeys } from './queries';
 import { useAdminMutation, useAdminQuery, type AdminFetch } from './useAdminQuery';
@@ -67,7 +68,7 @@ export function useTaggerControls() {
   // Slow loop: the rarely-changing settings-derived bits. Silent on failure —
   // a 30s poll that toasts on a blip is noise.
   const settingsQuery = useAdminQuery<SettingsResponse>({
-    key: libraryKeys.settings(),
+    key: settingsKeys.detail(),
     path: '/settings',
     refetchInterval: 30_000,
     staleTime: 0,
@@ -105,7 +106,7 @@ export function useTaggerControls() {
     : null;
 
   const reloadSettings = useCallback(
-    () => qc.invalidateQueries({ queryKey: libraryKeys.settings() }),
+    () => qc.invalidateQueries({ queryKey: settingsKeys.detail() }),
     [qc],
   );
   const reloadTagger = useCallback(
@@ -206,9 +207,7 @@ export function useTaggerControls() {
   // before invalidating, so the switch moves at once rather than waiting out
   // the poll.
   const patchAudioSetting = useCallback((patch: Record<string, unknown>) => {
-    qc.setQueryData<SettingsResponse>(libraryKeys.settings(), prev => (prev
-      ? { ...prev, values: { ...prev.values, audio: { ...prev.values?.audio, ...patch } } }
-      : prev));
+    patchSettingsAudio(qc, patch);
     void reloadSettings();
   }, [qc, reloadSettings]);
 
