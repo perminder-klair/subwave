@@ -46,6 +46,18 @@ test('requestIntros survives a controller restart', async () => {
   assert.equal((await coldLoad({ enabled: true, requestIntros: true })).requestIntros, true);
 });
 
+test('a requestIntros-only settings patch persists without changing beds.enabled', async () => {
+  await coldLoad({ enabled: true, requestIntros: false, thresholdSec: 12, crossSec: 6 });
+  const result = await settings.update({ beds: { requestIntros: true } });
+  assert.equal(result.saved.beds.enabled, true);
+  assert.equal(result.saved.beds.requestIntros, true);
+
+  setCache(null);
+  await settings.load();
+  assert.equal(settings.get().beds.enabled, true);
+  assert.equal(settings.get().beds.requestIntros, true);
+});
+
 test('a settings.json written before the key existed reads as on', async () => {
   // The upgrade case: beds already enabled, no requestIntros key on disk.
   const beds = await coldLoad({ enabled: true, thresholdSec: 20 });

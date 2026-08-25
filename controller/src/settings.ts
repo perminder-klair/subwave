@@ -1880,11 +1880,15 @@ export async function update(patch) {
   if ('beds' in patch) {
     const bd = parseSettingsPatchKey<{
       enabled?: boolean;
+      requestIntros?: boolean;
       thresholdSec?: number;
       crossSec?: number;
     }>('beds', patch.beds);
     if (bd.enabled !== undefined) {
       next.beds.enabled = bd.enabled;
+    }
+    if (bd.requestIntros !== undefined) {
+      next.beds.requestIntros = bd.requestIntros;
     }
     if (bd.thresholdSec !== undefined) {
       next.beds.thresholdSec = bd.thresholdSec;
