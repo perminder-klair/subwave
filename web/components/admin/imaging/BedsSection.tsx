@@ -310,7 +310,7 @@ export function BedsSection({ bedsData, busy, createBed, uploadBed, onDelete, da
               <p className="mt-1.5 text-[12px] leading-[1.55] text-muted">
                 {requestIntros
                   ? 'A requested song always gets a bed in front, however short the intro — somebody asked for it, so its opening plays clean.'
-                  : 'Off — request intros play over the song’s opening, and only the length rule below can bed one.'}
+                  : 'Off — request intros play over the song’s opening instead.'}
               </p>
             </div>
             <Seg
