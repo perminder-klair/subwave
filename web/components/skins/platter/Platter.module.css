@@ -38,6 +38,15 @@
 .rim { animation: platter-rim 5.9s linear infinite; }
 .pulse { animation: platter-pulse 2.4s ease-in-out infinite; }
 
+@media (prefers-reduced-motion: reduce) {
+  .record,
+  .sheen,
+  .rim,
+  .pulse {
+    animation: none;
+  }
+}
+
 /* Deliberately off-token: a record is black in every theme. */
 .vinyl {
   background:
