@@ -12,6 +12,19 @@ import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group';
 import { Switch } from '../ui/switch';
 import { Badge, badgeVariants } from '../ui/badge';
 
+/**
+ * A card title reduced to a stable scroll target: `"Listener requests"` →
+ * `"listener-requests"`. Lives here rather than next to its one caller because
+ * the anchor is a property of the Card, and a jump table elsewhere has to be
+ * able to spell the same slug without importing a panel.
+ */
+export function cardAnchor(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 export interface EyebrowProps {
   children?: ReactNode;
   className?: string;
@@ -32,11 +45,21 @@ export interface CardProps {
   // Drops the box border/background and side padding, for sections inside
   // EditorDialog (.card.is-flat in globals.css).
   flat?: boolean;
+  /**
+   * Scroll-target slug, exposed as `data-card`. Defaults to the slugged title;
+   * pass one explicitly when the title is not a plain string.
+   */
+  anchor?: string;
 }
 
-export function Card({ title, sub, right, children, className, bodyClass, headClass, flat }: CardProps) {
+export function Card({ title, sub, right, children, className, bodyClass, headClass, flat, anchor }: CardProps) {
+  // Anchor slug derived from the title so /admin/settings' search can scroll to
+  // a card without every section having to hand-label one. Only a plain-string
+  // title is slugged — an interpolated one ("{provider} API key") would give a
+  // slug that moves with the data, which is worse than having none.
+  const slug = anchor ?? (typeof title === 'string' ? cardAnchor(title) : undefined);
   return (
-    <section className={cn('card', flat && 'is-flat', className)}>
+    <section data-card={slug} className={cn('card', flat && 'is-flat', className)}>
       {(title || right) && (
         <div className={cn('card-head', headClass)}>
           {title && <span className="title">{title}</span>}

@@ -3368,6 +3368,31 @@ html:has(.admin-root.paper) {
     }
 }
 
+/* Settings search jumped to this card — a two-and-a-bit second accent ring so
+   the operator can see WHICH of six near-identical cards the result landed on.
+   Set as a DOM attribute rather than React state: the flash outlives the scroll
+   animation and belongs to no component's data. Respects reduced motion by
+   holding the ring steady instead of fading it. */
+.admin-root .card[data-flash] {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    animation: settings-card-flash 2.6s ease-out forwards;
+}
+@keyframes settings-card-flash {
+    0%,
+    70% {
+        outline-color: var(--accent);
+    }
+    100% {
+        outline-color: transparent;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .admin-root .card[data-flash] {
+        animation: none;
+    }
+}
+
 /* Card */
 .admin-root .card {
     border: 1px solid var(--ink);

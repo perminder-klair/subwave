@@ -32,6 +32,12 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
   const [testing, setTesting] = useState(false);
   const [result, setResult] = useState<TestResult | null>(null);
 
+  // These creds are section-local (setup-config.json, not settings.json), so
+  // the panel cannot diff them for the sticky save bar — this section says so
+  // itself. A typed password is always a change: the GET only ever returns a
+  // `passSet` flag, never the value, so there is nothing to compare it to.
+  const dirty = url !== (nv?.url ?? '') || user !== (nv?.user ?? '') || pass !== '';
+
   const env = { url: !!nv?.env?.url, user: !!nv?.env?.user, pass: !!nv?.env?.pass };
   const allEnv = env.url && env.user && env.pass;
   const passSet = !!nv?.passSet;
@@ -202,6 +208,7 @@ export function NavidromeSection({ data, adminFetch, refresh }: NavidromeSection
           busy={busy}
           onSave={save}
           saveLabel="Save music source"
+          dirty={dirty}
         />
       )}
     </>

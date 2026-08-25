@@ -8,6 +8,7 @@ import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { Card, Pill, Seg } from '../ui';
 import { SectionHeader, SaveBar, type SectionProps, type LikesForm } from './shared';
+import { Advanced } from './section-chrome';
 
 export function LikesSection({ data, form, setForm, busy, saveSettings, fieldErrors }: SectionProps) {
   const lk = form.likes;
@@ -91,6 +92,7 @@ export function LikesSection({ data, form, setForm, busy, saveSettings, fieldErr
         </div>
       </Card>
 
+      <Advanced note="how listener taste feeds back into track selection">
       <Card title="AI DJ influence" sub="feed listener taste back into track selection">
         <div className="grid gap-[18px]">
           <div className="field">
@@ -139,16 +141,17 @@ export function LikesSection({ data, form, setForm, busy, saveSettings, fieldErr
             </div>
           </div>
         </div>
-
-        <SaveBar
-          note="Applies from the next pick, no restart needed."
-          busy={busy}
-          onSave={save}
-          saveLabel="Save likes"
-          errors={fieldErrors}
-          ownedKeys={['likes']}
-        />
       </Card>
+      </Advanced>
+
+      <SaveBar
+        note="Applies from the next pick, no restart needed."
+        busy={busy}
+        onSave={save}
+        saveLabel="Save likes"
+        errors={fieldErrors}
+        ownedKeys={['likes']}
+      />
     </>
   );
 }

@@ -9,6 +9,7 @@ import {
   Select, SelectTrigger, SelectValue, SelectContent, SelectItem, SelectGroup, SelectLabel,
 } from '../../ui/select';
 import { Card, Btn, Pill, Seg } from '../ui';
+import { Advanced } from './section-chrome';
 import { LocationPicker, type GeocodeResult } from '../../LocationPicker';
 import {
   SectionHeader, SaveBar, SettingsFieldError,
@@ -380,6 +381,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings, fieldE
         </div>
       </Card>
 
+      <Advanced note="request rate limits and the public-API switch">
       <Card title="Listener requests" sub="Rate limits and the pause switch for POST /request">
         <div className="grid gap-3">
           <div className="field">
@@ -537,6 +539,7 @@ export function StationSection({ data, form, setForm, busy, saveSettings, fieldE
           </div>
         </div>
       </Card>
+      </Advanced>
 
       <SaveBar
         note="Station name, location, timezone, locale, the private player, listener-request limits, and the public-API toggle apply live. Turning the stream password on or off needs a mixer restart."
