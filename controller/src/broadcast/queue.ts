@@ -591,17 +591,19 @@ class Queue {
     this.log('mix', `${kind} dropped (${reason})`);
   }
 
-  // Push an instrumental bed into dj_queue ahead of `item` when its link would
-  // outlast the song's own intro, so the DJ talks over the bed rather than over
-  // the song. Sets item.bedded, which is how the bed's start event
-  // (onBedStarted) finds the item whose link it should air.
+  // Push an instrumental bed into dj_queue ahead of `item` — when its link
+  // would outlast the song's own intro, or when the song is a listener request
+  // and its opening is not the DJ's to talk over — so the DJ talks over the bed
+  // rather than over the song. Sets item.bedded, which is how the bed's start
+  // event (onBedStarted) finds the item whose link it should air, and which
+  // airIntro reads to put the clip on the light-duck channel.
   //
   // Ordering is what makes this a controller-side feature rather than a mixer
   // one: the link's WAV was rendered a few lines up, so its real length is
   // readable here, before the track URI is written.
   //
-  // Silent no-op on every path that isn't a bedded link — beds off, a request
-  // intro (heavy duck by design), no script, a script that fits the intro, or no
+  // Silent no-op on every path that isn't a bedded link or a bedded request —
+  // beds off, request bedding off, no script, a link that fits the intro, or no
   // bed long enough.
   async maybePushBed(item: QueueItem) {
     const cfg = settings.get()?.beds;
@@ -610,10 +612,21 @@ class Queue {
     // this item unsent, and the recovery re-drain would otherwise queue a
     // SECOND bed ahead of it (~bedSec of voiceless filler between them).
     if (item.bedded) return;
-    // v1 is links only. Request intros ride the HEAVY duck by design, and a bed
-    // under a heavy duck is inaudible — bedding them means reworking the duck
-    // routing, which is its own change.
-    if (item.introKind !== 'link') return;
+    // Two reasons to bed, and they are gated separately (bed-policy.BedReason).
+    // A LINK beds when the DJ would outlast the incoming intro. A listener
+    // REQUEST beds because somebody asked for this track, so its opening bars
+    // are theirs — front-pad the intro instead of talking over them (#1465).
+    // `requestedBy` is the discriminator rather than introKind, because every
+    // request path pushes 'dj-speak' and so does the studio's own bare push
+    // (which carries no script and falls out one line down).
+    const reason: bedPolicy.BedReason = item.requestedBy ? 'request' : 'link';
+    if (reason === 'request') {
+      if (!cfg.requestIntros) return;
+    } else if (item.introKind !== 'link') {
+      // An unrequested 'dj-speak' intro — nothing routes here today, and it
+      // has no listener whose opening bars are being protected.
+      return;
+    }
     if (!item.introWav || !item.introScript || item.introAired) return;
 
     // Whatever plays right before this item is what the bed crosses in under —
@@ -636,7 +649,7 @@ class Queue {
       const budgetMs = bedPolicy.rampBudgetMs({
         vocalRanges: item.track?.vocalRanges ?? rec?.vocalRanges ?? null,
       });
-      if (!bedPolicy.bedWanted(voiceMs, budgetMs, cfg)) return;
+      if (!bedPolicy.bedWanted(voiceMs, budgetMs, cfg, reason)) return;
 
       // The bed's marker (and its cue_out clock) starts at cross-FEED time, a
       // full predecessor-exit-canvas before the bed is dominant — so that
@@ -683,9 +696,10 @@ class Queue {
       }
       if (item.transitionSfx) delete item.transitionSfx;
 
-      const why = budgetMs == null ? `no vocal onset, over ${cfg.thresholdSec}s`
-        : budgetMs === Infinity ? 'instrumental'
-          : `vocals at ${Math.round(budgetMs / 1000)}s`;
+      const why = reason === 'request' ? `requested by ${item.requestedBy}`
+        : budgetMs == null ? `no vocal onset, over ${cfg.thresholdSec}s`
+          : budgetMs === Infinity ? 'instrumental'
+            : `vocals at ${Math.round(budgetMs / 1000)}s`;
       this.log('beds', `bed "${pick.name}" ${bedSec}s (${entryCrossSec}s entry cross) → ${crossSec}s ramp into "${item.track?.title}" (${Math.round(voiceMs / 1000)}s link, ${why})`);
     } catch (err) {
       // A bed is a garnish — never let it cost the station a track.
@@ -1650,7 +1664,14 @@ class Queue {
       }
     }
     const kind = item.introKind || 'dj-speak';
-    const targetFile = kind === 'link'
+    // Channel is chosen by what this clip is playing OVER, not by its kind —
+    // the same split the boundary-deferred ident already relies on (#1382).
+    // A bedded clip has no song to talk over: the thing under it is an
+    // instrumental put there for exactly this purpose, so it takes the LIGHT
+    // duck (intro.txt, p=0.30) rather than the heavy one that would push the
+    // bed down to a hiss. Everything else keeps the kind's own channel.
+    const channel: 'intro' | 'say' = (item.bedded || kind === 'link') ? 'intro' : 'say';
+    const targetFile = channel === 'intro'
       ? config.liquidsoap.introFile
       : config.liquidsoap.sayFile;
     try {
@@ -1660,7 +1681,7 @@ class Queue {
       // still resolving from the wall clock.
       const seg: SegmentDesc = {
         kind,
-        channel: kind === 'link' ? 'intro' : 'say',
+        channel,
         text: item.introScript!,
         persona: item.introPersona || null,
         // Attribute the turn so windowMessages() can name the real speaker when

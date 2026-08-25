@@ -81,11 +81,41 @@ assert.equal(bedWanted(6_000, null, OPTS), false);
 // thresholdSec: 0 beds everything with an unknown budget (the "always" dial).
 assert.equal(bedWanted(1, null, { ...OPTS, thresholdSec: 0 }), true);
 
+// ── bedWanted — the 'request' reason ─────────────────────────────────────────
+//
+// A listener request beds because of what the track IS, not how long the DJ
+// talks: its opening bars belong to whoever asked for it (#1465). So every
+// input that suppresses a LINK's bed must NOT suppress a request's.
+
+// A six-word shout-out beds, where the identical link would not.
+assert.equal(bedWanted(3_000, null, OPTS, 'link'), false);
+assert.equal(bedWanted(3_000, null, OPTS, 'request'), true);
+
+// The measured ramp budget gets no vote — a request over a track whose vocals
+// start at 0:25 still beds, though the DJ fits inside the intro twice over.
+assert.equal(bedWanted(9_000, 25_000, OPTS, 'request'), true);
+
+// Not even an instrumental's unbounded budget, which is the one case that
+// short-circuits every other bedWanted path.
+assert.equal(bedWanted(9_000, Infinity, OPTS, 'request'), true);
+
+// The threshold is equally irrelevant, in both directions.
+assert.equal(bedWanted(1, null, { ...OPTS, thresholdSec: 60 }, 'request'), true);
+
+// Omitting the reason means 'link' — the pre-#1465 behaviour, so an unconverted
+// call site can't silently start bedding everything.
+assert.equal(bedWanted(3_000, null, OPTS), bedWanted(3_000, null, OPTS, 'link'));
+
 // ── bedWanted — degenerate input ─────────────────────────────────────────────
 
 assert.equal(bedWanted(0, null, OPTS), false);
 assert.equal(bedWanted(-5, null, OPTS), false);
 assert.equal(bedWanted(NaN, null, OPTS), false);
+
+// A request is not exempt from the zero-length guard: there is nothing to bed
+// under a clip that doesn't exist, and a 0s bed would be dead air.
+assert.equal(bedWanted(0, null, OPTS, 'request'), false);
+assert.equal(bedWanted(NaN, null, OPTS, 'request'), false);
 
 // ── bedLengthFor — the arithmetic ────────────────────────────────────────────
 

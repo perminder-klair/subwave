@@ -364,6 +364,7 @@ export const sfxPatchSchema = settingsBlockOf({
 
 export const bedsPatchSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
+  requestIntros: settingsBoolLike(),
   thresholdSec: settingsFloatLike(
     BEDS_THRESHOLD_SEC_BOUNDS,
     `beds.thresholdSec must be number in [${BEDS_THRESHOLD_SEC_BOUNDS.min}, ${BEDS_THRESHOLD_SEC_BOUNDS.max}]`,

@@ -968,6 +968,7 @@ export async function load() {
     },
     beds: {
       enabled: typeof stored.beds?.enabled === 'boolean' ? stored.beds.enabled : DEFAULTS.beds.enabled,
+      requestIntros: typeof stored.beds?.requestIntros === 'boolean' ? stored.beds.requestIntros : DEFAULTS.beds.requestIntros,
       thresholdSec: Number.isFinite(stored.beds?.thresholdSec) ? stored.beds.thresholdSec : DEFAULTS.beds.thresholdSec,
       crossSec: Number.isFinite(stored.beds?.crossSec) ? stored.beds.crossSec : DEFAULTS.beds.crossSec,
     },

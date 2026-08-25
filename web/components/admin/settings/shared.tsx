@@ -356,7 +356,7 @@ export interface SettingsData {
       enrichment?: Partial<EmbeddingEnrichmentForm>;
     };
     sfx?: { enabled?: boolean };
-    beds?: { enabled?: boolean; thresholdSec?: number; crossSec?: number };
+    beds?: { enabled?: boolean; requestIntros?: boolean; thresholdSec?: number; crossSec?: number };
     ui?: { boothBuddy?: boolean; skin?: string; tuneInOverlay?: boolean };
     privacy?: {
       privatePlayer?: boolean;

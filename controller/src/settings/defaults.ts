@@ -509,9 +509,16 @@ export const DEFAULTS = {
   // so toggling costs no mixer restart (unlike jingleRatio).
   beds: {
     enabled: false,
+    // Front-pad a LISTENER REQUEST's intro with a bed instead of talking over
+    // the song's opening, regardless of how short the intro is (#1465). Someone
+    // asked for this track, so its first bars belong to them. On by default
+    // WITHIN beds.enabled, which is itself off by default — so a fresh station
+    // is unchanged, and a station already running beds gains this at upgrade.
+    // That second half is a deliberate behaviour change, not an oversight.
+    requestIntros: true,
     // Bed when the DJ's clip runs longer than this. Consulted ONLY where the
     // incoming track's vocal onset is unknown; a measured onset wins. See
-    // bed-policy.rampBudgetMs.
+    // bed-policy.rampBudgetMs. Requests ignore it — see requestIntros.
     thresholdSec: 12,
     // The bed's own exit crossfade — how long the next song takes to ramp in under
     // the DJ's closing words.

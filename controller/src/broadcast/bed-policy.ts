@@ -8,6 +8,14 @@
 // (light duck, ~40%), so every second of DJ costs a second of the song it is
 // introducing. A bed decouples the two — Song A → bed (DJ talks) → ramp → Song B.
 //
+// Two reasons a bed fires, and they answer different questions. A LINK beds
+// only when the DJ would outlast the incoming track's intro — the bed is
+// damage control for a long script. A REQUEST intro beds because of what the
+// track IS: somebody asked for this one, so its opening belongs to them and
+// the DJ gets out of the way even for a six-word shout-out. That is a policy
+// difference, not a tuning one, which is why it enters as its own flag rather
+// than as a threshold the caller drops to zero.
+//
 // No I/O, no imports from the queue. Everything here is a function of numbers.
 
 export interface BedOpts {
@@ -16,6 +24,12 @@ export interface BedOpts {
   // The bed's own exit crossfade — how long the next song takes to ramp in.
   crossSec: number;
 }
+
+// Why a bed is being considered for this clip. 'link' is the original case:
+// an autonomous between-track link, bedded only when it would outlast the
+// incoming intro. 'request' is a listener request's own intro, which beds on
+// length-independent grounds (see the header).
+export type BedReason = 'link' | 'request';
 
 // Bed alone before the DJ's clip lands, ON TOP of the entry cross (see
 // bedLengthFor's entryCrossSec). This is LATENCY, not a preference: the
@@ -62,9 +76,20 @@ export function rampBudgetMs(
 
 // Should this spoken clip ride a bed? `voiceMs` is the rendered clip's real
 // length plus the lead-in/tail padding (queue.speechDurationMs). `budgetMs` is
-// rampBudgetMs() for the incoming track — null when unknown.
-export function bedWanted(voiceMs: number, budgetMs: number | null, opts: BedOpts): boolean {
+// rampBudgetMs() for the incoming track — null when unknown. `reason` says
+// which of the two questions in the header is being asked.
+export function bedWanted(
+  voiceMs: number,
+  budgetMs: number | null,
+  opts: BedOpts,
+  reason: BedReason = 'link',
+): boolean {
   if (!Number.isFinite(voiceMs) || voiceMs <= 0) return false;
+  // A request's opening belongs to the listener who asked for it, so the
+  // ramp budget never gets a vote — not even an instrumental's Infinity,
+  // which is the whole point of testing this BEFORE the budget. The zero-
+  // length guard above still holds: there is nothing to bed under silence.
+  if (reason === 'request') return true;
   // Known budget: bed exactly when the DJ would outlast the intro. Infinity
   // (instrumental) can never be outlasted, so it falls out here.
   if (budgetMs != null) return voiceMs > budgetMs;

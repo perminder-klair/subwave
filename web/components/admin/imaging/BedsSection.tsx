@@ -238,6 +238,11 @@ export function BedsSection({ bedsData, busy, createBed, uploadBed, onDelete, da
   const ready = !!bedsData.generatorReady;
   const beds = data?.values?.beds;
   const enabled = beds?.enabled === true;
+  // Mirrors the controller's default (settings/defaults.ts): on WITHIN beds,
+  // which are themselves off by default. `?? true` rather than `=== true` is
+  // the whole difference — a station saved before this field existed has no
+  // stored value and must read as on, the same way the controller decides it.
+  const requestIntros = beds?.requestIntros ?? true;
   const thresholdSec = beds?.thresholdSec ?? 12;
   const crossSec = beds?.crossSec ?? 6;
 
@@ -298,6 +303,24 @@ export function BedsSection({ bedsData, busy, createBed, uploadBed, onDelete, da
             onChange={v => { if (!busy) saveSettings({ beds: { enabled: v === 'on' } }); }}
           />
         </div>
+        {enabled && (
+          <div className="flex flex-wrap items-center justify-between gap-5 border-t border-separator-soft px-[18px] py-[16px]">
+            <div className="min-w-[240px] flex-1">
+              <div className="font-mono text-[10px] font-bold tracking-[0.2em] uppercase">listener requests</div>
+              <p className="mt-1.5 text-[12px] leading-[1.55] text-muted">
+                {requestIntros
+                  ? 'A requested song always gets a bed in front, however short the intro — somebody asked for it, so its opening plays clean.'
+                  : 'Off — request intros play over the song’s opening, and only the length rule below can bed one.'}
+              </p>
+            </div>
+            <Seg
+              accent
+              value={requestIntros ? 'on' : 'off'}
+              options={[{ id: 'on', label: 'On' }, { id: 'off', label: 'Off' }]}
+              onChange={v => { if (!busy) saveSettings({ beds: { requestIntros: v === 'on' } }); }}
+            />
+          </div>
+        )}
       </PanelBox>
 
       {enabled && list.length === 0 && (
