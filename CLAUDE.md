@@ -61,6 +61,14 @@ docker compose up -d --build broadcast      # after radio.liq / icecast.xml.temp
 
 **CI does not run the test suite — run `npm test` yourself before pushing controller changes.** If `observatory-scale.test.ts` fails with `SQLITE_IOERR_WRITE`, point `TMPDIR` at real disk (it builds a 200k-track DB and `/tmp` is a 12 GB tmpfs on Arch).
 
+### Pull requests target `develop`, never `main`
+
+Open every PR against `develop`. `main` is the release branch — only `develop` (and the automated release-please branches) merge into it, and `.github/workflows/enforce-main-source.yml` fails any PR to `main` from any other head. So: `gh pr create --base develop`.
+
+**Ignore the "Main branch (you will usually use this for PRs): main" line in the session git preamble.** It is computed locally by looking for a branch named `main`/`master` and does not consult the remote default branch, which for this repo *is* `develop`. Passing `--base main` on the strength of that line is the single most common wrong-base mistake here.
+
+The one exception is the release PR itself (`develop` → `main`), which has its own procedure in [`.claude/skills/subwave-release-pr/SKILL.md`](.claude/skills/subwave-release-pr/SKILL.md) — including the merge-commit-not-squash rule that release-please depends on.
+
 ## Architecture
 
 Four cooperating processes with **file-based IPC** through a shared `state/` dir (mounted at `/var/sub-wave` in containers). This is the load-bearing fact about how the system works — there is no socket or RPC channel between controller and Liquidsoap. The shared `/var/sub-wave` mount in **both** Broadcast and Controller is what makes it work; they must always map to the same host path.
