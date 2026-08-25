@@ -971,6 +971,15 @@ export async function load() {
       thresholdSec: Number.isFinite(stored.beds?.thresholdSec) ? stored.beds.thresholdSec : DEFAULTS.beds.thresholdSec,
       crossSec: Number.isFinite(stored.beds?.crossSec) ? stored.beds.crossSec : DEFAULTS.beds.crossSec,
     },
+    silenceTrim: {
+      enabled:
+        typeof stored.silenceTrim?.enabled === 'boolean'
+          ? stored.silenceTrim.enabled
+          : DEFAULTS.silenceTrim.enabled,
+      minGapMs: Number.isFinite(stored.silenceTrim?.minGapMs)
+        ? stored.silenceTrim.minGapMs
+        : DEFAULTS.silenceTrim.minGapMs,
+    },
     webhooks: normalizeWebhooks(stored.webhooks),
     webhooksPolicy: {
       trackPlayListenerGated:
@@ -1890,6 +1899,18 @@ export async function update(patch) {
     }
     if (bd.crossSec !== undefined) {
       next.beds.crossSec = bd.crossSec;
+    }
+  }
+  if ('silenceTrim' in patch) {
+    const st = parseSettingsPatchKey<{
+      enabled?: boolean;
+      minGapMs?: number;
+    }>('silenceTrim', patch.silenceTrim);
+    if (st.enabled !== undefined) {
+      next.silenceTrim.enabled = st.enabled;
+    }
+    if (st.minGapMs !== undefined) {
+      next.silenceTrim.minGapMs = st.minGapMs;
     }
   }
   if ('ui' in patch) {

@@ -60,6 +60,14 @@ export const BEDS_THRESHOLD_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 60
 // own length too, so a long ramp on a short link can't invert the arithmetic.
 export const BEDS_CROSS_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
 
+// Dead-air trim: the smallest edge gap worth cutting. The FLOOR is what keeps
+// the feature from eating deliberate silence — a segued album leaves a beat
+// between tracks on purpose, and a mastering blank worth a cue point is
+// measured in seconds, not frames. The ceiling bounds the same mistake from
+// the other side: past 30s an operator is describing a different problem
+// (a corrupt rip) than the one a cue point solves.
+export const SILENCE_TRIM_MIN_GAP_MS_BOUNDS: SettingsNumericBound = { min: 250, max: 30000 };
+
 /**
  * `parseInt(raw, 10)` + a bounds check, exactly as the hand-rolled branch did.
  *
@@ -371,6 +379,14 @@ export const bedsPatchSchema = settingsBlockOf({
   crossSec: settingsFloatLike(
     BEDS_CROSS_SEC_BOUNDS,
     `beds.crossSec must be number in [${BEDS_CROSS_SEC_BOUNDS.min}, ${BEDS_CROSS_SEC_BOUNDS.max}]`,
+  ),
+});
+
+export const silenceTrimPatchSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+  minGapMs: settingsIntLike(
+    SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
+    `silenceTrim.minGapMs must be int in [${SILENCE_TRIM_MIN_GAP_MS_BOUNDS.min}, ${SILENCE_TRIM_MIN_GAP_MS_BOUNDS.max}]`,
   ),
 });
 

@@ -257,9 +257,15 @@ export interface RequestsForm {
   onePendingPerIp: boolean;
 }
 
+export interface SilenceTrimForm {
+  enabled: boolean;
+  minGapMs: string;
+}
+
 export interface FormState {
   crossfadeDuration: string;
   maxTrackSeconds: string;
+  silenceTrim: SilenceTrimForm;
   transitions: TransitionsForm;
   archive: ArchiveForm;
   stream: StreamForm;
@@ -311,6 +317,7 @@ export interface SettingsData {
       idleAfterMinutes?: number;
     };
     loudness?: { targetLufs?: number; maxBoostDb?: number; source?: LoudnessSource };
+    silenceTrim?: { enabled?: boolean; minGapMs?: number };
     station?: string;
     stationDescription?: string;
     timezone?: string;

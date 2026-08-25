@@ -87,6 +87,15 @@ export interface AnalysisResult {
   // requested stems_dir (tail rides along when the outro was computable).
   // null = no stems_dir requested / backend predates the feature.
   stemsCached: boolean | null;
+  // Dead-air gaps at the file's edges (ms), measured against an ABSOLUTE dBFS
+  // floor — not the relative gates behind introMs / outro.startMs, which ask
+  // where the MUSIC starts and stops and would read a quiet intro or a long
+  // ring-out as silence. null = not measured (backend predates the feature,
+  // the edge window was entirely silent so the gap outlasts it, or — for the
+  // tail — the analysed file was not proven complete). Consumers treat null as
+  // "no silence signal, trim nothing".
+  leadSilenceMs: number | null;
+  tailSilenceMs: number | null;
 }
 
 // The outgoing track's measured ending — what actually decides whether a
@@ -110,6 +119,15 @@ export interface OutroInfo {
 // loudness/peak entirely when pyloudnorm is absent or measurement failed.
 function parseFinite(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+// Coerce an edge-silence field to a non-negative whole-ms count or null. A
+// negative or non-finite value is a broken measurement, not a zero-length gap:
+// null keeps the "no signal, trim nothing" path rather than stamping a cue
+// point derived from nonsense.
+function parseSilenceMs(v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return null;
+  return Math.round(v);
 }
 
 // Coerce a list of spans to clean Section[]. Drops malformed/zero-length spans.
@@ -272,6 +290,8 @@ interface WorkerMessage {
   key_ranges?: unknown;
   audio_embedding?: unknown;
   outro?: unknown;
+  lead_silence_ms?: unknown;
+  tail_silence_ms?: unknown;
   stems_cached?: boolean;
   text_embeddings?: unknown;
   // render_transition op fields
@@ -445,6 +465,8 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           keyRanges: parseKeyRanges(msg.key_ranges),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
           outro: parseOutro(msg.outro),
+          leadSilenceMs: parseSilenceMs(msg.lead_silence_ms),
+          tailSilenceMs: parseSilenceMs(msg.tail_silence_ms),
           stemsCached: typeof msg.stems_cached === 'boolean' ? msg.stems_cached : null,
         }),
       reject,
@@ -609,6 +631,8 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     keyRanges: parseKeyRanges(resBody.key_ranges),
     audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
     outro: parseOutro(resBody.outro),
+    leadSilenceMs: parseSilenceMs(resBody.lead_silence_ms),
+    tailSilenceMs: parseSilenceMs(resBody.tail_silence_ms),
     stemsCached: typeof resBody.stems_cached === 'boolean' ? resBody.stems_cached : null,
   };
 }

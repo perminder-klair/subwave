@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { ARTIST_VARIETY_WINDOW } from '../broadcast/dj-agent/artist-guard.js';
 import {
   BEDS_CROSS_SEC_BOUNDS,
+  SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
   BEDS_THRESHOLD_SEC_BOUNDS,
   CROSSFADE_DURATION_BOUNDS,
   JINGLE_RATIO_BOUNDS,
@@ -517,6 +518,19 @@ export const DEFAULTS = {
     // the DJ's closing words.
     crossSec: 6,
   },
+  // Dead-air trim — cut near-silent runs off the head/tail of a track so a bad
+  // rip's leading blank or a long mastering gap doesn't air as silence
+  // (music/silence-trim.ts stamps liq_cue_in / liq_cue_out; radio.liq's
+  // cue_cut does the cutting). OFF by default: it acts on a MEASUREMENT, and
+  // an upgrade must sound byte-identical until the operator asks for this.
+  // Controller-side only — no mixer restart.
+  silenceTrim: {
+    enabled: false,
+    // Gaps shorter than this are left alone. A track legitimately opens a beat
+    // after zero, and a segued album's inter-track space is deliberate; only a
+    // gap the listener would call dead air is worth a cue point.
+    minGapMs: 1500,
+  },
   // Fire-and-forget station-event POSTs (event list in broadcast/webhooks.ts).
   webhooks: [] as Webhook[],
   webhooksPolicy: {
@@ -569,6 +583,7 @@ export const BOUNDS = {
   // Ceiling from the shared show schema: the strict show validator bounds-checks
   // a show's override against this station figure, so two copies would drift.
   maxTrackSeconds: { min: 0, max: SHOW_MAX_TRACK_SECONDS, type: 'int' },
+  silenceTrimMinGapMs: { ...SILENCE_TRIM_MIN_GAP_MS_BOUNDS, type: 'int' },
   loudnessTargetLufs: { ...LOUDNESS_TARGET_LUFS_BOUNDS, type: 'float' },
   loudnessMaxBoostDb: { ...LOUDNESS_MAX_BOOST_DB_BOUNDS, type: 'float' },
 };

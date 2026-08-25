@@ -10,6 +10,7 @@ import { writeFileAtomic } from '../util/atomic-file.js';
 import { shuffle } from '../util/shuffle.js';
 import { mapPool } from '../util/async-pool.js';
 import * as subsonic from '../music/subsonic.js';
+import * as silenceTrim from '../music/silence-trim.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
@@ -443,7 +444,19 @@ async function refreshAutoPlaylistInner() {
   // Stamp the station cap on every fallback entry (#447). max-track-length is a
   // pure on-air cue_out cut, not a selection filter, so over-length tracks stay
   // in the pool and simply crossfade out at the cap when the queue runs dry.
-  const lines = ['#EXTM3U', ...pool.map((t: any) => subsonic.getAnnotatedUri(t, { maxDurationSec }))];
+  // Dead-air trim, for the same reason as the loudness stamp above: this
+  // fallback bypasses the drain, and an untrimmed coast track is exactly where
+  // a leading blank goes unnoticed — nobody is watching when auto.m3u plays.
+  // Same policy module as the drain (music/silence-trim.ts), so both paths cut
+  // identically. Off / unmeasured → nulls → today's untouched entry.
+  const lines = ['#EXTM3U', ...pool.map((t: any) => {
+    const trim = silenceTrim.resolveSilenceTrim(t);
+    return subsonic.getAnnotatedUri(t, {
+      maxDurationSec,
+      cueInSec: trim.cueInSec,
+      cueOutSec: trim.cueOutSec,
+    });
+  })];
   // Atomic replace: Liquidsoap watches this file (reload_mode="watch"), so an
   // in-place write can trigger a reload that loads a truncated playlist.
   await writeFileAtomic(config.liquidsoap.autoPlaylist, lines.join('\n'));

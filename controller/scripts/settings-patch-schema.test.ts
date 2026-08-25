@@ -607,9 +607,9 @@ test('the converted keys are exactly the ones with schemas', () => {
     'jingleRatio', 'likes',
     'locale', 'loudness', 'maxTrackSeconds', 'moodSchedule', 'moods', 'personas',
     'privacy', 'requests', 'schedule', 'scheduleOverride', 'scrobble', 'search',
-    'sfx', 'shows', 'station', 'stationDescription', 'stream', 'theme',
-    'timezone', 'transitions', 'ui', 'weather', 'weatherMoods', 'webhooks',
-    'webhooksPolicy',
+    'sfx', 'shows', 'silenceTrim', 'station', 'stationDescription', 'stream',
+    'theme', 'timezone', 'transitions', 'ui', 'weather', 'weatherMoods',
+    'webhooks', 'webhooksPolicy',
   ]);
 });
 

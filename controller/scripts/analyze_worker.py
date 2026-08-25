@@ -94,6 +94,17 @@ CLAP_WINDOWS = int(os.environ.get("ANALYZE_CLAP_WINDOWS", "").strip() or "3")
 # outro signal, behave as today").
 OUTRO_SECONDS = float(os.environ.get("ANALYZE_OUTRO_SECONDS", "").strip() or "20")
 
+# --- Silence trim (dead-air gaps at the file's edges) -----------------------
+# Absolute peak floor (dBFS) below which a frame counts as SILENCE. This is
+# deliberately NOT the relative gate estimate_intro_ms / analyze_outro use:
+# those ask "where does the music come in / start winding down" against the
+# track's OWN loud level, so a quiet piano intro or a long ring-out trips them.
+# A dead-air gap is an absolute property of the file — near-digital silence, a
+# bad rip's leading blank, mastering slack at the end — and measuring it
+# against a relative reference eats real music. Emitted as lead_silence_ms /
+# tail_silence_ms; the controller decides whether a gap is worth cutting.
+SILENCE_DBFS = float(os.environ.get("ANALYZE_SILENCE_DBFS", "").strip() or "-50")
+
 # --- Vocal-activity ranges (optional, opt-in) ------------------------------
 # Off unless ANALYZE_VOCAL_ACTIVITY is truthy. Runs Demucs source separation to
 # isolate the vocal stem, then thresholds its energy envelope into present/
@@ -600,6 +611,39 @@ def estimate_key_ranges(chroma, sr, librosa, window_s=10.0):
         return None
 
 
+def silence_edges_ms(y, sr):
+    """(lead_ms, tail_ms) of near-silence at the edges of the decoded buffer
+    `y`, measured against the ABSOLUTE SILENCE_DBFS floor.
+
+    Returns (None, None) when NO frame in the buffer clears the floor: a window
+    with nothing audible in it cannot say where the gap ends, only that it
+    outlasts the window, and a guess there would cut real audio. Callers treat
+    None as "no signal, behave as today"."""
+    import numpy as np
+
+    if y is None or np.size(y) == 0 or not sr:
+        return (None, None)
+    y = np.asarray(y)
+    if y.ndim > 1:
+        y = np.max(np.abs(y), axis=0)
+    n = int(y.size)
+    frame, hop = 2048, 512
+    # Frame-wise PEAK, not RMS: a 2048-sample RMS window straddling the first
+    # transient averages it away and reads the attack as still-silent, which
+    # would trim the head of the note we are trying to preserve.
+    starts = np.arange(0, max(1, n - frame + 1), hop)
+    peaks = np.array([float(np.max(np.abs(y[s : s + frame]))) for s in starts])
+    thr = 10.0 ** (SILENCE_DBFS / 20.0)
+    loud = np.nonzero(peaks >= thr)[0]
+    if loud.size == 0:
+        return (None, None)
+    lead_ms = float(starts[int(loud[0])]) / float(sr) * 1000.0
+    # The tail gap opens at the END of the last audible frame, not its start.
+    last_end = min(n, int(starts[int(loud[-1])]) + frame)
+    tail_ms = float(n - last_end) / float(sr) * 1000.0
+    return (max(0.0, lead_ms), max(0.0, tail_ms))
+
+
 def estimate_intro_ms(y, sr, librosa):
     """Rough intro length: the first time the short-term energy rises and stays
     above a fraction of the track's typical loud level — i.e. where the track
@@ -1017,6 +1061,16 @@ def analyze_outro(path, librosa, duration_s):
         log(f"outro beat grid failed: {e}")
 
     out = {"startMs": int(round(wind_start_s * 1000.0)), "ending": ending}
+    # Trailing dead air (absolute floor — see SILENCE_DBFS). Rides this decode
+    # because the tail window is already in memory AND because this function is
+    # the one place a COMPLETE file is proven: a byte-capped download's "tail"
+    # is mid-song, and a cue_out measured off it would cut the song in half.
+    # Lifted to a top-level result field by analyze(), so outro_json never
+    # carries it. A fully-silent tail window reads None and is omitted — the
+    # gap outlasts OUTRO_SECONDS and we cannot see where it begins.
+    _lead_t, tail_silence_ms = silence_edges_ms(y, sr)
+    if tail_silence_ms is not None:
+        out["tail_silence_ms"] = int(round(tail_silence_ms))
     if lufs is not None:
         out["lufs"] = lufs
     if bpm_t is not None:
@@ -1804,6 +1858,12 @@ def analyze(
 
     intro_ms = estimate_intro_ms(y, sr, librosa)
 
+    # Leading dead air, off the SAME decoded head window (free). Absolute
+    # floor, NOT intro_ms's relative one — see SILENCE_DBFS. None when the
+    # whole window reads silent: the gap outlasts ANALYZE_SECONDS and we
+    # cannot see where it ends, so the controller trims nothing.
+    lead_silence_ms, _tail_head = silence_edges_ms(y, sr)
+
     # When vocal activity was measured, the start of the first vocal range is a
     # truer intro than the energy heuristic (an instrumental intro is exactly
     # the vocal-free leading region). Prefer it; fall back to the heuristic for
@@ -1835,6 +1895,14 @@ def analyze(
         "intro_ms": int(intro_ms) if intro_ms is not None else None,
         "confidence": confidence,
     }
+    # Edge dead air. Head rides this pass; the tail is measured inside
+    # analyze_outro (the only place a COMPLETE file is proven) and lifted out
+    # of the outro dict HERE so outro_json never carries it. Omitted when not
+    # measured — absence means "no silence signal, behave as today".
+    if lead_silence_ms is not None:
+        result["lead_silence_ms"] = int(round(lead_silence_ms))
+    if outro is not None and "tail_silence_ms" in outro:
+        result["tail_silence_ms"] = outro.pop("tail_silence_ms")
     # Only carry loudness fields when measured — absence signals "no loudness
     # this pass", so a worker without pyloudnorm is byte-for-byte today.
     if loudness_lufs is not None:

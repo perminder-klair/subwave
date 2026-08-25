@@ -466,6 +466,22 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 22');
   }
 
+  if (userVersion < 23) {
+    // Edge dead air (ms) — near-silent runs at the very start and very end of
+    // the file, measured against an ABSOLUTE dBFS floor by the analyzer. These
+    // are NOT intro_ms / outro_json.startMs, which are relative gates over
+    // musical content: a quiet intro is music, a leading blank is not.
+    // Nullable; NULL → no silence signal, today's behaviour (nothing trimmed).
+    // tail_silence_ms is only measurable off a COMPLETE file, so it follows
+    // outro_json's write rule (see upsertTrackAnalysis) and a partial pass
+    // leaves it alone rather than wiping it.
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN lead_silence_ms INTEGER;
+      ALTER TABLE tracks ADD COLUMN tail_silence_ms INTEGER;
+    `);
+    d.pragma('user_version = 23');
+  }
+
   // Reconcile the requested embedding dim against what physically exists.
   //
   // The vec0 table's `FLOAT[N]` schema is the authority for what inserts accept —

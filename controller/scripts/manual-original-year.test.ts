@@ -411,6 +411,11 @@ test('migration 22 backfills the refresh marker ONLY where the era text changed'
   // have: schema 21, a populated vec index, and no dirty-marker column yet.
   const d = db.requireDb();
   d.prepare(`ALTER TABLE tracks DROP COLUMN text_vector_dirty`).run();
+  // Every column added AFTER v21 has to go too, not just v22's: the fixture is
+  // rewinding user_version, and each later migration re-runs its own
+  // `ALTER TABLE … ADD COLUMN`, which errors on a column that is still there.
+  d.prepare(`ALTER TABLE tracks DROP COLUMN lead_silence_ms`).run();
+  d.prepare(`ALTER TABLE tracks DROP COLUMN tail_silence_ms`).run();
   d.pragma('user_version = 21');
   db.close();
   await db.open({ embeddingDim: 768, adoptStoredDim: true });

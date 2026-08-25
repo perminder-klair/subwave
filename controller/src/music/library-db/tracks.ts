@@ -369,6 +369,12 @@ interface TrackAnalysisWrite {
   // pass that couldn't compute the tail (capped download, url path) must not
   // wipe an outro a previous complete-file pass measured.
   outro?: TrackOutro | null;
+  // Edge dead air (ms). The HEAD is measurable on every pass, so it overwrites
+  // like the other head features. The TAIL follows the outro's rule — only a
+  // proven-complete file can measure it, so null keeps what a previous pass
+  // wrote instead of wiping it.
+  leadSilenceMs?: number | null;
+  tailSilenceMs?: number | null;
   // Whether this pass ran a stem-caching attempt for the track (feature: stem
   // backfill). true stamps stems_at so the backfill scope drops it; false/
   // undefined leaves the stamp alone. Pass true for a MISS too — see the
@@ -394,6 +400,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         beats_json          = ?,
         bars_json           = ?,
         key_ranges_json     = ?,
+        lead_silence_ms     = ?,
         -- COALESCE: vocal activity is gated separately (ANALYZE_VOCAL_ACTIVITY),
         -- so a normal bpm/key pass passes null here and must NOT wipe an
         -- existing vocal_ranges_json. A non-null value (incl. "[]" for an
@@ -402,6 +409,10 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         -- Same for the outro: only computable off a COMPLETE file, so a pass
         -- that analysed a capped download passes null and keeps what's there.
         outro_json          = COALESCE(?, outro_json),
+        -- Trailing dead air rides the outro decode and shares its rule: only a
+        -- COMPLETE file can measure it, so a capped-download pass passes null
+        -- and keeps whatever a full pass already found.
+        tail_silence_ms     = COALESCE(?, tail_silence_ms),
         -- Same COALESCE shape: a pass with the stem cache off passes null and
         -- must not clear a stamp an earlier stem pass set.
         stems_at            = COALESCE(?, stems_at),
@@ -427,8 +438,10 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       a.beats && a.beats.length ? JSON.stringify(a.beats) : null,
       a.bars && a.bars.length ? JSON.stringify(a.bars) : null,
       a.keyRanges && a.keyRanges.length ? JSON.stringify(a.keyRanges) : null,
+      Number.isFinite(a.leadSilenceMs as number) ? Math.max(0, Math.round(a.leadSilenceMs as number)) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
       a.outro != null ? JSON.stringify(a.outro) : null,
+      Number.isFinite(a.tailSilenceMs as number) ? Math.max(0, Math.round(a.tailSilenceMs as number)) : null,
       a.stemsAttempted ? new Date().toISOString() : null,
       ANALYSIS_VERSION,
       id,
@@ -560,7 +573,8 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
-      key_ranges_json = NULL, outro_json = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
+      key_ranges_json = NULL, outro_json = NULL,
+      lead_silence_ms = NULL, tail_silence_ms = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
       audio_moods = NULL, audio_mood_scores_json = NULL,
       -- A --re-analyze is the operator saying the past doesn't apply, so the
       -- failure history goes with the analysis it describes. Without this, the

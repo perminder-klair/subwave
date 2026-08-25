@@ -58,6 +58,8 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     keyRanges: row.key_ranges_json ? parseKeyRanges(row.key_ranges_json) : null,
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     outro: row.outro_json ? parseOutroJson(row.outro_json) : null,
+    leadSilenceMs: row.lead_silence_ms ?? null,
+    tailSilenceMs: row.tail_silence_ms ?? null,
     mapX: row.map_x ?? null,
     mapY: row.map_y ?? null,
   };

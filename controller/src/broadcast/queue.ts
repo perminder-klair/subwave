@@ -21,6 +21,7 @@ import * as subsonic from '../music/subsonic.js';
 import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
 import * as loudness from '../music/loudness.js';
+import * as silenceTrim from '../music/silence-trim.js';
 import * as blocklist from '../music/blocklist.js';
 import { artistRootKey, trackKey } from '../music/recency.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
@@ -1010,6 +1011,9 @@ class Queue {
     try { energyDelta = energyForDaypart().speed - 1; } catch { /* context optional */ }
     let nextIntroMs = successor.track.introMs;
     if (nextIntroMs == null && successor.track.id) nextIntroMs = library.get(successor.track.id)?.introMs ?? null;
+    // Onto the trimmed timeline: the blend is sized against the runway the
+    // successor will actually have on air, not the one its file starts with.
+    nextIntroMs = silenceTrim.shiftOnsetMs(successor.track, nextIntroMs);
     const maxSec = settings.get()?.crossfadeDuration ?? null;
     const secs = mix.crossSecondsFor(cur, next, { energyDelta, nextIntroMs, maxSec });
     if (secs == null) return;
@@ -1203,9 +1207,21 @@ class Queue {
           }
         }
 
+        // Dead-air trim: cut the near-silent head/tail off this track so a bad
+        // rip's leading blank doesn't air as silence. Resolved through the
+        // policy module, never inlined — the auto.m3u rewrite asks the same
+        // question and the two must not drift. Off / unmeasured → nulls, i.e.
+        // no cue stamps and today's behaviour.
+        const trim = silenceTrim.resolveSilenceTrim(item.track);
+
         // Record the effective early end for the pair-drain deadline math —
         // rides into `current` when the item airs (onTrackStarted spreads it).
+        // Both early ends fold in: the length cap and the trimmed tail shorten
+        // the track for the SAME reason as far as the seam clock is concerned,
+        // and a deadline computed off the untrimmed length would hand over
+        // late by exactly the silence we just cut.
         if (cappedExit) item.cueOutSec = Math.min(item.cueOutSec ?? Infinity, maxDurationSec!);
+        if (trim.cueOutSec != null) item.cueOutSec = Math.min(item.cueOutSec ?? Infinity, trim.cueOutSec);
         // Stem-seam cue points: the blend's cut on the way out, the clip's
         // hand-off on the way in (stamped when the INCOMING item drains).
         // Per-attempt identity for proto_subhttp's explicit completion signal.
@@ -1215,12 +1231,25 @@ class Queue {
         item.resolveProbeId = subsonic.getLocalPath(item.track)
           ? undefined
           : randomBytes(8).toString('hex');
+        // A rendered blend's cut and the trimmed tail are both "stop early";
+        // whichever comes first wins, exactly as getAnnotatedUri already
+        // arbitrates those against the #447 cap. On the way in, the stem
+        // seam's cue-in is DEEPER into the track than any leading silence (the
+        // clip already played that head), so the later of the two is the one
+        // that leaves no audio played twice.
+        const cueOutCandidates = [item.stemBlend?.blendStartSec, trim.cueOutSec]
+          .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+        const cueInCandidates = [item.stemSeam ? item.stemCueInSec : null, trim.cueInSec]
+          .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
         const uri = subsonic.getAnnotatedUri(item.track, {
           maxDurationSec,
-          cueOutSec: item.stemBlend?.blendStartSec ?? null,
-          cueInSec: item.stemSeam ? item.stemCueInSec ?? null : null,
+          cueOutSec: cueOutCandidates.length ? Math.min(...cueOutCandidates) : null,
+          cueInSec: cueInCandidates.length ? Math.max(...cueInCandidates) : null,
           resolveProbeId: item.resolveProbeId,
         });
+        if (trim.cueInSec != null || trim.cueOutSec != null) {
+          this.log('mix', `silence trimmed on "${item.track.title}"${trim.cueInSec != null ? ` head ${trim.cueInSec}s` : ''}${trim.cueOutSec != null ? ` tail from ${trim.cueOutSec}s` : ''}`);
+        }
         // Queue-file writes wait longer than the default 1.5s: with a clip
         // following, two back-to-back writes are the norm and one missed
         // 1.0s poll must not overwrite an unconsumed handoff.

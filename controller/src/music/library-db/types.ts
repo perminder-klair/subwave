@@ -72,6 +72,12 @@ export interface TrackRecord {
   // Outro (tail) features — the track's measured ending (fade vs cold, tail
   // loudness/tempo/bar grid). null → no outro signal, today's transitions.
   outro: TrackOutro | null;
+  // Edge dead air (ms) — near-silent runs at the file's very start / very end,
+  // measured against an ABSOLUTE dBFS floor. Distinct from introMs and
+  // outro.startMs, which are relative gates over MUSICAL content. null → not
+  // measured; music/silence-trim.ts treats null as "trim nothing".
+  leadSilenceMs: number | null;
+  tailSilenceMs: number | null;
   // Sound-map coordinates — a 2D UMAP projection of the CLAP audio vector,
   // normalised to [0,1] per axis (music/map-projection.ts). The Observatory
   // places nodes by these when present, so tracks that SOUND alike sit close.
@@ -168,6 +174,8 @@ export interface TrackRow {
   key_ranges_json: string | null;
   audio_moods: string | null;
   outro_json: string | null;
+  lead_silence_ms: number | null;
+  tail_silence_ms: number | null;
   map_x: number | null;
   map_y: number | null;
 }

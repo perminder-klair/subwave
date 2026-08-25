@@ -201,6 +201,10 @@ export default function SettingsPanel() {
     const nextForm: FormState = {
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
       maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
+      silenceTrim: {
+        enabled: v.silenceTrim?.enabled ?? false,
+        minGapMs: String(v.silenceTrim?.minGapMs ?? 1500),
+      },
       transitions: {
         pairDrain: v.transitions?.pairDrain ?? true,
         stemBlends: v.transitions?.stemBlends ?? false,
@@ -1080,6 +1084,79 @@ export default function SettingsPanel() {
                     album mixes or DJ sets that keep landing in rotation. Listener requests still
                     play any length, and a show can override this with its own limit (0 there means
                     unlimited). Applies on the next pick; no restart needed.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Dead-air trim" sub="cut silent gaps off track edges">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <Label>Trim silent edges</Label>
+                    <div className="flex items-center gap-2">
+                      <Seg
+                        options={[
+                          { id: 'on', label: 'On' },
+                          { id: 'off', label: 'Off' },
+                        ]}
+                        value={form.silenceTrim.enabled ? 'on' : 'off'}
+                        onChange={id =>
+                          setForm(f =>
+                            f ? { ...f, silenceTrim: { ...f.silenceTrim, enabled: id === 'on' } } : f,
+                          )
+                        }
+                      />
+                    </div>
+                    <SettingsFieldError path="silenceTrim.enabled" errors={fieldErrors} />
+                    <div className="field-hint">
+                      Some rips carry a chunk of silence before the music starts, or a long blank
+                      after it ends — on air that plays as dead air. With this on, the station
+                      skips past the silence and cuts away at the end instead of waiting it out.
+                      Needs the track analysed; unanalysed tracks play whole as before.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <Label>Shortest gap worth cutting</Label>
+                    <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
+                      <Input
+                        className="mono-num w-28"
+                        aria-label="Shortest gap worth cutting (milliseconds)"
+                        type="number"
+                        step={100}
+                        min={250}
+                        max={30000}
+                        value={form.silenceTrim.minGapMs}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f =>
+                            f ? { ...f, silenceTrim: { ...f.silenceTrim, minGapMs: e.target.value } } : f,
+                          )
+                        }
+                      />
+                      <span className="text-[12px] text-muted">ms</span>
+                      <Btn
+                        sm
+                        onClick={() =>
+                          saveSettings({
+                            silenceTrim: {
+                              enabled: form.silenceTrim.enabled,
+                              minGapMs: parseInt(form.silenceTrim.minGapMs, 10) || 1500,
+                            },
+                          })
+                        }
+                        disabled={busy}
+                      >
+                        Save trim
+                      </Btn>
+                    </div>
+                    <SettingsFieldError path="silenceTrim.minGapMs" errors={fieldErrors} />
+                    <div className="field-hint">
+                      Anything shorter than this is left alone. Tracks often open a beat after
+                      zero, and albums that segue leave space between songs on purpose — raise
+                      this if your library is full of them, lower it to catch smaller gaps.
+                      Applies on the next pick; no restart needed.
+                    </div>
                   </div>
                 </div>
               </Card>
