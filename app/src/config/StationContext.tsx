@@ -12,6 +12,8 @@ import React, {
   useState,
 } from 'react';
 import { teardown } from '@/audio/player';
+import { publishCarBrowseTree } from '@/car/browseTree';
+import { onCarStationChange } from '@/car/carTune';
 import { createApi, type StationApi } from '@/lib/api';
 import {
   clearActiveStation,
@@ -60,6 +62,21 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
       alive = false;
     };
   }, []);
+
+  // A car screen (Android Auto / CarPlay) can re-point the active station from
+  // the headless service — re-read the persisted store so the phone UI follows.
+  // No teardown here: the car path owns the audio hand-over (see carTune.ts).
+  useEffect(() => {
+    return onCarStationChange(() => {
+      loadStations().then(setStore).catch(() => {});
+    });
+  }, []);
+
+  // Keep the car screens' station list in step with the live store.
+  useEffect(() => {
+    if (!ready) return;
+    void publishCarBrowseTree(featured, store.recents);
+  }, [ready, featured, store.recents]);
 
   const selectStation = useCallback(async (ref: StationRef) => {
     // Single choke point for re-pointing the app: stop the current station's

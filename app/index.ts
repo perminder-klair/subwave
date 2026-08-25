@@ -6,8 +6,13 @@
 //
 // The service MUST be registered before the router entry runs.
 import TrackPlayer from 'react-native-track-player';
+import { startCarPlay } from '@/car/carPlay';
 import { PlaybackService } from './service';
 
 TrackPlayer.registerPlaybackService(() => PlaybackService);
+
+// CarPlay templates (iOS-only no-op elsewhere) — registered here, not in the
+// React tree, because the car can connect while the phone UI is unmounted.
+startCarPlay();
 
 import 'expo-router/entry';

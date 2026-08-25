@@ -5,7 +5,7 @@ Native iOS + Android player for [SUB/WAVE](../README.md) — built with Expo + r
 ## Stack
 
 - **Expo SDK 56** (RN 0.85, React 19, New Architecture) · **expo-router** (file-based)
-- **react-native-track-player** — background audio + lock-screen / CarPlay controls (Android Auto is intentionally not declared — Google Play rejected it under the Auto content policy, #477)
+- **react-native-track-player** (lovegaoshi fork, Media3) — background audio, lock-screen controls, and the Android Auto browse tree; **react-native-carplay** drives the CarPlay app. Both car surfaces are ship-gated in `eas.json` (CarPlay awaits the Apple entitlement; the Android Auto declaration stays off Play builds under the June 2026 TTS-content enforcement, #477 — see docs/TESTING.md)
 - **react-native-google-cast** — Google Cast sender (Chromecast / Nest / Android TV). The Cast device fetches the stream itself; the phone becomes a remote (`src/hooks/useCast.ts` merges cast state over the local player). Uses the Default Media Receiver, so no receiver registration. Basic-auth stations can't cast (the `Authorization` header can't ride along) — the button hides for them.
 - **AirPlay** (iOS) — a local Expo module (`modules/airplay-route-picker`) wraps `AVRoutePickerView`; routing itself is system-level, the button just makes it discoverable in-app.
 - **NativeWind 4** (Tailwind for RN) — reuses the web's class names + the 7 theme tokens

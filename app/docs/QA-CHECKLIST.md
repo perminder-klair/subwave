@@ -36,8 +36,11 @@ Mark each box per platform. Note the device + OS version you tested on.
 
 ## Platform controls
 
-- [ ] **iOS** — **CarPlay**: SUB/WAVE appears, shows now-playing, Play/Pause/Stop work.
-      _(Android Auto is intentionally **not** declared — rejected by Google Play under the Auto TTS-content policy; nothing to test there.)_
+- [ ] **iOS** — **CarPlay**: SUB/WAVE app icon appears on the CarPlay home screen; Stations list shows featured + saved stations; tapping a row starts the stream and shows Now Playing (title/artist/artwork, Play/Pause, no scrubber). _(Needs the Apple carplay-audio entitlement on device builds; CarPlay Simulator works without it.)_
+- [ ] **iOS** — **CarPlay cold start**: with the app killed, plug into CarPlay and launch SUB/WAVE from the car screen — Stations list renders, a tap plays. Then open the phone app: it shows the same station tuned in (no fight over playback).
+- [ ] **iOS** — **Phone UI regression (scene split)**: normal phone launch still boots to the player (splash → UI), deep links (`subwave://`) still open, dev-client still connects. _(validates the withCarPlay scene delegates against the current Expo template)_
+- [ ] **Android** — **Android Auto** _(dev/sideload/preview builds only — the declaration is stripped from Play `production` builds, see TESTING.md)_: SUB/WAVE appears in the Auto launcher; Stations tab lists stations; tap tunes; "Hey Google, play SUB/WAVE" works; a car tap on another saved station switches the phone app too.
+- [ ] **Android** — **Auto cold start**: app killed, phone plugged into the head unit (or DHU) — launcher icon present, browse list loads, tap plays at the live edge.
 - [ ] **Android** — **Kill the app** (swipe from recents): the **foreground-service notification is removed** and audio stops (`StopPlaybackAndRemoveNotification`).
 - [ ] **iOS** — **AirPlay**: the route-picker button in the masthead opens the system picker; audio moves to a HomePod/Apple TV and back. Lock-screen metadata still updates while routed.
 - [ ] **iOS** / [ ] **Android** — **Google Cast, connect mid-listen**: tap the cast button while tuned in → audio moves to the Cast device (phone goes silent, deck reads `Cast · <device>`), power/volume/mute now drive the device. First iOS tap shows the **Local Network permission** prompt.

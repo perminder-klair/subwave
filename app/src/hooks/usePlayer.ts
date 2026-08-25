@@ -17,7 +17,7 @@ import {
   ROUTE_REASON_OLD_DEVICE_UNAVAILABLE,
 } from '../../modules/airplay-route-picker';
 import { getLastLiveMeta, loadAndPlay, setupPlayer, teardown } from '@/audio/player';
-import type { StationApi } from '@/lib/api';
+import { streamBelongsTo, type StationApi } from '@/lib/api';
 import type { StreamFormat } from '@/lib/streamFormat';
 import { loadVolumePref, saveVolumePref } from '@/lib/volume';
 
@@ -312,12 +312,19 @@ export function usePlayer(
   // over dead audio. (RNTP lands in State.None after reset(); the event
   // handler above deliberately ignores None because reset() also fires that
   // mid tune-in and mid reconnect.)
+  //
+  // One exception: a CAR-initiated switch (src/car/carTune.ts) re-points the
+  // store AND starts the new station's stream itself. When the loaded stream
+  // already belongs to the incoming base, adopt it — stopping here would kill
+  // audio the driver just started from the car screen.
   const prevBaseRef = useRef(api?.base ?? null);
   useEffect(() => {
     const nextBase = api?.base ?? null;
     if (prevBaseRef.current === nextBase) return;
     prevBaseRef.current = nextBase;
-    if (tunedInRef.current) stop();
+    const meta = getLastLiveMeta();
+    const adopted = !!(nextBase && meta && streamBelongsTo(meta.url, nextBase));
+    if (tunedInRef.current && !adopted) stop();
   }, [api, stop]);
 
   // Format change mid-listen — retune onto the new mount in place. Covers both

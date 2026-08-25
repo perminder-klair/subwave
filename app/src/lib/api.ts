@@ -168,6 +168,15 @@ export function splitCredentials(rawBase: string): {
   return { base: `${scheme}${rest}`, authorization: `Basic ${base64(`${user}:${pass}`)}` };
 }
 
+/** Does a loaded stream URL belong to this station base? Compares against the
+ *  credential-free base because streamUrl() strips userinfo (#764) while the
+ *  station store keeps it. Used by usePlayer's station-change effect to adopt
+ *  a car-initiated switch (src/car/carTune.ts) instead of stopping it. */
+export function streamBelongsTo(streamUrl: string, base: string): boolean {
+  const clean = splitCredentials(base).base;
+  return !!clean && streamUrl.startsWith(`${clean}/`);
+}
+
 // Every call carries a hard timeout: a hung origin must not stall the 5s
 // feed poll (or leave a request spinner up forever) — fail fast, retry on
 // the next tick. Composed by hand with any caller-supplied signal because
