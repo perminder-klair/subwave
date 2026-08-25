@@ -11,8 +11,11 @@ import {
   SHOW_ENERGY,
   SHOW_FILTER_VALUES_MAX,
   SHOW_NAME_MAX,
+  SHOW_TAG_MAX,
+  SHOW_TAG_RE,
   SHOW_TOPIC_MAX,
   SHOW_VOCALS,
+  TAGS_PER_SHOW_LIMIT,
 } from '@/lib/schemas.generated';
 
 export const NAME_MAX = SHOW_NAME_MAX;
@@ -23,6 +26,9 @@ export const PLAYLISTS_MAX = PLAYLISTS_PER_SHOW;
 // Deliberately separate from PLAYLISTS_MAX: the same figure today, but one name
 // covering both is how they would silently stop being.
 export const EXCLUDED_PLAYLISTS_MAX = EXCLUDED_PLAYLISTS_PER_SHOW;
+export const TAGS_MAX = TAGS_PER_SHOW_LIMIT;
+export const TAG_MAX = SHOW_TAG_MAX;
+export const TAG_RE = SHOW_TAG_RE;
 
 /** How much the panel knows about the live Navidrome playlist index.
  *
@@ -82,6 +88,9 @@ export interface Show {
   /** Pin the feature segment to one skill. Empty = the producer picks per episode.
    *  Only used with programme on. */
   segmentSkill: string;
+  /** Operator organisation tags. They filter and group this list and nothing
+   *  else — the picker, the DJ agent and every public route are blind to them. */
+  tags: string[];
 }
 
 /** Mirrors the controller's EraWindow. Multiple windows let a show span

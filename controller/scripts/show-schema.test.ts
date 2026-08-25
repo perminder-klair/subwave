@@ -23,7 +23,9 @@ const {
   SHOWS_LIMIT,
   SHOW_FILTER_VALUES_MAX,
   SHOW_NAME_MAX,
+  SHOW_TAG_MAX,
   SHOW_TOPIC_MAX,
+  TAGS_PER_SHOW_LIMIT,
   migrateLegacyShowFields,
   showSchema,
 } = await import('../src/schemas/show.js');
@@ -59,6 +61,7 @@ test('a minimal show validates and every optional field defaults', () => {
   assert.deepEqual(s.eras, []);
   assert.deepEqual(s.energies, []);
   assert.deepEqual(s.guestPersonaIds, []);
+  assert.deepEqual(s.tags, []);
   assert.match(s.id, /^s_[a-z0-9]+$/);
 });
 
@@ -318,7 +321,9 @@ test('explicit null reads as absent on every optional field', () => {
     topic: null, segmentSkill: null, themeId: null, vocals: null,
     moods: null, genres: null, energies: null, eras: null,
     guestPersonaIds: null, playlistIds: null, excludedPlaylistIds: null,
+    tags: null,
   });
+  assert.deepEqual(s.tags, []);
   assert.equal(s.topic, '');
   assert.equal(s.vocals, '');
   assert.equal(s.themeId, '');
@@ -357,4 +362,55 @@ test('load survives an over-cap energies list full of duplicates', () => {
   const rows = normalizeShows([show({ energies })], personaIds);
   assert.equal(rows.length, 1);
   assert.deepEqual(rows[0].energies, ['low']);
+});
+
+// --- tags: organisation only, and the one list that REFUSES a bad entry -------
+
+test('tags lowercase, trim, de-duplicate and keep first-seen order', () => {
+  // The comma-string arm is not decoration: it is the wire shape every other
+  // tag surface in the codebase (skills, the community catalogs) already
+  // sends, so a client that has one must not 400 here.
+  assert.deepEqual(strict({ tags: ['  Late-Night ', 'FACTUAL', 'late-night'] }).tags,
+    ['late-night', 'factual']);
+  assert.deepEqual(strict({ tags: 'weekend, Archive' }).tags, ['weekend', 'archive']);
+});
+
+test('a malformed tag is REFUSED on save, unlike every other list on a show', () => {
+  // Deliberately unlike moods/genres/skills, which drop a bad entry: a tag is
+  // typed by hand in the editor, and one that silently vanishes on save is the
+  // operator watching their own input disappear on the next reload.
+  assert.throws(() => strict({ tags: ['-nope'] }), /tag/);
+  assert.throws(() => strict({ tags: ['Has Space'] }), /tag/);
+  assert.throws(() => strict({ tags: ['x'.repeat(SHOW_TAG_MAX + 1)] }), /tag/);
+  assert.throws(
+    () => strict({ tags: Array.from({ length: TAGS_PER_SHOW_LIMIT + 1 }, (_, i) => `t${i}`) }),
+    /at most/,
+  );
+});
+
+test('load DROPS a bad tag where save refuses it, and the cap survives junk', () => {
+  const [s] = normalizeShows([{
+    name: 'Breakfast',
+    personaId: 'p_host',
+    // Two valid, one invalid, one non-string, one duplicate.
+    tags: ['late-night', '-nope', 42, 'LATE-NIGHT', 'factual'],
+  }], personaIds);
+  assert.deepEqual(s.tags, ['late-night', 'factual'], 'the show keeps its real tags');
+
+  // The cap is applied AFTER the validity filter, so junk cannot spend the
+  // budget the operator's own tags need.
+  const junk = Array.from({ length: TAGS_PER_SHOW_LIMIT }, () => 'NOT A TAG');
+  const [t] = normalizeShows([{
+    name: 'Breakfast', personaId: 'p_host', tags: [...junk, 'kept'],
+  }], personaIds);
+  assert.deepEqual(t.tags, ['kept']);
+});
+
+test('a show with no tags round-trips byte-identically apart from the empty list', () => {
+  // The upgrade rule: absent must coerce to the pre-existing behaviour. Both
+  // paths must agree, or a station that has never tagged anything would see
+  // its shows rewritten differently by load and by save.
+  const [loaded] = normalizeShows([{ name: 'Breakfast', personaId: 'p_host' }], personaIds);
+  assert.deepEqual(loaded.tags, []);
+  assert.deepEqual(strict().tags, loaded.tags);
 });

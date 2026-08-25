@@ -36,6 +36,9 @@ export interface Persona {
   avatar: string;
   tts: PersonaTts;
   skills: string[];
+  /** Operator organisation tags. They filter and group the roster and nothing
+   *  else — no prompt, no public route, no on-air behaviour reads them. */
+  tags: string[];
 }
 
 // Mirrors the controller's djPrompts entries (settings.ts:validateDjPromptsStrict).

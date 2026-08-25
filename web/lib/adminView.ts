@@ -1,8 +1,8 @@
 'use client';
 
-// Browser-local admin view preferences: roster view (cards or list) for
-// /admin/skills, /admin/shows and /admin/personas, and the Rundown board's
-// pixels-per-hour density.
+// Browser-local admin view preferences: roster view (cards or list) and roster
+// SORT for /admin/skills, /admin/shows and /admin/personas, and the Rundown
+// board's pixels-per-hour density.
 //
 // Stored PER SURFACE, not globally — an operator may want Skills as a dense
 // list while Shows stays on cards. Browser-local like the skin/theme
@@ -86,4 +86,49 @@ export function useBoardDensity(): [BoardDensity, (d: BoardDensity) => void] {
   }, []);
 
   return [density, setDensity];
+}
+
+/* Roster SORT, stored per surface beside the cards/list view.
+ *
+ * The vocabulary is per-surface — shows sort by scheduled hours, personas by
+ * how often they speak — so this stores an opaque string and each panel owns
+ * its own union and its own fallback. A stored value the panel no longer
+ * recognises reads as absent, which is what makes retiring a sort mode safe.
+ *
+ * Deliberately NOT station state: which order one operator likes to read their
+ * shows in is a browser preference, the same call roster-order.ts made when it
+ * chose display order over reordering the persisted array. The FILTERS
+ * (search text, tag chips) are not stored at all — a filter that survives a
+ * reload is a roster that looks half-empty for reasons the operator has
+ * forgotten setting. */
+
+const SORT_KEY_PREFIX = 'subwave-admin-sort:';
+
+export function useRosterSort<T extends string>(
+  surface: RosterSurface,
+  allowed: readonly T[],
+  fallback: T,
+): [T, (v: T) => void] {
+  const [sort, setSortState] = useState<T>(fallback);
+
+  // Read in a mount effect, not in the initial state, so server and first
+  // client render agree — the same hydration shape as useRosterView.
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(`${SORT_KEY_PREFIX}${surface}`);
+      if (raw && (allowed as readonly string[]).includes(raw)) setSortState(raw as T);
+    } catch { /* private-mode browsers throw on getItem — the fallback stands */ }
+    // `allowed` is a module-level literal at every call site; listing it here
+    // would re-run this on every render for a value that never changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [surface]);
+
+  const setSort = useCallback((v: T) => {
+    setSortState(v);
+    try {
+      window.localStorage.setItem(`${SORT_KEY_PREFIX}${surface}`, v);
+    } catch { /* as above — the choice still applies for this session */ }
+  }, [surface]);
+
+  return [sort, setSort];
 }

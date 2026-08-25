@@ -33,6 +33,8 @@ interface PersonaEditorProps {
   defaultEngine: string;
   cloudIssueText: string | null;
   skillCatalog: SkillCatalogEntry[];
+  // Tags already used across the roster, offered as one-click adds.
+  tagSuggestions: string[];
   editorRef: RefObject<HTMLDivElement | null>;
   open: boolean;
   isNew: boolean;
@@ -56,7 +58,7 @@ interface PersonaEditorProps {
 
 export function PersonaEditor({
   persona, index, position, control, personaCount, activePersonaId, onAirPersonaId, data, adminFetch, avatarTick, uploadingId,
-  defaultEngine, cloudIssueText, skillCatalog, editorRef, open, isNew, onClose,
+  defaultEngine, cloudIssueText, skillCatalog, tagSuggestions, editorRef, open, isNew, onClose,
   onUpdate,
   onUploadAvatar, onGenerateAvatar, onClearAvatar, onSetActive, onRemove,
   canSave, focusedOk, allPersonasOk, promptOk, busy, onSave, onDiscard,
@@ -166,6 +168,7 @@ export function PersonaEditor({
           isNew={isNew}
           adminFetch={adminFetch}
           avatarTick={avatarTick}
+          tagSuggestions={tagSuggestions}
           uploading={uploadingId === persona.id}
           onUpdate={update}
           onPickAvatar={(file) => onUploadAvatar(persona.id, file)}

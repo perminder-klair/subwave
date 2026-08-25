@@ -661,6 +661,14 @@ export const PERSONA_LANGUAGE_MAX = 60;
 export const PERSONA_SOUL_MAX = 2000;
 export const PERSONA_SKILLS_LIMIT = 64;
 
+// Freeform organisation tags — operator vocabulary for filtering and grouping
+// the admin roster. Third copy of one pattern (skill.ts, show.ts) on purpose:
+// a mirrored schema module may import only zod, so the alternative to three
+// declarations is no mirror. See the header.
+export const PERSONA_TAG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
+export const PERSONA_TAG_MAX = 24;
+export const TAGS_PER_PERSONA_LIMIT = 8;
+
 export const PERSONA_FREQUENCIES = [
   'silent',
   'quiet',
@@ -992,6 +1000,7 @@ export interface PersonaParsed {
   avatar: string;
   tts: TtsVoiceSlot;
   skills: string[] | null;
+  tags: string[];
 }
 
 /**
@@ -1008,6 +1017,47 @@ export interface PersonaParsed {
  * scriptLength → djMode → tts → skills → avatar. An operator with two bad
  * fields must still be told about the same one first.
  */
+// Array or comma string, trimmed + lowercased, empties dropped — the same two
+// wire shapes the skill and show tag fields accept.
+function personaTagList(raw: unknown): string[] {
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+  return list.map((s) => String(s ?? '').trim().toLowerCase()).filter(Boolean);
+}
+
+/**
+ * Organisation only — tags steer nothing on air and are not published by the
+ * public roster route.
+ *
+ * A bad tag is REFUSED, unlike the sibling `skills` list, and the difference is
+ * deliberate: `skills` is a subscription resolved against a live catalogue
+ * where a dead entry is inert, while a tag is typed by hand in the editor and
+ * silently losing one is the operator watching their own input disappear on
+ * reload. repairPersonaTags below is the lenient load-path twin.
+ */
+const personaTags = z
+  .union([z.null(), z.array(z.unknown()), z.string()])
+  .optional()
+  .transform((v) => (v == null ? [] : personaTagList(v)))
+  .check((c) => {
+    for (const tag of c.value) {
+      if (!PERSONA_TAG_RE.test(tag)) {
+        c.issues.push({
+          code: 'custom',
+          input: c.value,
+          message: `invalid tag "${tag}" — lowercase slugs (a-z, 0-9, hyphens), max ${PERSONA_TAG_MAX} chars`,
+        });
+      }
+    }
+    if (new Set(c.value).size > TAGS_PER_PERSONA_LIMIT) {
+      c.issues.push({
+        code: 'custom',
+        input: c.value,
+        message: `tags must be at most ${TAGS_PER_PERSONA_LIMIT} entries`,
+      });
+    }
+  })
+  .transform((toks) => [...new Set(toks)]);
+
 export const personaSchema = z
   .object({
     name: personaCoercedText('name', 1, PERSONA_NAME_MAX),
@@ -1097,6 +1147,10 @@ export const personaSchema = z
         .nullable()
         .default(null),
     ),
+    // Declared AFTER skills and emitted last in the transform below, so both
+    // the issue order an operator is told about and the persisted key order of
+    // every pre-existing field are unchanged.
+    tags: personaTags,
     id: z.preprocess(
       // A malformed id reads as absent so resolvePersonaIds mints one.
       (v) => (typeof v === 'string' && PERSONA_ID_RE.test(v) ? v : undefined),
@@ -1120,6 +1174,7 @@ export const personaSchema = z
       avatar: p.avatar,
       tts: p.tts,
       skills: p.skills,
+      tags: p.tags,
     }),
   );
 
@@ -1186,7 +1241,27 @@ export function repairPersonaForLoad(
           .filter((s) => PERSONA_SKILL_SLUG_RE.test(s))
           .slice(0, PERSONA_SKILLS_LIMIT)
       : undefined,
+    tags: repairPersonaTags(raw.tags),
   };
+}
+
+/**
+ * Tags, repaired: lowercased, invalid entries dropped, de-duplicated, capped.
+ * The cap applies AFTER the validity filter so junk in a hand-edited file does
+ * not spend the budget the operator's real tags need. Non-array reads as absent
+ * so the schema's [] default applies.
+ */
+export function repairPersonaTags(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const tag = item.trim().toLowerCase();
+    if (!PERSONA_TAG_RE.test(tag) || out.includes(tag)) continue;
+    out.push(tag);
+    if (out.length >= TAGS_PER_PERSONA_LIMIT) break;
+  }
+  return out;
 }
 
 // ── DJ prompt library ────────────────────────────────────────────────────────
@@ -3051,6 +3126,16 @@ export const SHOW_FILTER_VALUES_MAX = 15;
 export const SHOW_GENRE_MAX = 64;
 export const SHOW_SEGMENT_SKILL_MAX = 64;
 export const SHOW_THEME_ID_MAX = 64;
+
+// Freeform organisation tags (`tags: ["late-night", "weekend"]`) — operator
+// vocabulary for filtering and grouping the admin show list, the twin of
+// skill.ts's SKILL_TAG_RE. Declared here rather than imported because the
+// mirror is one flat concatenation and a schema module may import only zod
+// (see the header) — the same reason SHOW_ID_RE and PERSONA_ID_RE are three
+// copies of one pattern.
+export const SHOW_TAG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
+export const SHOW_TAG_MAX = 24;
+export const TAGS_PER_SHOW_LIMIT = 8;
 export const SHOW_YEAR_MIN = 1900;
 export const SHOW_YEAR_MAX = 2100;
 // Also the STATION-wide cap's ceiling — settings/defaults.ts BOUNDS reads it
@@ -3216,6 +3301,38 @@ export function migrateLegacyShowFields(raw: unknown): Record<string, unknown> {
   for (const k of LEGACY_SHOW_FIELDS) delete rec[k];
   return rec;
 }
+
+// Accepts the array the editor sends AND a comma string, the two wire shapes
+// every other tag surface in the codebase has always taken. Tokens are
+// trimmed + lowercased, empties dropped, de-duplicated in first-seen order.
+function showTagList(raw: unknown): string[] {
+  const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
+  return list.map((s) => String(s ?? '').trim().toLowerCase()).filter(Boolean);
+}
+
+const showTags = z
+  .union([z.null(), z.array(z.unknown()), z.string()])
+  .optional()
+  .transform((v) => (v == null ? [] : showTagList(v)))
+  .check((c) => {
+    for (const tag of c.value) {
+      if (!SHOW_TAG_RE.test(tag)) {
+        c.issues.push({
+          code: 'custom',
+          input: c.value,
+          message: `invalid tag "${tag}" — lowercase slugs (a-z, 0-9, hyphens), max ${SHOW_TAG_MAX} chars`,
+        });
+      }
+    }
+    if (new Set(c.value).size > TAGS_PER_SHOW_LIMIT) {
+      c.issues.push({
+        code: 'custom',
+        input: c.value,
+        message: `must have at most ${TAGS_PER_SHOW_LIMIT} entries`,
+      });
+    }
+  })
+  .transform((toks) => [...new Set(toks)]);
 
 export function showSchema(ctx: ShowSchemaContext) {
   // Migration must run BEFORE the object parse — z.object strips unknown keys,
@@ -3386,6 +3503,17 @@ function showObjectSchema(ctx: ShowSchemaContext) {
         max: EXCLUDED_PLAYLISTS_PER_SHOW,
         overflowError: `must have at most ${EXCLUDED_PLAYLISTS_PER_SHOW} entries`,
       }),
+      // Organisation only — tags steer nothing on air. Declared LAST so the
+      // persisted key order of every pre-existing field is unchanged, and
+      // defaulted to [] so a show written before the field round-trips byte
+      // identically apart from the new empty list.
+      //
+      // Unlike every other list here a bad entry is REFUSED rather than
+      // dropped: a tag is typed by hand in the editor, and a tag that silently
+      // vanishes on save is the failure the skill conversion called out. The
+      // lenient load twin (repairShowTags) drops instead, because a hand-edited
+      // settings.json should cost the show a filter chip, not the show.
+      tags: showTags,
     })
     // Needs two fields at once, so it cannot live on guestPersonaIds itself.
     .check((c) => {
@@ -3473,6 +3601,26 @@ export function repairShowStringList(
 }
 
 /**
+ * Tags, repaired: lowercased, invalid entries dropped, de-duplicated, capped.
+ *
+ * The cap is applied AFTER the validity filter, not before, so a stored list
+ * padded with junk still yields the operator's real tags rather than spending
+ * the budget on entries that were never going to survive.
+ */
+export function repairShowTags(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: string[] = [];
+  for (const item of raw) {
+    if (typeof item !== 'string') continue;
+    const tag = item.trim().toLowerCase();
+    if (!SHOW_TAG_RE.test(tag) || out.includes(tag)) continue;
+    out.push(tag);
+    if (out.length >= TAGS_PER_SHOW_LIMIT) break;
+  }
+  return out;
+}
+
+/**
  * Every per-field repair the load path applies before parsing, in one place.
  *
  * `undefined` lets the schema's own default apply. Each repair lands on a value
@@ -3535,6 +3683,11 @@ export function repairShowForLoad(
             typeof g === 'string' && g !== host && (personaIds == null || personaIds.includes(g)))
           .slice(0, GUESTS_PER_SHOW)
       : undefined,
+    // Lenient twin of the strict `tags` field: an invalid tag is DROPPED here
+    // rather than failing the show, the same posture skill.ts's
+    // normalizeSkillTags takes against a hand-edited SKILL.md. Non-array reads
+    // as absent so the schema's [] default applies.
+    tags: repairShowTags(raw.tags),
     playlistIds: repairShowStringList(raw.playlistIds, { max: PLAYLISTS_PER_SHOW }),
     excludedPlaylistIds: repairShowStringList(raw.excludedPlaylistIds, {
       max: EXCLUDED_PLAYLISTS_PER_SHOW,

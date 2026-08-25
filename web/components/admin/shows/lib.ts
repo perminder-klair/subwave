@@ -53,6 +53,7 @@ export function hydrateShow(s: Partial<Show>): Show {
     excludedPlaylistIds: Array.isArray(m.excludedPlaylistIds) ? m.excludedPlaylistIds : [],
     programme: m.programme ?? false,
     segmentSkill: m.segmentSkill ?? '',
+    tags: Array.isArray(m.tags) ? m.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean) : [],
   };
 }
 
@@ -124,6 +125,9 @@ export function showPayload(s: Show) {
     programme: s.programme ?? false,
     // A skill pin only means something in programme mode.
     segmentSkill: s.programme ? (s.segmentSkill || '') : '',
+    // No "only means something with" conditional: a tag is the operator's own
+    // filing, so it survives every other field being cleared.
+    tags: s.tags || [],
   };
 }
 
@@ -132,6 +136,11 @@ export function showPayload(s: Show) {
 // and the table row so the two views can't drift.
 export function showFacets(s: Show): ShowFacet[] {
   const facets: ShowFacet[] = [];
+  // Tags lead. Every other facet describes what the show PLAYS; a tag is how
+  // the operator files it, and the whole reason it exists is to be findable at
+  // a glance in a list too long to read — which it isn't behind eight mood and
+  // genre chips.
+  (s.tags || []).forEach(t => facets.push({ key: `tag-${t}`, label: `#${t}`, accent: true }));
   if (s.moods.length) s.moods.forEach(m => facets.push({ key: `mood-${m}`, label: m }));
   else facets.push({ key: 'mood-any', label: 'any mood' });
   s.genres.forEach(g => facets.push({ key: `genre-${g}`, label: g }));
