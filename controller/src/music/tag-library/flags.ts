@@ -130,6 +130,11 @@ export async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<st
       title: song.title,
       artist: song.artist,
       album: song.album,
+      // Subsonic album/artist ids. The walk is the only writer that has
+      // them, and they are what lets an ALBUM/ARTIST blocklist entry match a
+      // library-sourced candidate exactly rather than by name.
+      albumId: song.albumId ?? null,
+      artistId: song.artistId ?? null,
       year: song.year,
       // Album-level era signals (issues #842, #1418). The album's
       // originalReleaseDate is a track's original year only when it is

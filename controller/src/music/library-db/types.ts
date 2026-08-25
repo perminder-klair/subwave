@@ -13,6 +13,12 @@ export interface TrackRecord {
   title: string | null;
   artist: string | null;
   album: string | null;
+  // Subsonic album/artist ids — what lets the never-play blocklist match an
+  // ALBUM or ARTIST entry EXACTLY on a library-sourced candidate, instead of
+  // through the normalised-name fallback that a compilation or a "feat."
+  // credit defeats. null = not walked since the migration that added them.
+  albumId: string | null;
+  artistId: string | null;
   year: number | null;
   // Original-release-year surface (issue #842): the track's TRUE first-release
   // year when it differs from the file's `year` tag (reissues, compilation
@@ -132,6 +138,11 @@ export interface TrackRow {
   title: string | null;
   artist: string | null;
   album: string | null;
+  // Subsonic ids for the track's album and artist. NULL on any row not walked
+  // since the migration that added them — every consumer treats that as
+  // "unknown" and falls back to the name it already had.
+  album_id: string | null;
+  artist_id: string | null;
   year: number | null;
   original_year: number | null;
   original_year_source: string | null;
@@ -176,6 +187,11 @@ export interface TrackMeta {
   title?: string | null;
   artist?: string | null;
   album?: string | null;
+  /** Subsonic album/artist ids. Omitted by the non-walk writers (manual tag
+   *  edits, the analyzer's metadata top-up), which have no id to offer —
+   *  upsertTrackMeta COALESCEs, so an omitted id never clears a stored one. */
+  albumId?: string | null;
+  artistId?: string | null;
   year?: number | string | null;
   genres?: string[] | null;
   duration?: number | null;

@@ -186,6 +186,8 @@ export function set(songId: string, data: any) {
     title: data.title,
     artist: data.artist,
     album: data.album,
+    albumId: data.albumId ?? null,
+    artistId: data.artistId ?? null,
     year: data.year,
     genres: Array.isArray(data.genres) && data.genres.length
       ? data.genres
@@ -324,6 +326,14 @@ function slimTrack(r: db.TrackRecord) {
     title: r.title,
     artist: r.artist,
     album: r.album,
+    // Subsonic album/artist ids. Carried so blocklist.matchOf can reach
+    // its EXACT id tiers on library-sourced candidates — every rejectBlocked()
+    // below filters these rows, and without the ids an album entry falls back
+    // to (album name, that track's artist), which a compilation defeats. Not
+    // part of the LLM candidate surface: llm/.../picker/slim.ts whitelists its
+    // own fields, so this stays out of the model's context.
+    albumId: r.albumId,
+    artistId: r.artistId,
     year: r.year,
     // Era-year surface (issues #842, #1418) — carried inline so show-filter's
     // era checks on library-sourced pools never need a per-track DB lookup.

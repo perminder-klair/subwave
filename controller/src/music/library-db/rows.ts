@@ -14,6 +14,8 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     title: row.title,
     artist: row.artist,
     album: row.album,
+    albumId: row.album_id ?? null,
+    artistId: row.artist_id ?? null,
     year: row.year,
     originalYear: row.original_year ?? null,
     originalYearSource: row.original_year_source ?? null,
