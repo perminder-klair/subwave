@@ -74,6 +74,32 @@ router.get('/jingles/:filename/audio', requireAdmin, async (req, res) => {
   }
 });
 
+// Air a jingle on-air now — the automation-facing trigger (MCP, webhooks, an
+// operator's own dashboard) for a station ident or an event announcement that
+// shouldn't have to wait for the rotate to draw it.
+//
+// This is the endpoint to reach for when the clip is longer than a stinger.
+// /sfx/:name/play mixes UNDER the programme with a light duck and is capped at
+// SFX_MAX_SEC precisely because a long clip there keeps droning over the music;
+// a jingle rides the music chain instead, at full level and with no length cap.
+//
+// Manual trigger, so it ignores the jingleRatio autonomy dial the same way
+// /sfx/:name/play ignores settings.sfx.enabled — an explicit press always fires.
+// It is queued, not immediate: the clip lands in dj_queue and airs at the next
+// track boundary (there is no skip; Liquidsoap owns pacing).
+router.post('/jingles/:filename/play', requireAdmin, async (req, res) => {
+  try {
+    if (!(await jingles.getPath(req.params.filename))) {
+      const names = (await jingles.list()).map(j => j.filename).join(', ');
+      return res.status(404).json({ error: `unknown jingle: ${req.params.filename}${names ? `. Available: ${names}` : ''}` });
+    }
+    await queue.playJingle(req.params.filename);
+    res.json({ ok: true, filename: req.params.filename });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // TAG-LIBRARY — kick off the tagger as a background child process.
 // Polls /settings to see progress (library.total grows; tagger.running flips).

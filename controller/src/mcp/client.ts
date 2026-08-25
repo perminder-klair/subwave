@@ -107,6 +107,11 @@ export interface SfxPlayResult {
   name: string;
 }
 
+export interface JinglePlayResult {
+  ok: boolean;
+  filename: string;
+}
+
 export class SubwaveClient {
   constructor(private readonly config: SubwaveConfig) {}
 
@@ -321,6 +326,18 @@ export class SubwaveClient {
   /** POST /sfx/:name/play — fire a sound effect on-air now. */
   async playSfx(name: string): Promise<SfxPlayResult> {
     return this.call<SfxPlayResult>(`/sfx/${encodeURIComponent(name)}/play`, {
+      method: "POST",
+      admin: true,
+    });
+  }
+
+  async listJingles(): Promise<Record<string, unknown>> {
+    return this.call<Record<string, unknown>>("/jingles", { admin: true });
+  }
+
+  /** POST /jingles/:filename/play — queue a jingle for the next boundary. */
+  async playJingle(filename: string): Promise<JinglePlayResult> {
+    return this.call<JinglePlayResult>(`/jingles/${encodeURIComponent(filename)}/play`, {
       method: "POST",
       admin: true,
     });

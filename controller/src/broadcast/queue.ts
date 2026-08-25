@@ -27,6 +27,7 @@ import { speak, voiceGainDb } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import * as sfx from './sfx.js';
+import * as jingles from './jingles.js';
 import * as beds from './beds.js';
 import * as bedPolicy from './bed-policy.js';
 import * as session from './session.js';
@@ -65,6 +66,8 @@ import {
   BACKFILL_DEDUP_MAX_GAP_MS,
   EMPTY_DJ_QUEUE_CLEAR_THRESHOLD,
   PICK_SHOW_LOOKAHEAD_SEC,
+  PLAY_JINGLE_POLL_MS,
+  PLAY_JINGLE_WAIT_MS,
   boundaryCarriesTrackVoice,
   formatAgo,
   knownDurationSec,
@@ -1708,6 +1711,78 @@ class Queue {
     } catch (err) {
       this.log('error', `playSfx failed: ${(err as Error).message}`);
     }
+  }
+
+  // Air a jingle NOW — the on-demand counterpart to the rotate, for the station
+  // ident or event announcement an operator fires by hand or from a dashboard
+  // (POST /jingles/:filename/play, subwave_play_jingle). Manual trigger, so it
+  // ignores jingleRatio: turning the rotate off silences the automatic draw,
+  // never an explicit press.
+  //
+  // Deliberately NOT the sfx path, which is where this request first arrived:
+  // an effect is amplified to 0.7 and mixed UNDER the programme with only a
+  // light duck, so anything past a stinger's length drones on over the music —
+  // which is exactly what SFX_MAX_SEC exists to prevent, and why raising that
+  // cap would not have given anyone a usable announcement. A jingle instead
+  // rides the music chain as its own item: full level, the programme yields to
+  // it, and nothing bounds its length.
+  //
+  // It goes in through next.txt like a bed rather than a handoff file of its
+  // own, so it lands in dj_queue behind whatever is already queued and airs at
+  // the next track boundary. There is no interrupt on offer here: Liquidsoap
+  // owns pacing and track-end is still the only natural transition.
+  async playJingle(filename: string) {
+    if (!filename) return;
+    try {
+      const path = await jingles.getPath(filename);
+      if (!path) {
+        this.log('error', `Unknown jingle: ${filename}`);
+        return;
+      }
+      // Wait out an in-flight drain before writing. A drain that beds an item
+      // writes the bed and the track it ramps into as two SEPARATE handoffs
+      // (maybePushBed), and a jingle slotted between them takes the bed's place
+      // under the DJ's link: the link airs over the announcement and the bed
+      // plays to nobody. senderBusy is the same single-flight flag the drain
+      // guards itself with — waited on here rather than early-returned on,
+      // because an explicit operator press must never be silently dropped.
+      // Claim the flag only if we actually won it: past the bound a drain still
+      // holds it, and clearing someone else's mutex in the finally below would
+      // let a second drain start on top of the first.
+      const claimed = await this.waitForSenderIdle();
+      if (claimed) this.senderBusy = true;
+      else this.log('scheduler', `sender still busy after ${PLAY_JINGLE_WAIT_MS}ms — airing "${filename}" anyway`);
+      try {
+        await writeHandoff(config.liquidsoap.queueFile, jingles.jingleUri(path));
+      } finally {
+        if (claimed) {
+          this.senderBusy = false;
+          // Same release semantics as the drain's own finally: a forced drain
+          // that arrived while we held the flag has to be re-run, not lost.
+          if (this.pendingForceDrain) {
+            this.pendingForceDrain = false;
+            void this.drainToLiquidsoap(true);
+          }
+        }
+      }
+      this.log('jingle', `"${filename}" queued — airs at the next boundary`);
+      session.appendTurn({ role: 'segment', kind: 'jingle', text: filename });
+    } catch (err) {
+      this.log('error', `playJingle failed: ${(err as Error).message}`);
+    }
+  }
+
+  // Poll senderBusy down to false, bounded. Returns false if the bound expired
+  // with the sender still busy — the caller pushes anyway. Failing OPEN is the
+  // deliberate direction: a split bed pair costs a garnish, whereas dropping an
+  // operator's announcement costs the thing they pressed the button for.
+  async waitForSenderIdle(): Promise<boolean> {
+    const deadline = Date.now() + PLAY_JINGLE_WAIT_MS;
+    while (this.senderBusy) {
+      if (Date.now() >= deadline) return false;
+      await sleep(PLAY_JINGLE_POLL_MS);
+    }
+    return true;
   }
 
   // Called by the now-playing watcher when Liquidsoap reports a new track.

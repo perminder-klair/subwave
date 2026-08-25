@@ -23,6 +23,7 @@ import { router as publicRouter } from '../src/routes/public.js';
 import { router as requestRouter } from '../src/routes/request.js';
 import { router as djRouter } from '../src/routes/dj.js';
 import { router as sfxRouter } from '../src/routes/sfx.js';
+import { router as jinglesRouter } from '../src/routes/jingles.js';
 import { router as statsRouter } from '../src/routes/stats.js';
 import { router as listenersRouter } from '../src/routes/listeners.js';
 
@@ -49,7 +50,7 @@ function routeKeys(router: any): Set<string> {
 
 async function main() {
   const real = new Set<string>();
-  for (const r of [publicRouter, requestRouter, djRouter, sfxRouter, statsRouter, listenersRouter]) {
+  for (const r of [publicRouter, requestRouter, djRouter, sfxRouter, jinglesRouter, statsRouter, listenersRouter]) {
     for (const k of routeKeys(r)) real.add(k);
   }
 

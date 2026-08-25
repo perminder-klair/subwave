@@ -201,10 +201,12 @@ export const config = {
     sfxFile: `${STATE_DIR}/sfx.txt`,
     autoPlaylist: `${STATE_DIR}/auto.m3u`,
     nowPlayingFile: `${STATE_DIR}/now-playing.json`,
-    // Written by radio.liq when a jingle starts feeding the jingle rotate
-    // (issue #997). Jingles play outside the controller's voice serialiser,
-    // so airVoice reads this to hold spoken segments until the stinger has
-    // cleared the air.
+    // Written by radio.liq when a jingle starts feeding (issue #997). Jingles
+    // play outside the controller's voice serialiser, so airVoice reads this to
+    // hold spoken segments until the clip has cleared the air. TWO writers, one
+    // file: the rotate's own on_metadata, and on_meta's `subwave_kind="jingle"`
+    // branch for a clip the controller pushed on demand (queue.playJingle).
+    // They stage through separate temp dirs — see radio.liq's jingle_now_tmp_dir.
     jinglePlayingFile: `${STATE_DIR}/jingle-playing.json`,
     // Written by radio.liq when a track annotated `subwave_kind="bed"` starts
     // (broadcast/beds.ts). A bed carries no title/artist, so on_meta skips

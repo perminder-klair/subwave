@@ -596,6 +596,61 @@ export function registerSubwaveTools(
   );
 
   // -------------------------------------------------------------------------
+  // subwave_list_jingles — the jingle library (admin)
+  // -------------------------------------------------------------------------
+  server.registerTool(
+    "subwave_list_jingles",
+    {
+      title: "List jingles",
+      description:
+        "List the station's jingle library — full-level clips (idents, event " +
+        "announcements) that play as their own item in the programme rather than " +
+        "under it. Unlike sound effects these have no length cap. ADMIN endpoint. " +
+        "Use a returned filename with subwave_play_jingle.",
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    () =>
+      run(async () => {
+        const data = await client.listJingles();
+        return { content: [text(data)] };
+      }),
+  );
+
+  // -------------------------------------------------------------------------
+  // subwave_play_jingle — air a jingle at the next boundary (admin)
+  // -------------------------------------------------------------------------
+  server.registerTool(
+    "subwave_play_jingle",
+    {
+      title: "Air a jingle",
+      description:
+        "Queue a jingle from the station library to air at the next track boundary — " +
+        "at full level, with the programme yielding to it. ADMIN endpoint. This is the " +
+        "tool for anything longer than a stinger (an event announcement, a sponsor " +
+        "spot, a station ident): subwave_play_sfx mixes UNDER the music and is capped " +
+        "at 10 seconds. It is queued, not instant — the station never cuts a song off " +
+        "mid-play. List valid filenames with subwave_list_jingles.",
+      inputSchema: {
+        filename: z
+          .string()
+          .min(1)
+          .describe("Jingle filename, e.g. 'jingle_a1b2c3d4.wav'. List valid ones with subwave_list_jingles."),
+      },
+      outputSchema: { ok: z.boolean(), filename: z.string() },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    ({ filename }) =>
+      run(async () => {
+        const result = await client.playJingle(filename);
+        return {
+          content: [text(`Jingle '${result.filename}' is queued for the next boundary.`)],
+          structuredContent: { ...result },
+        };
+      }),
+  );
+
+  // -------------------------------------------------------------------------
   // subwave_refresh_playlist — rebuild the fallback auto-playlist (admin)
   // -------------------------------------------------------------------------
   server.registerTool(

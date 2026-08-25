@@ -35,6 +35,8 @@ for the full architecture write-up.
 | `subwave_run_skill` | admin | Run a named skill segment now (weather, news, …). |
 | `subwave_list_sfx` | admin | The sound-effects library. |
 | `subwave_play_sfx` | admin | Fire a sound effect on-air immediately. |
+| `subwave_list_jingles` | admin | The jingle library — idents and announcements, no length cap. |
+| `subwave_play_jingle` | admin | Queue a jingle to air at the next boundary, at full level. |
 | `subwave_refresh_playlist` | admin | Rebuild the fallback auto-playlist for the current mood. |
 
 Listeners have no skip — track-end is the only transition, and a requested
@@ -150,5 +152,11 @@ The stdio transport keeps `stdout` clean; the server logs only to `stderr`.
   of an emergency weather warning), use `subwave_dj_announce`'s `sfx`
   parameter; `subwave_play_sfx` fires one standalone. For wording that must
   not be paraphrased, use `mode='raw'`.
+- **Effects vs jingles.** An effect is mixed *under* the programme, which is
+  why it is capped at 10s — a longer one drones on over the music. Anything
+  longer belongs in the jingle library: `subwave_play_jingle` gives the clip
+  its own slot at full level, with no cap, so a sponsor spot or a two-minute
+  event announcement works. It airs at the next track boundary rather than
+  instantly — there is no skip in this system.
 - The controller must be running. If it isn't reachable, every tool returns an
   error naming the URL it tried and what to check.

@@ -69,6 +69,14 @@ export function pickLinkInterval() {
 // can't trip it.
 export const EMPTY_DJ_QUEUE_CLEAR_THRESHOLD = 3;
 
+// How long queue.playJingle waits for an in-flight drain to release the sender
+// mutex before pushing its announcement anyway, and how often it looks. The
+// bound is generous because the drain it is yielding to can legitimately hold
+// the mutex through a slow local TTS render; past it the press wins regardless
+// (see waitForSenderIdle for which way this deliberately fails).
+export const PLAY_JINGLE_WAIT_MS = 30_000;
+export const PLAY_JINGLE_POLL_MS = 100;
+
 // Upper bound on how far a recordPlay end-stamp can sit after the play's start
 // for the events-backfill dedup (playAlreadyRecorded). recordPlay stamps
 // endedAt at the track's END; an event's `t` is its START, so the two differ by

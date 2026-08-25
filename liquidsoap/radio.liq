@@ -47,6 +47,14 @@ end
 
 np_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/now-playing")
 jingle_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle")
+# Second dir for the SAME marker file, for the same reason the two voice
+# channels get one each (see below): jingle-playing.json has two writers — the
+# rotate's own on_metadata and on_meta's on-demand branch — and the stdlib always
+# names its staging file `atomic.write` inside the dir it is given. The two
+# clips can never be the same clip (music_meta is captured above the rotate), but
+# their feeds can overlap inside one crossfade, and a shared dir makes that a
+# torn write.
+jingle_now_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle-now")
 bed_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/bed")
 starve_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/starve")
 # One per voice channel, not one for both: they write the SAME marker file, and
@@ -1573,6 +1581,37 @@ def on_meta(m) =
       atomic=true,
       temp_dir=bed_tmp_dir,
       "#{state_dir}/bed-playing.json"
+    )
+  # ON-DEMAND JINGLES — a station ident or event announcement the controller
+  # pushed straight into dj_queue instead of waiting for the rotate to draw it
+  # (broadcast/jingles.ts jingleUri + queue.playJingle). Same not-a-song
+  # reasoning as the bed branch above, and it has to sit BEFORE the gate for a
+  # second reason too: a jingle imported on a host without ffmpeg keeps its
+  # original container and its ID3 tags, so a titled upload would otherwise sail
+  # through the gate and publish an announcement as the now-playing track.
+  #
+  # It writes the SAME marker the rotate's own on_metadata writes, because the
+  # controller's jingle collision guard (#997, waitForJingleClear) is what keeps
+  # a boundary-aired link off the top of it — and that guard reads exactly one
+  # file. The clip is NOT gated on voice_until the way the rotate is: an
+  # operator press is exempt from the automatic gates by design, and this
+  # marker is the other half of the guard covering that direction anyway.
+  #
+  # bed_on_air is cleared for the same reason the untitled branch below clears
+  # it: whatever bed was up has ended, and a latched flag starves the rotate
+  # until the next tagged song. The push is serialised against the drain
+  # (queue.waitForSenderIdle), so this can't be splitting a live bed pair.
+  elsif m["subwave_kind"] == "jingle" then
+    log("on_meta: on-demand jingle started (#{filename})")
+    bed_on_air := false
+    file.write(
+      data=json.stringify(compact=true, {
+        filename = filename,
+        startedAt = time()
+      }),
+      atomic=true,
+      temp_dir=jingle_now_tmp_dir,
+      "#{state_dir}/jingle-playing.json"
     )
   elsif title != "" or artist != "" then
     bed_on_air := false
