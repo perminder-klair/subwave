@@ -449,6 +449,18 @@ class AnalyzeRequest(BaseModel):
 @app.post("/analyze")
 async def analyze(req: AnalyzeRequest):
     if req.path:
+        # A controller can reach this sidecar over HTTP without sharing its
+        # state mount. Name that boundary failure before handing it to the
+        # worker, so the controller can retry by URL without also retrying
+        # genuine decode/model failures.
+        if not os.path.isfile(req.path) or not os.access(req.path, os.R_OK):
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "path_unavailable",
+                    "message": f"analyzer cannot read controller path: {req.path}",
+                },
+            )
         payload: dict[str, Any] = {"id": "1", "path": req.path}
     elif req.url:
         payload = {"id": "1", "url": req.url}

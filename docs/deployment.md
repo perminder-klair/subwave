@@ -264,7 +264,8 @@ Three things to know before you do it:
 
 - **Mount it in the controller *and* the analyzer, at the identical path.**
   The controller hands the analyzer a filesystem *path*, not audio (the same
-  handoff that makes a remote analyzer need a matching mount — see
+  fast handoff a remote analyzer can fall back from for ordinary analysis, but
+  not for stem output — see
   ["Running the analyzer on another machine"](tts-heavy.md)). A stems mount
   that only one of them can see fails every write.
 - **Ownership sorts itself out on boot.** A fresh bind mount lands root-owned

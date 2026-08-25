@@ -205,13 +205,16 @@ answers, sends analysis there instead of to the local `analyzer` container. Use
 a LAN or Tailscale address — `localhost` is the *controller container's*
 loopback.
 
-**One requirement, and it is the whole reason network-share attempts fail:
-both machines must see the state directory at the same path.** The controller
-pre-fetches each track to `/var/sub-wave/analyze-tmp/` and hands the analyzer a
-*path*, not the audio (network fetch on the controller overlaps DSP on the
-analyzer — that's most of the throughput). If the analyzer can't open that path,
-every track fails. Stem-cache rendering (`state/stems/`) writes back through the
-same shared dir.
+The fast path still uses shared storage: the controller pre-fetches each track
+to `/var/sub-wave/analyze-tmp/` and hands that path to the analyzer, overlapping
+the next network fetch with the current DSP work. If the remote analyzer cannot
+read the path, it now returns a typed refusal and the controller retries that
+track by URL. That makes a share-less remote analyzer work, at the cost of the
+prefetch overlap.
+
+A same-path state mount is therefore **recommended for throughput, but required
+only for stem caching**. Stem rendering writes into `state/stems/`; a remote
+machine cannot send those files back through the URL fallback.
 
 So, on the GPU host:
 
@@ -226,9 +229,10 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      # MUST resolve to the same files the station's /var/sub-wave holds, at
-      # this exact mount point. An NFS/SMB export of the station's state dir is
-      # the usual way; the AIO's equivalent is the appdata share.
+      # Optional for ordinary analysis; recommended for the prefetch fast path
+      # and REQUIRED for stem caching. It must resolve to the station's state
+      # files at this exact path. NFS/SMB is the usual choice; the AIO's
+      # equivalent is the appdata share.
       - /mnt/subwave-state:/var/sub-wave
       - analyzer-cache:/opt/analyzer/hf-cache
     # CUDA image only — same reservation docker-compose.analyzer-gpu.yml applies
@@ -249,19 +253,21 @@ checks, in order:
 
 1. `curl http://<gpu-host>:8080/health` from the **station** host — expect
    `"ok": true` with `analyze` in `engines`.
-2. `docker compose exec analyzer ls /var/sub-wave/analyze-tmp` on the **GPU**
-   host while a scan runs — if that's empty or errors, the share is the problem,
-   not the URL.
-3. Watch the station's analyze log: path-open errors mean the mount point
-   differs. Timeouts are ambiguous — the per-track deadline is
+2. If you configured the shared-state fast path, run
+   `docker compose exec analyzer ls /var/sub-wave/analyze-tmp` on the **GPU**
+   host while a scan runs. Empty or unreadable means the controller will use
+   slower URL downloads; fix the mount before enabling stem caching.
+3. Watch the station's analyze log. A one-time `using URL downloads` warning
+   confirms the share-less fallback is active. Timeouts are ambiguous — the
+   per-track deadline is
    `ANALYZE_REQUEST_TIMEOUT_MS` (120s by default), and reading a long track
    across a slow share *plus* the DSP can outrun it on a link that is otherwise
    working. Raise it before concluding the URL is wrong.
 
 Keep the local `analyzer` service stopped (`docker compose stop analyzer` after
 each `up -d`, which restarts it) so you aren't paying for an idle image, and
-mind that the share needs write permission for the analyzer's user — it writes
-stems and reads temp audio.
+if you use the shared path, mind that it needs read permission for staged audio
+and write permission for stems under the analyzer's user.
 
 > **Not the same as sharing your music library.** Navidrome's music files aren't
 > involved here; the shared directory is SUB/WAVE's own `state/`.

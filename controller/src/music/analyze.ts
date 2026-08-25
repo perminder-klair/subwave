@@ -603,7 +603,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       // Lyrics still override the stored ranges below either way.
       const vocal = vocalBackfill ? (lyricVocal && !stems_dir ? false : true) : undefined;
       const a = localPath
-        ? await analyzer.analyzePath(localPath, {
+        ? await analyzer.analyzePathWithUrlFallback(id, localPath, {
             embed,
             vocal,
             complete: localComplete,
