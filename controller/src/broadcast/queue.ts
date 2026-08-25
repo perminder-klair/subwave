@@ -75,6 +75,7 @@ import {
   playAlreadyRecorded,
   shouldDropStaleLink,
   sleep,
+  voiceChannelFor,
 } from './queue/pure.js';
 import {
   PUSH_PROBE_INTERVAL_MS,
@@ -417,9 +418,12 @@ class Queue {
   // `introScript` is tied to THIS track but is NOT aired at queue time:
   // drainToLiquidsoap renders it to a WAV ahead of time and airIntro() writes
   // that WAV only when the track actually starts, so the voice lands over the
-  // right song. `introKind` picks the engine routing and the duck channel —
-  // 'dj-speak' → say.txt (HEAVY duck, request intros), 'link' → intro.txt
-  // (LIGHT duck, between-track links).
+  // right song. `introKind` picks the engine routing (voice slot, gain trim)
+  // and the DEFAULT duck channel — 'dj-speak' → say.txt (HEAVY duck, request
+  // intros), 'link' → intro.txt (LIGHT duck, between-track links). It no longer
+  // decides the channel outright: since #1465 a clip airing on a bed takes the
+  // light duck whatever its kind, because the channel follows what the clip
+  // plays OVER (airIntro's `overBed`).
   //
   // `linkPrev` is the track the intro BACK-ANNOUNCES. Deferring the line to air
   // time (#189) is only valid while this pick is still immediately-next; a
@@ -595,8 +599,9 @@ class Queue {
   // would outlast the song's own intro, or when the song is a listener request
   // and its opening is not the DJ's to talk over — so the DJ talks over the bed
   // rather than over the song. Sets item.bedded, which is how the bed's start
-  // event (onBedStarted) finds the item whose link it should air, and which
-  // airIntro reads to put the clip on the light-duck channel.
+  // event (onBedStarted) finds the item whose link it should air — and only
+  // that. The light-duck channel is onBedStarted's `overBed` to give, because
+  // the flag says a bed was HANDED OVER while the marker says one is on air.
   //
   // Ordering is what makes this a controller-side feature rather than a mixer
   // one: the link's WAV was rendered a few lines up, so its real length is
@@ -1335,10 +1340,13 @@ class Queue {
     if (!text || !text.trim()) return;
     try {
       const wavPath = await speak(text, { kind, persona });
-      const targetFile = kind === 'link'
+      // No bed here by construction — announce() speaks without queueing a
+      // track, so there is nothing for maybePushBed to have bedded.
+      const channel = voiceChannelFor(kind);
+      const targetFile = channel === 'intro'
         ? config.liquidsoap.introFile
         : config.liquidsoap.sayFile;
-      const seg: SegmentDesc = { kind, channel: kind === 'link' ? 'intro' : 'say', text, meta, persona };
+      const seg: SegmentDesc = { kind, channel, text, meta, persona };
       const handoff = await airVoice(targetFile, wavPath, text, voiceGainDb(kind, persona), {
         onQueued: q => this.onQueued(q, seg),
       });
@@ -1591,7 +1599,18 @@ class Queue {
   // (issue #189). The WAV was rendered ahead of time in drainToLiquidsoap, so
   // this just writes the path to the duck channel and mirrors the bookkeeping
   // announce() does (djLog feeds the opener anti-repeat; session + webhook).
-  async airIntro(item: QueueItem, predecessor: Track | null = null) {
+  // `overBed` is the CALLER's statement that an instrumental bed is feeding the
+  // music chain right now — onBedStarted saw the marker. It is not read off
+  // item.bedded, which only means a bed URI reached next.txt: a pushed item is
+  // handed over, never playable (a URI Liquidsoap can't resolve is dropped in
+  // silence, and a marker missed by more than BED_MARKER_FRESH_MS never fires
+  // the event). In that case the song itself starts and onTrackStarted airs the
+  // line over ITS opening — which is a song to talk over, so it takes the heavy
+  // duck like any other request intro. Inferring the channel from the flag
+  // would hand the one failure case this feature exists to prevent a LIGHTER
+  // duck than it had before #1465. Same rule as onSpoken's channel: passed by
+  // whoever knows, never re-derived (#1382).
+  async airIntro(item: QueueItem, predecessor: Track | null = null, { overBed = false }: { overBed?: boolean } = {}) {
     // Station voice off (settings.tts.enabled). The generation sites already
     // skip writing intros, so this only catches an item queued BEFORE the
     // switch was flipped — it must not air its script now. Backstop, not the
@@ -1666,11 +1685,9 @@ class Queue {
     const kind = item.introKind || 'dj-speak';
     // Channel is chosen by what this clip is playing OVER, not by its kind —
     // the same split the boundary-deferred ident already relies on (#1382).
-    // A bedded clip has no song to talk over: the thing under it is an
-    // instrumental put there for exactly this purpose, so it takes the LIGHT
-    // duck (intro.txt, p=0.30) rather than the heavy one that would push the
-    // bed down to a hiss. Everything else keeps the kind's own channel.
-    const channel: 'intro' | 'say' = (item.bedded || kind === 'link') ? 'intro' : 'say';
+    // `overBed` comes from onBedStarted, which SAW the bed start; see
+    // voiceChannelFor for why it can't be read off item.bedded here.
+    const channel = voiceChannelFor(kind, { overBed });
     const targetFile = channel === 'intro'
       ? config.liquidsoap.introFile
       : config.liquidsoap.sayFile;
@@ -2532,7 +2549,10 @@ class Queue {
     const waitMs = Math.max(0, startedMs + (item.bedEntrySec || 0) * 1000 - Date.now());
     this.log('beds', `bed on air → airing the link for "${item.track?.title}"${
       waitMs > 0 ? ` in ${(waitMs / 1000).toFixed(1)}s (entry cross)` : ''}`);
-    const fire = () => void this.airIntro(item, this.current?.track || null);
+    // overBed: the marker above IS the bed feeding the music chain, so this is
+    // the one call site that can state it as a fact rather than infer it from
+    // item.bedded (see airIntro).
+    const fire = () => void this.airIntro(item, this.current?.track || null, { overBed: true });
     if (waitMs > 0) setTimeout(fire, waitMs);
     else fire();
   }

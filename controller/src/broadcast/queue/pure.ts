@@ -370,6 +370,38 @@ export function boundaryCarriesTrackVoice(
   return !shouldDropStaleLink(item, predecessor);
 }
 
+// Which mixer channel a spoken clip takes: 'intro' → intro.txt → intro_queue →
+// LIGHT duck (p=0.30, the music stays audible under the voice), 'say' →
+// say.txt → voice_queue → HEAVY duck (p=0.22, the voice dominates).
+//
+// The rule is **what the clip plays OVER, not what kind it is**. A link talks
+// up the song that just started, so the song stays up. Everything else — idents,
+// the hourly clock, weather, a request intro — is meant to dominate.
+//
+// `overBed` is the #1465 case and it OVERRIDES the kind: a clip airing on an
+// instrumental bed has no song to talk over, and the heavy duck would push the
+// bed (put there for exactly this purpose) down to a hiss. It is the CALLER's
+// observation that a bed is on air — `queue.onBedStarted` saw the marker —
+// never `item.bedded`, which only means a bed URI reached next.txt. A pushed
+// item is handed over, never playable: an unresolvable URI is dropped in
+// silence and a marker missed by more than BED_MARKER_FRESH_MS never fires the
+// event, and in both cases the SONG starts and the line airs over its opening,
+// which is a song to talk over and takes the heavy duck like any other request
+// intro. Reading the flag would hand that failure — the one this feature exists
+// to prevent — a lighter duck than it had pre-#1465.
+//
+// Pure + exported so the rule is unit-pinned (scripts/voice-channel.test.ts)
+// and stated once: `announce` and `airIntro` both reach it, and each had its own
+// inline copy. `airPendingVoice` deliberately does NOT — a boundary-deferred
+// ident is a say-kind clip forced onto the intro channel (#1382), which is an
+// exception to this rule rather than an instance of it.
+export function voiceChannelFor(
+  kind: string | null | undefined,
+  { overBed = false }: { overBed?: boolean } = {},
+): 'intro' | 'say' {
+  return (overBed || kind === 'link') ? 'intro' : 'say';
+}
+
 // Per-target-file write chain. Liquidsoap polls each handoff file (say.txt,
 // intro.txt, sfx.txt, next.txt) on a 0.5-1.0s interval and DELETES the file
 // after reading it (see liquidsoap/radio.liq poll_voice/poll_intro/poll_sfx/

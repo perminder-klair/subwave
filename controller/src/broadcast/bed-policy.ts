@@ -115,8 +115,13 @@ export function bedWanted(
 // fade-in, the way a presenter talks up to the vocal.
 //
 // The clamp keeps the arithmetic total rather than trusting the policy to stay
-// honest: the ramp must never start before the bed does. Only reachable on a
-// sub-2s script, which bedWanted() prevents today.
+// honest: the ramp must never start before the bed does. It used to be
+// unreachable because bedWanted() refused a short script; since #1465 a
+// 'request' beds at ANY length, so what keeps it out of range is now only the
+// arithmetic — with the defaults it needs entryCrossSec + clip under 1s, i.e. a
+// sub-second clip on a hard-cut station. Close enough to matter, far enough not
+// to design around: don't reason about which scripts can reach it, the clamp is
+// the reason it doesn't have to hold.
 export function bedLengthFor(
   voiceMs: number,
   opts: BedOpts,
