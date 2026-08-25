@@ -69,14 +69,6 @@ export function pickLinkInterval() {
 // can't trip it.
 export const EMPTY_DJ_QUEUE_CLEAR_THRESHOLD = 3;
 
-// How long queue.playJingle waits for an in-flight drain to release the sender
-// mutex before pushing its announcement anyway, and how often it looks. The
-// bound is generous because the drain it is yielding to can legitimately hold
-// the mutex through a slow local TTS render; past it the press wins regardless
-// (see waitForSenderIdle for which way this deliberately fails).
-export const PLAY_JINGLE_WAIT_MS = 30_000;
-export const PLAY_JINGLE_POLL_MS = 100;
-
 // Upper bound on how far a recordPlay end-stamp can sit after the play's start
 // for the events-backfill dedup (playAlreadyRecorded). recordPlay stamps
 // endedAt at the track's END; an event's `t` is its START, so the two differ by
@@ -379,7 +371,8 @@ export function boundaryCarriesTrackVoice(
 }
 
 // Per-target-file write chain. Liquidsoap polls each handoff file (say.txt,
-// intro.txt, sfx.txt, next.txt) on a 0.5-1.0s interval and DELETES the file
+// intro.txt, sfx.txt, next.txt, jingle-now.txt) on a 0.5-1.0s interval and
+// DELETES the file
 // after reading it (see liquidsoap/radio.liq poll_voice/poll_intro/poll_sfx/
 // poll_queue). Without serialisation, two writes inside one poll window
 // silently lose the first one — exactly the failure in issue #140 where a
@@ -398,5 +391,3 @@ export function formatAgo(ms: number) {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
 }
-
-

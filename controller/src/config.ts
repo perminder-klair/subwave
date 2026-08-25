@@ -190,6 +190,10 @@ export const config = {
   },
   liquidsoap: {
     queueFile: `${STATE_DIR}/next.txt`,
+    // Dedicated priority handoff for an operator-triggered jingle. Keeping it
+    // separate from next.txt lets Liquidsoap choose it before an already-filled
+    // FIFO dj_queue at the next safe boundary.
+    jingleFile: `${STATE_DIR}/jingle-now.txt`,
     sayFile: `${STATE_DIR}/say.txt`,
     // Separate channel for talk-over voice (auto-links, anything that should
     // play OVER a track that's already started with light ducking instead of

@@ -105,6 +105,7 @@ try {
   // now-playing.json must not be served as the current track after the boot.
   const nightShiftDir = join(root, 'stations', 'night-shift');
   writeFileSync(join(nightShiftDir, 'next.txt'), 'annotate:title=stale:file:///stale.mp3');
+  writeFileSync(join(nightShiftDir, 'jingle-now.txt'), 'annotate:subwave_kind="jingle":/stale.wav');
   writeFileSync(join(nightShiftDir, 'now-playing.json'), '{"title":"stale"}');
   writeFileSync(join(nightShiftDir, 'jingle-playing.json'), '{"filename":"stale.wav"}');
 
@@ -112,6 +113,7 @@ try {
   manager.activateStation(root, 'night-shift');
   assert.equal(manager.activeIdOnDisk(root), 'night-shift');
   assert.ok(!existsSync(join(nightShiftDir, 'next.txt')));
+  assert.ok(!existsSync(join(nightShiftDir, 'jingle-now.txt')));
   assert.ok(!existsSync(join(nightShiftDir, 'now-playing.json')));
   assert.ok(!existsSync(join(nightShiftDir, 'jingle-playing.json')));
   manager.deleteStation(root, 'night-shift-2');

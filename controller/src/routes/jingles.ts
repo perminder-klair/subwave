@@ -85,8 +85,9 @@ router.get('/jingles/:filename/audio', requireAdmin, async (req, res) => {
 //
 // Manual trigger, so it ignores the jingleRatio autonomy dial the same way
 // /sfx/:name/play ignores settings.sfx.enabled — an explicit press always fires.
-// It is queued, not immediate: the clip lands in dj_queue and airs at the next
-// track boundary (there is no skip; Liquidsoap owns pacing).
+// It is queued, not immediate: the priority source takes the next safe track
+// boundary. Active speech or a bed/track pair defers it rather than mixing over
+// the DJ or splitting the pair (there is no skip; Liquidsoap owns pacing).
 router.post('/jingles/:filename/play', requireAdmin, async (req, res) => {
   try {
     if (!(await jingles.getPath(req.params.filename))) {

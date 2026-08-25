@@ -109,7 +109,8 @@ export default function AgentAccess() {
           <code className="bs-code-inline">subwave_play_jingle</code> to give it its own
           slot at full level, with the music yielding to it and no cap on length. That
           is the one to use for a pre-recorded event announcement or a sponsor spot. It
-          airs at the next track boundary rather than cutting a song off mid-play.
+          airs at the next safe track boundary rather than cutting a song off
+          mid-play; active speech or a bed/track pair defers it briefly.
         </p>
       </section>
 

@@ -14,7 +14,7 @@ whole HTTP API (and a live playground), see [`api.md`](./api.md) or the admin
 
 ## The short version
 
-There are two ways to connect — both expose the **same seventeen tools** from
+There are two ways to connect — both expose the **same nineteen tools** from
 the **same source** (`controller/src/mcp/`):
 
 ```
@@ -29,7 +29,7 @@ Local alternative — stdio (runs from a repo clone via tsx):
 The tools own no state and almost no logic of their own — each is a typed
 wrapper over one controller HTTP endpoint (the one exception:
 `subwave_request_song` polls the request receipt so the agent gets an outcome,
-not a ticket). The model gets seventeen tools; the controller does the real work
+not a ticket). The model gets nineteen tools; the controller does the real work
 (LLM matching, track selection, TTS, queueing).
 
 **HTTP endpoint (recommended).** The controller serves MCP directly at
@@ -83,7 +83,7 @@ intent-shaped tools.
 | `subwave_list_sfx` | `GET /sfx` | admin | no |
 | `subwave_play_sfx` | `POST /sfx/:name/play` | admin | plays a stinger now |
 | `subwave_list_jingles` | `GET /jingles` | admin | no |
-| `subwave_play_jingle` | `POST /jingles/:filename/play` | admin | airs a jingle at the next boundary |
+| `subwave_play_jingle` | `POST /jingles/:filename/play` | admin | airs a jingle at the next safe boundary |
 | `subwave_refresh_playlist` | `POST /dj/refresh-playlist` | admin | no (fallback playlist only) |
 
 ### Read tools — `subwave_health`, `subwave_now_playing`, `subwave_station_state`, `subwave_schedule`, `subwave_session`

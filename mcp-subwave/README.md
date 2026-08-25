@@ -36,7 +36,7 @@ for the full architecture write-up.
 | `subwave_list_sfx` | admin | The sound-effects library. |
 | `subwave_play_sfx` | admin | Fire a sound effect on-air immediately. |
 | `subwave_list_jingles` | admin | The jingle library — idents and announcements, no length cap. |
-| `subwave_play_jingle` | admin | Queue a jingle to air at the next boundary, at full level. |
+| `subwave_play_jingle` | admin | Queue a jingle to air at the next safe boundary, at full level. |
 | `subwave_refresh_playlist` | admin | Rebuild the fallback auto-playlist for the current mood. |
 
 Listeners have no skip — track-end is the only transition, and a requested

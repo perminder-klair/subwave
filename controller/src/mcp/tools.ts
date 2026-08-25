@@ -2,7 +2,7 @@
  * The SUB/WAVE MCP tool set — the single source of truth for both transports
  * (the controller's HTTP mount in routes/mcp.ts, and the standalone stdio
  * server in mcp-subwave/src/index.ts). `registerSubwaveTools(server, client)`
- * registers all 17 tools on an McpServer; each tool is a thin wrapper over one
+ * registers all 19 tools on an McpServer; each tool is a thin wrapper over one
  * controller endpoint via the shared SubwaveClient.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -618,19 +618,20 @@ export function registerSubwaveTools(
   );
 
   // -------------------------------------------------------------------------
-  // subwave_play_jingle — air a jingle at the next boundary (admin)
+  // subwave_play_jingle — air a jingle at the next safe boundary (admin)
   // -------------------------------------------------------------------------
   server.registerTool(
     "subwave_play_jingle",
     {
       title: "Air a jingle",
       description:
-        "Queue a jingle from the station library to air at the next track boundary — " +
+        "Queue a jingle from the station library to air at the next safe track boundary — " +
         "at full level, with the programme yielding to it. ADMIN endpoint. This is the " +
         "tool for anything longer than a stinger (an event announcement, a sponsor " +
         "spot, a station ident): subwave_play_sfx mixes UNDER the music and is capped " +
         "at 10 seconds. It is queued, not instant — the station never cuts a song off " +
-        "mid-play. List valid filenames with subwave_list_jingles.",
+        "mid-play, and active speech or a bed/track pair defers it. List valid " +
+        "filenames with subwave_list_jingles.",
       inputSchema: {
         filename: z
           .string()
@@ -644,7 +645,7 @@ export function registerSubwaveTools(
       run(async () => {
         const result = await client.playJingle(filename);
         return {
-          content: [text(`Jingle '${result.filename}' is queued for the next boundary.`)],
+          content: [text(`Jingle '${result.filename}' is queued for the next safe boundary.`)],
           structuredContent: { ...result },
         };
       }),

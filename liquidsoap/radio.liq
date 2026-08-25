@@ -49,7 +49,7 @@ np_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/now-playing")
 jingle_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle")
 # Second dir for the SAME marker file, for the same reason the two voice
 # channels get one each (see below): jingle-playing.json has two writers — the
-# rotate's own on_metadata and on_meta's on-demand branch — and the stdlib always
+# rotate's own on_metadata and jingle_now_queue's hook — and the stdlib always
 # names its staging file `atomic.write` inside the dir it is given. The two
 # clips can never be the same clip (music_meta is captured above the rotate), but
 # their feeds can overlap inside one crossfade, and a shared dir makes that a
@@ -69,6 +69,13 @@ intro_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/intro")
 # jingles gate reads it from a thunk long before then (same lazy-thunk pattern
 # as bed_on_air).
 music_starved = ref(false)
+
+# On-demand jingles and the automatic rotate share these live safety gates.
+# Declared before the queue sources because the priority jingle source needs
+# them; on_meta and voice_marker below update them at the live edge.
+bed_on_air = ref(false)
+voice_until = ref(0.)
+jingle_now_on_air = ref(false)
 
 # ---------------------------------------------------------------------------
 # RUNTIME SETTINGS — one tiny text file per value, written by the controller
@@ -305,6 +312,7 @@ protocol.add(temporary=true, syntax="subhttp:<full url>", doc="Navidrome stream 
 # ---------------------------------------------------------------------------
 
 dj_queue = request.queue(id="dj_queue")
+jingle_now_queue = request.queue(id="jingle_now_queue")
 
 def poll_queue() =
   if file.exists("#{state_dir}/next.txt") then
@@ -317,6 +325,34 @@ def poll_queue() =
   end
 end
 thread.run(every=1.0, poll_queue)
+
+def poll_jingle_now() =
+  if file.exists("#{state_dir}/jingle-now.txt") then
+    contents = string.trim(file.contents("#{state_dir}/jingle-now.txt"))
+    file.remove("#{state_dir}/jingle-now.txt")
+    if contents != "" then
+      log("Queueing on-demand jingle: #{contents}")
+      ignore(jingle_now_queue.push(request.create(contents)))
+    end
+  end
+end
+thread.run(every=0.5, poll_jingle_now)
+
+# Mark a manual jingle from its own source. It is deliberately outside
+# music_meta: uploaded clips can retain ID3 tags, and no such tag may become the
+# station's now-playing row or ICY title.
+jingle_now_queue.on_metadata(synchronous=false, fun (m) ->
+  jingle_now_on_air := true
+  file.write(
+    data=json.stringify(compact=true, {
+      filename = m["filename"],
+      startedAt = time()
+    }),
+    atomic=true,
+    temp_dir=jingle_now_tmp_dir,
+    "#{state_dir}/jingle-playing.json"
+  )
+)
 
 # ---------------------------------------------------------------------------
 # AUTONOMOUS FALLBACK — the controller maintains auto.m3u with mood-
@@ -950,7 +986,6 @@ music_meta = music
 # and a bed IS a track, so without this gate a stinger can land BETWEEN the bed
 # and the song it ramps into. While up, the jingles source reads as unavailable
 # and the rotate defers to the next real boundary.
-bed_on_air = ref(false)
 
 # Voice-on-air deadline for the jingle gate below. #997 solved one direction —
 # a voice handoff waits out a jingle that is already feeding (jingle-playing.json
@@ -963,7 +998,6 @@ bed_on_air = ref(false)
 # after the first push (measured: still true 24s after a 6.4s clip finished,
 # queue empty), which would starve the jingle rotate permanently. An instant in
 # the future cannot latch — at worst it is already in the past.
-voice_until = ref(0.)
 
 # Hard ceiling on how far ahead voice_marker may push that deadline. The gate
 # fails toward SERVING jingles, deliberately: a measured duration that comes back
@@ -1029,11 +1063,26 @@ music =
     # the same so a stinger can't be handed over the DJ (voice_until above); and
     # a starved music chain does the same so the rotate can't serve stingers
     # forever over dead air (see the MUSIC STARVE GUARD below).
-    jingles = source.available(jingles, {not bed_on_air() and time() > voice_until() and not music_starved()})
+    jingles = source.available(jingles, {
+      not bed_on_air() and not jingle_now_on_air() and
+      time() > voice_until() and not music_starved()
+    })
     rotate(weights=[1, jingle_ratio()], [jingles, music])
   else
     music
   end
+
+# Manual presses wrap the automatic rotate so they win the next SAFE boundary,
+# even when dj_queue already holds tracks or the rotate is due. While speech or
+# a bed is live the source is unavailable but the request remains queued.
+jingle_now = source.available(jingle_now_queue, {
+  not bed_on_air() and time() > voice_until()
+})
+music = fallback(
+  id="music_with_jingle_now",
+  track_sensitive=true,
+  [jingle_now, music]
+)
 
 # Per-track loudness normalisation, the ReplayGain mechanism: the controller
 # stamps `liq_amplify` ("<n> dB") on any track with a measured LUFS. BEFORE the
@@ -1571,6 +1620,7 @@ def on_meta(m) =
   # link now" only from this marker. Hence the branch BEFORE the gate. Same
   # shape and rationale as jingle-playing.json (#997).
   if m["subwave_kind"] == "bed" then
+    jingle_now_on_air := false
     log("on_meta: bed started (#{filename})")
     bed_on_air := true
     file.write(
@@ -1582,39 +1632,9 @@ def on_meta(m) =
       temp_dir=bed_tmp_dir,
       "#{state_dir}/bed-playing.json"
     )
-  # ON-DEMAND JINGLES — a station ident or event announcement the controller
-  # pushed straight into dj_queue instead of waiting for the rotate to draw it
-  # (broadcast/jingles.ts jingleUri + queue.playJingle). Same not-a-song
-  # reasoning as the bed branch above, and it has to sit BEFORE the gate for a
-  # second reason too: a jingle imported on a host without ffmpeg keeps its
-  # original container and its ID3 tags, so a titled upload would otherwise sail
-  # through the gate and publish an announcement as the now-playing track.
-  #
-  # It writes the SAME marker the rotate's own on_metadata writes, because the
-  # controller's jingle collision guard (#997, waitForJingleClear) is what keeps
-  # a boundary-aired link off the top of it — and that guard reads exactly one
-  # file. The clip is NOT gated on voice_until the way the rotate is: an
-  # operator press is exempt from the automatic gates by design, and this
-  # marker is the other half of the guard covering that direction anyway.
-  #
-  # bed_on_air is cleared for the same reason the untitled branch below clears
-  # it: whatever bed was up has ended, and a latched flag starves the rotate
-  # until the next tagged song. The push is serialised against the drain
-  # (queue.waitForSenderIdle), so this can't be splitting a live bed pair.
-  elsif m["subwave_kind"] == "jingle" then
-    log("on_meta: on-demand jingle started (#{filename})")
-    bed_on_air := false
-    file.write(
-      data=json.stringify(compact=true, {
-        filename = filename,
-        startedAt = time()
-      }),
-      atomic=true,
-      temp_dir=jingle_now_tmp_dir,
-      "#{state_dir}/jingle-playing.json"
-    )
   elsif title != "" or artist != "" then
     bed_on_air := false
+    jingle_now_on_air := false
     log("on_meta: title=#{title} | artist=#{artist} | album=#{album} | id=#{subsonic_id}")
     ts = int_of_float(time())
     # json.stringify, not interpolation: titles with embedded quotes or
@@ -1646,6 +1666,7 @@ def on_meta(m) =
     # reset bed_on_air would latch true and keep the jingle rotate starved until
     # the next tagged song.
     bed_on_air := false
+    jingle_now_on_air := false
   end
 end
 

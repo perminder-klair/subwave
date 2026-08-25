@@ -91,15 +91,12 @@ export async function getPath(filename: string): Promise<string | null> {
 }
 
 // Wrap a jingle's audio path in an `annotate:` URI for a ONE-OFF airing pushed
-// straight into dj_queue (queue.playJingle) rather than drawn by the rotate.
+// into the priority jingle_now_queue (queue.playJingle) rather than drawn by the
+// automatic rotate.
 //
-// `subwave_kind="jingle"` is what radio.liq's on_meta branches on, and that
-// branch sits BEFORE its title/artist gate for two reasons. A jingle is not a
-// song, so it must never reach now-playing.json or the ICY title — and an
-// operator-uploaded file stored without ffmpeg keeps its original container and
-// can carry an ID3 title, which would otherwise sail through that gate and
-// publish an event announcement as the current track. The same branch writes
-// jingle-playing.json, which is how the voice serialiser learns to hold (#997).
+// `subwave_kind="jingle"` names the contract in mixer logs and keeps this source
+// distinct from beds. The priority queue owns its marker hook directly and sits
+// outside music_meta, so retained ID3 tags never reach now-playing or ICY.
 //
 // Mirrors beds.bedUri, minus the cue_out/cross overrides: a bed is deliberately
 // cut to the length of the link it carries, whereas an announcement plays in

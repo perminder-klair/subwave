@@ -70,6 +70,7 @@ Four cooperating processes with **file-based IPC** through a shared `state/` dir
 | File | Poll | Purpose |
 | --- | --- | --- |
 | `next.txt` | 1.0s | one annotated track URI, drained into `request.queue.push` |
+| `jingle-now.txt` | 0.5s | one manual jingle URI, drained into a priority queue for the next safe boundary |
 | `say.txt` | 0.5s | WAV path → `voice_queue`, **heavy-ducked** (`smooth_add p=0.22`). Idents, hourly time, weather, request intros |
 | `intro.txt` | 0.5s | between-track links → `intro_queue`, **light-ducked** (`p=0.30`) so the song stays audible under the voice |
 | `auto.m3u` | watch | fallback playlist, rewritten every `AUTO_QUEUE_REFRESH_MINUTES` (default 60) for the current mood |
@@ -78,7 +79,7 @@ Four cooperating processes with **file-based IPC** through a shared `state/` dir
 **Liquidsoap → Controller / UI** — marker files, each written from an `on_metadata` hook:
 
 - `now-playing.json` — the live track. Written from **`music_meta`, the pre-cross handle**; see `liquidsoap/CLAUDE.md` before moving it.
-- `jingle-playing.json` — a jingle is on air, so `airVoice` holds every spoken segment until its window passes. Jingles play outside the controller's voice serialiser, which is why the marker exists. `jingleRatio: 0` disables them (mixer restart).
+- `jingle-playing.json` — a jingle is on air, so `airVoice` holds every spoken segment until its window passes. Jingles play outside the controller's voice serialiser, which is why the marker exists. `jingleRatio: 0` disables the automatic rotate (mixer restart); manual presses still queue.
 - `bed-playing.json` — an instrumental the DJ talks over BETWEEN songs. A bed is queued like a request but is **not a song**: `on_meta` branches on the annotation before its `title != ""` gate, so it never reaches `now-playing.json`. That silence is why the marker exists — `queue.onBedStarted` is the only way the controller learns "air the link now".
 - `voice-playing.json` — a spoken clip started. This is what makes air-time stamps real rather than estimated (#1382); see [`docs/internals/broadcast.md`](docs/internals/broadcast.md).
 - `music-starved.json` — `{starved, since, at}`, the dead-air guard's own state, written on edge **and** as a heartbeat so a stale file is detectable. Read by `broadcast/music-starve.ts` and surfaced on the public health route. Its writer must never raise (see `liquidsoap/CLAUDE.md`).
@@ -122,7 +123,7 @@ Rules that are expensive to rediscover. Each links to its full reasoning — **r
 
 ### Structural rules
 
-- **One writer per file.** `queue.drainToLiquidsoap()` is the only writer of `next.txt` (+ request-intro `say.txt`); `queue.announce()` the only writer of scheduled `say.txt`/`intro.txt`; `queue.onSpoken()` the only place post-air bookkeeping happens. Poll intervals (1.0s queue, 0.5s voice) are the upper bound on perceived latency.
+- **One writer per file.** `queue.drainToLiquidsoap()` is the only writer of `next.txt` (+ request-intro `say.txt`); `queue.playJingle()` the only writer of `jingle-now.txt`; `queue.announce()` the only writer of scheduled `say.txt`/`intro.txt`; `queue.onSpoken()` the only place post-air bookkeeping happens. Poll intervals (1.0s queue, 0.5s voice/jingle) are the upper bound on perceived latency.
 - **A pushed track is "handed over", never "playable".** `item.sent` only means the URI reached `next.txt`; Liquidsoap silently drops a request it cannot resolve, and the reconcile sweep needs ~3 auto tracks to notice. `proto_subhttp` records an explicit `ready`/`failed` result under the handoff's one-use probe id, and `queue.verifyPushResolved()` consumes it over telnet. **Never infer resolution from `dj_queue.queue()` membership**: it includes idle/resolving requests and omits a healthy request while boundary prefetch owns it. Missing/unknown outcome channels fail open. See [`liquidsoap/CLAUDE.md`](liquidsoap/CLAUDE.md).
 - **Policy lives in its own module, never inlined at the call site.** `broadcast/voice-policy.ts` (station muted), `clock-policy.ts` (wall clock off air), `dj-budget.ts` (daily token cap), `banter-policy.ts` (when a guest-show exchange may air), `drain-policy.ts`, `skip-policy.ts`, `util/request-guard.ts` (listener-request safety), `util/public-persona.ts`, `broadcast/dj-agent/artist-guard.ts`, `music/blocklist-rules.ts`. Each exists because the same decision is reached from several call sites and drifted when it was duplicated. Adding a second copy of one of these checks is the bug.
 - **A gate's failure direction is a deliberate design choice — never "unify" two of them.** `POST /listener-auth` fails OPEN, `POST /station-auth` fails CLOSED (both in `util/listener-auth.ts`); the three listener-count gates fail OPEN on an unknown count while `presentListeners()` fails CLOSED; the analysis quiet gate fails open in the *opposite* direction from the DJ gates. Same for validation posture: `validate*Strict` throws, `normalize*` repairs-or-drops, and neither restates a rule.

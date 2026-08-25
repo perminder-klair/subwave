@@ -331,7 +331,7 @@ export function deleteStation(root: string, id: string): void {
 // switch. Each is swallowed independently: a missing file is the common
 // case, not an error.
 const STALE_IPC_FILES = [
-  'next.txt', 'say.txt', 'intro.txt', 'sfx.txt',
+  'next.txt', 'jingle-now.txt', 'say.txt', 'intro.txt', 'sfx.txt',
   'now-playing.json', 'jingle-playing.json', 'bed-playing.json',
   'music-starved.json',
 ];

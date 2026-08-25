@@ -1,6 +1,7 @@
 // The handoff-file write path and the spoken-segment serialiser.
 //
-// Liquidsoap polls each handoff file (say.txt, intro.txt, sfx.txt, next.txt)
+// Liquidsoap polls each handoff file (say.txt, intro.txt, sfx.txt, next.txt,
+// jingle-now.txt)
 // and deletes it after reading, so two writes inside one poll window silently
 // lose the first (issue #140). Every write goes through writeHandoff(), which
 // serialises per file and waits for the previous one to be consumed. On top of
@@ -54,7 +55,10 @@ export async function writeHandoff(path: string, contents: string, { maxWaitMs =
   // return. Errors don't break the chain — the .catch above ensures the next
   // writer still gets its turn.
   const release = next.then(() => waitForConsumed(path, maxWaitMs).catch(() => undefined));
-  _handoffChains.set(path, release);
+  // The caller owns `next` and must see a failed write. The internal tail is
+  // bookkeeping only: keep it fulfilled so a rejected write neither becomes
+  // an unhandled rejection nor poisons the next writer for this file.
+  _handoffChains.set(path, release.catch(() => undefined));
   return next;
 }
 
@@ -315,4 +319,3 @@ function wavDurationMs(path: string): number | null {
     if (fd != null) closeSync(fd);
   }
 }
-

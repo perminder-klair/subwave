@@ -485,11 +485,11 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
         path: '/jingles/:filename/play',
         summary: 'Air a jingle',
         description:
-          'Queue a jingle to air at the next track boundary, at full level with the ' +
+          'Queue a jingle to air at the next safe track boundary, at full level with the ' +
           'programme yielding to it. Use this rather than POST /sfx/:name/play for ' +
           'anything longer than a stinger — an effect is mixed UNDER the music and ' +
           'capped at 10s. Queued, not instant: the station never cuts a song off ' +
-          'mid-play. 404 if the filename is unknown.',
+          'mid-play, and active speech or a bed/track pair defers it. 404 if the filename is unknown.',
         auth: 'admin',
         mutatesAir: true,
         pathParams: [{ name: 'filename', required: true, description: 'Jingle filename from GET /jingles', example: 'jingle_a1b2c3d4.wav' }],
@@ -580,7 +580,7 @@ export const MCP_TOOLS: McpToolDoc[] = [
   { name: 'subwave_list_sfx', title: 'List sound effects', description: 'The sound-effect stinger library.', endpoint: 'GET /sfx', auth: 'admin' },
   { name: 'subwave_play_sfx', title: 'Play a sound effect', description: 'Play a stinger on air now.', endpoint: 'POST /sfx/:name/play', auth: 'admin', mutatesAir: true },
   { name: 'subwave_list_jingles', title: 'List jingles', description: 'The jingle library — idents and announcements, no length cap.', endpoint: 'GET /jingles', auth: 'admin' },
-  { name: 'subwave_play_jingle', title: 'Air a jingle', description: 'Queue a jingle to air at the next boundary, at full level.', endpoint: 'POST /jingles/:filename/play', auth: 'admin', mutatesAir: true },
+  { name: 'subwave_play_jingle', title: 'Air a jingle', description: 'Queue a jingle to air at the next safe boundary, at full level.', endpoint: 'POST /jingles/:filename/play', auth: 'admin', mutatesAir: true },
   { name: 'subwave_refresh_playlist', title: 'Refresh playlist', description: 'Rebuild the fallback auto-playlist.', endpoint: 'POST /dj/refresh-playlist', auth: 'admin' },
 ];
 

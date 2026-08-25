@@ -58,7 +58,7 @@ for (const f of [
   'session.json', 'sessions', 'logs', 'archive', 'queue.json',
   'recent-plays.json', 'now-playing.json', 'jingle-playing.json',
   'bed-playing.json', 'listeners.jsonl', 'audience.json', 'likes.json',
-  'seen-curiosity.json', 'next.txt', 'say.txt', 'intro.txt', 'sfx.txt',
+  'seen-curiosity.json', 'next.txt', 'jingle-now.txt', 'say.txt', 'intro.txt', 'sfx.txt',
   'auto.m3u', 'library.db-wal', 'library.db-shm', 'station.json',
   'settings.json.bak-pre-ollama', 'some-future-file.xyz',
 ]) assert.equal(duplicateAction(f), 'skip', f);
