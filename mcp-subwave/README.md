@@ -157,6 +157,7 @@ The stdio transport keeps `stdout` clean; the server logs only to `stderr`.
   longer belongs in the jingle library: `subwave_play_jingle` gives the clip
   its own slot at full level, with no cap, so a sponsor spot or a two-minute
   event announcement works. It airs at the next track boundary rather than
-  instantly — there is no skip in this system.
+  instantly — there is no skip in this system, and a repeat call while it is
+  still waiting is refused (409) rather than airing the clip twice.
 - The controller must be running. If it isn't reachable, every tool returns an
   error naming the URL it tried and what to check.

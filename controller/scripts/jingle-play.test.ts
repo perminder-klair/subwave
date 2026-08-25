@@ -1,5 +1,6 @@
 // Pins the on-demand jingle path — POST /jingles/:filename/play →
-// queue.playJingle → jingle-now.txt → Liquidsoap's priority queue → on_meta.
+// queue.playJingle → jingle-now.txt → Liquidsoap's priority queue and its own
+// marker hook (NOT on_meta, which never sees that source).
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -33,12 +34,29 @@ assert.notEqual(
 );
 
 const filename = 'jingle_a1b2c3d4.wav';
+const other = 'jingle_deadbeef.wav';
 const jingleDir = join(STATE, 'jingles');
 mkdirSync(jingleDir, { recursive: true });
 writeFileSync(join(jingleDir, filename), 'audio');
+writeFileSync(join(jingleDir, other), 'audio');
 writeFileSync(join(STATE, 'jingles.json'), JSON.stringify({
-  items: { [filename]: { text: 'Event announcement' } },
+  items: {
+    [filename]: { text: 'Event announcement' },
+    [other]: { text: 'Sponsor spot' },
+  },
 }));
+
+// Liquidsoap consumed the handoff, and the clip has aired — which is what
+// retires the pending press so the same jingle can be fired again.
+async function markAired(name: string) {
+  rmSync(join(STATE, 'jingle-now.txt'), { force: true });
+  writeFileSync(join(STATE, 'jingle-playing.json'), JSON.stringify({
+    filename: join(jingleDir, name),
+    durationSec: 4,
+    startedAt: Date.now() / 1000,
+  }));
+  await new Promise(resolve => setTimeout(resolve, 150));
+}
 
 test('manual jingle uses a priority handoff without touching the FIFO track handoff', async () => {
   writeFileSync(config.liquidsoap.queueFile, 'existing-track');
@@ -50,10 +68,26 @@ test('manual jingle uses a priority handoff without touching the FIFO track hand
     readFileSync(join(STATE, 'jingle-now.txt'), 'utf8'),
     `annotate:subwave_kind="jingle":${join(jingleDir, filename)}`,
   );
-  // Simulate Liquidsoap consuming the handoff so the per-file release chain is
-  // settled before the error-path test replaces the target with a directory.
+  // Also settles the per-file release chain before the next test writes.
+  await markAired(filename);
+});
+
+// The priority queue is a FIFO with no remove path, and the fallback keeps
+// selecting it while it is non-empty — so a retried tool call or a
+// double-clicked button would air the same announcement twice with no way back
+// short of /restart-mixer.
+test('a repeat press of an un-aired jingle is refused, not stacked', async () => {
+  assert.deepEqual(await queue.playJingle(other), { ok: true });
+  assert.ok(existsSync(join(STATE, 'jingle-now.txt')), 'the first press was handed over');
   rmSync(join(STATE, 'jingle-now.txt'));
-  await new Promise(resolve => setTimeout(resolve, 150));
+
+  assert.deepEqual(await queue.playJingle(other), { ok: false, reason: 'already-queued' });
+  assert.ok(!existsSync(join(STATE, 'jingle-now.txt')), 'the repeat wrote no second handoff');
+
+  // Once it has been heard, the same jingle can be fired again.
+  await markAired(other);
+  assert.deepEqual(await queue.playJingle(other), { ok: true });
+  await markAired(other);
 });
 
 test('manual jingle rejects when its priority handoff cannot be written', async () => {
@@ -64,6 +98,9 @@ test('manual jingle rejects when its priority handoff cannot be written', async 
   } finally {
     config.liquidsoap.jingleFile = livePath;
   }
+  // A press that never reached the handoff leaves nothing pending behind it.
+  assert.deepEqual(await queue.playJingle(filename), { ok: true });
+  await markAired(filename);
 });
 
 const liq = readFileSync(RADIO_LIQ, 'utf8');
@@ -92,14 +129,42 @@ assert.ok(!branchBody.includes('insert_metadata'), 'and never touches the ICY ti
 // FIFO dj_queue. Its availability gate preserves a manual press while deferring
 // it past active speech or a bed/track pair.
 const priorityQueue = liq.indexOf('jingle_now_queue = request.queue(id="jingle_now_queue")');
+const priorityGate = liq.indexOf('jingle_now = source.available(jingle_now_queue');
 const priorityFallback = liq.indexOf('[jingle_now, music]');
 assert.ok(priorityQueue > 0, 'on-demand jingles have a dedicated request queue');
-assert.ok(priorityFallback > priorityQueue, 'the dedicated queue wins the next safe boundary');
-const gateWindow = liq.slice(priorityQueue, priorityFallback);
+assert.ok(priorityGate > priorityQueue, 'the dedicated queue is wrapped in an availability gate');
+assert.ok(priorityFallback > priorityGate, 'the dedicated queue wins the next safe boundary');
+// Anchored at the gate itself, NOT at the queue declaration ~770 lines above:
+// the automatic rotate's gate carries both of these strings, so a window that
+// started any earlier passed even with this gate deleted outright.
+const gateWindow = liq.slice(priorityGate, priorityFallback);
 assert.ok(gateWindow.includes('not bed_on_air()'), 'a jingle cannot split a bed from its track');
 assert.ok(gateWindow.includes('time() > voice_until()'), 'a jingle cannot start over active speech');
 assert.ok(priorityFallback > liq.indexOf('rotate(weights=[1, jingle_ratio()]'),
   'manual priority wraps the automatic rotate so an automatic jingle cannot win first');
+
+// The rotate must also stand down while a manual jingle is on air, or it stacks
+// a stinger on top of the announcement.
+const rotateGate = liq.slice(
+  liq.indexOf('jingles = source.available(jingles, {'),
+  liq.indexOf('rotate(weights=[1, jingle_ratio()]'),
+);
+assert.ok(rotateGate.includes('not jingle_now_on_air()'),
+  'the rotate defers to a manual jingle already on air');
+// ...and the flag has to be cleared by every on_meta branch, or it latches true
+// and starves the rotate permanently (the bed_on_air failure, repeated).
+const onMetaBody = liq.slice(liq.indexOf('def on_meta(m) ='), liq.indexOf('music_meta.on_metadata('));
+assert.equal(
+  onMetaBody.split('jingle_now_on_air := false').length - 1, 3,
+  'every on_meta branch clears jingle_now_on_air',
+);
+
+// Clip length rides in the marker: the controller can only parse RIFF, and an
+// import on a host without ffmpeg keeps its original container.
+assert.ok(branchBody.includes('durationSec = jingle_duration(fname)'),
+  'the marker carries a measured duration, not just a filename');
+assert.ok(liq.includes('null.get(default=0., request.duration(fname))'),
+  'jingle_duration measures via request.duration and degrades to 0 (unmeasured)');
 
 test.after(() => {
   if (existsSync(STATE)) rmSync(STATE, { recursive: true, force: true });

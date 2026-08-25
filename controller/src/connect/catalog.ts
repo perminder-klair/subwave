@@ -489,7 +489,9 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
           'programme yielding to it. Use this rather than POST /sfx/:name/play for ' +
           'anything longer than a stinger — an effect is mixed UNDER the music and ' +
           'capped at 10s. Queued, not instant: the station never cuts a song off ' +
-          'mid-play, and active speech or a bed/track pair defers it. 404 if the filename is unknown.',
+          'mid-play, and active speech or a bed/track pair defers it. 404 if the filename is ' +
+          'unknown; 409 if that jingle is already queued and has not aired — the queue has no ' +
+          'cancel, so a retried call would air the announcement twice.',
         auth: 'admin',
         mutatesAir: true,
         pathParams: [{ name: 'filename', required: true, description: 'Jingle filename from GET /jingles', example: 'jingle_a1b2c3d4.wav' }],

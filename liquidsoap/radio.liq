@@ -73,8 +73,31 @@ music_starved = ref(false)
 # On-demand jingles and the automatic rotate share these live safety gates.
 # Declared before the queue sources because the priority jingle source needs
 # them; on_meta and voice_marker below update them at the live edge.
+#
+# BEDS ↔ JINGLES — bed_on_air is true from a bed's first metadata until the next
+# real song's (both set in on_meta below). The jingle rotate counts every
+# music-chain track and a bed IS a track, so without this gate a stinger can land
+# BETWEEN the bed and the song it ramps into. While up, the jingle sources read
+# as unavailable and both the rotate and a manual press defer to the next real
+# boundary.
 bed_on_air = ref(false)
+
+# Voice-on-air deadline for the jingle gates. #997 solved one direction — a
+# voice handoff waits out a jingle that is already feeding (jingle-playing.json
+# + waitForJingleClear in the controller). The other direction was unguarded: the
+# rotate could hand a stinger to the music chain WHILE a DJ clip is on air, and
+# the jingle simply plays over the voice.
+#
+# A deadline, not a boolean. `source.is_ready(voice_queue)` looks like the
+# obvious predicate and is a trap: on a request.queue it latches true forever
+# after the first push (measured: still true 24s after a 6.4s clip finished,
+# queue empty), which would starve the jingle rotate permanently. An instant in
+# the future cannot latch — at worst it is already in the past.
 voice_until = ref(0.)
+
+# True from a manual (on-demand) jingle's first metadata until the next
+# music-chain track resets it in on_meta. Keeps the automatic rotate from
+# stacking a stinger on top of an announcement an operator fired by hand.
 jingle_now_on_air = ref(false)
 
 # ---------------------------------------------------------------------------
@@ -338,14 +361,38 @@ def poll_jingle_now() =
 end
 thread.run(every=0.5, poll_jingle_now)
 
+# Measured clip length for a jingle marker, in seconds, or 0. when the file
+# cannot be read. The controller can only parse a RIFF header (wavDurationMs),
+# and a jingle imported on a host without ffmpeg keeps its ORIGINAL container
+# (jingles.importAudio only transcodes when ffmpeg is present) — so an .mp3
+# announcement would fall back to a 15s guess and let the DJ talk over the rest
+# of it. Liquidsoap can measure anything it can decode, so measure it here and
+# ship it in the marker; 0. means "unmeasured" and the controller degrades to
+# its own fallback exactly as before.
+#
+# request.duration decodes a header and RAISES on an unreadable or empty
+# filename, so every call is wrapped. Unlike voice_marker the duration cannot be
+# computed AFTER the marker (it is part of the payload), which makes this
+# try/catch the thing that keeps a raise from costing the marker entirely.
+def jingle_duration(fname) =
+  try
+    null.get(default=0., request.duration(fname))
+  catch err do
+    log(label="subwave", "jingle duration unavailable for #{fname} (#{err})")
+    0.
+  end
+end
+
 # Mark a manual jingle from its own source. It is deliberately outside
 # music_meta: uploaded clips can retain ID3 tags, and no such tag may become the
 # station's now-playing row or ICY title.
 jingle_now_queue.on_metadata(synchronous=false, fun (m) -> begin
   jingle_now_on_air := true
+  fname = m["filename"]
   file.write(
     data=json.stringify(compact=true, {
-      filename = m["filename"],
+      filename = fname,
+      durationSec = jingle_duration(fname),
       startedAt = time()
     }),
     atomic=true,
@@ -981,26 +1028,9 @@ end
 # crossfade. It is also what the starve guard samples.
 music_meta = music
 
-# BEDS ↔ JINGLES — true from a bed's first metadata until the next real song's
-# (both set in on_meta below). The jingle rotate counts every music-chain track
-# and a bed IS a track, so without this gate a stinger can land BETWEEN the bed
-# and the song it ramps into. While up, the jingles source reads as unavailable
-# and the rotate defers to the next real boundary.
-
-# Voice-on-air deadline for the jingle gate below. #997 solved one direction —
-# a voice handoff waits out a jingle that is already feeding (jingle-playing.json
-# + waitForJingleClear in the controller). The other direction was unguarded: the
-# rotate could hand a stinger to the music chain WHILE a DJ clip is on air, and
-# the jingle simply plays over the voice.
-#
-# A deadline, not a boolean. `source.is_ready(voice_queue)` looks like the
-# obvious predicate and is a trap: on a request.queue it latches true forever
-# after the first push (measured: still true 24s after a 6.4s clip finished,
-# queue empty), which would starve the jingle rotate permanently. An instant in
-# the future cannot latch — at worst it is already in the past.
-
-# Hard ceiling on how far ahead voice_marker may push that deadline. The gate
-# fails toward SERVING jingles, deliberately: a measured duration that comes back
+# Hard ceiling on how far ahead voice_marker may push voice_until (declared at
+# the top of the file with the other live gates). The gate fails toward SERVING
+# jingles, deliberately: a measured duration that comes back
 # wrong (corrupt header, a filename that resolved to some other media) would
 # otherwise silence the rotate for as long as that number says, and unlike the
 # collision the gate fixes, that failure is inaudible — nothing in the log says
@@ -1051,6 +1081,7 @@ music =
       file.write(
         data=json.stringify(compact=true, {
           filename = m["filename"],
+          durationSec = jingle_duration(m["filename"]),
           startedAt = time()
         }),
         atomic=true,

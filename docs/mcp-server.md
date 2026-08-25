@@ -191,6 +191,12 @@ current song finishes rather than cutting it off. Like `subwave_play_sfx`, it is
 a manual trigger and ignores the station's jingle-rotation dial — turning the
 rotate off silences the automatic draw, never an explicit call.
 
+**Do not retry a call that succeeded.** The queue behind this has no cancel, so
+a second push of the same clip airs the announcement twice back to back. Calling
+again while the first is still waiting for its boundary is refused (`409`,
+`"… is already queued and hasn't aired yet"`) — treat that as "your press
+landed", not as a failure to retry. Two *different* announcements queue normally.
+
 ---
 
 ## Authentication

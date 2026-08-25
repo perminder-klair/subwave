@@ -630,8 +630,11 @@ export function registerSubwaveTools(
         "tool for anything longer than a stinger (an event announcement, a sponsor " +
         "spot, a station ident): subwave_play_sfx mixes UNDER the music and is capped " +
         "at 10 seconds. It is queued, not instant — the station never cuts a song off " +
-        "mid-play, and active speech or a bed/track pair defers it. List valid " +
-        "filenames with subwave_list_jingles.",
+        "mid-play, and active speech or a bed/track pair defers it. DO NOT retry a call that " +
+        "succeeded: the queue behind this has no cancel, so a second push airs the " +
+        "announcement twice. Calling again before the first has aired is refused with " +
+        "\"already queued\" — that means your press landed. List valid filenames with " +
+        "subwave_list_jingles.",
       inputSchema: {
         filename: z
           .string()

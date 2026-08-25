@@ -88,13 +88,24 @@ router.get('/jingles/:filename/audio', requireAdmin, async (req, res) => {
 // It is queued, not immediate: the priority source takes the next safe track
 // boundary. Active speech or a bed/track pair defers it rather than mixing over
 // the DJ or splitting the pair (there is no skip; Liquidsoap owns pacing).
+// 409 if the same jingle is already queued and hasn't aired — the priority queue
+// has no remove path, so a retried call would air the announcement twice.
 router.post('/jingles/:filename/play', requireAdmin, async (req, res) => {
   try {
     if (!(await jingles.getPath(req.params.filename))) {
       const names = (await jingles.list()).map(j => j.filename).join(', ');
       return res.status(404).json({ error: `unknown jingle: ${req.params.filename}${names ? `. Available: ${names}` : ''}` });
     }
-    await queue.playJingle(req.params.filename);
+    const result = await queue.playJingle(req.params.filename);
+    if (!result.ok) {
+      // Not a rate limit — a repeat of something already queued and unaired.
+      // See queue.playJingle: the priority queue has no remove path, so a
+      // retried tool call would otherwise air the same announcement twice.
+      const msg = result.reason === 'already-queued'
+        ? `"${req.params.filename}" is already queued and hasn't aired yet`
+        : 'too many jingles are already queued and haven\'t aired yet';
+      return res.status(409).json({ error: msg, reason: result.reason });
+    }
     res.json({ ok: true, filename: req.params.filename });
   } catch (err) {
     res.status(500).json({ error: err.message });

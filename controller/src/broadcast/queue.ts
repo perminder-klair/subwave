@@ -96,6 +96,7 @@ import {
   airVoice,
   speechDurationMs,
   writeHandoff,
+  jingleAiredAtMs,
   type QueuedVoice,
   type VoiceHandoff,
 } from './queue/voice-io.js';
@@ -126,6 +127,16 @@ export { BACKFILL_DEDUP_MAX_GAP_MS, boundaryCarriesTrackVoice, playAlreadyRecord
 export { registerSkillKinds } from './queue/kinds.js';
 export type { NowPlaying, QueueItem, Track } from './queue/types.js';
 
+// Manual jingle presses that may be pending at once (see playJingle). A bound on
+// a runaway loop across different filenames, not a policy on how many
+// announcements an operator may line up.
+const PENDING_JINGLE_MAX = 3;
+// How long a press stays pending before it is assumed lost. A mixer restart
+// empties jingle_now_queue and drops the request with no signal, so this is what
+// stops that from wedging the button shut. Generously past any single track, so
+// it never retires a press that is merely waiting for its boundary.
+const PENDING_JINGLE_TTL_MS = 30 * 60 * 1000;
+
 // transitions far more often — a working DJ talks across most of them.
 class Queue {
   upcoming: QueueItem[] = [];  // request items pushed by listeners, not yet playing
@@ -153,6 +164,7 @@ class Queue {
   _deadlinePickAt = 0;          // last deadline-pick ATTEMPT (ms epoch) — failure-retry cooldown, see maybeDeadlinePick
   _pendingVoice: { text: string; kind: string; wavPath: string; persona: Persona | null; meta: TurnMeta; t: number } | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
   _introRenders = new IntroRenderTracker<QueueItem>(); // timed-out pre-renders stay reusable by airIntro
+  _pendingJingles = new Map<string, number>(); // manual jingle presses handed over but not yet heard — see playJingle
 
   // Snapshot upcoming/current/history to disk. The queue is otherwise purely
   // in-memory, so a controller restart (every `--build controller` rebuild)
@@ -1730,13 +1742,46 @@ class Queue {
   // Liquidsoap keeps it unavailable while voice or a bed is active, preserving
   // the request until the next SAFE boundary rather than mixing over speech or
   // splitting a bed from the track it carries.
+  //
+  // Presses are DE-DUPLICATED, not rate-limited. jingle_now_queue is a FIFO with
+  // no remove path (dj_queue has cancelQueued via dj_queue.remove; this has
+  // nothing), and the fallback keeps selecting it while it is non-empty — so
+  // every extra push is another announcement aired back-to-back with no music
+  // between, and the only way out is /restart-mixer. An agent retrying a tool
+  // call or a double-clicked dashboard button is enough to stack them. Pressing
+  // the SAME jingle while it is still pending is that accident and is refused;
+  // two DIFFERENT announcements queue normally, because an explicit operator
+  // action always fires. PENDING_JINGLE_MAX bounds a runaway loop across files.
   async playJingle(filename: string) {
     if (!filename) throw new Error('Jingle filename is required');
     const path = await jingles.getPath(filename);
     if (!path) throw new Error(`Unknown jingle: ${filename}`);
+    this.retirePendingJingles();
+    if (this._pendingJingles.has(filename)) return { ok: false as const, reason: 'already-queued' as const };
+    if (this._pendingJingles.size >= PENDING_JINGLE_MAX) return { ok: false as const, reason: 'queue-full' as const };
     await writeHandoff(config.liquidsoap.jingleFile, jingles.jingleUri(path), { maxWaitMs: 5000 });
-    this.log('jingle', `"${filename}" queued — airs at the next safe boundary`);
-    session.appendTurn({ role: 'segment', kind: 'jingle', text: filename });
+    this._pendingJingles.set(filename, Date.now());
+    // The sidecar's own script, not the hashed filename: every other segment
+    // turn in the booth log and the DJ's chat history carries prose, and
+    // `jingle_a1b2c3d4.wav` reads as noise next to them (playSfx logs its
+    // effect NAME for the same reason).
+    const label = (await jingles.list()).find(j => j.filename === filename)?.text || filename;
+    this.log('jingle', `"${label}" queued — airs at the next safe boundary`);
+    session.appendTurn({ role: 'segment', kind: 'jingle', text: label });
+    return { ok: true as const };
+  }
+
+  // Retire presses that have been heard, or that are old enough that they never
+  // will be. A mixer restart empties jingle_now_queue and loses the request
+  // silently, so every entry has to expire on its own — the button must never
+  // wedge shut on bookkeeping.
+  retirePendingJingles() {
+    const now = Date.now();
+    for (const [name, at] of this._pendingJingles) {
+      if (now - at > PENDING_JINGLE_TTL_MS || jingleAiredAtMs(name) >= at) {
+        this._pendingJingles.delete(name);
+      }
+    }
   }
 
   // Called by the now-playing watcher when Liquidsoap reports a new track.
