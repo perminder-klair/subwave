@@ -1,0 +1,17 @@
+# Codex MCP wiring for the local SUB/WAVE controller.
+#
+# `args` is relative, so launch Codex from the repo root.
+
+[mcp_servers.subwave]
+command = "npx"
+args = [
+    "tsx",
+    "mcp-subwave/src/index.ts",
+]
+
+[mcp_servers.subwave.env]
+# 7701 is the controller's own port, published to the host by
+# docker-compose.dev.yml and by docker-compose.byo.yml (${CONTROLLER_PORT:-7701}).
+# Under the default prod docker-compose.yml only Caddy binds a host port, so the
+# controller is not reachable on 7701 there — use http://localhost:7700/api instead.
+SUBWAVE_API_URL = "http://localhost:7701"
