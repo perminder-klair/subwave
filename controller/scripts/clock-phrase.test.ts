@@ -4,7 +4,7 @@
 // Run: `npm test -- clock-phrase` (tsx scripts/clock-phrase.test.ts).
 
 import assert from 'node:assert/strict';
-import { clockDisplay, spokenHourPhrase, spokenTimePhrase } from '../src/time.js';
+import { clockDisplay, spokenHourPhrase, spokenTimePhrase, spokenDaypartPhrase } from '../src/time.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -98,6 +98,24 @@ async function main() {
     assert.equal(spokenTimePhrase(23, 50), 'coming up on midnight');
     assert.equal(spokenTimePhrase(11, 45), 'quarter to noon');
     assert.equal(spokenTimePhrase(0, 20), 'quarter past midnight');
+  });
+
+  await test('daypart phrase — the only clock reading a station ident may speak', () => {
+    assert.equal(spokenDaypartPhrase(0), 'in the morning', 'small hours follow "one in the morning"');
+    assert.equal(spokenDaypartPhrase(5), 'in the morning');
+    assert.equal(spokenDaypartPhrase(11), 'in the morning');
+    assert.equal(spokenDaypartPhrase(12), 'in the afternoon');
+    assert.equal(spokenDaypartPhrase(15), 'in the afternoon');
+    assert.equal(spokenDaypartPhrase(18), 'in the evening');
+    assert.equal(spokenDaypartPhrase(21), 'in the evening');
+    assert.equal(spokenDaypartPhrase(22), 'at night');
+    assert.equal(spokenDaypartPhrase(27), 'in the morning', 'normalises past the day edge like spokenHourPhrase');
+  });
+  await test('daypart phrase agrees with the suffix spokenHourPhrase speaks', () => {
+    for (let h = 0; h < 24; h++) {
+      if (h === 0 || h === 12) continue; // midnight / noon carry no daypart
+      assert.ok(spokenHourPhrase(h).endsWith(spokenDaypartPhrase(h)), `hour ${h}`);
+    }
   });
 
   if (failures) {

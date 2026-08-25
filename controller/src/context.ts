@@ -6,7 +6,7 @@ import { fetchWithTimeout } from './util/fetch-timeout.js';
 import { resolveActiveShow, resolveOnAirLocation, get as getSettings, moodScheduleFor, weatherMoodFor } from './settings.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
-import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase, spokenTimePhrase } from './time.js';
+import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase, spokenTimePhrase, spokenDaypartPhrase } from './time.js';
 
 // The day-period → {vibe, show} table stays in code (these feed spoken-segment
 // prompts and show resolution). Each period's MOOD is operator-editable
@@ -273,6 +273,10 @@ export function getClockContext(date = new Date()) {
     // near :00, "half past six" mid-hour (#1282: a manual trigger at 18:31
     // still announced "just gone six in the evening").
     spokenTime: spokenTimePhrase(h, m),
+    // Daypart only, for the station ident — the one segment that must not
+    // name the hour, because it airs minutes after it is written and the
+    // hour can change in between ("three in the afternoon" on air at 3:50).
+    spokenDaypart: spokenDaypartPhrase(h),
     isWeekend: dow === 0 || dow === 6,
     isLateNight: h < 5,
     isCommute: (minutesOfDay >= 450 && minutesOfDay < 570) ||  // 07:30-09:30
