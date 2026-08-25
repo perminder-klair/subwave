@@ -527,7 +527,7 @@ function AdminSidebar({
         </SidebarMenu>
 
         {process.env.NEXT_PUBLIC_APP_VERSION ? (
-          <div className="border-t border-dashed border-[var(--separator-strong)] px-1 pt-3 text-[10px] tracking-[0.18em] text-muted uppercase group-data-[collapsible=icon]:hidden">
+          <div className="border-t border-dashed border-[var(--separator-strong)] px-1 pt-1.5 text-[10px] tracking-[0.18em] text-muted uppercase group-data-[collapsible=icon]:hidden">
             v{process.env.NEXT_PUBLIC_APP_VERSION}
           </div>
         ) : null}

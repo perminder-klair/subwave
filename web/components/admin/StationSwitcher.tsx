@@ -58,17 +58,12 @@ export default function StationSwitcher({
         <SidebarMenuItem>
           <DropdownMenu modal={false} onOpenChange={o => { if (o) void stationsQuery.refetch(); }}>
             <DropdownMenuTrigger asChild>
-              <SidebarMenuButton size="lg" tooltip="Switch station">
-                <span className="flex aspect-square size-8 shrink-0 items-center justify-center rounded-sm border border-ink">
-                  <RadioTower className="size-4" />
+              <SidebarMenuButton tooltip="Switch station">
+                <span className="flex aspect-square size-5 shrink-0 items-center justify-center rounded-sm border border-ink">
+                  <RadioTower className="size-3" />
                 </span>
-                <span className="grid min-w-0 flex-1 text-left leading-tight">
-                  <span className="truncate text-[13px] font-extrabold tracking-[0.08em] uppercase">
-                    {active.name}
-                  </span>
-                  <span className="caption truncate">
-                    {active.id ?? 'this install'} · on air
-                  </span>
+                <span className="min-w-0 flex-1 truncate text-[13px] font-extrabold tracking-[0.08em] uppercase">
+                  {active.name}
                 </span>
                 <ChevronsUpDown className="ml-auto size-4 opacity-60" />
               </SidebarMenuButton>
