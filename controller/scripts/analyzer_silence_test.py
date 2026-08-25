@@ -121,6 +121,30 @@ def t_shorter_than_one_frame():
     assert tail is None or tail >= 0
 
 
+def t_complete_short_track_keeps_tail_measurement():
+    # Outro musical features need a distinct 20s tail, but dead-air detection
+    # does not. A complete 10s file already has its real end in memory, so the
+    # final 3s blank must still be reported instead of disappearing behind the
+    # outro feature's minimum-duration guard.
+    y = np.concatenate([tone(7.0), silence(3.0)])
+
+    class FakeLibrosa:
+        @staticmethod
+        def to_mono(buf):
+            return buf
+
+    original_load_audio = aw.load_audio
+    aw.load_audio = lambda *_args, **_kwargs: (y, SR)
+    try:
+        outro = aw.analyze_outro("short.wav", FakeLibrosa(), 10.0)
+    finally:
+        aw.load_audio = original_load_audio
+
+    assert outro is not None, "complete short track lost its tail measurement"
+    near(outro.get("tail_silence_ms"), 3000.0, "short-track tail")
+    assert "startMs" not in outro, "short track must not invent distinct-outro features"
+
+
 print("silence_edges_ms")
 test("measures both edges", t_both_edges)
 test("no gaps reads zero, not None", t_no_gaps)
@@ -129,6 +153,7 @@ test("a noise floor below the gate is silence", t_below_floor_is_silence)
 test("an entirely silent window reads unknown", t_all_silent_window_is_unknown)
 test("empty / missing input refuses cleanly", t_empty_and_missing)
 test("a sub-frame buffer never raises", t_shorter_than_one_frame)
+test("a complete short track still measures its real tail", t_complete_short_track_keeps_tail_measurement)
 
 if failures:
     print(f"✗ {failures} failure(s)")

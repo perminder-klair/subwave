@@ -33,9 +33,24 @@ export const HARD_DEADLINE_SEC = 45;
 // the window still fits a few honest retries.
 export const DEADLINE_PICK_COOLDOWN_SEC = 25;
 
-// Seconds left before the on-air track's EFFECTIVE end — min(duration,
-// stamped cue_out): a length-capped track ends at its cue, minutes before its
-// tagged duration (pressure-test finding: raw duration desyncs the deadline).
+// Effective on-air span: [cue_in, min(duration, cue_out)]. Both cue values are
+// absolute offsets in the file, while startedAt is stamped when playback begins
+// at cue_in, so the skipped head must not count toward the remaining clock.
+export function playableDurationSec(
+  durationSec: number | null | undefined,
+  cueOutSec?: number | null,
+  cueInSec?: number | null,
+): number | null {
+  const dur = typeof durationSec === 'number' && Number.isFinite(durationSec) && durationSec > 0 ? durationSec : null;
+  if (dur == null) return null;
+  const cueOut = typeof cueOutSec === 'number' && Number.isFinite(cueOutSec) && cueOutSec > 0 ? cueOutSec : null;
+  const cueIn = typeof cueInSec === 'number' && Number.isFinite(cueInSec) && cueInSec > 0 ? cueInSec : 0;
+  return Math.max(0, Math.min(dur, cueOut ?? dur) - cueIn);
+}
+
+// Seconds left before the on-air track's EFFECTIVE end — its playable span
+// after both cue points. A length-capped or silence-trimmed track therefore
+// ends when Liquidsoap does, not at its original tagged duration.
 // Null when unknowable (no start stamp / no usable duration) — callers treat
 // null as "cannot schedule", which degrades to today's eager behaviour.
 export function remainingSec(
@@ -43,13 +58,12 @@ export function remainingSec(
   startedAtMs: number | null | undefined,
   durationSec: number | null | undefined,
   cueOutSec?: number | null,
+  cueInSec?: number | null,
 ): number | null {
   if (typeof startedAtMs !== 'number' || !Number.isFinite(startedAtMs)) return null;
-  const dur = typeof durationSec === 'number' && Number.isFinite(durationSec) && durationSec > 0 ? durationSec : null;
-  if (dur == null) return null;
-  const cue = typeof cueOutSec === 'number' && Number.isFinite(cueOutSec) && cueOutSec > 0 ? cueOutSec : null;
-  const effective = cue != null ? Math.min(dur, cue) : dur;
-  return (startedAtMs + effective * 1000 - nowMs) / 1000;
+  const playable = playableDurationSec(durationSec, cueOutSec, cueInSec);
+  if (playable == null) return null;
+  return (startedAtMs + playable * 1000 - nowMs) / 1000;
 }
 
 // Runway the drain keeps for the commit tail that follows the intro render

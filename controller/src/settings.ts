@@ -976,7 +976,9 @@ export async function load() {
         typeof stored.silenceTrim?.enabled === 'boolean'
           ? stored.silenceTrim.enabled
           : DEFAULTS.silenceTrim.enabled,
-      minGapMs: Number.isFinite(stored.silenceTrim?.minGapMs)
+      minGapMs: Number.isInteger(stored.silenceTrim?.minGapMs) &&
+        stored.silenceTrim.minGapMs >= BOUNDS.silenceTrimMinGapMs.min &&
+        stored.silenceTrim.minGapMs <= BOUNDS.silenceTrimMinGapMs.max
         ? stored.silenceTrim.minGapMs
         : DEFAULTS.silenceTrim.minGapMs,
     },

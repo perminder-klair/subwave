@@ -1000,9 +1000,10 @@ def analyze_outro(path, librosa, duration_s):
     Pure librosa (+ optional pyloudnorm), so this runs on the LEAN tier too."""
     import numpy as np
 
-    if not duration_s or duration_s <= OUTRO_SECONDS + 1.0:
-        return None  # too short to have a distinct outro
-    offset = max(0.0, duration_s - OUTRO_SECONDS)
+    if not duration_s:
+        return None
+    distinct_outro = duration_s > OUTRO_SECONDS + 1.0
+    offset = max(0.0, duration_s - OUTRO_SECONDS) if distinct_outro else 0.0
     # Channel-preserving decode for the loudness meter (the tail LUFS must be
     # comparable to the body's stereo loudness_lufs — issue #998); RMS shape
     # and the beat grid work off the mono downmix as before.
@@ -1010,8 +1011,21 @@ def analyze_outro(path, librosa, duration_s):
     y = librosa.to_mono(y_src) if y_src is not None else None
     # Validation backstop for an unknown completeness: a truncated file either
     # errors here or decodes well short of the requested tail — skip it.
-    if y is None or len(y) < ANALYZE_SR * OUTRO_SECONDS * 0.6:
+    expected_s = min(OUTRO_SECONDS, duration_s)
+    if y is None or len(y) < ANALYZE_SR * expected_s * 0.6:
         return None
+
+    # A short track has no distinct musical outro to characterize, but a
+    # COMPLETE file still exposes its real tail. Return only that independent
+    # edge measurement; analyze() lifts it to the top-level result and then
+    # discards the empty outro shell.
+    if not distinct_outro:
+        _lead_t, tail_silence_ms = silence_edges_ms(y, sr)
+        return (
+            {"tail_silence_ms": int(round(tail_silence_ms))}
+            if tail_silence_ms is not None
+            else None
+        )
 
     hop = 512
     rms = librosa.feature.rms(y=y, frame_length=2048, hop_length=hop)[0]
@@ -1788,7 +1802,7 @@ def analyze(
         # the outro's beat grid; [] = analysed instrumental tail, mirroring
         # the head semantics. TAIL_VOCAL_MIN_LOUD (see its definition) guards
         # against separation bleed on a fading outro.
-        if detector is not None and outro is not None:
+        if detector is not None and outro is not None and "startMs" in outro:
             try:
                 tail_offset = max(0.0, duration_s - OUTRO_SECONDS)
                 y_tail, _srt = load_audio(
@@ -1903,6 +1917,8 @@ def analyze(
         result["lead_silence_ms"] = int(round(lead_silence_ms))
     if outro is not None and "tail_silence_ms" in outro:
         result["tail_silence_ms"] = outro.pop("tail_silence_ms")
+        if not outro:
+            outro = None
     # Only carry loudness fields when measured — absence signals "no loudness
     # this pass", so a worker without pyloudnorm is byte-for-byte today.
     if loudness_lufs is not None:

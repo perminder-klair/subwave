@@ -56,6 +56,14 @@ test('absent settings coerce to today: nothing trimmed', async () => {
   assert.deepEqual(resolveSilenceTrim(GAPPY), { cueInSec: null, cueOutSec: null });
 });
 
+test('an out-of-range cold-load threshold cannot weaken the safety floor', async () => {
+  await coldLoad({ enabled: true, minGapMs: -1 });
+  assert.equal(settings.get().silenceTrim.minGapMs, 1_500);
+  // A finite-but-invalid hand edit must not make an ordinary sub-second lead
+  // eligible for trimming; cold-load normalization is the safety boundary.
+  assert.equal(resolveSilenceTrim({ duration: 200, leadSilenceMs: 900 }).cueInSec, null);
+});
+
 test('a measured gap becomes a cue point, margin kept', async () => {
   await coldLoad({ enabled: true, minGapMs: 1_500 });
   const t = resolveSilenceTrim(GAPPY);

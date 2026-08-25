@@ -43,6 +43,7 @@ import * as liquidsoapControl from './liquidsoap-control.js';
 import {
   drainAction,
   introRenderBudgetSec,
+  playableDurationSec,
   remainingSec,
   shouldDeadlinePick,
   DEADLINE_PICK_COOLDOWN_SEC,
@@ -944,6 +945,7 @@ class Queue {
       Number.isFinite(startedMs) ? startedMs : null,
       durSec > 0 ? durSec : null,
       cur.cueOutSec ?? null,
+      cur.cueInSec ?? null,
     );
   }
 
@@ -962,7 +964,9 @@ class Queue {
       let d = Number(ahead.track?.duration) || 0;
       if (!d && ahead.track?.id) d = Number(library.get(ahead.track.id)?.durationSec) || 0;
       if (!d) return null;
-      remaining += ahead.cueOutSec != null ? Math.min(d, ahead.cueOutSec) : d;
+      const playable = playableDurationSec(d, ahead.cueOutSec ?? null, ahead.cueInSec ?? null);
+      if (playable == null) return null;
+      remaining += playable;
     }
     return remaining;
   }
@@ -1241,10 +1245,11 @@ class Queue {
           .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
         const cueInCandidates = [item.stemSeam ? item.stemCueInSec : null, trim.cueInSec]
           .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+        item.cueInSec = cueInCandidates.length ? Math.max(...cueInCandidates) : undefined;
         const uri = subsonic.getAnnotatedUri(item.track, {
           maxDurationSec,
           cueOutSec: cueOutCandidates.length ? Math.min(...cueOutCandidates) : null,
-          cueInSec: cueInCandidates.length ? Math.max(...cueInCandidates) : null,
+          cueInSec: item.cueInSec ?? null,
           resolveProbeId: item.resolveProbeId,
         });
         if (trim.cueInSec != null || trim.cueOutSec != null) {
