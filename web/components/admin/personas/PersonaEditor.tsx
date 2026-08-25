@@ -2,7 +2,7 @@
 // Full-screen editor for the focused persona. `control`+`index` thread straight
 // down to the cards that bind real fields; `persona` stays as a read-only live
 // snapshot for display-only reads (title, share link, on-air/default pills).
-import type { RefObject } from 'react';
+import { useState, type RefObject } from 'react';
 import type { Control } from 'react-hook-form';
 import type { Persona, PersonasFormValues, SettingsResponse, SkillCatalogEntry } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
@@ -64,6 +64,8 @@ export function PersonaEditor({
   canSave, focusedOk, allPersonasOk, promptOk, busy, onSave, onDiscard,
 }: PersonaEditorProps) {
   const update = (patch: Partial<Persona>) => onUpdate(index, patch);
+  const [tagDraftBlocked, setTagDraftBlocked] = useState(false);
+  const editorCanSave = canSave && !tagDraftBlocked;
 
   // Opens the prefilled add-persona Issue Form on GitHub. Only the portable fields
   // travel — voice and avatar stay station-side.
@@ -106,11 +108,13 @@ export function PersonaEditor({
               <span
                 className={cn(
                   'size-1.5 flex-none rounded-full',
-                  canSave ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
+                  editorCanSave ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
                 )}
               />
               <span className="min-w-0">
-                {!canSave && !focusedOk
+                {tagDraftBlocked
+                  ? <span className="text-[var(--danger)]">finish or correct the pending tag</span>
+                  : !canSave && !focusedOk
                   ? <span className="text-[var(--danger)]">this persona has a missing or invalid field</span>
                   : !canSave && !allPersonasOk
                     ? <span className="text-[var(--danger)]">another persona in the roster is incomplete</span>
@@ -153,8 +157,8 @@ export function PersonaEditor({
               id: 'save',
               label: busy ? 'Saving…' : 'Save persona',
               tone: 'accent',
-              onClick: onSave,
-              disabled: busy || !canSave,
+              onClick: () => { if (!tagDraftBlocked) onSave(); },
+              disabled: busy || !editorCanSave,
             },
           ]}
         />
@@ -169,6 +173,7 @@ export function PersonaEditor({
           adminFetch={adminFetch}
           avatarTick={avatarTick}
           tagSuggestions={tagSuggestions}
+          onTagDraftBlockedChange={setTagDraftBlocked}
           uploading={uploadingId === persona.id}
           onUpdate={update}
           onPickAvatar={(file) => onUploadAvatar(persona.id, file)}

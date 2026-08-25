@@ -81,7 +81,7 @@ export function PersonaRoster({
             )}
           </Btn>
           <Btn className="min-h-9 sm:min-h-0" onClick={onOpenPrompt}>System prompt</Btn>
-          <Btn className="min-h-9 sm:min-h-0" tone="accent" onClick={onAdd} disabled={roster.length >= PERSONA_MAX}>
+          <Btn className="min-h-9 sm:min-h-0" tone="accent" onClick={onAdd} disabled={total >= PERSONA_MAX}>
             + Add persona
           </Btn>
         </div>

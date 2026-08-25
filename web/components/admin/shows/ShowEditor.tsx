@@ -127,6 +127,8 @@ export function ShowEditor({
   onSave, onClose, onRemove,
 }: ShowEditorProps) {
   const uid = useId();
+  const [tagDraftBlocked, setTagDraftBlocked] = useState(false);
+  const editorValid = valid && !tagDraftBlocked;
   // `index` is a runtime number, not a literal, so a plain template-literal
   // expression widens to `string` — cast to the template-literal type
   // FieldPath<ShowsFormValues> actually needs so every call site below
@@ -241,11 +243,13 @@ export function ShowEditor({
               <span
                 className={cn(
                   'size-1.5 flex-none rounded-full',
-                  valid ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
+                  editorValid ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
                 )}
               />
               <span className="min-w-0">
-                {gateIssue
+                {tagDraftBlocked
+                  ? <span className="text-[var(--danger)]">tags: finish or correct the pending tag</span>
+                  : gateIssue
                   ? <span className="text-[var(--danger)]">{gateIssue}</span>
                   : 'saves this show · schedule it on the grid, then Save schedule'}
               </span>
@@ -260,8 +264,8 @@ export function ShowEditor({
               id: 'save',
               label: busy ? 'Saving…' : 'Save show',
               tone: 'accent',
-              onClick: onSave,
-              disabled: busy || !valid,
+              onClick: () => { if (!tagDraftBlocked) onSave(); },
+              disabled: busy || !editorValid,
             },
           ]}
         />
@@ -300,6 +304,7 @@ export function ShowEditor({
                 charMax={TAG_MAX}
                 suggestions={tagSuggestions}
                 noun="show"
+                onDraftBlockedChange={setTagDraftBlocked}
                 disabled={busy}
               />
             </div>

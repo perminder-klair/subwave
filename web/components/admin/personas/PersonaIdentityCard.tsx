@@ -25,6 +25,7 @@ interface PersonaIdentityCardProps {
   // Tags already used by the OTHER personas, offered as one-click adds so the
   // roster converges on one vocabulary instead of near-duplicates.
   tagSuggestions: string[];
+  onTagDraftBlockedChange: (blocked: boolean) => void;
   onPickAvatar: (file: File) => void;
   onGenerateAvatar: () => void;
   onClearAvatar: () => void;
@@ -32,6 +33,7 @@ interface PersonaIdentityCardProps {
 
 export function PersonaIdentityCard({
   persona, index, control, isNew, adminFetch, avatarTick, uploading, tagSuggestions,
+  onTagDraftBlockedChange,
   onUpdate, onPickAvatar, onGenerateAvatar, onClearAvatar,
 }: PersonaIdentityCardProps) {
   const soulLen = persona.soul.trim().length;
@@ -123,6 +125,7 @@ export function PersonaIdentityCard({
               charMax={TAG_MAX}
               suggestions={tagSuggestions}
               noun="DJ"
+              onDraftBlockedChange={onTagDraftBlockedChange}
             />
             <div className="field-hint">
               Freeform filing for the roster — by station, by shift, by whatever

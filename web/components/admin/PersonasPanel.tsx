@@ -720,7 +720,7 @@ export default function PersonasPanel() {
         index={safeIdx}
         position={focusedPosition}
         control={control}
-        personaCount={roster.length}
+        personaCount={personas.length}
         activePersonaId={activePersonaId}
         onAirPersonaId={onAirPersonaId}
         data={data}

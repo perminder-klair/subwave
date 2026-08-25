@@ -35,12 +35,22 @@ export interface TagFieldProps {
   suggestions?: string[];
   /** What a tag is being attached to, for the messages ("show", "DJ"). */
   noun: string;
+  /** A malformed, uncommitted draft must participate in the parent editor's
+   *  save gate; otherwise clicking Save blurs this input, reports the error
+   *  locally, then submits the old tag array and silently loses the draft. */
+  onDraftBlockedChange?: (blocked: boolean) => void;
   disabled?: boolean;
   className?: string;
 }
 
+export function tagDraftBlocksSave(draft: string, pattern: RegExp): boolean {
+  const tag = draft.trim().toLowerCase();
+  return tag !== '' && !pattern.test(tag);
+}
+
 export function TagField({
-  value, onChange, pattern, max, charMax, suggestions, noun, disabled, className,
+  value, onChange, pattern, max, charMax, suggestions, noun,
+  onDraftBlockedChange, disabled, className,
 }: TagFieldProps) {
   const [draft, setDraft] = useState('');
   // Inline rather than a toast: the input that caused it is on screen, and a
@@ -50,14 +60,17 @@ export function TagField({
 
   const add = (raw: string) => {
     const tag = raw.trim().toLowerCase();
-    if (!tag) { setErr(null); return; }
+    if (!tag) { setErr(null); onDraftBlockedChange?.(false); return; }
     if (!pattern.test(tag)) {
       setErr(`“${tag}” isn’t a valid tag — lowercase letters, digits and hyphens, max ${charMax} characters`);
+      onDraftBlockedChange?.(true);
       return;
     }
     // Re-typing a tag that is already on is a no-op, not an error: it is what
     // an operator does when they have lost track of which chips are set.
-    if (value.includes(tag)) { setDraft(''); setErr(null); return; }
+    if (value.includes(tag)) {
+      setDraft(''); setErr(null); onDraftBlockedChange?.(false); return;
+    }
     if (value.length >= max) {
       setErr(`At most ${max} tags per ${noun}`);
       return;
@@ -65,6 +78,7 @@ export function TagField({
     onChange([...value, tag]);
     setDraft('');
     setErr(null);
+    onDraftBlockedChange?.(false);
   };
 
   const unused = (suggestions || []).filter(t => !value.includes(t));
@@ -88,7 +102,12 @@ export function TagField({
           maxLength={charMax}
           value={draft}
           disabled={disabled || value.length >= max}
-          onChange={(e: ChangeEvent<HTMLInputElement>) => { setDraft(e.target.value); setErr(null); }}
+          onChange={(e: ChangeEvent<HTMLInputElement>) => {
+            const next = e.target.value;
+            setDraft(next);
+            setErr(null);
+            onDraftBlockedChange?.(tagDraftBlocksSave(next, pattern));
+          }}
           onKeyDown={e => {
             if (e.key === 'Enter' || e.key === ',') {
               // Enter inside an editor form would otherwise submit it.
