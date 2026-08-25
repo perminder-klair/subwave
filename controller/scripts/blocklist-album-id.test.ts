@@ -26,9 +26,10 @@ const stateDir = mkdtempSync(join(tmpdir(), 'subwave-blocklist-album-id-'));
 process.env.STATE_DIR = stateDir;
 
 const db = await import('../src/music/library-db.js');
+const library = await import('../src/music/library.js');
 const blocklist = await import('../src/music/blocklist.js');
 
-await db.open({ embeddingDim: 768 });
+await library.load();
 await blocklist.load();
 
 // One various-artists compilation: same album, same album id, DIFFERENT artist
@@ -42,6 +43,8 @@ db.upsertTrackMeta('t2', {
   title: 'Second', artist: 'Second Act', album: 'Sunshine Sampler',
   albumId: COMP_ALBUM_ID, artistId: 'art-second',
 });
+db.upsertTrackTags('t1', { moods: ['sunny'], energy: 'medium', source: 'manual' });
+db.upsertTrackTags('t2', { moods: ['sunny'], energy: 'medium', source: 'manual' });
 
 test("the walk's album/artist ids round-trip through library.db", () => {
   const rec = db.getTrack('t2');
@@ -81,6 +84,11 @@ test('blocking a compilation album blocks EVERY track on it, not just the one it
   const hit = blocklist.hitOf(t2);
   assert.equal(hit?.kind, 'entry');
   assert.equal(hit?.kind === 'entry' && hit.type, 'album');
+});
+
+test('the public mood source filters a compilation sibling by its album id', () => {
+  const ids = library.songsByMood('sunny').map((track) => track.id);
+  assert.equal(ids.includes('t2'), false, 'the differently credited sibling never reaches a mood candidate pool');
 });
 
 test('an artist block matches by id through a credit the name fallback cannot normalise', async () => {

@@ -275,6 +275,8 @@ export function songsByMood(mood: string | null | undefined): any[] {
       title: r.title,
       artist: r.artist,
       album: r.album,
+      albumId: r.albumId,
+      artistId: r.artistId,
       year: r.year,
       genres: r.genres,
       genre: r.genre,
