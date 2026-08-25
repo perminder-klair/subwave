@@ -34,6 +34,7 @@ interface Props {
 const POPULAR = 12;
 const MATCHES = 10;
 const norm = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+export const genreSelectionKey = (s: string) => s.trim().toLowerCase();
 
 export default function GenreSuggest({ adminFetch, value, onSelect, selected, disabled }: Props) {
   const query = useAdminQuery<SuggestData>({
@@ -49,8 +50,8 @@ export default function GenreSuggest({ adminFetch, value, onSelect, selected, di
     () => new Map((data?.genres || []).map((genre) => [norm(genre.value), genre])),
     [data],
   );
-  const selectedNorm = useMemo(
-    () => new Set((selected || []).map(norm)),
+  const selectedKeys = useMemo(
+    () => new Set((selected || []).map(genreSelectionKey)),
     [selected],
   );
 
@@ -90,7 +91,7 @@ export default function GenreSuggest({ adminFetch, value, onSelect, selected, di
       </span>
       <div className="flex flex-wrap gap-1.5">
         {chips.map((g) => {
-          const isSelected = selectedNorm.has(norm(g.value));
+          const isSelected = selectedKeys.has(genreSelectionKey(g.value));
           const tracks = `${g.songCount} track${g.songCount === 1 ? '' : 's'}`;
           return (
             <button
