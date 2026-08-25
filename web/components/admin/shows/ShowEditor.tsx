@@ -178,14 +178,22 @@ export function ShowEditor({
   // The editor is remounted per show (keyed by id at the call site), so this
   // resets on switch — it's a text buffer, not form data.
   const [genreDraft, setGenreDraft] = useState('');
-  const addGenre = (g: string) => {
+  const addGenre = (g: string, { keepDraft = false } = {}) => {
     const v = g.trim().slice(0, 64);
     const current = genresCtl.field.value ?? [];
     if (!v || current.length >= FILTER_VALUES_MAX) return;
-    if (current.some((x: string) => x.toLowerCase() === v.toLowerCase())) { setGenreDraft(''); return; }
+    if (current.some((x: string) => x.toLowerCase() === v.toLowerCase())) {
+      if (!keepDraft) setGenreDraft('');
+      return;
+    }
     genresCtl.field.onChange([...current, v]);
-    setGenreDraft('');
+    if (!keepDraft) setGenreDraft('');
   };
+  // A suggestion chip narrows the list it came from, so clearing the draft on
+  // click would throw the user back to "popular genres" after every pick —
+  // retyping "trance" once per trance sub-genre. Committing the typed
+  // text (Enter/Add) still clears: there the draft *is* the thing consumed.
+  const addGenreFromSuggestion = (g: string) => addGenre(g, { keepDraft: true });
   // Genres no track carries. The controller resolves free text onto the nearest
   // library tag, silently broadening the show ("Pop Punk" → "Pop") or dropping the
   // filter — invisible on air unless said here. Mirrors show-filter.normGenre so UI
@@ -555,7 +563,9 @@ export function ShowEditor({
           <GenreSuggest
             adminFetch={adminFetch}
             value={genreDraft}
-            onSelect={addGenre}
+            selected={showGenres}
+            onSelect={addGenreFromSuggestion}
+            disabled={showGenres.length >= FILTER_VALUES_MAX}
           />
 
           <SwitchField
