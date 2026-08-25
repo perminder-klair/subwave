@@ -4227,6 +4227,11 @@ html:has(.admin-root.paper) {
 }
 .admin-root .lib-chip:hover { border-color: var(--ink); color: var(--ink); }
 .admin-root .lib-chip.on { background: var(--ink); border-color: var(--ink); color: var(--bg); }
+/* a chip that is already picked stays on screen as feedback, not as a target */
+.admin-root .lib-chip:disabled { cursor: default; }
+.admin-root .lib-chip:disabled:not(.on) { opacity: 0.5; }
+.admin-root .lib-chip:disabled:not(.on):hover { border-color: var(--separator-strong); color: var(--muted); }
+.admin-root .lib-chip.on:disabled:hover { border-color: var(--ink); color: var(--bg); }
 .admin-root .lib-chip .n { font-size: 9px; opacity: 0.6; font-variant-numeric: tabular-nums; }
 .admin-root .lib-chip-more { border-style: dashed; }
 

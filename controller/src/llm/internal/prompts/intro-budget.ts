@@ -5,13 +5,15 @@
 // never a precondition.
 
 import * as library from '../../../music/library.js';
+import { shiftOnsetMs } from '../../../music/silence-trim.js';
 
 // Intro runway (ms to where the track 'comes in') for a track, from the track
 // object or a library lookup. Null when un-analysed.
 export function introMsFor(track: any): number | null {
-  if (track?.introMs != null) return track.introMs;
-  const rec = track?.id ? library.get(track.id) : null;
-  return rec?.introMs ?? null;
+  const raw = track?.introMs != null ? track.introMs : (track?.id ? library.get(track.id)?.introMs ?? null : null);
+  // Onto the trimmed timeline: a leading blank the drain cut off is runway the
+  // DJ will never actually have (music/silence-trim.ts).
+  return shiftOnsetMs(track, raw);
 }
 
 // MEASURED first vocal entry (ms) from the track's Demucs vocal ranges, or
@@ -23,7 +25,8 @@ export function firstVocalMsFor(track: any): number | null {
   const ranges = track?.id ? library.get(track.id)?.vocalRanges : null;
   if (!Array.isArray(ranges) || ranges.length === 0) return null;
   const first = Number(ranges[0]?.startMs);
-  return Number.isFinite(first) && first >= 0 ? first : null;
+  if (!Number.isFinite(first) || first < 0) return null;
+  return shiftOnsetMs(track, first);
 }
 
 // Delegates to library.bpmKeyFor — the shared resolver that prefers the

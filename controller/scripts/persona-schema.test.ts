@@ -35,6 +35,9 @@ const {
   PERSONA_SKILLS_LIMIT,
   PERSONA_SKILL_SLUG_RE,
   PERSONA_SOUL_MAX,
+  PERSONA_TAG_MAX,
+  PERSONA_TAG_RE,
+  TAGS_PER_PERSONA_LIMIT,
   TTS_CLOUD_PROVIDERS,
   TTS_ENGINES,
   clampPersonaDial,
@@ -73,6 +76,13 @@ test('PERSONA_ID_RE is the same pattern as the show schema owns', async () => {
   const { SHOW_ID_RE } = await import('../src/schemas/show.js');
   assert.equal(PERSONA_ID_RE.source, SHOW_ID_RE.source);
   assert.equal(PERSONA_ID_RE.flags, SHOW_ID_RE.flags);
+});
+
+test('PERSONA_TAG_RE is the same pattern the show and skill schemas own', async () => {
+  const { SHOW_TAG_RE } = await import('../src/schemas/show.js');
+  const { SKILL_TAG_RE } = await import('../src/schemas/skill.js');
+  assert.equal(PERSONA_TAG_RE.source, SHOW_TAG_RE.source);
+  assert.equal(PERSONA_TAG_RE.source, SKILL_TAG_RE.source);
 });
 
 test('PERSONA_SKILL_SLUG_RE is the same pattern as the skill schema owns', async () => {
@@ -566,9 +576,62 @@ test('anything the strict path accepts, the lenient path returns unchanged', () 
     avatar: 'p_rich.webp',
     tts: { engine: 'kokoro', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 1.5, speed: 1.1 },
     skills: ['news', 'weather'],
+    tags: ['late-night', 'flagship'],
   };
   const strict = validate.validatePersonasStrict([rich]);
   const lenient = normalize.normalizePersonaArray([rich])!;
   assert.deepEqual(strict, lenient);
   assert.deepEqual(strict[0], rich, 'a fully-specified persona round-trips byte-for-byte');
+});
+
+// ── tags: organisation only, and the one list that REFUSES a bad entry ───────
+
+test('tags lowercase, trim, de-duplicate and keep first-seen order', () => {
+  const [p] = validate.validatePersonasStrict([
+    { ...base(), tags: ['  Late-Night ', 'FLAGSHIP', 'late-night'] },
+  ]);
+  assert.deepEqual(p.tags, ['late-night', 'flagship']);
+});
+
+test('a malformed tag is REFUSED on save, unlike the sibling skills list', () => {
+  // skills DROPS a malformed entry because it is a subscription resolved
+  // against a live catalogue, where a dead entry is inert. A tag is typed by
+  // hand and losing one silently is the operator watching their own input
+  // disappear — so it throws.
+  assert.throws(() => validate.validatePersonasStrict([{ ...base(), tags: ['-nope'] }]), /tag/);
+  assert.throws(() => validate.validatePersonasStrict([{ ...base(), tags: ['Has Space'] }]), /tag/);
+  assert.throws(
+    () => validate.validatePersonasStrict([{ ...base(), tags: ['x'.repeat(PERSONA_TAG_MAX + 1)] }]),
+    /tag/,
+  );
+  assert.throws(
+    () => validate.validatePersonasStrict([{
+      ...base(),
+      tags: Array.from({ length: TAGS_PER_PERSONA_LIMIT + 1 }, (_, i) => `t${i}`),
+    }]),
+    /tags/,
+  );
+});
+
+test('load DROPS a bad tag where save refuses it, and the cap survives junk', () => {
+  const [p] = normalize.normalizePersonaArray([
+    { ...base(), tags: ['late-night', '-nope', 42, 'LATE-NIGHT', 'flagship'] },
+  ])!;
+  assert.deepEqual(p.tags, ['late-night', 'flagship'], 'the persona keeps its real tags');
+
+  // The cap applies AFTER the validity filter, so junk cannot spend the budget
+  // the operator's own tags need.
+  const junk = Array.from({ length: TAGS_PER_PERSONA_LIMIT }, () => 'NOT A TAG');
+  const [q] = normalize.normalizePersonaArray([{ ...base(), tags: [...junk, 'kept'] }])!;
+  assert.deepEqual(q.tags, ['kept']);
+});
+
+test('an untagged persona loads and saves identically — the upgrade is a no-op', () => {
+  const [saved] = validate.validatePersonasStrict([base()]);
+  const [loaded] = normalize.normalizePersonaArray([base()])!;
+  assert.deepEqual(saved.tags, []);
+  assert.deepEqual(saved.tags, loaded.tags);
+  // Absent is NOT a stand-in for "all tags" the way an absent `skills` is for
+  // "all skills" — a persona that carries no tags carries no tags.
+  assert.notEqual(saved.tags, null);
 });

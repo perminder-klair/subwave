@@ -18,6 +18,16 @@ const T0 = 1_700_000_000_000; // arbitrary epoch anchor
 assert.equal(remainingSec(T0 + 60_000, T0, 200), 140, 'plain remaining');
 // A stamped cue_out shortens the effective end (length-capped track).
 assert.equal(remainingSec(T0 + 60_000, T0, 600, 200), 140, 'cue_out caps the effective end');
+// A cue_in shortens the on-air span too: startedAt is stamped when the cued
+// audio begins, not at byte zero. Forgetting this delays the deadline by the
+// skipped head and can leave too little time to hand the successor over.
+assert.equal(remainingSec(T0 + 60_000, T0, 200, null, 30), 110, 'cue_in shortens the effective span');
+// Both cues describe absolute offsets in the file, so the playable span is
+// cue_out - cue_in rather than either value on its own.
+assert.equal(remainingSec(T0 + 60_000, T0, 600, 200, 30), 110, 'cue pair bounds the playable span');
+// A cue pair that would invert (a degenerate stamp) floors at zero rather than
+// running the clock backwards.
+assert.equal(remainingSec(T0, T0, 200, 30, 60), 0, 'an inverted cue pair floors at zero');
 // cue_out longer than the track never extends it.
 assert.equal(remainingSec(T0 + 60_000, T0, 200, 600), 140, 'duration wins when shorter than the cue');
 // Past the end goes negative (stale current) — callers treat it as expired.

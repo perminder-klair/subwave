@@ -24,13 +24,19 @@ interface Props {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   value: string;
   onSelect: (genre: string) => void;
+  // Genres already picked. The caller keeps the typed filter in place across
+  // picks, so the same chip list stays on screen — without marking what's
+  // already in it, a chip gives no feedback when clicked.
+  selected?: string[];
+  disabled?: boolean;
 }
 
 const POPULAR = 12;
 const MATCHES = 10;
 const norm = (s: string) => s.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+export const genreSelectionKey = (s: string) => s.trim().toLowerCase();
 
-export default function GenreSuggest({ adminFetch, value, onSelect }: Props) {
+export default function GenreSuggest({ adminFetch, value, onSelect, selected, disabled }: Props) {
   const query = useAdminQuery<SuggestData>({
     key: settingsKeys.genreSuggestions(),
     adminFetch,
@@ -43,6 +49,10 @@ export default function GenreSuggest({ adminFetch, value, onSelect }: Props) {
   const byNorm = useMemo(
     () => new Map((data?.genres || []).map((genre) => [norm(genre.value), genre])),
     [data],
+  );
+  const selectedKeys = useMemo(
+    () => new Set((selected || []).map(genreSelectionKey)),
+    [selected],
   );
 
   if (query.error || !data || data.genres.length === 0) return null;
@@ -80,18 +90,24 @@ export default function GenreSuggest({ adminFetch, value, onSelect }: Props) {
         {match && !data.hasEmbeddings ? ' — tag your library with embeddings for related genres' : ''}
       </span>
       <div className="flex flex-wrap gap-1.5">
-        {chips.map((g) => (
-          <button
-            key={g.value}
-            type="button"
-            className={cn('lib-chip', norm(g.value) === nv && nv !== '' && 'on')}
-            onClick={() => onSelect(g.value)}
-            title={`${g.songCount} track${g.songCount === 1 ? '' : 's'}`}
-          >
-            {g.value}
-            {g.songCount > 0 && <span className="n">{g.songCount}</span>}
-          </button>
-        ))}
+        {chips.map((g) => {
+          const isSelected = selectedKeys.has(genreSelectionKey(g.value));
+          const tracks = `${g.songCount} track${g.songCount === 1 ? '' : 's'}`;
+          return (
+            <button
+              key={g.value}
+              type="button"
+              className={cn('lib-chip', (isSelected || (norm(g.value) === nv && nv !== '')) && 'on')}
+              onClick={() => onSelect(g.value)}
+              disabled={isSelected || disabled}
+              aria-pressed={isSelected}
+              title={isSelected ? `${tracks} — already added` : tracks}
+            >
+              {g.value}
+              {g.songCount > 0 && <span className="n">{g.songCount}</span>}
+            </button>
+          );
+        })}
       </div>
     </div>
   );

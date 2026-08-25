@@ -17,9 +17,13 @@
   animation-play-state: running;
 }
 
-.record { animation: platter-spin 8s linear infinite; }
+/* The deck runs at 45, not 33⅓ (see the disc in PlatterSkin.tsx) — stylised
+   rather than literal, but the ratio is honest: each duration is the old 33⅓
+   figure ÷ 1.35. .rim is the platter mat under the disc, so it must stay locked
+   to .record — drift between the two reads as a slipping deck. */
+.record { animation: platter-spin 5.9s linear infinite; }
 .sheen {
-  animation: platter-sheen 16s linear infinite;
+  animation: platter-sheen 11.8s linear infinite;
   mix-blend-mode: screen;
   background: conic-gradient(
     from 210deg,
@@ -31,8 +35,17 @@
     rgba(255, 255, 255, 0) 344deg
   );
 }
-.rim { animation: platter-rim 8s linear infinite; }
+.rim { animation: platter-rim 5.9s linear infinite; }
 .pulse { animation: platter-pulse 2.4s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .record,
+  .sheen,
+  .rim,
+  .pulse {
+    animation: none;
+  }
+}
 
 /* Deliberately off-token: a record is black in every theme. */
 .vinyl {
@@ -42,7 +55,7 @@
       rgba(255, 255, 255, 0.05) 0 1px,
       rgba(0, 0, 0, 0) 1px 3px
     ),
-    radial-gradient(circle at 50% 50%, #1c1815 0 32%, #0c0a09 33% 100%);
+    radial-gradient(circle at 50% 50%, #1c1815 0 35%, #0c0a09 36% 100%);
   box-shadow:
     inset 0 0 55px rgba(0, 0, 0, 0.85),
     0 16px 42px rgba(0, 0, 0, 0.35);

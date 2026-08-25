@@ -67,7 +67,7 @@ export async function maybeRenderBlend(
   outTrack: BlendTrack,
   inTrack: BlendTrack,
   remainingSec: number | null,
-  opts: { outCapped?: boolean } = {},
+  opts: { outCapped?: boolean; outTrimEndSec?: number | null; inHeadTrimmed?: boolean } = {},
 ): Promise<BlendPlan | null> {
   const s = settings.get();
   if (s?.transitions?.stemBlends !== true) return null;
@@ -75,6 +75,16 @@ export async function maybeRenderBlend(
   if (!settings.getEffectivePersona()?.djMode) return null;
   if (!outTrack?.id || !inTrack?.id) return null;
   if (opts.outCapped) return null;      // a capped exit already owns that ending
+  // Dead-air trim vetoes (music/silence-trim.ts), same posture as outCapped:
+  // this feature may only ever upgrade a seam, so when the trim owns either
+  // edge the plain pair-aware crossfade wins rather than a clip that describes
+  // audio which no longer airs.
+  //
+  // The INCOMING head is the unconditional one: the clip is rendered from the
+  // successor's head window starting at zero, so a trimmed leading blank is
+  // baked into the seam — the blend would air exactly the silence the trim was
+  // turned on to remove.
+  if (opts.inHeadTrimmed) return null;
   if (bulkPassRunning()) return null;
 
   const out = db.getTrack(outTrack.id);
@@ -84,6 +94,11 @@ export async function maybeRenderBlend(
   // (outro bars) + duration; the incoming a head grid. The render re-checks
   // all of this — these gates just avoid pointless round-trips.
   if (!out.outro?.bars?.length || !out.durationSec || !inn.bars?.length) return null;
+  // The OUTGOING side is cheap to pre-judge: a blend always starts at or after
+  // the outro wind-down, so a trimmed end at/before it can only cut the clip's
+  // own source region. The exact test against blendStartSec runs post-render
+  // below, once the worker has said where the seam actually falls.
+  if (opts.outTrimEndSec != null && opts.outTrimEndSec <= (out.outro.startMs ?? 0) / 1000) return null;
   // Tempo gate: near-locked or clean half/double only.
   if (mix.bpmCompat(out.outro.bpm ?? out.bpm, inn.bpm) < BPM_COMPAT_MIN) return null;
   // Cache-hit-only: both windows must already be separated.
@@ -155,6 +170,11 @@ export async function maybeRenderBlend(
   // on both sides of the seam — a degenerate render is worse than none.
   if (!(result.blendStartSec > 10 && result.blendStartSec < out.durationSec)) return null;
   if (!(result.inCueSec > 1 && result.clipSec > 2)) return null;
+  // The exact outgoing-side trim test, now that the seam's position is known.
+  // The drain arbitrates cue_outs as "earliest wins", so a trimmed end before
+  // the seam would cut the track before the clip's source region ever plays —
+  // the clip would fade in from audio the listener never heard.
+  if (opts.outTrimEndSec != null && opts.outTrimEndSec < result.blendStartSec) return null;
   return {
     clipPath: result.path,
     blendStartSec: result.blendStartSec,

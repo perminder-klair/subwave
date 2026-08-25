@@ -103,10 +103,10 @@ export interface QueueItem {
   startedAt?: string;
   endedAt?: string;
   source?: string;
-  // Effective early end (seconds) stamped at drain time — the length cap's
-  // liq_cue_out today, a stem-blend cue later. The pair-drain deadline math
-  // uses min(duration, cueOutSec): a capped track ends at its cue, minutes
-  // before its tagged duration.
+  // Effective cue points stamped at drain time. The pair-drain deadline math
+  // uses cueOutSec - cueInSec: both are absolute file offsets, while startedAt
+  // is the moment playback begins at cueInSec.
+  cueInSec?: number;
   cueOutSec?: number;
   // Stem-blend seam (feature: stem-blend transitions). `stemBlend` rides the
   // OUTGOING item: a rendered clip airs after it (written to next.txt right

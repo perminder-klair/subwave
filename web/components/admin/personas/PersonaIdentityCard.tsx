@@ -1,9 +1,12 @@
 'use client';
 import type { Control } from 'react-hook-form';
+import { useController } from 'react-hook-form';
 import type { Persona, PersonasFormValues } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
-import { NAME_MAX, TAGLINE_MAX, SOUL_MAX, LANGUAGE_MAX } from './constants';
+import { NAME_MAX, TAGLINE_MAX, SOUL_MAX, LANGUAGE_MAX, TAGS_MAX, TAG_MAX, TAG_RE } from './constants';
 import { Card } from '../ui';
+import { TagField } from '../TagField';
+import { Label } from '../../ui/label';
 import { TextField, TextareaField } from '@/lib/form-fields';
 import { AiFill } from '../AiFill';
 import { PersonaAvatarPicker } from './PersonaAvatarPicker';
@@ -19,16 +22,22 @@ interface PersonaIdentityCardProps {
   // The AI-draft "apply" is the one remaining multi-field bulk patch — every
   // keystroke field below is bound straight to `control` instead.
   onUpdate: (patch: Partial<Persona>) => void;
+  // Tags already used by the OTHER personas, offered as one-click adds so the
+  // roster converges on one vocabulary instead of near-duplicates.
+  tagSuggestions: string[];
+  onTagDraftBlockedChange: (blocked: boolean) => void;
   onPickAvatar: (file: File) => void;
   onGenerateAvatar: () => void;
   onClearAvatar: () => void;
 }
 
 export function PersonaIdentityCard({
-  persona, index, control, isNew, adminFetch, avatarTick, uploading,
+  persona, index, control, isNew, adminFetch, avatarTick, uploading, tagSuggestions,
+  onTagDraftBlockedChange,
   onUpdate, onPickAvatar, onGenerateAvatar, onClearAvatar,
 }: PersonaIdentityCardProps) {
   const soulLen = persona.soul.trim().length;
+  const tagsCtl = useController({ control, name: `personas.${index}.tags` });
   return (
     <Card flat title="Identity">
       {isNew && (
@@ -98,6 +107,29 @@ export function PersonaIdentityCard({
               <code>state/voices/</code>, or a Cloud voice). An English-only voice reads it
               with an English accent.
               <span className="ml-2 text-muted">{persona.language.trim().length} / {LANGUAGE_MAX}</span>
+            </div>
+          </div>
+
+          {/* Filing, not personality: tags never reach a prompt, the public
+              roster or anything on air. They group this list and stop there,
+              which is why they sit below the fold of Identity rather than
+              beside Soul. */}
+          <div>
+            <Label>Tags</Label>
+            <TagField
+              className="mt-1.5"
+              value={tagsCtl.field.value || []}
+              onChange={tagsCtl.field.onChange}
+              pattern={TAG_RE}
+              max={TAGS_MAX}
+              charMax={TAG_MAX}
+              suggestions={tagSuggestions}
+              noun="DJ"
+              onDraftBlockedChange={onTagDraftBlockedChange}
+            />
+            <div className="field-hint">
+              Freeform filing for the roster — by station, by shift, by whatever
+              you group on. Up to {TAGS_MAX}. Nothing on air reads them.
             </div>
           </div>
         </div>

@@ -34,6 +34,10 @@ export interface TrackLite {
   isCompilation: boolean | null;
   yearUntrusted: boolean | null;
   durationSec: number | null;
+  // Edge dead air (music/silence-trim.ts) — see getTrackLite.
+  leadSilenceMs: number | null;
+  tailSilenceMs: number | null;
+  tailStartMs: number | null;
 }
 
 // Lean read for the /now-playing hot path (polled every ~5s by every listener).
@@ -45,8 +49,8 @@ export interface TrackLite {
 // concurrent HTTP response, making the whole UI sluggish (#723).
 export function getTrackLite(id: string): TrackLite | null {
   const row = requireDb()
-    .prepare(`SELECT genres, genre, bpm, musical_key, moods, energy, year, original_year, is_compilation, era_untrusted, duration_sec FROM tracks WHERE id = ?`)
-    .get(id) as Pick<TrackRow, 'genres' | 'genre' | 'bpm' | 'musical_key' | 'moods' | 'energy' | 'year' | 'original_year' | 'is_compilation' | 'era_untrusted' | 'duration_sec'> | undefined;
+    .prepare(`SELECT genres, genre, bpm, musical_key, moods, energy, year, original_year, is_compilation, era_untrusted, duration_sec, lead_silence_ms, tail_silence_ms, tail_start_ms FROM tracks WHERE id = ?`)
+    .get(id) as Pick<TrackRow, 'genres' | 'genre' | 'bpm' | 'musical_key' | 'moods' | 'energy' | 'year' | 'original_year' | 'is_compilation' | 'era_untrusted' | 'duration_sec' | 'lead_silence_ms' | 'tail_silence_ms' | 'tail_start_ms'> | undefined;
   if (!row) return null;
   return {
     genres: row.genres ? safeParseArray(row.genres) : [],
@@ -64,6 +68,13 @@ export function getTrackLite(id: string): TrackLite | null {
       ? true
       : (row.is_compilation == null && row.era_untrusted == null ? null : false),
     durationSec: row.duration_sec ?? null,
+    // Edge dead air. Three plain INTEGER columns, so this stays the lean read
+    // #723 made it — and /now-playing needs them: an auto-playlist play has no
+    // queue item to carry the stamped cue points, so the listener's track clock
+    // can only be shortened by resolving the trim from the row itself.
+    leadSilenceMs: row.lead_silence_ms ?? null,
+    tailSilenceMs: row.tail_silence_ms ?? null,
+    tailStartMs: row.tail_start_ms ?? null,
   };
 }
 
@@ -144,12 +155,17 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
   requireDb()
     .prepare(
       `
-      INSERT INTO tracks (id, title, artist, album, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
         album        = COALESCE(excluded.album, tracks.album),
+        -- COALESCE, like every other column here: the walk is the only writer
+        -- that HAS these ids, so a manual tag edit or an analyzer metadata
+        -- top-up passing undefined must not blank a walked row.
+        album_id     = COALESCE(excluded.album_id, tracks.album_id),
+        artist_id    = COALESCE(excluded.artist_id, tracks.artist_id),
         year         = COALESCE(excluded.year, tracks.year),
         -- Walk-time 'album-tag' years never clobber a per-track 'musicbrainz'
         -- resolution — the MB lookup is the more specific signal (issue #842) —
@@ -187,6 +203,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
       meta.title ?? null,
       meta.artist ?? null,
       meta.album ?? null,
+      meta.albumId ?? null,
+      meta.artistId ?? null,
       normaliseYear(meta.year),
       normaliseYear(meta.originalYear),
       normaliseYear(meta.originalYear) != null ? 'album-tag' : null,
@@ -369,6 +387,13 @@ interface TrackAnalysisWrite {
   // pass that couldn't compute the tail (capped download, url path) must not
   // wipe an outro a previous complete-file pass measured.
   outro?: TrackOutro | null;
+  // Edge dead air (ms). The HEAD is measurable on every pass, so it overwrites
+  // like the other head features. The TAIL follows the outro's rule — only a
+  // proven-complete file can measure it, so null keeps what a previous pass
+  // wrote instead of wiping it.
+  leadSilenceMs?: number | null;
+  tailSilenceMs?: number | null;
+  tailStartMs?: number | null;
   // Whether this pass ran a stem-caching attempt for the track (feature: stem
   // backfill). true stamps stems_at so the backfill scope drops it; false/
   // undefined leaves the stamp alone. Pass true for a MISS too — see the
@@ -394,6 +419,7 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         beats_json          = ?,
         bars_json           = ?,
         key_ranges_json     = ?,
+        lead_silence_ms     = ?,
         -- COALESCE: vocal activity is gated separately (ANALYZE_VOCAL_ACTIVITY),
         -- so a normal bpm/key pass passes null here and must NOT wipe an
         -- existing vocal_ranges_json. A non-null value (incl. "[]" for an
@@ -402,6 +428,13 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
         -- Same for the outro: only computable off a COMPLETE file, so a pass
         -- that analysed a capped download passes null and keeps what's there.
         outro_json          = COALESCE(?, outro_json),
+        -- Trailing dead air rides the outro decode and shares its rule: only a
+        -- COMPLETE file can measure it, so a capped-download pass passes null
+        -- and keeps whatever a full pass already found.
+        tail_silence_ms     = COALESCE(?, tail_silence_ms),
+        -- Same pass, same rule: the gap's absolute start is only meaningful
+        -- when the gap itself was measurable.
+        tail_start_ms       = COALESCE(?, tail_start_ms),
         -- Same COALESCE shape: a pass with the stem cache off passes null and
         -- must not clear a stamp an earlier stem pass set.
         stems_at            = COALESCE(?, stems_at),
@@ -427,8 +460,11 @@ export function upsertTrackAnalysis(id: string, a: TrackAnalysisWrite): void {
       a.beats && a.beats.length ? JSON.stringify(a.beats) : null,
       a.bars && a.bars.length ? JSON.stringify(a.bars) : null,
       a.keyRanges && a.keyRanges.length ? JSON.stringify(a.keyRanges) : null,
+      Number.isFinite(a.leadSilenceMs as number) ? Math.max(0, Math.round(a.leadSilenceMs as number)) : null,
       a.vocalRanges != null ? JSON.stringify(a.vocalRanges) : null,
       a.outro != null ? JSON.stringify(a.outro) : null,
+      Number.isFinite(a.tailSilenceMs as number) ? Math.max(0, Math.round(a.tailSilenceMs as number)) : null,
+      Number.isFinite(a.tailStartMs as number) ? Math.max(0, Math.round(a.tailStartMs as number)) : null,
       a.stemsAttempted ? new Date().toISOString() : null,
       ANALYSIS_VERSION,
       id,
@@ -560,7 +596,8 @@ export function clearAnalysis(opts: { keepVocal?: boolean; clearStems?: boolean 
     `UPDATE tracks SET bpm = NULL, musical_key = NULL, intro_ms = NULL,
       analysis_confidence = NULL, loudness_lufs = NULL, peak_db = NULL,
       structure_json = NULL, pace_json = NULL, beats_json = NULL, bars_json = NULL,
-      key_ranges_json = NULL, outro_json = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
+      key_ranges_json = NULL, outro_json = NULL,
+      lead_silence_ms = NULL, tail_silence_ms = NULL, tail_start_ms = NULL,${vocalCol}${stemsCol} analysis_version = NULL,
       audio_moods = NULL, audio_mood_scores_json = NULL,
       -- A --re-analyze is the operator saying the past doesn't apply, so the
       -- failure history goes with the analysis it describes. Without this, the

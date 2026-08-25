@@ -37,7 +37,14 @@ import {
 import { PersonaHero } from './personas/PersonaHero';
 import { SystemPromptModal } from './personas/SystemPromptModal';
 import { PersonaRoster } from './personas/PersonaRoster';
-import { orderPersonaRoster } from './personas/roster-order';
+import {
+  PERSONA_SORTS,
+  orderPersonaRoster,
+  personaFilterActive,
+  personaTagVocabulary,
+  type PersonaSort,
+} from './personas/roster-order';
+import { useRosterSort } from '../../lib/adminView';
 import { PersonaEditor } from './personas/PersonaEditor';
 import { useCommunityPersonas } from './personas/queries';
 import {
@@ -86,6 +93,13 @@ export default function PersonasPanel() {
   const [communityOpen, setCommunityOpen] = useState(false); // catalog modal open?
   const [installing, setInstalling] = useState<string | null>(null); // community slug installing, or null
   // Not array rows — plain state, not RHF (see the schema comment above).
+  // Sort is remembered per browser; the filters deliberately are not — see
+  // useRosterSort's note on why a filter that survives a reload is worse than
+  // one you have to set again.
+  const [sort, setSort] = useRosterSort<PersonaSort>('personas', PERSONA_SORTS, 'az');
+  const [query, setQuery] = useState('');
+  const [tagSel, setTagSel] = useState<string[]>([]);
+
   const [activePersonaId, setActivePersonaId] = useState('');
   const [activeDjPromptId, setActiveDjPromptId] = useState('');
   const [djHouseRules, setDjHouseRules] = useState('');
@@ -208,6 +222,7 @@ export default function PersonasPanel() {
       avatar: '',
       tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0, speed: 1 },
       skills: (data?.skills?.catalog || []).map(s => s.name),
+      tags: [],
     });
     // errors populate only once a field is touched, so without this the new
     // row's "incomplete" badge and the editor's status line stay silent about
@@ -359,9 +374,13 @@ export default function PersonasPanel() {
   // `p.skills.length`; the memo re-uses the last good order until the array
   // settles. Sits above the loading guards so the hook order never varies.
   const roster = useMemo(
-    () => orderPersonaRoster(personas, onAirPersonaId),
-    [personas, onAirPersonaId],
+    () => orderPersonaRoster(personas, onAirPersonaId, { sort, filter: { query, tags: tagSel } }),
+    [personas, onAirPersonaId, sort, query, tagSel],
   );
+  // Vocabulary and suggestions come from the WHOLE roster, not the filtered
+  // view: the point of offering a tag is to converge on one word for a thing,
+  // and a filtered list hides exactly the tags worth reusing.
+  const allTags = useMemo(() => personaTagVocabulary(personas), [personas]);
 
   // The textarea's maxLength already enforces the house-rules cap; this guards
   // a pasted-over-limit edge.
@@ -404,6 +423,7 @@ export default function PersonasPanel() {
               speed: p.tts.speed ?? 1,
             },
             skills: p.skills,
+            tags: p.tags || [],
           })),
           activePersonaId,
           djPrompts: values.djPrompts.map(p => ({ id: p.id, name: p.name.trim(), text: p.text.trim() })),
@@ -591,6 +611,16 @@ export default function PersonasPanel() {
 
       <PersonaRoster
         roster={roster}
+        total={personas.length}
+        sort={sort}
+        onSortChange={setSort}
+        query={query}
+        onQueryChange={setQuery}
+        tags={allTags}
+        selectedTags={tagSel}
+        onTagsChange={setTagSel}
+        filtered={personaFilterActive({ query, tags: tagSel })}
+        onClearFilters={() => { setQuery(''); setTagSel([]); }}
         activePersonaId={activePersonaId}
         onAirPersonaId={onAirPersonaId}
         avatarTick={avatarTick}
@@ -690,7 +720,7 @@ export default function PersonasPanel() {
         index={safeIdx}
         position={focusedPosition}
         control={control}
-        personaCount={roster.length}
+        personaCount={personas.length}
         activePersonaId={activePersonaId}
         onAirPersonaId={onAirPersonaId}
         data={data}
@@ -700,6 +730,7 @@ export default function PersonasPanel() {
         defaultEngine={defaultEngine}
         cloudIssueText={focusedCloudIssue}
         skillCatalog={skillCatalog}
+        tagSuggestions={allTags}
         editorRef={editorRef}
         open={editorOpen}
         isNew={focused.id === creatingId}

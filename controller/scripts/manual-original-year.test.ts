@@ -410,7 +410,17 @@ test('migration 22 backfills the refresh marker ONLY where the era text changed'
   // Recreate the on-disk shape an installation already running PR #1431 can
   // have: schema 21, a populated vec index, and no dirty-marker column yet.
   const d = db.requireDb();
-  d.prepare(`ALTER TABLE tracks DROP COLUMN text_vector_dirty`).run();
+  // Every column added after schema 21 has to come off, not just v22's — the
+  // point is a genuine v21 shape, and migrate() re-runs each block from there.
+  d.prepare(`ALTER TABLE tracks DROP COLUMN text_vector_dirty`).run();  // v22
+  // v23 — the indexes reference the columns, so they go first.
+  d.prepare(`DROP INDEX IF EXISTS idx_tracks_album_id`).run();
+  d.prepare(`DROP INDEX IF EXISTS idx_tracks_artist_id`).run();
+  d.prepare(`ALTER TABLE tracks DROP COLUMN album_id`).run();
+  d.prepare(`ALTER TABLE tracks DROP COLUMN artist_id`).run();
+  d.prepare(`ALTER TABLE tracks DROP COLUMN tail_start_ms`).run();       // v25
+  d.prepare(`ALTER TABLE tracks DROP COLUMN lead_silence_ms`).run();     // v24
+  d.prepare(`ALTER TABLE tracks DROP COLUMN tail_silence_ms`).run();
   d.pragma('user_version = 21');
   db.close();
   await db.open({ embeddingDim: 768, adoptStoredDim: true });

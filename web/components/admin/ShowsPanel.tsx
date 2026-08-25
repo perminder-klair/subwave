@@ -25,15 +25,17 @@ import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin
 import { useZodForm, applyServerFieldErrors } from '@/lib/form';
 import { showSchema, type ShowSchemaContext } from '@/lib/schemas.generated';
 import { Button } from '../ui/button';
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from '../ui/select';
 import { Card, Btn, Pill, Eyebrow, Metric } from './ui';
 import RosterViewToggle from './RosterViewToggle';
+import RosterToolbar from './RosterToolbar';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { ErrorState } from '@/components/ui/error-state';
 import { V3AlertDialog } from '../ui/alert-dialog';
 import { Modal } from '../ui/modal';
 import ShowsTable from './shows/ShowsTable';
-import { useRosterView } from '../../lib/adminView';
+import { useRosterView, useRosterSort } from '../../lib/adminView';
 import { showSubmitUrl } from '../../lib/repo';
 import { ShowDefRow } from './shows/ShowDefRow';
 import { ShowEditor } from './shows/ShowEditor';
@@ -49,6 +51,18 @@ import type {
   SkillOption,
 } from './shows/types';
 import { SHOWS_MAX } from './shows/types';
+// Radix Select forbids an empty-string item value, so "all hosts" travels as a
+// sentinel and is mapped back to '' — the same shape ANY_SENTINEL takes in the
+// show editor's own pickers.
+const ANY_HOST = '__any_host__';
+import {
+  SHOW_SORTS,
+  SHOW_SORT_LABELS,
+  orderShowRoster,
+  showFilterActive,
+  showTagVocabulary,
+  type ShowSort,
+} from './shows/roster-order';
 import { useSettingsQuery } from './settings/queries';
 import {
   patchShowSettings,
@@ -82,6 +96,13 @@ export default function ShowsPanel() {
   const [schedule, setSchedule] = useState<Schedule>(emptyWeek());
   const [communityOpen, setCommunityOpen] = useState(false);          // catalog modal open?
   const [view, setView] = useRosterView('shows');
+  // Sort is remembered per browser; the filters deliberately are not — see
+  // useRosterSort's note on why a filter that survives a reload is worse than
+  // one you have to set again.
+  const [sort, setSort] = useRosterSort<ShowSort>('shows', SHOW_SORTS, 'az');
+  const [query, setQuery] = useState('');
+  const [tagSel, setTagSel] = useState<string[]>([]);
+  const [hostSel, setHostSel] = useState('');
 
   // Shows are edited in place — no modal, no draft copy; edits land straight on
   // the RHF field array and persist on Save show. null = none open.
@@ -273,7 +294,7 @@ export default function ShowsPanel() {
       themeId: '', genres: [], eras: [], energies: [], vocals: '',
       filtersStrict: false, maxTrackSeconds: null,
       playlistIds: [], playlistStrict: false, excludedPlaylistIds: [],
-      programme: false, segmentSkill: '',
+      programme: false, segmentSkill: '', tags: [],
     });
     // errors populate only once a field is touched, so without this the new
     // row's "incomplete" badge stays silent about why.
@@ -390,6 +411,18 @@ export default function ShowsPanel() {
   const focusedErrors = (focusIdx != null ? form.formState.errors.shows?.[focusIdx] : undefined) as
     FieldErrors<Show> | undefined;
 
+  // Display order only — every entry carries its form-array `index`, which is
+  // what focusShow, Save show and delete key off. See shows/roster-order.ts.
+  const filter = { query, tags: tagSel, personaId: hostSel };
+  const filterOn = showFilterActive(filter);
+  const allTags = showTagVocabulary(shows);
+  const entries = orderShowRoster(shows, { sort, filter, personas, hoursFor: countHours });
+  const clearFilters = () => { setQuery(''); setTagSel([]); setHostSel(''); };
+  // Suggestions come from the WHOLE list, not the filtered view: the point of
+  // offering them is to converge on one vocabulary, and a filtered list would
+  // hide exactly the tags the operator should be reusing.
+  const tagSuggestions = allTags;
+
   return (
     <div className="grid gap-4">
       <section className="card">
@@ -430,9 +463,6 @@ export default function ShowsPanel() {
         {/* Own line on a phone: sharing a row with the caption folds the
             Cards/List toggle into two stacked icons. */}
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
-          <span className="flex-none">
-            <RosterViewToggle view={view} onChange={setView} />
-          </span>
           <Btn
             className="min-h-9 sm:min-h-0"
             onClick={() => setCommunityOpen(true)}
@@ -454,6 +484,47 @@ export default function ShowsPanel() {
           </Btn>
         </div>
       </div>
+      {/* Hidden below a handful of shows: a filter bar over four rows is
+          furniture, and the list this exists for is the 40-show one. */}
+      {shows.length > 5 && (
+        <RosterToolbar<ShowSort>
+          query={query}
+          onQueryChange={setQuery}
+          noun="shows"
+          sort={sort}
+          onSortChange={setSort}
+          sortOptions={SHOW_SORTS.map(k => [k, SHOW_SORT_LABELS[k]] as const)}
+          tags={allTags}
+          selectedTags={tagSel}
+          onTagsChange={setTagSel}
+          filtered={filterOn}
+          onClear={clearFilters}
+          view={view}
+          onViewChange={setView}
+          summary={filterOn ? `${entries.length} of ${shows.length}` : undefined}
+          extraFilters={personas.length > 1 && (
+            <Select value={hostSel || ANY_HOST} onValueChange={v => setHostSel(v === ANY_HOST ? '' : v)}>
+              <SelectTrigger className="min-w-0 flex-1 sm:w-[170px] sm:flex-none" aria-label="Filter by host">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ANY_HOST}>All hosts</SelectItem>
+                {personas.map(p => (
+                  <SelectItem key={p.id} value={p.id}>{p.name?.trim() || 'Unnamed'}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+        />
+      )}
+      {/* The toolbar carries the view toggle once it is on screen; below the
+          threshold the header row above keeps it, so it never disappears. */}
+      {shows.length > 0 && shows.length <= 5 && (
+        <div className="flex justify-end">
+          <RosterViewToggle view={view} onChange={setView} />
+        </div>
+      )}
+
       {shows.length === 0 && (
         <EmptyState
           title="No shows scheduled"
@@ -461,14 +532,22 @@ export default function ShowsPanel() {
         />
       )}
 
-      {view === 'list' && shows.length > 0 && (
+      {shows.length > 0 && entries.length === 0 && (
+        <EmptyState
+          title="No shows match"
+          description="Nothing fits the current filters."
+          action={<Btn onClick={clearFilters}>Clear filters</Btn>}
+        />
+      )}
+
+      {view === 'list' && entries.length > 0 && (
         <ShowsTable
-          rows={shows.map((s, i) => showRow(s, i, personas, apiBase, countHours(s.id), !form.formState.errors.shows?.[i]))}
+          rows={entries.map(e => showRow(e.show, e.index, personas, apiBase, countHours(e.show.id), !form.formState.errors.shows?.[e.index]))}
           onEdit={r => focusShow(r.index)}
         />
       )}
 
-      {view === 'cards' && shows.map((s, i) => {
+      {view === 'cards' && entries.map(({ show: s, index: i }) => {
         const ok = !form.formState.errors.shows?.[i];
         const hrs = countHours(s.id);
         const host = personas.find(p => p.id === s.personaId) ?? null;
@@ -498,6 +577,7 @@ export default function ShowsPanel() {
           control={control}
           trigger={trigger}
           errors={focusedErrors}
+          tagSuggestions={tagSuggestions}
           editorRef={editorRef}
           personas={personas}
           moods={moods}

@@ -92,12 +92,17 @@ function Deck({
         aria-hidden="true"
       />
 
+      {/* A 7" single, not an LP: the station airs one track at a time, so the
+          disc under the needle is always a 45 — a 7" label sits at half the
+          disc's width (an LP's is nearer a third), and Platter.module.css spins
+          it 1.35x faster. The spindle stays put: it's the deck's peg, one size
+          for either record. */}
       <div
         className={cn('absolute inset-[6%] rounded-full', styles.vinyl, styles.record, playing && styles.playing)}
         aria-hidden="true"
       >
-        <div className="absolute inset-[30.5%] rounded-full border-2 border-[var(--accent)]" />
-        <div className="absolute inset-[32%] flex flex-col items-center justify-center gap-[2%] rounded-full border border-[#0c0a09] bg-[#ece5d6] px-[6%] text-center text-[#161412]">
+        <div className="absolute inset-[26.5%] rounded-full border-2 border-[var(--accent)]" />
+        <div className="absolute inset-[28%] flex flex-col items-center justify-center gap-[2%] rounded-full border border-[#0c0a09] bg-[#ece5d6] px-[6%] text-center text-[#161412]">
           <span className="font-mono text-[clamp(6px,1.3cqw,9px)] font-bold tracking-[0.26em] text-[var(--accent)]">
             {stationName}
           </span>
@@ -109,7 +114,7 @@ function Deck({
           </span>
           <span className="my-[2%] size-[6%] rounded-full bg-[#0c0a09]" />
           <span className="font-mono text-[clamp(5px,0.95cqw,7px)] tracking-[0.22em] text-[#7a736a]">
-            SIDE A · 33⅓ RPM
+            SIDE A · 45 RPM
           </span>
         </div>
       </div>

@@ -87,6 +87,20 @@ export interface AnalysisResult {
   // requested stems_dir (tail rides along when the outro was computable).
   // null = no stems_dir requested / backend predates the feature.
   stemsCached: boolean | null;
+  // Dead-air gaps at the file's edges (ms), measured against an ABSOLUTE dBFS
+  // floor — not the relative gates behind introMs / outro.startMs, which ask
+  // where the MUSIC starts and stops and would read a quiet intro or a long
+  // ring-out as silence. null = not measured (backend predates the feature,
+  // the edge window was entirely silent so the gap outlasts it, or — for the
+  // tail — the analysed file was not proven complete). Consumers treat null as
+  // "no silence signal, trim nothing".
+  leadSilenceMs: number | null;
+  tailSilenceMs: number | null;
+  // Where the trailing gap OPENS, absolute ms from byte zero. Same measurement
+  // as tailSilenceMs, expressed as the cue point itself so the controller never
+  // reconstructs it as (tagged duration - gap) — the tag and the decoded file
+  // disagree often enough to move the cut. null whenever tailSilenceMs is.
+  tailStartMs: number | null;
 }
 
 // The outgoing track's measured ending — what actually decides whether a
@@ -110,6 +124,15 @@ export interface OutroInfo {
 // loudness/peak entirely when pyloudnorm is absent or measurement failed.
 function parseFinite(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+// Coerce an edge-silence field to a non-negative whole-ms count or null. A
+// negative or non-finite value is a broken measurement, not a zero-length gap:
+// null keeps the "no signal, trim nothing" path rather than stamping a cue
+// point derived from nonsense.
+function parseSilenceMs(v: unknown): number | null {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return null;
+  return Math.round(v);
 }
 
 // Coerce a list of spans to clean Section[]. Drops malformed/zero-length spans.
@@ -272,6 +295,9 @@ interface WorkerMessage {
   key_ranges?: unknown;
   audio_embedding?: unknown;
   outro?: unknown;
+  lead_silence_ms?: unknown;
+  tail_silence_ms?: unknown;
+  tail_start_ms?: unknown;
   stems_cached?: boolean;
   text_embeddings?: unknown;
   // render_transition op fields
@@ -445,6 +471,9 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           keyRanges: parseKeyRanges(msg.key_ranges),
           audioEmbedding: parseAudioEmbedding(msg.audio_embedding),
           outro: parseOutro(msg.outro),
+          leadSilenceMs: parseSilenceMs(msg.lead_silence_ms),
+          tailSilenceMs: parseSilenceMs(msg.tail_silence_ms),
+          tailStartMs: parseSilenceMs(msg.tail_start_ms),
           stemsCached: typeof msg.stems_cached === 'boolean' ? msg.stems_cached : null,
         }),
       reject,
@@ -582,6 +611,36 @@ async function sidecarReachable(): Promise<boolean> {
 
 // POST the sidecar a request body of either {url} (it downloads) or {path}
 // (a file on the shared volume the controller pre-fetched).
+class AnalyzerPathUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AnalyzerPathUnavailableError';
+  }
+}
+
+async function sidecarFailure(res: Response): Promise<never> {
+  const raw = await res.text().catch(() => '');
+  let detail: unknown = null;
+  try {
+    detail = JSON.parse(raw)?.detail;
+  } catch {
+    // Non-JSON responses retain the previous status + raw-body error shape.
+  }
+  if (
+    res.status === 422
+    && detail != null
+    && typeof detail === 'object'
+    && (detail as Record<string, unknown>).code === 'path_unavailable'
+  ) {
+    const message = (detail as Record<string, unknown>).message;
+    throw new AnalyzerPathUnavailableError(
+      typeof message === 'string' ? message : 'analyzer cannot read controller path',
+    );
+  }
+  const message = typeof detail === 'string' ? detail : raw;
+  throw new Error(`analyze sidecar ${res.status}: ${message}`);
+}
+
 async function sidecarRequest(body: ({ url: string } | { path: string }) & AnalyzeRequestOpts): Promise<AnalysisResult> {
   const base = _sidecarBase;
   const res = await fetchWithTimeout(`${base}/analyze`, {
@@ -591,7 +650,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     timeoutMs: config.analyzer.requestTimeoutMs,
     bodyDeadline: true,
   });
-  if (!res.ok) throw new Error(`analyze sidecar ${res.status}: ${await res.text().catch(() => '')}`);
+  if (!res.ok) return sidecarFailure(res);
   const resBody = (await res.json()) as WorkerMessage;
   if (!resBody.ok) throw new Error(resBody.error || 'analysis failed');
   return {
@@ -609,6 +668,9 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     keyRanges: parseKeyRanges(resBody.key_ranges),
     audioEmbedding: parseAudioEmbedding(resBody.audio_embedding),
     outro: parseOutro(resBody.outro),
+    leadSilenceMs: parseSilenceMs(resBody.lead_silence_ms),
+    tailSilenceMs: parseSilenceMs(resBody.tail_silence_ms),
+    tailStartMs: parseSilenceMs(resBody.tail_start_ms),
     stemsCached: typeof resBody.stems_cached === 'boolean' ? resBody.stems_cached : null,
   };
 }
@@ -1025,6 +1087,38 @@ export async function analyzePath(localPath: string, opts: AnalyzeRequestOpts = 
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
   return backend === 'sidecar' ? analyzeViaSidecarPath(localPath, opts) : analyzeViaLocalPath(localPath, opts);
+}
+
+let pathFallbackWarned = false;
+
+// Prefer the one-ahead shared-path handoff, but degrade a sidecar that cannot
+// see the controller's state mount to its existing URL input. Only the
+// sidecar's machine-readable path-unavailable response earns the retry: a
+// decode/model failure is real analysis work failing and must not be doubled.
+// `complete` describes the controller's staged file, while `stems_dir` is a
+// controller-local output path; neither is valid when the sidecar downloads
+// its own temporary copy.
+export async function analyzePathWithUrlFallback(
+  songId: string,
+  localPath: string,
+  opts: AnalyzeRequestOpts = {},
+): Promise<AnalysisResult> {
+  try {
+    return await analyzePath(localPath, opts);
+  } catch (err) {
+    if (!(err instanceof AnalyzerPathUnavailableError)) throw err;
+    if (!pathFallbackWarned) {
+      pathFallbackWarned = true;
+      console.error(
+        '[analyze] analyzer cannot read controller staging paths; using URL downloads ' +
+        '(slower, and stem caching still requires shared state)',
+      );
+    }
+    const urlOpts = { ...opts };
+    delete urlOpts.complete;
+    delete urlOpts.stems_dir;
+    return analyze(songId, urlOpts);
+  }
 }
 
 export function shutdown(): void {

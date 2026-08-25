@@ -13,11 +13,13 @@ import { fileURLToPath } from 'node:url';
 const scriptsDir = dirname(fileURLToPath(import.meta.url));
 
 const SUITES = [
+  'analyzer_sidecar_contract_test.py', // typed missing-path response for URL fallback (#1331)
   'analyzer_embedding_test.py', // batched CLAP + embedding-only backfills (#1426)
   'idle_release_test.py', // idle model release + heavy clock (#1099/#1204)
   'vocal_gate_test.py', // vocal-stem gate thresholds (#1125)
   'test_chatterbox_chunk.py', // chatterbox chunk_text (#1130)
   'analyzer_noise_test.py', // decode-noise filter + capability loss (#1300)
+  'analyzer_silence_test.py', // edge dead-air measurement (silence trim)
 ];
 
 const probe = spawnSync('python3', ['--version'], { stdio: 'ignore' });

@@ -39,6 +39,10 @@ export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: 
       speed: typeof p?.tts?.speed === 'number' ? p.tts.speed : 1,
     },
     skills: Array.isArray(p?.skills) ? p.skills : allSkills,
+    // Unlike `skills`, an absent value is NOT a stand-in for "everything" — a
+    // persona that carries no tags carries no tags, which is what every
+    // persona saved before the field does.
+    tags: Array.isArray(p?.tags) ? p.tags.map(t => String(t).trim().toLowerCase()).filter(Boolean) : [],
   };
 }
 

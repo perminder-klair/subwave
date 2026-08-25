@@ -22,6 +22,8 @@ import { listCommunitySkills } from '../skills/loader.js';
 import { listCommunityPersonas } from '../personas/community.js';
 import { listCommunityShows } from '../shows/community.js';
 import { resolveEraYear } from '../music/show-filter.js';
+import { resolveSilenceTrim } from '../music/silence-trim.js';
+import { playableDurationSec } from '../broadcast/drain-policy.js';
 import { lifetimeTokenCount } from '../llm/log.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
@@ -235,12 +237,33 @@ router.get('/now-playing', async (req, res) => {
       // (requests + DJ picks); auto-playlist plays fall back to the library
       // DB's duration_sec. Tracks known to neither just omit it — the player
       // degrades to an elapsed-only readout, same as the metadata strip.
+      //
+      // What's published is the PLAYABLE span, not the tagged length: with the
+      // dead-air trim on, Liquidsoap starts at liq_cue_in and stops at
+      // liq_cue_out, so a tagged duration runs the listener's progress bar past
+      // the end of the song by exactly the silence that was cut. Both airing
+      // paths resolve it, and they resolve it differently on purpose — a
+      // queue-tracked play carries the cue points the drain actually stamped
+      // (which fold in the #447 cap and a stem seam too), while an untracked
+      // auto-playlist play has no queue item and can only re-ask the policy
+      // module. `rec` is the LEAN read (#723) and the trim inputs are plain
+      // integer columns on it, so this stays free of the acoustic blob parse.
       if (nowPlaying.duration == null) {
         const cur = queue.current;
-        const queueDuration =
-          cur?.track?.id === nowPlaying.subsonic_id ? cur?.track?.duration : null;
-        const duration = queueDuration ?? rec?.durationSec ?? null;
-        if (typeof duration === 'number' && duration > 0) nowPlaying.duration = duration;
+        const tracked = cur?.track?.id === nowPlaying.subsonic_id ? cur : null;
+        const duration = tracked?.track?.duration ?? rec?.durationSec ?? null;
+        if (typeof duration === 'number' && duration > 0) {
+          const playable = tracked
+            ? playableDurationSec(duration, tracked.cueOutSec ?? null, tracked.cueInSec ?? null)
+            : (() => {
+                const trim = resolveSilenceTrim(rec);
+                return playableDurationSec(duration, trim.cueOutSec, trim.cueInSec);
+              })();
+          // playableDurationSec only returns null on an unusable duration,
+          // which the guard above already excluded; keep the tagged value as a
+          // belt-and-braces fallback rather than dropping the clock entirely.
+          nowPlaying.duration = playable != null && playable > 0 ? playable : duration;
+        }
       }
     }
     // Served from the 15s listener-monitor cache — no per-request Icecast hit.

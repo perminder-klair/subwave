@@ -24,7 +24,8 @@ export const TAGGER_VERSION = 3;
 // v4: added the pace curve (pace_json).
 // v5: added the beat/bar grid (beats_json, bars_json).
 // v6: added per-region key ranges (key_ranges_json).
-export const ANALYSIS_VERSION = 6;
+// v7: added edge dead air (lead_silence_ms, tail_silence_ms, tail_start_ms).
+export const ANALYSIS_VERSION = 7;
 
 // CLAP audio-embedding dim. Fixed by the model (LAION-CLAP's audio projection
 // is 512-d), so — unlike the text index in track_vectors — there's no per-model

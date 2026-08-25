@@ -14,6 +14,8 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     title: row.title,
     artist: row.artist,
     album: row.album,
+    albumId: row.album_id ?? null,
+    artistId: row.artist_id ?? null,
     year: row.year,
     originalYear: row.original_year ?? null,
     originalYearSource: row.original_year_source ?? null,
@@ -58,6 +60,9 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     keyRanges: row.key_ranges_json ? parseKeyRanges(row.key_ranges_json) : null,
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     outro: row.outro_json ? parseOutroJson(row.outro_json) : null,
+    leadSilenceMs: row.lead_silence_ms ?? null,
+    tailSilenceMs: row.tail_silence_ms ?? null,
+    tailStartMs: row.tail_start_ms ?? null,
     mapX: row.map_x ?? null,
     mapY: row.map_y ?? null,
   };

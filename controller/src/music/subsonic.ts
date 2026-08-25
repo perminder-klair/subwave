@@ -750,6 +750,10 @@ export async function* iterateAllSongs() {
         for (const s of songs) {
           yield {
             ...s,
+            // The album we are ITERATING is the authoritative id — a Child's
+            // own albumId is normally the same, but it is optional in the
+            // Subsonic spec, and this loop always knows the answer.
+            albumId: s.albumId ?? r.album?.id ?? album.id ?? null,
             albumIsCompilation: isCompilation,
             albumOriginalYear: originalYear,
             albumEraUntrusted: suspicion.suspect,

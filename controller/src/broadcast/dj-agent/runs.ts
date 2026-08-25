@@ -8,6 +8,7 @@ import * as settings from '../../settings.js';
 import * as library from '../../music/library.js';
 import * as mix from '../../music/mix.js';
 import * as journey from '../../music/journey.js';
+import { shiftOnsetMs } from '../../music/silence-trim.js';
 import { shuffle } from '../../util/shuffle.js';
 import { energyForDaypart } from '../../context.js';
 
@@ -111,9 +112,9 @@ function analysisOf(track: any): { bpm: number | null; key: string | null } {
 // Resolve a track's measured intro runway (ms), for the talk-within-the-intro
 // budget enforcement.
 export function introMsOf(track: any): number | null {
-  if (track?.introMs != null) return track.introMs;
-  const rec = track?.id ? library.get(track.id) : null;
-  return rec?.introMs ?? null;
+  const raw = track?.introMs != null ? track.introMs : (track?.id ? library.get(track.id)?.introMs ?? null : null);
+  // Trimmed timeline — see intro-budget.introMsFor for why.
+  return shiftOnsetMs(track, raw);
 }
 
 // Probability of STARTING a run on a given pick, by chattiness. Quiet personas

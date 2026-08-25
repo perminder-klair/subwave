@@ -603,7 +603,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       // Lyrics still override the stored ranges below either way.
       const vocal = vocalBackfill ? (lyricVocal && !stems_dir ? false : true) : undefined;
       const a = localPath
-        ? await analyzer.analyzePath(localPath, {
+        ? await analyzer.analyzePathWithUrlFallback(id, localPath, {
             embed,
             vocal,
             complete: localComplete,
@@ -657,6 +657,9 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
           keyRanges: a.keyRanges,
           vocalRanges,
           outro,
+          leadSilenceMs: a.leadSilenceMs,
+          tailSilenceMs: a.tailSilenceMs,
+          tailStartMs: a.tailStartMs,
           // Stamp the stem attempt whenever the worker actually reached the
           // stem-writing step — true (written) OR false (the write failed for
           // this track). Both are settled outcomes, and stamping the miss is
