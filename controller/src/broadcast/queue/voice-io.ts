@@ -138,9 +138,7 @@ export function airInEstimate(
   { now, chainFreeAt, jingleClearAt, jingleWindowMs = JINGLE_WAIT_CEILING_MS }:
     { now: number; chainFreeAt: number; jingleClearAt: number; jingleWindowMs?: number },
 ): { waitMs: number; estimatedAirInMs: number } {
-  const jingleWait = Math.min(
-    Math.max(0, jingleClearAt - now), jingleWindowMs, JINGLE_WAIT_CEILING_MS,
-  );
+  const jingleWait = jingleWaitMs(now, jingleClearAt, jingleWindowMs);
   const chainWait = Math.max(0, chainFreeAt - now);
   const waitMs = Math.max(chainWait, jingleWait);
   return { waitMs, estimatedAirInMs: waitMs + HANDOFF_TO_AIR_MS };
@@ -237,8 +235,9 @@ const JINGLE_WAIT_CEILING_MS = 600_000;
 export const BED_MARKER_FRESH_MS = 10_000;
 
 // The guard window as two numbers: when the clip clears, and how long the window
-// is in total. The second is what bounds the sleep — see waitForJingleClear.
-function jingleWindow(): { clearAtMs: number; windowMs: number } {
+// is in total. The second is what bounds the sleep — see jingleWaitMs. Exported
+// as the test seam for the marker's durationSec precedence.
+export function jingleWindow(): { clearAtMs: number; windowMs: number } {
   const none = { clearAtMs: 0, windowMs: 0 };
   try {
     const m = JSON.parse(readFileSync(config.liquidsoap.jinglePlayingFile, 'utf8'));
@@ -274,13 +273,20 @@ export function jingleAiredAtMs(filename: string): number {
   }
 }
 
+// How long to hold a voice handoff behind a jingle. Three bounds, in order:
+// `clearAtMs - now` is the honest remaining wait; `windowMs` caps it at the
+// clip's OWN length, so a startedAt dated into the future (clock skew, a
+// corrupt marker) can never buy more than one clip's worth of silence; the
+// ceiling is the backstop for an implausibly long clip. Exported and pure
+// because it is the whole guard — airInEstimate's forecast and the sleep below
+// must not be able to drift apart.
+export function jingleWaitMs(now: number, clearAtMs: number, windowMs: number): number {
+  return Math.max(0, Math.min(clearAtMs - now, windowMs, JINGLE_WAIT_CEILING_MS));
+}
+
 async function waitForJingleClear() {
   const { clearAtMs, windowMs } = jingleWindow();
-  // Three bounds, in order. `clearAtMs - now` is the honest remaining wait;
-  // `windowMs` caps it at the clip's own length, so a startedAt dated into the
-  // future (clock skew, a corrupt marker) can never buy more than one clip's
-  // worth of silence; the ceiling is the backstop for an implausibly long clip.
-  const waitMs = Math.min(clearAtMs - Date.now(), windowMs, JINGLE_WAIT_CEILING_MS);
+  const waitMs = jingleWaitMs(Date.now(), clearAtMs, windowMs);
   if (waitMs > 0) await sleep(waitMs);
 }
 
