@@ -41,7 +41,12 @@ export interface SectionSpec {
   formKeys: readonly string[];
 }
 
-export const SECTIONS: readonly SectionSpec[] = [
+// `satisfies`, never a `readonly SectionSpec[]` annotation: the annotation
+// widens every `id` back to `string` and takes `SectionId` — and with it every
+// typo guard on SETTINGS_INDEX, ADVANCED_CARDS and `activeSection` — down with
+// it. A bad id then compiles clean and dies quietly at runtime (`sectionById`
+// → undefined → no formKeys → no dirty tracking, no save bar).
+export const SECTIONS = [
   {
     id: 'station', group: 'the station', label: 'Station',
     hint: 'name · location · privacy', icon: Radio,
@@ -102,7 +107,7 @@ export const SECTIONS: readonly SectionSpec[] = [
     hint: 'mixer · broadcast', icon: AlertTriangle,
     formKeys: ['crossfadeDuration', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'stream', 'loudness'],
   },
-] as const;
+] as const satisfies readonly SectionSpec[];
 
 export type SectionId = (typeof SECTIONS)[number]['id'];
 
@@ -140,7 +145,7 @@ export const RESTART_PATHS: readonly string[] = [
  * A section renders its own <Advanced> wrapper; this table exists so the search
  * index can say "adv" on a result and open the disclosure when it jumps there.
  */
-export const ADVANCED_CARDS: Record<string, readonly string[]> = {
+export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
   station: ['listener-requests', 'public-api'],
   llm: ['fallback', 'reasoning', 'next-track-picker', 'idle-behaviour', 'daily-token-budget'],
   tts: ['fallback-voice'],
@@ -153,7 +158,7 @@ export const ADVANCED_CARDS: Record<string, readonly string[]> = {
   ],
 };
 
-export const isAdvancedCard = (section: string, anchor: string) =>
+export const isAdvancedCard = (section: SectionId, anchor: string) =>
   (ADVANCED_CARDS[section] || []).includes(anchor);
 
 export interface IndexEntry {

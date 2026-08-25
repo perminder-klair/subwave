@@ -116,6 +116,25 @@ const OPUS_BITRATES = SETTINGS_OPUS_BITRATES;
 const AAC_BITRATES = SETTINGS_AAC_BITRATES;
 
 /**
+ * Settings keys a save posts under a name the FormState does NOT use.
+ *
+ * `rebaselineSavedPatch` already re-homes the VALUES (audio.stemCache* is edited
+ * as `transitions.*`); anything that scopes by FormState key has to follow the
+ * same map or it misses the alias. Discard is the case that bites: rolling back
+ * `transitions` while leaving the `audio.stemCacheGb` message on screen parks an
+ * error under a value that no longer produced it.
+ */
+const FORM_KEY_ALIASES: Record<string, readonly string[]> = {
+  transitions: ['audio'],
+};
+
+/** Does `path` belong to any of these FormState keys, alias included? */
+function ownsErrorPath(formKeys: readonly string[], path: string): boolean {
+  const under = (key: string) => path === key || path.startsWith(`${key}.`);
+  return formKeys.some(key => under(key) || (FORM_KEY_ALIASES[key] ?? []).some(under));
+}
+
+/**
  * Replace exactly the errors belonging to the keys this patch carried.
  *
  * Scoped by TOP-LEVEL key, because that is the unit a save button posts and the
@@ -138,6 +157,46 @@ function mergePatchErrors(
   }
   for (const [path, message] of Object.entries(next || {})) out[path] = message;
   return out;
+}
+
+/**
+ * How long a search jump waits for its target card to mount, in animation
+ * frames (~1s at 60Hz). Generous on purpose: the cost of waiting is invisible
+ * — the scroll simply happens on the frame the card appears — while the cost of
+ * giving up early is a jump that silently does nothing.
+ */
+const JUMP_MAX_FRAMES = 60;
+
+/**
+ * Collector for the number boxes in a whole-block save.
+ *
+ * Archives and the danger zone post EVERY field on every click, so a box the
+ * operator cleared and has not refilled rides along with whatever they actually
+ * edited — and neither JS coercion fails safely there. `Number('')` is 0, which
+ * is a VALID listener buffer and a valid retention window, so saving an AAC
+ * toggle would quietly set the buffer to 0s and flag a mixer restart.
+ * `parseInt('')` is NaN, which JSON.stringify posts as `null` and fails the
+ * whole block with a message pointing at a field nobody touched.
+ *
+ * So a blank box refuses the save and names itself instead. An explicitly typed
+ * `0` still parses, which is what keeps "0 = no limit" on max track length.
+ */
+function numberFields() {
+  const bad: Record<string, string> = {};
+  const read = (path: string, raw: string, parse: (s: string) => number) => {
+    const text = String(raw).trim();
+    // Blank is checked before the parser, not by it: Number('') is a finite 0.
+    const n = text ? parse(text) : NaN;
+    if (Number.isFinite(n)) return n;
+    bad[path] = 'enter a number';
+    return 0;
+  };
+  return {
+    bad,
+    int: (path: string, raw: string) => read(path, raw, t => parseInt(t, 10)),
+    float: (path: string, raw: string) => read(path, raw, t => parseFloat(t)),
+    num: (path: string, raw: string) => read(path, raw, Number),
+  };
 }
 
 const sameForm = (a: FormState, b: FormState) => JSON.stringify(a) === JSON.stringify(b);
@@ -565,6 +624,22 @@ export default function SettingsPanel() {
   };
 
   /**
+   * Post a whole-block patch — unless a number box in it was left blank, in
+   * which case name the box and save nothing. See `numberFields`.
+   */
+  const saveBlock = (n: ReturnType<typeof numberFields>, patch: Record<string, unknown>) => {
+    const blanks = Object.keys(n.bad);
+    if (blanks.length > 0) {
+      setFieldErrors(prev => mergePatchErrors(prev, patch, n.bad));
+      notify.err(blanks.length === 1
+        ? 'a number field is empty — fill it in before saving'
+        : `${blanks.length} number fields are empty — fill them in before saving`);
+      return;
+    }
+    saveSettings(patch);
+  };
+
+  /**
    * Archives and the danger zone used to carry a Save button per card — one for
    * the bitrate, one for the retention window, one for each stream mount. Each
    * now folds into the section's one save.
@@ -572,27 +647,30 @@ export default function SettingsPanel() {
    * Posting the whole block is safe rather than noisy: `settings.update()`
    * change-gates every field in these two blocks against the CURRENT value
    * before deciding it changed, so an untouched field posted alongside an
-   * edited one neither writes nor flags a restart.
+   * edited one neither writes nor flags a restart. What it is NOT safe against
+   * is a blank number box, which is why both go through `saveBlock`.
    */
   const saveArchives = () => {
     if (!form) return;
-    saveSettings({
+    const n = numberFields();
+    saveBlock(n, {
       archive: {
         enabled: form.archive.enabled,
-        bitrate: parseInt(form.archive.bitrate, 10),
-        retentionDays: parseInt(form.archive.retentionDays, 10),
+        bitrate: n.int('archive.bitrate', form.archive.bitrate),
+        retentionDays: n.int('archive.retentionDays', form.archive.retentionDays),
       },
     });
   };
 
   const saveDanger = () => {
     if (!form) return;
-    saveSettings({
-      crossfadeDuration: parseFloat(form.crossfadeDuration),
-      maxTrackSeconds: parseInt(form.maxTrackSeconds, 10) || 0,
+    const n = numberFields();
+    saveBlock(n, {
+      crossfadeDuration: n.float('crossfadeDuration', form.crossfadeDuration),
+      maxTrackSeconds: n.int('maxTrackSeconds', form.maxTrackSeconds),
       silenceTrim: {
         enabled: form.silenceTrim.enabled,
-        minGapMs: parseInt(form.silenceTrim.minGapMs, 10) || 1500,
+        minGapMs: n.int('silenceTrim.minGapMs', form.silenceTrim.minGapMs),
       },
       transitions: {
         pairDrain: form.transitions.pairDrain,
@@ -600,24 +678,24 @@ export default function SettingsPanel() {
       },
       audio: {
         stemCache: form.transitions.stemCache,
-        stemCacheGb: Number(form.transitions.stemCacheGb),
+        stemCacheGb: n.num('audio.stemCacheGb', form.transitions.stemCacheGb),
       },
       loudness: {
-        targetLufs: parseFloat(form.loudness.targetLufs),
-        maxBoostDb: parseFloat(form.loudness.maxBoostDb),
+        targetLufs: n.float('loudness.targetLufs', form.loudness.targetLufs),
+        maxBoostDb: n.float('loudness.maxBoostDb', form.loudness.maxBoostDb),
         source: form.loudness.source,
       },
       stream: {
         idleWhenEmpty: form.stream.idleWhenEmpty,
-        idleAfterMinutes: parseInt(form.stream.idleAfterMinutes, 10),
+        idleAfterMinutes: n.int('stream.idleAfterMinutes', form.stream.idleAfterMinutes),
         opusEnabled: form.stream.opusEnabled,
-        opusBitrate: parseInt(form.stream.opusBitrate, 10),
+        opusBitrate: n.int('stream.opusBitrate', form.stream.opusBitrate),
         flacEnabled: form.stream.flacEnabled,
         oggIcyMetadata: form.stream.oggIcyMetadata,
         aacEnabled: form.stream.aacEnabled,
-        aacBitrate: parseInt(form.stream.aacBitrate, 10),
-        bitrate: parseInt(form.stream.bitrate, 10),
-        bufferSeconds: Number(form.stream.bufferSeconds),
+        aacBitrate: n.int('stream.aacBitrate', form.stream.aacBitrate),
+        bitrate: n.int('stream.bitrate', form.stream.bitrate),
+        bufferSeconds: n.num('stream.bufferSeconds', form.stream.bufferSeconds),
       },
     });
   };
@@ -659,8 +737,7 @@ export default function SettingsPanel() {
     setFieldErrors(prev => {
       const out: Record<string, string> = {};
       for (const [path, message] of Object.entries(prev)) {
-        const owned = activeSpec.formKeys.some(k => path === k || path.startsWith(`${k}.`));
-        if (!owned) out[path] = message;
+        if (!ownsErrorPath(activeSpec.formKeys, path)) out[path] = message;
       }
       return out;
     });
@@ -671,14 +748,22 @@ export default function SettingsPanel() {
     setActiveSection(section);
     if (advanced) setAdvOpen(prev => ({ ...prev, [section]: true }));
     // The section swap and the disclosure both have to commit before the target
-    // card exists to scroll to, so this waits a beat rather than a frame.
-    window.setTimeout(() => {
+    // card exists to scroll to. A fixed delay is a bet against render time that
+    // a 1200-control section can lose, and a lost jump looks exactly like a
+    // broken search result — no scroll, no flash, no error. So watch for the
+    // card across frames instead, and give up only after JUMP_MAX_FRAMES.
+    let frames = 0;
+    const settle = () => {
       const el = document.querySelector(`[data-card="${anchor}"]`);
-      if (!(el instanceof HTMLElement)) return;
+      if (!(el instanceof HTMLElement)) {
+        if (frames++ < JUMP_MAX_FRAMES) window.requestAnimationFrame(settle);
+        return;
+      }
       el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       el.setAttribute('data-flash', '');
       window.setTimeout(() => el.removeAttribute('data-flash'), 2600);
-    }, 90);
+    };
+    window.requestAnimationFrame(settle);
   }, []);
 
   const chrome = useMemo(() => ({

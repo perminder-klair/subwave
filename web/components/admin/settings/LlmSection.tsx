@@ -1230,6 +1230,14 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
         saveLabel="Save LLM provider"
         errors={fieldErrors}
         ownedKeys={['llm']}
+        // All four key boxes are component-local — the panel diffs FormState
+        // and cannot see them, so a pasted key alone would leave the section
+        // "clean" and unmount the very button that saves it. The managed pair
+        // has a Test-and-save path too; the compat pair only has this button.
+        dirty={!!(
+          primaryKeyInput.trim() || fallbackKeyInput.trim()
+          || compatKeyInput.trim() || compatFallbackKeyInput.trim()
+        )}
       />
 
       {/* The SAFE outcome (keep the embedding pin) is the default; only the explicit

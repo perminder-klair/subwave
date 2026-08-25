@@ -852,6 +852,10 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         saveLabel="Save library tagger"
         errors={fieldErrors}
         ownedKeys={['embedding', 'audio']}
+        // Both key boxes are component-local — the panel diffs FormState and
+        // cannot see them, so a pasted key alone would leave the section
+        // "clean" and unmount the very button that saves it.
+        dirty={!!(embeddingKeyInput.trim() || compatEmbedKeyInput.trim())}
       />
     </>
   );

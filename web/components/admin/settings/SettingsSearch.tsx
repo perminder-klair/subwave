@@ -44,13 +44,33 @@ function isTyping(): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
+/**
+ * Is a modal layer already holding the keyboard?
+ *
+ * `isTyping` is not enough: inside a Radix alert dialog ("Restart mixer") focus
+ * sits on a plain <button>, and inside an open Radix select `/` is that widget's
+ * OWN typeahead key. Either way this palette portals outside their focus trap,
+ * so it would paint over a dialog that keeps every keystroke — visible, and
+ * unusable. Matches Radix's own open-state markers — every one of these four
+ * content elements carries `role` and `data-state` on the SAME node — so a new
+ * dialog or menu is covered the day it is added, with nothing to register here.
+ */
+function isOverlayOpen(): boolean {
+  return !!document.querySelector([
+    '[data-state="open"][role="dialog"]',      // Dialog
+    '[data-state="open"][role="alertdialog"]', // AlertDialog
+    '[data-state="open"][role="listbox"]',     // Select
+    '[data-state="open"][role="menu"]',        // DropdownMenu
+  ].join(','));
+}
+
 export function SettingsSearch({ onJump }: SettingsSearchProps) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key !== '/' || isTyping()) return;
+      if (e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.defaultPrevented) return;
+      if (e.key !== '/' || isTyping() || isOverlayOpen()) return;
       e.preventDefault();
       setOpen(true);
     };

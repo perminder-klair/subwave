@@ -282,6 +282,22 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
               Cosmetic, used to label the &quot;scrobbling as&quot; status line above.
             </div>
           </div>
+
+          {/* Test probes the SAVED credentials, so it belongs in the card and
+              not beside the save button: the save bar renders only while the
+              section is dirty, which is the one state in which there is
+              nothing saved worth testing. */}
+          <div className="field">
+            <div className="flex flex-wrap items-center gap-3">
+              <Btn sm onClick={() => sendTest('lastfm')} disabled={busy || !lfReady}>
+                Test
+              </Btn>
+              <span className="text-[12px] leading-[1.5] text-muted">
+                Sends a now-playing update for the on-air track with the saved
+                credentials. Needs something playing.
+              </span>
+            </div>
+          </div>
         </div>
 
         <SaveBar
@@ -289,11 +305,6 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
           busy={busy}
           onSave={saveLastfm}
           saveLabel="Save Last.fm"
-          extra={
-            <Btn sm onClick={() => sendTest('lastfm')} disabled={busy || !lfReady}>
-              Test
-            </Btn>
-          }
         />
       </Card>
 
@@ -392,6 +403,22 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
             />
             <div className="field-hint">Cosmetic only.</div>
           </div>
+
+          {/* Test probes the SAVED credentials, so it belongs in the card and
+              not beside the save button: the save bar renders only while the
+              section is dirty, which is the one state in which there is
+              nothing saved worth testing. */}
+          <div className="field">
+            <div className="flex flex-wrap items-center gap-3">
+              <Btn sm onClick={() => sendTest('listenbrainz')} disabled={busy || !lbReady}>
+                Test
+              </Btn>
+              <span className="text-[12px] leading-[1.5] text-muted">
+                Sends a now-playing update for the on-air track with the saved
+                credentials. Needs something playing.
+              </span>
+            </div>
+          </div>
         </div>
 
         <SaveBar
@@ -399,11 +426,6 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
           busy={busy}
           onSave={saveListenbrainz}
           saveLabel="Save ListenBrainz"
-          extra={
-            <Btn sm onClick={() => sendTest('listenbrainz')} disabled={busy || !lbReady}>
-              Test
-            </Btn>
-          }
         />
       </Card>
     </>

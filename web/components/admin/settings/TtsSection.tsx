@@ -1500,6 +1500,10 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
         busy={busy}
         onSave={save}
         saveLabel="Save TTS settings"
+        // Both key boxes are component-local — the panel diffs FormState and
+        // cannot see them, so a pasted key alone would leave the section
+        // "clean" and unmount the very button that saves it.
+        dirty={!!(cloudKeyInput.trim() || compatKeyInput.trim())}
       />
     </>
   );

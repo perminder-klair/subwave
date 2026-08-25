@@ -586,7 +586,6 @@ interface SaveBarProps {
   busy: boolean;
   onSave: () => void;
   saveLabel: ReactNode;
-  extra?: ReactNode;
   /** Server errors from the last save, keyed by dotted path. */
   errors?: SettingsFieldErrors;
   /** The top-level settings keys this bar's save owns, e.g. ['search']. */
@@ -628,9 +627,12 @@ export function ownedFieldErrors(
  * (Scrobbling: Last.fm and ListenBrainz are separate services) simply portals
  * two rows.
  *
- * No portal target means nothing is unsaved, and the bar renders nothing.
+ * No portal target means nothing is unsaved, and the bar renders nothing —
+ * which is also why the bar carries NOTHING but the save. A "Test" button next
+ * to it would disappear the moment the section went clean, i.e. exactly when a
+ * saved connection is worth testing. Non-save actions belong in the card.
  */
-export function SaveBar({ note, busy, onSave, saveLabel, extra, errors, ownedKeys, dirty }: SaveBarProps) {
+export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirty }: SaveBarProps) {
   const { saveSlot } = useSectionChrome();
   // Only a section whose state does not ride FormState passes `dirty`; for the
   // rest the panel already diffs the form against its saved baseline.
@@ -654,7 +656,6 @@ export function SaveBar({ note, busy, onSave, saveLabel, extra, errors, ownedKey
       <span className="min-w-0 flex-1 text-[12px] leading-[1.5] break-words text-muted">{note}</span>
       {/* Full-width action row on a phone; `sm:` restores the inline cluster. */}
       <span className="ml-auto flex w-full gap-2 sm:w-auto">
-        {extra}
         {/* whileTap fires before the network call, so the commit is felt before
             the save toast lands. */}
         <m.span whileTap={{ scale: 0.97 }} className="inline-flex flex-1 sm:flex-none">
