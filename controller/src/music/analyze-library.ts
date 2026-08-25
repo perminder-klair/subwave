@@ -131,6 +131,11 @@ async function main() {
         title: song.title,
         artist: song.artist,
         album: song.album,
+        // Same ids the tagger's walk records — this walk writes the
+        // same rows, so it must not leave them NULL on a catalogue that only
+        // ever runs the analyzer's pass.
+        albumId: song.albumId ?? null,
+        artistId: song.artistId ?? null,
         year: song.year,
         genres: subsonic.songGenres(song),
         duration: song.duration,

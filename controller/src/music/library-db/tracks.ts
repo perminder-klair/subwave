@@ -144,12 +144,17 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
   requireDb()
     .prepare(
       `
-      INSERT INTO tracks (id, title, artist, album, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO tracks (id, title, artist, album, album_id, artist_id, year, original_year, original_year_source, is_compilation, era_untrusted, genres, duration_sec)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         title        = COALESCE(excluded.title, tracks.title),
         artist       = COALESCE(excluded.artist, tracks.artist),
         album        = COALESCE(excluded.album, tracks.album),
+        -- COALESCE, like every other column here: the walk is the only writer
+        -- that HAS these ids, so a manual tag edit or an analyzer metadata
+        -- top-up passing undefined must not blank a walked row.
+        album_id     = COALESCE(excluded.album_id, tracks.album_id),
+        artist_id    = COALESCE(excluded.artist_id, tracks.artist_id),
         year         = COALESCE(excluded.year, tracks.year),
         -- Walk-time 'album-tag' years never clobber a per-track 'musicbrainz'
         -- resolution — the MB lookup is the more specific signal (issue #842) —
@@ -187,6 +192,8 @@ export function upsertTrackMeta(id: string, meta: TrackMeta): void {
       meta.title ?? null,
       meta.artist ?? null,
       meta.album ?? null,
+      meta.albumId ?? null,
+      meta.artistId ?? null,
       normaliseYear(meta.year),
       normaliseYear(meta.originalYear),
       normaliseYear(meta.originalYear) != null ? 'album-tag' : null,

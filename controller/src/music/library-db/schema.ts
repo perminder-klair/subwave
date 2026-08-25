@@ -467,6 +467,30 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
   }
 
   if (userVersion < 23) {
+    // Subsonic album/artist ids on the track row. Until now `tracks`
+    // carried only free-text `album`/`artist`, so an ALBUM or ARTIST blocklist
+    // entry could only be enforced against a library-sourced candidate through
+    // matchOf()'s normalised-name fallback — and that fallback keys an album on
+    // (album name, THAT TRACK'S artist). On a compilation or any split credit
+    // ("Artist feat. Guest") every other track on the blocked album carries a
+    // different artist string, misses the key, and airs. The id tiers already
+    // in matchOf() are exact; they were simply unreachable from the pools the
+    // picker actually draws from. Storing the ids makes them reachable.
+    //
+    // No backfill is possible here — the ids live in Navidrome, not in this
+    // file. NULL is the pre-existing behaviour (name fallback only), so an
+    // upgraded station is byte-identical until its next library walk fills
+    // them in.
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN album_id  TEXT;
+      ALTER TABLE tracks ADD COLUMN artist_id TEXT;
+      CREATE INDEX IF NOT EXISTS idx_tracks_album_id  ON tracks(album_id);
+      CREATE INDEX IF NOT EXISTS idx_tracks_artist_id ON tracks(artist_id);
+    `);
+    d.pragma('user_version = 23');
+  }
+
+  if (userVersion < 24) {
     // Edge dead air (ms) — near-silent runs at the very start and very end of
     // the file, measured against an ABSOLUTE dBFS floor by the analyzer. These
     // are NOT intro_ms / outro_json.startMs, which are relative gates over
@@ -479,7 +503,7 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
       ALTER TABLE tracks ADD COLUMN lead_silence_ms INTEGER;
       ALTER TABLE tracks ADD COLUMN tail_silence_ms INTEGER;
     `);
-    d.pragma('user_version = 23');
+    d.pragma('user_version = 24');
   }
 
   // Reconcile the requested embedding dim against what physically exists.
@@ -631,4 +655,3 @@ function vecTableDim(d: Database.Database): number | null {
 function vecCount(d: Database.Database): number {
   return (d.prepare('SELECT COUNT(*) AS n FROM track_vectors').get() as { n: number }).n;
 }
-
