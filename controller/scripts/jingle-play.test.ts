@@ -78,6 +78,10 @@ const markerHook = liq.indexOf('jingle_now_queue.on_metadata(synchronous=false')
 const markerHookEnd = liq.indexOf('\n  )', markerHook);
 assert.ok(markerHook > 0, 'the priority queue marks its own clips at feed time');
 const branchBody = liq.slice(markerHook, markerHookEnd);
+assert.ok(
+  branchBody.includes('fun (m) -> begin'),
+  'a multi-expression Liquidsoap callback must use a begin/end block',
+);
 assert.ok(branchBody.includes('jingle-playing.json'), 'writes the collision-guard marker');
 assert.ok(branchBody.includes('jingle_now_tmp_dir'), 'own temp dir — one per writer, #1240');
 assert.ok(!branchBody.includes('temp_dir=jingle_tmp_dir'), 'never shares the rotate writer staging dir');

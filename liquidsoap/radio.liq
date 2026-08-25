@@ -341,7 +341,7 @@ thread.run(every=0.5, poll_jingle_now)
 # Mark a manual jingle from its own source. It is deliberately outside
 # music_meta: uploaded clips can retain ID3 tags, and no such tag may become the
 # station's now-playing row or ICY title.
-jingle_now_queue.on_metadata(synchronous=false, fun (m) ->
+jingle_now_queue.on_metadata(synchronous=false, fun (m) -> begin
   jingle_now_on_air := true
   file.write(
     data=json.stringify(compact=true, {
@@ -352,7 +352,7 @@ jingle_now_queue.on_metadata(synchronous=false, fun (m) ->
     temp_dir=jingle_now_tmp_dir,
     "#{state_dir}/jingle-playing.json"
   )
-)
+end)
 
 # ---------------------------------------------------------------------------
 # AUTONOMOUS FALLBACK — the controller maintains auto.m3u with mood-
