@@ -15,7 +15,10 @@
 //     bad measurement halve a song.
 //
 // No audio, no library DB: tracks carry their own measurements so the library
-// fallback is never reached.
+// fallback is never reached HERE. That fallback is the path every real caller
+// actually takes, and it has its own file — scripts/silence-trim-library.test.ts.
+// Keep the split: this file is the arithmetic, that one is the plumbing, and a
+// break in the plumbing is invisible to every assertion below.
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -39,8 +42,14 @@ async function coldLoad(silenceTrim: Record<string, unknown> | undefined) {
   await settings.load();
 }
 
-// A 200s track with a 6s leading blank and a 9s trailing one.
-const GAPPY = { duration: 200, leadSilenceMs: 6_000, tailSilenceMs: 9_000 };
+// A 200s track with a 6s leading blank and a 9s trailing one. `tailStartMs`
+// is where that trailing gap opens, absolute: 200s - 9s.
+const GAPPY = {
+  duration: 200,
+  leadSilenceMs: 6_000,
+  tailSilenceMs: 9_000,
+  tailStartMs: 191_000,
+};
 
 test('the operator dial survives a cold load', async () => {
   await coldLoad({ enabled: true, minGapMs: 4_000 });
@@ -93,7 +102,9 @@ test('the ceiling bounds one bad measurement', async () => {
   // 5 minutes of "silence" on a 600s track is a broken measurement. It is
   // still acted on — but only up to MAX_TRIM_SEC, so the damage is bounded at
   // 30s rather than five minutes.
-  const t = resolveSilenceTrim({ duration: 600, leadSilenceMs: 300_000, tailSilenceMs: 300_000 });
+  const t = resolveSilenceTrim({
+    duration: 600, leadSilenceMs: 300_000, tailSilenceMs: 300_000, tailStartMs: 300_000,
+  });
   assert.equal(t.cueInSec, 30);
   assert.equal(t.cueOutSec, 570);
 });
@@ -102,11 +113,43 @@ test('a degenerate pair yields no cue_out rather than an empty request', async (
   await coldLoad({ enabled: true, minGapMs: 1_500 });
   // A 4s track whose tail "silence" outlasts it: cue_out would land at or
   // before cue_in, which Liquidsoap resolves as a request with no audio.
-  const t = resolveSilenceTrim({ duration: 4, leadSilenceMs: 2_000, tailSilenceMs: 3_500 });
+  const t = resolveSilenceTrim({
+    duration: 4, leadSilenceMs: 2_000, tailSilenceMs: 3_500, tailStartMs: 500,
+  });
   assert.equal(t.cueOutSec, null);
   // An unknown duration is the same refusal — a cue_out is absolute, so it
   // cannot be computed without a length to subtract from.
   assert.equal(resolveSilenceTrim({ tailSilenceMs: 9_000 }).cueOutSec, null);
+});
+
+test('the cue_out comes off the measured end, not the tagged duration', async () => {
+  await coldLoad({ enabled: true, minGapMs: 1_500 });
+  // The tag says 200s; the analyzer decoded a file that really ends at 203s and
+  // reports the gap opening at 194s. Deriving the cue as (duration - gap) would
+  // put it at 191.25s — 3s of real music cut off the end for no reason but a
+  // stale header. tailStartMs + tailSilenceMs is the end the measurement SAW.
+  const t = resolveSilenceTrim({
+    duration: 200, tailSilenceMs: 9_000, tailStartMs: 194_000,
+  });
+  assert.equal(t.cueOutSec, 194.25);
+});
+
+test('a row analysed before tailStartMs existed falls back to the duration', async () => {
+  await coldLoad({ enabled: true, minGapMs: 1_500 });
+  // null is "this column predates the measurement", not "the gap opens at 0" —
+  // the tagged duration is still better than refusing to trim at all.
+  const t = resolveSilenceTrim({ duration: 200, tailSilenceMs: 9_000, tailStartMs: null });
+  assert.equal(t.cueOutSec, 191.25);
+});
+
+test('durationSec is accepted alongside duration', async () => {
+  await coldLoad({ enabled: true, minGapMs: 1_500 });
+  // /now-playing resolves the trim off the lean library row, which spells the
+  // length `durationSec`. Reading only `duration` there silently dropped the
+  // tail side for every auto-playlist play.
+  const t = resolveSilenceTrim({ durationSec: 200, leadSilenceMs: 6_000, tailSilenceMs: 9_000 });
+  assert.equal(t.cueInSec, 5.75);
+  assert.equal(t.cueOutSec, 191.25);
 });
 
 test('unmeasured edges stay untouched even with the feature on', async () => {

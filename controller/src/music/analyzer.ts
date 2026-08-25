@@ -96,6 +96,11 @@ export interface AnalysisResult {
   // "no silence signal, trim nothing".
   leadSilenceMs: number | null;
   tailSilenceMs: number | null;
+  // Where the trailing gap OPENS, absolute ms from byte zero. Same measurement
+  // as tailSilenceMs, expressed as the cue point itself so the controller never
+  // reconstructs it as (tagged duration - gap) — the tag and the decoded file
+  // disagree often enough to move the cut. null whenever tailSilenceMs is.
+  tailStartMs: number | null;
 }
 
 // The outgoing track's measured ending — what actually decides whether a
@@ -292,6 +297,7 @@ interface WorkerMessage {
   outro?: unknown;
   lead_silence_ms?: unknown;
   tail_silence_ms?: unknown;
+  tail_start_ms?: unknown;
   stems_cached?: boolean;
   text_embeddings?: unknown;
   // render_transition op fields
@@ -467,6 +473,7 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
           outro: parseOutro(msg.outro),
           leadSilenceMs: parseSilenceMs(msg.lead_silence_ms),
           tailSilenceMs: parseSilenceMs(msg.tail_silence_ms),
+          tailStartMs: parseSilenceMs(msg.tail_start_ms),
           stemsCached: typeof msg.stems_cached === 'boolean' ? msg.stems_cached : null,
         }),
       reject,
@@ -663,6 +670,7 @@ async function sidecarRequest(body: ({ url: string } | { path: string }) & Analy
     outro: parseOutro(resBody.outro),
     leadSilenceMs: parseSilenceMs(resBody.lead_silence_ms),
     tailSilenceMs: parseSilenceMs(resBody.tail_silence_ms),
+    tailStartMs: parseSilenceMs(resBody.tail_start_ms),
     stemsCached: typeof resBody.stems_cached === 'boolean' ? resBody.stems_cached : null,
   };
 }

@@ -147,6 +147,15 @@ export function get(songId: string): any {
     // Measured ending (fade vs cold, tail loudness/tempo/grid) — feeds the
     // queue's ending-aware exit canvas + effect gating. null = no signal.
     outro: t.outro,
+    // Edge dead air — music/silence-trim.ts resolves EVERY real caller through
+    // this projection, because no pick path (Subsonic songs, slimTrack
+    // candidates, the auto.m3u pool) carries these fields on the track object.
+    // Omitting them here doesn't degrade the trim, it disables it outright:
+    // resolveSilenceTrim reads undefined, treats it as "not measured", and
+    // stamps nothing however the operator sets the dial. null = no signal.
+    leadSilenceMs: t.leadSilenceMs,
+    tailSilenceMs: t.tailSilenceMs,
+    tailStartMs: t.tailStartMs,
   };
 }
 

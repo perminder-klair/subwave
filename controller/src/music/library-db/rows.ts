@@ -62,6 +62,7 @@ export function rowToTrack(row: TrackRow): TrackRecord {
     outro: row.outro_json ? parseOutroJson(row.outro_json) : null,
     leadSilenceMs: row.lead_silence_ms ?? null,
     tailSilenceMs: row.tail_silence_ms ?? null,
+    tailStartMs: row.tail_start_ms ?? null,
     mapX: row.map_x ?? null,
     mapY: row.map_y ?? null,
   };

@@ -17,7 +17,8 @@
 // gate and is unambiguously music; cutting to it would be vandalism. Dead air
 // is an absolute property of the file — near-digital silence — and the
 // analyzer measures it against an absolute dBFS floor as lead_silence_ms /
-// tail_silence_ms. Those two fields are the only input this module trusts.
+// tail_silence_ms (+ tail_start_ms, the same tail measurement expressed as an
+// absolute offset). Those fields are the only input this module trusts.
 //
 // Three guards, each for a different way this feature goes wrong
 // -------------------------------------------------------------
@@ -50,10 +51,15 @@ const MAX_TRIM_SEC = 30;
 
 export interface SilenceTrimTrack {
   id?: string | null;
+  // Subsonic songs spell it `duration`, library rows `durationSec`. Both are
+  // seconds and both reach this module (the drain passes the former, the
+  // /now-playing lean read the latter), so accept either rather than making
+  // every caller reshape.
   duration?: number | string | null;
+  durationSec?: number | string | null;
   leadSilenceMs?: number | null;
   tailSilenceMs?: number | null;
-  [k: string]: unknown;
+  tailStartMs?: number | null;
 }
 
 export interface SilenceTrimResult {
@@ -83,9 +89,10 @@ function usableTrimSec(gapMs: number | null | undefined, minGapMs: number): numb
 // record — the same precedence queue.mixAnalysisFor uses, so a track carrying
 // fresh analysis doesn't get a stale answer from the DB.
 //
-// The duration is what makes the tail side safe: a cue_out is an ABSOLUTE
-// offset, so it can only be computed against a known length. An unknown
-// duration yields no cue_out rather than a guess.
+// The end reference is what makes the tail side safe: a cue_out is an ABSOLUTE
+// offset, so it can only be computed against a known end. `tailStartMs` is that
+// end measured off the analyzed decode itself; the tagged duration is the
+// fallback. Neither known → no cue_out rather than a guess.
 export function resolveSilenceTrim(
   track: SilenceTrimTrack | null | undefined,
 ): SilenceTrimResult {
@@ -96,24 +103,39 @@ export function resolveSilenceTrim(
 
   let leadMs = track.leadSilenceMs;
   let tailMs = track.tailSilenceMs;
-  let durSec = Number(track.duration) || 0;
-  if ((leadMs == null || tailMs == null || durSec <= 0) && track.id) {
+  let tailStartMs = track.tailStartMs;
+  let durSec = Number(track.duration ?? track.durationSec) || 0;
+  if ((leadMs == null || tailMs == null || tailStartMs == null || durSec <= 0) && track.id) {
     const rec = library.get(track.id);
     if (leadMs == null) leadMs = rec?.leadSilenceMs ?? null;
     if (tailMs == null) tailMs = rec?.tailSilenceMs ?? null;
+    if (tailStartMs == null) tailStartMs = rec?.tailStartMs ?? null;
     if (durSec <= 0) durSec = rec?.durationSec ?? 0;
   }
 
   const leadSec = usableTrimSec(leadMs, minGapMs);
   const tailSec = usableTrimSec(tailMs, minGapMs);
 
-  // A cue_out needs a length to subtract from, and the result must still leave
+  // Where the analyzer's own decode ENDED, in file-absolute seconds.
+  //
+  // Preferred over the tagged duration, and not as a nicety: a cue_out is an
+  // absolute offset, so deriving it as (duration - gap) silently inherits every
+  // disagreement between the container tag and the decoded file. `tailStartMs`
+  // and `tailMs` come off the SAME buffer, so their sum is the end the
+  // measurement actually saw. The tagged duration stays the fallback for rows
+  // analysed before the column existed.
+  const measuredEndSec = tailStartMs != null && tailMs != null
+    ? (tailStartMs + tailMs) / 1000
+    : null;
+  const endRefSec = measuredEndSec ?? (durSec > 0 ? durSec : null);
+
+  // A cue_out needs an end to subtract from, and the result must still leave
   // audible track behind it — a degenerate pair (a mis-measured tail longer
   // than the song) yields no stamp rather than a cue_out at or before the
   // cue_in, which Liquidsoap would resolve as an empty request.
   let cueOutSec: number | null = null;
-  if (tailSec != null && durSec > 0) {
-    const end = durSec - tailSec;
+  if (tailSec != null && endRefSec != null && endRefSec > 0) {
+    const end = endRefSec - tailSec;
     if (end > (leadSec ?? 0) + 1) cueOutSec = Math.round(end * 1000) / 1000;
   }
 

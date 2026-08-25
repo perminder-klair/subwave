@@ -418,6 +418,7 @@ test('migration 22 backfills the refresh marker ONLY where the era text changed'
   d.prepare(`DROP INDEX IF EXISTS idx_tracks_artist_id`).run();
   d.prepare(`ALTER TABLE tracks DROP COLUMN album_id`).run();
   d.prepare(`ALTER TABLE tracks DROP COLUMN artist_id`).run();
+  d.prepare(`ALTER TABLE tracks DROP COLUMN tail_start_ms`).run();       // v25
   d.prepare(`ALTER TABLE tracks DROP COLUMN lead_silence_ms`).run();     // v24
   d.prepare(`ALTER TABLE tracks DROP COLUMN tail_silence_ms`).run();
   d.pragma('user_version = 21');

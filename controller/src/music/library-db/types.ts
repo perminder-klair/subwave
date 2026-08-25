@@ -84,6 +84,11 @@ export interface TrackRecord {
   // measured; music/silence-trim.ts treats null as "trim nothing".
   leadSilenceMs: number | null;
   tailSilenceMs: number | null;
+  // Where the trailing gap OPENS, absolute ms from byte zero — the cue_out
+  // itself, rather than a length that has to be subtracted from a duration the
+  // analyzer never saw. null on rows analysed before this column existed;
+  // silence-trim.ts then falls back to (duration - tailSilenceMs).
+  tailStartMs: number | null;
   // Sound-map coordinates — a 2D UMAP projection of the CLAP audio vector,
   // normalised to [0,1] per axis (music/map-projection.ts). The Observatory
   // places nodes by these when present, so tracks that SOUND alike sit close.
@@ -187,6 +192,7 @@ export interface TrackRow {
   outro_json: string | null;
   lead_silence_ms: number | null;
   tail_silence_ms: number | null;
+  tail_start_ms: number | null;
   map_x: number | null;
   map_y: number | null;
 }

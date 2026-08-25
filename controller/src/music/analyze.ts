@@ -659,6 +659,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
           outro,
           leadSilenceMs: a.leadSilenceMs,
           tailSilenceMs: a.tailSilenceMs,
+          tailStartMs: a.tailStartMs,
           // Stamp the stem attempt whenever the worker actually reached the
           // stem-writing step — true (written) OR false (the write failed for
           // this track). Both are settled outcomes, and stamping the miss is

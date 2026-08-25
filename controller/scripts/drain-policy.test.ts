@@ -25,6 +25,9 @@ assert.equal(remainingSec(T0 + 60_000, T0, 200, null, 30), 110, 'cue_in shortens
 // Both cues describe absolute offsets in the file, so the playable span is
 // cue_out - cue_in rather than either value on its own.
 assert.equal(remainingSec(T0 + 60_000, T0, 600, 200, 30), 110, 'cue pair bounds the playable span');
+// A cue pair that would invert (a degenerate stamp) floors at zero rather than
+// running the clock backwards.
+assert.equal(remainingSec(T0, T0, 200, 30, 60), 0, 'an inverted cue pair floors at zero');
 // cue_out longer than the track never extends it.
 assert.equal(remainingSec(T0 + 60_000, T0, 200, 600), 140, 'duration wins when shorter than the cue');
 // Past the end goes negative (stale current) — callers treat it as expired.

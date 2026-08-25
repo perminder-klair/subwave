@@ -506,6 +506,20 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 24');
   }
 
+  if (userVersion < 25) {
+    // ABSOLUTE offset (ms) where the trailing dead air opens, measured off the
+    // same decode as tail_silence_ms. The gap LENGTH alone only becomes a
+    // cue_out by subtracting it from a duration, and the only duration the
+    // controller holds is the container tag — which disagrees with the decoded
+    // file often enough (VBR headers) to move the cut by that difference.
+    // Nullable, and follows tail_silence_ms's COALESCE write rule for the same
+    // reason. NULL → silence-trim.ts falls back to (duration - gap).
+    runDdl(d, `
+      ALTER TABLE tracks ADD COLUMN tail_start_ms INTEGER;
+    `);
+    d.pragma('user_version = 25');
+  }
+
   // Reconcile the requested embedding dim against what physically exists.
   //
   // The vec0 table's `FLOAT[N]` schema is the authority for what inserts accept —

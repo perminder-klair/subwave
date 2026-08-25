@@ -635,9 +635,20 @@ class Queue {
       // DJ talk before trampling its vocal? Analysis rides the track object when
       // present, else the library row (queued items hold only id/title/artist).
       const rec = item.track?.id ? library.get(item.track.id) : null;
-      const budgetMs = bedPolicy.rampBudgetMs({
+      // The onset is measured from byte zero, and the drain may be about to cut
+      // a leading blank off this very track — so shift it onto the trimmed
+      // timeline before asking whether the link outlasts it. This is the same
+      // correction intro-budget's firstVocalMsFor applies to the SAME
+      // measurement; leaving it out here made the two disagree about one track,
+      // with the prompt told the runway is 2s while the bed decision still
+      // thought it was 8s and declined a bed the link needed. null (unknown)
+      // and Infinity (instrumental) carry their meanings through untouched.
+      const rawBudgetMs = bedPolicy.rampBudgetMs({
         vocalRanges: item.track?.vocalRanges ?? rec?.vocalRanges ?? null,
       });
+      const budgetMs = rawBudgetMs != null && Number.isFinite(rawBudgetMs)
+        ? silenceTrim.shiftOnsetMs(item.track, rawBudgetMs)
+        : rawBudgetMs;
       if (!bedPolicy.bedWanted(voiceMs, budgetMs, cfg)) return;
 
       // The bed's marker (and its cue_out clock) starts at cross-FEED time, a
@@ -761,8 +772,17 @@ class Queue {
     if (!cappedExit) {
       const outro = item.track.outro ?? (item.track.id ? library.get(item.track.id)?.outro : null) ?? null;
       if (outro) {
-        const windDownSec = durSec > 0 && Number.isFinite(outro.startMs)
-          ? Math.max(0, durSec - outro.startMs / 1000)
+        // Measure the wind-down to the end that will actually AIR, not the
+        // tagged one. A trailing blank drags outro.startMs earlier (the RMS
+        // decay into silence reads as a fade), so an untrimmed durSec counts
+        // the silence we are about to cut as part of the ramp and sizes the
+        // exit canvas longer than the track has left.
+        const trimEndSec = silenceTrim.resolveSilenceTrim(item.track).cueOutSec;
+        const endSec = trimEndSec != null && durSec > 0
+          ? Math.min(durSec, trimEndSec)
+          : (trimEndSec ?? durSec);
+        const windDownSec = endSec > 0 && Number.isFinite(outro.startMs)
+          ? Math.max(0, endSec - outro.startMs / 1000)
           : null;
         // Body loudness for the tail-drop shaping — same resolution ladder as
         // applyLoudnessGain (track object first, else the library row).
@@ -1165,6 +1185,16 @@ class Queue {
         const itemDurSec = knownDurationSec(item.track);
         const cappedExit = !!(maxDurationSec && itemDurSec > maxDurationSec);
 
+        // Dead-air trim: cut the near-silent head/tail off this track so a bad
+        // rip's leading blank doesn't air as silence. Resolved through the
+        // policy module, never inlined — the auto.m3u rewrite asks the same
+        // question and the two must not drift. Off / unmeasured → nulls, i.e.
+        // no cue stamps and today's behaviour.
+        //
+        // Resolved HERE, above the stem-blend attempt, because the blend is
+        // rendered FROM the two regions the trim can remove and has to be told.
+        const trim = silenceTrim.resolveSilenceTrim(item.track);
+
         // Pair stamps for THIS item's own exit (the seam into its successor)
         // — only when the successor is known at annotate time. Resolved fresh
         // after the awaits above: an operator cancel during the TTS render
@@ -1185,8 +1215,20 @@ class Queue {
               // from the hold decision above: the TTS await between them can
               // run tens of seconds on a slow engine, and a stale window
               // would let the render overrun the drain's hard fallback.
+              // Both trim edges are blend vetoes, for the same reason
+              // outCapped is: the clip is mixed FROM the outgoing tail and the
+              // incoming head, so a cut that lands inside either region makes
+              // the rendered seam describe audio that no longer airs. The
+              // incoming side is the sharper one — a successor's leading blank
+              // is baked into the clip, so the blend would air the very silence
+              // the trim exists to remove.
+              const inTrim = silenceTrim.resolveSilenceTrim(successor.track);
               const blend = await stemBlend.maybeRenderBlend(
-                item.track, successor.track, this.remainingUntilItemAirs(item), { outCapped: cappedExit },
+                item.track, successor.track, this.remainingUntilItemAirs(item), {
+                  outCapped: cappedExit,
+                  outTrimEndSec: trim.cueOutSec,
+                  inHeadTrimmed: inTrim.cueInSec != null,
+                },
               );
               if (blend && this.upcoming.includes(item) && this.upcoming.includes(successor)) {
                 // The rendered seam owns this ending: strip exit gestures
@@ -1210,13 +1252,6 @@ class Queue {
             }
           }
         }
-
-        // Dead-air trim: cut the near-silent head/tail off this track so a bad
-        // rip's leading blank doesn't air as silence. Resolved through the
-        // policy module, never inlined — the auto.m3u rewrite asks the same
-        // question and the two must not drift. Off / unmeasured → nulls, i.e.
-        // no cue stamps and today's behaviour.
-        const trim = silenceTrim.resolveSilenceTrim(item.track);
 
         // Record the effective early end for the pair-drain deadline math —
         // rides into `current` when the item airs (onTrackStarted spreads it).
