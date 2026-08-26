@@ -1032,7 +1032,18 @@ async function runRequestViaAgent(queue: any, { requester, text }: { requester: 
 // Never throws (callers still need to run the pick after it) and is idempotent:
 // it marks the handoff aired up front, so a concurrent second call — or a
 // mid-way failure — can't double-air or retry into the middle of the new show.
-export async function runPersonaHandoff(queue: any, ctx: any): Promise<void> {
+// The two model calls are injectable for the same reason artist-guard's are:
+// the thing worth pinning here is the WIRING — which memory each side of the
+// mic-pass is handed — and that is only observable at the generator boundary.
+// Production passes nothing and gets the real ones.
+export interface HandoffDeps {
+  generateSignoff?: typeof dj.generateSignoff;
+  generateHandoffGreeting?: typeof dj.generateHandoffGreeting;
+}
+
+export async function runPersonaHandoff(queue: any, ctx: any, deps: HandoffDeps = {}): Promise<void> {
+  const generateSignoff = deps.generateSignoff ?? dj.generateSignoff;
+  const generateHandoffGreeting = deps.generateHandoffGreeting ?? dj.generateHandoffGreeting;
   const pending = session.pendingHandoff();
   if (!pending) return;
 
@@ -1094,7 +1105,7 @@ export async function runPersonaHandoff(queue: any, ctx: any): Promise<void> {
     //    incoming DJ never reads the sign-off as its own words.
     let signoffText: string | null = null;
     try {
-      signoffText = await dj.generateSignoff({
+      signoffText = await generateSignoff({
         personaOut, personaIn, showIn,
         context: ctx, recap: outgoingRecap, recentOpeners: outgoingOpeners,
       });
@@ -1115,7 +1126,7 @@ export async function runPersonaHandoff(queue: any, ctx: any): Promise<void> {
     //    the producer's angle (planned before this runs — see the call sites)
     //    rides along; the standalone intro is then skipped (programme.ts).
     try {
-      const greeting = await dj.generateHandoffGreeting({
+      const greeting = await generateHandoffGreeting({
         personaIn, personaOut, showIn,
         episodeAngle: session.getProgramme()?.plan?.angle || null,
         context: ctx, recap: queue.getDjRecap(), recentOpeners,

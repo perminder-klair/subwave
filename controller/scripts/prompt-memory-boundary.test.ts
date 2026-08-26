@@ -9,7 +9,7 @@
 
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -169,4 +169,80 @@ test('a malformed persisted turn is skipped, not thrown on', () => {
 
   assert.match(queue.getDjRecap() || '', /Still on the air/);
   assert.deepEqual(queue.getRecentOpeners(), ['Still on the air.']);
+});
+
+// A turn with a chosen timestamp. appendTurn always stamps `now`, and the two
+// tests below are about turns that are OLD.
+function pushTurn(kind: string, text: string, agoMs: number) {
+  (session.getSession() as any).messages.push({
+    t: new Date(Date.now() - agoMs).toISOString(), role: 'segment', kind, text, meta: {},
+  });
+}
+
+test('the recap window measures from the newest turn, not the oldest', () => {
+  queue.djLog = [];
+  session.start(context({ id: 's_long_run', name: 'The Long Run' }));
+  // Session turns are stored oldest-first and reversed into prompt memory;
+  // djLog, the source this replaced, was natively newest-first. getDjRecap
+  // BREAKS on the first entry past its cutoff, so if that reverse is ever
+  // dropped the oldest turn is examined first and the DJ silently gets no
+  // memory at all — with every same-hour assertion in this file still passing.
+  pushTurn('link', 'Three hours ago, in another mood entirely.', 3 * 60 * 60_000);
+  pushTurn('link', 'An hour in, finding the thread.', 60 * 60_000);
+  pushTurn('link', 'And that is where we are now.', 1_000);
+
+  const recap = queue.getDjRecap() || '';
+  assert.match(recap, /that is where we are now/);
+  assert.match(recap, /finding the thread/);
+  assert.doesNotMatch(recap, /another mood entirely/, 'past the 120-minute window');
+
+  const lines = recap.split('\n');
+  assert.match(lines[0], /that is where we are now/, 'newest line first');
+  assert.deepEqual(queue.getRecentOpeners(), [
+    'And that is where we',
+    'An hour in, finding the',
+    'Three hours ago, in another',
+  ], 'openers carry no time cutoff of their own — only the recap does');
+});
+
+test('prompt memory survives a controller restart', async () => {
+  queue.djLog = [];
+  const ctx = context({ id: 's_resumed', name: 'Resumed Session' });
+  // What recover() actually reads: a session.json written by the previous
+  // process. The malformed turn is the reason promptMemoryEntries guards
+  // `text` at all — nothing validates a turn's shape on the way back in.
+  writeFileSync(join(root, 'session.json'), JSON.stringify({
+    id: 's_persisted', kind: 'show', key: 'show:s_resumed',
+    startedAt: new Date(Date.now() - 30 * 60_000).toISOString(),
+    ctxAt: new Date().toISOString(),
+    endedAt: null,
+    show: { id: 's_resumed', name: 'Resumed Session', topic: '' },
+    persona: { id: 'p_host', name: 'The Host' },
+    scenario: { period: 'morning', mood: 'calm', weather: null },
+    handoff: null, programme: null,
+    messages: [
+      { t: new Date(Date.now() - 120_000).toISOString(), role: 'segment', kind: 'link', text: 'Said before the restart.', meta: {} },
+      { t: new Date(Date.now() - 60_000).toISOString(), role: 'segment', kind: 'link', meta: {} },
+    ],
+  }));
+
+  const resumed = await session.recover(ctx);
+  assert.equal(resumed.id, 's_persisted', 'the persisted session was resumed, not replaced');
+  assert.match(queue.getDjRecap() || '', /Said before the restart/);
+  assert.deepEqual(queue.getRecentOpeners(), ['Said before the restart.']);
+});
+
+test('the 4h cap clears prompt memory the same way a show boundary does', async () => {
+  queue.djLog = [];
+  const ctx = context(null, 'morning');
+  session.start(ctx);
+  recordVoice('link', 'Said in hour one of a very long shift.');
+  // MAX_SESSION_MS is the other hard roll. Same key, same daypart — only age
+  // ends this session, and the soft-shift path must not swallow it.
+  (session.getSession() as any).startedAt = new Date(Date.now() - 5 * 60 * 60_000).toISOString();
+
+  await session.maybeRoll(ctx);
+
+  assert.equal(queue.getDjRecap(), null, 'the fresh session starts clean');
+  assert.match(queue.getDjRecap({ prior: true }) || '', /hour one of a very long shift/);
 });
