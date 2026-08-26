@@ -70,6 +70,7 @@ import {
   EMPTY_DJ_QUEUE_CLEAR_THRESHOLD,
   PICK_SHOW_LOOKAHEAD_SEC,
   boundaryCarriesTrackVoice,
+  exchangeSegment,
   formatAgo,
   knownDurationSec,
   linkClockDrifted,
@@ -1540,18 +1541,7 @@ class Queue {
     }
     for (const l of rendered) {
       try {
-        const seg: SegmentDesc = {
-          kind,
-          channel: 'say',
-          text: l.text,
-          persona: l.persona,
-          logText: `${l.persona?.name ? `${l.persona.name}: ` : ''}${l.text}`,
-          meta: { personaId: l.persona?.id, personaName: l.persona?.name },
-          // The aggregate dj.say below covers the legacy channel for the whole
-          // exchange; voice.start/voice.end still fire per line, because each
-          // line is its own real speech window.
-          legacy: false,
-        };
+        const seg: SegmentDesc = exchangeSegment(l, kind);
         const handoff = await airVoice(config.liquidsoap.sayFile, l.wavPath, l.text, voiceGainDb(kind, l.persona), {
           onQueued: q => this.onQueued(q, seg),
         });

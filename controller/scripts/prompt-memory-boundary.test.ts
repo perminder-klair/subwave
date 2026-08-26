@@ -19,6 +19,7 @@ process.env.STATE_DIR = root;
 const session = await import('../src/broadcast/session.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const scripts = await import('../src/llm/internal/prompts/scripts.js');
+const { exchangeSegment } = await import('../src/broadcast/queue/pure.js');
 
 after(() => {
   rmSync(root, { recursive: true, force: true });
@@ -245,4 +246,53 @@ test('the 4h cap clears prompt memory the same way a show boundary does', async 
 
   assert.equal(queue.getDjRecap(), null, 'the fresh session starts clean');
   assert.match(queue.getDjRecap({ prior: true }) || '', /hour one of a very long shift/);
+});
+
+// --- the guest-attribution contract, end to end ----------------------------
+// The test above synthesizes a guest turn's meta. These two pin who actually
+// produces it: queue.announceExchange builds every rotated line through
+// exchangeSegment, and queue.onSpoken is the one place that meta reaches the
+// session. Without them, the rotation could stop stamping the speaker and a
+// guest's words would silently become the host's own — with every assertion
+// above still green.
+
+test('a rotated exchange line is stamped with the voice that spoke it', () => {
+  const seg = exchangeSegment(
+    { persona: { id: 'p_guest', name: 'Sol' }, text: 'You brought the same coffee.' },
+    'banter',
+  );
+  assert.equal(seg.meta.personaId, 'p_guest', 'prompt memory and windowMessages key off this');
+  assert.equal(seg.meta.personaName, 'Sol');
+  assert.equal(seg.logText, 'Sol: You brought the same coffee.', 'the booth log names the speaker');
+  assert.equal(seg.channel, 'say');
+  assert.equal(seg.legacy, false, 'the exchange publishes ONE aggregate dj.say');
+
+  // A line with no persona is the solo case — no attribution to invent.
+  const solo = exchangeSegment({ persona: null, text: 'Just me in here.' }, 'banter');
+  assert.equal(solo.logText, 'Just me in here.');
+  assert.equal(solo.meta.personaId, undefined);
+});
+
+test('post-air bookkeeping carries that stamp into prompt memory', async () => {
+  queue.djLog = [];
+  session.start(context({ id: 's_guest_wired', name: 'Two Chairs' }));
+  (session.getSession() as any).persona = { id: 'p_host', name: 'The Host' };
+
+  // The real bookkeeping path, with only the mixer's air stamp faked — onSpoken
+  // is what turns a SegmentDesc into a session turn.
+  const spoke = (line: { persona: any; text: string }) => {
+    const seg = exchangeSegment(line, 'banter');
+    queue.onSpoken(
+      { voiceId: 'v1', clipMs: 1000, aired: Promise.resolve(Date.now()) } as any,
+      seg as any,
+    );
+  };
+  spoke({ persona: { id: 'p_host', name: 'The Host' }, text: 'I brought the good coffee.' });
+  spoke({ persona: { id: 'p_guest', name: 'Sol' }, text: 'You brought the same coffee.' });
+  await new Promise((r) => setImmediate(r));
+
+  const recap = queue.getDjRecap() || '';
+  assert.match(recap, /Sol: You brought the same coffee/, "the guest's line keeps their name");
+  assert.doesNotMatch(recap, /Sol: I brought the good coffee/);
+  assert.match(recap, /\[banter\]: "I brought the good coffee/, "the host's own line is unprefixed");
 });

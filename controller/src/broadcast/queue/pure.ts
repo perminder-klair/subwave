@@ -423,3 +423,36 @@ export function formatAgo(ms: number) {
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
 }
+
+// The attribution a multi-voice exchange line carries off the mic.
+//
+// A rotated line is spoken by whoever holds the mic for it — a guest co-host,
+// not the session's host — and TWO surfaces downstream depend on being told so.
+// `logText` prefixes the booth log with the speaker; `meta.personaId` is what
+// session.windowMessages() and broadcast/prompt-memory.ts both key off to name
+// the real speaker instead of handing a guest's words to the host as their own.
+// Lived inline in announceExchange, where the shape it owes those two readers
+// could drift without anything noticing.
+export function exchangeSegment(
+  line: { persona?: { id?: string; name?: string } | null; text: string },
+  kind: string,
+): {
+  kind: string; channel: 'say'; text: string;
+  persona: { id?: string; name?: string } | null;
+  logText: string;
+  meta: { personaId?: string; personaName?: string };
+  legacy: false;
+} {
+  const name = line.persona?.name;
+  return {
+    kind,
+    channel: 'say',
+    text: line.text,
+    persona: line.persona ?? null,
+    logText: `${name ? `${name}: ` : ''}${line.text}`,
+    meta: { personaId: line.persona?.id, personaName: name },
+    // The aggregate dj.say the exchange publishes covers the legacy channel for
+    // the whole conversation; voice.start/voice.end still fire per line.
+    legacy: false,
+  };
+}
