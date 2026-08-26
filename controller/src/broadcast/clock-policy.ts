@@ -57,6 +57,26 @@ export function speakClockAllowed(): boolean {
   return clockEnabled();
 }
 
+// A boundary-deferred station ident may mention only the computed daypart, but
+// even that can go stale while its rendered WAV waits for a clean track seam.
+// Stamp only a daypart the model was actually allowed to use: an ident written
+// with the station clock off made no clock claim and must not be dropped later
+// merely because the wall clock moved on.
+export function stationIdDaypartStamp(daypart: unknown, clockAllowed: boolean): string | null {
+  if (!clockAllowed || typeof daypart !== 'string') return null;
+  return daypart.trim() || null;
+}
+
+// Air-time backstop for the stamp above. Rendered audio cannot be rewritten,
+// so silence on this one boundary is cheaper than airing the previous daypart.
+// Missing/malformed stamps fail open because they mean no validated daypart
+// claim reached this channel (including controllers predating the stamp).
+export function stationIdDaypartDrifted(stamped: unknown, live: unknown): boolean {
+  if (typeof stamped !== 'string' || !stamped.trim()) return false;
+  if (typeof live !== 'string' || !live.trim()) return false;
+  return stamped.trim() !== live.trim();
+}
+
 // May the AUTOMATIC top-of-the-hour time check fire? Same predicate, named for
 // the call site in broadcast/dj-gate.ts. Manual runners must NOT call this —
 // they bypass the gate entirely, which is what preserves the operator's pad.

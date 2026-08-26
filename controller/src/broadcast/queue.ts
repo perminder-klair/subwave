@@ -33,11 +33,12 @@ import * as beds from './beds.js';
 import * as bedPolicy from './bed-policy.js';
 import * as session from './session.js';
 import type { TurnMeta } from './session.js';
-import { getFullContext, energyForDaypart } from '../context.js';
+import { getFullContext, getClockContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 import { djCallsAllowed, presentListeners } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
+import { stationIdDaypartDrifted } from './clock-policy.js';
 import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
 import * as liquidsoapControl from './liquidsoap-control.js';
@@ -165,7 +166,7 @@ class Queue {
   _emptyDjQueueStreak = 0;      // consecutive reconcile checks seeing an empty dj_queue while sent items remain — see reconcileWithDjQueue
   _resolveFailStreak = 0;       // consecutive pushes Liquidsoap never resolved — re-pick budget, see onPushResolveFailed
   _deadlinePickAt = 0;          // last deadline-pick ATTEMPT (ms epoch) — failure-retry cooldown, see maybeDeadlinePick
-  _pendingVoice: { text: string; kind: string; wavPath: string; persona: Persona | null; meta: TurnMeta; t: number } | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
+  _pendingVoice: { text: string; kind: string; wavPath: string; persona: Persona | null; meta: TurnMeta; daypart: string | null; t: number } | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
   _introRenders = new IntroRenderTracker<QueueItem>(); // timed-out pre-renders stay reusable by airIntro
   _pendingJingles = new Map<string, number>(); // manual jingle presses handed over but not yet heard — see playJingle
 
@@ -1578,11 +1579,11 @@ class Queue {
   // (djLog → recap/opener anti-repeat, session turn, webhook) happens at AIR
   // time, so the DJ's memory reflects what reached the stream, not what was
   // merely scheduled.
-  async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {} }: { persona?: Persona | null; meta?: TurnMeta } = {}) {
+  async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {}, daypart = null }: { persona?: Persona | null; meta?: TurnMeta; daypart?: string | null } = {}) {
     if (!text || !text.trim()) return;
     try {
       const wavPath = await speak(text, { kind, persona });
-      this._pendingVoice = { text, kind, wavPath, persona, meta, t: Date.now() };
+      this._pendingVoice = { text, kind, wavPath, persona, meta, daypart, t: Date.now() };
       this.log('scheduler', `Holding ${kind} for the next track boundary`);
     } catch (err) {
       this.log('error', `Deferred announce failed: ${(err as Error).message}`);
@@ -1642,6 +1643,16 @@ class Queue {
     // held again below, so a busy stretch can't keep re-deferring a dead ident.
     if (Date.now() - p.t > PENDING_VOICE_MAX_AGE_MS) {
       this.dropPendingVoice('waited too long for a track boundary');
+      return;
+    }
+    // A daypart offered at generation can cross its boundary while the WAV
+    // waits here (for example, an ident written at 17:45 airing after 18:00).
+    // The rendered words cannot be corrected, so apply the same fail-silent
+    // trade as the pick-link clock drift guard. No stamp means the ident was
+    // written with no permitted clock claim and remains eligible.
+    const liveDaypart = getClockContext().spokenDaypart;
+    if (stationIdDaypartDrifted(p.daypart, liveDaypart)) {
+      this.dropPendingVoice(`daypart changed from "${p.daypart}" to "${liveDaypart}" before air`);
       return;
     }
     // This boundary already speaks. The track's own line is tied to THIS song

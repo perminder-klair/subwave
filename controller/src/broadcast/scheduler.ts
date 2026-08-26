@@ -27,6 +27,7 @@ import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
+import { speakClockAllowed, stationIdDaypartStamp } from './clock-policy.js';
 import { banterTickPlan, banterCronExpression } from './banter-policy.js';
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
@@ -816,13 +817,20 @@ export async function runStationId({ atNextTrack = false } = {}) {
   return withTrace({ kind: 'station-id' }, async () => {
     const ctx = await getFullContext();
     const speaker = settings.pickOnAirSpeaker();
+    // Scheduled idents can wait across several track boundaries. Stamp the
+    // daypart being offered to the model so the queue can refuse a rendered
+    // clip if that fact changed before air. Immediate operator idents do not
+    // enter the deferred path, so the stamp is unnecessary there.
+    const daypart = atNextTrack
+      ? stationIdDaypartStamp(ctx.clock?.spokenDaypart, speakClockAllowed())
+      : null;
     const script = await dj.generateStationId({
       recap: queue.getDjRecap(),
       context: ctx,
       recentOpeners: queue.getRecentOpeners(),
       persona: speaker,
     });
-    const opts = { persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name } };
+    const opts = { persona: speaker, daypart, meta: { personaId: speaker?.id, personaName: speaker?.name } };
     if (atNextTrack) await queue.announceAtNextTrack(script, 'station-id', opts);
     else await queue.announce(script, 'station-id', opts);
     return script;
