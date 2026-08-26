@@ -219,6 +219,22 @@ function softRankByCompat(pool: Candidate[], current: { bpm: number | null; key:
 // Multi-value lists (#929): OR within an attribute, AND across attributes.
 // Empty list = no constraint on that attribute.
 type ShowFilter = { moods: string[]; genres: string[]; eras: YearRange[]; energies: string[]; vocals: VocalMode; strict?: boolean } | null;
+type StrictGenreResolution = { genres: string[]; warnings: string[] };
+
+async function resolveStrictGenres(showFilter: ShowFilter): Promise<StrictGenreResolution> {
+  const genres: string[] = [];
+  const warnings: string[] = [];
+  if (!showFilter?.strict || !showFilter.genres.length) return { genres, warnings };
+  for (const g of showFilter.genres) {
+    try {
+      const resolved = await subsonic.resolveGenreName(g);
+      const warning = genreResolutionWarningOnce(g, resolved);
+      if (warning) warnings.push(warning);
+      if (resolved) genres.push(resolved);
+    } catch {}
+  }
+  return { genres, warnings };
+}
 
 function hasMusicFilter(f: ShowFilter): boolean {
   return !!f && (f.genres.length > 0 || hasEraBound(f.eras));
@@ -282,7 +298,7 @@ async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max:
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set()) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }) {
   await library.load();
   // Airing memory (music/airing.ts) — orders the similarity sources so the
   // unexplored shelf survives their small caps; and the id-level recency union
@@ -320,20 +336,10 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // Resolve the show's free-text genres to the library's exact tags ONCE, up
   // front. A resolution failure drops that entry (never-starve: none resolving
   // means no genre filter at all, so misspelled genres never strand the show).
-  const strictGenres: string[] = [];
+  const strictGenres = strictGenreResolution.genres;
   // Resolutions that silently broadened / dropped what the operator configured.
   // Surfaced through strictInfo so the caller (which owns `queue`) can log them.
-  const genreWarnings: string[] = [];
-  if (strict && showFilter?.genres.length) {
-    for (const g of showFilter.genres) {
-      try {
-        const resolved = await subsonic.resolveGenreName(g);
-        const warning = genreResolutionWarningOnce(g, resolved);
-        if (warning) genreWarnings.push(warning);
-        if (resolved) strictGenres.push(resolved);
-      } catch {}
-    }
-  }
+  const genreWarnings = strictGenreResolution.warnings;
   // Hard-prefer every set filter on a discovery source in strict mode; a no-op
   // otherwise. Each prefer* falls back to the full set when nothing in the
   // source matches, so leaning a source can only tighten, never starve it.
@@ -835,6 +841,9 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const playlistPool = activeShow ? await resolveShowPlaylistPool(activeShow) : null;
   const playlistStrict = !!activeShow?.playlistStrict;
   const excludedIds = activeShow ? await resolveExcludedPlaylistIds(activeShow) : null;
+  // Resolve once, before both capacity and candidate filtering. A fuzzy genre
+  // alias must narrow the hard-window universe exactly as it narrows the pool.
+  const strictGenreResolution = await resolveStrictGenres(showFilter);
   // Count-based HARD no-repeat guard (last N distinct plays) — non-relaxable,
   // survives buildCandidates' starvation cascade. A resolved strict playlist
   // is its own catalogue, so clamp to its post-filter/post-exclusion identity
@@ -842,7 +851,12 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const effN = effectiveShowNoRepeatWindow(
     settings.get().llm?.noRepeatWindow ?? 0,
     librarySize,
-    { show: activeShow, playlistTracks: playlistPool?.tracks ?? null, excludedIds },
+    {
+      show: activeShow,
+      playlistTracks: playlistPool?.tracks ?? null,
+      excludedIds,
+      resolvedGenres: strictGenreResolution.genres,
+    },
   );
   const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
   // Pinned anchor resolved to nothing → the show is silently un-anchored.
@@ -857,7 +871,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     const key = artistRootKey({ artist: opts.avoidArtist });
     if (key) blockedArtists.add(key);
   }
-  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists);
+  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution);
 
   // Excluded playlists (blocklist): drop any track whose id appears in the
   // show's excluded playlist union. Applied after buildCandidates so the full

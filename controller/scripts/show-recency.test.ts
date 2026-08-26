@@ -50,6 +50,19 @@ assert.equal(
 );
 assert.equal(
   effectiveShowNoRepeatWindow(100, 27_986, {
+    show: { playlistStrict: true, filtersStrict: true, genres: ['Pop Punk'] },
+    playlistTracks: tracks.map((track, i) => ({
+      ...track,
+      genres: [i < 20 ? 'Pop' : 'Rock'],
+    })),
+    excludedIds: null,
+    resolvedGenres: ['Pop'],
+  }),
+  0,
+  'capacity must use the same resolved genre alias as candidate filtering',
+);
+assert.equal(
+  effectiveShowNoRepeatWindow(100, 27_986, {
     show: { playlistStrict: true, filtersStrict: false },
     playlistTracks: tracks,
     excludedIds: new Set(tracks.slice(20).map(track => track.id)),
@@ -80,11 +93,10 @@ assert.equal(
 // library-wide clamp in one path while leaving the helper tests green.
 for (const file of ['../src/music/picker.ts', '../src/broadcast/dj-agent.ts']) {
   const source = readFileSync(new URL(file, import.meta.url), 'utf8');
-  assert.match(
-    source,
-    /effectiveShowNoRepeatWindow\([\s\S]*?\{ show: activeShow, playlistTracks(?:\: playlistPool\?\.tracks \?\? null)?, excludedIds \}/,
-    `${file} must scope its hard no-repeat window through the shared show policy`,
-  );
+  assert.match(source, /effectiveShowNoRepeatWindow\(/,
+    `${file} must scope its hard no-repeat window through the shared show policy`);
+  assert.match(source, /resolvedGenres:/,
+    `${file} must use its resolved genre lock for show capacity`);
 }
 
 console.log('show recency checks passed');

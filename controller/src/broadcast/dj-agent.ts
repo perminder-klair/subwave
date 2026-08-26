@@ -193,17 +193,6 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   const playlistTracks = playlistPool?.tracks ?? null;
   const excludedIds = activeShow ? await resolveExcludedPlaylistIds(activeShow) : null;
 
-  // Count-based HARD no-repeat guard: the last N distinct plays can't re-air,
-  // and (unlike recentIds/recentKeys above) this survives the tool-level
-  // starvation cascade. A resolved strict playlist is its own catalogue, so
-  // clamp to its real identity count; 0 leaves the relaxable window in charge.
-  const effN = effectiveShowNoRepeatWindow(
-    settings.get().llm?.noRepeatWindow ?? 0,
-    librarySize,
-    { show: activeShow, playlistTracks, excludedIds },
-  );
-  const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
-
   // Strict music locks for the discovery tools (filtersStrict). Resolved HERE,
   // once, off the same show snapshot as the playlist pool — the async work the
   // sync buildTools can't do — then threaded through run() alongside the
@@ -247,6 +236,23 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   const vocalLock = strict && activeShow?.vocals && library.vocalAnalyzedCount() > 0
     ? (activeShow.vocals as VocalMode)
     : null;
+
+  // Count-based HARD no-repeat guard: the last N distinct plays can't re-air,
+  // and (unlike recentIds/recentKeys above) this survives the tool-level
+  // starvation cascade. A resolved strict playlist is its own catalogue, so
+  // clamp to its real identity count using the same resolved genre lock as the
+  // tools; 0 leaves the relaxable window in charge.
+  const effN = effectiveShowNoRepeatWindow(
+    settings.get().llm?.noRepeatWindow ?? 0,
+    librarySize,
+    {
+      show: activeShow,
+      playlistTracks,
+      excludedIds,
+      resolvedGenres: genreLock ?? [],
+    },
+  );
+  const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
   // A pinned anchor that resolves to nothing (deleted/recreated playlist →
   // stale id, or a Navidrome error — resolveShowPlaylistPool swallows both)
   // silently un-anchors the show: no lock, no showPlaylistTracks tool. Say so,

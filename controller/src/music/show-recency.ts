@@ -31,10 +31,14 @@ export function effectiveShowNoRepeatWindow(
     show,
     playlistTracks,
     excludedIds,
+    resolvedGenres,
   }: {
     show: RecencyShow;
     playlistTracks: ShowTrack[] | null;
     excludedIds: Set<string> | null;
+    // The picker resolves free-text show genres onto exact library tags before
+    // filtering. Use that same lock here so capacity and eligibility agree.
+    resolvedGenres?: string[];
   },
 ): number {
   // A soft anchor can leave the playlist, and an unresolved strict anchor has
@@ -45,7 +49,7 @@ export function effectiveShowNoRepeatWindow(
 
   const filtered = show.filtersStrict
     ? applyStrictLocks(playlistTracks, {
-        genres: show.genres ?? [],
+        genres: resolvedGenres ?? show.genres ?? [],
         eras: show.eras ?? [],
         moods: show.moods ?? [],
         energies: show.energies ?? [],
