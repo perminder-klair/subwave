@@ -104,22 +104,22 @@ export default function Clients() {
           <div className="bs-eyebrow">STATION BEHIND A PASSWORD</div>
           <p>
             If a station sits behind HTTP Basic Auth (a reverse proxy asking for a
-            username and password before anything reaches the controller), put the
-            credentials in the address you add:{' '}
-            <code className="bs-code-inline">https://dj:secret@radio.example.com</code>.
-            The API polls and the artwork authenticate straight off that URL; the audio
-            stream gets an explicit{' '}
+            username and password before anything reaches the controller), add its public
+            address, open <strong>Station login</strong>, and enter the two fields. The
+            station URL stays credential-free; the login is saved in the iOS Keychain or
+            Android&rsquo;s secure storage. API polls and artwork receive an in-memory
+            authenticated URL, while the audio stream gets an explicit{' '}
             <code className="bs-code-inline">Authorization</code> header instead, because
             iOS&rsquo;s AVPlayer silently drops{' '}
             <code className="bs-code-inline">user:pass@</code> from a media URL. That is
             why such a station could fail in the app while the same address
-            played fine in a browser. The same form works for a station using
+            played fine in a browser. The same fields work for a station using
             SUB/WAVE&rsquo;s own <strong>stream password</strong>: any username will do,
-            the password is what gets checked. Percent-encode an{' '}
-            <code className="bs-code-inline">@</code> in the password as{' '}
-            <code className="bs-code-inline">%40</code>, and note that casting to a
-            Chromecast isn&rsquo;t available for a station with credentials in its
-            address.
+            the password is what gets checked. Special characters need no encoding in the
+            fields. A login never rides an automatic fallback from HTTPS to HTTP: for a
+            trusted cleartext station, enter an explicit <code className="bs-code-inline">http://</code>{' '}
+            address and approve the warning before the app sends it. Casting to a Chromecast isn&rsquo;t available for a station with a
+            saved login, because the receiver cannot send that header.
           </p>
         </div>
       </section>

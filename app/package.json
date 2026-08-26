@@ -21,6 +21,7 @@
     "expo-linear-gradient": "~56.0.4",
     "expo-linking": "~56.0.13",
     "expo-router": "~56.2.9",
+    "expo-secure-store": "~56.0.4",
     "expo-splash-screen": "~56.0.10",
     "expo-status-bar": "~56.0.4",
     "expo-updates": "~56.0.19",
@@ -42,10 +43,12 @@
     "@types/react": "~19.2.2",
     "babel-preset-expo": "~56.0.0",
     "patch-package": "^8.0.1",
+    "tsx": "^4.19.2",
     "typescript": "~6.0.3"
   },
   "scripts": {
     "start": "expo start --dev-client",
+    "test": "tsx --test scripts/*.test.ts",
     "android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",

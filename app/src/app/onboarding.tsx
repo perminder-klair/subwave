@@ -9,6 +9,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -17,7 +18,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { ArrowLeftRight, ChevronRight } from 'lucide-react-native';
+import { ArrowLeftRight, ChevronDown, ChevronRight, ChevronUp, KeyRound } from 'lucide-react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import DiscMark from '@/components/DiscMark';
 import LiveDot from '@/components/LiveDot';
@@ -26,6 +27,11 @@ import { createApi, normalizeBase, type HealthResult, type StationApi } from '@/
 import { useStation } from '@/config/StationContext';
 import { fetchDirectory, type DirectoryStation } from '@/lib/directory';
 import type { StationRef } from '@/lib/station';
+import {
+  splitStationAddress,
+  stationProbeCandidates,
+  type StationCredentials,
+} from '@/lib/station-credentials';
 import { useTheme } from '@/theme/ThemeContext';
 
 const PROBE_TIMEOUT_MS = 4500;
@@ -55,6 +61,20 @@ const isLocalHost = (h: string) =>
 // Cleartext-warning / http-scheme accent. Mirrors HealthCheck's local copy.
 const DANGER = '#c5302a';
 
+function confirmCleartextLogin(): Promise<boolean> {
+  return new Promise((resolve) => {
+    Alert.alert(
+      'Send station login over HTTP?',
+      'Plain HTTP exposes the username and password to the network. Only continue for a station and network you trust.',
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Continue over HTTP', style: 'destructive', onPress: () => resolve(true) },
+      ],
+      { cancelable: true, onDismiss: () => resolve(false) },
+    );
+  });
+}
+
 // Recognise a TLS "the server's CA isn't trusted" failure from the raw error
 // (Android: "Trust anchor for certification path not found" /
 // CertPathValidatorException; iOS: certificate invalid / not trusted). The app
@@ -63,16 +83,15 @@ const DANGER = '#c5302a';
 const isUntrustedCa = (msg?: string) =>
   !!msg && /trust anchor|certpathvalidator|certification path|certificate.*(invalid|not trusted)/i.test(msg);
 
-// Did the address we probed already carry `user:pass@` userinfo? Same shape
-// splitCredentials() matches in lib/api.ts, so "the app read credentials off
-// this URL" and "this returns true" are the same question.
-const hasUserinfo = (candidates: string[]) => candidates.some((c) => /^https?:\/\/[^/@]+@/i.test(c));
-
 // Turn a failed health probe into a human diagnostic for the failure card. The
 // network case names the usual "works in the browser, fails in the app" culprit
 // (a TLS chain Android rejects but the browser tolerates) — the most common and
 // least obvious cause for an otherwise-valid HTTPS station.
-function describeFail(fail: HealthResult | null, candidates: string[]): string | undefined {
+function describeFail(
+  fail: HealthResult | null,
+  usedCredentials: boolean,
+  triedHttps: boolean,
+): string | undefined {
   if (!fail || fail.ok) return undefined;
   if (fail.kind === 'timeout')
     return 'No response in time — the box may be asleep, on another network, or blocked by a firewall.';
@@ -81,15 +100,13 @@ function describeFail(fail: HealthResult | null, candidates: string[]): string |
   // password), and the generic "check your /api/* route" advice below sends
   // people hunting a proxy bug that isn't there — the reported symptom is
   // "works in the browser, in VLC and in curl, fails in the app" (#1300, bug
-  // 8). The app DOES support it, via credentials in the URL, which nothing
-  // told anyone. Split on whether the tried address ALREADY carried them: if it
-  // did, they were rejected, and the usual reason is an unencoded special
-  // character (splitCredentials cuts the userinfo at the first `@`, so a raw
-  // `@` in the password takes the host with it).
+  // 8). Split on whether this probe carried the first-class login fields: if it
+  // did, the credentials were rejected; otherwise direct the listener back to
+  // those fields instead of the old user:pass@host syntax.
   if (fail.kind === 'http' && fail.status === 401)
-    return hasUserinfo(candidates)
-      ? "The station rejected the credentials in the address (HTTP 401). Check the username and password — and percent-encode an @ inside them as %40, since the address is cut at the first @: the password p@ss is typed dj:p%40ss@radio.yourhost.com."
-      : "The station asked for a password (HTTP 401) — it sits behind HTTP Basic Auth, either on the reverse proxy in front of it or via SUB/WAVE's own stream password. Put the credentials in the address as user:pass@host (e.g. dj:secret@radio.yourhost.com); the app carries them through to the API, the artwork and the audio stream.";
+    return usedCredentials
+      ? 'The station rejected this login (HTTP 401). Go back and check the username and password.'
+      : 'The station asked for a login (HTTP 401). Go back, open Station login, and enter its username and password.';
   // 407 comes from a proxy between THIS DEVICE and the station, not from the
   // station — credentials in the station address never reach it, so the advice
   // above would be actively wrong here.
@@ -111,7 +128,6 @@ function describeFail(fail: HealthResult | null, candidates: string[]): string |
         : 'install its root on the device (Settings → Security → Encryption & credentials → Install a certificate → CA certificate)';
     return `This device doesn't trust the station's certificate. On older phones this is usually a chain ending at a root too new for the device — set your reverse proxy to serve the full chain, including any cross-signed intermediate that links back to an older trusted root. If it's a private or self-signed CA, ${install} instead. A publicly-trusted certificate (e.g. Let's Encrypt) or plain http:// on your LAN also work.`;
   }
-  const triedHttps = candidates.some((c) => c.startsWith('https://'));
   return triedHttps
     ? "Couldn't open a connection. If the same address works in your phone's browser, it's usually a TLS/certificate the app rejects but the browser tolerates — most often an incomplete certificate chain (set your reverse proxy to serve the full chain, including intermediates) or a private/self-signed CA the device doesn't trust. DNS or a firewall on this network can cause it too."
     : "Couldn't open a connection — check the address is right and the station is reachable from this network.";
@@ -121,10 +137,11 @@ interface Target {
   base: string;
   url: string;
   name: string;
+  credentials?: StationCredentials | null;
 }
 
 export default function Onboarding() {
-  const { featured, recents, selectStation, base } = useStation();
+  const { featured, recents, selectStation, credentialsFor, base } = useStation();
   const { colors } = useTheme();
   const addMode = !!base;
   // Deep-link from the Stations "Discover" list: prefill + jump straight to the
@@ -145,9 +162,13 @@ export default function Onboarding() {
   // host still auto-falls back to http); switching to http forces cleartext for
   // HTTP-only boxes. An explicit scheme typed into the field always wins.
   const [scheme, setScheme] = useState<'https' | 'http'>('https');
+  const [showLogin, setShowLogin] = useState(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   // Diagnostic + raw error for the failure card, set by runCheck on a dead probe.
   const [failDetail, setFailDetail] = useState<string | undefined>(undefined);
   const [failRaw, setFailRaw] = useState<string | undefined>(undefined);
+  const [tuneError, setTuneError] = useState<string | undefined>(undefined);
   const [directory, setDirectory] = useState<DirectoryStation[]>([]);
   const runId = useRef(0);
 
@@ -170,25 +191,75 @@ export default function Onboarding() {
     return true;
   });
 
-  const runCheck = async (rawUrl: string, presetName?: string) => {
+  const runCheck = async (
+    rawUrl: string,
+    presetName?: string,
+    suppliedCredentials?: StationCredentials | null,
+  ) => {
+    const id = ++runId.current;
     const trimmed = rawUrl.trim();
-    // A bare hostname probes https first then falls back to cleartext http, so
-    // listeners on HTTP-only stations can just type the address. An explicit
-    // protocol (http:// or https://) is honored verbatim — no fallback.
-    const candidates = (/:\/\//.test(trimmed) ? [trimmed] : [`https://${trimmed}`, `http://${trimmed}`])
-      .map((c) => normalizeBase(c))
+    const split = splitStationAddress(trimmed);
+    const initialCandidates = stationProbeCandidates(
+      trimmed,
+      !!(suppliedCredentials ?? split.credentials),
+    );
+    if (!initialCandidates.length) return;
+
+    let activeCredentials: StationCredentials | null;
+    try {
+      activeCredentials = suppliedCredentials === undefined
+        ? split.credentials ?? await credentialsFor(initialCandidates[0])
+        : suppliedCredentials;
+    } catch {
+      if (runId.current !== id) return;
+      const first = initialCandidates[0];
+      setTarget({
+        base: first,
+        url: stripProto(first),
+        name: presetName || stripProto(first),
+        // undefined tells Retry to attempt the secure read again.
+        credentials: undefined,
+      });
+      setSteps(['wait', 'fail', 'wait', 'wait']);
+      setDone(false);
+      setFailed(true);
+      setInsecure(false);
+      setFailDetail(
+        "Couldn't read this station login from secure storage. Unlock the device's secure storage and retry; no saved credentials were changed.",
+      );
+      setFailRaw(undefined);
+      setTuneError(undefined);
+      setPhase('check');
+      return;
+    }
+    if (runId.current !== id) return;
+
+    // A login must never ride an automatic HTTPS→HTTP fallback. An explicit
+    // http:// address remains supported, but consent happens before any probe
+    // can put the Basic credentials on the wire.
+    const candidates = stationProbeCandidates(trimmed, !!activeCredentials)
+      .map((candidate) => normalizeBase(candidate))
       .filter(Boolean);
     if (!candidates.length) return;
+    if (activeCredentials && candidates[0].startsWith('http://')) {
+      const allowed = await confirmCleartextLogin();
+      if (!allowed || runId.current !== id) return;
+    }
 
-    const id = ++runId.current;
     const first = candidates[0];
-    setTarget({ base: first, url: stripProto(first), name: presetName || stripProto(first) });
+    setTarget({
+      base: first,
+      url: stripProto(first),
+      name: presetName || stripProto(first),
+      credentials: activeCredentials,
+    });
     setSteps(['wait', 'wait', 'wait', 'wait']);
     setDone(false);
     setFailed(false);
     setInsecure(false);
     setFailDetail(undefined);
     setFailRaw(undefined);
+    setTuneError(undefined);
     setPhase('check');
 
     const set = (i: number, s: StepState) =>
@@ -200,7 +271,7 @@ export default function Onboarding() {
     // network) so the caller can try the next candidate and, if all fail, show
     // a real diagnostic instead of a bare "failed".
     const probe = async (candidate: string): Promise<{ api: StationApi } | { fail: HealthResult }> => {
-      const api = createApi(candidate);
+      const api = createApi(candidate, activeCredentials);
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), PROBE_TIMEOUT_MS);
       try {
@@ -239,7 +310,16 @@ export default function Onboarding() {
       }
       if (!api) {
         set(1, 'fail');
-        setFailDetail(describeFail(lastFail, candidates));
+        setFailDetail(
+          describeFail(
+            lastFail,
+            !!activeCredentials,
+            candidates.some((candidate) => candidate.startsWith('https://')),
+          ),
+        );
+        if (lastFail && !lastFail.ok && lastFail.kind === 'http' && lastFail.status === 401) {
+          setShowLogin(true);
+        }
         const raw = lastFail && !lastFail.ok ? lastFail.message : undefined;
         // The Android generic carries no detail; iOS often surfaces a useful one.
         setFailRaw(raw && raw !== 'Network request failed' ? raw : undefined);
@@ -248,7 +328,12 @@ export default function Onboarding() {
       }
       // Re-point the target at the candidate that actually answered.
       const fallbackName = presetName || stripProto(base);
-      setTarget({ base, url: stripProto(base), name: fallbackName });
+      setTarget({
+        base,
+        url: stripProto(base),
+        name: fallbackName,
+        credentials: activeCredentials,
+      });
       // Flag cleartext on a non-local host — whether the probe silently fell
       // back from https (an on-path attacker could force that by blocking the
       // https attempt) or the listener picked http explicitly. Either way a
@@ -290,16 +375,26 @@ export default function Onboarding() {
 
   const tuneIn = async () => {
     if (!target) return;
-    // selectStation tears down any current playback before re-pointing.
-    await selectStation({ url: target.base, name: target.name });
-    if (addMode) {
-      // Came here from the stations modal ([index, stations, onboarding]) —
-      // unwind to the existing root player. replace() would stack a second
-      // player screen inside the modal (overlapping screens).
-      router.dismissTo('/');
-    } else {
-      // First run: onboarding IS the root — swap it for the player.
-      router.replace('/');
+    setTuneError(undefined);
+    try {
+      // selectStation tears down any current playback before re-pointing.
+      await selectStation(
+        { url: target.base, name: target.name },
+        target.credentials,
+      );
+      if (addMode) {
+        // Came here from the stations modal ([index, stations, onboarding]) —
+        // unwind to the existing root player. replace() would stack a second
+        // player screen inside the modal (overlapping screens).
+        router.dismissTo('/');
+      } else {
+        // First run: onboarding IS the root — swap it for the player.
+        router.replace('/');
+      }
+    } catch {
+      setTuneError(
+        "Couldn't save this station login securely. The station was not added; unlock secure storage and try again.",
+      );
     }
   };
 
@@ -313,8 +408,11 @@ export default function Onboarding() {
   const submitEntry = () => {
     const h = host.trim();
     if (!h) return;
-    if (/:\/\//.test(h)) runCheck(h);
-    else runCheck(scheme === 'http' ? `http://${h}` : h);
+    const legacyCredentials = splitStationAddress(h).credentials;
+    const enteredCredentials = username || password ? { username, password } : null;
+    const credentials = legacyCredentials ?? enteredCredentials;
+    if (/:\/\//.test(h)) runCheck(h, undefined, credentials);
+    else runCheck(scheme === 'http' ? `http://${h}` : h, undefined, credentials);
   };
 
   // Auto-run the probe once when arriving with a prefilled station (Discover).
@@ -389,11 +487,107 @@ export default function Onboarding() {
                   style={{ color: colors.ink, fontSize: 14, paddingVertical: 14, paddingRight: 13, paddingLeft: 10 }}
                 />
               </View>
-              {/* HTTPS is tried first for a bare host and falls back to HTTP; tap
-                  the prefix to force one or the other. */}
-              <Text className="font-mono text-muted" style={{ fontSize: 10.5, lineHeight: 16, marginTop: 7 }}>
-                Tap the prefix to switch HTTPS / HTTP. HTTPS auto-falls back to HTTP.
-                {'\n'}Password-protected station? Type user:pass@host.
+              <Pressable
+                onPress={() => setShowLogin((visible) => !visible)}
+                accessibilityRole="button"
+                accessibilityState={{ expanded: showLogin }}
+                accessibilityLabel={`${showLogin ? 'Hide' : 'Show'} station login fields`}
+                className="flex-row items-center"
+                style={{ gap: 8, paddingVertical: 11 }}
+              >
+                <KeyRound size={14} color={colors.accent} />
+                <Text
+                  className="font-mono text-ink"
+                  style={{ flex: 1, fontSize: 10.5, letterSpacing: 1.2, textTransform: 'uppercase', fontWeight: '700' }}
+                >
+                  Station login
+                </Text>
+                <Text className="font-mono text-muted" style={{ fontSize: 10 }}>
+                  {username ? username : 'optional'}
+                </Text>
+                {showLogin ? (
+                  <ChevronUp size={14} color={colors.muted} />
+                ) : (
+                  <ChevronDown size={14} color={colors.muted} />
+                )}
+              </Pressable>
+
+              {showLogin ? (
+                <View style={{ gap: 8, paddingBottom: 4 }}>
+                  <View>
+                    <Text
+                      className="font-mono text-muted"
+                      style={{ fontSize: 9, letterSpacing: 1.4, textTransform: 'uppercase', marginBottom: 5 }}
+                    >
+                      Username
+                    </Text>
+                    <TextInput
+                      value={username}
+                      onChangeText={setUsername}
+                      placeholder="dj"
+                      placeholderTextColor={colors.muted}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      spellCheck={false}
+                      autoComplete="username"
+                      textContentType="username"
+                      returnKeyType="next"
+                      accessibilityLabel="Station username"
+                      className="font-mono"
+                      style={{
+                        color: colors.ink,
+                        backgroundColor: colors.field,
+                        borderWidth: 1,
+                        borderColor: colors.muted,
+                        fontSize: 14,
+                        paddingVertical: 12,
+                        paddingHorizontal: 13,
+                      }}
+                    />
+                  </View>
+                  <View>
+                    <Text
+                      className="font-mono text-muted"
+                      style={{ fontSize: 9, letterSpacing: 1.4, textTransform: 'uppercase', marginBottom: 5 }}
+                    >
+                      Password
+                    </Text>
+                    <TextInput
+                      value={password}
+                      onChangeText={setPassword}
+                      placeholder="Password"
+                      placeholderTextColor={colors.muted}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      spellCheck={false}
+                      autoComplete="password"
+                      textContentType="password"
+                      secureTextEntry
+                      returnKeyType="go"
+                      onSubmitEditing={submitEntry}
+                      accessibilityLabel="Station password"
+                      className="font-mono"
+                      style={{
+                        color: colors.ink,
+                        backgroundColor: colors.field,
+                        borderWidth: 1,
+                        borderColor: colors.muted,
+                        fontSize: 14,
+                        paddingVertical: 12,
+                        paddingHorizontal: 13,
+                      }}
+                    />
+                  </View>
+                  <Text className="font-mono text-muted" style={{ fontSize: 9.5, lineHeight: 14 }}>
+                    Saved in this device&apos;s secure credential storage.
+                  </Text>
+                </View>
+              ) : null}
+
+              {/* HTTPS is tried first for a bare public station; authenticated
+                  stations require an explicit HTTP choice before cleartext. */}
+              <Text className="font-mono text-muted" style={{ fontSize: 10.5, lineHeight: 16 }}>
+                Tap the prefix to switch HTTPS / HTTP. Without a login, HTTPS auto-falls back to HTTP.
               </Text>
 
               <Pressable
@@ -498,9 +692,10 @@ export default function Onboarding() {
               insecure={insecure}
               failDetail={failDetail}
               failRaw={failRaw}
+              tuneError={tuneError}
               onTuneIn={tuneIn}
               onBack={backToEntry}
-              onRetry={() => target && runCheck(target.url, target.name)}
+              onRetry={() => target && runCheck(target.base, target.name, target.credentials)}
             />
           )}
         </ScrollView>
@@ -517,6 +712,7 @@ function HealthCheck({
   insecure,
   failDetail,
   failRaw,
+  tuneError,
   onTuneIn,
   onBack,
   onRetry,
@@ -528,6 +724,7 @@ function HealthCheck({
   insecure: boolean;
   failDetail?: string;
   failRaw?: string;
+  tuneError?: string;
   onTuneIn: () => void;
   onBack: () => void;
   onRetry: () => void;
@@ -602,6 +799,11 @@ function HealthCheck({
                 station you trust on a network you trust.
               </Text>
             </View>
+          ) : null}
+          {tuneError ? (
+            <Text className="font-body" style={{ color: destructive, fontSize: 12.5, lineHeight: 19 }}>
+              {tuneError}
+            </Text>
           ) : null}
           <Pressable
             onPress={onTuneIn}

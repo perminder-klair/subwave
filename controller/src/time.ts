@@ -139,11 +139,24 @@ export function spokenHourPhrase(hour: number) {
   const h = ((hour % 24) + 24) % 24;
   if (h === 0) return 'midnight';
   if (h === 12) return 'noon';
-  const word = HOUR_WORDS[h % 12];
-  if (h < 12) return `${word} in the morning`;
-  if (h < 18) return `${word} in the afternoon`;
-  if (h < 22) return `${word} in the evening`;
-  return `${word} at night`;
+  return `${HOUR_WORDS[h % 12]} ${spokenDaypartPhrase(h)}`;
+}
+
+// The part of the day alone, in the shape spokenHourPhrase appends to the
+// hour: "in the morning", "in the afternoon", "in the evening", "at night".
+// This is what a station ident gets to say about the clock. An ident is
+// written at the cron tick and airs after LLM + TTS + queue latency, so an
+// hour is already too precise: told "the time of day, never the minutes" at
+// 15:49, the model announced "three in the afternoon" — an hour that was
+// eleven minutes from being wrong. The daypart is the only reading that
+// survives that latency, so it is computed here and handed to the prompt
+// rather than left for the model to truncate the clock into.
+export function spokenDaypartPhrase(hour: number) {
+  const h = ((hour % 24) + 24) % 24;
+  if (h < 12) return 'in the morning';
+  if (h < 18) return 'in the afternoon';
+  if (h < 22) return 'in the evening';
+  return 'at night';
 }
 
 // The time as a radio DJ would round it — minute-aware, deliberately coarse

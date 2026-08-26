@@ -34,7 +34,8 @@ import { linkClockAt, linkClockStampFor } from './queue/pure.js';
 import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
-import { recencyWindowsForLibrary, effectiveNoRepeatWindow } from '../music/recency.js';
+import { recencyWindowsForLibrary } from '../music/recency.js';
+import { effectiveShowNoRepeatWindow } from '../music/show-recency.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, runArtistGuard } from './dj-agent/artist-guard.js';
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
@@ -178,13 +179,6 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   // "recently played", just in-flight, and shouldn't tighten the hard guard.
   for (const id of queue.queuedIds()) recentIds.add(id);
 
-  // Count-based HARD no-repeat guard: the last N distinct plays can't re-air,
-  // and (unlike recentIds/recentKeys above) this survives the tool-level
-  // starvation cascade. Clamped to library size so a small catalogue never
-  // fully blocks; 0 = off, leaving the relaxable window in sole charge.
-  const effN = effectiveNoRepeatWindow(settings.get().llm?.noRepeatWindow ?? 0, librarySize);
-  const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
-
   // Show playlist anchor: resolve the union here (async Navidrome fetch) and
   // thread it into the agent's tools. Strict → a hard lock set so every tool's
   // results are intersected with the playlist (the agent can only pick in-set);
@@ -242,6 +236,23 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   const vocalLock = strict && activeShow?.vocals && library.vocalAnalyzedCount() > 0
     ? (activeShow.vocals as VocalMode)
     : null;
+
+  // Count-based HARD no-repeat guard: the last N distinct plays can't re-air,
+  // and (unlike recentIds/recentKeys above) this survives the tool-level
+  // starvation cascade. A resolved strict playlist is its own catalogue, so
+  // clamp to its real identity count using the same resolved genre lock as the
+  // tools; 0 leaves the relaxable window in charge.
+  const effN = effectiveShowNoRepeatWindow(
+    settings.get().llm?.noRepeatWindow ?? 0,
+    librarySize,
+    {
+      show: activeShow,
+      playlistTracks,
+      excludedIds,
+      resolvedGenres: genreLock ?? [],
+    },
+  );
+  const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
   // A pinned anchor that resolves to nothing (deleted/recreated playlist →
   // stale id, or a Navidrome error — resolveShowPlaylistPool swallows both)
   // silently un-anchors the show: no lock, no showPlaylistTracks tool. Say so,

@@ -2,32 +2,42 @@
 //
 // A show can pin one or more Navidrome playlists (settings show.playlistIds);
 // the union of their tracks becomes the show's candidate pool. This module
-// turns that id list into a deduped track pool, shared by all three consumers:
+// turns that id list into an identity-deduped track pool, shared by all three consumers:
 // the pool picker (music/picker.ts), the session DJ agent's tools
 // (broadcast/dj-agent.ts), and the LLM-free fallback (broadcast/scheduler.ts).
 //
 // subsonic.getPlaylist already rejects station-archive entries, so there's no
-// extra archive filtering here — the merge is purely union + dedupe by id.
+// extra archive filtering here — the merge is purely union + dedupe by id and
+// normalised title|artist identity.
 
 import * as subsonic from './subsonic.js';
+import { trackKey } from './recency.js';
 
 export type PlaylistPool = {
-  ids: Set<string>; // every track id in the union — the strict lock set
+  ids: Set<string>; // every SURVIVING track id — the strict lock set. Not every
+                    // id in the union: an alternate rip collapsed by the
+                    // identity dedupe below is absent, so a strict show cannot
+                    // pick it. resolveShowPlaylistPool warns when that happens.
   tracks: any[];     // deduped Subsonic song objects
   names: string[];   // resolved playlist names, for logging / debug
 };
 
 // Pure: flatten a list of playlist track-lists into one deduped array, keeping
-// the first occurrence of each id and dropping entries without an id. The
-// unit-test seam (scripts/show-playlist.test.ts) — no Subsonic, no I/O.
+// the first occurrence of each id or normalised title|artist identity and
+// dropping entries without an id. The unit-test seam
+// (scripts/show-playlist.test.ts) — no Subsonic, no I/O.
 export function mergePlaylistTracks(lists: any[][]): any[] {
-  const seen = new Set<string>();
+  const seenIds = new Set<string>();
+  const seenKeys = new Set<string>();
   const out: any[] = [];
   for (const list of lists) {
     for (const t of list || []) {
       const id = t?.id;
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
+      if (!id || seenIds.has(id)) continue;
+      const key = t?.title ? trackKey(t) : '';
+      if (key && seenKeys.has(key)) continue;
+      seenIds.add(id);
+      if (key) seenKeys.add(key);
       out.push(t);
     }
   }
@@ -84,6 +94,21 @@ export async function resolveShowPlaylistPool(show: any): Promise<PlaylistPool |
 
   const tracks = mergePlaylistTracks(lists);
   if (!tracks.length) return null;
+  // The identity dedupe drops playlist entries the operator can still SEE in
+  // Navidrome, and it shrinks the strict lock set with them. Say so: a strict
+  // show quietly short of the songs its own playlist lists is undiagnosable
+  // from the operator's side — the same reason the pick paths shout when a
+  // pinned anchor resolves to nothing. Only the identity collapses are counted;
+  // a plain id repeated across two pinned playlists is an ordinary union.
+  const distinctIds = new Set<string>();
+  for (const list of lists) {
+    for (const t of list || []) if (t?.id) distinctIds.add(t.id);
+  }
+  const collapsed = distinctIds.size - tracks.length;
+  if (collapsed > 0) {
+    const where = names.length ? names.join(', ') : `${ids.length} playlist(s)`;
+    console.warn(`[show-playlist] ${collapsed} duplicate rip(s) in ${where} collapsed by title/artist — one id per song reaches the pick paths, so the show has ${tracks.length} playable entries, not ${distinctIds.size}.`);
+  }
   return { ids: new Set<string>(tracks.map((t: any) => t.id)), tracks, names };
 }
 
