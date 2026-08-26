@@ -87,7 +87,7 @@ import {
 } from './settings/defaults.js';
 import { validateCompatParams } from './settings/compat-params.js';
 import { parseSettingsPatchKey } from './settings/patch-registry.js';
-import { STREAM_BUFFER_SECONDS_BOUNDS, maxTrackSecondsValueSchema } from './schemas/settings.js';
+import { STREAM_BUFFER_SECONDS_BOUNDS, STREAM_MAX_LISTENERS_BOUNDS, maxTrackSecondsValueSchema } from './schemas/settings.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
@@ -446,6 +446,16 @@ export async function load() {
         stored.stream.idleAfterMinutes <= 1440
           ? stored.stream.idleAfterMinutes
           : DEFAULTS.stream.idleAfterMinutes,
+      // Same shape and the same shared constant as bufferSeconds above: the
+      // load path must bound against exactly what streamSchema accepts, or a
+      // saved value silently reverts on the next cold start and the handoff
+      // file hands the entrypoint a figure the operator never chose.
+      maxListeners:
+        Number.isInteger(stored.stream?.maxListeners) &&
+        stored.stream.maxListeners >= STREAM_MAX_LISTENERS_BOUNDS.min &&
+        stored.stream.maxListeners <= STREAM_MAX_LISTENERS_BOUNDS.max
+          ? stored.stream.maxListeners
+          : DEFAULTS.stream.maxListeners,
     },
     loudness: {
       targetLufs:
@@ -1169,6 +1179,16 @@ export async function update(patch) {
     // because it is not an encoder field and restarts for a different reason.
     if (st.bufferSeconds !== undefined && st.bufferSeconds !== cur.stream.bufferSeconds) {
       next.stream.bufferSeconds = st.bufferSeconds as number;
+      restart = true;
+    }
+    // Concurrent-listener ceiling (Icecast <limits><clients>). Same lifecycle
+    // as bufferSeconds above — icecast.xml, rendered once at container boot —
+    // so the same change-gate and the same restart=true. What differs is that
+    // an ICECAST_MAX_CLIENTS in the broadcast container's environment WINS at
+    // render time, so this save can legitimately be a no-op on air; the
+    // entrypoint logs which source it took and the admin hint says so.
+    if (st.maxListeners !== undefined && st.maxListeners !== cur.stream.maxListeners) {
+      next.stream.maxListeners = st.maxListeners as number;
       restart = true;
     }
     // Idle pause is enforced controller-side over telnet (broadcast/

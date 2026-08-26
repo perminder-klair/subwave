@@ -218,6 +218,7 @@ export interface StreamForm {
   oggIcyMetadata: boolean;
   idleWhenEmpty: boolean;
   idleAfterMinutes: string;
+  maxListeners: string;
 }
 
 export type LoudnessSource = 'replaygain-then-measured' | 'replaygain' | 'measured';
@@ -317,6 +318,7 @@ export interface SettingsData {
       oggIcyMetadata?: boolean;
       idleWhenEmpty?: boolean;
       idleAfterMinutes?: number;
+      maxListeners?: number;
     };
     loudness?: { targetLufs?: number; maxBoostDb?: number; source?: LoudnessSource };
     silenceTrim?: { enabled?: boolean; minGapMs?: number };

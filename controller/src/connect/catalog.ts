@@ -607,7 +607,7 @@ export const STREAM_MOUNTS: StreamMountDoc[] = [
     format: 'Ogg Opus',
     codec: 'opus',
     description:
-      'Low-bitrate, high-quality Opus at 48kHz. Enable in Settings → Streams. ' +
+      'Low-bitrate, high-quality Opus at 48kHz. Enable in Settings → Danger zone. ' +
       'Chromium-based browsers upgrade to it automatically; iOS/Firefox stay on MP3.',
     settingFlag: 'opusEnabled',
     alwaysOn: false,
@@ -618,7 +618,7 @@ export const STREAM_MOUNTS: StreamMountDoc[] = [
     codec: 'flac',
     description:
       'Lossless capture of the processed bus at 44.1kHz. Enable in Settings → ' +
-      'Streams. For external players — the web/native players do not auto-select it.',
+      'Danger zone. For external players — the web/native players do not auto-select it.',
     settingFlag: 'flacEnabled',
     alwaysOn: false,
   },
@@ -627,7 +627,7 @@ export const STREAM_MOUNTS: StreamMountDoc[] = [
     format: 'AAC (ADTS)',
     codec: 'aac',
     description:
-      'AAC-LC at 44.1kHz, served as audio/aac. Enable in Settings → Streams. For ' +
+      'AAC-LC at 44.1kHz, served as audio/aac. Enable in Settings → Danger zone. For ' +
       'external players that prefer AAC.',
     settingFlag: 'aacEnabled',
     alwaysOn: false,

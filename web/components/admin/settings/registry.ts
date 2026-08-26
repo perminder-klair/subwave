@@ -136,6 +136,7 @@ export const RESTART_PATHS: readonly string[] = [
   'stream.aacBitrate',
   'stream.bitrate',
   'stream.bufferSeconds',
+  'stream.maxListeners',
 ];
 
 /**
@@ -154,7 +155,7 @@ export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
   danger: [
     'crossfade', 'stem-transitions', 'max-track-length', 'dead-air-trim',
     'loudness-levelling', 'opus-stream', 'flac-stream', 'ogg-metadata',
-    'aac-stream', 'stream-mp3-bitrate', 'listener-buffer',
+    'aac-stream', 'stream-mp3-bitrate', 'listener-buffer', 'max-listeners',
   ],
 };
 
@@ -302,5 +303,6 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Bitrate', section: 'danger', card: 'AAC stream', keywords: 'aac kbps restart' },
   { label: 'Bitrate', section: 'danger', card: 'Stream MP3 bitrate', keywords: 'mp3 kbps stream restart' },
   { label: 'Listener buffer', section: 'danger', card: 'Listener buffer', keywords: 'burst size seconds behind live edge restart' },
+  { label: 'Max listeners', section: 'danger', card: 'Max listeners', keywords: 'icecast max clients concurrent connections capacity limit licensing fees restart' },
   { label: 'Restart mixer', section: 'danger', card: 'Mixer', keywords: 'restart liquidsoap apply pending' },
 ];

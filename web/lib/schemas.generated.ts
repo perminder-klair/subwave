@@ -2321,6 +2321,13 @@ export const LOUDNESS_MAX_BOOST_DB_BOUNDS: SettingsNumericBound = { min: 0, max:
 // the load path drift.
 export const STREAM_BUFFER_SECONDS_BOUNDS: SettingsNumericBound = { min: 0, max: 60 };
 
+// Icecast's <limits><clients> ceiling. 1 is the floor because 0 would render a
+// station nobody can tune into; 10000 is far past what one homelab box serves
+// and exists only to keep a typo out of the config. Licensing bodies in some
+// countries calculate fees on simultaneous listener capacity, which is why this
+// is a first-class setting rather than a convenience (#1300 FR 15).
+export const STREAM_MAX_LISTENERS_BOUNDS: SettingsNumericBound = { min: 1, max: 10000 };
+
 // Falling back to the product default is what an emptied station name does —
 // see stationSchema.
 export const SETTINGS_STATION_DEFAULT_NAME = 'SUB/WAVE';
@@ -2454,6 +2461,10 @@ export const streamPatchSchema = settingsBlockOf({
   idleAfterMinutes: settingsIntLike(
     { min: 1, max: 1440 },
     'stream.idleAfterMinutes must be an integer between 1 and 1440',
+  ),
+  maxListeners: settingsIntLike(
+    STREAM_MAX_LISTENERS_BOUNDS,
+    `stream.maxListeners must be an integer between ${STREAM_MAX_LISTENERS_BOUNDS.min} and ${STREAM_MAX_LISTENERS_BOUNDS.max}`,
   ),
 });
 

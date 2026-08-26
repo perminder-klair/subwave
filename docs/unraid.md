@@ -378,7 +378,16 @@ path. For most people the single-upstream setup above is the easier win.
   proxy](#putting-it-behind-your-own-reverse-proxy) above — one upstream, plus
   the one stream-buffering gotcha.
 - **Updates:** one-click → Unraid's normal **Check for Updates** / **Apply
-  Update**. Compose stack → stack menu → **Pull & Up**.
+  Update**. Compose stack → stack menu → **Pull & Up**. To pin or roll back to
+  a specific release, point the container's **Repository** field at a tag
+  (`ghcr.io/perminder-klair/subwave-aio:1.4.2`) instead of `:latest`.
+- **Max concurrent listeners:** **admin → Settings → Danger zone → Max
+  listeners**, then restart the container so Icecast re-renders its config.
+  This used to be reachable only through `ICECAST_MAX_CLIENTS`, which the
+  one-click template does not expose and the AIO image has no `.env` for —
+  so on Unraid it was unsettable. It is a station setting now. (Adding
+  `ICECAST_MAX_CLIENTS` as a custom container variable still overrides the
+  field; the broadcast log names which source it used on every boot.)
 - **Backups:** everything lives under the appdata path
   (`/mnt/user/appdata/subwave`) — settings, library cache, archives, voices.
   Back that path up (it's already on your pool/array).

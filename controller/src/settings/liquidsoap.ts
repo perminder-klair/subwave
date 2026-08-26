@@ -23,6 +23,13 @@ export const LIQ_STREAM_BITRATE_PATH = `${STATE_DIR}/liquidsoap_stream_bitrate.t
 // <burst-size>. Same liquidsoap_*.txt convention because it shares their
 // lifecycle exactly: written on save, consumed once at broadcast boot.
 export const LIQ_STREAM_BUFFER_SECONDS_PATH = `${STATE_DIR}/liquidsoap_stream_buffer_seconds.txt`;
+// Also the ENTRYPOINT's, not radio.liq's — Icecast's <limits><clients>. Unlike
+// every other file here it is an override that can LOSE: ICECAST_MAX_CLIENTS in
+// the environment wins, because the var shipped first and is wired into all
+// three compose files. The entrypoint logs which source it took so an operator
+// editing the admin field on a station whose .env pins the var can see why
+// nothing moved.
+export const LIQ_ICECAST_MAX_CLIENTS_PATH = `${STATE_DIR}/liquidsoap_icecast_max_clients.txt`;
 const LIQ_STATION_NAME_PATH = `${STATE_DIR}/liquidsoap_station_name.txt`;
 // Read by the BROADCAST ENTRYPOINT (docker/broadcast-entrypoint.sh + the AIO
 // supervisor), not liquidsoap: only the literal value 'true' makes the
@@ -43,6 +50,7 @@ export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_AAC_BITRATE_PATH, String(s.stream.aacBitrate));
   await writeFile(LIQ_STREAM_BITRATE_PATH, String(s.stream.bitrate));
   await writeFile(LIQ_STREAM_BUFFER_SECONDS_PATH, String(s.stream.bufferSeconds));
+  await writeFile(LIQ_ICECAST_MAX_CLIENTS_PATH, String(s.stream.maxListeners));
   await writeFile(LIQ_STATION_NAME_PATH, s.station || DEFAULTS.station);
   await writeFile(
     ICECAST_LISTENER_AUTH_PATH,

@@ -52,7 +52,7 @@ export default function IntegrationsTab({ catalog }: Props) {
     <div className="grid gap-4">
       <Card
         title="Stream URLs"
-        sub="Point any player, speaker, or hub at these. MP3 is always live; the others turn on in Settings → Streams."
+        sub="Point any player, speaker, or hub at these. MP3 is always live; the others turn on in Settings → Danger zone."
       >
         <div className="grid gap-2.5">
           {catalog.streamMounts.map(m => (
@@ -67,7 +67,7 @@ export default function IntegrationsTab({ catalog }: Props) {
               <div className="mb-2 text-[11px] leading-[1.5] text-muted">{m.description}</div>
               {m.enabled
                 ? <CopyUrl url={`${origin}${m.mount}`} />
-                : <div className="text-[11px] text-muted italic">Enable in Settings → Streams to get a URL.</div>}
+                : <div className="text-[11px] text-muted italic">Enable in Settings → Danger zone to get a URL.</div>}
             </div>
           ))}
         </div>
@@ -87,7 +87,7 @@ export default function IntegrationsTab({ catalog }: Props) {
             <CopyUrl url={`${apiBase}/state`} />
           </div>
           <div className="text-[11px] leading-[1.5] text-muted">
-            Both are public JSON, no auth. See the Endpoints tab for the full response shapes.
+            Both are public JSON, no auth. See the API tab for the full response shapes.
           </div>
         </div>
       </Card>

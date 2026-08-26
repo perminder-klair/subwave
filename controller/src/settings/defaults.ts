@@ -71,6 +71,14 @@ export const DEFAULTS = {
     // pulled — no decode, no Navidrome downloads — resuming mid-track on connect.
     idleWhenEmpty: false,
     idleAfterMinutes: 10,
+    // Icecast's <limits><clients> ceiling, applied at broadcast boot. 100 is
+    // the figure the entrypoint has always defaulted to, so an upgrade renders
+    // a byte-identical icecast.xml. An ICECAST_MAX_CLIENTS in the environment
+    // still WINS over this — the var predates the setting and is wired into
+    // every compose file — which is why the entrypoint logs which source it
+    // took. The setting exists for AIO/Unraid, where there is no .env to put
+    // the var in at all.
+    maxListeners: 100,
   },
   // Per-track loudness normalisation (music/mix.ts gainForLoudness), read live at
   // annotate time. maxBoostDb caps the upward direction only, and the boost is

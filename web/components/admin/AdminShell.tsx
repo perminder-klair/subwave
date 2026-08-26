@@ -39,6 +39,9 @@ import {
   AudioLines,
   Waves,
   Mic,
+  Braces,
+  Boxes,
+  Webhook,
 } from 'lucide-react';
 import { useAdminAuth } from '../../lib/adminAuth';
 import type { SignInResult } from '../../lib/adminAuth';
@@ -196,7 +199,23 @@ const NAV_SECTIONS: NavSection[] = [
   {
     label: 'System',
     items: [
-      { href: '/admin/connect', id: 'connect', label: 'Connect', icon: Plug },
+      // Three separate "where is the stream URL?" reports (#1300, #1485) landed
+      // while /admin/connect already served exactly that, on its third tab,
+      // behind a nav label that never says so. The panel was never the problem;
+      // the two words in the rail were. Expanding its tabs as children puts the
+      // literal phrase "Stream URLs" in the sidebar, and that tab now leads.
+      {
+        href: '/admin/connect',
+        id: 'connect',
+        label: 'Connect',
+        icon: Plug,
+        children: [
+          { href: '/admin/connect?tab=integrations', id: 'connect-integrations', label: 'Stream URLs', icon: Radio, tab: 'integrations', defaultTab: true },
+          { href: '/admin/connect?tab=endpoints', id: 'connect-endpoints', label: 'API', icon: Braces, tab: 'endpoints' },
+          { href: '/admin/connect?tab=mcp', id: 'connect-mcp', label: 'MCP', icon: Boxes, tab: 'mcp' },
+          { href: '/admin/connect?tab=webhooks', id: 'connect-webhooks', label: 'Webhooks', icon: Webhook, tab: 'webhooks' },
+        ],
+      },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],

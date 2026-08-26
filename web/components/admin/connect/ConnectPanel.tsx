@@ -4,12 +4,13 @@
    the manifest plus the live station origin + per-mount enabled state, so every URL
    shown here is a real, copy-ready absolute URL. */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback } from 'react';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { notify, errorMessage } from '../../../lib/notify';
 import { adminResponse } from '../../../lib/admin-query';
 import type { LucideIcon } from 'lucide-react';
-import { Braces, Boxes, Cable, Webhook } from 'lucide-react';
+import { Braces, Boxes, Radio, Webhook } from 'lucide-react';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import { Card, Btn, Eyebrow } from '../ui';
@@ -22,34 +23,50 @@ import { useConnectCatalogQuery } from './queries';
 
 type TabId = 'endpoints' | 'mcp' | 'integrations' | 'webhooks';
 
+const TAB_IDS = ['integrations', 'endpoints', 'mcp', 'webhooks'] as const;
+
+// Stream URLs leads, and is the default. Three "where is the stream URL?"
+// reports arrived while this panel already answered it — on the third tab,
+// under the word "Integrations", behind a rail entry saying only "Connect"
+// (#1300, #1485). The endpoint explorer is the specialist surface; the stream
+// address is what an operator opens this page for. Tab IDS are unchanged, so
+// every existing /admin/connect?tab=… deep link still resolves.
 const TABS: { id: TabId; label: string; icon: LucideIcon }[] = [
-  { id: 'endpoints', label: 'Endpoints', icon: Braces },
+  { id: 'integrations', label: 'Stream URLs', icon: Radio },
+  { id: 'endpoints', label: 'API', icon: Braces },
   { id: 'mcp', label: 'MCP', icon: Boxes },
-  { id: 'integrations', label: 'Integrations', icon: Cable },
   { id: 'webhooks', label: 'Webhooks', icon: Webhook },
 ];
 
 export default function ConnectPanel() {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
-  const [tab, setTab] = useState<TabId>('endpoints');
   const catalogQuery = useConnectCatalogQuery(adminFetch, hydrated && !needsAuth);
   const catalog = catalogQuery.data ?? null;
 
-  // Deep-link: /admin/connect?tab=mcp opens that tab directly
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const t = new URLSearchParams(window.location.search).get('tab');
-    if (t === 'endpoints' || t === 'mcp' || t === 'integrations' || t === 'webhooks') setTab(t);
-  }, []);
+  // The active tab lives in the URL (?tab=…), read every render rather than
+  // mirrored into state. Same pattern as ImagingPanel, and for the same reason:
+  // the sidebar now carries these tabs as sub-items, and a soft nav to the same
+  // pathname does NOT remount, so a mount-only effect would move the URL while
+  // leaving the panel on the tab it was already showing. Unknown values fall
+  // back to the default rather than rendering nothing.
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const rawTab = searchParams.get('tab');
+  const tab: TabId = (TAB_IDS as readonly string[]).includes(rawTab ?? '')
+    ? (rawTab as TabId)
+    : 'integrations';
 
-  const selectTab = useCallback((id: string) => {
-    setTab(id as TabId);
-    if (typeof window !== 'undefined') {
-      const url = new URL(window.location.href);
-      url.searchParams.set('tab', id);
-      window.history.replaceState(null, '', url.toString());
-    }
-  }, []);
+  // Routed through Next so an in-page tab press re-derives `tab` the same way a
+  // sidebar press does.
+  const selectTab = useCallback(
+    (id: string) => {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      params.set('tab', id);
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    },
+    [router, pathname, searchParams],
+  );
 
   const downloadOpenApi = useCallback(async () => {
     if (!catalog) return;

@@ -337,6 +337,7 @@ export default function SettingsPanel() {
         oggIcyMetadata: v.stream?.oggIcyMetadata ?? true,
         idleWhenEmpty: v.stream?.idleWhenEmpty ?? false,
         idleAfterMinutes: String(v.stream?.idleAfterMinutes ?? 10),
+        maxListeners: String(v.stream?.maxListeners ?? 100),
       },
       loudness: {
         targetLufs: String(v.loudness?.targetLufs ?? -14),
@@ -696,6 +697,7 @@ export default function SettingsPanel() {
         aacBitrate: n.int('stream.aacBitrate', form.stream.aacBitrate),
         bitrate: n.int('stream.bitrate', form.stream.bitrate),
         bufferSeconds: n.num('stream.bufferSeconds', form.stream.bufferSeconds),
+        maxListeners: n.int('stream.maxListeners', form.stream.maxListeners),
       },
     });
   };
@@ -1757,6 +1759,53 @@ export default function SettingsPanel() {
                     for network stalls; 0 disables the connect burst. Applies on the next
                     broadcast restart. Current: {data?.values?.stream?.bufferSeconds ?? '—'}
                     {' '}seconds.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Max listeners" sub="Icecast concurrent-connection ceiling">
+                <div className="field">
+                  <div className="flex items-center gap-2">
+                    <Label>Max listeners</Label>
+                    <Pill tone="ink">restart required</Pill>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      className="mono-num w-28"
+                      aria-label="Max concurrent listeners"
+                      type="number"
+                      min={1}
+                      max={10000}
+                      step={1}
+                      value={form.stream.maxListeners}
+                      onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                        setForm(f =>
+                          f
+                            ? { ...f, stream: { ...f.stream, maxListeners: e.target.value } }
+                            : f,
+                        )
+                      }
+                    />
+                    <span className="text-[12px] text-muted">connections</span>
+                  </div>
+                  <SettingsFieldError path="stream.maxListeners" errors={fieldErrors} />
+                  <div className="field-hint">
+                    How many people can be tuned in at once, across all mounts. Icecast
+                    refuses connections past this; each one costs bandwidth at the mount&apos;s
+                    bitrate, so size it against your upstream. Some countries calculate
+                    licensing fees on simultaneous listener capacity, which is the usual
+                    reason to set it deliberately rather than leave it at 100. Applies on the
+                    next broadcast restart. Current:{' '}
+                    {data?.values?.stream?.maxListeners ?? '—'}.
+                  </div>
+                  <div className="field-hint">
+                    <strong>ICECAST_MAX_CLIENTS</strong>{' '}in the environment overrides this —
+                    it predates the setting and stays authoritative where it&apos;s set. The
+                    broadcast log names the source it used on every boot
+                    (<code>max listeners N (from …)</code>), so check there if this field
+                    saves but nothing changes.
                   </div>
                 </div>
               </Card>

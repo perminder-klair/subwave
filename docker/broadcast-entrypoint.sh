@@ -101,6 +101,34 @@ stream_buffer_seconds() {
     read_state_num liquidsoap_stream_buffer_seconds.txt 22
 }
 
+# Concurrent-listener ceiling (Icecast <limits><clients>). Two sources, and the
+# ENV one WINS: ICECAST_MAX_CLIENTS shipped long before the setting and is wired
+# into all three compose files, so demoting it would silently change a
+# configured station on upgrade. The setting
+# (stream.maxListeners -> liquidsoap_icecast_max_clients.txt) is what reaches
+# AIO/Unraid, where there is no .env to put the var in at all.
+#
+# Echoes "<value> <source>" so the caller can LOG which source won. An operator
+# editing the admin field on a station whose .env pins the var otherwise sees
+# the number save and nothing happen.
+#
+# A non-numeric or zero value would render a station nobody can tune into (or
+# invalid XML), so either source falls back to 100 rather than failing icecast
+# at boot. docker/aio/supervisor.sh carries the same function; both are driven
+# from one table by scripts/max-listeners.test.ts.
+resolve_max_clients() {
+    _src=ICECAST_MAX_CLIENTS
+    _v="${ICECAST_MAX_CLIENTS:-}"
+    if [ -z "$_v" ]; then
+        _src=settings
+        _v=$(read_state_num liquidsoap_icecast_max_clients.txt 100)
+    fi
+    case "$_v" in
+        *[!0-9]*|''|0) echo "100 fallback:$_v@$_src" ;;
+        *) echo "$_v $_src" ;;
+    esac
+}
+
 # Sourcing with SUBWAVE_BROADCAST_LIB=1 defines the helpers above WITHOUT
 # booting a station, so scripts/state-bootstrap.test.ts can drive them.
 if [ "${SUBWAVE_BROADCAST_LIB:-}" = "1" ]; then
@@ -187,15 +215,11 @@ export ICECAST_HOST=localhost
 # Substitution is plain sed with `|` delimiters — the secrets are hex and every
 # other value numeric, so there's no escaping risk.
 
-# Concurrent-listener ceiling. A non-numeric value would render invalid XML and
-# fail icecast at boot, so fall back to 100 with a warning instead.
-ICECAST_MAX_CLIENTS="${ICECAST_MAX_CLIENTS:-100}"
-case "$ICECAST_MAX_CLIENTS" in
-    *[!0-9]*|'')
-        echo "broadcast: ICECAST_MAX_CLIENTS='$ICECAST_MAX_CLIENTS' is not a number — using 100" >&2
-        ICECAST_MAX_CLIENTS=100
-        ;;
-esac
+# Concurrent-listener ceiling — see resolve_max_clients above for the two
+# sources and why env wins.
+MAX_CLIENTS_LINE="$(resolve_max_clients)"
+ICECAST_MAX_CLIENTS="${MAX_CLIENTS_LINE%% *}"
+echo "broadcast: max listeners $ICECAST_MAX_CLIENTS (from ${MAX_CLIENTS_LINE#* })" >&2
 
 # Listener buffer depth (<burst-size>, #993/#1114). Sized in SECONDS and
 # converted per bitrate here, because burst-size is a byte count — a fixed one
