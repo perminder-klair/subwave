@@ -34,6 +34,7 @@ import { useStation } from '@/config/StationContext';
 import { useCast } from '@/hooks/useCast';
 import { useConnectivity } from '@/hooks/useConnectivity';
 import { useCoverColors } from '@/hooks/useCoverColors';
+import { useLiveActivity } from '@/hooks/useLiveActivity';
 import { useNowPlayingInfo } from '@/hooks/useNowPlayingInfo';
 import { usePlayer } from '@/hooks/usePlayer';
 import { useSignal } from '@/hooks/useSignal';
@@ -201,6 +202,7 @@ export default function PlayerScreen() {
     session,
     elapsed,
     progress,
+    trackStartedAt,
     timezone,
     locale,
     // While tuned in LOCALLY, keep a slow background poll alive so the lock
@@ -272,6 +274,23 @@ export default function PlayerScreen() {
   // playback: while casting nothing plays through RNTP, so there's no media
   // session to decorate (the Cast device shows its own metadata).
   useNowPlayingInfo({ api, tunedIn: localPlayer.tunedIn, nowPlaying, boothFeed, activeShow });
+
+  // The same card again, on the surfaces the OS media controls don't reach:
+  // Lock Screen, Dynamic Island, and — the reason it exists — the Apple Watch
+  // Smart Stack, which iOS mirrors it into without a watchOS target. iOS-only
+  // and self-gating; a no-op everywhere else. Keyed on LOCAL playback for the
+  // same reason as the lock screen above.
+  useLiveActivity({
+    api,
+    tunedIn: localPlayer.tunedIn,
+    nowPlaying,
+    activeShow,
+    boothFeed,
+    trackStartedAt,
+    station: stationName || 'SUB/WAVE',
+    accent: colors.accent,
+    like: trackLike,
+  });
 
   // Tear down playback if the station drops off air mid-listen. `offline` is
   // debounced upstream (useStationFeed needs OFFLINE_CONFIRM_POLLS consecutive

@@ -38,6 +38,14 @@ Mark each box per platform. Note the device + OS version you tested on.
 
 - [ ] **iOS** — **CarPlay**: SUB/WAVE appears, shows now-playing, Play/Pause/Stop work.
       _(Android Auto is intentionally **not** declared — rejected by Google Play under the Auto TTS-content policy; nothing to test there.)_
+- [ ] **iOS 17+** — **Live Activity appears on tune-in**: lock the phone → the SUB/WAVE card is on the Lock Screen with station name, title, artist, cover and a running clock. Tune out → the card disappears.
+- [ ] **iOS 17+** — **Card tracks the broadcast while backgrounded**: leave it locked across a song change → title/artist/cover swap and the progress bar restarts. While the DJ talks, the artist line + artwork swap to the persona (same as the lock screen).
+- [ ] **iOS 17+** — **Cover art renders**, not the fallback disc mark. _(a disc mark on every track means the App Group entitlement is missing on one side — see TESTING.md)_
+- [ ] **iOS 17+** — **Heart works from the card**: tap it with the app fully backgrounded (swiped out of the switcher is the real test — the intent has to wake the app) → the count moves within ~5s and the in-app heart agrees.
+- [ ] **iOS 17+** — **Dynamic Island** (Pro device): compact shows cover + clock; long-press expands to title/artist/heart/progress.
+- [ ] **iOS 18+ / watchOS 11+** — **Apple Watch Smart Stack**: with the phone tuned in, raise the paired watch → the SUB/WAVE card is in the Smart Stack and follows track changes.
+- [ ] **iOS 16.x** — **Graceful floor**: on a 16.x device no card appears and nothing breaks — the OS Now Playing card still shows metadata and controls.
+- [ ] **iOS** — **Live Activities switched off** for SUB/WAVE in Settings → the app tunes in normally, no card, no error.
 - [ ] **Android** — **Kill the app** (swipe from recents): the **foreground-service notification is removed** and audio stops (`StopPlaybackAndRemoveNotification`).
 - [ ] **iOS** — **AirPlay**: the route-picker button in the masthead opens the system picker; audio moves to a HomePod/Apple TV and back. Lock-screen metadata still updates while routed.
 - [ ] **iOS** / [ ] **Android** — **Google Cast, connect mid-listen**: tap the cast button while tuned in → audio moves to the Cast device (phone goes silent, deck reads `Cast · <device>`), power/volume/mute now drive the device. First iOS tap shows the **Local Network permission** prompt.

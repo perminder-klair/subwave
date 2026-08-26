@@ -9,6 +9,16 @@ A separate **Expo SDK 56 / React Native** project (own `package.json`, `node_mod
 Architecture-critical and easy to break — read [`app/docs/TESTING.md`](app/docs/TESTING.md) before touching native config:
 
 - **New Architecture is mandatory** (RN 0.85 ignores `newArchEnabled=false`). Reanimated 4 requires it. RNTP 4.1.2 isn't natively new-arch-compatible, so `app/patches/react-native-track-player+4.1.2.patch` carries the fix (2 source files); without it Android crashes on the first playback event.
+- **The Live Activity is native, so OTA can't reach it.** The on-air card (Lock
+  Screen, Dynamic Island, and — the point — the **Apple Watch Smart Stack**, which
+  iOS 18+ mirrors it into for free) is a widget extension in `targets/live-activity/`
+  plus a local Expo module in `modules/live-activity/`, driven by
+  `src/hooks/useLiveActivity.ts`. React Native does not run on watchOS, so this is
+  the wrist without a second codebase (a real watch app is #1488). Its SwiftUI ships in the binary: an
+  `expo-updates` OTA changes the hook, never the card. `SubwaveLiveAttributes.swift`
+  is compiled into both targets and `npm test` fails if the copies drift — a
+  mismatch silently stops the card rendering rather than failing the build. Full
+  rules in [`app/docs/TESTING.md`](docs/TESTING.md).
 - **`ios/` and `android/` are gitignored** (Continuous Native Generation) — regenerated from `app.json` + `assets/` by `expo prebuild` / EAS. The source of truth for icons/splash is `assets/` (disc-mark branding) + `app.json`.
 
 Distribution is **EAS cloud builds** → iOS TestFlight + Android internal-distribution link (project `@pinku1/subwave`, bundle `com.getsubwave.app`). The repeat-release workflow lives in the `subwave-app-ios-release` and `subwave-app-android-release` skills; getting it onto a physical Android phone over USB is `subwave-app-android`. See `app/README.md`.

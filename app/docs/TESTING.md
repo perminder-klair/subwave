@@ -192,6 +192,58 @@ stream in the phone app first, then connect the car. RNTP feeds the iOS surface
 > path, no manifest declaration). Revisit only if Google's policy changes **and**
 > a compliant `MediaBrowserService` browse tree is added.
 
+### Live Activity — Lock Screen, Dynamic Island, Apple Watch (iOS only)
+
+The on-air card. A **widget extension target** (`targets/live-activity/`, wired by
+`@bacons/apple-targets`) plus a **local Expo module** (`modules/live-activity/`)
+that drives ActivityKit, started and stopped by `src/hooks/useLiveActivity.ts`.
+
+The reason it exists is the **Apple Watch**: React Native does not run on watchOS,
+so a real watch app is a second, Swift-only codebase. iOS 18+ mirrors an iPhone
+Live Activity into the **watch Smart Stack** for free — the same lock-screen
+SwiftUI view, rendered on the wrist. One target, no watchOS project, no second
+release path.
+
+**The floor is iOS 17** (the widget target builds at 17.0 for the interactive
+heart). `isLiveActivitySupported()` is the only gate; below it the app behaves
+exactly as it did before and the OS Now Playing card is untouched.
+
+What is easy to get wrong:
+
+- **`SubwaveLiveAttributes.swift` is compiled twice** — once into the widget, once
+  into the Expo module — because the two are different Swift modules and neither
+  can import the other. ActivityKit matches an activity to its widget by the type
+  NAME, not its module, which is why two copies work; it is the same split Apple's
+  own app/extension template has. `npm test` fails if they drift. A mismatched
+  `ContentState` does **not** fail the build — the card just silently stops
+  rendering on device, which is a miserable thing to debug.
+- **`_shared/` is load-bearing.** `LikeTrackIntent.swift` must compile into the
+  **main app target** as well as the widget — that is what `_shared/` means to
+  `@bacons/apple-targets`, and it is what makes the heart work at all, because a
+  `LiveActivityIntent` runs in the app's process (waking it if suspended). If the
+  intent ends up in the widget target only, the button does nothing. Confirm the
+  generated project lists it under the app target after a prebuild.
+- **The widget gets no network turn.** Cover art is downloaded by the app into the
+  `group.com.getsubwave.app` container and handed to the widget as a *filename*.
+  Miss the App Group entitlement on either side and every cover silently falls
+  back to the drawn disc mark.
+- **Version lockstep.** App Store Connect rejects an upload whose extension
+  `CFBundleShortVersionString` differs from the app's. `eas.json` uses
+  `autoIncrement` with remote `appVersionSource`; check the widget target picks up
+  the same version on the first production build rather than at submit time.
+- **The heart fills on the next feed poll (≤5s), not instantly.** Deliberate: the
+  intent hands the tap back to JS so the like goes out through the app's own
+  `StationApi` — no station URL and no SecureStore credential in an app extension —
+  and the controller rejects a stale tap, so a heart that fills and then un-fills
+  would be worse than one that fills a beat late.
+
+Iterate on it like any other native change: `npx expo prebuild -p ios --clean`,
+then `xed ios` and pick the **SUB/WAVE Live** scheme — `SubwaveLiveActivity.swift`
+carries a `#Preview` so the layout can be worked on without a device. It cannot
+run in Expo Go, and the Dynamic Island needs a Pro-class device or the matching
+simulator.
+
+
 ---
 
 ## EAS cloud builds (for distributing to testers)

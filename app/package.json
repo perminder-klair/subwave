@@ -3,6 +3,7 @@
   "version": "1.4.0",
   "main": "index.ts",
   "dependencies": {
+    "@bacons/apple-targets": "^5.0.0",
     "@expo-google-fonts/fraunces": "^0.4.1",
     "@expo-google-fonts/jetbrains-mono": "^0.4.1",
     "@expo-google-fonts/plus-jakarta-sans": "^0.4.2",
