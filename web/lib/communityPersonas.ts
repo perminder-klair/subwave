@@ -17,6 +17,7 @@ export interface CommunityPersona {
   frequency: 'silent' | 'quiet' | 'moderate' | 'chatty' | 'aggressive';
   scriptLength: 'one-liner' | 'concise' | 'extended' | 'storyteller';
   djMode: boolean;
+  linkStyle?: 'natural' | 'announce';
   humour?: number; // tone dials 0-10; absent = neutral
   localColour?: number;
   warmth?: number;

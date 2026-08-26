@@ -25,6 +25,7 @@ export function personaFromSettings(p: Partial<Persona> | undefined, allSkills: 
     frequency: p?.frequency ?? 'moderate',
     scriptLength: p?.scriptLength ?? 'concise',
     djMode: p?.djMode === true,
+    linkStyle: p?.linkStyle === 'announce' ? 'announce' : 'natural',
     humour: typeof p?.humour === 'number' ? p.humour : DIAL_NEUTRAL,
     localColour: typeof p?.localColour === 'number' ? p.localColour : DIAL_NEUTRAL,
     warmth: typeof p?.warmth === 'number' ? p.warmth : DIAL_NEUTRAL,

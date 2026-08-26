@@ -12,6 +12,7 @@ import { isNamedRequester } from '../../../util/request-guard.js';
 import { introBudgetPhrase, introMsFor, firstVocalMsFor, bpmKeyFor } from './intro-budget.js';
 import { trackEraYear } from '../../../music/show-filter.js';
 import { trackFeelSuffix } from './track-feel.js';
+import { announceLine } from '../../../broadcast/announce-line.js';
 
 // The feel note appended to a track line (track-feel.ts) is a STEER, not copy.
 // Without this the model reads the label out — "high-energy" spoken flat is
@@ -228,8 +229,38 @@ export async function generateAdLib({ instruction, context = null, recap = null,
   });
 }
 
+// Pure prompt-assembly for generateLink, split out for testability. `announce`
+// (persona linkStyle:'announce', settings.announceLinks()) replaces the whole
+// natural instruction — set it up, tease the feel, vary the opener — with a
+// fixed, matter-of-fact one: the whole line is "This is <artist>." or "Next
+// up, <artist>.", alternating with the previous link. Everything else (tease,
+// patter, the intro budget, "vary how you open", the feel clause) is a
+// natural-only concern and plays no part in announce mode.
+export function linkPrompt({
+  announce, current, teaseClause, patterClause, budget, lengthPhraseText, clockClause, feelClause,
+}: {
+  announce: boolean;
+  current: { artist?: string | null } | null | undefined;
+  teaseClause: string;
+  patterClause: string;
+  budget: string | null;
+  lengthPhraseText: string;
+  clockClause: string;
+  feelClause: string;
+}): string {
+  if (announce) {
+    // Fallback prompt only — generateLink composes the line itself in code
+    // (announce-line.ts) whenever it has an artist to work with, and calls
+    // the model only when it doesn't (see below).
+    const artist = current?.artist || '<artist>';
+    return `Write the DJ link for the track now starting. It must be EXACTLY one of: "This is ${artist}." or "Next up, ${artist}." — nothing before or after it: no title, album, year, feel, or clock.`;
+  }
+  return `Write a short DJ link to carry into the track now starting — set it up, capture its feel, weave in the moment.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhraseText}, conversational. Vary how you open — don't default to "here's", "this is", "coming up", or "that was"; find a different way in each time. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.${clockClause}${feelClause}`;
+}
+
 export async function generateLink({ previous, current, context, clockIsAirTime = false, recap = null, recentTracks = null, recentOpeners = null, persona = null }: any) {
   const speaker = persona || settings.getEffectivePersona();
+  const announce = settings.announceLinks(speaker);
   // A pick-attached link is written when the pick is made but airs a full
   // track later, so a clock reference baked in at generation time is stale by
   // the length of whatever is playing now — "18:10" spoken at 18:20 (issue
@@ -283,14 +314,39 @@ export async function generateLink({ previous, current, context, clockIsAirTime 
   // deterministic backstop would drop the line anyway; better not to write it.
   const budget = introBudgetPhrase(introMsFor(current), firstVocalMsFor(current));
   const feelClause = feelSuffix ? FEEL_CLAUSE : '';
-  const prompt = `Write a short DJ link to carry into the track now starting — set it up, capture its feel, weave in the moment.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhrase('link', speaker)}, conversational. Vary how you open — don't default to "here's", "this is", "coming up", or "that was"; find a different way in each time. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.${clockClause}${feelClause}\n\n${ctxLines.join('\n')}`;
+  // Announce mode: compose the line in code (announce-line.ts) whenever we
+  // have an artist to work with — no LLM call at all, and no risk of a model
+  // drifting off the fixed form or failing to alternate. Fall through to the
+  // announce prompt below only when there is no artist to announce (current
+  // is null/unknown), which the model-composed fallback still covers.
+  if (announce) {
+    const composed = announceLine(current?.artist || '');
+    if (composed) return composed;
+  }
 
-  return djText({
-    system: djSystem(speaker),
-    prompt: decoratePrompt(prompt, { kind: 'link', recap, recentOpeners }),
-    temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
-    kind: 'generateLink',
+  const instruction = linkPrompt({
+    announce, current, teaseClause, patterClause, budget,
+    lengthPhraseText: lengthPhrase('link', speaker), clockClause, feelClause,
   });
+  const prompt = `${instruction}\n\n${ctxLines.join('\n')}`;
+
+  // Announce mode: no tone angle (there is nothing to vary), no recap, no
+  // opener blocklist — a fixed kind absent from ANGLES draws no angle line,
+  // and recap/recentOpeners are withheld outright. Lower temperature too:
+  // with only two allowed outputs there is nothing left to vary creatively.
+  return announce
+    ? djText({
+        system: djSystem(speaker),
+        prompt: decoratePrompt(prompt, { kind: 'announce-link', recap: null, recentOpeners: null }),
+        temperature: 0.3, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
+        kind: 'generateLink',
+      })
+    : djText({
+        system: djSystem(speaker),
+        prompt: decoratePrompt(prompt, { kind: 'link', recap, recentOpeners }),
+        temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
+        kind: 'generateLink',
+      });
 }
 
 export async function generateHourlyTime({ recap = null, context = null, recentOpeners = null, persona = null }: any = {}) {

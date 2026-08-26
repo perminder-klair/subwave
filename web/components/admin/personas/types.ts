@@ -23,6 +23,10 @@ export interface Persona {
   // Back-announces AND teases what's next, and runs callbacks across the session.
   // Off = the tasteful-narrator behaviour.
   djMode: boolean;
+  // 'natural' (default) writes the ordinary between-track link. 'announce' is
+  // a matter-of-fact station: the link is exactly "This is <artist>." or
+  // "Next up, <artist>." — nothing else.
+  linkStyle: 'natural' | 'announce';
   // Tone dials, 0–10, default 5 (neutral). Map to prompt bands server-side.
   humour: number;
   localColour: number;
@@ -138,6 +142,7 @@ export interface CommunityPersona {
   frequency: 'silent' | 'quiet' | 'moderate' | 'chatty' | 'aggressive';
   scriptLength: 'one-liner' | 'concise' | 'extended' | 'storyteller';
   djMode: boolean;
+  linkStyle?: 'natural' | 'announce';
   humour?: number;
   localColour?: number;
   warmth?: number;

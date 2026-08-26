@@ -47,6 +47,16 @@ export function effectsActive(persona: unknown = getEffectivePersona()): boolean
   return !!(persona as { djMode?: unknown } | null | undefined)?.djMode;
 }
 
+// True only when the effective persona's linkStyle is explicitly 'announce'.
+// Absent/invalid (normalisation already repairs those to 'natural') reads as
+// false, so a station that never touched the field keeps its old links.
+// Every announce-aware call site (dj-agent.ts, dj-agent/schemas.ts,
+// llm/internal/prompts/scripts.ts) reads it from here rather than inlining
+// the string compare, same precedent as effectsActive() above.
+export function announceLinks(persona: unknown = getEffectivePersona()): boolean {
+  return (persona as { linkStyle?: unknown } | null | undefined)?.linkStyle === 'announce';
+}
+
 // Effective track-length cap in SECONDS for the moment a pick is made, or null
 // for "no cap". A scheduled show's maxTrackSeconds (when set) overrides the
 // station default; 0 at the winning level means unlimited. This is the single

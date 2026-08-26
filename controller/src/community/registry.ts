@@ -23,6 +23,7 @@ import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { queue } from '../broadcast/queue.js';
 import {
   FREQUENCIES,
+  LINK_STYLES,
   SCRIPT_LENGTHS,
   SHOW_MOODS,
   SHOW_ENERGY,
@@ -71,6 +72,7 @@ export interface CommunityPersona {
   frequency: 'silent' | 'quiet' | 'moderate' | 'chatty' | 'aggressive';
   scriptLength: 'one-liner' | 'concise' | 'extended' | 'storyteller';
   djMode: boolean;
+  linkStyle?: 'natural' | 'announce';
   humour?: number;
   localColour?: number;
   warmth?: number;
@@ -205,6 +207,7 @@ function normalizePersona(raw: any): CommunityPersona | null {
     frequency: (FREQUENCIES as string[]).includes(raw?.frequency) ? raw.frequency : 'moderate',
     scriptLength: (SCRIPT_LENGTHS as string[]).includes(raw?.scriptLength) ? raw.scriptLength : 'concise',
     djMode: raw?.djMode === true,
+    linkStyle: (LINK_STYLES as string[]).includes(raw?.linkStyle) ? raw.linkStyle : 'natural',
     humour: dial(raw?.humour),
     localColour: dial(raw?.localColour),
     warmth: dial(raw?.warmth),

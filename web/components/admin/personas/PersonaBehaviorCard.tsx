@@ -11,7 +11,7 @@
 // so no adapter is needed at any of the four sites below.
 import { useController, type Control } from 'react-hook-form';
 import type { PersonasFormValues } from './types';
-import { FREQUENCIES, SCRIPT_LENGTHS, TONE_DIALS, toneBandIndex } from './constants';
+import { FREQUENCIES, LINK_STYLES, SCRIPT_LENGTHS, TONE_DIALS, toneBandIndex } from './constants';
 import { Card, Toggle } from '../ui';
 import { SteppedFader } from './SteppedFader';
 import { ToneKnob } from './ToneKnob';
@@ -25,6 +25,7 @@ export function PersonaBehaviorCard({ index, control }: PersonaBehaviorCardProps
   const frequency = useController({ control, name: `personas.${index}.frequency` });
   const scriptLength = useController({ control, name: `personas.${index}.scriptLength` });
   const djMode = useController({ control, name: `personas.${index}.djMode` });
+  const linkStyle = useController({ control, name: `personas.${index}.linkStyle` });
   const humour = useController({ control, name: `personas.${index}.humour` });
   const localColour = useController({ control, name: `personas.${index}.localColour` });
   const warmth = useController({ control, name: `personas.${index}.warmth` });
@@ -66,6 +67,14 @@ export function PersonaBehaviorCard({ index, control }: PersonaBehaviorCardProps
               ariaLabel="Work the desk like a real DJ"
             />
           </div>
+
+          <div className="rule-label">link style</div>
+          <SteppedFader
+            ariaLabel="Link style"
+            stops={LINK_STYLES}
+            value={linkStyle.field.value || 'natural'}
+            onChange={linkStyle.field.onChange}
+          />
         </div>
 
         <div className="mt-4 lg:mt-0">

@@ -204,6 +204,7 @@ router.post('/personas/community/:slug/install', requireAdmin, async (req, res) 
     frequency: cp.frequency,
     scriptLength: cp.scriptLength,
     djMode: cp.djMode,
+    linkStyle: cp.linkStyle ?? 'natural',
     humour: cp.humour ?? 5,
     localColour: cp.localColour ?? 5,
     warmth: cp.warmth ?? 5,

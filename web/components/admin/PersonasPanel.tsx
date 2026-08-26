@@ -216,7 +216,7 @@ export default function PersonasPanel() {
     const newId = clientMintId();
     appendPersonaField({
       id: newId, name: 'New persona', tagline: '',
-      frequency: 'moderate', scriptLength: 'concise', djMode: false,
+      frequency: 'moderate', scriptLength: 'concise', djMode: false, linkStyle: 'natural',
       humour: DIAL_NEUTRAL, localColour: DIAL_NEUTRAL, warmth: DIAL_NEUTRAL, soul: '',
       language: '',
       avatar: '',
@@ -405,6 +405,7 @@ export default function PersonasPanel() {
             frequency: p.frequency,
             scriptLength: p.scriptLength,
             djMode: p.djMode,
+            linkStyle: p.linkStyle,
             humour: p.humour,
             localColour: p.localColour,
             warmth: p.warmth,
