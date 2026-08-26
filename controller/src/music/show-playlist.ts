@@ -14,7 +14,10 @@ import * as subsonic from './subsonic.js';
 import { trackKey } from './recency.js';
 
 export type PlaylistPool = {
-  ids: Set<string>; // every track id in the union — the strict lock set
+  ids: Set<string>; // every SURVIVING track id — the strict lock set. Not every
+                    // id in the union: an alternate rip collapsed by the
+                    // identity dedupe below is absent, so a strict show cannot
+                    // pick it. resolveShowPlaylistPool warns when that happens.
   tracks: any[];     // deduped Subsonic song objects
   names: string[];   // resolved playlist names, for logging / debug
 };
@@ -91,6 +94,21 @@ export async function resolveShowPlaylistPool(show: any): Promise<PlaylistPool |
 
   const tracks = mergePlaylistTracks(lists);
   if (!tracks.length) return null;
+  // The identity dedupe drops playlist entries the operator can still SEE in
+  // Navidrome, and it shrinks the strict lock set with them. Say so: a strict
+  // show quietly short of the songs its own playlist lists is undiagnosable
+  // from the operator's side — the same reason the pick paths shout when a
+  // pinned anchor resolves to nothing. Only the identity collapses are counted;
+  // a plain id repeated across two pinned playlists is an ordinary union.
+  const distinctIds = new Set<string>();
+  for (const list of lists) {
+    for (const t of list || []) if (t?.id) distinctIds.add(t.id);
+  }
+  const collapsed = distinctIds.size - tracks.length;
+  if (collapsed > 0) {
+    const where = names.length ? names.join(', ') : `${ids.length} playlist(s)`;
+    console.warn(`[show-playlist] ${collapsed} duplicate rip(s) in ${where} collapsed by title/artist — one id per song reaches the pick paths, so the show has ${tracks.length} playable entries, not ${distinctIds.size}.`);
+  }
   return { ids: new Set<string>(tracks.map((t: any) => t.id)), tracks, names };
 }
 

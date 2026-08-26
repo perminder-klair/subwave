@@ -2,12 +2,14 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { effectiveShowNoRepeatWindow } from '../src/music/show-recency.js';
 
-const tracks = Array.from({ length: 40 }, (_, i) => ({
+const makeTracks = (n: number) => Array.from({ length: n }, (_, i) => ({
   id: `track-${i + 1}`,
   title: `Track ${i + 1}`,
   artist: `Artist ${i + 1}`,
   genres: [i < 20 ? 'Jazz' : 'Rock'],
 }));
+
+const tracks = makeTracks(40);
 
 // A strict playlist is its own catalogue for the hard no-repeat clamp. With
 // only 21 distinct tracks the configured 100-track guard must self-disable so
@@ -21,6 +23,29 @@ assert.equal(
   }),
   0,
   'a 21-track strict playlist must clamp against 21, not the full library',
+);
+
+// The clamp is arithmetic, not a switch: pin both sides of it, or a regression
+// that simply returned 0 for every strict playlist would satisfy the whole
+// suite. Below the library ceiling the playlist's own 37.5% governs; above it
+// the operator's configured window is already the smaller number and stands.
+assert.equal(
+  effectiveShowNoRepeatWindow(100, 27_986, {
+    show: { playlistStrict: true, filtersStrict: false },
+    playlistTracks: makeTracks(200),
+    excludedIds: null,
+  }),
+  75,
+  'a 200-track strict playlist clamps to floor(200 * 0.375), not the configured 100',
+);
+assert.equal(
+  effectiveShowNoRepeatWindow(100, 27_986, {
+    show: { playlistStrict: true, filtersStrict: false },
+    playlistTracks: makeTracks(400),
+    excludedIds: null,
+  }),
+  100,
+  'a playlist wide enough to carry the configured window keeps it intact',
 );
 
 // Soft anchors and unresolved anchors still pick from the wider catalogue, so
