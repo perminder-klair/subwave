@@ -289,6 +289,140 @@ edge address. Once the direct public route is closed, preserve real listener
 IPs with the trusted-proxy setup in
 [deployment.md](deployment.md#cloudflare-tunnel).
 
+## Public stream, LAN-only admin
+
+A common homelab shape: the player and the stream reachable from the internet,
+the operator console reachable only from home. SUB/WAVE has no setting for
+this — the split is made at your proxy, and this section is the recipe.
+
+### What can and cannot be split
+
+There are two operator surfaces, and only one of them separates cleanly by
+path.
+
+| Surface | Paths | Can you restrict it by path? |
+| --- | --- | --- |
+| Operator **UI** | `/admin*`, `/onboarding` | **Yes.** Distinct prefixes, served by the web container. |
+| Operator **API** | admin routes under `/api/*` | **No.** The controller mounts public and admin routes on one flat namespace — `/api/now-playing` and `/api/settings` are siblings. There is no `/api/admin/` prefix to deny. |
+
+So the practical split is: **deny the console's pages from the internet, and
+let the admin API stay guarded by HTTP Basic auth**, which is what guards it
+today on every default install (`ADMIN_USER` / `ADMIN_PASS`, mandatory in
+production). That gets you the requested outcome — nobody outside your LAN sees
+a login box, let alone a console — without an allowlist that breaks the next
+time a listener-facing endpoint is added.
+
+If you want the admin API off the public interface as well, see
+[Two front doors](#two-front-doors) below.
+
+Leave `SITE_URL` pointing at the **public** origin either way. It's the
+canonical address the tune-in files, share cards and the Connect panel hand
+out; the LAN address is how *you* reach the box, not how listeners reach the
+station.
+
+### One hostname, restricted console
+
+Add this to the recipe you already applied, above the catch-all web rule.
+
+**nginx** — order matters, `location` prefixes are matched before the `/`
+fallback:
+
+```nginx
+# Operator console: LAN only. Everything else on this server block stays public.
+location ~ ^/(admin|onboarding) {
+    allow 192.168.1.0/24;   # your LAN
+    allow 100.64.0.0/10;    # Tailscale, if you use it
+    deny  all;
+
+    proxy_pass http://127.0.0.1:7700;
+    proxy_set_header Host              $host;
+    proxy_set_header X-Real-IP         $remote_addr;
+    proxy_set_header X-Forwarded-For   $remote_addr;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+```
+
+**Caddy** — including the bundled `docker/Caddyfile`, where this goes above the
+final `handle`:
+
+```caddyfile
+@console path /admin /admin/* /onboarding /onboarding/*
+handle @console {
+	@notlan not remote_ip 192.168.1.0/24 100.64.0.0/10
+	respond @notlan 404
+	reverse_proxy web:7700
+}
+```
+
+`404` rather than `403` — a 403 confirms there is a console there to find.
+
+**Traefik** — attach an `ipAllowList` middleware to a higher-priority router
+matching the same paths:
+
+```yaml
+labels:
+  - "traefik.http.middlewares.subwave-lan.ipallowlist.sourcerange=192.168.1.0/24,100.64.0.0/10"
+  - "traefik.http.routers.subwave-console.rule=Host(`radio.example.com`) && (PathPrefix(`/admin`) || PathPrefix(`/onboarding`))"
+  - "traefik.http.routers.subwave-console.priority=100"
+  - "traefik.http.routers.subwave-console.middlewares=subwave-lan@docker"
+  - "traefik.http.routers.subwave-console.service=subwave-web"
+```
+
+Behind Cloudflare or a tunnel, the connecting peer is the edge, not the
+listener — your allowlist must read the forwarded address, which means the
+trusted-proxy setup in [deployment.md](deployment.md#real-listener-ips-behind-a-proxy)
+has to be correct first. Test it before you rely on it: a misconfigured
+trusted-proxy list turns an IP allowlist into either a lockout or a no-op.
+
+Do **not** add `/api` to the allowlist. The player calls `/api/now-playing`,
+`/api/state`, `/api/session`, `/api/request`, `/api/like` and `/api/cover/:id`
+from every listener's browser; denying `/api` from the internet takes the
+public player down with it.
+
+### Two front doors
+
+For a genuinely separate admin surface — the console *and* its API off the
+public interface — run two front ends over the same containers. The web bundle
+calls `/api` and `/stream.mp3` **relative to its own origin**, so both work
+with the stock image and no rebuild.
+
+Use [`docker-compose.byo.yml`](../docker-compose.byo.yml) with
+`BIND_ADDRESS=127.0.0.1`, then:
+
+- **Public front end** (`radio.example.com`, port 443 on the WAN) — the route
+  contract above, minus the console: `/admin*` and `/onboarding` return 404.
+- **LAN front end** (`subwave.lan`, or port 8443 bound to your LAN interface) —
+  the full route contract, nothing denied.
+
+Then decide what the public front end does with `/api/*`. Two honest options:
+
+- **Pass it through** (simple, recommended). The admin API stays reachable from
+  the internet and stays protected by Basic auth. This is the same posture as a
+  default install; the win is that the console pages are gone.
+- **Allowlist the listener endpoints** (strict, brittle). Route only
+  `/api/now-playing`, `/api/state`, `/api/session`, `/api/health`,
+  `/api/schedule`, `/api/themes`, `/api/beacon`, `/api/cover/*`, `/api/request`,
+  `/api/request/*`, `/api/like` and `/api/station-auth`, and 404 the rest. It
+  works, and it will silently break a listener feature the first time a release
+  adds an endpoint to that list. Pin `SUBWAVE_VERSION` and re-read this list at
+  each upgrade if you take this path.
+
+`/api/onboarding/status` is deliberately absent from that list. The player
+calls it to redirect a fresh install to the wizard and treats any non-200 as
+"nothing to do", so denying it publicly costs nothing and stops the public
+origin advertising an unconfigured station.
+
+`/api/listener-auth` stays denied on **both** front ends. Icecast calls the
+controller over the private Compose network; it never needs a route.
+
+### On the all-in-one image
+
+The AIO image can't do this internally — it bundles Caddy, the controller, the
+web UI and Icecast behind one host port by design. Put your own proxy in front
+of that single port and apply the console rule there, exactly as above with the
+AIO's port as the upstream. That works on Unraid, where the outer proxy is
+usually SWAG or Nginx Proxy Manager already fronting everything else.
+
 ## Verify the public route table
 
 Run these after applying any recipe:

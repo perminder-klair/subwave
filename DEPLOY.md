@@ -199,9 +199,23 @@ If a deploy goes wrong, roll back:
 
 ```bash
 git log --oneline -5
-git checkout <previous-sha>
+git checkout <previous-tag-or-sha>
 docker compose -f docker-compose.yml up -d --build
 ```
+
+On an **image** install (the standalone CLI, or plain compose off GHCR) there is
+nothing to check out — move the pin instead:
+
+```bash
+sed -i 's/^SUBWAVE_VERSION=.*/SUBWAVE_VERSION=1.4.2/' .env
+docker compose pull && docker compose up -d
+```
+
+Take a backup **before** you update, and read the state caveats before rolling
+back more than one release: settings the newer version added are dropped on the
+older version's first save, and the library database migrates forward only.
+Those, plus recovery for a broken login, a silent stream and a restart-looping
+controller, are in [`docs/updating.md`](docs/updating.md).
 
 ## 8. Operations
 
@@ -213,9 +227,6 @@ docker compose -f docker-compose.yml logs -f caddy
 
 # Restart just one service
 docker compose -f docker-compose.yml restart controller
-
-# Manual skip (controller exposes POST /skip, Caddy proxies it under /api)
-curl -X POST http://localhost/api/skip
 
 # What's queued / playing / in the DJ log
 curl -s http://localhost/api/state | jq
@@ -272,14 +283,24 @@ to bootstrap state, jingle rendering, updates, and backup. Skip section 6
 
 ## 10. Backup
 
-The only stateful path is `state/` (under the repo). Two things really matter:
+The only stateful path is `state/` (under the repo). Three things matter, in
+this order:
 
-- `archive/` — your show recordings. Big. Back up or rotate.
+- `settings.json` + `schedule.json` + `library.db` — your configuration, your
+  show grid, and every LLM enrichment pass over your library. The expensive
+  one is `library.db`: rebuilding it costs hours and tokens, not just a rescan.
+  **Admin → Settings → Backup → Export** zips all three (plus jingles, SFX,
+  custom voices, themes, skills and persona avatars) with a WAL-safe copy of
+  the database. API keys are redacted, so re-enter cloud keys after a restore.
+- `archive/` — your show recordings. Big, and deliberately **not** in the
+  export. Back up or rotate separately.
 - `jingles/` + `jingles.m3u` — re-derivable from `scripts/generate-jingles.sh`,
   so backup is optional.
 
 Everything else (`voice/`, `auto.m3u`, `now-playing.json`, the queue files)
 is ephemeral and regenerates within minutes of a fresh boot.
 
-A nightly tar of `state/archive/` to an external box is
-sufficient.
+A nightly tar of `state/` to an external box covers everything, archives
+included. If that's too big, tar `state/archive/` on its own schedule and take
+the admin export before each update — see
+[`docs/updating.md`](docs/updating.md#before-you-update).

@@ -86,6 +86,80 @@ docker compose up -d`}</CodeBlock>
       </section>
 
       <section className="bs-section">
+        <p className="bs-eyebrow">WHEN AN UPDATE LANDS BADLY</p>
+        <h2>Rolling back.</h2>
+        <p>
+          Two minutes of preparation makes this a command rather than an
+          investigation. Before you update, take a backup from{' '}
+          <Link href="/admin/settings?section=backup" className="bs-link">
+            Settings &rarr; Backup
+          </Link>{' '}
+          &mdash; it zips your settings, show schedule and the library tag
+          database, which is the expensive thing to rebuild &mdash; and write
+          down the version you are on.
+        </p>
+        <CodeBlock>{`grep SUBWAVE_VERSION .env    # image installs
+git describe --tags          # clone installs`}</CodeBlock>
+
+        <p className="mt-4">
+          Rolling back is then a version change plus a recreate. On an image
+          install, move the pin backwards; every service reads the same
+          variable, so one line moves the whole stack together:
+        </p>
+        <CodeBlock>{`# .env
+SUBWAVE_VERSION=1.4.2`}</CodeBlock>
+        <CodeBlock>{`docker compose pull
+docker compose up -d`}</CodeBlock>
+
+        <p className="mt-4">On a clone, check out the previous tag instead:</p>
+        <CodeBlock>{`git log --oneline -10
+git checkout <previous-tag>
+docker compose up -d --build`}</CodeBlock>
+
+        <div className="bs-callout">
+          <div className="bs-eyebrow">WHAT ROLLING BACK DOES TO YOUR STATE</div>
+          <p>
+            <code className="bs-code-inline">state/</code>{' '}does not roll back
+            with the images. Settings a newer version added are dropped on the
+            older version&apos;s first save, and the library database migrates
+            forward only. So going back <strong>one</strong> release is
+            routine; going back several, or across a release whose notes
+            mention a schema change, is the case where you restore that backup.
+          </p>
+        </div>
+
+        <div className="bs-callout">
+          <div className="bs-eyebrow">LOCKED OUT OF ADMIN?</div>
+          <p>
+            Admin credentials come from{' '}
+            <code className="bs-code-inline">ADMIN_USER</code> and{' '}
+            <code className="bs-code-inline">ADMIN_PASS</code> in the root{' '}
+            <code className="bs-code-inline">.env</code>, and only from there
+            &mdash; nothing an upgrade does to your station data can change
+            them. Compose reads that file when a container is{' '}
+            <em>recreated</em>, not restarted, so a stale container is the
+            usual cause:
+          </p>
+          <CodeBlock>{`docker compose exec controller printenv ADMIN_USER
+docker compose up -d --force-recreate controller`}</CodeBlock>
+        </div>
+
+        <p className="mt-4 text-muted">
+          The full procedure &mdash; every install shape, plus recovery for a
+          silent stream and a restart-looping controller &mdash; is in{' '}
+          <a
+            href="https://github.com/perminder-klair/subwave/blob/main/docs/updating.md"
+            target="_blank"
+            rel="noreferrer"
+            className="bs-link"
+          >
+            docs/updating.md &#8599;
+          </a>
+          .
+        </p>
+      </section>
+
+      <section className="bs-section">
         <p className="bs-eyebrow">WHEN THINGS GO WRONG</p>
         <h2>Logs are the source of truth.</h2>
         <ul className="bs-list">

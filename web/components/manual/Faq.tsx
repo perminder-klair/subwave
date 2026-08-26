@@ -4,7 +4,7 @@ import ManualPage from './ManualPage';
 export default function Faq() {
   return (
     <ManualPage
-      eyebrow="MANUAL · 15"
+      eyebrow="MANUAL · 16"
       title="Questions & answers."
       intro="The things people ask most about how SUB/WAVE behaves — how it copes with an empty room, what it needs from a model, and what the moving parts behind the DJ actually do."
       current="/manual/faq"
@@ -75,20 +75,20 @@ export default function Faq() {
         <p className="bs-eyebrow">CHOOSING THE NEXT SONG</p>
         <h2>What are the candidate pool and the agentic picker?</h2>
         <p>
-          They are two ways the DJ chooses what to play next. The{' '}
-          <strong>candidate pool</strong> picker is the straightforward one: it gathers a
-          shortlist of tracks from your library (similar songs, similar artists, mood
-          matches, recently-added and frequently-played albums), caps it to a couple of
-          dozen, and asks the model to pick one from that list.
+          Two ways the DJ chooses what to play next. With the{' '}
+          <strong>candidate pool</strong>, the station gathers a shortlist from your
+          library and asks the model once to pick one from it. With the{' '}
+          <strong>agentic picker</strong> &mdash; the default &mdash; the model searches
+          the library itself with a set of tools, so its choices stay coherent across a
+          run. If the agent ever fails or runs slow the station quietly falls back to the
+          pool, so the music never stops either way.
         </p>
         <p>
-          The <strong>agentic picker</strong> is the richer one. It runs as a small
-          reasoning loop with a memory of the current session and tools to search the
-          library itself, so its choices (and the links between them) stay coherent
-          across a run rather than starting cold each time. It is on by default; if it
-          ever fails or runs slow, the station quietly falls back to the candidate pool,
-          so the music never stops either way. Which one suits you comes down to the
-          model; see <Link href="/manual/llm" className="bs-link">Models &amp; Tokens</Link>.
+          Which one suits you comes down to your model. The full comparison, and how to
+          decide, is on{' '}
+          <Link href="/manual/concepts" className="bs-link">Concepts</Link>; the model
+          side is on{' '}
+          <Link href="/manual/llm" className="bs-link">Models &amp; Tokens</Link>.
         </p>
       </section>
 
