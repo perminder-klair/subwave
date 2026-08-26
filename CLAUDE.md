@@ -96,6 +96,8 @@ Four cooperating processes with **file-based IPC** through a shared `state/` dir
 
 **Controller state**: `session.json` — the live DJ session (chat-history JSON, `broadcast/session.js`), archived to `state/sessions/<id>.json` on roll. Controller-internal; Liquidsoap never reads it.
 
+**Prompt memory follows that session, not the booth log.** `Queue.djLog` is a station-wide operator history and deliberately survives show changes; `queue.getDjRecap()` / `getRecentOpeners()` read only aired `segment` turns from the current session. A real show change or 4h hard roll clears those prompts, while an autonomous daypart/mood soft shift retains them. The hard-roll handoff may carry the previous show/host/mood identity, never arbitrary prior speech; the incoming greeting acknowledges the outgoing presenter by name without ingesting their raw sign-off.
+
 **Browsers → Icecast**: direct `<audio>` on `…/stream.mp3` (default) or `…/stream.opus`. MP3 is the universal floor and must stay always-served (Sonos, hardware radios, car receivers, older Safari). The Opus upgrade is gated four ways and lands on the next `tune()`, never on a playing element — the details and the iOS/Firefox chained-Ogg failures are in [`web/CLAUDE.md`](web/CLAUDE.md).
 
 ### Code layout

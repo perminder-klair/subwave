@@ -33,6 +33,7 @@ import * as beds from './beds.js';
 import * as bedPolicy from './bed-policy.js';
 import * as session from './session.js';
 import type { TurnMeta } from './session.js';
+import type { PromptMemoryEntry } from './prompt-memory.js';
 import { getFullContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
@@ -337,8 +338,8 @@ class Queue {
   getDjRecap({ limit = 10, withinMinutes = 120, maxChars = 140 } = {}) {
     const cutoff = Date.now() - withinMinutes * 60_000;
     const seenDedupe = new Set<string>();
-    const picked: DjLogEntry[] = [];
-    for (const entry of this.djLog) {
+    const picked: PromptMemoryEntry[] = [];
+    for (const entry of session.promptMemory()) {
       if (!VOICE_KINDS.has(entry.kind)) continue;
       if (new Date(entry.t).getTime() < cutoff) break;
       if (DEDUPE_KINDS.has(entry.kind)) {
@@ -388,7 +389,7 @@ class Queue {
   getRecentOpeners(n = 6) {
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const entry of this.djLog) {
+    for (const entry of session.promptMemory()) {
       if (!VOICE_KINDS.has(entry.kind)) continue;
       const msg = (entry.message || '').replace(/^["'\s]+/, '').replace(/\s+/g, ' ').trim();
       if (!msg) continue;

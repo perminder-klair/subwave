@@ -189,25 +189,23 @@ export async function generateSignoff({ personaOut, personaIn, showIn = null, co
   });
 }
 
-export async function generateHandoffGreeting({ personaIn, personaOut, signoffText = null, showIn = null, episodeAngle = null, context = null, recap = null, recentOpeners = null }: any) {
+export function handoffGreetingPrompt({ personaIn, personaOut, showIn = null, episodeAngle = null, context = null, recap = null, recentOpeners = null }: any) {
   const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
   const inName = personaIn?.name || 'your host';
   const outName = personaOut?.name || 'the previous host';
-  // The predecessor's actual sign-off rides in the prompt so the greeting can
-  // genuinely respond to it ("Cheers Johnny…") rather than a generic hello.
-  if (signoffText) {
-    const clipped = String(signoffText).replace(/\s+/g, ' ').trim().slice(0, 240);
-    if (clipped) ctxLines.push(`${outName} just signed off with: "${clipped}"`);
-  }
   // Programme shows: this greeting doubles as the episode's intro, so the
   // producer's angle rides in (broadcast/programme.ts skips the standalone
   // intro when a handoff opened the show).
   const angleClause = showIn && episodeAngle ? ` Today's episode angle: ${episodeAngle} — set it up as you open.` : '';
   const showClause = showIn ? ` You're kicking off "${showIn}".${angleClause}` : '';
-  ctxLines.push(`Task: you're ${inName}, just taking over the mic from ${outName}. Acknowledge ${outName} warmly and naturally — a quick nod to what they said if it fits — then ease into your shift.${showClause} ${lengthPhrase('link', personaIn)}. Keep it easy and in character; you're stepping up to the decks, not reading a bulletin.`);
+  ctxLines.push(`Task: you're ${inName}, just taking over the mic from ${outName}. Acknowledge ${outName} warmly and naturally by name, then ease into your own shift without continuing their topic.${showClause} ${lengthPhrase('link', personaIn)}. Keep it easy and in character; you're stepping up to the decks, not reading a bulletin.`);
+  return decoratePrompt(ctxLines.join('\n'), { kind: 'handoff', recap, recentOpeners });
+}
+
+export async function generateHandoffGreeting(args: any) {
   return djText({
-    system: djSystem(personaIn),
-    prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'handoff', recap, recentOpeners }),
+    system: djSystem(args.personaIn),
+    prompt: handoffGreetingPrompt(args),
     temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
     kind: 'generateHandoffGreeting',
   });

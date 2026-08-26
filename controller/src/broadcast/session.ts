@@ -23,6 +23,7 @@ import { writeFileAtomic } from '../util/atomic-file.js';
 import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 import type { getFullContext } from '../context.js';
+import { promptMemoryEntries, type PromptMemoryEntry } from './prompt-memory.js';
 
 // The station context object the DJ/session layer keys off — the exact return
 // shape of getFullContext (type-only import, erased at runtime, so no cycle).
@@ -115,8 +116,8 @@ const WINDOW_TURNS = 40;                    // turns fed to the agent
 // hundred turns, so this never trims in practice — it exists because persist()
 // rewrites the whole array on every turn (1s debounce), and an unbounded array
 // makes that O(n²) over the session (and lets a pathological session grow
-// session.json without limit). Far above WINDOW_TURNS and everything
-// buildHandoff reads, so trimming is invisible to the agent.
+// session.json without limit). Far above WINDOW_TURNS and the prompt-memory
+// windows, so trimming is invisible to the agent.
 const MAX_TURNS = 500;
 const RATIONALE_WINDOW = 3;                 // most-recent dj/pick reasons kept in the window (anti-thread-momentum)
 const PERSIST_DEBOUNCE_MS = 1000;
@@ -129,7 +130,8 @@ function mintId() {
 }
 
 // Identity of the run. Consecutive hours of the same show share one session;
-// an autonomous block rolls when its time period or dominant mood changes.
+// an autonomous block changes key when its period or mood changes, but
+// maybeRoll() treats that key change as a soft shift rather than a hard roll.
 export function sessionKeyFor(ctx: SessionContext) {
   if (ctx?.activeShow?.id) return `show:${ctx.activeShow.id}`;
   return `auto:${ctx?.time?.period || 'unknown'}:${ctx?.dominantMood || 'none'}`;
@@ -200,7 +202,8 @@ function scenarioText(s: Session) {
 // (only on a HARD roll now — a show boundary or the 4h cap; daypart turnovers
 // keep the live session instead, see maybeRoll). Enriched with the prior
 // persona + mood so a new program still opens with a sense of where the station
-// just was.
+// just was. Identity-only by design: raw prior speech is the semantic bridge
+// issue #1479 closes, while the separate on-air mic pass still sounds natural.
 //
 // STILL intentionally omits the "recently aired" track list — leaking the
 // previous session's titles into the new picker's prompt window biases it
@@ -208,8 +211,6 @@ function scenarioText(s: Session) {
 // The picker has its own recents window for blocking repeats. Do not add titles.
 function buildHandoff(prev: Session | null): string | null {
   if (!prev) return null;
-  const lastSpoken = [...prev.messages].reverse()
-    .find((m) => m.role === 'dj' || m.role === 'segment');
   const parts = [
     prev.kind === 'show'
       ? `the show "${prev.show?.name}"`
@@ -217,7 +218,6 @@ function buildHandoff(prev: Session | null): string | null {
   ];
   if (prev.persona?.name) parts.push(`hosted as ${prev.persona.name}`);
   if (prev.scenario?.mood) parts.push(`mood ${prev.scenario.mood}`);
-  if (lastSpoken?.text) parts.push(`you last said: "${lastSpoken.text.slice(0, 120)}"`);
   return parts.join(' — ');
 }
 
@@ -261,6 +261,14 @@ export function onAirPersona() {
 
 export function getSession() {
   return _session;
+}
+
+// Aired speech belonging to the current editorial session, newest first.
+// Queue.getDjRecap()/getRecentOpeners() format this for prompts; keeping the
+// raw selection here makes a show hard-roll the boundary by construction while
+// leaving Queue.djLog global for the booth UI and stats.
+export function promptMemory(): PromptMemoryEntry[] {
+  return promptMemoryEntries(_session?.messages || []);
 }
 
 // Append a turn. `role` ∈ event|dj|track|segment; `kind` names the turn type
