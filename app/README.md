@@ -53,7 +53,7 @@ Listeners can still enter any station URL on first launch and switch between the
 
 ## Architecture
 
-The structural difference from the web player: the web bakes its base URL in at build time (`NEXT_PUBLIC_API_URL`). Here the base is resolved at **runtime** from `StationContext` and threaded through `createApi(base)` (`src/lib/api.ts`). Every hook/screen reads `api`/`base` from context.
+The structural difference from the web player: the web bakes its base URL in at build time (`NEXT_PUBLIC_API_URL`). Here the base is resolved at **runtime** from `StationContext` and threaded through `createApi(base)` (`src/lib/api.ts`). Every hook/screen reads `api`/`base` from context. Optional station logins are stored separately in the platform keychain/keystore; saved and displayed station URLs never contain credentials.
 
 - `src/config/StationContext.tsx` — active station + recents + switch/forget (the runtime base)
 - `src/theme/ThemeContext.tsx` — station theme via NativeWind `vars()`; per-listener override

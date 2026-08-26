@@ -82,7 +82,13 @@
         }
       ],
       "./plugins/withAndroidUserCaTrust",
-      "./plugins/withGradleMemory"
+      "./plugins/withGradleMemory",
+      [
+        "expo-secure-store",
+        {
+          "faceIDPermission": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

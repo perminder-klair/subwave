@@ -12,6 +12,13 @@
 // origin (matches docker/Caddyfile routing).
 
 import { mountFor, type StreamFormat } from './streamFormat';
+import {
+  authorizationFor,
+  normalizeStationBase,
+  resolveStationConnection,
+  splitStationAddress,
+  type StationCredentials,
+} from './station-credentials';
 import type {
   DjPublic,
   LikeResult,
@@ -88,59 +95,18 @@ export interface StationApi {
    *  station support (lib/streamFormat.ts) — this just builds the URL. Carries
    *  NO embedded credentials — see streamHeaders(). */
   streamUrl(format?: StreamFormat): string;
-  /** Headers to attach to the audio stream request. When the station URL
-   *  embedded HTTP basic-auth credentials (`https://user:pass@host`), this
+  /** Headers to attach to the audio stream request. When the station has HTTP
+   *  Basic Auth credentials, this
    *  returns `{ Authorization: 'Basic …' }`; otherwise `undefined`. iOS AVPlayer
    *  (via react-native-track-player) ignores userinfo in the URL, so the
    *  credential MUST travel as a header or the stream 401s and never starts —
-   *  unlike the fetch/Image paths, which honour userinfo, so they keep using the
-   *  credentialed base (#764). */
+   *  unlike the fetch/Image paths, which honour in-memory URL userinfo (#764). */
   streamHeaders(): Record<string, string> | undefined;
 }
 
 /** Strip a trailing slash; default to https:// if the user typed a bare host. */
 export function normalizeBase(raw: string): string {
-  let s = (raw || '').trim();
-  if (!s) return s;
-  if (!/^https?:\/\//i.test(s)) s = `https://${s}`;
-  return s.replace(/\/+$/, '');
-}
-
-// Standard base64 over the UTF-8 bytes of a string. Self-contained rather than
-// relying on global `btoa` (Hermes-version-dependent, and latin1-only) so a
-// credential with non-ASCII characters still encodes the way a browser would.
-const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
-function base64(input: string): string {
-  const bytes: number[] = [];
-  for (let i = 0; i < input.length; i++) {
-    let c = input.charCodeAt(i);
-    if (c < 0x80) bytes.push(c);
-    else if (c < 0x800) bytes.push(0xc0 | (c >> 6), 0x80 | (c & 0x3f));
-    else if (c >= 0xd800 && c <= 0xdbff && i + 1 < input.length) {
-      // surrogate pair → single code point
-      const lo = input.charCodeAt(++i);
-      c = 0x10000 + ((c & 0x3ff) << 10) + (lo & 0x3ff);
-      bytes.push(
-        0xf0 | (c >> 18),
-        0x80 | ((c >> 12) & 0x3f),
-        0x80 | ((c >> 6) & 0x3f),
-        0x80 | (c & 0x3f),
-      );
-    } else {
-      bytes.push(0xe0 | (c >> 12), 0x80 | ((c >> 6) & 0x3f), 0x80 | (c & 0x3f));
-    }
-  }
-  let out = '';
-  for (let i = 0; i < bytes.length; i += 3) {
-    const b0 = bytes[i];
-    const b1 = bytes[i + 1];
-    const b2 = bytes[i + 2];
-    out += B64[b0 >> 2];
-    out += B64[((b0 & 3) << 4) | (b1 === undefined ? 0 : b1 >> 4)];
-    out += b1 === undefined ? '=' : B64[((b1 & 15) << 2) | (b2 === undefined ? 0 : b2 >> 6)];
-    out += b2 === undefined ? '=' : B64[b2 & 63];
-  }
-  return out;
+  return normalizeStationBase(raw);
 }
 
 /** Split a normalized base into a credential-free base URL and, if the URL
@@ -151,21 +117,11 @@ export function splitCredentials(rawBase: string): {
   base: string;
   authorization: string | null;
 } {
-  const norm = normalizeBase(rawBase);
-  const m = norm.match(/^(https?:\/\/)(?:([^/@]+)@)?(.+)$/i);
-  if (!m || !m[2]) return { base: norm, authorization: null };
-  const [, scheme, userinfo, rest] = m;
-  const idx = userinfo.indexOf(':');
-  const dec = (s: string) => {
-    try {
-      return decodeURIComponent(s);
-    } catch {
-      return s;
-    }
+  const split = splitStationAddress(rawBase);
+  return {
+    base: split.base,
+    authorization: split.credentials ? authorizationFor(split.credentials) : null,
   };
-  const user = dec(idx >= 0 ? userinfo.slice(0, idx) : userinfo);
-  const pass = idx >= 0 ? dec(userinfo.slice(idx + 1)) : '';
-  return { base: `${scheme}${rest}`, authorization: `Basic ${base64(`${user}:${pass}`)}` };
 }
 
 // Every call carries a hard timeout: a hung origin must not stall the 5s
@@ -195,20 +151,19 @@ async function getJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   return (await res.json()) as T;
 }
 
-export function createApi(rawBase: string): StationApi {
-  // `base` deliberately KEEPS any URL-embedded credentials: RN's fetch and
-  // <Image> (both NSURLSession on iOS / OkHttp on Android) honour `user:pass@`
-  // userinfo, so the API polls and cover/avatar artwork already work with a
-  // basic-auth station. Only the audio path is broken — iOS AVPlayer drops
-  // userinfo — so we produce a credential-free URL + Authorization header for
-  // the stream alone (streamUrl/streamHeaders below), leaving every other
-  // request untouched (#764).
-  const base = normalizeBase(rawBase);
-  const { base: cleanBase, authorization } = splitCredentials(rawBase);
+export function createApi(
+  rawBase: string,
+  credentials?: StationCredentials | null,
+): StationApi {
+  const connection = resolveStationConnection(rawBase, credentials);
+  // Keep the persisted/displayed base credential-free. RN fetch and Image still
+  // need the proven URL-userinfo path, so reconstruct it only inside this live
+  // client; AVPlayer gets the equivalent explicit header below (#764/#1300).
+  const { base: cleanBase, requestBase, authorization } = connection;
   const streamAuthHeaders: Record<string, string> | undefined = authorization
     ? { Authorization: authorization }
     : undefined;
-  const api = (p: string) => `${base}/api${p}`;
+  const api = (p: string) => `${requestBase}/api${p}`;
   // Single source of the health logic; health() below is just its boolean.
   const probeHealth = async (signal?: AbortSignal): Promise<HealthResult> => {
     try {
@@ -221,7 +176,7 @@ export function createApi(rawBase: string): StationApi {
     }
   };
   return {
-    base,
+    base: cleanBase,
     nowPlaying: (signal) => getJson<NowPlayingResponse>(api('/now-playing'), signal),
     state: (signal) => getJson<StationState>(api('/state'), signal),
     session: (signal) => getJson<SessionPayload>(api('/session'), signal),
