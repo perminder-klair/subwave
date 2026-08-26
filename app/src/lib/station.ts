@@ -15,6 +15,7 @@ import {
   splitStationAddress,
   type StationCredentials,
 } from './station-credentials';
+import { forgetStoredStation } from './station-store';
 
 const KEY = 'subwave.stations.v1';
 const RECENTS_CAP = 8;
@@ -102,13 +103,10 @@ export async function setActiveStation(
   const split = splitStationAddress(ref.url);
   const url = split.base;
   const nextCredentials = credentials === undefined ? split.credentials : credentials;
-  try {
-    if (nextCredentials) await credentialVault.set(url, nextCredentials);
-    else if (credentials === null) await credentialVault.remove(url);
-  } catch {
-    // Secure persistence is a convenience; the caller still keeps credentials
-    // in memory for this listening session.
-  }
+  // Do not commit a clean station record when its secret could not be saved:
+  // that would present a broken recent after the current process exits.
+  if (nextCredentials) await credentialVault.set(url, nextCredentials);
+  else if (credentials === null) await credentialVault.remove(url);
   const store = await loadStations();
   const recents = [
     { url, name: ref.name, lastUsed: Date.now() },
@@ -120,19 +118,11 @@ export async function setActiveStation(
 }
 
 export async function removeRecent(url: string): Promise<StationStore> {
-  const norm = splitStationAddress(url).base;
-  const store = await loadStations();
-  const next: StationStore = {
-    activeStation: store.activeStation,
-    recents: store.recents.filter((r) => splitStationAddress(r.url).base !== norm),
-  };
-  await persist(next);
-  try {
-    await credentialVault.remove(norm);
-  } catch {
-    /* non-fatal */
-  }
-  return next;
+  return forgetStoredStation(url, {
+    load: loadStations,
+    removeCredential: (base) => credentialVault.remove(base),
+    persist,
+  });
 }
 
 export async function clearActiveStation(): Promise<StationStore> {

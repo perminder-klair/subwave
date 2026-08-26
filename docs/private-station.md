@@ -103,6 +103,9 @@ Three things to know:
   live in this device's iOS Keychain or Android Keystore-backed secure storage.
   It is still a shared listening password, not an account — don't reuse a
   password that matters.
+- **An authenticated bare address never falls back silently to HTTP.** Type an
+  explicit `http://` address if a trusted station really has no TLS; the app
+  asks before it sends the login over cleartext.
 - **Google Cast is unavailable** for a station with a saved login (the cast
   button doesn't appear). A Chromecast fetches the stream itself, and it has no
   way to send the header — this applies to SUB/WAVE's own stream password too.

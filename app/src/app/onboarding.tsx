@@ -9,6 +9,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -26,7 +27,11 @@ import { createApi, normalizeBase, type HealthResult, type StationApi } from '@/
 import { useStation } from '@/config/StationContext';
 import { fetchDirectory, type DirectoryStation } from '@/lib/directory';
 import type { StationRef } from '@/lib/station';
-import { splitStationAddress, type StationCredentials } from '@/lib/station-credentials';
+import {
+  splitStationAddress,
+  stationProbeCandidates,
+  type StationCredentials,
+} from '@/lib/station-credentials';
 import { useTheme } from '@/theme/ThemeContext';
 
 const PROBE_TIMEOUT_MS = 4500;
@@ -55,6 +60,20 @@ const isLocalHost = (h: string) =>
 
 // Cleartext-warning / http-scheme accent. Mirrors HealthCheck's local copy.
 const DANGER = '#c5302a';
+
+function confirmCleartextLogin(): Promise<boolean> {
+  return new Promise((resolve) => {
+    Alert.alert(
+      'Send station login over HTTP?',
+      'Plain HTTP exposes the username and password to the network. Only continue for a station and network you trust.',
+      [
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+        { text: 'Continue over HTTP', style: 'destructive', onPress: () => resolve(true) },
+      ],
+      { cancelable: true, onDismiss: () => resolve(false) },
+    );
+  });
+}
 
 // Recognise a TLS "the server's CA isn't trusted" failure from the raw error
 // (Android: "Trust anchor for certification path not found" /
@@ -118,7 +137,7 @@ interface Target {
   base: string;
   url: string;
   name: string;
-  credentials: StationCredentials | null;
+  credentials?: StationCredentials | null;
 }
 
 export default function Onboarding() {
@@ -149,6 +168,7 @@ export default function Onboarding() {
   // Diagnostic + raw error for the failure card, set by runCheck on a dead probe.
   const [failDetail, setFailDetail] = useState<string | undefined>(undefined);
   const [failRaw, setFailRaw] = useState<string | undefined>(undefined);
+  const [tuneError, setTuneError] = useState<string | undefined>(undefined);
   const [directory, setDirectory] = useState<DirectoryStation[]>([]);
   const runId = useRef(0);
 
@@ -176,23 +196,56 @@ export default function Onboarding() {
     presetName?: string,
     suppliedCredentials?: StationCredentials | null,
   ) => {
+    const id = ++runId.current;
     const trimmed = rawUrl.trim();
-    const hadScheme = /:\/\//.test(trimmed);
     const split = splitStationAddress(trimmed);
-    const bareBase = stripProto(split.base);
-    // A bare hostname probes https first then falls back to cleartext http, so
-    // listeners on HTTP-only stations can just type the address. An explicit
-    // protocol (http:// or https://) is honored verbatim — no fallback.
-    const candidates = (hadScheme ? [split.base] : [`https://${bareBase}`, `http://${bareBase}`])
-      .map((c) => normalizeBase(c))
+    const initialCandidates = stationProbeCandidates(
+      trimmed,
+      !!(suppliedCredentials ?? split.credentials),
+    );
+    if (!initialCandidates.length) return;
+
+    let activeCredentials: StationCredentials | null;
+    try {
+      activeCredentials = suppliedCredentials === undefined
+        ? split.credentials ?? await credentialsFor(initialCandidates[0])
+        : suppliedCredentials;
+    } catch {
+      if (runId.current !== id) return;
+      const first = initialCandidates[0];
+      setTarget({
+        base: first,
+        url: stripProto(first),
+        name: presetName || stripProto(first),
+        // undefined tells Retry to attempt the secure read again.
+        credentials: undefined,
+      });
+      setSteps(['wait', 'fail', 'wait', 'wait']);
+      setDone(false);
+      setFailed(true);
+      setInsecure(false);
+      setFailDetail(
+        "Couldn't read this station login from secure storage. Unlock the device's secure storage and retry; no saved credentials were changed.",
+      );
+      setFailRaw(undefined);
+      setTuneError(undefined);
+      setPhase('check');
+      return;
+    }
+    if (runId.current !== id) return;
+
+    // A login must never ride an automatic HTTPS→HTTP fallback. An explicit
+    // http:// address remains supported, but consent happens before any probe
+    // can put the Basic credentials on the wire.
+    const candidates = stationProbeCandidates(trimmed, !!activeCredentials)
+      .map((candidate) => normalizeBase(candidate))
       .filter(Boolean);
     if (!candidates.length) return;
+    if (activeCredentials && candidates[0].startsWith('http://')) {
+      const allowed = await confirmCleartextLogin();
+      if (!allowed || runId.current !== id) return;
+    }
 
-    const activeCredentials = suppliedCredentials === undefined
-      ? split.credentials ?? await credentialsFor(candidates[0])
-      : suppliedCredentials;
-
-    const id = ++runId.current;
     const first = candidates[0];
     setTarget({
       base: first,
@@ -206,6 +259,7 @@ export default function Onboarding() {
     setInsecure(false);
     setFailDetail(undefined);
     setFailRaw(undefined);
+    setTuneError(undefined);
     setPhase('check');
 
     const set = (i: number, s: StepState) =>
@@ -321,19 +375,26 @@ export default function Onboarding() {
 
   const tuneIn = async () => {
     if (!target) return;
-    // selectStation tears down any current playback before re-pointing.
-    await selectStation(
-      { url: target.base, name: target.name },
-      target.credentials,
-    );
-    if (addMode) {
-      // Came here from the stations modal ([index, stations, onboarding]) —
-      // unwind to the existing root player. replace() would stack a second
-      // player screen inside the modal (overlapping screens).
-      router.dismissTo('/');
-    } else {
-      // First run: onboarding IS the root — swap it for the player.
-      router.replace('/');
+    setTuneError(undefined);
+    try {
+      // selectStation tears down any current playback before re-pointing.
+      await selectStation(
+        { url: target.base, name: target.name },
+        target.credentials,
+      );
+      if (addMode) {
+        // Came here from the stations modal ([index, stations, onboarding]) —
+        // unwind to the existing root player. replace() would stack a second
+        // player screen inside the modal (overlapping screens).
+        router.dismissTo('/');
+      } else {
+        // First run: onboarding IS the root — swap it for the player.
+        router.replace('/');
+      }
+    } catch {
+      setTuneError(
+        "Couldn't save this station login securely. The station was not added; unlock secure storage and try again.",
+      );
     }
   };
 
@@ -523,10 +584,10 @@ export default function Onboarding() {
                 </View>
               ) : null}
 
-              {/* HTTPS is tried first for a bare host and falls back to HTTP; tap
-                  the prefix to force one or the other. */}
+              {/* HTTPS is tried first for a bare public station; authenticated
+                  stations require an explicit HTTP choice before cleartext. */}
               <Text className="font-mono text-muted" style={{ fontSize: 10.5, lineHeight: 16 }}>
-                Tap the prefix to switch HTTPS / HTTP. HTTPS auto-falls back to HTTP.
+                Tap the prefix to switch HTTPS / HTTP. Without a login, HTTPS auto-falls back to HTTP.
               </Text>
 
               <Pressable
@@ -631,9 +692,10 @@ export default function Onboarding() {
               insecure={insecure}
               failDetail={failDetail}
               failRaw={failRaw}
+              tuneError={tuneError}
               onTuneIn={tuneIn}
               onBack={backToEntry}
-              onRetry={() => target && runCheck(target.url, target.name)}
+              onRetry={() => target && runCheck(target.base, target.name, target.credentials)}
             />
           )}
         </ScrollView>
@@ -650,6 +712,7 @@ function HealthCheck({
   insecure,
   failDetail,
   failRaw,
+  tuneError,
   onTuneIn,
   onBack,
   onRetry,
@@ -661,6 +724,7 @@ function HealthCheck({
   insecure: boolean;
   failDetail?: string;
   failRaw?: string;
+  tuneError?: string;
   onTuneIn: () => void;
   onBack: () => void;
   onRetry: () => void;
@@ -735,6 +799,11 @@ function HealthCheck({
                 station you trust on a network you trust.
               </Text>
             </View>
+          ) : null}
+          {tuneError ? (
+            <Text className="font-body" style={{ color: destructive, fontSize: 12.5, lineHeight: 19 }}>
+              {tuneError}
+            </Text>
           ) : null}
           <Pressable
             onPress={onTuneIn}

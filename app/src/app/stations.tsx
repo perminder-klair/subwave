@@ -46,16 +46,36 @@ export default function Stations() {
   }, []);
 
   const switchTo = async (ref: StationRef) => {
-    if (normalizeBase(ref.url) !== base) {
-      await selectStation(ref);
+    try {
+      if (normalizeBase(ref.url) !== base) {
+        await selectStation(ref);
+      }
+      router.dismissTo('/');
+    } catch {
+      Alert.alert(
+        "Couldn't load station login",
+        "The device's secure storage could not be read. Current playback was left untouched; unlock the device and try again.",
+      );
     }
-    router.dismissTo('/');
   };
 
   const confirmForget = (st: StationRef) => {
     Alert.alert('Remove station?', `${st.name} will be removed from your stations.`, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Remove', style: 'destructive', onPress: () => forgetStation(st.url) },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await forgetStation(st.url);
+          } catch {
+            Alert.alert(
+              "Couldn't remove station",
+              "The device's secure storage could not be updated, so the station and its saved login were left in place.",
+            );
+          }
+        },
+      },
     ]);
   };
 

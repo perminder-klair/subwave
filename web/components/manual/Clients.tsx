@@ -116,7 +116,9 @@ export default function Clients() {
             played fine in a browser. The same fields work for a station using
             SUB/WAVE&rsquo;s own <strong>stream password</strong>: any username will do,
             the password is what gets checked. Special characters need no encoding in the
-            fields. Casting to a Chromecast isn&rsquo;t available for a station with a
+            fields. A login never rides an automatic fallback from HTTPS to HTTP: for a
+            trusted cleartext station, enter an explicit <code className="bs-code-inline">http://</code>{' '}
+            address and approve the warning before the app sends it. Casting to a Chromecast isn&rsquo;t available for a station with a
             saved login, because the receiver cannot send that header.
           </p>
         </div>

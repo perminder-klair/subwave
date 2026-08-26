@@ -115,6 +115,19 @@ export function resolveStationConnection(
   };
 }
 
+/** Probe a bare public station over TLS first. Authenticated probes never
+ * silently downgrade to cleartext; listeners must type http:// explicitly. */
+export function stationProbeCandidates(raw: string, authenticated: boolean): string[] {
+  const trimmed = raw.trim();
+  const split = splitStationAddress(trimmed);
+  if (!split.base) return [];
+  if (/:\/\//.test(trimmed)) return [split.base];
+  const bareBase = split.base.replace(/^https?:\/\//i, '');
+  return authenticated
+    ? [`https://${bareBase}`]
+    : [`https://${bareBase}`, `http://${bareBase}`];
+}
+
 /** Remove userinfo from legacy AsyncStorage records and return secrets for
  * migration into platform-secure storage. */
 export function migrateLegacyStationStore(store: StoredStationStore): {
@@ -125,20 +138,30 @@ export function migrateLegacyStationStore(store: StoredStationStore): {
   const credentials: Record<string, StationCredentials> = {};
   let changed = false;
 
-  const clean = (raw: string): string => {
+  const splitAndMark = (raw: string) => {
     const split = splitStationAddress(raw);
     if (split.base !== raw) changed = true;
-    if (split.credentials) {
-      credentials[split.base] = split.credentials;
-      changed = true;
-    }
-    return split.base;
+    if (split.credentials) changed = true;
+    return split;
   };
 
-  const activeStation = store.activeStation ? clean(store.activeStation) : null;
-  const recents = store.recents.map((recent) => {
-    const url = clean(recent.url);
-    return url === recent.url ? recent : { ...recent, url };
+  const splitRecents = store.recents.map((recent) => ({
+    recent,
+    split: splitAndMark(recent.url),
+  }));
+  // Recents are newest-first. Walk oldest-to-newest so the latest login wins.
+  for (let i = splitRecents.length - 1; i >= 0; i--) {
+    const { split } = splitRecents[i];
+    if (split.credentials) credentials[split.base] = split.credentials;
+  }
+
+  const active = store.activeStation ? splitAndMark(store.activeStation) : null;
+  // The active URL is the most authoritative legacy record.
+  if (active?.credentials) credentials[active.base] = active.credentials;
+
+  const activeStation = active?.base ?? null;
+  const recents = splitRecents.map(({ recent, split }) => {
+    return split.base === recent.url ? recent : { ...recent, url: split.base };
   });
 
   return {

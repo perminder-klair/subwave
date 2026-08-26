@@ -58,14 +58,23 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let alive = true;
     loadStations().then(async (s) => {
-      const activeCredentials = s.activeStation
-        ? await loadStationCredentials(s.activeStation)
-        : null;
+      let activeCredentials: StationCredentials | null = null;
+      try {
+        activeCredentials = s.activeStation
+          ? await loadStationCredentials(s.activeStation)
+          : null;
+      } catch {
+        // A locked/corrupt keychain must not strand the app behind the native
+        // splash. Start without the login; later station actions surface the
+        // read failure and never overwrite the vault.
+      }
       if (alive) {
         setStore(s);
         setCredentials(activeCredentials);
         setReady(true);
       }
+    }).catch(() => {
+      if (alive) setReady(true);
     });
     return () => {
       alive = false;
@@ -76,14 +85,19 @@ export function StationProvider({ children }: { children: React.ReactNode }) {
     ref: StationRef,
     suppliedCredentials?: StationCredentials | null,
   ) => {
-    // Single choke point for re-pointing the app: stop the current station's
-    // audio BEFORE the base changes, so every caller (stations screen,
-    // onboarding add-station) gets the teardown for free.
-    await teardown();
     const nextCredentials = suppliedCredentials === undefined
       ? await loadStationCredentials(ref.url)
       : suppliedCredentials;
-    const next = await setActiveStation(ref, nextCredentials);
+    // A saved-station switch has already loaded its credential, so do not
+    // rewrite the same vault entry. New/edited onboarding credentials are
+    // persisted before current playback is interrupted.
+    const next = await setActiveStation(
+      ref,
+      suppliedCredentials === undefined ? undefined : nextCredentials,
+    );
+    // Single choke point for re-pointing the runtime app: stop the current
+    // station before changing the context base every screen consumes.
+    await teardown();
     setCredentials(nextCredentials);
     setStore(next);
   }, []);
