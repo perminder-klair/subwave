@@ -1076,19 +1076,27 @@ export async function runPersonaHandoff(queue: any, ctx: any): Promise<void> {
   session.markHandoffAired();
 
   await withTrace({ kind: 'handoff', from: personaOut.name, to: personaIn.name }, async () => {
+    // The sign-off closes the show that just ENDED, but maybeRoll has already
+    // hard-rolled by the time this runs — the live session holds nothing but its
+    // own scenario turn, so reading it would strip the outgoing DJ of the hour
+    // it is signing off from. Its memory is the ARCHIVED session's
+    // (session.priorPromptMemory). The greeting keeps the fresh session's empty
+    // memory on purpose: not inheriting the outgoing topic is the point of #1479.
+    const outgoingRecap = queue.getDjRecap({ prior: true });
+    const outgoingOpeners = queue.getRecentOpeners(6, { prior: true });
     const recentOpeners = queue.getRecentOpeners();
     let aired = false;
 
     // 1. Sign-off, in the OUTGOING persona's voice. Tag the session turn with
-    //    the outgoing persona's id + name — session.windowMessages() uses the id
-    //    to spot a turn spoken by someone other than the session's own persona
-    //    and names the real speaker, so the incoming DJ never reads the
-    //    sign-off as its own words.
+    //    the outgoing persona's id + name — that id is what keeps the line out
+    //    of the new session's prompt memory (broadcast/prompt-memory.ts) and
+    //    what makes session.windowMessages() name the real speaker, so the
+    //    incoming DJ never reads the sign-off as its own words.
     let signoffText: string | null = null;
     try {
       signoffText = await dj.generateSignoff({
         personaOut, personaIn, showIn,
-        context: ctx, recap: queue.getDjRecap(), recentOpeners,
+        context: ctx, recap: outgoingRecap, recentOpeners: outgoingOpeners,
       });
       await queue.announce(signoffText, 'handoff', {
         persona: personaOut, meta: { personaId: personaOut.id, personaName: personaOut.name },

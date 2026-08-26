@@ -335,11 +335,13 @@ class Queue {
   // null when nothing relevant has aired. Wider window catches slow-firing
   // kinds (hourly, station ID) so the DJ doesn't echo something it said
   // an hour ago.
-  getDjRecap({ limit = 10, withinMinutes = 120, maxChars = 140 } = {}) {
+  // `prior` reads the session a hard roll just archived instead of the live one
+  // — the mic-pass sign-off is the single caller (session.priorPromptMemory).
+  getDjRecap({ limit = 10, withinMinutes = 120, maxChars = 140, prior = false } = {}) {
     const cutoff = Date.now() - withinMinutes * 60_000;
     const seenDedupe = new Set<string>();
     const picked: PromptMemoryEntry[] = [];
-    for (const entry of session.promptMemory()) {
+    for (const entry of prior ? session.priorPromptMemory() : session.promptMemory()) {
       if (!VOICE_KINDS.has(entry.kind)) continue;
       if (new Date(entry.t).getTime() < cutoff) break;
       if (DEDUPE_KINDS.has(entry.kind)) {
@@ -386,10 +388,10 @@ class Queue {
   // First ~5 words of recent DJ utterances — fed to the prompt as an
   // explicit "don't open with any of these" list. Catches repeated openers
   // that the recap text alone glosses over.
-  getRecentOpeners(n = 6) {
+  getRecentOpeners(n = 6, { prior = false } = {}) {
     const seen = new Set<string>();
     const out: string[] = [];
-    for (const entry of session.promptMemory()) {
+    for (const entry of prior ? session.priorPromptMemory() : session.promptMemory()) {
       if (!VOICE_KINDS.has(entry.kind)) continue;
       const msg = (entry.message || '').replace(/^["'\s]+/, '').replace(/\s+/g, ' ').trim();
       if (!msg) continue;

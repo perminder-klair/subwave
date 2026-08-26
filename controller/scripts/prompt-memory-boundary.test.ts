@@ -38,9 +38,9 @@ function context(show: { id: string; name: string } | null, period = 'morning') 
   } as any;
 }
 
-function recordVoice(kind: string, text: string) {
+function recordVoice(kind: string, text: string, meta: Record<string, unknown> = {}) {
   queue.log(kind, text);
-  session.appendTurn({ role: 'segment', kind, text });
+  session.appendTurn({ role: 'segment', kind, text, meta });
 }
 
 test('same-session prompt memory includes speech that actually aired', () => {
@@ -103,4 +103,70 @@ test('the incoming greeting acknowledges the presenter without ingesting their r
   assert.match(prompt, /taking over the mic from Wren/);
   assert.match(prompt, /Cultural Currents/);
   assert.doesNotMatch(prompt, /ceiling fan|flight plan/i);
+});
+
+test("the outgoing DJ's sign-off still reads its own show's memory", async () => {
+  queue.djLog = [];
+  session.start(context({ id: 's_soft_start', name: 'The Soft Start Procedure' }));
+  recordVoice('link', "The ceiling fan thinks it's an aircraft propeller.");
+
+  // The mic-pass runs AFTER the roll, so the sign-off's recap comes from the
+  // archived session — otherwise the outgoing DJ signs off with no memory of
+  // the hour it just presented.
+  await session.maybeRoll(context({ id: 's_cultural', name: 'Cultural Currents' }));
+
+  assert.equal(queue.getDjRecap(), null, 'the fresh session starts clean');
+  assert.match(queue.getDjRecap({ prior: true }) || '', /ceiling fan/i);
+  assert.deepEqual(queue.getRecentOpeners(6, { prior: true }), ["The ceiling fan thinks it's"]);
+});
+
+test("the sign-off never becomes the incoming persona's prompt memory", async () => {
+  queue.djLog = [];
+  session.start(context({ id: 's_soft_start', name: 'The Soft Start Procedure' }));
+  await session.maybeRoll(context({ id: 's_cultural', name: 'Cultural Currents' }));
+
+  // queue.announce tags the sign-off with the OUTGOING persona; the greeting
+  // that follows is the new session's own voice.
+  recordVoice('handoff', 'The ceiling fan has its own flight plan.', {
+    personaId: 'p_wren', personaName: 'Wren',
+  });
+  recordVoice('handoff', 'Welcome to Cultural Currents.');
+
+  const recap = queue.getDjRecap() || '';
+  assert.doesNotMatch(recap, /ceiling fan|flight plan/i);
+  assert.match(recap, /Welcome to Cultural Currents/);
+  assert.deepEqual(queue.getRecentOpeners(), ['Welcome to Cultural Currents.']);
+
+  assert.ok(
+    queue.djLog.some((entry) => /ceiling fan/i.test(entry.message)),
+    'the operator booth log keeps the sign-off',
+  );
+});
+
+test("a guest co-host's lines keep their attribution in the recap", () => {
+  queue.djLog = [];
+  const s = session.start(context({ id: 's_guest', name: 'Two Chairs' }));
+  const hostId = s.persona?.id ?? null;
+
+  recordVoice('banter', 'I brought the good coffee.', hostId ? { personaId: hostId } : {});
+  recordVoice('banter', 'You brought the same coffee.', {
+    personaId: 'p_guest', personaName: 'Sol',
+  });
+
+  const recap = queue.getDjRecap() || '';
+  assert.match(recap, /Sol: You brought the same coffee/);
+  assert.doesNotMatch(recap, /Sol: I brought the good coffee/);
+});
+
+test('a malformed persisted turn is skipped, not thrown on', () => {
+  queue.djLog = [];
+  session.start(context({ id: 's_broken', name: 'Recovered Session' }));
+  // recover() validates that `messages` is an array, not each turn's shape —
+  // getDjRecap runs synchronously inside POST /request, so this must not 500.
+  session.appendTurn({ role: 'segment', kind: 'link', text: undefined as any });
+  (session.getSession() as any).messages.push({ t: new Date().toISOString(), role: 'segment', kind: 'link' });
+  recordVoice('link', 'Still on the air.');
+
+  assert.match(queue.getDjRecap() || '', /Still on the air/);
+  assert.deepEqual(queue.getRecentOpeners(), ['Still on the air.']);
 });

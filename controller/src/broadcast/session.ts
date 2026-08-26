@@ -268,7 +268,22 @@ export function getSession() {
 // raw selection here makes a show hard-roll the boundary by construction while
 // leaving Queue.djLog global for the booth UI and stats.
 export function promptMemory(): PromptMemoryEntry[] {
-  return promptMemoryEntries(_session?.messages || []);
+  return promptMemoryEntries(_session?.messages || [], _session?.persona?.id ?? null);
+}
+
+// The same view of the session a hard roll just archived. The mic-pass runs
+// AFTER maybeRoll (it is driven off pendingHandoff on the fresh session), so by
+// the time the outgoing DJ signs off, the only session in memory is the one
+// that just started — its own show's hour is already behind the boundary. The
+// sign-off is the one segment that belongs to the OUTGOING session, so it reads
+// this. In-memory only and never persisted: a controller restart between the
+// roll and the mic-pass simply falls back to no recap, which is the floor the
+// handoff already tolerates. Deliberately NOT offered to the incoming greeting
+// — a fresh session opening with clean memory is the point of #1479.
+let _priorPromptMemory: PromptMemoryEntry[] = [];
+
+export function priorPromptMemory(): PromptMemoryEntry[] {
+  return _priorPromptMemory;
 }
 
 // Append a turn. `role` ∈ event|dj|track|segment; `kind` names the turn type
@@ -367,6 +382,9 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   if (bothAuto && !aged) return softShift(ctx, nextKey);
 
   const prev = _session;
+  // Snapshot before end()/start() replace the live session — the outgoing DJ's
+  // sign-off is generated after this returns (see priorPromptMemory above).
+  _priorPromptMemory = promptMemoryEntries(prev.messages, prev.persona?.id ?? null);
   await end();
   const next = start(ctx, buildHandoff(prev));
   stampRolledFrom(next, prev);
