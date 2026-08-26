@@ -253,8 +253,10 @@ docker compose -f docker-compose.byo.yml up -d
 
 That exposes the web UI on `:7700`, the controller API on `:7701`, and the
 Icecast stream on `:7702` (all configurable). Point your proxy at those three.
-`docker/Caddyfile` is a working reference for the route table you need to
-replicate. Details in [`DEPLOY.md`](DEPLOY.md#bring-your-own-reverse-proxy).
+`docker/Caddyfile` is the canonical route table. Copy-paste nginx, Nginx Proxy
+Manager, Traefik, and Cloudflare Tunnel configurations are in
+[`docs/reverse-proxy.md`](docs/reverse-proxy.md); deployment context remains in
+[`DEPLOY.md`](DEPLOY.md#bring-your-own-reverse-proxy).
 
 **Images on GHCR.** Tagged releases publish to `ghcr.io/perminder-klair/subwave-{caddy,broadcast,controller,web}`, the default-on `subwave-analyzer` (lean, multi-arch acoustic analysis) sidecar, and the opt-in `subwave-tts-heavy` (expressive voices) sidecar. Heavy-analysis variants — `subwave-analyzer-heavy` and `subwave-aio-heavy` (CLAP + Demucs, amd64) — are published for operators who enable "sounds-like"/vocals, plus the NVIDIA CUDA builds of that heavy stack (amd64) — `subwave-analyzer-cuda` for split-stack hosts via the `docker-compose.analyzer-gpu.yml` overlay, and `subwave-aio-cuda` for one-click all-in-one hosts.
 All compose files pull `:latest` by default; pin a version with
@@ -316,6 +318,7 @@ bin/subwave        Operator CLI entry: setup, status, doctor, lifecycle
 ## Documentation
 
 - **[`DEPLOY.md`](DEPLOY.md):** production deployment, updates, backup.
+- **[`docs/reverse-proxy.md`](docs/reverse-proxy.md):** complete nginx, Nginx Proxy Manager, Traefik, and Cloudflare Tunnel route recipes.
 - **[`docs/unraid.md`](docs/unraid.md):** running on Unraid — one-click from Community Applications, or the Compose Manager Plus stack.
 - **[`docs/tts-heavy.md`](docs/tts-heavy.md):** the opt-in `tts-heavy` voices and the default-on acoustic `analyzer` service — what each does and how to toggle them, including [running analysis on another machine](docs/tts-heavy.md#running-the-analyzer-on-another-machine) (a GPU box elsewhere on the network).
 - **[`docs/custom-tts.md`](docs/custom-tts.md):** bring your own TTS server — point the DJ at any HTTP endpoint you run (your GPU box, a bridge in front of a vendor API), the same way the LLM side takes a custom base URL.

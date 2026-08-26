@@ -244,20 +244,22 @@ host port:
 | Port (default) | Service | What your proxy should forward |
 |---|---|---|
 | `${WEB_PORT:-7700}` | Next.js web UI | everything not matched below |
-| `${CONTROLLER_PORT:-7701}` | controller HTTP API | `/api/*` (with the `/api` prefix stripped) |
-| `${ICECAST_PORT:-7702}` | Icecast | `/stream.mp3` (disable buffering for live audio) |
+| `${CONTROLLER_PORT:-7701}` | controller HTTP API | `/api/*` (with the `/api` prefix stripped), plus `/listen.pls` and `/listen.m3u` with their paths unchanged |
+| `${ICECAST_PORT:-7702}` | Icecast | the whole `/stream*` family (disable buffering for live audio) |
 
 Liquidsoap stays internal-only — it has no public surface.
 
 Override any of the host ports by setting `WEB_PORT`, `CONTROLLER_PORT`, or
-`ICECAST_PORT` in `docker/.env`.
+`ICECAST_PORT` in the root `.env`.
 
 **Single-origin routing is the default.** The web UI is built to call `/api`
 and `/stream.mp3` relative to its own origin, so the cleanest setup is one
 hostname (e.g. `https://radio.example.com`) where your proxy fronts all three.
 `docker/Caddyfile` is a working reference for what that route table looks
 like — replicate it in your Traefik labels, nginx `location` blocks, or
-existing Caddyfile.
+existing Caddyfile. Complete nginx, Nginx Proxy Manager, Traefik, and
+Cloudflare Tunnel configurations are in
+[`docs/reverse-proxy.md`](docs/reverse-proxy.md).
 
 If you instead want separate hostnames per surface (e.g. `api.example.com`
 and `stream.example.com`), you'll have to rebuild the `web` image with
