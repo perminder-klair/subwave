@@ -15,10 +15,11 @@ import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { shuffle } from '../util/shuffle.js';
 import { mapPool } from '../util/async-pool.js';
-import { artistRootKey, filterPickerCandidates, recencyWindowsForLibrary, effectiveNoRepeatWindow } from './recency.js';
+import { artistRootKey, filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
 import { AIRING_RANK_WEIGHT, freshness, freshnessBiasedOrder, lastAiredMsOf, unairedFlag, type AiredIndex } from './airing.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, preferVocals, applyStrictLocks, hasEraBound, eraSpan, type YearRange, type VocalMode } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
+import { effectiveShowNoRepeatWindow } from './show-recency.js';
 import * as likes from '../broadcast/likes.js';
 
 // A track flowing through the pool builder — a raw Subsonic child, a slimTrack
@@ -281,7 +282,7 @@ async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max:
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentArtists: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set()) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set()) {
   await library.load();
   // Airing memory (music/airing.ts) — orders the similarity sources so the
   // unexplored shelf survives their small caps; and the id-level recency union
@@ -713,6 +714,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     || (currentTrack?.id ? analysisFor(currentTrack) : { bpm: null, key: null });
   const final = filterPickerCandidates(softRankByCompat(selectionPool, curAnalysis, library.lastAiredInfo()), {
     recentIds,
+    recentKeys,
     recentArtists,
     hardRecentIds,
     hardRecentKeys,
@@ -807,13 +809,8 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // small one and never reached the wide windows this scaling exists to give it.
   const librarySize = stats.mirrorTotal || stats.total;
   const windows = recencyWindowsForLibrary(stats.distinctArtists, librarySize);
-  const recentIds = queue.recentlyPlayedIds(windows.trackHours);
+  const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(windows.trackHours);
   const recentArtists = queue.recentArtistsSince(windows.artistHours);
-  // Count-based HARD no-repeat guard (last N distinct plays) — non-relaxable,
-  // survives buildCandidates' starvation cascade. Clamped to library size so a
-  // small catalogue never fully blocks; 0 = off. Mirrors the agent path.
-  const effN = effectiveNoRepeatWindow(settings.get().llm?.noRepeatWindow ?? 0, librarySize);
-  const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
   const currentTrack = queue.current?.track || null;
   // Resolve the active show once: its music-steering filters shape the pool
   // (below) and its brief steers the LLM pick (further down). Prefer the show
@@ -838,6 +835,16 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const playlistPool = activeShow ? await resolveShowPlaylistPool(activeShow) : null;
   const playlistStrict = !!activeShow?.playlistStrict;
   const excludedIds = activeShow ? await resolveExcludedPlaylistIds(activeShow) : null;
+  // Count-based HARD no-repeat guard (last N distinct plays) — non-relaxable,
+  // survives buildCandidates' starvation cascade. A resolved strict playlist
+  // is its own catalogue, so clamp to its post-filter/post-exclusion identity
+  // count; soft/unresolved anchors remain library-scoped. Mirrors the agent.
+  const effN = effectiveShowNoRepeatWindow(
+    settings.get().llm?.noRepeatWindow ?? 0,
+    librarySize,
+    { show: activeShow, playlistTracks: playlistPool?.tracks ?? null, excludedIds },
+  );
+  const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
   // Pinned anchor resolved to nothing → the show is silently un-anchored.
   // Surface it (same warning as the agent path in dj-agent.ts).
   if (activeShow?.playlistIds?.length && !playlistPool) {
@@ -850,7 +857,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     const key = artistRootKey({ artist: opts.avoidArtist });
     if (key) blockedArtists.add(key);
   }
-  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists);
+  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists);
 
   // Excluded playlists (blocklist): drop any track whose id appears in the
   // show's excluded playlist union. Applied after buildCandidates so the full

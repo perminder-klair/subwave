@@ -2,14 +2,16 @@
 //
 // A show can pin one or more Navidrome playlists (settings show.playlistIds);
 // the union of their tracks becomes the show's candidate pool. This module
-// turns that id list into a deduped track pool, shared by all three consumers:
+// turns that id list into an identity-deduped track pool, shared by all three consumers:
 // the pool picker (music/picker.ts), the session DJ agent's tools
 // (broadcast/dj-agent.ts), and the LLM-free fallback (broadcast/scheduler.ts).
 //
 // subsonic.getPlaylist already rejects station-archive entries, so there's no
-// extra archive filtering here — the merge is purely union + dedupe by id.
+// extra archive filtering here — the merge is purely union + dedupe by id and
+// normalised title|artist identity.
 
 import * as subsonic from './subsonic.js';
+import { trackKey } from './recency.js';
 
 export type PlaylistPool = {
   ids: Set<string>; // every track id in the union — the strict lock set
@@ -18,16 +20,21 @@ export type PlaylistPool = {
 };
 
 // Pure: flatten a list of playlist track-lists into one deduped array, keeping
-// the first occurrence of each id and dropping entries without an id. The
-// unit-test seam (scripts/show-playlist.test.ts) — no Subsonic, no I/O.
+// the first occurrence of each id or normalised title|artist identity and
+// dropping entries without an id. The unit-test seam
+// (scripts/show-playlist.test.ts) — no Subsonic, no I/O.
 export function mergePlaylistTracks(lists: any[][]): any[] {
-  const seen = new Set<string>();
+  const seenIds = new Set<string>();
+  const seenKeys = new Set<string>();
   const out: any[] = [];
   for (const list of lists) {
     for (const t of list || []) {
       const id = t?.id;
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
+      if (!id || seenIds.has(id)) continue;
+      const key = t?.title ? trackKey(t) : '';
+      if (key && seenKeys.has(key)) continue;
+      seenIds.add(id);
+      if (key) seenKeys.add(key);
       out.push(t);
     }
   }
