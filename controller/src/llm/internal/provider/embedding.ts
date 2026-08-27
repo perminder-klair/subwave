@@ -10,6 +10,8 @@
 //   google              → text-embedding-004              (768d)
 //   openrouter          → openai/text-embedding-3-small   (OpenAI-compatible
 //                                                          embeddings endpoint)
+//   requesty/orcarouter → openai/text-embedding-3-small   (OpenAI-compatible
+//                                                          embeddings endpoint)
 //   anthropic           → falls back to openai embeddings (Anthropic has no
 //                                                          first-party API as
 //                                                          of 2026-05)
@@ -18,7 +20,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOllama } from 'ai-sdk-ollama';
 import * as settings from '../../../settings.js';
-import { llmCfg, ollamaBaseUrl, loccaEmbedBaseUrl, OPENROUTER_APP_HEADERS } from './registry.js';
+import { llmCfg, ollamaBaseUrl, loccaEmbedBaseUrl, DEFAULT_ORCAROUTER_BASE_URL, OPENROUTER_APP_HEADERS } from './registry.js';
 
 // Separate from the registry's language-model cache — the signature is prefixed
 // `embed|` so there's no key overlap, and keeping it local avoids exporting a
@@ -60,6 +62,10 @@ function defaultEmbeddingModelFor(provider: string): string {
     case 'requesty':
       // Requesty is OpenAI-compatible and uses provider/model naming, so the
       // OpenAI embedding model is the safe default — same as openrouter.
+      return 'openai/text-embedding-3-small';
+    case 'orcarouter':
+      // OrcaRouter is OpenAI-compatible and uses provider/model naming, so the
+      // OpenAI embedding model is the safe default — same as requesty.
       return 'openai/text-embedding-3-small';
     case 'anthropic':
       // No first-party Anthropic embedding API. We resolve via openai.
@@ -243,6 +249,19 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       });
       return provider.textEmbeddingModel(id);
     }
+    case 'orcarouter': {
+      // OrcaRouter exposes an OpenAI-compatible embeddings endpoint
+      // (POST https://api.orcarouter.ai/v1/embeddings), so it routes through
+      // the same createOpenAI transport as requesty — just a fixed base URL.
+      // A real key is required — a missing one 401s with the 'unauthorized'
+      // message.
+      const provider = createOpenAI({
+        baseURL: DEFAULT_ORCAROUTER_BASE_URL,
+        apiKey: cfg.apiKey || process.env.ORCAROUTER_API_KEY || 'unused',
+        name: 'orcarouter',
+      });
+      return provider.textEmbeddingModel(id);
+    }
     case 'ollama': {
       const provider = createOllama({ baseURL: ollamaBaseUrl(cfg as any) });
       return provider.textEmbeddingModel(id);
@@ -258,7 +277,7 @@ export function buildEmbeddingModel(cfg: EmbeddingCfg) {
       throw new Error(
         `Provider "${cfg.provider}" has no text-embedding support. Pick an ` +
           `embedding-capable provider in Settings → Library tagger → Embedding ` +
-          `(ollama, openai, google, openrouter, requesty, locca, or openai-compatible).`,
+          `(ollama, openai, google, openrouter, requesty, orcarouter, locca, or openai-compatible).`,
       );
   }
 }

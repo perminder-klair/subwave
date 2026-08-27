@@ -259,18 +259,20 @@ export function validateTtsCorrectionsStrict(raw: any): Array<{ from: string; to
 }
 
 // LLM provider abstraction. `ollama` is the homelab default; the cloud
-// providers are opt-in and resolved by llm/provider.js. `openrouter` and
-// `gateway` are aggregators — one key, any vendor's models. `openai-compatible`
-// targets any self-hosted OpenAI-compatible server (llama.cpp, vLLM, LM Studio,
-// etc.) via the operator-supplied `llm.baseUrl`. `locca` is a first-class local
-// llama.cpp via the locca CLI — same transport as openai-compatible but with a
-// host default base URL (host.docker.internal:8080) and onboarding discovery.
+// providers are opt-in and resolved by llm/provider.js. `openrouter`,
+// `requesty` and `orcarouter` are aggregators — one key, any vendor's models.
+// `openai-compatible` targets any self-hosted OpenAI-compatible server
+// (llama.cpp, vLLM, LM Studio, etc.) via the operator-supplied `llm.baseUrl`.
+// `locca` is a first-class local llama.cpp via the locca CLI — same transport
+// as openai-compatible but with a host default base URL
+// (host.docker.internal:8080) and onboarding discovery.
 export const LLM_PROVIDERS = [
   'ollama',
   'openai-compatible',
   'locca',
   'openrouter',
   'requesty',
+  'orcarouter',
   'anthropic',
   'openai',
   'google',
@@ -294,6 +296,7 @@ export const EMBEDDING_PROVIDERS = [
   'openai',
   'google',
   'requesty',
+  'orcarouter',
 ];
 
 // Coerce a stored Ollama context-window value. 0 disables (use Ollama's own

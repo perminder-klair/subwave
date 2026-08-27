@@ -134,6 +134,31 @@ console.log('\n[3b] openrouter builds an embedding model (offline, #522)');
   ok('openrouter builds without the no-embeddings error', built, threw ? `threw: ${threw.slice(0, 48)}` : 'ok');
 }
 
+// ---- 3c. orcarouter BUILDS an embedding model (offline) --------------------
+// OrcaRouter exposes an OpenAI-compatible embeddings endpoint, so — like
+// openrouter — it must not be rejected as chat-only. Offline: buildEmbeddingModel
+// constructs the client without any network call; we only assert it doesn't
+// throw the "no text-embedding support" error the chat-only providers do.
+console.log('\n[3c] orcarouter builds an embedding model (offline)');
+{
+  let built = false;
+  let threw = '';
+  try {
+    embProvider.buildEmbeddingModel({
+      enabled: true,
+      provider: 'orcarouter',
+      model: '',
+      apiKey: 'test-key',
+      ollamaUrl: '',
+      baseUrl: '',
+    });
+    built = true;
+  } catch (e: any) {
+    threw = e?.message || String(e);
+  }
+  ok('orcarouter builds without the no-embeddings error', built, threw ? `threw: ${threw.slice(0, 48)}` : 'ok');
+}
+
 // ---- 4. library-db dim handling (#2) --------------------------------------
 console.log('\n[4] library-db honours the stored dim');
 // Seed a 768-d DB the way the tagger would.

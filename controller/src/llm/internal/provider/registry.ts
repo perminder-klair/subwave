@@ -2,13 +2,13 @@
 //
 // Every model call in the controller resolves its model through here, so the
 // operator can switch providers (homelab Ollama ↔ Anthropic ↔ OpenAI ↔ Google
-// Gemini ↔ DeepSeek ↔ OpenRouter ↔ the Vercel AI Gateway) from the admin Settings UI
-// without a redeploy and without touching a single call site.
+// Gemini ↔ DeepSeek ↔ OpenRouter ↔ Requesty ↔ OrcaRouter ↔ the Vercel AI Gateway)
+// from the admin Settings UI without a redeploy and without touching a single call site.
 //
 // The active provider/model lives in `settings.llm` (see settings.js):
 //   { provider:  'ollama' | 'openai-compatible' | 'locca' | 'anthropic' |
 //                'openai' | 'google' | 'deepseek' | 'openrouter' | 'requesty' |
-//                'gateway',
+//                'orcarouter' | 'gateway',
 //     model:     string,   // empty → provider default
 //     apiKey:    string,   // empty → read the provider's env var
 //     ollamaUrl: string,   // empty → config.ollama.url default (Ollama only)
@@ -224,6 +224,13 @@ export function loccaEmbedBaseUrl(cfg: any): string {
 // goes through createOpenAI with this base, keyed by REQUESTY_API_KEY.
 export const DEFAULT_REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
 
+// OrcaRouter is an OpenAI-compatible model-routing gateway (provider/model
+// naming, e.g. anthropic/claude-sonnet-4.6; `orcarouter/auto` is the named
+// auto-router). Same shape as requesty — a fixed-endpoint aggregator, one key,
+// any vendor — so the base URL isn't operator-configurable; the chat path goes
+// through createOpenAI with this base, keyed by ORCAROUTER_API_KEY.
+export const DEFAULT_ORCAROUTER_BASE_URL = 'https://api.orcarouter.ai/v1';
+
 // OpenRouter app attribution (openrouter.ai/docs/app-attribution): HTTP-Referer
 // is the app's identity in OpenRouter's rankings (required for an app page),
 // X-Title its display name. Sent on every OpenRouter request — chat, embeddings,
@@ -374,6 +381,25 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
         baseURL: DEFAULT_REQUESTY_BASE_URL,
         apiKey: cfg.apiKey || process.env.REQUESTY_API_KEY || 'unused',
         name: 'requesty',
+        fetch: debugFetch,
+      });
+      model = provider.chat(id);
+      break;
+    }
+    case 'orcarouter': {
+      // OrcaRouter is an OpenAI-compatible gateway, so it reuses the same
+      // createOpenAI transport as openai-compatible — just a fixed base URL
+      // (api.orcarouter.ai/v1) instead of an operator-supplied one. Models use
+      // provider/model naming (e.g. anthropic/claude-sonnet-4.6), or the named
+      // router `orcarouter/auto`. Like requesty it's a hosted aggregator with
+      // no first-class thinking knob, so we pass through verbatim (debugFetch
+      // only — no enable_thinking injection, which only makes sense for
+      // self-hosted llama.cpp/vLLM). A real key is required; it comes from
+      // settings or ORCAROUTER_API_KEY.
+      const provider = createOpenAI({
+        baseURL: DEFAULT_ORCAROUTER_BASE_URL,
+        apiKey: cfg.apiKey || process.env.ORCAROUTER_API_KEY || 'unused',
+        name: 'orcarouter',
         fetch: debugFetch,
       });
       model = provider.chat(id);

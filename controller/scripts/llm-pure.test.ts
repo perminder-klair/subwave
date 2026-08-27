@@ -389,6 +389,11 @@ async function main() {
     assert.equal(reasoningFor({ provider: 'requesty', model: 'openai/gpt-4o-mini', reasoning: false }), 'minimal');
     assert.equal(reasoningFor({ provider: 'requesty', model: 'openai/gpt-4o-mini', reasoning: true }, { forceNoThink: true }), 'minimal');
   });
+  await test('orcarouter: none when suppressing — \'minimal\' is not a valid reasoning_effort for OrcaRouter (none/low/medium/high/xhigh)', () => {
+    assert.equal(reasoningFor({ provider: 'orcarouter', model: 'anthropic/claude-sonnet-4.6', reasoning: true }), undefined);
+    assert.equal(reasoningFor({ provider: 'orcarouter', model: 'anthropic/claude-sonnet-4.6', reasoning: false }), 'none');
+    assert.equal(reasoningFor({ provider: 'orcarouter', model: 'orcarouter/auto', reasoning: true }, { forceNoThink: true }), 'none');
+  });
   await test('gateway: none forwarded to the downstream vendor when suppressing (replaces the dual-block hack)', () => {
     assert.equal(reasoningFor({ provider: 'gateway', model: 'anthropic/claude-haiku-4.5', reasoning: true }), undefined);
     assert.equal(reasoningFor({ provider: 'gateway', model: 'anthropic/claude-haiku-4.5', reasoning: false }), 'none');
@@ -546,7 +551,7 @@ async function main() {
     }
   });
   await test('native-strategy providers get room to seed, refine, cross-check', () => {
-    for (const provider of ['openai', 'anthropic', 'google', 'deepseek', 'openrouter', 'requesty', 'gateway']) {
+    for (const provider of ['openai', 'anthropic', 'google', 'deepseek', 'openrouter', 'requesty', 'orcarouter', 'gateway']) {
       assert.equal(discoveryStepsFor({ provider }), 3, provider);
       assert.equal(gatedMaxStepsFor({ provider }), 4, provider);
     }

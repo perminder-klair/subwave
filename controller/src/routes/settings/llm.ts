@@ -114,6 +114,14 @@ async function probeKey(
         return { ok: true, message: `✓ OpenRouter key valid · model responded` };
       } catch (err) { return { ok: false, message: briefLlmError(err) }; }
     }
+    case 'ORCAROUTER_API_KEY': {
+      try {
+        const model = activeModel('orcarouter') || 'orcarouter/auto';
+        const m = createOpenAI({ baseURL: llmProvider.DEFAULT_ORCAROUTER_BASE_URL, apiKey: value }).chat(model);
+        await generateText({ model: m, prompt: 'Reply with the single word OK.', maxOutputTokens: 32, abortSignal: AbortSignal.timeout(15000) });
+        return { ok: true, message: `✓ OrcaRouter key valid · model responded` };
+      } catch (err) { return { ok: false, message: briefLlmError(err) }; }
+    }
     case 'AI_GATEWAY_API_KEY': {
       return { ok: true, message: 'Key format looks valid — confirm via a live LLM call' };
     }
@@ -324,7 +332,7 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
 // type flag. For scope=embedding we can't tell them apart at the API level like
 // openai/google/openrouter/gateway do, so we trim by model-name heuristic below
 // — otherwise the embedding picker offers chat models that just fail to embed.
-const MIXED_MODEL_LIST_PROVIDERS = new Set(['ollama', 'openai-compatible', 'locca', 'requesty']);
+const MIXED_MODEL_LIST_PROVIDERS = new Set(['ollama', 'openai-compatible', 'locca', 'requesty', 'orcarouter']);
 
 // Heuristic: does this model id look like a text-embedding model? Embedding
 // model naming is conventional — almost all carry "embed", the rest come from a
@@ -487,6 +495,21 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
           headers: { 'Authorization': `Bearer ${apiKey}` },
         });
         if (!r.ok) throw new Error(`Requesty HTTP ${r.status}`);
+        const data = (await r.json()) as { data?: unknown };
+        models = Array.isArray(data?.data)
+          ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string').sort()
+          : [];
+        break;
+      }
+
+      case 'orcarouter': {
+        const apiKey = resolveKey('ORCAROUTER_API_KEY');
+        if (!apiKey) throw new Error('ORCAROUTER_API_KEY not set');
+        const r = await fetch(`${llmProvider.DEFAULT_ORCAROUTER_BASE_URL}/models`, {
+          signal: ctrl.signal,
+          headers: { 'Authorization': `Bearer ${apiKey}` },
+        });
+        if (!r.ok) throw new Error(`OrcaRouter HTTP ${r.status}`);
         const data = (await r.json()) as { data?: unknown };
         models = Array.isArray(data?.data)
           ? (data.data as { id?: unknown }[]).map((m) => m?.id).filter((id): id is string => typeof id === 'string').sort()

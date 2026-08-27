@@ -30,7 +30,7 @@ import {
   normalizeNavidromeCredentials,
   type LlmProbeInput,
 } from '../schemas/onboarding.js';
-import { DEFAULT_LOCCA_BASE_URL, DEFAULT_REQUESTY_BASE_URL, OPENROUTER_APP_HEADERS, noThinkFetch } from '../llm/provider.js';
+import { DEFAULT_LOCCA_BASE_URL, DEFAULT_REQUESTY_BASE_URL, DEFAULT_ORCAROUTER_BASE_URL, OPENROUTER_APP_HEADERS, noThinkFetch } from '../llm/provider.js';
 import * as settings from '../settings.js';
 import * as jingles from '../broadcast/jingles.js';
 import { queue } from '../broadcast/queue.js';
@@ -124,6 +124,13 @@ router.post('/onboarding/test-llm', requireAdmin, validateBody(llmProbeSchema), 
         // call goes through createOpenAI like openai-compatible, but with the
         // hosted endpoint. Model ids use provider/model naming (openai/gpt-4o-mini).
         m = createOpenAI({ baseURL: DEFAULT_REQUESTY_BASE_URL, apiKey: apiKey || 'unused' }).chat(model);
+        break;
+      case 'orcarouter':
+        // OrcaRouter is an OpenAI-compatible gateway at a fixed base URL; the
+        // test call goes through createOpenAI like requesty. Model ids use
+        // provider/model naming (anthropic/claude-sonnet-4.6) or the named
+        // router `orcarouter/auto`.
+        m = createOpenAI({ baseURL: DEFAULT_ORCAROUTER_BASE_URL, apiKey: apiKey || 'unused' }).chat(model);
         break;
       case 'ollama':
       default: {

@@ -28,6 +28,7 @@ import {
   probeAnthropic,
   probeOpenRouter,
   probeRequesty,
+  probeOrcarouter,
   type ProbeResult,
 } from '../probes.ts';
 import { p, pc, accent, exitIfCancelled, banner, header, ok, warn, err, info, muted } from '../ui.ts';
@@ -35,7 +36,7 @@ import { p, pc, accent, exitIfCancelled, banner, header, ok, warn, err, info, mu
 // Keep in step with the controller's LLM_PROVIDERS (controller/src/settings.ts).
 // `locca` shares the openai-compatible transport but is keyless with a default
 // host base URL, so it groups with the local providers rather than the cloud set.
-type CloudProvider = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'openrouter' | 'requesty' | 'gateway';
+type CloudProvider = 'anthropic' | 'openai' | 'google' | 'deepseek' | 'openrouter' | 'requesty' | 'orcarouter' | 'gateway';
 type LlmProvider = 'ollama' | 'openai-compatible' | 'locca' | CloudProvider;
 
 // Cloud providers whose API key the AI SDK reads from a process.env var.
@@ -48,6 +49,7 @@ const CLOUD_ENV_VAR: Record<CloudProvider, string> = {
   deepseek: 'DEEPSEEK_API_KEY',
   openrouter: 'OPENROUTER_API_KEY',
   requesty: 'REQUESTY_API_KEY',
+  orcarouter: 'ORCAROUTER_API_KEY',
   gateway: 'AI_GATEWAY_API_KEY',
 };
 
@@ -301,6 +303,7 @@ const LLM_PROVIDER_OPTIONS: Array<{ value: LlmProvider | 'later'; label: string;
   { value: 'deepseek',          label: 'DeepSeek',                         hint: 'needs DEEPSEEK_API_KEY' },
   { value: 'openrouter',        label: 'OpenRouter — multi-vendor',        hint: 'needs OPENROUTER_API_KEY' },
   { value: 'requesty',          label: 'Requesty — multi-vendor',          hint: 'needs REQUESTY_API_KEY' },
+  { value: 'orcarouter',        label: 'OrcaRouter — multi-vendor',        hint: 'needs ORCAROUTER_API_KEY' },
   { value: 'gateway',           label: 'Vercel AI Gateway — multi-vendor', hint: 'needs AI_GATEWAY_API_KEY' },
   { value: 'later',             label: 'Other / configure later',          hint: 'set it up in the admin UI' },
 ];
@@ -315,6 +318,7 @@ const EXAMPLE_MODEL: Record<Exclude<LlmProvider, 'ollama'>, string> = {
   deepseek: 'deepseek-chat',
   openrouter: 'anthropic/claude-sonnet-4-5',
   requesty: 'openai/gpt-4o-mini',
+  orcarouter: 'orcarouter/auto',
   gateway: 'anthropic/claude-sonnet-4-5',
 };
 
@@ -415,6 +419,7 @@ async function maybeProbeCloud(provider: CloudProvider, label: string, apiKey: s
   if (provider === 'anthropic') return reportProbe(label, () => probeAnthropic({ apiKey }));
   if (provider === 'openrouter') return reportProbe(label, () => probeOpenRouter({ apiKey }));
   if (provider === 'requesty') return reportProbe(label, () => probeRequesty({ apiKey }));
+  if (provider === 'orcarouter') return reportProbe(label, () => probeOrcarouter({ apiKey }));
 }
 
 // Setting COMPOSE_PROFILES in .env is what brings the sidecar up on subsequent

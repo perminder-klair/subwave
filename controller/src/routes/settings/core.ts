@@ -194,6 +194,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         DEEPSEEK_API_KEY: !!process.env.DEEPSEEK_API_KEY,
         OPENROUTER_API_KEY: !!process.env.OPENROUTER_API_KEY,
         REQUESTY_API_KEY: !!process.env.REQUESTY_API_KEY,
+        ORCAROUTER_API_KEY: !!process.env.ORCAROUTER_API_KEY,
         AI_GATEWAY_API_KEY: !!process.env.AI_GATEWAY_API_KEY,
         SEARCH_API_KEY: !!process.env.SEARCH_API_KEY,
         EMBEDDING_API_KEY: !!process.env.EMBEDDING_API_KEY,
