@@ -1,11 +1,12 @@
 // Scheduler — drives autonomous behaviour:
 //   - refreshes the auto-playlist file Liquidsoap falls back to
 //   - the TALK TICK: one per-minute cron over the slot table in
-//     talk-scheduler.ts, which owns every scheduled spoken segment — the hourly
-//     time check (:00, in character), station IDs (:15/:30/:45, varied by
-//     frequency), guest-show banter (:20/:50 windows) and programme beats — as
-//     well as the unconditional :00 session roll
-//   - agentic segment tick (weather, news, now-playing digs, facts, web search) every 5 min
+//     talk-scheduler.ts, which owns every spoken segment the station produces on
+//     its own — the hourly time check (:00, in character), station IDs
+//     (:15/:30/:45, varied by frequency), guest-show banter (:20/:50 windows),
+//     the programme beats, and the segment director (weather, news,
+//     now-playing digs, facts, web search) filling the minutes none of them
+//     want — plus the unconditional :00 session roll
 //   - maintenance: auto-playlist refresh, voice/WAL cleanup, takeover expiry,
 //     the nightly doctor and the operator's own skill crons. These have no
 //     arbitration concern and stay on crons of their own.
@@ -670,27 +671,33 @@ function banterEligible(now: Date): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// SEGMENT TICK
+// SEGMENT DIRECTOR
 // Hands a snapshot of the moment and a set of real-world data tools to the
 // segment-director agent (skills/_agent.js), which decides whether to air one
 // between-track segment (weather / news / now-playing dig / fact / artist news) or to
 // stay silent. The same agent also backs the /dj/skill manual-override route
 // (runCapability), forced to one capability.
+//
+// It is the talk table's one FILL row (#1500): offered every fifth minute, with
+// no wall-clock placement of its own, and it stands down on any minute a
+// scheduled row wants. Its per-kind cooldowns and frequency floor stay inside
+// skills/_agent.ts — the table decides WHETHER it is offered the minute, never
+// how often it should speak.
 // ---------------------------------------------------------------------------
 
-async function skillsTick() {
-  if (!autoVoiceAllowed()) return;  // station voice is off — music only (manual /dj/skill still runs)
-  if (programme.onAir()) return;  // a programme episode owns its talk moments — the director stands down
-  if (!djCallsAllowed()) return;  // nobody listening — skip the segment director
-  if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
-  try {
-    await withTrace({ kind: 'segment' }, async () => {
-      const ctx = await getFullContext();
-      await agenticTick(ctx);
-    });
-  } catch (err) {
-    queue.log('error', `Segment tick failed: ${err.message}`);
-  }
+function segmentEligible(): boolean {
+  if (!autoVoiceAllowed()) return false;  // station voice is off — music only (manual /dj/skill still runs)
+  if (programme.onAir()) return false;  // a programme episode owns its talk moments — the director stands down
+  if (!djCallsAllowed()) return false;  // nobody listening — skip the segment director
+  if (!optionalSegmentsAllowed()) return false;  // over the daily token budget — mute optional segments
+  return true;
+}
+
+async function runSegmentTick() {
+  await withTrace({ kind: 'segment' }, async () => {
+    const ctx = await getFullContext();
+    await agenticTick(ctx);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -769,20 +776,20 @@ export async function runStationId({ atNextTrack = false } = {}) {
 
 // ---------------------------------------------------------------------------
 // TALK TICK
-// The one cron that owns every SCHEDULED spoken segment — hourly check,
-// programme beats, banter, idents. They compete for one scarce resource (the
-// listener's ear), so they are rows in one table (talk-scheduler.ts) driven by
-// one per-minute tick, rather than four crons coordinating implicitly through
-// hand-partitioned minutes (#1500).
+// The one cron that owns every spoken segment the station produces on its own —
+// hourly check, programme beats, banter, idents, and the segment director
+// filling the gaps. They compete for one scarce resource (the listener's ear),
+// so they are rows in one table (talk-scheduler.ts) driven by one per-minute
+// tick, rather than five crons coordinating implicitly through hand-partitioned
+// minutes (#1500).
 //
 // What this tick does NOT do:
 //   - decide eligibility. Every gate still resolves through its own policy
 //     module at fire time (talkEligible below); the table carries placement, not
 //     policy, and a second copy of a gate here would be the bug.
-//   - schedule the segment director. skills/_agent.ts keeps its own `*/5` cron
-//     and its own cooldowns/floor — folding it in is #1500 PR 3.
-//   - arbitrate. No row loses a slot to another one yet; the windows in the
-//     table are today's exact firing minutes. Turning that on is PR 2.
+//   - decide how OFTEN the segment director should speak. It is a row here, so
+//     the table decides whether it is offered a minute at all; its per-kind
+//     cooldowns and frequency floor stay in skills/_agent.ts.
 //
 // Everything below traps its own errors: node-cron doesn't catch async throws,
 // and where a throw used to cost one cron its own tick it would now cost the
@@ -843,6 +850,7 @@ function talkEligible(kind: TalkKind, now: Date, rolled: SessionRoll | null): bo
     return true;
   }
   if (kind === 'banter') return banterEligible(now);
+  if (kind === 'segment') return segmentEligible();
   // Programme beats carry no frequency/listener/budget gate of their own — a
   // planned episode's beats are the show. `dueBeat` (the row's external slot)
   // has already said one is due.
@@ -865,6 +873,9 @@ async function runTalkSlot(plan: Extract<TalkPlan, { act: 'fire' }>) {
       case 'banter':
         await runBanter();
         return;
+      case 'segment':
+        await runSegmentTick();
+        return;
       case 'programme': {
         const ctx = await getFullContext();
         if (plan.slot === 'feature') await programme.featureTick(queue, ctx);
@@ -883,6 +894,7 @@ const TALK_FAILURE_LABEL: Record<TalkKind, (slot: string) => string> = {
   hourly: () => 'Hourly check',
   'station-id': () => 'Station ID',
   banter: () => 'Banter',
+  segment: () => 'Segment tick',
   programme: slot => `Programme ${slot} tick`,
 };
 
@@ -1176,18 +1188,13 @@ export function startScheduler() {
   // Auto-playlist refresh, every AUTO_QUEUE_REFRESH_MINUTES (default 60)
   cron.schedule(`*/${config.show.autoQueueRefreshMinutes} * * * *`, refreshAutoPlaylist);
 
-  // Every scheduled spoken segment — the hourly check at :00, idents at
-  // :15/:30/:45, banter's :20/:50 windows and the programme beats — plus the
+  // Every spoken segment the station produces on its own — the hourly check at
+  // :00, idents at :15/:30/:45, banter's :20/:50 windows, the programme beats,
+  // and the segment director filling the minutes none of them want — plus the
   // unconditional :00 session roll. One tick over one slot table (see talkTick
-  // and talk-scheduler.ts) rather than four crons hand-partitioning the hour
+  // and talk-scheduler.ts) rather than five crons hand-partitioning the hour
   // between themselves (#1500).
   cron.schedule('* * * * *', talkTick);
-
-  // Segment tick every 5 minutes — the segment-director agent decides whether
-  // to air a segment; per-kind cooldowns and the frequency floor live in it.
-  // Deliberately NOT a talk-table row yet: it is the one talker with no
-  // wall-clock slot at all, and folding it in is #1500 PR 3.
-  cron.schedule('*/5 * * * *', skillsTick);
 
   // Takeover expiry sweep — cheap (no LLM unless an expiry actually reverts).
   cron.schedule('*/5 * * * *', overrideJanitor);

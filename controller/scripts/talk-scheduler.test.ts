@@ -30,6 +30,12 @@
 //  - The frequency ladder answers per SLOT. `[15,30,45].includes(m)` reads a
 //    retry minute as no slot at all, which would silently cancel every retry
 //    the windows exist to allow.
+//  - A FILL ROW IS NOT A SLOT ROW. The segment director has no wall-clock
+//    placement, so it stands down whenever a scheduled row wants the minute —
+//    including one that is merely waiting, since a filler that speaks now
+//    resets the quiet gap and pushes that row's retry out. It is the one row
+//    exempt from the yield-only-to-a-firing-row rule, and it is exempt for the
+//    same reason the rule exists: it cannot be starved by yielding.
 //  - Per-row `air` and `clock` survive, and nothing is asked before it is due.
 //
 // STATE_DIR is redirected at a throwaway dir BEFORE the first import so
@@ -349,6 +355,101 @@ test('a programme beat outranks the hourly check, because a beat cannot retry', 
 });
 
 // ---------------------------------------------------------------------------
+// THE FILL ROW
+// ---------------------------------------------------------------------------
+
+test('the segment director is offered the same minutes its cron fired on', () => {
+  const r = makeReplay({ eligible: kind => kind === 'segment' });
+  r.hour();
+  assert.deepEqual(r.minutesOf('segment'), [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]);
+  assert.equal(talkSlot('segment').role, 'fill');
+  // Its cadence is the table's; how often it actually SPEAKS stays in
+  // skills/_agent.ts, so the row carries no gap of its own.
+  assert.equal(talkSlot('segment').minGapMs, 0);
+});
+
+test('the filler stands down for a slot row that is merely WAITING, not just firing', () => {
+  // The asymmetry, and the whole point of folding it in. A talk break at :14
+  // leaves the :15 ident waiting on its three-minute gap. Under its own cron the
+  // director fired at :15 anyway, reset the gap, and pushed the ident to :18 —
+  // one of the two off-clock talkers banter-policy.ts names as able to starve a
+  // slot. Now it stands down and the ident takes :17.
+  const r = makeReplay({
+    lastTalkBreakAt: clockAt(14),
+    feedback: true,
+    eligible: kind => kind === 'segment' || kind === 'station-id',
+  });
+  for (let m = 15; m <= 20; m++) r.tick(at(m));
+  assert.deepEqual(r.minutesOf('station-id'), [17], 'the ident is no longer pushed out');
+  // :15 was contested and yielded; :20 is genuinely free — the ident has
+  // spoken and claimed its slot, so nothing wants that minute any more. The
+  // filler stands down for a contested MINUTE, not for an open window.
+  assert.deepEqual(r.minutesOf('segment'), [20]);
+});
+
+test("a contested minute never reaches the filler's own gates", () => {
+  // Gate before generation, applied to arbitration: the filler's four gates are
+  // cheap, but asking them on a minute it cannot have is the same shape of
+  // waste as letting the LLM write a script the dispatcher throws away.
+  const asked: TalkKind[] = [];
+  const r = makeReplay({ eligible: kind => { asked.push(kind); return true; } });
+  r.tick(at(15));  // the ident's chance opens
+  assert.deepEqual(asked, ['station-id'], 'the filler is not even asked');
+  asked.length = 0;
+  // :10 and :40 are the only stride ticks no slot row's WINDOW can reach at
+  // all, so they are free whatever else has happened this hour.
+  r.tick(at(10));
+  assert.deepEqual(asked, ['segment']);
+});
+
+test('the filler yields to a firing row, and takes the minutes nothing else wants', () => {
+  // A clean, chatty hour: the filler loses the six opening minutes and keeps
+  // the six the scheduled rows have finished with. That halving IS the fix —
+  // those six were exactly the minutes it used to double-talk on — and the
+  // count is pinned because it is the real cost of this PR.
+  const r = makeReplay({ feedback: true });
+  r.hour();
+  assert.deepEqual(r.minutesOf('hourly'), [0]);
+  assert.deepEqual(r.minutesOf('station-id'), [15, 30, 45]);
+  assert.deepEqual(r.minutesOf('banter'), [20, 50]);
+  assert.deepEqual(r.minutesOf('segment'), [5, 10, 25, 35, 40, 55]);
+  // Every minute has at most one talker — the invariant the whole table exists
+  // for, now that five kinds share it.
+  const minutes = r.rang.map(x => x.minute);
+  assert.equal(new Set(minutes).size, minutes.length, 'two segments aired in one minute');
+});
+
+test('deferring to an OPEN window rather than a wanted minute would switch the filler off', () => {
+  // Why the rule is "a slot row wants this minute" and not "a slot row's window
+  // is open". With ten-minute windows the scheduled rows cover 50 minutes of
+  // the hour, so the second reading leaves the director :10 and :40 — not
+  // standing down, switched off. A row that has already fired, or is ineligible,
+  // produces no plan and wants nothing.
+  const covered = new Set<number>();
+  for (const row of TALK_SLOTS) {
+    if (row.opens === 'external' || row.opens === 'any') continue;
+    for (const open of row.opens) {
+      for (let i = 0; i < row.windowMinutes; i++) covered.add(open + i);
+    }
+  }
+  const strideTicks = [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55];
+  assert.deepEqual(strideTicks.filter(m => !covered.has(m)), [10, 40], 'the reading NOT taken');
+  const r = makeReplay({ feedback: true });
+  r.hour();
+  assert.equal(r.minutesOf('segment').length, 6, 'the reading taken');
+});
+
+test('the filler never narrates its own stand-down', () => {
+  // A filler that did not fill is not an event; a SCHEDULED segment that
+  // quietly did not happen is #1419, and those still log. One booth-log line
+  // per contested minute would bury the ones that matter.
+  const r = makeReplay({ feedback: true });
+  r.hour();
+  assert.equal(r.logs.filter(l => l.startsWith('[segment]')).length, 0);
+  assert.deepEqual(r.logs, [], 'a clear hour explains nothing at all');
+});
+
+// ---------------------------------------------------------------------------
 // IN-FLIGHT TALK
 // ---------------------------------------------------------------------------
 
@@ -563,15 +664,19 @@ test('policy is asked only for a row that is open and unfired', () => {
   // opens at :15.
   r.tick(at(12));
   assert.deepEqual(asked, [], 'a closed window must not reach a policy module');
-  // :15 opens the ident row and nothing else.
+  // :15 opens the ident row, and a slot row wanting the minute stops the
+  // filler's gates being asked at all (see the fill-row tests).
   r.tick(at(15));
   assert.deepEqual(asked, ['station-id']);
-  // Second tick on the same minute: the slot is claimed, so the gates are not
-  // re-asked (and the segment is not re-aired).
+  // Second tick on the same minute: the ident's slot is claimed, so its gates
+  // are not re-asked and it does not speak twice. (The guard is per ROW, not
+  // per minute — with the ident's chance taken, a repeat tick would offer that
+  // minute to the filler. node-cron fires a minute once, so this is only ever
+  // the shape of the claim, not a case the station reaches.)
   asked.length = 0;
   r.tick(at(15));
-  assert.deepEqual(asked, []);
-  assert.equal(r.rang.length, 1);
+  assert.ok(!asked.includes('station-id'), 'a claimed slot is not re-asked');
+  assert.deepEqual(r.minutesOf('station-id'), [15], 'and does not air twice');
 });
 
 test('the session roll is not in the table', () => {

@@ -44,7 +44,7 @@ import {
 // THE SLOT TABLE
 // ---------------------------------------------------------------------------
 
-export type TalkKind = 'hourly' | 'programme' | 'banter' | 'station-id';
+export type TalkKind = 'hourly' | 'programme' | 'banter' | 'station-id' | 'segment';
 
 // Which clock a row's placement is a fact ABOUT. Two clocks coexist on purpose
 // and a unified table must not collapse them: slot minutes run on PROCESS time
@@ -61,13 +61,29 @@ export type TalkClock = 'process' | 'station';
 // through the voice queue. Per-row, never unified away.
 export type TalkAir = 'immediate' | 'next-track';
 
+// What a row IS, which decides what it may take the minute from.
+//
+//   'slot' — a scheduled chance. It owns its minutes, it yields only to a row
+//            that is actually FIRING, and when it is held it says so.
+//   'fill' — opportunistic. It has no scheduled chance to lose, so it stands
+//            down whenever any slot row WANTS the minute (firing or waiting),
+//            and it does so silently: "the filler did not fill this minute" is
+//            not an event, where a scheduled segment quietly not happening is
+//            exactly the #1419 failure worth logging.
+//
+// The asymmetry is the point. A slot row yielding to a merely-open row would
+// let one row sit on its window starving everything beneath it; a fill row
+// cannot be starved by yielding, because another chance is one stride away.
+export type TalkRole = 'slot' | 'fill';
+
 export type TalkSlot = {
   kind: TalkKind;
-  // Minutes at which a window OPENS, or 'external' for a row whose placement is
+  // Minutes at which a window OPENS. 'external' for a row whose placement is
   // computed elsewhere (programme beats, which resolve on the station clock via
-  // programme.dueBeat()). The caller supplies external slots through the
-  // `externalSlot` resolver.
-  opens: readonly number[] | 'external';
+  // programme.dueBeat(), supplied through the `externalSlot` resolver), or 'any'
+  // for a row with no scheduled minutes at all — every tick it is sampled on is
+  // its own chance.
+  opens: readonly number[] | 'external' | 'any';
   // How long a window stays open for, in minutes. 1 means "this minute only",
   // which is exactly the old fixed-instant cron.
   windowMinutes: number;
@@ -76,6 +92,7 @@ export type TalkSlot = {
   // every row except banter carries today.
   minGapMs: number;
   air: TalkAir;
+  role: TalkRole;
   // Who wins the minute when two rows would both fire. Lower is stronger; ties
   // break on table order. The ordering principle, so a new row can be placed
   // without guessing: A ROW THAT CANNOT RETRY OUTRANKS A ROW THAT CAN, and
@@ -127,6 +144,7 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     windowMinutes: 1,
     minGapMs: 0,
     air: 'immediate',
+    role: 'slot',
     priority: 1,
     clock: 'station',
     stride: 5,
@@ -148,6 +166,7 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     windowMinutes: 10,
     minGapMs: 3 * 60_000,
     air: 'immediate',
+    role: 'slot',
     priority: 2,
     clock: 'process',
     stride: 1,
@@ -162,6 +181,7 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     windowMinutes: BANTER_WINDOW_MINUTES,
     minGapMs: BANTER_MIN_GAP_MS,
     air: 'immediate',
+    role: 'slot',
     priority: 3,
     clock: 'process',
     stride: 1,
@@ -183,9 +203,36 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     windowMinutes: 10,
     minGapMs: 3 * 60_000,
     air: 'next-track',
+    role: 'slot',
     priority: 4,
     clock: 'process',
     stride: 1,
+    oneFirePerSlot: true,
+  },
+  // The segment director — weather, news, a now-playing dig, a fact. The only
+  // talker with no wall-clock placement at all: it is offered every fifth
+  // minute and decides for itself whether it has anything to say. That is why
+  // it is a FILL row rather than a slot, and why it carries no gap of its own —
+  // its cooldowns and frequency floor live in skills/_agent.ts, which is where
+  // they belong (a second copy here would be the bug this table exists to
+  // avoid).
+  //
+  // Before #1500 it was the loudest uncoordinated voice on the station: a
+  // `*/5` cron with a floor of ZERO on `aggressive`, ticking on :00, :15, :20,
+  // :30, :45 and :50 — every opening minute the other rows own. It is named in
+  // banter-policy.ts as one of the two things that could air off-clock and
+  // starve a slot, and #1419 is half its doing. Standing it down on the minutes
+  // another row wants is the second half of that fix.
+  {
+    kind: 'segment',
+    opens: 'any',
+    windowMinutes: 1,
+    minGapMs: 0,
+    air: 'immediate',
+    role: 'fill',
+    priority: 5,
+    clock: 'process',
+    stride: 5,
     oneFirePerSlot: true,
   },
 ];
@@ -202,6 +249,9 @@ export function talkSlot(kind: TalkKind, slots: readonly TalkSlot[] = TALK_SLOTS
 // by wall-clock hour below.
 export function openMinuteFor(row: TalkSlot, minute: number): number | null {
   if (row.opens === 'external') return null;
+  // A row with no scheduled minutes opens a fresh chance on every tick it is
+  // sampled on — the stride is its whole schedule.
+  if (row.opens === 'any') return minute;
   for (const open of row.opens) {
     if (minute >= open && minute < open + row.windowMinutes) return open;
   }
@@ -243,7 +293,7 @@ export function talkGap(p: { nowMs: number; lastTalkBreakAt: number; needMs: num
 }
 
 function slotLabel(row: TalkSlot, slot: string): string {
-  return row.opens === 'external' ? slot : `:${slot}`;
+  return row.opens === 'external' ? slot : `:${slot}`;  // 'any' labels by its minute, like a fixed row
 }
 
 // Whether a held row gets another minute at all. A fixed row does until its
@@ -353,6 +403,10 @@ export type TalkTickInput = {
 // stays quiet.
 function waitPlan(row: TalkSlot, slot: string, slotKey: string, reason: TalkWaitReason, p: TalkTickInput): TalkPlan {
   const base = { kind: row.kind, act: 'wait' as const, slot, slotKey, reason };
+  // A fill row standing down is its normal operating mode, not an exception —
+  // it had no scheduled chance to lose. Narrating it would put a line in the
+  // booth log on most ticks and bury the ones that matter.
+  if (row.role === 'fill') return { ...base, log: null, markLogged: null };
   if (!canRetry(row, slot, p.now.getMinutes())) {
     return { ...base, log: missedLine(row, slot, reason), markLogged: null };
   }
@@ -408,16 +462,56 @@ export function talkSlotPlan(row: TalkSlot, p: TalkTickInput): TalkPlan | null {
 // #1419 was, one layer up.
 export function talkTickPlan(p: TalkTickInput): TalkPlan[] {
   const rows = p.slots ?? TALK_SLOTS;
-  const out: { row: TalkSlot; plan: TalkPlan; index: number }[] = [];
-  rows.forEach((row, index) => {
-    const plan = talkSlotPlan(row, p);
-    if (plan) out.push({ row, plan, index });
-  });
+  const planOf = (role: TalkRole) => {
+    const found: { row: TalkSlot; plan: TalkPlan; index: number }[] = [];
+    rows.forEach((row, index) => {
+      if (row.role !== role) return;
+      const plan = talkSlotPlan(row, p);
+      if (plan) found.push({ row, plan, index });
+    });
+    return found;
+  };
+
+  // Slot rows first, and fill rows are only PLANNED if none of them wanted the
+  // minute. A fill row stands down whenever a slot row wants it — firing, or
+  // waiting inside its window for a gap to clear. Waiting counts because a
+  // filler that speaks now resets the quiet gap and pushes that row's retry
+  // further out, possibly past its window: the harm is the same whether the
+  // scheduled segment is about to air or about to be allowed to.
+  //
+  // "Wants the minute" is deliberately narrower than "has an open window". With
+  // ten-minute windows the slot rows cover 50 of the 60 minutes, so deferring
+  // to open WINDOWS would leave the segment director two ticks an hour instead
+  // of six — it would not be standing down, it would be switched off. A row
+  // that has already fired its slot, or is ineligible this minute, produces no
+  // plan and wants nothing.
+  //
+  // Asking in two passes rather than filtering afterwards keeps the laziness
+  // the whole planner is built on: on a contested minute the filler's own gates
+  // are never consulted, the same reason eligibility is resolved per open row
+  // rather than up front.
+  const out = planOf('slot');
+  if (!out.length) out.push(...planOf('fill'));
   // Stable: equal priorities keep table order, so the table itself stays the
   // one place the running order is written down.
   out.sort((a, b) => (a.row.priority - b.row.priority) || (a.index - b.index));
+  const contenders = out;
+
+  // ONE TALKER PER MINUTE. Where the old crons partitioned minutes by hand so
+  // two segments could not be scheduled together (#310), the table lets windows
+  // overlap — an ident's :15 window now reaches into banter's :20 one — and
+  // resolves the overlap here instead. The loser does NOT lose its slot: it
+  // waits inside its own window and takes the next clear minute, which is
+  // #1419's postpone-don't-cancel rule generalised from banter to every row.
+  //
+  // A row yields only to a row that is FIRING, never to one that is merely
+  // open. Yielding to an open-but-blocked row would let a high-priority row sit
+  // on its whole window holding everything below it — the same starvation
+  // #1419 was, one layer up. (A fill row is the deliberate exception above, and
+  // is exempt from the starvation argument for the same reason: it has no slot
+  // to lose.)
   let speaker: TalkKind | null = null;
-  return out.map(({ row, plan }) => {
+  return contenders.map(({ row, plan }) => {
     if (plan.act !== 'fire') return plan;
     if (!speaker) { speaker = row.kind; return plan; }
     return waitPlan(row, plan.slot, plan.slotKey, { held: 'yield', to: speaker }, p);
