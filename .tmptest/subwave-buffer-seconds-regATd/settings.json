@@ -1,0 +1,470 @@
+{
+  "jingleRatio": 30,
+  "crossfadeDuration": 10,
+  "maxTrackSeconds": 0,
+  "archive": {
+    "enabled": false,
+    "bitrate": 128,
+    "retentionDays": 30
+  },
+  "stream": {
+    "opusEnabled": false,
+    "opusBitrate": 96,
+    "flacEnabled": false,
+    "aacEnabled": false,
+    "aacBitrate": 192,
+    "bitrate": 192,
+    "oggIcyMetadata": true,
+    "bufferSeconds": 45,
+    "idleWhenEmpty": false,
+    "idleAfterMinutes": 10,
+    "maxListeners": 100
+  },
+  "loudness": {
+    "targetLufs": -14,
+    "maxBoostDb": 6,
+    "source": "replaygain-then-measured"
+  },
+  "weather": {
+    "lat": 30.7333,
+    "lng": 76.7794,
+    "locationName": "Punjab",
+    "onAirLocation": "",
+    "units": "metric"
+  },
+  "djPrompt": "",
+  "djPrompts": [],
+  "activeDjPromptId": "",
+  "djHouseRules": "",
+  "djSpeakClock": true,
+  "station": "SUB/WAVE",
+  "stationDescription": "",
+  "timezone": "",
+  "locale": "en-GB",
+  "theme": {
+    "active": "classic-light"
+  },
+  "festivals": [
+    {
+      "month": 1,
+      "day": 1,
+      "name": "New Year's Day",
+      "mood": "celebratory"
+    },
+    {
+      "month": 2,
+      "day": 14,
+      "name": "Valentine's Day",
+      "mood": "romantic"
+    },
+    {
+      "month": 3,
+      "day": 17,
+      "name": "St. Patrick's Day",
+      "mood": "celebratory"
+    },
+    {
+      "month": 4,
+      "day": 13,
+      "name": "Vaisakhi",
+      "mood": "festival",
+      "windowDays": 1
+    },
+    {
+      "month": 5,
+      "day": 1,
+      "name": "May Day",
+      "mood": "festival"
+    },
+    {
+      "month": 6,
+      "day": 21,
+      "name": "Summer Solstice",
+      "mood": "celebratory"
+    },
+    {
+      "month": 10,
+      "day": 31,
+      "name": "Halloween",
+      "mood": "festival"
+    },
+    {
+      "month": 11,
+      "day": 1,
+      "name": "Diwali",
+      "mood": "festival",
+      "windowDays": 3
+    },
+    {
+      "month": 11,
+      "day": 5,
+      "name": "Bonfire Night",
+      "mood": "festival"
+    },
+    {
+      "month": 12,
+      "day": 21,
+      "name": "Winter Solstice",
+      "mood": "reflective"
+    },
+    {
+      "month": 12,
+      "day": 25,
+      "name": "Christmas",
+      "mood": "celebratory",
+      "windowDays": 1
+    },
+    {
+      "month": 12,
+      "day": 26,
+      "name": "Boxing Day",
+      "mood": "celebratory"
+    },
+    {
+      "month": 12,
+      "day": 31,
+      "name": "New Year's Eve",
+      "mood": "celebratory"
+    }
+  ],
+  "moods": [
+    {
+      "name": "energetic",
+      "clapPrompt": "high-energy, upbeat, powerful music with a strong driving beat"
+    },
+    {
+      "name": "calm",
+      "clapPrompt": "calm, peaceful, soft, soothing, gentle music"
+    },
+    {
+      "name": "reflective",
+      "clapPrompt": "reflective, introspective, melancholic, emotional music"
+    },
+    {
+      "name": "celebratory",
+      "clapPrompt": "joyful, festive, celebratory party music"
+    },
+    {
+      "name": "romantic",
+      "clapPrompt": "romantic, intimate, tender, loving music"
+    },
+    {
+      "name": "spiritual",
+      "clapPrompt": "spiritual, devotional, sacred, meditative music"
+    },
+    {
+      "name": "focus",
+      "clapPrompt": "minimal, unobtrusive, ambient instrumental background music for concentration"
+    },
+    {
+      "name": "workout",
+      "clapPrompt": "intense, pounding, adrenaline-pumping workout music"
+    },
+    {
+      "name": "driving",
+      "clapPrompt": "steady, groovy, mid-tempo cruising music for a road trip"
+    },
+    {
+      "name": "cooking",
+      "clapPrompt": "light, cheerful, breezy, feel-good easy-listening music"
+    },
+    {
+      "name": "rainy",
+      "clapPrompt": "mellow, wistful, cozy music for a rainy day"
+    },
+    {
+      "name": "sunny",
+      "clapPrompt": "bright, warm, sunny, feel-good summer music"
+    },
+    {
+      "name": "night",
+      "clapPrompt": "dark, atmospheric, moody late-night music"
+    },
+    {
+      "name": "morning",
+      "clapPrompt": "fresh, gentle, optimistic early-morning music"
+    },
+    {
+      "name": "evening",
+      "clapPrompt": "smooth, warm, relaxed evening music"
+    },
+    {
+      "name": "festival",
+      "clapPrompt": "big, anthemic, euphoric festival crowd music"
+    },
+    {
+      "name": "cultural",
+      "clapPrompt": "traditional folk music with regional acoustic instruments"
+    }
+  ],
+  "moodSchedule": {
+    "early-morning": "morning",
+    "morning": "morning",
+    "midday": "energetic",
+    "afternoon": "focus",
+    "drive-time": "driving",
+    "evening": "evening",
+    "late-evening": "night",
+    "after-hours": "reflective"
+  },
+  "weatherMoods": {
+    "clear": "sunny",
+    "cloudy": "",
+    "foggy": "rainy",
+    "rainy": "rainy",
+    "snowy": "reflective",
+    "stormy": "rainy"
+  },
+  "ui": {
+    "boothBuddy": false,
+    "skin": "classic",
+    "tuneInOverlay": true
+  },
+  "privacy": {
+    "privatePlayer": false,
+    "listenerAuth": false,
+    "password": "",
+    "publishPersonaSouls": false
+  },
+  "requests": {
+    "enabled": true,
+    "maxPending": 6,
+    "globalHourlyCap": 30,
+    "repeatCooldownMin": 120,
+    "cooldownSec": 60,
+    "perIpHourlyCap": 8,
+    "onePendingPerIp": true
+  },
+  "personas": [
+    {
+      "id": "p_default0",
+      "name": "Marlowe",
+      "tagline": "Late-night company and well-chosen records.",
+      "frequency": "moderate",
+      "scriptLength": "concise",
+      "soul": "warm, slightly understated, never corny — late-night BBC 6 Music presenter; observant, dry humour, specific",
+      "language": "",
+      "avatar": "",
+      "tts": {
+        "engine": "piper",
+        "cloudProvider": "openai",
+        "voice": "bm_george",
+        "gainDb": 0,
+        "speed": 1
+      }
+    },
+    {
+      "id": "p_default1",
+      "name": "Wren",
+      "tagline": "Small details, quiet rooms, one good image.",
+      "frequency": "quiet",
+      "scriptLength": "concise",
+      "soul": "thoughtful and a little wistful; finds small details in tracks and rooms; favours one well-chosen image over a list",
+      "language": "",
+      "avatar": "",
+      "tts": {
+        "engine": "piper",
+        "cloudProvider": "openai",
+        "voice": "bf_alice",
+        "gainDb": 0,
+        "speed": 1
+      }
+    },
+    {
+      "id": "p_default2",
+      "name": "Hale",
+      "tagline": "Says less, means more. Leaves space.",
+      "frequency": "moderate",
+      "scriptLength": "concise",
+      "soul": "plainspoken and grounded; says less, means more; would rather leave space than fill it",
+      "language": "",
+      "avatar": "",
+      "tts": {
+        "engine": "piper",
+        "cloudProvider": "openai",
+        "voice": "bm_daniel",
+        "gainDb": 0,
+        "speed": 1
+      }
+    }
+  ],
+  "activePersonaId": "p_default0",
+  "tts": {
+    "enabled": true,
+    "defaultEngine": "piper",
+    "fallback": {
+      "enabled": false,
+      "engine": "piper",
+      "voice": "",
+      "cloudProvider": "openai"
+    },
+    "heavyEnabled": false,
+    "kokoro": {
+      "voice": "bf_isabella",
+      "lang": ""
+    },
+    "chatterbox": {
+      "referenceVoice": ""
+    },
+    "pocketTts": {
+      "voice": "alba"
+    },
+    "cloud": {
+      "enabled": false,
+      "provider": "openai",
+      "model": "gpt-4o-mini-tts",
+      "voice": "alloy",
+      "apiKey": "",
+      "compatApiKey": "",
+      "baseUrl": "",
+      "voiceStability": 0.5,
+      "voiceStyle": 0,
+      "voiceSimilarityBoost": 0.75,
+      "voiceUseSpeakerBoost": true,
+      "temperature": 0.7,
+      "topP": 0.7,
+      "latency": "normal",
+      "compatParams": []
+    },
+    "remote": {
+      "url": ""
+    },
+    "gainDb": {
+      "piper": 0,
+      "kokoro": 0,
+      "chatterbox": 0,
+      "pocket-tts": 0,
+      "cloud": 0,
+      "remote": 0
+    },
+    "speed": {
+      "piper": 1,
+      "kokoro": 1,
+      "chatterbox": 1,
+      "pocket-tts": 1,
+      "cloud": 1,
+      "remote": 1
+    },
+    "corrections": []
+  },
+  "llm": {
+    "provider": "ollama",
+    "model": "",
+    "apiKey": "",
+    "keys": {},
+    "ollamaUrl": "",
+    "providerBaseUrls": {},
+    "baseUrl": "",
+    "reasoning": false,
+    "toolChoice": "required",
+    "numCtx": 16384,
+    "repeatPenalty": 1.15,
+    "pickerAgent": true,
+    "noRepeatWindow": 250,
+    "artistVarietyWindow": 5,
+    "requestWebResolve": false,
+    "agentTimeoutMs": 45000,
+    "pauseWhenEmpty": false,
+    "dailyTokenCap": 0,
+    "budgetSoftPct": 80,
+    "maxOutputTokens": 0,
+    "discoverySteps": 0,
+    "exemptRequests": true,
+    "debugRawRequests": false,
+    "fallback": {
+      "enabled": false,
+      "provider": "ollama",
+      "model": "",
+      "apiKey": "",
+      "ollamaUrl": "",
+      "providerBaseUrls": {},
+      "baseUrl": "",
+      "reasoning": false,
+      "toolChoice": "required",
+      "numCtx": 16384,
+      "repeatPenalty": 1.15,
+      "discoverySteps": 0
+    }
+  },
+  "search": {
+    "provider": "duckduckgo",
+    "apiKey": "",
+    "baseUrl": ""
+  },
+  "embedding": {
+    "enabled": true,
+    "provider": "",
+    "model": "",
+    "providerBaseUrls": {},
+    "baseUrl": "",
+    "ollamaUrl": "",
+    "apiKey": "",
+    "seedCount": 0,
+    "knnNeighbours": 10,
+    "moodVoteThreshold": 0.4,
+    "confidenceThreshold": 0.35,
+    "maxActiveLearningRounds": 3,
+    "audioFusionWeight": 0.5,
+    "batchSize": 25,
+    "enrichment": {
+      "lastfmTags": null,
+      "lyrics": true,
+      "originalYear": true
+    }
+  },
+  "skills": {
+    "enabled": {}
+  },
+  "audio": {
+    "embeddings": false,
+    "vocalActivity": false,
+    "stemCache": false,
+    "stemCacheGb": 15,
+    "analyzeQuietOnly": false,
+    "analyzeQuietMinutes": 10
+  },
+  "transitions": {
+    "pairDrain": true,
+    "stemBlends": false
+  },
+  "sfx": {
+    "enabled": true
+  },
+  "beds": {
+    "enabled": false,
+    "requestIntros": true,
+    "thresholdSec": 12,
+    "crossSec": 6,
+    "tailSec": 3
+  },
+  "silenceTrim": {
+    "enabled": false,
+    "minGapMs": 1500
+  },
+  "webhooks": [],
+  "webhooksPolicy": {
+    "trackPlayListenerGated": false
+  },
+  "scrobble": {
+    "lastfm": {
+      "enabled": false,
+      "apiKey": "",
+      "apiSecret": "",
+      "sessionKey": "",
+      "username": ""
+    },
+    "listenbrainz": {
+      "enabled": false,
+      "userToken": "",
+      "username": "",
+      "baseUrl": ""
+    }
+  },
+  "likes": {
+    "enabled": true,
+    "starInNavidrome": true,
+    "influenceDj": false,
+    "maxTracks": 10,
+    "windowDays": 30
+  }
+}

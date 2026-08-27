@@ -51,15 +51,8 @@ export const BANTER_WINDOW_MINUTES = 10;
 // or a chatty DJ-mode station would never banter.
 export const BANTER_MIN_GAP_MS = 5 * 60_000;
 
-// The window a minute falls in, identified by its opening minute, or null
-// outside both. Kept here rather than read off the talk-slot table because
-// dj-gate's `banter` rung needs it and must not depend on the scheduler: the
-// rung is a frequency question ("does this persona get both slots?"), and it
-// asks per SLOT so a retry minute (:24) reads as the same chance as the minute
-// that opened it (:20) rather than as no chance at all.
-export function banterSlot(minute: number): number | null {
-  for (const slot of BANTER_SLOTS) {
-    if (minute >= slot && minute < slot + BANTER_WINDOW_MINUTES) return slot;
-  }
-  return null;
-}
+// The window arithmetic these three numbers imply is NOT here: it is the talk
+// slot table's, applied identically to every row (talk-scheduler.ts's
+// `openMinuteFor`), and dj-gate's banter rung asks the table the same question
+// the ident rung does. A second copy keyed to banter alone is exactly the drift
+// this file's own history warns about.

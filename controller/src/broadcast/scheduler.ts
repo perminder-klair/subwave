@@ -800,19 +800,37 @@ export async function runStationId({ atNextTrack = false } = {}) {
 const talkFired: Partial<Record<TalkKind, string | null>> = {};
 const talkLogged: Partial<Record<TalkKind, string | null>> = {};
 
-type SessionRoll = Awaited<ReturnType<typeof rollSessionNow>> | null;
+// The :00 session roll's outcome, remembered for the hour it belongs to. The
+// hourly row's window runs to :09, so a check postponed past :00 is resolved on
+// a tick where no roll happened — and the roll's own result is one of its gates
+// (a programme intro aired by the roll stands the generic time check down, the
+// one-talker-per-slot rule of #310). Keyed by hour so a stale result can never
+// gate the NEXT hour's check.
+type SessionRoll = Awaited<ReturnType<typeof rollSessionNow>>;
+let lastRoll: { hourKey: string; roll: SessionRoll } | null = null;
+
+const hourKey = (now: Date) =>
+  `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}-${now.getHours()}`;
 
 // Whether a row that is due this minute may actually fire — the live gates,
 // unchanged and still owned by their own modules. Resolved lazily by the
 // planner, and only for a row whose window is open and unfired.
-function talkEligible(kind: TalkKind, now: Date, rolled: SessionRoll): boolean {
+function talkEligible(kind: TalkKind, now: Date, rolled: SessionRoll | null): boolean {
   if (kind === 'hourly') {
     // A programme show opens its episode with the intro, and that intro owns
     // the top of the show's first hour — so when it aired (in this tick's roll,
     // or minutes ago via the track-start call site) the generic time check
-    // stands down, the same one-talker-per-slot rule as #310. Reads the roll's
-    // own result, which is why the roll runs first and this is asked after it.
-    if (rolled?.ctx && (rolled.introAired || programme.suppressHourly(now))) return false;
+    // stands down, the same one-talker-per-slot rule as #310.
+    //
+    // Asked in two halves, and suppressHourly UNCONDITIONALLY. It used to sit
+    // behind `rolled.ctx &&`, which was harmless while the row fired only at
+    // :00 right after its own roll — but the row now retries to :09, and a
+    // controller that booted at :03 (or whose getFullContext threw) has no roll
+    // to consult and would talk straight over a programme intro. The roll's own
+    // `introAired` stays as the extra signal for the intro that aired seconds
+    // ago in this very tick.
+    if (programme.suppressHourly(now)) return false;
+    if (rolled?.ctx && rolled.introAired) return false;
     if (!shouldFire('hourly', now)) return false;
     if (!djCallsAllowed()) return false;  // nobody listening — stay on the auto playlist
     if (!optionalSegmentsAllowed()) return false;  // over the daily token budget — mute optional segments
@@ -868,6 +886,8 @@ const TALK_FAILURE_LABEL: Record<TalkKind, (slot: string) => string> = {
   programme: slot => `Programme ${slot} tick`,
 };
 
+const pendingTalkOf = (kind: string | null) => (kind ? { kind } : null);
+
 async function talkTick() {
   const now = new Date();
 
@@ -886,15 +906,17 @@ async function talkTick() {
   // the roll leaves it pending and the next track boundary airs it. Normally
   // queue.onTrackStarted has already rolled and aired it a track earlier via
   // its look-ahead, making this call a no-op.
-  const rolled = now.getMinutes() === 0
+  if (now.getMinutes() === 0) {
     // rollSessionNow traps every step of its own, but this tick is now the one
     // cron behind every scheduled segment: a rejection here must not take the
     // rest of the minute — or, unhandled, the process — with it.
-    ? await rollSessionNow({ airHandoff: false }).catch(err => {
+    const roll = await rollSessionNow({ airHandoff: false }).catch(err => {
       queue.log('error', `Session roll failed: ${err.message}`);
       return null;
-    })
-    : null;
+    });
+    lastRoll = roll ? { hourKey: hourKey(now), roll } : null;
+  }
+  const rolled = lastRoll?.hourKey === hourKey(now) ? lastRoll.roll : null;
 
   // A gate that throws used to cost one cron its tick; it would now cost the
   // minute every scheduled segment shares. runTalkSlot traps the segments
@@ -904,6 +926,7 @@ async function talkTick() {
     plans = talkTickPlan({
       now,
       lastTalkBreakAt: queue.getLastTalkBreakAt(),
+      pendingTalk: pendingTalkOf(queue.pendingVoiceKind()),
       eligible: kind => talkEligible(kind, now, rolled),
       externalSlot: kind => (kind === 'programme' ? programme.dueBeat(now) : null),
       fired: talkFired,

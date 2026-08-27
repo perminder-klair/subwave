@@ -1,33 +1,36 @@
-// Pins the TALK SLOT TABLE (broadcast/talk-scheduler.ts) — #1500, PR 1.
+// Pins the TALK SLOT TABLE and its arbitration (broadcast/talk-scheduler.ts) —
+// #1500, PRs 1 and 2.
 //
-// Four crons became one per-minute tick over a table. The whole claim of that
-// PR is that it is BEHAVIOUR-PRESERVING, and per the repo's own rule a
-// refactor that says so has to prove it. So the load-bearing test here is the
-// first one: an independent model of the OLD schedule — the four cron
-// expressions and the frequency rungs, written out by hand — replayed against
-// the real planner, minute by minute, for every rung. If the table ever fires
-// on a minute the old crons didn't (or stops firing on one they did), that test
-// says which minute and which kind.
+// PR 1 merged four talk crons into one per-minute tick over a table, with
+// windows of one minute and no gaps, so the schedule was byte-identical. PR 2
+// turns the table on: real windows, real quiet gaps, one talker per minute, and
+// a stand-down line whatever the reason. That is a deliberate behaviour change,
+// so the tests carry the shape of the change rather than a reproduction of the
+// old schedule.
 //
-// The rest pin the properties the table is supposed to carry forward:
+// The properties, and the real way each regresses:
 //
-//  - The fixed windows stay DISJOINT. Two rows opening on one minute is #310
-//    (a station ID and an hourly check stacked back to back), which the old
-//    code prevented by hand-partitioning minutes across four cron strings.
-//  - Banter's window survives the generalisation intact (#1419): the tail, the
-//    slot identity of a retry minute, the 5-minute gap, one fire per slot, the
-//    logged-once stand-down. These assertions moved here verbatim from
-//    scripts/banter-policy.test.ts along with the machinery they cover.
-//  - The rows that DON'T have a gap still don't. `minGapMs: 0` has to read as
-//    "no check", not as "a check that usually passes" — an ident 25s after a
-//    talk break fires today and must keep firing, or PR 1 has quietly shipped
-//    PR 2's behaviour change.
-//  - Per-row `air` and `clock` survive. Idents defer to the next track
-//    boundary; programme beats are a station-clock fact sampled on a 5-minute
-//    stride. Both are properties the scheduler may not unify away.
-//  - Nothing is asked before it is due. The planner resolves eligibility and
-//    external slots lazily, so a closed window never reaches a policy module —
-//    which is what keeps the gates evaluated exactly where they were.
+//  - A QUIET HOUR IS UNCHANGED. Widening a window must cost nothing when
+//    nothing is in the way: every row still fires on the minute its old cron
+//    did. If this drifts, the windows have started moving the schedule instead
+//    of rescuing it.
+//  - POSTPONE, NEVER CANCEL. #1419's fix, generalised. A row that loses its
+//    opening minute — to a talk break, to a rendered ident waiting on a
+//    boundary, or to another row — retries inside its window rather than
+//    vanishing until the next slot (or, on `quiet`, the next hour).
+//  - ONE TALKER PER MINUTE (#310). Windows now OVERLAP by design, so this can
+//    no longer be a property of the cron strings; it has to be a property of
+//    the planner, and nothing else enforces it.
+//  - A ROW YIELDS ONLY TO A ROW THAT IS FIRING. Yielding to a merely-open
+//    higher-priority row would let one row sit on its whole window holding
+//    everything under it — #1419 again, one layer up. This is the subtle one.
+//  - IN-FLIGHT TALK COUNTS. A boundary-deferred ident is queued minutes before
+//    it airs and `getLastTalkBreakAt()` cannot see it, which is how a :20 tick
+//    read a clear gap and still landed ten seconds in front of it.
+//  - The frequency ladder answers per SLOT. `[15,30,45].includes(m)` reads a
+//    retry minute as no slot at all, which would silently cancel every retry
+//    the windows exist to allow.
+//  - Per-row `air` and `clock` survive, and nothing is asked before it is due.
 //
 // STATE_DIR is redirected at a throwaway dir BEFORE the first import so
 // settings.load()/update() touch nothing real — hence the dynamic imports. Same
@@ -48,7 +51,7 @@ process.env.STATE_DIR = root;
 const settings = await import('../src/settings.js');
 const {
   TALK_SLOTS, talkSlot, talkTickPlan, talkSlotPlan, talkGap, talkSlotKey,
-  openMinuteFor, windowEndMinute, standDownLine, missedLine,
+  openMinuteFor, windowEndMinute, canRetry, standDownLine, missedLine,
 } = await import('../src/broadcast/talk-scheduler.js');
 const { BANTER_SLOTS, BANTER_WINDOW_MINUTES, BANTER_MIN_GAP_MS } = await import('../src/broadcast/banter-policy.js');
 const { shouldFire } = await import('../src/broadcast/dj-gate.js');
@@ -65,34 +68,19 @@ async function station(frequency: string) {
   } as any);
 }
 
-const at = (minute: number, hour = 9) => new Date(2026, 7, 19, hour, minute, 0);
+const HOUR = 9;
+const at = (minute: number, hour = HOUR) => new Date(2026, 7, 19, hour, minute, 0);
+const clockAt = (minute: number, second = 0, hour = HOUR) =>
+  new Date(2026, 7, 19, hour, minute, second).getTime();
 
-// ---------------------------------------------------------------------------
-// THE OLD SCHEDULE, MODELLED INDEPENDENTLY
-// Written from the cron expressions and the rungs as they stood before #1500,
-// NOT from the table — the point is for the two to be able to disagree.
-//   hourlyCheck   '0 * * * *'         + shouldFire('hourly')   (quiet: even station hours)
-//   stationId     '15,30,45 * * * *'  + shouldFire('stationId') (quiet: :45, moderate: :15/:45)
-//   banterTick    '20-29,50-59 * * * *' + the window state machine
-//   programmeTick '*/5 * * * *'       + programme.dueBeat()
-// ---------------------------------------------------------------------------
-
-function oldIdentMinutes(frequency: string): number[] {
-  if (frequency === 'quiet') return [45];
-  if (frequency === 'moderate') return [15, 45];
-  return [15, 30, 45];
-}
-
-function oldBanterSlots(frequency: string): number[] {
-  if (frequency === 'quiet') return [];
-  if (frequency === 'moderate') return [20];
-  return [20, 50];
-}
-
-// One tick's worth of driving, threading the two slot maps back in exactly as
-// scheduler.talkTick does.
+// Drives the planner exactly as scheduler.talkTick does, threading the two slot
+// maps back in. `feedback` closes the loop the real station closes: a segment
+// that airs sets the quiet gap for every row after it, which is what makes a
+// disrupted hour testable at all.
 function makeReplay(opts: {
   lastTalkBreakAt?: number;
+  feedback?: boolean;
+  pendingTalk?: { kind: string } | null;
   eligible?: (kind: TalkKind, now: Date) => boolean;
   externalSlot?: (kind: TalkKind, now: Date) => string | null;
 } = {}) {
@@ -100,10 +88,12 @@ function makeReplay(opts: {
   const logged: Partial<Record<TalkKind, string | null>> = {};
   const rang: { minute: number; kind: TalkKind; slot: string }[] = [];
   const logs: string[] = [];
+  let lastTalkBreakAt = opts.lastTalkBreakAt ?? 0;
   const tick = (now: Date) => {
     const plans: TalkPlan[] = talkTickPlan({
       now,
-      lastTalkBreakAt: opts.lastTalkBreakAt ?? 0,
+      lastTalkBreakAt,
+      pendingTalk: opts.pendingTalk ?? null,
       eligible: kind => (opts.eligible ? opts.eligible(kind, now) : true),
       externalSlot: kind => (opts.externalSlot ? opts.externalSlot(kind, now) : null),
       fired,
@@ -117,60 +107,91 @@ function makeReplay(opts: {
       }
       fired[plan.kind] = plan.slotKey;
       rang.push({ minute: now.getMinutes(), kind: plan.kind, slot: plan.slot });
+      if (opts.feedback) lastTalkBreakAt = now.getTime();
     }
     return plans;
   };
-  return { tick, rang, logs };
+  const hour = (hourOf = HOUR) => { for (let m = 0; m < 60; m++) tick(at(m, hourOf)); };
+  return { tick, hour, rang, logs, minutesOf: (k: TalkKind) => rang.filter(r => r.kind === k).map(r => r.minute) };
 }
 
 // ---------------------------------------------------------------------------
+// THE SCHEDULE
+// ---------------------------------------------------------------------------
 
-test('the table fires on exactly the minutes the four crons fired on', async () => {
+test('a quiet hour is unchanged — every row still fires on the minute its cron did', async () => {
+  // The four expressions the table replaced, and the rungs that narrowed them:
+  //   hourlyCheck   '0 * * * *'          quiet: even station hours only
+  //   stationId     '15,30,45 * * * *'   quiet: :45, moderate: :15/:45
+  //   banterTick    '20,50 * * * *'      quiet: never, moderate: :20 only
+  // Widening the windows and adding the gaps must not move any of them when the
+  // hour has room. Talk FEEDS BACK here, so each segment that airs sets the gap
+  // for the next — an hour of real spacing, not an artificially empty one.
+  const identMinutes = (f: string) => (f === 'quiet' ? [45] : f === 'moderate' ? [15, 45] : [15, 30, 45]);
+  const banterMinutes = (f: string) => (f === 'quiet' ? [] : f === 'moderate' ? [20] : [20, 50]);
+
   for (const frequency of ['quiet', 'moderate', 'chatty', 'aggressive']) {
     await station(frequency);
     // Two hours, so the `quiet` rung's every-other-STATION-hour time check is
     // actually exercised rather than assumed.
     for (const hour of [9, 10]) {
-      // Gates that were constant-true for a live station in the old crons stay
-      // constant-true here; the ones that shaped the SCHEDULE (the frequency
-      // ladder) are resolved through the real dj-gate, not stubbed.
-      const { tick, rang } = makeReplay({
+      const r = makeReplay({
+        feedback: true,
         eligible: (kind, now) => {
           if (kind === 'programme') return false;  // covered on its own below
-          if (kind === 'station-id') return shouldFire('stationId', now);
-          return shouldFire(kind, now);
+          return shouldFire(kind === 'station-id' ? 'stationId' : kind, now);
         },
       });
-      for (let m = 0; m < 60; m++) tick(at(m, hour));
-
-      const hourly = rang.filter(r => r.kind === 'hourly').map(r => r.minute);
+      r.hour(hour);
       const expectHourly = (frequency !== 'quiet' || zonedParts(at(0, hour)).hour % 2 === 0) ? [0] : [];
-      assert.deepEqual(hourly, expectHourly, `${frequency} @${hour}: hourly minutes`);
-
-      const idents = rang.filter(r => r.kind === 'station-id').map(r => r.minute);
-      assert.deepEqual(idents, oldIdentMinutes(frequency), `${frequency} @${hour}: ident minutes`);
-
-      // Nothing has aired in this replay, so the gap is open from the minute
-      // each window opens — which is where the old fixed `20,50` cron fired.
-      const banter = rang.filter(r => r.kind === 'banter').map(r => r.minute);
-      assert.deepEqual(banter, oldBanterSlots(frequency), `${frequency} @${hour}: banter minutes`);
+      assert.deepEqual(r.minutesOf('hourly'), expectHourly, `${frequency} @${hour}: hourly`);
+      assert.deepEqual(r.minutesOf('station-id'), identMinutes(frequency), `${frequency} @${hour}: idents`);
+      assert.deepEqual(r.minutesOf('banter'), banterMinutes(frequency), `${frequency} @${hour}: banter`);
+      assert.deepEqual(r.logs, [], `${frequency} @${hour}: a clear hour explains nothing`);
     }
   }
 });
 
-test('no minute opens two fixed windows — the #310 partition survives as a property', () => {
-  const fixed = TALK_SLOTS.filter(r => r.opens !== 'external');
-  for (let m = 0; m < 60; m++) {
-    const open = fixed.filter(r => openMinuteFor(r, m) != null).map(r => r.kind);
-    assert.ok(open.length <= 1, `:${m} opens ${open.join(' + ')} — two scheduled talkers on one minute`);
+test('two rows never open a new chance on the same minute — #310 as a table property', () => {
+  // The windows OVERLAP now (an ident's :15 window reaches into banter's :20
+  // one), so #310 can no longer be read off the cron strings. What survives at
+  // the table level is that no two rows OPEN together: every collision is a new
+  // chance meeting another row's tail, which is what arbitration resolves.
+  const opens = new Map<number, TalkKind>();
+  for (const row of TALK_SLOTS) {
+    if (row.opens === 'external') continue;
+    for (const m of row.opens) {
+      assert.equal(opens.get(m), undefined, `:${m} opens both ${opens.get(m)} and ${row.kind}`);
+      opens.set(m, row.kind);
+    }
   }
-  // The specific pair the issue is about: the hourly check owns :00 and the
-  // ident row must never reach it, whatever its window grows to.
+  // The specific pair the issue is about: the hourly check owns :00, and the
+  // ident row must not open there whatever its window grows to.
   assert.equal(openMinuteFor(talkSlot('station-id'), 0), null);
-  // And banter's window must not reach the next ident slot at :30 (it opens at
-  // :20 and runs to :29) — the assertion that used to read banterWindowEnd.
-  assert.equal(windowEndMinute(talkSlot('banter'), 20), 29);
-  assert.equal(openMinuteFor(talkSlot('banter'), 30), null);
+  // And the overlap that now exists on purpose, so the arbitration tests below
+  // are testing a real minute rather than a hypothetical one.
+  assert.equal(openMinuteFor(talkSlot('station-id'), 20), 15);
+  assert.equal(openMinuteFor(talkSlot('banter'), 20), 20);
+});
+
+test('the table carries real windows and real gaps, banter widest', () => {
+  // Banter is the longest break the station airs, so it holds out for the most
+  // quiet; the short segments settle for three minutes, which is still enough
+  // to stop one landing on the back of another (#310, as a number).
+  assert.equal(talkSlot('banter').minGapMs, BANTER_MIN_GAP_MS);
+  assert.equal(talkSlot('banter').windowMinutes, BANTER_WINDOW_MINUTES);
+  for (const kind of ['hourly', 'station-id'] as TalkKind[]) {
+    assert.ok(talkSlot(kind).windowMinutes > 1, `${kind} must be able to retry`);
+    assert.ok(talkSlot(kind).minGapMs > 0, `${kind} must respect a quiet gap`);
+    assert.ok(talkSlot(kind).minGapMs < BANTER_MIN_GAP_MS, `${kind} should be less demanding than banter`);
+  }
+  // The programme beat is the exception at both ends: it cannot retry, so it
+  // leads the priority order and takes no gap — the beats ARE the show.
+  assert.equal(talkSlot('programme').minGapMs, 0);
+  assert.equal(Math.min(...TALK_SLOTS.map(r => r.priority)), talkSlot('programme').priority);
+  // The ordering principle: fewer chances in the hour outranks more.
+  assert.ok(talkSlot('hourly').priority < talkSlot('banter').priority);
+  assert.ok(talkSlot('banter').priority < talkSlot('station-id').priority);
 });
 
 test('per-row air mode and clock survive the merge', () => {
@@ -188,97 +209,239 @@ test('per-row air mode and clock survive the merge', () => {
   }
 });
 
-test('PR 1 windows are single minutes and PR 1 gaps are zero, except banter', () => {
-  // The values that make this refactor behaviour-identical. Widening them is
-  // PR 2 and has to be a stated behaviour change — if this test starts failing
-  // without that PR, the schedule moved by accident.
-  for (const kind of ['hourly', 'station-id'] as TalkKind[]) {
-    assert.equal(talkSlot(kind).windowMinutes, 1, `${kind} has no retry window yet`);
-    assert.equal(talkSlot(kind).minGapMs, 0, `${kind} has no quiet gap yet`);
-  }
-  assert.equal(talkSlot('banter').windowMinutes, BANTER_WINDOW_MINUTES);
-  assert.equal(talkSlot('banter').minGapMs, BANTER_MIN_GAP_MS);
-  assert.deepEqual([...talkSlot('banter').opens as readonly number[]], [...BANTER_SLOTS]);
-});
-
-test('a zero gap is no check at all — an ident still fires 25s after a talk break', () => {
-  // The tempting accident in this refactor: generalising banter's gap onto
-  // every row. An ident that lands 25s behind a segment is today's behaviour,
-  // and PR 1 must not change it (PR 2 may, deliberately).
-  const now = at(15);
-  const { tick, rang, logs } = makeReplay({ lastTalkBreakAt: now.getTime() - 25_000 });
-  tick(now);
-  assert.deepEqual(rang.map(r => r.kind), ['station-id']);
-  assert.deepEqual(logs, [], 'a row with no gap has nothing to stand down about');
-  // Same for the hourly check at :00.
-  const top = at(0);
-  const hourly = makeReplay({ lastTalkBreakAt: top.getTime() - 25_000 });
-  hourly.tick(top);
-  assert.deepEqual(hourly.rang.map(r => r.kind), ['hourly']);
-});
-
 // ---------------------------------------------------------------------------
-// BANTER'S WINDOW, THROUGH THE GENERALISED PLANNER
-// Moved from scripts/banter-policy.test.ts with the machinery. #1419 is the
-// only bug the old scheduler had a real fix for, so the new planner has to
-// reproduce it exactly rather than approximately.
+// POSTPONE, NEVER CANCEL
 // ---------------------------------------------------------------------------
 
-const WINDOW_20 = [20, 21, 22, 23, 24, 25, 26, 27, 28, 29];
-
-function replayBanter(minutes: number[], opts: { talkAtMin?: number; talkAtSec?: number; eligible?: boolean } = {}) {
-  const lastTalkBreakAt = opts.talkAtMin == null
-    ? 0
-    : new Date(2026, 7, 19, 9, opts.talkAtMin, opts.talkAtSec ?? 0).getTime();
+test('a disrupted hour postpones every row instead of dropping it', async () => {
+  await station('aggressive');
+  // A segment-director spot lands at :14:00 — off-clock, exactly the kind of
+  // thing the old fixed minutes could not see. Under the old crons the :15
+  // ident fired straight into its back (#310's failure, arriving off-schedule
+  // rather than on it); now it waits out its three minutes and takes :17.
   const r = makeReplay({
-    lastTalkBreakAt,
-    eligible: kind => kind === 'banter' && (opts.eligible ?? true),
+    lastTalkBreakAt: clockAt(14),
+    feedback: true,
+    eligible: (kind, now) => kind !== 'programme' && shouldFire(kind === 'station-id' ? 'stationId' : kind, now),
   });
-  for (const m of minutes) r.tick(at(m));
-  return { fired: r.rang.map(x => x.minute), logs: r.logs };
-}
+  for (let m = 15; m < 30; m++) r.tick(at(m));
+  assert.deepEqual(r.minutesOf('station-id'), [17], 'the ident postpones to the first clear minute');
+  // …and banter, which needs five clear minutes, takes :22 rather than losing
+  // the slot the way it did before #1419.
+  assert.deepEqual(r.minutesOf('banter'), [22]);
+  // One line per held slot, naming the cause and the numbers.
+  assert.equal(r.logs.length, 2);
+  assert.match(r.logs[0], /^\[station-id\] stood down at :15 — last standalone talk 60s ago, minimum gap 180s \(retrying until :24\)$/);
+  assert.match(r.logs[1], /^\[banter\] stood down at :20 — last standalone talk \d+s ago, minimum gap 300s \(retrying until :29\)$/);
+});
 
 test("the reporter's hour: a :19:35 ident postpones the exchange, it no longer cancels it", () => {
-  // 09:15 ident → boundary-deferred → actually airs 09:19:35. The pre-#1419
-  // code saw 25s at the :20 tick and gave up until :50 (or, on moderate, until
-  // 10:20).
-  const { fired, logs } = replayBanter(WINDOW_20, { talkAtMin: 19, talkAtSec: 35 });
+  // The #1419 case itself. A :15 ident is boundary-deferred and actually airs
+  // at 09:19:35; the pre-fix code saw 25s at the :20 tick and gave up until
+  // :50 (or, on moderate, until 10:20).
+  const r = makeReplay({
+    lastTalkBreakAt: clockAt(19, 35),
+    eligible: kind => kind === 'banter',
+  });
+  for (let m = 20; m <= 29; m++) r.tick(at(m));
   // The gap clears at :24:35, so :24 is still short (24:00 − 19:35 = 265s) and
   // :25 is the first minute that may air.
-  assert.deepEqual(fired, [25]);
-  // One stand-down line for the slot, not one per blocked minute.
-  assert.equal(logs.length, 1);
-  assert.match(logs[0], /^\[banter\] stood down at :20 — last standalone talk 25s ago/);
-  assert.match(logs[0], /minimum gap 300s \(retrying until :29\)/);
+  assert.deepEqual(r.minutesOf('banter'), [25]);
+  assert.equal(r.logs.length, 1, 'one stand-down for the slot, not one per blocked minute');
+  assert.match(r.logs[0], /^\[banter\] stood down at :20 — last standalone talk 25s ago/);
 });
 
 test('a slot fires at most once, however many minutes are left in the window', () => {
-  const { fired, logs } = replayBanter(WINDOW_20);
-  assert.deepEqual(fired, [20], 'the slot opens, airs once, and stays quiet');
-  assert.deepEqual(logs, []);
-  // The :50 window is its own chance, unaffected by the :20 one.
-  assert.deepEqual(replayBanter([...WINDOW_20, 50, 51, 52]).fired, [20, 50]);
+  const r = makeReplay({ eligible: kind => kind === 'banter' });
+  for (let m = 20; m <= 29; m++) r.tick(at(m));
+  assert.deepEqual(r.minutesOf('banter'), [20], 'the slot opens, airs once, and stays quiet');
+  assert.deepEqual(r.logs, []);
+  for (let m = 50; m <= 52; m++) r.tick(at(m));
+  assert.deepEqual(r.minutesOf('banter'), [20, 50], 'the :50 window is its own chance');
 });
 
 test('a window that never clears says so once, at the minute it is lost', () => {
-  const late = replayBanter(WINDOW_20, { talkAtMin: 24, talkAtSec: 30 });
-  assert.deepEqual(late.fired, [], 'the gap never clears inside this window');
-  assert.equal(late.logs.length, 2, 'one stand-down at :20, one "missed" at :29');
-  assert.match(late.logs[0], /stood down at :20/);
-  assert.match(late.logs[1], /slot :20 missed/);
+  const r = makeReplay({ lastTalkBreakAt: clockAt(24, 30), eligible: kind => kind === 'banter' });
+  for (let m = 20; m <= 29; m++) r.tick(at(m));
+  assert.deepEqual(r.minutesOf('banter'), [], 'the gap never clears inside this window');
+  assert.equal(r.logs.length, 2, 'one stand-down at :20, one "missed" at :29');
+  assert.match(r.logs[0], /stood down at :20/);
+  assert.match(r.logs[1], /^\[banter\] slot :20 missed — .*window closed at :29$/);
   // The last minute being the FIRST blocked one still reports, with numbers —
   // the case where an operator would otherwise get no line at all.
-  const only29 = replayBanter([29], { talkAtMin: 28, talkAtSec: 30 });
-  assert.deepEqual(only29.fired, []);
-  assert.equal(only29.logs.length, 1);
-  assert.match(only29.logs[0], /slot :20 missed — last standalone talk 30s ago/);
+  const only = makeReplay({ lastTalkBreakAt: clockAt(28, 30), eligible: kind => kind === 'banter' });
+  only.tick(at(29));
+  assert.deepEqual(only.minutesOf('banter'), []);
+  assert.equal(only.logs.length, 1);
+  assert.match(only.logs[0], /slot :20 missed — last standalone talk 30s ago/);
 });
 
-test('an ineligible row is silent — it never logs about a gap it never reached', () => {
-  const out = replayBanter(WINDOW_20, { talkAtMin: 19, talkAtSec: 35, eligible: false });
-  assert.deepEqual(out.fired, []);
-  assert.deepEqual(out.logs, [], 'a per-minute tick must not narrate ineligible minutes');
+test('every row logs its stand-down now, not just banter', () => {
+  // The half of #1419's fix that only banter got: an ident or an hourly check
+  // that stood down used to be a bare `return`, so a starved hour left nothing
+  // in the booth log to explain itself.
+  for (const [kind, open] of [['hourly', 0], ['station-id', 15], ['banter', 20]] as const) {
+    const r = makeReplay({ lastTalkBreakAt: clockAt(open, 0), eligible: k => k === kind });
+    r.tick(at(open + 1));
+    assert.equal(r.logs.length, 1, `${kind} must report standing down`);
+    assert.match(r.logs[0], new RegExp(`^\\[${kind}\\] stood down at :${open} — last standalone talk 60s ago`));
+  }
 });
+
+// ---------------------------------------------------------------------------
+// ONE TALKER PER MINUTE
+// ---------------------------------------------------------------------------
+
+test('when two rows would both fire, priority takes the minute and the loser waits', () => {
+  // :20 is the overlap the wider ident window creates: banter's :20 chance
+  // opens while the ident's :15 window still has four minutes to run. Both are
+  // clear, so this is arbitration and nothing else.
+  const r = makeReplay({ eligible: kind => kind === 'banter' || kind === 'station-id' });
+  const plans = r.tick(at(20));
+  assert.deepEqual(plans.map(p => `${p.kind}:${p.act}`), ['banter:fire', 'station-id:wait']);
+  assert.deepEqual(r.minutesOf('banter'), [20]);
+  assert.deepEqual(r.minutesOf('station-id'), [], 'the ident does not also speak');
+  assert.equal(r.logs.length, 1);
+  assert.match(r.logs[0], /^\[station-id\] stood down at :15 — banter took the minute \(retrying until :24\)$/);
+});
+
+test('a yielded slot is postponed, not cancelled', () => {
+  // The loser keeps its window. Next minute the winner's slot is claimed, so
+  // the ident that lost :20 speaks at :21 — this is the whole difference
+  // between arbitration and the old "whoever the cron favoured wins outright".
+  const r = makeReplay({ eligible: kind => kind === 'banter' || kind === 'station-id' });
+  r.tick(at(20));
+  r.tick(at(21));
+  assert.deepEqual(r.minutesOf('banter'), [20]);
+  assert.deepEqual(r.minutesOf('station-id'), [21]);
+});
+
+test('a row yields only to a row that is FIRING, never to one that is merely open', () => {
+  // The subtle failure this rule exists to prevent: banter (higher priority)
+  // is open across :20–:29 but blocked on its five-minute gap, while the ident
+  // needs only three. A "yield to any open higher-priority row" reading would
+  // hold the ident for the whole overlap and hand #1419 straight back, one
+  // layer up. Talk aired at :21:00, so at :24 the ident is clear (180s) and
+  // banter is not (300s needed).
+  const r = makeReplay({
+    lastTalkBreakAt: clockAt(21),
+    eligible: kind => kind === 'banter' || kind === 'station-id',
+  });
+  const plans = r.tick(at(24));
+  assert.deepEqual(plans.map(p => `${p.kind}:${p.act}`), ['banter:wait', 'station-id:fire']);
+  assert.deepEqual(r.minutesOf('station-id'), [24]);
+});
+
+test('a programme beat outranks the hourly check, because a beat cannot retry', () => {
+  // A station zone at a :30 offset puts a station-clock feature beat (:35–:39)
+  // at process :05 — inside the hourly row's window. The beat has no window of
+  // its own, so it takes the minute and the hourly check retries.
+  const r = makeReplay({
+    eligible: kind => kind === 'programme' || kind === 'hourly',
+    externalSlot: kind => (kind === 'programme' ? 'feature' : null),
+  });
+  const plans = r.tick(at(5));
+  assert.deepEqual(plans.map(p => `${p.kind}:${p.act}`), ['programme:fire', 'hourly:wait']);
+  assert.match(r.logs[0], /^\[hourly\] stood down at :0 — programme took the minute/);
+  // …and it does retry, at the next minute the beat is no longer due.
+  r.tick(at(6));
+  assert.deepEqual(r.minutesOf('hourly'), [6]);
+});
+
+// ---------------------------------------------------------------------------
+// IN-FLIGHT TALK
+// ---------------------------------------------------------------------------
+
+test('a segment waiting for a track boundary holds every gap-gated row', () => {
+  // #1419's root cause, from the side the window alone never fixed: an ident is
+  // rendered at :15 and waits for the next transition. getLastTalkBreakAt()
+  // reports what HAS aired, so at :20 the gap looks clear and banter fires ten
+  // seconds in front of it. `pendingTalk` is the queue's own `_pendingVoice`.
+  const r = makeReplay({
+    pendingTalk: { kind: 'station-id' },
+    eligible: kind => kind === 'banter',
+  });
+  r.tick(at(20));
+  assert.deepEqual(r.minutesOf('banter'), [], 'in-flight talk is still talk');
+  assert.equal(r.logs.length, 1);
+  assert.match(r.logs[0], /^\[banter\] stood down at :20 — a station-id is rendered and waiting for the next track boundary \(retrying until :29\)$/);
+  // It postpones like every other hold: once the ident airs, the window's
+  // remaining minutes are the exchange's.
+  const after = makeReplay({ eligible: kind => kind === 'banter' });
+  after.tick(at(21));
+  assert.deepEqual(after.minutesOf('banter'), [21]);
+});
+
+test('a pending segment that never airs costs the slots it blocks — and says so', () => {
+  // The trade this rule makes, stated rather than discovered. A deferred ident
+  // waits for a TRACK BOUNDARY, not for a clock, so on a station playing a very
+  // long cut it can sit through a whole window and take the slots under it with
+  // it. That is still the right answer — it will air the moment the track
+  // changes, and airing banter one second in front of it is the exact stacking
+  // the gap exists to prevent — and it is bounded twice: queue drops a pending
+  // clip older than PENDING_VOICE_MAX_AGE_MS at the next track start, and a
+  // station with no track start for that long has a dead-air problem the guard
+  // in radio.liq owns, not a scheduling one.
+  //
+  // What must never happen is that it goes unexplained, which is the whole of
+  // #1419: an absence in the booth log with nothing to read.
+  const r = makeReplay({ pendingTalk: { kind: 'station-id' }, eligible: kind => kind === 'banter' });
+  for (let m = 20; m <= 29; m++) r.tick(at(m));
+  assert.deepEqual(r.minutesOf('banter'), []);
+  assert.equal(r.logs.length, 2, 'one stand-down when the window opens, one when it closes');
+  assert.match(r.logs[1], /^\[banter\] slot :20 missed — a station-id is rendered and waiting for the next track boundary; window closed at :29$/);
+});
+
+test('a row with no gap ignores in-flight talk, because it has opted out of the question', () => {
+  // `minGapMs: 0` means "this row does not ask about quiet", and a programme
+  // beat that cannot retry must not be lost to a pending ident.
+  const r = makeReplay({
+    pendingTalk: { kind: 'station-id' },
+    eligible: kind => kind === 'programme',
+    externalSlot: kind => (kind === 'programme' ? 'outro' : null),
+  });
+  r.tick(at(55));
+  assert.deepEqual(r.minutesOf('programme'), [55]);
+});
+
+// ---------------------------------------------------------------------------
+// THE FREQUENCY LADDER, PER SLOT
+// ---------------------------------------------------------------------------
+
+test('the ident rung reads the slot, so every retry minute keeps its chance', async () => {
+  // `[15,30,45].includes(m)` would answer false for :18 and silently cancel
+  // every retry the window exists to allow — the migration banter needed at
+  // #1419 and the ident row needs now.
+  const window = (open: number) => Array.from({ length: talkSlot('station-id').windowMinutes }, (_, i) => open + i);
+
+  await station('quiet');
+  for (const m of window(45)) assert.equal(shouldFire('stationId', at(m)), true, `quiet should retry at :${m}`);
+  for (const m of [...window(15), ...window(30)]) {
+    assert.equal(shouldFire('stationId', at(m)), false, `quiet must not ident at :${m}`);
+  }
+
+  await station('moderate');
+  for (const m of [...window(15), ...window(45)]) {
+    assert.equal(shouldFire('stationId', at(m)), true, `moderate should retry at :${m}`);
+  }
+  for (const m of window(30)) assert.equal(shouldFire('stationId', at(m)), false, `moderate must not ident at :${m}`);
+
+  for (const f of ['chatty', 'aggressive']) {
+    await station(f);
+    for (const m of [...window(15), ...window(30), ...window(45)]) {
+      assert.equal(shouldFire('stationId', at(m)), true, `${f} should ident at :${m}`);
+    }
+    // Outside every ident window nothing fires, whatever the rung — :00 in
+    // particular stays the hourly check's (#310).
+    for (const m of [0, 5, 9, 14, 25, 44, 55]) {
+      assert.equal(shouldFire('stationId', at(m)), false, `${f} must not ident at :${m}`);
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PRIMITIVES
+// ---------------------------------------------------------------------------
 
 test('a retry minute keeps its slot identity, so one window is one chance', () => {
   const row = talkSlot('banter');
@@ -286,6 +449,7 @@ test('a retry minute keeps its slot identity, so one window is one chance', () =
     for (let i = 0; i < BANTER_WINDOW_MINUTES; i++) {
       assert.equal(openMinuteFor(row, slot + i), slot, `:${slot + i} should belong to slot :${slot}`);
     }
+    assert.equal(windowEndMinute(row, slot), slot + BANTER_WINDOW_MINUTES - 1);
   }
   // Stable across the window, distinct across slots, hours and days — what
   // makes "one fire per slot" survive a per-minute tick without a countdown.
@@ -317,28 +481,42 @@ test('the quiet gap is measured, not rounded, and an empty log reads as infinite
   assert.equal(talkGap({ nowMs: now, lastTalkBreakAt: now, needMs: 0 }).clear, true);
 });
 
-test('the stand-down lines carry the reason and the numbers', () => {
+test('the stand-down lines carry the reason and the numbers, for all three causes', () => {
   const row = talkSlot('banter');
   const now = 1_000_000_000_000;
   const gap = talkGap({ nowMs: now, lastTalkBreakAt: now - 25_000, needMs: BANTER_MIN_GAP_MS });
-  const line = standDownLine(row, '20', gap);
-  // Which gap, how long ago, how long is left — and which row said so, which
+  const line = standDownLine(row, '20', { held: 'gap', gap });
+  // Which row, which cause, how long ago, how long is left — the row prefix
   // matters now that four kinds share one log channel.
-  assert.match(line, /^\[banter\]/);
-  assert.match(line, /25s ago/);
-  assert.match(line, /300s/);
-  assert.match(line, /:29/);
-  const missed = missedLine(row, '20', gap);
-  assert.match(missed, /slot :20 missed/);
-  assert.match(missed, /25s ago/);
-  assert.match(missed, /300s/);
+  assert.match(line, /^\[banter\] stood down at :20 — last standalone talk 25s ago, minimum gap 300s \(retrying until :29\)$/);
+  assert.match(missedLine(row, '20', { held: 'gap', gap }), /^\[banter\] slot :20 missed — last standalone talk 25s ago, minimum gap 300s; window closed at :29$/);
   // A fresh boot has no last break — the line must not print "Infinitys".
-  assert.match(standDownLine(row, '20', talkGap({ nowMs: now, lastTalkBreakAt: 0, needMs: 1 })), /never ago/);
+  assert.match(standDownLine(row, '20', { held: 'gap', gap: talkGap({ nowMs: now, lastTalkBreakAt: 0, needMs: 1 }) }), /never ago/);
+  // The two causes that carry no numbers still name themselves precisely.
+  assert.match(standDownLine(row, '20', { held: 'pending', pendingKind: 'station-id' }), /a station-id is rendered and waiting/);
+  assert.match(standDownLine(row, '20', { held: 'yield', to: 'hourly' }), /hourly took the minute/);
 });
 
-// ---------------------------------------------------------------------------
-// THE PROGRAMME ROW
-// ---------------------------------------------------------------------------
+test('a held beat is reported as lost, never as retrying', () => {
+  // The programme row cannot retry — `dueBeat` is a window on the station clock
+  // that the table samples once — so if anything ever holds it, the line must
+  // say the beat is gone rather than promise a minute that will not come. It
+  // leads the real table's priority order precisely so this cannot happen; a
+  // synthetic table proves the wording without weakening that.
+  const outranked = TALK_SLOTS.map(r => (r.kind === 'programme' ? { ...r, priority: 99 } : r));
+  const plans = talkTickPlan({
+    now: at(20), lastTalkBreakAt: 0, pendingTalk: null,
+    eligible: () => true,
+    externalSlot: kind => (kind === 'programme' ? 'feature' : null),
+    fired: {}, logged: {}, slots: outranked,
+  });
+  const held = plans.find(p => p.kind === 'programme');
+  assert.equal(held?.act, 'wait');
+  assert.match(held!.act === 'wait' ? held.log! : '', /^\[programme\] slot feature missed — banter took the minute; and it has no second chance$/);
+  assert.equal(canRetry(talkSlot('programme'), 'feature', 20), false);
+  assert.equal(canRetry(talkSlot('banter'), '20', 20), true);
+  assert.equal(canRetry(talkSlot('banter'), '20', 29), false, 'the last minute of a window is not a retry');
+});
 
 test('programme beats are sampled on a 5-minute stride, as their old cron was', () => {
   const asked: number[] = [];
@@ -350,13 +528,13 @@ test('programme beats are sampled on a 5-minute stride, as their old cron was', 
       return 'feature';  // "a beat is due", whatever the station zone says
     },
   });
-  for (let m = 0; m < 60; m++) r.tick(at(m));
+  r.hour();
   // Every 5th minute and only those: with every real IANA offset a multiple of
   // 15 minutes, that lands exactly one tick inside each beat window (:35–:39,
   // :55+) whatever the zone — which is what `*/5` did. A per-minute row would
-  // add retries the old cron never had, and that is PR 2's call to make.
+  // add retries the old cron never had.
   assert.deepEqual(asked, [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]);
-  assert.deepEqual(r.rang.filter(x => x.kind === 'programme').map(x => x.minute), asked);
+  assert.deepEqual(r.minutesOf('programme'), asked);
 });
 
 test('the programme row carries the beat as its slot, and does not claim it', () => {
@@ -371,22 +549,7 @@ test('the programme row carries the beat as its slot, and does not claim it', ()
   r.tick(at(55));
   r.tick(at(55));  // same minute twice — the row must not remember
   assert.deepEqual(r.rang.map(x => x.slot), ['outro', 'outro']);
-  // A row that DOES claim behaves the other way, on the same replay shape.
   assert.equal(talkSlot('banter').oneFirePerSlot, true);
-});
-
-test('a programme beat and a banter window can come due together, in table order', () => {
-  // The only pair that can: the fixed windows are disjoint, but a station zone
-  // at a :30/:45 offset puts a station-clock beat inside a process-minute
-  // banter window. Both used to fire from separate crons; now they dispatch in
-  // one tick, and the table is where the order is written down.
-  const r = makeReplay({
-    eligible: () => true,
-    externalSlot: kind => (kind === 'programme' ? 'outro' : null),
-  });
-  const plans = r.tick(at(25));
-  assert.deepEqual(plans.map(p => p.kind), ['programme', 'banter']);
-  assert.ok(talkSlot('programme').priority <= talkSlot('banter').priority);
 });
 
 // ---------------------------------------------------------------------------
@@ -395,11 +558,10 @@ test('a programme beat and a banter window can come due together, in table order
 
 test('policy is asked only for a row that is open and unfired', () => {
   const asked: TalkKind[] = [];
-  const r = makeReplay({
-    eligible: kind => { asked.push(kind); return true; },
-  });
-  // :07 opens nothing at all.
-  r.tick(at(7));
+  const r = makeReplay({ eligible: kind => { asked.push(kind); return true; } });
+  // :12 falls in no window at all — the hourly's closed at :09 and the ident's
+  // opens at :15.
+  r.tick(at(12));
   assert.deepEqual(asked, [], 'a closed window must not reach a policy module');
   // :15 opens the ident row and nothing else.
   r.tick(at(15));
@@ -429,8 +591,8 @@ test('a row that is not due is skipped without a decision', () => {
   for (const m of [0, 15, 19, 30, 45, 49]) {
     assert.equal(
       talkSlotPlan(row, {
-        now: at(m), lastTalkBreakAt: 0, eligible: () => true, externalSlot: () => null,
-        fired: {}, logged: {},
+        now: at(m), lastTalkBreakAt: 0, pendingTalk: null,
+        eligible: () => true, externalSlot: () => null, fired: {}, logged: {},
       }),
       null,
       `:${m} must not reach the gap check`,

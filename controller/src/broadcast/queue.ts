@@ -1588,6 +1588,15 @@ class Queue {
     }
   }
 
+  // The kind of segment already rendered and waiting for the next track
+  // boundary, or null. Talk that has NOT aired yet, so getLastTalkBreakAt()
+  // cannot report it — which is precisely why the talk scheduler asks: a slot
+  // gated on a quiet gap must not fire ten seconds in front of an ident that
+  // has been queued for three minutes (#1419, #1500).
+  pendingVoiceKind(): string | null {
+    return this._pendingVoice?.kind ?? null;
+  }
+
   // Discard a scheduled-but-unaired deferred segment. A mic-pass supersedes an
   // ident: sign-off + greeting name the station, the outgoing show and the
   // incoming one, so an ident in front of it is three spoken segments in a row

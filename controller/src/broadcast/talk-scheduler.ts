@@ -19,9 +19,18 @@
 //
 // The shape is banterTickPlan's, generalised: banter is the row that already
 // had a window, a quiet gap and logged-once stand-downs, because #1419 forced
-// them. The other rows carry the same fields — with PR-1 values that make them
-// no-ops — so turning them on later is a table edit with a test diff, not a
-// rewrite.
+// them. Every row now carries all three, plus the two rules the old crons had
+// no way to express:
+//
+//   - ONE TALKER PER MINUTE. When two rows would fire together, priority
+//     decides and the loser WAITS INSIDE ITS WINDOW. #310 stops being a
+//     partitioning convention nobody can read and becomes a rule in one place;
+//     #1419's postpone-don't-cancel becomes universal.
+//   - IN-FLIGHT TALK COUNTS. A boundary-deferred ident is rendered and queued
+//     minutes before it airs, and queue.getLastTalkBreakAt() — which reports
+//     what HAS aired — cannot see it. That blind spot is #1419's actual root
+//     cause: the :20 tick reads a clear gap, fires, and the ident lands ten
+//     seconds later anyway. `pendingTalk` closes it.
 //
 // Pure and I/O-free (a `Date`, two counters and two injected resolvers in;
 // plans out) so scripts/talk-scheduler.test.ts can walk an hour minute by minute
@@ -67,10 +76,13 @@ export type TalkSlot = {
   // every row except banter carries today.
   minGapMs: number;
   air: TalkAir;
-  // Dispatch order within a tick. PR 1 has NO arbitration — nothing loses a
-  // slot to anything — so this only sequences the rows that happen to come due
-  // together, and by construction only `programme` can co-occur with another
-  // row (the fixed windows :00 / :15,:30,:45 / :20-:29,:50-:59 are disjoint).
+  // Who wins the minute when two rows would both fire. Lower is stronger; ties
+  // break on table order. The ordering principle, so a new row can be placed
+  // without guessing: A ROW THAT CANNOT RETRY OUTRANKS A ROW THAT CAN, and
+  // among rows that can retry, the one with fewer chances left in the hour
+  // outranks the one with more. That is why the programme beat leads (it has no
+  // window of its own — a lost beat is lost), the hourly check comes next (one
+  // chance an hour), then banter (two slots), then idents (three).
   priority: number;
   clock: TalkClock;
   // Only evaluate this row on process minutes divisible by `stride`. Exists so
@@ -87,69 +99,91 @@ export type TalkSlot = {
   oneFirePerSlot: boolean;
 };
 
-// Rows in priority order. The values below are deliberately the ones that
-// reproduce today's schedule EXACTLY — windows of 1 minute and `minGapMs: 0`
-// everywhere banter isn't. Widening them is a behaviour change and belongs in
-// its own PR (#1500, PR 2), where the frequency ladder also has to start
-// answering per-SLOT rather than per-minute: shouldFire('stationId') currently
-// tests `m === 45` / `[15,30,45].includes(m)`, so a retry minute inside a wider
-// ident window would read as no slot at all. Banter already did that migration
-// (dj-gate asks banterSlot(m)); nothing else has.
+// Rows in priority order.
+//
+// Two families of number live here and they answer different questions. `opens`
+// is WHERE a chance falls — hand-partitioned minutes with a reason (#310), and
+// the frequency ladder in dj-gate.ts narrows them further per persona. Window
+// and gap are HOW LONG that chance lasts and HOW MUCH quiet it needs: they are
+// what turn a missed instant into a postponed one.
+//
+// The gaps are shorter than banter's on purpose. Banter is the longest break
+// the station airs, so it holds out for five clear minutes; an ident and a time
+// check are seconds long, and three minutes is enough to stop them landing on
+// the back of a segment that just finished — which is the whole of #310,
+// stated as a number instead of as an absent cron minute.
 export const TALK_SLOTS: readonly TalkSlot[] = [
-  // Top of the hour: the DJ checks in. Note the SESSION ROLL that used to share
-  // this cron is not a row — it is unconditional and runs before any of this
-  // (see scheduler.talkTick), because a muted or empty station must still roll
-  // its session, plan the episode and settle a pending handoff.
-  {
-    kind: 'hourly',
-    opens: [0],
-    windowMinutes: 1,
-    minGapMs: 0,
-    air: 'immediate',
-    priority: 1,
-    clock: 'process',
-    stride: 1,
-    oneFirePerSlot: true,
-  },
   // Programme beats — the feature mid-hour and the outro in the final minutes
   // of the show's last hour, both placed on the station clock by
   // programme.dueBeat(). Gating lives in programme.ts; this row only says when
-  // to ask.
+  // to ask. It leads the table because it is the one row that CANNOT retry:
+  // `dueBeat` is a window on the station clock that this row samples once, so a
+  // beat that yields is a beat the episode never gets. It takes no gap for the
+  // same reason — a planned episode's beats are the show, not an interruption
+  // of it.
   {
     kind: 'programme',
     opens: 'external',
     windowMinutes: 1,
     minGapMs: 0,
     air: 'immediate',
-    priority: 2,
+    priority: 1,
     clock: 'station',
     stride: 5,
     oneFirePerSlot: false,
   },
-  // Guest-show banter — the one row that already has a real window and a real
-  // gap, because #1419 forced them. Its numbers keep their reasoning in
-  // banter-policy.ts and are imported rather than restated.
+  // Top of the hour: the DJ checks in. The window runs to :09 — past that it is
+  // no longer a top-of-hour check, and the next one is only 50 minutes away.
+  // The script is written at FIRE time, not at :00, so a check postponed to
+  // :04 still reads the clock correctly (broadcast/queue's spoken-clock guards
+  // cover the drift that remains).
+  //
+  // Note the SESSION ROLL that used to share this row's cron is not a row at
+  // all — it is unconditional and runs before any of this (see
+  // scheduler.talkTick), because a muted or empty station must still roll its
+  // session, plan the episode and settle a pending handoff.
   {
-    kind: 'banter',
-    opens: BANTER_SLOTS,
-    windowMinutes: BANTER_WINDOW_MINUTES,
-    minGapMs: BANTER_MIN_GAP_MS,
+    kind: 'hourly',
+    opens: [0],
+    windowMinutes: 10,
+    minGapMs: 3 * 60_000,
     air: 'immediate',
     priority: 2,
     clock: 'process',
     stride: 1,
     oneFirePerSlot: true,
   },
+  // Guest-show banter — the row that had a window and a gap first, because
+  // #1419 forced them. Its numbers keep their reasoning in banter-policy.ts and
+  // are imported rather than restated.
+  {
+    kind: 'banter',
+    opens: BANTER_SLOTS,
+    windowMinutes: BANTER_WINDOW_MINUTES,
+    minGapMs: BANTER_MIN_GAP_MS,
+    air: 'immediate',
+    priority: 3,
+    clock: 'process',
+    stride: 1,
+    oneFirePerSlot: true,
+  },
   // Station idents. Candidate minutes are :15/:30/:45 — deliberately NOT :00,
   // which the hourly check owns; firing both there stacked two voice segments
-  // back to back (#310). The frequency rung narrows the three to one or two.
+  // back to back (#310). The frequency rung narrows the three to one or two,
+  // and asks per SLOT, so a retry at :18 still reads as the :15 chance.
+  //
+  // The ten-minute window is what stops an ident vanishing when its minute is
+  // busy: an ident that loses :15 to a segment retries through :24 instead of
+  // waiting for :30 (and, on `quiet`, for the next hour). It is also the row
+  // most likely to yield — three chances an hour is the most of any row, so it
+  // is the cheapest to postpone.
   {
     kind: 'station-id',
     opens: [15, 30, 45],
-    windowMinutes: 1,
-    minGapMs: 0,
+    windowMinutes: 10,
+    minGapMs: 3 * 60_000,
     air: 'next-track',
-    priority: 3,
+    priority: 4,
     clock: 'process',
     stride: 1,
     oneFirePerSlot: true,
@@ -212,29 +246,60 @@ function slotLabel(row: TalkSlot, slot: string): string {
   return row.opens === 'external' ? slot : `:${slot}`;
 }
 
-function endLabel(row: TalkSlot, slot: string): string {
-  return row.opens === 'external' ? slot : `:${windowEndMinute(row, Number(slot))}`;
+// Whether a held row gets another minute at all. A fixed row does until its
+// window's last minute; an `opens: 'external'` row NEVER does — its placement is
+// a window on someone else's clock that this table samples once, so a held beat
+// is a lost beat. The distinction has to reach the log line, or an operator
+// reads "retrying until…" about a chance that has already gone.
+export function canRetry(row: TalkSlot, slot: string, minute: number): boolean {
+  if (row.opens === 'external') return false;
+  return minute < windowEndMinute(row, Number(slot));
 }
 
 function sinceLabel(gap: TalkGap): string {
   return Number.isFinite(gap.sinceMs) ? `${Math.round(gap.sinceMs / 1000)}s` : 'never';
 }
 
+// WHY a row stood down. Three things can hold a slot, and an operator reading
+// the booth log needs to tell them apart: a quiet gap that hasn't elapsed, a
+// rendered segment still waiting for a track boundary, and another row that
+// took the minute. Each carries its own numbers.
+export type TalkWaitReason =
+  | { held: 'gap'; gap: TalkGap }
+  | { held: 'pending'; pendingKind: string }
+  | { held: 'yield'; to: TalkKind };
+
+// The clause that says what is holding the slot. Kept as one function so the
+// stand-down and missed lines can't describe the same cause differently.
+function becauseOf(reason: TalkWaitReason): string {
+  if (reason.held === 'gap') {
+    return `last standalone talk ${sinceLabel(reason.gap)} ago, `
+      + `minimum gap ${Math.round(reason.gap.needMs / 1000)}s`;
+  }
+  if (reason.held === 'pending') {
+    return `a ${reason.pendingKind} is rendered and waiting for the next track boundary`;
+  }
+  return `${reason.to} took the minute`;
+}
+
 // The stand-down line: the reason AND the numbers behind it, so this class of
 // scheduling collision is visible in the booth log instead of being inferred
 // from an absence. Logged once per slot by the caller (a per-minute tick would
 // otherwise repeat it for every minute of the window).
-export function standDownLine(row: TalkSlot, slot: string, gap: TalkGap): string {
-  return `[${row.kind}] stood down at ${slotLabel(row, slot)} — last standalone talk ${sinceLabel(gap)} ago, `
-    + `minimum gap ${Math.round(gap.needMs / 1000)}s (retrying until ${endLabel(row, slot)})`;
+export function standDownLine(row: TalkSlot, slot: string, reason: TalkWaitReason): string {
+  const until = row.opens === 'external' ? '' : `:${windowEndMinute(row, Number(slot))}`;
+  return `[${row.kind}] stood down at ${slotLabel(row, slot)} — ${becauseOf(reason)} `
+    + `(retrying until ${until})`;
 }
 
-// The window closed unfired. Carries the gap numbers too, because this is the
-// only line an operator gets when the very last minute of a window is the first
-// one to be blocked.
-export function missedLine(row: TalkSlot, slot: string, gap: TalkGap): string {
-  return `[${row.kind}] slot ${slotLabel(row, slot)} missed — last standalone talk ${sinceLabel(gap)} ago, `
-    + `minimum gap ${Math.round(gap.needMs / 1000)}s never cleared before ${endLabel(row, slot)}`;
+// The window closed unfired. Carries the same numbers, because this is the only
+// line an operator gets when the very last minute of a window is the first one
+// to be blocked.
+export function missedLine(row: TalkSlot, slot: string, reason: TalkWaitReason): string {
+  const tail = row.opens === 'external'
+    ? 'and it has no second chance'
+    : `window closed at :${windowEndMinute(row, Number(slot))}`;
+  return `[${row.kind}] slot ${slotLabel(row, slot)} missed — ${becauseOf(reason)}; ${tail}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -252,16 +317,25 @@ export function missedLine(row: TalkSlot, slot: string, gap: TalkGap): string {
 // ---------------------------------------------------------------------------
 
 export type TalkPlan =
-  // In the window, eligible, but the quiet gap hasn't elapsed. `log` is the one
-  // line to write (null when this slot has already reported) and `markLogged`
-  // is what the caller should remember so the next minute stays quiet.
-  | { kind: TalkKind; act: 'wait'; slot: string; slotKey: string; gap: TalkGap; log: string | null; markLogged: string | null }
+  // In the window and eligible, but something is holding the slot — the quiet
+  // gap, a rendered segment still waiting for a boundary, or a higher-priority
+  // row that took the minute. `log` is the one line to write (null when this
+  // slot has already reported) and `markLogged` is what the caller should
+  // remember so the next minute stays quiet.
+  | { kind: TalkKind; act: 'wait'; slot: string; slotKey: string; reason: TalkWaitReason; log: string | null; markLogged: string | null }
   // Air it. The caller claims `slotKey` BEFORE awaiting the segment.
   | { kind: TalkKind; act: 'fire'; slot: string; slotKey: string; gap: TalkGap };
 
 export type TalkTickInput = {
   now: Date;
   lastTalkBreakAt: number;
+  // A segment already rendered and queued for the next track boundary, by kind
+  // (queue's `_pendingVoice`), or null. This is talk that has NOT aired, so
+  // `lastTalkBreakAt` cannot see it, and it is the reason a :20 banter tick
+  // could read a clear gap and still land ten seconds in front of a :15 ident
+  // (#1419). Rows that run a gap check honour it; a row with `minGapMs: 0` has
+  // opted out of gap questions entirely and ignores this too.
+  pendingTalk: { kind: string } | null;
   // Resolved lazily, and only for a row whose window is actually open and
   // unfired — the live gates are cheap but they are policy, and evaluating them
   // for a row that isn't due would report a stand-down nobody asked about.
@@ -273,9 +347,28 @@ export type TalkTickInput = {
   slots?: readonly TalkSlot[];
 };
 
+// A held slot, with the log-once bookkeeping every hold shares: the window's
+// LAST minute reports the chance being lost (and always reports, since it may
+// be the first blocked minute), any other minute reports once per slot and then
+// stays quiet.
+function waitPlan(row: TalkSlot, slot: string, slotKey: string, reason: TalkWaitReason, p: TalkTickInput): TalkPlan {
+  const base = { kind: row.kind, act: 'wait' as const, slot, slotKey, reason };
+  if (!canRetry(row, slot, p.now.getMinutes())) {
+    return { ...base, log: missedLine(row, slot, reason), markLogged: null };
+  }
+  // Once per slot, not once per tick: the stand-down used to be a bare
+  // `return`, which is why a starved hour left nothing in the log to explain
+  // itself (#1419).
+  if (p.logged[row.kind] === slotKey) return { ...base, log: null, markLogged: null };
+  return { ...base, log: standDownLine(row, slot, reason), markLogged: slotKey };
+}
+
 // One row's decision, or null for "nothing to do" — outside the window, already
 // spoken, or not eligible this minute. Silent by design: a per-minute tick that
 // narrated every ineligible minute would bury the booth log.
+//
+// Arbitration is NOT here: this answers "would this row like the minute?", and
+// talkTickPlan below resolves the rows that both would.
 export function talkSlotPlan(row: TalkSlot, p: TalkTickInput): TalkPlan | null {
   const minute = p.now.getMinutes();
   if (minute % row.stride !== 0) return null;
@@ -286,36 +379,47 @@ export function talkSlotPlan(row: TalkSlot, p: TalkTickInput): TalkPlan | null {
   const slotKey = talkSlotKey(row.kind, p.now, slot);
   if (row.oneFirePerSlot && p.fired[row.kind] === slotKey) return null;
   if (!p.eligible(row.kind)) return null;
+  // A row that runs a gap check is asking "has the listener had a moment of
+  // quiet?", and a rendered segment queued for the next boundary is the same
+  // question's answer arriving late. Checked before the gap because it is the
+  // more specific reason, and the operator wants the specific one.
+  if (row.minGapMs > 0 && p.pendingTalk) {
+    return waitPlan(row, slot, slotKey, { held: 'pending', pendingKind: p.pendingTalk.kind }, p);
+  }
   const gap = talkGap({ nowMs: p.now.getTime(), lastTalkBreakAt: p.lastTalkBreakAt, needMs: row.minGapMs });
   if (gap.clear) return { kind: row.kind, act: 'fire', slot, slotKey, gap };
-  // The window's last minute is the chance being LOST, so it says so rather
-  // than promising a retry that can't happen — and it carries the numbers,
-  // because it is the only line an operator gets when the last minute is also
-  // the first one to be blocked.
-  if (row.opens !== 'external' && minute === windowEndMinute(row, Number(slot))) {
-    return { kind: row.kind, act: 'wait', slot, slotKey, gap, log: missedLine(row, slot, gap), markLogged: null };
-  }
-  // Once per slot, not once per tick: the stand-down used to be a bare
-  // `return`, which is why a starved hour left nothing in the log to explain
-  // itself (#1419).
-  if (p.logged[row.kind] === slotKey) {
-    return { kind: row.kind, act: 'wait', slot, slotKey, gap, log: null, markLogged: null };
-  }
-  return { kind: row.kind, act: 'wait', slot, slotKey, gap, log: standDownLine(row, slot, gap), markLogged: slotKey };
+  return waitPlan(row, slot, slotKey, { held: 'gap', gap }, p);
 }
 
 // Everything this minute has to do, in dispatch order. Rows that have nothing
 // to do are absent rather than present-and-skipped, so the caller's loop is the
 // list of things that actually happen.
+//
+// ONE TALKER PER MINUTE. Where the old crons partitioned minutes by hand so two
+// segments could not be scheduled together (#310), the table lets windows
+// overlap — an ident's :15 window now reaches into banter's :20 one — and
+// resolves the overlap here instead. The loser does NOT lose its slot: it waits
+// inside its own window and takes the next clear minute, which is #1419's
+// postpone-don't-cancel rule generalised from banter to every row.
+//
+// A row yields only to a row that is FIRING this minute, never to one that is
+// merely open. Yielding to an open-but-blocked row would let a high-priority
+// row sit on its whole window holding everything below it — the same starvation
+// #1419 was, one layer up.
 export function talkTickPlan(p: TalkTickInput): TalkPlan[] {
   const rows = p.slots ?? TALK_SLOTS;
-  const out: { plan: TalkPlan; priority: number; index: number }[] = [];
+  const out: { row: TalkSlot; plan: TalkPlan; index: number }[] = [];
   rows.forEach((row, index) => {
     const plan = talkSlotPlan(row, p);
-    if (plan) out.push({ plan, priority: row.priority, index });
+    if (plan) out.push({ row, plan, index });
   });
   // Stable: equal priorities keep table order, so the table itself stays the
   // one place the running order is written down.
-  out.sort((a, b) => (a.priority - b.priority) || (a.index - b.index));
-  return out.map(o => o.plan);
+  out.sort((a, b) => (a.row.priority - b.row.priority) || (a.index - b.index));
+  let speaker: TalkKind | null = null;
+  return out.map(({ row, plan }) => {
+    if (plan.act !== 'fire') return plan;
+    if (!speaker) { speaker = row.kind; return plan; }
+    return waitPlan(row, plan.slot, plan.slotKey, { held: 'yield', to: speaker }, p);
+  });
 }
