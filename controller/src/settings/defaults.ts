@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import { ARTIST_VARIETY_WINDOW } from '../broadcast/dj-agent/artist-guard.js';
 import {
   BEDS_CROSS_SEC_BOUNDS,
+  BEDS_TAIL_SEC_BOUNDS,
   SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
   BEDS_THRESHOLD_SEC_BOUNDS,
   CROSSFADE_DURATION_BOUNDS,
@@ -529,9 +530,13 @@ export const DEFAULTS = {
     // incoming track's vocal onset is unknown; a measured onset wins. See
     // bed-policy.rampBudgetMs. Requests ignore it — see requestIntros.
     thresholdSec: 12,
-    // The bed's own exit crossfade — how long the next song takes to ramp in under
-    // the DJ's closing words.
+    // The bed's own exit crossfade — how long the next song takes to ramp in
+    // after the tail below.
     crossSec: 6,
+    // Solo bed between the DJ's last word and the start of that ramp (#1485
+    // FR 5c). Sized INTO the bed rather than taken out of it, so this is the
+    // quiet an operator hears at any crossSec — see bed-policy.bedLengthFor.
+    tailSec: 3,
   },
   // Dead-air trim — cut near-silent runs off the head/tail of a track so a bad
   // rip's leading blank or a long mastering gap doesn't air as silence
@@ -595,6 +600,7 @@ export const BOUNDS = {
   crossfadeDuration: { ...CROSSFADE_DURATION_BOUNDS, type: 'float' },
   bedsThresholdSec: { ...BEDS_THRESHOLD_SEC_BOUNDS, type: 'float' },
   bedsCrossSec: { ...BEDS_CROSS_SEC_BOUNDS, type: 'float' },
+  bedsTailSec: { ...BEDS_TAIL_SEC_BOUNDS, type: 'float' },
   // Ceiling from the shared show schema: the strict show validator bounds-checks
   // a show's override against this station figure, so two copies would drift.
   maxTrackSeconds: { min: 0, max: SHOW_MAX_TRACK_SECONDS, type: 'int' },

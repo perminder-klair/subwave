@@ -981,6 +981,7 @@ export async function load() {
       requestIntros: typeof stored.beds?.requestIntros === 'boolean' ? stored.beds.requestIntros : DEFAULTS.beds.requestIntros,
       thresholdSec: Number.isFinite(stored.beds?.thresholdSec) ? stored.beds.thresholdSec : DEFAULTS.beds.thresholdSec,
       crossSec: Number.isFinite(stored.beds?.crossSec) ? stored.beds.crossSec : DEFAULTS.beds.crossSec,
+      tailSec: Number.isFinite(stored.beds?.tailSec) ? stored.beds.tailSec : DEFAULTS.beds.tailSec,
     },
     silenceTrim: {
       enabled:
@@ -1914,6 +1915,7 @@ export async function update(patch) {
       requestIntros?: boolean;
       thresholdSec?: number;
       crossSec?: number;
+      tailSec?: number;
     }>('beds', patch.beds);
     if (bd.enabled !== undefined) {
       next.beds.enabled = bd.enabled;
@@ -1926,6 +1928,9 @@ export async function update(patch) {
     }
     if (bd.crossSec !== undefined) {
       next.beds.crossSec = bd.crossSec;
+    }
+    if (bd.tailSec !== undefined) {
+      next.beds.tailSec = bd.tailSec;
     }
   }
   if ('silenceTrim' in patch) {

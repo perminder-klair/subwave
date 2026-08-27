@@ -15,13 +15,13 @@ import {
   BED_TAIL_SEC,
 } from '../src/broadcast/bed-policy.js';
 
-const OPTS = { thresholdSec: 12, crossSec: 6 };
+const OPTS = { thresholdSec: 12, crossSec: 6, tailSec: 3 };
 
 // The constants ARE the contract: 2.5s of head is the latency budget (1.5s
 // watcher tick + 0.5s intro.txt poll + slack) and every formula-shaped
 // assertion below would still pass if they drifted — so pin the literals.
 assert.equal(BED_HEAD_SEC, 2.5);
-assert.equal(BED_TAIL_SEC, 2.0);
+assert.equal(BED_TAIL_SEC, 3.0);
 
 // ── rampBudgetMs — the three-state vocal read ────────────────────────────────
 
@@ -119,16 +119,25 @@ assert.equal(bedWanted(NaN, null, OPTS, 'request'), false);
 
 // ── bedLengthFor — the arithmetic ────────────────────────────────────────────
 
+// The quiet an operator actually hears: from the DJ's last word to the moment
+// the next song starts fading in. Every assertion in this section is about this
+// number, because it is the one the setting names (#1485 FR 5c) — before the
+// fix it was a residual of tail minus cross and ran NEGATIVE at the defaults.
+function tailGap(voiceSec: number, opts: typeof OPTS, entryCrossSec = 0): number {
+  const { bedSec, crossSec } = bedLengthFor(voiceSec * 1000, opts, entryCrossSec);
+  const rampStartsAt = bedSec - crossSec;
+  const djEndsAt = entryCrossSec + BED_HEAD_SEC + voiceSec;
+  return round2(rampStartsAt - djEndsAt);
+}
+
 {
   const { bedSec, crossSec } = bedLengthFor(20_000, OPTS);
-  assert.equal(bedSec, 24.5);   // literal, not the formula — see the pins above
+  assert.equal(bedSec, 31.5);   // literal, not the formula — see the pins above
   assert.equal(crossSec, 6);
 
-  // The load-bearing property: the next song's fade-in starts ~4s before the
-  // DJ's clip ends, so the closing words ride over the incoming track.
-  const rampStartsAt = bedSec - crossSec;      // 18.5
-  const djEndsAt = BED_HEAD_SEC + 20;          // 22.5
-  assert.equal(round2(djEndsAt - rampStartsAt), 4);
+  // The load-bearing property: the bed plays ALONE for tailSec after the DJ
+  // stops, and only then does the next song start fading in.
+  assert.equal(tailGap(20, OPTS), 3);
 }
 
 // The entry cross (the predecessor's exit canvas the bed fades in under) is
@@ -136,31 +145,68 @@ assert.equal(bedWanted(NaN, null, OPTS, 'request'), false);
 // cross-FEED time, a full canvas before the bed is dominant.
 {
   const { bedSec, crossSec } = bedLengthFor(20_000, OPTS, 10);
-  assert.equal(bedSec, 34.5);   // 10 entry + 2.5 head + 20 voice + 2 tail
+  // 10 entry + 2.5 head + 20 voice + 3 tail + 6 cross
+  assert.equal(bedSec, 41.5);
   assert.equal(crossSec, 6);
-  // The DJ now lands at entry+head and still ends ~4s into the ramp.
-  const djEndsAt = 10 + BED_HEAD_SEC + 20;     // 32.5
-  assert.equal(round2(djEndsAt - (bedSec - crossSec)), 4);
+  assert.equal(tailGap(20, OPTS, 10), 3);
 }
 
-// The 4s ramp holds at any script length — it's a property of the constants,
-// not of the clip.
+// The gap is a property of tailSec ALONE — not of the clip, the entry cross or
+// the ramp. That independence is the fix: it is what makes the setting mean the
+// same thing on a hard-cut station and on a 15s-ramp one, and it is what fails
+// the moment someone takes the cross back out of the sum.
 for (const voiceSec of [8, 15, 30, 45]) {
-  const { bedSec, crossSec } = bedLengthFor(voiceSec * 1000, OPTS);
-  const overlap = round2((BED_HEAD_SEC + voiceSec) - (bedSec - crossSec));
-  assert.equal(overlap, 4, `ramp overlap drifted at voiceSec=${voiceSec}`);
+  for (const entry of [0, 6, 12]) {
+    for (const crossSec of [0, 2, 6, 15]) {
+      assert.equal(
+        tailGap(voiceSec, { ...OPTS, crossSec }, entry), 3,
+        `tail gap drifted at voiceSec=${voiceSec} entry=${entry} cross=${crossSec}`,
+      );
+    }
+  }
 }
+
+// tailSec is honoured across its whole range, 0 included: a 0 puts the ramp on
+// the DJ's last syllable. That is the HARD end of this setting, not the old
+// behaviour — the pre-#1485 overlap talked over the incoming song and is
+// deliberately unreachable now (bed-policy's header says why).
+for (const tailSec of [0, 1.5, 3, 15]) {
+  assert.equal(tailGap(20, { ...OPTS, tailSec }), tailSec, `tailSec=${tailSec} not honoured`);
+}
+
+// A cold-loaded pre-#1485 settings file has no tailSec at all. bed-policy
+// coerces rather than producing NaN — the normaliser fills the key on the real
+// path, but BedOpts is also built by hand here and at a couple of call sites.
+{
+  const noTail = { thresholdSec: 12, crossSec: 6 } as typeof OPTS;
+  assert.equal(bedLengthFor(20_000, noTail).bedSec, 31.5);
+  assert.equal(tailGap(20, noTail), BED_TAIL_SEC);
+}
+
+// Garbage in the same key takes the same route (never NaN into cue_out), and a
+// negative tail is floored at 0 rather than eating into the voice.
+for (const bad of [NaN, Infinity, undefined, null, 'x']) {
+  const opts = { ...OPTS, tailSec: bad } as unknown as typeof OPTS;
+  assert.equal(bedLengthFor(20_000, opts).bedSec, 31.5, `tailSec=${String(bad)} did not coerce`);
+}
+assert.equal(tailGap(20, { ...OPTS, tailSec: -5 }), 0);
 
 // Clamp: the ramp can never start before the bed does, even on a script so
-// short bedWanted would never pass it.
+// short bedWanted would never pass it. Structurally unreachable since the cross
+// joined the sum — kept as arithmetic insurance, so pin that it stays inert.
 {
   const { bedSec, crossSec } = bedLengthFor(200, OPTS);
   assert.ok(crossSec <= bedSec - 1, 'cross must leave at least 1s of bed');
-  assert.ok(crossSec > 0);
+  assert.equal(crossSec, OPTS.crossSec, 'clamp bit a case it should no longer reach');
 }
 
-// A crossSec of 0 is honoured (hard cut into the next song, no ramp).
-assert.equal(bedLengthFor(20_000, { ...OPTS, crossSec: 0 }).crossSec, 0);
+// A crossSec of 0 is honoured (hard cut into the next song, no ramp) and the
+// bed is sized down with it — the tail is still there.
+{
+  const { bedSec, crossSec } = bedLengthFor(20_000, { ...OPTS, crossSec: 0 });
+  assert.equal(crossSec, 0);
+  assert.equal(bedSec, 25.5);   // 2.5 head + 20 voice + 3 tail + 0 cross
+}
 
 // ── pickBed ──────────────────────────────────────────────────────────────────
 

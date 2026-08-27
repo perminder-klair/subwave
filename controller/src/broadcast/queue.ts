@@ -738,7 +738,12 @@ class Queue {
         : budgetMs == null ? `no vocal onset, over ${cfg.thresholdSec}s`
           : budgetMs === Infinity ? 'instrumental'
             : `vocals at ${Math.round(budgetMs / 1000)}s`;
-      this.log('beds', `bed "${pick.name}" ${bedSec}s (${entryCrossSec}s entry cross) → ${crossSec}s ramp into "${item.track?.title}" (${Math.round(voiceMs / 1000)}s link, ${why})`);
+      // The tail is reported because it is the part an operator HEARS as a
+      // decision (a beat of bare bed) rather than as a fade, and it is the term
+      // that makes bedSec outgrow a short bed file — so when the line above
+      // says "no bed long enough", this line on the previous bed shows why.
+      const tailSec = Number.isFinite(cfg.tailSec) ? cfg.tailSec : bedPolicy.BED_TAIL_SEC;
+      this.log('beds', `bed "${pick.name}" ${bedSec}s (${entryCrossSec}s entry cross) → ${tailSec}s tail → ${crossSec}s ramp into "${item.track?.title}" (${Math.round(voiceMs / 1000)}s link, ${why})`);
     } catch (err) {
       // A bed is a garnish — never let it cost the station a track.
       this.log('error', `Bed push failed: ${(err as Error).message}`);

@@ -2036,6 +2036,7 @@ export const BEDS_THRESHOLD_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 60
 // The bed's ramp into the next song. bed-policy clamps this against the bed's
 // own length too, so a long ramp on a short link can't invert the arithmetic.
 export const BEDS_CROSS_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
+export const BEDS_TAIL_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
 
 // Dead-air trim: the smallest edge gap worth cutting. The FLOOR is what keeps
 // the feature from eating deliberate silence — a segued album leaves a beat
@@ -2364,6 +2365,10 @@ export const bedsPatchSchema = settingsBlockOf({
   crossSec: settingsFloatLike(
     BEDS_CROSS_SEC_BOUNDS,
     `beds.crossSec must be number in [${BEDS_CROSS_SEC_BOUNDS.min}, ${BEDS_CROSS_SEC_BOUNDS.max}]`,
+  ),
+  tailSec: settingsFloatLike(
+    BEDS_TAIL_SEC_BOUNDS,
+    `beds.tailSec must be number in [${BEDS_TAIL_SEC_BOUNDS.min}, ${BEDS_TAIL_SEC_BOUNDS.max}]`,
   ),
 });
 

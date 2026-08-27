@@ -23,6 +23,11 @@ export interface BedOpts {
   thresholdSec: number;
   // The bed's own exit crossfade — how long the next song takes to ramp in.
   crossSec: number;
+  // Solo bed between the DJ's last word and the start of that ramp. Optional
+  // because BedOpts is `settings.beds` passed verbatim and a cold-loaded
+  // pre-#1485 file has no such key; bedLengthFor coerces an absent or
+  // unusable value to BED_TAIL_SEC.
+  tailSec?: number;
 }
 
 // Why a bed is being considered for this clip. 'link' is the original case:
@@ -39,9 +44,13 @@ export type BedReason = 'link' | 'request';
 // it degrades to exactly today's behaviour, which is the point.
 export const BED_HEAD_SEC = 2.5;
 
-// Bed + next song blend after the DJ's clip ends, so the bed doesn't die on the
-// DJ's last syllable.
-export const BED_TAIL_SEC = 2.0;
+// Default for `settings.beds.tailSec` — how long the bed plays ALONE after the
+// DJ's last word, before the next song starts fading in. 3s is the low end of
+// what was asked for and reads as a deliberate beat rather than a gap; the
+// operator can take it to 0 (ramp begins on the last syllable) or out to 15.
+//
+// This is a specified quantity now, not a residual — see bedLengthFor.
+export const BED_TAIL_SEC = 3.0;
 
 // The ramp budget: how long the DJ may talk over the START of `track` before
 // trampling something the listener wants to hear. Reads the three-state vocal
@@ -100,7 +109,7 @@ export function bedWanted(
 
 // How long the bed plays, and how long its exit cross is.
 //
-//   bedSec = entryCross + head + voice + tail
+//   bedSec = entryCross + head + voice + tail + cross
 //
 // `entryCrossSec` is the PREDECESSOR's exit canvas — the cross the bed fades in
 // under. The bed's clock (cue_out, and the marker the controller keys the link
@@ -109,26 +118,41 @@ export function bedWanted(
 // tail budget. Without it, the DJ's opening words land over the outgoing song's
 // fade rather than over the solo bed.
 //
-// The bed's liq_cross_duration means the next song starts fading in at
-// (bedSec - crossSec), landing ~4s before the DJ's clip ends with the defaults.
-// That overlap IS the ramp: the DJ's closing words play over the song's
-// fade-in, the way a presenter talks up to the vocal.
+// #1485 (FR 5c) — THE TAIL AND THE CROSS ARE BOTH IN THE SUM, and that is the
+// whole fix. The bed's liq_cross_duration means the next song starts fading in
+// at (bedSec - crossSec), so the quiet the operator actually hears between the
+// last word and the next song is (bedSec - crossSec) - (entryCross + head +
+// voice) — i.e. tail MINUS cross. While the sum omitted the cross, that quiet
+// was a RESIDUAL of two settings that know nothing about each other, and at the
+// shipped defaults it was negative: tail 2s against a 6s bed ramp put the song
+// under the DJ's closing FOUR seconds. A bed exists precisely so the DJ is not
+// talking over the song it is introducing, so the feature was inverting itself
+// on a default station, and no value of `crossSec` could fix it without also
+// changing how the song comes in. Adding the cross to the sum makes the quiet
+// exactly `tailSec` at every crossfade length, which is what makes it a
+// setting an operator can reason about rather than a leftover.
 //
-// The clamp keeps the arithmetic total rather than trusting the policy to stay
-// honest: the ramp must never start before the bed does. It used to be
-// unreachable because bedWanted() refused a short script; since #1465 a
-// 'request' beds at ANY length, so what keeps it out of range is now only the
-// arithmetic — with the defaults it needs entryCrossSec + clip under 1s, i.e. a
-// sub-second clip on a hard-cut station. Close enough to matter, far enough not
-// to design around: don't reason about which scripts can reach it, the clamp is
-// the reason it doesn't have to hold.
+// Deliberately NOT reachable any more: the old overlap, where a presenter talks
+// up to the vocal over the incoming song. That is a real radio gesture, but it
+// is the gesture beds were built to replace — the un-bedded path already does
+// it, and `bedWanted` returning false is how you ask for it. tailSec 0 is the
+// hard end of this range: the ramp starts on the last syllable.
+//
+// The clamp is now structurally unreachable — crossSec is a term of bedSec, so
+// bedSec - 1 exceeds it by head - 1 (1.5s) plus the voice — and it stays as
+// arithmetic insurance rather than as a case to reason about.
 export function bedLengthFor(
   voiceMs: number,
   opts: BedOpts,
   entryCrossSec = 0,
 ): { bedSec: number; crossSec: number } {
-  const bedSec = Math.max(0, entryCrossSec) + BED_HEAD_SEC + voiceMs / 1000 + BED_TAIL_SEC;
-  const crossSec = Math.min(Math.max(0, opts.crossSec), bedSec - 1);
+  const crossReq = Math.max(0, opts.crossSec);
+  // Absent (pre-#1485 settings file) or unusable → the default. Same posture as
+  // the normaliser in settings.ts; bed-policy repeats it because BedOpts is
+  // also built by hand at a couple of call sites and in the tests.
+  const tailSec = Number.isFinite(opts.tailSec) ? Math.max(0, opts.tailSec as number) : BED_TAIL_SEC;
+  const bedSec = Math.max(0, entryCrossSec) + BED_HEAD_SEC + voiceMs / 1000 + tailSec + crossReq;
+  const crossSec = Math.min(crossReq, bedSec - 1);
   return { bedSec: round2(bedSec), crossSec: round2(crossSec) };
 }
 
