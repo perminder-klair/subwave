@@ -1,8 +1,14 @@
 // Scheduler — drives autonomous behaviour:
 //   - refreshes the auto-playlist file Liquidsoap falls back to
-//   - hourly time check (top of every hour, in character)
-//   - station IDs (every ~45 min, varied by frequency setting)
+//   - the TALK TICK: one per-minute cron over the slot table in
+//     talk-scheduler.ts, which owns every scheduled spoken segment — the hourly
+//     time check (:00, in character), station IDs (:15/:30/:45, varied by
+//     frequency), guest-show banter (:20/:50 windows) and programme beats — as
+//     well as the unconditional :00 session roll
 //   - agentic segment tick (weather, news, now-playing digs, facts, web search) every 5 min
+//   - maintenance: auto-playlist refresh, voice/WAL cleanup, takeover expiry,
+//     the nightly doctor and the operator's own skill crons. These have no
+//     arbitration concern and stay on crons of their own.
 
 import cron, { type ScheduledTask } from 'node-cron';
 import { config } from '../config.js';
@@ -28,7 +34,7 @@ import * as programme from './programme.js';
 import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
 import { speakClockAllowed, stationIdDaypartStamp } from './clock-policy.js';
-import { banterTickPlan, banterCronExpression } from './banter-policy.js';
+import { talkTickPlan, type TalkKind, type TalkPlan } from './talk-scheduler.js';
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
@@ -586,28 +592,6 @@ export async function rollSessionNow({ airHandoff = true }: { airHandoff?: boole
   return { ctx, introAired };
 }
 
-async function hourlyCheck() {
-  // The top of the hour is the natural show boundary for STATE — roll the
-  // session here so a scheduled show starting/ending opens a fresh chat
-  // history even if no track happens to start right on the hour.
-  //
-  // It is NOT the natural boundary for the AIR, though: :00 lands mid-song.
-  // So don't air the mic-pass from here (issue: handoffs ducking the middle of
-  // a track). The roll leaves it pending and the next track boundary airs it —
-  // normally queue.onTrackStarted has already rolled and aired it a track
-  // earlier via its look-ahead, making this call a no-op.
-  const rolled = await rollSessionNow({ airHandoff: false });
-  if (rolled.ctx && (rolled.introAired || programme.suppressHourly())) return;
-  if (!shouldFire('hourly')) return;
-  if (!djCallsAllowed()) return;  // nobody listening — stay on the auto playlist
-  if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
-  try {
-    await runHourlyCheck();
-  } catch (err) {
-    queue.log('error', `Hourly check failed: ${err.message}`);
-  }
-}
-
 // Generate and air a between-track DJ link for whatever is playing now.
 // Gate-free; used by the /dj/segment command route.
 export async function runLink() {
@@ -669,22 +653,13 @@ export async function runBanter() {
   });
 }
 
-// Slot bookkeeping for the banter WINDOW (banter-policy.ts). The tick runs
-// every minute for ten minutes after each slot opens, so it needs to remember
-// two things: which slot has already spoken (one exchange per slot — and the
-// claim is taken BEFORE the await, since rendering a multi-voice exchange
-// outlasts a minute and a second tick would otherwise start a concurrent one),
-// and which slot it has already reported standing down for, so a per-minute
-// tick logs the reason once rather than ten times.
-let banterFiredSlot: string | null = null;
-let banterLoggedSlot: string | null = null;
-
 // Whether a banter tick may consider firing at all: the show opted in, it has
 // the roster an exchange needs, the frequency rung allows this slot, someone is
 // listening, and the daily token budget isn't spent. Collapsed into one flag for
-// banterTickPlan, which owns the window/gap/logging state machine — the same
-// split as skillCronAllowed below, and for the same reason: the rule is worth
-// pinning, and it can't be if it reads live settings and listener state itself.
+// the talk-slot planner, which owns the window/gap/logging state machine — the
+// same split as skillCronAllowed below, and for the same reason: the rule is
+// worth pinning, and it can't be if it reads live settings and listener state
+// itself.
 function banterEligible(now: Date): boolean {
   const { show, guests } = settings.getOnAirRoster();
   if (!show?.banter || !guests.length) return false;  // solo show, or not opted in
@@ -692,38 +667,6 @@ function banterEligible(now: Date): boolean {
   if (!djCallsAllowed()) return false;  // nobody listening — save the tokens and the breath
   if (!optionalSegmentsAllowed()) return false;  // over the daily token budget
   return true;
-}
-
-// A guest-show exchange, gated on the quiet gap. Fires the FIRST minute of its
-// window where the gap is clear rather than only at the minute the slot opens —
-// a boundary-deferred ident airing at :19:35 used to cancel the :20 exchange
-// outright (and with it the whole hour on `moderate`, which has one slot), when
-// what it should do is postpone it to :24:35 (#1419).
-//
-// Every standalone talk break sets the gap — idents, hourly, handoff, banter AND
-// the segment-director spots (weather/news/…). Track-tied links don't, or a
-// chatty DJ-mode station would never banter (queue.getLastTalkBreakAt).
-async function banterTick() {
-  const now = new Date();
-  const plan = banterTickPlan({
-    now,
-    eligible: banterEligible(now),
-    lastTalkBreakAt: queue.getLastTalkBreakAt(),
-    firedSlot: banterFiredSlot,
-    loggedSlot: banterLoggedSlot,
-  });
-  if (plan.act === 'skip') return;
-  if (plan.act === 'wait') {
-    if (plan.markLogged) banterLoggedSlot = plan.markLogged;
-    if (plan.log) queue.log('scheduler', plan.log);
-    return;
-  }
-  banterFiredSlot = plan.slotKey;  // claim the slot before any await — see above
-  try {
-    await runBanter();
-  } catch (err) {
-    queue.log('error', `Banter failed: ${err.message}`);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -755,24 +698,11 @@ async function skillsTick() {
 // The feature beat mid-hour (station-minute :35–:39) and the outro in the final
 // hour's closing minutes (station-minute :55+). Placement is a STATION-clock
 // fact, but station zones sit at :30/:45 offsets (IST, Nepal), so a fixed
-// process-minute cron would land mid-show — instead the tick runs every 5
-// minutes and dispatches on programme.dueBeat(), with the beat flags making
-// repeat ticks inside a window no-ops. The intro has no cron of its own; it
-// rides the session-settled hook. Gating lives in programme.ts.
+// process-minute slot would land mid-show — instead the talk tick samples the
+// row every 5 minutes and dispatches on programme.dueBeat(), with the beat
+// flags making repeat ticks inside a window no-ops. The intro has no slot of
+// its own; it rides the session-settled hook. Gating lives in programme.ts.
 // ---------------------------------------------------------------------------
-
-async function programmeTick() {
-  if (!programme.onAir()) return;
-  const beat = programme.dueBeat();
-  if (!beat) return;
-  try {
-    const ctx = await getFullContext();
-    if (beat === 'feature') await programme.featureTick(queue, ctx);
-    else await programme.outroTick(queue, ctx);
-  } catch (err) {
-    queue.log('error', `Programme ${beat} tick failed: ${err.message}`);
-  }
-}
 
 // Gate-free manual runners — the /dj/segment command route. An operator press
 // always fires (only "no programme show on air" throws). Intro/outro re-mark
@@ -837,14 +767,164 @@ export async function runStationId({ atNextTrack = false } = {}) {
   });
 }
 
-async function stationId() {
-  if (!shouldFire('stationId')) return;
-  if (!djCallsAllowed()) return;  // nobody listening — skip the ident
-  if (!optionalSegmentsAllowed()) return;  // over the daily token budget — mute optional segments
+// ---------------------------------------------------------------------------
+// TALK TICK
+// The one cron that owns every SCHEDULED spoken segment — hourly check,
+// programme beats, banter, idents. They compete for one scarce resource (the
+// listener's ear), so they are rows in one table (talk-scheduler.ts) driven by
+// one per-minute tick, rather than four crons coordinating implicitly through
+// hand-partitioned minutes (#1500).
+//
+// What this tick does NOT do:
+//   - decide eligibility. Every gate still resolves through its own policy
+//     module at fire time (talkEligible below); the table carries placement, not
+//     policy, and a second copy of a gate here would be the bug.
+//   - schedule the segment director. skills/_agent.ts keeps its own `*/5` cron
+//     and its own cooldowns/floor — folding it in is #1500 PR 3.
+//   - arbitrate. No row loses a slot to another one yet; the windows in the
+//     table are today's exact firing minutes. Turning that on is PR 2.
+//
+// Everything below traps its own errors: node-cron doesn't catch async throws,
+// and where a throw used to cost one cron its own tick it would now cost the
+// minute that every scheduled segment shares.
+// ---------------------------------------------------------------------------
+
+// Per-kind slot bookkeeping. A row with a real window ticks every minute for as
+// long as it stays open, so it has to remember two things: which slot has
+// already spoken (one fire per slot — and the claim is taken BEFORE the await,
+// since rendering a multi-voice exchange outlasts a minute and the next tick
+// would otherwise start a concurrent one), and which slot it has already
+// reported standing down for, so the reason is logged once rather than once a
+// minute. Rows that don't claim (programme, whose beat flags live in session
+// state) simply never have theirs read back.
+const talkFired: Partial<Record<TalkKind, string | null>> = {};
+const talkLogged: Partial<Record<TalkKind, string | null>> = {};
+
+type SessionRoll = Awaited<ReturnType<typeof rollSessionNow>> | null;
+
+// Whether a row that is due this minute may actually fire — the live gates,
+// unchanged and still owned by their own modules. Resolved lazily by the
+// planner, and only for a row whose window is open and unfired.
+function talkEligible(kind: TalkKind, now: Date, rolled: SessionRoll): boolean {
+  if (kind === 'hourly') {
+    // A programme show opens its episode with the intro, and that intro owns
+    // the top of the show's first hour — so when it aired (in this tick's roll,
+    // or minutes ago via the track-start call site) the generic time check
+    // stands down, the same one-talker-per-slot rule as #310. Reads the roll's
+    // own result, which is why the roll runs first and this is asked after it.
+    if (rolled?.ctx && (rolled.introAired || programme.suppressHourly(now))) return false;
+    if (!shouldFire('hourly', now)) return false;
+    if (!djCallsAllowed()) return false;  // nobody listening — stay on the auto playlist
+    if (!optionalSegmentsAllowed()) return false;  // over the daily token budget — mute optional segments
+    return true;
+  }
+  if (kind === 'station-id') {
+    if (!shouldFire('stationId', now)) return false;
+    if (!djCallsAllowed()) return false;  // nobody listening — skip the ident
+    if (!optionalSegmentsAllowed()) return false;  // over the daily token budget — mute optional segments
+    return true;
+  }
+  if (kind === 'banter') return banterEligible(now);
+  // Programme beats carry no frequency/listener/budget gate of their own — a
+  // planned episode's beats are the show. `dueBeat` (the row's external slot)
+  // has already said one is due.
+  if (kind === 'programme') return programme.onAir(now);
+  return false;
+}
+
+async function runTalkSlot(plan: Extract<TalkPlan, { act: 'fire' }>) {
   try {
-    await runStationId({ atNextTrack: true });
+    switch (plan.kind) {
+      case 'hourly':
+        await runHourlyCheck();
+        return;
+      case 'station-id':
+        // Scheduled idents hold for the next track boundary instead of ducking
+        // the current song mid-vocal at an arbitrary wall-clock minute — the
+        // table's `air: 'next-track'`, which only this row carries.
+        await runStationId({ atNextTrack: true });
+        return;
+      case 'banter':
+        await runBanter();
+        return;
+      case 'programme': {
+        const ctx = await getFullContext();
+        if (plan.slot === 'feature') await programme.featureTick(queue, ctx);
+        else await programme.outroTick(queue, ctx);
+        return;
+      }
+    }
   } catch (err) {
-    queue.log('error', `Station ID failed: ${err.message}`);
+    queue.log('error', `${TALK_FAILURE_LABEL[plan.kind](plan.slot)} failed: ${err.message}`);
+  }
+}
+
+// The booth-log wording each row keeps from the cron it replaced — operators
+// grep these.
+const TALK_FAILURE_LABEL: Record<TalkKind, (slot: string) => string> = {
+  hourly: () => 'Hourly check',
+  'station-id': () => 'Station ID',
+  banter: () => 'Banter',
+  programme: slot => `Programme ${slot} tick`,
+};
+
+async function talkTick() {
+  const now = new Date();
+
+  // The top of the hour is the natural show boundary for STATE — roll the
+  // session here so a scheduled show starting/ending opens a fresh chat history
+  // even if no track happens to start right on the hour.
+  //
+  // UNCONDITIONAL, and deliberately outside the table: this is not a talk
+  // action. A muted station, an empty one and one over its token budget all
+  // still have to roll the session, plan the episode and leave the handoff
+  // pending — gating it behind the hourly row's eligibility would stop a quiet
+  // station rolling at all (#1500 finding 3).
+  //
+  // :00 is NOT the natural boundary for the AIR, though: it lands mid-song. So
+  // don't air the mic-pass from here (handoffs ducking the middle of a track) —
+  // the roll leaves it pending and the next track boundary airs it. Normally
+  // queue.onTrackStarted has already rolled and aired it a track earlier via
+  // its look-ahead, making this call a no-op.
+  const rolled = now.getMinutes() === 0
+    // rollSessionNow traps every step of its own, but this tick is now the one
+    // cron behind every scheduled segment: a rejection here must not take the
+    // rest of the minute — or, unhandled, the process — with it.
+    ? await rollSessionNow({ airHandoff: false }).catch(err => {
+      queue.log('error', `Session roll failed: ${err.message}`);
+      return null;
+    })
+    : null;
+
+  // A gate that throws used to cost one cron its tick; it would now cost the
+  // minute every scheduled segment shares. runTalkSlot traps the segments
+  // themselves — this covers the planning around them.
+  let plans: TalkPlan[] = [];
+  try {
+    plans = talkTickPlan({
+      now,
+      lastTalkBreakAt: queue.getLastTalkBreakAt(),
+      eligible: kind => talkEligible(kind, now, rolled),
+      externalSlot: kind => (kind === 'programme' ? programme.dueBeat(now) : null),
+      fired: talkFired,
+      logged: talkLogged,
+    });
+  } catch (err) {
+    queue.log('error', `Talk tick planning failed: ${err.message}`);
+  }
+
+  // Sequential, in the table's dispatch order. Only the programme row can come
+  // due alongside another (the fixed windows are disjoint), and the voice chain
+  // serialises anyway — so this costs nothing and makes the running order a
+  // property of the table instead of of cron registration order.
+  for (const plan of plans) {
+    if (plan.act === 'wait') {
+      if (plan.markLogged) talkLogged[plan.kind] = plan.markLogged;
+      if (plan.log) queue.log('scheduler', plan.log);
+      continue;
+    }
+    talkFired[plan.kind] = plan.slotKey;  // claim the slot before any await — see above
+    await runTalkSlot(plan);
   }
 }
 
@@ -1073,32 +1153,18 @@ export function startScheduler() {
   // Auto-playlist refresh, every AUTO_QUEUE_REFRESH_MINUTES (default 60)
   cron.schedule(`*/${config.show.autoQueueRefreshMinutes} * * * *`, refreshAutoPlaylist);
 
-  // Top of every hour
-  cron.schedule('0 * * * *', hourlyCheck);
+  // Every scheduled spoken segment — the hourly check at :00, idents at
+  // :15/:30/:45, banter's :20/:50 windows and the programme beats — plus the
+  // unconditional :00 session roll. One tick over one slot table (see talkTick
+  // and talk-scheduler.ts) rather than four crons hand-partitioning the hour
+  // between themselves (#1500).
+  cron.schedule('* * * * *', talkTick);
 
   // Segment tick every 5 minutes — the segment-director agent decides whether
   // to air a segment; per-kind cooldowns and the frequency floor live in it.
+  // Deliberately NOT a talk-table row yet: it is the one talker with no
+  // wall-clock slot at all, and folding it in is #1500 PR 3.
   cron.schedule('*/5 * * * *', skillsTick);
-
-  // Station ID candidate ticks at :15, :30, :45 — handler gates by frequency.
-  // Deliberately NOT :00: the hourly check owns the top of the hour, and firing
-  // both there stacked two voice segments on each other (issue #310).
-  cron.schedule('15,30,45 * * * *', stationId);
-
-  // Guest-show banter: slots OPEN at :20/:50 — minutes no other wall-clock
-  // talker owns (same issue-#310 reasoning as the ident slots) — and each stays
-  // open for BANTER_WINDOW_MINUTES, so the tick runs every minute across both
-  // windows. That tail is what stops an off-clock talk break (a
-  // boundary-deferred ident, a zero-floor segment spot) from cancelling the
-  // exchange outright instead of postponing it (#1419). The handler gates on
-  // the show's banter toggle, the live roster, frequency, listeners, budget and
-  // the quiet gap, and fires at most once per slot.
-  cron.schedule(banterCronExpression(), banterTick);
-
-  // Programme beats: feature mid-hour, outro in the final minutes of the
-  // show's last hour — dispatched on STATION-zone minute windows (see
-  // programmeTick). No-ops outside a programme episode.
-  cron.schedule('*/5 * * * *', programmeTick);
 
   // Takeover expiry sweep — cheap (no LLM unless an expiry actually reverts).
   cron.schedule('*/5 * * * *', overrideJanitor);

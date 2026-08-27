@@ -1,0 +1,1 @@
+{"code":"import{communityPersonas,readCommunityPersona}from\"../community/registry.js\";export{communityPersonas as listCommunityPersonas,readCommunityPersona};\n","warnings":[],"map":{"version":3,"mappings":"AAWA,OACuB,kBACrB,yBACK","names":[],"ignoreList":[],"sources":["/home/klair/Projects/subwave/controller/src/personas/community.ts"],"sourcesContent":[null]}}

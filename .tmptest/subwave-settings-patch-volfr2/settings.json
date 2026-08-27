@@ -1,0 +1,337 @@
+{
+  "jingleRatio": 7,
+  "crossfadeDuration": 8.5,
+  "maxTrackSeconds": 0,
+  "archive": {
+    "enabled": false,
+    "bitrate": 128,
+    "retentionDays": 30
+  },
+  "stream": {
+    "opusEnabled": false,
+    "opusBitrate": 96,
+    "flacEnabled": false,
+    "aacEnabled": false,
+    "aacBitrate": 192,
+    "bitrate": 192,
+    "oggIcyMetadata": true,
+    "bufferSeconds": 22,
+    "idleWhenEmpty": false,
+    "idleAfterMinutes": 10,
+    "maxListeners": 100
+  },
+  "loudness": {
+    "targetLufs": -15,
+    "maxBoostDb": 6,
+    "source": "measured"
+  },
+  "weather": {
+    "lat": 30.7333,
+    "lng": 76.7794,
+    "locationName": "Punjab",
+    "onAirLocation": "",
+    "units": "metric"
+  },
+  "djPrompt": "",
+  "djPrompts": [],
+  "activeDjPromptId": "",
+  "djHouseRules": "",
+  "djSpeakClock": true,
+  "station": "SUB/WAVE",
+  "stationDescription": "",
+  "timezone": "",
+  "locale": "en-US",
+  "theme": {
+    "active": "classic-light"
+  },
+  "festivals": [
+    {
+      "month": 1,
+      "day": 1,
+      "name": "Test",
+      "mood": "newmood",
+      "description": "",
+      "windowDays": 0
+    }
+  ],
+  "moods": [
+    {
+      "name": "newmood",
+      "clapPrompt": ""
+    },
+    {
+      "name": "chill",
+      "clapPrompt": ""
+    }
+  ],
+  "moodSchedule": {
+    "early-morning": "newmood",
+    "morning": "newmood",
+    "midday": "chill",
+    "afternoon": "chill",
+    "drive-time": "chill",
+    "evening": "chill",
+    "late-evening": "chill",
+    "after-hours": "chill"
+  },
+  "weatherMoods": {
+    "clear": "newmood",
+    "cloudy": "",
+    "foggy": "",
+    "rainy": "",
+    "snowy": "",
+    "stormy": ""
+  },
+  "ui": {
+    "boothBuddy": true,
+    "skin": "classic",
+    "tuneInOverlay": true
+  },
+  "privacy": {
+    "privatePlayer": false,
+    "listenerAuth": false,
+    "password": "",
+    "publishPersonaSouls": true
+  },
+  "requests": {
+    "enabled": true,
+    "maxPending": 3,
+    "globalHourlyCap": 77,
+    "repeatCooldownMin": 120,
+    "cooldownSec": 60,
+    "perIpHourlyCap": 8,
+    "onePendingPerIp": true
+  },
+  "personas": [
+    {
+      "id": "p_default0",
+      "name": "Marlowe",
+      "tagline": "Late-night company and well-chosen records.",
+      "frequency": "moderate",
+      "scriptLength": "concise",
+      "soul": "warm, slightly understated, never corny — late-night BBC 6 Music presenter; observant, dry humour, specific",
+      "language": "",
+      "avatar": "",
+      "tts": {
+        "engine": "piper",
+        "cloudProvider": "openai",
+        "voice": "bm_george",
+        "gainDb": 0,
+        "speed": 1
+      }
+    },
+    {
+      "id": "p_default1",
+      "name": "Wren",
+      "tagline": "Small details, quiet rooms, one good image.",
+      "frequency": "quiet",
+      "scriptLength": "concise",
+      "soul": "thoughtful and a little wistful; finds small details in tracks and rooms; favours one well-chosen image over a list",
+      "language": "",
+      "avatar": "",
+      "tts": {
+        "engine": "piper",
+        "cloudProvider": "openai",
+        "voice": "bf_alice",
+        "gainDb": 0,
+        "speed": 1
+      }
+    },
+    {
+      "id": "p_default2",
+      "name": "Hale",
+      "tagline": "Says less, means more. Leaves space.",
+      "frequency": "moderate",
+      "scriptLength": "concise",
+      "soul": "plainspoken and grounded; says less, means more; would rather leave space than fill it",
+      "language": "",
+      "avatar": "",
+      "tts": {
+        "engine": "piper",
+        "cloudProvider": "openai",
+        "voice": "bm_daniel",
+        "gainDb": 0,
+        "speed": 1
+      }
+    }
+  ],
+  "activePersonaId": "p_default0",
+  "tts": {
+    "enabled": true,
+    "defaultEngine": "piper",
+    "fallback": {
+      "enabled": false,
+      "engine": "piper",
+      "voice": "",
+      "cloudProvider": "openai"
+    },
+    "heavyEnabled": false,
+    "kokoro": {
+      "voice": "bf_isabella",
+      "lang": ""
+    },
+    "chatterbox": {
+      "referenceVoice": ""
+    },
+    "pocketTts": {
+      "voice": "alba"
+    },
+    "cloud": {
+      "enabled": false,
+      "provider": "openai",
+      "model": "gpt-4o-mini-tts",
+      "voice": "alloy",
+      "apiKey": "",
+      "compatApiKey": "",
+      "baseUrl": "",
+      "voiceStability": 0.5,
+      "voiceStyle": 0,
+      "voiceSimilarityBoost": 0.75,
+      "voiceUseSpeakerBoost": true,
+      "temperature": 0.7,
+      "topP": 0.7,
+      "latency": "normal",
+      "compatParams": []
+    },
+    "remote": {
+      "url": ""
+    },
+    "gainDb": {
+      "piper": 0,
+      "kokoro": 0,
+      "chatterbox": 0,
+      "pocket-tts": 0,
+      "cloud": 0,
+      "remote": 0
+    },
+    "speed": {
+      "piper": 1,
+      "kokoro": 1,
+      "chatterbox": 1,
+      "pocket-tts": 1,
+      "cloud": 1,
+      "remote": 1
+    },
+    "corrections": []
+  },
+  "llm": {
+    "provider": "ollama",
+    "model": "",
+    "apiKey": "",
+    "keys": {},
+    "ollamaUrl": "",
+    "providerBaseUrls": {},
+    "baseUrl": "",
+    "reasoning": false,
+    "toolChoice": "required",
+    "numCtx": 16384,
+    "repeatPenalty": 1.15,
+    "pickerAgent": true,
+    "noRepeatWindow": 250,
+    "artistVarietyWindow": 5,
+    "requestWebResolve": false,
+    "agentTimeoutMs": 45000,
+    "pauseWhenEmpty": false,
+    "dailyTokenCap": 0,
+    "budgetSoftPct": 80,
+    "maxOutputTokens": 0,
+    "discoverySteps": 0,
+    "exemptRequests": true,
+    "debugRawRequests": false,
+    "fallback": {
+      "enabled": false,
+      "provider": "ollama",
+      "model": "",
+      "apiKey": "",
+      "ollamaUrl": "",
+      "providerBaseUrls": {},
+      "baseUrl": "",
+      "reasoning": false,
+      "toolChoice": "required",
+      "numCtx": 16384,
+      "repeatPenalty": 1.15,
+      "discoverySteps": 0
+    }
+  },
+  "search": {
+    "provider": "duckduckgo",
+    "apiKey": "real-search-key",
+    "baseUrl": ""
+  },
+  "embedding": {
+    "enabled": true,
+    "provider": "",
+    "model": "",
+    "providerBaseUrls": {},
+    "baseUrl": "",
+    "ollamaUrl": "",
+    "apiKey": "",
+    "seedCount": 0,
+    "knnNeighbours": 10,
+    "moodVoteThreshold": 0.4,
+    "confidenceThreshold": 0.35,
+    "maxActiveLearningRounds": 3,
+    "audioFusionWeight": 0.5,
+    "batchSize": 25,
+    "enrichment": {
+      "lastfmTags": null,
+      "lyrics": true,
+      "originalYear": true
+    }
+  },
+  "skills": {
+    "enabled": {}
+  },
+  "audio": {
+    "embeddings": false,
+    "vocalActivity": false,
+    "stemCache": false,
+    "stemCacheGb": 15.5,
+    "analyzeQuietOnly": false,
+    "analyzeQuietMinutes": 10
+  },
+  "transitions": {
+    "pairDrain": true,
+    "stemBlends": false
+  },
+  "sfx": {
+    "enabled": true
+  },
+  "beds": {
+    "enabled": false,
+    "requestIntros": true,
+    "thresholdSec": 9.5,
+    "crossSec": 3,
+    "tailSec": 3
+  },
+  "silenceTrim": {
+    "enabled": false,
+    "minGapMs": 1500
+  },
+  "webhooks": [],
+  "webhooksPolicy": {
+    "trackPlayListenerGated": false
+  },
+  "scrobble": {
+    "lastfm": {
+      "enabled": true,
+      "apiKey": "real-key",
+      "apiSecret": "s1",
+      "sessionKey": "sk",
+      "username": "set"
+    },
+    "listenbrainz": {
+      "enabled": false,
+      "userToken": "",
+      "username": "",
+      "baseUrl": ""
+    }
+  },
+  "likes": {
+    "enabled": true,
+    "starInNavidrome": true,
+    "influenceDj": false,
+    "maxTracks": 1,
+    "windowDays": 30
+  }
+}
