@@ -36,7 +36,8 @@ Open an issue with:
 
 - what you expected vs. what happened,
 - steps to reproduce,
-- relevant logs (`docker compose logs -f controller` / `liquidsoap`).
+- relevant logs (`docker compose logs -f controller` / `liquidsoap`),
+- the version you are running (`git describe --tags` or the release tag).
 
 ## Pull requests
 
