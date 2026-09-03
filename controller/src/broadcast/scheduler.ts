@@ -191,12 +191,17 @@ async function refreshAutoPlaylistInner() {
   // library with duplicate copies of a song (N distinct ids for one track)
   // can't slip a just-played track back in or stack copies into the pool (#874).
   // The artist cap stops a deep-catalogue artist from dominating the fallback.
+  // Strict playlist mode hard-filters the finished pool down to inPl below
+  // regardless of which source contributed a track, so lifting the cap here is
+  // safe — it only stops the show-playlist source itself from being capped to
+  // AUTO_MAX_PER_ARTIST tracks before that filter runs, which otherwise
+  // defeats a strict single-artist/album show.
   // Pure + unit-tested in scripts/auto-pool.test.ts.
   const builder = createPoolBuilder({
     recentIds,
     recentKeys,
     targetPool: TARGET_POOL,
-    maxPerArtist: AUTO_MAX_PER_ARTIST,
+    maxPerArtist: strictPlaylist ? Infinity : AUTO_MAX_PER_ARTIST,
   });
   const pool = builder.pool;
   const fromSource = builder.fromSource;

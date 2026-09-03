@@ -704,8 +704,12 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   }
 
   // De-dup by id, cap per artist so one name can't dominate the pool (the LLM
-  // can only rotate artists across what it's handed), shuffle, cap.
-  const MAX_PER_ARTIST = 3;
+  // can only rotate artists across what it's handed), shuffle, cap. A strict
+  // playlist anchor is an intentional single-artist/album pool (selectionPool
+  // was already narrowed to inPl above) — capping it here would silently
+  // shrink a strict single-artist show down to 3 candidate tracks and defeat
+  // the point of pinning that playlist.
+  const MAX_PER_ARTIST = strictPlaylist ? Infinity : 3;
   const perArtist = new Map<string, number>();
   // Soft tempo/harmonic re-rank toward the current track BEFORE the cap, so
   // compatible tracks are likelier to survive the slice — never a hard filter,
