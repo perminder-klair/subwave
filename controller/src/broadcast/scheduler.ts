@@ -950,7 +950,7 @@ async function nightlyDoctor() {
 //     (skillCronAllowed, mirroring skillsTick): voice off, mid-programme,
 //     no listeners, over the daily token budget;
 //   - the per-skill eligibility rules (skills/eligibility.ts): the operator's
-//     enabled toggle and the on-air persona's skill allowlist. Both are
+//     enabled toggle, host persona skill allowlist, and co-host roster rule. These are
 //     re-read at FIRE time, not at registration — a skill disabled at 07:00
 //     must not still speak at 08:00, and the persona on air is a fact about
 //     the moment the timer fires.
@@ -989,6 +989,17 @@ export function skillCronAllowed(gates: SkillCronGates): boolean {
   return skillCronStandDownReason(gates) === null;
 }
 
+export function skillCronEligibility(cap: any, enabled: Record<string, boolean | undefined>, host: any, guests: any[]) {
+  return skillEligible({
+    seeded: cap.seeded,
+    skill: cap.skill,
+    enabled,
+    personaSkills: host?.skills,
+    requiresCohosts: !!cap.cohosts,
+    hasCohosts: !!host && guests.length > 0,
+  });
+}
+
 export function syncSkillCrons() {
   // destroy(), not stop(): node-cron 4 keeps every task in a process-global
   // registry, and stop() only halts firing — the entry stays. This runs on
@@ -1019,12 +1030,13 @@ export function syncSkillCrons() {
       // Logged rather than silent: a cron that stands itself down leaves no
       // other trace, and "my 8am skill never spoke" is otherwise undiagnosable.
       const now = new Date();
-      const eligible = skillEligible({
-        seeded: cap.seeded,
-        skill: cap.skill,
-        enabled: settings.get().skills?.enabled || {},
-        personaSkills: settings.getEffectivePersona(now)?.skills,
-      });
+      const { host, guests } = settings.getOnAirRoster(now);
+      const eligible = skillCronEligibility(
+        cap,
+        settings.get().skills?.enabled || {},
+        host,
+        guests,
+      );
       if (!eligible.allowed) {
         queue.log('scheduler', `[skills] cron "${cap.kind}" stood down — ${eligible.reason}`);
         return;

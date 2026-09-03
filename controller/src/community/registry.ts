@@ -56,6 +56,7 @@ export interface CommunitySkill {
   // than dropped from the listing.
   cron?: string;
   cronOnly?: boolean;
+  cohosts?: boolean;
   window?: 'any' | 'commute';
   context?: string;
   submittedBy?: string;
@@ -181,6 +182,7 @@ function normalizeSkill(raw: any): CommunitySkill | null {
     cooldown: optStr(raw?.cooldown, 16),
     cron: optStr(raw?.cron, 64),
     cronOnly: raw?.cronOnly === true ? true : undefined,
+    cohosts: raw?.cohosts === true ? true : undefined,
     window: raw?.window === 'commute' ? 'commute' : undefined,
     context: optStr(raw?.context, 200),
     submittedBy: optStr(raw?.submittedBy, 80),

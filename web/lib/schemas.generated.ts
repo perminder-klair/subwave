@@ -3987,12 +3987,21 @@ const skillCronOnlySchema = z.preprocess(
   z.boolean({ error: 'cronOnly must be a boolean' }).default(false),
 );
 
+// Opt-in multi-persona discussion. Absent/null stays false for compatibility;
+// a present form value must be a literal boolean so a typo cannot silently turn
+// a normal skill into a multi-voice exchange.
+const skillCohostsSchema = z.preprocess(
+  skillNullToUndefined,
+  z.boolean({ error: 'cohosts must be a boolean' }).default(false),
+);
+
 // The fields every skill's SKILL.md carries, built-in or custom.
 export const builtinSkillFileSchema = z.object({
   label: skillLabelSchema,
   cooldown: skillCooldownSchema,
   cron: skillCronSchema,
   cronOnly: skillCronOnlySchema,
+  cohosts: skillCohostsSchema,
   context: skillContextSchema,
   tags: skillTagsSchema,
   brief: skillBriefSchema,
@@ -4035,6 +4044,7 @@ export function skillFieldsFrom(kind: string, parsed: SkillFileParsed) {
     cooldown: parsed.cooldown,
     cron: parsed.cron,
     cronOnly: parsed.cronOnly,
+    cohosts: parsed.cohosts,
     contextFields: parsed.context,
     window: parsed.window,
     requiresKey: parsed.requiresKey,

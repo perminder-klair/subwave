@@ -573,6 +573,7 @@ export default function SkillsPanel() {
                       {s.label || s.name}
                     </span>
                     {s.custom && <Pill className="text-[8px]">custom</Pill>}
+                    {s.cohosts && <MetaChip accent>co-hosted</MetaChip>}
                   </div>
 
                   {s.ready === false && (

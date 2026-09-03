@@ -121,11 +121,12 @@ async function previousAngle(showId: string): Promise<string | null> {
 
 // The capability menu the producer may build features from: enabled, ready,
 // and owned by the host persona — the same offer the segment director makes.
-function featureKindMenu(host: { skills?: string[] } | null | undefined): { kind: string; desc: string }[] {
+function featureKindMenu(host: { skills?: string[] } | null | undefined, hasCohosts: boolean): { kind: string; desc: string }[] {
   try {
     return skillCatalog()
       .filter((c) => c.enabled && c.ready)
       .filter((c) => !host?.skills || host.skills.includes(c.name))
+      .filter((c) => !c.cohosts || hasCohosts)
       .map((c) => ({ kind: c.kind, desc: c.description || c.label }));
   } catch {
     return [];
@@ -172,7 +173,7 @@ export async function ensurePlan(ctx: SessionContext, now = session.contextDate(
         guests: roster.guests,
         context: ctx,
         previousAngle: prevAngle,
-        skillKinds: pinned ? [] : featureKindMenu(roster.host),
+        skillKinds: pinned ? [] : featureKindMenu(roster.host, roster.guests.length > 0),
         pinnedKind: pinned,
       }));
     prog.status = 'ok';
