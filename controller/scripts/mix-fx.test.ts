@@ -61,6 +61,67 @@ async function main() {
     );
   });
 
+  // Equality between two readings is necessary but NOT sufficient: two equally
+  // OFF-grid values compare equal just as happily as two aligned ones, and
+  // that is precisely how a clamp applied after the octave fold flattened the
+  // whole 110–160 band onto a flat 0.75s chop gate while the invariance test
+  // above stayed green. So assert the property the doc comments actually
+  // promise: the stamped period is the track's beat (or its dotted eighth)
+  // scaled by a power of two, i.e. it lands ON the grid at some octave.
+  //
+  // `unit` is derived from the RAW bpm on purpose, so this cannot be satisfied
+  // by mirroring whatever timingBpm happens to do — any octave of the reading
+  // is a power of two away from it either way. Division by an exact power of
+  // two is exact in binary FP, so the only slack is the 2-dp stamp rounding,
+  // which the expectation reproduces rather than tolerates.
+  function assertOnGrid(value: number, unit: number, lo: number, hi: number, label: string) {
+    const octave = Math.round(Math.log2(unit / value));
+    const exact = unit / Math.pow(2, octave);
+    assert.equal(
+      value, Math.round(exact * 100) / 100,
+      `${label}: ${value}s is not a power-of-two multiple of ${unit}s (nearest is ${exact})`,
+    );
+    assert.ok(value >= lo && value <= hi, `${label}: ${value}s outside the audible window [${lo}, ${hi}]`);
+  }
+
+  await test('effect periods stay on the beat grid across the whole tempo range', () => {
+    // 30–300 BPM in 0.1 steps: every real reading, both octaves of it, and the
+    // 110 fold boundary from both sides.
+    for (let tenths = 300; tenths <= 3000; tenths++) {
+      const bpm = tenths / 10;
+      const beat = 60 / bpm;
+      assertOnGrid(chopPeriodFor(bpm), beat, 0.25, 0.75, `chop @ ${bpm}`);
+      assertOnGrid(washoutDelayFor(bpm), 0.75 * beat, 0.18, 0.45, `washout tap @ ${bpm}`);
+      assertOnGrid(loopBarFor(bpm), 4 * beat, 1.2, 3.4, `loop bar @ ${bpm}`);
+    }
+  });
+
+  await test('effect periods are octave-invariant below the 110 fold line too', () => {
+    // timingBpm only folds at or above 110, so a true 52 BPM track stored as
+    // 104 is left raw — the measured #1417 corpus starts at 124. The effect
+    // periods must not care: they fold their own result by powers of two, so
+    // they agree on either side of that threshold. The bar-snapped canvases
+    // legitimately do not, which is why they are not asserted here.
+    for (const bpm of [41.7, 52, 55, 56.2, 63, 76, 104, 109]) {
+      assert.equal(chopPeriodFor(bpm), chopPeriodFor(bpm * 2), `chop @ ${bpm}`);
+      assert.equal(washoutDelayFor(bpm), washoutDelayFor(bpm * 2), `washout tap @ ${bpm}`);
+      assert.equal(loopBarFor(bpm), loopBarFor(bpm * 2), `loop bar @ ${bpm}`);
+    }
+  });
+
+  await test('the 110–160 band keeps a one-beat chop gate (the #1434 regression)', () => {
+    // The clamp-after-fold bug returned a flat 0.75s here — 1.38 beats at 110
+    // rising to 1.90 at 152 — so the gate walked the grid and cut mid-note,
+    // against chopPeriodFor's own "opens at each beat start" contract.
+    assert.equal(chopPeriodFor(110), 0.55);
+    assert.equal(chopPeriodFor(120), 0.5);
+    assert.equal(chopPeriodFor(128), 0.47);
+    assert.equal(chopPeriodFor(140), 0.43);
+    // 152 is the doubled reading of 76: half a beat of the folded pulse.
+    assert.equal(chopPeriodFor(152), 0.39);
+    assert.equal(chopPeriodFor(76), 0.39);
+  });
+
   console.log('washoutCrossSecondsFor (canvas: bar snap, clamps, ceiling):');
 
   await test('snaps to whole bars of the flagged track', () => {
