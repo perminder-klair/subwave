@@ -4,7 +4,11 @@
 // back-and-forth); each line is then rendered in its speaker's own TTS voice
 // and aired back-to-back through the serialized voice chain
 // (queue.announceExchange). Speaker ids ride a per-call Zod enum, so the model
-// can't invent a voice we can't render.
+// can't invent a voice we can't render — and that enum stays STRICT: a speaker
+// repaired into whichever persona looks closest airs the line in the wrong
+// voice, which is worse than losing the beat. settings.castSpeakerIdRule() is
+// the prompt-side mitigation for the rejections that follow from that (#1512);
+// it lowers the odds of a rejected exchange and cannot rule one out.
 
 import { z } from 'zod';
 import * as settings from '../../../settings.js';
@@ -46,7 +50,7 @@ ${castBlock(host, guests)}
 
 Rules:
 - ${MIN_LINES} to ${MAX_LINES} lines total, at least two different speakers. Let the turn-taking breathe — it doesn't have to alternate mechanically, but nobody monologues.
-- For every structured "speaker" field, copy the persona id exactly and verbatim from the cast list above. Never use a display name, the HOST or GUEST role, or an altered, reformatted, or rewritten persona id.
+- ${settings.castSpeakerIdRule()}
 - Each speaker stays in THEIR OWN character per the voice notes. The host carries the room; guests chip in as themselves.
 - Ground it in the moment you're given (the track playing, the hour, the show) — react, riff, disagree gently, tease. One thread, not a topic list.
 - This is a conversation, NOT a link: do not introduce, back-announce, or name-drop the next track, do not read a station ident, do not announce the time.

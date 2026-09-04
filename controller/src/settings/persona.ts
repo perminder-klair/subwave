@@ -346,6 +346,25 @@ export function castHouseRulesBlock(): string {
   );
 }
 
+// The exact-persona-id rule for those same two cast prompts, and for the same
+// single-wording reason as castHouseRulesBlock above: both wrap a per-call
+// `speaker` enum built from the active cast, so a model that answers with a
+// display name or the bare role sinks the WHOLE exchange — the enum rejects the
+// object, djObject's free-text recovery attempt fails on it again, and the
+// caller gets an error instead of an exchange (issue #1512, reported on the
+// Banter button; the guest-show open/close beats fail the same way, silently,
+// because nobody pressed anything).
+//
+// The enum stays strict deliberately: a repaired speaker is a line aired in the
+// WRONG voice, which is worse than a dropped beat. So this rule is the
+// mitigation, and unlike castHouseRulesBlock's scope clause — which says the
+// same thing but only renders once an operator has set djHouseRules, i.e. not
+// on the default install the bug was reported from — it is unconditional.
+export function castSpeakerIdRule(): string {
+  return 'For every structured "speaker" field, copy the persona id exactly and verbatim from the cast list above. '
+    + 'Never use a display name, the HOST or GUEST role, or an altered, reformatted, or rewritten persona id.';
+}
+
 // Persona prelude shared by every tool-loop agent system prompt — the picker
 // and request agents in broadcast/dj-agent.js, and the segment director in
 // skills/_agent.js. These agents build task-specific templates (with tools,

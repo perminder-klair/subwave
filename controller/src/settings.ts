@@ -210,6 +210,7 @@ export {
   agentLanguageReminder,
   agentPersonaPreamble,
   castHouseRulesBlock,
+  castSpeakerIdRule,
   effectiveFrequency,
   effectiveMaxTrackSec,
   effectsActive,
