@@ -104,18 +104,22 @@ async function main() {
   console.log('washoutDelayFor (tempo-synced comb tap):');
 
   await test('dotted eighth of the octave-safe timing pulse', () => {
-    // 120 folds to the safer 60 BPM pulse; its 0.75s tap reaches the audible
-    // clamp, matching a track reported directly at 60.
-    assert.equal(washoutDelayFor(120), 0.45);
-    // 100 BPM → 0.45s (right at the clamp edge).
+    // 120 folds to the 60 BPM pulse: its 0.75s tap is out of the audible
+    // window, so it HALVES to 0.375 — a dotted eighth of the 120 reading and a
+    // dotted sixteenth of the folded pulse, which is the same instant.
+    assert.equal(washoutDelayFor(120), 0.38);
+    // 100 BPM → 0.45s (right at the window edge, no halving needed).
     assert.equal(washoutDelayFor(100), 0.45);
   });
 
-  await test('clamped for extreme tempi', () => {
-    assert.equal(washoutDelayFor(60), 0.45);   // slow → capped high
-    // 300 folds through 150 to the aligned 75 BPM pulse, then caps high. A
-    // genuine fast track still lands on every fourth beat at that pulse.
-    assert.equal(washoutDelayFor(300), 0.45);
+  await test('halved, not clamped, for extreme tempi', () => {
+    // Slow → the dotted eighth overshoots the window and halves onto the grid.
+    // A clamp would have parked this at the 0.45 ceiling, which is 0.45 of a
+    // beat at 60 BPM and a subdivision of nothing.
+    assert.equal(washoutDelayFor(60), 0.38);
+    // 300 folds through 150 to the 75 BPM pulse, then halves once: 0.3s is
+    // 1.5 beats of the raw reading, still on the eighth-note grid.
+    assert.equal(washoutDelayFor(300), 0.3);
   });
 
   await test('unknown BPM → 0.30s neutral default (radio.liq fallback twin)', () => {

@@ -187,6 +187,15 @@ export const CROSS_MAX_SECONDS = 14;
 // at 80 BPM, where every pulse is still aligned to every other real beat.
 // Never multiply a low reading; doing that could turn a genuine slow bar into
 // a half-bar. Keeping the fold here means every duration consumer agrees.
+//
+// The 110 line is the MEASURED one (#1417 saw 62–88 BPM stored at 124–176), so
+// a double that lands below it — a true 52 read as 104 — is deliberately left
+// alone rather than guessed at. That residue only reaches the BAR-SNAPPED
+// canvases (adaptive/ending/washout), which size a whole number of bars and so
+// do change with the octave. The effect PERIODS (chop, washout tap, loop bar)
+// each fold their own result onto the beat grid by powers of two, which is
+// octave-invariant by construction — they are correct on either side of this
+// threshold and do not depend on it. Don't widen the threshold to "fix" them.
 function timingBpm(bpm: number | null): number | null {
   if (typeof bpm !== 'number' || !Number.isFinite(bpm) || bpm <= 0) return null;
   let folded = bpm;
@@ -435,14 +444,26 @@ export function washoutCrossSecondsFor(a: Analysis, maxSec: number | null = null
 }
 
 // Comb tap spacing for the washout tail — a dotted eighth of the flagged
-// track's octave-safe timing pulse (the classic dub-throw subdivision), clamped
-// so extreme tempi stay in the audible-echo range. Unknown BPM → 0.30 s (the
-// neutral default radio.liq also falls back to when the stamp is absent).
+// track's octave-safe timing pulse (the classic dub-throw subdivision), HALVED
+// into the audible-echo range so extreme tempi stay usable. Unknown BPM →
+// 0.30 s (the neutral default radio.liq also falls back to when the stamp is
+// absent).
+//
+// The range is reached by halving, never by clamping: a clamped tap is a
+// number inside the window that is no longer a subdivision of anything, so the
+// comb drifts against the tail it is supposed to echo. Halving keeps every tap
+// on the grid — at 128 BPM the tap is a dotted eighth of the raw reading and a
+// dotted sixteenth of the folded pulse, which is the same instant either way.
+// Descending from above lands on the one dyadic point in (0.225, 0.45], so the
+// result is identical for a reading and its octave twin at ANY tempo — this
+// consumer does not depend on timingBpm's 110 threshold at all.
 export function washoutDelayFor(bpm: number | null): number {
   const folded = timingBpm(bpm);
   if (folded == null) return 0.3;
-  const clamped = Math.max(0.18, Math.min(0.45, 0.75 * (60 / folded)));
-  return Math.round(clamped * 100) / 100;
+  let tap = 0.75 * (60 / folded);
+  while (tap > 0.45) tap = tap / 2;
+  while (tap < 0.18) tap = tap * 2;
+  return Math.round(tap * 100) / 100;
 }
 
 // Loop tap for the exit loop — one bar (4 beats, 4/4) of the flagged track's
@@ -529,16 +550,26 @@ export function effectAllowedFor(kind: 'sweep' | 'washout' | 'blend' | 'dissolve
 }
 
 // Gate period for the chop — one beat of the OUTGOING track's octave-safe
-// timing pulse (the one being cut), clamped so extreme tempi stay in the
-// stab-audible range. Unknown BPM → 0.5 s (the neutral default radio.liq also
-// falls back to when the stamp is absent). Unlike the washout's dotted-eighth
-// echo tap, the chop cuts ON the beat: the gate opens at each beat start so the
-// downbeat transient survives.
+// timing pulse (the one being cut), HALVED into the stab-audible range so
+// extreme tempi stay usable. Unknown BPM → 0.5 s (the neutral default radio.liq
+// also falls back to when the stamp is absent). Unlike the washout's
+// dotted-eighth echo tap, the chop cuts ON the beat: the gate opens at each
+// beat start so the downbeat transient survives.
+//
+// Halving, never clamping — same reason as washoutDelayFor, and load-bearing
+// here because the clamp bound over the whole 110–160 band once the fold was
+// applied first: every one of those tempi returned a flat 0.75 s, which is 1.4
+// to 1.9 beats and lands on nothing. The gate then walks the grid and cuts
+// mid-note, which is exactly what the "opens at each beat start" promise above
+// rules out. Descending from above lands on the one dyadic point in
+// (0.375, 0.75], so this is octave-invariant at any tempo.
 export function chopPeriodFor(bpm: number | null): number {
   const folded = timingBpm(bpm);
   if (folded == null) return 0.5;
-  const clamped = Math.max(0.25, Math.min(0.75, 60 / folded));
-  return Math.round(clamped * 100) / 100;
+  let period = 60 / folded;
+  while (period > 0.75) period = period / 2;
+  while (period < 0.25) period = period * 2;
+  return Math.round(period * 100) / 100;
 }
 
 // --- Feature 2: transition FX ----------------------------------------------
