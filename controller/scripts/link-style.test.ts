@@ -7,7 +7,10 @@
 // llm/internal/prompts/scripts.ts's linkPrompt), and announce-line.ts — the
 // module that actually COMPOSES the announcement in code, since a model can
 // neither hold a fixed string reliably nor alternate with a line it is never
-// shown.
+// shown. The compose is PURE: it alternates against the link that last AIRED
+// (handed in by the caller), refuses the artists an English frame cannot carry,
+// and pins the /dj/segment button's link to the only form true of a track
+// already playing.
 //
 // Run: npx tsx scripts/link-style.test.ts (auto-discovered by npm test).
 import assert from 'node:assert/strict';
@@ -22,7 +25,8 @@ const { normalizePersona } = await import('../src/settings/normalize.js');
 const { announceLinks } = await import('../src/settings/persona.js');
 const { buildLinkClause } = await import('../src/broadcast/dj-agent/link-clause.js');
 const { linkPrompt, generateLink } = await import('../src/llm/internal/prompts/scripts.js');
-const { announceLine, resetAnnounceAlternation } = await import('../src/broadcast/announce-line.js');
+const { announceLine, nextAnnounceForm } = await import('../src/broadcast/announce-line.js');
+const { queue } = await import('../src/broadcast/queue.js');
 
 const basePersona = () => ({
   name: 'Nova',
@@ -124,35 +128,150 @@ test('announce link prompt names the artist in the fixed two-form contract', () 
 
 // ── announce-line.ts — the station composes and alternates, the model never does ──
 
-test('announceLine alternates This is -> Next up -> This is, and trims the artist', () => {
-  resetAnnounceAlternation();
-  assert.equal(announceLine('  Marvin Gaye  '), 'This is Marvin Gaye.');
-  assert.equal(announceLine('Kim Weston'), 'Next up, Kim Weston.');
-  assert.equal(announceLine('Lee Hazlewood'), 'This is Lee Hazlewood.');
+test('announceLine alternates against the line that last aired, and trims the artist', () => {
+  assert.equal(announceLine('  Marvin Gaye  ', null, { lastLine: null }), 'This is Marvin Gaye.');
+  assert.equal(
+    announceLine('Kim Weston', null, { lastLine: 'This is Marvin Gaye.' }),
+    'Next up, Kim Weston.',
+  );
+  assert.equal(
+    announceLine('Lee Hazlewood', null, { lastLine: 'Next up, Kim Weston.' }),
+    'This is Lee Hazlewood.',
+  );
+});
+
+// The whole point of anchoring on the AIRED line rather than a counter: a
+// composed line that never airs (silence ordered, intro budget, refused pick)
+// must not flip the form, or the next line the listener hears repeats the last
+// one they heard.
+test('a composed link that never airs does not disturb the alternation', () => {
+  const aired = announceLine('A', null, { lastLine: null });
+  assert.equal(aired, 'This is A.');
+  // Composed for a pick that was then deduped/dropped — never logged, so the
+  // next compose still sees the same last-aired line.
+  assert.equal(announceLine('B', null, { lastLine: aired }), 'Next up, B.');
+  assert.equal(announceLine('C', null, { lastLine: aired }), 'Next up, C.');
+});
+
+test('nextAnnounceForm restarts the sequence after a non-announce line', () => {
+  assert.equal(nextAnnounceForm(null), 'this-is');
+  assert.equal(nextAnnounceForm('Dust motes are dancing in the sun.'), 'this-is');
+  assert.equal(nextAnnounceForm('"Next up, Kim Weston."'), 'this-is');
+  assert.equal(nextAnnounceForm('this is marvin gaye.'), 'next-up');
+});
+
+// A link fired from /dj/segment airs OVER the track already playing, so
+// "Next up, <artist>." would be a false claim about what the listener is
+// hearing. Only "This is" is true there, whatever the alternation says.
+test('a link for the track already on air is pinned to the This is form', () => {
+  assert.equal(
+    announceLine('Marvin Gaye', null, { lastLine: 'Next up, Kim Weston.', currentIsOnAir: true }),
+    'This is Marvin Gaye.',
+  );
+  assert.equal(
+    announceLine('Marvin Gaye', null, { lastLine: 'This is Kim Weston.', currentIsOnAir: true }),
+    'This is Marvin Gaye.',
+  );
 });
 
 test('announceLine returns empty string for an empty/whitespace-only artist', () => {
-  resetAnnounceAlternation();
-  assert.equal(announceLine(''), '');
-  assert.equal(announceLine('   '), '');
+  assert.equal(announceLine('', null), '');
+  assert.equal(announceLine('   ', null), '');
+  assert.equal(announceLine(null, null), '');
+  assert.equal(announceLine(undefined, null), '');
+});
+
+// languageDirective binds a persona to speak exclusively in its own language;
+// a hardcoded English frame would put an English line on a Turkish station.
+test('announceLine refuses to compose for a persona that does not speak English', () => {
+  assert.equal(announceLine('Barış Manço', { language: 'Turkish' }), '');
+  assert.equal(announceLine('Marvin Gaye', { language: 'Punjabi' }), '');
+  // Unset and an explicit English both mean English.
+  assert.equal(announceLine('Marvin Gaye', { language: '' }), 'This is Marvin Gaye.');
+  assert.equal(announceLine('Marvin Gaye', { language: 'english' }), 'This is Marvin Gaye.');
+});
+
+// spokenProperNounDirective requires ZERO CJK characters in a spoken field and
+// tells the MODEL to romanize. Composed code can't romanize, so it stands down
+// rather than handing an English voice characters it cannot read.
+test('announceLine refuses to compose a non-Latin artist name', () => {
+  assert.equal(announceLine('ウルフルズ', null), '');
+  assert.equal(announceLine('周杰倫', null), '');
+  assert.equal(announceLine('방탄소년단', null), '');
+  // A Latin name with accents is fine — the directive is about CJK scripts.
+  assert.equal(announceLine('Café Tacvba', null), 'This is Café Tacvba.');
 });
 
 // ── generateLink composes in code and never calls the model when it has an artist ──
 
+// Every generateLink assertion below is also a no-LLM-call assertion: nothing
+// is configured to serve a model in this throwaway STATE_DIR, so a fall-through
+// would either throw or return something else — the exact equality catches both.
+const announcePersona = { linkStyle: 'announce', name: 'Nova', soul: 'warm and dry' };
+
 test('generateLink in announce mode returns the composed line with no LLM call', async () => {
-  resetAnnounceAlternation();
-  const persona = { linkStyle: 'announce', name: 'Nova', soul: 'warm and dry' };
   const result = await generateLink({
     previous: null,
     current: { title: 'Ain\'t No Mountain High Enough', artist: 'Chris Stapleton' },
     context: {},
-    persona,
+    persona: announcePersona,
   });
-  // Deterministic: alternation was just reset, so the first call is 'This is'.
-  // If this ever fell through to the model, either the LLM call would throw
-  // (no provider configured in this throwaway STATE_DIR) or return different
-  // text — either way this exact-equality assertion fails.
   assert.equal(result, 'This is Chris Stapleton.');
+});
+
+test('generateLink alternates announce mode against the link that last aired', async () => {
+  assert.equal(
+    await generateLink({
+      previous: null, current: { artist: 'Chris Stapleton' }, context: {},
+      persona: announcePersona, lastLink: 'This is Kim Weston.',
+    }),
+    'Next up, Chris Stapleton.',
+  );
+  assert.equal(
+    await generateLink({
+      previous: null, current: { artist: 'Chris Stapleton' }, context: {},
+      persona: announcePersona, lastLink: 'Next up, Kim Weston.',
+    }),
+    'This is Chris Stapleton.',
+  );
+});
+
+// scheduler.runLink (the /dj/segment button) airs over the track already
+// playing and passes currentIsOnAir — "Next up" about it would be false.
+test('generateLink announces the on-air track with This is, whatever the alternation', async () => {
+  assert.equal(
+    await generateLink({
+      previous: null, current: { artist: 'Chris Stapleton' }, context: {},
+      persona: announcePersona, lastLink: 'This is Kim Weston.', currentIsOnAir: true,
+    }),
+    'This is Chris Stapleton.',
+  );
+});
+
+// The bug this replaces: with no artist, the announce prompt asked the model
+// for a line whose only permitted forms were "This is <artist>." / "Next up,
+// <artist>." — and a model at temperature 0.3 reads the placeholder out.
+// There is nothing to announce, so there is no link.
+test('generateLink in announce mode drops the link when the track has no artist', async () => {
+  for (const current of [{ title: 'Untitled' }, { title: 'Untitled', artist: '' }, { title: 'Untitled', artist: '   ' }]) {
+    assert.equal(
+      await generateLink({ previous: null, current, context: {}, persona: announcePersona }),
+      '',
+    );
+  }
+});
+
+test('the announce prompt never carries a placeholder in place of an artist name', () => {
+  const prompt = linkPrompt({
+    announce: true,
+    current: { artist: '' },
+    teaseClause: '', patterClause: '', budget: null,
+    lengthPhraseText: 'one or two sentences', clockClause: '', feelClause: '',
+  });
+  assert.doesNotMatch(prompt, /<artist>/);
+  // With no name to announce it falls back to the well-formed natural ask
+  // rather than a two-form contract it cannot fill.
+  assert.match(prompt, /Write a short DJ link/);
 });
 
 test('natural link prompt is unchanged versus the pre-extraction template', () => {
@@ -174,4 +293,48 @@ test('natural link prompt is unchanged versus the pre-extraction template', () =
       + ` Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.`
       + ` Never state the clock time.`,
   );
+});
+
+// ── the air-truth anchor the alternation reads ───────────────────────────────
+
+// djLog entries for voice kinds are written by onSpoken, i.e. after the clip
+// reached the stream — which is the whole reason announce mode alternates
+// against this rather than a counter it advances while composing.
+test('getLastLinkText returns the most recently aired link and ignores other kinds', () => {
+  (queue as any).djLog = [];
+  assert.equal(queue.getLastLinkText(), null);
+
+  queue.log('link', 'This is Marvin Gaye.');
+  queue.log('station-id', 'You are listening to SUB/WAVE.');
+  queue.log('ai-pick', 'Helpless — Neil Young');
+  assert.equal(queue.getLastLinkText(), 'This is Marvin Gaye.');
+  assert.equal(nextAnnounceForm(queue.getLastLinkText()), 'next-up');
+
+  queue.log('link', 'Next up, Kim Weston.');
+  assert.equal(queue.getLastLinkText(), 'Next up, Kim Weston.');
+  assert.equal(nextAnnounceForm(queue.getLastLinkText()), 'this-is');
+  (queue as any).djLog = [];
+});
+
+// ── the announce contract follows the persona who SPEAKS the line ────────────
+
+// The link is pinned to session.onAirPersona() at enqueue, and inside the
+// handoff look-ahead that disagrees with the wall-clock getEffectivePersona()
+// — which is what a bare announceLinks() resolves to. Written the incoming
+// DJ's line under the outgoing DJ's link contract. Source-level because the
+// two personas only diverge inside a live look-ahead window.
+test('every announce-mode call site names the persona it resolves against', async () => {
+  const { readFileSync } = await import('node:fs');
+  for (const file of [
+    '../src/broadcast/dj-agent.ts',
+    '../src/broadcast/dj-agent/schemas.ts',
+  ]) {
+    const src = readFileSync(new URL(file, import.meta.url), 'utf8');
+    assert.doesNotMatch(
+      src,
+      /announceLinks\(\s*\)/,
+      `${file} calls announceLinks() with no persona — it must pass session.onAirPersona()`,
+    );
+    assert.match(src, /announceLinks\(\s*(?:link)?[Ss]peaker|announceLinks\(session\.onAirPersona\(\)\)/);
+  }
 });

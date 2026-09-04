@@ -233,9 +233,17 @@ export async function generateAdLib({ instruction, context = null, recap = null,
 // (persona linkStyle:'announce', settings.announceLinks()) replaces the whole
 // natural instruction — set it up, tease the feel, vary the opener — with a
 // fixed, matter-of-fact one: the whole line is "This is <artist>." or "Next
-// up, <artist>.", alternating with the previous link. Everything else (tease,
-// patter, the intro budget, "vary how you open", the feel clause) is a
-// natural-only concern and plays no part in announce mode.
+// up, <artist>.". Everything else (tease, patter, the intro budget, "vary how
+// you open", the feel clause) is a natural-only concern and plays no part in
+// announce mode.
+//
+// The announce branch is reached only for the artists the station cannot frame
+// itself — a non-English persona, or a name in a script the composed English
+// line can't carry (announce-line.ts) — so it always has a REAL artist name to
+// name. It must never fall back to a placeholder: the only two lines this
+// prompt permits are the two it writes out, so a `<artist>` stand-in is a line
+// the model reads onto the air verbatim. With no artist at all there is
+// nothing to announce, and generateLink drops the link before it gets here.
 export function linkPrompt({
   announce, current, teaseClause, patterClause, budget, lengthPhraseText, clockClause, feelClause,
 }: {
@@ -248,17 +256,14 @@ export function linkPrompt({
   clockClause: string;
   feelClause: string;
 }): string {
-  if (announce) {
-    // Fallback prompt only — generateLink composes the line itself in code
-    // (announce-line.ts) whenever it has an artist to work with, and calls
-    // the model only when it doesn't (see below).
-    const artist = current?.artist || '<artist>';
+  const artist = String(current?.artist ?? '').trim();
+  if (announce && artist) {
     return `Write the DJ link for the track now starting. It must be EXACTLY one of: "This is ${artist}." or "Next up, ${artist}." — nothing before or after it: no title, album, year, feel, or clock.`;
   }
   return `Write a short DJ link to carry into the track now starting — set it up, capture its feel, weave in the moment.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhraseText}, conversational. Vary how you open — don't default to "here's", "this is", "coming up", or "that was"; find a different way in each time. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.${clockClause}${feelClause}`;
 }
 
-export async function generateLink({ previous, current, context, clockIsAirTime = false, recap = null, recentTracks = null, recentOpeners = null, persona = null }: any) {
+export async function generateLink({ previous, current, context, clockIsAirTime = false, recap = null, recentTracks = null, recentOpeners = null, persona = null, lastLink = null, currentIsOnAir = false }: any) {
   const speaker = persona || settings.getEffectivePersona();
   const announce = settings.announceLinks(speaker);
   // A pick-attached link is written when the pick is made but airs a full
@@ -314,14 +319,25 @@ export async function generateLink({ previous, current, context, clockIsAirTime 
   // deterministic backstop would drop the line anyway; better not to write it.
   const budget = introBudgetPhrase(introMsFor(current), firstVocalMsFor(current));
   const feelClause = feelSuffix ? FEEL_CLAUSE : '';
-  // Announce mode: compose the line in code (announce-line.ts) whenever we
-  // have an artist to work with — no LLM call at all, and no risk of a model
-  // drifting off the fixed form or failing to alternate. Fall through to the
-  // announce prompt below only when there is no artist to announce (current
-  // is null/unknown), which the model-composed fallback still covers.
+  // Announce mode: compose the line in code (announce-line.ts) whenever the
+  // station can frame it itself — no LLM call at all, and no risk of a model
+  // drifting off the fixed form. `lastLink` is the link that last AIRED, which
+  // is what the two forms alternate against; `currentIsOnAir` says `current`
+  // is the track already playing (the /dj/segment button), where "Next up"
+  // would be a false claim.
   if (announce) {
-    const composed = announceLine(current?.artist || '');
+    const composed = announceLine(current?.artist, speaker, { lastLine: lastLink, currentIsOnAir });
     if (composed) return composed;
+    // Nothing to announce. An announce-mode station has no other line to fall
+    // back on — its whole contract is naming the artist — and an unannounced
+    // track is a non-event on air, so drop the link rather than ask the model
+    // for a line whose only permitted forms need a name we don't have.
+    // '' is every caller's no-link signal (queue.announce ignores it,
+    // trimLinkToIntro nulls it).
+    if (!String(current?.artist ?? '').trim()) return '';
+    // Otherwise the artist exists but the composed English frame can't carry
+    // it (non-English persona, or a name in a non-Latin script): the model
+    // writes the line under djSystem's language + proper-noun directives.
   }
 
   const instruction = linkPrompt({

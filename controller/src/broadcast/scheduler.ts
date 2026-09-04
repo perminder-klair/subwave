@@ -623,11 +623,21 @@ export async function runLink() {
       // Unlike a pick-attached link, this one airs right now (announce below),
       // so the live clock in ctx is the air time — the model may speak it.
       clockIsAirTime: true,
+      // …and `current` is the track ALREADY PLAYING, not a pick about to
+      // start. Announce mode has to know: "Next up, <artist>." over a track
+      // three minutes in is a false claim, so this link is pinned to the
+      // "This is" form (announce-line.ts). Every queue read stays here.
+      currentIsOnAir: true,
+      lastLink: queue.getLastLinkText(),
       recap: queue.getDjRecap(),
       recentTracks: queue.getRecentTracks(),
       recentOpeners: queue.getRecentOpeners(),
       persona: speaker,
     });
+    // Announce mode drops the link when the on-air track carries no artist
+    // name — there is nothing for it to announce. Say so rather than answering
+    // the button press with a silent success.
+    if (!script) throw new Error('no link to air — this track has no artist name to announce');
     await queue.announce(script, 'link', {
       persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name },
     });

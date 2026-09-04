@@ -410,7 +410,19 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   // by announce-line.ts, because a model cannot reliably hold to a fixed
   // string and cannot alternate with a line it is never shown. Silence stays
   // the model's call; wording never is.
-  if (rawSay && settings.announceLinks()) rawSay = announceLine(song.artist);
+  //
+  // Resolved off the ON-AIR persona, not the wall-clock effective one: this
+  // line is spoken by whoever enqueuePick pins it to (session.onAirPersona()),
+  // and inside the handoff look-ahead those two disagree — the incoming DJ's
+  // line would otherwise be written under the outgoing DJ's link contract.
+  // An empty compose means no English/Latin frame fits this persona or artist
+  // (announce-line.ts): the model's own line stands, written under the same
+  // fixed-form schema description and its language directives.
+  const linkSpeaker = session.onAirPersona();
+  if (rawSay && settings.announceLinks(linkSpeaker)) {
+    const composed = announceLine(song.artist, linkSpeaker, { lastLine: queue.getLastLinkText() });
+    if (composed) rawSay = composed;
+  }
   // Talk-within-the-intro (feature 3a): enqueuePick re-applies this trim at
   // the chokepoint (near-idempotent — see the note there); it runs here too so
   // the session turn below records the line as it will actually air — trimmed,
@@ -521,6 +533,9 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
         recap: queue.getDjRecap(),
         recentTracks: queue.getRecentTracks(),
         recentOpeners: queue.getRecentOpeners(),
+        // Announce mode alternates against the link that last AIRED; every
+        // queue read stays at the call site, the prompt layer is handed values.
+        lastLink: queue.getLastLinkText(),
       });
     } catch (err) {
       queue.log('error', `DJ link failed: ${err.message}`);
@@ -621,7 +636,9 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
     const current = predecessor ?? queue.current?.track ?? null;
     const previous = predecessor ? (prior ?? null) : (queue.history[0]?.track ?? null);
     const djMode = !!settings.getEffectivePersona()?.djMode;
-    const announce = settings.announceLinks();
+    // On-air persona, not the wall-clock effective one — same reason as the
+    // announce compose in pickViaAgent: the link belongs to whoever speaks it.
+    const announce = settings.announceLinks(session.onAirPersona());
 
     // Feature 4 + Phase 2 — advance/maybe-start a mini-run; get the tempo/key
     // re-rank target and (when the audio index supports it) a sonic-journey
