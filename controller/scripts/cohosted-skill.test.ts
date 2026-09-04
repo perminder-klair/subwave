@@ -207,3 +207,22 @@ test('a solo show stands a forced co-hosted skill down — reported, not thrown'
     'a solo hour is not an error condition',
   );
 });
+
+test('the programme producer is only offered a co-hosted kind when the episode has guests', async () => {
+  // The producer plans an hour around the kinds it is shown. Offering a
+  // co-hosted skill to a solo episode plans a feature the beat can only fall
+  // back out of, and the fallback is straight talk with no data behind it.
+  const settings = await import('../src/settings.js');
+  const { writeSkillFile } = await import('../src/skills/scaffold.js');
+  const { loadSkills } = await import('../src/skills/loader.js');
+  const { featureKindMenu } = await import('../src/broadcast/programme.js');
+  await writeSkillFile({ kind: 'menu-cohosted', brief: 'Discuss one case.', cohosts: true });
+  await writeSkillFile({ kind: 'menu-solo', brief: 'Talk about one thing.' });
+  await loadSkills();
+  await settings.update({ skills: { enabled: { 'menu-cohosted': true, 'menu-solo': true } } });
+
+  const kinds = (hasCohosts: boolean) => featureKindMenu(null, hasCohosts).map(c => c.kind);
+  assert.ok(kinds(true).includes('menu-cohosted'), 'a guest episode may plan the co-hosted feature');
+  assert.ok(!kinds(false).includes('menu-cohosted'), 'a solo episode is never offered it');
+  assert.ok(kinds(false).includes('menu-solo'), 'ordinary skills stay on the solo menu');
+});

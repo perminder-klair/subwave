@@ -120,8 +120,11 @@ async function previousAngle(showId: string): Promise<string | null> {
 }
 
 // The capability menu the producer may build features from: enabled, ready,
-// and owned by the host persona — the same offer the segment director makes.
-function featureKindMenu(host: { skills?: string[] } | null | undefined, hasCohosts: boolean): { kind: string; desc: string }[] {
+// owned by the host persona, and — for a co-hosted skill — only when this
+// episode actually has guests to hold the discussion. Exported for the test
+// that pins that last filter: a producer offered a kind the beat cannot run
+// plans an hour around a feature that falls straight back to straight talk.
+export function featureKindMenu(host: { skills?: string[] } | null | undefined, hasCohosts: boolean): { kind: string; desc: string }[] {
   try {
     return skillCatalog()
       .filter((c) => c.enabled && c.ready)
