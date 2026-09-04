@@ -8,7 +8,8 @@
 //   2. Dedup    — never add the same track twice (again by id AND key, so
 //      duplicate library copies don't each claim a slot).
 //   3. Artist cap — cap any one artist's share so a deep-catalogue artist can't
-//      dominate the fallback and cluster on air.
+//      dominate the fallback and cluster on air. Per-source overridable
+//      (TakeOpts.maxPerArtist) for a source that IS an exact operator-pinned set.
 //
 // Extracted from the `take()` closure so the guards are unit-testable in
 // isolation (scripts/auto-pool.test.ts) without booting Subsonic/Liquidsoap.
@@ -33,6 +34,16 @@ export interface TakeOpts {
   // 36 h) window would coast entirely OFF-playlist. Dedup and the artist cap
   // still apply on the retry; only the recency guard is dropped.
   neverStarve?: boolean;
+  // Lift the artist cap for THIS source only. Set by the dedicated
+  // show-playlist source on a strict-playlist show: the operator pinned an
+  // exact set, so a single-artist / single-album playlist is the point, not a
+  // deep-catalogue artist muscling in — capping it at AUTO_MAX_PER_ARTIST left
+  // the strict end-filter with 2 in-playlist tracks to keep. Scoped per take()
+  // rather than lifted on the builder, because the OTHER sources still run on
+  // such a show (a strict-playlist show may also pin a genre) and an uncapped
+  // off-playlist source just fills TARGET_POOL with tracks the end-filter is
+  // about to drop, starving the in-playlist share it was meant to protect.
+  maxPerArtist?: number;
 }
 
 export interface PoolBuilder {
@@ -51,7 +62,7 @@ export function createPoolBuilder(opts: PoolBuilderOpts): PoolBuilder {
   const poolIds = new Set<string>();
   const poolKeys = new Set<string>();
 
-  const pull = (label: string, items: any[], cap: number, ignoreRecency: boolean): number => {
+  const pull = (label: string, items: any[], cap: number, ignoreRecency: boolean, artistCap: number): number => {
     let n = 0;
     for (const t of items) {
       if (n >= cap || pool.length >= targetPool) break;
@@ -64,7 +75,7 @@ export function createPoolBuilder(opts: PoolBuilderOpts): PoolBuilder {
       // Pool dedup: by id AND key, so copies #2..N don't re-fill the pool.
       if (poolIds.has(t.id) || (tk && poolKeys.has(tk))) continue;
       const ak = artistKey(t);
-      if (ak && (artistInPool.get(ak) || 0) >= maxPerArtist) continue;
+      if (ak && (artistInPool.get(ak) || 0) >= artistCap) continue;
       pool.push({ ...t, _source: label });
       poolIds.add(t.id);
       if (tk) poolKeys.add(tk);
@@ -76,8 +87,9 @@ export function createPoolBuilder(opts: PoolBuilderOpts): PoolBuilder {
   };
 
   const take = (label: string, items: any[], cap: number, takeOpts: TakeOpts = {}) => {
-    const n = pull(label, items, cap, false);
-    if (n === 0 && takeOpts.neverStarve) pull(label, items, cap, true);
+    const artistCap = takeOpts.maxPerArtist ?? maxPerArtist;
+    const n = pull(label, items, cap, false, artistCap);
+    if (n === 0 && takeOpts.neverStarve) pull(label, items, cap, true, artistCap);
   };
 
   return { pool, fromSource, take };

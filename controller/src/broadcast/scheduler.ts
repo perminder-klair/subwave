@@ -191,17 +191,14 @@ async function refreshAutoPlaylistInner() {
   // library with duplicate copies of a song (N distinct ids for one track)
   // can't slip a just-played track back in or stack copies into the pool (#874).
   // The artist cap stops a deep-catalogue artist from dominating the fallback.
-  // Strict playlist mode hard-filters the finished pool down to inPl below
-  // regardless of which source contributed a track, so lifting the cap here is
-  // safe — it only stops the show-playlist source itself from being capped to
-  // AUTO_MAX_PER_ARTIST tracks before that filter runs, which otherwise
-  // defeats a strict single-artist/album show.
+  // It stays on for every DISCOVERY source even on a strict-playlist show; only
+  // the dedicated show-playlist source opts out, per-take (see §0b).
   // Pure + unit-tested in scripts/auto-pool.test.ts.
   const builder = createPoolBuilder({
     recentIds,
     recentKeys,
     targetPool: TARGET_POOL,
-    maxPerArtist: strictPlaylist ? Infinity : AUTO_MAX_PER_ARTIST,
+    maxPerArtist: AUTO_MAX_PER_ARTIST,
   });
   const pool = builder.pool;
   const fromSource = builder.fromSource;
@@ -267,7 +264,14 @@ async function refreshAutoPlaylistInner() {
     // neverStarve: on a strict-playlist show this source IS the coast's
     // universe, and the end-filter below never-starves to the full pool when
     // nothing in-playlist survived — see TakeOpts.
-    take('show-playlist', shuffle(playlistPool!.tracks), strictPlaylist ? SHOW_PLAYLIST_STRICT_WEIGHT : SHOW_PLAYLIST_WEIGHT, { neverStarve: true });
+    // maxPerArtist lifted for THIS source in strict mode only: the operator
+    // pinned an exact set, so a single-artist / single-album playlist is the
+    // point. Capped at AUTO_MAX_PER_ARTIST it contributed 2 tracks, the strict
+    // end-filter below dropped every other source, and the coast looped a
+    // 2-track playlist. Scoped here rather than on the builder so an uncapped
+    // show-genre source (a strict-playlist show may also pin a genre) can't
+    // fill TARGET_POOL with tracks that same end-filter is about to drop.
+    take('show-playlist', shuffle(playlistPool!.tracks), strictPlaylist ? SHOW_PLAYLIST_STRICT_WEIGHT : SHOW_PLAYLIST_WEIGHT, { neverStarve: true, maxPerArtist: strictPlaylist ? Infinity : AUTO_MAX_PER_ARTIST });
   }
 
   // 1. Mood-tagged from the LLM-built library (only if tagger has run). A
