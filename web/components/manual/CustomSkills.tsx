@@ -125,9 +125,10 @@ the phase is unremarkable.`}</CodeBlock>
         </p>
         <p className="text-muted">
           On a solo or off-show hour the skill stands down; Run now reports that it requires
-          a co-hosted show before any model or TTS call. If it has a data tool, that skill&apos;s
-          own tool loop must return usable source material or the whole discussion stays
-          silent instead of inventing facts.
+          a co-hosted show before any model or TTS call. If it has a data tool, that data
+          must come back usable — gathered by the skill&apos;s own tool loop, or fetched in
+          code when the picker agent is off — or the whole discussion stays silent instead
+          of inventing facts.
         </p>
       </section>
 

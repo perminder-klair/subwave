@@ -800,7 +800,17 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
 
   if (cap.cohosts) {
     const { host, guests } = settings.getOnAirRoster();
-    if (!host || !guests.length) throw new Error(`skill "${cap.skill}" requires a co-hosted show`);
+    // A solo hour is a normal, transient station state, not a misconfiguration:
+    // reported as `{aired: false, reason}` like every other reason a forced
+    // skill has nothing to say (skills/abstain-policy.ts, #1412), so Run now
+    // answers 200 with the reason instead of a 500 and a red booth-log error.
+    // Contrast cap.ready() above, which throws because a missing API key is a
+    // real misconfiguration the operator has to go and fix.
+    if (!host || !guests.length) {
+      const reason = 'requires a co-hosted show';
+      queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
+      return { aired: false, text: null, reason };
+    }
     const situation = buildCohostedSituation(ctx, cap, { forced: true, brief });
     const result = await runCohostedCapability({
       capability: cap, host, guests, context: ctx, situation, segmentState, forced: true,

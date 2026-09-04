@@ -180,14 +180,30 @@ test('a forced prompt-only discussion cannot decline or omit dialogue', async ()
 });
 
 
-test('runCapability refuses a co-hosted skill before model or TTS work on a solo show', async () => {
+test('a solo show stands a forced co-hosted skill down — reported, not thrown', async () => {
+  // The #1412 shape: a forced skill with nothing to say answers
+  // `{aired: false, reason}` and POST /dj/skill returns 200 with the reason.
+  // A solo hour is a normal, transient state, so it belongs in that shape
+  // rather than in the 500 + red-booth-log path reserved for a misconfigured
+  // skill (a missing API key, which cap.ready() still throws for).
   const { writeSkillFile } = await import('../src/skills/scaffold.js');
   const { loadSkills } = await import('../src/skills/loader.js');
   const { runCapability } = await import('../src/skills/_agent.js');
+  const { queue } = await import('../src/broadcast/queue.js');
   await writeSkillFile({ kind: 'solo-refusal', brief: 'Discuss one case.', cohosts: true });
   await loadSkills();
-  await assert.rejects(
-    runCapability('solo-refusal', {}),
-    /requires a co-hosted show/,
+
+  queue.djLog = [];
+  const run = await runCapability('solo-refusal', {});
+  assert.equal(run.aired, false, 'no model or TTS work happened');
+  assert.equal(run.text, null);
+  assert.match(String(run.reason), /requires a co-hosted show/);
+  assert.ok(
+    queue.djLog.some((e: any) => e.kind === 'scheduler' && /stood down — requires a co-hosted show/.test(e.message)),
+    'the stand-down is in the booth log, not as an error',
+  );
+  assert.ok(
+    !queue.djLog.some((e: any) => e.kind === 'error'),
+    'a solo hour is not an error condition',
   );
 });
