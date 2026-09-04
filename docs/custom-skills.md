@@ -109,14 +109,19 @@ before any reaches air, then played back-to-back rather than mixed.
 
 A co-hosted skill only runs while an active show has a host and at least one
 resolved guest. Autonomous selection withholds it on a solo/off-show hour; its
-cron logs `requires a co-hosted show`; **Run now**, MCP and programme use fail
-clearly before model or TTS work. Ordinary skills, including ones with no
-`cohosts` field, keep the existing one-speaker path.
+cron logs `requires a co-hosted show`; **Run now**, MCP and programme use stand
+down with that same reason before any model or TTS work — reported, not an
+error, exactly like a data-backed skill that found nothing to say. Ordinary
+skills, including ones with no `cohosts` field, keep the existing one-speaker
+path.
 
-If the skill has a `tool.mjs`, the co-hosted discussion runs that skill's own tool
-loop. Data-backed skills must obtain usable source data before anyone speaks;
-`{ available: false }` or a tool error stands the whole exchange down instead of
-letting several personas amplify an invented fact.
+If the skill has a `tool.mjs`, the co-hosted discussion gathers its data the same
+way every other segment does: the skill's own tool loop when `llm.pickerAgent`
+is on, and a code-driven fetch plus one structured call when it is off (pool
+mode, for models that aren't trusted with tool loops). Data-backed skills must
+obtain usable source data before anyone speaks; `{ available: false }` or a tool
+error stands the whole exchange down instead of letting several personas amplify
+an invented fact.
 
 Set it in the admin editor with **Co-hosted discussion**, or in frontmatter:
 

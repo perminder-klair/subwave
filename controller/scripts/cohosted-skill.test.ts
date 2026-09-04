@@ -99,6 +99,75 @@ test('unavailable or failed grounded data stands down before any dialogue can ai
   }
 });
 
+test('the agent leg pins maxSteps at 2, never djAgent’s default of 8', async () => {
+  // directorAgent's own cap documents the failure this reinstates: a taller
+  // budget grows an "I already declined" trail on providers that don't comply
+  // on the first forced attempt, and burned the FULL agentTimeoutMs before
+  // recovery got a turn (#555).
+  let seen: any = null;
+  await runCohostedCapability({
+    capability: { kind: 'case-discussion', desc: 'Discuss one case.' },
+    host, guests, context: {}, situation: 'The current moment.', segmentState: {}, forced: true,
+    runAgent: async (args: any) => { seen = args; return { object: full, steps: 1, toolCalls: [] }; },
+  });
+  assert.equal(seen.maxSteps, 2);
+});
+
+test('pool mode fetches in code and makes ONE structured call — never a tool loop', async () => {
+  // llm.pickerAgent off means the operator's model isn't trusted with tool
+  // loops. Running one anyway left a grounded co-hosted skill unable to ever
+  // clear its grounding check (the tool is reachable only by a model tool
+  // call), so it stood down every tick after a full wasted agent run.
+  const settings = await import('../src/settings.js');
+  await settings.load();
+  await settings.update({ llm: { pickerAgent: false } });
+  try {
+    let toolCalls = 0;
+    const capability = {
+      kind: 'case-discussion', desc: 'Discuss one case.', toolName: 'skill_case_discussion',
+      toolDesc: 'Search for one historical case.', config: {},
+      toolFn: async () => { toolCalls += 1; return { available: true, headline: 'The Bakersfield file' }; },
+    };
+    let objectArgs: any = null;
+    const result = await runCohostedCapability({
+      capability, host, guests, context: {}, situation: 'The current moment.', segmentState: {}, forced: true,
+      runAgent: async () => { throw new Error('pool mode must not run the skill tool loop'); },
+      runObject: async (args: any) => { objectArgs = args; return full; },
+    });
+    assert.equal(result.aired, true);
+    assert.equal(toolCalls, 1, 'the tool is called in code, exactly once');
+    assert.equal(objectArgs.tools, undefined, 'the single structured call is offered no tools');
+    assert.match(String(objectArgs.prompt), /Bakersfield/, 'the fetched source data is inlined into the prompt');
+    assert.ok(objectArgs.signal, 'the unbounded djObject call carries a deadline signal');
+  } finally {
+    await settings.update({ llm: { pickerAgent: true } });
+  }
+});
+
+test('pool mode stands a grounded discussion down BEFORE any model call', async () => {
+  const settings = await import('../src/settings.js');
+  await settings.update({ llm: { pickerAgent: false } });
+  try {
+    for (const returned of [{ available: false }, { error: 'search offline' }]) {
+      const capability = {
+        kind: 'case-discussion', desc: 'Discuss one case.', toolName: 'skill_case_discussion',
+        toolDesc: 'Search for one historical case.', config: {},
+        toolFn: async () => returned,
+      };
+      const result = await runCohostedCapability({
+        capability, host, guests, context: {}, situation: 'The current moment.', segmentState: {}, forced: true,
+        runAgent: async () => { throw new Error('no tool loop in pool mode'); },
+        runObject: async () => { throw new Error('a model must not be asked to write from unusable data'); },
+      });
+      assert.equal(result.aired, false);
+      assert.equal(result.lines, null);
+      assert.ok(result.reason);
+    }
+  } finally {
+    await settings.update({ llm: { pickerAgent: true } });
+  }
+});
+
 test('a forced prompt-only discussion cannot decline or omit dialogue', async () => {
   await assert.rejects(
     runCohostedCapability({

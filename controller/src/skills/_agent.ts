@@ -34,13 +34,18 @@ import * as settings from '../settings.js';
 import { defineAgent } from '../llm/agent.js';
 import { djObject, modelTolerant } from '../llm/sdk.js';
 import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase } from '../llm/dj.js';
-import { buildSegmentTools, fetchSegmentData } from '../llm/segment-tools.js';
+import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
 import { skillEligible } from './eligibility.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
 import { runCohostedCapability } from './cohosted.js';
 import * as sfx from '../broadcast/sfx.js';
+
+// dataBlock moved to llm/segment-tools.js so the co-hosted pool path can share
+// it without closing an import cycle back into this module; re-exported here so
+// llm-bench (scripts/llm-bench/kinds/segment.ts) keeps the path it had.
+export { dataBlock };
 
 // The capability registry now lives entirely in skills/loader.js, which loads
 // every skill — shipped and operator-added — from a directory (SKILL.md +
@@ -409,16 +414,6 @@ export function chooseCapability(caps, ctx) {
     else if (at === bestAt) best.push(c);
   }
   return best[Math.floor(Math.random() * best.length)];
-}
-
-// The fetched tool data, rendered into the prompt. Compact but readable;
-// capped so a fat feed can't crowd the system prompt out of a small context.
-export function dataBlock(data: unknown) {
-  if (data == null) return '';
-  let body: string;
-  try { body = JSON.stringify(data, null, 1); } catch { body = String(data); }
-  if (body.length > 6000) body = body.slice(0, 6000) + '\n…(truncated)';
-  return `\n\nSource data for this segment (write only from this and the current moment — do not invent facts):\n${body}`;
 }
 
 // Same decision surface as segmentSchema minus `kind` (code already chose it)
