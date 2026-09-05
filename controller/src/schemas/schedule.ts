@@ -235,6 +235,33 @@ export interface ScheduleOverride {
   expiresAt: number;
 }
 
+/**
+ * The takeover target, read in ONE place.
+ *
+ * A takeover's `showId` is three-way, not two-way — it names a show, it is
+ * explicitly `null` for Default programming (#1507), or it is neither — and the
+ * two obvious spellings of the question DISAGREE about that third case:
+ * `showId === null` calls a malformed target a show pin, `typeof showId ===
+ * 'string'` calls it Default programming. Both are wrong: before #1507 a target
+ * that named nothing real simply VOIDED the takeover (the roster lookup missed
+ * and the grid resumed), and that is the behaviour these two keep. The resolver,
+ * the roster sweep, the janitor, the programme span, the route and both admin
+ * screens all ask through them, so the answer cannot drift between call sites.
+ *
+ * Deliberately loose in their parameter: the route asks about a request body
+ * and the admin forms about their own submitted values, neither of which is a
+ * stored `ScheduleOverride` yet.
+ */
+export function takeoverShowId(ov: { showId?: unknown } | null | undefined): string | null {
+  const id = ov?.showId;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+/** True while `ov` is an explicit Default programming takeover (#1507). */
+export function isDefaultTakeover(ov: { showId?: unknown } | null | undefined): boolean {
+  return !!ov && ov.showId === null;
+}
+
 export interface ScheduleOverrideContext {
   /** Show ids a string target may name, or null when this caller cannot check. */
   showIds: string[] | null;
@@ -253,10 +280,10 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
   return z
     .object(
       {
-        showId: z.union(
-          [z.string({ error: 'must be a show id' }).min(1, 'must be a show id'), z.null()],
-          { error: 'must be a show id or null' },
-        ),
+        // `.nullable()` rather than a two-branch union: null is the Default
+        // programming target, and the string's own message is the one an
+        // operator can act on — a union answers with its own wording instead.
+        showId: z.string({ error: 'must be a show id' }).min(1, 'must be a show id').nullable(),
         startedAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
         expiresAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
       },
@@ -267,8 +294,9 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
       { error: 'must be an object' },
     )
     .check((c) => {
-      const { showId, startedAt, expiresAt } = c.value;
-      if (typeof showId === 'string' && ctx.showIds && !ctx.showIds.includes(showId)) {
+      const { startedAt, expiresAt } = c.value;
+      const showId = takeoverShowId(c.value);
+      if (showId && ctx.showIds && !ctx.showIds.includes(showId)) {
         c.issues.push({
           code: 'custom',
           input: showId,
@@ -315,10 +343,10 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
  * needs server state.
  */
 export const scheduleOverrideRequestSchema = z.object({
-  showId: z.union(
-    [z.string({ error: 'pick a show or Default programming' }).min(1, 'pick a show or Default programming'), z.null()],
-    { error: 'pick a show or Default programming' },
-  ),
+  showId: z
+    .string({ error: 'pick a show or Default programming' })
+    .min(1, 'pick a show or Default programming')
+    .nullable(),
   minutes: z.coerce
     .number({ error: `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}` })
     .int(`must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`)

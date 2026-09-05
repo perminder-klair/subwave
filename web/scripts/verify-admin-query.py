@@ -3492,10 +3492,13 @@ def schedule_dashboard_override_reconciliation(page):
     assert page.get_by_text("On air · takeover", exact=True).count() == 0
     assert request_count(page, "/schedule", authenticated=True) == reads_after_cancel, page.request_log
     assert reads_after_pin - initial_reads <= 3, page.request_log
-    # Returning to Dash may mount its staleTime=0 live query, and DELETE does
-    # one exact post-write refresh. Navigation back to Schedule is pinned by the
-    # exact equality above and must add no request.
-    assert reads_after_cancel - reads_after_pin <= 3, page.request_log
+    # Exactly two reads are structurally possible in this window: remounting
+    # Dash refetches its staleTime=0 live query, and DELETE's onDone
+    # invalidates that same key for one post-write refresh. The Rundown's own
+    # query rides the 30s default staleTime off the cache write, which is what
+    # the two exact equalities above pin. Nothing about a null target adds a
+    # third — keep this at 2 so a real extra read cannot hide behind it.
+    assert reads_after_cancel - reads_after_pin <= 2, page.request_log
 
     # The nullable target extends, rather than replaces, named-show pins. Repeat
     # the same cache handoff with the configured show so its existing behavior

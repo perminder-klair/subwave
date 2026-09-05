@@ -24,7 +24,9 @@ import { SHOW_COLORS } from '../schedule/lib';
 // rule at the route, so the form's validation and the server's answer agree by
 // construction.
 import {
+  isDefaultTakeover,
   scheduleOverrideRequestSchema,
+  takeoverShowId,
   OVERRIDE_MIN_MINUTES,
   OVERRIDE_MAX_MINUTES,
   type ScheduleOverride,
@@ -79,8 +81,9 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   const showById = (id: string) => shows.find(s => s.id === id) ?? null;
 
   const live = override && override.expiresAt > now ? override : null;
-  const pinned = live && typeof live.showId === 'string' ? showById(live.showId) : null;
-  const defaultProgramming = !!live && live.showId === null;
+  const pinnedId = takeoverShowId(live);
+  const pinned = pinnedId ? showById(pinnedId) : null;
+  const defaultTakeover = isDefaultTakeover(live);
   const minutesLeft = live ? Math.max(1, Math.ceil((live.expiresAt - now) / 60_000)) : 0;
 
   interface PinResult {
@@ -132,10 +135,11 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   const pin = form.handleSubmit(async (values) => {
     try {
       await pinMutation.mutateAsync(values);
-      if (values.showId === null) {
+      const chosenId = takeoverShowId(values);
+      if (isDefaultTakeover(values)) {
         notify.ok('Default programming takes over — the switch airs on the next track.');
       } else {
-        const name = showById(values.showId)?.name || 'show';
+        const name = (chosenId && showById(chosenId)?.name) || 'show';
         notify.ok(`“${name}” takes over — the switch airs on the next track.`);
       }
     } catch (e) {
@@ -157,7 +161,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
     }
   };
 
-  const onAir = !!(live && (pinned || defaultProgramming));
+  const onAir = !!(live && (pinned || defaultTakeover));
 
   return (
     <Card
@@ -183,7 +187,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
         </span>
       }
     >
-      {live && (pinned || defaultProgramming) ? (
+      {live && (pinned || defaultTakeover) ? (
         <div className="grid gap-2.5">
           <div className="grid gap-1 border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-2.5 py-2">
             <div className="flex items-baseline gap-2">
@@ -199,7 +203,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
               </span>
             </div>
             <div className="text-[10px] text-muted">
-              {defaultProgramming ? 'autonomous music · default DJ' : 'on air over the schedule'}
+              {defaultTakeover ? 'autonomous music · default DJ' : 'on air over the schedule'}
               {' · '}{minutesLeft} min left
             </div>
           </div>
@@ -219,25 +223,32 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
           <Controller
             control={form.control}
             name="showId"
-            render={({ field }) => (
-              <SlotMenu
-                ariaLabel="Choose takeover programming"
-                // justify-self, not self-start: the grid otherwise stretches the slot to
-                // full width, where it reads as a text field rather than a value you pick.
-                className="min-h-9 justify-self-start text-[12px] sm:min-h-0"
-                label={field.value === null
-                  ? 'Default programming'
-                  : showById(field.value)?.name ?? 'Choose programming…'}
-                chipColor={field.value === null
-                  ? null
-                  : field.value ? colorOf(field.value) : undefined}
-                options={[
-                  { key: null, label: 'Default programming', chipColor: null },
-                  ...shows.map(s => ({ key: s.id, label: s.name, chipColor: colorOf(s.id) })),
-                ]}
-                onSelect={field.onChange}
-              />
-            )}
+            render={({ field }) => {
+              // The selected menu key IS the takeover target this form will
+              // submit, so it is read through the same two predicates rather
+              // than a third spelling of `=== null` (#1507 review).
+              const chosen = { showId: field.value };
+              const chosenId = takeoverShowId(chosen);
+              return (
+                <SlotMenu
+                  ariaLabel="Choose takeover programming"
+                  // justify-self, not self-start: the grid otherwise stretches the slot to
+                  // full width, where it reads as a text field rather than a value you pick.
+                  className="min-h-9 justify-self-start text-[12px] sm:min-h-0"
+                  label={isDefaultTakeover(chosen)
+                    ? 'Default programming'
+                    : (chosenId && showById(chosenId)?.name) || 'Choose programming…'}
+                  chipColor={isDefaultTakeover(chosen)
+                    ? null
+                    : chosenId ? colorOf(chosenId) : undefined}
+                  options={[
+                    { key: null, label: 'Default programming', chipColor: null },
+                    ...shows.map(s => ({ key: s.id, label: s.name, chipColor: colorOf(s.id) })),
+                  ]}
+                  onSelect={field.onChange}
+                />
+              );
+            }}
           />
           <div className="flex flex-wrap items-center gap-2.5">
             <Controller

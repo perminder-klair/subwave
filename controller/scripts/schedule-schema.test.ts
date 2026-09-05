@@ -24,12 +24,14 @@ const {
   SCHEDULE_DAYS,
   SCHEDULE_HOURS,
   emptyWeek,
+  isDefaultTakeover,
   repairScheduleForLoad,
   resolveScheduleSlots,
   scheduleOverrideRequestSchema,
   scheduleOverrideSchema,
   scheduleSaveSchema,
   scheduleSchema,
+  takeoverShowId,
 } = await import('../src/schemas/schedule.js');
 const { validateScheduleStrict, validateScheduleOverrideStrict } = await import(
   '../src/settings/validate.js'
@@ -240,6 +242,34 @@ test('override: accepts named-show and Default programming windows', () => {
   const schema = scheduleOverrideSchema({ showIds: IDS, now: null });
   assert.deepEqual(schema.parse(okOverride), okOverride);
   assert.deepEqual(schema.parse(defaultOverride), defaultOverride);
+});
+
+// The takeover target is THREE-way, and the two obvious inline spellings of the
+// question disagree about the third case. These pin which answer each predicate
+// gives, because every reader in the controller and the admin UI asks through
+// them — a drift here is a resolver and a /schedule route describing the same
+// stored override differently.
+test('takeover target: a show, Default programming, and neither', () => {
+  const win = { startedAt: NOW, expiresAt: NOW + 60 * 60_000 };
+  assert.equal(takeoverShowId({ ...win, showId: 'night_loop' }), 'night_loop');
+  assert.equal(isDefaultTakeover({ ...win, showId: 'night_loop' }), false);
+
+  assert.equal(takeoverShowId({ ...win, showId: null }), null);
+  assert.equal(isDefaultTakeover({ ...win, showId: null }), true);
+
+  // Neither: a malformed target names nothing real, so it is not a show pin AND
+  // not Default programming. Pre-#1507 the roster lookup missed and the grid
+  // resumed; both predicates saying "no" is what keeps that behaviour.
+  for (const bad of [undefined, '', 0, 42, {}, []]) {
+    assert.equal(takeoverShowId({ ...win, showId: bad }), null, String(bad));
+    assert.equal(isDefaultTakeover({ ...win, showId: bad }), false, String(bad));
+  }
+
+  // No takeover at all is neither, and must not throw on the way there.
+  assert.equal(takeoverShowId(null), null);
+  assert.equal(isDefaultTakeover(null), false);
+  assert.equal(takeoverShowId(undefined), null);
+  assert.equal(isDefaultTakeover(undefined), false);
 });
 
 test('override: Default programming is distinct from a cleared outer override', () => {

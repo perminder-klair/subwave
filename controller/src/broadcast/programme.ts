@@ -35,6 +35,7 @@ import { autoVoiceAllowed } from './voice-policy.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { zonedParts } from '../time.js';
+import { takeoverShowId } from '../schemas/schedule.js';
 
 // How long after the intro aired the generic hourly time-check stays
 // suppressed: the intro owns the top of the show's first hour (the same
@@ -55,7 +56,7 @@ export { showSpan, overrideSpan, planFeature, beatWindow };
 // grid run.
 function episodeSpan(now: Date): { index: number; total: number } {
   const ov = settings.getScheduleOverride(now.getTime());
-  if (ov && typeof ov.showId === 'string') return overrideSpan(ov, now.getTime());
+  if (ov && takeoverShowId(ov)) return overrideSpan(ov, now.getTime());
   const { dow, hour } = zonedParts(now);
   return showSpan(settings.get().schedule, dow, hour);
 }

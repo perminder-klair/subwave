@@ -109,6 +109,25 @@ await test('the weekly show resumes before and after a Default programming takeo
   assert.equal(resolveActiveShow(new Date(at.getTime() + 30 * 60_000), overridden as any)?.id, 's1');
 });
 
+await test('a malformed takeover target voids the takeover rather than reading as Default programming', () => {
+  // The drift the shared predicates exist to close: `showId === null` would
+  // read this as a show pin, `typeof showId === 'string'` as an explicit
+  // Default programming takeover. Neither is right — a target naming nothing
+  // real has always just let the weekly grid resume, and the resolver and
+  // getScheduleOverride must agree about that.
+  for (const bad of [undefined, '', 42]) {
+    const overridden = {
+      ...settings,
+      scheduleOverride: {
+        showId: bad,
+        startedAt: at.getTime() - 60_000,
+        expiresAt: at.getTime() + 60_000,
+      },
+    };
+    assert.equal(resolveActiveShow(at, overridden as any)?.id, 's1', String(bad));
+  }
+});
+
 await test('a live named-show takeover retains its existing precedence', () => {
   const alternate = {
     id: 's2', name: 'Dawn Patrol', topic: 'early sounds', personaId: 'p1',

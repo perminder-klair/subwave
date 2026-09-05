@@ -66,6 +66,7 @@ import {
   clampTtsGain,
   clampTtsSpeed,
   coerceGuestPersonaIds,
+  isDefaultTakeover,
   mintId,
   normalizeLlmKeys,
   normalizeLlmProviderBaseUrls,
@@ -74,6 +75,7 @@ import {
   normalizeTtsCorrections,
   normalizeTtsGainMap,
   normalizeTtsSpeedMap,
+  takeoverShowId,
   validateTtsCorrectionsStrict,
 } from './settings/vocab.js';
 import {
@@ -2094,9 +2096,10 @@ export async function update(patch) {
       }
     }
     // A takeover pinning a show that no longer exists dies with the show. A
-    // null target is Default programming, not an orphan.
-    if (next.scheduleOverride && typeof next.scheduleOverride.showId === 'string' && !showIds.includes(next.scheduleOverride.showId)) {
-      next.scheduleOverride = null;
+    // null target is Default programming, not an orphan, so it survives.
+    if (next.scheduleOverride && !isDefaultTakeover(next.scheduleOverride)) {
+      const pinnedId = takeoverShowId(next.scheduleOverride);
+      if (!pinnedId || !showIds.includes(pinnedId)) next.scheduleOverride = null;
     }
     if (!personaIds.includes(next.activePersonaId)) next.activePersonaId = personaIds[0];
 

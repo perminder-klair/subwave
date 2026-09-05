@@ -1088,10 +1088,12 @@ export function mintId(prefix) {
 // Re-exported here so no existing import site moved.
 export {
   emptyWeek,
+  isDefaultTakeover,
   OVERRIDE_MIN_MINUTES,
   OVERRIDE_MAX_MINUTES,
   SCHEDULE_DAYS,
   SCHEDULE_HOURS,
+  takeoverShowId,
 } from '../schemas/schedule.js';
 export type { ScheduleOverride, ScheduleWeek } from '../schemas/schedule.js';
 

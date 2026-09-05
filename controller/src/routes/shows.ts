@@ -18,9 +18,11 @@ import * as settings from '../settings.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { validateBody, validateBodyAsync } from '../middleware/validate.js';
 import {
+  isDefaultTakeover,
   resolveScheduleSlots,
   scheduleOverrideRequestSchema,
   scheduleSaveSchema,
+  takeoverShowId,
 } from '../schemas/schedule.js';
 import { showPostSchema } from '../schemas/show.js';
 import { listThemes } from '../themes.js';
@@ -213,10 +215,12 @@ router.post('/schedule/override', requireAdmin, validateBody(scheduleOverrideReq
   const { showId, minutes } = req.body as { showId: string | null; minutes: number };
 
   await settings.load();
-  const show = typeof showId === 'string'
-    ? (settings.get().shows || []).find((s: any) => s.id === showId)
-    : null;
-  if (typeof showId === 'string' && !show) {
+  // The same two predicates the resolver reads the stored target with, asked
+  // here of the request body so the route cannot answer a target differently
+  // from the resolver that will later act on it.
+  const pinnedId = takeoverShowId(req.body);
+  const show = pinnedId ? (settings.get().shows || []).find((s: any) => s.id === pinnedId) : null;
+  if (!isDefaultTakeover(req.body) && !show) {
     return res.status(404).json({ error: `no such show: ${showId}` });
   }
 
