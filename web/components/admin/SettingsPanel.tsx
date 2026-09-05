@@ -492,6 +492,7 @@ export default function SettingsPanel() {
         // round-trips through POST harmlessly (settings.update ignores 'set').
         apiKey: v.search?.apiKey ?? '',
         baseUrl: v.search?.baseUrl ?? '',
+        searxngEngines: v.search?.searxngEngines ?? '',
       },
       embedding: {
         enabled: v.embedding?.enabled ?? true,
