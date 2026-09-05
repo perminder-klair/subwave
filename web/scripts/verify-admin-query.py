@@ -157,6 +157,33 @@ def request_count(page, path, method="GET", query=None, authenticated=None):
     return len([entry for entry in page.request_log if matches(entry)])
 
 
+def settle_reads(page, path, authenticated=None, quiet_polls=8, max_polls=100):
+    """request_count once `path` has stopped being requested.
+
+    A client-side navigation INTO a route mounts that route twice, so a
+    staleTime:0 query on the incoming page fires two reads roughly 140ms apart.
+    Measured on both the dev server and a production build, so it is route
+    machinery rather than a StrictMode artifact, and pre-dates #1507 — the
+    pin-side bound in schedule_dashboard_override_reconciliation has always
+    allowed for it. Sampling a request counter on a fixed timeout races
+    the second read, which is what made this check fail in two different places
+    on two consecutive runs; poll for 400ms of quiet instead.
+    """
+    stable = 0
+    last = request_count(page, path, authenticated=authenticated)
+    for _ in range(max_polls):
+        page.wait_for_timeout(50)
+        current = request_count(page, path, authenticated=authenticated)
+        if current == last:
+            stable += 1
+            if stable >= quiet_polls:
+                return current
+        else:
+            stable = 0
+            last = current
+    return last
+
+
 def mutation_cache_snapshot(page):
     return page.evaluate("""() => {
       if (typeof window.__subwaveAdminMutationCacheSnapshot !== 'function') {
@@ -3458,7 +3485,7 @@ def schedule_dashboard_override_reconciliation(page):
     page.route("http://localhost:7791/schedule/override", schedule_route)
     page.goto(f"{WEB}/admin/shows/schedule", wait_until="domcontentloaded")
     page.get_by_text("Empty hours run autonomously", exact=False).wait_for(state="visible")
-    initial_reads = request_count(page, "/schedule", authenticated=True)
+    initial_reads = settle_reads(page, "/schedule", authenticated=True)
 
     click_admin_link(page, "Dash", "/admin/dash")
     page.wait_for_timeout(250)  # incoming route must own the click after the shell crossfade
@@ -3470,7 +3497,7 @@ def schedule_dashboard_override_reconciliation(page):
         page.get_by_role("button", name="Take over →").click()
     page.get_by_role("button", name="Cancel takeover").wait_for(state="visible")
     assert current["override"]["showId"] is None, current
-    reads_after_pin = request_count(page, "/schedule", authenticated=True)
+    reads_after_pin = settle_reads(page, "/schedule", authenticated=True)
 
     click_admin_link(page, "Schedule", "/admin/shows/schedule")
     page.get_by_text("On air · takeover", exact=True).wait_for(state="visible")
@@ -3481,24 +3508,28 @@ def schedule_dashboard_override_reconciliation(page):
     assert request_count(page, "/schedule", authenticated=True) == reads_after_pin, page.request_log
 
     click_admin_link(page, "Dash", "/admin/dash")
+    # Sampled between the navigation and the write, because they cost different
+    # things: the navigation remounts Dash (see settle_reads), the write must
+    # refresh exactly once. Bounding their SUM hides a redundant refetch behind
+    # the navigation's allowance, which is what the two asserts below fix.
+    reads_before_cancel = settle_reads(page, "/schedule", authenticated=True)
     with page.expect_response(
         lambda response: is_admin_request(response.request, "/schedule/override", "DELETE")
     ):
         page.get_by_role("button", name="Cancel takeover").click()
     page.get_by_label("Choose takeover programming").wait_for(state="visible")
-    reads_after_cancel = request_count(page, "/schedule", authenticated=True)
+    reads_after_cancel = settle_reads(page, "/schedule", authenticated=True)
     click_admin_link(page, "Schedule", "/admin/shows/schedule")
     page.get_by_text("On air", exact=True).wait_for(state="visible")
     assert page.get_by_text("On air · takeover", exact=True).count() == 0
     assert request_count(page, "/schedule", authenticated=True) == reads_after_cancel, page.request_log
     assert reads_after_pin - initial_reads <= 3, page.request_log
-    # Exactly two reads are structurally possible in this window: remounting
-    # Dash refetches its staleTime=0 live query, and DELETE's onDone
-    # invalidates that same key for one post-write refresh. The Rundown's own
-    # query rides the 30s default staleTime off the cache write, which is what
-    # the two exact equalities above pin. Nothing about a null target adds a
-    # third — keep this at 2 so a real extra read cannot hide behind it.
-    assert reads_after_cancel - reads_after_pin <= 2, page.request_log
+    # Navigating back to Dash costs its two route mounts and nothing else.
+    assert reads_before_cancel - reads_after_pin <= 2, page.request_log
+    # The read this check exists for: DELETE's onDone writes both caches and
+    # invalidates the Dashboard key, so it must cost EXACTLY ONE refresh — not
+    # "at most three", which passes just as happily with two redundant ones.
+    assert reads_after_cancel - reads_before_cancel == 1, page.request_log
 
     # The nullable target extends, rather than replaces, named-show pins. Repeat
     # the same cache handoff with the configured show so its existing behavior
@@ -3513,7 +3544,7 @@ def schedule_dashboard_override_reconciliation(page):
         page.get_by_role("button", name="Take over →").click()
     page.get_by_role("button", name="Cancel takeover").wait_for(state="visible")
     assert current["override"]["showId"] == show["id"], current
-    named_reads = request_count(page, "/schedule", authenticated=True)
+    named_reads = settle_reads(page, "/schedule", authenticated=True)
     click_admin_link(page, "Schedule", "/admin/shows/schedule")
     page.get_by_text("On air · takeover", exact=True).wait_for(state="visible")
     page.get_by_text(show["name"], exact=True).first.wait_for(state="visible")
