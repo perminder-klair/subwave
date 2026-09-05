@@ -46,6 +46,7 @@ import { activeModelLabel } from '../llm/provider.js';
 import { setRawDebugStderrMirror } from '../llm/log.js';
 import { taggerBatchSystem } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
+import { adoptAndPrune } from './id-rotation.js';
 import { reportProgress, formatPhaseBreakdown, sortedPhaseTimings } from './tagger-progress.js';
 import { planRun } from './rescan-scope.js';
 import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
@@ -298,13 +299,17 @@ async function main() {
 
   // Reconcile against the live catalogue. The walk above is complete and
   // authoritative, so any track row it didn't see is gone from Navidrome
-  // (typically after a full rescan that re-mints IDs). Pruning the orphans
-  // keeps coverage %, untagged scope and analysis scope honest. Guarded on a
-  // non-empty walk so a transient empty Navidrome response can't wipe the DB.
+  // (typically after a full rescan that re-mints IDs). Adoption first
+  // (music/id-rotation.ts): rows whose id was rotated by Navidrome's canonical
+  // migration carry their tags/analysis/vectors onto the new id instead of
+  // being re-derived from zero; the prune then only sees genuinely deleted
+  // rows, keeping coverage %, untagged scope and analysis scope honest.
+  // Guarded on a non-empty walk so a transient empty Navidrome response can't
+  // wipe the DB; --no-prune skips both (adoption is a mutation too).
   if (flags.noPrune) {
     console.log('[tag] --no-prune: skipping orphan prune (reconcile step deselected)');
   } else if (walked > 0) {
-    const pruned = db.pruneMissingTracks(liveIds);
+    const { pruned } = await adoptAndPrune(liveIds);
     if (pruned > 0) {
       console.log(`[tag] pruned ${pruned} orphaned tracks no longer in Navidrome`);
     }
