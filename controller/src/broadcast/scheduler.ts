@@ -28,6 +28,7 @@ import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/sh
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import { createPoolBuilder } from './auto-pool.js';
+import { autoPlaylistShowLabel, createShowBuildTracker } from './auto-playlist-show.js';
 import { reloadAutoPlaylist } from './liquidsoap-control.js';
 import * as session from './session.js';
 import * as djAgent from './dj-agent.js';
@@ -98,6 +99,35 @@ async function tracksFromAlbums(albums: any[], perAlbum: number, max: number) {
 
 export async function refreshAutoPlaylist() {
   return withTrace({ kind: 'auto-playlist' }, () => refreshAutoPlaylistInner());
+}
+
+// Which show the file on disk holds (#1111) — the tracker's rules, and why
+// each call lands where it does, are in broadcast/auto-playlist-show.ts.
+const autoPlaylistBuild = createShowBuildTracker();
+
+// Rebuild the fallback when — and only when — the resolved active show is not
+// the one auto.m3u holds. Called from the shared boundary sequence
+// (rollSessionNow), which every show transition already runs through: the :00
+// talk tick (a scheduled show starting or ending), the takeover start and
+// early-cancel routes, and the expiry janitor. Hooking there rather than adding
+// a second cron is what keeps the four paths from drifting apart — and what
+// keeps the rebuild off the timetable entirely, since a takeover starts on the
+// operator's minute, not on the hour.
+//
+// Returns whether it rebuilt, for the tests and for the callers' own logging.
+export async function refreshAutoPlaylistOnShowChange(reason: string): Promise<boolean> {
+  const show: any = settings.resolveActiveShow();
+  if (!autoPlaylistBuild.needsRebuild(show)) return false;
+  const rollback = autoPlaylistBuild.claim(show);
+  queue.log('scheduler',
+    `Auto-playlist: active show changed to ${autoPlaylistShowLabel(show)} (${reason}) — rebuilding the fallback`);
+  try {
+    await refreshAutoPlaylist();
+  } catch (err: any) {
+    rollback();  // still stale — the next boundary must retry
+    throw err;
+  }
+  return true;
 }
 
 async function refreshAutoPlaylistInner() {
@@ -516,6 +546,11 @@ async function refreshAutoPlaylistInner() {
     `Auto-playlist refreshed: ${pool.length} tracks (` +
     Object.entries(fromSource).filter(([, v]) => v > 0).map(([k, v]) => `${k}=${v}`).join(' ') +
     `, mood=${mood || 'none'}${showInfo})`);
+  // Record what this file now holds, whichever path asked for it — boot, the
+  // periodic cron, a settings/blocklist save, the admin Refresh button, or the
+  // boundary hook above. Stamping every writer is what stops the next boundary
+  // spending a rebuild on a show the file is already built for (#1111).
+  autoPlaylistBuild.built(show);
 }
 
 // ---------------------------------------------------------------------------
@@ -559,7 +594,21 @@ export async function runHourlyCheck() {
 // track boundary. The takeover routes keep the default true — an operator action
 // is explicit and should air promptly, the same reasoning that exempts the
 // manual /dj/segment runners from the budget gate.
-export async function rollSessionNow({ airHandoff = true }: { airHandoff?: boolean } = {}) {
+//
+// `reason` names the transition in the booth log's auto-playlist line — the one
+// place an operator can tell a scheduled boundary from a takeover.
+export async function rollSessionNow(
+  { airHandoff = true, reason = 'session roll' }: { airHandoff?: boolean; reason?: string } = {},
+) {
+  // The FALLBACK follows the show too, not just the session (#1111): every show
+  // transition runs through here, so this is where auto.m3u learns the show
+  // changed instead of waiting out the refresh cron. Fire-and-forget and traps
+  // its own errors — it is Navidrome I/O, and the mic-pass below is the audible
+  // thing; holding the handoff behind a pool rebuild would duck the outro it is
+  // supposed to land on. Ahead of the roll because it needs no context: a
+  // session roll that fails must not leave the previous show's fallback on air.
+  refreshAutoPlaylistOnShowChange(reason).catch(err =>
+    queue.log('error', `Auto-playlist refresh on show change failed: ${err.message}`));
   let ctx: Awaited<ReturnType<typeof getFullContext>> | null = null;
   try {
     ctx = await getFullContext();
@@ -939,7 +988,7 @@ async function talkTick() {
     // rollSessionNow traps every step of its own, but this tick is now the one
     // cron behind every scheduled segment: a rejection here must not take the
     // rest of the minute — or, unhandled, the process — with it.
-    const roll = await rollSessionNow({ airHandoff: false }).catch(err => {
+    const roll = await rollSessionNow({ airHandoff: false, reason: 'scheduled boundary' }).catch(err => {
       queue.log('error', `Session roll failed: ${err.message}`);
       return null;
     });
@@ -1200,7 +1249,7 @@ async function overrideJanitor() {
     if (!ov || Date.now() < ov.expiresAt) return;
     await settings.update({ scheduleOverride: null });
     queue.log('scheduler', '[takeover] override expired — back to the weekly schedule');
-    await rollSessionNow();
+    await rollSessionNow({ reason: 'takeover expired' });
   } catch (err) {
     queue.log('error', `Takeover janitor failed: ${err.message}`);
   }
