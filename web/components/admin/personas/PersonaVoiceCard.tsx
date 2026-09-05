@@ -74,9 +74,18 @@ export function PersonaVoiceCard({
                 Until that’s fixed, this persona falls back to <strong>{defaultEngine}</strong>.
               </>
             )}
+            allowInherit
             engineHint={<>
-              Each persona can use its own engine and voice. The badge on each card
-              shows whether it&apos;s ready in this build.
+              Each persona can use its own engine and voice, or follow the
+              station. The badge on each card shows whether it&apos;s ready in
+              this build.
+            </>}
+            inheritNote={<>
+              This persona follows <strong>Settings → TTS voice</strong>, which is
+              currently <strong>{defaultEngine}</strong>. On a local engine it
+              keeps the voice below; on the cloud voice it uses the station&apos;s
+              cloud provider and voice, because a local voice id means nothing to
+              a cloud provider.
             </>}
             unavailableNote={engine => (
               <>{ENGINE_UNAVAILABLE[engine]} This persona falls back to{' '}

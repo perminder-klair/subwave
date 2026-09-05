@@ -6,6 +6,7 @@ import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { cn } from '../../../lib/cn';
 import { Card, Btn } from '../ui';
+import { PERSONA_TTS_INHERIT, personasPinningOtherEngine } from '../../../lib/schemas.generated';
 import {
   SectionHeader, SaveBar, KeyTestResult,
   type SectionProps,
@@ -59,6 +60,33 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
     chatModel !== initial.current.chatModel ||
     voiceModel !== initial.current.voiceModel ||
     voiceName !== initial.current.voiceName;
+
+  // Wiring the brain sets the station's default engine to cloud, but a persona
+  // that PINS a local engine beats that default and keeps speaking through it —
+  // which is how a paying Brain + Cloud Voice customer used to hear Piper and
+  // nothing in the logs. List them so the operator can see it before it happens.
+  // The helper is mirrored from controller/src/schemas/persona.ts so the browser
+  // and the server answer "would this persona follow?" the same way.
+  const personas = (((data.values ?? {}) as { personas?: unknown }).personas) as
+    | Array<{ id?: unknown; name?: unknown; tts?: { engine?: unknown } | null }>
+    | undefined;
+  const pinned = personasPinningOtherEngine(personas, 'cloud');
+
+  // One click: point exactly those personas at the station default and leave
+  // every other field alone. update() replaces the whole personas array, so the
+  // untouched rows ride along verbatim.
+  const useStationDefault = async () => {
+    if (!Array.isArray(personas)) return;
+    const ids = new Set(pinned.map((p) => p.id));
+    await saveSettings({
+      personas: personas.map((p) =>
+        ids.has(String(p.id ?? ''))
+          ? { ...p, tts: { ...(p.tts || {}), engine: PERSONA_TTS_INHERIT } }
+          : p,
+      ),
+    });
+    refresh();
+  };
 
   // Redaction sentinel from getRedacted(): 'set' means a token is already on
   // file for that block. Both blocks share the same DJ Brain token in practice.
@@ -133,6 +161,10 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
         ...(typedToken ? { apiKey: typedToken } : {}),
       },
       tts: {
+        // The voice half of "wire the brain and its voice". Without this the
+        // cloud block is configured and never reached: tts.defaultEngine stays
+        // piper and every persona on 'inherit' follows it.
+        defaultEngine: 'cloud',
         cloud: {
           enabled: true,
           provider: 'openai-compatible',
@@ -242,6 +274,31 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
               blank to let the server pick its default.
             </div>
           </div>
+
+          {pinned.length > 0 && (
+            <div className="field grid gap-2 border border-[var(--danger)] bg-[var(--ink-softer)] p-3">
+              <span className="text-[11px] font-bold tracking-[0.12em] text-[var(--danger)] uppercase">
+                {pinned.length === 1 ? '1 persona will not use this voice' : `${pinned.length} personas will not use this voice`}
+              </span>
+              <span className="text-[11px] leading-[1.5] text-muted">
+                A persona that pins its own engine beats the station default, so
+                saving here would configure the cloud voice and never reach it:{' '}
+                {pinned.map((p, i) => (
+                  <span key={p.id || p.name}>
+                    {i > 0 ? ', ' : ''}
+                    <strong>{p.name}</strong> ({p.engine})
+                  </span>
+                ))}
+                . Point them at the station default and they follow whatever
+                Settings → TTS voice is set to — here, the DJ Brain voice.
+              </span>
+              <div>
+                <Btn onClick={useStationDefault} disabled={busy}>
+                  {busy ? 'Saving…' : 'Set them to station default'}
+                </Btn>
+              </div>
+            </div>
+          )}
 
           <div
             className={cn(

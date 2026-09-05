@@ -1399,6 +1399,31 @@ export function repairDjPromptForLoad(
   };
 }
 
+/**
+ * Personas that pin an engine which is NOT the one given — the list the admin
+ * DJ Brain section warns about before it wires the cloud voice, and the list
+ * its one-click fix patches to 'inherit'.
+ *
+ * A persona already on `inherit` is never listed: it follows the station by
+ * definition, which is exactly what the fix would set it to.
+ */
+export function personasPinningOtherEngine(
+  personas: Array<{ id?: unknown; name?: unknown; tts?: { engine?: unknown } | null }> | null | undefined,
+  engine: string,
+): Array<{ id: string; name: string; engine: string }> {
+  if (!Array.isArray(personas)) return [];
+  return personas
+    .filter((p) => {
+      const e = p?.tts?.engine;
+      return typeof e === 'string' && e !== PERSONA_TTS_INHERIT && e !== engine;
+    })
+    .map((p) => ({
+      id: String(p.id ?? ''),
+      name: String(p.name ?? p.id ?? ''),
+      engine: String(p.tts?.engine ?? ''),
+    }));
+}
+
 // ─── from controller/src/schemas/playlist.ts ─────────────────────────────
 
 // Shared playlist schemas — the request bodies of the /playlists routes and

@@ -39,6 +39,12 @@ import {
   type TtsVoiceSlot,
 } from '../schemas/persona.js';
 
+// personasPinningOtherEngine lives in schemas/persona.ts, not here: the admin
+// DJ Brain section needs it in the BROWSER, and only src/schemas/** is mirrored
+// into web/lib/schemas.generated.ts. Re-exported so controller call sites still
+// find it beside the resolver it belongs with.
+export { personasPinningOtherEngine } from '../schemas/persona.js';
+
 /** The slice of `settings.tts` the resolution depends on. */
 export interface StationVoiceDefaults {
   /** settings.tts.defaultEngine — the engine an inherit slot resolves to. */
@@ -107,29 +113,4 @@ export function resolvePersonaVoiceSlot(
     gainDb,
     speed,
   };
-}
-
-/**
- * Personas that pin an engine which is NOT the one given — the list the admin
- * DJ Brain section warns about before it wires the cloud voice, and the list
- * its one-click fix patches to 'inherit'.
- *
- * A persona already on `inherit` is never listed: it follows the station by
- * definition, which is exactly what the fix would set it to.
- */
-export function personasPinningOtherEngine(
-  personas: Array<{ id?: unknown; name?: unknown; tts?: { engine?: unknown } | null }> | null | undefined,
-  engine: string,
-): Array<{ id: string; name: string; engine: string }> {
-  if (!Array.isArray(personas)) return [];
-  return personas
-    .filter((p) => {
-      const e = p?.tts?.engine;
-      return typeof e === 'string' && e !== PERSONA_TTS_INHERIT && e !== engine;
-    })
-    .map((p) => ({
-      id: String(p.id ?? ''),
-      name: String(p.name ?? p.id ?? ''),
-      engine: String(p.tts?.engine ?? ''),
-    }));
 }
