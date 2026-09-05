@@ -23,7 +23,8 @@ import * as library from '../music/library.js';
 import * as loudness from '../music/loudness.js';
 import * as silenceTrim from '../music/silence-trim.js';
 import * as blocklist from '../music/blocklist.js';
-import { artistRootKey, trackKey } from '../music/recency.js';
+import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
+import { albumKeyFor } from '../music/album-facts.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
@@ -311,6 +312,7 @@ class Queue {
               id: null,
               title: e.title || null,
               artist: e.artist || null,
+              album: e.album || null,
               endedAt: e.t,
             });
           } catch {}
@@ -1979,6 +1981,11 @@ class Queue {
           id: t.id || null,
           title: t.title || null,
           artist: t.artist || null,
+          // For the album cooldown (#1485 FR 3). The compilation flags are NOT
+          // carried: albumKey exempts on the CANDIDATE side, which is the side
+          // holding them (a library row carries both; a Subsonic-sourced play
+          // often carries neither), and a block needs both sides to key alike.
+          album: t.album || null,
           endedAt,
         });
         this._recentPlays = this._recentPlays.slice(0, config.queue.recentPlaysMax);
@@ -2066,6 +2073,10 @@ class Queue {
     logEvent('track.play', {
       title: this.current.track.title,
       artist: this.current.track.artist || null,
+      // Carried so backfillRecentPlaysFromEvents can rebuild album keys after a
+      // restart. Without it the album cooldown forgets everything the sidecar
+      // didn't hold, which on a fresh boot is most of the window.
+      album: this.current.track.album || null,
       source: this.current.source,
       requestedBy: this.current.requestedBy || null,
       show: onAirShow?.name || null,
@@ -2682,6 +2693,49 @@ class Queue {
       if (new Date(p.endedAt).getTime() < cutoff) break;
       const k = (p.artist || '').toLowerCase().trim();
       if (k) out.add(k);
+    }
+    return out;
+  }
+
+  // The ALBUM keys (music/recency.albumKey — album + lead album artist, with
+  // compilations keyed as '' and therefore exempt) heard inside `hours`, plus
+  // every album already queued and unaired, plus the one on air.
+  //
+  // ONE method for BOTH pick paths (#1485 FR 3): the pool picker passes it to
+  // filterPickerCandidates and the agent path's album guard tests its pick
+  // against it, so "which albums are too recent" cannot mean two things. That
+  // is the property the artist guard does NOT have — recentArtistsSince (hours,
+  // pool) and neighbourArtistRoots (slots, agent) answer deliberately different
+  // questions — and it is why this one is in hours: an hours window is the
+  // shape both paths can read without either of them re-deriving it.
+  //
+  // The QUEUED side is included for the reason neighbourArtistRoots documents:
+  // a pick is not always adjacent to the track on air, so with a pair-aware
+  // drain (or a request stacked ahead) an album queued two slots out is exactly
+  // the repeat this guard exists to catch, and it has no play row yet. Unlike
+  // that method this takes the WHOLE queue rather than a tail — everything in
+  // it will air inside any window worth setting.
+  //
+  // Empty set when hours <= 0, which is the shipped default: the cooldown is
+  // off until an operator asks for it, so an upgrade changes nothing.
+  recentAlbumKeys(hours = 0): Set<string> {
+    const out = new Set<string>();
+    if (!Number.isFinite(hours) || hours <= 0) return out;
+    // albumKeyFor, not the pure albumKey: a queued pick or a sidecar play row
+    // carries no compilation flags, and without the library fill-in a sampler
+    // would enter the window it is meant to be exempt from.
+    const add = (track: CandidateLike | null | undefined) => {
+      const key = albumKeyFor(track || {});
+      if (key) out.add(key);
+    };
+    for (const item of this.upcoming) add(item?.track);
+    add(this.current?.track);
+    // _recentPlays is newest-first, so the first row past the cutoff ends the
+    // walk — same shape as recentArtistsSince.
+    const cutoff = Date.now() - hours * 3_600_000;
+    for (const p of this._recentPlays) {
+      if (new Date(p.endedAt).getTime() < cutoff) break;
+      add(p);
     }
     return out;
   }

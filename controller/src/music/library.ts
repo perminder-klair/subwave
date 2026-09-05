@@ -231,6 +231,15 @@ export function candidateFilterTracks() {
   return loaded ? db.candidateFilterTracks() : [];
 }
 
+// The album-cooldown exemption facts (#1485 FR 3) — is_compilation +
+// era_untrusted, composed. Two columns off the primary key: this is resolved
+// per candidate and per recent play on every pick (music/album-facts.ts), so
+// it deliberately does NOT go through the heavier lean read below. null when
+// the track has no library row (Subsonic-only), which reads as "no evidence".
+export function getAlbumFacts(songId: string) {
+  return loaded ? db.getAlbumFacts(songId) : null;
+}
+
 // Lean metadata for the /now-playing hot path — only the fields the player's
 // metadata strip renders (genre · BPM · key · mood · energy · year). Backed by
 // db.getTrackLite so a per-listener poll never SELECTs or JSON.parses the heavy

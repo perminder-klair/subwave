@@ -600,6 +600,20 @@ export const DEFAULTS = {
     },
   },
 
+  // Track-selection windows read by BOTH pick paths — the pool picker's
+  // candidate filter and the agent path's point-of-choice guard.
+  //
+  // `albumHours`: how long a record stays on cooldown after one of its tracks
+  // airs (#1485 FR 3). 0 = OFF, and that is deliberate rather than timid: the
+  // artist window already blocks everything an album window shorter than it
+  // would, so an album cooldown is only ever worth setting ABOVE the artist
+  // window — a number this code cannot pick for an operator, because it depends
+  // on how album-heavy their catalogue is. Off means an upgrade is
+  // byte-identical. See music/recency.ts albumKey.
+  picker: {
+    albumHours: 0,
+  },
+
   // The player heart button (#991). `starInNavidrome` mirrors each first like
   // into Navidrome via Subsonic star. `influenceDj` feeds the most-liked tracks
   // back to BOTH pick paths as a weighted preference — never a lock.

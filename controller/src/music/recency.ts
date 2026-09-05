@@ -26,12 +26,38 @@ export interface CandidateLike {
   // `durationSec`. Both optional — unknown length is never grounds to drop.
   duration?: number | null;
   durationSec?: number | null;
+  // Album surface for the album cooldown (albumKey below). Every field is
+  // optional because each source carries a different subset: a library row
+  // carries all four, a Subsonic child carries `album` alone, and a recent-play
+  // sidecar row written before #1485 carries none. Absent always reads as
+  // "no evidence", never as a repeat — see albumKey.
+  album?: string | null;
+  albumArtist?: string | null;
+  isCompilation?: boolean | null;
+  yearUntrusted?: boolean | null;
 }
 
 interface CandidateFilterState {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;
   recentArtists?: Set<string>;
+  // Album cooldown (#1485 FR 3) — albumKey()s heard inside settings
+  // picker.albumHours, from queue.recentAlbumKeys(). Relaxable, and the FIRST
+  // guard the cascade drops: it is the longest-memory preference here (an
+  // album window is only worth setting above the artist window, which already
+  // covers everything below it), so on a starved pool it is the one whose loss
+  // costs the least. Empty = off, which is the shipped default — and an empty
+  // set removes its cascade stage entirely, so the pool walks byte-identical
+  // modes to the ones it walked before this existed.
+  recentAlbums?: Set<string>;
+  // How a candidate's album key is resolved. Defaults to the pure `albumKey`,
+  // which is right for a candidate that already carries its compilation flags
+  // and for every unit test. Real pick paths inject
+  // `music/album-facts.albumKeyFor`, which fills those flags in from the
+  // library — without it the exemption is dead on a raw Subsonic candidate,
+  // which is most of the pool. Injected rather than imported because this
+  // module is pure and is the one every path sits on.
+  albumKeyOf?: (song: CandidateLike) => string;
   // Count-based hard no-repeat guard (live-repeats fix). Checked OUTSIDE the
   // relaxation cascade's mode loop — like maxDurationSec, a track in here is
   // never an acceptable pick, so it survives every starvation stage. This is
@@ -172,6 +198,70 @@ export function trackKey(song: CandidateLike): string {
   return `${(song.title || '').toLowerCase().trim()}|${artistKey(song)}`;
 }
 
+// The names a tagger writes on a multi-artist release. Lives HERE, beside
+// artistRootKey, because it is a fact about artist NAMES and two consumers now
+// need it — music/era-suspect.ts's `various-artists` era marker and the album
+// cooldown below. era-suspect imports it rather than keeping its own copy; the
+// dependency runs that way round because recency owns no era policy and must
+// not acquire one.
+const VARIOUS_ARTIST_NAMES = new Set([
+  'variousartists', 'various', 'va', 'verschiedene', 'diversos', 'divers',
+]);
+
+export function isVariousArtistsName(raw: unknown): boolean {
+  return VARIOUS_ARTIST_NAMES.has(String(raw ?? '').toLowerCase().replace(/[^a-z0-9]/g, ''));
+}
+
+// Is a cooldown on this track's ALBUM the wrong question? (#1485 FR 3)
+//
+// On a compilation it always is: "Now 47" and a Stax anthology are containers,
+// not records an artist made, so two tracks off one in an evening is ordinary
+// radio rather than the album-mode repetition the cooldown exists to stop.
+// The signals are the ones the era pipeline already composes — no second
+// heuristic (#1418): `yearUntrusted` is the OR of Navidrome's `isCompilation`
+// and the walk's derived `era_untrusted`, so it also covers the various-artist
+// and anthology shapes that carry no COMPILATION tag. It reads WIDER than
+// "compilation" — a single-artist "Best of" is in it too — and that costs
+// nothing here, because the artist window already spaces those.
+//
+// `isCompilation` is read beside it rather than folded away: a Subsonic-sourced
+// candidate can carry the raw flag with no walked row behind it.
+export function albumCooldownExempt(song: CandidateLike): boolean {
+  if (song?.isCompilation === true || song?.yearUntrusted === true) return true;
+  return isVariousArtistsName(song?.albumArtist);
+}
+
+// The album cooldown's key: the record, and who made it.
+//
+// Normalised exactly as artistRootKey normalises a name (lowercase, curly
+// apostrophes folded, whitespace collapsed) so the two keys can't disagree
+// about the same catalogue, and paired with the LEAD of the ALBUM artist when
+// the source carries one, the track's own artist otherwise — which is what
+// keeps "Marvin Gaye & Tammi Terrell" on `United` keyed with the Marvin Gaye
+// tracks around it.
+//
+// The ARTIST half is not decoration. It is what stops an untagged compilation
+// (one whose flags never reached us) from blocking a whole evening: without a
+// lead in the key, twelve different artists on one sampler would all share it.
+//
+// '' means NO KEY — never a match. Returned for an exempt album, an untitled
+// one, and an untagged artist, all for the same reason the artist guard never
+// drops an untagged candidate: absence of a name is not evidence of a repeat.
+//
+// Deliberately NOT an edition-stripping key: "Kid A" and "Kid A (Remastered)"
+// stay apart. Collapsing them means guessing which parenthetical is an edition
+// and which is the record's name, and the failure direction is a cooldown
+// nobody asked for.
+export function albumKey(song: CandidateLike): string {
+  if (!song || albumCooldownExempt(song)) return '';
+  const album = String(song.album || '')
+    .toLowerCase().replace(APOSTROPHES, "'").replace(/\s+/g, ' ').trim();
+  if (!album) return '';
+  const artist = artistRootKey({ artist: song.albumArtist || song.artist });
+  if (!artist) return '';
+  return `${album}|${artist}`;
+}
+
 // Large-library boost on the relaxable windows. The 12h/2h defaults were tuned
 // for small-to-mid libraries; at radio pace (~300-400 plays/day) 12h blocks
 // ~150-200 tracks, which on a 10k-50k catalogue is under 2% — far too little
@@ -239,6 +329,8 @@ export function filterPickerCandidates<T extends CandidateLike>(
     recentIds = new Set<string>(),
     recentKeys = new Set<string>(),
     recentArtists = new Set<string>(),
+    recentAlbums = new Set<string>(),
+    albumKeyOf = albumKey,
     hardRecentIds = new Set<string>(),
     hardRecentKeys = new Set<string>(),
     seenIds = new Set<string>(),
@@ -259,16 +351,24 @@ export function filterPickerCandidates<T extends CandidateLike>(
   // something rather than nothing. When artist relaxation is disabled the artist
   // guard stays ON in every mode — only the track guard may drop, and only for
   // fresh artists — so the agent is never handed an artist it just played.
-  const modes = allowArtistRelaxation
+  //
+  // The album stage is PREPENDED rather than folded into the first mode, and
+  // only when there is an album set to enforce: with the cooldown off (the
+  // default) the list is the exact list it always was, so an upgrade changes
+  // neither the result nor the number of passes.
+  const base = allowArtistRelaxation
     ? [
-        { recentTracks: true, recentArtists: true },
-        { recentTracks: true, recentArtists: false },
-        { recentTracks: false, recentArtists: false },
+        { recentTracks: true, recentArtists: true, recentAlbums: false },
+        { recentTracks: true, recentArtists: false, recentAlbums: false },
+        { recentTracks: false, recentArtists: false, recentAlbums: false },
       ]
     : [
-        { recentTracks: true, recentArtists: true },
-        { recentTracks: false, recentArtists: true },
+        { recentTracks: true, recentArtists: true, recentAlbums: false },
+        { recentTracks: false, recentArtists: true, recentAlbums: false },
       ];
+  const modes = recentAlbums.size
+    ? [{ recentTracks: true, recentArtists: true, recentAlbums: true }, ...base]
+    : base;
 
   for (const mode of modes) {
     const nextSeen = new Set(seenIds);
@@ -286,6 +386,14 @@ export function filterPickerCandidates<T extends CandidateLike>(
       if (hardRecentKeys.has(trackKey(song))) continue;
       if (mode.recentTracks && recentIds.has(song.id)) continue;
       if (mode.recentTracks && recentKeys.has(trackKey(song))) continue;
+
+      // Album cooldown. Keyed on album + lead artist, and an exempt or
+      // untitled album keys as '' — which matches nothing, so a compilation
+      // never blocks and never gets blocked (albumKey).
+      if (mode.recentAlbums) {
+        const ak = albumKeyOf(song);
+        if (ak && recentAlbums.has(ak)) continue;
+      }
 
       const key = artistKey(song);
       // Hard artist block — no mode gate, so it survives every relaxation stage

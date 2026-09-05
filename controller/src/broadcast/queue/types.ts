@@ -123,6 +123,11 @@ export interface RecentPlay {
   id: string | null;
   title: string | null;
   artist: string | null;
+  // The record this play came off, for the album cooldown (#1485 FR 3).
+  // OPTIONAL because the sidecar is durable: every row written before the
+  // cooldown existed carries no album, and so takes no part in it — an upgrade
+  // starts remembering albums from the next play, never retroactively.
+  album?: string | null;
   endedAt: string;
 }
 

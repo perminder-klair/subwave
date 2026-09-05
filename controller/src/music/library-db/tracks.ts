@@ -78,6 +78,33 @@ export function getTrackLite(id: string): TrackLite | null {
   };
 }
 
+/**
+ * The two era/compilation columns, composed the way every other reader
+ * composes them — and NOTHING else.
+ *
+ * A third lean read next to getTrackLite rather than a reuse of it: the album
+ * cooldown (#1485 FR 3) resolves this for every candidate in a pick and every
+ * play inside its window, and getTrackLite would JSON.parse `genres` and
+ * `moods` on each of them for fields this caller never looks at. Two INTEGER
+ * columns off the primary key is the whole query.
+ *
+ * null = no such row (a Subsonic-only track), which reads as "no evidence" —
+ * never as "not a compilation", because those are different answers.
+ */
+export function getAlbumFacts(id: string): { isCompilation: boolean | null; yearUntrusted: boolean | null } | null {
+  const row = requireDb()
+    .prepare(`SELECT is_compilation, era_untrusted FROM tracks WHERE id = ?`)
+    .get(id) as Pick<TrackRow, 'is_compilation' | 'era_untrusted'> | undefined;
+  if (!row) return null;
+  return {
+    isCompilation: row.is_compilation == null ? null : !!row.is_compilation,
+    // Same composition as rowToTrack/getTrackLite (#1418): OR, not COALESCE.
+    yearUntrusted: (row.is_compilation === 1 || row.era_untrusted === 1)
+      ? true
+      : (row.is_compilation == null && row.era_untrusted == null ? null : false),
+  };
+}
+
 // COUNT(*) of tagged tracks — the O(1)-ish query behind the coverage meter's
 // "tagged" tally. Replaces allTaggedIds().length, which materialised a ~30k-
 // element JS id array on every coverage poll only to read its .length (#723).
