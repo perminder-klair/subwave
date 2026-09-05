@@ -28,6 +28,10 @@ const validImperativeFixtures = {
   // admin-query-imperative: diagnosis-stream
   return adminResponse(adminFetch, '/doctor/stream', { headers: { Accept: 'text/event-stream' } });
 }\n`,
+  'debug/LlmCalls.tsx': `export async function run(adminFetch, format) {
+  // admin-query-imperative: llm-call-export
+  return adminResponse(adminFetch, \`/debug/llm-calls/export?format=\${format}\`);
+}\n`,
   'connect/ConnectPanel.tsx': `export async function run(adminFetch, catalog) {
   // admin-query-imperative: openapi-download
   return adminResponse(adminFetch, catalog.openapiPath);

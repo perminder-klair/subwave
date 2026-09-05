@@ -534,6 +534,29 @@ when a fallback is worth having.
 
 ---
 
+## Exporting the LLM call log
+
+Admin → **Debug** → *LLM recent calls* keeps the last 120 model calls since the
+controller started: the prompts, the tool trail, the response, the latency and
+the token usage. **Export JSON** downloads all of them as one document;
+**NDJSON** writes one call per line, for `jq` and `grep`:
+
+```bash
+# every call that failed, newest first
+jq -c 'select(.ok == false) | {t, kind, model, error}' subwave-llm-calls-*.ndjson
+
+# how long each pick took
+jq -r 'select(.kind == "djAgentPick") | [.t, .ms, .model] | @tsv' subwave-llm-calls-*.ndjson
+```
+
+The file holds exactly what the panel shows — same admin credential, same
+records, no extra fields and no extra filtering. That also means it holds
+whatever your prompts hold (persona souls, house rules, track metadata, listener
+request text), so read one before attaching it to a public issue. The ring is
+in-memory and since-boot: a restart empties it, and call 121 pushes call 1 out.
+
+---
+
 ## What's intentionally not included
 
 - **A `curl | sh` installer.** The two-file install (`curl docker-compose.yml` + `curl .env.example`) is the deliberate "as simple as it can be without piping random scripts into your shell" line.
