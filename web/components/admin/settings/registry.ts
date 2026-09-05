@@ -158,6 +158,7 @@ export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
     'crossfade', 'duck-depth', 'stem-transitions', 'max-track-length', 'dead-air-trim',
     'loudness-levelling', 'opus-stream', 'flac-stream', 'ogg-metadata',
     'aac-stream', 'stream-mp3-bitrate', 'listener-buffer', 'max-listeners',
+    'listener-country',
   ],
 };
 
@@ -311,5 +312,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Bitrate', section: 'danger', card: 'Stream MP3 bitrate', keywords: 'mp3 kbps stream restart' },
   { label: 'Listener buffer', section: 'danger', card: 'Listener buffer', keywords: 'burst size seconds behind live edge restart' },
   { label: 'Max listeners', section: 'danger', card: 'Max listeners', keywords: 'icecast max clients concurrent connections capacity limit licensing fees restart' },
+  { label: 'Country header', section: 'danger', card: 'Listener country', keywords: 'geoip cf-ipcountry cloudflare proxy header stats audience country rollup' },
+  { label: 'GeoIP database', section: 'danger', card: 'Listener country', keywords: 'mmdb maxmind geolite2 db-ip ip2location offline lookup stats audience country' },
   { label: 'Restart mixer', section: 'danger', card: 'Mixer', keywords: 'restart liquidsoap apply pending' },
 ];

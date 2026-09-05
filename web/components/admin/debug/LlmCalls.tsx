@@ -2,10 +2,11 @@
 
 import { useEffect, useState } from 'react';
 import { useAdminAuth } from '../../../lib/adminAuth';
-import { useAdminMutation } from '../../../lib/admin-query';
+import { adminResponse, useAdminMutation } from '../../../lib/admin-query';
+import { notify, errorMessage } from '../../../lib/notify';
 import { Checkbox } from '../../ui/checkbox';
 import { Label } from '../../ui/label';
-import { Card } from '../ui';
+import { Btn, Card } from '../ui';
 import { ScrollArea } from '../../ui/scroll-area';
 import { cn } from '../../../lib/cn';
 import { Tool, ToolHeader, ToolContent, ToolInput, ToolOutput } from '../../ai-elements/tool';
@@ -87,10 +88,44 @@ function ToolList({ calls }: { calls: Array<{ name?: string; args?: unknown; res
 }
 
 
+// Filenames the controller already stamps to the second — the browser never
+// invents one, so the file on disk matches what the route says it sent.
+function filenameFrom(res: Response, fallback: string): string {
+  const m = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '');
+  return m?.[1] || fallback;
+}
+
 export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
   const { adminFetch } = useAdminAuth();
   const calls = llm?.recentCalls || [];
   const [filter, setFilter] = useState('all');
+  const [exporting, setExporting] = useState<'json' | 'ndjson' | null>(null);
+
+  // A one-shot download, not server state — same shape as the backup and skill
+  // exports: adminFetch + a blob, because a plain <a href> can't carry the
+  // Basic-auth header. Deliberately exports the WHOLE ring rather than the
+  // `shown` filter: the filter is a reading aid, and a file that silently holds
+  // a subset is the wrong thing to attach to a bug report.
+  const exportCalls = async (format: 'json' | 'ndjson') => {
+    setExporting(format);
+    try {
+      // admin-query-imperative: llm-call-export
+      const r = await adminResponse(adminFetch, `/debug/llm-calls/export?format=${format}`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filenameFrom(r, `subwave-llm-calls.${format}`);
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      notify.err(`Export failed: ${errorMessage(e)}`);
+    } finally {
+      setExporting(null);
+    }
+  };
   const kinds = Array.from(new Set(calls.map(c => c.kind).filter(Boolean) as string[]));
   const shown = filter === 'all' ? calls : calls.filter(c => c.kind === filter);
 
@@ -131,7 +166,7 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
       title="LLM recent calls"
       sub={`${calls.length} calls · ${llm?.provider || '—'} / ${llm?.activeModel || '—'}`}
       right={
-        <div className="flex flex-wrap justify-end gap-1">
+        <div className="flex flex-wrap items-center justify-end gap-1">
           <FilterChip active={filter === 'all'} onClick={() => setFilter('all')}>
             all {calls.length}
           </FilterChip>
@@ -140,6 +175,22 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
               {k} {calls.filter(c => c.kind === k).length}
             </FilterChip>
           ))}
+          <Btn
+            sm
+            onClick={() => exportCalls('json')}
+            disabled={!calls.length || exporting !== null}
+            title="Download all recent calls as one JSON document"
+          >
+            {exporting === 'json' ? 'Exporting…' : 'Export JSON'}
+          </Btn>
+          <Btn
+            sm
+            onClick={() => exportCalls('ndjson')}
+            disabled={!calls.length || exporting !== null}
+            title="Download all recent calls as NDJSON — one call per line, for jq/grep"
+          >
+            {exporting === 'ndjson' ? 'Exporting…' : 'NDJSON'}
+          </Btn>
         </div>
       }
     >

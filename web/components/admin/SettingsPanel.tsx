@@ -342,6 +342,8 @@ export default function SettingsPanel() {
         idleWhenEmpty: v.stream?.idleWhenEmpty ?? false,
         idleAfterMinutes: String(v.stream?.idleAfterMinutes ?? 10),
         maxListeners: String(v.stream?.maxListeners ?? 100),
+        countryHeader: v.stream?.countryHeader ?? '',
+        geoipDbPath: v.stream?.geoipDbPath ?? '',
       },
       loudness: {
         targetLufs: String(v.loudness?.targetLufs ?? -14),
@@ -718,6 +720,8 @@ export default function SettingsPanel() {
         bitrate: n.int('stream.bitrate', form.stream.bitrate),
         bufferSeconds: n.num('stream.bufferSeconds', form.stream.bufferSeconds),
         maxListeners: n.int('stream.maxListeners', form.stream.maxListeners),
+        countryHeader: form.stream.countryHeader,
+        geoipDbPath: form.stream.geoipDbPath,
       },
     });
   };
@@ -1890,6 +1894,60 @@ export default function SettingsPanel() {
                     broadcast log names the source it used on every boot
                     (<code>max listeners N (from …)</code>), so check there if this field
                     saves but nothing changes.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Listener country" sub="where the Stats rollup gets geography from">
+                <div className="field">
+                  <Label>Country header</Label>
+                  <Input
+                    className="w-full"
+                    aria-label="Proxy header carrying the listener country"
+                    placeholder="x-country-code"
+                    value={form.stream.countryHeader}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f =>
+                        f
+                          ? { ...f, stream: { ...f.stream, countryHeader: e.target.value } }
+                          : f,
+                      )
+                    }
+                  />
+                  <SettingsFieldError path="stream.countryHeader" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Stats reads <code>CF-IPCountry</code> first, which only Cloudflare sets.
+                    If your own proxy adds a country header, name it here and it is read
+                    when Cloudflare&apos;s is absent. Leave blank if you have neither —
+                    an unknown country is simply left out of the rollup.
+                  </div>
+                </div>
+                <div className="field">
+                  <Label>GeoIP database</Label>
+                  <Input
+                    className="w-full"
+                    aria-label="Path to an offline GeoIP database"
+                    placeholder="/var/sub-wave/geoip/GeoLite2-Country.mmdb"
+                    value={form.stream.geoipDbPath}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f =>
+                        f
+                          ? { ...f, stream: { ...f.stream, geoipDbPath: e.target.value } }
+                          : f,
+                      )
+                    }
+                  />
+                  <SettingsFieldError path="stream.geoipDbPath" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Last resort when no header carries the answer: the path, inside the
+                    controller container, of a MaxMind-format <code>.mmdb</code> country
+                    database you supply — GeoLite2, DB-IP Lite and IP2Location LITE all
+                    work. Nothing is bundled; each has its own licence and attribution
+                    terms. An unreadable file is logged once and then ignored, so a wrong
+                    path costs the lookup, never a listener.{' '}
+                    <strong>GEOIP_DB_PATH</strong>{' '}in the environment overrides this.
                   </div>
                 </div>
               </Card>

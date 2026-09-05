@@ -2320,6 +2320,38 @@ export function settingsRawStringLike(max: number, message: string) {
 }
 
 /**
+ * The header-name grammar `stream.countryHeader` accepts.
+ *
+ * RFC 7230 token characters minus the separators nobody puts in a proxy header,
+ * capped at 64. It lives HERE rather than beside the resolver because a
+ * mirrored module may import only `zod`, so the schema cannot import the
+ * constant — the resolver (`broadcast/listener-country.ts`) imports it from
+ * this file instead, keeping one declaration for the save path, the browser
+ * pre-flight and the read path alike.
+ */
+export const STREAM_COUNTRY_HEADER_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
+
+/** Path length cap for `stream.geoipDbPath` — a generous PATH_MAX. */
+export const STREAM_GEOIP_DB_PATH_MAX = 512;
+
+/**
+ * `String(raw ?? '').trim()` + the header-name grammar, empty allowed.
+ *
+ * Empty is the default and means "don't read a second header", so it must stay
+ * accepted; anything else either matches the grammar or is REFUSED, because a
+ * repaired header name would silently read a header the operator never named.
+ */
+export function settingsHeaderNameLike(message: string) {
+  return z
+    .unknown()
+    .superRefine((raw, ctx) => {
+      const v = String(raw ?? '').trim();
+      if (v && !STREAM_COUNTRY_HEADER_RE.test(v)) ctx.addIssue({ code: 'custom', message });
+    })
+    .transform((raw) => String(raw ?? '').trim());
+}
+
+/**
  * A URL field: trim, length, then an http(s) scheme test on a non-empty value.
  *
  * `stripTrailingSlashes` is per-field and must be set from the branch being
@@ -2576,6 +2608,21 @@ export const streamPatchSchema = settingsBlockOf({
   maxListeners: settingsIntLike(
     STREAM_MAX_LISTENERS_BOUNDS,
     `stream.maxListeners must be an integer between ${STREAM_MAX_LISTENERS_BOUNDS.min} and ${STREAM_MAX_LISTENERS_BOUNDS.max}`,
+  ),
+  // A header NAME, not a country. Refused rather than dropped when malformed:
+  // this is typed by hand into a field whose only feedback is the Stats page
+  // staying blank a day later, so a silent drop is the operator watching their
+  // own input disappear — the same reasoning as the roster tag fields.
+  countryHeader: settingsHeaderNameLike(
+    'stream.countryHeader must be a header name (letters, digits and - _ . ~ ! # $ % & \' * + ^ ` |), or empty',
+  ),
+  // Absolute path to an operator-supplied MaxMind-format (.mmdb) database. Not
+  // existence-checked here: a settings save must not depend on a bind mount the
+  // broadcast container has and this process may not, and the reader already
+  // fails open with a log line naming the path it could not read.
+  geoipDbPath: settingsTrimmedString(
+    STREAM_GEOIP_DB_PATH_MAX,
+    `stream.geoipDbPath must be ${STREAM_GEOIP_DB_PATH_MAX} characters or fewer`,
   ),
 });
 

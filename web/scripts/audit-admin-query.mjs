@@ -111,6 +111,13 @@ const allowed = new Map([
     ['diagnosis-command', { callee: 'adminResponse', method: 'GET', path: /^\/doctor$/ }],
     ['diagnosis-stream', { callee: 'adminResponse', method: 'GET', path: /^\/doctor\/stream$/ }],
   ])],
+  ['debug/LlmCalls.tsx', new Map([
+    ['llm-call-export', {
+      callee: 'adminResponse',
+      method: 'GET',
+      path: /^\/debug\/llm-calls\/export\?format=\$\{\}$/,
+    }],
+  ])],
   ['connect/ConnectPanel.tsx', new Map([
     ['openapi-download', { callee: 'adminResponse', method: 'GET', path: /^catalog\.openapiPath$/ }],
   ])],
