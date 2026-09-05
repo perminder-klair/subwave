@@ -469,5 +469,5 @@ automatically.
 ## What's intentionally not included
 
 - **A `curl | sh` installer.** The two-file install (`curl docker-compose.yml` + `curl .env.example`) is the deliberate "as simple as it can be without piping random scripts into your shell" line.
-- **Multi-arch (arm64) images.** Piper, Kokoro, and Chatterbox wheels are amd64-only. Pin a Linux/amd64 host.
+- **A fully arm64 stack.** The split-stack core — `subwave-{caddy,broadcast,controller,web}` — and the lean `subwave-analyzer` ARE published for `linux/arm64` as well as `linux/amd64`, so a Pi 5 / arm64 NAS runs them natively (Dockerfile.controller picks its Piper build off `$TARGETARCH`; Kokoro/onnx have arm64 wheels). What is amd64-only: the `subwave-aio` all-in-one images (the bundled Next.js build fails its arm64 cross-build under QEMU), `subwave-tts-heavy` (Chatterbox), and the heavy/CUDA analyzer variants. On arm64, run the split stack and leave those opt-ins off — or set `DOCKER_DEFAULT_PLATFORM=linux/amd64` and accept emulation.
 - **Multi-host / k8s.** SUB/WAVE is a personal radio station — one Icecast mount, one broadcast. Scaling horizontally would mean per-listener streams, which defeats the design.
