@@ -544,6 +544,106 @@ test('the last-chance release is the row\'s alone — a clip that expires in the
   assert.deepEqual(r.logs, []);
 });
 
+test('two simulated hours: a pending clip never eats a whole window, whatever else is happening', () => {
+  // The unit tests above each pin one arranged minute. This drives the WHOLE
+  // table for two hours against pseudo-random pending clips, quiet gaps and
+  // eligibility, because the bug being fixed was not visible in any single
+  // minute: the old comparison cancelled `now` out, so it read the same at
+  // every minute of a window and only the whole window showed the loss.
+  //
+  // Seeded, so a failure is reproducible from the seed alone. Kept small enough
+  // to stay a unit test; the same harness was run at 400 seeds x 120 minutes
+  // against the pre-fix planner, where the `all-pending` count below was 256.
+  const rand = (seed: number) => () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+  const minuteAt = (i: number) => new Date(2026, 7, 19, HOUR + Math.floor(i / 60), i % 60, 0);
+  const TICKS = 120;
+  let fullyPendingWindows = 0, lastMinutePendingHolds = 0, pendingHolds = 0, released = 0;
+
+  for (let seed = 1; seed <= 12; seed++) {
+    const rnd = rand(seed);
+    // A boundary-deferred clip lands at random minutes and then sits in the
+    // queue until it goes stale — exactly what a run of link-carrying
+    // boundaries does to `_pendingVoice`.
+    const live: ({ kind: string; queuedAt: number } | null)[] = new Array(TICKS).fill(null);
+    for (let i = 0; i < TICKS; i++) {
+      if (rnd() >= 0.25) continue;
+      const queuedAt = minuteAt(i).getTime() - Math.floor(rnd() * 21) * 60_000;
+      for (let j = i; j < TICKS && minuteAt(j).getTime() - queuedAt <= PENDING_VOICE_MAX_AGE_MS; j++) {
+        live[j] = { kind: 'station-id', queuedAt };
+      }
+    }
+    const beats = new Set<number>();
+    const inelig = new Set<string>();
+    const breaks: number[] = [];
+    for (let i = 0; i < TICKS; i++) {
+      if (i % 5 === 0 && rnd() < 0.35) beats.add(i);
+      for (const row of TALK_SLOTS) if (rnd() < 0.12) inelig.add(`${row.kind}:${i}`);
+      breaks.push(rnd() < 0.15 ? 0 : minuteAt(i).getTime() - Math.floor(rnd() * 9) * 60_000);
+    }
+
+    const fired: Partial<Record<TalkKind, string | null>> = {};
+    const logged: Partial<Record<TalkKind, string | null>> = {};
+    const window = new Map<string, string[]>();
+    let lastTalkBreakAt = breaks[0];
+    for (let i = 0; i < TICKS; i++) {
+      const now = minuteAt(i);
+      const plans: TalkPlan[] = talkTickPlan({
+        now, lastTalkBreakAt,
+        pendingTalk: live[i],
+        eligible: kind => !inelig.has(`${kind}:${i}`),
+        externalSlot: kind => (kind === 'programme' && beats.has(i) ? `beat${i}` : null),
+        fired, logged,
+      });
+
+      // ONE TALKER PER MINUTE (#310) survives the release.
+      const firing = plans.filter(p => p.act === 'fire');
+      assert.ok(firing.length <= 1, `seed ${seed} :${now.getMinutes()} — ${firing.map(p => p.kind)} all fired`);
+
+      // The fill row still stands down — SILENTLY — to any slot row that wants
+      // the minute, firing or merely waiting.
+      const slotWants = plans.some(p => TALK_SLOTS.some(r => r.kind === p.kind && r.role === 'slot'));
+      const fillPresent = plans.some(p => TALK_SLOTS.some(r => r.kind === p.kind && r.role === 'fill'));
+      assert.ok(!(slotWants && fillPresent), `seed ${seed} :${now.getMinutes()} — the fill row spoke over a slot row`);
+
+      for (const plan of plans) {
+        const row = talkSlot(plan.kind);
+        const held = plan.act === 'wait' ? plan.reason.held : 'fire';
+        if (held === 'pending') {
+          pendingHolds++;
+          // `minGapMs: 0` has opted out of the question entirely.
+          assert.notEqual(row.minGapMs, 0, `seed ${seed} :${now.getMinutes()} — ${plan.kind} has no gap yet held on pending`);
+          // THE HOLD NEVER TAKES THE ROW'S LAST CHANCE. #1539 in one line.
+          assert.ok(row.opens === 'external' || canRetry(row, plan.slot, now.getMinutes()),
+            `seed ${seed} :${now.getMinutes()} — ${plan.kind} held on pending at its window's last minute (slot :${plan.slot})`);
+        }
+        if (row.opens !== 'external' && row.windowMinutes > 1) {
+          const key = `${plan.kind}|${plan.slotKey}`;
+          const acts = window.get(key) ?? [];
+          acts.push(held);
+          window.set(key, acts);
+        }
+        if (plan.act === 'wait') { if (plan.markLogged) logged[plan.kind] = plan.markLogged; }
+        else { fired[plan.kind] = plan.slotKey; lastTalkBreakAt = now.getTime(); }
+      }
+      if (plans.every(p => p.act !== 'fire')) lastTalkBreakAt = Math.max(lastTalkBreakAt, breaks[i]);
+    }
+
+    for (const [key, acts] of window) {
+      const row = talkSlot(key.split('|')[0] as TalkKind);
+      if (acts.some(a => a === 'pending') && acts.some(a => a !== 'pending')) released++;
+      if (acts.length === row.windowMinutes && acts.every(a => a === 'pending')) {
+        fullyPendingWindows++;
+        lastMinutePendingHolds++;
+      }
+    }
+  }
+
+  assert.equal(fullyPendingWindows, 0, 'no row may lose a whole window to a pending clip — that is a cancel, not a postpone');
+  assert.equal(lastMinutePendingHolds, 0);
+  assert.ok(pendingHolds > 100, `the run must actually exercise the hold (saw ${pendingHolds} held minutes)`);
+  assert.ok(released > 20, `and must actually exercise the release (saw ${released} windows held then released)`);
+});
+
 test('pending expiry before or at the hourly window close preserves the scheduled row', () => {
   const hourlyClose = clockAt(10);
   const cases = [
