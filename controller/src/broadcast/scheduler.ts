@@ -36,6 +36,7 @@ import * as programme from './programme.js';
 import { cleanupOldVoices } from '../audio/tts.js';
 import { shouldFire } from './dj-gate.js';
 import { speakClockAllowed, stationIdDaypartStamp } from './clock-policy.js';
+import { talkOnlyBetweenTracks, withTalkAir } from './talk-air.js';
 import { talkTickPlan, type TalkKind, type TalkPlan } from './talk-scheduler.js';
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
@@ -926,7 +927,22 @@ function talkEligible(kind: TalkKind, now: Date, rolled: SessionRoll | null): bo
   return false;
 }
 
+// Dispatch one fired row, with its resolved air mode in scope for everything it
+// says.
+//
+// The scope (broadcast/talk-air.ts) is what makes `djTalkOnlyBetweenTracks`
+// reach segments this function never sees: the segment director speaks from
+// four sites inside skills/_agent.ts and a programme beat from two more in
+// programme.ts, and queue.announce()/announceExchange() act on the scope rather
+// than on a flag each of those would have to pass down. Manual runners are
+// exempt because they are called from OUTSIDE it — the same exemption the voice
+// switch, the clock switch and the frequency ladder already carry, by the same
+// mechanism (the manual route never reaches the gate).
 async function runTalkSlot(plan: Extract<TalkPlan, { act: 'fire' }>) {
+  return withTalkAir(plan.air, () => runTalkSlotInner(plan));
+}
+
+async function runTalkSlotInner(plan: Extract<TalkPlan, { act: 'fire' }>) {
   try {
     switch (plan.kind) {
       case 'hourly':
@@ -935,8 +951,10 @@ async function runTalkSlot(plan: Extract<TalkPlan, { act: 'fire' }>) {
       case 'station-id':
         // Scheduled idents hold for the next track boundary instead of ducking
         // the current song mid-vocal at an arbitrary wall-clock minute — the
-        // table's `air: 'next-track'`, which only this row carries.
-        await runStationId({ atNextTrack: true });
+        // table's `air: 'next-track'`, the one row that carries it whatever the
+        // switch says. Read off the PLAN, not hardcoded, so the table (and the
+        // switch over it) stays the only place placement is decided.
+        await runStationId({ atNextTrack: plan.air === 'next-track' });
         return;
       case 'banter':
         await runBanter();
@@ -1007,6 +1025,11 @@ async function talkTick() {
       pendingTalk: queue.pendingVoiceTalk(),
       eligible: kind => talkEligible(kind, now, rolled),
       externalSlot: kind => (kind === 'programme' ? programme.dueBeat(now) : null),
+      // Read once per tick, not per row: a switch that flipped mid-plan could
+      // hand one row an immediate air and the next a deferred one on the same
+      // minute, and the pending-clip hold is only coherent if every row in the
+      // plan agrees about it.
+      betweenTracksOnly: talkOnlyBetweenTracks(),
       fired: talkFired,
       logged: talkLogged,
     });

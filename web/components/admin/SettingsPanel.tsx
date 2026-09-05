@@ -369,6 +369,9 @@ export default function SettingsPanel() {
         onePendingPerIp: v.requests?.onePendingPerIp !== false,
       },
       kokoroLang: v.tts?.kokoro?.lang ?? '',
+      // Absent (a settings.json predating the key) reads as OFF, matching the
+      // controller's own coercion in settings.load().
+      djTalkOnlyBetweenTracks: v.djTalkOnlyBetweenTracks === true,
       weather: {
         lat: String(v.weather?.lat ?? ''),
         lng: String(v.weather?.lng ?? ''),

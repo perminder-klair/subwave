@@ -516,6 +516,13 @@ export async function load() {
       typeof stored.djSpeakClock === 'boolean'
         ? stored.djSpeakClock
         : DEFAULTS.djSpeakClock,
+    // Talk placement switch. Same coercion as djSpeakClock above: a
+    // settings.json written before this key existed reads as the default
+    // `false`, so an upgrade keeps the pre-existing placement byte for byte.
+    djTalkOnlyBetweenTracks:
+      typeof stored.djTalkOnlyBetweenTracks === 'boolean'
+        ? stored.djTalkOnlyBetweenTracks
+        : DEFAULTS.djTalkOnlyBetweenTracks,
     station:
       typeof stored.station === 'string' && stored.station.trim()
         ? stored.station.trim().slice(0, 80)
@@ -1393,6 +1400,13 @@ export async function update(patch) {
   // call, so there is no restart and nothing to re-render.
   if ('djSpeakClock' in patch) {
     next.djSpeakClock = parseSettingsPatchKey<boolean>('djSpeakClock', patch.djSpeakClock);
+  }
+  // Talk placement switch. Applies live for the same reason — broadcast/
+  // talk-air.ts reads it on every talk tick, so there is nothing to re-render
+  // and no mixer restart.
+  if ('djTalkOnlyBetweenTracks' in patch) {
+    next.djTalkOnlyBetweenTracks =
+      parseSettingsPatchKey<boolean>('djTalkOnlyBetweenTracks', patch.djTalkOnlyBetweenTracks);
   }
   if ('personas' in patch) {
     next.personas = validatePersonasStrict(patch.personas);

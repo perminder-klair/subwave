@@ -22,6 +22,7 @@ import * as session from '../broadcast/session.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
 import { voiceStatus } from '../broadcast/voice-policy.js';
 import { clockStatus } from '../broadcast/clock-policy.js';
+import { talkAirStatus } from '../broadcast/talk-air.js';
 import * as requestLog from '../broadcast/request-log.js';
 import { getStationTimezone } from '../time.js';
 import { publicOrigin } from './public.js';
@@ -229,6 +230,11 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     // standing down — the same "why has the DJ gone quiet about X" question
     // `voice` above answers, one surface further in.
     clock: (() => { try { return clockStatus(); } catch (err: any) { return { error: err.message }; } })(),
+    // Talk placement switch (settings.djTalkOnlyBetweenTracks, #1485 FR 5b).
+    // `onlyBetweenTracks:true` means every scheduled segment is held for the
+    // next track boundary, so a segment that looks late is waiting rather than
+    // missing — the third question in the same family as `voice` and `clock`.
+    talkAir: (() => { try { return talkAirStatus(); } catch (err: any) { return { error: err.message }; } })(),
     // Done-tool retry churn (D2) — since-boot count of the strategy layer's
     // two "stopped without calling done" retry sites (agent.ts), the same
     // symptom the corrective re-pick in dj-agent.ts exists to salvage.

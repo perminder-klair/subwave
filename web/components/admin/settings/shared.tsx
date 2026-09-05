@@ -304,6 +304,9 @@ export interface FormState {
   timezone: string;
   locale: StationLocale;
   kokoroLang: string;
+  /** Talk placement switch — every scheduled segment waits for the next track
+   *  boundary. Flat, like djSpeakClock, and owned by the TTS section. */
+  djTalkOnlyBetweenTracks: boolean;
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
@@ -354,6 +357,9 @@ export interface SettingsData {
     stationDescription?: string;
     timezone?: string;
     locale?: StationLocale;
+    /** Absent on a settings.json predating the key — read it as false, which is
+     *  what the controller's own coercion does. */
+    djTalkOnlyBetweenTracks?: boolean;
     theme?: { active?: string };
     weather?: {
       lat?: number;

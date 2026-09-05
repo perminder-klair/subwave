@@ -194,6 +194,19 @@ export const DEFAULTS = {
   // time: off means "stop doing this unprompted". Policy lives in exactly one
   // place — broadcast/clock-policy.ts. Applies live; no restart.
   djSpeakClock: true,
+  // Talk placement switch (#1485 FR 5b). false = the pre-existing behaviour:
+  // every scheduled segment except the station ident airs the minute it is
+  // written, ducking whatever song is mid-play. true = every SCHEDULED spoken
+  // segment — hourly check, programme beats, banter, idents and the segment
+  // director's spots — is rendered now and held for the next track boundary,
+  // so the station only talks between songs. Manual /dj triggers stay exempt
+  // (an explicit press always fires, the same exemption djSpeakClock carries).
+  // The trade is stated where the operator can read it: a held segment may air
+  // a track later than the minute it was written for, so a time check can read
+  // the clock late — the daypart stamp and PENDING_VOICE_MAX_AGE_MS are what
+  // bound it. Policy lives in exactly one place — broadcast/talk-air.ts.
+  // Applies live; no restart.
+  djTalkOnlyBetweenTracks: false,
   // One persona is active at a time; a scheduled show can override who is on air.
   personas: SEED_PERSONAS,
   activePersonaId: SEED_PERSONAS[0].id,
