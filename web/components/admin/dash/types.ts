@@ -83,6 +83,20 @@ export interface ActResponse {
   error?: string;
 }
 
+// POST /dj/never-play-again's response shape (broadcast/never-play-again.ts,
+// NeverPlayAgainResult) — a superset of ActResponse, so it still flows
+// through the shared `act()` helper. Only the fields the dash toast actually
+// reads are declared; the rest (`purged`, `skip`, …) pass through unread.
+export interface NeverPlayAgainResponse extends ActResponse {
+  blocked?: { name?: string | null; artist?: string | null } | null;
+  navidromeExcluded?: boolean;
+  navidromeScanTriggered?: boolean;
+  // Present alongside ok:true when the Navidrome-side half degraded (path
+  // validation, .ndignore write, or scan trigger failed) but the SUB/WAVE
+  // block + skip still succeeded — see the route's Failure semantics.
+  warning?: string | null;
+}
+
 export interface ConnectionsState {
   count: number;
   connections: ListenerConnection[];
