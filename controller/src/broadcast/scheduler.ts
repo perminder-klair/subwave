@@ -917,8 +917,6 @@ const TALK_FAILURE_LABEL: Record<TalkKind, (slot: string) => string> = {
   programme: slot => `Programme ${slot} tick`,
 };
 
-const pendingTalkOf = (kind: string | null) => (kind ? { kind } : null);
-
 async function talkTick() {
   const now = new Date();
 
@@ -957,7 +955,7 @@ async function talkTick() {
     plans = talkTickPlan({
       now,
       lastTalkBreakAt: queue.getLastTalkBreakAt(),
-      pendingTalk: pendingTalkOf(queue.pendingVoiceKind()),
+      pendingTalk: queue.pendingVoiceTalk(),
       eligible: kind => talkEligible(kind, now, rolled),
       externalSlot: kind => (kind === 'programme' ? programme.dueBeat(now) : null),
       fired: talkFired,

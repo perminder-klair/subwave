@@ -26,11 +26,12 @@
 //     decides and the loser WAITS INSIDE ITS WINDOW. #310 stops being a
 //     partitioning convention nobody can read and becomes a rule in one place;
 //     #1419's postpone-don't-cancel becomes universal.
-//   - IN-FLIGHT TALK COUNTS. A boundary-deferred ident is rendered and queued
-//     minutes before it airs, and queue.getLastTalkBreakAt() — which reports
-//     what HAS aired — cannot see it. That blind spot is #1419's actual root
-//     cause: the :20 tick reads a clear gap, fires, and the ident lands ten
-//     seconds later anyway. `pendingTalk` closes it.
+//   - IN-FLIGHT TALK COUNTS WHILE IT CAN STILL AIR IN THE WINDOW. A boundary-
+//     deferred ident is rendered and queued minutes before it airs, and
+//     queue.getLastTalkBreakAt() — which reports what HAS aired — cannot see it.
+//     That blind spot is #1419's actual root cause: the :20 tick reads a clear
+//     gap, fires, and the ident lands ten seconds later anyway. `pendingTalk`
+//     closes it without letting an expiring clip consume the row's final chance.
 //
 // Pure and I/O-free (a `Date`, two counters and two injected resolvers in;
 // plans out) so scripts/talk-scheduler.test.ts can walk an hour minute by minute
@@ -39,6 +40,7 @@
 import {
   BANTER_SLOTS, BANTER_WINDOW_MINUTES, BANTER_MIN_GAP_MS,
 } from './banter-policy.js';
+import { PENDING_VOICE_MAX_AGE_MS } from './queue/kinds.js';
 
 // ---------------------------------------------------------------------------
 // THE SLOT TABLE
@@ -283,6 +285,7 @@ export function talkSlotKey(kind: TalkKind, now: Date, slot: string): string {
 // ---------------------------------------------------------------------------
 
 export type TalkGap = { clear: boolean; sinceMs: number; needMs: number };
+export type PendingTalk = { kind: string; queuedAt: number };
 
 // `lastTalkBreakAt` is 0 when nothing has aired yet (a fresh boot), which reads
 // as an infinite gap — correct: there is no break to stack onto. `needMs: 0`
@@ -379,13 +382,13 @@ export type TalkPlan =
 export type TalkTickInput = {
   now: Date;
   lastTalkBreakAt: number;
-  // A segment already rendered and queued for the next track boundary, by kind
-  // (queue's `_pendingVoice`), or null. This is talk that has NOT aired, so
-  // `lastTalkBreakAt` cannot see it, and it is the reason a :20 banter tick
-  // could read a clear gap and still land ten seconds in front of a :15 ident
-  // (#1419). Rows that run a gap check honour it; a row with `minGapMs: 0` has
-  // opted out of gap questions entirely and ignores this too.
-  pendingTalk: { kind: string } | null;
+  // A segment already rendered and queued for the next track boundary, with
+  // the age anchor from queue's `_pendingVoice`, or null. This is talk that has
+  // NOT aired, so `lastTalkBreakAt` cannot see it, and it is the reason a :20
+  // banter tick could read a clear gap and still land ten seconds in front of a
+  // :15 ident (#1419). It blocks only while it could still validly air inside
+  // the row's window. Rows with `minGapMs: 0` ignore the question entirely.
+  pendingTalk: PendingTalk | null;
   // Resolved lazily, and only for a row whose window is actually open and
   // unfired — the live gates are cheap but they are policy, and evaluating them
   // for a row that isn't due would report a stand-down nobody asked about.
@@ -417,6 +420,22 @@ function waitPlan(row: TalkSlot, slot: string, slotKey: string, reason: TalkWait
   return { ...base, log: standDownLine(row, slot, reason), markLogged: slotKey };
 }
 
+// A pending clip blocks this row only when its queue validity extends past the
+// row's precise window close. Equality favours the scheduled row: if the clip
+// expires exactly as the window closes, an uncertain boundary handoff must not
+// consume the row's final chance. Queue still owns eventual stale dropping.
+function pendingCanAirInWindow(row: TalkSlot, slot: string, p: TalkTickInput): boolean {
+  const pending = p.pendingTalk;
+  if (!pending || row.opens === 'external') return false;
+  const nowMs = p.now.getTime();
+  const ageMs = Math.max(0, nowMs - pending.queuedAt);
+  const validForMs = Math.max(0, PENDING_VOICE_MAX_AGE_MS - ageMs);
+  const windowClose = new Date(p.now);
+  windowClose.setMinutes(windowEndMinute(row, Number(slot)) + 1, 0, 0);
+  const windowRemainingMs = Math.max(0, windowClose.getTime() - nowMs);
+  return validForMs > windowRemainingMs;
+}
+
 // One row's decision, or null for "nothing to do" — outside the window, already
 // spoken, or not eligible this minute. Silent by design: a per-minute tick that
 // narrated every ineligible minute would bury the booth log.
@@ -435,9 +454,10 @@ export function talkSlotPlan(row: TalkSlot, p: TalkTickInput): TalkPlan | null {
   if (!p.eligible(row.kind)) return null;
   // A row that runs a gap check is asking "has the listener had a moment of
   // quiet?", and a rendered segment queued for the next boundary is the same
-  // question's answer arriving late. Checked before the gap because it is the
-  // more specific reason, and the operator wants the specific one.
-  if (row.minGapMs > 0 && p.pendingTalk) {
+  // question's answer arriving late — but only while it can still air before
+  // this window closes. Checked before the gap because it is the more specific
+  // reason, and the operator wants the specific one.
+  if (row.minGapMs > 0 && p.pendingTalk && pendingCanAirInWindow(row, slot, p)) {
     return waitPlan(row, slot, slotKey, { held: 'pending', pendingKind: p.pendingTalk.kind }, p);
   }
   const gap = talkGap({ nowMs: p.now.getTime(), lastTalkBreakAt: p.lastTalkBreakAt, needMs: row.minGapMs });

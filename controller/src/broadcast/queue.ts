@@ -1603,13 +1603,14 @@ class Queue {
     }
   }
 
-  // The kind of segment already rendered and waiting for the next track
-  // boundary, or null. Talk that has NOT aired yet, so getLastTalkBreakAt()
-  // cannot report it — which is precisely why the talk scheduler asks: a slot
-  // gated on a quiet gap must not fire ten seconds in front of an ident that
-  // has been queued for three minutes (#1419, #1500).
-  pendingVoiceKind(): string | null {
-    return this._pendingVoice?.kind ?? null;
+  // The minimal description of a segment already rendered and waiting for the
+  // next track boundary, or null. Talk that has NOT aired yet is invisible to
+  // getLastTalkBreakAt(), while the enqueue time lets the talk scheduler respect
+  // both that in-flight talk and the queue's finite validity window (#1419,
+  // #1500, #1539). Queue remains the owner of eventual stale dropping.
+  pendingVoiceTalk(): { kind: string; queuedAt: number } | null {
+    const p = this._pendingVoice;
+    return p ? { kind: p.kind, queuedAt: p.t } : null;
   }
 
   // Discard a scheduled-but-unaired deferred segment. A mic-pass supersedes an
