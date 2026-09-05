@@ -6,6 +6,7 @@
 // this only covers cloud voices — tts.js still owns the dispatch + fallback.
 
 import { generateSpeech } from 'ai';
+import { resolvePersonaVoiceSlot } from '../../../audio/persona-engine.js';
 import type { FetchFunction } from '@ai-sdk/provider-utils';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createElevenLabs } from '@ai-sdk/elevenlabs';
@@ -111,14 +112,19 @@ type CloudPersona = {
 // what will actually speak.
 export function resolveCloudModelForPersona(persona: CloudPersona): string {
   const t: any = settings.get().tts || {};
-  const model = resolveCloudModel(persona?.tts, {
+  // Resolve 'inherit' before asking the pure rule: it keys off engine ===
+  // 'cloud', and a raw inherit slot would read as "the persona pinned some
+  // other engine" and report no model — so a station on the cloud voice would
+  // silently lose its expression-cue hints and speak brackets aloud.
+  const slot = resolvePersonaVoiceSlot(persona?.tts, t);
+  const model = resolveCloudModel(slot, {
     defaultEngine: t.defaultEngine,
     provider: t.cloud?.provider,
     model: t.cloud?.model,
   });
   if (!model) return '';
-  const explicit = persona?.tts?.engine === 'cloud';
-  if (!isConfigured(explicit ? persona?.tts?.cloudProvider || null : null)) return '';
+  const explicit = slot?.engine === 'cloud';
+  if (!isConfigured(explicit ? slot?.cloudProvider || null : null)) return '';
   return model;
 }
 
@@ -127,13 +133,14 @@ export function resolveCloudModelForPersona(persona: CloudPersona): string {
 // hinting a fallback local engine that would read the brackets aloud.
 export function resolveCloudProviderForPersona(persona: CloudPersona): string {
   const t: any = settings.get().tts || {};
-  const provider = resolveCloudProvider(persona?.tts, {
+  const slot = resolvePersonaVoiceSlot(persona?.tts, t);
+  const provider = resolveCloudProvider(slot, {
     defaultEngine: t.defaultEngine,
     provider: t.cloud?.provider,
   });
   if (!provider) return '';
-  const explicit = persona?.tts?.engine === 'cloud';
-  if (!isConfigured(explicit ? persona?.tts?.cloudProvider || null : null)) return '';
+  const explicit = slot?.engine === 'cloud';
+  if (!isConfigured(explicit ? slot?.cloudProvider || null : null)) return '';
   return provider;
 }
 
@@ -142,13 +149,14 @@ export function resolveCloudProviderForPersona(persona: CloudPersona): string {
 // switch changes before airtime; fallback sanitization must preserve that
 // original expressive provenance rather than re-evaluating current readiness.
 export function requestedCloudExpressionCueFamilyForPersona(persona: CloudPersona) {
-  const t = settings.get().tts || {};
+  const t: any = settings.get().tts || {};
+  const slot = resolvePersonaVoiceSlot(persona?.tts, t);
   return cloudExpressionCueFamily(
-    resolveCloudProvider(persona?.tts, {
+    resolveCloudProvider(slot, {
       defaultEngine: t.defaultEngine,
       provider: t.cloud?.provider,
     }),
-    resolveCloudModel(persona?.tts, {
+    resolveCloudModel(slot, {
       defaultEngine: t.defaultEngine,
       provider: t.cloud?.provider,
       model: t.cloud?.model,

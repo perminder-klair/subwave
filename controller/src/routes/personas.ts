@@ -11,6 +11,7 @@
 // so an operator can't smuggle anything else past the data-URL header.
 
 import express from 'express';
+import { PERSONA_TTS_INHERIT } from '../schemas/persona.js';
 import { mkdir, readdir, unlink, writeFile } from 'node:fs/promises';
 import * as settings from '../settings.js';
 import { requireAdmin } from '../middleware/auth.js';
@@ -211,7 +212,7 @@ router.post('/personas/community/:slug/install', requireAdmin, async (req, res) 
     soul: cp.soul,
     language: cp.language || '',
     avatar: '',
-    tts: { engine: 'piper', cloudProvider: 'openai', voice: '', gainDb: 0, speed: 1 },
+    tts: { engine: PERSONA_TTS_INHERIT, cloudProvider: 'openai', voice: '', gainDb: 0, speed: 1 },
     skills: null,
   };
 
