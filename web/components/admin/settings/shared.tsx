@@ -236,6 +236,8 @@ export interface StreamForm {
   idleWhenEmpty: boolean;
   idleAfterMinutes: string;
   maxListeners: string;
+  countryHeader: string;
+  geoipDbPath: string;
 }
 
 export type LoudnessSource = 'replaygain-then-measured' | 'replaygain' | 'measured';
@@ -350,6 +352,8 @@ export interface SettingsData {
       idleWhenEmpty?: boolean;
       idleAfterMinutes?: number;
       maxListeners?: number;
+      countryHeader?: string;
+      geoipDbPath?: string;
     };
     loudness?: { targetLufs?: number; maxBoostDb?: number; source?: LoudnessSource };
     silenceTrim?: { enabled?: boolean; minGapMs?: number };

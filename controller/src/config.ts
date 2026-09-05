@@ -203,6 +203,14 @@ export const config = {
     adminUrl: envUrl('ICECAST_ADMIN_URL', 'http://broadcast:7702/admin/listclients'),
     adminUser: envStr('ICECAST_ADMIN_USER', 'admin'),
   },
+  // Offline GeoIP database (MaxMind MMDB format) for the listener-country
+  // rollup. Empty = no lookup, which is the default: the DB is a licensed
+  // download nobody can ship, so the header chain stays the primary answer and
+  // this is the last, opt-in link in it. Env wins over settings.stream.geoipDbPath
+  // like every other config value here.
+  geoip: {
+    dbPath: envStr('GEOIP_DB_PATH', ''),
+  },
   liquidsoap: {
     queueFile: `${STATE_DIR}/next.txt`,
     // Dedicated priority handoff for an operator-triggered jingle. Keeping it

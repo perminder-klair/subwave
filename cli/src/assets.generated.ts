@@ -1088,6 +1088,18 @@ SITE_URL=
 # directly lets a single spoofed header defeat every limit listed above.
 # TRUST_CF_CONNECTING_IP=1
 
+# Offline GeoIP database for the Stats page's listener-country rollup.
+#
+# Stats reads CF-IPCountry first, then whatever header you name in
+# admin → Settings → Danger zone → Listener country. This is the last resort
+# when neither carries an answer: an IP-to-country database in MaxMind's MMDB
+# format (GeoLite2, DB-IP Lite and IP2Location LITE all fit), at a path the
+# CONTROLLER container can read. Nothing is bundled — each has its own licence.
+#
+# Set here only if you want env to win over the admin field. Wrong path? One
+# warning in the controller log and the header links carry on; nothing breaks.
+# GEOIP_DB_PATH=/var/sub-wave/geoip/country.mmdb
+
 # ───────── Overrides for the wizard's fields ─────────
 # These all live in state/settings.json after the wizard runs. Set them here
 # only if you want env to win (12-factor / CI / GitOps style deploys).

@@ -89,7 +89,14 @@ import {
 } from './settings/defaults.js';
 import { validateCompatParams } from './settings/compat-params.js';
 import { parseSettingsPatchKey } from './settings/patch-registry.js';
-import { PICKER_ALBUM_HOURS_BOUNDS, STREAM_BUFFER_SECONDS_BOUNDS, STREAM_MAX_LISTENERS_BOUNDS, maxTrackSecondsValueSchema } from './schemas/settings.js';
+import {
+  PICKER_ALBUM_HOURS_BOUNDS,
+  STREAM_BUFFER_SECONDS_BOUNDS,
+  STREAM_COUNTRY_HEADER_RE,
+  STREAM_GEOIP_DB_PATH_MAX,
+  STREAM_MAX_LISTENERS_BOUNDS,
+  maxTrackSecondsValueSchema,
+} from './schemas/settings.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
@@ -470,6 +477,24 @@ export async function load() {
         stored.stream.maxListeners <= STREAM_MAX_LISTENERS_BOUNDS.max
           ? stored.stream.maxListeners
           : DEFAULTS.stream.maxListeners,
+      // Listener-country fallbacks (#1485). Bounded here against exactly what
+      // streamPatchSchema accepts, for the reason the two lines above it
+      // document: a field composed on the save path but missing from THIS
+      // block survives until the next cold load and then vanishes, with the
+      // feature reverting to its downstream default and nothing in the logs.
+      // A hand-edited settings.json is repaired rather than refused — a bad
+      // header name here costs the header link, never a boot.
+      countryHeader:
+        typeof stored.stream?.countryHeader === 'string' &&
+        (stored.stream.countryHeader.trim() === '' ||
+          STREAM_COUNTRY_HEADER_RE.test(stored.stream.countryHeader.trim()))
+          ? stored.stream.countryHeader.trim()
+          : DEFAULTS.stream.countryHeader,
+      geoipDbPath:
+        typeof stored.stream?.geoipDbPath === 'string' &&
+        stored.stream.geoipDbPath.trim().length <= STREAM_GEOIP_DB_PATH_MAX
+          ? stored.stream.geoipDbPath.trim()
+          : DEFAULTS.stream.geoipDbPath,
     },
     loudness: {
       targetLufs:
@@ -1259,6 +1284,13 @@ export async function update(patch) {
     }
     if (st.idleAfterMinutes !== undefined) {
       next.stream.idleAfterMinutes = st.idleAfterMinutes as number;
+    }
+    // Listener-country fallbacks. Read live per beacon (routes/audience.ts,
+    // broadcast/geoip.ts), so neither needs a Liquidsoap file nor a restart —
+    // they touch analytics, not the encoder chain. Clearing either to '' is a
+    // legitimate save, which is why there is no truthiness guard.
+    for (const k of ['countryHeader', 'geoipDbPath'] as const) {
+      if (st[k] !== undefined) (next.stream as Record<string, unknown>)[k] = st[k];
     }
   }
   if ('loudness' in patch) {

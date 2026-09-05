@@ -90,6 +90,16 @@ export const DEFAULTS = {
     // took. The setting exists for AIO/Unraid, where there is no .env to put
     // the var in at all.
     maxListeners: 100,
+    // Listener-country fallbacks for the audience rollup (#1485). Both empty by
+    // default, which is byte-identical to the pre-existing behaviour: only
+    // `cf-ipcountry` is read and a station behind a plain reverse proxy records
+    // a blank country. `countryHeader` names whatever header that proxy sets
+    // instead (`x-country-code`, `x-geoip-country`, …); `geoipDbPath` points at
+    // an operator-supplied MaxMind-format database for an offline IP lookup
+    // when no header carries the answer. GEOIP_DB_PATH in the environment wins
+    // over the setting, like every other config path.
+    countryHeader: '',
+    geoipDbPath: '',
   },
   // Per-track loudness normalisation (music/mix.ts gainForLoudness), read live at
   // annotate time. maxBoostDb caps the upward direction only, and the boost is

@@ -2,14 +2,18 @@
 //
 // Answers "where do the listeners come from, and roughly where are they?" for
 // the admin Stats page, without retaining any raw PII. Data arrives two ways,
-// both off the same Cloudflare-fronted edge:
+// both off the same edge request:
 //   - the player POSTs a one-shot /beacon on first load carrying
 //     document.referrer + any UTM param. The external referrer is ONLY visible
 //     on the initial HTML navigation (which hits `web`, not the controller —
 //     the API polls only ever see a same-origin referrer), so the browser has
 //     to hand it to us.
-//   - that same beacon request carries Cloudflare's Cf-Connecting-Ip +
-//     Cf-Ipcountry, giving us geography and a distinct-session estimate.
+//   - that same beacon request carries the client IP and, where the edge can
+//     work one out, a country. The country is resolved by the chain in
+//     broadcast/listener-country.ts (Cf-Ipcountry → an operator-named proxy
+//     header → an optional offline MMDB lookup), so a station that is not
+//     behind Cloudflare still gets a geography column; every link fails open
+//     and an exhausted chain simply records no country (#1485).
 //
 // Privacy: a raw IP is NEVER stored. The IP is salted+hashed (the salt is
 // process-random and never persisted) only to dedupe sessions within a day; we
