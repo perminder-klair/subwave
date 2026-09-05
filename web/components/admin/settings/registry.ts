@@ -10,7 +10,7 @@
 
 import {
   Radio, Palette, Cpu, Mic, Library, Search,
-  Activity, Archive, Save, AlertTriangle, Heart, Music2,
+  Activity, Archive, Save, AlertTriangle, Heart, Music2, BrainCircuit,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -60,6 +60,15 @@ export const SECTIONS = [
   {
     id: 'theme', group: 'the station', label: 'Skin & Themes',
     hint: 'player skin · palette', icon: Palette,
+    formKeys: [],
+  },
+  {
+    // One-field setup for the hosted DJ Brain: writes both `llm` and
+    // `tts.cloud` in a single save, but owns neither slice — the LLM provider
+    // and TTS voice sections keep the dirty tracking for those keys, and this
+    // one holds local state only, so it lists no formKeys.
+    id: 'brain', group: 'the dj', label: 'DJ Brain',
+    hint: 'one field · brain + voice', icon: BrainCircuit,
     formKeys: [],
   },
   {

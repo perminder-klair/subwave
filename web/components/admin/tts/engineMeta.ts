@@ -18,8 +18,22 @@ export const ENGINES: EngineMeta[] = [
   { id: 'remote',     label: 'Remote',     blurb: 'Self-hosted HTTP endpoint' },
 ];
 
+// The persona-only "follow the station" card, offered FIRST so the default
+// reads as a choice rather than a fallback. Kept out of ENGINES because that
+// list is also the fallback slot's and the settings default-engine picker's,
+// neither of which can inherit (see PERSONA_TTS_INHERIT in the controller's
+// schemas/persona.ts). engineStatus()'s default branch already gives it no
+// badge and never mutes it.
+export const INHERIT_ENGINE: EngineMeta = {
+  id: 'inherit',
+  label: 'Station default',
+  blurb: 'Follow Settings → TTS voice',
+};
+
+export const PERSONA_ENGINES: EngineMeta[] = [INHERIT_ENGINE, ...ENGINES];
+
 export const ENGINE_META: Record<string, EngineMeta> = Object.fromEntries(
-  ENGINES.map(e => [e.id, e]),
+  [INHERIT_ENGINE, ...ENGINES].map(e => [e.id, e]),
 );
 
 export type EngineStatusTone = 'ok' | 'warn';

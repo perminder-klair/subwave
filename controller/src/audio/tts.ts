@@ -19,6 +19,7 @@ import {
 } from './tts-fallback.js';
 import { localizedPreviewText } from './preview-text.js';
 import * as cloud from '../llm/speech.js';
+import { resolvePersonaVoiceSlot } from './persona-engine.js';
 import { stripThinking } from '../llm/sdk.js';
 import * as settings from '../settings.js';
 import { recordTts } from '../stats.js';
@@ -48,9 +49,18 @@ function personaFor(persona?: any): any {
 
 // The persona's TTS config for a persona-voiced kind, else null. `persona`
 // overrides the effective persona (persona handoff); absent → effective persona.
+//
+// This is the ONE seam where the 'inherit' engine sentinel is resolved into a
+// real engine (audio/persona-engine.ts). Everything downstream — requestedEngine,
+// resolveEngine, ttsTarget, personaCloudProvider and every per-engine branch in
+// speakWith — compares `personaTts.engine` against a concrete engine id, so
+// resolving here keeps the sentinel out of a dozen comparisons that would each
+// have to learn it (and one of which would eventually forget). A slot naming a
+// real engine passes through untouched.
 function djPersonaTts(kind: string, persona?: any): any {
   if (GLOBAL_VOICE_KINDS.has(kind)) return null;
-  return personaFor(persona)?.tts || null;
+  const slot = personaFor(persona)?.tts || null;
+  return resolvePersonaVoiceSlot(slot, settings.get().tts);
 }
 
 // The engine the persona (or the global default) actually asked for, BEFORE

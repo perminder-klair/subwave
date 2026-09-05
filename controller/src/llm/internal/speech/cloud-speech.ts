@@ -6,6 +6,7 @@
 // this only covers cloud voices — tts.js still owns the dispatch + fallback.
 
 import { generateSpeech } from 'ai';
+import { resolvePersonaVoiceSlot } from '../../../audio/persona-engine.js';
 import type { FetchFunction } from '@ai-sdk/provider-utils';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createElevenLabs } from '@ai-sdk/elevenlabs';
@@ -111,14 +112,19 @@ type CloudPersona = {
 // what will actually speak.
 export function resolveCloudModelForPersona(persona: CloudPersona): string {
   const t: any = settings.get().tts || {};
-  const model = resolveCloudModel(persona?.tts, {
+  // Resolve 'inherit' before asking the pure rule: it keys off engine ===
+  // 'cloud', and a raw inherit slot would read as "the persona pinned some
+  // other engine" and report no model — so a station on the cloud voice would
+  // silently lose its expression-cue hints and speak brackets aloud.
+  const slot = resolvePersonaVoiceSlot(persona?.tts, t);
+  const model = resolveCloudModel(slot, {
     defaultEngine: t.defaultEngine,
     provider: t.cloud?.provider,
     model: t.cloud?.model,
   });
   if (!model) return '';
-  const explicit = persona?.tts?.engine === 'cloud';
-  if (!isConfigured(explicit ? persona?.tts?.cloudProvider || null : null)) return '';
+  const explicit = slot?.engine === 'cloud';
+  if (!isConfigured(explicit ? slot?.cloudProvider || null : null)) return '';
   return model;
 }
 
@@ -127,13 +133,14 @@ export function resolveCloudModelForPersona(persona: CloudPersona): string {
 // hinting a fallback local engine that would read the brackets aloud.
 export function resolveCloudProviderForPersona(persona: CloudPersona): string {
   const t: any = settings.get().tts || {};
-  const provider = resolveCloudProvider(persona?.tts, {
+  const slot = resolvePersonaVoiceSlot(persona?.tts, t);
+  const provider = resolveCloudProvider(slot, {
     defaultEngine: t.defaultEngine,
     provider: t.cloud?.provider,
   });
   if (!provider) return '';
-  const explicit = persona?.tts?.engine === 'cloud';
-  if (!isConfigured(explicit ? persona?.tts?.cloudProvider || null : null)) return '';
+  const explicit = slot?.engine === 'cloud';
+  if (!isConfigured(explicit ? slot?.cloudProvider || null : null)) return '';
   return provider;
 }
 
@@ -142,13 +149,14 @@ export function resolveCloudProviderForPersona(persona: CloudPersona): string {
 // switch changes before airtime; fallback sanitization must preserve that
 // original expressive provenance rather than re-evaluating current readiness.
 export function requestedCloudExpressionCueFamilyForPersona(persona: CloudPersona) {
-  const t = settings.get().tts || {};
+  const t: any = settings.get().tts || {};
+  const slot = resolvePersonaVoiceSlot(persona?.tts, t);
   return cloudExpressionCueFamily(
-    resolveCloudProvider(persona?.tts, {
+    resolveCloudProvider(slot, {
       defaultEngine: t.defaultEngine,
       provider: t.cloud?.provider,
     }),
-    resolveCloudModel(persona?.tts, {
+    resolveCloudModel(slot, {
       defaultEngine: t.defaultEngine,
       provider: t.cloud?.provider,
       model: t.cloud?.model,
@@ -170,6 +178,25 @@ function clampSpeed(speed: any, provider: string) {
   if (!Number.isFinite(n) || n <= 0) return 1.0;
   const [lo, hi] = SPEED_RANGE[provider] || [0.25, 4.0];
   return Math.min(hi, Math.max(lo, n));
+}
+
+// Where the computed speech `speed` gets applied. Pure so the routing decision
+// is unit-pinned in scripts/llm-pure.test.ts rather than inferred from the call
+// site. Returns what to put in the request body's `speed` field (`body`, null =
+// omit it) and the ffmpeg atempo factor to stretch the rendered audio locally
+// (`atempo`, null = skip). At most one is ever non-null:
+//   speed === 1.0 (unity)          → { body: null,  atempo: null }  nothing to do
+//   non-compat provider            → { body: speed, atempo: null }  server honours speed
+//   openai-compatible + sendSpeed  → { body: speed, atempo: null }  told to honour it
+//   openai-compatible + !sendSpeed → { body: null,  atempo: speed } stretch locally (issue #942)
+export function speedDirective(
+  provider: string,
+  sendSpeed: boolean,
+  speed: number,
+): { body: number | null; atempo: number | null } {
+  if (speed === 1.0) return { body: null, atempo: null };
+  if (provider === 'openai-compatible' && !sendSpeed) return { body: null, atempo: speed };
+  return { body: speed, atempo: null };
 }
 
 // Minimal language-name → ISO 639-1 map for the ElevenLabs `language` param
@@ -364,15 +391,22 @@ export async function speak(
   // sent when it differs from default so default stations are unaffected and
   // providers that ignore the field never see it.
   //
-  // openai-compatible servers NEVER receive `speed` — implementations are
-  // wildly uneven (#942: a Chatterbox shim behind LiteLLM produced comb-filtered
-  // "echo chamber" audio with broken mp3 frame timestamps whenever `speed` was
-  // present, and daypart energy makes it non-unity most of the day). The server
-  // renders at 1x and the rate is applied locally via ffmpeg atempo below, so
-  // every knob still works without the fragile server-side path.
+  // openai-compatible servers default to NOT receiving `speed` — implementations
+  // are wildly uneven (#942: a Chatterbox shim behind LiteLLM produced
+  // comb-filtered "echo chamber" audio with broken mp3 frame timestamps whenever
+  // `speed` was present, and daypart energy makes it non-unity most of the day).
+  // The server renders at 1x and the rate is applied locally via ffmpeg atempo
+  // below, so every knob still works without the fragile server-side path.
+  //
+  // Escape hatch: tts.cloud.sendSpeed puts a compat server back on the native
+  // `speed` field and skips the local stretch — for a server that honours it
+  // cleanly (e.g. the hosted DJ Brain voice), where native speed beats
+  // time-stretch artifacts. openai / elevenlabs always take the field.
+  // speedDirective() owns the routing (unit-pinned in scripts/llm-pure.test.ts).
   const isCompat = c.provider === 'openai-compatible';
   const speed = clampSpeed(config.tts.cloudSpeed * (speedScale != null ? speedScale : 1), c.provider);
-  const stretchLocally = isCompat && speed !== 1.0;
+  const rate = speedDirective(c.provider, !!c.sendSpeed, speed);
+  const stretchLocally = rate.atempo != null;
 
   // ElevenLabs voice_settings — expressive knobs the operator tunes in the
   // Cloud TTS section of admin → Settings (issue #696). Only spread when the
@@ -422,7 +456,7 @@ export async function speak(
     model: speechModel(c),
     text,
     voice: c.voice || undefined,
-    ...(speed !== 1.0 && !isCompat ? { speed } : {}),
+    ...(rate.body != null ? { speed: rate.body } : {}),
     // Persona character (soul) + language → provider-native delivery hint
     // (issues #579 / #558).
     ...deliveryHint({ language, soul }, c.provider, c.model),

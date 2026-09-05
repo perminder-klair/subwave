@@ -127,6 +127,32 @@ export const TTS_ENGINES = [
   'remote',
 ] as const;
 
+/**
+ * "Use whatever the station is set to" — a PERSONA-only engine value.
+ *
+ * Deliberately NOT a member of TTS_ENGINES. That list is also the vocabulary
+ * for `tts.defaultEngine` (which would then be able to inherit from itself),
+ * for the `tts.gainDb` / `tts.speed` per-engine maps (which need a real engine
+ * per key), and for the station rescue slot `tts.fallback` (where "inherit"
+ * names the rung BELOW it in the chain and so means nothing). It is admitted
+ * only where a slot genuinely sits under a station default — see
+ * ttsVoiceSlotSchema's `allowInherit`.
+ */
+export const PERSONA_TTS_INHERIT = 'inherit';
+
+/** The engine vocabulary a PERSONA slot accepts: inherit, then the real ones. */
+export const PERSONA_TTS_ENGINES = [PERSONA_TTS_INHERIT, ...TTS_ENGINES] as const;
+
+/**
+ * Engines whose voice ids share the seed roster's local id-space (.onnx / .wav
+ * / kokoro-shaped / built-in ids). A voice on an INHERIT slot was chosen
+ * without knowing which engine would speak it, so it only carries to these —
+ * `cloud` and `remote` take provider-specific ids from the station block that
+ * names the provider. This is what stops a Piper voice id ("bm_george")
+ * reaching a cloud provider as a voice name.
+ */
+export const TTS_LOCAL_ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts'] as const;
+
 export const TTS_CLOUD_PROVIDERS = [
   'openai',
   'elevenlabs',
@@ -199,7 +225,9 @@ export interface TtsVoiceSlot {
  * never opted into. A transform reports exactly the first failure the
  * hand-rolled validator reported, in the same order.
  */
-export function ttsVoiceSlotSchema(where: string) {
+export function ttsVoiceSlotSchema(where: string, opts?: { allowInherit?: boolean }) {
+  const allowInherit = opts?.allowInherit === true;
+  const engines: readonly string[] = allowInherit ? PERSONA_TTS_ENGINES : TTS_ENGINES;
   // `.optional()` so an ABSENT block reaches the transform and is refused by the
   // engine rule below ("tts.engine must be one of: …") rather than by zod's
   // generic 'expected nonoptional' — the hand-rolled validator's `raw || {}`
@@ -210,10 +238,10 @@ export function ttsVoiceSlotSchema(where: string) {
     const t = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
 
     const engine = t.engine as string;
-    if (!(TTS_ENGINES as readonly string[]).includes(engine)) {
+    if (!engines.includes(engine)) {
       ctx.addIssue({
         code: 'custom',
-        message: `${where}.engine must be one of: ${TTS_ENGINES.join(', ')}`,
+        message: `${where}.engine must be one of: ${engines.join(', ')}`,
       });
       return z.NEVER;
     }
@@ -270,6 +298,13 @@ export function ttsVoiceSlotSchema(where: string) {
       if (voice.length > TTS_VOICE_MAX) {
         return fail(`${where}.voice must be 0-${TTS_VOICE_MAX} chars`);
       }
+    } else if (engine === PERSONA_TTS_INHERIT) {
+      // No engine is known at validation time, so no per-engine voice rule can
+      // apply — only the shared length cap. resolvePersonaVoiceSlot() decides at
+      // speak time whether the id survives the resolved engine.
+      if (voice.length > TTS_VOICE_MAX) {
+        return fail(`${where}.voice must be 0-${TTS_VOICE_MAX} chars`);
+      }
     } else {
       // piper: empty = the baked-in default. A Kokoro-shaped id is also
       // accepted — the seed roster carries one per persona under piper so
@@ -303,9 +338,14 @@ export function ttsVoiceSlotSchema(where: string) {
  * output is therefore always schema-valid, which is what lets the load path run
  * the real schema after repairing rather than maintaining a second set of rules.
  */
-export function repairTtsVoiceSlot(raw: unknown): TtsVoiceSlot {
+export function repairTtsVoiceSlot(raw: unknown, opts?: { allowInherit?: boolean }): TtsVoiceSlot {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-  const engine = (TTS_ENGINES as readonly string[]).includes(r.engine as string)
+  const engines: readonly string[] = opts?.allowInherit === true ? PERSONA_TTS_ENGINES : TTS_ENGINES;
+  // 'piper' and not PERSONA_TTS_INHERIT: an unreadable engine on a persona
+  // written before this value existed must land on the behaviour it had, and
+  // that behaviour was the piper floor — never a value that re-points the
+  // persona at whatever the station is set to today.
+  const engine = engines.includes(r.engine as string)
     ? (r.engine as string)
     : 'piper';
   const cloudProvider = (TTS_CLOUD_PROVIDERS as readonly string[]).includes(
@@ -535,7 +575,7 @@ export const personaSchema = z
         .optional()
         .transform((v) => v ?? ''),
     ),
-    tts: ttsVoiceSlotSchema('tts'),
+    tts: ttsVoiceSlotSchema('tts', { allowInherit: true }),
     // skills — absent → null ("all skills", the legacy default). Present → an
     // explicit slug array.
     skills: z.preprocess(
@@ -650,7 +690,7 @@ export function repairPersonaForLoad(
       typeof raw.avatar === 'string' && PERSONA_AVATAR_FILENAME_RE.test(raw.avatar.trim())
         ? raw.avatar.trim()
         : undefined,
-    tts: repairTtsVoiceSlot(raw.tts),
+    tts: repairTtsVoiceSlot(raw.tts, { allowInherit: true }),
     // Non-array → undefined → the schema's null default ("all skills"), which is
     // what normalizeSkills returned. Renames are applied HERE and not in the
     // schema: a rename is a migration of stored data, not a rule a submitted
@@ -754,4 +794,29 @@ export function repairDjPromptForLoad(
     id: typeof raw.id === 'string' && PERSONA_ID_RE.test(raw.id) ? raw.id : undefined,
     name,
   };
+}
+
+/**
+ * Personas that pin an engine which is NOT the one given — the list the admin
+ * DJ Brain section warns about before it wires the cloud voice, and the list
+ * its one-click fix patches to 'inherit'.
+ *
+ * A persona already on `inherit` is never listed: it follows the station by
+ * definition, which is exactly what the fix would set it to.
+ */
+export function personasPinningOtherEngine(
+  personas: Array<{ id?: unknown; name?: unknown; tts?: { engine?: unknown } | null }> | null | undefined,
+  engine: string,
+): Array<{ id: string; name: string; engine: string }> {
+  if (!Array.isArray(personas)) return [];
+  return personas
+    .filter((p) => {
+      const e = p?.tts?.engine;
+      return typeof e === 'string' && e !== PERSONA_TTS_INHERIT && e !== engine;
+    })
+    .map((p) => ({
+      id: String(p.id ?? ''),
+      name: String(p.name ?? p.id ?? ''),
+      engine: String(p.tts?.engine ?? ''),
+    }));
 }

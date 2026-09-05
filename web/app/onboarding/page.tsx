@@ -6,13 +6,22 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
+import { Suspense } from 'react';
 import WizardShell from '@/components/onboarding/WizardShell';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || '/api';
 
 type Status = { needsSetup: boolean; setupCompletedAt: string | null };
 
-export default function SetupPage() {
+// `?rerun=1` re-opens the wizard on a station that is already set up — the
+// "already set up" card below links to it. Nothing is bypassed by the flag:
+// WizardShell still gates on ADMIN_USER/ADMIN_PASS exactly as it does on a
+// first run, and POST /onboarding/save is admin-gated on the controller. It
+// only decides which of the two views this page renders, so a re-run is worth
+// no more than reloading the page.
+function SetupPageInner() {
+  const rerun = useSearchParams().get('rerun') === '1';
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,7 +43,7 @@ export default function SetupPage() {
     );
   }
   if (!status) return <div role="status" className="p-8 text-sm text-ink/60">Loading…</div>;
-  if (status.needsSetup) return <WizardShell />;
+  if (status.needsSetup || rerun) return <WizardShell />;
 
   // Setup already complete.
   return (
@@ -68,6 +77,20 @@ export default function SetupPage() {
           Docs
         </Link>
       </div>
+      <p className="mt-6 text-sm text-ink/70">
+        Changing music server, or switching the DJ to a hosted brain?{' '}
+        <Link href="/onboarding?rerun=1" className="bs-link">Run the wizard again</Link>{' '}
+        — it walks the same steps and overwrites what you confirm.
+      </p>
     </div>
+  );
+}
+
+// useSearchParams needs a Suspense boundary in the App Router.
+export default function SetupPage() {
+  return (
+    <Suspense fallback={<div role="status" className="p-8 text-sm text-ink/60">Loading…</div>}>
+      <SetupPageInner />
+    </Suspense>
   );
 }

@@ -20,7 +20,7 @@ import { CloudProviderSelector } from './CloudProviderSelector';
 import { resolveKeyPresence } from './cloudProviderMeta';
 import { VoicePreviewButton } from './VoicePreviewButton';
 import { VoicePicker, type VoicePickerGroup } from './VoicePicker';
-import { ENGINES, type EngineAvailability } from './engineMeta';
+import { ENGINES, PERSONA_ENGINES, type EngineAvailability } from './engineMeta';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
@@ -29,6 +29,8 @@ import {
 import { cn } from '../../../lib/cn';
 
 const ENGINE_IDS = ENGINES.map(e => e.id);
+// Personas may also follow the station default; the fallback slot may not.
+const PERSONA_ENGINE_IDS = PERSONA_ENGINES.map(e => e.id);
 
 // Matches the controller's shared voice-slot shape (settings/validate.ts
 // validateTtsBlock).
@@ -97,12 +99,19 @@ interface EngineVoiceFieldsProps {
   cloudIssue?: ReactNode;
   engineHint?: ReactNode;
   previewHint?: ReactNode;
+  // Personas only: offer "Station default" (the 'inherit' engine). The station
+  // rescue slot must not — 'inherit' there would name the rung below it in the
+  // chain. When set, the caller also supplies the note shown while it is picked,
+  // since only it knows which engine the station is on.
+  allowInherit?: boolean;
+  inheritNote?: ReactNode;
 }
 
 export function EngineVoiceFields({
   value, onChange, data, adminFetch,
   previewSpeed, previewLanguage,
   unavailableNote, cloudIssue, engineHint, previewHint,
+  allowInherit = false, inheritNote,
 }: EngineVoiceFieldsProps) {
   const kokoroVoices: string[] = data?.tts?.kokoroVoices || [];
   const kokoroLanguages = data?.tts?.kokoroVoiceLanguages || {};
@@ -134,6 +143,13 @@ export function EngineVoiceFields({
   const selectEngine = (v: string) => {
     const patch: Partial<VoiceSlot> = { engine: v };
     const cur = value.voice.trim();
+    if (v === 'inherit') {
+      // No engine is known yet, so there is no rule to normalise against — and
+      // the stored id is still wanted if the station is on a local engine.
+      // resolvePersonaVoiceSlot drops it at speak time when it isn't.
+      onChange(patch);
+      return;
+    }
     if (v === 'cloud') {
       // A discovered voice counts as valid too, or toggling the engine away and
       // back destroys a voice the operator picked from the server's own list.
@@ -183,13 +199,17 @@ export function EngineVoiceFields({
         <Label>Engine</Label>
         <EngineSelector
           value={value.engine}
-          engineIds={ENGINE_IDS}
+          engineIds={allowInherit ? PERSONA_ENGINE_IDS : ENGINE_IDS}
           available={selectorAvailable}
           showStatusHint={!cloudAlerted}
           onChange={selectEngine}
         />
         {engineHint && <div className="field-hint max-w-[70ch]">{engineHint}</div>}
       </div>
+
+      {value.engine === 'inherit' && inheritNote && (
+        <div className="field-hint mb-4 max-w-[70ch]">{inheritNote}</div>
+      )}
 
       {value.engine === 'piper' && (() => {
         const piperVoices: string[] = data?.tts?.piperVoices || [];
