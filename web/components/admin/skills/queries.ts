@@ -12,6 +12,7 @@ export interface CommunitySkill {
   label: string;
   brief: string;
   cooldown?: string;
+  cohosts?: boolean;
   window?: 'any' | 'commute';
   context?: string;
   submittedBy?: string;
@@ -28,6 +29,7 @@ export interface SkillLike {
   custom?: boolean;
   enabled?: boolean;
   cooldownMs?: number;
+  cohosts?: boolean;
 }
 
 export interface SkillConfigField {
@@ -45,6 +47,7 @@ export interface SkillDefaults {
   label?: string;
   cooldown?: string;
   context?: string;
+  cohosts?: boolean;
   brief?: string;
 }
 
@@ -58,6 +61,7 @@ export interface SkillFileResponse {
   cron?: string | null;
   cronInvalid?: boolean;
   cronOnly?: boolean;
+  cohosts?: boolean;
   context?: string;
   knownContextFields?: string[];
   window?: 'any' | 'commute';

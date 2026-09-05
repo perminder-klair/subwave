@@ -80,6 +80,7 @@ export function PersonaEditor({
       frequency: persona.frequency,
       'script-length': persona.scriptLength,
       'dj-mode': persona.djMode ? 'on' : '',
+      'link-style': persona.linkStyle,
       humour: persona.humour !== DIAL_NEUTRAL ? String(persona.humour) : '',
       'local-colour': persona.localColour !== DIAL_NEUTRAL ? String(persona.localColour) : '',
       warmth: persona.warmth !== DIAL_NEUTRAL ? String(persona.warmth) : '',

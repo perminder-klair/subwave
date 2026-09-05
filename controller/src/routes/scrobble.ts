@@ -21,8 +21,10 @@ export const router = express.Router();
 
 router.post('/scrobble/test', requireAdmin, async (req, res) => {
   const provider = req.body?.provider as ScrobbleProvider | undefined;
-  if (provider !== 'lastfm' && provider !== 'listenbrainz') {
-    return res.status(400).json({ error: 'provider must be "lastfm" or "listenbrainz"' });
+  if (provider !== 'lastfm' && provider !== 'listenbrainz' && provider !== 'navidrome') {
+    return res
+      .status(400)
+      .json({ error: 'provider must be "lastfm", "listenbrainz" or "navidrome"' });
   }
   // Use the live track if there is one. Otherwise the test reports back
   // cleanly — operators tend to click this before anything is on-air, and

@@ -167,6 +167,15 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
   // "semantic similarity" degrades to artist-string matching. The two
   // single-artist tools (topSongsByArtist, recentByArtist) opt out: capping
   // them would neuter the question they exist to answer.
+  //
+  // A strict PLAYLIST show opts out wholesale, for the same reason and at the
+  // same seam as music/picker.ts: `playlistLock` below hard-intersects every
+  // tool's pool with the operator's pinned set BEFORE this filter runs, so what
+  // survives is already an exact hand-picked universe — a single-artist or
+  // single-album playlist is the point of pinning it, not an artist dominating
+  // a discovery pool. With the cap on, a show pinned to one artist handed the
+  // agent 3 tracks from showPlaylistTracks (of a cap of 12) and 3 from every
+  // other tool, which is the fallback pool picker's bug on the DEFAULT path.
   const collect = (list: any, cap = 8, opts: { maxPerArtist?: number } = {}) => {
     // Strict show: filter candidates BEFORE recency + cap, so the 8 the agent
     // sees are genre-/era-/mood-/energy-pure. Each lock is HARD (starve:true) —
@@ -209,7 +218,7 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
       hardRecentIds,
       hardRecentKeys,
       seenIds: new Set(seen.keys()),
-      maxPerArtist: opts.maxPerArtist ?? 3,
+      maxPerArtist: opts.maxPerArtist ?? (playlistLock ? Infinity : 3),
       cap,
     });
     const out: any[] = [];

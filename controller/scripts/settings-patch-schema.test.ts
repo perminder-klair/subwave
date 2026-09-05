@@ -377,6 +377,22 @@ test('search.baseUrl TYPE-checks where scrobble.listenbrainz.baseUrl coerces', (
   assert.equal(searchPatchSchema.parse({ baseUrl: 'http://x/' }).baseUrl, 'http://x/');
 });
 
+// #1353. New field, so it takes the trimmed posture rather than search.apiKey's
+// raw one — nothing shipped depends on the old storage behaviour here.
+test('search.searxngEngines trims, caps and defaults to empty', () => {
+  assert.equal(searchPatchSchema.parse({ searxngEngines: '  google, wikipedia  ' }).searxngEngines,
+    'google, wikipedia');
+  assert.equal(searchPatchSchema.parse({ searxngEngines: '' }).searxngEngines, '');
+  // Absent stays absent — update() only writes the key when the patch names it,
+  // so an unset pin can never be clobbered by a save from another panel.
+  assert.equal('searxngEngines' in searchPatchSchema.parse({ provider: 'searxng' }), false);
+  assert.equal(searchPatchSchema.safeParse({ searxngEngines: 'x'.repeat(501) }).success, false);
+  assert.equal(
+    searchPatchSchema.safeParse({ searxngEngines: 'x'.repeat(501) }).error?.issues[0]?.message,
+    'search.searxngEngines must be 0-500 chars',
+  );
+});
+
 test('search.apiKey stringifies null to "null" and does NOT trim', () => {
   // Not a good design, but the shipping one, and a secret field is the last
   // place to change storage behaviour by accident.
@@ -588,6 +604,14 @@ test('update() refuses a bad value with the pre-conversion message', async () =>
   });
 });
 
+test('update() keeps a Default programming takeover when the show roster changes', async () => {
+  const now = Date.now();
+  const override = { showId: null, startedAt: now, expiresAt: now + 60 * 60_000 };
+  await settings.update({ scheduleOverride: override });
+  const result = await settings.update({ shows: [] });
+  assert.deepEqual(result.saved.scheduleOverride, override);
+});
+
 test('update() still tolerates a key it has never heard of', async () => {
   // This is the half backup restore depends on: routes/backup.ts hands update()
   // a whole settings.json, and a key from a newer version must cost one setting
@@ -603,9 +627,11 @@ test('the converted keys are exactly the ones with schemas', () => {
   // post-merge cross-field rules, write-throughs into another key).
   assert.deepEqual(Object.keys(SETTINGS_PATCH_SCHEMAS).sort(), [
     'activeDjPromptId', 'archive', 'audio', 'beds', 'crossfadeDuration',
-    'djHouseRules', 'djPrompt', 'djPrompts', 'djSpeakClock', 'festivals',
+    'djHouseRules', 'djPrompt', 'djPrompts', 'djSpeakClock',
+    'djTalkOnlyBetweenTracks', 'ducking', 'festivals',
     'jingleRatio', 'likes',
     'locale', 'loudness', 'maxTrackSeconds', 'moodSchedule', 'moods', 'personas',
+    'picker',
     'privacy', 'requests', 'schedule', 'scheduleOverride', 'scrobble', 'search',
     'sfx', 'shows', 'silenceTrim', 'station', 'stationDescription', 'stream',
     'theme', 'timezone', 'transitions', 'ui', 'weather', 'weatherMoods',
@@ -709,8 +735,12 @@ test('the djPrompt trio: pure rules convert, cross-key ones stay in update()', (
 });
 
 test('scheduleOverride validates SHAPE at the route, roster membership in update()', () => {
-  // Clearing the pin is how a takeover is cancelled, so null is legal.
+  // Clearing the takeover is outer null; an object with showId null is a live
+  // Default programming takeover and must remain distinct.
   assert.equal(validateSettingsPatch({ scheduleOverride: null }), null);
+  assert.equal(validateSettingsPatch({
+    scheduleOverride: { showId: null, startedAt: 1, expiresAt: 2 },
+  }), null);
   const bad = validateSettingsPatch({
     scheduleOverride: { showId: '', startedAt: 1, expiresAt: 2 },
   });

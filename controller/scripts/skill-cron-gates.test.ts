@@ -26,7 +26,7 @@ import { join } from 'node:path';
 // pulls in modules (settings, queue, …) that derive paths from it at module scope.
 process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'skill-cron-gates-'));
 
-const { skillCronAllowed, skillCronStandDownReason } = await import('../src/broadcast/scheduler.js');
+const { skillCronAllowed, skillCronStandDownReason, skillCronEligibility } = await import('../src/broadcast/scheduler.js');
 
 const ALL_OPEN = {
   voiceAllowed: true,
@@ -86,5 +86,23 @@ for (const key of Object.keys(ALL_OPEN) as Array<keyof typeof ALL_OPEN>) {
 const reasons = (Object.keys(ALL_OPEN) as Array<keyof typeof ALL_OPEN>)
   .map((key) => skillCronStandDownReason({ ...ALL_OPEN, [key]: key === 'programmeOnAir' }));
 assert.equal(new Set(reasons).size, reasons.length, 'each gate needs its own message');
+
+const cohosted = { seeded: true, skill: 'case-discussion', cohosts: true };
+const host = { skills: ['case-discussion'] };
+assert.deepEqual(
+  skillCronEligibility(cohosted, {}, host, [{}]),
+  { allowed: true },
+  'a co-hosted cron is eligible with a host-owned skill and an active guest',
+);
+assert.equal(
+  skillCronEligibility(cohosted, {}, host, []).reason,
+  'requires a co-hosted show',
+  'a co-hosted cron stands down clearly on a solo show',
+);
+assert.deepEqual(
+  skillCronEligibility({ ...cohosted, cohosts: false }, {}, host, []),
+  { allowed: true },
+  'ordinary skill crons keep working on solo shows',
+);
 
 console.log('skill-cron-gates.test.ts — all assertions passed');

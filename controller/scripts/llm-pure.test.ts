@@ -14,6 +14,8 @@ import { stripThinking, truncationError, extractJson, usageOf, perfOf, warningsO
 import { withDeadline, withTransientRetry, retryAfterMs } from '../src/llm/internal/core/retry.js';
 import { reasoningFor, needsToolCallObject, repeatPenaltyApplies, appliedNumCtx, appliedRepeatPenalty, forcedToolChoice, discoveryStepsFor, gatedMaxStepsFor, runDiscoverySteps, DISCOVERY_STEPS_MIN, DISCOVERY_STEPS_MAX } from '../src/llm/internal/provider/capabilities.js';
 import { agentPlan } from '../src/llm/internal/strategy/plan.js';
+import { objectViaToolCall, emitInstructions, EMIT_ANSWER_INSTRUCTION } from '../src/llm/internal/strategy/object-via-tool.js';
+import { NATIVE_JSON_INSTRUCTION } from '../src/llm/internal/strategy/object.js';
 import { introBudgetPhrase, enforceIntroBudget } from '../src/llm/internal/prompts/intro-budget.js';
 import { embeddingBaseUrl } from '../src/llm/internal/provider/embedding.js';
 import { DEFAULT_LOCCA_EMBED_BASE_URL, openAICompatibleFetch } from '../src/llm/internal/provider/registry.js';
@@ -587,6 +589,75 @@ async function main() {
     for (const cfg of [{ provider: 'anthropic' }, { provider: 'openai' }, { provider: 'ollama' }, { provider: 'anthropic', discoverySteps: 5 }]) {
       assert.equal(runDiscoverySteps(cfg, false), DISCOVERY_STEPS_MIN, JSON.stringify(cfg));
       assert.equal(runDiscoverySteps(cfg, true), discoveryStepsFor(cfg), JSON.stringify(cfg));
+    }
+  });
+
+  // ---- Forced-tool transport instruction (issue #1536) ----
+  // The forced-tool branch states its OWN answer channel, in the system channel,
+  // and no caller states one. Callers cannot: needsToolCallObject picks the
+  // branch per LEG at call time, so a caller's output-channel wording is right
+  // on one branch and wrong on the other two. The tagger's "Return ONLY a JSON
+  // object" met toolChoice:'required' and gemma-4-12b on llama.cpp spent whole
+  // generations deciding which of the two to obey, tagging zero tracks.
+  //
+  // Asserted against a MOCK MODEL rather than a string, because the property
+  // that matters is that the instruction reaches the wire — a constant that
+  // exists but is no longer composed into `instructions` is the regression.
+  // The mock answers with text and never calls `emit`, which is the #1536
+  // failure itself: objectViaToolCall throws, and what we pin is what the model
+  // had been told before it did.
+  console.log('objectViaToolCall (the forced-tool branch carries its own answer channel):');
+  async function forcedToolCall(system?: string) {
+    let seen: any;
+    const model = new MockLanguageModelV3({
+      doGenerate: async (opts: any) => {
+        seen = opts;
+        return {
+          content: [{ type: 'text', text: 'here is the answer instead of calling the tool' }],
+          finishReason: 'stop',
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          warnings: [],
+        };
+      },
+    });
+    const err: any = await objectViaToolCall(
+      { model, cfg: { provider: 'ollama', reasoning: false } },
+      { system, prompt: 'tag these', schema: z.object({ a: z.string() }), temperature: 0.2, maxOutputTokens: 256 },
+    ).catch((e: any) => e);
+    return { seen, err };
+  }
+  await test('the emit instruction reaches the model alongside the caller system prompt', async () => {
+    const { seen, err } = await forcedToolCall('CALLER SYSTEM PROMPT');
+    assert.match(String(err?.message), /never called the emit tool/);
+    // Serialised, so the assertion does not depend on how the SDK shapes the
+    // system turn — only on the text having been sent.
+    const wire = JSON.stringify(seen.prompt);
+    assert.ok(wire.includes('CALLER SYSTEM PROMPT'), 'caller system prompt survives');
+    assert.ok(wire.includes(EMIT_ANSWER_INSTRUCTION), 'transport instruction is appended');
+    assert.equal(seen.toolChoice?.type, 'required');
+    assert.deepEqual((seen.tools || []).map((t: any) => t.name), ['emit']);
+  });
+  await test('a caller with no system prompt still gets the instruction', async () => {
+    const { seen } = await forcedToolCall(undefined);
+    assert.ok(JSON.stringify(seen.prompt).includes(EMIT_ANSWER_INSTRUCTION));
+  });
+  await test('the instruction goes LAST, nearest the model turn', () => {
+    assert.ok(emitInstructions('SYSTEM').endsWith(EMIT_ANSWER_INSTRUCTION));
+    assert.equal(emitInstructions(''), EMIT_ANSWER_INSTRUCTION);
+    assert.equal(emitInstructions(undefined), EMIT_ANSWER_INSTRUCTION);
+  });
+  await test("the NATIVE branch's rule stays a FORMAT rule, never a channel rule", () => {
+    // Its job is to carry the shape for `openrouter`/`gateway` legs whose
+    // downstream model ignores response_format. It must NOT tell the model where
+    // to put the answer: @ai-sdk/anthropic implements responseFormat:'json' by
+    // forcing a synthesized `json` tool, so "reply with JSON, don't call a tool"
+    // here would recreate #1536 on Anthropic — the same collision, other branch.
+    assert.match(NATIVE_JSON_INSTRUCTION, /single JSON object/i, 'still carries the shape');
+    for (const channelWord of ['tool', 'reply', 'respond', 'instead']) {
+      assert.ok(
+        !NATIVE_JSON_INSTRUCTION.toLowerCase().includes(channelWord),
+        `native rule must not name an answer channel (found "${channelWord}")`,
+      );
     }
   });
 

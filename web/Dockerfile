@@ -1,14 +1,30 @@
 # Multi-stage build for the Next.js listener UI.
 # Produces a slim standalone image (~150MB) suitable for production.
+#
+# Node 24 (LTS "Krypton"), NOT 22. Node 22 — including the newest 22.23.2 —
+# still carries the `TransformStream` shutdown race fixed upstream by
+# nodejs/node#62040: `reader.cancel()` clears the controller's algorithms while
+# a write is already in flight, so the pending write reaches
+# `transformStreamDefaultControllerPerformTransform` and throws
+# `TypeError: controller[kState].transformAlgorithm is not a function`. Next's
+# App Router streams every RSC response through a TransformStream, so a client
+# that disconnects mid-render trips it — and once the browser starts retrying,
+# every request fails and the UI shows "Can't reach the controller" (#1535,
+# seen on a Pi 5 / k3s arm64 deploy, but the race is not arch-specific —
+# reproduced under both linux/amd64 and linux/arm64). The fix shipped in
+# v24.15.0 and v25.8.1 and was never backported to the 22.x line. The floating
+# `24` tag always resolves to the newest 24.x, so it is comfortably past that
+# floor; the runner stage re-checks it at build time rather than trusting the
+# tag. Do not move this back to 22.
 
 # ---- deps ----
-FROM node:22-bookworm-slim AS deps
+FROM node:24-bookworm-slim AS deps
 WORKDIR /app
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
 
 # ---- build ----
-FROM node:22-bookworm-slim AS build
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY web/ ./
@@ -38,7 +54,7 @@ ENV SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION}
 RUN npm run build
 
 # ---- runner ----
-FROM node:22-bookworm-slim AS runner
+FROM node:24-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -46,6 +62,11 @@ ENV PORT=7700
 ENV HOSTNAME=0.0.0.0
 
 RUN groupadd -r next && useradd -r -g next next
+
+# Regression guard for #1535 — fails the build if the base image's Node still
+# leaks the TransformStream cancel race (see the header and the script).
+COPY web/scripts/check-transformstream-race.mjs /tmp/check-transformstream-race.mjs
+RUN node /tmp/check-transformstream-race.mjs && rm /tmp/check-transformstream-race.mjs
 
 # Standalone output bundles only the runtime files Next.js needs.
 COPY --from=build --chown=next:next /app/.next/standalone ./

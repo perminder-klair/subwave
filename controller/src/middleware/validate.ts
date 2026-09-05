@@ -109,7 +109,7 @@ export function validatePublicBody(schema: ZodType) {
 /**
  * Same contract, for the one body that is a PARTIAL PATCH rather than an object.
  *
- * `POST /settings` carries any subset of 42 top-level keys, so there is no
+ * `POST /settings` carries any subset of 43 top-level keys, so there is no
  * single `ZodType` to hand `validateBody` — a schema over the whole settings
  * object would strip every key a form learns to send next. The per-key registry
  * (settings/patch-registry.ts) validates only the keys actually present and

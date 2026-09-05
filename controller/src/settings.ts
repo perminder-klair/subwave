@@ -66,6 +66,7 @@ import {
   clampTtsGain,
   clampTtsSpeed,
   coerceGuestPersonaIds,
+  isDefaultTakeover,
   mintId,
   normalizeLlmKeys,
   normalizeLlmProviderBaseUrls,
@@ -74,6 +75,7 @@ import {
   normalizeTtsCorrections,
   normalizeTtsGainMap,
   normalizeTtsSpeedMap,
+  takeoverShowId,
   validateTtsCorrectionsStrict,
 } from './settings/vocab.js';
 import {
@@ -87,12 +89,20 @@ import {
 } from './settings/defaults.js';
 import { validateCompatParams } from './settings/compat-params.js';
 import { parseSettingsPatchKey } from './settings/patch-registry.js';
-import { STREAM_BUFFER_SECONDS_BOUNDS, STREAM_MAX_LISTENERS_BOUNDS, maxTrackSecondsValueSchema } from './schemas/settings.js';
+import {
+  PICKER_ALBUM_HOURS_BOUNDS,
+  STREAM_BUFFER_SECONDS_BOUNDS,
+  STREAM_COUNTRY_HEADER_RE,
+  STREAM_GEOIP_DB_PATH_MAX,
+  STREAM_MAX_LISTENERS_BOUNDS,
+  maxTrackSecondsValueSchema,
+} from './schemas/settings.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
   normalizeArchiveRetentionDays,
   normalizeDjPrompts,
+  normalizeDuckDepth,
   normalizePersonaArray,
   normalizeTtsFallback,
   normalizeSchedule,
@@ -136,6 +146,7 @@ export {
   KOKORO_LANGS,
   KOKORO_VOICES,
   KOKORO_VOICE_LANGUAGES,
+  LINK_STYLES,
   LLM_PROVIDERS,
   LOUDNESS_SOURCES,
   MAX_OUTPUT_TOKENS_MAX,
@@ -209,7 +220,9 @@ export {
 export {
   agentLanguageReminder,
   agentPersonaPreamble,
+  announceLinks,
   castHouseRulesBlock,
+  castSpeakerIdRule,
   effectiveFrequency,
   effectiveMaxTrackSec,
   effectsActive,
@@ -381,6 +394,14 @@ export async function load() {
   const loaded: any = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
+    // Bounded here as well as at the save path: a hand-edited settings.json is
+    // load()'s input, so it repairs rather than throws — and an out-of-range `p`
+    // reaches radio.liq as a handoff file, where 3.0 is a music BOOST under the
+    // DJ. Both bounds come from the shared schema's constant, never a copy.
+    ducking: {
+      voice: normalizeDuckDepth(stored.ducking?.voice, DEFAULTS.ducking.voice),
+      intro: normalizeDuckDepth(stored.ducking?.intro, DEFAULTS.ducking.intro),
+    },
     maxTrackSeconds: coerceMaxTrackSeconds(rawMaxTrackSec(stored), false) ?? DEFAULTS.maxTrackSeconds,
     archive: {
       enabled:
@@ -456,6 +477,24 @@ export async function load() {
         stored.stream.maxListeners <= STREAM_MAX_LISTENERS_BOUNDS.max
           ? stored.stream.maxListeners
           : DEFAULTS.stream.maxListeners,
+      // Listener-country fallbacks (#1485). Bounded here against exactly what
+      // streamPatchSchema accepts, for the reason the two lines above it
+      // document: a field composed on the save path but missing from THIS
+      // block survives until the next cold load and then vanishes, with the
+      // feature reverting to its downstream default and nothing in the logs.
+      // A hand-edited settings.json is repaired rather than refused — a bad
+      // header name here costs the header link, never a boot.
+      countryHeader:
+        typeof stored.stream?.countryHeader === 'string' &&
+        (stored.stream.countryHeader.trim() === '' ||
+          STREAM_COUNTRY_HEADER_RE.test(stored.stream.countryHeader.trim()))
+          ? stored.stream.countryHeader.trim()
+          : DEFAULTS.stream.countryHeader,
+      geoipDbPath:
+        typeof stored.stream?.geoipDbPath === 'string' &&
+        stored.stream.geoipDbPath.trim().length <= STREAM_GEOIP_DB_PATH_MAX
+          ? stored.stream.geoipDbPath.trim()
+          : DEFAULTS.stream.geoipDbPath,
     },
     loudness: {
       targetLufs:
@@ -502,6 +541,13 @@ export async function load() {
       typeof stored.djSpeakClock === 'boolean'
         ? stored.djSpeakClock
         : DEFAULTS.djSpeakClock,
+    // Talk placement switch. Same coercion as djSpeakClock above: a
+    // settings.json written before this key existed reads as the default
+    // `false`, so an upgrade keeps the pre-existing placement byte for byte.
+    djTalkOnlyBetweenTracks:
+      typeof stored.djTalkOnlyBetweenTracks === 'boolean'
+        ? stored.djTalkOnlyBetweenTracks
+        : DEFAULTS.djTalkOnlyBetweenTracks,
     station:
       typeof stored.station === 'string' && stored.station.trim()
         ? stored.station.trim().slice(0, 80)
@@ -874,6 +920,10 @@ export async function load() {
         : DEFAULTS.search.provider,
       apiKey: typeof stored.search?.apiKey === 'string' ? stored.search.apiKey : '',
       baseUrl: typeof stored.search?.baseUrl === 'string' ? stored.search.baseUrl : DEFAULTS.search.baseUrl,
+      searxngEngines:
+        typeof stored.search?.searxngEngines === 'string'
+          ? stored.search.searxngEngines
+          : DEFAULTS.search.searxngEngines,
     },
     embedding: {
       enabled:
@@ -1042,6 +1092,25 @@ export async function load() {
             ? stored.scrobble.listenbrainz.baseUrl.trim().slice(0, 500)
             : '',
       },
+      navidrome: {
+        enabled:
+          typeof stored.scrobble?.navidrome?.enabled === 'boolean'
+            ? stored.scrobble.navidrome.enabled
+            : DEFAULTS.scrobble.navidrome.enabled,
+      },
+    },
+    // Album cooldown (#1485 FR 3). Bounds-clamped rather than validated: load()
+    // is lenient by contract, and this block does NOT spread DEFAULTS — a field
+    // missing here saves, works for the process, then vanishes on the next cold
+    // load (see controller/CLAUDE.md's THREE edits). Pinned by a cold-load round
+    // trip in scripts/picker-album-hours.test.ts.
+    picker: {
+      albumHours: Number.isFinite(Number(stored.picker?.albumHours))
+        ? Math.min(
+            PICKER_ALBUM_HOURS_BOUNDS.max,
+            Math.max(PICKER_ALBUM_HOURS_BOUNDS.min, Number(stored.picker.albumHours)),
+          )
+        : DEFAULTS.picker.albumHours,
     },
     likes: {
       enabled:
@@ -1094,6 +1163,20 @@ export async function update(patch) {
     const v = parseSettingsPatchKey<number>('crossfadeDuration', patch.crossfadeDuration);
     if (v !== cur.crossfadeDuration) {
       next.crossfadeDuration = v;
+      restart = true;
+    }
+  }
+  if ('ducking' in patch) {
+    const dk = parseSettingsPatchKey<{ voice?: number; intro?: number }>('ducking', patch.ducking);
+    // Per-field change gating, like every other liquidsoap_*.txt key: the panel
+    // posts the whole block, and a restart banner on an untouched pair is how a
+    // save of something else drags the mixer down with it.
+    if (dk.voice !== undefined && dk.voice !== cur.ducking.voice) {
+      next.ducking.voice = dk.voice;
+      restart = true;
+    }
+    if (dk.intro !== undefined && dk.intro !== cur.ducking.intro) {
+      next.ducking.intro = dk.intro;
       restart = true;
     }
   }
@@ -1201,6 +1284,13 @@ export async function update(patch) {
     }
     if (st.idleAfterMinutes !== undefined) {
       next.stream.idleAfterMinutes = st.idleAfterMinutes as number;
+    }
+    // Listener-country fallbacks. Read live per beacon (routes/audience.ts,
+    // broadcast/geoip.ts), so neither needs a Liquidsoap file nor a restart —
+    // they touch analytics, not the encoder chain. Clearing either to '' is a
+    // legitimate save, which is why there is no truthiness guard.
+    for (const k of ['countryHeader', 'geoipDbPath'] as const) {
+      if (st[k] !== undefined) (next.stream as Record<string, unknown>)[k] = st[k];
     }
   }
   if ('loudness' in patch) {
@@ -1342,6 +1432,13 @@ export async function update(patch) {
   // call, so there is no restart and nothing to re-render.
   if ('djSpeakClock' in patch) {
     next.djSpeakClock = parseSettingsPatchKey<boolean>('djSpeakClock', patch.djSpeakClock);
+  }
+  // Talk placement switch. Applies live for the same reason — broadcast/
+  // talk-air.ts reads it on every talk tick, so there is nothing to re-render
+  // and no mixer restart.
+  if ('djTalkOnlyBetweenTracks' in patch) {
+    next.djTalkOnlyBetweenTracks =
+      parseSettingsPatchKey<boolean>('djTalkOnlyBetweenTracks', patch.djTalkOnlyBetweenTracks);
   }
   if ('personas' in patch) {
     next.personas = validatePersonasStrict(patch.personas);
@@ -1694,10 +1791,15 @@ export async function update(patch) {
       }
     }
   }
+  if ('picker' in patch) {
+    const pk = parseSettingsPatchKey<Record<string, unknown>>('picker', patch.picker);
+    if (pk.albumHours !== undefined) next.picker.albumHours = pk.albumHours as number;
+  }
   if ('search' in patch) {
     const sr = parseSettingsPatchKey<Record<string, unknown>>('search', patch.search);
     if (sr.provider !== undefined) next.search.provider = sr.provider as string;
     if (sr.baseUrl !== undefined) next.search.baseUrl = sr.baseUrl as string;
+    if (sr.searxngEngines !== undefined) next.search.searxngEngines = sr.searxngEngines as string;
     // 'set' is the redaction sentinel from getRedacted() — ignore it so a
     // round-tripped form doesn't overwrite the real key. Tested against the RAW
     // patch value, not the parsed one: the sentinel means "leave the stored
@@ -2034,6 +2136,7 @@ export async function update(patch) {
     const sb = parseSettingsPatchKey<{
       lastfm?: Record<string, unknown>;
       listenbrainz?: Record<string, unknown>;
+      navidrome?: Record<string, unknown>;
     }>('scrobble', patch.scrobble);
     const rawSb = (patch.scrobble || {}) as Record<string, Record<string, unknown> | undefined>;
     // 'set' is the redaction sentinel from getRedacted() — ignore it so a
@@ -2057,6 +2160,12 @@ export async function update(patch) {
         if (k === 'userToken' && rawSb.listenbrainz?.[k] === 'set') continue;
         (next.scrobble.listenbrainz as Record<string, unknown>)[k] = lb[k];
       }
+    }
+    // No secret sentinel here: Navidrome reuses config.navidrome's credentials,
+    // so the block is one flag and nothing is ever redacted out of it (#1298).
+    if (sb.navidrome !== undefined) {
+      const nd = sb.navidrome;
+      if (nd.enabled !== undefined) next.scrobble.navidrome.enabled = nd.enabled as boolean;
     }
   }
   if ('likes' in patch) {
@@ -2090,9 +2199,11 @@ export async function update(patch) {
         }
       }
     }
-    // A takeover pinning a show that no longer exists dies with the show.
-    if (next.scheduleOverride && !showIds.includes(next.scheduleOverride.showId)) {
-      next.scheduleOverride = null;
+    // A takeover pinning a show that no longer exists dies with the show. A
+    // null target is Default programming, not an orphan, so it survives.
+    if (next.scheduleOverride && !isDefaultTakeover(next.scheduleOverride)) {
+      const pinnedId = takeoverShowId(next.scheduleOverride);
+      if (!pinnedId || !showIds.includes(pinnedId)) next.scheduleOverride = null;
     }
     if (!personaIds.includes(next.activePersonaId)) next.activePersonaId = personaIds[0];
 

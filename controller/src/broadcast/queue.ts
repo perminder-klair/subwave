@@ -23,7 +23,8 @@ import * as library from '../music/library.js';
 import * as loudness from '../music/loudness.js';
 import * as silenceTrim from '../music/silence-trim.js';
 import * as blocklist from '../music/blocklist.js';
-import { artistRootKey, trackKey } from '../music/recency.js';
+import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
+import { albumKeyFor } from '../music/album-facts.js';
 import { speak, voiceGainDb } from '../audio/tts.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
@@ -39,7 +40,8 @@ import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 import { djCallsAllowed, presentListeners } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
-import { stationIdDaypartDrifted } from './clock-policy.js';
+import { speakClockAllowed, stationIdDaypartDrifted, stationIdDaypartStamp } from './clock-policy.js';
+import { currentTalkAir } from './talk-air.js';
 import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
 import * as liquidsoapControl from './liquidsoap-control.js';
@@ -92,10 +94,11 @@ import {
 import {
   DEDUPE_KINDS,
   KIND_LABEL,
-  PENDING_VOICE_MAX_AGE_MS,
   TRACK_TIED_KINDS,
   VOICE_KINDS,
+  pendingVoiceStale,
 } from './queue/kinds.js';
+import type { PendingTalk } from './queue/kinds.js';
 import {
   BED_MARKER_FRESH_MS,
   VOICE_LEADIN_MS,
@@ -126,6 +129,29 @@ interface SegmentDesc {
   logText?: string | null;
   /** Whether this segment also fires the legacy dj.say/dj.link event. */
   legacy?: boolean;
+}
+
+// A rendered segment waiting for the next track boundary — the one slot behind
+// announceAtNextTrack() and airPendingVoice().
+//
+// `clips` is a LIST because a segment is not always one utterance: a banter
+// exchange is several lines in several voices, rendered all-or-nothing and
+// aired back to back, and `djTalkOnlyBetweenTracks` (#1485 FR 5b) can defer one
+// of those exactly as it defers an ident. It is still ONE segment and one slot
+// — the queue never holds two deferred segments, and the talk-slot planner is
+// what stops a second one being written while this one waits (see
+// talk-scheduler's pendingHolds).
+interface PendingVoice {
+  kind: string;
+  clips: { text: string; wavPath: string; persona: Persona | null; meta: TurnMeta }[];
+  /** The daypart the model was allowed to claim, or null for no claim at all —
+   *  the stamp stationIdDaypartDrifted refuses a stale clip on. */
+  daypart: string | null;
+  /** Whether the clips are lines of one multi-voice exchange, which decides the
+   *  attribution they air under and the single webhook they owe. */
+  exchange: boolean;
+  /** Enqueue time — the anchor for both the stale drop and the planner's hold. */
+  t: number;
 }
 
 // Re-exported so every existing `from './queue.js'` import keeps working.
@@ -168,7 +194,7 @@ class Queue {
   _emptyDjQueueStreak = 0;      // consecutive reconcile checks seeing an empty dj_queue while sent items remain — see reconcileWithDjQueue
   _resolveFailStreak = 0;       // consecutive pushes Liquidsoap never resolved — re-pick budget, see onPushResolveFailed
   _deadlinePickAt = 0;          // last deadline-pick ATTEMPT (ms epoch) — failure-retry cooldown, see maybeDeadlinePick
-  _pendingVoice: { text: string; kind: string; wavPath: string; persona: Persona | null; meta: TurnMeta; daypart: string | null; t: number } | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
+  _pendingVoice: PendingVoice | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
   _introRenders = new IntroRenderTracker<QueueItem>(); // timed-out pre-renders stay reusable by airIntro
   _pendingJingles = new Map<string, number>(); // manual jingle presses handed over but not yet heard — see playJingle
 
@@ -310,6 +336,7 @@ class Queue {
               id: null,
               title: e.title || null,
               artist: e.artist || null,
+              album: e.album || null,
               endedAt: e.t,
             });
           } catch {}
@@ -404,6 +431,21 @@ class Queue {
       if (out.length >= n) break;
     }
     return out;
+  }
+
+  // The text of the most recent between-track link that actually AIRED, or
+  // null. djLog entries for voice kinds are written by onSpoken — after the
+  // clip reached the stream — which is what makes this the right anchor for
+  // announce-mode's alternation (broadcast/announce-line.ts): a link that was
+  // composed and then dropped (silence ordered, intro budget, refused pick)
+  // never lands here, so the next one can't repeat the form the listener just
+  // heard. 'link' is the kind both link paths log under — enqueuePick's
+  // introKind and announce()'s own kind.
+  getLastLinkText(): string | null {
+    for (const entry of this.djLog) {
+      if (entry.kind === 'link') return entry.message || null;
+    }
+    return null;
   }
 
   // Timestamp (ms) of the most recent on-air spoken segment, or 0. Defaults to
@@ -1434,6 +1476,17 @@ class Queue {
     if (!text || !text.trim()) return;
     try {
       const wavPath = await speak(text, { kind, persona });
+      // `djTalkOnlyBetweenTracks` (#1485 FR 5b). The scheduled talk tick runs
+      // every fire inside a talk-air scope (broadcast/talk-air.ts), so the
+      // decision has already been made by the time the WAV exists — this is the
+      // one place it is ACTED on for single-utterance segments, which is why
+      // there is no flag to thread and no call site that can forget it. Outside
+      // a scope (every manual trigger) the mode reads 'immediate' and nothing
+      // below changes.
+      if (currentTalkAir() === 'next-track') {
+        this.holdForNextTrack(kind, [{ text, wavPath, persona, meta }], { exchange: false });
+        return;
+      }
       // No bed here by construction — announce() speaks without queueing a
       // track, so there is nothing for maybePushBed to have bedded.
       const channel = voiceChannelFor(kind);
@@ -1545,6 +1598,16 @@ class Queue {
       this.log('error', `Exchange render failed: ${(err as Error).message}`);
       return false;
     }
+    // Deferred as one segment, not as N: the exchange keeps its order and its
+    // all-or-nothing rendering, and the boundary hears the whole conversation.
+    if (currentTalkAir() === 'next-track') {
+      this.holdForNextTrack(
+        kind,
+        rendered.map(l => ({ text: l.text, wavPath: l.wavPath, persona: l.persona, meta: {} })),
+        { exchange: true },
+      );
+      return true;
+    }
     for (const l of rendered) {
       try {
         const seg: SegmentDesc = exchangeSegment(l, kind);
@@ -1572,20 +1635,72 @@ class Queue {
   // latency off the air path) and onTrackStarted airs it via the light-duck
   // intro channel.
   //
-  // One slot only: a newer pending segment replaces an unaired older one, so a
-  // fresh ident supersedes a stale one rather than stacking. All bookkeeping
-  // (djLog → recap/opener anti-repeat, session turn, webhook) happens at AIR
-  // time, so the DJ's memory reflects what reached the stream, not what was
-  // merely scheduled.
+  // The ident is the row that has always deferred; with
+  // `djTalkOnlyBetweenTracks` on (#1485 FR 5b) every scheduled segment reaches
+  // the same slot, through announce()/announceExchange() rather than through
+  // here. All bookkeeping (djLog → recap/opener anti-repeat, session turn,
+  // webhook) happens at AIR time, so the DJ's memory reflects what reached the
+  // stream, not what was merely scheduled.
   async announceAtNextTrack(text, kind = 'announcement', { persona = null, meta = {}, daypart = null }: { persona?: Persona | null; meta?: TurnMeta; daypart?: string | null } = {}) {
     if (!text || !text.trim()) return;
     try {
       const wavPath = await speak(text, { kind, persona });
-      this._pendingVoice = { text, kind, wavPath, persona, meta, daypart, t: Date.now() };
-      this.log('scheduler', `Holding ${kind} for the next track boundary`);
+      this.holdForNextTrack(kind, [{ text, wavPath, persona, meta }], { exchange: false, daypart });
     } catch (err) {
       this.log('error', `Deferred announce failed: ${(err as Error).message}`);
     }
+  }
+
+  // Take the one deferred slot. The three ways in — an ident's explicit
+  // announceAtNextTrack, and announce()/announceExchange() under a 'next-track'
+  // talk-air scope — differ only in what they hand over, so the slot is claimed
+  // in exactly one place.
+  //
+  // The DAYPART STAMP is applied here rather than by each caller, so every
+  // deferred segment carries the guard and not just the ident that needed it
+  // first: a clip that waits across a daypart boundary is dropped at air rather
+  // than reading yesterday's part of the day. A caller that already computed
+  // the stamp (runStationId, which offers the daypart to the model) passes it;
+  // everything else gets the live one. `null` means the clip made no clock
+  // claim the guard could refuse — that is what stationIdDaypartStamp returns
+  // with the station clock off, and it fails open on purpose.
+  //
+  // Replacing an unaired segment is still the rule for the ident path this
+  // started as (a fresh ident supersedes a stale one). With
+  // djTalkOnlyBetweenTracks on it should never happen: the talk-slot planner
+  // holds every row while a clip is waiting, precisely so a second scheduled
+  // segment is never WRITTEN, let alone dropped on the floor here. It is logged
+  // where it does, because a segment paid for in tokens and TTS and then
+  // silently deleted is exactly the failure that hold exists to prevent.
+  holdForNextTrack(
+    kind: string,
+    clips: PendingVoice['clips'],
+    { exchange = false, daypart }: { exchange?: boolean; daypart?: string | null } = {},
+  ) {
+    if (!clips.length) return;
+    const superseded = this._pendingVoice;
+    this._pendingVoice = {
+      kind,
+      clips,
+      daypart: daypart ?? stationIdDaypartStamp(getClockContext().spokenDaypart, speakClockAllowed()),
+      exchange,
+      t: Date.now(),
+    };
+    if (superseded) {
+      this.log('scheduler',
+        `Dropped pending ${superseded.kind} — a ${kind} took the next track boundary instead`);
+    }
+    this.log('scheduler', `Holding ${kind} for the next track boundary`);
+  }
+
+  // The minimal description of a segment already rendered and waiting for the
+  // next track boundary, or null. Talk that has NOT aired yet is invisible to
+  // getLastTalkBreakAt(), while the enqueue time lets the talk scheduler respect
+  // both that in-flight talk and the queue's finite validity window (#1419,
+  // #1500, #1539). Queue remains the owner of eventual stale dropping.
+  pendingVoiceTalk(): PendingTalk | null {
+    const p = this._pendingVoice;
+    return p ? { kind: p.kind, queuedAt: p.t } : null;
   }
 
   // Discard a scheduled-but-unaired deferred segment. A mic-pass supersedes an
@@ -1639,7 +1754,7 @@ class Queue {
     if (!p) return;
     // Staleness first: a clip too old to air is dropped outright rather than
     // held again below, so a busy stretch can't keep re-deferring a dead ident.
-    if (Date.now() - p.t > PENDING_VOICE_MAX_AGE_MS) {
+    if (pendingVoiceStale(p.t, Date.now())) {
       this.dropPendingVoice('waited too long for a track boundary');
       return;
     }
@@ -1672,17 +1787,39 @@ class Queue {
       return;
     }
     this._pendingVoice = null;
-    if (!existsSync(p.wavPath)) return;
-    try {
-      // Deferred idents ride the INTRO file (light duck at a track boundary),
-      // whatever their kind — see announceAtNextTrack.
-      const seg: SegmentDesc = { kind: p.kind, channel: 'intro', text: p.text, meta: p.meta, persona: p.persona };
-      const handoff = await airVoice(config.liquidsoap.introFile, p.wavPath, p.text, voiceGainDb(p.kind, p.persona), {
-        onQueued: q => this.onQueued(q, seg),
+    // The reaper deletes old WAVs; a segment whose clips are all gone has
+    // nothing left to air. A partially reaped exchange airs what survives
+    // rather than nothing — the alternative is silence on a boundary the
+    // planner already spent a slot on.
+    const clips = p.clips.filter(c => existsSync(c.wavPath));
+    if (!clips.length) return;
+    for (const clip of clips) {
+      try {
+        // Deferred segments ride the INTRO file (light duck at a track
+        // boundary), whatever their kind — see announceAtNextTrack. An exchange
+        // line still carries its SPEAKER's attribution (exchangeSegment), which
+        // is what session.windowMessages() and prompt-memory key off; only the
+        // channel changes, because the channel is a fact about the boundary and
+        // not about the line.
+        const seg: SegmentDesc = p.exchange
+          ? { ...exchangeSegment(clip, p.kind), channel: 'intro' }
+          : { kind: p.kind, channel: 'intro', text: clip.text, meta: clip.meta, persona: clip.persona };
+        const handoff = await airVoice(config.liquidsoap.introFile, clip.wavPath, clip.text, voiceGainDb(p.kind, clip.persona), {
+          onQueued: q => this.onQueued(q, seg),
+        });
+        this.onSpoken(handoff, seg);
+      } catch (err) {
+        this.log('error', `Air pending voice failed: ${(err as Error).message}`);
+      }
+    }
+    // One webhook for the whole exchange, at air time — the same single event
+    // announceExchange fires, moved to where the words actually reached the
+    // stream. A single-clip segment's event rides onSpoken like every other.
+    if (p.exchange) {
+      webhooks.notify('dj.say', {
+        text: clips.map(c => `${c.persona?.name || 'DJ'}: ${c.text}`).join('\n'),
+        kind: p.kind,
       });
-      this.onSpoken(handoff, seg);
-    } catch (err) {
-      this.log('error', `Air pending voice failed: ${(err as Error).message}`);
     }
   }
 
@@ -1953,6 +2090,11 @@ class Queue {
           id: t.id || null,
           title: t.title || null,
           artist: t.artist || null,
+          // For the album cooldown (#1485 FR 3). The compilation flags are NOT
+          // carried: albumKey exempts on the CANDIDATE side, which is the side
+          // holding them (a library row carries both; a Subsonic-sourced play
+          // often carries neither), and a block needs both sides to key alike.
+          album: t.album || null,
           endedAt,
         });
         this._recentPlays = this._recentPlays.slice(0, config.queue.recentPlaysMax);
@@ -2040,6 +2182,10 @@ class Queue {
     logEvent('track.play', {
       title: this.current.track.title,
       artist: this.current.track.artist || null,
+      // Carried so backfillRecentPlaysFromEvents can rebuild album keys after a
+      // restart. Without it the album cooldown forgets everything the sidecar
+      // didn't hold, which on a fresh boot is most of the window.
+      album: this.current.track.album || null,
       source: this.current.source,
       requestedBy: this.current.requestedBy || null,
       show: onAirShow?.name || null,
@@ -2656,6 +2802,49 @@ class Queue {
       if (new Date(p.endedAt).getTime() < cutoff) break;
       const k = (p.artist || '').toLowerCase().trim();
       if (k) out.add(k);
+    }
+    return out;
+  }
+
+  // The ALBUM keys (music/recency.albumKey — album + lead album artist, with
+  // compilations keyed as '' and therefore exempt) heard inside `hours`, plus
+  // every album already queued and unaired, plus the one on air.
+  //
+  // ONE method for BOTH pick paths (#1485 FR 3): the pool picker passes it to
+  // filterPickerCandidates and the agent path's album guard tests its pick
+  // against it, so "which albums are too recent" cannot mean two things. That
+  // is the property the artist guard does NOT have — recentArtistsSince (hours,
+  // pool) and neighbourArtistRoots (slots, agent) answer deliberately different
+  // questions — and it is why this one is in hours: an hours window is the
+  // shape both paths can read without either of them re-deriving it.
+  //
+  // The QUEUED side is included for the reason neighbourArtistRoots documents:
+  // a pick is not always adjacent to the track on air, so with a pair-aware
+  // drain (or a request stacked ahead) an album queued two slots out is exactly
+  // the repeat this guard exists to catch, and it has no play row yet. Unlike
+  // that method this takes the WHOLE queue rather than a tail — everything in
+  // it will air inside any window worth setting.
+  //
+  // Empty set when hours <= 0, which is the shipped default: the cooldown is
+  // off until an operator asks for it, so an upgrade changes nothing.
+  recentAlbumKeys(hours = 0): Set<string> {
+    const out = new Set<string>();
+    if (!Number.isFinite(hours) || hours <= 0) return out;
+    // albumKeyFor, not the pure albumKey: a queued pick or a sidecar play row
+    // carries no compilation flags, and without the library fill-in a sampler
+    // would enter the window it is meant to be exempt from.
+    const add = (track: CandidateLike | null | undefined) => {
+      const key = albumKeyFor(track || {});
+      if (key) out.add(key);
+    };
+    for (const item of this.upcoming) add(item?.track);
+    add(this.current?.track);
+    // _recentPlays is newest-first, so the first row past the cutoff ends the
+    // walk — same shape as recentArtistsSince.
+    const cutoff = Date.now() - hours * 3_600_000;
+    for (const p of this._recentPlays) {
+      if (new Date(p.endedAt).getTime() < cutoff) break;
+      add(p);
     }
     return out;
   }

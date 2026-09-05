@@ -70,7 +70,7 @@ export const SECTIONS = [
   {
     id: 'tts', group: 'the dj', label: 'TTS voice',
     hint: 'default engine', icon: Mic,
-    formKeys: ['tts', 'kokoroLang'],
+    formKeys: ['tts', 'kokoroLang', 'djTalkOnlyBetweenTracks'],
   },
   {
     id: 'library', group: 'the dj', label: 'Library tagger',
@@ -89,7 +89,7 @@ export const SECTIONS = [
   },
   {
     id: 'scrobble', group: 'listeners', label: 'Scrobbling',
-    hint: 'last.fm · listenbrainz', icon: Activity,
+    hint: 'last.fm · listenbrainz · navidrome', icon: Activity,
     formKeys: ['scrobble'],
   },
   {
@@ -105,7 +105,7 @@ export const SECTIONS = [
   {
     id: 'danger', group: 'operations', label: 'Danger zone',
     hint: 'mixer · broadcast', icon: AlertTriangle,
-    formKeys: ['crossfadeDuration', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'stream', 'loudness'],
+    formKeys: ['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'stream', 'loudness'],
   },
 ] as const satisfies readonly SectionSpec[];
 
@@ -126,6 +126,8 @@ export const RESTART_PATHS: readonly string[] = [
   'station',
   'privacy.listenerAuth',
   'crossfadeDuration',
+  'ducking.voice',
+  'ducking.intro',
   'archive.enabled',
   'archive.bitrate',
   'stream.opusEnabled',
@@ -153,9 +155,10 @@ export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
   library: ['seed-phase', 'propagation', 'enrichment'],
   likes: ['ai-dj-influence'],
   danger: [
-    'crossfade', 'stem-transitions', 'max-track-length', 'dead-air-trim',
+    'crossfade', 'duck-depth', 'stem-transitions', 'max-track-length', 'dead-air-trim',
     'loudness-levelling', 'opus-stream', 'flac-stream', 'ogg-metadata',
     'aac-stream', 'stream-mp3-bitrate', 'listener-buffer', 'max-listeners',
+    'listener-country',
   ],
 };
 
@@ -227,6 +230,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
 
   // ── tts voice ──────────────────────────────────────────────────────────────
   { label: 'DJ speech', section: 'tts', card: 'Station voice', keywords: 'on air music only mute silent' },
+  { label: 'Talk placement', section: 'tts', card: 'Station voice', keywords: 'between tracks boundary interrupt over song duck mid-song' },
   { label: 'Engine', section: 'tts', card: 'Voice engine', keywords: 'piper kokoro chatterbox pocket-tts cloud remote' },
   { label: 'Voice', section: 'tts', card: 'Voice engine', keywords: 'speaker accent alba amy' },
   { label: 'Voice level (dB)', section: 'tts', card: 'Voice engine', keywords: 'gain trim loudness decibel' },
@@ -257,6 +261,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Provider', section: 'search', card: 'Provider', keywords: 'duckduckgo tavily brave searxng live facts' },
   { label: 'API key', section: 'search', card: 'Provider', keywords: 'tavily brave token search_api_key' },
   { label: 'SearXNG URL', section: 'search', card: 'Provider', keywords: 'self hosted meta search json' },
+  { label: 'Engines', section: 'search', card: 'Provider', keywords: 'searxng engines pin restrict google duckduckgo wikipedia' },
 
   // ── likes ──────────────────────────────────────────────────────────────────
   { label: 'Enabled', section: 'likes', card: 'Heart button', keywords: 'heart like listener tap' },
@@ -275,6 +280,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'User token', section: 'scrobble', card: 'ListenBrainz', keywords: 'listenbrainz profile token' },
   { label: 'API base URL', section: 'scrobble', card: 'ListenBrainz', keywords: 'self hosted instance endpoint' },
   { label: 'Username (display)', section: 'scrobble', card: 'ListenBrainz', keywords: 'listenbrainz user dash' },
+  { label: 'Enabled', section: 'scrobble', card: 'Navidrome', keywords: 'navidrome play count last played smart playlist nsp rotation subsonic' },
 
   // ── archives ───────────────────────────────────────────────────────────────
   { label: 'Record the broadcast to disk', section: 'archives', card: 'Hourly archive', keywords: 'archive recording mp3 tapes restart' },
@@ -285,6 +291,8 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Stop stream', section: 'danger', card: 'Broadcast', keywords: 'off air disconnect icecast mount' },
   { label: 'Pause when the room is empty', section: 'danger', card: 'Idle pause', keywords: 'idle empty listeners resume' },
   { label: 'Crossfade duration', section: 'danger', card: 'Crossfade', keywords: 'overlap seams transition restart' },
+  { label: 'DJ over silence duck depth', section: 'danger', card: 'Duck depth', keywords: 'ducking voice smooth_add say idents heavy restart' },
+  { label: 'DJ over a track duck depth', section: 'danger', card: 'Duck depth', keywords: 'ducking intro talk over link light smooth_add restart' },
   { label: 'Pair-aware transitions', section: 'danger', card: 'Stem transitions', keywords: 'pair drain successor crossfade' },
   { label: 'Stem cache', section: 'danger', card: 'Stem transitions', keywords: 'demucs drums bass vocals disk' },
   { label: 'Stem cache budget', section: 'danger', card: 'Stem transitions', keywords: 'gb evict oldest' },
@@ -304,5 +312,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Bitrate', section: 'danger', card: 'Stream MP3 bitrate', keywords: 'mp3 kbps stream restart' },
   { label: 'Listener buffer', section: 'danger', card: 'Listener buffer', keywords: 'burst size seconds behind live edge restart' },
   { label: 'Max listeners', section: 'danger', card: 'Max listeners', keywords: 'icecast max clients concurrent connections capacity limit licensing fees restart' },
+  { label: 'Country header', section: 'danger', card: 'Listener country', keywords: 'geoip cf-ipcountry cloudflare proxy header stats audience country rollup' },
+  { label: 'GeoIP database', section: 'danger', card: 'Listener country', keywords: 'mmdb maxmind geolite2 db-ip ip2location offline lookup stats audience country' },
   { label: 'Restart mixer', section: 'danger', card: 'Mixer', keywords: 'restart liquidsoap apply pending' },
 ];

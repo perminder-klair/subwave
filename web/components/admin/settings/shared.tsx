@@ -149,6 +149,8 @@ export interface SearchForm {
   provider: string;
   apiKey: string;
   baseUrl: string;
+  /** Optional comma-separated SearXNG engine pin (#1353); '' = instance default. */
+  searxngEngines: string;
 }
 
 export interface EmbeddingEnrichmentForm {
@@ -187,12 +189,27 @@ export interface ScrobbleListenbrainzForm {
   baseUrl: string;
 }
 
+/** Navidrome play reporting (#1298). No credentials of its own — the station's
+ *  existing Navidrome connection is what it scrobbles through. */
+export interface ScrobbleNavidromeForm {
+  enabled: boolean;
+}
+
 export interface ScrobbleForm {
   lastfm: ScrobbleLastfmForm;
   listenbrainz: ScrobbleListenbrainzForm;
+  navidrome: ScrobbleNavidromeForm;
 }
 
 /** Listener likes (#991) — heart button + Navidrome star + DJ influence. */
+// Track-selection windows read by BOTH pick paths. A separate top-level
+// settings key from `llm` because the album cooldown is not LLM config — the
+// stateless pool picker enforces it too.
+export interface PickerForm {
+  // Hours, as typed. 0/'' = off.
+  albumHours: string;
+}
+
 export interface LikesForm {
   enabled: boolean;
   starInNavidrome: boolean;
@@ -219,6 +236,8 @@ export interface StreamForm {
   idleWhenEmpty: boolean;
   idleAfterMinutes: string;
   maxListeners: string;
+  countryHeader: string;
+  geoipDbPath: string;
 }
 
 export type LoudnessSource = 'replaygain-then-measured' | 'replaygain' | 'measured';
@@ -265,8 +284,17 @@ export interface SilenceTrimForm {
   minGapMs: string;
 }
 
+// settings.ducking — the two smooth_add depths radio.liq reads at mixer
+// startup. Strings like every other number box: a blank input must reach
+// saveBlock as a field error, not as 0 (which is a full mute under the DJ).
+export interface DuckingForm {
+  voice: string;
+  intro: string;
+}
+
 export interface FormState {
   crossfadeDuration: string;
+  ducking: DuckingForm;
   maxTrackSeconds: string;
   silenceTrim: SilenceTrimForm;
   transitions: TransitionsForm;
@@ -278,9 +306,13 @@ export interface FormState {
   timezone: string;
   locale: StationLocale;
   kokoroLang: string;
+  /** Talk placement switch — every scheduled segment waits for the next track
+   *  boundary. Flat, like djSpeakClock, and owned by the TTS section. */
+  djTalkOnlyBetweenTracks: boolean;
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
+  picker: PickerForm;
   search: SearchForm;
   embedding: EmbeddingForm;
   scrobble: ScrobbleForm;
@@ -302,6 +334,7 @@ export interface SettingsData {
   values?: {
     jingleRatio?: number;
     crossfadeDuration?: number;
+    ducking?: { voice?: number; intro?: number };
     maxTrackSeconds?: number;
     minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number; retentionDays?: number };
@@ -319,6 +352,8 @@ export interface SettingsData {
       idleWhenEmpty?: boolean;
       idleAfterMinutes?: number;
       maxListeners?: number;
+      countryHeader?: string;
+      geoipDbPath?: string;
     };
     loudness?: { targetLufs?: number; maxBoostDb?: number; source?: LoudnessSource };
     silenceTrim?: { enabled?: boolean; minGapMs?: number };
@@ -326,6 +361,9 @@ export interface SettingsData {
     stationDescription?: string;
     timezone?: string;
     locale?: StationLocale;
+    /** Absent on a settings.json predating the key — read it as false, which is
+     *  what the controller's own coercion does. */
+    djTalkOnlyBetweenTracks?: boolean;
     theme?: { active?: string };
     weather?: {
       lat?: number;
@@ -387,6 +425,10 @@ export interface SettingsData {
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;
       listenbrainz?: Partial<ScrobbleListenbrainzForm>;
+      navidrome?: Partial<ScrobbleNavidromeForm>;
+    };
+    picker?: {
+      albumHours?: number;
     };
     likes?: {
       enabled?: boolean;

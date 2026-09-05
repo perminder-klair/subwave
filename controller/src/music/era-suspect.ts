@@ -42,7 +42,7 @@
 // soundtracks, label samplers and various-artist collections — which is what it
 // is supposed to be. Re-measure before loosening any of the three numbers.
 
-import { artistRootKey } from './recency.js';
+import { artistRootKey, isVariousArtistsName } from './recency.js';
 
 /** Album-level facts the walk can read without a single extra request. */
 export interface AlbumEraFacts {
@@ -86,12 +86,10 @@ const MANY_ARTISTS_MAX_SHARE = 0.30;
 // catalogue number, a lyric or an address, not a date.
 const MIN_YEAR = 1900;
 
-function norm(s: unknown): string {
-  return String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
-}
-
-// Navidrome writes the album artist for a multi-artist release as one of these.
-const VARIOUS = new Set(['variousartists', 'various', 'va', 'verschiedene', 'diversos', 'divers']);
+// Navidrome writes the album artist for a multi-artist release as one of a
+// short list of names; that list lives in music/recency.ts beside the other
+// artist-name normalisation, because the album cooldown (#1485) reads it too
+// and a second copy would drift the way the single `isCompilation` check did.
 
 // Titles that SAY the record is a collection. Deliberately a short, specific
 // list: on the measured catalogue it fires on 12 albums out of 3,989, and the
@@ -172,7 +170,7 @@ export function albumEraSuspect(f: AlbumEraFacts): EraSuspicion {
   // 2. The album artist is the various-artists marker. Navidrome sets this on
   //    multi-artist releases even when it does not set the compilation flag,
   //    which is exactly the gap #1418 is about.
-  if (VARIOUS.has(norm(f.albumArtist))) return { suspect: true, reason: 'various-artists' };
+  if (isVariousArtistsName(f.albumArtist)) return { suspect: true, reason: 'various-artists' };
 
   // 3. A record with no one at the front of it. All three conditions were
   //    measured, not guessed (see the header): enough distinct LEAD artists,

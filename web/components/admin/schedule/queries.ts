@@ -2,12 +2,7 @@
 
 import { adminJson, type AdminFetch } from '@/lib/admin-query';
 import { useAdminQuery } from '@/lib/admin-query';
-
-export interface ScheduleOverride {
-  showId: string;
-  startedAt: number;
-  expiresAt: number;
-}
+import type { ScheduleOverride } from '@/lib/schemas.generated';
 
 export interface ScheduleLiveData {
   override: ScheduleOverride | null;

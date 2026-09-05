@@ -65,12 +65,15 @@ type Run = { status: number; out: string };
 // Drive bootstrap_state_dirs() against a scratch state dir. `set -eu` is set
 // here too — the point of the test is that the function survives a failure
 // under the same shell options the real entrypoint uses.
-function bootstrap(script: string, lib: string, stateRoot: string, stateDir: string): Run {
+function bootstrap(
+  script: string, lib: string, stateRoot: string, stateDir: string,
+  extraEnv: Record<string, string> = {},
+): Run {
   const cmd = `set -eu; ${lib}=1 source "$1"; bootstrap_state_dirs "$2" "$3" 2>&1`;
   try {
     const out = execFileSync('bash', ['-c', cmd, 'bash', script, stateRoot, stateDir], {
       encoding: 'utf8',
-      env: { ...process.env, PATH: process.env.PATH ?? '' },
+      env: { ...process.env, PATH: process.env.PATH ?? '', ...extraEnv },
     });
     return { status: 0, out };
   } catch (err) {
@@ -178,6 +181,40 @@ for (const s of SUPERVISORS) {
       const mode = statSync(join(dir, d)).mode & 0o777;
       assert.equal(mode & 0o002, 0o002, `${d} not writable by other uids (mode ${mode.toString(8)})`);
     }
+  });
+
+  // 5. A RELOCATED stem cache (STEMS_DIR in .env → the container path
+  //    SUBWAVE_STEMS_DIR) is outside the state dir, so the subdir loop above
+  //    never touches it. Without its own entry the bind mount keeps the
+  //    root-owned 755 Docker gives a freshly created source — the analyzer
+  //    (uid 10001) then cannot write one stem, and the whole reason the
+  //    operator moved the cache to a bigger disk is silently undone.
+  check('a relocated stem cache root is created and world-writable', () => {
+    const { root, dir } = scratch();
+    const stems = join(root, 'relocated-stems');
+    const r = bootstrap(s.path, s.lib, root, dir, { SUBWAVE_STEMS_DIR: stems });
+    assert.equal(r.status, 0, `exited ${r.status}: ${r.out}`);
+    assert.equal(r.out.trim(), '', `expected silence, got: ${r.out}`);
+    assert.ok(existsSync(stems), 'relocated stems root not created');
+    const mode = statSync(stems).mode & 0o777;
+    assert.equal(mode & 0o002, 0o002, `relocated stems root mode ${mode.toString(8)}`);
+    // Still does the in-state dirs — relocation replaces nothing.
+    for (const d of SUBDIRS) assert.ok(existsSync(join(dir, d)), `${d} skipped`);
+  });
+
+  // 6. Same never-fatal contract as every other path: the exFAT/NTFS/NFS disk
+  //    people move the stem cache onto is exactly where chmod refuses, and
+  //    that must cost a warning, not the broadcast.
+  check('an unusable relocated stems root warns and does not abort', () => {
+    const { root, dir } = scratch();
+    const stems = join(root, 'relocated-stems');
+    mkdirSync(root, { recursive: true });
+    writeFileSync(stems, 'not a directory');
+    const r = bootstrap(s.path, s.lib, root, dir, { SUBWAVE_STEMS_DIR: stems });
+    assert.equal(r.status, 0, `bootstrap aborted (exit ${r.status}): ${r.out}`);
+    assert.match(r.out, /relocated-stems/, `warning does not name the path: ${r.out}`);
+    assert.match(r.out, /WARNING/i, `not surfaced as a warning: ${r.out}`);
+    for (const d of SUBDIRS) assert.ok(existsSync(join(dir, d)), `${d} skipped`);
   });
 }
 

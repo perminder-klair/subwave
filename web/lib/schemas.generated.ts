@@ -684,6 +684,16 @@ export const PERSONA_SCRIPT_LENGTHS = [
   'storyteller',
 ] as const;
 
+// 'natural' (default) writes the ordinary between-track link — set the track
+// up, name the artist or capture its feel, vary the opener. 'announce' is a
+// matter-of-fact station: the link is exactly "This is <artist>." or "Next
+// up, <artist>." — nothing else. Absent/invalid → 'natural', same posture as
+// djMode's absent → false, so an upgraded station keeps its old links.
+export const PERSONA_LINK_STYLES = [
+  'natural',
+  'announce',
+] as const;
+
 // Per-persona tone dials — 0-10 with 5 the neutral default.
 export const PERSONA_DIAL_MIN = 0;
 export const PERSONA_DIAL_MAX = 10;
@@ -992,6 +1002,7 @@ export interface PersonaParsed {
   frequency: string;
   scriptLength: string;
   djMode: boolean;
+  linkStyle: string;
   humour: number;
   localColour: number;
   warmth: number;
@@ -1093,6 +1104,15 @@ export const personaSchema = z
       personaNullToUndefined,
       z.boolean({ error: 'djMode must be a boolean' }).default(false),
     ),
+    // Absent → 'natural' (the historical link behaviour). See PERSONA_LINK_STYLES.
+    linkStyle: z.preprocess(
+      personaNullToUndefined,
+      z
+        .enum(PERSONA_LINK_STYLES, {
+          error: `linkStyle must be one of: ${PERSONA_LINK_STYLES.join(', ')}`,
+        })
+        .default('natural'),
+    ),
     // An absent dial reads as neutral, which is what clampPersonaDial returns
     // for undefined — see the note on personaCoercedText for the .optional().
     humour: z.unknown().optional().transform(clampPersonaDial),
@@ -1166,6 +1186,7 @@ export const personaSchema = z
       frequency: p.frequency,
       scriptLength: p.scriptLength,
       djMode: p.djMode,
+      linkStyle: p.linkStyle,
       humour: p.humour,
       localColour: p.localColour,
       warmth: p.warmth,
@@ -1225,6 +1246,9 @@ export function repairPersonaForLoad(
       ? raw.scriptLength
       : undefined,
     djMode: raw.djMode === true ? true : undefined,
+    linkStyle: (PERSONA_LINK_STYLES as readonly string[]).includes(raw.linkStyle as string)
+      ? raw.linkStyle
+      : undefined,
     avatar:
       typeof raw.avatar === 'string' && PERSONA_AVATAR_FILENAME_RE.test(raw.avatar.trim())
         ? raw.avatar.trim()
@@ -1884,15 +1908,45 @@ export function repairScheduleForLoad(raw: unknown, showIds: string[]): Schedule
 
 // ── Timed takeover (#930) ────────────────────────────────────────────────────
 
-/** Pin one show for a bounded window, then the weekly grid resumes. */
+/**
+ * A bounded takeover target. `showId: null` means Default programming; an
+ * outer `scheduleOverride: null` means there is no takeover at all.
+ */
 export interface ScheduleOverride {
-  showId: string;
+  showId: string | null;
   startedAt: number;
   expiresAt: number;
 }
 
+/**
+ * The takeover target, read in ONE place.
+ *
+ * A takeover's `showId` is three-way, not two-way — it names a show, it is
+ * explicitly `null` for Default programming (#1507), or it is neither — and the
+ * two obvious spellings of the question DISAGREE about that third case:
+ * `showId === null` calls a malformed target a show pin, `typeof showId ===
+ * 'string'` calls it Default programming. Both are wrong: before #1507 a target
+ * that named nothing real simply VOIDED the takeover (the roster lookup missed
+ * and the grid resumed), and that is the behaviour these two keep. The resolver,
+ * the roster sweep, the janitor, the programme span, the route and both admin
+ * screens all ask through them, so the answer cannot drift between call sites.
+ *
+ * Deliberately loose in their parameter: the route asks about a request body
+ * and the admin forms about their own submitted values, neither of which is a
+ * stored `ScheduleOverride` yet.
+ */
+export function takeoverShowId(ov: { showId?: unknown } | null | undefined): string | null {
+  const id = ov?.showId;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+/** True while `ov` is an explicit Default programming takeover (#1507). */
+export function isDefaultTakeover(ov: { showId?: unknown } | null | undefined): boolean {
+  return !!ov && ov.showId === null;
+}
+
 export interface ScheduleOverrideContext {
-  /** Show ids the pin may name, or null when this caller cannot check. */
+  /** Show ids a string target may name, or null when this caller cannot check. */
   showIds: string[] | null;
   /**
    * Epoch-ms "now", or null to not judge expiry at all.
@@ -1909,7 +1963,10 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
   return z
     .object(
       {
-        showId: z.string({ error: 'must be a show id' }).min(1, 'must be a show id'),
+        // `.nullable()` rather than a two-branch union: null is the Default
+        // programming target, and the string's own message is the one an
+        // operator can act on — a union answers with its own wording instead.
+        showId: z.string({ error: 'must be a show id' }).min(1, 'must be a show id').nullable(),
         startedAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
         expiresAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
       },
@@ -1920,8 +1977,9 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
       { error: 'must be an object' },
     )
     .check((c) => {
-      const { showId, startedAt, expiresAt } = c.value;
-      if (ctx.showIds && !ctx.showIds.includes(showId)) {
+      const { startedAt, expiresAt } = c.value;
+      const showId = takeoverShowId(c.value);
+      if (showId && ctx.showIds && !ctx.showIds.includes(showId)) {
         c.issues.push({
           code: 'custom',
           input: showId,
@@ -1958,15 +2016,20 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
 /**
  * POST /schedule/override's body.
  *
- * `minutes` is coerced because the hand-rolled route ran `Number(req.body
- * ?.minutes)` and therefore accepted the string "60". An EMPTY showId now 400s
+ * `showId: null` requests Default programming; an outer missing field is still
+ * malformed. `minutes` is coerced because the hand-rolled route ran
+ * `Number(req.body?.minutes)` and therefore accepted the string "60". An EMPTY
+ * showId now 400s
  * where it used to reach the roster lookup and 404 as `no such show: ` — a
  * missing field is a malformed request, not a missing show. A real id that
  * isn't in the roster still 404s from the handler, which is the answer that
  * needs server state.
  */
 export const scheduleOverrideRequestSchema = z.object({
-  showId: z.string({ error: 'pick a show to pin' }).min(1, 'pick a show to pin'),
+  showId: z
+    .string({ error: 'pick a show or Default programming' })
+    .min(1, 'pick a show or Default programming')
+    .nullable(),
   minutes: z.coerce
     .number({ error: `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}` })
     .int(`must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`)
@@ -2257,6 +2320,38 @@ export function settingsRawStringLike(max: number, message: string) {
 }
 
 /**
+ * The header-name grammar `stream.countryHeader` accepts.
+ *
+ * RFC 7230 token characters minus the separators nobody puts in a proxy header,
+ * capped at 64. It lives HERE rather than beside the resolver because a
+ * mirrored module may import only `zod`, so the schema cannot import the
+ * constant — the resolver (`broadcast/listener-country.ts`) imports it from
+ * this file instead, keeping one declaration for the save path, the browser
+ * pre-flight and the read path alike.
+ */
+export const STREAM_COUNTRY_HEADER_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
+
+/** Path length cap for `stream.geoipDbPath` — a generous PATH_MAX. */
+export const STREAM_GEOIP_DB_PATH_MAX = 512;
+
+/**
+ * `String(raw ?? '').trim()` + the header-name grammar, empty allowed.
+ *
+ * Empty is the default and means "don't read a second header", so it must stay
+ * accepted; anything else either matches the grammar or is REFUSED, because a
+ * repaired header name would silently read a header the operator never named.
+ */
+export function settingsHeaderNameLike(message: string) {
+  return z
+    .unknown()
+    .superRefine((raw, ctx) => {
+      const v = String(raw ?? '').trim();
+      if (v && !STREAM_COUNTRY_HEADER_RE.test(v)) ctx.addIssue({ code: 'custom', message });
+    })
+    .transform((raw) => String(raw ?? '').trim());
+}
+
+/**
  * A URL field: trim, length, then an http(s) scheme test on a non-empty value.
  *
  * `stripTrailingSlashes` is per-field and must be set from the branch being
@@ -2310,7 +2405,22 @@ export const SETTINGS_LOUDNESS_SOURCES = [
 
 export const SETTINGS_SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'brave', 'searxng'] as const;
 
+/**
+ * Cap for the optional SearXNG `engines=` pin. Generous on purpose — the value
+ * is a comma-separated list of SearXNG `name:` fields, so a dozen engines with
+ * multi-word names still fits well inside it.
+ */
+export const SETTINGS_SEARXNG_ENGINES_MAX = 500;
+
 export const CROSSFADE_DURATION_BOUNDS: SettingsNumericBound = { min: 0, max: 30 };
+
+// `smooth_add`'s `p` — the fraction of the music the mixer LEAVES UP while a
+// voice channel has signal, so it reads backwards from a dB cut: SMALLER is a
+// deeper duck. 1 is no duck at all (the DJ competes with the song) and 0 is a
+// full mute under the voice, which is a legitimate operator taste and is NOT
+// the music-paused interlude — the music keeps rolling underneath, silenced.
+// Shared by both layers because they are the same knob at two depths.
+export const DUCK_DEPTH_BOUNDS: SettingsNumericBound = { min: 0, max: 1 };
 // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
 // 0 disables boosting entirely (cut-only levelling); 12 dB is plenty.
@@ -2331,6 +2441,19 @@ export const STREAM_MAX_LISTENERS_BOUNDS: SettingsNumericBound = { min: 1, max: 
 
 // Falling back to the product default is what an emptied station name does —
 // see stationSchema.
+// Album cooldown, in HOURS: how long after a track from a record airs before
+// another track from that same record may be picked (#1485 FR 3). 0 = off, and
+// off is the shipped default — the artist window already spaces everything an
+// album window below it would catch, so a non-zero default would be a
+// behaviour change on upgrade rather than a setting.
+//
+// Fractional hours are allowed (0.5 is a real answer on a small library) and
+// the ceiling is 72: past three days this stops being a cooldown and becomes a
+// second no-repeat window, which is what llm.noRepeatWindow is for, and on any
+// catalogue small enough to notice the difference it would just walk the
+// starvation cascade every pick.
+export const PICKER_ALBUM_HOURS_BOUNDS: SettingsNumericBound = { min: 0, max: 72 };
+
 export const SETTINGS_STATION_DEFAULT_NAME = 'SUB/WAVE';
 export const SETTINGS_STATION_NAME_MAX = 80;
 export const SETTINGS_STATION_DESCRIPTION_MAX = 200;
@@ -2384,6 +2507,21 @@ export const crossfadeDurationSchema = settingsFloatLike(
   CROSSFADE_DURATION_BOUNDS,
   `crossfadeDuration must be number in [${CROSSFADE_DURATION_BOUNDS.min}, ${CROSSFADE_DURATION_BOUNDS.max}]`,
 );
+
+// Both depths ride ONE block so the pair is edited and posted together — they
+// are read once at mixer startup out of two liquidsoap_duck_*.txt files, and a
+// half-applied pair would leave the light layer louder than the heavy one until
+// the next save.
+export const duckingPatchSchema = settingsBlockOf({
+  voice: settingsFloatLike(
+    DUCK_DEPTH_BOUNDS,
+    `ducking.voice must be number in [${DUCK_DEPTH_BOUNDS.min}, ${DUCK_DEPTH_BOUNDS.max}]`,
+  ),
+  intro: settingsFloatLike(
+    DUCK_DEPTH_BOUNDS,
+    `ducking.intro must be number in [${DUCK_DEPTH_BOUNDS.min}, ${DUCK_DEPTH_BOUNDS.max}]`,
+  ),
+});
 
 export const transitionsPatchSchema = settingsBlockOf({
   // stemBlends is documented as needing pairDrain, but that dependency is
@@ -2471,6 +2609,21 @@ export const streamPatchSchema = settingsBlockOf({
     STREAM_MAX_LISTENERS_BOUNDS,
     `stream.maxListeners must be an integer between ${STREAM_MAX_LISTENERS_BOUNDS.min} and ${STREAM_MAX_LISTENERS_BOUNDS.max}`,
   ),
+  // A header NAME, not a country. Refused rather than dropped when malformed:
+  // this is typed by hand into a field whose only feedback is the Stats page
+  // staying blank a day later, so a silent drop is the operator watching their
+  // own input disappear — the same reasoning as the roster tag fields.
+  countryHeader: settingsHeaderNameLike(
+    'stream.countryHeader must be a header name (letters, digits and - _ . ~ ! # $ % & \' * + ^ ` |), or empty',
+  ),
+  // Absolute path to an operator-supplied MaxMind-format (.mmdb) database. Not
+  // existence-checked here: a settings save must not depend on a bind mount the
+  // broadcast container has and this process may not, and the reader already
+  // fails open with a log line naming the path it could not read.
+  geoipDbPath: settingsTrimmedString(
+    STREAM_GEOIP_DB_PATH_MAX,
+    `stream.geoipDbPath must be ${STREAM_GEOIP_DB_PATH_MAX} characters or fewer`,
+  ),
 });
 
 export const weatherPatchSchema = settingsBlockOf({
@@ -2522,6 +2675,17 @@ export const djSpeakClockSchema = z.boolean({
 });
 
 /**
+ * Talk placement switch (FR 5b of #1485). Same strict posture as
+ * `djSpeakClockSchema` above and for the same reason: this key has never had a
+ * hand-rolled branch to inherit leniency from, so it starts strict rather than
+ * acquiring a coercion nobody asked for. load() still coerces a hand-edited
+ * settings.json to the default, so only a PATCH is refused.
+ */
+export const djTalkOnlyBetweenTracksSchema = z.boolean({
+  error: 'djTalkOnlyBetweenTracks must be a boolean',
+});
+
+/**
  * Trim FIRST, then a strict pair — ' en-GB ' saves, 'en-gb' does not.
  *
  * Not settingsStrictOneOf: that tests the raw value, which is right for
@@ -2552,6 +2716,17 @@ export const audioPatchSchema = settingsBlockOf({
   analyzeQuietMinutes: settingsNumberFloorLike(
     { min: 1, max: 120 },
     'audio.analyzeQuietMinutes must be between 1 and 120',
+  ),
+});
+
+// Track-selection windows that are neither LLM config nor stream config, and
+// that BOTH pick paths read. A new key, so there is no hand-rolled branch to
+// reproduce: `settingsNumberLike` is chosen on merit (Number() refuses '6abc'
+// and keeps the fraction) rather than to preserve an accident.
+export const pickerPatchSchema = settingsBlockOf({
+  albumHours: settingsNumberLike(
+    PICKER_ALBUM_HOURS_BOUNDS,
+    `picker.albumHours must be between ${PICKER_ALBUM_HOURS_BOUNDS.min} and ${PICKER_ALBUM_HOURS_BOUNDS.max} (0 = off)`,
   ),
 });
 
@@ -2595,6 +2770,14 @@ export const searchPatchSchema = settingsBlockOf({
     })
     .transform((raw) => String(raw).trim()),
   apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars'),
+  // Optional comma-separated SearXNG engine pin (#1353), appended as the
+  // `engines=` query param when non-empty. New field, so it takes the trimmed
+  // posture rather than search.apiKey's raw one — there is no stored behaviour
+  // to preserve here, and a stray space around a name is a typo, not a value.
+  searxngEngines: settingsTrimmedString(
+    SETTINGS_SEARXNG_ENGINES_MAX,
+    `search.searxngEngines must be 0-${SETTINGS_SEARXNG_ENGINES_MAX} chars`,
+  ),
 });
 
 const scrobbleLastfmSchema = settingsBlockOf({
@@ -2617,9 +2800,17 @@ const scrobbleListenbrainzSchema = settingsBlockOf({
   }),
 });
 
+// Navidrome (#1298) carries an enable flag and nothing else: the credentials
+// are already the station's own `config.navidrome` (env / setup-config), so
+// there is no key to paste here and no secret to redact.
+const scrobbleNavidromeSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+});
+
 export const scrobblePatchSchema = settingsBlockOf({
   lastfm: scrobbleLastfmSchema,
   listenbrainz: scrobbleListenbrainzSchema,
+  navidrome: scrobbleNavidromeSchema,
 });
 
 /**
@@ -3987,12 +4178,21 @@ const skillCronOnlySchema = z.preprocess(
   z.boolean({ error: 'cronOnly must be a boolean' }).default(false),
 );
 
+// Opt-in multi-persona discussion. Absent/null stays false for compatibility;
+// a present form value must be a literal boolean so a typo cannot silently turn
+// a normal skill into a multi-voice exchange.
+const skillCohostsSchema = z.preprocess(
+  skillNullToUndefined,
+  z.boolean({ error: 'cohosts must be a boolean' }).default(false),
+);
+
 // The fields every skill's SKILL.md carries, built-in or custom.
 export const builtinSkillFileSchema = z.object({
   label: skillLabelSchema,
   cooldown: skillCooldownSchema,
   cron: skillCronSchema,
   cronOnly: skillCronOnlySchema,
+  cohosts: skillCohostsSchema,
   context: skillContextSchema,
   tags: skillTagsSchema,
   brief: skillBriefSchema,
@@ -4035,6 +4235,7 @@ export function skillFieldsFrom(kind: string, parsed: SkillFileParsed) {
     cooldown: parsed.cooldown,
     cron: parsed.cron,
     cronOnly: parsed.cronOnly,
+    cohosts: parsed.cohosts,
     contextFields: parsed.context,
     window: parsed.window,
     requiresKey: parsed.requiresKey,

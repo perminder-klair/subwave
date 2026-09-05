@@ -3,6 +3,10 @@
 // tagBatch — one LLM call per N tracks → TagResult[], same validation, positional.
 // tagOne is used by the inline /library/retag route; tagBatch is used by the
 // bulk tag-library.ts script. Both produce identical shapes per track.
+//
+// TAGGER_CONTRACT_VERSION below is the re-tagging stamp's only prompt-side
+// input (#1548) — change what the prompts ASK FOR and you must bump it by hand,
+// or already-tagged rows are never re-decided. Full reasoning at the constant.
 
 import { z } from 'zod';
 import { moodVocab } from '../settings.js';
@@ -18,13 +22,56 @@ export const BatchTagSchema = z.object({
   results: z.array(TagSchema),
 });
 
+// ===========================================================================
+//  BUMP TAGGER_CONTRACT_VERSION WHEN YOU CHANGE WHAT THE PROMPTS BELOW ASK FOR
+// ===========================================================================
+//
+// `promptVocabHash(TAGGER_CONTRACT_VERSION)` (music/embeddings.ts) is the
+// `prompt_hash` stamped on every LLM-tagged row, and `staleTaggedIds`
+// (library-db/queries.ts) re-tags every row whose stamp differs on --upgrade /
+// admin Re-scan → Re-decide moods. Since #1548 that stamp keys off this number
+// plus the live mood vocabulary — NOT off the prompt text — so a cosmetic
+// reword is free and a SEMANTIC change is invisible until you bump this.
+//
+// Bump it when the prompts start asking for something different:
+//   - different mood-selection guidance (the FEELS-not-genre rules, the
+//     worked examples that steer them);
+//   - a different energy scale, or different values on it;
+//   - a different fallback for an untaggable track;
+//   - a different result shape or batch cardinality/order rule.
+//
+// Do NOT bump it for a reword, a typo, a reflow, or transport wording (#1536)
+// — those don't change a single tag, and a bump costs a full library re-tag on
+// the next Re-decide (~1600 batch calls on a 40k library, usually against a
+// slow homelab Ollama box). Editing settings.moods invalidates on its own; the
+// vocabulary is already a hash input and needs no bump.
+//
+//   1  the shipped contract as of #1548 (1-3 moods from the live vocabulary,
+//      low|medium|high energy, {"moods":[],"energy":"medium"} when unreadable,
+//      batch = exactly one entry per input track in input order)
+//
+// scripts/tagger-contract-hash.test.ts pins this number and the hash recipe, so
+// a change to either shows up as a diff line in review.
+export const TAGGER_CONTRACT_VERSION = 1;
+
 // System prompts are FUNCTIONS, not consts: the mood list is operator-editable
-// (settings.moods) and read live, so the prompt — and the promptVocabHash the
-// tagger keys re-tagging on — reflect the current vocabulary each call.
+// (settings.moods) and read live, so the prompt reflects the current vocabulary
+// each call. The re-tagging stamp no longer reads the prompt at all — see
+// TAGGER_CONTRACT_VERSION above.
+//
+// Both prompts describe the RESULT and never the output channel. Which channel
+// a tag call actually uses is decided per leg inside djObject (forced `emit`
+// tool for ollama/openai-compatible/locca, native structured output for the
+// cloud providers, free text on the recovery attempt), and each branch states
+// its own rule there. These prompts used to say "Return ONLY a JSON object",
+// which was true on one of those three branches: on the forced-tool branch it
+// contradicted toolChoice:'required' and gemma-4-12b on llama.cpp burned whole
+// generations deciding which to obey, never tagging a single batch (#1536).
+// Keep output-channel wording out of here — it cannot be right from here.
 export function taggerSystem(): string {
   return `You tag music tracks with mood and energy for a personal radio station.
 
-For each track, output ONLY a JSON object:
+For each track, the required result has this shape:
 {
   "moods": [1-3 strings, each from this exact list: ${moodVocab().join(', ')}],
   "energy": "low" | "medium" | "high"
@@ -35,13 +82,13 @@ A spiritual Punjabi devotional is "spiritual" and "reflective" — not "cultural
 A high-BPM dance track is "energetic" and "workout" — not "celebratory" unless it sounds festive.
 A slow rainy-day instrumental is "calm" and "rainy" — not "evening" just because it's chill.
 
-If you genuinely cannot tell from the title/artist/album, return {"moods":[],"energy":"medium"}. Do not invent.`;
+If you genuinely cannot tell from the title/artist/album, the result is {"moods":[],"energy":"medium"}. Do not invent.`;
 }
 
 export function taggerBatchSystem(): string {
   return `You tag music tracks with mood and energy for a personal radio station.
 
-You will be given a numbered list of tracks. Return ONLY a JSON object of the form:
+You will be given a numbered list of tracks. The required result has this shape:
 {
   "results": [
     { "moods": [...], "energy": "low" | "medium" | "high" },
@@ -60,7 +107,7 @@ A spiritual Punjabi devotional is "spiritual" and "reflective" — not "cultural
 A high-BPM dance track is "energetic" and "workout" — not "celebratory" unless it sounds festive.
 A slow rainy-day instrumental is "calm" and "rainy" — not "evening" just because it's chill.
 
-If you genuinely cannot tell from the title/artist/album for a track, return {"moods":[],"energy":"medium"} for that entry. Do not invent.`;
+If you genuinely cannot tell from the title/artist/album for a track, use {"moods":[],"energy":"medium"} for that entry. Do not invent.`;
 }
 
 export interface TaggableSong {

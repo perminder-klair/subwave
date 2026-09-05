@@ -14,7 +14,9 @@ import {
   coerceShowEras,
   coerceShowGenres,
   coerceShowMoods,
+  isDefaultTakeover,
   personaToneDirectives,
+  takeoverShowId,
 } from './vocab.js';
 import { DEFAULTS, coerceMaxTrackSeconds } from './defaults.js';
 import { get, peek } from './store.js';
@@ -45,6 +47,16 @@ export function effectiveFrequency(persona: unknown = getEffectivePersona()) {
 // applied.
 export function effectsActive(persona: unknown = getEffectivePersona()): boolean {
   return !!(persona as { djMode?: unknown } | null | undefined)?.djMode;
+}
+
+// True only when the effective persona's linkStyle is explicitly 'announce'.
+// Absent/invalid (normalisation already repairs those to 'natural') reads as
+// false, so a station that never touched the field keeps its old links.
+// Every announce-aware call site (dj-agent.ts, dj-agent/schemas.ts,
+// llm/internal/prompts/scripts.ts) reads it from here rather than inlining
+// the string compare, same precedent as effectsActive() above.
+export function announceLinks(persona: unknown = getEffectivePersona()): boolean {
+  return (persona as { linkStyle?: unknown } | null | undefined)?.linkStyle === 'announce';
 }
 
 // Effective track-length cap in SECONDS for the moment a pick is made, or null
@@ -86,7 +98,11 @@ export function resolveActiveShow(date = new Date(), s = get()) {
   // airtime — naturally straddle the pin's start/end boundary.
   const ov = s?.scheduleOverride;
   if (ov && date.getTime() >= ov.startedAt && date.getTime() < ov.expiresAt) {
-    const pinned = s.shows?.find(x => x.id === ov.showId);
+    // A live null target is an explicit Default programming takeover. It must
+    // stop here rather than falling through to the weekly grid.
+    if (isDefaultTakeover(ov)) return null;
+    const pinnedId = takeoverShowId(ov);
+    const pinned = pinnedId ? s.shows?.find(x => x.id === pinnedId) : null;
     // A dangling showId (show deleted mid-takeover) voids the override.
     if (pinned) return resolveShowShape(pinned, s);
   }
@@ -100,14 +116,17 @@ export function resolveActiveShow(date = new Date(), s = get()) {
   return resolveShowShape(show, s);
 }
 
-// The takeover currently in force, or null (absent, expired, or dangling —
-// the same voiding rules resolveActiveShow applies). Route/janitor helper.
+// The takeover currently in force, or null (absent, expired, or a target that
+// names nothing real — a dangling or malformed show id). An explicit null
+// target is a valid Default programming takeover. Route/janitor helper.
 export function getScheduleOverride(now = Date.now()) {
   const s = get();
   const ov = s?.scheduleOverride;
   if (!ov) return null;
   if (now >= ov.expiresAt) return null;
-  if (!s.shows?.some(x => x.id === ov.showId)) return null;
+  if (isDefaultTakeover(ov)) return ov;
+  const pinnedId = takeoverShowId(ov);
+  if (!pinnedId || !s.shows?.some(x => x.id === pinnedId)) return null;
   return ov;
 }
 
@@ -344,6 +363,25 @@ export function castHouseRulesBlock(): string {
     "follow these in every line's spoken text (the words the listener hears on air); "
     + 'they do not apply to the "speaker" field, which stays an exact persona id from the cast list',
   );
+}
+
+// The exact-persona-id rule for those same two cast prompts, and for the same
+// single-wording reason as castHouseRulesBlock above: both wrap a per-call
+// `speaker` enum built from the active cast, so a model that answers with a
+// display name or the bare role sinks the WHOLE exchange — the enum rejects the
+// object, djObject's free-text recovery attempt fails on it again, and the
+// caller gets an error instead of an exchange (issue #1512, reported on the
+// Banter button; the guest-show open/close beats fail the same way, silently,
+// because nobody pressed anything).
+//
+// The enum stays strict deliberately: a repaired speaker is a line aired in the
+// WRONG voice, which is worse than a dropped beat. So this rule is the
+// mitigation, and unlike castHouseRulesBlock's scope clause — which says the
+// same thing but only renders once an operator has set djHouseRules, i.e. not
+// on the default install the bug was reported from — it is unconditional.
+export function castSpeakerIdRule(): string {
+  return 'For every structured "speaker" field, copy the persona id exactly and verbatim from the cast list above. '
+    + 'Never use a display name, the HOST or GUEST role, or an altered, reformatted, or rewritten persona id.';
 }
 
 // Persona prelude shared by every tool-loop agent system prompt — the picker

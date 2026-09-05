@@ -35,6 +35,7 @@ import { autoVoiceAllowed } from './voice-policy.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { zonedParts } from '../time.js';
+import { takeoverShowId } from '../schemas/schedule.js';
 
 // How long after the intro aired the generic hourly time-check stays
 // suppressed: the intro owns the top of the show's first hour (the same
@@ -47,12 +48,15 @@ const INTRO_SUPPRESSES_HOURLY_MS = 45 * 60 * 1000;
 import { showSpan, overrideSpan, planFeature, beatWindow } from './programme-pure.js';
 export { showSpan, overrideSpan, planFeature, beatWindow };
 
-// The episode's position/length at `now`. A live takeover (#930) IS the
+// The episode's position/length at `now`. A live SHOW takeover (#930) IS the
 // episode — its window drives the arc, since the pinned show usually isn't in
-// the grid at these hours and showSpan can't see it. Otherwise the grid run.
+// the grid at these hours and showSpan can't see it. A Default programming
+// takeover is not an episode; programme work already stands down because there
+// is no active show, and this fallback keeps the span defensive. Otherwise the
+// grid run.
 function episodeSpan(now: Date): { index: number; total: number } {
   const ov = settings.getScheduleOverride(now.getTime());
-  if (ov) return overrideSpan(ov, now.getTime());
+  if (ov && takeoverShowId(ov)) return overrideSpan(ov, now.getTime());
   const { dow, hour } = zonedParts(now);
   return showSpan(settings.get().schedule, dow, hour);
 }
@@ -120,12 +124,16 @@ async function previousAngle(showId: string): Promise<string | null> {
 }
 
 // The capability menu the producer may build features from: enabled, ready,
-// and owned by the host persona — the same offer the segment director makes.
-function featureKindMenu(host: { skills?: string[] } | null | undefined): { kind: string; desc: string }[] {
+// owned by the host persona, and — for a co-hosted skill — only when this
+// episode actually has guests to hold the discussion. Exported for the test
+// that pins that last filter: a producer offered a kind the beat cannot run
+// plans an hour around a feature that falls straight back to straight talk.
+export function featureKindMenu(host: { skills?: string[] } | null | undefined, hasCohosts: boolean): { kind: string; desc: string }[] {
   try {
     return skillCatalog()
       .filter((c) => c.enabled && c.ready)
       .filter((c) => !host?.skills || host.skills.includes(c.name))
+      .filter((c) => !c.cohosts || hasCohosts)
       .map((c) => ({ kind: c.kind, desc: c.description || c.label }));
   } catch {
     return [];
@@ -172,7 +180,7 @@ export async function ensurePlan(ctx: SessionContext, now = session.contextDate(
         guests: roster.guests,
         context: ctx,
         previousAngle: prevAngle,
-        skillKinds: pinned ? [] : featureKindMenu(roster.host),
+        skillKinds: pinned ? [] : featureKindMenu(roster.host, roster.guests.length > 0),
         pinnedKind: pinned,
       }));
     prog.status = 'ok';

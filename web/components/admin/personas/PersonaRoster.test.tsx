@@ -12,6 +12,7 @@ const persona: Persona = {
   frequency: 'moderate',
   scriptLength: 'concise',
   djMode: false,
+  linkStyle: 'natural',
   humour: 5,
   localColour: 5,
   warmth: 5,

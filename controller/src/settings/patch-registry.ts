@@ -1,8 +1,8 @@
 // The `POST /settings` patch registry (#1348).
 //
-// `settings.update()` takes a PARTIAL patch over 42 top-level keys and validates
+// `settings.update()` takes a PARTIAL patch over 43 top-level keys and validates
 // it in a long chain of `if ('<key>' in patch)` branches — a route that owns
-// forty-two shapes doesn't fit #1337's one-schema-per-form recipe.
+// forty-three shapes doesn't fit #1337's one-schema-per-form recipe.
 //
 // This module is the frame the conversion lands in, one key at a time:
 //
@@ -34,8 +34,10 @@ import {
   bedsPatchSchema,
   silenceTrimPatchSchema,
   crossfadeDurationSchema,
+  duckingPatchSchema,
   djHouseRulesSchema,
   djSpeakClockSchema,
+  djTalkOnlyBetweenTracksSchema,
   festivalsSchema,
   jingleRatioSchema,
   likesPatchSchema,
@@ -43,6 +45,7 @@ import {
   loudnessPatchSchema,
   moodScheduleSchema,
   moodsSchema,
+  pickerPatchSchema,
   privacyPatchSchema,
   requestsPatchSchema,
   scrobblePatchSchema,
@@ -99,6 +102,7 @@ import { firstMessage, flattenIssues } from '../util/zod-error.js';
 export const SETTINGS_PATCH_KEYS = [
   'jingleRatio',
   'crossfadeDuration',
+  'ducking',
   'maxTrackSeconds',
   'maxTrackMinutes',
   'archive',
@@ -119,6 +123,7 @@ export const SETTINGS_PATCH_KEYS = [
   'djPrompt',
   'djHouseRules',
   'djSpeakClock',
+  'djTalkOnlyBetweenTracks',
   'personas',
   'shows',
   'schedule',
@@ -126,6 +131,7 @@ export const SETTINGS_PATCH_KEYS = [
   'activePersonaId',
   'tts',
   'llm',
+  'picker',
   'search',
   'embedding',
   'skills',
@@ -187,15 +193,18 @@ type SettingsPatchEntry = ZodType | ((ctx: SettingsPatchContext) => ZodType);
 export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, SettingsPatchEntry>>> = {
   jingleRatio: jingleRatioSchema,
   crossfadeDuration: crossfadeDurationSchema,
+  ducking: duckingPatchSchema,
   archive: archivePatchSchema,
   stream: streamPatchSchema,
   loudness: loudnessPatchSchema,
   weather: weatherPatchSchema,
+  picker: pickerPatchSchema,
   station: stationSchema,
   stationDescription: stationDescriptionSchema,
   locale: localeSchema,
   djHouseRules: djHouseRulesSchema,
   djSpeakClock: djSpeakClockSchema,
+  djTalkOnlyBetweenTracks: djTalkOnlyBetweenTracksSchema,
   search: searchPatchSchema,
   audio: audioPatchSchema,
   transitions: transitionsPatchSchema,

@@ -61,11 +61,13 @@ test('explicit null reads as absent on every optional field', () => {
   // always meant "use the default" — a 400 here is an accept→reject change on
   // a public admin endpoint.
   const parsed = customSkillFileSchema.parse({
-    brief: 'b', label: null, cooldown: null, context: null, tags: null,
+    brief: 'b', label: null, cooldown: null, cronOnly: null, cohosts: null, context: null, tags: null,
     window: null, requiresKey: null,
   });
   assert.equal(parsed.label, undefined);
   assert.equal(parsed.cooldown, undefined);
+  assert.equal(parsed.cronOnly, false);
+  assert.equal(parsed.cohosts, false);
   assert.equal(parsed.context, undefined);
   assert.equal(parsed.tags, undefined);
   assert.equal(parsed.window, undefined);
@@ -218,6 +220,7 @@ test('skillFieldsFrom renames context → contextFields and carries the rest', (
     cooldown: '6h',
     cron: '0 * * * *',
     cronOnly: true,
+    cohosts: true,
     context: ['weather'],
     tags: ['nightly'],
     window: 'commute',
@@ -229,12 +232,19 @@ test('skillFieldsFrom renames context → contextFields and carries the rest', (
     cooldown: '6h',
     cron: '0 * * * *',
     cronOnly: true,
+    cohosts: true,
     contextFields: ['weather'],
     window: 'commute',
     requiresKey: 'MOON_KEY',
     tags: ['nightly'],
     brief: 'say something',
   });
+});
+
+test('cohosts defaults to false, accepts only booleans, and maps to skill fields', () => {
+  assert.equal(builtinSkillFileSchema.parse({ brief: 'b' }).cohosts, false);
+  assert.equal(builtinSkillFileSchema.parse({ brief: 'b', cohosts: true }).cohosts, true);
+  assert.throws(() => builtinSkillFileSchema.parse({ brief: 'b', cohosts: 'yes' }));
 });
 
 test('cronOnly defaults to false and rejects a non-boolean', () => {

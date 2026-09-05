@@ -280,6 +280,38 @@ export function settingsRawStringLike(max: number, message: string) {
 }
 
 /**
+ * The header-name grammar `stream.countryHeader` accepts.
+ *
+ * RFC 7230 token characters minus the separators nobody puts in a proxy header,
+ * capped at 64. It lives HERE rather than beside the resolver because a
+ * mirrored module may import only `zod`, so the schema cannot import the
+ * constant — the resolver (`broadcast/listener-country.ts`) imports it from
+ * this file instead, keeping one declaration for the save path, the browser
+ * pre-flight and the read path alike.
+ */
+export const STREAM_COUNTRY_HEADER_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
+
+/** Path length cap for `stream.geoipDbPath` — a generous PATH_MAX. */
+export const STREAM_GEOIP_DB_PATH_MAX = 512;
+
+/**
+ * `String(raw ?? '').trim()` + the header-name grammar, empty allowed.
+ *
+ * Empty is the default and means "don't read a second header", so it must stay
+ * accepted; anything else either matches the grammar or is REFUSED, because a
+ * repaired header name would silently read a header the operator never named.
+ */
+export function settingsHeaderNameLike(message: string) {
+  return z
+    .unknown()
+    .superRefine((raw, ctx) => {
+      const v = String(raw ?? '').trim();
+      if (v && !STREAM_COUNTRY_HEADER_RE.test(v)) ctx.addIssue({ code: 'custom', message });
+    })
+    .transform((raw) => String(raw ?? '').trim());
+}
+
+/**
  * A URL field: trim, length, then an http(s) scheme test on a non-empty value.
  *
  * `stripTrailingSlashes` is per-field and must be set from the branch being
@@ -333,7 +365,22 @@ export const SETTINGS_LOUDNESS_SOURCES = [
 
 export const SETTINGS_SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'brave', 'searxng'] as const;
 
+/**
+ * Cap for the optional SearXNG `engines=` pin. Generous on purpose — the value
+ * is a comma-separated list of SearXNG `name:` fields, so a dozen engines with
+ * multi-word names still fits well inside it.
+ */
+export const SETTINGS_SEARXNG_ENGINES_MAX = 500;
+
 export const CROSSFADE_DURATION_BOUNDS: SettingsNumericBound = { min: 0, max: 30 };
+
+// `smooth_add`'s `p` — the fraction of the music the mixer LEAVES UP while a
+// voice channel has signal, so it reads backwards from a dB cut: SMALLER is a
+// deeper duck. 1 is no duck at all (the DJ competes with the song) and 0 is a
+// full mute under the voice, which is a legitimate operator taste and is NOT
+// the music-paused interlude — the music keeps rolling underneath, silenced.
+// Shared by both layers because they are the same knob at two depths.
+export const DUCK_DEPTH_BOUNDS: SettingsNumericBound = { min: 0, max: 1 };
 // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
 // 0 disables boosting entirely (cut-only levelling); 12 dB is plenty.
@@ -354,6 +401,19 @@ export const STREAM_MAX_LISTENERS_BOUNDS: SettingsNumericBound = { min: 1, max: 
 
 // Falling back to the product default is what an emptied station name does —
 // see stationSchema.
+// Album cooldown, in HOURS: how long after a track from a record airs before
+// another track from that same record may be picked (#1485 FR 3). 0 = off, and
+// off is the shipped default — the artist window already spaces everything an
+// album window below it would catch, so a non-zero default would be a
+// behaviour change on upgrade rather than a setting.
+//
+// Fractional hours are allowed (0.5 is a real answer on a small library) and
+// the ceiling is 72: past three days this stops being a cooldown and becomes a
+// second no-repeat window, which is what llm.noRepeatWindow is for, and on any
+// catalogue small enough to notice the difference it would just walk the
+// starvation cascade every pick.
+export const PICKER_ALBUM_HOURS_BOUNDS: SettingsNumericBound = { min: 0, max: 72 };
+
 export const SETTINGS_STATION_DEFAULT_NAME = 'SUB/WAVE';
 export const SETTINGS_STATION_NAME_MAX = 80;
 export const SETTINGS_STATION_DESCRIPTION_MAX = 200;
@@ -407,6 +467,21 @@ export const crossfadeDurationSchema = settingsFloatLike(
   CROSSFADE_DURATION_BOUNDS,
   `crossfadeDuration must be number in [${CROSSFADE_DURATION_BOUNDS.min}, ${CROSSFADE_DURATION_BOUNDS.max}]`,
 );
+
+// Both depths ride ONE block so the pair is edited and posted together — they
+// are read once at mixer startup out of two liquidsoap_duck_*.txt files, and a
+// half-applied pair would leave the light layer louder than the heavy one until
+// the next save.
+export const duckingPatchSchema = settingsBlockOf({
+  voice: settingsFloatLike(
+    DUCK_DEPTH_BOUNDS,
+    `ducking.voice must be number in [${DUCK_DEPTH_BOUNDS.min}, ${DUCK_DEPTH_BOUNDS.max}]`,
+  ),
+  intro: settingsFloatLike(
+    DUCK_DEPTH_BOUNDS,
+    `ducking.intro must be number in [${DUCK_DEPTH_BOUNDS.min}, ${DUCK_DEPTH_BOUNDS.max}]`,
+  ),
+});
 
 export const transitionsPatchSchema = settingsBlockOf({
   // stemBlends is documented as needing pairDrain, but that dependency is
@@ -494,6 +569,21 @@ export const streamPatchSchema = settingsBlockOf({
     STREAM_MAX_LISTENERS_BOUNDS,
     `stream.maxListeners must be an integer between ${STREAM_MAX_LISTENERS_BOUNDS.min} and ${STREAM_MAX_LISTENERS_BOUNDS.max}`,
   ),
+  // A header NAME, not a country. Refused rather than dropped when malformed:
+  // this is typed by hand into a field whose only feedback is the Stats page
+  // staying blank a day later, so a silent drop is the operator watching their
+  // own input disappear — the same reasoning as the roster tag fields.
+  countryHeader: settingsHeaderNameLike(
+    'stream.countryHeader must be a header name (letters, digits and - _ . ~ ! # $ % & \' * + ^ ` |), or empty',
+  ),
+  // Absolute path to an operator-supplied MaxMind-format (.mmdb) database. Not
+  // existence-checked here: a settings save must not depend on a bind mount the
+  // broadcast container has and this process may not, and the reader already
+  // fails open with a log line naming the path it could not read.
+  geoipDbPath: settingsTrimmedString(
+    STREAM_GEOIP_DB_PATH_MAX,
+    `stream.geoipDbPath must be ${STREAM_GEOIP_DB_PATH_MAX} characters or fewer`,
+  ),
 });
 
 export const weatherPatchSchema = settingsBlockOf({
@@ -545,6 +635,17 @@ export const djSpeakClockSchema = z.boolean({
 });
 
 /**
+ * Talk placement switch (FR 5b of #1485). Same strict posture as
+ * `djSpeakClockSchema` above and for the same reason: this key has never had a
+ * hand-rolled branch to inherit leniency from, so it starts strict rather than
+ * acquiring a coercion nobody asked for. load() still coerces a hand-edited
+ * settings.json to the default, so only a PATCH is refused.
+ */
+export const djTalkOnlyBetweenTracksSchema = z.boolean({
+  error: 'djTalkOnlyBetweenTracks must be a boolean',
+});
+
+/**
  * Trim FIRST, then a strict pair — ' en-GB ' saves, 'en-gb' does not.
  *
  * Not settingsStrictOneOf: that tests the raw value, which is right for
@@ -575,6 +676,17 @@ export const audioPatchSchema = settingsBlockOf({
   analyzeQuietMinutes: settingsNumberFloorLike(
     { min: 1, max: 120 },
     'audio.analyzeQuietMinutes must be between 1 and 120',
+  ),
+});
+
+// Track-selection windows that are neither LLM config nor stream config, and
+// that BOTH pick paths read. A new key, so there is no hand-rolled branch to
+// reproduce: `settingsNumberLike` is chosen on merit (Number() refuses '6abc'
+// and keeps the fraction) rather than to preserve an accident.
+export const pickerPatchSchema = settingsBlockOf({
+  albumHours: settingsNumberLike(
+    PICKER_ALBUM_HOURS_BOUNDS,
+    `picker.albumHours must be between ${PICKER_ALBUM_HOURS_BOUNDS.min} and ${PICKER_ALBUM_HOURS_BOUNDS.max} (0 = off)`,
   ),
 });
 
@@ -618,6 +730,14 @@ export const searchPatchSchema = settingsBlockOf({
     })
     .transform((raw) => String(raw).trim()),
   apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars'),
+  // Optional comma-separated SearXNG engine pin (#1353), appended as the
+  // `engines=` query param when non-empty. New field, so it takes the trimmed
+  // posture rather than search.apiKey's raw one — there is no stored behaviour
+  // to preserve here, and a stray space around a name is a typo, not a value.
+  searxngEngines: settingsTrimmedString(
+    SETTINGS_SEARXNG_ENGINES_MAX,
+    `search.searxngEngines must be 0-${SETTINGS_SEARXNG_ENGINES_MAX} chars`,
+  ),
 });
 
 const scrobbleLastfmSchema = settingsBlockOf({
@@ -640,9 +760,17 @@ const scrobbleListenbrainzSchema = settingsBlockOf({
   }),
 });
 
+// Navidrome (#1298) carries an enable flag and nothing else: the credentials
+// are already the station's own `config.navidrome` (env / setup-config), so
+// there is no key to paste here and no secret to redact.
+const scrobbleNavidromeSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+});
+
 export const scrobblePatchSchema = settingsBlockOf({
   lastfm: scrobbleLastfmSchema,
   listenbrainz: scrobbleListenbrainzSchema,
+  navidrome: scrobbleNavidromeSchema,
 });
 
 /**

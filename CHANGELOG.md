@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.11.0](https://github.com/perminder-klair/subwave/compare/v1.10.0...v1.11.0) (2026-08-26)
+
+
+### Features
+
+* **admin:** search, group and defer the settings surface ([#1477](https://github.com/perminder-klair/subwave/issues/1477)) ([00b4d97](https://github.com/perminder-klair/subwave/commit/00b4d97d60fea0eb082f034fd844ea1626702982))
+* **app:** add first-class station credentials ([#1484](https://github.com/perminder-klair/subwave/issues/1484)) ([83f0607](https://github.com/perminder-klair/subwave/commit/83f0607b65f44f5ba73d6baf70a10ff190fd1809))
+* **app:** on-air Live Activity for Lock Screen, Dynamic Island and Apple Watch ([#1489](https://github.com/perminder-klair/subwave/issues/1489)) ([c91df6e](https://github.com/perminder-klair/subwave/commit/c91df6e8d0a35da6eb0cdb32c9fd44da028d09a0))
+* **broadcast:** max listeners as a setting, and lead Connect with the stream URL ([#1491](https://github.com/perminder-klair/subwave/issues/1491)) ([7c23528](https://github.com/perminder-klair/subwave/commit/7c235285d418aa6f6b1cb807f7b15cbac709e978))
+
+
+### Bug Fixes
+
+* **admin:** compact sidebar station switcher ([#1476](https://github.com/perminder-klair/subwave/issues/1476)) ([dea64c8](https://github.com/perminder-klair/subwave/commit/dea64c89c047d3895cae32e64b9ed7cb92043b94))
+* **dj:** scope prompt memory to editorial sessions ([#1479](https://github.com/perminder-klair/subwave/issues/1479)) ([#1481](https://github.com/perminder-klair/subwave/issues/1481)) ([d5cbee6](https://github.com/perminder-klair/subwave/commit/d5cbee6655e65b1f46e95e0c02c7fe637a2b37d3))
+* **dj:** station ident names the daypart, never the hour ([#1478](https://github.com/perminder-klair/subwave/issues/1478)) ([574f63c](https://github.com/perminder-klair/subwave/commit/574f63ceafeb0095a530e518ac6cb72173b3f496))
+* **shows:** let strict playlists cycle ([#1482](https://github.com/perminder-klair/subwave/issues/1482)) ([2b0c704](https://github.com/perminder-klair/subwave/commit/2b0c704aaa73f660f81616bb1d0a38c30196afe7))
+
+
+### Documentation
+
+* add complete reverse-proxy recipes ([#1483](https://github.com/perminder-klair/subwave/issues/1483)) ([6592b4c](https://github.com/perminder-klair/subwave/commit/6592b4cdeb6cc10526631d7b5a03075ae7b249fb))
+* concept explainers, update/rollback procedure, split-port recipe ([#1487](https://github.com/perminder-klair/subwave/issues/1487)) ([d75cc55](https://github.com/perminder-klair/subwave/commit/d75cc55a0704e3a6814c3bf2b3bc4e5fac2a58e1))
+
 ## [1.10.0](https://github.com/perminder-klair/subwave/compare/v1.9.0...v1.10.0) (2026-08-25)
 
 

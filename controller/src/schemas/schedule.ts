@@ -225,15 +225,45 @@ export function repairScheduleForLoad(raw: unknown, showIds: string[]): Schedule
 
 // ── Timed takeover (#930) ────────────────────────────────────────────────────
 
-/** Pin one show for a bounded window, then the weekly grid resumes. */
+/**
+ * A bounded takeover target. `showId: null` means Default programming; an
+ * outer `scheduleOverride: null` means there is no takeover at all.
+ */
 export interface ScheduleOverride {
-  showId: string;
+  showId: string | null;
   startedAt: number;
   expiresAt: number;
 }
 
+/**
+ * The takeover target, read in ONE place.
+ *
+ * A takeover's `showId` is three-way, not two-way — it names a show, it is
+ * explicitly `null` for Default programming (#1507), or it is neither — and the
+ * two obvious spellings of the question DISAGREE about that third case:
+ * `showId === null` calls a malformed target a show pin, `typeof showId ===
+ * 'string'` calls it Default programming. Both are wrong: before #1507 a target
+ * that named nothing real simply VOIDED the takeover (the roster lookup missed
+ * and the grid resumed), and that is the behaviour these two keep. The resolver,
+ * the roster sweep, the janitor, the programme span, the route and both admin
+ * screens all ask through them, so the answer cannot drift between call sites.
+ *
+ * Deliberately loose in their parameter: the route asks about a request body
+ * and the admin forms about their own submitted values, neither of which is a
+ * stored `ScheduleOverride` yet.
+ */
+export function takeoverShowId(ov: { showId?: unknown } | null | undefined): string | null {
+  const id = ov?.showId;
+  return typeof id === 'string' && id.length > 0 ? id : null;
+}
+
+/** True while `ov` is an explicit Default programming takeover (#1507). */
+export function isDefaultTakeover(ov: { showId?: unknown } | null | undefined): boolean {
+  return !!ov && ov.showId === null;
+}
+
 export interface ScheduleOverrideContext {
-  /** Show ids the pin may name, or null when this caller cannot check. */
+  /** Show ids a string target may name, or null when this caller cannot check. */
   showIds: string[] | null;
   /**
    * Epoch-ms "now", or null to not judge expiry at all.
@@ -250,7 +280,10 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
   return z
     .object(
       {
-        showId: z.string({ error: 'must be a show id' }).min(1, 'must be a show id'),
+        // `.nullable()` rather than a two-branch union: null is the Default
+        // programming target, and the string's own message is the one an
+        // operator can act on — a union answers with its own wording instead.
+        showId: z.string({ error: 'must be a show id' }).min(1, 'must be a show id').nullable(),
         startedAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
         expiresAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
       },
@@ -261,8 +294,9 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
       { error: 'must be an object' },
     )
     .check((c) => {
-      const { showId, startedAt, expiresAt } = c.value;
-      if (ctx.showIds && !ctx.showIds.includes(showId)) {
+      const { startedAt, expiresAt } = c.value;
+      const showId = takeoverShowId(c.value);
+      if (showId && ctx.showIds && !ctx.showIds.includes(showId)) {
         c.issues.push({
           code: 'custom',
           input: showId,
@@ -299,15 +333,20 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
 /**
  * POST /schedule/override's body.
  *
- * `minutes` is coerced because the hand-rolled route ran `Number(req.body
- * ?.minutes)` and therefore accepted the string "60". An EMPTY showId now 400s
+ * `showId: null` requests Default programming; an outer missing field is still
+ * malformed. `minutes` is coerced because the hand-rolled route ran
+ * `Number(req.body?.minutes)` and therefore accepted the string "60". An EMPTY
+ * showId now 400s
  * where it used to reach the roster lookup and 404 as `no such show: ` — a
  * missing field is a malformed request, not a missing show. A real id that
  * isn't in the roster still 404s from the handler, which is the answer that
  * needs server state.
  */
 export const scheduleOverrideRequestSchema = z.object({
-  showId: z.string({ error: 'pick a show to pin' }).min(1, 'pick a show to pin'),
+  showId: z
+    .string({ error: 'pick a show or Default programming' })
+    .min(1, 'pick a show or Default programming')
+    .nullable(),
   minutes: z.coerce
     .number({ error: `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}` })
     .int(`must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`)

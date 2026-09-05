@@ -69,13 +69,20 @@ bootstrap_state_dirs() {
     state_prepare_dir "$root"
     state_prepare_dir "$dir"
     # stems + transitions are the analyzer's (uid 10001), and the only two
-    # dirs worth relocating to a bigger disk — the ONLY way to do that being a
-    # bind mount at <state>/stems (music/stem-cache.ts stemsRoot() has no
-    # setting behind it). A fresh bind mount lands root-owned 755, which the
-    # analyzer cannot write without the same 777 treatment as the rest.
+    # dirs worth relocating to a bigger disk. A fresh bind mount lands
+    # root-owned 755, which the analyzer cannot write without the same 777
+    # treatment as the rest.
     for sub in voice voices archive jingles logs sessions sfx stems transitions; do
         state_prepare_dir "$dir/$sub"
     done
+    # A RELOCATED stem cache (STEMS_DIR in .env, handed down as the container
+    # path SUBWAVE_STEMS_DIR) sits outside $dir, so the loop above never
+    # reaches it and the bind mount would keep its root-owned 755 — the exact
+    # state the loop entry above exists to prevent. Per-station subdirs under
+    # it are created by the analyzer itself, which inherits this 777.
+    if [ -n "${SUBWAVE_STEMS_DIR:-}" ]; then
+        state_prepare_dir "$SUBWAVE_STEMS_DIR"
+    fi
     # Liquidsoap's reload_mode="watch" playlists need the files to exist.
     state_prepare_file "$dir/auto.m3u" 666
     state_prepare_file "$dir/jingles.m3u" 666

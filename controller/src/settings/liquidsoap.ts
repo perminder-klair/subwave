@@ -10,6 +10,11 @@ import { DEFAULTS } from './defaults.js';
 
 export const LIQ_JINGLE_RATIO_PATH = `${STATE_DIR}/liquidsoap_jingle_ratio.txt`;
 export const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
+// The two `smooth_add` ducking depths — radio.liq's `p` on the heavy voice
+// layer and the light intro layer. Same read-once-at-startup lifecycle as the
+// crossfade above, so a change needs a mixer restart.
+export const LIQ_DUCK_VOICE_PATH = `${STATE_DIR}/liquidsoap_duck_voice.txt`;
+export const LIQ_DUCK_INTRO_PATH = `${STATE_DIR}/liquidsoap_duck_intro.txt`;
 export const LIQ_ARCHIVE_ENABLED_PATH = `${STATE_DIR}/liquidsoap_archive_enabled.txt`;
 export const LIQ_ARCHIVE_BITRATE_PATH = `${STATE_DIR}/liquidsoap_archive_bitrate.txt`;
 export const LIQ_OPUS_ENABLED_PATH = `${STATE_DIR}/liquidsoap_opus_enabled.txt`;
@@ -40,6 +45,11 @@ export const ICECAST_LISTENER_AUTH_PATH = `${STATE_DIR}/icecast_listener_auth.tx
 export async function writeLiquidsoapSettings(s) {
   await writeFile(LIQ_JINGLE_RATIO_PATH, String(s.jingleRatio));
   await writeFile(LIQ_CROSSFADE_PATH, String(s.crossfadeDuration));
+  // Defaulted the way `station` is: every caller hands over a load()d object
+  // that composes the block, but a handoff file is what the mixer reads and a
+  // `undefined` there would silently unduck the DJ.
+  await writeFile(LIQ_DUCK_VOICE_PATH, String(s.ducking?.voice ?? DEFAULTS.ducking.voice));
+  await writeFile(LIQ_DUCK_INTRO_PATH, String(s.ducking?.intro ?? DEFAULTS.ducking.intro));
   await writeFile(LIQ_ARCHIVE_ENABLED_PATH, s.archive.enabled ? 'true' : 'false');
   await writeFile(LIQ_ARCHIVE_BITRATE_PATH, String(s.archive.bitrate));
   await writeFile(LIQ_OPUS_ENABLED_PATH, s.stream.opusEnabled ? 'true' : 'false');

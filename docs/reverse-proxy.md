@@ -35,6 +35,17 @@ The examples use the default ports and a proxy on the same host. Replace
 `127.0.0.1` with an address or Docker service name reachable from your proxy
 when it runs elsewhere.
 
+### Optional: a listener-country header
+
+Admin → Stats rolls listener sessions up by country, and the value it reads
+first is `CF-IPCountry` — which only Cloudflare sets. If your proxy can add a
+country header of its own (nginx with the GeoIP2 module, Traefik behind a CDN),
+forward it and name it in Admin → Settings → Danger zone → **Listener country**.
+Where it can't, point the same card at an offline `.mmdb` database instead.
+Neither is required: with no country, sessions are still counted, just without
+geography. Full recipe, including where to get a database:
+[deployment.md → Listener country on the Stats page](deployment.md#listener-country-on-the-stats-page).
+
 ## nginx
 
 Put these directives inside the existing `server` block for

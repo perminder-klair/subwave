@@ -19,6 +19,15 @@ export const STATE_ROOT = process.env.STATE_DIR
 // once-per-boot by design: switching stations restarts this process.
 export const STATE_DIR = resolveActiveStationDir(STATE_ROOT);
 
+// Relocated stem-cache root, as a CONTAINER path. The operator sets STEMS_DIR
+// (a HOST path) in the root .env; every compose file bind-mounts it at a fixed
+// container path and passes that path down as SUBWAVE_STEMS_DIR. Two names on
+// purpose: the controller reads .env through `env_file:`, so the host value is
+// visible in here and is meaningless to a process inside the container.
+// Empty (the default) means "no relocation" — music/stem-cache.ts then resolves
+// the cache under STATE_DIR exactly as it did before STEMS_DIR existed.
+export const STEMS_DIR = envStr('SUBWAVE_STEMS_DIR', '');
+
 // Repo-bundled static audio (studio bed, emergency clip, default sound
 // effects). In Docker the compose files mount <repo>/sounds → /sounds and
 // pass SOUNDS_DIR=/sounds. Native dev falls back to the repo-local sounds/
@@ -48,6 +57,8 @@ export const config = {
   stateDir: STATE_DIR,
   // The install-level state root (stations/, icecast-secrets.env live here).
   stateRoot: STATE_ROOT,
+  // Container path of a relocated stem cache; '' = under stateDir as before.
+  stemsDir: STEMS_DIR,
   soundsDir: SOUNDS_DIR,
   navidrome: {
     url: envUrl('NAVIDROME_URL', 'http://navidrome:4533'),
@@ -93,6 +104,10 @@ export const config = {
     // scales linearly with the window. Keep in sync with analyze_worker.py
     // and docker/analyzer/server.py.
     seconds: envFloat('ANALYZE_SECONDS', 40, { min: 1 }),
+    // Maximum controller-side in-flight analysis jobs for a sidecar backend.
+    // Local stdio analysis remains single-flight (music/analyze.ts), because one
+    // line-protocol worker cannot safely execute requests concurrently.
+    concurrency: envInt('ANALYZE_CONCURRENCY', 1, { min: 1, max: 8 }),
     requestTimeoutMs: envInt('ANALYZE_REQUEST_TIMEOUT_MS', 120_000),
     // Transition renders (stem-blend transitions) get their own, shorter
     // deadline: they run inside the pair-drain window and must lose the race
@@ -187,6 +202,14 @@ export const config = {
     // ICECAST_ADMIN_PASSWORD or state/icecast-secrets.env (see listeners.ts).
     adminUrl: envUrl('ICECAST_ADMIN_URL', 'http://broadcast:7702/admin/listclients'),
     adminUser: envStr('ICECAST_ADMIN_USER', 'admin'),
+  },
+  // Offline GeoIP database (MaxMind MMDB format) for the listener-country
+  // rollup. Empty = no lookup, which is the default: the DB is a licensed
+  // download nobody can ship, so the header chain stays the primary answer and
+  // this is the last, opt-in link in it. Env wins over settings.stream.geoipDbPath
+  // like every other config value here.
+  geoip: {
+    dbPath: envStr('GEOIP_DB_PATH', ''),
   },
   liquidsoap: {
     queueFile: `${STATE_DIR}/next.txt`,

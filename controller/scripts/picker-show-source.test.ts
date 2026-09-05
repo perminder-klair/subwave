@@ -25,6 +25,14 @@
 //      off-playlist candidate. scheduler.ts has always gated its identical
 //      source; picker.ts did not.
 //
+//   3. The per-artist cap must be LIFTED for a strict-PLAYLIST show, in all
+//      THREE pick paths, and only there. A playlist is an exact operator-pinned
+//      set, so a single-artist / single-album playlist is the point of pinning
+//      it — capping it at 3 (picker) / AUTO_MAX_PER_ARTIST (coast) handed the
+//      LLM three tracks and looped a two-track fallback. The lift must sit
+//      AFTER the playlist narrowing (otherwise it uncaps a discovery pool) and
+//      must not spill onto sources the strict end-filter is about to drop.
+//
 // Scraped from source because there is no runtime seam: nothing observable
 // distinguishes "the show source contributed zero" from "the show has no
 // matching tracks", which is the same reason picker-lock-forwarding.test.ts
@@ -52,6 +60,7 @@ function test(name: string, fn: () => void) {
 const here = dirname(fileURLToPath(import.meta.url));
 const picker = readFileSync(resolve(here, '../src/music/picker.ts'), 'utf8');
 const scheduler = readFileSync(resolve(here, '../src/broadcast/scheduler.ts'), 'utf8');
+const scope = readFileSync(resolve(here, '../src/llm/internal/tools/picker/scope.ts'), 'utf8');
 
 // The single line that adds a named source to the pool.
 const addLine = (src: string, label: string): string => {
@@ -119,6 +128,72 @@ test('scheduler.ts still gates its twin the same way', () => {
   assert.ok(
     /if\s*\(!strictPlaylist\)/.test(before),
     'scheduler.ts §2b must keep its !strictPlaylist gate — picker.ts mirrors it',
+  );
+});
+
+console.log('\nthe artist cap is lifted for a strict-playlist show, in every pick path:');
+
+test('picker.ts uncaps MAX_PER_ARTIST for a strict playlist, after the inPl narrowing', () => {
+  const m = picker.match(/^\s*const MAX_PER_ARTIST = .*$/m);
+  assert.ok(m, 'no MAX_PER_ARTIST declaration found in picker.ts');
+  assert.ok(
+    /strictPlaylist\s*\?\s*Infinity/.test(m![0]),
+    `a strict playlist is an exact pinned set — capping it shrinks a single-artist show to 3 candidates:\n    ${m![0].trim()}`,
+  );
+  // Order is load-bearing: the cap is applied to selectionPool, which is only
+  // the playlist set once `inPl` has narrowed it. Uncapping ABOVE that line
+  // would uncap the raw discovery pool instead.
+  const narrowAt = picker.indexOf('const inPl = pool.filter(');
+  assert.ok(narrowAt > 0, 'no strict-playlist narrowing found in picker.ts');
+  assert.ok(
+    narrowAt < picker.indexOf(m![0]),
+    'MAX_PER_ARTIST must be declared AFTER selectionPool is narrowed to the playlist set',
+  );
+});
+
+test('scheduler.ts lifts the cap on the show-playlist TAKE, not on the builder', () => {
+  const builder = scheduler.match(/createPoolBuilder\(\{[\s\S]*?\}\)/);
+  assert.ok(builder, 'no createPoolBuilder call found in scheduler.ts');
+  assert.ok(
+    !/strictPlaylist/.test(builder![0]),
+    'the BUILDER cap must stay unconditional — lifting it there uncaps show-genre/mood/recent too, and those tracks fill TARGET_POOL only to be dropped by the strict end-filter, starving the in-playlist share:\n    ' + builder![0],
+  );
+  const line = addLine(scheduler, 'show-playlist');
+  assert.ok(
+    /maxPerArtist:[^,}]*Infinity/.test(line),
+    `the show-playlist source must opt out per-take on a strict playlist:\n    ${line.trim()}`,
+  );
+  assert.ok(
+    /strictPlaylist/.test(line),
+    `the opt-out must be conditional on strictPlaylist — a SOFT playlist anchor still shares the pool with discovery:\n    ${line.trim()}`,
+  );
+});
+
+test('scheduler.ts keeps the cap on every discovery source', () => {
+  for (const label of ['mood', 'recent', 'frequent', 'starred', 'explore']) {
+    const line = addLine(scheduler, label);
+    assert.ok(
+      !/maxPerArtist/.test(line),
+      `discovery source "${label}" must keep the builder's artist cap:\n    ${line.trim()}`,
+    );
+  }
+});
+
+test('scope.ts uncaps the agent tools under a playlistLock', () => {
+  // The agent path (dj-agent.pickViaAgent) is the DEFAULT picker; music/picker.ts
+  // is its fallback. collect() applies playlistLock as a hard intersection just
+  // above this filter, so what reaches it is already the pinned set.
+  const m = scope.match(/^\s*maxPerArtist: opts\.maxPerArtist.*$/m);
+  assert.ok(m, 'no maxPerArtist default found in scope.ts collect()');
+  assert.ok(
+    /playlistLock\s*\?\s*Infinity/.test(m![0]),
+    `without this, showPlaylistTracks returns 3 of its cap of 12 on a single-artist show — the pool picker's bug on the default path:\n    ${m![0].trim()}`,
+  );
+  const lockAt = scope.indexOf('if (playlistLock) pool = pool.filter(');
+  assert.ok(lockAt > 0, 'no playlistLock intersection found in scope.ts');
+  assert.ok(
+    lockAt < scope.indexOf(m![0]),
+    'the playlistLock intersection must run BEFORE the cap is lifted, or the lift uncaps an unfiltered discovery pool',
   );
 });
 

@@ -10,6 +10,10 @@ import {
   LLM_DEBUG_LOG,
   LLM_DEBUG_MAX,
   agentDoneRetryCount,
+  llmCallExportFormat,
+  llmCallExportFilename,
+  serializeLlmCalls,
+  LLM_CALL_EXPORT_CONTENT_TYPE,
 } from '../llm/log.js';
 import * as tts from '../audio/tts.js';
 import { ttsCalls } from '../stats.js';
@@ -22,6 +26,7 @@ import * as session from '../broadcast/session.js';
 import { budgetStatus } from '../broadcast/dj-budget.js';
 import { voiceStatus } from '../broadcast/voice-policy.js';
 import { clockStatus } from '../broadcast/clock-policy.js';
+import { talkAirStatus } from '../broadcast/talk-air.js';
 import * as requestLog from '../broadcast/request-log.js';
 import { getStationTimezone } from '../time.js';
 import { publicOrigin } from './public.js';
@@ -229,6 +234,11 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     // standing down — the same "why has the DJ gone quiet about X" question
     // `voice` above answers, one surface further in.
     clock: (() => { try { return clockStatus(); } catch (err: any) { return { error: err.message }; } })(),
+    // Talk placement switch (settings.djTalkOnlyBetweenTracks, #1485 FR 5b).
+    // `onlyBetweenTracks:true` means every scheduled segment is held for the
+    // next track boundary, so a segment that looks late is waiting rather than
+    // missing — the third question in the same family as `voice` and `clock`.
+    talkAir: (() => { try { return talkAirStatus(); } catch (err: any) { return { error: err.message }; } })(),
     // Done-tool retry churn (D2) — since-boot count of the strategy layer's
     // two "stopped without calling done" retry sites (agent.ts), the same
     // symptom the corrective re-pick in dj-agent.ts exists to salvage.
@@ -352,6 +362,38 @@ router.get('/debug/state-tree', requireAdmin, async (req, res) => {
       return;
     }
     res.json({ root: config.stateDir, path: rel, entries: [], shown: 0, total: 0, error: err.message });
+  }
+});
+
+// GET /debug/llm-calls/export — the recent-calls ring buffer as a downloadable
+// file (#1485, FR 15). `?format=ndjson` for one call per line; anything else is
+// a single JSON document.
+//
+// The SAME array /debug already serves as `llm.recentCalls`, written out
+// verbatim — this route adds no field and filters none, so there is nothing here
+// an operator could not already read in the panel. It exists because copying a
+// prompt, its tool trail and the model's answer out of a browser is where a bug
+// report stops getting filed.
+//
+// Deliberately NOT behind the /debug snapshot cache above: that cache exists to
+// coalesce a 2s poll from several admin tabs, and this is a one-shot download
+// that must reflect the ring at the moment the operator pressed the button.
+// It is also not in the Connect catalog — like backup/doctor, this is an
+// internal operator route, not part of the documented integration subset.
+router.get('/debug/llm-calls/export', requireAdmin, (req, res) => {
+  try {
+    const format = llmCallExportFormat(req.query.format);
+    const body = serializeLlmCalls(dj.recentCalls, format);
+    res.setHeader('Content-Type', LLM_CALL_EXPORT_CONTENT_TYPE[format]);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="${llmCallExportFilename(format)}"`,
+    );
+    // The ring is a since-boot window that moves under any cache.
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(body);
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
   }
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "sub-wave-controller",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -37,6 +37,7 @@
     "express": "^4.21.0",
     "fast-xml-parser": "^5.10.1",
     "helmet": "^8.3.0",
+    "mmdb-lib": "^3.0.3",
     "multer": "^2.0.1",
     "node-cron": "^4.6.0",
     "sqlite-vec": "^0.1.9",

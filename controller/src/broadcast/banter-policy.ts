@@ -25,10 +25,12 @@
 // real talk" would let banter stack right behind one, which is the thing the
 // gap exists to prevent.
 //
-// Pure and I/O-free (a `Date` in, numbers out) so scripts/banter-policy.test.ts
-// can pin the window arithmetic without a scheduler or a clock. The FREQUENCY
-// ladder is deliberately NOT here — it stays in dj-gate.ts with the other
-// rungs, and asks this module only which slot a minute belongs to.
+// This file is the NUMBERS and their reasoning. The window/gap/logging state
+// machine they feed was generalised to every talk kind in talk-scheduler.ts
+// (#1500) — banter is simply the row that already had all three fields, so the
+// mechanism moved out and the policy stayed. The FREQUENCY ladder is
+// deliberately in neither: it stays in dj-gate.ts with the other rungs, and
+// asks this module only which slot a minute belongs to.
 
 // Minute each banter window OPENS. Chosen because no other wall-clock talker
 // owns them — the ident cron is :15/:30/:45 and the hourly check is :00 (issue
@@ -49,122 +51,8 @@ export const BANTER_WINDOW_MINUTES = 10;
 // or a chatty DJ-mode station would never banter.
 export const BANTER_MIN_GAP_MS = 5 * 60_000;
 
-// The window a minute falls in, identified by its opening minute, or null
-// outside both. Windows never cross an hour boundary by construction (the last
-// slot opens at :50 and runs to :59), which is what lets a slot be keyed by
-// wall-clock hour below.
-export function banterSlot(minute: number): number | null {
-  for (const slot of BANTER_SLOTS) {
-    if (minute >= slot && minute < slot + BANTER_WINDOW_MINUTES) return slot;
-  }
-  return null;
-}
-
-// Last minute of a slot's window — the tick's final chance, and what the
-// stand-down log line quotes so an operator can see how long is left.
-export function banterWindowEnd(slot: number): number {
-  return slot + BANTER_WINDOW_MINUTES - 1;
-}
-
-// Stable identity for "this hour's :20 window", so one exchange per slot
-// survives a per-minute tick without a timer or a countdown. Process-local
-// time, like every other minute-slot decision in the scheduler: the cron fires
-// on process minutes, so the key must agree with it. A DST fall-back repeats an
-// hour and re-opens the slot once — harmless, and strictly better than a
-// forward jump silently consuming one.
-export function banterSlotKey(now: Date): string | null {
-  const slot = banterSlot(now.getMinutes());
-  if (slot == null) return null;
-  const day = `${now.getFullYear()}-${now.getMonth() + 1}-${now.getDate()}`;
-  return `${day}-${now.getHours()}-${slot}`;
-}
-
-// The cron expression the window implies, derived rather than written out, so
-// the schedule and BANTER_SLOTS/BANTER_WINDOW_MINUTES cannot drift apart.
-export function banterCronExpression(): string {
-  const minutes = BANTER_SLOTS.map(s => `${s}-${banterWindowEnd(s)}`).join(',');
-  return `${minutes} * * * *`;
-}
-
-export type BanterGap = { clear: boolean; sinceMs: number; needMs: number };
-
-// Whether the quiet gap has elapsed. `lastTalkBreakAt` is 0 when nothing has
-// aired yet (a fresh boot), which reads as an infinite gap — correct: there is
-// no break to stack onto.
-export function banterGap(p: { nowMs: number; lastTalkBreakAt: number }): BanterGap {
-  const sinceMs = p.lastTalkBreakAt > 0 ? p.nowMs - p.lastTalkBreakAt : Infinity;
-  return { clear: sinceMs >= BANTER_MIN_GAP_MS, sinceMs, needMs: BANTER_MIN_GAP_MS };
-}
-
-// The stand-down line the issue asked for: the reason AND the numbers behind
-// it, so this class of scheduling collision is visible in the booth log instead
-// of being inferred from an absence. Logged once per slot by the caller (a
-// per-minute tick would otherwise repeat it ten times).
-export function banterStandDownLine(slot: number, gap: BanterGap): string {
-  const since = Number.isFinite(gap.sinceMs) ? `${Math.round(gap.sinceMs / 1000)}s` : 'never';
-  return `[banter] stood down at :${slot} — last standalone talk ${since} ago, `
-    + `minimum gap ${Math.round(gap.needMs / 1000)}s (retrying until :${banterWindowEnd(slot)})`;
-}
-
-// The window closed unfired. Carries the gap numbers too, because this is the
-// only line an operator gets when the very last minute of a window is the first
-// one to be blocked.
-export function banterMissedLine(slot: number, gap: BanterGap): string {
-  const since = Number.isFinite(gap.sinceMs) ? `${Math.round(gap.sinceMs / 1000)}s` : 'never';
-  return `[banter] slot :${slot} missed — last standalone talk ${since} ago, `
-    + `minimum gap ${Math.round(gap.needMs / 1000)}s never cleared before :${banterWindowEnd(slot)}`;
-}
-
-// ---------------------------------------------------------------------------
-// THE TICK'S STATE MACHINE
-// What one banter tick should do, as a pure decision over the clock, the two
-// slot counters and one collapsed eligibility flag. Split out for the same
-// reason skillCronAllowed() takes its four gates as an object: the rule is
-// worth pinning (scripts/banter-policy.test.ts walks the reporter's own hour
-// minute by minute) and it cannot be, if it reads real settings, listener and
-// budget state itself. The caller keeps resolving `eligible` — roster, the
-// frequency rung, listeners, budget — because those need the live modules.
-//
-// The ORDER matters and is the pre-#1419 order: a solo show or a quiet persona
-// short-circuits BEFORE the gap is consulted, so an ineligible show never logs
-// a stand-down about a gap that was never going to be asked about.
-// ---------------------------------------------------------------------------
-
-export type BanterPlan =
-  // Nothing to do: outside both windows, this slot already spoke, or the show
-  // isn't eligible this minute. Silent by design — a per-minute tick that
-  // narrated every ineligible minute would bury the booth log.
-  | { act: 'skip' }
-  // In the window, eligible, but the quiet gap hasn't elapsed. `log` is the one
-  // line to write (null when this slot has already reported), and `markLogged`
-  // is what the caller should remember so the next minute stays quiet.
-  | { act: 'wait'; slot: number; gap: BanterGap; log: string | null; markLogged: string | null }
-  // Air it. The caller claims `slotKey` BEFORE awaiting the exchange.
-  | { act: 'fire'; slot: number; slotKey: string; gap: BanterGap };
-
-export function banterTickPlan(p: {
-  now: Date;
-  eligible: boolean;
-  lastTalkBreakAt: number;
-  firedSlot: string | null;
-  loggedSlot: string | null;
-}): BanterPlan {
-  const slotKey = banterSlotKey(p.now);
-  if (!slotKey) return { act: 'skip' };            // outside both windows
-  if (slotKey === p.firedSlot) return { act: 'skip' };  // this slot already spoke
-  if (!p.eligible) return { act: 'skip' };
-  const slot = banterSlot(p.now.getMinutes())!;
-  const gap = banterGap({ nowMs: p.now.getTime(), lastTalkBreakAt: p.lastTalkBreakAt });
-  if (gap.clear) return { act: 'fire', slot, slotKey, gap };
-  // The window's last minute is the chance being LOST, so it says so rather
-  // than promising a retry that can't happen — and it carries the numbers,
-  // because it is the only line an operator gets when the last minute is also
-  // the first one to be blocked.
-  if (p.now.getMinutes() === banterWindowEnd(slot)) {
-    return { act: 'wait', slot, gap, log: banterMissedLine(slot, gap), markLogged: null };
-  }
-  // Once per slot, not once per tick: the stand-down was a bare `return`, which
-  // is why a starved hour left nothing in the log to explain itself (#1419).
-  if (p.loggedSlot === slotKey) return { act: 'wait', slot, gap, log: null, markLogged: null };
-  return { act: 'wait', slot, gap, log: banterStandDownLine(slot, gap), markLogged: slotKey };
-}
+// The window arithmetic these three numbers imply is NOT here: it is the talk
+// slot table's, applied identically to every row (talk-scheduler.ts's
+// `openMinuteFor`), and dj-gate's banter rung asks the table the same question
+// the ident rung does. A second copy keyed to banter alone is exactly the drift
+// this file's own history warns about.

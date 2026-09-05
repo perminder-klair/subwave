@@ -11,7 +11,7 @@
 // Run: `npm test -- voice-air-events`.
 
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import test, { after } from 'node:test';
 import { createServer, type Server } from 'node:http';
 import { mkdtempSync, writeFileSync, rmSync, unlinkSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -38,6 +38,20 @@ const { notifySpoken, notifyQueued } = await import('../src/broadcast/voice-even
 const { setCache } = await import('../src/settings/store.js');
 
 const MARKER = config.liquidsoap.voicePlayingFile;
+after(() => resetVoiceMarkers());
+
+// awaitVoiceAir deliberately unrefs its production timeout so a controller can
+// shut down without waiting up to 20 seconds. A test awaiting only that timer
+// needs one referenced handle of its own or Node 22 correctly ends the subprocess
+// with the promise still pending. Keep that test support local to this file.
+async function keepProcessAliveUntil<T>(promise: Promise<T>): Promise<T> {
+  const keepAlive = setInterval(() => {}, 1_000);
+  try {
+    return await promise;
+  } finally {
+    clearInterval(keepAlive);
+  }
+}
 
 function writeMarker(m: Record<string, unknown>) {
   writeFileSync(MARKER, JSON.stringify(m));
@@ -165,7 +179,7 @@ test('a clip whose marker never comes reports an unknown air time', async () => 
   writeMarker({ voiceId: 'someone-else', channel: 'say', startedAt: 1770000400 });
   // Marker support is present (the file exists), so this one really does wait —
   // and then reports "unknown" rather than inventing a stamp.
-  assert.equal(await awaitVoiceAir('seg-4', 120), null);
+  assert.equal(await keepProcessAliveUntil(awaitVoiceAir('seg-4', 120)), null);
 });
 
 // --- the fan-out ----------------------------------------------------------

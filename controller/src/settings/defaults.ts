@@ -11,6 +11,7 @@ import {
   SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
   BEDS_THRESHOLD_SEC_BOUNDS,
   CROSSFADE_DURATION_BOUNDS,
+  DUCK_DEPTH_BOUNDS,
   JINGLE_RATIO_BOUNDS,
   LOUDNESS_MAX_BOOST_DB_BOUNDS,
   LOUDNESS_TARGET_LUFS_BOUNDS,
@@ -34,6 +35,15 @@ import {
 export const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
   crossfadeDuration: 10.0, // seconds
+  // How far the music drops under each spoken layer — `smooth_add`'s `p`, so
+  // the number is what is LEFT UP, not the cut: 0.22 is ~-13 dB, 0.30 is ~-10.
+  // These are exactly the literals radio.liq carried before they were settings,
+  // so an upgrade is byte-identical. Read once at mixer startup out of
+  // liquidsoap_duck_voice.txt / liquidsoap_duck_intro.txt — a change needs a
+  // mixer restart. `voice` is the heavy solo-DJ duck (say.txt: idents, hourly
+  // time, weather, request intros); `intro` is the light talk-over duck
+  // (intro.txt: between-track links) that leaves the song audible underneath.
+  ducking: { voice: 0.22, intro: 0.30 },
   // Station-wide cap on autonomously-picked track length; 0 = no cap (#447). A
   // show's own maxTrackSeconds overrides it (0 there = unlimited). Listener
   // requests always bypass it.
@@ -80,6 +90,16 @@ export const DEFAULTS = {
     // took. The setting exists for AIO/Unraid, where there is no .env to put
     // the var in at all.
     maxListeners: 100,
+    // Listener-country fallbacks for the audience rollup (#1485). Both empty by
+    // default, which is byte-identical to the pre-existing behaviour: only
+    // `cf-ipcountry` is read and a station behind a plain reverse proxy records
+    // a blank country. `countryHeader` names whatever header that proxy sets
+    // instead (`x-country-code`, `x-geoip-country`, …); `geoipDbPath` points at
+    // an operator-supplied MaxMind-format database for an offline IP lookup
+    // when no header carries the answer. GEOIP_DB_PATH in the environment wins
+    // over the setting, like every other config path.
+    countryHeader: '',
+    geoipDbPath: '',
   },
   // Per-track loudness normalisation (music/mix.ts gainForLoudness), read live at
   // annotate time. maxBoostDb caps the upward direction only, and the boost is
@@ -184,6 +204,19 @@ export const DEFAULTS = {
   // time: off means "stop doing this unprompted". Policy lives in exactly one
   // place — broadcast/clock-policy.ts. Applies live; no restart.
   djSpeakClock: true,
+  // Talk placement switch (#1485 FR 5b). false = the pre-existing behaviour:
+  // every scheduled segment except the station ident airs the minute it is
+  // written, ducking whatever song is mid-play. true = every SCHEDULED spoken
+  // segment — hourly check, programme beats, banter, idents and the segment
+  // director's spots — is rendered now and held for the next track boundary,
+  // so the station only talks between songs. Manual /dj triggers stay exempt
+  // (an explicit press always fires, the same exemption djSpeakClock carries).
+  // The trade is stated where the operator can read it: a held segment may air
+  // a track later than the minute it was written for, so a time check can read
+  // the clock late — the daypart stamp and PENDING_VOICE_MAX_AGE_MS are what
+  // bound it. Policy lives in exactly one place — broadcast/talk-air.ts.
+  // Applies live; no restart.
+  djTalkOnlyBetweenTracks: false,
   // One persona is active at a time; a scheduled show can override who is on air.
   personas: SEED_PERSONAS,
   activePersonaId: SEED_PERSONAS[0].id,
@@ -467,6 +500,9 @@ export const DEFAULTS = {
     provider: 'duckduckgo',
     apiKey: '',
     baseUrl: '',
+    // Optional comma-separated SearXNG engine pin (#1353). Empty means "send no
+    // engines= param", i.e. the instance's own default engine set.
+    searxngEngines: '',
   },
   skills: {
     enabled: {},
@@ -578,6 +614,27 @@ export const DEFAULTS = {
       // `${baseUrl}/submit-listens`. Env LISTENBRAINZ_API_URL wins.
       baseUrl: '',
     },
+    // Navidrome play reporting (#1298) — Subsonic `scrobble`, so playCount and
+    // lastPlayed move and `.nsp` smart playlists rotate. No credentials of its
+    // own (it reuses config.navidrome) and, unlike the two above, no listener
+    // gate: see broadcast/scrobble-pure.ts. Off by default.
+    navidrome: {
+      enabled: false,
+    },
+  },
+
+  // Track-selection windows read by BOTH pick paths — the pool picker's
+  // candidate filter and the agent path's point-of-choice guard.
+  //
+  // `albumHours`: how long a record stays on cooldown after one of its tracks
+  // airs (#1485 FR 3). 0 = OFF, and that is deliberate rather than timid: the
+  // artist window already blocks everything an album window shorter than it
+  // would, so an album cooldown is only ever worth setting ABOVE the artist
+  // window — a number this code cannot pick for an operator, because it depends
+  // on how album-heavy their catalogue is. Off means an upgrade is
+  // byte-identical. See music/recency.ts albumKey.
+  picker: {
+    albumHours: 0,
   },
 
   // The player heart button (#991). `starInNavidrome` mirrors each first like
@@ -598,6 +655,8 @@ export const BOUNDS = {
   // non-mirrored one, so the schema has to own the constant.
   jingleRatio: { ...JINGLE_RATIO_BOUNDS, type: 'int' },
   crossfadeDuration: { ...CROSSFADE_DURATION_BOUNDS, type: 'float' },
+  duckingVoice: { ...DUCK_DEPTH_BOUNDS, type: 'float' },
+  duckingIntro: { ...DUCK_DEPTH_BOUNDS, type: 'float' },
   bedsThresholdSec: { ...BEDS_THRESHOLD_SEC_BOUNDS, type: 'float' },
   bedsCrossSec: { ...BEDS_CROSS_SEC_BOUNDS, type: 'float' },
   bedsTailSec: { ...BEDS_TAIL_SEC_BOUNDS, type: 'float' },

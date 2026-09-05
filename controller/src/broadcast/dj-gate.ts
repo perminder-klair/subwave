@@ -14,7 +14,7 @@ import * as settings from '../settings.js';
 import { zonedParts } from '../time.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { autoTimeCheckAllowed } from './clock-policy.js';
-import { banterSlot } from './banter-policy.js';
+import { talkSlot, openMinuteFor } from './talk-scheduler.js';
 
 export function shouldFire(kind, now = new Date()) {
   // Station-wide voice switch (settings.tts.enabled). Sits above the frequency
@@ -32,15 +32,22 @@ export function shouldFire(kind, now = new Date()) {
   if (f === 'silent') return false;
 
   if (kind === 'stationId') {
-    if (f === 'quiet')    return m === 45;
-    if (f === 'moderate') return m === 15 || m === 45;
-    // Never at minute 0 — that's reserved for the hourly time check, which
-    // always fires there. Letting both land on the hour stacked a station ID
-    // and an hourly check back to back (and, with a between-track link, talking
-    // over each other) — issue #310. Chatty and aggressive both ident at
-    // 15/30/45 (three an hour is the ceiling); the rungs differ in link
-    // spacing, segment floors and banter instead.
-    return [15, 30, 45].includes(m);
+    // Which CHANCE this minute belongs to, not which minute it is. An ident
+    // slot is a ten-minute window (talk-scheduler.ts), so a retry at :18 has to
+    // read as the :15 chance or the rung silently cancels every retry — the
+    // same indirection banter has needed since #1419. The window's opening
+    // minutes are :15/:30/:45, deliberately never :00: that is the hourly time
+    // check's, and letting both land on the hour stacked a station ID and an
+    // hourly check back to back (and, with a between-track link, talking over
+    // each other) — issue #310.
+    const slot = openMinuteFor(talkSlot('station-id'), m);
+    if (slot == null) return false;
+    if (f === 'quiet')    return slot === 45;
+    if (f === 'moderate') return slot === 15 || slot === 45;
+    // Chatty and aggressive both ident at :15/:30/:45 (three an hour is the
+    // ceiling); the rungs differ in link spacing, segment floors and banter
+    // instead.
+    return true;
   }
 
   if (kind === 'hourly') {
@@ -68,8 +75,9 @@ export function shouldFire(kind, now = new Date()) {
     // the exchange instead of cancelling the hour (#1419). The window shape
     // lives in banter-policy.ts; this stays the frequency ladder only, and asks
     // it which slot the minute belongs to so a retry minute (:24) reads as the
-    // same slot as its opening one (:20) rather than as no slot at all.
-    const slot = banterSlot(m);
+    // same slot as its opening one (:20) rather than as no slot at all — the
+    // same question the ident rung above now asks.
+    const slot = openMinuteFor(talkSlot('banter'), m);
     if (slot == null) return false;
     // Banter is chatty by nature: a quiet persona never auto-fires it (the
     // operator's manual /dj/segment trigger still works), moderate gets at

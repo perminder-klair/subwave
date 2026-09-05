@@ -67,6 +67,56 @@ const song = (id: string, title: string, artist: string) => ({ id, title, artist
   assert(b.pool.every(t => t.id === 't1' || t.id === 't2'), 'first two of the artist are kept');
 }
 
+// A single take() may LIFT the artist cap for itself (TakeOpts.maxPerArtist).
+// This is what the coast's dedicated show-playlist source does on a strict
+// playlist show: the operator pinned an exact set, so a single-artist playlist
+// contributing only AUTO_MAX_PER_ARTIST tracks left the strict end-filter in
+// scheduler.ts with 2 tracks to keep and the station looped a 2-track fallback.
+{
+  const b = createPoolBuilder({ recentIds: new Set(), recentKeys: new Set(), targetPool: 30, maxPerArtist: 2 });
+  b.take('show-playlist', [
+    song('p1', 'One', 'Arjan Dhillon'),
+    song('p2', 'Two', 'Arjan Dhillon'),
+    song('p3', 'Three', 'Arjan Dhillon'),
+    song('p4', 'Four', 'Arjan Dhillon'),
+  ], 30, { maxPerArtist: Infinity });
+  assert.equal(b.pool.length, 4, 'a per-take maxPerArtist override lifts the cap for that source');
+}
+
+// ...and the override must NOT leak to the other sources. A strict-playlist
+// show may ALSO pin a genre, and an uncapped show-genre source would fill
+// targetPool with tracks the strict end-filter is about to drop — starving the
+// in-playlist share the override exists to protect.
+{
+  const b = createPoolBuilder({ recentIds: new Set(), recentKeys: new Set(), targetPool: 30, maxPerArtist: 2 });
+  b.take('show-playlist', [
+    song('p1', 'One', 'Arjan Dhillon'),
+    song('p2', 'Two', 'Arjan Dhillon'),
+    song('p3', 'Three', 'Arjan Dhillon'),
+  ], 30, { maxPerArtist: Infinity });
+  b.take('show-genre', [
+    song('g1', 'G One', 'Sidhu Moose Wala'),
+    song('g2', 'G Two', 'Sidhu Moose Wala'),
+    song('g3', 'G Three', 'Sidhu Moose Wala'),  // over the builder cap → dropped
+  ], 30);
+  assert.equal(b.pool.filter(t => t._source === 'show-playlist').length, 3, 'the overriding source keeps its uncapped share');
+  assert.equal(b.pool.filter(t => t._source === 'show-genre').length, 2, 'the builder cap still binds every other source');
+}
+
+// The override survives the neverStarve retry — that retry drops only the
+// recency guard, so a strict-playlist show whose whole playlist is inside the
+// recency window must still get its uncapped in-set contribution.
+{
+  const recentIds = new Set(['p1', 'p2', 'p3']);
+  const b = createPoolBuilder({ recentIds, recentKeys: new Set(), targetPool: 30, maxPerArtist: 2 });
+  b.take('show-playlist', [
+    song('p1', 'One', 'Arjan Dhillon'),
+    song('p2', 'Two', 'Arjan Dhillon'),
+    song('p3', 'Three', 'Arjan Dhillon'),
+  ], 30, { neverStarve: true, maxPerArtist: Infinity });
+  assert.equal(b.pool.length, 3, 'neverStarve retry honours the per-take artist cap override');
+}
+
 // ── caps: per-take cap and targetPool ceiling ────────────────────────────────
 
 // The per-call `cap` limits how many a single source contributes.

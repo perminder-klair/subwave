@@ -149,12 +149,17 @@ model stages rather than replacing the whole analyzer. A sounds-like backfill
 over tracks whose baseline analysis is already current skips those baseline
 features, and batches each track's CLAP windows into one CUDA model call.
 
-It's a compose overlay, not an `.env` toggle (a GPU device reservation can't be
-switched from `.env`):
+By default the base `docker-compose.yml` selects the CPU analyzer. To keep the
+CUDA image and GPU reservation on every Compose command, set `COMPOSE_FILE` in
+`.env`:
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
+```dotenv
+COMPOSE_FILE=docker-compose.yml:docker-compose.analyzer-gpu.yml
 ```
+
+With that line present, normal rebuilds and restarts keep using the CUDA analyzer.
+Remove the line to return to the CPU analyzer. This remains opt-in because the
+GPU overlay must not be enabled by default on CPU-only hosts.
 
 That swaps the `analyzer` service to the `subwave-analyzer-cuda` image (heavy +
 cu124 torch wheels) and hands it the GPU. Requirements: the NVIDIA driver +
@@ -206,11 +211,33 @@ a LAN or Tailscale address — `localhost` is the *controller container's*
 loopback.
 
 The fast path still uses shared storage: the controller pre-fetches each track
-to `/var/sub-wave/analyze-tmp/` and hands that path to the analyzer, overlapping
-the next network fetch with the current DSP work. If the remote analyzer cannot
-read the path, it now returns a typed refusal and the controller retries that
-track by URL. That makes a share-less remote analyzer work, at the cost of the
-prefetch overlap.
+to `/var/sub-wave/analyze-tmp/` and hands that path to the analyzer. If the
+remote analyzer cannot read the path, it returns the typed `422
+path_unavailable` response and the controller retries that track by URL. That
+makes a share-less remote analyzer work without copying station state, though
+the remote service must then download each admitted track itself.
+
+Remote URL fetching is where bounded concurrency is useful: download/decode for
+some tracks can overlap inference on others. Set the same value on both hosts:
+
+```ini
+# root .env on the STATION host (controller's active-request limit)
+ANALYZE_CONCURRENCY=2
+```
+
+```yaml
+# GPU host analyzer service (number of independent worker processes)
+environment:
+  - ANALYZE_CONCURRENCY=2
+```
+
+The default is `1`, preserving the existing single-flight pass. Values `2`–`4`
+are sensible starting points for a remote GPU, with a supported maximum of `8`.
+Each sidecar worker is an independent Python process and may load its own CLAP
+and Demucs models, so raising the value increases CPU, RAM and VRAM use as well
+as network and Navidrome/source-server demand. A mismatch is safe but effective
+parallelism is limited by the smaller usable side. This is an operator tuning
+trade-off, not a guaranteed speedup.
 
 A same-path state mount is therefore **recommended for throughput, but required
 only for stem caching**. Stem rendering writes into `state/stems/`; a remote
@@ -228,6 +255,8 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
+    environment:
+      - ANALYZE_CONCURRENCY=2  # match the station host; default 1
     volumes:
       # Optional for ordinary analysis; recommended for the prefetch fast path
       # and REQUIRED for stem caching. It must resolve to the station's state

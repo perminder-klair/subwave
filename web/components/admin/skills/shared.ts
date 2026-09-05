@@ -19,6 +19,7 @@ export interface Skill {
   cooldownMs?: number;
   custom?: boolean;
   tags?: string[];
+  cohosts?: boolean;
 }
 
 export type StatusFilter = 'all' | 'enabled' | 'disabled' | 'needs-key' | 'custom' | 'builtin';

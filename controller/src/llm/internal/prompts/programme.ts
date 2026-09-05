@@ -283,6 +283,7 @@ ${castBlock}
 
 Rules:
 - ${MIN_EXCHANGE_LINES} to ${MAX_EXCHANGE_LINES} lines total, at least two speakers; the host carries the room.
+- ${settings.castSpeakerIdRule()}
 - Each speaker stays in THEIR OWN character per the voice notes.
 - ${beatTask}
 - Plain spoken words only: no stage directions, no asterisks, no emoji. No invented listener messages, callers, or events.

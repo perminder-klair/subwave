@@ -1,12 +1,15 @@
 // Shim that folds the pure-stdlib Python suites into `npm test`'s *.test.ts
 // auto-discovery, so they actually run with the rest of the suite instead of
 // only when someone remembers `python3 scripts/<file>.py`. Each suite is
-// deliberately dependency-free (no torch / demucs / librosa / audio), so a
-// plain python3 is the only requirement; a box without one skips cleanly
-// (exit 0) rather than failing the suite — CI runs lint only, so this gate is
-// for contributors' own `npm test` runs.
+// lightweight and isolated from the analyzer runtime (no torch / demucs /
+// librosa / audio). Two numerical suites use NumPy; when it is unavailable,
+// this shim installs the pinned test-only wheel into a temporary directory, so
+// a clean checkout's `npm test` is reproducible without modifying the user's
+// Python environment. A box without python3 still skips cleanly (exit 0).
 
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -28,11 +31,34 @@ if (probe.error || probe.status !== 0) {
   process.exit(0);
 }
 
+const NUMPY_VERSION = '2.5.2';
+const pythonEnv = { ...process.env };
+let depsDir: string | null = null;
+const numpyProbe = spawnSync('python3', ['-c', 'import numpy'], { stdio: 'ignore' });
+if (numpyProbe.status !== 0) {
+  depsDir = mkdtempSync(join(tmpdir(), 'subwave-python-test-deps-'));
+  console.log(`— installing test dependency numpy==${NUMPY_VERSION}`);
+  const install = spawnSync(
+    'python3',
+    ['-m', 'pip', 'install', '--disable-pip-version-check', '--no-input', '--target', depsDir, `numpy==${NUMPY_VERSION}`],
+    { stdio: 'inherit' },
+  );
+  if (install.error || install.status !== 0) {
+    console.error(`✗ could not install test dependency numpy==${NUMPY_VERSION}`);
+    process.exit(1);
+  }
+  pythonEnv.PYTHONPATH = pythonEnv.PYTHONPATH ? `${depsDir}:${pythonEnv.PYTHONPATH}` : depsDir;
+}
+
 const failed: string[] = [];
-for (const file of SUITES) {
-  console.log(`— ${file}`);
-  const { status } = spawnSync('python3', [join(scriptsDir, file)], { stdio: 'inherit' });
-  if (status !== 0) failed.push(file);
+try {
+  for (const file of SUITES) {
+    console.log(`— ${file}`);
+    const { status } = spawnSync('python3', [join(scriptsDir, file)], { stdio: 'inherit', env: pythonEnv });
+    if (status !== 0) failed.push(file);
+  }
+} finally {
+  if (depsDir) rmSync(depsDir, { recursive: true, force: true });
 }
 
 if (failed.length > 0) {

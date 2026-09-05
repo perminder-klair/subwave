@@ -100,10 +100,12 @@ test('config.ts builds on real defaults with a hostile environment', async () =>
   process.env.PORT = 'eight thousand';
   process.env.PIPER_SPEED = 'fast';
   process.env.NAVIDROME_URL = 'navidrome:4533';
+  process.env.ANALYZE_CONCURRENCY = 'many';
   const { config } = await import('../src/config.js');
   assert.equal(config.news.maxItems, 10);
   assert.equal(config.server.port, 7701);
   assert.equal(config.piper.speed, 1);
   assert.equal(config.navidrome.url, 'http://navidrome:4533');
+  assert.equal(config.analyzer.concurrency, 1);
   assert.ok(Number.isFinite(config.tts.cloudSpeed), 'no NaN reaches the TTS layer');
 });

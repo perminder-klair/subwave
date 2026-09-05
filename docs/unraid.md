@@ -388,6 +388,15 @@ path. For most people the single-upstream setup above is the easier win.
   so on Unraid it was unsettable. It is a station setting now. (Adding
   `ICECAST_MAX_CLIENTS` as a custom container variable still overrides the
   field; the broadcast log names which source it used on every boot.)
+- **Listener country in Stats:** **admin → Settings → Danger zone → Listener
+  country**. `CF-IPCountry` only exists behind Cloudflare, so a station reached
+  over the LAN or a plain reverse proxy shows sessions with no geography. Name
+  your proxy's own country header there, or point the same card at an offline
+  `.mmdb` database (put it under the appdata path — the container already sees
+  it). Both are settings rather than variables for the same reason max listeners
+  is: the AIO image has no `.env`. `GEOIP_DB_PATH` as a custom container
+  variable still overrides the field. Full recipe in
+  [`deployment.md`](deployment.md#listener-country-on-the-stats-page).
 - **Backups:** everything lives under the appdata path
   (`/mnt/user/appdata/subwave`) — settings, library cache, archives, voices.
   Back that path up (it's already on your pool/array).

@@ -310,6 +310,10 @@ export default function SettingsPanel() {
     const v = data.values;
     const nextForm: FormState = {
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
+      ducking: {
+        voice: String(v.ducking?.voice ?? 0.22),
+        intro: String(v.ducking?.intro ?? 0.3),
+      },
       maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
       silenceTrim: {
         enabled: v.silenceTrim?.enabled ?? false,
@@ -338,6 +342,8 @@ export default function SettingsPanel() {
         idleWhenEmpty: v.stream?.idleWhenEmpty ?? false,
         idleAfterMinutes: String(v.stream?.idleAfterMinutes ?? 10),
         maxListeners: String(v.stream?.maxListeners ?? 100),
+        countryHeader: v.stream?.countryHeader ?? '',
+        geoipDbPath: v.stream?.geoipDbPath ?? '',
       },
       loudness: {
         targetLufs: String(v.loudness?.targetLufs ?? -14),
@@ -365,6 +371,9 @@ export default function SettingsPanel() {
         onePendingPerIp: v.requests?.onePendingPerIp !== false,
       },
       kokoroLang: v.tts?.kokoro?.lang ?? '',
+      // Absent (a settings.json predating the key) reads as OFF, matching the
+      // controller's own coercion in settings.load().
+      djTalkOnlyBetweenTracks: v.djTalkOnlyBetweenTracks === true,
       weather: {
         lat: String(v.weather?.lat ?? ''),
         lng: String(v.weather?.lng ?? ''),
@@ -492,6 +501,7 @@ export default function SettingsPanel() {
         // round-trips through POST harmlessly (settings.update ignores 'set').
         apiKey: v.search?.apiKey ?? '',
         baseUrl: v.search?.baseUrl ?? '',
+        searxngEngines: v.search?.searxngEngines ?? '',
       },
       embedding: {
         enabled: v.embedding?.enabled ?? true,
@@ -534,6 +544,14 @@ export default function SettingsPanel() {
           username: v.scrobble?.listenbrainz?.username ?? '',
           baseUrl: v.scrobble?.listenbrainz?.baseUrl ?? '',
         },
+        navidrome: {
+          enabled: !!v.scrobble?.navidrome?.enabled,
+        },
+      },
+      picker: {
+        // 0 = off, and that IS the shipped default — an absent key must read as
+        // off rather than inventing a cooldown the operator never asked for.
+        albumHours: String(typeof v.picker?.albumHours === 'number' ? v.picker.albumHours : 0),
       },
       likes: {
         enabled: v.likes?.enabled ?? true,
@@ -668,6 +686,10 @@ export default function SettingsPanel() {
     const n = numberFields();
     saveBlock(n, {
       crossfadeDuration: n.float('crossfadeDuration', form.crossfadeDuration),
+      ducking: {
+        voice: n.float('ducking.voice', form.ducking.voice),
+        intro: n.float('ducking.intro', form.ducking.intro),
+      },
       maxTrackSeconds: n.int('maxTrackSeconds', form.maxTrackSeconds),
       silenceTrim: {
         enabled: form.silenceTrim.enabled,
@@ -698,6 +720,8 @@ export default function SettingsPanel() {
         bitrate: n.int('stream.bitrate', form.stream.bitrate),
         bufferSeconds: n.num('stream.bufferSeconds', form.stream.bufferSeconds),
         maxListeners: n.int('stream.maxListeners', form.stream.maxListeners),
+        countryHeader: form.stream.countryHeader,
+        geoipDbPath: form.stream.geoipDbPath,
       },
     });
   };
@@ -1131,7 +1155,7 @@ export default function SettingsPanel() {
               </Card>
             )}
 
-            <Advanced note="crossfade, transitions, loudness and the extra stream mounts">
+            <Advanced note="crossfade, duck depth, transitions, loudness and the extra stream mounts">
             {form && (
               <Card title="Crossfade" sub="track transition overlap">
                 <div className="field">
@@ -1157,6 +1181,70 @@ export default function SettingsPanel() {
                   <div className="field-hint">
                     Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
                     Saving flags a pending restart. Apply it with the Mixer card below.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Duck depth" sub="how far the music drops under the DJ">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>DJ over silence</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        aria-label="Duck depth for solo DJ speech"
+                        type="number"
+                        step={0.01}
+                        min={0}
+                        max={1}
+                        value={form.ducking.voice}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f => (f ? { ...f, ducking: { ...f.ducking, voice: e.target.value } } : f))
+                        }
+                      />
+                      <span className="text-[12px] text-muted">× music</span>
+                    </div>
+                    <SettingsFieldError path="ducking.voice" errors={fieldErrors} />
+                    <div className="field-hint">
+                      The heavy duck: station IDs, the hourly time, weather and request intros
+                      (current: {data?.values?.ducking?.voice}). It is the fraction of the music
+                      LEFT UP, so smaller is deeper — 0.22 is about −13 dB, 1 is no duck at all
+                      and 0 mutes the music while the DJ talks. Saving flags a pending restart;
+                      apply it with the Mixer card below.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>DJ over a track</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        aria-label="Duck depth for talk-over links"
+                        type="number"
+                        step={0.01}
+                        min={0}
+                        max={1}
+                        value={form.ducking.intro}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f => (f ? { ...f, ducking: { ...f.ducking, intro: e.target.value } } : f))
+                        }
+                      />
+                      <span className="text-[12px] text-muted">× music</span>
+                    </div>
+                    <SettingsFieldError path="ducking.intro" errors={fieldErrors} />
+                    <div className="field-hint">
+                      The light duck for between-track links, which talk over the song rather
+                      than replacing it (current: {data?.values?.ducking?.intro}). Keep it above
+                      the heavy duck — 0.30 is about −10 dB. Saving flags a pending restart.
+                    </div>
                   </div>
                 </div>
               </Card>
@@ -1811,6 +1899,60 @@ export default function SettingsPanel() {
               </Card>
             )}
 
+            {form && (
+              <Card title="Listener country" sub="where the Stats rollup gets geography from">
+                <div className="field">
+                  <Label>Country header</Label>
+                  <Input
+                    className="w-full"
+                    aria-label="Proxy header carrying the listener country"
+                    placeholder="x-country-code"
+                    value={form.stream.countryHeader}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f =>
+                        f
+                          ? { ...f, stream: { ...f.stream, countryHeader: e.target.value } }
+                          : f,
+                      )
+                    }
+                  />
+                  <SettingsFieldError path="stream.countryHeader" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Stats reads <code>CF-IPCountry</code> first, which only Cloudflare sets.
+                    If your own proxy adds a country header, name it here and it is read
+                    when Cloudflare&apos;s is absent. Leave blank if you have neither —
+                    an unknown country is simply left out of the rollup.
+                  </div>
+                </div>
+                <div className="field">
+                  <Label>GeoIP database</Label>
+                  <Input
+                    className="w-full"
+                    aria-label="Path to an offline GeoIP database"
+                    placeholder="/var/sub-wave/geoip/GeoLite2-Country.mmdb"
+                    value={form.stream.geoipDbPath}
+                    onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                      setForm(f =>
+                        f
+                          ? { ...f, stream: { ...f.stream, geoipDbPath: e.target.value } }
+                          : f,
+                      )
+                    }
+                  />
+                  <SettingsFieldError path="stream.geoipDbPath" errors={fieldErrors} />
+                  <div className="field-hint">
+                    Last resort when no header carries the answer: the path, inside the
+                    controller container, of a MaxMind-format <code>.mmdb</code> country
+                    database you supply — GeoLite2, DB-IP Lite and IP2Location LITE all
+                    work. Nothing is bundled; each has its own licence and attribution
+                    terms. An unreadable file is logged once and then ignored, so a wrong
+                    path costs the lookup, never a listener.{' '}
+                    <strong>GEOIP_DB_PATH</strong>{' '}in the environment overrides this.
+                  </div>
+                </div>
+              </Card>
+            )}
+
 
             </Advanced>
 
@@ -1836,7 +1978,7 @@ export default function SettingsPanel() {
               onSave={saveDanger}
               saveLabel="Save danger zone"
               errors={fieldErrors}
-              ownedKeys={['crossfadeDuration', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'audio', 'loudness', 'stream']}
+              ownedKeys={['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'audio', 'loudness', 'stream']}
             />
           </>
         )}

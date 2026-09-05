@@ -37,6 +37,7 @@ import {
 } from './lib';
 import { settingsKeys, useSettingsQuery } from '../settings/queries';
 import { scheduleKeys, useScheduleOverrideQuery } from './queries';
+import { isDefaultTakeover, takeoverShowId } from '@/lib/schemas.generated';
 
 /** The airtime-bar tick — hours a show "should" get in a week. */
 const WEEKLY_TARGET = 12;
@@ -205,7 +206,16 @@ export default function SchedulePanel() {
   const dirty = schedule && serverSchedule ? diffCells(schedule, serverSchedule) : 0;
 
   const liveOverride = override && override.expiresAt > now.getTime() ? override : null;
-  const pinnedShow = liveOverride ? showById(liveOverride.showId) : null;
+  const pinnedShowId = takeoverShowId(liveOverride);
+  const pinnedShow = pinnedShowId ? showById(pinnedShowId) : null;
+  const defaultTakeover = isDefaultTakeover(liveOverride);
+  // A takeover only OWNS this header when it resolves to something really on
+  // air — a named show still in the roster, or Default programming. A target
+  // that names neither voids the takeover (the same rule the controller's
+  // getScheduleOverride applies), and the weekly grid is what is playing, so
+  // claiming "On air · takeover" over the grid show's name would be the false
+  // claim #1507's Rundown criterion forbids.
+  const airingTakeover = liveOverride && (pinnedShow || defaultTakeover) ? liveOverride : null;
 
   // Resolve through the roster rather than trusting the id: a show deleted in
   // another tab would leave a dangling brush that writes an unrenderable id.
@@ -491,8 +501,10 @@ export default function SchedulePanel() {
     ? `${Math.floor(leftMin / 60)} h ${leftMin % 60} min left`
     : `${leftMin} min left`;
 
-  const onAirShow = pinnedShow ?? showById(curBlock.showId);
-  const onAirColor = pinnedShow ? colorOf(pinnedShow.id) : curBlock.showId ? colorOf(curBlock.showId) : null;
+  const onAirShow = defaultTakeover ? null : pinnedShow ?? showById(curBlock.showId);
+  const onAirColor = defaultTakeover
+    ? null
+    : pinnedShow ? colorOf(pinnedShow.id) : curBlock.showId ? colorOf(curBlock.showId) : null;
 
   const clockLabel = `${now.toLocaleDateString(locale, {
     weekday: 'short', month: 'short', day: 'numeric', year: 'numeric',
@@ -556,16 +568,20 @@ export default function SchedulePanel() {
       <div className="border-b border-ink bg-[var(--page-bg)]">
         <div className="grid grid-cols-1 sm:grid-cols-3">
           <NowCell
-            label={pinnedShow ? 'On air · takeover' : 'On air'}
+            label={airingTakeover ? 'On air · takeover' : 'On air'}
             live
-            time={liveOverride
-              ? `until ${fmtClock(liveOverride.expiresAt, tz, locale)}`
+            time={airingTakeover
+              ? `until ${fmtClock(airingTakeover.expiresAt, tz, locale)}`
               : `${hhmm(curBlock.start)} – ${hhmm(curBlock.start + curBlock.span)}`}
-            left={pinnedShow ? undefined : leftLabel}
-            name={onAirShow ? onAirShow.name : 'Nobody in the chair'}
+            left={airingTakeover ? undefined : leftLabel}
+            name={defaultTakeover
+              ? 'Default programming'
+              : onAirShow ? onAirShow.name : 'Nobody in the chair'}
             color={onAirColor}
-            meta={metaOf(pinnedShow ? pinnedShow.id : curBlock.showId)}
-            pct={pinnedShow ? undefined : Math.min(100, Math.round((elapsedMin / totalMin) * 100))}
+            meta={defaultTakeover
+              ? 'autonomous music · default DJ'
+              : metaOf(pinnedShow ? pinnedShow.id : curBlock.showId)}
+            pct={airingTakeover ? undefined : Math.min(100, Math.round((elapsedMin / totalMin) * 100))}
           />
           <NowCell
             label="Up next"

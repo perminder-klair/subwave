@@ -85,6 +85,7 @@ interface SkillFormValues {
   cooldown: string;
   cron: string;
   cronOnly: boolean;
+  cohosts: boolean;
   context: string[];
   tags: string[];
   brief: string;
@@ -124,6 +125,7 @@ function fileToFormValues(j: SkillFileResponse) {
     cooldown: j.cooldown || '',
     cron: j.cron || '',
     cronOnly: !!j.cronOnly,
+    cohosts: !!j.cohosts,
     context: splitContext(j.context),
     window: (j.window === 'commute' ? 'commute' : 'any') as 'any' | 'commute',
     tags: Array.isArray(j.tags) ? j.tags : [],
@@ -191,8 +193,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const form = useZodForm(
     schema,
     (mode === 'create'
-      ? { name: '', label: '', cooldown: '', cron: '', cronOnly: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '' }
-      : { label: '', cooldown: '', cron: '', cronOnly: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '' }
+      ? { name: '', label: '', cooldown: '', cron: '', cronOnly: false, cohosts: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '' }
+      : { label: '', cooldown: '', cron: '', cronOnly: false, cohosts: false, context: [], tags: [], brief: '', window: 'any', requiresKey: '' }
     ) as DefaultValues<z.input<typeof schema>>,
   );
   const control = form.control as unknown as Control<SkillFormValues>;
@@ -275,7 +277,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   // passthrough with no rendered control, so a disk-authored value that isn't
   // UPPER_SNAKE_CASE has nowhere else to surface, and a gated Save would
   // otherwise never say why.
-  const FIELDS_WITH_INLINE_ERRORS = ['name', 'label', 'cooldown', 'cron', 'cronOnly', 'context', 'tags', 'window', 'brief'];
+  const FIELDS_WITH_INLINE_ERRORS = ['name', 'label', 'cooldown', 'cron', 'cronOnly', 'cohosts', 'context', 'tags', 'window', 'brief'];
   const blockingIssue = (() => {
     const entry = Object.entries(form.formState.errors).find(
       ([key, err]) => err && !FIELDS_WITH_INLINE_ERRORS.includes(key),
@@ -291,6 +293,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const cooldownValue = (useWatch({ control, name: 'cooldown' }) as string | undefined) || '';
   const contextValue = (useWatch({ control, name: 'context' }) as string[] | undefined) || [];
   const windowValue = (useWatch({ control, name: 'window' }) as 'any' | 'commute' | undefined) || 'any';
+  const cohostsValue = !!useWatch({ control, name: 'cohosts' });
   const displayName = labelValue || (isEdit ? titleCase(kind) : (nameValue ? titleCase(nameValue) : 'New skill'));
 
   const saveMutation = useAdminMutation<SkillsResponse, {
@@ -508,6 +511,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
       cooldown: cooldownValue,
       context: contextValue.join(', '),
       window: windowValue === 'commute' ? 'commute' : '',
+      cohosts: cohostsValue ? 'true' : '',
     });
     window.open(url, '_blank', 'noopener,noreferrer');
   };
@@ -782,6 +786,36 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
               <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6, maxWidth: '72ch' }}>
                 Off by default: the skill stays eligible for the DJ&apos;s normal between-track random picks in addition to firing on the schedule above. Turn this on for a skill written around a specific moment (a running joke tied to a particular time) so it never airs at any other time.
               </div>
+            </div>
+
+            <div className="sw-section">
+              <Controller
+                control={control}
+                name="cohosts"
+                render={({ field }) => {
+                  const baseId = `${uid}-cohosts`;
+                  const aria = fieldAria(baseId);
+                  return (
+                    <>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <Switch
+                          {...aria.controlProps}
+                          checked={!!field.value}
+                          onCheckedChange={field.onChange}
+                          onBlur={field.onBlur}
+                          ref={field.ref}
+                        />
+                        <label {...aria.labelProps} style={{ ...sectionLabel, cursor: 'pointer' }}>
+                          CO-HOSTED DISCUSSION
+                        </label>
+                      </div>
+                      <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 12, lineHeight: 1.6, maxWidth: '72ch' }}>
+                        Uses the current show&apos;s host plus every guest co-host, with each contribution spoken in that persona&apos;s own voice. It runs only while a co-hosted show is active; the show roster, not this skill, chooses the participants.
+                      </div>
+                    </>
+                  );
+                }}
+              />
             </div>
 
             {/* Window — custom skills only (built-in window isn't editable) */}
