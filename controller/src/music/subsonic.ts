@@ -532,6 +532,28 @@ export async function unstar(id) {
   await call('unstar', { id });
 }
 
+// Play reporting for Navidrome (#1298). Two calls, one endpoint:
+//   submission=false → "now playing" ping (Navidrome shows the track under
+//     Now Playing and does NOT touch playCount/lastPlayed)
+//   submission=true  → the real scrobble, which is what bumps playCount and
+//     lastPlayed so `.nsp` smart playlists filtering on lastPlayed rotate.
+// `time` is MILLISECONDS since epoch (Subsonic's own unit here — unlike
+// Last.fm/ListenBrainz, which take seconds), and names when the play STARTED.
+// Omitted when unknown so the server stamps its own clock.
+//
+// Throws like every other call() — broadcast/scrobble.ts is the only caller and
+// swallows it, because a Navidrome outage must never reach the broadcast.
+export async function scrobble(
+  id: string,
+  { submission = true, timeMs = null }: { submission?: boolean; timeMs?: number | null } = {},
+) {
+  await call('scrobble', {
+    id,
+    submission,
+    time: Number.isFinite(timeMs as number) ? Math.floor(timeMs as number) : null,
+  });
+}
+
 export async function getAlbumList(offset = 0, size = 500) {
   const r = await call('getAlbumList2', { type: 'alphabeticalByName', size, offset });
   return r.albumList2?.album || [];

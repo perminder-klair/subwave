@@ -20,8 +20,10 @@ interface ScrobbleSectionProps extends SectionProps {
 export function ScrobbleSection({ data, form, setForm, busy, saveSettings, adminFetch, refresh }: ScrobbleSectionProps) {
   const lf = form.scrobble.lastfm;
   const lb = form.scrobble.listenbrainz;
+  const nd = form.scrobble.navidrome;
   const savedLf = data.values?.scrobble?.lastfm || {};
   const savedLb = data.values?.scrobble?.listenbrainz || {};
+  const savedNd = data.values?.scrobble?.navidrome || {};
 
   // 'set' means "stored": leave the input empty. The controller ignores 'set' on
   // POST, so a round-trip won't blank the secret.
@@ -35,6 +37,9 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
   const lbTokenSet = lb.userToken === 'set' || !!env.LISTENBRAINZ_USER_TOKEN;
   const lfReady = lf.enabled && lfApiKeySet && lfApiSecretSet && lfSessionSet;
   const lbReady = lb.enabled && lbTokenSet;
+  // Navidrome has no credentials of its own — the station's existing connection
+  // is the credential, so "enabled" is the whole readiness test here.
+  const ndReady = !!nd.enabled;
 
   // Needs the API key + secret saved first (the backend reads them from settings/env).
   const canConnect = lfApiKeySet && lfApiSecretSet;
@@ -60,8 +65,11 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
     if (lb.userToken && lb.userToken !== 'set') patch.userToken = lb.userToken;
     saveSettings({ scrobble: { listenbrainz: patch } });
   };
+  const saveNavidrome = () => {
+    saveSettings({ scrobble: { navidrome: { enabled: nd.enabled } } });
+  };
 
-  const sendTest = async (provider: 'lastfm' | 'listenbrainz') => {
+  const sendTest = async (provider: 'lastfm' | 'listenbrainz' | 'navidrome') => {
     try {
       const r = await adminResponse(adminFetch, '/scrobble/test', {
         method: 'POST',
@@ -132,16 +140,19 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
     <>
       <SectionHeader
         eyebrow="scrobbling"
-        title="Station-wide scrobbling to Last.fm and ListenBrainz."
+        title="Station-wide scrobbling to Last.fm, ListenBrainz and your own Navidrome."
         sub={<>
-          Each backend is independent, pick one or both. Tracks scrobble only when at
-          least one listener is tuned in to the stream. For Last.fm, enter your API key
-          and secret, then hit <strong>Connect to Last.fm</strong> to authorize, no
-          session-key wrangling. Nothing here leaves the controller.
+          Each backend is independent, pick any of them. Last.fm and ListenBrainz
+          scrobble only when at least one listener is tuned in to the stream;
+          Navidrome logs every track the station airs, because that is what keeps
+          smart playlists rotating. For Last.fm, enter your API key and secret, then
+          hit <strong>Connect to Last.fm</strong> to authorize, no session-key
+          wrangling. Nothing here leaves the controller.
         </>}
         metrics={[
           { n: lfReady ? 'on' : 'off', l: 'last.fm', accent: lfReady },
           { n: lbReady ? 'on' : 'off', l: 'listenbrainz', accent: lbReady },
+          { n: ndReady ? 'on' : 'off', l: 'navidrome', accent: ndReady },
         ]}
       />
 
@@ -426,6 +437,74 @@ export function ScrobbleSection({ data, form, setForm, busy, saveSettings, admin
           busy={busy}
           onSave={saveListenbrainz}
           saveLabel="Save ListenBrainz"
+        />
+      </Card>
+
+      <Card
+        title="Navidrome"
+        sub={ndReady ? 'logging plays back to your library' : 'not logging plays'}
+      >
+        <div className="grid gap-[18px]">
+          <div className="field">
+            <div className="flex items-center gap-2">
+              <Label>Enabled</Label>
+              {nd.enabled !== !!savedNd.enabled && <Pill tone="accent" dot>unsaved</Pill>}
+            </div>
+            <Seg
+              value={nd.enabled ? 'on' : 'off'}
+              onChange={v =>
+                setForm(f => ({
+                  ...f,
+                  scrobble: {
+                    ...f.scrobble,
+                    navidrome: { ...f.scrobble.navidrome, enabled: v === 'on' },
+                  },
+                }))
+              }
+              options={[{ id: 'off', label: 'Off' }, { id: 'on', label: 'On' }]}
+            />
+            <div className="field-hint">
+              Reports plays back to the Navidrome you already stream from, so
+              <strong> play count</strong> and <strong>last played</strong> move as the
+              station airs tracks. That is what <code>.nsp</code> smart playlists filter
+              on, so a rule like &ldquo;not played in the last 7 days&rdquo; finally keeps
+              the Auto-DJ off the same handful of songs. Off by default; nothing else to
+              configure, it reuses your existing Navidrome connection.
+            </div>
+          </div>
+
+          <div className="field">
+            <Label>Listener gate</Label>
+            <div className="field-hint">
+              Unlike Last.fm and ListenBrainz, this one is <strong>not</strong> gated on
+              listeners. A track the station played to an empty room still has to stop
+              the picker reaching for it again an hour later, and this is your own
+              library rather than a public profile.
+            </div>
+          </div>
+
+          {/* Test probes the SAVED setting against the live Navidrome, so it
+              belongs in the card and not beside the save button: the save bar
+              renders only while the section is dirty. */}
+          <div className="field">
+            <div className="flex flex-wrap items-center gap-3">
+              <Btn sm onClick={() => sendTest('navidrome')} disabled={busy || !ndReady}>
+                Test
+              </Btn>
+              <span className="text-[12px] leading-[1.5] text-muted">
+                Sends a now-playing ping for the on-air track. Needs something playing
+                that came from the library (an untracked auto-playlist file has no id to
+                report).
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <SaveBar
+          note="Applies on the next track transition, no restart needed."
+          busy={busy}
+          onSave={saveNavidrome}
+          saveLabel="Save Navidrome"
         />
       </Card>
     </>

@@ -1,4 +1,4 @@
-// Station-wide scrobbling — Last.fm + ListenBrainz.
+// Station-wide scrobbling — Last.fm + ListenBrainz + Navidrome.
 //
 // Triggered from Queue.onTrackStarted on every real music transition:
 //   - the OUTGOING track (the one that just ended) is submitted as a scrobble
@@ -7,16 +7,28 @@
 //   - the INCOMING track gets a `track.updateNowPlaying` / `playing_now` ping
 //     so the operator's profile shows "currently playing X" — same listener
 //     gate, no eligibility check
+//   - Navidrome takes both halves through the Subsonic `scrobble` endpoint
+//     (`submission=false` for the ping, `submission=true` for the play) so
+//     playCount and lastPlayed move in the operator's own library
 //
-// Each backend (Last.fm, ListenBrainz) is independent: own enable flag, own
-// credentials, own failure mode. Every network call is fire-and-forget with a
-// 5s timeout — matching broadcast/webhooks.ts. Failures log to stderr; there
-// is no retry queue. If you want guaranteed delivery, point at a relay.
+// Each backend (Last.fm, ListenBrainz, Navidrome) is independent: own enable
+// flag, own credentials, own failure mode. Every network call is
+// fire-and-forget with a 5s timeout — matching broadcast/webhooks.ts. Failures
+// log to stderr; there is no retry queue. If you want guaranteed delivery,
+// point at a relay.
 //
 // Listener gating fails CLOSED (unknown listener count → skip), unlike
 // djCallsAllowed() which fails OPEN. Silencing the DJ during a stats outage
 // is worse than over-talking, but polluting a real Last.fm profile with
 // scrobbles during a monitoring blip is worse than missing a few entries.
+//
+// Navidrome (#1298) is the exception and runs BEFORE that gate: it is the
+// operator's own library, not a public profile, and the point of stamping
+// playCount/lastPlayed is that `.nsp` smart playlists rotate — a play nobody
+// heard still has to stop the picker reaching for the same track an hour
+// later. `planNavidrome` in scrobble-pure.ts owns that reasoning; the ordering
+// here is what makes it reachable. With the setting off (the default) nothing
+// about the pre-existing path changes.
 
 import { createHash } from 'node:crypto';
 import * as settings from '../settings.js';
@@ -28,6 +40,14 @@ import {
   resolveLastfmSessionKey,
 } from '../music/lastfm-shared.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
+import { config } from '../config.js';
+import * as subsonic from '../music/subsonic.js';
+import {
+  elapsedSeconds,
+  isEligibleScrobble,
+  planNavidrome,
+  type ScrobbleTrackLike,
+} from './scrobble-pure.js';
 
 const TIMEOUT_MS = 5000;
 
@@ -49,50 +69,14 @@ function listenbrainzSubmitUrl(): string {
   return `${listenbrainzApiBase()}/submit-listens`;
 }
 
-// Last.fm's documented rule for a "valid scrobble":
-//   - the track must be longer than 30 seconds
-//   - and either >50% of the track has been played, or >4 minutes (whichever
-//     comes first)
-// When duration is unknown we can only enforce the 4-minute floor.
-const MIN_DURATION_SEC = 30;
-const MIN_ELAPSED_FLOOR_SEC = 240;
-
-export interface ScrobbleTrack {
-  id?: string | null;
-  title?: string | null;
-  artist?: string | null;
-  album?: string | null;
-  duration?: number | null; // seconds, optional
-}
+// The eligibility rule and the Navidrome plan are pure and live in
+// scrobble-pure.ts — one copy, driven from a test table.
+export type ScrobbleTrack = ScrobbleTrackLike;
 
 interface TrackEventArgs {
   outgoing: ScrobbleTrack | null;        // the track that just ended (may be null on first start)
   outgoingStartedAt: string | null;      // ISO timestamp the outgoing track started at
   incoming: ScrobbleTrack | null;        // the track that just started
-}
-
-// ── eligibility ─────────────────────────────────────────────────────────────
-
-function elapsedSeconds(startedAt: string | null | undefined): number {
-  if (!startedAt) return 0;
-  const t = Date.parse(startedAt);
-  if (!Number.isFinite(t)) return 0;
-  return Math.max(0, Math.floor((Date.now() - t) / 1000));
-}
-
-function isEligibleScrobble(track: ScrobbleTrack | null, elapsed: number): boolean {
-  if (!track?.title || !track?.artist) return false;
-  const d = Number(track.duration);
-  if (Number.isFinite(d) && d > 0) {
-    if (d <= MIN_DURATION_SEC) return false;
-    return elapsed >= d / 2 || elapsed >= MIN_ELAPSED_FLOOR_SEC;
-  }
-  // Duration unknown (auto-playlist tracks don't carry it through the annotation
-  // chain). SUB/WAVE has no skip endpoint — Liquidsoap controls pacing and a
-  // new track replacing the old one means the old one played to natural
-  // completion. Treat elapsed as the effective duration and apply only the
-  // >30s floor (Last.fm's "ignore short clips" rule).
-  return elapsed >= MIN_DURATION_SEC;
 }
 
 // ── credential helpers ──────────────────────────────────────────────────────
@@ -354,12 +338,66 @@ async function listenbrainzSubmit(track: ScrobbleTrack, startedAt: string, token
   );
 }
 
+// ── Navidrome client ────────────────────────────────────────────────────────
+//
+// Reuses the Subsonic client every other library call goes through
+// (music/subsonic.ts), so it inherits the salt+token auth, the bounded fetch
+// and the /debug call log. Credentials come from `config.navidrome` — the same
+// ones the picker streams with — never from settings, so there is nothing to
+// paste and nothing to redact.
+
+function navidromeConfigured(): boolean {
+  const n = config.navidrome;
+  return !!(n?.url && n?.user && n?.password);
+}
+
+function navidromeEnabled(): boolean {
+  return !!settings.get()?.scrobble?.navidrome?.enabled;
+}
+
+// Fire-and-forget, like every other backend here. A Navidrome outage costs one
+// missing play stamp and must never surface anywhere near the broadcast, so the
+// only thing a failure does is log — no retry, no queue, no throw.
+function sendNavidrome(
+  id: string,
+  opts: { submission: boolean; timeMs?: number | null },
+  label: string,
+): void {
+  void subsonic
+    .scrobble(id, { submission: opts.submission, timeMs: opts.timeMs ?? null })
+    .catch((err: any) => {
+      console.warn(`[scrobble] navidrome ${label} failed: ${err?.message || String(err)}`);
+    });
+}
+
 // ── public surface ──────────────────────────────────────────────────────────
 
 // Called from Queue.onTrackStarted on every real music transition. Pure
-// side-effects — never throws, never blocks the caller. Fires both backends
-// in parallel (fire-and-forget).
+// side-effects — never throws, never blocks the caller. Fires every enabled
+// backend in parallel (fire-and-forget).
 export function onTrackEvent({ outgoing, outgoingStartedAt, incoming }: TrackEventArgs): void {
+  // Navidrome first — deliberately AHEAD of the listener gate below, which
+  // returns early on an unknown count. See the header note and planNavidrome.
+  const navPlan = planNavidrome({
+    enabled: navidromeEnabled(),
+    configured: navidromeConfigured(),
+    incoming,
+    outgoing,
+    outgoingStartedAt,
+  });
+  if (navPlan.nowPlayingId) {
+    console.log(`[scrobble] now-playing → navidrome: "${incoming?.title || navPlan.nowPlayingId}"`);
+    sendNavidrome(navPlan.nowPlayingId, { submission: false }, 'now-playing');
+  }
+  if (navPlan.submitId) {
+    console.log(`[scrobble] submit → navidrome: "${outgoing?.title || navPlan.submitId}"`);
+    sendNavidrome(
+      navPlan.submitId,
+      { submission: true, timeMs: navPlan.submitAtMs },
+      'submit',
+    );
+  }
+
   const listeners = presentListeners();
   if (listeners === null) {
     console.log(`[scrobble] skip: ${getListenerCount() ?? 'null'} listener(s)`);
@@ -403,7 +441,7 @@ export function onTrackEvent({ outgoing, outgoingStartedAt, incoming }: TrackEve
 // verify their credentials regardless of who's tuned in) but still respects
 // the per-backend enabled flag, since "disabled but configured" should not
 // surprise-emit.
-export type ScrobbleProvider = 'lastfm' | 'listenbrainz';
+export type ScrobbleProvider = 'lastfm' | 'listenbrainz' | 'navidrome';
 
 export interface TestResult {
   ok: boolean;
@@ -432,6 +470,24 @@ export async function testNowPlaying(
     return res.ok
       ? { ok: true, message: `sent playing_now to listenbrainz for "${track.title}"` }
       : { ok: false, message: `listenbrainz rejected it — ${res.message || 'unknown error'}` };
+  }
+  if (provider === 'navidrome') {
+    if (!navidromeEnabled()) return { ok: false, message: 'navidrome scrobbling is off' };
+    if (!navidromeConfigured()) {
+      return { ok: false, message: 'navidrome URL / username / password not configured' };
+    }
+    const id = String(track.id || '').trim();
+    if (!id) {
+      return { ok: false, message: 'the on-air track carries no Navidrome id — wait for a library track' };
+    }
+    // The one call here that is NOT fire-and-forget: the operator asked, so the
+    // error text is the answer.
+    try {
+      await subsonic.scrobble(id, { submission: false });
+      return { ok: true, message: `sent now-playing to navidrome for "${track.title}"` };
+    } catch (err: any) {
+      return { ok: false, message: `navidrome rejected it — ${err?.message || 'unknown error'}` };
+    }
   }
   return { ok: false, message: `unknown provider "${provider}"` };
 }

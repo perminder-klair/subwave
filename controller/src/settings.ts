@@ -1047,6 +1047,12 @@ export async function load() {
             ? stored.scrobble.listenbrainz.baseUrl.trim().slice(0, 500)
             : '',
       },
+      navidrome: {
+        enabled:
+          typeof stored.scrobble?.navidrome?.enabled === 'boolean'
+            ? stored.scrobble.navidrome.enabled
+            : DEFAULTS.scrobble.navidrome.enabled,
+      },
     },
     likes: {
       enabled:
@@ -2039,6 +2045,7 @@ export async function update(patch) {
     const sb = parseSettingsPatchKey<{
       lastfm?: Record<string, unknown>;
       listenbrainz?: Record<string, unknown>;
+      navidrome?: Record<string, unknown>;
     }>('scrobble', patch.scrobble);
     const rawSb = (patch.scrobble || {}) as Record<string, Record<string, unknown> | undefined>;
     // 'set' is the redaction sentinel from getRedacted() — ignore it so a
@@ -2062,6 +2069,12 @@ export async function update(patch) {
         if (k === 'userToken' && rawSb.listenbrainz?.[k] === 'set') continue;
         (next.scrobble.listenbrainz as Record<string, unknown>)[k] = lb[k];
       }
+    }
+    // No secret sentinel here: Navidrome reuses config.navidrome's credentials,
+    // so the block is one flag and nothing is ever redacted out of it (#1298).
+    if (sb.navidrome !== undefined) {
+      const nd = sb.navidrome;
+      if (nd.enabled !== undefined) next.scrobble.navidrome.enabled = nd.enabled as boolean;
     }
   }
   if ('likes' in patch) {
