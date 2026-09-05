@@ -879,6 +879,10 @@ export async function load() {
         : DEFAULTS.search.provider,
       apiKey: typeof stored.search?.apiKey === 'string' ? stored.search.apiKey : '',
       baseUrl: typeof stored.search?.baseUrl === 'string' ? stored.search.baseUrl : DEFAULTS.search.baseUrl,
+      searxngEngines:
+        typeof stored.search?.searxngEngines === 'string'
+          ? stored.search.searxngEngines
+          : DEFAULTS.search.searxngEngines,
     },
     embedding: {
       enabled:
@@ -1703,6 +1707,7 @@ export async function update(patch) {
     const sr = parseSettingsPatchKey<Record<string, unknown>>('search', patch.search);
     if (sr.provider !== undefined) next.search.provider = sr.provider as string;
     if (sr.baseUrl !== undefined) next.search.baseUrl = sr.baseUrl as string;
+    if (sr.searxngEngines !== undefined) next.search.searxngEngines = sr.searxngEngines as string;
     // 'set' is the redaction sentinel from getRedacted() — ignore it so a
     // round-tripped form doesn't overwrite the real key. Tested against the RAW
     // patch value, not the parsed one: the sentinel means "leave the stored

@@ -467,6 +467,9 @@ export const DEFAULTS = {
     provider: 'duckduckgo',
     apiKey: '',
     baseUrl: '',
+    // Optional comma-separated SearXNG engine pin (#1353). Empty means "send no
+    // engines= param", i.e. the instance's own default engine set.
+    searxngEngines: '',
   },
   skills: {
     enabled: {},

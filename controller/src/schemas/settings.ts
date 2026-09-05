@@ -333,6 +333,13 @@ export const SETTINGS_LOUDNESS_SOURCES = [
 
 export const SETTINGS_SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'brave', 'searxng'] as const;
 
+/**
+ * Cap for the optional SearXNG `engines=` pin. Generous on purpose — the value
+ * is a comma-separated list of SearXNG `name:` fields, so a dozen engines with
+ * multi-word names still fits well inside it.
+ */
+export const SETTINGS_SEARXNG_ENGINES_MAX = 500;
+
 export const CROSSFADE_DURATION_BOUNDS: SettingsNumericBound = { min: 0, max: 30 };
 // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
@@ -618,6 +625,14 @@ export const searchPatchSchema = settingsBlockOf({
     })
     .transform((raw) => String(raw).trim()),
   apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars'),
+  // Optional comma-separated SearXNG engine pin (#1353), appended as the
+  // `engines=` query param when non-empty. New field, so it takes the trimmed
+  // posture rather than search.apiKey's raw one — there is no stored behaviour
+  // to preserve here, and a stray space around a name is a typo, not a value.
+  searxngEngines: settingsTrimmedString(
+    SETTINGS_SEARXNG_ENGINES_MAX,
+    `search.searxngEngines must be 0-${SETTINGS_SEARXNG_ENGINES_MAX} chars`,
+  ),
 });
 
 const scrobbleLastfmSchema = settingsBlockOf({

@@ -257,6 +257,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Provider', section: 'search', card: 'Provider', keywords: 'duckduckgo tavily brave searxng live facts' },
   { label: 'API key', section: 'search', card: 'Provider', keywords: 'tavily brave token search_api_key' },
   { label: 'SearXNG URL', section: 'search', card: 'Provider', keywords: 'self hosted meta search json' },
+  { label: 'Engines', section: 'search', card: 'Provider', keywords: 'searxng engines pin restrict google duckduckgo wikipedia' },
 
   // ── likes ──────────────────────────────────────────────────────────────────
   { label: 'Enabled', section: 'likes', card: 'Heart button', keywords: 'heart like listener tap' },

@@ -149,6 +149,8 @@ export interface SearchForm {
   provider: string;
   apiKey: string;
   baseUrl: string;
+  /** Optional comma-separated SearXNG engine pin (#1353); '' = instance default. */
+  searxngEngines: string;
 }
 
 export interface EmbeddingEnrichmentForm {
