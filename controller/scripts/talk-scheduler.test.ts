@@ -24,11 +24,13 @@
 //  - A ROW YIELDS ONLY TO A ROW THAT IS FIRING. Yielding to a merely-open
 //    higher-priority row would let one row sit on its whole window holding
 //    everything under it — #1419 again, one layer up. This is the subtle one.
-//  - IN-FLIGHT TALK COUNTS WHILE IT CAN STILL AIR IN THE WINDOW. A boundary-
+//  - IN-FLIGHT TALK COUNTS, BUT NEVER PAST THE ROW'S LAST CHANCE. A boundary-
 //    deferred ident is queued minutes before it airs and `getLastTalkBreakAt()`
 //    cannot see it, which is how a :20 tick read a clear gap and still landed
-//    ten seconds in front of it. Its queue age also bounds that hold, so a row
-//    keeps its final chance when the deferred clip cannot pre-empt it in time.
+//    ten seconds in front of it. The hold is bounded at both ends: a clip that
+//    expires inside the window never blocks, and one that outlives the window
+//    stops blocking on the window's last retry minute, so a held row still
+//    fires inside its window instead of logging `missed` (#1539).
 //  - The frequency ladder answers per SLOT. `[15,30,45].includes(m)` reads a
 //    retry minute as no slot at all, which would silently cancel every retry
 //    the windows exist to allow.
@@ -461,7 +463,8 @@ test('a segment waiting for a track boundary holds every gap-gated row', () => {
   // rendered at :15 and waits for the next transition. getLastTalkBreakAt()
   // reports what HAS aired, so at :20 the gap looks clear and banter fires ten
   // seconds in front of it. `pendingTalk` carries the queue's `_pendingVoice`
-  // kind and enqueue time so that protection is bounded by its valid life.
+  // kind and enqueue time, so that protection is bounded by the clip's valid
+  // life and by the blocked row's own remaining chances.
   const r = makeReplay({
     pendingTalk: { kind: 'station-id', queuedAt: clockAt(15) },
     eligible: kind => kind === 'banter',
@@ -480,15 +483,65 @@ test('a segment waiting for a track boundary holds every gap-gated row', () => {
 test('a pending segment fresh enough to outlast a window holds it — and says so', () => {
   // A freshly rendered ident can still validly air throughout this banter
   // window. Letting banter go first could stack the two at the next boundary,
-  // so the pending-specific hold remains the right, operator-visible answer.
+  // so the pending-specific hold remains the right, operator-visible answer —
+  // for every minute of the window except the last, which the next test owns.
   const r = makeReplay({
     pendingTalk: { kind: 'station-id', queuedAt: clockAt(20) },
     eligible: kind => kind === 'banter',
   });
-  for (let m = 20; m <= 29; m++) r.tick(at(m));
+  for (let m = 20; m <= 28; m++) r.tick(at(m));
   assert.deepEqual(r.minutesOf('banter'), []);
-  assert.equal(r.logs.length, 2, 'one stand-down when the window opens, one when it closes');
-  assert.match(r.logs[1], /^\[banter\] slot :20 missed — a station-id is rendered and waiting for the next track boundary; window closed at :29$/);
+  assert.equal(r.logs.length, 1, 'said once per slot, not once per minute');
+  assert.match(r.logs[0], /^\[banter\] stood down at :20 — a station-id is rendered and waiting for the next track boundary \(retrying until :29\)$/);
+});
+
+test('a held row still fires inside its window — the hold never costs the final chance', () => {
+  // #1539, and the test the issue asked for. `_pendingVoice` may legitimately
+  // live PENDING_VOICE_MAX_AGE_MS, and it is dropped only at a track start, so
+  // on a chatty station where every boundary carries its own link a clip can
+  // outlast the window of the row it is holding. Unbounded, that row logged
+  // `slot :NN missed` and — for the hourly check, which gets ONE chance an
+  // hour — lost the whole hour, which is a hold quietly becoming a cancel.
+  //
+  // Both cases the issue names, with the enqueue times the rows themselves
+  // produce: the ident's :45 window runs to :54, so a retry inside it stamps a
+  // clip whose 20 minutes reach past the hourly window's :10 close and past
+  // banter's :00 one. The window's last minute is the row's final chance and
+  // the hold stands down for it.
+  const cases = [
+    { label: 'hourly :00-:09 behind an ident queued at :51', kind: 'hourly' as TalkKind, open: 0, last: 9, queuedAt: clockAt(51, 0, HOUR - 1) },
+    { label: 'banter :50-:59 behind an ident queued at :45', kind: 'banter' as TalkKind, open: 50, last: 59, queuedAt: clockAt(45) },
+  ];
+  for (const { label, kind, open, last, queuedAt } of cases) {
+    const r = makeReplay({
+      pendingTalk: { kind: 'station-id', queuedAt },
+      eligible: k => k === kind,
+    });
+    for (let m = open; m <= last; m++) r.tick(at(m));
+    assert.deepEqual(r.minutesOf(kind), [last], `${label}: postponed to its last minute, not cancelled`);
+    assert.equal(r.logs.length, 1, `${label}: held once, then took the minute`);
+    assert.match(
+      r.logs[0],
+      new RegExp(`^\\[${kind}\\] stood down at :${open} — a station-id is rendered and waiting for the next track boundary \\(retrying until :${last}\\)$`),
+      label,
+    );
+    assert.equal(r.logs.some(line => line.includes('missed')), false, `${label}: a held row postpones, never cancels`);
+  }
+});
+
+test('the last-chance release is the row\'s alone — a clip that expires in the window never holds at all', () => {
+  // The other end of the bound, and why it is two rules rather than one. A clip
+  // that will expire before this window closes is dropped by the queue while
+  // the row still has minutes left, so it was never able to cost the row its
+  // slot: it does not hold even at the opening minute. Only a clip that
+  // outlives the window is worth standing down for, and only until the last.
+  const r = makeReplay({
+    pendingTalk: { kind: 'station-id', queuedAt: clockAt(50, 0, HOUR - 1) },
+    eligible: kind => kind === 'hourly',
+  });
+  for (let m = 0; m <= 9; m++) r.tick(at(m));
+  assert.deepEqual(r.minutesOf('hourly'), [0], 'expires at :10, exactly when the window closes — the row keeps all ten minutes');
+  assert.deepEqual(r.logs, []);
 });
 
 test('pending expiry before or at the hourly window close preserves the scheduled row', () => {

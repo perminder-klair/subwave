@@ -92,10 +92,11 @@ import {
 import {
   DEDUPE_KINDS,
   KIND_LABEL,
-  PENDING_VOICE_MAX_AGE_MS,
   TRACK_TIED_KINDS,
   VOICE_KINDS,
+  pendingVoiceStale,
 } from './queue/kinds.js';
+import type { PendingTalk } from './queue/kinds.js';
 import {
   BED_MARKER_FRESH_MS,
   VOICE_LEADIN_MS,
@@ -1608,7 +1609,7 @@ class Queue {
   // getLastTalkBreakAt(), while the enqueue time lets the talk scheduler respect
   // both that in-flight talk and the queue's finite validity window (#1419,
   // #1500, #1539). Queue remains the owner of eventual stale dropping.
-  pendingVoiceTalk(): { kind: string; queuedAt: number } | null {
+  pendingVoiceTalk(): PendingTalk | null {
     const p = this._pendingVoice;
     return p ? { kind: p.kind, queuedAt: p.t } : null;
   }
@@ -1664,7 +1665,7 @@ class Queue {
     if (!p) return;
     // Staleness first: a clip too old to air is dropped outright rather than
     // held again below, so a busy stretch can't keep re-deferring a dead ident.
-    if (Date.now() - p.t > PENDING_VOICE_MAX_AGE_MS) {
+    if (pendingVoiceStale(p.t, Date.now())) {
       this.dropPendingVoice('waited too long for a track boundary');
       return;
     }

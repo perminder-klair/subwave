@@ -26,12 +26,15 @@
 //     decides and the loser WAITS INSIDE ITS WINDOW. #310 stops being a
 //     partitioning convention nobody can read and becomes a rule in one place;
 //     #1419's postpone-don't-cancel becomes universal.
-//   - IN-FLIGHT TALK COUNTS WHILE IT CAN STILL AIR IN THE WINDOW. A boundary-
+//   - IN-FLIGHT TALK COUNTS, BUT NEVER PAST THE ROW'S LAST CHANCE. A boundary-
 //     deferred ident is rendered and queued minutes before it airs, and
 //     queue.getLastTalkBreakAt() — which reports what HAS aired — cannot see it.
 //     That blind spot is #1419's actual root cause: the :20 tick reads a clear
 //     gap, fires, and the ident lands ten seconds later anyway. `pendingTalk`
-//     closes it without letting an expiring clip consume the row's final chance.
+//     closes it. The hold is then bounded at both ends (#1539): a clip that
+//     expires inside the window never blocks, and one that outlives it stops
+//     blocking on the window's last retry minute, so a held row still fires
+//     inside its window rather than logging `missed`.
 //
 // Pure and I/O-free (a `Date`, two counters and two injected resolvers in;
 // plans out) so scripts/talk-scheduler.test.ts can walk an hour minute by minute
@@ -40,7 +43,8 @@
 import {
   BANTER_SLOTS, BANTER_WINDOW_MINUTES, BANTER_MIN_GAP_MS,
 } from './banter-policy.js';
-import { PENDING_VOICE_MAX_AGE_MS } from './queue/kinds.js';
+import { pendingVoiceValidForMs } from './queue/kinds.js';
+import type { PendingTalk } from './queue/kinds.js';
 
 // ---------------------------------------------------------------------------
 // THE SLOT TABLE
@@ -285,7 +289,9 @@ export function talkSlotKey(kind: TalkKind, now: Date, slot: string): string {
 // ---------------------------------------------------------------------------
 
 export type TalkGap = { clear: boolean; sinceMs: number; needMs: number };
-export type PendingTalk = { kind: string; queuedAt: number };
+// Re-exported, not redeclared: the shape and the age limit that gives
+// `queuedAt` its meaning live together in queue/kinds.ts.
+export type { PendingTalk };
 
 // `lastTalkBreakAt` is 0 when nothing has aired yet (a fresh boot), which reads
 // as an infinite gap — correct: there is no break to stack onto. `needMs: 0`
@@ -386,8 +392,9 @@ export type TalkTickInput = {
   // the age anchor from queue's `_pendingVoice`, or null. This is talk that has
   // NOT aired, so `lastTalkBreakAt` cannot see it, and it is the reason a :20
   // banter tick could read a clear gap and still land ten seconds in front of a
-  // :15 ident (#1419). It blocks only while it could still validly air inside
-  // the row's window. Rows with `minGapMs: 0` ignore the question entirely.
+  // :15 ident (#1419). It blocks only while its queue life outlives the row's
+  // window AND the row still has a retry minute to spend (#1539). Rows with
+  // `minGapMs: 0` ignore the question entirely.
   pendingTalk: PendingTalk | null;
   // Resolved lazily, and only for a row whose window is actually open and
   // unfired — the live gates are cheap but they are policy, and evaluating them
@@ -420,20 +427,21 @@ function waitPlan(row: TalkSlot, slot: string, slotKey: string, reason: TalkWait
   return { ...base, log: standDownLine(row, slot, reason), markLogged: slotKey };
 }
 
-// A pending clip blocks this row only when its queue validity extends past the
-// row's precise window close. Equality favours the scheduled row: if the clip
-// expires exactly as the window closes, an uncertain boundary handoff must not
-// consume the row's final chance. Queue still owns eventual stale dropping.
-function pendingCanAirInWindow(row: TalkSlot, slot: string, p: TalkTickInput): boolean {
-  const pending = p.pendingTalk;
-  if (!pending || row.opens === 'external') return false;
-  const nowMs = p.now.getTime();
-  const ageMs = Math.max(0, nowMs - pending.queuedAt);
-  const validForMs = Math.max(0, PENDING_VOICE_MAX_AGE_MS - ageMs);
-  const windowClose = new Date(p.now);
+// Whether the pending clip's remaining queue life reaches PAST this row's
+// precise window close — that is, whether it could still be sitting on a
+// boundary after the row's last chance has gone. A clip that will expire inside
+// the window is dropped by the queue before the window is out, so it cannot be
+// the reason the row never speaks; one that outlives the window can be, which
+// is the half of the hold #1539 had to bound. Equality favours the scheduled
+// row. Queue still owns the eventual stale drop.
+//
+// Only ever asked of a row that can retry, so `Number(slot)` is a real opening
+// minute here (canRetry answers false for the one `opens: 'external'` row).
+function pendingOutlivesWindow(row: TalkSlot, slot: string, pending: PendingTalk, nowMs: number): boolean {
+  const windowClose = new Date(nowMs);
   windowClose.setMinutes(windowEndMinute(row, Number(slot)) + 1, 0, 0);
   const windowRemainingMs = Math.max(0, windowClose.getTime() - nowMs);
-  return validForMs > windowRemainingMs;
+  return pendingVoiceValidForMs(pending.queuedAt, nowMs) > windowRemainingMs;
 }
 
 // One row's decision, or null for "nothing to do" — outside the window, already
@@ -454,11 +462,24 @@ export function talkSlotPlan(row: TalkSlot, p: TalkTickInput): TalkPlan | null {
   if (!p.eligible(row.kind)) return null;
   // A row that runs a gap check is asking "has the listener had a moment of
   // quiet?", and a rendered segment queued for the next boundary is the same
-  // question's answer arriving late — but only while it can still air before
-  // this window closes. Checked before the gap because it is the more specific
-  // reason, and the operator wants the specific one.
-  if (row.minGapMs > 0 && p.pendingTalk && pendingCanAirInWindow(row, slot, p)) {
-    return waitPlan(row, slot, slotKey, { held: 'pending', pendingKind: p.pendingTalk.kind }, p);
+  // question's answer arriving late. Checked before the gap because it is the
+  // more specific reason, and the operator wants the specific one.
+  //
+  // Bounded twice, because an unbounded hold turns postpone into cancel
+  // (#1539). A clip that will EXPIRE INSIDE this window is dropped by the queue
+  // before the row runs out of chances, so it never blocks at all. A clip that
+  // outlives the window blocks only while the row HAS A RETRY MINUTE LEFT: the
+  // window's last minute is the row's final chance and is never given away, so
+  // a held row still fires inside its window. Taking that minute may land in
+  // front of a clip that airs seconds later, and that is the trade — a stacked
+  // break the operator can hear beats an hourly check that silently never
+  // happened, which is postpone-don't-cancel applied to the one holder that
+  // could otherwise sit on a whole window.
+  const pending = p.pendingTalk;
+  if (row.minGapMs > 0 && pending
+      && canRetry(row, slot, minute)
+      && pendingOutlivesWindow(row, slot, pending, p.now.getTime())) {
+    return waitPlan(row, slot, slotKey, { held: 'pending', pendingKind: pending.kind }, p);
   }
   const gap = talkGap({ nowMs: p.now.getTime(), lastTalkBreakAt: p.lastTalkBreakAt, needMs: row.minGapMs });
   if (gap.clear) return { kind: row.kind, act: 'fire', slot, slotKey, gap };

@@ -20,6 +20,28 @@ export const TRACK_TIED_KINDS = new Set(['dj-speak', 'link']);
 // dropped as stale (its prompt context baked in the clock at generation time).
 // Comfortably past a long album cut, well short of the next ident sounding odd.
 export const PENDING_VOICE_MAX_AGE_MS = 20 * 60_000;
+// The minimal description of a segment already rendered and waiting for the
+// next track boundary: what it is, and when it was queued. Declared beside the
+// age limit rather than at either end, because Queue produces it and
+// broadcast/talk-scheduler.ts consumes it, and a second spelling of the shape
+// would drift from the constant that gives `queuedAt` its meaning.
+export type PendingTalk = { kind: string; queuedAt: number };
+// The two questions asked about that clip's finite life, named once so neither
+// caller re-spells the arithmetic. Queue asks the first at a track start, to
+// drop a clip that waited too long; the talk scheduler asks the second to
+// decide how long a pending clip may hold a gap-gated row (#1539).
+//
+// Two functions rather than one, deliberately: the drop is strictly PAST the
+// limit while the scheduler needs the remaining duration, and deriving either
+// from the other would move the drop boundary by a millisecond.
+export function pendingVoiceStale(queuedAt: number, nowMs: number): boolean {
+  return nowMs - queuedAt > PENDING_VOICE_MAX_AGE_MS;
+}
+// Clamped at both ends: a clock adjustment that stamps a clip in the future
+// must not buy it more than the one lifetime the constant allows.
+export function pendingVoiceValidForMs(queuedAt: number, nowMs: number): number {
+  return Math.max(0, PENDING_VOICE_MAX_AGE_MS - Math.max(0, nowMs - queuedAt));
+}
 // Kinds whose recap entries are de-duped. Skills are added at load time too.
 // 'handoff' is deliberately NOT deduped — its two lines (sign-off + greeting)
 // are distinct utterances by different voices.
