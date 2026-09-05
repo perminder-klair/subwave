@@ -641,15 +641,35 @@ export async function ensureReady(): Promise<ProbeResult> {
   return first;
 }
 
-// The mood vocabulary is part of the LLM tagger's prompt; including its hash
-// in promptHash means a vocab change auto-invalidates older tags via the
-// --upgrade path.
-export function promptVocabHash(systemPrompt: string): string {
+// The tagging-provenance stamp: `prompt_hash` on every LLM-tagged row, and the
+// value `staleTaggedIds` compares against on --upgrade / admin Re-decide moods.
+//
+// It hashes TWO things and deliberately not a third:
+//
+//   - the tagger CONTRACT version (music/tagger-core.TAGGER_CONTRACT_VERSION),
+//     bumped by hand when the prompt's meaning changes;
+//   - the live mood vocabulary, so an operator editing settings.moods
+//     auto-invalidates tags decided against the old list;
+//   - NOT the prompt string itself (#1548). It used to take the rendered
+//     `taggerBatchSystem()` text, which made every cosmetic reword — #1541's
+//     transport-wording fix, a typo, a reflowed line — re-tag the entire
+//     library on the next Re-decide: ~1600 batch calls on a 40k library
+//     against a homelab Ollama box, for a contract that did not change.
+//
+// The trade is stated in docs/internals/music.md: the version has to be bumped
+// by hand, so a semantic prompt edit that forgets it never re-decides.
+//
+// `vocab` is injectable so scripts/tagger-contract-hash.test.ts can pin the
+// inputs without loading settings (same shape as audio-moods.moodVocabHash).
+export function promptVocabHash(
+  contractVersion: number,
+  vocab: readonly string[] = moodVocab(),
+): string {
   return crypto
     .createHash('sha256')
-    .update(systemPrompt)
+    .update(`tagger-contract-v${contractVersion}`)
     .update('|')
-    .update(moodVocab().join(','))
+    .update(vocab.join(','))
     .digest('hex')
     .slice(0, 16);
 }

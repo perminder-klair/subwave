@@ -17,7 +17,7 @@ import * as settings from '../settings.js';
 import * as embeddings from '../music/embeddings.js';
 import { resolveEraYear } from '../music/show-filter.js';
 import { buildGenreSuggest } from '../music/genre-suggest.js';
-import { tagBatch, taggerBatchSystem } from '../music/tagger-core.js';
+import { tagBatch, TAGGER_CONTRACT_VERSION } from '../music/tagger-core.js';
 import { promptVocabHash } from '../music/embeddings.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { queue } from '../broadcast/queue.js';
@@ -871,7 +871,7 @@ router.post('/library/retag', requireAdmin, async (req, res) => {
       moods,
       energy,
       source: 'llm',
-      promptHash: promptVocabHash(taggerBatchSystem()),
+      promptHash: promptVocabHash(TAGGER_CONTRACT_VERSION),
       model: activeModelLabel(),
     });
     await library.save();

@@ -28,6 +28,10 @@
 //                         run (else defers to settings.audio.vocalActivity)
 //   --upgrade             re-LLM-tag only tagged rows with stale promptHash/model
 //                         (never source='manual'). The "Re-decide moods" pass.
+//                         promptHash keys off tagger-core.TAGGER_CONTRACT_VERSION
+//                         + the live mood vocabulary, NOT the prompt text (#1548)
+//                         — a semantic prompt change needs a manual version bump
+//                         or this pass finds nothing stale.
 //   --rescan              re-scan mode: fire ONLY the selected re-* passes, each
 //                         scoped to already-done tracks; never forward-process the
 //                         untagged remainder (set by the admin Re-scan tab)
@@ -44,7 +48,7 @@ import { vote, fuseNeighbours } from './tag-propagator.js';
 import { summariseEval, formatEvalSummary } from './propagation-eval.js';
 import { activeModelLabel } from '../llm/provider.js';
 import { setRawDebugStderrMirror } from '../llm/log.js';
-import { taggerBatchSystem } from './tagger-core.js';
+import { TAGGER_CONTRACT_VERSION } from './tagger-core.js';
 import { runAnalysisPass } from './analyze.js';
 import { reportProgress, formatPhaseBreakdown, sortedPhaseTimings } from './tagger-progress.js';
 import { planRun } from './rescan-scope.js';
@@ -278,7 +282,7 @@ async function main() {
     if (flags.rescan && reembedIds.length === 0) reembedIds = db.unembeddedIds();
   }
 
-  const promptHash = embeddings.promptVocabHash(taggerBatchSystem());
+  const promptHash = embeddings.promptVocabHash(TAGGER_CONTRACT_VERSION);
   const modelLabel = activeModelLabel();
 
   // Single- vs dual-LLM tagging. Decided once and shared by the seed + active-
