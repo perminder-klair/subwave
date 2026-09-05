@@ -68,6 +68,29 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
   const ttsCloud = (values.tts as { cloud?: { apiKey?: unknown } } | undefined)?.cloud;
   const ttsKeyOnFile = ttsCloud?.apiKey === 'set';
   const keysOnFile = llmKeyOnFile && ttsKeyOnFile;
+  // Three states, not two. A section that says a flat red "token not set" while
+  // the brain half is genuinely configured reads as broken — which is exactly
+  // what an operator sees straight after the onboarding wizard, since that
+  // wires settings.llm and leaves the voice for this section. Name the half
+  // that is missing, and keep red for "neither".
+  const keyState: 'both' | 'partial' | 'none' =
+    keysOnFile ? 'both' : (llmKeyOnFile || ttsKeyOnFile) ? 'partial' : 'none';
+  const missingHalf = llmKeyOnFile ? 'voice (Cloud TTS)' : 'brain (LLM)';
+  const KEY_TONE = {
+    both: { border: 'border-[var(--accent)]', dot: 'bg-[var(--accent)]', text: 'text-[color:var(--accent)]' },
+    partial: { border: 'border-[var(--warn,var(--accent))]', dot: 'bg-[var(--warn,var(--accent))]', text: 'text-[color:var(--warn,var(--accent))]' },
+    none: { border: 'border-[var(--danger)]', dot: 'bg-[var(--danger)]', text: 'text-[var(--danger)]' },
+  }[keyState];
+  const keyTitle = {
+    both: 'DJ Brain token on file',
+    partial: `DJ Brain token on file for the ${llmKeyOnFile ? 'brain' : 'voice'} only`,
+    none: 'DJ Brain token not set',
+  }[keyState];
+  const keyBlurb = {
+    both: 'Both the brain and the voice have a token saved. Leave the field blank to keep it.',
+    partial: `The ${llmKeyOnFile ? 'brain (LLM)' : 'voice (Cloud TTS)'} has a token saved; the ${missingHalf} does not. Paste it above and Save to wire both.`,
+    none: 'No token saved yet for the brain or the voice. Paste it above and Save.',
+  }[keyState];
 
   // Reuse the LLM openai-compatible probe (POST /settings/llm/probe-compat) to
   // verify the base URL + token + chat model before saving.
@@ -223,29 +246,15 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
           <div
             className={cn(
               'field flex items-start gap-2.5 border bg-[var(--ink-softer)] p-3',
-              keysOnFile ? 'border-[var(--accent)]' : 'border-[var(--danger)]',
+              KEY_TONE.border,
             )}
           >
-            <span
-              className={cn(
-                'mt-1 size-1.5 flex-none rounded-full',
-                keysOnFile ? 'bg-[var(--accent)]' : 'bg-[var(--danger)]',
-              )}
-            />
+            <span className={cn('mt-1 size-1.5 flex-none rounded-full', KEY_TONE.dot)} />
             <div className="grid gap-0.5">
-              <span
-                className={cn(
-                  'text-[11px] font-bold tracking-[0.12em] uppercase',
-                  keysOnFile ? 'text-[color:var(--accent)]' : 'text-[var(--danger)]',
-                )}
-              >
-                {keysOnFile ? 'DJ Brain token on file' : 'DJ Brain token not set'}
+              <span className={cn('text-[11px] font-bold tracking-[0.12em] uppercase', KEY_TONE.text)}>
+                {keyTitle}
               </span>
-              <span className="text-[11px] leading-[1.5] text-muted">
-                {keysOnFile
-                  ? 'Both the brain and the voice have a token saved. Leave the field blank to keep it.'
-                  : 'No token saved yet for the brain and/or the voice. Paste it above and Save.'}
-              </span>
+              <span className="text-[11px] leading-[1.5] text-muted">{keyBlurb}</span>
             </div>
           </div>
         </div>
