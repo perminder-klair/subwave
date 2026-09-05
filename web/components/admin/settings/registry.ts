@@ -105,7 +105,7 @@ export const SECTIONS = [
   {
     id: 'danger', group: 'operations', label: 'Danger zone',
     hint: 'mixer · broadcast', icon: AlertTriangle,
-    formKeys: ['crossfadeDuration', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'stream', 'loudness'],
+    formKeys: ['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'stream', 'loudness'],
   },
 ] as const satisfies readonly SectionSpec[];
 
@@ -126,6 +126,8 @@ export const RESTART_PATHS: readonly string[] = [
   'station',
   'privacy.listenerAuth',
   'crossfadeDuration',
+  'ducking.voice',
+  'ducking.intro',
   'archive.enabled',
   'archive.bitrate',
   'stream.opusEnabled',
@@ -153,7 +155,7 @@ export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
   library: ['seed-phase', 'propagation', 'enrichment'],
   likes: ['ai-dj-influence'],
   danger: [
-    'crossfade', 'stem-transitions', 'max-track-length', 'dead-air-trim',
+    'crossfade', 'duck-depth', 'stem-transitions', 'max-track-length', 'dead-air-trim',
     'loudness-levelling', 'opus-stream', 'flac-stream', 'ogg-metadata',
     'aac-stream', 'stream-mp3-bitrate', 'listener-buffer', 'max-listeners',
   ],
@@ -287,6 +289,8 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Stop stream', section: 'danger', card: 'Broadcast', keywords: 'off air disconnect icecast mount' },
   { label: 'Pause when the room is empty', section: 'danger', card: 'Idle pause', keywords: 'idle empty listeners resume' },
   { label: 'Crossfade duration', section: 'danger', card: 'Crossfade', keywords: 'overlap seams transition restart' },
+  { label: 'DJ over silence duck depth', section: 'danger', card: 'Duck depth', keywords: 'ducking voice smooth_add say idents heavy restart' },
+  { label: 'DJ over a track duck depth', section: 'danger', card: 'Duck depth', keywords: 'ducking intro talk over link light smooth_add restart' },
   { label: 'Pair-aware transitions', section: 'danger', card: 'Stem transitions', keywords: 'pair drain successor crossfade' },
   { label: 'Stem cache', section: 'danger', card: 'Stem transitions', keywords: 'demucs drums bass vocals disk' },
   { label: 'Stem cache budget', section: 'danger', card: 'Stem transitions', keywords: 'gb evict oldest' },

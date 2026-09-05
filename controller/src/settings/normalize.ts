@@ -29,6 +29,7 @@ import {
   type ShowSchemaContext,
 } from '../schemas/show.js';
 import { resolveShowIds } from '../schemas/show-server.js';
+import { DUCK_DEPTH_BOUNDS } from '../schemas/settings.js';
 // The persona + prompt-library rules themselves, so this lenient path and
 // update()'s strict one cannot restate them differently.
 import {
@@ -60,6 +61,22 @@ export function normalizeArchiveRetentionDays(archive: any): number {
   if (Number.isInteger(v) && v >= 0) return v;
   if (archive?.enabled === true) return 0;
   return DEFAULTS.archive.retentionDays;
+}
+
+// A stored `smooth_add` duck depth, repaired rather than refused — load()'s
+// input is a file an operator (or a backup from another version) may have
+// hand-edited, and the value leaves the controller as a handoff file the mixer
+// reads once at startup. Out of range in either direction is the expensive
+// direction to pass through: >1 is a music BOOST under the DJ, <0 inverts the
+// bus. Bounds come from the shared schema so the save path and this one cannot
+// drift, which is the same rule stream.maxListeners follows.
+export function normalizeDuckDepth(raw: unknown, fallback: number): number {
+  return typeof raw === 'number'
+    && Number.isFinite(raw)
+    && raw >= DUCK_DEPTH_BOUNDS.min
+    && raw <= DUCK_DEPTH_BOUNDS.max
+    ? raw
+    : fallback;
 }
 
 // Persona skill assignment. `null` (raw not an array) is the "all skills"

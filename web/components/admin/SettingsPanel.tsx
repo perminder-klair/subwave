@@ -310,6 +310,10 @@ export default function SettingsPanel() {
     const v = data.values;
     const nextForm: FormState = {
       crossfadeDuration: String(v.crossfadeDuration ?? ''),
+      ducking: {
+        voice: String(v.ducking?.voice ?? 0.22),
+        intro: String(v.ducking?.intro ?? 0.3),
+      },
       maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
       silenceTrim: {
         enabled: v.silenceTrim?.enabled ?? false,
@@ -672,6 +676,10 @@ export default function SettingsPanel() {
     const n = numberFields();
     saveBlock(n, {
       crossfadeDuration: n.float('crossfadeDuration', form.crossfadeDuration),
+      ducking: {
+        voice: n.float('ducking.voice', form.ducking.voice),
+        intro: n.float('ducking.intro', form.ducking.intro),
+      },
       maxTrackSeconds: n.int('maxTrackSeconds', form.maxTrackSeconds),
       silenceTrim: {
         enabled: form.silenceTrim.enabled,
@@ -1135,7 +1143,7 @@ export default function SettingsPanel() {
               </Card>
             )}
 
-            <Advanced note="crossfade, transitions, loudness and the extra stream mounts">
+            <Advanced note="crossfade, duck depth, transitions, loudness and the extra stream mounts">
             {form && (
               <Card title="Crossfade" sub="track transition overlap">
                 <div className="field">
@@ -1161,6 +1169,70 @@ export default function SettingsPanel() {
                   <div className="field-hint">
                     Seconds of overlap between tracks (current: {data?.values?.crossfadeDuration}s).
                     Saving flags a pending restart. Apply it with the Mixer card below.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="Duck depth" sub="how far the music drops under the DJ">
+                <div className="grid gap-3">
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>DJ over silence</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        aria-label="Duck depth for solo DJ speech"
+                        type="number"
+                        step={0.01}
+                        min={0}
+                        max={1}
+                        value={form.ducking.voice}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f => (f ? { ...f, ducking: { ...f.ducking, voice: e.target.value } } : f))
+                        }
+                      />
+                      <span className="text-[12px] text-muted">× music</span>
+                    </div>
+                    <SettingsFieldError path="ducking.voice" errors={fieldErrors} />
+                    <div className="field-hint">
+                      The heavy duck: station IDs, the hourly time, weather and request intros
+                      (current: {data?.values?.ducking?.voice}). It is the fraction of the music
+                      LEFT UP, so smaller is deeper — 0.22 is about −13 dB, 1 is no duck at all
+                      and 0 mutes the music while the DJ talks. Saving flags a pending restart;
+                      apply it with the Mixer card below.
+                    </div>
+                  </div>
+
+                  <div className="field">
+                    <div className="flex items-center gap-2">
+                      <Label>DJ over a track</Label>
+                      <Pill tone="ink">restart required</Pill>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        className="mono-num w-28"
+                        aria-label="Duck depth for talk-over links"
+                        type="number"
+                        step={0.01}
+                        min={0}
+                        max={1}
+                        value={form.ducking.intro}
+                        onChange={(e: ChangeEvent<HTMLInputElement>) =>
+                          setForm(f => (f ? { ...f, ducking: { ...f.ducking, intro: e.target.value } } : f))
+                        }
+                      />
+                      <span className="text-[12px] text-muted">× music</span>
+                    </div>
+                    <SettingsFieldError path="ducking.intro" errors={fieldErrors} />
+                    <div className="field-hint">
+                      The light duck for between-track links, which talk over the song rather
+                      than replacing it (current: {data?.values?.ducking?.intro}). Keep it above
+                      the heavy duck — 0.30 is about −10 dB. Saving flags a pending restart.
+                    </div>
                   </div>
                 </div>
               </Card>
@@ -1840,7 +1912,7 @@ export default function SettingsPanel() {
               onSave={saveDanger}
               saveLabel="Save danger zone"
               errors={fieldErrors}
-              ownedKeys={['crossfadeDuration', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'audio', 'loudness', 'stream']}
+              ownedKeys={['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'audio', 'loudness', 'stream']}
             />
           </>
         )}

@@ -95,6 +95,7 @@ import {
   SKILL_RENAMES,
   normalizeArchiveRetentionDays,
   normalizeDjPrompts,
+  normalizeDuckDepth,
   normalizePersonaArray,
   normalizeTtsFallback,
   normalizeSchedule,
@@ -386,6 +387,14 @@ export async function load() {
   const loaded: any = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
+    // Bounded here as well as at the save path: a hand-edited settings.json is
+    // load()'s input, so it repairs rather than throws — and an out-of-range `p`
+    // reaches radio.liq as a handoff file, where 3.0 is a music BOOST under the
+    // DJ. Both bounds come from the shared schema's constant, never a copy.
+    ducking: {
+      voice: normalizeDuckDepth(stored.ducking?.voice, DEFAULTS.ducking.voice),
+      intro: normalizeDuckDepth(stored.ducking?.intro, DEFAULTS.ducking.intro),
+    },
     maxTrackSeconds: coerceMaxTrackSeconds(rawMaxTrackSec(stored), false) ?? DEFAULTS.maxTrackSeconds,
     archive: {
       enabled:
@@ -1109,6 +1118,20 @@ export async function update(patch) {
     const v = parseSettingsPatchKey<number>('crossfadeDuration', patch.crossfadeDuration);
     if (v !== cur.crossfadeDuration) {
       next.crossfadeDuration = v;
+      restart = true;
+    }
+  }
+  if ('ducking' in patch) {
+    const dk = parseSettingsPatchKey<{ voice?: number; intro?: number }>('ducking', patch.ducking);
+    // Per-field change gating, like every other liquidsoap_*.txt key: the panel
+    // posts the whole block, and a restart banner on an untouched pair is how a
+    // save of something else drags the mixer down with it.
+    if (dk.voice !== undefined && dk.voice !== cur.ducking.voice) {
+      next.ducking.voice = dk.voice;
+      restart = true;
+    }
+    if (dk.intro !== undefined && dk.intro !== cur.ducking.intro) {
+      next.ducking.intro = dk.intro;
       restart = true;
     }
   }

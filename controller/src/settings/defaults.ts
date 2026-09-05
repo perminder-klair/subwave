@@ -11,6 +11,7 @@ import {
   SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
   BEDS_THRESHOLD_SEC_BOUNDS,
   CROSSFADE_DURATION_BOUNDS,
+  DUCK_DEPTH_BOUNDS,
   JINGLE_RATIO_BOUNDS,
   LOUDNESS_MAX_BOOST_DB_BOUNDS,
   LOUDNESS_TARGET_LUFS_BOUNDS,
@@ -34,6 +35,15 @@ import {
 export const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
   crossfadeDuration: 10.0, // seconds
+  // How far the music drops under each spoken layer — `smooth_add`'s `p`, so
+  // the number is what is LEFT UP, not the cut: 0.22 is ~-13 dB, 0.30 is ~-10.
+  // These are exactly the literals radio.liq carried before they were settings,
+  // so an upgrade is byte-identical. Read once at mixer startup out of
+  // liquidsoap_duck_voice.txt / liquidsoap_duck_intro.txt — a change needs a
+  // mixer restart. `voice` is the heavy solo-DJ duck (say.txt: idents, hourly
+  // time, weather, request intros); `intro` is the light talk-over duck
+  // (intro.txt: between-track links) that leaves the song audible underneath.
+  ducking: { voice: 0.22, intro: 0.30 },
   // Station-wide cap on autonomously-picked track length; 0 = no cap (#447). A
   // show's own maxTrackSeconds overrides it (0 there = unlimited). Listener
   // requests always bypass it.
@@ -608,6 +618,8 @@ export const BOUNDS = {
   // non-mirrored one, so the schema has to own the constant.
   jingleRatio: { ...JINGLE_RATIO_BOUNDS, type: 'int' },
   crossfadeDuration: { ...CROSSFADE_DURATION_BOUNDS, type: 'float' },
+  duckingVoice: { ...DUCK_DEPTH_BOUNDS, type: 'float' },
+  duckingIntro: { ...DUCK_DEPTH_BOUNDS, type: 'float' },
   bedsThresholdSec: { ...BEDS_THRESHOLD_SEC_BOUNDS, type: 'float' },
   bedsCrossSec: { ...BEDS_CROSS_SEC_BOUNDS, type: 'float' },
   bedsTailSec: { ...BEDS_TAIL_SEC_BOUNDS, type: 'float' },

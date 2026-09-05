@@ -108,6 +108,11 @@ jingle_now_on_air = ref(false)
 
 jingle_ratio = ref(30)
 crossfade_duration = ref(10.0)
+# smooth_add's `p` on the two ducking layers (see the DUCKING block below).
+# These are the depths that shipped as literals; a missing/garbage file keeps
+# them, so an upgrade with no settings.json change is byte-identical.
+duck_voice = ref(0.22)
+duck_intro = ref(0.30)
 archive_enabled = ref(false)
 archive_bitrate = ref(128)
 opus_enabled = ref(false)
@@ -149,6 +154,25 @@ if file.exists("#{state_dir}/liquidsoap_crossfade.txt") then
   raw = string.trim(file.contents("#{state_dir}/liquidsoap_crossfade.txt"))
   v = float_of_string(default=10.0, raw)
   if v >= 0.0 then crossfade_duration := v end
+end
+
+# Duck depths. `p` is the fraction of the music LEFT UP under a voice channel,
+# so the range is [0, 1] and smaller is deeper: 1.0 is no duck at all, 0.0 is a
+# full mute under the voice (still not the music-paused interlude — the music
+# keeps rolling underneath). Out-of-range is refused rather than clamped: the
+# controller already bounds the value on both its save and load paths, so a bad
+# file here is a hand-edit, and keeping the shipped depth beats guessing which
+# end the operator meant.
+if file.exists("#{state_dir}/liquidsoap_duck_voice.txt") then
+  raw = string.trim(file.contents("#{state_dir}/liquidsoap_duck_voice.txt"))
+  v = float_of_string(default=0.22, raw)
+  if v >= 0.0 and v <= 1.0 then duck_voice := v end
+end
+
+if file.exists("#{state_dir}/liquidsoap_duck_intro.txt") then
+  raw = string.trim(file.contents("#{state_dir}/liquidsoap_duck_intro.txt"))
+  v = float_of_string(default=0.30, raw)
+  if v >= 0.0 and v <= 1.0 then duck_intro := v end
 end
 
 if file.exists("#{state_dir}/liquidsoap_archive_enabled.txt") then
@@ -215,7 +239,7 @@ if file.exists("#{state_dir}/liquidsoap_station_name.txt") then
   if raw != "" then station_name := raw end
 end
 
-log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} opus_bitrate=#{opus_bitrate()} flac_enabled=#{flac_enabled()} aac_enabled=#{aac_enabled()} aac_bitrate=#{aac_bitrate()} ogg_icy_metadata=#{ogg_icy_metadata()} station_name=#{station_name()}")
+log("settings loaded: jingle_ratio=#{jingle_ratio()} crossfade_duration=#{crossfade_duration()} duck_voice=#{duck_voice()} duck_intro=#{duck_intro()} archive_enabled=#{archive_enabled()} archive_bitrate=#{archive_bitrate()} stream_bitrate=#{stream_bitrate()} opus_enabled=#{opus_enabled()} opus_bitrate=#{opus_bitrate()} flac_enabled=#{flac_enabled()} aac_enabled=#{aac_enabled()} aac_bitrate=#{aac_bitrate()} ogg_icy_metadata=#{ogg_icy_metadata()} station_name=#{station_name()}")
 
 # ---------------------------------------------------------------------------
 # subhttp:<full-url> — whole-file download via curl. The built-in
@@ -1444,9 +1468,14 @@ music_bus =
 # layers because each gets a silent lead-in clip pushed ahead of the speech (see
 # poll_voice / poll_intro), so the dip completes BEFORE the DJ's first word.
 
+# Both depths are operator settings (liquidsoap_duck_*.txt, read once above);
+# the shipped 0.22 / 0.30 are the defaults. `p` is a getter, so the ref reads
+# fine here — but the file is read at STARTUP, so a change needs a restart like
+# every other liquidsoap_*.txt value.
 ducked = smooth_add(
   duration=0.8,
-  p={0.22},         # heavy duck: music drops to ~-13 dB under solo voice
+  # heavy duck: 0.22 (the default) drops the music to ~-13 dB under solo voice
+  p={duck_voice()},
   normal=music_bus,
   special=voice
 )
@@ -1454,7 +1483,7 @@ ducked = smooth_add(
 # Light duck on top for talk-over links — leaves the song audible underneath.
 radio = smooth_add(
   duration=0.8,
-  p={0.30},         # ~-10 dB
+  p={duck_intro()},   # 0.30 default, ~-10 dB
   normal=ducked,
   special=intro
 )
