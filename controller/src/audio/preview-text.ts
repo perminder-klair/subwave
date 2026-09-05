@@ -38,6 +38,9 @@ const ENTRIES: PreviewEntry[] = [
     sample: 'Ви слухаєте SUB/WAVE. Це зразок голосу.' },
   { keys: ['czech', 'cestina', 'cs'],
     sample: 'Posloucháte SUB/WAVE. Toto je ukázka hlasu.' },
+  // 'slovencina' is the normalized form of "slovenčina" (diacritics stripped).
+  { keys: ['slovak', 'slovencina', 'sk'],
+    sample: 'Počúvate SUB/WAVE. Toto je ukážka hlasu.' },
   { keys: ['swedish', 'svenska', 'sv'],
     sample: 'Du lyssnar på SUB/WAVE. Det här är ett röstprov.' },
   { keys: ['norwegian', 'norsk', 'no', 'nb'],
