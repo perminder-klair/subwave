@@ -1,7 +1,8 @@
-"""Dependency-free tests for the analyzer sidecar's path-handoff contract."""
+"""Dependency-free tests for the analyzer sidecar pool and path contract."""
 
 import asyncio
 import importlib.util
+import os
 import sys
 import tempfile
 import types
@@ -47,18 +48,75 @@ assert spec and spec.loader
 server = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(server)
 
-worker_calls = []
+
+class FakeWorker:
+    def __init__(self, name, ready=True):
+        self.name = name
+        self.ready = ready
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls = []
+        self.ready_meta = {}
+        self.capability_errors = {}
+        self.capabilities = {}
+        self.models_resident = False
+        self.last_heavy = None
+        self.recycles = 0
+
+    async def request(self, payload):
+        self.calls.append(payload)
+        self.entered.set()
+        await self.release.wait()
+        return {"ok": True, "bpm": 120, "key": "8A", "intro_ms": 500, "confidence": 0.9}
+
+    def capability(self, meta_key, _loss_key):
+        return self.capabilities.get(meta_key) if self.ready else None
 
 
-async def worker_request(payload):
-    worker_calls.append(payload)
-    return {"ok": True, "bpm": 120, "key": "8A", "intro_ms": 500, "confidence": 0.9}
+async def test_pool_concurrency():
+    first = FakeWorker("first")
+    second = FakeWorker("second")
+    pool = server.AnalyzerWorkerPool([first, second])
+    one = asyncio.create_task(pool.request({"id": "1"}))
+    two = asyncio.create_task(pool.request({"id": "2"}))
+    await asyncio.wait_for(asyncio.gather(first.entered.wait(), second.entered.wait()), 1)
+    assert first.calls == [{"id": "1"}], first.calls
+    assert second.calls == [{"id": "2"}], second.calls
+    first.release.set()
+    second.release.set()
+    await asyncio.gather(one, two)
 
 
-server.analyzer_worker.request = worker_request
+async def test_unavailable_worker_skipped():
+    unavailable = FakeWorker("down", ready=False)
+    healthy = FakeWorker("healthy")
+    pool = server.AnalyzerWorkerPool([unavailable, healthy])
+    task = asyncio.create_task(pool.request({"id": "1"}))
+    await asyncio.wait_for(healthy.entered.wait(), 1)
+    assert unavailable.calls == [], unavailable.calls
+    healthy.release.set()
+    await task
 
 
-async def main():
+async def test_capability_aggregation_is_conservative():
+    first = FakeWorker("first")
+    second = FakeWorker("second")
+    first.capabilities["audio_embedding_capable"] = True
+    second.capabilities["audio_embedding_capable"] = False
+    pool = server.AnalyzerWorkerPool([first, second])
+    assert pool.capability("audio_embedding_capable", "audio_embedding") is False
+    second.ready = False
+    assert pool.capability("audio_embedding_capable", "audio_embedding") is None
+
+
+async def test_path_contract():
+    worker_calls = []
+
+    async def worker_request(payload):
+        worker_calls.append(payload)
+        return {"ok": True, "bpm": 120, "key": "8A", "intro_ms": 500, "confidence": 0.9}
+
+    server.analyzer_pool.request = worker_request
     missing = "/definitely-not-mounted/subwave-track.audio"
     try:
         await server.analyze(server.AnalyzeRequest(path=missing))
@@ -78,5 +136,29 @@ async def main():
     assert worker_calls == [{"id": "1", "path": audio.name}], worker_calls
 
 
+def test_concurrency_env_validation():
+    old = os.environ.get("SUBWAVE_TEST_CONCURRENCY")
+    try:
+        for raw, expected in ((None, 1), ("", 1), ("4", 4), ("0", 1), ("9", 1), ("many", 1)):
+            if raw is None:
+                os.environ.pop("SUBWAVE_TEST_CONCURRENCY", None)
+            else:
+                os.environ["SUBWAVE_TEST_CONCURRENCY"] = raw
+            assert server._bounded_int_env("SUBWAVE_TEST_CONCURRENCY", 1, 1, 8) == expected
+    finally:
+        if old is None:
+            os.environ.pop("SUBWAVE_TEST_CONCURRENCY", None)
+        else:
+            os.environ["SUBWAVE_TEST_CONCURRENCY"] = old
+
+
+async def main():
+    test_concurrency_env_validation()
+    await test_pool_concurrency()
+    await test_unavailable_worker_skipped()
+    await test_capability_aggregation_is_conservative()
+    await test_path_contract()
+
+
 asyncio.run(main())
-print("analyzer sidecar path contract: ok")
+print("analyzer sidecar pool + path contract: ok")

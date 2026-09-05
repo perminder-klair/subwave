@@ -307,6 +307,7 @@ services:
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=${ANALYZE_SECONDS:-}
+      - ANALYZE_CONCURRENCY=${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but anonymous HF downloads are rate-limited. Same var

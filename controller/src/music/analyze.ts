@@ -21,6 +21,7 @@ import { runAudioMoodPass } from './audio-moods.js';
 import { runPropagatedEnergyPass } from './propagated-energy.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
 import { quietGateDecision, type QuietState } from './analyze-quiet-pure.js';
+import { dispatchAnalysis, type DispatchOutcome } from './analyze-dispatch.js';
 import {
   analysisModeForTrack,
   backfillDecision,
@@ -459,6 +460,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
 
   let analyzed = 0;
   let failed = 0;
+  let orderedDone = 0;
   // Failures since the last success in THIS pass — the signal that separates a
   // bad file from a bad pass (see failureCountsAgainstTrack).
   let consecutiveFailures = 0;
@@ -506,40 +508,48 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   // per-track skips themselves are routine, not news.
   let stemGateAnnounced = false;
 
-  // One-ahead prefetch pipeline: the controller downloads track i+1's audio
-  // (network) while the backend computes track i (CPU), so the two overlap.
-  // The backend stays single-threaded — we only hide fetch latency. Each
-  // download resolves to a temp path on the shared volume; on download failure
-  // we fall back to the url path for that one id so it still gets analysed.
-  // One-ahead prefetch, eagerly reduced to a SETTLED result so a rejection can
-  // never float as an unhandled rejection in the window between kicking the
-  // download off and awaiting it next iteration. downloadCapped now rejects on
-  // every stale library entry (file missing on disk) — common — and Node's
-  // default --unhandled-rejections=throw crashed the whole pass when a one-ahead
-  // prefetch rejected during the previous track's compute window. The .then(_,_)
-  // attaches handlers immediately, so the rejection is always owned.
+  // The controller's established serial path keeps its one-ahead staging
+  // pipeline. Concurrent sidecar jobs instead stage only after admission, so a
+  // quiet-time pause never keeps downloading work that has not started.
   type Prefetch = Promise<{ path: string; complete: boolean } | { err: any }>;
   const prefetch = (songId: string): Prefetch =>
     analyzer.downloadCapped(songId).then((r) => r, (err) => ({ err }));
-  let inflight: Prefetch | null = ids.length > 0 ? prefetch(ids[0]) : null;
 
-  for (let i = 0; i < ids.length; i++) {
-    // Gate BEFORE the next prefetch is kicked off: while paused, only the
-    // already-inflight download (this track's) is outstanding — the pass
-    // doesn't keep pulling audio for a queue it isn't going to compute yet.
-    await waitForQuiet(quietGate, { done: i, total: ids.length });
-    const id = ids[i];
+  interface TrackWorkResult {
+    audioEmbedded: boolean;
+    vocalAnalyzed: boolean;
+  }
+
+  const allocateStems = (id: string): string | undefined => {
+    const trackStemDecision = stemCacheStore.stemWriteDecision({
+      cacheOn: stemCache,
+      slotsLeft: stemSlotsLeft,
+      hasExistingDir: existingStemDirs.has(id),
+    });
+    if (trackStemDecision.consumesSlot) stemSlotsLeft -= 1;
+    if (stemCache && !trackStemDecision.want && !stemGateAnnounced) {
+      stemGateAnnounced = true;
+      console.log(
+        `[analyze] stem cache budget reached mid-pass — stems skipped for the remaining net-new tracks ` +
+          '(raise audio.stemCacheGb in Settings → Transitions to cache more)',
+      );
+    }
+    return trackStemDecision.want ? stemCacheStore.dirFor(id) : undefined;
+  };
+
+  const runTrack = async (
+    id: string,
+    index: number,
+    downloadPromise?: Prefetch,
+    admittedStems?: { dir: string | undefined },
+  ): Promise<TrackWorkResult> => {
     const embeddingOnly = analysisModeForTrack(id, fullAnalysisIds, audioBackfill) === 'embedding-only';
-    const downloadPromise = inflight;
-    // Kick off the NEXT download before awaiting this one's analysis so the
-    // fetch overlaps the compute.
-    inflight = i + 1 < ids.length ? prefetch(ids[i + 1]) : null;
-
     let localPath: string | null = null;
     let localComplete: boolean | undefined;
+
     try {
-      const settled = downloadPromise ? await downloadPromise : null;
-      if (settled && 'err' in settled) {
+      const settled = await (downloadPromise ?? prefetch(id));
+      if ('err' in settled) {
         const err: any = settled.err;
         // A non-audio response (stale library entry — file missing on disk) is
         // not retryable via the url path, so don't mask it behind the sidecar's
@@ -547,21 +557,16 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
         if (err instanceof analyzer.NonAudioResponseError) throw err;
         // Otherwise a transient fetch failure — fall back to the url path.
         console.error(`[analyze] ${id} prefetch failed (${err?.message || err}); using url path`);
-        localPath = null;
       } else {
-        localPath = settled?.path ?? null;
-        localComplete = settled && 'complete' in settled ? settled.complete : undefined;
+        localPath = settled.path;
+        localComplete = settled.complete;
       }
       // embed:true makes the backend lazy-load CLAP even when its own env
       // doesn't have ANALYZE_AUDIO_EMBEDDING (the admin-toggle path); omitted
       // when audio is off so the backend keeps its env-driven default.
       const embed = audioBackfill ? true : undefined;
       // Lyric-first vocal ranges (#1125): when vocal activity is wanted, try the
-      // track's timed Navidrome lyrics before spending a Demucs separation. A
-      // synced-lyric or explicit-instrumental track is decided here — accurately,
-      // with no separation bleed — and skips Demucs. Anything inconclusive (no
-      // lyrics, or unsynced text) still runs Demucs (now with the mix floor).
-      // Best-effort: a lyric-fetch failure just falls through to Demucs.
+      // track's timed Navidrome lyrics before spending a Demucs separation.
       let lyricVocal: LyricVocalResult | null = null;
       if (vocalBackfill) {
         try {
@@ -570,37 +575,11 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
           lyricVocal = null;
         }
       }
-      // stems_dir asks the worker to persist the stems it separates anyway —
-      // wire-named (spread verbatim into the worker request). Implies the
-      // separation even when the vocal toggle is off.
-      // Budget-gated (#1257): a net-new dir spends one of the pass's headroom
-      // slots; a rewrite of a dir already on disk is free (no net-new bytes).
-      // Once the slots run out, later tracks analyse without stems and stay
-      // in needsStemsIds for a pass with room. Announced once, not per track.
-      const stemDecision = stemCacheStore.stemWriteDecision({
-        cacheOn: stemCache,
-        slotsLeft: stemSlotsLeft,
-        hasExistingDir: existingStemDirs.has(id),
-      });
-      if (stemDecision.consumesSlot) stemSlotsLeft -= 1;
-      if (stemCache && !stemDecision.want && !stemGateAnnounced) {
-        stemGateAnnounced = true;
-        console.log(
-          `[analyze] stem cache budget reached mid-pass — stems skipped for the remaining net-new tracks ` +
-            '(raise audio.stemCacheGb in Settings → Transitions to cache more)',
-        );
-      }
-      const stems_dir = stemDecision.want ? stemCacheStore.dirFor(id) : undefined;
-      // vocal:true forces the Demucs pass for this track (admin/backfill path),
-      // mirroring embed. A lyric-decided track sends an EXPLICIT false — the
-      // worker only skips Demucs on undefined when its OWN env has vocal off,
-      // and the analyzer service/AIO can carry ANALYZE_VOCAL_ACTIVITY, which
-      // would pay the whole separation just to have its result overridden
-      // below. Omitted when vocal activity is off.
-      // …unless this track is caching stems: explicit false wins over stems_dir
-      // in the worker, and the stem cache IS the separation, so skipping it to
-      // save a Demucs pass we're paying for anyway would just lose the stems.
-      // Lyrics still override the stored ranges below either way.
+      // Serial analysis spends stem headroom at the same point as before. The
+      // concurrent path reserves it during ordered admission and passes it in.
+      const stems_dir = admittedStems ? admittedStems.dir : allocateStems(id);
+      // A lyric-decided track explicitly skips Demucs unless stem caching needs
+      // the separation anyway. Omitted when vocal activity is off.
       const vocal = vocalBackfill ? (lyricVocal && !stems_dir ? false : true) : undefined;
       const a = localPath
         ? await analyzer.analyzePathWithUrlFallback(id, localPath, {
@@ -616,24 +595,12 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
             stems_dir,
             embedding_only: embeddingOnly || undefined,
           });
+      let storedVocal = false;
       if (!embeddingOnly) {
         // Lyrics win over the worker's vocal output when present: the ranges are
         // ground truth, and a synced onset is a truer intro than the energy
-        // heuristic the worker returns once Demucs is skipped. An instrumental
-        // marker (introMs null) keeps the energy-based intro.
+        // heuristic the worker returns once Demucs is skipped.
         const vocalRanges = lyricVocal ? lyricVocal.vocalRanges : a.vocalRanges;
-        // Tail ranges for lyric-decided tracks (feature: vocal-aware
-        // transitions): vocal:false above skips the worker's tail Demucs pass,
-        // so a.outro comes back with NO vocalRanges — and without a fill here
-        // the sung tracks the feature exists for never get tail data
-        // (mix.vocalTailFor stays null) while the tail-widened backfill
-        // re-targets them on every pass, forever — the same churn class as the
-        // "275/7093" report. Lyrics are tail ground truth exactly as they are
-        // for the head: clip the whole-track ranges into the outro window
-        // (20s mirrors the worker's ANALYZE_OUTRO_SECONDS default; the
-        // wind-down start bounds it when the tagged duration is unknown).
-        // Lyric-decided ⇒ override, matching vocalRanges above — a
-        // stems-forced Demucs tail is still trumped by synced timing.
         let outro = a.outro;
         if (lyricVocal && outro) {
           const durMs = (Number(db.getTrack(id)?.durationSec) || 0) * 1000;
@@ -660,25 +627,11 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
           leadSilenceMs: a.leadSilenceMs,
           tailSilenceMs: a.tailSilenceMs,
           tailStartMs: a.tailStartMs,
-          // Stamp the stem attempt whenever the worker actually reached the
-          // stem-writing step — true (written) OR false (the write failed for
-          // this track). Both are settled outcomes, and stamping the miss is
-          // what stops a track that can never produce stems from being
-          // re-targeted on every pass forever. null means the worker never got
-          // that far (no stems_dir requested, or no Demucs), so the track stays
-          // in scope for a later, better-equipped pass.
           stemsAttempted: a.stemsCached !== null,
         });
-        if (vocalRanges != null) vocalAnalyzed += 1;
-        // Stuck-case telemetry (vocal-aware transitions): a vocal pass that
-        // produced head ranges but NO outro (incomplete download — the file
-        // grew past ANALYZE_MAX_BYTES since its outro was stored) can't write
-        // tail vocal data, and the upsert's COALESCE keeps the old tail-missing
-        // outro — so the widened backfill will re-target this track every pass.
-        // Say so instead of churning silently. Lyric-decided tracks hit the
-        // same wall (no outro → nothing for the lyric fill above to clip into);
-        // otherwise keyed off the WORKER's ranges, not the lyric-resolved ones:
-        // it's the Demucs tail pass that's stuck.
+        storedVocal = vocalRanges != null;
+        // Surface the tail-vocal stuck case instead of silently retargeting it
+        // on every later pass.
         if (a.outro == null && (lyricVocal != null || (vocal && a.vocalRanges != null))) {
           const prior = db.getTrack(id);
           if (prior?.outro && prior.outro.vocalRanges == null) {
@@ -686,11 +639,7 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
           }
         }
       }
-      // Opportunistically store the CLAP audio vector whenever the backend
-      // carried one. Independent of the baseline write above: a track analysed
-      // before CLAP was enabled can take the embedding-only path once
-      // unanalysedAudioIds re-targets it. The first vector written stamps the
-      // audio-embedding provenance row.
+      let storedAudio = false;
       if (a.audioEmbedding && a.audioEmbedding.length === db.AUDIO_EMBEDDING_DIM) {
         try {
           db.upsertTrackAudioVector(id, a.audioEmbedding);
@@ -698,38 +647,35 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
             db.setAudioEmbeddingMeta(audioModelLabel, db.AUDIO_EMBEDDING_DIM);
             audioMetaStamped = true;
           }
-          audioEmbedded += 1;
+          storedAudio = true;
         } catch (err: any) {
           console.error(`[analyze] ${id} audio-vector write failed: ${err?.message || err}`);
         }
       }
+      return { audioEmbedded: storedAudio, vocalAnalyzed: storedVocal };
+    } finally {
+      // Drop this track's temp file (best-effort) regardless of outcome.
+      if (localPath) await rm(localPath, { force: true }).catch(() => {});
+    }
+  };
+
+  const commitOutcome = async (
+    outcome: DispatchOutcome<TrackWorkResult>,
+    id: string,
+    index: number,
+  ): Promise<void> => {
+    if (outcome.status === 'fulfilled') {
       analyzed += 1;
-      // A success is the evidence that the pass itself is healthy — so the
-      // failures buffered since the last one were about their FILES after all,
-      // and their stamps land now. The run the systemic guard counts starts
-      // again from here.
+      if (outcome.value.audioEmbedded) audioEmbedded += 1;
+      if (outcome.value.vocalAnalyzed) vocalAnalyzed += 1;
+      // A success proves buffered failures since the previous success were
+      // about their files, not a broken pass.
       flushFailureStamps();
       consecutiveFailures = 0;
-    } catch (err: any) {
+    } else {
       failed += 1;
       consecutiveFailures += 1;
-      // The analysis columns stay NULL so the next run retries — but record WHY
-      // and count it. Without the stamp a permanently unanalysable track (a
-      // corrupt file, a row whose file is gone) is indistinguishable from one
-      // never attempted, so it re-enters the scope forever and nothing can name
-      // it. After MAX_ANALYSIS_FAILURES the scope queries exclude it and the
-      // admin list is where it goes to be seen.
-      //
-      // Only counted while the throw is evidence about the FILE. Past
-      // SYSTEMIC_FAILURE_RUN with no success in between the cause is the pass,
-      // not the track — Navidrome gone (isAvailable() gates on the ANALYZER
-      // being up, never the music backend), the sidecar dying, a mount that went
-      // away — and counting those would sentence a whole batch to the exclusion
-      // list over three passes, recoverable only by hand. Hence stamps are
-      // BUFFERED (pendingFailureStamps): writing them here still condemned the
-      // five tracks in front of the guard on every pass, and an excluded track
-      // can't self-heal, because the success that would clear its count is
-      // exactly what exclusion prevents.
+      const err: any = outcome.reason;
       const reason = String(err?.message || err);
       console.error(`[analyze] ${id} failed: ${reason}`);
       if (failureCountsAgainstTrack(consecutiveFailures)) {
@@ -741,24 +687,66 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
             'in the pass rather than the files (is the music backend reachable?), so these failures ' +
             'are not counted against any track until one analyses successfully again',
         );
-        // The leading run's buffered stamps go with the verdict — the trip is
-        // the moment they stopped being evidence about the files.
         pendingFailureStamps = [];
       }
-    } finally {
-      // Drop this track's temp file (best-effort) regardless of outcome.
-      if (localPath) await rm(localPath, { force: true }).catch(() => {});
     }
-    if ((i + 1) % 25 === 0 || i + 1 === ids.length) {
-      console.log(`[analyze] ${i + 1}/${ids.length} (ok=${analyzed} fail=${failed})`);
+    const done = index + 1;
+    orderedDone = done;
+    if (done % 25 === 0 || done === ids.length) {
+      console.log(`[analyze] ${done}/${ids.length} (ok=${analyzed} fail=${failed})`);
       reportProgress({
         phase: 'analyze',
         label: 'Analysing audio',
-        done: i + 1,
+        done,
         total: ids.length,
         errors: failed || undefined,
       });
     }
+  };
+
+  const requestedConcurrency = config.analyzer.concurrency;
+  const effectiveConcurrency = backend === 'sidecar' ? requestedConcurrency : 1;
+  if (backend === 'local' && requestedConcurrency > 1) {
+    logEvent(
+      'info',
+      `ANALYZE_CONCURRENCY=${requestedConcurrency} applies to HTTP sidecars; local ANALYZE_PYTHON remains single-flight`,
+    );
+  }
+
+  if (effectiveConcurrency === 1) {
+    // One-ahead prefetch pipeline: controller network I/O for track i+1 overlaps
+    // backend compute for track i. Rejections are settled immediately so none
+    // can float as an unhandled rejection during the compute window.
+    let inflight: Prefetch | null = prefetch(ids[0]);
+    for (let i = 0; i < ids.length; i++) {
+      await waitForQuiet(quietGate, { done: i, total: ids.length });
+      const current = inflight;
+      inflight = i + 1 < ids.length ? prefetch(ids[i + 1]) : null;
+      let outcome: DispatchOutcome<TrackWorkResult>;
+      try {
+        outcome = { status: 'fulfilled', value: await runTrack(ids[i], i, current ?? undefined) };
+      } catch (reason) {
+        outcome = { status: 'rejected', reason };
+      }
+      await commitOutcome(outcome, ids[i], i);
+    }
+  } else {
+    logEvent('info', `Analyzer concurrency: ${effectiveConcurrency} in-flight sidecar jobs`);
+    const admittedStems = new Map<number, { dir: string | undefined }>();
+    await dispatchAnalysis(ids, {
+      concurrency: effectiveConcurrency,
+      beforeStart: async (index) => {
+        await waitForQuiet(quietGate, { done: orderedDone, total: ids.length });
+        // Capacity exists and quiet admission has succeeded; reserve the
+        // pass-wide stem budget in source order before this job can race ahead.
+        admittedStems.set(index, { dir: allocateStems(ids[index]) });
+      },
+      run: (id, index) => runTrack(id, index, undefined, admittedStems.get(index)),
+      onOutcome: (outcome, id, index) => {
+        admittedStems.delete(index);
+        return commitOutcome(outcome, id, index);
+      },
+    });
   }
 
   // A trailing run of failures shorter than the systemic threshold never met

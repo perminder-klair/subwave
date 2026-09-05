@@ -316,6 +316,7 @@ services:
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
+      - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # CLAP isn't gated, but anonymous HF downloads are rate-limited. Same var
@@ -614,6 +615,7 @@ services:
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
+      - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.
@@ -862,6 +864,7 @@ services:
       # Demucs model + analysis-window overrides (see .env.example).
       - DEMUCS_MODEL=\${DEMUCS_MODEL:-}
       - ANALYZE_SECONDS=\${ANALYZE_SECONDS:-}
+      - ANALYZE_CONCURRENCY=\${ANALYZE_CONCURRENCY:-}
       - ANALYZE_CLAP_WINDOWS=\${ANALYZE_CLAP_WINDOWS:-}
       - ANALYZE_OUTRO_SECONDS=\${ANALYZE_OUTRO_SECONDS:-}
       # Anonymous HF downloads are rate-limited; same var as tts-heavy.
@@ -1155,6 +1158,12 @@ SITE_URL=
 # stem caching. Without one, analysis retries by URL after the path probe:
 #   docs/tts-heavy.md#running-the-analyzer-on-another-machine
 # ANALYZE_URL=http://192.168.1.101:8080   # overrides the in-compose analyzer
+# ANALYZE_CONCURRENCY=1  # max in-flight sidecar jobs / worker processes (1-8).
+#                        # Default 1 preserves existing behaviour. For a remote
+#                        # GPU analyzer, start with 2-4 and set the SAME value on
+#                        # both station and GPU hosts. Each worker can load its
+#                        # own models, increasing CPU/RAM/VRAM plus network and
+#                        # source-server demand; tune to the smaller host limit.
 # ANALYZE_DEVICE=    # auto (default) / cpu / cuda — torch device for CLAP/Demucs;
 #                    # only meaningful on the cuda analyzer flavour
 # ANALYZE_IDLE_UNLOAD_S=  # seconds of no CLAP/Demucs use before the models are

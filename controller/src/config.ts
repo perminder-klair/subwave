@@ -104,6 +104,10 @@ export const config = {
     // scales linearly with the window. Keep in sync with analyze_worker.py
     // and docker/analyzer/server.py.
     seconds: envFloat('ANALYZE_SECONDS', 40, { min: 1 }),
+    // Maximum controller-side in-flight analysis jobs for a sidecar backend.
+    // Local stdio analysis remains single-flight (music/analyze.ts), because one
+    // line-protocol worker cannot safely execute requests concurrently.
+    concurrency: envInt('ANALYZE_CONCURRENCY', 1, { min: 1, max: 8 }),
     requestTimeoutMs: envInt('ANALYZE_REQUEST_TIMEOUT_MS', 120_000),
     // Transition renders (stem-blend transitions) get their own, shorter
     // deadline: they run inside the pair-drain window and must lose the race

@@ -1,8 +1,9 @@
 """
 subwave-analyzer — acoustic-analysis sidecar for SUB/WAVE.
 
-A thin FastAPI shim over one long-lived subprocess: the SAME stdio worker the
-controller runs in-process (controller/scripts/analyze_worker.py), speaking one
+A thin FastAPI shim over a bounded pool of long-lived subprocesses: the SAME
+stdio worker the controller runs in-process
+(controller/scripts/analyze_worker.py), speaking one
 JSON object per line ({"ready": true} once loaded, then one response per
 request). run() supervises it — start → wait-for-exit → respawn — so a crash
 (OOM, fatal model error) recovers without bouncing the container. No audio
@@ -33,6 +34,28 @@ ANALYZE_SECONDS = os.environ.get("ANALYZE_SECONDS", "").strip() or "40"
 # Only touched when CLAP is enabled without a local CLAP_MODEL_PATH; compose
 # mounts a named volume over it so the weight download survives recreates.
 ANALYZER_HF_HOME = os.environ.get("ANALYZER_HF_HOME", "/opt/analyzer/hf-cache")
+
+
+def _bounded_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        logging.getLogger("analyzer").warning(
+            f"{name}={raw!r} is not a whole number; using {default}"
+        )
+        return default
+    if value < minimum or value > maximum:
+        logging.getLogger("analyzer").warning(
+            f"{name}={raw!r} must be between {minimum} and {maximum}; using {default}"
+        )
+        return default
+    return value
+
+
+ANALYZE_CONCURRENCY = _bounded_int_env("ANALYZE_CONCURRENCY", 1, 1, 8)
 
 # Idle worker recycle (#1204 follow-up). The worker's own idle release drops
 # the CLAP/Demucs singletons, but ~1GB of librosa/numba/torch scratch stays
@@ -332,12 +355,79 @@ class StdioWorker:
                     log.warning(f"[{self.name}] worker not back within 180s of recycle")
 
 
-analyzer_worker = StdioWorker(
-    name="analyze",
-    python=ANALYZE_PYTHON,
-    script=ANALYZE_WORKER,
-    env_extra={"ANALYZE_SECONDS": ANALYZE_SECONDS, "HF_HOME": ANALYZER_HF_HOME},
-)
+class AnalyzerWorkerPool:
+    """Facade over independent single-flight stdio workers."""
+
+    def __init__(self, workers: list[StdioWorker]):
+        self.workers = workers
+        self._available = asyncio.Condition()
+        self._busy: set[StdioWorker] = set()
+        self._next = 0
+
+    @property
+    def ready_workers(self) -> list[StdioWorker]:
+        return [worker for worker in self.workers if worker.ready]
+
+    @property
+    def ready(self) -> bool:
+        return bool(self.ready_workers)
+
+    def capability(self, meta_key: str, loss_key: str) -> bool | None:
+        # Aggregate across the whole configured pool. A booting/crashed member is
+        # unknown, so optional capability is not advertised true until every
+        # selectable member can fulfil it.
+        if not self.ready_workers:
+            return None
+        values = [worker.capability(meta_key, loss_key) for worker in self.workers]
+        if any(value is False for value in values):
+            return False
+        if all(value is True for value in values):
+            return True
+        return None
+
+    def capability_error(self, loss_key: str) -> str | None:
+        errors = [
+            worker.capability_errors[loss_key]
+            for worker in self.workers
+            if loss_key in worker.capability_errors
+        ]
+        return errors[0] if errors else None
+
+    async def request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        async with self._available:
+            while True:
+                count = len(self.workers)
+                for offset in range(count):
+                    index = (self._next + offset) % count
+                    worker = self.workers[index]
+                    if worker.ready and worker not in self._busy:
+                        self._busy.add(worker)
+                        self._next = (index + 1) % count
+                        break
+                else:
+                    if not self.ready:
+                        raise RuntimeError("[analyze] no worker ready")
+                    await self._available.wait()
+                    continue
+                break
+        try:
+            return await worker.request(payload)
+        finally:
+            async with self._available:
+                self._busy.discard(worker)
+                self._available.notify_all()
+
+
+analyzer_workers = [
+    StdioWorker(
+        name=f"analyze-{index + 1}",
+        python=ANALYZE_PYTHON,
+        script=ANALYZE_WORKER,
+        env_extra={"ANALYZE_SECONDS": ANALYZE_SECONDS, "HF_HOME": ANALYZER_HF_HOME},
+    )
+    for index in range(ANALYZE_CONCURRENCY)
+]
+analyzer_pool = AnalyzerWorkerPool(analyzer_workers)
 
 
 @asynccontextmanager
@@ -345,13 +435,15 @@ async def lifespan(_app: FastAPI):
     # Background task so uvicorn binds :8080 immediately — a cold CLAP/Demucs
     # load would otherwise block the bind and the controller's probe would see
     # "connection refused" during boot.
-    tasks = [asyncio.create_task(analyzer_worker.run(), name="analyze-run")]
-    if RECYCLE_IDLE_S > 0:
-        tasks.append(
-            asyncio.create_task(
-                analyzer_worker.recycle_loop(RECYCLE_IDLE_S), name="analyze-recycle"
+    tasks = []
+    for index, worker in enumerate(analyzer_workers, start=1):
+        tasks.append(asyncio.create_task(worker.run(), name=f"analyze-run-{index}"))
+        if RECYCLE_IDLE_S > 0:
+            tasks.append(
+                asyncio.create_task(
+                    worker.recycle_loop(RECYCLE_IDLE_S), name=f"analyze-recycle-{index}"
+                )
             )
-        )
     try:
         yield
     finally:
@@ -369,22 +461,22 @@ async def health():
     # controller's probe (analyzer.ts:sidecarReachable) keys readiness on
     # `engines.includes("analyze")`, so advertising it while booting/crashed
     # would cause failed /analyze calls instead of a clean fall-through.
-    ready_engines: list[str] = []
-    if analyzer_worker.ready:
-        ready_engines.append("analyze")
+    ready = analyzer_pool.ready_workers
+    ready_engines: list[str] = ["analyze"] if ready else []
+    heavy_times = [worker.last_heavy for worker in ready if worker.last_heavy is not None]
     return {
         "ok": True,
         "engines": ready_engines,
-        "analyze_loaded": analyzer_worker.ready,
+        "analyze_loaded": bool(ready),
         # CLAP "sounds-like" capability (WITH_CLAP=1 builds only) — the admin
         # UI warns to rebuild before a fruitless run. None until ready. Reads
         # through capability(), so a model that failed to LOAD reports false
         # here rather than the ready line's install-time guess.
-        "analyze_audio_capable": analyzer_worker.capability(
+        "analyze_audio_capable": analyzer_pool.capability(
             "audio_embedding_capable", "audio_embedding"
         ),
         # Demucs vocal-activity capability (WITH_DEMUCS=1). None until ready.
-        "analyze_vocal_capable": analyzer_worker.capability(
+        "analyze_vocal_capable": analyzer_pool.capability(
             "vocal_activity_capable", "vocal_activity"
         ),
         # WHY a capability is false, when the reason is a failed load rather
@@ -392,34 +484,34 @@ async def health():
         # actionable part: "rebuild with the heavy image" and "give this host
         # reach to huggingface.co" are opposite instructions, and a bare false
         # can't tell them apart.
-        "analyze_audio_error": analyzer_worker.capability_errors.get("audio_embedding"),
-        "analyze_vocal_error": analyzer_worker.capability_errors.get("vocal_activity"),
+        "analyze_audio_error": analyzer_pool.capability_error("audio_embedding"),
+        "analyze_vocal_error": analyzer_pool.capability_error("vocal_activity"),
         # Tail vocal ranges — a worker-version signal as much as a capability:
         # workers predating the feature never emit the key, so this stays None
         # on stale images and the controller's backfill widening (which
         # requires === true) can't churn against them. Demucs failing to load
         # takes the tail down with it — same model, same separation.
-        "analyze_tail_vocal_capable": analyzer_worker.capability(
+        "analyze_tail_vocal_capable": analyzer_pool.capability(
             "tail_vocal_capable", "vocal_activity"
         ),
         # CLAP text tower (same 512-d space as the audio vectors) — powers
         # "sounds like ..." search and zero-shot moods. Needs torch, so lean
         # images report false. Shares CLAP's load, so it shares its failure.
-        "analyze_text_capable": analyzer_worker.capability(
+        "analyze_text_capable": analyzer_pool.capability(
             "text_embedding_capable", "audio_embedding"
         ),
         # Best-effort residency (#1204): whether CLAP/Demucs are believed
         # loaded right now — lets an operator confirm the idle release
         # without grepping logs. None while the worker is down.
-        "analyze_models_resident": analyzer_worker.models_resident if analyzer_worker.ready else None,
-        # Seconds since the last completed heavy request against THIS worker
-        # process; null when none has run since it spawned.
-        "analyze_heavy_idle_s": (
-            round(time.monotonic() - analyzer_worker.last_heavy, 1)
-            if analyzer_worker.ready and analyzer_worker.last_heavy is not None
-            else None
+        "analyze_models_resident": (
+            all(worker.models_resident for worker in ready) if ready else None
         ),
-        "analyze_worker_recycles": analyzer_worker.recycles,
+        # Conservative pool aggregate: seconds since the most recently completed
+        # heavy request on any ready member (null when none has run).
+        "analyze_heavy_idle_s": (
+            round(time.monotonic() - max(heavy_times), 1) if heavy_times else None
+        ),
+        "analyze_worker_recycles": sum(worker.recycles for worker in analyzer_workers),
     }
 
 
@@ -476,7 +568,7 @@ async def analyze(req: AnalyzeRequest):
         payload["stems_dir"] = req.stems_dir
     if req.embedding_only:
         payload["embedding_only"] = True
-    msg = await analyzer_worker.request(payload)
+    msg = await analyzer_pool.request(payload)
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "analyze failed")
     out: dict[str, Any] = {
@@ -516,9 +608,8 @@ class RenderTransitionRequest(BaseModel):
 @app.post("/render-transition")
 async def render_transition(req: RenderTransitionRequest):
     """Mix a pre-rendered transition WAV from two tracks' cached stems onto
-    the shared volume. Fast (a mix, not a separation) but still serialized
-    behind the single worker lock — the controller's render deadline handles
-    a render stuck behind a bulk analyze item."""
+    the shared volume. Fast (a mix, not a separation) and bounded by the same
+    pool, so an idle member can serve it without waiting behind every bulk job."""
     payload: dict[str, Any] = {
         "id": "1",
         "op": "render_transition",
@@ -530,7 +621,7 @@ async def render_transition(req: RenderTransitionRequest):
         payload["clip_name"] = req.clip_name
     if req.target_lufs is not None:
         payload["target_lufs"] = req.target_lufs
-    msg = await analyzer_worker.request(payload)
+    msg = await analyzer_pool.request(payload)
     if not msg.get("ok"):
         # A clean miss (stems absent, degenerate grids) is an expected
         # outcome, not a server fault — pass the reason through as 200 so the
@@ -559,7 +650,7 @@ async def embed_text(req: EmbedTextRequest):
     "text embedding unavailable"."""
     if not req.texts:
         raise HTTPException(400, "missing 'texts'")
-    msg = await analyzer_worker.request({"id": "1", "texts": req.texts})
+    msg = await analyzer_pool.request({"id": "1", "texts": req.texts})
     if not msg.get("ok"):
         raise HTTPException(500, msg.get("error") or "embed-text failed")
     return {"ok": True, "embeddings": msg.get("text_embeddings") or []}
