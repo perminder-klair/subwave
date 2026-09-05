@@ -24,7 +24,7 @@ export const BatchTagSchema = z.object({
 export function taggerSystem(): string {
   return `You tag music tracks with mood and energy for a personal radio station.
 
-For each track, output ONLY a JSON object:
+For each track, the required result has this shape:
 {
   "moods": [1-3 strings, each from this exact list: ${moodVocab().join(', ')}],
   "energy": "low" | "medium" | "high"
@@ -41,7 +41,7 @@ If you genuinely cannot tell from the title/artist/album, return {"moods":[],"en
 export function taggerBatchSystem(): string {
   return `You tag music tracks with mood and energy for a personal radio station.
 
-You will be given a numbered list of tracks. Return ONLY a JSON object of the form:
+You will be given a numbered list of tracks. The required result has this shape:
 {
   "results": [
     { "moods": [...], "energy": "low" | "medium" | "high" },
