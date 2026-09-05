@@ -1,35 +1,40 @@
-// downloadCapped must not leave its staging file behind when it throws.
-//
-// `createWriteStream` truncates `<analyze-tmp>/<id>.audio` into existence the
-// moment the pipeline starts, and three of downloadCapped's throws land AFTER
-// that line: a pipeline rejection (the request timeout aborting mid-body), the
-// `read === 0` guard, and the small-file non-audio backstop. Only the SUCCESS
-// path returns a path, and the caller only ever removes paths it was handed —
-// runAnalysisPass's one-ahead prefetch reduces a rejection to `{err}` and drops
-// the filename — so an orphan is unreachable until the pass's end-of-run
-// `rm -rf analyze-tmp`, which a crash or a mid-pass rebuild skips entirely.
+// downloadCapped must not leave its staging file behind when it throws — and
+// must KEEP it on every path that returns one, including the deliberate
+// cap-hit truncation the outro analysis depends on.
 //
 // Every failing case here SEEDS the destination first, so the assertion is
 // "the cleanup ran", not the weaker "no file happened to be created" — that
-// distinction is what makes the content-type case (which throws before any
-// write) worth pinning alongside the three that do write.
+// distinction is what makes the two guards ABOVE the pipeline (a non-200, an
+// honest error envelope caught on the content type) worth pinning alongside
+// the three throws that do write a file.
 //
 // Loopback HTTP only, no external network: the same shape as
 // analyzer-path-fallback.test.ts — stand a server up, point NAVIDROME_URL at
 // it, then dynamically import analyzer.js so its module-level ANALYZE_TMP_DIR
-// resolves against the temp STATE_DIR.
+// and ANALYZE_MAX_BYTES resolve against the temp STATE_DIR and the small cap
+// set below.
 
 import assert from 'node:assert/strict';
 import { createServer, type ServerResponse } from 'node:http';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test, { after, before } from 'node:test';
 
 // One behaviour per song id, so each test names the failure it is pinning.
-type Mode = 'truncated' | 'empty' | 'tiny-envelope' | 'json-header' | 'ok';
+type Mode = 'truncated' | 'empty' | 'tiny-envelope' | 'json-header' | 'server-error' | 'over-cap' | 'tiny-audio' | 'ok';
 
 const AUDIO = 'audio/mpeg';
+
+// The byte cap the module reads at import time. Small enough that a test can
+// serve past it in one response — the real default is 12 MB.
+const MAX_BYTES = 4096;
+
+// One envelope shared by the two cases that serve one, so they can only ever
+// differ in the header under test.
+const ERROR_BODY = JSON.stringify({
+  'subsonic-response': { status: 'failed', error: { code: 70, message: 'Song not found' } },
+});
 
 function respond(mode: Mode, res: ServerResponse): void {
   switch (mode) {
@@ -48,25 +53,43 @@ function respond(mode: Mode, res: ServerResponse): void {
       return;
     // A Subsonic error envelope wearing an audio content type: slips the header
     // guard, gets written to disk, and is caught by the <1024-byte backstop.
-    case 'tiny-envelope': {
-      const body = JSON.stringify({
-        'subsonic-response': { status: 'failed', error: { code: 70, message: 'Song not found' } },
-      });
-      res.writeHead(200, { 'Content-Type': AUDIO, 'Content-Length': String(Buffer.byteLength(body)) });
-      res.end(body);
+    case 'tiny-envelope':
+      res.writeHead(200, { 'Content-Type': AUDIO, 'Content-Length': String(Buffer.byteLength(ERROR_BODY)) });
+      res.end(ERROR_BODY);
       return;
-    }
     // Honest error envelope — rejected by the content-type guard, before any
     // file is created. Seeded anyway, so this pins that the cleanup is blanket.
-    case 'json-header': {
-      const body = JSON.stringify({
-        'subsonic-response': { status: 'failed', error: { code: 70, message: 'Song not found' } },
-      });
-      res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(body)) });
+    case 'json-header':
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(ERROR_BODY)) });
+      res.end(ERROR_BODY);
+      return;
+    // The other pre-pipeline throw: `!res.ok`. Also creates no file, also
+    // seeded, for the same reason.
+    case 'server-error':
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      res.end('navidrome exploded');
+      return;
+    // More audio than the cap — the SUCCESS path that truncates. `capped()`
+    // returns normally, pipeline resolves, and the short file is kept with
+    // complete:false so outro analysis can veto itself.
+    case 'over-cap': {
+      const body = Buffer.alloc(MAX_BYTES * 16, 0x5a);
+      body.writeUInt8(0xff, 0);
+      res.writeHead(200, { 'Content-Type': AUDIO, 'Content-Length': String(body.length) });
       res.end(body);
       return;
     }
-    // Real (if short) audio — the success path, which must KEEP its file.
+    // Real audio SHORTER than the 1024-byte backstop window: re-read, found not
+    // to start with '{' or '<', and kept. The backstop's own false-positive edge.
+    case 'tiny-audio': {
+      const body = Buffer.alloc(512, 0x5a);
+      body.writeUInt8(0xff, 0);
+      res.writeHead(200, { 'Content-Type': AUDIO, 'Content-Length': String(body.length) });
+      res.end(body);
+      return;
+    }
+    // Real (if short) audio, over the backstop window and under the cap — the
+    // plain success path, which must KEEP its file.
     case 'ok': {
       const body = Buffer.alloc(2048, 0x5a);
       body.writeUInt8(0xff, 0); // not '{' or '<', so the small-file backstop stays clear
@@ -78,6 +101,10 @@ function respond(mode: Mode, res: ServerResponse): void {
 }
 
 const server = createServer((req, res) => {
+  // The cap case abandons the body mid-response, which resets the connection —
+  // an unhandled 'error' here would take the test process down with it.
+  req.on('error', () => {});
+  res.on('error', () => {});
   const id = new URL(req.url || '/', 'http://localhost').searchParams.get('id') || '';
   respond(id as Mode, res);
 });
@@ -105,6 +132,7 @@ before(async () => {
   const address = server.address();
   assert.ok(address && typeof address === 'object');
   process.env.STATE_DIR = tmpDir;
+  process.env.ANALYZE_MAX_BYTES = String(MAX_BYTES);
   process.env.NAVIDROME_URL = `http://127.0.0.1:${address.port}`;
   process.env.NAVIDROME_USER = 'test';
   process.env.NAVIDROME_PASS = 'test';
@@ -114,6 +142,7 @@ before(async () => {
 after(async () => {
   analyzer?.shutdown();
   await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())));
+  rmSync(tmpDir, { recursive: true, force: true });
 });
 
 test('a download cut off mid-body leaves no partial file behind', async () => {
@@ -138,6 +167,30 @@ test('an error envelope caught on the content type also clears a stale staging f
   const dest = seed('json-header');
   await assert.rejects(analyzer.downloadCapped('json-header'), analyzer.NonAudioResponseError);
   assert.equal(existsSync(dest), false, 'cleanup is blanket — it does not depend on this throw having written a file');
+});
+
+test('a non-200 clears a stale staging file too', async () => {
+  const dest = seed('server-error');
+  await assert.rejects(analyzer.downloadCapped('server-error'), /download 500/);
+  assert.equal(existsSync(dest), false, 'the other pre-pipeline guard must not be an exception to the cleanup');
+});
+
+test('a download that hits the byte cap KEEPS its truncated file', async () => {
+  const { path, complete } = await analyzer.downloadCapped('over-cap');
+  assert.equal(path, stagedPath('over-cap'));
+  assert.equal(existsSync(path), true, 'the cap is a success, not a failure — the cleanup must not fire');
+  assert.equal(complete, false, 'a capped read is incomplete, which is what vetoes outro analysis');
+  assert.ok(
+    statSync(path).size >= MAX_BYTES,
+    `the kept file holds at least the cap (${statSync(path).size} bytes)`,
+  );
+});
+
+test('real audio shorter than the backstop window is kept', async () => {
+  const { path, complete } = await analyzer.downloadCapped('tiny-audio');
+  assert.equal(existsSync(path), true, 'the <1024 re-read must not condemn a short file that is real audio');
+  assert.equal(statSync(path).size, 512);
+  assert.equal(complete, true);
 });
 
 test('a successful download keeps its file for the caller to hand on', async () => {
