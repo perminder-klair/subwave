@@ -189,9 +189,16 @@ export interface ScrobbleListenbrainzForm {
   baseUrl: string;
 }
 
+/** Navidrome play reporting (#1298). No credentials of its own — the station's
+ *  existing Navidrome connection is what it scrobbles through. */
+export interface ScrobbleNavidromeForm {
+  enabled: boolean;
+}
+
 export interface ScrobbleForm {
   lastfm: ScrobbleLastfmForm;
   listenbrainz: ScrobbleListenbrainzForm;
+  navidrome: ScrobbleNavidromeForm;
 }
 
 /** Listener likes (#991) — heart button + Navidrome star + DJ influence. */
@@ -389,6 +396,7 @@ export interface SettingsData {
     scrobble?: {
       lastfm?: Partial<ScrobbleLastfmForm>;
       listenbrainz?: Partial<ScrobbleListenbrainzForm>;
+      navidrome?: Partial<ScrobbleNavidromeForm>;
     };
     likes?: {
       enabled?: boolean;

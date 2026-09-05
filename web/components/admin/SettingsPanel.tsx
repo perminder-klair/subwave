@@ -535,6 +535,9 @@ export default function SettingsPanel() {
           username: v.scrobble?.listenbrainz?.username ?? '',
           baseUrl: v.scrobble?.listenbrainz?.baseUrl ?? '',
         },
+        navidrome: {
+          enabled: !!v.scrobble?.navidrome?.enabled,
+        },
       },
       likes: {
         enabled: v.likes?.enabled ?? true,

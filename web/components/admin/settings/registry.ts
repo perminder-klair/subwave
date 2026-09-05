@@ -89,7 +89,7 @@ export const SECTIONS = [
   },
   {
     id: 'scrobble', group: 'listeners', label: 'Scrobbling',
-    hint: 'last.fm · listenbrainz', icon: Activity,
+    hint: 'last.fm · listenbrainz · navidrome', icon: Activity,
     formKeys: ['scrobble'],
   },
   {
@@ -276,6 +276,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'User token', section: 'scrobble', card: 'ListenBrainz', keywords: 'listenbrainz profile token' },
   { label: 'API base URL', section: 'scrobble', card: 'ListenBrainz', keywords: 'self hosted instance endpoint' },
   { label: 'Username (display)', section: 'scrobble', card: 'ListenBrainz', keywords: 'listenbrainz user dash' },
+  { label: 'Enabled', section: 'scrobble', card: 'Navidrome', keywords: 'navidrome play count last played smart playlist nsp rotation subsonic' },
 
   // ── archives ───────────────────────────────────────────────────────────────
   { label: 'Record the broadcast to disk', section: 'archives', card: 'Hourly archive', keywords: 'archive recording mp3 tapes restart' },

@@ -581,6 +581,13 @@ export const DEFAULTS = {
       // `${baseUrl}/submit-listens`. Env LISTENBRAINZ_API_URL wins.
       baseUrl: '',
     },
+    // Navidrome play reporting (#1298) — Subsonic `scrobble`, so playCount and
+    // lastPlayed move and `.nsp` smart playlists rotate. No credentials of its
+    // own (it reuses config.navidrome) and, unlike the two above, no listener
+    // gate: see broadcast/scrobble-pure.ts. Off by default.
+    navidrome: {
+      enabled: false,
+    },
   },
 
   // The player heart button (#991). `starInNavidrome` mirrors each first like

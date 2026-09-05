@@ -655,9 +655,17 @@ const scrobbleListenbrainzSchema = settingsBlockOf({
   }),
 });
 
+// Navidrome (#1298) carries an enable flag and nothing else: the credentials
+// are already the station's own `config.navidrome` (env / setup-config), so
+// there is no key to paste here and no secret to redact.
+const scrobbleNavidromeSchema = settingsBlockOf({
+  enabled: settingsBoolLike(),
+});
+
 export const scrobblePatchSchema = settingsBlockOf({
   lastfm: scrobbleLastfmSchema,
   listenbrainz: scrobbleListenbrainzSchema,
+  navidrome: scrobbleNavidromeSchema,
 });
 
 /**
