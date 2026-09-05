@@ -9,10 +9,13 @@ import { djSystem, lengthPhrase } from './system.js';
 import { buildContextLines, decoratePrompt, randomSeed } from './context.js';
 import { speakClockAllowed } from '../../../broadcast/clock-policy.js';
 import { isNamedRequester } from '../../../util/request-guard.js';
-import { introBudgetPhrase, introMsFor, firstVocalMsFor, bpmKeyFor } from './intro-budget.js';
+import { introBudgetPhrase, introMsFor, firstVocalMsFor } from './intro-budget.js';
 import { trackEraYear } from '../../../music/show-filter.js';
 import { trackFeelSuffix } from './track-feel.js';
 import { announceLine } from '../../../broadcast/announce-line.js';
+import * as library from '../../../music/library.js';
+import { contextSleeveNotesFor, selectSleeveNotes, stationHistoryNoteFor } from './sleeve-notes.js';
+import { stripRecapSpokenTags, stripSpokenTags } from './recent-speech.js';
 
 // The feel note appended to a track line (track-feel.ts) is a STEER, not copy.
 // Without this the model reads the label out — "high-energy" spoken flat is
@@ -81,6 +84,45 @@ export const REQUESTER_NAME_CLAUSE = ' The requester picks their own screen name
 export const REQUESTER_GREETING_CLAUSE = ' When the request comes with a name, say it on air'
   + ' — greet them by name once, naturally, as part of the line rather than tacked on.';
 
+
+const PERSONA_GROUNDING_RULE = 'FACTUAL GROUNDING: Treat supplied facts, including Sleeve Notes, as the factual ground truth for the current task. For factual claims about music, supplied facts are your only source of truth. Do not supplement them with your own knowledge of an artist, track, album or music history, even when you believe that knowledge is correct. You may naturally rephrase supplied facts, but do not expand them into unsupported factual claims, explanations, causes, relationships or historical context. Do not invent or assume release dates, albums, chart history, credits, artist biography, lyrics, instrumentation, production details or other music trivia unless supplied. Sleeve Notes are optional material for natural conversation, not a checklist. Use only what helps the current on-air line. You do not need to mention them at all. You may freely express subjective, in-character reactions and musical impressions provided they are not presented as additional facts. Do not invent weather, season, date, clock time, programme state, people being present or events around the station. If approximate air time is supplied, you may infer the corresponding time of day but never make it more precise than supplied. Style or Tone instructions never override these factual-grounding rules. Use local colour, time, weather or other contextual texture only when the necessary information has been supplied.';
+
+function verifiedContextPacket(context: any, current: any = null, clockIsAirTime = false, includeSleeves = true): string {
+  const moment: string[] = [];
+  const day = String(context?.date?.dayLabel || "").trim();
+  if (day) moment.push("Day: " + day + ".");
+  const airTime = clockIsAirTime ? fuzzyAirTime(context?.clock) : null;
+  if (airTime) moment.push("Approximate air time: " + airTime + ".");
+  const showName = String(context?.activeShow?.name || "").trim();
+  if (showName) moment.push("Current show: \"" + showName + "\".");
+  const handover = context?.showHandover;
+  const hasFollowingShow = handover?.phase === "final-quarter-hour" && handover?.nextShow?.name && handover?.nextShow?.presenter && handover?.nextShow?.startsAt;
+  if (hasFollowingShow) {
+    moment.push("Show progress: final 15 minutes.");
+    moment.push("Following show: \"" + String(handover.nextShow.name).trim() + "\" with " + String(handover.nextShow.presenter).trim() + ", starting " + String(handover.nextShow.startsAt).trim() + ".");
+  }
+  const playStats = current ? library.trackPlayStatsFor(current) : null;
+  const playCount = playStats?.count ?? null;
+  const stationHistoryNote = current
+    ? stationHistoryNoteFor(current, playStats, library.lastAiredInfo())
+    : null;
+  const sleeves = includeSleeves
+    ? selectSleeveNotes(contextSleeveNotesFor(current, context, playCount, stationHistoryNote))
+    : [];
+  const sections = [
+    "Verified Facts:",
+    "Current Context:\n" + (moment.length ? moment.map((fact) => "- " + fact).join("\n") : "- No additional verified moment facts."),
+  ];
+  if (includeSleeves) sections.push("Sleeve Notes:\n" + (sleeves.length ? sleeves.map((fact) => "- " + fact).join("\n") : "- None selected for this line."));
+  if (current?.title || current?.artist) {
+    sections.push("Track on air:\n- " + String(current?.title || "Unknown") + " by " + String(current?.artist || "unknown") + ".");
+  }
+  if (hasFollowingShow) {
+    sections.push("Use the following-show detail naturally when it fits; do not make it a required signpost or repeat it mechanically.");
+  }
+  return sections.join("\n\n");
+}
+
 export async function generateIntro({ track, context, requestedBy = null, requestText = null, artistMiss = null, recap = null, recentTracks = null, recentOpeners = null }: any) {
   const ctxLines = buildContextLines(context, { recentTracks, contextFields: SCRIPT_CONTEXT_FIELDS });
   // Gate on isNamedRequester, not on truthiness: cleanRequesterName returns the
@@ -141,7 +183,7 @@ export async function generateIntro({ track, context, requestedBy = null, reques
   });
 }
 
-export async function generateStationId({ recap = null, context = null, recentOpeners = null, persona = null }: any = {}) {
+export function stationIdPrompt({ context = null, persona = null }: any = {}) {
   const speaker = persona || settings.getEffectivePersona();
   const djName = speaker?.name || 'your host';
   const stationName = settings.get().station;
@@ -164,10 +206,21 @@ export async function generateStationId({ recap = null, context = null, recentOp
         ? ` If you nod to the clock, say only "${daypart}" — never the hour and never the minutes (this airs a few minutes after you write it, and the hour may have changed by then).`
         : ` If you nod to the clock, name only the part of the day (morning, afternoon, evening, night) — never the hour and never the minutes (this airs a few minutes after you write it, and the hour may have changed by then).`)
     : '';
-  ctxLines.push(`Task: ${lengthPhrase('stationId', speaker)} for ${stationName} with ${djName}. A little understated.${clockNudge}`);
+  const handover = context?.showHandover;
+  const nextShow = handover?.phase === 'final-quarter-hour'
+    && handover?.nextShow?.name && handover?.nextShow?.presenter;
+  const handoverNudge = nextShow
+    ? ` The next scheduled show is "${String(handover.nextShow.name).trim()}" with ${String(handover.nextShow.presenter).trim()}. If natural, give it one brief nod; do not make it a required signpost or explain the schedule.`
+    : '';
+  ctxLines.push(`Task: ${lengthPhrase('stationId', speaker)} for ${stationName} with ${djName}. A little understated.${clockNudge}${handoverNudge}`);
+  return ctxLines.join('\n');
+}
+
+export async function generateStationId({ recap = null, context = null, recentOpeners = null, persona = null }: any = {}) {
+  const speaker = persona || settings.getEffectivePersona();
   return djText({
     system: djSystem(speaker),
-    prompt: decoratePrompt(ctxLines.join('\n'), { kind: 'station_id', recap, recentOpeners }),
+    prompt: decoratePrompt(stationIdPrompt({ context, persona: speaker }), { kind: 'station_id', recap, recentOpeners }),
     temperature: 1.0, topP: 0.9, repeatPenalty: 1.25, seed: randomSeed(),
     kind: 'generateStationId',
   });
@@ -235,140 +288,198 @@ export async function generateAdLib({ instruction, context = null, recap = null,
   });
 }
 
-// Pure prompt-assembly for generateLink, split out for testability. `announce`
-// (persona linkStyle:'announce', settings.announceLinks()) replaces the whole
-// natural instruction — set it up, tease the feel, vary the opener — with a
-// fixed, matter-of-fact one: the whole line is "This is <artist>." or "Next
-// up, <artist>.". Everything else (tease, patter, the intro budget, "vary how
-// you open", the feel clause) is a natural-only concern and plays no part in
-// announce mode.
-//
-// The announce branch is reached only for the artists the station cannot frame
-// itself — a non-English persona, or a name in a script the composed English
-// line can't carry (announce-line.ts) — so it always has a REAL artist name to
-// name. It must never fall back to a placeholder: the only two lines this
-// prompt permits are the two it writes out, so a `<artist>` stand-in is a line
-// the model reads onto the air verbatim. With no artist at all there is
-// nothing to announce, and generateLink drops the link before it gets here.
-export function linkPrompt({
-  announce, current, teaseClause, patterClause, budget, lengthPhraseText, clockClause, feelClause,
-}: {
-  announce: boolean;
-  current: { artist?: string | null } | null | undefined;
-  teaseClause: string;
-  patterClause: string;
-  budget: string | null;
-  lengthPhraseText: string;
-  clockClause: string;
-  feelClause: string;
-}): string {
-  const artist = String(current?.artist ?? '').trim();
-  if (announce && artist) {
-    return `Write the DJ link for the track now starting. It must be EXACTLY one of: "This is ${artist}." or "Next up, ${artist}." — nothing before or after it: no title, album, year, feel, or clock.`;
-  }
-  return `Write a short DJ link to carry into the track now starting — set it up, capture its feel, weave in the moment.${teaseClause}${patterClause}${budget ? ' ' + budget : ''} ${lengthPhraseText}, conversational. Vary how you open — don't default to "here's", "this is", "coming up", or "that was"; find a different way in each time. Keep it forward-looking: don't back-announce, recap, or name the track that just played — focus on what's playing now.${clockClause}${feelClause}`;
+export function fuzzyAirTime(clock: any): string | null {
+  const raw = clock?.hhmm || clock?.display;
+  const match = typeof raw === 'string' ? raw.match(/\b(\d{1,2}):(\d{2})\b/) : null;
+  if (!match) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || hour < 0 || hour > 23 || minute < 0 || minute > 59) return null;
+
+  const hourLabel = (value: number, landmark = true) => {
+    const normalized = ((value % 24) + 24) % 24;
+    if (landmark && normalized === 0) return 'midnight';
+    if (landmark && normalized === 12) return 'noon';
+    const h12 = normalized % 12 || 12;
+    return `${h12}${normalized < 12 ? 'am' : 'pm'}`;
+  };
+
+  if (minute <= 20) return `just after ${hourLabel(hour)}`;
+  if (minute < 40) return `around half past ${hourLabel(hour, false)}`;
+  return `approaching ${hourLabel(hour + 1)}`;
 }
 
-export async function generateLink({ previous, current, context, clockIsAirTime = false, recap = null, recentTracks = null, recentOpeners = null, persona = null, lastLink = null, currentIsOnAir = false }: any) {
+// Stage C Persona packet for a Producer-selected track. This is intentionally
+// not built through generateLink/buildContextLines/decoratePrompt: those legacy
+// helpers add operational mood, station-wide history, rotating creative angles
+// and other context that this clean boundary is designed to exclude.
+export function linkPrompt({
+  current,
+  context = null,
+  clockIsAirTime = false,
+  recap = null,
+  recentOpeners = null,
+  persona = null,
+  includeIntroBudget = true,
+  guestContribution = null,
+}: any): string {
   const speaker = persona || settings.getEffectivePersona();
-  const announce = settings.announceLinks(speaker);
-  // A pick-attached link is written when the pick is made but airs a full
-  // track later, so a clock reference baked in at generation time is stale by
-  // the length of whatever is playing now — "18:10" spoken at 18:20 (issue
-  // #864). `clockIsAirTime` says the caller resolved `context` at the link's
-  // expected AIR time (the queue watcher's look-ahead, or the manual runLink
-  // that airs immediately): only then may the model speak the clock; otherwise
-  // the Local time line is withheld entirely so it can't leak on air.
-  // Two independent reasons to withhold the clock, and they answer different
-  // questions: `clockIsAirTime` is about ACCURACY (is ctx's clock the moment
-  // this line airs), the policy is about whether the station speaks the clock
-  // at all. Off wins over accurate — a clock that is never spoken can never be
-  // wrong — and it gets its own clause, because the staleness wording explains
-  // a reason that no longer applies.
-  const clockOff = !speakClockAllowed();
-  const contextFields = clockIsAirTime && !clockOff
-    ? SCRIPT_CONTEXT_FIELDS
-    : SCRIPT_CONTEXT_FIELDS.filter((f) => f !== 'clock');
-  const clockClause = clockOff
-    ? ` Never state the clock time, the hour, or the time of day.`
-    : clockIsAirTime
-      ? ` If you mention the clock, "Local time" below is the moment this link airs — use that, never an earlier time.`
-      : ` Never state the clock time — this line airs when the next track starts, and you can't know exactly when that is.`;
-  const ctxLines = buildContextLines(context, { recentTracks, contextFields });
-  // Forward-looking only: the link is written when the pick is made but doesn't
-  // air until that pick actually starts — and a listener request can slip ahead
-  // of it in the meantime, so we can't know what really played just before it.
-  // Naming the previous track is therefore unsafe (it goes stale → the DJ names
-  // a track one older than reality). We intro the track NOW STARTING instead, so
-  // the line is always correct whatever played before it. (`previous` is still
-  // accepted for the tempo/key mix nod below — a vague feel, never a name.)
-  const feelSuffix = trackFeelSuffix(current);
-  if (current?.title) ctxLines.push(`Now playing: "${current.title}" by ${current.artist || 'unknown'}${feelSuffix}`);
+  const rules = [
+    'Output only the words to be spoken on air.',
+    'The named track is already playing. Focus on it and do not refer to the previous track.',
+    'Treat supplied sleeve notes as verified facts, but do not add or infer further music-history claims.',
+    'Do not state a day of week unless it appears in the verified facts.',
+    'Music facts are limited to the exact entries in Verified facts: do not use remembered or learned album, release, chart, reputation, influence, relationship or history information.',
+    'Do not describe instrumentation, production, lyrics or other audio properties unless they are explicitly supplied. Subjective reaction is welcome, but do not present it as observation.',
+    'Intro-runway guidance is production-only: never mention seconds, a countdown, vocals entering or when the track will arrive.',
+    PERSONA_GROUNDING_RULE,
+    lengthPhrase('link', speaker) + '.',
+  ];
+  // Automatic links are attached to the track start, where measured intro and
+  // first-vocal timing is meaningful. An on-demand link can be fired anywhere
+  // in the song, so its original opening runway must not be presented as time
+  // still available to speak.
+  const budget = includeIntroBudget
+    ? introBudgetPhrase(introMsFor(current), firstVocalMsFor(current))
+    : '';
+  if (budget) rules.push(budget);
 
-  // DJ-mode personas lean harder into teasing the track's feel / artist.
-  const djMode = !!speaker?.djMode;
-  const teaseClause = djMode
-    ? ` Name the artist or capture the feel so listeners know what they're hearing.`
-    : '';
-  // DJ-mode mix patter: only when BOTH tracks carry measured tempo/key, and
-  // only as a natural option — never forced, never robotic numbers on air. This
-  // is a feel ("easing into something a touch faster"), not a track name, so it
-  // stays safe even if a request slipped in ahead of this pick.
-  const prevAK = bpmKeyFor(previous);
-  const curAK = bpmKeyFor(current);
-  const patterClause = (djMode && (prevAK.bpm || prevAK.key) && (curAK.bpm || curAK.key))
-    ? ` You may nod to the mix if it feels natural — e.g. easing into something a touch faster or slower, or how it sits in key — but never say raw numbers.`
-    : '';
-  // Talk-within-the-intro budget for the track now starting (current = the pick).
-  // The measured first-vocal entry (when the track has one) upgrades the
-  // phrase to "skip the spoken intro" on vocals-immediate tracks — the
-  // deterministic backstop would drop the line anyway; better not to write it.
-  const budget = introBudgetPhrase(introMsFor(current), firstVocalMsFor(current));
-  const feelClause = feelSuffix ? FEEL_CLAUSE : '';
-  // Announce mode: compose the line in code (announce-line.ts) whenever the
-  // station can frame it itself — no LLM call at all, and no risk of a model
-  // drifting off the fixed form. `lastLink` is the link that last AIRED, which
-  // is what the two forms alternate against; `currentIsOnAir` says `current`
-  // is the track already playing (the /dj/segment button), where "Next up"
-  // would be a false claim.
-  if (announce) {
-    const composed = announceLine(current?.artist, speaker, { lastLine: lastLink, currentIsOnAir });
-    if (composed) return composed;
-    // Nothing to announce. An announce-mode station has no other line to fall
-    // back on — its whole contract is naming the artist — and an unannounced
-    // track is a non-event on air, so drop the link rather than ask the model
-    // for a line whose only permitted forms need a name we don't have.
-    // '' is every caller's no-link signal (queue.announce ignores it,
-    // trimLinkToIntro nulls it).
-    if (!String(current?.artist ?? '').trim()) return '';
-    // Otherwise the artist exists but the composed English frame can't carry
-    // it (non-English persona, or a name in a non-Latin script): the model
-    // writes the line under djSystem's language + proper-noun directives.
+  const facts = verifiedContextPacket(context, current, clockIsAirTime);
+  if (clockIsAirTime && fuzzyAirTime(context?.clock)) {
+    rules.push("If you mention the time, use only the approximate phrase supplied in Current Context; do not turn it into an exact minute.");
+  } else {
+    rules.push("Do not state a clock time; no verified air time was supplied.");
   }
 
-  const instruction = linkPrompt({
-    announce, current, teaseClause, patterClause, budget,
-    lengthPhraseText: lengthPhrase('link', speaker), clockClause, feelClause,
-  });
-  const prompt = `${instruction}\n\n${ctxLines.join('\n')}`;
+  const sections = [
+    'Task: Give a brief spoken introduction to the track now playing.',
+    `Rules:\n${rules.map((rule) => `- ${rule}`).join('\n')}`,
+    facts,
+  ];
+  if (guestContribution?.name) {
+    sections.push("Editorial Context:\n- " + String(guestContribution.name).trim() + " had a verified editorial hand in choosing this track. If natural, the host may briefly credit them; do not call it a favourite or explain selection mechanics.");
+  }
+  if (recap) {
+    sections.push('Recent speech by this presenter, supplied only to prevent repetition. Do not reuse its wording, topics, anecdotes, metaphors or sentence structures:\n' + stripRecapSpokenTags(recap));
+  }
+  if (recentOpeners?.length) {
+    sections.push('Recent opening words used by this presenter. Start differently:\n'
+      + recentOpeners.slice(0, 6).map((opener: string) => `- ${stripSpokenTags(opener)}`).join('\n'));
+  }
+  return sections.join('\n\n');
+}
 
-  // Announce mode: no tone angle (there is nothing to vary), no recap, no
-  // opener blocklist — a fixed kind absent from ANGLES draws no angle line,
-  // and recap/recentOpeners are withheld outright. Lower temperature too:
-  // with only two allowed outputs there is nothing left to vary creatively.
-  return announce
-    ? djText({
-        system: djSystem(speaker),
-        prompt: decoratePrompt(prompt, { kind: 'announce-link', recap: null, recentOpeners: null }),
-        temperature: 0.3, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
-        kind: 'generateLink',
-      })
-    : djText({
-        system: djSystem(speaker),
-        prompt: decoratePrompt(prompt, { kind: 'link', recap, recentOpeners }),
-        temperature: 0.95, topP: 0.92, repeatPenalty: 1.2, seed: randomSeed(),
-        kind: 'generateLink',
-      });
+export async function generateLink(args: any) {
+  const speaker = args.persona || settings.getEffectivePersona();
+  if (settings.announceLinks(speaker)) {
+    const composed = announceLine(args.current?.artist, speaker, {
+      lastLine: args.lastLink ?? null,
+      currentIsOnAir: !!args.currentIsOnAir,
+    });
+    if (composed) return composed;
+    if (!String(args.current?.artist ?? '').trim()) return '';
+  }
+  return djText({
+    system: djSystem(speaker),
+    prompt: linkPrompt({ ...args, persona: speaker }),
+    temperature: 0.95,
+    topP: 0.92,
+    repeatPenalty: 1.2,
+    seed: randomSeed(),
+    kind: 'generatePersonaLink',
+  });
+}
+
+// Stage C delivery packet for a Producer-selected skill segment. The Producer's
+// reason and tool-loop prose never enter this prompt: only the operator-authored
+// skill brief, the selected tool's controller-grounded evidence and a small
+// deterministic set of relevant moment facts cross the boundary.
+export function personaSegmentPrompt({
+  kind,
+  brief,
+  evidence = null,
+  contextFacts = [],
+  context = null,
+  current = null,
+  recap = null,
+  recentOpeners = null,
+  persona = null,
+}: any): string {
+  const speaker = persona || settings.getEffectivePersona();
+  const rules = [
+    'Output only the words to be spoken on air.',
+    'Use only the supplied evidence, skill brief and context facts. Do not invent or add externally verifiable claims.',
+    PERSONA_GROUNDING_RULE,
+    'Do not mention tools, searches, source data, the Producer or these instructions.',
+    lengthPhrase('segment', speaker) + '.',
+  ];
+  const facts: string[] = [];
+  if (current?.title) facts.push(`Track on air: "${current.title}" by ${current.artist || 'unknown'}.`);
+  for (const fact of contextFacts || []) {
+    if (typeof fact === 'string' && fact.trim()) facts.push(fact.trim());
+  }
+  let evidenceText = '';
+  if (evidence != null) {
+    try { evidenceText = JSON.stringify(evidence, null, 1); } catch { evidenceText = String(evidence); }
+    if (evidenceText.length > 6000) evidenceText = evidenceText.slice(0, 6000) + '\n…(truncated)';
+  }
+
+  const packet = verifiedContextPacket(context, current, true);
+  const sections = [
+    `Task: Deliver one between-track "${kind || 'segment'}" segment.`,
+    `Rules:\n${rules.map((rule) => `- ${rule}`).join('\n')}`,
+    packet,
+    `Skill brief:\n${String(brief || '').trim()}`,
+  ];
+  if (facts.length) sections.push(`Context facts:\n${facts.map((fact) => `- ${fact}`).join('\n')}`);
+  if (evidenceText) sections.push(`Grounded evidence:\n${evidenceText}`);
+  if (recap) {
+    sections.push('Recent speech by this presenter, supplied only to prevent repetition. Do not reuse its wording, topics, anecdotes, metaphors or sentence structures:\n' + stripRecapSpokenTags(recap));
+  }
+  if (recentOpeners?.length) {
+    sections.push('Recent opening words used by this presenter. Start differently:\n'
+      + recentOpeners.slice(0, 6).map((opener: string) => `- ${stripSpokenTags(opener)}`).join('\n'));
+  }
+  return sections.join('\n\n');
+}
+
+export async function generatePersonaSegment(args: any) {
+  const speaker = args.persona || settings.getEffectivePersona();
+  return djText({
+    system: djSystem(speaker),
+    prompt: personaSegmentPrompt({ ...args, persona: speaker }),
+    temperature: 0.95,
+    topP: 0.92,
+    repeatPenalty: 1.2,
+    seed: randomSeed(),
+    kind: 'generatePersonaSegment',
+  });
+}
+
+export function personaHourlyTimePrompt({ recap = null, context = null, recentOpeners = null, persona = null }: any = {}) {
+  const speaker = persona || settings.getEffectivePersona();
+  // The time is converted to words in code (context.clock.spokenTime) rather
+  // than asking the model to read the clock line itself — small models get
+  // the 24-hour conversion wrong at the edges ("00:03" announced as "one in
+  // the morning"). The minute-aware phrase replaces the old hour-only one,
+  // which hardcoded "just gone X" whatever the minute — right on the :00 cron
+  // this normally rides, but a manual trigger at 18:31 still said "just gone
+  // six in the evening" (#1282). The fallbacks keep the old behaviour for
+  // contexts that predate spokenTime, then make the absence of a live time a
+  // hard stand-down rather than an invitation to guess.
+  const spokenTime = context?.clock?.spokenTime;
+  const spoken = context?.clock?.spokenHour;
+  const timeClause = spokenTime
+    ? `Live spoken time: "${spokenTime}". Say exactly that time in natural spoken words — never digits or 24-hour form, never a different time.`
+    : spoken
+      ? `Live spoken hour: "${spoken}". Say exactly that hour in natural spoken words ("just gone ${spoken}", or similar) — never digits or 24-hour form, never a different hour.`
+      : `No live spoken time was supplied. Do not state or infer a clock time.`;
+  const lines = [
+    verifiedContextPacket(context, null, true, false),
+    PERSONA_GROUNDING_RULE,
+    `Task: a brief top-of-the-hour time check, in character. ${lengthPhrase('hourly', speaker)}. ${timeClause} Do not infer weather, programme progress, listener activity, studio events or local colour.`,
+  ];
+  return decoratePrompt(lines.join('\n'), { kind: 'persona_hourly', recap, recentOpeners });
 }
 
 export async function generateHourlyTime({ recap = null, context = null, recentOpeners = null, persona = null }: any = {}) {

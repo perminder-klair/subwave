@@ -335,6 +335,34 @@ export function energyForDaypart(date = new Date()) {
   return base;
 }
 
+// The next distinct scheduled show is an optional on-air fact only in the
+// final 15 minutes of the current show. It is derived from the timetable, not
+// an LLM or routing decision, so prompt writers can safely offer a brief nod
+// without exposing any selection or control-plane context.
+export function showHandoverContext(now = new Date(), resolveShow: (at: Date) => any = resolveActiveShow) {
+  const current: any = resolveShow(now);
+  if (!current?.id) return null;
+  const { minute } = zonedParts(now);
+  const msToNextHour = (60 - minute) * 60_000 - now.getSeconds() * 1_000 - now.getMilliseconds();
+  let boundary = new Date(now.getTime() + msToNextHour);
+  for (let hoursAhead = 1; hoursAhead <= 168; hoursAhead += 1) {
+    const next: any = resolveShow(boundary);
+    if (!next || next.id !== current.id) {
+      if (!next?.persona?.name || boundary.getTime() - now.getTime() > 15 * 60_000) return null;
+      return {
+        phase: 'final-quarter-hour',
+        nextShow: {
+          name: String(next.name || '').trim(),
+          presenter: String(next.persona.name).trim(),
+          startsAt: spokenHourPhrase(zonedParts(boundary).hour),
+        },
+      };
+    }
+    boundary = new Date(boundary.getTime() + 60 * 60_000);
+  }
+  return null;
+}
+
 // Combined snapshot — what's the vibe right now? Pass `at` to resolve the
 // clock-derived parts (time, festival, date, clock, active show, and therefore
 // dominantMood) for a future moment instead — the queue watcher uses this to
@@ -389,5 +417,8 @@ export async function getFullContext(at?: Date) {
   // roll, stamps the OUTGOING persona onto the INCOMING show's session and
   // makes stampRolledFrom see no persona change at all (mic-pass suppressed).
   // Note this is distinct from `date` (getDateContext's calendar strings).
-  return { at: now.toISOString(), time, weather, festival, dominantMood, date, clock, activeShow, listeners };
+  return {
+    at: now.toISOString(), time, weather, festival, dominantMood, date, clock,
+    activeShow, showHandover: showHandoverContext(now), listeners,
+  };
 }
