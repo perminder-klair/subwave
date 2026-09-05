@@ -12,11 +12,10 @@ export const LYRIC_OFFSET_NUDGE_MS = 100;
 const OFFSET_STORAGE_KEY = 'subwave:lyrics-offset-ms';
 const OFFSET_CLIENT_STORAGE_KEY = 'subwave:lyrics-offset-client-id';
 
-// Re-ask cadence while the station is still answering for the previous track.
-// The listener sits a stream-buffer behind the live edge, so the window can run
-// to ~30s on a deep buffer; the limit covers it without polling indefinitely.
-const STALE_RETRY_MS = 2000;
-const STALE_RETRY_LIMIT = 20;
+// Re-ask at a low rate while the drawer is open and the station is still
+// answering for the live-edge track. Listener buffers are operator-configured
+// and can outlast any fixed retry window, so this intentionally has no cap.
+const STALE_RETRY_MS = 5000;
 
 export interface UseCurrentLyricsOptions {
   /** Current Subsonic/library song id from now-playing. */
@@ -125,7 +124,6 @@ export function useCurrentLyrics({
   // only when the local offset diverges from it, so simply loading a track
   // never PUTs the value straight back.
   const savedOffsetRef = useRef<number | null>(null);
-  const retryCountRef = useRef(0);
 
   useEffect(() => {
     clientIdRef.current = readLyricOffsetClientId();
@@ -184,18 +182,11 @@ export function useCurrentLyrics({
     return () => { cancelled = true; };
   }, [client, songId, retryTick]);
 
-  // Keyed on songId, NOT on `stale`: each retry re-runs the fetch effect, which
-  // clears `stale` on its way back out, so resetting the count there would zero
-  // it every cycle and the limit below would never bite.
-  useEffect(() => { retryCountRef.current = 0; }, [songId]);
-
-  // Re-ask while the station is answering for a different track. Bounded so a
-  // songId that never lines up can't leave the drawer polling forever; giving
-  // up just falls through to the ordinary empty state.
+  // Re-ask while the station is answering for a different track. This hook is
+  // mounted only while the drawer is open, so closing it cancels the poll.
   useEffect(() => {
-    if (!stale || retryCountRef.current >= STALE_RETRY_LIMIT) return;
+    if (!stale) return;
     const id = window.setTimeout(() => {
-      retryCountRef.current += 1;
       setRetryTick((n) => n + 1);
     }, STALE_RETRY_MS);
     return () => window.clearTimeout(id);

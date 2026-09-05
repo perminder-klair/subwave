@@ -33,6 +33,7 @@ import { checkAuthRateLimit, clientIp, listenerAuthFailureDelayMs } from '../mid
 import { STATE_ROOT } from '../config.js';
 import { activeStationId } from '../stations/resolve.js';
 import { toPublicLyricsPayload } from '../music/lyrics-public.js';
+import { BoundedLyricsCache } from '../music/lyrics-cache.js';
 
 export const router = express.Router();
 
@@ -95,6 +96,7 @@ function lyricOffsetMs(value: unknown): number | null {
 }
 
 const lyricOffsetHits = new Map<string, { last: number; hits: number[] }>();
+const lyricCache = new BoundedLyricsCache<{ synced: boolean; lines: Array<{ startMs: number; text: string }> }>();
 function checkLyricOffsetLimit(ip: string): { ok: boolean; retryAfter?: number } {
   const now = Date.now();
   const oneHourAgo = now - 3_600_000;
@@ -399,7 +401,7 @@ router.get('/lyrics/current', async (_req, res) => {
   try {
     const nowPlaying = await queue.getNowPlaying();
     const songId = nowPlaying?.subsonic_id ? String(nowPlaying.subsonic_id) : null;
-    const lyrics = songId ? await subsonic.getStructuredLyrics(songId) : null;
+    const lyrics = songId ? await lyricCache.get(songId, () => subsonic.getStructuredLyrics(songId)) : null;
     const clientId = lyricClientId(_req.query?.clientId);
     const offsetMs = songId && clientId ? await library.getLyricOffset(songId, clientId) : 0;
     res.setHeader('Cache-Control', 'no-store');

@@ -29,10 +29,3 @@ export function setLyricOffset(clientId: string, trackId: string, offsetMs: numb
     .run(clientId, trackId, clamped, new Date().toISOString());
   return clamped;
 }
-
-export function clearLyricOffset(clientId: string, trackId: string): void {
-  if (!clientId || !trackId) return;
-  requireDb()
-    .prepare('DELETE FROM lyric_offsets WHERE client_id = ? AND track_id = ?')
-    .run(clientId, trackId);
-}
