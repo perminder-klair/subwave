@@ -165,6 +165,16 @@ class StdioWorker:
     def available(self) -> bool:
         return self.ready and not self._recycling
 
+    @property
+    def recycling(self) -> bool:
+        """This worker is mid-recycle: unselectable now, but coming back.
+
+        recycle_loop's `finally` always clears the claim (bounded by its own
+        180s respawn deadline), so a pool waiter blocked on this flag is
+        guaranteed to be woken — see AnalyzerWorkerPool._acquire_worker.
+        """
+        return self._recycling
+
     def reserve_if_available(self) -> bool:
         # No await: selection and recycle's `_recycling = True` transition are
         # atomic relative to one another on the asyncio event loop.
@@ -368,7 +378,11 @@ class StdioWorker:
         """Terminate the worker after `idle_s` seconds without heavy use so
         run() respawns it fresh — the full-memory counterpart to the worker's
         own model release. A pool reservation wins over recycling; once recycle
-        claims the worker, new requests route to another available member."""
+        claims the worker, new requests route to another available member — or,
+        when this IS the only member (the ANALYZE_CONCURRENCY=1 default), queue
+        in _acquire_worker until the respawn re-readies it. Either way a racing
+        request runs against the new worker instead of 500ing, which is what
+        holding the request lock across the respawn used to buy."""
         while True:
             await asyncio.sleep(60)
             if not self.ready or self.last_heavy is None:
@@ -429,28 +443,61 @@ class AnalyzerWorkerPool:
     def ready(self) -> bool:
         return bool(self.ready_workers)
 
+    @property
+    def recycling(self) -> bool:
+        return any(worker.recycling for worker in self.workers)
+
     def capability(self, meta_key: str, loss_key: str) -> bool | None:
-        # Aggregate across the whole configured pool. A booting/crashed member is
-        # unknown, so optional capability is not advertised true until every
-        # selectable member can fulfil it.
-        if not self.ready_workers:
+        # Aggregate across the SELECTABLE members only. A booting, crashed or
+        # recycling member has no opinion — reading it would report `None` for
+        # the whole pool every time one member cycles, and the controller's
+        # tail-vocal backfill (which requires === true) would read a healthy
+        # heavy pool as a stale analyzer image.
+        #
+        # A capability is `False` only when EVERY selectable member has lost it
+        # — that is the lean-image case, where they all share one build. One
+        # member latching a load failure (capability_errors survives its own
+        # respawn by design) leaves the pool `None`: some member can still serve
+        # it, so `True` would be a lie, and `False` would switch the feature off
+        # station-wide over one worker's bad hour.
+        ready = self.ready_workers
+        if not ready:
             return None
-        values = [worker.capability(meta_key, loss_key) for worker in self.workers]
-        if any(value is False for value in values):
-            return False
+        values = [worker.capability(meta_key, loss_key) for worker in ready]
         if all(value is True for value in values):
             return True
+        if all(value is False for value in values):
+            return False
         return None
 
     def capability_error(self, loss_key: str) -> str | None:
+        # Selectable members only, matching capability() — a long-dead member's
+        # latched reason is not why the pool is degraded now.
         errors = [
             worker.capability_errors[loss_key]
-            for worker in self.workers
+            for worker in self.ready_workers
             if loss_key in worker.capability_errors
         ]
         return errors[0] if errors else None
 
     async def _acquire_worker(self) -> StdioWorker:
+        """Reserve one selectable member, waiting while the pool can recover.
+
+        Three states, and the difference between the last two is load-bearing.
+        A member is free → take it. Every member is busy → wait. NO member is
+        selectable → it depends on why: a member that is merely RECYCLING is
+        being respawned and will re-ready (or time out) within recycle_loop's
+        own 180s budget, and its `finally` always clears the claim, so waiting
+        here is bounded and the request is served by the fresh worker. This is
+        what the single worker's request lock used to do implicitly — it was
+        held across the respawn precisely so a racing request queued and then
+        ran against the new worker instead of 500ing, and at the default
+        ANALYZE_CONCURRENCY=1 that recycle window is the whole pool.
+
+        Nothing ready and nothing recycling is the boot/crash case, where
+        blocking would help no one: fail fast so the controller falls through
+        cleanly (the analysis row stays NULL and is retried next pass).
+        """
         async with self._available:
             while True:
                 count = len(self.workers)
@@ -461,7 +508,7 @@ class AnalyzerWorkerPool:
                         self._busy.add(worker)
                         self._next = (index + 1) % count
                         return worker
-                if not self.ready:
+                if not self.ready and not self.recycling:
                     raise WorkerUnavailableError("[analyze] no worker ready")
                 await self._available.wait()
 
@@ -473,17 +520,24 @@ class AnalyzerWorkerPool:
 
     async def request(self, payload: dict[str, Any]) -> dict[str, Any]:
         while True:
-            worker = await self._acquire_worker()
+            worker: StdioWorker | None = None
             try:
+                worker = await self._acquire_worker()
                 return await worker.request(payload)
             except WorkerUnavailableError:
-                # Readiness can change between selection and the worker lock
-                # (notably when recycle wins that race). Release the stale
-                # reservation and select another ready member instead of failing
-                # a request that the pool can still serve.
-                pass
+                # Selection itself failing (worker is still None) is the pool's
+                # considered verdict that nothing is ready and nothing is coming
+                # back — retrying would spin on the same answer, so it rides out
+                # to the caller as the single worker's "not ready" always did.
+                if worker is None:
+                    raise
+                # Past selection, readiness can still change before the worker
+                # lock (notably when recycle wins that race). Release the stale
+                # reservation and pick another member instead of failing a
+                # request the pool can still serve.
             finally:
-                await self._release_worker(worker)
+                if worker is not None:
+                    await self._release_worker(worker)
 
 
 analyzer_workers = [

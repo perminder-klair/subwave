@@ -78,6 +78,10 @@ class FakeWorker:
     def available(self):
         return self.ready
 
+    @property
+    def recycling(self):
+        return False
+
     def reserve_if_available(self):
         if not self.available or self.reserved:
             return False
@@ -98,8 +102,14 @@ class FakeWorker:
         await self.release.wait()
         return {"ok": True, "bpm": 120, "key": "8A", "intro_ms": 500, "confidence": 0.9}
 
-    def capability(self, meta_key, _loss_key):
-        return self.capabilities.get(meta_key) if self.ready else None
+    def capability(self, meta_key, loss_key):
+        # Mirrors StdioWorker.capability: an observed load failure wins over the
+        # advertised flag, and a member that is down has no opinion at all.
+        if not self.ready:
+            return None
+        if loss_key in self.capability_errors:
+            return False
+        return self.capabilities.get(meta_key)
 
 
 class LifecycleWorker(server.StdioWorker):
@@ -186,9 +196,84 @@ async def test_capability_aggregation_is_conservative():
     first.capabilities["audio_embedding_capable"] = True
     second.capabilities["audio_embedding_capable"] = False
     pool = server.AnalyzerWorkerPool([first, second])
-    assert pool.capability("audio_embedding_capable", "audio_embedding") is False
-    second.ready = False
+    # Split verdict: some member can still serve it, so `True` would be a lie —
+    # but `False` would switch the feature off station-wide over one member.
     assert pool.capability("audio_embedding_capable", "audio_embedding") is None
+    # A member that is not selectable has no opinion; the pool reports what the
+    # ones that CAN take work say, so one cycling member never drags the whole
+    # pool to unknown (the controller's tail-vocal backfill needs === true).
+    second.ready = False
+    assert pool.capability("audio_embedding_capable", "audio_embedding") is True
+    first.ready = False
+    assert pool.capability("audio_embedding_capable", "audio_embedding") is None
+    # Unanimous among selectable members is the lean-image case — they share one
+    # build, and that is the only shape that earns a definitive False.
+    first.capabilities["audio_embedding_capable"] = False
+    first.ready = True
+    second.ready = True
+    assert pool.capability("audio_embedding_capable", "audio_embedding") is False
+
+
+async def test_latched_capability_error_does_not_fan_out():
+    healthy = FakeWorker("healthy")
+    unlucky = FakeWorker("unlucky")
+    healthy.capabilities["vocal_activity_capable"] = True
+    unlucky.capabilities["vocal_activity_capable"] = True
+    # capability_errors survives the member's own respawn by design (#1300), so
+    # one worker's bad load hour must not switch Demucs off for the other three.
+    unlucky.capability_errors["vocal_activity"] = "CUDA out of memory"
+    pool = server.AnalyzerWorkerPool([healthy, unlucky])
+    assert pool.capability("vocal_activity_capable", "vocal_activity") is None
+    assert pool.capability_error("vocal_activity") == "CUDA out of memory"
+    # …and once that member is out of the selectable set, its latch goes with it.
+    unlucky.ready = False
+    assert pool.capability("vocal_activity_capable", "vocal_activity") is True
+    assert pool.capability_error("vocal_activity") is None
+
+
+async def test_single_worker_recycle_queues_instead_of_failing():
+    """The ANALYZE_CONCURRENCY=1 default must not 500 across a recycle.
+
+    Drives the REAL StdioWorker recycle transitions (`_set_recycling` /
+    `_set_ready`) rather than a stand-in, because the regression this guards is
+    in that state machine: recycle claiming the only member used to leave the
+    pool with nothing selectable, and _acquire_worker raised instead of waiting
+    out the respawn the way the worker's request lock used to.
+    """
+    only = LifecycleWorker("analyze-1")
+    pool = server.AnalyzerWorkerPool([only])
+    await only._set_ready(True)
+
+    # recycle_loop claims the worker, then terminates it and waits for run() to
+    # respawn — up to 180s with nothing else in the pool to take the request.
+    await only._set_recycling(True)
+    await only._set_ready(False)
+
+    task = asyncio.create_task(pool.request({"id": "1"}))
+    await asyncio.sleep(0)
+    assert not task.done(), "a request during the recycle window must queue, not fail"
+    assert only.calls == [], only.calls
+
+    # start() re-readies the fresh process; recycle_loop's finally clears the claim.
+    await only._set_ready(True)
+    await only._set_recycling(False)
+    await asyncio.wait_for(only.entered.wait(), 1)
+    assert only.calls == [{"id": "1"}], only.calls
+    only.release.set()
+    assert await asyncio.wait_for(task, 1) == {"ok": True}
+
+
+async def test_no_worker_ready_and_none_recycling_fails_fast():
+    """Boot and crash still fail fast — blocking there would help no one."""
+    down = LifecycleWorker("analyze-1")
+    pool = server.AnalyzerWorkerPool([down])
+    try:
+        await asyncio.wait_for(pool.request({"id": "1"}), 1)
+    except server.WorkerUnavailableError:
+        pass
+    else:
+        raise AssertionError("a pool with nothing ready or recycling must fail fast")
+    assert down.calls == [], down.calls
 
 
 async def test_path_contract():
@@ -240,7 +325,10 @@ async def main():
     await test_waiter_uses_worker_that_becomes_ready()
     await test_unavailable_selection_retries_another_ready_worker()
     await test_unavailable_worker_skipped()
+    await test_single_worker_recycle_queues_instead_of_failing()
+    await test_no_worker_ready_and_none_recycling_fails_fast()
     await test_capability_aggregation_is_conservative()
+    await test_latched_capability_error_does_not_fan_out()
     await test_path_contract()
 
 
