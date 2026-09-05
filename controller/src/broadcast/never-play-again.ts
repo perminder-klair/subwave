@@ -193,17 +193,26 @@ export async function runNeverPlayAgain(deps: NeverPlayAgainDeps, expectedSubson
 
   if (libraryPath) {
     try {
-      await deps.ignoreAdd(libraryPath);
-      navidromeExcluded = true;
-      // Only now — the write has actually landed — record it on the
-      // blocklist entry, so a later unblock (routes/library.ts DELETE) can
-      // find and reverse it. One unified check covers both a fresh block
-      // (blocked.libraryPath is still null from the add() above) and an
-      // already-blocked entry that never had one recorded, or had a stale
-      // one from before this track's path could be resolved.
-      if (blocked.libraryPath !== libraryPath) {
-        const upgraded = await deps.blocklistSetLibraryPath('track', subsonicId, libraryPath);
-        if (upgraded) blocked = upgraded;
+      // ignoreAdd() returns false (not an error) when the exact pattern is
+      // ALREADY on disk — a manual .ndignore edit, or another process. That
+      // rule pre-dates this call, so this call did not create it and must
+      // not claim ownership: no libraryPath is persisted and no scan is
+      // triggered, or a later unblock (routes/library.ts DELETE) would
+      // remove a rule it never wrote. The SUB/WAVE-side block above already
+      // satisfies the operator's ask regardless of which branch this takes.
+      const added = await deps.ignoreAdd(libraryPath);
+      if (added) {
+        navidromeExcluded = true;
+        // Only now — the write has actually landed — record it on the
+        // blocklist entry, so a later unblock (routes/library.ts DELETE) can
+        // find and reverse it. One unified check covers both a fresh block
+        // (blocked.libraryPath is still null from the add() above) and an
+        // already-blocked entry that never had one recorded, or had a stale
+        // one from before this track's path could be resolved.
+        if (blocked.libraryPath !== libraryPath) {
+          const upgraded = await deps.blocklistSetLibraryPath('track', subsonicId, libraryPath);
+          if (upgraded) blocked = upgraded;
+        }
       }
     } catch (err: any) {
       warning = `Navidrome exclusion failed — ${err?.message ?? err}`;
@@ -332,4 +341,47 @@ export async function reverseNeverPlayIgnore(deps: UnblockReversalDeps, libraryP
     deps.log('error', `never-play-again: .ndignore removal failed for "${libraryPath}": ${err?.message ?? err}`);
     return { reverted: false, warning: `Navidrome exclusion reversal failed — ${err?.message ?? err}` };
   }
+}
+
+export interface UnblockReversalManyResult {
+  /** How many `.ndignore` lines were actually removed by this call. */
+  reverted: number;
+  /** Non-null when something that should have worked didn't — an individual
+   *  removal failed, or the shared scan trigger failed after at least one
+   *  removal landed. Never set for the ordinary case (nothing to reverse, or
+   *  everything reversed cleanly). */
+  warning: string | null;
+}
+
+/**
+ * Bulk counterpart to reverseNeverPlayIgnore(), for DELETE /library/blocklist
+ * (bulk unblock). Called with the libraryPath of every removed entry that had
+ * one (nulls already filtered out by the caller — see routes/library.ts).
+ * Each line is reversed individually — never-play-ignore.ts's own add()/
+ * remove() already serialise concurrent writes via withLock(), so sequential
+ * calls here are safe — but the Navidrome scan is triggered ONCE for the
+ * whole batch, not once per entry: unblocking, say, 50 tracks at once must
+ * not fire 50 separate rescans.
+ */
+export async function reverseNeverPlayIgnoreMany(deps: UnblockReversalDeps, libraryPaths: string[]): Promise<UnblockReversalManyResult> {
+  if (!libraryPaths.length || !deps.ignoreEnabled()) return { reverted: 0, warning: null };
+  let reverted = 0;
+  let failures = 0;
+  for (const libraryPath of libraryPaths) {
+    try {
+      if (await deps.ignoreRemove(libraryPath)) reverted++;
+    } catch (err: any) {
+      failures++;
+      deps.log('error', `never-play-again: .ndignore removal failed for "${libraryPath}": ${err?.message ?? err}`);
+    }
+  }
+  const failureWarning = failures
+    ? `Navidrome exclusion reversal failed for ${failures} entr${failures === 1 ? 'y' : 'ies'}`
+    : null;
+  if (!reverted) return { reverted: 0, warning: failureWarning };
+  const scan = await deps.startScan();
+  if (!scan.ok) {
+    return { reverted, warning: "Navidrome scan trigger failed — the reversal will apply on Navidrome's next scheduled scan instead" };
+  }
+  return { reverted, warning: failureWarning };
 }

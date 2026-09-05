@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import {
   runNeverPlayAgain,
   reverseNeverPlayIgnore,
+  reverseNeverPlayIgnoreMany,
   NeverPlayAgainError,
   type NeverPlayAgainDeps,
   type UnblockReversalDeps,
@@ -467,6 +468,24 @@ test('.ndignore write fails on an ALREADY-BLOCKED entry: does not falsely upgrad
   assert.ok(!calls.includes('blocklistSetLibraryPath'));
 });
 
+test('.ndignore pattern already exists (ignoreAdd returns false): does not claim ownership of a pre-existing/manual rule', async () => {
+  const calls: string[] = [];
+  const deps = makeDeps(calls, {
+    ignoreAdd: async (rel) => { calls.push('ignoreAdd'); assert.equal(rel, SONG.path); return false; },
+    blocklistSetLibraryPath: async () => { calls.push('blocklistSetLibraryPath'); throw new Error('must not be called — ignoreAdd did not create a new rule'); },
+  });
+  const result = await runNeverPlayAgain(deps, EXPECTED_ID);
+  assert.equal(result.ok, true);
+  assert.equal(result.navidromeExcluded, false, 'this call did not create the exclusion, so it must not claim it');
+  assert.equal(result.navidromeScanTriggered, false, 'no scan for a rule this call did not add');
+  assert.equal(result.blocked.libraryPath, null, 'libraryPath is never persisted unless ignoreAdd actually added a new line');
+  assert.equal(result.warning, null, 'not a failure — the track is already excluded from Navidrome, just not by this call');
+  assert.ok(!calls.includes('blocklistSetLibraryPath'));
+  assert.ok(!calls.includes('startScan'));
+  assert.ok(calls.includes('blocklistAdd'), 'the SUB/WAVE-side block still lands regardless');
+  assert.ok(calls.includes('skipTrack'));
+});
+
 test('startScan reports failure (unsupported Navidrome version): non-fatal, still excluded, libraryPath still recorded', async () => {
   const calls: string[] = [];
   const deps = makeDeps(calls, {
@@ -601,4 +620,100 @@ test('reverseNeverPlayIgnore: ignoreRemove throws — reported as a warning, not
   assert.match(result.warning ?? '', /reversal failed/i);
   assert.ok(!calls.includes('startScan'), 'never reached — the removal itself threw');
   assert.ok(logs.some((l) => l.kind === 'error' && l.message.includes('permission denied')), 'the failure is also logged server-side, same as before');
+});
+
+// ── reverseNeverPlayIgnoreMany (bulk DELETE /library/blocklist) ────────────
+// Bulk counterpart — same reversal contract as reverseNeverPlayIgnore, but
+// over a batch of libraryPaths, with exactly ONE scan trigger for the whole
+// call rather than one per entry.
+
+test('reverseNeverPlayIgnoreMany: empty libraryPaths — a pure no-op', async () => {
+  const calls: string[] = [];
+  const deps = makeReversalDeps(calls);
+  const result = await reverseNeverPlayIgnoreMany(deps, []);
+  assert.deepEqual(result, { reverted: 0, warning: null });
+  assert.deepEqual(calls, [], 'ignoreEnabled is checked lazily behind the empty-array short-circuit — nothing runs at all');
+});
+
+test('reverseNeverPlayIgnoreMany: feature disabled — no-op even with libraryPaths present', async () => {
+  const calls: string[] = [];
+  const deps = makeReversalDeps(calls, {
+    ignoreEnabled: () => { calls.push('ignoreEnabled'); return false; },
+  });
+  const result = await reverseNeverPlayIgnoreMany(deps, ['a/1.flac', 'b/2.flac']);
+  assert.deepEqual(result, { reverted: 0, warning: null });
+  assert.ok(!calls.includes('ignoreRemove'));
+  assert.ok(!calls.includes('startScan'));
+});
+
+test('reverseNeverPlayIgnoreMany: several entries reversed — every line removed individually, ONE shared scan', async () => {
+  const calls: string[] = [];
+  const removedPaths: string[] = [];
+  const deps = makeReversalDeps(calls, {
+    ignoreRemove: async (rel) => { calls.push('ignoreRemove'); removedPaths.push(rel); return true; },
+  });
+  const result = await reverseNeverPlayIgnoreMany(deps, ['a/1.flac', 'b/2.flac', 'c/3.flac']);
+  assert.deepEqual(result, { reverted: 3, warning: null });
+  assert.deepEqual(removedPaths, ['a/1.flac', 'b/2.flac', 'c/3.flac']);
+  assert.equal(calls.filter((c) => c === 'startScan').length, 1, 'exactly one scan for the whole batch, never one per entry');
+});
+
+test('reverseNeverPlayIgnoreMany: some lines already gone — those count as misses, not failures, and still scans once for the rest', async () => {
+  const calls: string[] = [];
+  const deps = makeReversalDeps(calls, {
+    ignoreRemove: async (rel) => { calls.push('ignoreRemove'); return rel !== 'already-gone.flac'; },
+  });
+  const result = await reverseNeverPlayIgnoreMany(deps, ['a/1.flac', 'already-gone.flac', 'c/3.flac']);
+  assert.deepEqual(result, { reverted: 2, warning: null });
+  assert.equal(calls.filter((c) => c === 'startScan').length, 1);
+});
+
+test('reverseNeverPlayIgnoreMany: every line already gone — no scan, no warning (nothing left to do)', async () => {
+  const calls: string[] = [];
+  const deps = makeReversalDeps(calls, {
+    ignoreRemove: async () => { calls.push('ignoreRemove'); return false; },
+  });
+  const result = await reverseNeverPlayIgnoreMany(deps, ['a/1.flac', 'b/2.flac']);
+  assert.deepEqual(result, { reverted: 0, warning: null });
+  assert.ok(!calls.includes('startScan'));
+});
+
+test('reverseNeverPlayIgnoreMany: the shared scan trigger fails — degraded, not failed, reverted count still reported', async () => {
+  const calls: string[] = [];
+  const deps = makeReversalDeps(calls, {
+    ignoreRemove: async () => { calls.push('ignoreRemove'); return true; },
+    startScan: async () => { calls.push('startScan'); return { ok: false }; },
+  });
+  const result = await reverseNeverPlayIgnoreMany(deps, ['a/1.flac', 'b/2.flac']);
+  assert.equal(result.reverted, 2);
+  assert.match(result.warning ?? '', /scan trigger failed/i);
+});
+
+test('reverseNeverPlayIgnoreMany: one removal throws — reported in the warning, the rest still get processed and reversed', async () => {
+  const calls: string[] = [];
+  const logs: Array<{ kind: string; message: string }> = [];
+  const deps = makeReversalDeps(calls, {
+    ignoreRemove: async (rel) => {
+      calls.push('ignoreRemove');
+      if (rel === 'bad.flac') throw new Error('EACCES: permission denied');
+      return true;
+    },
+    log: (kind, message) => logs.push({ kind, message }),
+  });
+  const result = await reverseNeverPlayIgnoreMany(deps, ['a/1.flac', 'bad.flac', 'c/3.flac']);
+  assert.equal(result.reverted, 2, 'the two good entries still went through despite the bad one throwing');
+  assert.match(result.warning ?? '', /failed for 1 entry/i);
+  assert.ok(calls.includes('startScan'), 'still scans once — at least one reversal actually landed');
+  assert.ok(logs.some((l) => l.kind === 'error' && l.message.includes('permission denied')));
+});
+
+test('reverseNeverPlayIgnoreMany: every removal throws — no scan (nothing landed), failure reported', async () => {
+  const calls: string[] = [];
+  const deps = makeReversalDeps(calls, {
+    ignoreRemove: async () => { calls.push('ignoreRemove'); throw new Error('EACCES: permission denied'); },
+  });
+  const result = await reverseNeverPlayIgnoreMany(deps, ['a/1.flac', 'b/2.flac']);
+  assert.equal(result.reverted, 0);
+  assert.match(result.warning ?? '', /failed for 2 entries/i);
+  assert.ok(!calls.includes('startScan'), 'nothing landed, so no point scanning');
 });
