@@ -106,6 +106,51 @@ async function main() {
     assert.equal(isQuotaOrAuthError({ code: 'ECONNRESET' }), false);
   });
 
+  // ---- DJ Brain monthly cap: a 429 that does not clear until the month rolls ----
+  // Measured against the hosted brain: the station retried each capped call
+  // three times, on every pick / link / ident, for the rest of the month. The
+  // wall is the calendar, so same-leg retry can only add latency.
+  await test('DJ Brain monthly token cap 429 → quota/auth, NOT transient', () => {
+    const e: any = { statusCode: 429, message: 'Monthly token budget reached (783/500).' };
+    assert.equal(isQuotaOrAuthError(e), true);
+    assert.equal(isTransient(e), false);    // no same-leg retry
+    assert.equal(isUnreachable(e), false);   // the brain answered
+  });
+  await test('the other three brain cap wordings classify too', () => {
+    for (const msg of [
+      'Monthly spoken-character budget reached (1,200,000/1,200,000).',
+      'Overage runaway ceiling reached (40,000,000 tokens, 2x the plan budget).',
+      'This key has no cloud-voice budget — the plan is LLM-only.',
+    ]) {
+      assert.equal(isQuotaOrAuthError({ statusCode: 429, message: msg }), true, msg);
+      assert.equal(isTransient({ statusCode: 429, message: msg }), false, msg);
+    }
+  });
+  await test('the machine-readable code wins when the message is reworded', () => {
+    // Parsed body (SDK `data`) and raw JSON string (`responseBody`) both work,
+    // so a future rewording cannot silently switch the retries back on.
+    const parsed: any = { statusCode: 429, message: 'nothing quota-shaped here', data: { error: { code: 'monthly_cap' } } };
+    assert.equal(isQuotaOrAuthError(parsed), true);
+    assert.equal(isTransient(parsed), false);
+    const raw: any = { statusCode: 429, message: 'nothing quota-shaped here', responseBody: '{"error":{"code":"monthly_cap"}}' };
+    assert.equal(isQuotaOrAuthError(raw), true);
+    const garbage: any = { statusCode: 429, message: 'slow down', responseBody: 'not json' };
+    assert.equal(isQuotaOrAuthError(garbage), false);
+  });
+  await test('an ORDINARY rate-limit 429 stays transient — the whole point', () => {
+    const plain: any = { statusCode: 429, message: 'Rate limit exceeded, please slow down' };
+    assert.equal(isQuotaOrAuthError(plain), false);
+    assert.equal(isTransient(plain), true);   // still worth a same-leg retry
+    const bare: any = { statusCode: 429, message: 'Too Many Requests' };
+    assert.equal(isQuotaOrAuthError(bare), false);
+    assert.equal(isTransient(bare), true);
+  });
+  await test('the cap 429 survives the AI_RetryError wrapper (unwrapSdkError)', () => {
+    const wrapped: any = { message: 'AI_RetryError', lastError: { statusCode: 429, message: 'Monthly token budget reached (783/500).' } };
+    assert.equal(isQuotaOrAuthError(wrapped), true);
+    assert.equal(isTransient(wrapped), false);
+  });
+
   // ---- upstream-overload gate: STAYS transient (retry first), THEN fails over (#671) ----
   console.log('isUpstreamOverloaded (reachable gateway relays a saturated upstream → retry, then fail over):');
   await test('OpenRouter "Upstream error from <provider>: ResourceExhausted" → upstream-overload', () => {
