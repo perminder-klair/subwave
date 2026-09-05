@@ -32,6 +32,8 @@ import { resolveThemeProvenance } from '../util/theme-provenance.js';
 import { checkAuthRateLimit, clientIp, listenerAuthFailureDelayMs } from '../middleware/ratelimit.js';
 import { STATE_ROOT } from '../config.js';
 import { activeStationId } from '../stations/resolve.js';
+import { toPublicLyricsPayload } from '../music/lyrics-public.js';
+import { BoundedLyricsCache } from '../music/lyrics-cache.js';
 
 export const router = express.Router();
 
@@ -80,6 +82,41 @@ function mimeForAvatar(filename: string): string {
 // avatar is set, so callers don't need to check for "is it set".
 function avatarUrlFor(personaId?: string | null): string {
   return personaId ? `/persona-avatar/${encodeURIComponent(personaId)}` : '';
+}
+
+function lyricClientId(value: unknown): string {
+  const id = typeof value === 'string' ? value.trim() : '';
+  return /^[A-Za-z0-9_-]{12,80}$/.test(id) ? id : '';
+}
+
+function lyricOffsetMs(value: unknown): number | null {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.min(30_000, Math.max(-30_000, Math.round(n)));
+}
+
+const lyricOffsetHits = new Map<string, { last: number; hits: number[] }>();
+const lyricCache = new BoundedLyricsCache<{ synced: boolean; lines: Array<{ startMs: number; text: string }> }>();
+function checkLyricOffsetLimit(ip: string): { ok: boolean; retryAfter?: number } {
+  const now = Date.now();
+  const oneHourAgo = now - 3_600_000;
+  const rec = lyricOffsetHits.get(ip) || { last: 0, hits: [] };
+  rec.hits = rec.hits.filter((t) => t > oneHourAgo);
+  if (rec.last && now - rec.last < 250) {
+    return { ok: false, retryAfter: 1 };
+  }
+  if (rec.hits.length >= 600) {
+    return { ok: false, retryAfter: Math.ceil((rec.hits[0] + 3_600_000 - now) / 1000) };
+  }
+  rec.last = now;
+  rec.hits.push(now);
+  lyricOffsetHits.set(ip, rec);
+  if (lyricOffsetHits.size > 2000) {
+    for (const [key, value] of lyricOffsetHits) {
+      if (!value.hits.length && now - value.last > 3_600_000) lyricOffsetHits.delete(key);
+    }
+  }
+  return { ok: true };
 }
 
 // The listener-safe persona shape + the souls disclosure rule live in
@@ -354,6 +391,59 @@ router.get('/now-playing', async (req, res) => {
     });
   } catch (err) {
     publicError(res, '/now-playing', err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /lyrics/current — lyrics for the currently airing library track.
+// ---------------------------------------------------------------------------
+router.get('/lyrics/current', async (_req, res) => {
+  try {
+    const nowPlaying = await queue.getNowPlaying();
+    const songId = nowPlaying?.subsonic_id ? String(nowPlaying.subsonic_id) : null;
+    const lyrics = songId ? await lyricCache.get(songId, () => subsonic.getStructuredLyrics(songId)) : null;
+    const clientId = lyricClientId(_req.query?.clientId);
+    const offsetMs = songId && clientId ? await library.getLyricOffset(songId, clientId) : 0;
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(toPublicLyricsPayload(songId, lyrics, offsetMs));
+  } catch (err) {
+    publicError(res, '/lyrics/current', err);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PUT /lyrics/current/offset — remember this client's timing correction for
+// the currently airing track. Public but scoped to an opaque client id so a
+// listener can only affect their own players, not the station-wide lyric data.
+// ---------------------------------------------------------------------------
+router.put('/lyrics/current/offset', async (req, res) => {
+  try {
+    const gate = checkLyricOffsetLimit(clientIp(req));
+    if (!gate.ok) {
+      res.setHeader('Retry-After', String(gate.retryAfter));
+      return res.status(429).json({ error: 'Too many lyric offset updates', retryAfter: gate.retryAfter });
+    }
+
+    const nowPlaying = await queue.getNowPlaying();
+    const songId = nowPlaying?.subsonic_id ? String(nowPlaying.subsonic_id) : null;
+    if (!songId) return res.status(409).json({ error: 'No library track is on air' });
+
+    const asked = typeof req.body?.songId === 'string' ? req.body.songId : '';
+    if (asked && asked !== songId) {
+      return res.status(409).json({ error: 'That track just ended', songId });
+    }
+
+    const clientId = lyricClientId(req.body?.clientId);
+    const offsetMs = lyricOffsetMs(req.body?.offsetMs);
+    if (!clientId || offsetMs == null) {
+      return res.status(400).json({ error: 'clientId and offsetMs are required' });
+    }
+
+    const saved = await library.setLyricOffset(songId, clientId, offsetMs);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, songId, offsetMs: saved });
+  } catch (err) {
+    publicError(res, '/lyrics/current/offset', err);
   }
 });
 

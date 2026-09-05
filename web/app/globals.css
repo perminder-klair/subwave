@@ -487,6 +487,33 @@ body::after {
 .v3-drawer-content {
     animation: v3-slide-in-right 220ms cubic-bezier(0.2, 0.7, 0.2, 1);
 }
+
+.v3-drawer-content::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    border: 1px solid var(--ink);
+    z-index: 1;
+}
+
+.v3-drawer-content > * {
+    position: relative;
+    z-index: 2;
+}
+
+[data-lyric-offset] {
+    margin-top: 0.75rem;
+    border: 1px solid color-mix(in oklab, var(--line) 42%, transparent);
+    background:
+        linear-gradient(180deg, color-mix(in oklab, var(--bg) 18%, transparent), color-mix(in oklab, var(--bg) 42%, transparent)),
+        color-mix(in oklab, var(--surface) 16%, transparent);
+    opacity: 0.58;
+}
+
+[data-lyric-offset] input[type="range"] {
+    opacity: 0.72;
+}
 .v3-drawer-overlay {
     animation: v3-fade-in 220ms ease-out;
 }
