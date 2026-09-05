@@ -23,7 +23,7 @@ import { personaToneDirectives, normalizeDial, DIAL_NEUTRAL, validatePersonasStr
 import { lengthMode, lengthPhrase } from '../src/llm/internal/prompts/system.js';
 import { showMusicLean } from '../src/llm/internal/prompts/picker.js';
 import { planSchema } from '../src/llm/internal/prompts/programme.js';
-import { modelForCloudRequest, resolveCloudModel, resolveCloudProvider, sharedCloudApiKeyForRequest } from '../src/llm/internal/speech/cloud-speech.js';
+import { modelForCloudRequest, resolveCloudModel, resolveCloudProvider, sharedCloudApiKeyForRequest, speedDirective } from '../src/llm/internal/speech/cloud-speech.js';
 
 let failures = 0;
 function test(name: string, fn: () => void | Promise<void>) {
@@ -1073,6 +1073,27 @@ async function main() {
   });
 
   // ---- showMusicLean: soft lean vs strict genre lock (shared by both pick paths) ----
+  // ---- speedDirective: where the computed cloud-TTS speed is applied ----
+  // At most one of body/atempo is ever non-null — the cloud engine either sends
+  // `speed` upstream OR stretches locally, never both. Guards the issue #942
+  // fix (compat servers stretch locally) AND its sendSpeed escape hatch.
+  console.log('speedDirective (send `speed` upstream vs. local ffmpeg atempo):');
+  await test('openai-compatible + sendSpeed off → stretch locally, body omitted', () => {
+    assert.deepEqual(speedDirective('openai-compatible', false, 1.4), { body: null, atempo: 1.4 });
+  });
+  await test('openai-compatible + sendSpeed on → send speed upstream, no local stretch', () => {
+    assert.deepEqual(speedDirective('openai-compatible', true, 1.4), { body: 1.4, atempo: null });
+  });
+  await test('non-compat providers always send speed upstream (sendSpeed irrelevant)', () => {
+    assert.deepEqual(speedDirective('openai', false, 1.4), { body: 1.4, atempo: null });
+    assert.deepEqual(speedDirective('elevenlabs', false, 0.9), { body: 0.9, atempo: null });
+  });
+  await test('unity speed (1.0) → nothing anywhere, for every provider/flag combo', () => {
+    assert.deepEqual(speedDirective('openai-compatible', false, 1.0), { body: null, atempo: null });
+    assert.deepEqual(speedDirective('openai-compatible', true, 1.0), { body: null, atempo: null });
+    assert.deepEqual(speedDirective('openai', false, 1.0), { body: null, atempo: null });
+  });
+
   console.log('showMusicLean (soft lean vs strict genre lock):');
   const SOFT_GENRE_LINE = '\n\nMusic steer for this show — lean toward Jazz. These are preferences, not hard filters: break them only when the flow genuinely demands it.';
   await test('no show → empty string', () => {

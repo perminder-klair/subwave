@@ -21,6 +21,14 @@ https://github.com/user-attachments/assets/0a2ba78a-eda3-44c1-adce-bfa78ae992cd
 </tr>
 </table>
 
+## Hosted, or bring your own station
+
+Don't want to run a language model? **[SUB/WAVE DJ Brain](https://my.getsubwave.com/brain)**
+is a metered brain (and optional cloud voice) for the station you already self-host: one
+key, pasted once, from £5/month. **[SUB/WAVE Hosted](https://my.getsubwave.com/)** runs the
+whole station for you at `yourname.getsubwave.com`. Both fund the project; the software
+here stays complete and free either way.
+
 ## Live demo
 
 - **Project site** — [getsubwave.com](https://www.getsubwave.com/)
