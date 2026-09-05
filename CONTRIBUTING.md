@@ -70,16 +70,22 @@ footer, for anything that breaks compatibility.
 PR titles follow the same convention — squash-merging keeps history clean, and
 the commit carries through `develop` → `main`, where release-please reads it.
 
-For ordinary PRs squash-merged into `develop`, maintainers must inspect GitHub's
-prefilled squash message before confirming the merge. The prefill can include
-branch commit messages and the PR body, so edit or replace it: keep the
-conventional PR title as the subject and only maintainer-approved body and
-footer content. Remove inherited third-party attribution and tool/session
-metadata such as `Co-Authored-By:`, `Claude-Session:`, or session-link footers.
-A `Co-Authored-By:` line may remain when a maintainer intentionally approves
-credit for a genuine human co-author, and a required `BREAKING CHANGE:` footer
-remains valid. This does not apply to the `develop` → `main` release PR, which
-uses a merge commit rather than squash.
+Commits on `develop` are authored by the repo owner and carry no third-party
+trailers. That holds when a commit is written, but not in GitHub's squash box,
+which prefills the message from every commit on the branch plus the PR body — so
+for ordinary PRs squash-merged into `develop`, read that message before
+confirming. **The default is to delete the inherited tail**: keep the
+conventional PR title as the subject, keep the body you would have written for
+the commit yourself, and drop the concatenated branch commit messages under it.
+Remove anything that rode in that way — attribution trailers
+(`Co-Authored-By:`) and tool or session metadata (`Claude-Session:`,
+generated-by footers, session links).
+
+Two things survive the cut: a `Co-Authored-By:` line you are deliberately
+keeping to credit a genuine human co-author, and a `BREAKING CHANGE:` footer the
+change actually needs. The release PR is merged rather than squashed, for
+reasons of its own — see
+[`.claude/skills/subwave-release-pr/SKILL.md`](.claude/skills/subwave-release-pr/SKILL.md).
 
 ## Releases
 
