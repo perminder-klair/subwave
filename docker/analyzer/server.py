@@ -21,7 +21,7 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -95,6 +95,10 @@ logging.basicConfig(
 log = logging.getLogger("analyzer")
 
 
+class WorkerUnavailableError(RuntimeError):
+    """A selected worker became unusable before accepting the request."""
+
+
 class StdioWorker:
     """Async wrapper around a long-lived stdio worker subprocess.
 
@@ -113,6 +117,9 @@ class StdioWorker:
         self.proc: asyncio.subprocess.Process | None = None
         self.lock = asyncio.Lock()
         self.ready = False
+        self._reserved = False
+        self._recycling = False
+        self._state_listener: Callable[[], Awaitable[None]] | None = None
         # Ready message minus the `ready` flag — per-engine capability
         # metadata. Cleared on every restart cycle.
         self.ready_meta: dict[str, Any] = {}
@@ -135,6 +142,40 @@ class StdioWorker:
         # operator's retry after fixing the cause.
         self.capability_errors: dict[str, str] = {}
 
+    def set_state_listener(self, listener: Callable[[], Awaitable[None]]) -> None:
+        self._state_listener = listener
+
+    async def _state_changed(self) -> None:
+        if self._state_listener is not None:
+            await self._state_listener()
+
+    async def _set_ready(self, ready: bool) -> None:
+        if self.ready == ready:
+            return
+        self.ready = ready
+        await self._state_changed()
+
+    async def _set_recycling(self, recycling: bool) -> None:
+        if self._recycling == recycling:
+            return
+        self._recycling = recycling
+        await self._state_changed()
+
+    @property
+    def available(self) -> bool:
+        return self.ready and not self._recycling
+
+    def reserve_if_available(self) -> bool:
+        # No await: selection and recycle's `_recycling = True` transition are
+        # atomic relative to one another on the asyncio event loop.
+        if not self.available or self._reserved:
+            return False
+        self._reserved = True
+        return True
+
+    def release_reservation(self) -> None:
+        self._reserved = False
+
     async def run(self) -> None:
         """Keep the worker alive forever (or until cancelled)."""
         try:
@@ -143,7 +184,7 @@ class StdioWorker:
                     await self.start()
                 except Exception as e:
                     log.error(f"[{self.name}] start failed: {e}")
-                    self._reset()
+                    await self._reset()
                     await asyncio.sleep(self.START_BACKOFF_S)
                     continue
                 assert self.proc is not None
@@ -151,14 +192,15 @@ class StdioWorker:
                 log.warning(
                     f"[{self.name}] worker exited with code={code}; restarting in {self.RUN_BACKOFF_S}s",
                 )
-                self._reset()
+                await self._reset()
                 await asyncio.sleep(self.RUN_BACKOFF_S)
         except asyncio.CancelledError:
+            await self._set_ready(False)
             self._terminate()
             raise
 
-    def _reset(self) -> None:
-        self.ready = False
+    async def _reset(self) -> None:
+        await self._set_ready(False)
         self.proc = None
         self.ready_meta = {}
         # A fresh worker holds no models; clearing last_heavy also stands the
@@ -214,7 +256,7 @@ class StdioWorker:
         ):
             self.models_resident = True
             self.last_heavy = time.monotonic()
-        self.ready = True
+        await self._set_ready(True)
 
     async def _await_message(self) -> dict[str, Any]:
         """Read worker stdout until a parseable JSON object arrives."""
@@ -302,7 +344,8 @@ class StdioWorker:
             # falls through cleanly (analysis row stays NULL), preferable to
             # blocking on an unhealthy worker.
             if not self.ready or not self.proc or self.proc.returncode is not None:
-                raise RuntimeError(f"[{self.name}] worker not ready")
+                await self._set_ready(False)
+                raise WorkerUnavailableError(f"[{self.name}] worker not ready")
             assert self.proc.stdin
             req = json.dumps(payload, ensure_ascii=False)
             self.proc.stdin.write((req + "\n").encode())
@@ -324,35 +367,43 @@ class StdioWorker:
     async def recycle_loop(self, idle_s: float) -> None:
         """Terminate the worker after `idle_s` seconds without heavy use so
         run() respawns it fresh — the full-memory counterpart to the worker's
-        own model release. Holding the lock across the respawn means a racing
-        request queues and then runs against the new worker instead of 500ing."""
+        own model release. A pool reservation wins over recycling; once recycle
+        claims the worker, new requests route to another available member."""
         while True:
             await asyncio.sleep(60)
             if not self.ready or self.last_heavy is None:
                 continue
             if time.monotonic() - self.last_heavy < idle_s:
                 continue
-            async with self.lock:
-                # Re-check under the lock: a heavy request may have completed
-                # while we waited to acquire it.
-                if self.last_heavy is None or time.monotonic() - self.last_heavy < idle_s:
-                    continue
-                log.info(
-                    f"[{self.name}] idle {int(idle_s)}s without heavy use — recycling worker "
-                    "for a full memory reclaim (re-pays imports on next request)"
-                )
-                self.recycles += 1
-                self.ready = False
-                self._terminate()
-                # Wait (bounded) for run() to respawn and re-ready before
-                # releasing the lock. On timeout, release anyway — queued
-                # requests then fail fast as for a crashed worker, and run()
-                # keeps retrying upstream.
-                deadline = time.monotonic() + 180.0
-                while time.monotonic() < deadline and not self.ready:
-                    await asyncio.sleep(0.5)
-                if not self.ready:
-                    log.warning(f"[{self.name}] worker not back within 180s of recycle")
+            # A pool reservation is made without yielding, as is this recycling
+            # claim. Whichever happens first wins: admitted work completes on
+            # this worker, or the pool sees it as unavailable and picks another.
+            if self._reserved:
+                continue
+            await self._set_recycling(True)
+            try:
+                async with self.lock:
+                    # Re-check under the lock: a heavy request may have completed
+                    # while we waited to acquire it.
+                    if self.last_heavy is None or time.monotonic() - self.last_heavy < idle_s:
+                        continue
+                    log.info(
+                        f"[{self.name}] idle {int(idle_s)}s without heavy use — recycling worker "
+                        "for a full memory reclaim (re-pays imports on next request)"
+                    )
+                    self.recycles += 1
+                    await self._set_ready(False)
+                    self._terminate()
+                    # Wait (bounded) for run() to respawn and re-ready before
+                    # releasing the lock. The pool routes new requests to other
+                    # available members during this window.
+                    deadline = time.monotonic() + 180.0
+                    while time.monotonic() < deadline and not self.ready:
+                        await asyncio.sleep(0.5)
+                    if not self.ready:
+                        log.warning(f"[{self.name}] worker not back within 180s of recycle")
+            finally:
+                await self._set_recycling(False)
 
 
 class AnalyzerWorkerPool:
@@ -363,10 +414,16 @@ class AnalyzerWorkerPool:
         self._available = asyncio.Condition()
         self._busy: set[StdioWorker] = set()
         self._next = 0
+        for worker in self.workers:
+            worker.set_state_listener(self._worker_state_changed)
+
+    async def _worker_state_changed(self) -> None:
+        async with self._available:
+            self._available.notify_all()
 
     @property
     def ready_workers(self) -> list[StdioWorker]:
-        return [worker for worker in self.workers if worker.ready]
+        return [worker for worker in self.workers if worker.available]
 
     @property
     def ready(self) -> bool:
@@ -393,29 +450,40 @@ class AnalyzerWorkerPool:
         ]
         return errors[0] if errors else None
 
-    async def request(self, payload: dict[str, Any]) -> dict[str, Any]:
+    async def _acquire_worker(self) -> StdioWorker:
         async with self._available:
             while True:
                 count = len(self.workers)
                 for offset in range(count):
                     index = (self._next + offset) % count
                     worker = self.workers[index]
-                    if worker.ready and worker not in self._busy:
+                    if worker not in self._busy and worker.reserve_if_available():
                         self._busy.add(worker)
                         self._next = (index + 1) % count
-                        break
-                else:
-                    if not self.ready:
-                        raise RuntimeError("[analyze] no worker ready")
-                    await self._available.wait()
-                    continue
-                break
-        try:
-            return await worker.request(payload)
-        finally:
-            async with self._available:
-                self._busy.discard(worker)
-                self._available.notify_all()
+                        return worker
+                if not self.ready:
+                    raise WorkerUnavailableError("[analyze] no worker ready")
+                await self._available.wait()
+
+    async def _release_worker(self, worker: StdioWorker) -> None:
+        async with self._available:
+            worker.release_reservation()
+            self._busy.discard(worker)
+            self._available.notify_all()
+
+    async def request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        while True:
+            worker = await self._acquire_worker()
+            try:
+                return await worker.request(payload)
+            except WorkerUnavailableError:
+                # Readiness can change between selection and the worker lock
+                # (notably when recycle wins that race). Release the stale
+                # reservation and select another ready member instead of failing
+                # a request that the pool can still serve.
+                pass
+            finally:
+                await self._release_worker(worker)
 
 
 analyzer_workers = [

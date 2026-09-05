@@ -62,8 +62,37 @@ class FakeWorker:
         self.models_resident = False
         self.last_heavy = None
         self.recycles = 0
+        self.state_listener = None
+        self.unavailable_on_request = False
+        self.reserved = False
+
+    def set_state_listener(self, listener):
+        self.state_listener = listener
+
+    async def set_ready(self, ready):
+        self.ready = ready
+        if self.state_listener:
+            await self.state_listener()
+
+    @property
+    def available(self):
+        return self.ready
+
+    def reserve_if_available(self):
+        if not self.available or self.reserved:
+            return False
+        self.reserved = True
+        return True
+
+    def release_reservation(self):
+        self.reserved = False
 
     async def request(self, payload):
+        if self.unavailable_on_request:
+            self.ready = False
+            if self.state_listener:
+                await self.state_listener()
+            raise server.WorkerUnavailableError(f"[{self.name}] worker not ready")
         self.calls.append(payload)
         self.entered.set()
         await self.release.wait()
@@ -71,6 +100,22 @@ class FakeWorker:
 
     def capability(self, meta_key, _loss_key):
         return self.capabilities.get(meta_key) if self.ready else None
+
+
+class LifecycleWorker(server.StdioWorker):
+    """StdioWorker state transitions with request I/O replaced by events."""
+
+    def __init__(self, name):
+        super().__init__(name, "python", "worker.py")
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.calls = []
+
+    async def request(self, payload):
+        self.calls.append(payload)
+        self.entered.set()
+        await self.release.wait()
+        return {"ok": True}
 
 
 async def test_pool_concurrency():
@@ -85,6 +130,43 @@ async def test_pool_concurrency():
     first.release.set()
     second.release.set()
     await asyncio.gather(one, two)
+
+
+async def test_waiter_uses_worker_that_becomes_ready():
+    busy = FakeWorker("busy")
+    booting = LifecycleWorker("booting")
+    pool = server.AnalyzerWorkerPool([busy, booting])
+    first = asyncio.create_task(pool.request({"id": "1"}))
+    await asyncio.wait_for(busy.entered.wait(), 1)
+    waiting = asyncio.create_task(pool.request({"id": "2"}))
+    await asyncio.sleep(0)
+    assert not waiting.done(), "second request should wait while the only ready worker is busy"
+
+    # This is the same StdioWorker readiness transition start() performs after
+    # its ready line, and must wake the pool's capacity waiter.
+    await booting._set_ready(True)
+    await asyncio.wait_for(booting.entered.wait(), 1)
+    assert booting.calls == [{"id": "2"}], booting.calls
+    assert busy.calls == [{"id": "1"}], busy.calls
+
+    booting.release.set()
+    await waiting
+    busy.release.set()
+    await first
+
+
+async def test_unavailable_selection_retries_another_ready_worker():
+    recycling = FakeWorker("recycling")
+    recycling.unavailable_on_request = True
+    healthy = FakeWorker("healthy")
+    pool = server.AnalyzerWorkerPool([recycling, healthy])
+
+    task = asyncio.create_task(pool.request({"id": "1"}))
+    await asyncio.wait_for(healthy.entered.wait(), 1)
+    assert recycling.calls == [], recycling.calls
+    assert healthy.calls == [{"id": "1"}], healthy.calls
+    healthy.release.set()
+    await task
 
 
 async def test_unavailable_worker_skipped():
@@ -155,6 +237,8 @@ def test_concurrency_env_validation():
 async def main():
     test_concurrency_env_validation()
     await test_pool_concurrency()
+    await test_waiter_uses_worker_that_becomes_ready()
+    await test_unavailable_selection_retries_another_ready_worker()
     await test_unavailable_worker_skipped()
     await test_capability_aggregation_is_conservative()
     await test_path_contract()
