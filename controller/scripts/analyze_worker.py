@@ -131,6 +131,42 @@ def _env_float(name, default):
         return default
 
 
+def _env_int(name, default, minimum=1):
+    """Whole-number env var, warn-and-fall-back — the Python half of the
+    controller's `envInt` (controller/src/util/env.ts). A bare `int(raw)`
+    RAISED on a typo, which for ANALYZE_MAX_BYTES took the whole download with
+    it while the TS side quietly produced NaN: the same bad value put the two
+    fetch paths on two different envelopes (#1549). Floats are rejected rather
+    than truncated, same as envInt."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    # Matched against the same shape envInt accepts rather than handed straight
+    # to int(), which is looser than the TS side: it takes "1_000" and non-ASCII
+    # digits, both of which would land the two fetch paths on different caps.
+    if not re.fullmatch(r"[-+]?[0-9]+", raw):
+        # Runs at module load, before log() is defined — write stderr directly.
+        sys.stderr.write(
+            f"[analyze-worker] {name}={raw!r} is not a whole number; using default {default}\n"
+        )
+        return default
+    value = int(raw)
+    if value < minimum:
+        sys.stderr.write(
+            f"[analyze-worker] {name}={raw!r} must be at least {minimum}; using default {default}\n"
+        )
+        return default
+    return value
+
+
+# Cap the download so we don't pull whole albums of bytes for a short analysis
+# window — ~3 MB covers 2 min of most codecs. Mirrors ANALYZE_MAX_BYTES in
+# controller/src/music/analyzer.ts so both fetch paths read the same envelope,
+# which is why it is parsed with the same posture (fall back to the default on
+# anything malformed, never raise and never NaN).
+ANALYZE_MAX_BYTES = _env_int("ANALYZE_MAX_BYTES", 12 * 1024 * 1024)
+
+
 # Vocal-stem gate thresholds (issue #1125). The stem is thresholded against BOTH
 # its own loud level (self-relative, catches quiet-but-present vocals) AND a
 # fraction of the FULL-MIX loud level (an absolute-ish floor). Demucs never
@@ -1617,9 +1653,6 @@ def fetch_audio(url):
     os.close(fd)
     req = urllib.request.Request(url, headers={"User-Agent": "subwave-analyzer/1"})
     with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT_S) as resp, open(path, "wb") as out:
-        # Cap the download so we don't pull whole albums of bytes for a
-        # 120-second analysis window — ~3 MB covers 2 min of most codecs.
-        max_bytes = int(os.environ.get("ANALYZE_MAX_BYTES", "").strip() or str(12 * 1024 * 1024))
         read = 0
         while True:
             chunk = resp.read(65536)
@@ -1627,9 +1660,9 @@ def fetch_audio(url):
                 break
             out.write(chunk)
             read += len(chunk)
-            if read >= max_bytes:
+            if read >= ANALYZE_MAX_BYTES:
                 break
-    return path, read < max_bytes
+    return path, read < ANALYZE_MAX_BYTES
 
 
 def ensure_fast_decode(path):
