@@ -1,7 +1,7 @@
 'use client';
 
 import type { ChangeEvent } from 'react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import { cn } from '../../../lib/cn';
@@ -43,6 +43,22 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
 
   const [test, setTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
   const [testing, setTesting] = useState(false);
+
+  // This section's fields are plain local state, not FormState, so the panel's
+  // form-vs-baseline diff can never see an edit here. SettingsPanel only mounts
+  // the save slot while SOMETHING is dirty, so without reporting it ourselves
+  // SaveBar portals into nothing and the section renders no Save button at all
+  // — the same reason LlmSection/TtsSection/LibrarySection pass `dirty` for
+  // their own local key inputs. Compare against the values we mounted with
+  // rather than against `form`, so a save (which refreshes `form`) settles
+  // back to clean instead of latching dirty forever.
+  const initial = useRef({ baseUrl, chatModel, voiceModel, voiceName });
+  const dirty =
+    !!token.trim() ||
+    baseUrl !== initial.current.baseUrl ||
+    chatModel !== initial.current.chatModel ||
+    voiceModel !== initial.current.voiceModel ||
+    voiceName !== initial.current.voiceName;
 
   // Redaction sentinel from getRedacted(): 'set' means a token is already on
   // file for that block. Both blocks share the same DJ Brain token in practice.
@@ -107,6 +123,11 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
         },
       },
     });
+    initial.current = { baseUrl: url, chatModel: chat, voiceModel: voiceM, voiceName: voiceV };
+    setBaseUrl(url);
+    setChatModel(chat);
+    setVoiceModel(voiceM);
+    setVoiceName(voiceV);
     setToken('');
     refresh();
   };
@@ -235,6 +256,7 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
         busy={busy}
         onSave={save}
         saveLabel="Save DJ Brain"
+        dirty={dirty}
       />
     </>
   );
