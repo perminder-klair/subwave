@@ -588,6 +588,17 @@ export const djSpeakClockSchema = z.boolean({
 });
 
 /**
+ * Talk placement switch (FR 5b of #1485). Same strict posture as
+ * `djSpeakClockSchema` above and for the same reason: this key has never had a
+ * hand-rolled branch to inherit leniency from, so it starts strict rather than
+ * acquiring a coercion nobody asked for. load() still coerces a hand-edited
+ * settings.json to the default, so only a PATCH is refused.
+ */
+export const djTalkOnlyBetweenTracksSchema = z.boolean({
+  error: 'djTalkOnlyBetweenTracks must be a boolean',
+});
+
+/**
  * Trim FIRST, then a strict pair — ' en-GB ' saves, 'en-gb' does not.
  *
  * Not settingsStrictOneOf: that tests the raw value, which is right for

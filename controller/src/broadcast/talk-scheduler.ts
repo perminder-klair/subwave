@@ -64,7 +64,14 @@ export type TalkClock = 'process' | 'station';
 // How a fired row reaches air. An ident has no real-time constraint, so it
 // defers to the next track boundary rather than ducking the current song
 // mid-vocal at an arbitrary wall-clock minute; everything else airs immediately
-// through the voice queue. Per-row, never unified away.
+// through the voice queue. Per-row, never unified away — the row's mode is what
+// the station does by default.
+//
+// One thing DOES override every row at once, and it is a switch rather than a
+// table edit: `djTalkOnlyBetweenTracks` (#1485 FR 5b, broadcast/talk-air.ts)
+// reads every row as 'next-track', so an operator who wants a station that
+// never talks over a song gets one without the table losing the per-row
+// distinction the switch-off case still needs.
 export type TalkAir = 'immediate' | 'next-track';
 
 // What a row IS, which decides what it may take the minute from.
@@ -382,8 +389,12 @@ export type TalkPlan =
   // slot has already reported) and `markLogged` is what the caller should
   // remember so the next minute stays quiet.
   | { kind: TalkKind; act: 'wait'; slot: string; slotKey: string; reason: TalkWaitReason; log: string | null; markLogged: string | null }
-  // Air it. The caller claims `slotKey` BEFORE awaiting the segment.
-  | { kind: TalkKind; act: 'fire'; slot: string; slotKey: string; gap: TalkGap };
+  // Air it. The caller claims `slotKey` BEFORE awaiting the segment. `air` is
+  // the row's mode as RESOLVED for this tick, not the row's own: with
+  // `betweenTracksOnly` on every row reads 'next-track'. Carried on the plan so
+  // the dispatcher never re-derives it — the table (and the switch over it)
+  // stays the one place placement is decided.
+  | { kind: TalkKind; act: 'fire'; slot: string; slotKey: string; gap: TalkGap; air: TalkAir };
 
 export type TalkTickInput = {
   now: Date;
@@ -402,6 +413,12 @@ export type TalkTickInput = {
   eligible: (kind: TalkKind) => boolean;
   // The open slot for an `opens: 'external'` row, or null.
   externalSlot: (kind: TalkKind) => string | null;
+  // `djTalkOnlyBetweenTracks` (#1485 FR 5b), resolved by the caller through
+  // broadcast/talk-air.ts. On, every row's `air` reads 'next-track' and the
+  // pending-clip hold changes shape — see pendingHolds() below. A parameter
+  // rather than a live read, for the reason every other gate here is one: a
+  // rule that reads settings itself cannot be replayed minute by minute.
+  betweenTracksOnly?: boolean;
   fired: Partial<Record<TalkKind, string | null>>;
   logged: Partial<Record<TalkKind, string | null>>;
   slots?: readonly TalkSlot[];
@@ -444,6 +461,36 @@ function pendingOutlivesWindow(row: TalkSlot, slot: string, pending: PendingTalk
   return pendingVoiceValidForMs(pending.queuedAt, nowMs) > windowRemainingMs;
 }
 
+// Whether a rendered clip already waiting for a boundary holds this row THIS
+// minute. Two rules, because the switch changes what the clip IS to the row.
+//
+// OFF (the pre-existing rule, #1419 + #1539): the clip is talk the listener has
+// not heard yet, so it counts against the QUIET GAP a gap-gated row is asking
+// about — and only against that. It is bounded at both ends, so a hold can
+// never cost a row its window: see pendingOutlivesWindow.
+//
+// ON (#1485 FR 5b): the clip is a RESOURCE, not a courtesy. Every row now
+// defers, and `queue._pendingVoice` keeps exactly ONE deferred segment — a
+// second one replaces the first — so a row firing while a clip waits would not
+// stack a break, it would silently delete a rendered segment that has already
+// been paid for in tokens and TTS. That is cancel, not postpone. So the hold
+// applies to every row regardless of `minGapMs`, and it is NOT released on the
+// window's last minute the way the gap-shaped hold is: the last-minute release
+// exists to trade a stacked break for a lost slot, and with the constraint on
+// the trade is not available — taking the minute costs the other segment
+// instead. A row held out of its whole window logs `missed`, which is the
+// honest report, and the boundary the clip is waiting for is usually a track
+// away. Gating the SECOND segment here rather than queueing it in the queue is
+// also gate-before-generation: a postponed row writes no script at all.
+function pendingHolds(
+  row: TalkSlot, slot: string, minute: number, pending: PendingTalk, p: TalkTickInput,
+): boolean {
+  if (p.betweenTracksOnly) return pendingVoiceValidForMs(pending.queuedAt, p.now.getTime()) > 0;
+  return row.minGapMs > 0
+    && canRetry(row, slot, minute)
+    && pendingOutlivesWindow(row, slot, pending, p.now.getTime());
+}
+
 // One row's decision, or null for "nothing to do" — outside the window, already
 // spoken, or not eligible this minute. Silent by design: a per-minute tick that
 // narrated every ineligible minute would bury the booth log.
@@ -476,13 +523,16 @@ export function talkSlotPlan(row: TalkSlot, p: TalkTickInput): TalkPlan | null {
   // happened, which is postpone-don't-cancel applied to the one holder that
   // could otherwise sit on a whole window.
   const pending = p.pendingTalk;
-  if (row.minGapMs > 0 && pending
-      && canRetry(row, slot, minute)
-      && pendingOutlivesWindow(row, slot, pending, p.now.getTime())) {
+  if (pending && pendingHolds(row, slot, minute, pending, p)) {
     return waitPlan(row, slot, slotKey, { held: 'pending', pendingKind: pending.kind }, p);
   }
   const gap = talkGap({ nowMs: p.now.getTime(), lastTalkBreakAt: p.lastTalkBreakAt, needMs: row.minGapMs });
-  if (gap.clear) return { kind: row.kind, act: 'fire', slot, slotKey, gap };
+  // The switch forces every row onto the boundary — including the fill row, and
+  // including the hourly check, which is why it is a switch and not a per-row
+  // default: a station that never talks over a song cannot make an exception
+  // for the one segment that reads the clock.
+  const air: TalkAir = p.betweenTracksOnly ? 'next-track' : row.air;
+  if (gap.clear) return { kind: row.kind, act: 'fire', slot, slotKey, gap, air };
   return waitPlan(row, slot, slotKey, { held: 'gap', gap }, p);
 }
 

@@ -91,20 +91,29 @@ const clockAt = (minute: number, second = 0, hour = HOUR) =>
 function makeReplay(opts: {
   lastTalkBreakAt?: number;
   feedback?: boolean;
-  pendingTalk?: { kind: string; queuedAt: number } | null;
+  // A function when the clip's presence has to CHANGE mid-hour — the deferred
+  // segment airing at a track boundary is what releases every row holding for
+  // it, and that release is the whole of postpone-don't-cancel under
+  // djTalkOnlyBetweenTracks.
+  pendingTalk?: { kind: string; queuedAt: number } | null
+    | ((now: Date) => { kind: string; queuedAt: number } | null);
+  betweenTracksOnly?: boolean;
   eligible?: (kind: TalkKind, now: Date) => boolean;
   externalSlot?: (kind: TalkKind, now: Date) => string | null;
 } = {}) {
   const fired: Partial<Record<TalkKind, string | null>> = {};
   const logged: Partial<Record<TalkKind, string | null>> = {};
-  const rang: { minute: number; kind: TalkKind; slot: string }[] = [];
+  const rang: { minute: number; kind: TalkKind; slot: string; air: string }[] = [];
   const logs: string[] = [];
   let lastTalkBreakAt = opts.lastTalkBreakAt ?? 0;
   const tick = (now: Date) => {
     const plans: TalkPlan[] = talkTickPlan({
       now,
       lastTalkBreakAt,
-      pendingTalk: opts.pendingTalk ?? null,
+      pendingTalk: (typeof opts.pendingTalk === 'function'
+        ? opts.pendingTalk(now)
+        : opts.pendingTalk) ?? null,
+      betweenTracksOnly: opts.betweenTracksOnly ?? false,
       eligible: kind => (opts.eligible ? opts.eligible(kind, now) : true),
       externalSlot: kind => (opts.externalSlot ? opts.externalSlot(kind, now) : null),
       fired,
@@ -117,7 +126,7 @@ function makeReplay(opts: {
         continue;
       }
       fired[plan.kind] = plan.slotKey;
-      rang.push({ minute: now.getMinutes(), kind: plan.kind, slot: plan.slot });
+      rang.push({ minute: now.getMinutes(), kind: plan.kind, slot: plan.slot, air: plan.air });
       if (opts.feedback) lastTalkBreakAt = now.getTime();
     }
     return plans;
@@ -909,6 +918,190 @@ test('a row that is not due is skipped without a decision', () => {
       `:${m} must not reach the gap check`,
     );
   }
+});
+
+
+// ---------------------------------------------------------------------------
+// TALK ONLY BETWEEN TRACKS (#1485 FR 5b)
+// One switch — `djTalkOnlyBetweenTracks`, resolved by broadcast/talk-air.ts and
+// handed to the planner as `betweenTracksOnly` — forces every row onto the
+// track boundary the ident has always waited for.
+//
+// The properties, and the real way each regresses:
+//
+//  - OFF IS THE OLD STATION, exactly. The flag defaults false, so every test
+//    above is also a test of the off case; what these add is that the plans
+//    themselves still carry the per-row `air`, since the switch must not be
+//    implemented by editing the table.
+//  - ON MOVES EVERY ROW, including the two it is tempting to exempt: the hourly
+//    check (which reads a clock, and would be the natural "but not that one")
+//    and the fill row (which has no slot, and could be argued to be free to
+//    talk whenever). A station that never talks over a song cannot make either
+//    exception and still be that station.
+//  - THE ONE DEFERRED SLOT IS A RESOURCE, so a second segment must be
+//    POSTPONED, never written. queue._pendingVoice holds one segment and a
+//    newer one replaces it, so a row firing while a clip waits would delete a
+//    rendered segment rather than stack a break — cancel wearing postpone's
+//    clothes, and the expensive direction (the tokens and the TTS are already
+//    spent). This is why the hold is widened to rows with `minGapMs: 0`, which
+//    have opted out of QUIET questions but not out of physics.
+//  - AND IT IS STILL A POSTPONE. The clip airs at a boundary and every row it
+//    was holding takes the next minute inside its own window.
+// ---------------------------------------------------------------------------
+
+test('the switch is off by default, and the table keeps its per-row air modes', () => {
+  // The off case is the whole of the upgrade promise: an operator who never
+  // touches the setting must get the station they had. The planner default and
+  // an explicit false are the same thing, and both report the ROW's mode.
+  for (const betweenTracksOnly of [undefined, false]) {
+    const r = makeReplay({ betweenTracksOnly, eligible: () => true, externalSlot: () => null });
+    r.hour();
+    const airOf = (k: TalkKind) => r.rang.filter(x => x.kind === k).map(x => x.air);
+    assert.deepEqual(airOf('station-id'), ['next-track', 'next-track', 'next-track']);
+    assert.deepEqual(airOf('hourly'), ['immediate']);
+    assert.deepEqual(airOf('banter'), ['immediate', 'immediate']);
+    assert.ok(airOf('segment').every(a => a === 'immediate'), 'the filler airs immediately too');
+  }
+});
+
+test('the switch forces every row onto the next track boundary, the fill row included', async () => {
+  // Including the two rows it is tempting to exempt. The hourly check reads a
+  // clock, so deferring it is the trade the switch names out loud; the segment
+  // director has no slot to protect, so nothing would break if it kept ducking
+  // — and a station that still talks over a song six times an hour is not the
+  // station the operator asked for.
+  await station('aggressive');
+  const r = makeReplay({
+    betweenTracksOnly: true,
+    eligible: () => true,
+    // One beat, where a real `dueBeat` window puts it — a row that claims every
+    // stride minute would stand the filler down all hour and hide it below.
+    externalSlot: (kind, now) => (kind === 'programme' && now.getMinutes() === 35 ? 'feature' : null),
+  });
+  r.hour();
+  assert.ok(r.rang.length >= 6, 'the hour still talks');
+  assert.deepEqual([...new Set(r.rang.map(x => x.air))], ['next-track']);
+  // Every KIND, not just every fire — a row that happened not to fire this hour
+  // would otherwise hide behind one that did.
+  for (const kind of ['hourly', 'banter', 'station-id', 'segment', 'programme'] as TalkKind[]) {
+    assert.ok(r.rang.some(x => x.kind === kind), `${kind} never fired — the assertion above proves nothing about it`);
+  }
+});
+
+test('with the switch on, a waiting clip holds even the rows that take no gap', () => {
+  // `minGapMs: 0` means "this row does not ask whether the listener has had
+  // quiet" — programme beats are the show, the filler has its own floor. It has
+  // never meant "this row may overwrite a rendered segment", and with every row
+  // deferring that is exactly what firing would do.
+  const pendingTalk = { kind: 'hourly-check', queuedAt: clockAt(38) };
+  for (const kind of ['programme', 'segment'] as TalkKind[]) {
+    assert.equal(talkSlot(kind).minGapMs, 0, `${kind} must be a no-gap row for this test to mean anything`);
+    const off = makeReplay({
+      pendingTalk, eligible: k => k === kind,
+      externalSlot: k => (k === 'programme' ? 'feature' : null),
+    });
+    off.tick(at(40));
+    assert.deepEqual(off.minutesOf(kind), [40], `${kind}: unchanged with the switch off`);
+
+    const on = makeReplay({
+      betweenTracksOnly: true, pendingTalk, eligible: k => k === kind,
+      externalSlot: k => (k === 'programme' ? 'feature' : null),
+    });
+    on.tick(at(40));
+    assert.deepEqual(on.minutesOf(kind), [], `${kind}: the boundary is taken`);
+  }
+});
+
+test('the hold is a postpone: the clip airs, and the held row takes the next minute in its window', () => {
+  // The release, which is what makes this a postpone rather than a slower
+  // cancel. The ident sitting on the boundary airs at :03 — `_pendingVoice`
+  // goes null — and the hourly check, held since :00, speaks at :04, still
+  // inside its own window and still reading the right hour.
+  const r = makeReplay({
+    betweenTracksOnly: true,
+    pendingTalk: now => (now.getMinutes() < 4 ? { kind: 'station-id', queuedAt: clockAt(58, 0, HOUR - 1) } : null),
+    eligible: kind => kind === 'hourly',
+  });
+  for (let m = 0; m <= 9; m++) r.tick(at(m));
+  assert.deepEqual(r.minutesOf('hourly'), [4]);
+  assert.equal(r.logs.length, 1, 'held once, then took the minute');
+  assert.match(r.logs[0], /^\[hourly\] stood down at :0 — a station-id is rendered and waiting for the next track boundary \(retrying until :9\)$/);
+});
+
+test('a clip whose queue life runs out stops holding, without waiting for a boundary', () => {
+  // The queue drops a clip past PENDING_VOICE_MAX_AGE_MS at the next track
+  // start, so a clip that old can no longer take the boundary and must not go
+  // on blocking as if it could. Queued at :45 of the previous hour, it expires
+  // exactly at :05 — and :05 is the minute the hourly check gets.
+  const r = makeReplay({
+    betweenTracksOnly: true,
+    pendingTalk: { kind: 'station-id', queuedAt: clockAt(45, 0, HOUR - 1) },
+    eligible: kind => kind === 'hourly',
+  });
+  for (let m = 0; m <= 9; m++) r.tick(at(m));
+  assert.equal(clockAt(45, 0, HOUR - 1) + PENDING_VOICE_MAX_AGE_MS, clockAt(5), 'fixture: expiry lands on :05');
+  assert.deepEqual(r.minutesOf('hourly'), [5]);
+});
+
+test('the last-minute release is NOT taken when the switch is on — it would delete the waiting clip', () => {
+  // The one rule that inverts, and the reason it has to. With the switch off,
+  // the window's final minute is never given away (#1539): taking it stacks a
+  // break in front of a clip that airs seconds later, which is the cheaper of
+  // two bad outcomes. With the switch on that trade is not on offer — the row
+  // would DEFER too, and the single slot holds one segment, so firing replaces
+  // a rendered, paid-for segment with this one. Missing the window is then the
+  // honest outcome, and it is logged as a miss rather than as a retry.
+  const queuedAt = clockAt(51, 0, HOUR - 1);  // valid to :11, past the hourly window's :09 close
+  const off = makeReplay({ pendingTalk: { kind: 'station-id', queuedAt }, eligible: k => k === 'hourly' });
+  for (let m = 0; m <= 9; m++) off.tick(at(m));
+  assert.deepEqual(off.minutesOf('hourly'), [9], 'off: the final chance is never given away');
+
+  const on = makeReplay({
+    betweenTracksOnly: true, pendingTalk: { kind: 'station-id', queuedAt }, eligible: k => k === 'hourly',
+  });
+  for (let m = 0; m <= 9; m++) on.tick(at(m));
+  assert.deepEqual(on.minutesOf('hourly'), [], 'on: the clip keeps the boundary');
+  assert.equal(on.logs.length, 2, 'one stand-down, then one miss when the window closes');
+  assert.match(on.logs[0], /^\[hourly\] stood down at :0 —/);
+  assert.match(
+    on.logs[1],
+    /^\[hourly\] slot :0 missed — a station-id is rendered and waiting for the next track boundary; window closed at :9$/,
+  );
+});
+
+test('a programme beat held by a waiting clip is reported as lost, not as retrying', () => {
+  // The switch's sharpest edge, stated where an operator can find it: the beat
+  // row samples `dueBeat` once, so a beat that cannot take its minute has no
+  // second chance — and with the switch on a waiting clip can be what takes it.
+  // The log has to say so rather than promising a retry that cannot come.
+  const r = makeReplay({
+    betweenTracksOnly: true,
+    pendingTalk: { kind: 'station-id', queuedAt: clockAt(33) },
+    eligible: kind => kind === 'programme',
+    externalSlot: kind => (kind === 'programme' ? 'feature' : null),
+  });
+  r.tick(at(35));
+  assert.deepEqual(r.minutesOf('programme'), []);
+  assert.match(
+    r.logs[0],
+    /^\[programme\] slot feature missed — a station-id is rendered and waiting for the next track boundary; and it has no second chance$/,
+  );
+});
+
+test('one talker per minute survives the switch — the loser waits, it does not also defer', () => {
+  // Arbitration runs before placement, so turning every row into a deferring
+  // row must not turn a contested minute into two clips racing for one slot.
+  // The ident's :15 window reaches :20, where banter opens; banter outranks it,
+  // takes the minute, and the ident waits inside its own window exactly as it
+  // does with the switch off.
+  const r = makeReplay({
+    betweenTracksOnly: true,
+    lastTalkBreakAt: clockAt(0),
+    eligible: kind => kind === 'banter' || kind === 'station-id',
+  });
+  r.tick(at(20));
+  assert.deepEqual(r.rang.map(x => `${x.kind}@${x.minute}`), ['banter@20']);
+  assert.match(r.logs[0], /^\[station-id\] stood down at :15 — banter took the minute \(retrying until :24\)$/);
 });
 
 test.after(() => rmSync(root, { recursive: true, force: true }));
