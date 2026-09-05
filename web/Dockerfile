@@ -1,14 +1,44 @@
 # Multi-stage build for the Next.js listener UI.
 # Produces a slim standalone image (~150MB) suitable for production.
 
+# Node 24.15.0 contains the upstream #62040 fix for the #62036 TransformStream
+# cancellation/write race. Pin its multi-architecture OCI index for every stage.
 # ---- deps ----
-FROM node:22-bookworm-slim AS deps
+FROM node:24.15.0-bookworm-slim@sha256:4e6b70dd6cbfc88c8157ba19aa3d9f9cce6ba4703576d55459e45efcbc9c5f5d AS deps
 WORKDIR /app
 COPY web/package.json web/package-lock.json ./
 RUN npm ci
+# Validate the pinned runtime against the Node #62036/#62040 TransformStream
+# cancellation/write race before spending time on the application build.
+RUN node -e "\
+const assert = require('node:assert');\
+const { TransformStream } = require('node:stream/web');\
+const { setTimeout } = require('node:timers/promises');\
+(async () => {\
+  const stream = new TransformStream({\
+    transform(chunk, controller) { controller.enqueue(chunk); },\
+  });\
+  await setTimeout(0);\
+  const reader = stream.readable.getReader();\
+  const writer = stream.writable.getWriter();\
+  const [readResult, cancelResult, lateWriteResult] = await Promise.allSettled([\
+    reader.read(),\
+    reader.cancel(new Error('client disconnected')),\
+    writer.write('late-write'),\
+  ]);\
+  assert.strictEqual(readResult.status, 'fulfilled');\
+  assert.strictEqual(cancelResult.status, 'fulfilled');\
+  if (lateWriteResult.status === 'rejected') {\
+    const message = String(lateWriteResult.reason?.message ?? lateWriteResult.reason);\
+    assert.doesNotMatch(message, /transformAlgorithm is not a function/,\
+      'Internal TransformStream implementation error leaked');\
+  }\
+  console.log('TransformStream cancellation race probe passed on ' + process.version);\
+})().catch((error) => { console.error(error); process.exitCode = 1; });\
+"
 
 # ---- build ----
-FROM node:22-bookworm-slim AS build
+FROM node:24.15.0-bookworm-slim@sha256:4e6b70dd6cbfc88c8157ba19aa3d9f9cce6ba4703576d55459e45efcbc9c5f5d AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY web/ ./
@@ -38,7 +68,7 @@ ENV SUBWAVE_BUILD_VERSION=${SUBWAVE_BUILD_VERSION}
 RUN npm run build
 
 # ---- runner ----
-FROM node:22-bookworm-slim AS runner
+FROM node:24.15.0-bookworm-slim@sha256:4e6b70dd6cbfc88c8157ba19aa3d9f9cce6ba4703576d55459e45efcbc9c5f5d AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1

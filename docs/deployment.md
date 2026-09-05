@@ -469,5 +469,5 @@ automatically.
 ## What's intentionally not included
 
 - **A `curl | sh` installer.** The two-file install (`curl docker-compose.yml` + `curl .env.example`) is the deliberate "as simple as it can be without piping random scripts into your shell" line.
-- **Multi-arch (arm64) images.** Piper, Kokoro, and Chatterbox wheels are amd64-only. Pin a Linux/amd64 host.
+- **Universal arm64 image coverage.** The split-stack core images (`subwave-caddy`, `subwave-broadcast`, `subwave-controller`, and `subwave-web`) are published for Linux amd64 and arm64, but the all-in-one and heavyweight images remain amd64-only. Arm64 hosts should use the split stack.
 - **Multi-host / k8s.** SUB/WAVE is a personal radio station — one Icecast mount, one broadcast. Scaling horizontally would mean per-listener streams, which defeats the design.
