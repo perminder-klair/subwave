@@ -249,6 +249,12 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             : {}),
         },
       },
+      // Its own top-level key, not part of `llm`: the album cooldown is read by
+      // the stateless pool picker too, so it is picking config rather than LLM
+      // config. It rides in the same PATCH because it is edited on this card.
+      picker: {
+        albumHours: Math.max(0, parseFloat(form.picker.albumHours) || 0),
+      },
     });
     // Save API keys if typed — these go to secrets.env, not settings.json
     const primaryKeyVar = LLM_ENV_VARS[activeProvider];
@@ -1124,6 +1130,30 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             keeps circling back; lower it if the DJ is reaching too far from the
             show&apos;s sound. {' '}<strong>0 = off</strong>, though an artist can
             never follow itself whatever this says. 0&ndash;25.
+          </div>
+        </div>
+
+        <div className="field mt-4">
+          <Label>Album cooldown (hours)</Label>
+          <Input
+            type="number"
+            min={0}
+            max={72}
+            step={0.5}
+            value={form.picker.albumHours}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, picker: { ...f.picker, albumHours: e.target.value } }))
+            }
+            placeholder="0"
+            className="max-w-[200px]"
+          />
+          <div className="field-hint">
+            How long a <strong>record</strong> rests after one of its tracks airs, on
+            both pickers. Only worth setting <em>above</em> the artist spacing above
+            &mdash; below it, the artist guard already covers the same ground. Like
+            that one it yields rather than starving the pool, and compilations and
+            various-artists albums are exempt, since two tracks off one sampler is
+            ordinary radio. {' '}<strong>0 = off</strong> (the default). 0&ndash;72.
           </div>
         </div>
       </Card>

@@ -16,6 +16,7 @@ import { bpmCompat, keyCompat } from './mix.js';
 import { shuffle } from '../util/shuffle.js';
 import { mapPool } from '../util/async-pool.js';
 import { artistRootKey, filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
+import { albumKeyFor } from './album-facts.js';
 import { AIRING_RANK_WEIGHT, freshness, freshnessBiasedOrder, lastAiredMsOf, unairedFlag, type AiredIndex } from './airing.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, preferVocals, applyStrictLocks, hasEraBound, eraSpan, type YearRange, type VocalMode } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
@@ -33,6 +34,12 @@ interface Candidate {
   title?: string;
   artist?: string;
   album?: string;
+  // Album-cooldown surface (#1485 FR 3). Library-sourced candidates carry both
+  // flags via slimTrack; a Subsonic child carries `album` alone, and albumKey
+  // reads a missing flag as "no evidence", never as a compilation.
+  albumArtist?: string | null;
+  isCompilation?: boolean | null;
+  yearUntrusted?: boolean | null;
   year?: number | string | null;
   genre?: string | null;
   duration?: number | null;
@@ -298,7 +305,7 @@ async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max:
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, recentAlbums: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }) {
   await library.load();
   // Airing memory (music/airing.ts) — orders the similarity sources so the
   // unexplored shelf survives their small caps; and the id-level recency union
@@ -726,6 +733,14 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
     recentIds,
     recentKeys,
     recentArtists,
+    // Album cooldown (#1485 FR 3) — the SAME set the agent path's album guard
+    // tests its pick against (queue.recentAlbumKeys), so the two paths cannot
+    // disagree about which records are too recent. Empty unless the operator
+    // set picker.albumHours, and an empty set is a no-op inside the filter.
+    recentAlbums,
+    // Most pool sources are raw Subsonic children, which carry no compilation
+    // flag at all — the pure key would never exempt one. See album-facts.ts.
+    albumKeyOf: albumKeyFor,
     hardRecentIds,
     hardRecentKeys,
     artistCounts: perArtist,
@@ -821,6 +836,10 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   const windows = recencyWindowsForLibrary(stats.distinctArtists, librarySize);
   const { ids: recentIds, keys: recentKeys } = queue.recentlyPlayed(windows.trackHours);
   const recentArtists = queue.recentArtistsSince(windows.artistHours);
+  // Album cooldown. Operator-set hours, NOT library-scaled like the windows
+  // above: those scale because they are derived defaults, this one is a number
+  // the operator typed. 0 (the default) yields an empty set — off.
+  const recentAlbums = queue.recentAlbumKeys(settings.get().picker?.albumHours ?? 0);
   const currentTrack = queue.current?.track || null;
   // Resolve the active show once: its music-steering filters shape the pool
   // (below) and its brief steers the LLM pick (further down). Prefer the show
@@ -875,7 +894,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     const key = artistRootKey({ artist: opts.avoidArtist });
     if (key) blockedArtists.add(key);
   }
-  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution);
+  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution);
 
   // Excluded playlists (blocklist): drop any track whose id appears in the
   // show's excluded playlist union. Applied after buildCandidates so the full

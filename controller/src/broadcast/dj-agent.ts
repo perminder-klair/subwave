@@ -38,6 +38,8 @@ import { recencyWindowsForLibrary } from '../music/recency.js';
 import { effectiveShowNoRepeatWindow } from '../music/show-recency.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, runArtistGuard } from './dj-agent/artist-guard.js';
+import { runAlbumGuard } from './dj-agent/album-guard.js';
+import { albumKeyFor } from '../music/album-facts.js';
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
@@ -389,11 +391,14 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   // escalated differently on purpose (see below): back-to-back is a fault worth
   // a pool rescue, spacing is a preference that yields to the run.
   const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
+  // Read once: the album guard below steps around the same neighbours, and two
+  // reads of a live queue across two awaits could disagree.
+  const neighbourRoots = queue.neighbourArtistRoots(varietyWindow);
   const guarded = await runArtistGuard<any>({
     song, object, current,
     seen: extras.seen,
     // Every queue read stays here; the policy module is handed values only.
-    recentRoots: queue.neighbourArtistRoots(varietyWindow),
+    recentRoots: neighbourRoots,
     window: varietyWindow,
     repick: (alt, reason) => repickFromSeen({
       seen: alt, badId: null, wantLink, showAt,
@@ -413,6 +418,45 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   if (guarded.kind === 'repicked') {
     object = guarded.object;
     song = guarded.song;
+  }
+
+  // Album cooldown (#1485 FR 3), at the same point of choice and for the same
+  // reason: the discovery tools carry no album filter (#618), and around an
+  // album track `tracksLikeThis` frequently answers with that album.
+  //
+  // AFTER the artist guard, on whatever pick it left standing — an album
+  // re-pick that ran first could be reverted by the artist guard straight back
+  // onto a recent album, since the artist guard knows nothing about records.
+  // Nothing to do on a 'rescued' slot: that pick came from the pool, which
+  // applies this same cooldown itself.
+  //
+  // Zero cost when off (the default): albumHours 0 makes recentAlbumKeys empty
+  // and the guard is skipped outright, so no queue walk and no branch taken.
+  const albumHours = Number(settings.get().picker?.albumHours) || 0;
+  if (albumHours > 0) {
+    const albumGuarded = await runAlbumGuard<any>({
+      song, object,
+      seen: extras.seen,
+      recentAlbums: queue.recentAlbumKeys(albumHours),
+      avoidArtistRoots: neighbourRoots,
+      // The run's `seen` values are the MODEL's projection and carry no
+      // compilation flags (adding them would put them in a re-pick prompt), so
+      // the key is resolved against the library — the same resolver the pool
+      // path's filter uses, which is what makes the two paths agree.
+      albumKeyOf: albumKeyFor,
+      hours: albumHours,
+      repick: (alt, reason) => repickFromSeen({
+        seen: alt, badId: null, wantLink, showAt,
+        playlistResolved: !!playlistTracks?.length,
+        reason,
+      }),
+      log: (line) => queue.log('picker', line),
+      logEvent,
+    });
+    if (albumGuarded.kind === 'repicked') {
+      object = albumGuarded.object;
+      song = albumGuarded.song;
+    }
   }
 
   let rawSay = typeof object.say === 'string' ? object.say.trim() : '';

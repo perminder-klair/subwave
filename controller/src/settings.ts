@@ -89,7 +89,7 @@ import {
 } from './settings/defaults.js';
 import { validateCompatParams } from './settings/compat-params.js';
 import { parseSettingsPatchKey } from './settings/patch-registry.js';
-import { STREAM_BUFFER_SECONDS_BOUNDS, STREAM_MAX_LISTENERS_BOUNDS, maxTrackSecondsValueSchema } from './schemas/settings.js';
+import { PICKER_ALBUM_HOURS_BOUNDS, STREAM_BUFFER_SECONDS_BOUNDS, STREAM_MAX_LISTENERS_BOUNDS, maxTrackSecondsValueSchema } from './schemas/settings.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
@@ -1067,6 +1067,19 @@ export async function load() {
             : DEFAULTS.scrobble.navidrome.enabled,
       },
     },
+    // Album cooldown (#1485 FR 3). Bounds-clamped rather than validated: load()
+    // is lenient by contract, and this block does NOT spread DEFAULTS — a field
+    // missing here saves, works for the process, then vanishes on the next cold
+    // load (see controller/CLAUDE.md's THREE edits). Pinned by a cold-load round
+    // trip in scripts/picker-album-hours.test.ts.
+    picker: {
+      albumHours: Number.isFinite(Number(stored.picker?.albumHours))
+        ? Math.min(
+            PICKER_ALBUM_HOURS_BOUNDS.max,
+            Math.max(PICKER_ALBUM_HOURS_BOUNDS.min, Number(stored.picker.albumHours)),
+          )
+        : DEFAULTS.picker.albumHours,
+    },
     likes: {
       enabled:
         typeof stored.likes?.enabled === 'boolean'
@@ -1731,6 +1744,10 @@ export async function update(patch) {
         );
       }
     }
+  }
+  if ('picker' in patch) {
+    const pk = parseSettingsPatchKey<Record<string, unknown>>('picker', patch.picker);
+    if (pk.albumHours !== undefined) next.picker.albumHours = pk.albumHours as number;
   }
   if ('search' in patch) {
     const sr = parseSettingsPatchKey<Record<string, unknown>>('search', patch.search);
