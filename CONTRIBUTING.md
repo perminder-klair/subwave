@@ -70,6 +70,17 @@ footer, for anything that breaks compatibility.
 PR titles follow the same convention — squash-merging keeps history clean, and
 the commit carries through `develop` → `main`, where release-please reads it.
 
+For ordinary PRs squash-merged into `develop`, maintainers must inspect GitHub's
+prefilled squash message before confirming the merge. The prefill can include
+branch commit messages and the PR body, so edit or replace it: keep the
+conventional PR title as the subject and only maintainer-approved body and
+footer content. Remove inherited third-party attribution and tool/session
+metadata such as `Co-Authored-By:`, `Claude-Session:`, or session-link footers.
+A `Co-Authored-By:` line may remain when a maintainer intentionally approves
+credit for a genuine human co-author, and a required `BREAKING CHANGE:` footer
+remains valid. This does not apply to the `develop` → `main` release PR, which
+uses a merge commit rather than squash.
+
 ## Releases
 
 You don't cut releases by hand. Maintainers merge `develop` into `main` to ship;
