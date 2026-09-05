@@ -29,6 +29,11 @@ interface ErrorLike {
   // AI_RetryError wrapper — the real APICallError lives here (see unwrapSdkError).
   lastError?: ErrorLike;
   errors?: ErrorLike[];
+  // Parsed/raw upstream error body — the AI SDK attaches these to
+  // APICallError, and they carry the machine-readable `error.code` that
+  // isQuotaOrAuthError prefers over message-sniffing.
+  data?: unknown;
+  responseBody?: unknown;
   // Diagnostics fields truncationError attaches / failureDiagnostics reads.
   text?: unknown;
   finishReason?: unknown;
@@ -390,6 +395,26 @@ export function isUnreachable(err: ErrorLike | null | undefined): boolean {
 // "can only afford" are OpenRouter's per-request affordability 402, which
 // carries no "insufficient"/"quota" token, so it is matched by text too.
 const QUOTA_RE = /usage limit|quota|exceeded your current|insufficient[ _]?(quota|funds|credit|balance)|requires more credits|can only afford|upgrade for higher|out of credit|payment required/i;
+// SUB/WAVE DJ Brain's monthly cap. It answers 429 with `error.code:
+// "monthly_cap"` and a "Monthly … budget reached" / "Overage runaway ceiling"
+// / "no cloud-voice budget" message — a wall that does not move until the
+// calendar month rolls, so retrying the same leg is pure latency (measured:
+// three attempts per pick, per link and per ident for the rest of the month).
+// Ordinary "slow down" 429s carry none of these and stay transient.
+const BRAIN_CAP_CODE = 'monthly_cap';
+const BRAIN_CAP_RE = /monthly [\w-]+ budget reached|overage runaway ceiling reached|no cloud-voice budget/i;
+
+// The upstream's machine-readable error code, when the SDK preserved the
+// parsed (or raw) body. Preferred over message-sniffing because a reworded
+// message must not silently re-enable the retries this exists to stop.
+function upstreamErrorCode(err: ErrorLike): string {
+  const body = err.data ?? err.responseBody;
+  const parsed = typeof body === 'string'
+    ? (() => { try { return JSON.parse(body); } catch { return null; } })()
+    : body;
+  const code = (parsed as { error?: { code?: unknown } } | null)?.error?.code;
+  return typeof code === 'string' ? code : (typeof err.code === 'string' ? err.code : '');
+}
 const AUTH_RE = /invalid[ _]?api[ _]?key|incorrect[ _]?api[ _]?key|unauthorized|authentication (failed|error)|forbidden|api key (not|is|was) /i;
 
 export function isQuotaOrAuthError(err: ErrorLike | null | undefined): boolean {
@@ -405,6 +430,9 @@ export function isQuotaOrAuthError(err: ErrorLike | null | undefined): boolean {
   const msg = String(err.message || err.cause?.message || '');
   if (AUTH_RE.test(msg)) return true;
   if (QUOTA_RE.test(msg)) return true;
+  // DJ Brain monthly cap — by code first, message second (see BRAIN_CAP_RE).
+  if (upstreamErrorCode(err) === BRAIN_CAP_CODE) return true;
+  if (BRAIN_CAP_RE.test(msg)) return true;
   return false;
 }
 

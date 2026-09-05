@@ -278,6 +278,15 @@ export const DEFAULTS = {
       voiceStyle: 0,
       voiceSimilarityBoost: 0.75,
       voiceUseSpeakerBoost: true,
+      // openai-compatible only: send the computed speech `speed` upstream in the
+      // request body instead of applying it locally via ffmpeg atempo. Off by
+      // default because compat servers are uneven with the field (issue #942:
+      // some shims produced comb-filtered audio when `speed` was present), so we
+      // stretch locally when unsure. Turn it on when the server honours `speed`
+      // natively — e.g. the hosted DJ Brain voice — since native speed beats
+      // time-stretch artifacts. Inert for openai / elevenlabs (they always send
+      // speed). See speedDirective() in llm/internal/speech/cloud-speech.ts.
+      sendSpeed: false,
       // Fish Audio S2.1 controls. Persisted alongside the shared cloud config so
       // switching providers preserves the tuning, but sent only for fish-audio.
       temperature: 0.7,

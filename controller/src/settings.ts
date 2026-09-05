@@ -768,6 +768,10 @@ export async function load() {
           typeof stored.tts?.cloud?.voiceUseSpeakerBoost === 'boolean'
             ? stored.tts.cloud.voiceUseSpeakerBoost
             : DEFAULTS.tts.cloud.voiceUseSpeakerBoost,
+        sendSpeed:
+          typeof stored.tts?.cloud?.sendSpeed === 'boolean'
+            ? stored.tts.cloud.sendSpeed
+            : DEFAULTS.tts.cloud.sendSpeed,
         // Fish Audio controls — lenient load for hand-edited/older settings.
         // Only the Fish provider sends these fields on the wire.
         temperature:
@@ -1634,6 +1638,12 @@ export async function update(patch) {
       }
       if (c.voiceUseSpeakerBoost !== undefined) {
         next.tts.cloud.voiceUseSpeakerBoost = !!c.voiceUseSpeakerBoost;
+      }
+      // openai-compatible: send `speed` upstream vs. stretch locally (see
+      // speedDirective / issue #942). Plain boolean coercion — only consulted on
+      // the compat path, inert elsewhere.
+      if (c.sendSpeed !== undefined) {
+        next.tts.cloud.sendSpeed = !!c.sendSpeed;
       }
       // Fish Audio synthesis controls. Clamp numeric knobs like the existing
       // ElevenLabs sliders; reject an unknown enum so a typo cannot silently
