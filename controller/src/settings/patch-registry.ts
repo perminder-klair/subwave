@@ -1,8 +1,8 @@
 // The `POST /settings` patch registry (#1348).
 //
-// `settings.update()` takes a PARTIAL patch over 42 top-level keys and validates
+// `settings.update()` takes a PARTIAL patch over 43 top-level keys and validates
 // it in a long chain of `if ('<key>' in patch)` branches — a route that owns
-// forty-two shapes doesn't fit #1337's one-schema-per-form recipe.
+// forty-three shapes doesn't fit #1337's one-schema-per-form recipe.
 //
 // This module is the frame the conversion lands in, one key at a time:
 //
@@ -34,6 +34,7 @@ import {
   bedsPatchSchema,
   silenceTrimPatchSchema,
   crossfadeDurationSchema,
+  duckingPatchSchema,
   djHouseRulesSchema,
   djSpeakClockSchema,
   festivalsSchema,
@@ -99,6 +100,7 @@ import { firstMessage, flattenIssues } from '../util/zod-error.js';
 export const SETTINGS_PATCH_KEYS = [
   'jingleRatio',
   'crossfadeDuration',
+  'ducking',
   'maxTrackSeconds',
   'maxTrackMinutes',
   'archive',
@@ -187,6 +189,7 @@ type SettingsPatchEntry = ZodType | ((ctx: SettingsPatchContext) => ZodType);
 export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, SettingsPatchEntry>>> = {
   jingleRatio: jingleRatioSchema,
   crossfadeDuration: crossfadeDurationSchema,
+  ducking: duckingPatchSchema,
   archive: archivePatchSchema,
   stream: streamPatchSchema,
   loudness: loudnessPatchSchema,
