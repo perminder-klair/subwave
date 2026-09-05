@@ -25,6 +25,7 @@ import * as likes from '../broadcast/likes.js';
 import * as settings from '../settings.js';
 import { canonicalId } from './id-canonical.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
+import { reportRotation } from './tagger-progress.js';
 
 export interface RotationManifest {
   version: 1;
@@ -87,6 +88,11 @@ export async function adoptAndPrune(
       `[id-rotation] adopted ${adopted} rotated Navidrome id(s) — tags/analysis/vectors carried over, ` +
         `${renamed} stem dir(s) renamed; state-file migration handed to the controller`,
     );
+    // Ask the controller to apply it NOW, not at our exit. Adoption is phase 0
+    // of a run that can then tag for hours, and until the manifest is applied
+    // the live controller enforces a blocklist full of dead ids. Strictly after
+    // the manifest write, so the parent always finds the file it is told about.
+    reportRotation({ adopted });
   }
 
   const pruned = db.pruneMissingTracks(liveIds);

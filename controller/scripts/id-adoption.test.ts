@@ -55,6 +55,7 @@ async function main() {
   const db = await import('../src/music/library-db.js');
   const stemCache = await import('../src/music/stem-cache.js');
   const rotation = await import('../src/music/id-rotation.js');
+  const { ROTATION_PREFIX } = await import('../src/music/tagger-progress.js');
   await db.open({ embeddingDim: 8, adoptStoredDim: true });
   const sql = db.requireDb();
 
@@ -123,7 +124,18 @@ async function main() {
   db.upsertTrackAnalysis(NEW_REDONE, { bpm: 96, musicalKey: 'C', introMs: 1000 });
 
   const liveIds = new Set([NEW_HEX, NEW_NANO, KEEP, NEW_FAIL, NEW_REDONE]);
-  const result = await rotation.adoptAndPrune(liveIds);
+  // Capture stdout across the adoption so the [rotation] sentinel can be
+  // asserted — it is what tells the live controller to migrate its state files
+  // NOW rather than at the child's exit, hours later.
+  const stdout: string[] = [];
+  const realLog = console.log;
+  console.log = (...args: unknown[]) => { stdout.push(args.map(String).join(' ')); };
+  let result: { adopted: number; pruned: number };
+  try {
+    result = await rotation.adoptAndPrune(liveIds);
+  } finally {
+    console.log = realLog;
+  }
 
   console.log('adoption after a rotated walk:');
 
@@ -218,6 +230,20 @@ async function main() {
   await test('an untouched live track keeps its data', () => {
     const row = sql.prepare('SELECT moods FROM tracks WHERE id = ?').get(KEEP) as { moods: string };
     assert.deepEqual(JSON.parse(row.moods), ['sunny']);
+  });
+
+  await test('a [rotation] sentinel asks the controller to migrate state files now', () => {
+    const line = stdout.find((l) => l.startsWith(ROTATION_PREFIX));
+    assert.ok(line, 'adoption must emit the sentinel, not wait for the child to exit');
+    const payload = JSON.parse(line.slice(ROTATION_PREFIX.length));
+    assert.equal(payload.adopted, 4);
+    assert.ok(payload.at, 'stamped');
+    // It has to follow the manifest write: the parent reads the file the
+    // moment it sees this line.
+    assert.ok(
+      stdout.indexOf(line) > stdout.findIndex((l) => l.includes('[id-rotation] adopted')),
+      'sentinel comes after the manifest is on disk',
+    );
   });
 
   await test('the manifest records the confirmed map for the controller to apply', () => {
