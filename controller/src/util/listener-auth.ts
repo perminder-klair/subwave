@@ -77,3 +77,38 @@ export function stationAuthDecision(opts: {
   if (!opts.password) return false;
   return safeEqual(opts.candidate || '', opts.password);
 }
+
+// Where a station password rides on a plain GET (#1575). POST /station-auth
+// takes it in a JSON body, but a listener-facing READ has to carry it on the
+// request itself, and three shapes are already in the wild:
+//
+//   x-station-auth: <password>        explicit, what an API client should send
+//   authorization: Bearer <password>  what most HTTP tooling reaches for first
+//   ?auth=<password>                  the SAME query token Icecast forwards on
+//                                     the stream mount (web/lib/stationAuth.ts
+//                                     withStreamAuth), so a client that already
+//                                     built a stream URL needs nothing new
+//
+// Kept pure and beside stationAuthDecision so the read path and the save path
+// can't drift on what counts as a credential. First non-empty wins; a repeated
+// query param (Express hands back an array) is ignored rather than guessed at,
+// because picking one of two conflicting values is how a wrong password looks
+// like a right one.
+function firstString(v: unknown): string {
+  return typeof v === 'string' ? v : '';
+}
+
+export function stationAuthCandidate(src: {
+  headerToken?: unknown;
+  authorization?: unknown;
+  query?: unknown;
+}): string {
+  const header = firstString(src.headerToken).trim();
+  if (header) return header;
+  const auth = firstString(src.authorization).trim();
+  if (/^bearer\s+/i.test(auth)) {
+    const token = auth.replace(/^bearer\s+/i, '').trim();
+    if (token) return token;
+  }
+  return firstString(src.query).trim();
+}

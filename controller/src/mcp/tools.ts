@@ -2,7 +2,7 @@
  * The SUB/WAVE MCP tool set — the single source of truth for both transports
  * (the controller's HTTP mount in routes/mcp.ts, and the standalone stdio
  * server in mcp-subwave/src/index.ts). `registerSubwaveTools(server, client)`
- * registers all 19 tools on an McpServer; each tool is a thin wrapper over one
+ * registers all 20 tools on an McpServer; each tool is a thin wrapper over one
  * controller endpoint via the shared SubwaveClient.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -306,6 +306,55 @@ export function registerSubwaveTools(
     ({ q }) =>
       run(async () => {
         const data = await client.searchLibrary(q);
+        return { content: [text(data)] };
+      }),
+  );
+
+  // -------------------------------------------------------------------------
+  // subwave_similar_tracks — CLAP "sounds like this" neighbours (station gate)
+  // -------------------------------------------------------------------------
+  server.registerTool(
+    "subwave_similar_tracks",
+    {
+      title: "Tracks that sound like this one",
+      description:
+        "Find tracks whose ACTUAL SOUND (timbre, instrumentation, production, energy) is " +
+        "closest to a seed track — blind to tags and metadata, so it works for " +
+        "instrumentals and non-English tracks. Pass a track id (best; take it from " +
+        "subwave_now_playing or subwave_search_library) OR free text to resolve as a " +
+        "title/artist. Needs no admin credentials: it is gated by the STATION password " +
+        "and open on a public station. Never errors on a library without audio " +
+        "fingerprints — it returns an empty list plus a `reason` saying why " +
+        "('no-audio-index' = the station has no CLAP analysis at all, " +
+        "'seed-not-analysed' = this track specifically, 'seed-not-found' = nothing " +
+        "matched). Reading is all it does; pair it with subwave_queue_track (admin) or " +
+        "subwave_request_song to actually put one on air.",
+      inputSchema: {
+        id: z.string().min(1).optional().describe("Track id to seed from — preferred over q."),
+        q: z
+          .string()
+          .min(1)
+          .optional()
+          .describe(
+            "Free text resolved to a seed track, e.g. 'boards of canada roygbiv'. Used when id is " +
+              "absent, or when the id's track has no audio fingerprint of its own.",
+          ),
+        limit: z.number().int().min(1).max(50).optional().describe("Max results (default 12, cap 50)."),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    ({ id, q, limit }) =>
+      run(async () => {
+        if (!id && !q) {
+          return { content: [text("Pass either `id` (a track id) or `q` (text to resolve to one).")], isError: true };
+        }
+        const data = await client.similarTracks({ id, q, limit });
+        // The reason is the whole point of an empty result here — surface it as
+        // prose so a model reading only the text block still learns whether to
+        // try a different seed or stop asking this station for sound matches.
+        if (!data.results?.length) {
+          return { content: [text(`No sound-alike tracks: ${data.reason}${data.message ? ` — ${data.message}` : ""}`)] };
+        }
         return { content: [text(data)] };
       }),
   );

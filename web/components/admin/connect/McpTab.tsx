@@ -99,7 +99,9 @@ export default function McpTab({ catalog }: Props) {
                 <code className="text-[12px] font-semibold">{t.name}</code>
                 {t.auth === 'admin'
                   ? <Pill tone="accent">admin</Pill>
-                  : <Pill>public</Pill>}
+                  : t.auth === 'station'
+                    ? <Pill tone="accent">station</Pill>
+                    : <Pill>public</Pill>}
                 {t.mutatesAir && <Pill className="border-vermilion text-vermilion">on-air</Pill>}
                 <code className="ml-auto text-[11px] text-muted">{t.endpoint}</code>
               </div>

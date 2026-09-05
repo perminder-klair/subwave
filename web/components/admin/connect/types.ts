@@ -14,7 +14,7 @@ export interface EndpointDoc {
   path: string;
   summary: string;
   description: string;
-  auth: 'none' | 'admin';
+  auth: 'none' | 'admin' | 'station';
   mutatesAir?: boolean;
   pathParams?: ParamDoc[];
   queryParams?: ParamDoc[];
@@ -34,7 +34,7 @@ export interface McpToolDoc {
   title: string;
   description: string;
   endpoint: string;
-  auth: 'none' | 'admin';
+  auth: 'none' | 'admin' | 'station';
   mutatesAir?: boolean;
 }
 

@@ -15,7 +15,9 @@
 // FORWARDS the caller's Authorization header. Public tools work for anyone;
 // admin tools 401 without valid creds, matching the exact surface of the
 // endpoints they wrap. The tools reuse the live routes with no handler refactor,
-// and requireAdmin is untouched.
+// and requireAdmin is untouched. The station-gated read (GET /similar-tracks)
+// forwards its own header the same way — a private station's listener password
+// is a different secret from the admin one, so it cannot ride Authorization.
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -54,6 +56,11 @@ router.post('/mcp', async (req, res) => {
     // Forward the caller's IP so POST /request's per-IP rate limit keys on the
     // real caller — without this every MCP user shares one loopback bucket.
     forwardIp: clientIp(req),
+    // Same passthrough for the STATION password, which gates the
+    // listener-facing reads. A different secret from the admin one, so it
+    // rides its own header; absent on a public station, where the gate is open.
+    forwardStationAuth:
+      typeof req.headers['x-station-auth'] === 'string' ? req.headers['x-station-auth'] : undefined,
   });
 
   const server = new McpServer({ name: 'subwave-mcp', version: process.env.SUBWAVE_VERSION || 'latest' });

@@ -21,10 +21,13 @@ const METHOD_CLASS: Record<string, string> = {
 };
 
 // Admin endpoints get a -u placeholder, never the operator's cached credentials.
+// Station-gated ones get the header placeholder — a different secret (the
+// listener password) and only needed while a privacy lock is on.
 function toCurl(ep: EndpointDoc, apiBase: string): string {
   const parts = ['curl'];
   if (ep.method !== 'GET') parts.push('-X', ep.method);
   if (ep.auth === 'admin') parts.push('-u "$ADMIN_USER:$ADMIN_PASS"');
+  if (ep.auth === 'station') parts.push('-H "x-station-auth: $STATION_PASSWORD"');
   if (ep.bodyExample && ep.method !== 'GET' && ep.method !== 'DELETE') {
     parts.push('-H "Content-Type: application/json"');
     parts.push(`-d '${JSON.stringify(ep.bodyExample)}'`);
@@ -69,7 +72,9 @@ export default function EndpointCard({ endpoint, apiBase, adminFetch }: Props) {
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           {endpoint.auth === 'admin'
             ? <Pill tone="accent">admin</Pill>
-            : <Pill>public</Pill>}
+            : endpoint.auth === 'station'
+              ? <Pill tone="accent">station</Pill>
+              : <Pill>public</Pill>}
           {endpoint.mutatesAir && <Pill className="border-vermilion text-vermilion">on-air</Pill>}
         </span>
       </summary>

@@ -82,6 +82,15 @@ async function main() {
     const health = doc.paths['/health']?.get as any;
     assert.equal(health.security, undefined, '/health is public');
   });
+  // A station-gated read is open on a public station, so its requirement must
+  // be OPTIONAL — the empty object first. Emitting only { stationAuth: [] }
+  // makes every generated client demand a password most stations don't have.
+  await test('station-gated endpoints declare an OPTIONAL apiKey requirement', () => {
+    const doc = toOpenApi('https://radio.example.com');
+    const similar = doc.paths['/similar-tracks']?.get as any;
+    assert.deepEqual(similar.security, [{}, { stationAuth: [] }], '/similar-tracks is station-gated');
+    assert.equal(doc.components.securitySchemes.stationAuth.name, 'x-station-auth');
+  });
 
   // MCP_TOOLS is a hand-maintained mirror of the tools registerSubwaveTools
   // actually registers; assert the two sets match exactly. A stub server

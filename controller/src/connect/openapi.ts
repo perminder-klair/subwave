@@ -6,7 +6,8 @@
 // Every path is emitted under the `/api` prefix (that's how the endpoints are
 // reached from outside the controller, behind Caddy), even though the catalog
 // stores them prefix-free. Admin endpoints carry a basicAuth security
-// requirement; public ones carry none.
+// requirement, station-gated ones a stationAuth apiKey header; public ones
+// carry none.
 
 import {
   ENDPOINTS,
@@ -21,6 +22,7 @@ interface OpenApiDoc {
   components: {
     securitySchemes: {
       basicAuth: { type: 'http'; scheme: 'basic'; description: string };
+      stationAuth: { type: 'apiKey'; in: 'header'; name: string; description: string };
     };
   };
   paths: Record<string, Record<string, unknown>>;
@@ -53,7 +55,15 @@ function operationFor(ep: EndpointDoc) {
     summary: ep.summary,
     description: ep.description,
     // Group operations in generated clients / Swagger UI by their air-safety.
-    tags: [ep.mutatesAir ? 'mutates-air' : ep.auth === 'admin' ? 'admin-read' : 'public-read'],
+    tags: [
+      ep.mutatesAir
+        ? 'mutates-air'
+        : ep.auth === 'admin'
+          ? 'admin-read'
+          : ep.auth === 'station'
+            ? 'station-read'
+            : 'public-read',
+    ],
     ...(parameters.length ? { parameters } : {}),
     responses: {
       '200': {
@@ -68,6 +78,10 @@ function operationFor(ep: EndpointDoc) {
   };
 
   if (ep.auth === 'admin') op.security = [{ basicAuth: [] }];
+  // Station-gated reads are OPEN on a public station, so the requirement is
+  // declared as optional ({} first): a generated client must not demand a
+  // password from an operator whose station has no locks on.
+  if (ep.auth === 'station') op.security = [{}, { stationAuth: [] }];
 
   if (ep.bodyExample) {
     op.requestBody = {
@@ -99,7 +113,9 @@ export function toOpenApi(origin: string, version = 'latest'): OpenApiDoc {
       description:
         'The integration subset of the SUB/WAVE controller HTTP API — station ' +
         'state, listener requests, DJ control, and operational reads. Admin ' +
-        'endpoints use HTTP Basic auth (the station\'s ADMIN_USER / ADMIN_PASS). ' +
+        'endpoints use HTTP Basic auth (the station\'s ADMIN_USER / ADMIN_PASS); ' +
+        'station-gated reads take the listener password in an x-station-auth ' +
+        'header, and need nothing at all on a public station. ' +
         'Explore and try these live at /admin/connect.',
     },
     servers: [{ url: base, description: 'This station' }],
@@ -109,6 +125,15 @@ export function toOpenApi(origin: string, version = 'latest'): OpenApiDoc {
           type: 'http',
           scheme: 'basic',
           description: 'The station\'s ADMIN_USER / ADMIN_PASS.',
+        },
+        stationAuth: {
+          type: 'apiKey',
+          in: 'header',
+          name: 'x-station-auth',
+          description:
+            'The station\'s listener password (Settings → Privacy). Only required ' +
+            'while a privacy lock is on; a public station accepts these reads with ' +
+            'no credential.',
         },
       },
     },

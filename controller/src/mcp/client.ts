@@ -7,10 +7,13 @@
  *   - the standalone stdio server (mcp-subwave/src/index.ts), which points it at
  *     SUBWAVE_API_URL with admin creds from its own environment.
  *
- * Three endpoint classes matter here:
+ * Four endpoint classes matter here:
  *   - public, read-only:        GET /health, /now-playing, /state, /schedule,
  *                               /session, /request/:id
  *   - public, rate-limited:     POST /request (202 receipt + background resolve)
+ *   - station-password gated:   GET /similar-tracks — open on a public station,
+ *                               closed on a private one (a DIFFERENT secret
+ *                               from the admin one; see stationHeader)
  *   - admin, Basic-auth gated:  the /dj/* command surface and /sfx
  *
  * Every failure is turned into a SubwaveError carrying a message written for
@@ -50,6 +53,20 @@ export interface SubwaveConfig {
    * caller instead of collapsing every MCP user into the loopback address.
    */
   forwardIp?: string;
+  /**
+   * The STATION password (settings.privacy.password) — a different credential
+   * from the admin one, gating the listener-facing reads (GET /similar-tracks).
+   * Unset is the normal case: a public station has no locks and the gate is
+   * open. From the stdio server this is SUBWAVE_STATION_PASSWORD.
+   */
+  stationPassword?: string;
+  /**
+   * Pre-formed x-station-auth value to forward verbatim, used by the
+   * controller's HTTP MCP mount to pass the caller's station password through
+   * exactly as the Authorization header is. Takes precedence over
+   * stationPassword when set.
+   */
+  forwardStationAuth?: string;
 }
 
 /** POST /request hands back a receipt; the booth resolves in the background. */
@@ -119,6 +136,17 @@ export class SubwaveClient {
     return Boolean(this.config.forwardAuth || (this.config.adminUser && this.config.adminPass));
   }
 
+  private get hasStationCreds(): boolean {
+    return Boolean(this.config.forwardStationAuth || this.config.stationPassword);
+  }
+
+  // The station gate reads three shapes (util/listener-auth.stationAuthCandidate);
+  // the explicit header is the one an API client should send, so send that.
+  private stationHeader(): Record<string, string> {
+    const token = this.config.forwardStationAuth || this.config.stationPassword;
+    return token ? { "x-station-auth": token } : {};
+  }
+
   private authHeader(): Record<string, string> {
     if (this.config.forwardAuth) return { authorization: this.config.forwardAuth };
     if (!(this.config.adminUser && this.config.adminPass)) return {};
@@ -129,7 +157,13 @@ export class SubwaveClient {
   /** Core fetch wrapper: timeout, JSON parsing, and agent-readable errors. */
   private async call<T>(
     path: string,
-    init: { method?: string; body?: unknown; admin?: boolean; allowStatuses?: number[] } = {},
+    init: {
+      method?: string;
+      body?: unknown;
+      admin?: boolean;
+      station?: boolean;
+      allowStatuses?: number[];
+    } = {},
   ): Promise<T> {
     const url = `${this.config.baseUrl}${path}`;
 
@@ -142,6 +176,7 @@ export class SubwaveClient {
           ...(init.body !== undefined ? { "content-type": "application/json" } : {}),
           ...(this.config.forwardIp ? { "x-forwarded-for": this.config.forwardIp } : {}),
           ...(init.admin ? this.authHeader() : {}),
+          ...(init.station ? this.stationHeader() : {}),
         },
         body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
       });
@@ -175,6 +210,21 @@ export class SubwaveClient {
           `Rate limited — wait ${retryAfter ?? "a moment"}s before requesting again. ` +
             `The controller caps song requests at 1 per 20s and 8 per hour.`,
         retryAfter,
+      );
+    }
+
+    // A station-gated endpoint rejects the STATION password, not the admin
+    // one, so the recovery advice has to name a different secret — telling the
+    // agent to supply admin credentials it may already have is a dead end.
+    if ((res.status === 401 || res.status === 403) && init.station) {
+      throw new SubwaveError(
+        `This station is private and rejected the station password for ${path}. ` +
+          (this.hasStationCreds
+            ? `The station password provided to this MCP connection doesn't match the ` +
+              `station's privacy password.`
+            : `Provide the station's listener password to this MCP connection (an ` +
+              `x-station-auth header for the HTTP endpoint, or SUBWAVE_STATION_PASSWORD ` +
+              `for the stdio server).`),
       );
     }
 
@@ -297,6 +347,24 @@ export class SubwaveClient {
       `/dj/search?q=${encodeURIComponent(q)}`,
       { admin: true },
     );
+  }
+
+  /**
+   * GET /similar-tracks — CLAP "sounds like this" neighbours for a seed track.
+   * Station-gated, not admin-gated, and never an error for a missing
+   * embedding: an empty `results` always arrives with a `reason`.
+   */
+  async similarTracks(params: { id?: string; q?: string; limit?: number }): Promise<{
+    seed: { id: string; title: string | null; artist: string | null } | null;
+    results: Record<string, unknown>[];
+    reason: string;
+    message: string | null;
+  }> {
+    const qs = new URLSearchParams();
+    if (params.id) qs.set("id", params.id);
+    if (params.q) qs.set("q", params.q);
+    if (params.limit) qs.set("limit", String(params.limit));
+    return this.call(`/similar-tracks?${qs.toString()}`, { station: true });
   }
 
   /** POST /dj/queue-track — queue an exact track from a search result. */

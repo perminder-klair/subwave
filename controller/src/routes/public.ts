@@ -29,7 +29,14 @@ import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { listenerAuthDecision, stationAuthDecision } from '../util/listener-auth.js';
 import { publicGuestIds, publicPersonaShape, soulsArePublic } from '../util/public-persona.js';
 import { resolveThemeProvenance } from '../util/theme-provenance.js';
+import {
+  parseSimilarLimit,
+  publicSimilarTrack,
+  similarKnnWidth,
+  similarTracksOutcome,
+} from '../util/similar-tracks.js';
 import { checkAuthRateLimit, clientIp, listenerAuthFailureDelayMs } from '../middleware/ratelimit.js';
+import { requireStationAuth } from '../middleware/station-auth.js';
 import { STATE_ROOT } from '../config.js';
 import { activeStationId } from '../stations/resolve.js';
 
@@ -661,6 +668,95 @@ router.post(
     res.status(ok ? 200 : 401).json({ ok });
   },
 );
+
+// ---------------------------------------------------------------------------
+// GET /similar-tracks?id=<trackId>|q=<terms>&limit=N — the CLAP "sounds like
+// this" lookup, outside the admin library panel (#1575). An operator building
+// a call-in agent against the HTTP API wants the same neighbours the Library
+// tab shows, without handing that agent the admin password.
+//
+// So the gate is the STATION password, not requireAdmin: open on a public
+// station, closed on a private one (requireStationAuth, which fails CLOSED —
+// see middleware/station-auth.ts). And the row shape is the public subset in
+// util/similar-tracks.ts, never the admin row: no tagger provenance, no
+// era-trust internals, no blocklist annotation.
+//
+// It always answers 200 with a `reason`. A lean analyzer, a library still
+// being analysed and a seed nobody has heard of are three different empty
+// results, and a 503 (what /library/search-sound answers, correctly, for an
+// operator watching a capability flag) tells an API consumer none of them
+// apart. util/similar-tracks.ts owns which is which.
+//
+// Blocklist: applied once, inside library.tracksLikeThisAudio's existing
+// rejectBlocked chokepoint. Never add a second filter here.
+// ---------------------------------------------------------------------------
+router.get('/similar-tracks', requireStationAuth, async (req, res) => {
+  const id = (typeof req.query?.id === 'string' ? req.query.id : '').trim();
+  const q = (typeof req.query?.q === 'string' ? req.query.q : '').trim();
+  if (!id && !q) return res.status(400).json({ error: 'id or q is required' });
+  const limit = parseSimilarLimit(req.query?.limit);
+
+  try {
+    await library.load();
+    const stats = library.stats();
+
+    // Resolve the seed HERE rather than leaning on tracksLikeThisAudio's own
+    // title fallback, because the caller has to be told WHICH track answered
+    // — "no results for the thing you meant" and "no results for something
+    // else entirely" are the two failures an agent has to be able to separate.
+    // Same resolution order the KNN uses internally: the id first, then the
+    // first text match that actually carries an audio vector.
+    let seedId = '';
+    let seedRow: { id: string; title: string | null; artist: string | null } | null = null;
+    let seedFound = false;
+
+    if (id) {
+      const t = library.get(id);
+      if (t) {
+        seedFound = true;
+        seedRow = { id, title: t.title ?? null, artist: t.artist ?? null };
+        if (library.hasAudioVector(id)) seedId = id;
+      }
+    }
+    if (!seedId && q) {
+      const rows = library.filter({ q, limit: 8 }).rows;
+      if (rows.length) {
+        seedFound = true;
+        // Report the best text match even when none of them is analysed —
+        // that is what makes 'seed-not-analysed' actionable.
+        if (!seedRow) seedRow = { id: rows[0].id, title: rows[0].title ?? null, artist: rows[0].artist ?? null };
+        for (const row of rows) {
+          if (library.hasAudioVector(row.id)) {
+            seedId = row.id;
+            seedRow = { id: row.id, title: row.title ?? null, artist: row.artist ?? null };
+            break;
+          }
+        }
+      }
+    }
+
+    const hits = seedId ? library.tracksLikeThisAudio(seedId, similarKnnWidth(limit)) : [];
+    const results = hits
+      // The station's own hourly archive mixdowns are not music (issue #273);
+      // a co-located Navidrome that scans state/archive puts them in the index.
+      .filter((t) => !subsonic.isStationArchive(t))
+      .filter((t) => t.id !== seedId)
+      .slice(0, limit)
+      .map(publicSimilarTrack);
+
+    const outcome = similarTracksOutcome({
+      audioIndexSize: stats.withAudioEmbedding ?? 0,
+      libraryTotal: stats.total ?? 0,
+      seedFound,
+      seedHasVector: Boolean(seedId),
+      neighbourCount: results.length,
+    });
+
+    res.json({ seed: seedRow, results, ...outcome });
+  } catch (err) {
+    publicError(res, '/similar-tracks', err);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // GET /themes — public theme registry. Returns the active theme id plus the

@@ -27,6 +27,7 @@ for the full architecture write-up.
 | `subwave_request_song` | none | Natural-language song request — submits, then polls the outcome (~45s budget). |
 | `subwave_request_status` | none | Poll an earlier request by its `requestId`. |
 | `subwave_search_library` | admin | Deterministic library search (no LLM, no rate limit). |
+| `subwave_similar_tracks` | station | CLAP sound-alike neighbours for a seed track — matched on the sound, not the tags. |
 | `subwave_queue_track` | admin | Queue an exact search result — no DJ intro. |
 | `subwave_skip_track` | admin | Force-end the current track (operator override). |
 | `subwave_dj_announce` | admin | Speak an update on-air (`styled`/`raw`), optionally over an `sfx` stinger. |
@@ -58,6 +59,7 @@ The server is configured entirely through environment variables:
 | `SUBWAVE_API_URL` | `http://localhost:7701` | Controller base URL. Prod (behind Caddy) is `http://localhost:7700/api`. |
 | `SUBWAVE_ADMIN_USER` | — | Controller `ADMIN_USER`. Required for the DJ control tools. |
 | `SUBWAVE_ADMIN_PASS` | — | Controller `ADMIN_PASS`. Required for the DJ control tools. |
+| `SUBWAVE_STATION_PASSWORD` | — | The station's **listener** password (Settings → Privacy). A different secret from the admin one; only needed for `subwave_similar_tracks` on a station with a privacy lock on. |
 
 The tools marked `none` above work without admin credentials. The admin tools
 need them — if unset, those tools return an error explaining what to set.
