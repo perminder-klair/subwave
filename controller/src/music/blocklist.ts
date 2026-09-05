@@ -291,15 +291,27 @@ export async function removeMany(
   return { removed, missing };
 }
 
-// Rewrite entry ids after a Navidrome ID rotation (music/id-rotation.ts).
-// Track entries move ONLY via the adoption-confirmed map — an unmapped track
-// id stays as-is (the track is genuinely gone; by-id semantics unchanged).
-// Album/artist ids can't be validated against song liveIds, so they go through
-// the raw shape transform — hash-family ids are fixed points, and the
-// normalised-name fallback still covers anything the transform misses.
+// Rewrite ids after a Navidrome ID rotation (music/id-rotation.ts).
+//
+// Entries: track entries move ONLY via the adoption-confirmed map — an
+// unmapped track id stays as-is (the track is genuinely gone; by-id semantics
+// unchanged). Album/artist ids can't be validated against song liveIds, so
+// they go through the raw shape transform — hash-family ids are fixed points,
+// and the normalised-name fallback still covers anything the transform misses.
+//
+// RULES carry ids too, and exactly one field does: `playlist`, whose `values`
+// are Navidrome playlist ids (every other field is free text and must be left
+// alone). A stale playlist id is INERT by design — it resolves to an empty
+// member set and the rule silently stops blocking — so a rotation would turn
+// "never play anything in the Christmas playlist" into a rule that matches
+// nothing, with no error and nothing in the Blocked tab to say so. They go
+// through the caller's playlist mapper, the same one the recipes and show pins
+// use. `showIds` are internal SUB/WAVE show ids and are NOT Navidrome ids —
+// never map them.
 export async function remapIds(
   trackMap: ReadonlyMap<string, string>,
   canonical: (id: string) => string,
+  mapPlaylistId: (id: string) => string = (id) => id,
 ): Promise<number> {
   await load();
   let changed = 0;
@@ -310,8 +322,25 @@ export async function remapIds(
       changed++;
     }
   }
+  let playlistRulesTouched = false;
+  for (const r of rules) {
+    if (r.field !== 'playlist') continue;
+    r.values = r.values.map((v) => {
+      const next = mapPlaylistId(v);
+      if (next !== v) {
+        changed++;
+        playlistRulesTouched = true;
+      }
+      return next;
+    });
+  }
   if (changed) {
     rebuildIndex();
+    // The pre-resolved member sets are keyed by the OLD playlist ids, so they
+    // no longer answer for anything. Expire rather than refetch: the lazy TTL
+    // path owns that call, and remapping must not start depending on Navidrome
+    // being reachable.
+    if (playlistRulesTouched) playlistMembersAt = 0;
     await persist();
   }
   return changed;

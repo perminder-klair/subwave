@@ -129,7 +129,7 @@ export async function applyPendingRotation(): Promise<{ applied: boolean }> {
     return c;
   };
 
-  const blocked = await blocklist.remapIds(trackMap, canonicalId);
+  const blocked = await blocklist.remapIds(trackMap, canonicalId, mapPlaylistId);
   const liked = await likes.remapTrackIds(trackMap);
   const recipes = playlistRecipes.remapIds(trackMap, mapPlaylistId);
   const shows = await remapShowPlaylistIds(mapPlaylistId);

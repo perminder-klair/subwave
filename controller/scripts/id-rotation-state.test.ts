@@ -59,6 +59,23 @@ async function main() {
       { type: 'album', id: OLD_TRACK2, name: 'Blocked Album', artist: 'E', album: null, addedAt: '2026-07-01T00:00:00.000Z' },
       { type: 'artist', id: FIXED_ARTIST, name: 'Blocked Artist', artist: null, album: null, addedAt: '2026-07-01T00:00:00.000Z' },
     ],
+    // Rules carry ids too (#1300 FR 1). Exactly one field does — `playlist`,
+    // whose values are Navidrome playlist ids. A stale one is INERT by design
+    // (empty member set → the rule silently blocks nothing), so a rotation
+    // that skipped rules would quietly switch a never-play rule off.
+    rules: [
+      {
+        id: 'rule-playlist', label: 'Christmas songs', field: 'playlist',
+        values: [OLD_PL], season: null, showIds: [], addedAt: '2026-07-01T00:00:00.000Z',
+      },
+      // Every other field is free text. A genre that happens to look like an
+      // id must come through untouched.
+      {
+        id: 'rule-genre', label: 'No spoken word', field: 'genre',
+        values: ['Spoken Word', OLD_TRACK2], season: null, showIds: [],
+        addedAt: '2026-07-01T00:00:00.000Z',
+      },
+    ],
   }));
 
   writeFileSync(join(stateDir, 'likes.json'), JSON.stringify({
@@ -130,6 +147,21 @@ async function main() {
     // The in-memory index moved with the file — enforcement sees the new id.
     assert.equal(blocklist.isBlocked({ id: NEW_TRACK }), true);
     assert.equal(blocklist.isBlocked({ id: OLD_TRACK }), false);
+  });
+
+  await test('blocklist: playlist RULE ids remap; free-text rule values do not', async () => {
+    const raw = JSON.parse(readFileSync(join(stateDir, 'blocklist.json'), 'utf8'));
+    const byId = Object.fromEntries(
+      raw.rules.map((r: { id: string; values: string[] }) => [r.id, r.values]),
+    );
+    assert.deepEqual(byId['rule-playlist'], [NEW_PL], 'a playlist rule follows its playlist');
+    // Same string, different field: `genre` values are operator text, not ids.
+    assert.deepEqual(byId['rule-genre'], ['Spoken Word', OLD_TRACK2]);
+    // …and the in-memory compiled rules moved with the file.
+    assert.deepEqual(
+      blocklist.listRules().find((r) => r.id === 'rule-playlist')?.values,
+      [NEW_PL],
+    );
   });
 
   await test('likes: songId, track snapshot and airingKey prefix all follow the map', () => {
