@@ -39,6 +39,14 @@ const NEW_NANO = '3LyqmwQBm5IRqlVjNYASwb';
 const KEEP = '0aaaaaaaaaaaaaaaaaaaaa';
 // Hash-family id (fixed point) that vanished from Navidrome — must prune.
 const GONE = '5cLJPkLA5DK2BADhoeotPk';
+// Two more 32-hex → base62 pairs (same value-preserving branch as OLD_HEX),
+// for the analyze-failure carry rules: OLD_FAIL's successor is un-analysed and
+// must inherit the strikes; OLD_REDONE's successor analysed cleanly and must
+// NOT have them resurrected.
+const OLD_FAIL = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+const NEW_FAIL = '4V7sy1hL4SujOBMYLPtQuk';
+const OLD_REDONE = '0f1e2d3c4b5a69788796a5b4c3d2e1f0';
+const NEW_REDONE = '0swFTnex6snHrxlMKLfJgA';
 
 async function main() {
   const stateDir = mkdtempSync(join(tmpdir(), 'subwave-adopt-'));
@@ -57,12 +65,22 @@ async function main() {
   db.upsertTrackAnalysis(OLD_HEX, {
     bpm: 120, musicalKey: 'Am', introMs: 4200, loudnessLufs: -11.2, peakDb: -0.8,
     vocalRanges: [], outro: { ending: 'fade' } as never, stemsAttempted: true,
+    // Dead-air trim (#1470). Days of decode time on a real library, and the
+    // columns landed AFTER the first version of the carry list was written —
+    // the exact class of loss the derived carry set exists to stop.
+    leadSilenceMs: 6_000, tailSilenceMs: 9_000, tailStartMs: 191_000,
   });
   db.setOriginalYear(OLD_HEX, 1978); // MusicBrainz resolution — must outrank walk-time album-tag year
   // 1978 is the era the row resolves to at this point, so the write leaves
   // text_vector_dirty = 0 — the state the adoption must carry across.
   db.upsertTrackVector(OLD_HEX, [1, 2, 3, 4, 5, 6, 7, 8], 1978);
   db.upsertTrackAudioVector(OLD_HEX, new Float32Array(512).fill(0.25));
+  // …then something changed the row's era text, so the stored vector no longer
+  // describes it (#1418 follow-up). The marker is NOT NULL DEFAULT 0, so a
+  // fresh row's 0 looks like a real answer to every null-based merge rule —
+  // it has to follow the VECTOR across, or the vector arrives looking clean and
+  // is never replaced.
+  sql.prepare('UPDATE tracks SET text_vector_dirty = 1 WHERE id = ?').run(OLD_HEX);
   db.recordPlay({
     trackId: OLD_HEX, title: 'Old Title', artist: 'A', album: 'B',
     playedAt: '2026-07-01T00:00:00.000Z', source: 'ai', requestedBy: null, showId: null, showName: null,
@@ -80,6 +98,13 @@ async function main() {
   db.upsertTrackMeta(GONE, { title: 'Deleted', artist: 'G', album: 'H', duration: 80 });
   db.upsertTrackTags(GONE, { moods: ['gone'], energy: 'low', source: 'llm' });
 
+  // Two tracks that had failed analysis three times — out of every scope via
+  // analysisFailureExclusion (#1315).
+  for (const id of [OLD_FAIL, OLD_REDONE]) {
+    db.upsertTrackMeta(id, { title: 'Broken', artist: 'I', album: 'J', duration: 111 });
+    for (let i = 0; i < 3; i++) db.recordAnalysisFailure(id, 'decode failed');
+  }
+
   // ---- simulate the post-rotation walk -------------------------------------
   // Fresh walk metadata lands under the NEW ids (title changed to prove the
   // walk's copy wins), including an album-tag original year that must NOT beat
@@ -91,16 +116,22 @@ async function main() {
   // tags must survive adoption untouched.
   db.upsertTrackTags(NEW_NANO, { moods: ['fresh'], energy: 'high', source: 'llm' });
 
-  const liveIds = new Set([NEW_HEX, NEW_NANO, KEEP]);
+  db.upsertTrackMeta(NEW_FAIL, { title: 'Broken', artist: 'I', album: 'J', duration: 111 });
+  db.upsertTrackMeta(NEW_REDONE, { title: 'Broken', artist: 'I', album: 'J', duration: 111 });
+  // …and this one analysed cleanly under its new id, which is what NULLs the
+  // failure trio. Adoption must not put the old row's three strikes back.
+  db.upsertTrackAnalysis(NEW_REDONE, { bpm: 96, musicalKey: 'C', introMs: 1000 });
+
+  const liveIds = new Set([NEW_HEX, NEW_NANO, KEEP, NEW_FAIL, NEW_REDONE]);
   const result = await rotation.adoptAndPrune(liveIds);
 
   console.log('adoption after a rotated walk:');
 
-  await test('adopts both rotated tracks and prunes only the genuinely deleted one', () => {
-    assert.equal(result.adopted, 2);
+  await test('adopts every rotated track and prunes only the genuinely deleted one', () => {
+    assert.equal(result.adopted, 4);
     assert.equal(result.pruned, 1);
     const ids = (sql.prepare('SELECT id FROM tracks ORDER BY id').all() as Array<{ id: string }>).map(r => r.id);
-    assert.deepEqual(ids.sort(), [NEW_HEX, NEW_NANO, KEEP].sort());
+    assert.deepEqual(ids.sort(), [NEW_HEX, NEW_NANO, KEEP, NEW_FAIL, NEW_REDONE].sort());
   });
 
   await test('derived data rides onto the new row; walk metadata wins', () => {
@@ -119,6 +150,34 @@ async function main() {
     assert.equal(row.lyric_excerpt, 'la la');
   });
 
+  // The columns whose absence from the old hand-written carry list was the
+  // whole bug: measured once, expensive to remeasure, and invisible if lost —
+  // `analysis_version` rides across too, so nothing would ever re-derive them.
+  await test('dead-air trim measurements survive the rotation', () => {
+    const row = sql.prepare(
+      'SELECT lead_silence_ms, tail_silence_ms, tail_start_ms FROM tracks WHERE id = ?',
+    ).get(NEW_HEX) as Record<string, unknown>;
+    assert.equal(row.lead_silence_ms, 6_000);
+    assert.equal(row.tail_silence_ms, 9_000);
+    assert.equal(row.tail_start_ms, 191_000);
+  });
+
+  await test('analysis failures follow an un-analysed successor, and are not resurrected onto an analysed one', () => {
+    const failed = sql.prepare(
+      'SELECT analyze_error, analyze_fail_count FROM tracks WHERE id = ?',
+    ).get(NEW_FAIL) as Record<string, unknown>;
+    assert.equal(failed.analyze_fail_count, 3, 'three strikes keep the track out of scope');
+    assert.equal(failed.analyze_error, 'decode failed');
+
+    const redone = sql.prepare(
+      'SELECT analyze_error, analyze_failed_at, analyze_fail_count, bpm FROM tracks WHERE id = ?',
+    ).get(NEW_REDONE) as Record<string, unknown>;
+    assert.equal(redone.bpm, 96, 'the successor kept its own clean analysis');
+    assert.equal(redone.analyze_fail_count, null);
+    assert.equal(redone.analyze_error, null);
+    assert.equal(redone.analyze_failed_at, null);
+  });
+
   await test('a carried MusicBrainz year outranks the walk-time album-tag year', () => {
     const row = sql.prepare('SELECT original_year, original_year_source FROM tracks WHERE id = ?').get(NEW_HEX) as Record<string, unknown>;
     assert.equal(row.original_year, 1978);
@@ -130,6 +189,14 @@ async function main() {
     assert.equal(db.hasVector(OLD_HEX), false);
     assert.ok(sql.prepare('SELECT 1 FROM track_audio_vectors WHERE id = ?').get(NEW_HEX));
     assert.equal(sql.prepare('SELECT 1 FROM track_audio_vectors WHERE id = ?').get(OLD_HEX), undefined);
+  });
+
+  await test('the stale-vector marker rides with the vector it describes', () => {
+    const moved = sql.prepare('SELECT text_vector_dirty FROM tracks WHERE id = ?').get(NEW_HEX) as { text_vector_dirty: number };
+    assert.equal(moved.text_vector_dirty, 1, 'a carried vector keeps its refresh marker');
+    // Nothing moved onto NANO (neither side had a vector), so it keeps its own.
+    const untouched = sql.prepare('SELECT text_vector_dirty FROM tracks WHERE id = ?').get(NEW_NANO) as { text_vector_dirty: number };
+    assert.equal(untouched.text_vector_dirty, 0);
   });
 
   await test('play history follows the track', () => {
@@ -157,7 +224,10 @@ async function main() {
     const manifest = JSON.parse(readFileSync(join(stateDir, 'id-rotation.json'), 'utf8'));
     assert.equal(manifest.version, 1);
     assert.ok(manifest.at);
-    assert.deepEqual(manifest.trackMap, { [OLD_HEX]: NEW_HEX, [OLD_NANO]: NEW_NANO });
+    assert.deepEqual(manifest.trackMap, {
+      [OLD_HEX]: NEW_HEX, [OLD_NANO]: NEW_NANO,
+      [OLD_FAIL]: NEW_FAIL, [OLD_REDONE]: NEW_REDONE,
+    });
   });
 
   console.log('idempotence and inertness:');
@@ -173,7 +243,7 @@ async function main() {
   await test('without a rotation it behaves exactly like pruneMissingTracks', async () => {
     // KEEP vanishes from Navidrome; its id is a canonicalId fixed point, so
     // nothing maps and the row must be pruned, not adopted.
-    const r = await rotation.adoptAndPrune(new Set([NEW_HEX, NEW_NANO]));
+    const r = await rotation.adoptAndPrune(new Set([NEW_HEX, NEW_NANO, NEW_FAIL, NEW_REDONE]));
     assert.equal(r.adopted, 0);
     assert.equal(r.pruned, 1);
     assert.equal(sql.prepare('SELECT 1 FROM tracks WHERE id = ?').get(KEEP), undefined);
