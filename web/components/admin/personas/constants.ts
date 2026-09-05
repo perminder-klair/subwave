@@ -16,6 +16,11 @@ export const SCRIPT_LENGTHS = [
   { id: 'extended',    label: 'Extended',    desc: 'Longer, storytelling segments. Roughly double the length across intros, links, weather and idents.' },
   { id: 'storyteller', label: 'Storyteller', desc: 'Long-form — proper scene-setting monologues, roughly triple the default length.' },
 ];
+// Ids must match the controller's PERSONA_LINK_STYLES (schemas/persona.ts).
+export const LINK_STYLES = [
+  { id: 'natural',  label: 'Natural',  desc: 'The ordinary between-track link — sets the track up, names the artist or captures its feel, varies the opener.' },
+  { id: 'announce', label: 'Announce only', desc: 'Matter-of-fact: the link is exactly "This is <artist>." or "Next up, <artist>." — nothing else.' },
+];
 // 0–10, default 5, mapping to three prompt bands server-side
 // (settings.personaToneDirectives): 0–3 low, 7–10 high, 4–6 neutral (nothing
 // injected). Surfacing the band stops operators expecting 6 vs 7 to differ.

@@ -568,6 +568,7 @@ test('anything the strict path accepts, the lenient path returns unchanged', () 
     frequency: 'chatty',
     scriptLength: 'extended',
     djMode: true,
+    linkStyle: 'natural',
     humour: 8,
     localColour: 2,
     warmth: 7,

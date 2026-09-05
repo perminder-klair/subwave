@@ -5,6 +5,12 @@
 # keep it clear of `git clean -dffx`.
 
 x-state: &state-mount ${STATE_DIR:-./state}:/var/sub-wave
+# Optional host relocation for the stem cache (STEMS_DIR in .env). The
+# container path is fixed because compose cannot know which station is active;
+# SUBWAVE_STEMS_DIR hands that path to the controller and the broadcast
+# entrypoint, which re-append the per-station segment under it. Unset leaves
+# the cache under the state dir, exactly as before.
+x-stems: &stems-mount ${STEMS_DIR:-${STATE_DIR:-./state}/stems}:/var/sub-wave/stems
 
 # Cap container log growth (10m × 3 ≈ 30MB/service) — the default json-file
 # driver is unbounded and eventually fills the host disk.
@@ -72,12 +78,18 @@ services:
       - ICECAST_TRUSTED_PROXY_HOSTS=${ICECAST_TRUSTED_PROXY_HOSTS:-}
       # Keeps the hourly archive paths (%Y-%m-%d/%H-00.mp3) on local wall time.
       - TZ=${TZ:-Europe/London}
+      # Container path of the STEMS_DIR bind mount above — empty when the
+      # operator did not relocate, which keeps the cache under the state dir
+      # exactly as before. Named apart from STEMS_DIR on purpose: that one is a
+      # HOST path and reaches the controller through `env_file: ./.env`.
+      - SUBWAVE_STEMS_DIR=${STEMS_DIR:+/var/sub-wave/stems}
     extra_hosts:
       # Liquidsoap fetching Subsonic URLs that point at host services
       # (e.g. NAVIDROME_URL=http://host.docker.internal:4533).
       - "host.docker.internal:host-gateway"
     volumes:
       - *state-mount
+      - *stems-mount
       - ${STATE_DIR:-./state}/logs:/var/log/liquidsoap
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:7702/status-json.xsl > /dev/null"]
@@ -116,6 +128,11 @@ services:
       - TZ=${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
+      # Container path of the STEMS_DIR bind mount above — empty when the
+      # operator did not relocate, which keeps the cache under the state dir
+      # exactly as before. Named apart from STEMS_DIR on purpose: that one is a
+      # HOST path and reaches the controller through `env_file: ./.env`.
+      - SUBWAVE_STEMS_DIR=${STEMS_DIR:+/var/sub-wave/stems}
       # Optional Chatterbox/PocketTTS sidecar (--profile tts-heavy). When the
       # profile is off the URL is unreachable and TTS falls back to Piper.
       - TTS_HEAVY_URL=${TTS_HEAVY_URL:-http://tts-heavy:8080}
@@ -133,6 +150,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - *state-mount
+      - *stems-mount
     # curl is in the controller image; /health is served at the router root.
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:7701/health > /dev/null"]
@@ -297,6 +315,7 @@ services:
     volumes:
       # Shared mount — reads tracks pre-fetched into /var/sub-wave/analyze-tmp.
       - *state-mount
+      - *stems-mount
       # Persist the CLAP/Demucs HF cache across recreates.
       - analyzer-cache:/opt/analyzer/hf-cache
 

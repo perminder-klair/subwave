@@ -53,6 +53,8 @@ import {
 import { dropEchoedLink, enqueuePick, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
 import { advanceRun, runActive } from './dj-agent/runs.js';
 import { pickSchemaBase, pickSystem, requestSystem } from './dj-agent/schemas.js';
+import { buildLinkClause } from './dj-agent/link-clause.js';
+import { announceLine } from './announce-line.js';
 import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.js';
 import * as likes from './likes.js';
 import { classifyPickFailure, type PickFailure } from '../util/pick-seed.js';
@@ -413,7 +415,25 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
     song = guarded.song;
   }
 
-  const rawSay = typeof object.say === 'string' ? object.say.trim() : '';
+  let rawSay = typeof object.say === 'string' ? object.say.trim() : '';
+  // Announce mode: the model's `say` only signals "speak" — the exact line
+  // (and its alternation with whatever aired before it) is composed in code
+  // by announce-line.ts, because a model cannot reliably hold to a fixed
+  // string and cannot alternate with a line it is never shown. Silence stays
+  // the model's call; wording never is.
+  //
+  // Resolved off the ON-AIR persona, not the wall-clock effective one: this
+  // line is spoken by whoever enqueuePick pins it to (session.onAirPersona()),
+  // and inside the handoff look-ahead those two disagree — the incoming DJ's
+  // line would otherwise be written under the outgoing DJ's link contract.
+  // An empty compose means no English/Latin frame fits this persona or artist
+  // (announce-line.ts): the model's own line stands, written under the same
+  // fixed-form schema description and its language directives.
+  const linkSpeaker = session.onAirPersona();
+  if (rawSay && settings.announceLinks(linkSpeaker)) {
+    const composed = announceLine(song.artist, linkSpeaker, { lastLine: queue.getLastLinkText() });
+    if (composed) rawSay = composed;
+  }
   // Talk-within-the-intro (feature 3a): enqueuePick re-applies this trim at
   // the chokepoint (near-idempotent — see the note there); it runs here too so
   // the session turn below records the line as it will actually air — trimmed,
@@ -524,6 +544,9 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
         recap: queue.getDjRecap(),
         recentTracks: queue.getRecentTracks(),
         recentOpeners: queue.getRecentOpeners(),
+        // Announce mode alternates against the link that last AIRED; every
+        // queue read stays at the call site, the prompt layer is handed values.
+        lastLink: queue.getLastLinkText(),
       });
     } catch (err) {
       queue.log('error', `DJ link failed: ${err.message}`);
@@ -624,6 +647,9 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
     const current = predecessor ?? queue.current?.track ?? null;
     const previous = predecessor ? (prior ?? null) : (queue.history[0]?.track ?? null);
     const djMode = !!settings.getEffectivePersona()?.djMode;
+    // On-air persona, not the wall-clock effective one — same reason as the
+    // announce compose in pickViaAgent: the link belongs to whoever speaks it.
+    const announce = settings.announceLinks(session.onAirPersona());
 
     // Feature 4 + Phase 2 — advance/maybe-start a mini-run; get the tempo/key
     // re-rank target and (when the audio index supports it) a sonic-journey
@@ -659,8 +685,13 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
     // up…"). Feed it the same two signals through the event message: one random
     // forward-looking angle to vary the approach, and the recent openers to
     // steer clear of. Only when a link is actually being written.
-    const linkAngle = wantLink ? dj.pickAngle('link') : null;
-    const recentOpeners = wantLink ? queue.getRecentOpeners() : [];
+    //
+    // Announce mode skips both: alternating between exactly two fixed forms
+    // ("This is <artist>." / "Next up, <artist>.") IS the variety, and an
+    // opener blocklist built from those same two forms would eventually
+    // forbid both allowed ones (the bug this feature exists to fix).
+    const linkAngle = wantLink && !announce ? dj.pickAngle('link') : null;
+    const recentOpeners = wantLink && !announce ? queue.getRecentOpeners() : [];
     // Clock discipline for the link (#864). The agent path carries no clock of
     // its own, so the model extrapolates one from stale stamped lines in its
     // session window — and the link then airs a full track later, putting spoken
@@ -692,21 +723,14 @@ export async function runTrackEvent(queue, ctx, { wantLink, showAt = null, prede
             ? ` The link airs at about ${airClock.display || airClock.hhmm} — if you mention the clock, that is the time to use, never an earlier one.`
             : ` Never state the clock time in the link — you can't know exactly when it airs.`)
       : '';
-    const varietyClause = wantLink
-      ? ` Approach for this link: ${linkAngle} Vary your first words — don't default to "here's", "this is", or "coming up".`
-        + (recentOpeners.length
-            ? ` You opened recent lines with ${recentOpeners.slice(0, 6).map(o => `"${o}…"`).join(', ')} — start this one differently.`
-            : '')
-      : '';
     // The full link contract (introduce the pick, no back-announce, vary the
-    // opener) lives in the "say" schema description (pickSchemaBase), which
-    // travels on every call — this clause only TRIGGERS the link and carries
-    // the per-pick extras the schema can't know (the intro_ms budget, the
-    // opener blocklist). Restating the contract here doubled it per pick.
+    // opener — or, in announce mode, the fixed two-form contract) lives in the
+    // "say" schema description (pickSchemaBase), which travels on every call —
+    // this clause only TRIGGERS the link and carries the per-pick extras the
+    // schema can't know (the intro_ms budget, the opener blocklist). Restating
+    // the contract here doubled it per pick. See dj-agent/link-clause.ts.
     const linkClause = wantLink
-      ? (djMode
-          ? ` Also write the "say" link — it airs as your pick starts. If the track you pick shows an intro_ms, keep the link short enough to finish before then, so you land just as the vocals come in.${varietyClause}`
-          : ` Also write the "say" link — it airs as your pick starts.${varietyClause}`)
+      ? buildLinkClause({ djMode, announce, angle: linkAngle, recentOpeners })
       : ' Stay silent — no link this time.';
     // Surface the current track's real Subsonic id so similarSongs /
     // tracksLikeThis ("pass the currently-playing song id") actually have one

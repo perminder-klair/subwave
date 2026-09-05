@@ -99,10 +99,19 @@ try {
   // build their own system text, so nothing but an explicit append puts the
   // rules on them — and the rules must not reach the `speaker` field, which
   // has to stay an exact persona id from the cast list.
+  //
+  // The exemption is asserted against the BLOCK's own scope wording, not the
+  // bare phrase `"speaker" field`: both cast prompts now carry an unconditional
+  // exact-id rule of their own (settings.castSpeakerIdRule, #1512) that
+  // contains that phrase, so the loose match passes even with the scope clause
+  // deleted — the regression this line exists for.
   for (const [name, prompt] of castPrompts()) {
     assert.ok(prompt.includes('Station house rules'), `${name} path carries the block`);
     assert.ok(prompt.includes(RULES), `${name} path carries the rules text`);
-    assert.ok(prompt.includes('"speaker" field'), `${name} framing exempts the speaker id`);
+    assert.ok(
+      prompt.includes('they do not apply to the "speaker" field'),
+      `${name} framing exempts the speaker id`,
+    );
   }
 
   // ── The block also rides a CUSTOM template ───────────────────────────────

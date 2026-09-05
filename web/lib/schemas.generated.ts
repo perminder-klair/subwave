@@ -684,6 +684,16 @@ export const PERSONA_SCRIPT_LENGTHS = [
   'storyteller',
 ] as const;
 
+// 'natural' (default) writes the ordinary between-track link — set the track
+// up, name the artist or capture its feel, vary the opener. 'announce' is a
+// matter-of-fact station: the link is exactly "This is <artist>." or "Next
+// up, <artist>." — nothing else. Absent/invalid → 'natural', same posture as
+// djMode's absent → false, so an upgraded station keeps its old links.
+export const PERSONA_LINK_STYLES = [
+  'natural',
+  'announce',
+] as const;
+
 // Per-persona tone dials — 0-10 with 5 the neutral default.
 export const PERSONA_DIAL_MIN = 0;
 export const PERSONA_DIAL_MAX = 10;
@@ -992,6 +1002,7 @@ export interface PersonaParsed {
   frequency: string;
   scriptLength: string;
   djMode: boolean;
+  linkStyle: string;
   humour: number;
   localColour: number;
   warmth: number;
@@ -1093,6 +1104,15 @@ export const personaSchema = z
       personaNullToUndefined,
       z.boolean({ error: 'djMode must be a boolean' }).default(false),
     ),
+    // Absent → 'natural' (the historical link behaviour). See PERSONA_LINK_STYLES.
+    linkStyle: z.preprocess(
+      personaNullToUndefined,
+      z
+        .enum(PERSONA_LINK_STYLES, {
+          error: `linkStyle must be one of: ${PERSONA_LINK_STYLES.join(', ')}`,
+        })
+        .default('natural'),
+    ),
     // An absent dial reads as neutral, which is what clampPersonaDial returns
     // for undefined — see the note on personaCoercedText for the .optional().
     humour: z.unknown().optional().transform(clampPersonaDial),
@@ -1166,6 +1186,7 @@ export const personaSchema = z
       frequency: p.frequency,
       scriptLength: p.scriptLength,
       djMode: p.djMode,
+      linkStyle: p.linkStyle,
       humour: p.humour,
       localColour: p.localColour,
       warmth: p.warmth,
@@ -1225,6 +1246,9 @@ export function repairPersonaForLoad(
       ? raw.scriptLength
       : undefined,
     djMode: raw.djMode === true ? true : undefined,
+    linkStyle: (PERSONA_LINK_STYLES as readonly string[]).includes(raw.linkStyle as string)
+      ? raw.linkStyle
+      : undefined,
     avatar:
       typeof raw.avatar === 'string' && PERSONA_AVATAR_FILENAME_RE.test(raw.avatar.trim())
         ? raw.avatar.trim()
@@ -3987,12 +4011,21 @@ const skillCronOnlySchema = z.preprocess(
   z.boolean({ error: 'cronOnly must be a boolean' }).default(false),
 );
 
+// Opt-in multi-persona discussion. Absent/null stays false for compatibility;
+// a present form value must be a literal boolean so a typo cannot silently turn
+// a normal skill into a multi-voice exchange.
+const skillCohostsSchema = z.preprocess(
+  skillNullToUndefined,
+  z.boolean({ error: 'cohosts must be a boolean' }).default(false),
+);
+
 // The fields every skill's SKILL.md carries, built-in or custom.
 export const builtinSkillFileSchema = z.object({
   label: skillLabelSchema,
   cooldown: skillCooldownSchema,
   cron: skillCronSchema,
   cronOnly: skillCronOnlySchema,
+  cohosts: skillCohostsSchema,
   context: skillContextSchema,
   tags: skillTagsSchema,
   brief: skillBriefSchema,
@@ -4035,6 +4068,7 @@ export function skillFieldsFrom(kind: string, parsed: SkillFileParsed) {
     cooldown: parsed.cooldown,
     cron: parsed.cron,
     cronOnly: parsed.cronOnly,
+    cohosts: parsed.cohosts,
     contextFields: parsed.context,
     window: parsed.window,
     requiresKey: parsed.requiresKey,

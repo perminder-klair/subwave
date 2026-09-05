@@ -433,6 +433,7 @@ router.get('/dj', async (req, res) => {
       soul: persona?.soul || '',
       frequency: persona?.frequency || 'moderate',
       djMode: persona?.djMode === true,
+      linkStyle: persona?.linkStyle === 'announce' ? 'announce' : 'natural',
       avatar: avatarUrlFor(persona?.id),
       station: s.station,
       // Station-level share-card blurb. Persona-independent by design, so a

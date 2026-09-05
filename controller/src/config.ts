@@ -19,6 +19,15 @@ export const STATE_ROOT = process.env.STATE_DIR
 // once-per-boot by design: switching stations restarts this process.
 export const STATE_DIR = resolveActiveStationDir(STATE_ROOT);
 
+// Relocated stem-cache root, as a CONTAINER path. The operator sets STEMS_DIR
+// (a HOST path) in the root .env; every compose file bind-mounts it at a fixed
+// container path and passes that path down as SUBWAVE_STEMS_DIR. Two names on
+// purpose: the controller reads .env through `env_file:`, so the host value is
+// visible in here and is meaningless to a process inside the container.
+// Empty (the default) means "no relocation" — music/stem-cache.ts then resolves
+// the cache under STATE_DIR exactly as it did before STEMS_DIR existed.
+export const STEMS_DIR = envStr('SUBWAVE_STEMS_DIR', '');
+
 // Repo-bundled static audio (studio bed, emergency clip, default sound
 // effects). In Docker the compose files mount <repo>/sounds → /sounds and
 // pass SOUNDS_DIR=/sounds. Native dev falls back to the repo-local sounds/
@@ -48,6 +57,8 @@ export const config = {
   stateDir: STATE_DIR,
   // The install-level state root (stations/, icecast-secrets.env live here).
   stateRoot: STATE_ROOT,
+  // Container path of a relocated stem cache; '' = under stateDir as before.
+  stemsDir: STEMS_DIR,
   soundsDir: SOUNDS_DIR,
   navidrome: {
     url: envUrl('NAVIDROME_URL', 'http://navidrome:4533'),

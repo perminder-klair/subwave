@@ -173,4 +173,22 @@ const form = {
   assert.equal(data.cron, undefined, 'cron cannot be resurrected from a stale carried line');
 }
 
+// ── cohosts is OWNED and omitted when false ──────────────────────────────────
+{
+  await writeSkillFile({ kind: 'case-discussion', brief: 'Discuss one case.', cohosts: true });
+  const cohostFile = join(stateDir, 'skills', 'case-discussion', 'SKILL.md');
+  let md = readFileSync(cohostFile, 'utf8');
+  assert.match(md, /^cohosts: true$/m, 'the opt-in is persisted when enabled');
+  const { loadSkills } = await import('../src/skills/loader.js');
+  let loaded = await loadSkills();
+  assert.equal(loaded.find(c => c.kind === 'case-discussion')?.cohosts, true, 'rescan reloads the opt-in');
+
+  await writeSkillFile({ kind: 'case-discussion', brief: 'Discuss one case.', cohosts: false });
+  md = readFileSync(cohostFile, 'utf8');
+  assert.doesNotMatch(md, /cohosts/, 'clearing the opt-in removes the owned frontmatter line');
+  loaded = await loadSkills();
+  assert.equal(loaded.find(c => c.kind === 'case-discussion')?.cohosts, false, 'rescan returns the skill to solo mode');
+}
+
+
 console.log('skill-scaffold-preserve.test.ts — all assertions passed');

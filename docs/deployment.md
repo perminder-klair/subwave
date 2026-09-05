@@ -244,24 +244,42 @@ cache to whatever `audio.stemCacheGb` allows (up to 1 TB), the archive by
 about 1.4 GB a day at 128 kbps. Both are usually the reason someone wants
 part of `state/` on a bigger, cheaper disk.
 
-There is no setting for this, by design: the paths are derived from the state
-dir (`stemsRoot()` is `<state>/stems`), so **the supported move is a bind
-mount at the same path**. Add it to every service that already mounts the
-state volume:
+Set `STEMS_DIR` in `.env` to the host folder you want to use. Compose mounts
+that folder into all three services at one fixed container path and hands them
+that path as `SUBWAVE_STEMS_DIR`, which is what the controller resolves the
+cache against:
 
-```yaml
-# docker-compose.override.yml
-services:
-  broadcast:
-    volumes:
-      - /mnt/bigdisk/subwave-stems:/var/sub-wave/stems
-  controller:
-    volumes:
-      - /mnt/bigdisk/subwave-stems:/var/sub-wave/stems
-  analyzer:
-    volumes:
-      - /mnt/bigdisk/subwave-stems:/var/sub-wave/stems
+```dotenv
+# .env
+STEMS_DIR=/mnt/bigdisk/subwave-stems
 ```
+
+Move what is already cached across first — nothing migrates it for you, and
+the old copy is simply orphaned where it sits:
+
+```sh
+docker compose down
+mv state/stems/* /mnt/bigdisk/subwave-stems/    # multi-station: state/stations/<id>/stems
+docker compose up -d
+```
+
+If the stack is already on the new setting, recreating the three services is
+enough:
+
+```sh
+docker compose up -d --force-recreate broadcast controller analyzer
+```
+
+If `STEMS_DIR` is unset, the cache remains at `${STATE_DIR:-./state}/stems` —
+removing the line is a clean undo.
+
+**Multi-station installs get a folder per station under it**
+(`/mnt/bigdisk/subwave-stems/stations/<id>/`). Compose cannot read
+`state/stations/active.json`, so the mount has to address the install rather
+than the station; the per-station segment is re-appended on the other side.
+It has to stay split, because Navidrome credentials are per-station: two
+stations can index different libraries, and this cache is keyed by track id
+alone.
 
 Three things to know before you do it:
 
@@ -274,7 +292,9 @@ Three things to know before you do it:
 - **Ownership sorts itself out on boot.** A fresh bind mount lands root-owned
   and the analyzer runs as uid 10001, so it could not write there. The
   broadcast entrypoint now opens `stems/` and `transitions/` to mode 777 on
-  every boot, exactly as it already did for `voice/`, `sfx/` and the rest.
+  every boot, exactly as it already did for `voice/`, `sfx/` and the rest —
+  and, when `STEMS_DIR` is set, the relocated root as well, which the in-state
+  loop never reaches.
 - **A mount that refuses `chmod` no longer stops the station.** Read-only
   binds, some NFS exports and exFAT/NTFS disks won't take the permission
   change. That used to abort the broadcast entrypoint before Icecast started,

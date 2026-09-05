@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { detectCompose } from '../compose.ts';
+import { composeFileArgs } from '../docker.ts';
 import { resolveInstallMode, detectDrift, hasDrift } from '../compose-sync.ts';
 import { getSubwaveHome } from '../util.ts';
 import { isCloneMode } from '../home.ts';
@@ -49,7 +50,7 @@ export async function runUpdateCommand(): Promise<void> {
 
   // --ignore-buildable skips services that carry only a `build:` block.
   header('docker compose pull');
-  const pullArgs = ['compose', '-f', compose.file.file, 'pull'];
+  const pullArgs = ['compose', ...composeFileArgs(compose.file), 'pull'];
   if (cloneMode) pullArgs.push('--ignore-buildable');
   const pullCode = await run('docker', pullArgs, home);
   if (pullCode !== 0) {
@@ -60,7 +61,7 @@ export async function runUpdateCommand(): Promise<void> {
     header('docker compose build');
     const buildCode = await run(
       'docker',
-      ['compose', '-f', compose.file.file, 'build', '--pull'],
+      ['compose', ...composeFileArgs(compose.file), 'build', '--pull'],
       home,
     );
     if (buildCode !== 0) {
@@ -75,7 +76,7 @@ export async function runUpdateCommand(): Promise<void> {
   header('docker compose up -d');
   const upCode = await run(
     'docker',
-    ['compose', '-f', compose.file.file, 'up', '-d', '--remove-orphans'],
+    ['compose', ...composeFileArgs(compose.file), 'up', '-d', '--remove-orphans'],
     home,
   );
   if (upCode !== 0) {

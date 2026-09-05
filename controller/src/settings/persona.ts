@@ -47,6 +47,16 @@ export function effectsActive(persona: unknown = getEffectivePersona()): boolean
   return !!(persona as { djMode?: unknown } | null | undefined)?.djMode;
 }
 
+// True only when the effective persona's linkStyle is explicitly 'announce'.
+// Absent/invalid (normalisation already repairs those to 'natural') reads as
+// false, so a station that never touched the field keeps its old links.
+// Every announce-aware call site (dj-agent.ts, dj-agent/schemas.ts,
+// llm/internal/prompts/scripts.ts) reads it from here rather than inlining
+// the string compare, same precedent as effectsActive() above.
+export function announceLinks(persona: unknown = getEffectivePersona()): boolean {
+  return (persona as { linkStyle?: unknown } | null | undefined)?.linkStyle === 'announce';
+}
+
 // Effective track-length cap in SECONDS for the moment a pick is made, or null
 // for "no cap". A scheduled show's maxTrackSeconds (when set) overrides the
 // station default; 0 at the winning level means unlimited. This is the single
@@ -344,6 +354,25 @@ export function castHouseRulesBlock(): string {
     "follow these in every line's spoken text (the words the listener hears on air); "
     + 'they do not apply to the "speaker" field, which stays an exact persona id from the cast list',
   );
+}
+
+// The exact-persona-id rule for those same two cast prompts, and for the same
+// single-wording reason as castHouseRulesBlock above: both wrap a per-call
+// `speaker` enum built from the active cast, so a model that answers with a
+// display name or the bare role sinks the WHOLE exchange — the enum rejects the
+// object, djObject's free-text recovery attempt fails on it again, and the
+// caller gets an error instead of an exchange (issue #1512, reported on the
+// Banter button; the guest-show open/close beats fail the same way, silently,
+// because nobody pressed anything).
+//
+// The enum stays strict deliberately: a repaired speaker is a line aired in the
+// WRONG voice, which is worse than a dropped beat. So this rule is the
+// mitigation, and unlike castHouseRulesBlock's scope clause — which says the
+// same thing but only renders once an operator has set djHouseRules, i.e. not
+// on the default install the bug was reported from — it is unconditional.
+export function castSpeakerIdRule(): string {
+  return 'For every structured "speaker" field, copy the persona id exactly and verbatim from the cast list above. '
+    + 'Never use a display name, the HOST or GUEST role, or an altered, reformatted, or rewritten persona id.';
 }
 
 // Persona prelude shared by every tool-loop agent system prompt — the picker

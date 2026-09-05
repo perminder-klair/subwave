@@ -23,6 +23,7 @@ import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { queue } from '../broadcast/queue.js';
 import {
   FREQUENCIES,
+  LINK_STYLES,
   SCRIPT_LENGTHS,
   SHOW_MOODS,
   SHOW_ENERGY,
@@ -56,6 +57,7 @@ export interface CommunitySkill {
   // than dropped from the listing.
   cron?: string;
   cronOnly?: boolean;
+  cohosts?: boolean;
   window?: 'any' | 'commute';
   context?: string;
   submittedBy?: string;
@@ -71,6 +73,7 @@ export interface CommunityPersona {
   frequency: 'silent' | 'quiet' | 'moderate' | 'chatty' | 'aggressive';
   scriptLength: 'one-liner' | 'concise' | 'extended' | 'storyteller';
   djMode: boolean;
+  linkStyle?: 'natural' | 'announce';
   humour?: number;
   localColour?: number;
   warmth?: number;
@@ -181,6 +184,7 @@ function normalizeSkill(raw: any): CommunitySkill | null {
     cooldown: optStr(raw?.cooldown, 16),
     cron: optStr(raw?.cron, 64),
     cronOnly: raw?.cronOnly === true ? true : undefined,
+    cohosts: raw?.cohosts === true ? true : undefined,
     window: raw?.window === 'commute' ? 'commute' : undefined,
     context: optStr(raw?.context, 200),
     submittedBy: optStr(raw?.submittedBy, 80),
@@ -205,6 +209,7 @@ function normalizePersona(raw: any): CommunityPersona | null {
     frequency: (FREQUENCIES as string[]).includes(raw?.frequency) ? raw.frequency : 'moderate',
     scriptLength: (SCRIPT_LENGTHS as string[]).includes(raw?.scriptLength) ? raw.scriptLength : 'concise',
     djMode: raw?.djMode === true,
+    linkStyle: (LINK_STYLES as string[]).includes(raw?.linkStyle) ? raw.linkStyle : 'natural',
     humour: dial(raw?.humour),
     localColour: dial(raw?.localColour),
     warmth: dial(raw?.warmth),

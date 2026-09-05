@@ -259,11 +259,12 @@ test('the 4h cap clears prompt memory the same way a show boundary does', async 
 test('a rotated exchange line is stamped with the voice that spoke it', () => {
   const seg = exchangeSegment(
     { persona: { id: 'p_guest', name: 'Sol' }, text: 'You brought the same coffee.' },
-    'banter',
+    'case-discussion',
   );
   assert.equal(seg.meta.personaId, 'p_guest', 'prompt memory and windowMessages key off this');
   assert.equal(seg.meta.personaName, 'Sol');
   assert.equal(seg.logText, 'Sol: You brought the same coffee.', 'the booth log names the speaker');
+  assert.equal(seg.kind, 'case-discussion', 'custom co-hosted skill kinds preserve the exchange attribution path');
   assert.equal(seg.channel, 'say');
   assert.equal(seg.legacy, false, 'the exchange publishes ONE aggregate dj.say');
 

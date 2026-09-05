@@ -80,6 +80,7 @@ label: Moon phase         # label shown in admin (defaults to a title-cased name
 cooldown: 6h              # min gap between auto firings — "90m" | "6h" | "2d" | "45" (minutes)
 cron: 0 8 * * *           # OPTIONAL: also fire on a fixed schedule, station time
 cronOnly: true            # OPTIONAL: with a cron, never fire at random too
+cohosts: true             # OPTIONAL: active host + guests, each in their own voice
 window: any               # "any" (default) | "commute" — commute hours only
 context: time, festival   # OPTIONAL: "right now" fields it may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; unset → stays inert
@@ -103,6 +104,31 @@ the phase is unremarkable.`}</CodeBlock>
           the dedicated weather skill so the DJ doesn&rsquo;t staple the forecast to every break.
           Tick it back on (in the frontmatter, or per-field on the admin Edit sheet) where
           it&rsquo;s genuinely topical.
+        </p>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">CO-HOSTED DISCUSSIONS</p>
+        <h2>One roster, one real voice per person.</h2>
+        <p>
+          Set <code className="bs-code-inline">cohosts: true</code>, or turn on{' '}
+          <strong>Co-hosted discussion</strong> in the skill editor. The skill then uses the
+          active scheduled show&apos;s host plus every guest co-host — the show roster is the
+          authority, not a persona list stored in the skill. It produces exactly one
+          contribution per person, in roster order, with 2–5 short sentences each.
+        </p>
+        <p>
+          Speaker names do not belong in the spoken text. Each contribution carries the
+          persona id separately, so it is rendered in that persona&apos;s own TTS voice and
+          attributed to them in the booth and session memory. The whole exchange is
+          rendered before the first line airs, then played back-to-back rather than mixed.
+        </p>
+        <p className="text-muted">
+          On a solo or off-show hour the skill stands down; Run now reports that it requires
+          a co-hosted show before any model or TTS call. If it has a data tool, that data
+          must come back usable — gathered by the skill&apos;s own tool loop, or fetched in
+          code when the picker agent is off — or the whole discussion stays silent instead
+          of inventing facts.
         </p>
       </section>
 
@@ -278,7 +304,7 @@ export const configFields = {
           built-ins, a custom skill only fires autonomously when it&rsquo;s enabled{' '}
           <em>and</em> assigned to the persona on air (Personas page). <strong>Run now</strong>{' '}
           is an operator override that ignores the toggle, the persona, the frequency gate,
-          and the cooldown.
+          and the cooldown. A co-hosted skill still requires an active host-and-guest show roster.
         </p>
         <p>
           A <code className="bs-code-inline">cron:</code> timer sits between the two. It

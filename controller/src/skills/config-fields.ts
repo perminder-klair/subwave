@@ -23,7 +23,7 @@
 // `context`, which writeSkillFile supersedes).
 export const OWNED_FRONTMATTER_KEYS = new Set([
   'name', 'label', 'cooldown', 'context', 'contextFields',
-  'window', 'requiresKey', 'tags', 'cron', 'cronOnly',
+  'window', 'requiresKey', 'tags', 'cron', 'cronOnly', 'cohosts',
 ]);
 
 // Keys a skill may not declare as a knob: everything writeSkillFile owns, plus

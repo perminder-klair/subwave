@@ -36,6 +36,7 @@ import {
   PERSONA_DIAL_NEUTRAL,
   PERSONA_FREQUENCIES,
   PERSONA_LIMIT as PERSONA_LIMIT_VALUE,
+  PERSONA_LINK_STYLES,
   PERSONA_SCRIPT_LENGTHS,
   PERSONA_SKILLS_LIMIT,
   PERSONA_SOUL_MAX,
@@ -97,6 +98,9 @@ export const FREQUENCIES: readonly string[] = PERSONA_FREQUENCIES;
 // doubles, 'storyteller' roughly triples for long-form monologues.
 // See llm/internal/prompts/system.ts LENGTH_PHRASES for the actual directives.
 export const SCRIPT_LENGTHS: readonly string[] = PERSONA_SCRIPT_LENGTHS;
+
+// 'natural' (default) or 'announce' — see PERSONA_LINK_STYLES / announceLinks().
+export const LINK_STYLES: readonly string[] = PERSONA_LINK_STYLES;
 
 // Per-persona tone dials. Each is 0-10 with 5 (DIAL_NEUTRAL) the default. A
 // model can't distinguish humour=6 from 7, so rather than inject a raw "7/10"

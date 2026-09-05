@@ -37,8 +37,8 @@ state/skills/
     tool.mjs      # OPTIONAL: a data fetcher, wrapped as a tool the DJ can call
 ```
 
-Two copy-ready examples live in [`docs/examples/skills`](./examples/skills) — copy
-a folder into `state/skills/` and hit **Rescan** in the admin Skills page:
+Three copy-ready examples live in [`docs/examples/skills`](./examples/skills) —
+copy a folder into `state/skills/` and hit **Rescan** in the admin Skills page:
 
 - [`moon-phase`](./examples/skills/moon-phase) — the small end. No settings, no
   network, no memory: it works out the lunar phase from the date and returns it.
@@ -46,6 +46,13 @@ a folder into `state/skills/` and hit **Rescan** in the admin Skills page:
   (`configFields`), a call out to a public API, and `state` so it marks the
   sunset once a day rather than every time it fires. Fill in its coordinates in
   the edit sheet before it will say anything.
+- [`todoist`](./examples/skills/todoist) — the same shape against an
+  **authenticated** API: the DJ picks one outstanding task off your Todoist list
+  and dares the room to go and do it before the next record ends. Put
+  `TODOIST_API_TOKEN` in the root `.env` — the whole file is passed into the
+  controller, so any key you add there reaches `process.env` — then set the
+  filter in the edit sheet. Each task is burned on read for the rest of the day,
+  so it nudges rather than nags.
 
 ## SKILL.md
 
@@ -56,6 +63,7 @@ label: Moon phase         # human label in /admin/skills (defaults to title-case
 cooldown: 6h              # hard min gap between autonomous firings — "90m" | "6h" | "2d" | "45" (bare = minutes)
 cron: 0 * * * *           # OPTIONAL: fire on a fixed schedule instead of/alongside the cooldown gate (see below)
 cronOnly: true            # OPTIONAL: with a cron: set, withhold this skill from random autonomous picks entirely
+cohosts: true             # OPTIONAL: host + every active guest each speak in their own voice (see below)
 window: any               # "any" (default) | "commute" — only offered during commute hours
 context: time, festival   # OPTIONAL: which "right now" fields this segment may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; if unset, the skill stays inert
@@ -90,6 +98,49 @@ Values are read as text whatever their YAML type, so `feedMaxItems: 6` and
 ignored. A block that isn't valid YAML — most often an unquoted colon in a
 value — still loads, read with the old line-by-line parser, and logs a warning
 naming the file.
+
+### `cohosts: true` — one contribution from every host
+
+`cohosts: true` turns the skill from one DJ line into a co-hosted discussion. It
+uses the **active scheduled show's roster**: the show's host followed by every
+resolved `guestPersonaIds` co-host. A skill cannot choose arbitrary personas, and
+the existing enable toggle and persona assignment remain keyed to the host.
+
+The discussion contains exactly one contribution per live roster member, in that
+order. The model is instructed to give each person **2–5 short sentences**, in
+that persona's own character, as one coherent conversation. Do not put labels
+such as `Mara:` in the brief or returned speech: speaker identity is structured
+metadata, and each contribution is rendered through that persona's own TTS
+configuration and fallback. The clips are pre-rendered as a complete exchange
+before any reaches air, then played back-to-back rather than mixed.
+
+A co-hosted skill only runs while an active show has a host and at least one
+resolved guest. Autonomous selection withholds it on a solo/off-show hour; its
+cron logs `requires a co-hosted show`; **Run now**, MCP and programme use stand
+down with that same reason before any model or TTS work — reported, not an
+error, exactly like a data-backed skill that found nothing to say. Ordinary
+skills, including ones with no `cohosts` field, keep the existing one-speaker
+path.
+
+If the skill has a `tool.mjs`, the co-hosted discussion gathers its data the same
+way every other segment does: the skill's own tool loop when `llm.pickerAgent`
+is on, and a code-driven fetch plus one structured call when it is off (pool
+mode, for models that aren't trusted with tool loops). Data-backed skills must
+obtain usable source data before anyone speaks; `{ available: false }` or a tool
+error stands the whole exchange down instead of letting several personas amplify
+an invented fact.
+
+Set it in the admin editor with **Co-hosted discussion**, or in frontmatter:
+
+```yaml
+---
+name: case-discussion
+label: Case discussion
+cohosts: true
+---
+Find one well-sourced historical case and have the hosts discuss the outcome and
+investigation. Give every host a distinct perspective; do not write name labels.
+```
 
 ### `context:` — what the segment is allowed to mention
 
@@ -182,12 +233,16 @@ morning bulletin, a sign-off, a running joke tied to a particular hour. It still
 suits a skill that speaks *only when something is notable* less well: it fires
 on the clock rather than on the news, so it will keep asking at 8am whether
 there is anything to say. It just no longer makes something up when the answer
-is no. Both example skills in
-[`docs/examples/skills`](examples/skills) are in that second group and
-deliberately carry no `cron:` — `moon-phase` is meant to skip an unremarkable
-gibbous, and `sunset` tracks a time that moves through the year, so pinning it to
-a fixed clock reading would be wrong in a different way. Leave those on
-`cooldown:` and let the director decide.
+is no. The example skills in
+[`docs/examples/skills`](examples/skills) ship without a `cron:` for that reason
+— `moon-phase` is meant to skip an unremarkable gibbous, and `sunset` tracks a
+time that moves through the year, so pinning it to a fixed clock reading would be
+wrong in a different way. Leave those on `cooldown:` and let the director decide.
+
+`todoist` is the one that goes either way, which is why its frontmatter carries
+the line commented out: on `cooldown:` it is a nudge that turns up when it turns
+up, and with `cron: 0 8 * * *` + `cronOnly: true` it becomes a fixed morning
+alarm that never fires at random. Pick the one you actually want to hear.
 
 **Daylight saving.** A normal daily cron survives a clock change: `cron: 0 8 * * *`
 fires once at 08:00 local on the spring-forward day, the autumn day, and every
@@ -298,8 +353,9 @@ skill. Each entry takes:
 | `min` / `max` / `integer` | `number` only — bounds, and whether fractions are refused |
 
 Keys must be `letters, digits, _` starting with a letter, and can't shadow a key
-the editor already owns (`name`, `label`, `cooldown`, `context`, `window`,
-`requiresKey`, `tags`, `toolDescription`, `brief`). A malformed declaration is
+the editor already owns (`name`, `label`, `cooldown`, `cron`, `cronOnly`,
+`cohosts`, `context`, `window`, `requiresKey`, `tags`, `toolDescription`,
+`brief`). A malformed declaration is
 narrowed away rather than breaking the skill — the skill still loads and airs, it
 just shows no settings. A bad *value* is the opposite: the save fails loudly with
 a 400 rather than dropping the knob you just set.
@@ -408,7 +464,8 @@ knobs ride in `tool.mjs`, so the copy gets its own feed field under its own name
 - **Persona ownership still applies.** Like built-in skills, a custom skill only
   fires autonomously when it's enabled *and* assigned to the persona on air
   (Personas page). **Run now** is an operator override that bypasses the toggle,
-  the persona assignment, the frequency gate, and the cooldown.
+  the persona assignment, the frequency gate, and the cooldown. A co-hosted skill's active host-plus-guest roster requirement is not
+  bypassed.
 
 ## Sharing skills
 

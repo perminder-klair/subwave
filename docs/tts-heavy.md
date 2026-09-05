@@ -149,12 +149,17 @@ model stages rather than replacing the whole analyzer. A sounds-like backfill
 over tracks whose baseline analysis is already current skips those baseline
 features, and batches each track's CLAP windows into one CUDA model call.
 
-It's a compose overlay, not an `.env` toggle (a GPU device reservation can't be
-switched from `.env`):
+By default the base `docker-compose.yml` selects the CPU analyzer. To keep the
+CUDA image and GPU reservation on every Compose command, set `COMPOSE_FILE` in
+`.env`:
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
+```dotenv
+COMPOSE_FILE=docker-compose.yml:docker-compose.analyzer-gpu.yml
 ```
+
+With that line present, normal rebuilds and restarts keep using the CUDA analyzer.
+Remove the line to return to the CPU analyzer. This remains opt-in because the
+GPU overlay must not be enabled by default on CPU-only hosts.
 
 That swaps the `analyzer` service to the `subwave-analyzer-cuda` image (heavy +
 cu124 torch wheels) and hands it the GPU. Requirements: the NVIDIA driver +

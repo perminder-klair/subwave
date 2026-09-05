@@ -361,6 +361,9 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     // a skill that later loses its cron line doesn't silently start firing at
     // random again without the operator noticing the coupled field too.
     cronOnly: String(data.cronOnly).trim().toLowerCase() === 'true',
+    // Disk loading stays lenient: only the literal YAML/string true opts in.
+    // False, absent and malformed values preserve the historical solo path.
+    cohosts: String(data.cohosts).trim().toLowerCase() === 'true',
     // Operator-editable knobs this skill declares for itself (tool.mjs
     // `configFields`). Drives the admin editor's settings section — see
     // config-fields.ts. Empty for a prompt-only or undeclared skill.

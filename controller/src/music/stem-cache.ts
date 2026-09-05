@@ -1,6 +1,7 @@
 // Stem cache (feature: stem-blend transitions) — per-track Demucs stem
 // windows persisted by the analyzer worker (head 40s + tail 20s, 4 FLACs
-// each) under `<stateDir>/stems/<trackId>/`, so a transition render is a
+// each) under `<stateDir>/stems/<trackId>/` (or under the STEMS_DIR bind mount
+// when the operator relocated it — see resolveStemsRoot), so a render is a
 // fast mix of cached stems instead of a fresh separation inside the drain
 // deadline. The controller owns the LIFECYCLE (this module: paths, presence
 // checks, byte-budget LRU sweep); the analyzer owns the WRITES
@@ -14,8 +15,40 @@ import * as settings from '../settings.js';
 export const STEM_NAMES = ['drums', 'bass', 'other', 'vocals'] as const;
 export type StemWindow = 'head' | 'tail';
 
+// Pure path seam (pinned by scripts/stem-cache-root.test.ts): where the cache
+// lives, given the state layout and an optional relocated root.
+//
+// `relocated` is the container path of the STEMS_DIR bind mount. It addresses
+// the INSTALL, not the station, because compose cannot know which station is
+// active — the pointer is read at boot by the controller and the broadcast
+// entrypoint, long after the mount is fixed. So a multi-station install keeps
+// its per-station segment UNDER the relocated root: Navidrome credentials are
+// per-station (setup/config.ts), two stations can therefore index different
+// libraries, and this cache is keyed by track id alone — sharing one root
+// between them would let station B render a transition from station A's audio.
+//
+// No relocation → `<stateDir>/stems`, byte-identical to a pre-STEMS_DIR
+// install, which is what makes removing STEMS_DIR from .env a clean undo.
+export function resolveStemsRoot(
+  opts: { stateRoot: string; stateDir: string; relocated?: string },
+): string {
+  const relocated = opts.relocated?.trim();
+  if (!relocated) return path.join(opts.stateDir, 'stems');
+  // '' on a single-station install, 'stations/<id>' on a multi-station one.
+  // A stateDir outside the root (native dev with STATE_DIR pointing elsewhere)
+  // has no meaningful segment — fall back to the relocated root itself rather
+  // than climbing out of it with '..'.
+  const segment = path.relative(opts.stateRoot, opts.stateDir);
+  if (!segment || segment.startsWith('..') || path.isAbsolute(segment)) return relocated;
+  return path.join(relocated, segment);
+}
+
 export function stemsRoot(): string {
-  return path.join(config.stateDir, 'stems');
+  return resolveStemsRoot({
+    stateRoot: config.stateRoot,
+    stateDir: config.stateDir,
+    relocated: config.stemsDir,
+  });
 }
 
 export function dirFor(trackId: string): string {

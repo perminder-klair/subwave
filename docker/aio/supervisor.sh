@@ -95,11 +95,19 @@ bootstrap_state_dirs() {
 	state_prepare_dir "$root"
 	state_prepare_dir "$dir"
 	# stems + transitions are the analyzer's, and the only two dirs worth
-	# relocating to a bigger disk — a bind mount at <state>/stems lands
-	# root-owned 755, which the analyzer cannot write without this chmod.
+	# relocating to a bigger disk — a bind mount there lands root-owned 755,
+	# which the analyzer cannot write without this chmod.
 	for sub in voice voices archive jingles logs sessions sfx stems transitions; do
 		state_prepare_dir "$dir/$sub"
 	done
+	# A RELOCATED stem cache (SUBWAVE_STEMS_DIR — the container path of the
+	# mount; compose sets it from STEMS_DIR, AIO operators pass -e) sits
+	# outside $dir, so the loop above never reaches it and the mount would
+	# keep its root-owned 755. Per-station subdirs under it are created by the
+	# analyzer itself, which inherits this 777.
+	if [ -n "${SUBWAVE_STEMS_DIR:-}" ]; then
+		state_prepare_dir "$SUBWAVE_STEMS_DIR"
+	fi
 	# Liquidsoap's reload_mode="watch" playlists need the files to exist.
 	state_prepare_file "$dir/auto.m3u" 666
 	state_prepare_file "$dir/jingles.m3u" 666

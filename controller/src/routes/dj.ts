@@ -200,6 +200,7 @@ router.post('/dj/skills/community/:slug/install', requireAdmin, async (req, res)
       // two install routes disagreed about a documented key.
       cron: cs.cron,
       cronOnly: cs.cronOnly,
+      cohosts: cs.cohosts,
     });
   } catch (err) {
     return res.status(400).json({ error: `community skill "${slug}" is malformed: ${err.message}` });
@@ -389,6 +390,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       label: tpl.data.label || kind,
       cooldown: tpl.data.cooldown || '60m',
       context: (effectiveContextFields({ contextFields: tpl.data.context ?? tpl.data.contextFields }) || []).join(', '),
+      cohosts: String(tpl.data.cohosts).trim().toLowerCase() === 'true',
       tags: parseTags(tpl.data.tags),
       brief: tpl.body || '',
     } : null;
@@ -414,6 +416,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         // value is actually fixable, so it needs to say so there too.
         cronInvalid: !!data.cron?.trim() && !cron.validate(data.cron.trim()),
         cronOnly: String(data.cronOnly).trim().toLowerCase() === 'true',
+        cohosts: String(data.cohosts).trim().toLowerCase() === 'true',
         configFields,
         config: readConfigValues(configFields, data),
         tags: parseTags(data.tags),
@@ -433,6 +436,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
         label: cat?.label || kind,
         cooldown: msToCooldownStr(cat?.cooldownMs || 0),
         context: (cat?.contextFields || []).join(', '),
+        cohosts: !!cat?.cohosts,
         knownContextFields: [...dj.CONTEXT_FIELDS],
         configFields,
         config: readConfigValues(configFields, loadedConfig(kind)),
@@ -469,6 +473,7 @@ router.get('/dj/skills/:kind/file', requireAdmin, async (req, res) => {
       cron: data.cron?.trim() || null,
       cronInvalid: !!data.cron?.trim() && !cron.validate(data.cron.trim()),
       cronOnly: String(data.cronOnly).trim().toLowerCase() === 'true',
+      cohosts: String(data.cohosts).trim().toLowerCase() === 'true',
       tags: parseTags(data.tags),
       hasTool: await skillHasTool(kind),
       brief: body || '',

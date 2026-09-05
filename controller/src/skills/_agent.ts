@@ -34,12 +34,18 @@ import * as settings from '../settings.js';
 import { defineAgent } from '../llm/agent.js';
 import { djObject, modelTolerant } from '../llm/sdk.js';
 import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase } from '../llm/dj.js';
-import { buildSegmentTools, fetchSegmentData } from '../llm/segment-tools.js';
+import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
 import { skillEligible } from './eligibility.js';
 import { requiresGrounding, standDownReason } from './abstain-policy.js';
+import { runCohostedCapability } from './cohosted.js';
 import * as sfx from '../broadcast/sfx.js';
+
+// dataBlock moved to llm/segment-tools.js so the co-hosted pool path can share
+// it without closing an import cycle back into this module; re-exported here so
+// llm-bench (scripts/llm-bench/kinds/segment.ts) keeps the path it had.
+export { dataBlock };
 
 // The capability registry now lives entirely in skills/loader.js, which loads
 // every skill — shipped and operator-added — from a directory (SKILL.md +
@@ -230,10 +236,10 @@ function frequencyFloorMs(freq: string) {
 function availableCapabilities(ctx, now: Date) {
   const s = settings.get();
   const enabled = s.skills?.enabled || {};
-  const persona = settings.getEffectivePersona(now);
+  const { host: persona, guests } = settings.getOnAirRoster(now);
   const out: ReturnType<typeof allCapabilities> = [];
   for (const cap of allCapabilities()) {
-    // Enabled + owned-by-the-on-air-persona. Both rules live in
+    // Enabled + host-owned + roster-compatible. These rules live in
     // skills/eligibility.ts because the cron timer owes the same two answers
     // and reaches runCapability() without passing through here.
     if (!skillEligible({
@@ -241,6 +247,8 @@ function availableCapabilities(ctx, now: Date) {
       skill: cap.skill,
       enabled,
       personaSkills: persona?.skills,
+      requiresCohosts: !!cap.cohosts,
+      hasCohosts: !!persona && guests.length > 0,
     }).allowed) continue;
     // cronOnly withholds the skill from the autonomous director entirely — it
     // fires only when its dedicated cron task calls runCapability() directly
@@ -320,7 +328,9 @@ export const directorAgent = defineAgent({
   buildSystem: ({ persona, caps, freq, sfxCatalog }) =>
     directorSystem(persona, caps, freq, sfxCatalog),
   buildTools: ({ ctx, segmentState, caps }) => ({
-    tools: buildSegmentTools(ctx, segmentState, caps),
+    // Co-hosted skills run their own cast-shaped tool loop after selection.
+    // Their data tools must not be called in this generic selection pass.
+    tools: buildSegmentTools(ctx, segmentState, caps.filter((cap) => !cap.cohosts)),
   }),
 });
 
@@ -354,6 +364,15 @@ export function buildSituation(ctx, { forced = false, contextFields, recentCurio
     ? '\nWrite the segment the operator has asked for now.'
     : '\nDecide now: air one segment, or stay silent.');
   return lines.join('\n');
+}
+
+function buildCohostedSituation(ctx, cap, { forced = false, brief = null }: { forced?: boolean; brief?: string | null } = {}) {
+  const recentCuriosity = cap.kind === 'curiosity' ? recentAiredCuriosity() : undefined;
+  let situation = buildSituation(ctx, { forced, contextFields: effectiveContextFields(cap), recentCuriosity });
+  const openers = queue.getRecentOpeners();
+  if (openers.length) situation += `\n\nRecent opening words (start the first contribution differently): ${openers.join(' | ')}`;
+  if (brief) situation += `\n\n${brief}`;
+  return situation;
 }
 
 // ---------------------------------------------------------------------------
@@ -395,16 +414,6 @@ export function chooseCapability(caps, ctx) {
     else if (at === bestAt) best.push(c);
   }
   return best[Math.floor(Math.random() * best.length)];
-}
-
-// The fetched tool data, rendered into the prompt. Compact but readable;
-// capped so a fat feed can't crowd the system prompt out of a small context.
-export function dataBlock(data: unknown) {
-  if (data == null) return '';
-  let body: string;
-  try { body = JSON.stringify(data, null, 1); } catch { body = String(data); }
-  if (body.length > 6000) body = body.slice(0, 6000) + '\n…(truncated)';
-  return `\n\nSource data for this segment (write only from this and the current moment — do not invent facts):\n${body}`;
 }
 
 // Same decision surface as segmentSchema minus `kind` (code already chose it)
@@ -455,13 +464,31 @@ async function deadlinedSegmentObject(args: Record<string, unknown>) {
 // call: the model can't say anything true about data it never got.
 async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
   const cap = chooseCapability(caps, ctx);
-  if (!cap) return { seg: null, reason: 'nothing fresh to say' };
+  if (!cap) return { seg: null, exchange: null, reason: 'nothing fresh to say' };
+  if (cap.cohosts) {
+    const { host, guests } = settings.getOnAirRoster();
+    if (!host || !guests.length) return { seg: null, exchange: null, reason: 'requires a co-hosted show' };
+    const result = await runCohostedCapability({
+      capability: cap, host, guests, context: ctx,
+      situation: buildCohostedSituation(ctx, cap),
+      segmentState, forced: false,
+    });
+    if (result.aired) lastUnavailable.delete(cap.kind);
+    else lastUnavailable.set(cap.kind, Date.now());
+    return {
+      seg: null,
+      exchange: result.aired ? { kind: cap.kind, lines: result.lines || [] } : null,
+      reason: result.reason || undefined,
+      skippedBeforeLlm: undefined,
+    };
+  }
   const data = await fetchSegmentData(cap, ctx, segmentState);
   const blocked = standDownReason(cap, data);
   if (blocked || data?.error) {
     lastUnavailable.set(cap.kind, Date.now());
     return {
       seg: null,
+      exchange: null,
       reason: blocked || `${cap.kind} data fetch failed (${data.error})`,
       skippedBeforeLlm: cap.kind,
     };
@@ -476,8 +503,8 @@ async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
     kind: 'generateSegment',
   });
   const text = out?.air ? String(out?.text || '').trim() : '';
-  if (!text) return { seg: null, reason: out?.reason || 'nothing to add' };
-  return { seg: { kind: cap.kind, text, sfx: out?.sfx ?? null }, reason: out?.reason };
+  if (!text) return { seg: null, exchange: null, reason: out?.reason || 'nothing to add' };
+  return { seg: { kind: cap.kind, text, sfx: out?.sfx ?? null }, exchange: null, reason: out?.reason };
 }
 
 // Called by the scheduler's 5-minute cron. Picks at most one segment to air,
@@ -526,12 +553,13 @@ export async function agenticTick(ctx) {
     const sfxCatalog = settings.get().sfx?.enabled === false ? [] : await sfx.catalog();
 
     let seg: { kind: string; text: string; sfx: string | null } | null = null;
+    let exchange: { kind: string; lines: Array<{ persona: any; text: string }> } | null = null;
     let silentReason: string | undefined;
     let skippedBeforeLlm: string | undefined;
     if (!settings.get().llm?.pickerAgent) {
       // Pool mode: the operator's model isn't trusted with tool loops, so the
       // director runs the code-driven single-call path instead of the agent.
-      ({ seg, reason: silentReason, skippedBeforeLlm } = await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }));
+      ({ seg, exchange, reason: silentReason, skippedBeforeLlm } = await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }));
     } else {
       // When curiosity is on offer, brief the agent with what it already aired so
       // a pool-exhausted fallback doesn't repeat itself (issue #577).
@@ -545,6 +573,36 @@ export async function agenticTick(ctx) {
       // despite air=true still degrades to silence rather than erroring.
       seg = object?.air ? object?.segment : null;
       silentReason = object?.reason;
+      const selectedKind = seg?.kind;
+      const selected = selectedKind ? caps.find(c => c.kind === selectedKind) : null;
+      if (selected?.cohosts) {
+        const { host, guests } = settings.getOnAirRoster();
+        if (!host || !guests.length) {
+          seg = null;
+          silentReason = 'requires a co-hosted show';
+        } else {
+          const result = await runCohostedCapability({
+            capability: selected, host, guests, context: ctx,
+            situation: buildCohostedSituation(ctx, selected),
+            segmentState, forced: false,
+          });
+          exchange = result.aired ? { kind: selected.kind, lines: result.lines || [] } : null;
+          if (result.aired) lastUnavailable.delete(selected.kind);
+          else lastUnavailable.set(selected.kind, Date.now());
+          seg = null;
+          silentReason = result.reason || undefined;
+        }
+      }
+    }
+
+    if (exchange) {
+      const aired = await queue.announceExchange(exchange.lines, exchange.kind);
+      if (!aired) throw new Error(`co-hosted skill "${exchange.kind}" failed to render`);
+      lastFired.set(exchange.kind, Date.now());
+      segmentState.lastAnySegment = Date.now();
+      if (exchange.kind === 'weather' && ctx.weather?.condition) segmentState.lastWeatherCondition = ctx.weather.condition;
+      if (exchange.kind === 'curiosity') recordCuriosity(exchange.lines.map((line) => line.text).join(' '), { aired: true });
+      return;
     }
 
     if (!seg || !seg.text || !seg.text.trim()) {
@@ -740,6 +798,38 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
     throw new Error(`skill "${cap.skill}" is not ready${hint}`);
   }
 
+  if (cap.cohosts) {
+    const { host, guests } = settings.getOnAirRoster();
+    // A solo hour is a normal, transient station state, not a misconfiguration:
+    // reported as `{aired: false, reason}` like every other reason a forced
+    // skill has nothing to say (skills/abstain-policy.ts, #1412), so Run now
+    // answers 200 with the reason instead of a 500 and a red booth-log error.
+    // Contrast cap.ready() above, which throws because a missing API key is a
+    // real misconfiguration the operator has to go and fix.
+    if (!host || !guests.length) {
+      const reason = 'requires a co-hosted show';
+      queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
+      return { aired: false, text: null, reason };
+    }
+    const situation = buildCohostedSituation(ctx, cap, { forced: true, brief });
+    const result = await runCohostedCapability({
+      capability: cap, host, guests, context: ctx, situation, segmentState, forced: true,
+    });
+    if (!result.aired || !result.lines) {
+      const reason = result.reason || 'nothing usable to discuss';
+      queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
+      return { aired: false, text: null, reason };
+    }
+    const aired = await queue.announceExchange(result.lines, cap.kind);
+    if (!aired) throw new Error(`skill "${cap.skill}" co-hosted exchange failed to render`);
+    lastFired.set(cap.kind, Date.now());
+    segmentState.lastAnySegment = Date.now();
+    if (cap.kind === 'weather' && ctx.weather?.condition) segmentState.lastWeatherCondition = ctx.weather.condition;
+    if (cap.kind === 'curiosity') recordCuriosity(result.lines.map((line) => line.text).join(' '), { aired: true });
+    const text = result.lines.map((line) => `${line.persona.name || 'DJ'}: ${line.text}`).join('\n');
+    return { aired: true, text, reason: result.reason };
+  }
+
   const speaker = persona || settings.getEffectivePersona(new Date());
   // Empty catalogue when SFX are disabled — the agent is never offered effects.
   const sfxCatalog = settings.get().sfx?.enabled === false ? [] : await sfx.catalog();
@@ -904,6 +994,7 @@ export function skillCatalog() {
       // Freeform organisation tags from SKILL.md frontmatter — filter fodder
       // for the admin skill list.
       tags: c.tags || [],
+      cohosts: !!c.cohosts,
     };
   });
 }

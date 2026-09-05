@@ -71,8 +71,21 @@ export function pickSchemaBase() {
   const clockRule = speakClockAllowed()
     ? 'Never state a clock time unless the event message tells you when the link airs — then use exactly that time.'
     : 'Never state a clock time, the hour, or the time of day.';
+  // Announce mode (persona linkStyle:'announce') replaces the ordinary
+  // introduce-the-pick contract with a fixed, matter-of-fact one. This
+  // description is a sane fallback only: runTrackEvent (dj-agent.ts)
+  // overwrites whatever text the model returns with announce-line.ts's own
+  // composed, alternating line — a model cannot reliably hold to a fixed
+  // string or alternate with a line it is never shown, so `say` here only
+  // has to signal "speak" (non-empty) versus "stay silent" (null).
+  // Off the ON-AIR persona (as pickSystem/requestSystem below resolve theirs),
+  // never the wall-clock effective one: inside the handoff look-ahead they
+  // disagree, and the contract must match the persona whose line this is.
+  const sayDescription = settings.announceLinks(session.onAirPersona())
+    ? `when the latest event message says to write a spoken link, set this to EXACTLY one of: "This is <artist>." or "Next up, <artist>." — nothing before or after it: no title, album, year, feel, or clock. Use the artist name exactly as shown on the chosen track. When the event says stay silent, set this to null`
+    : `when the latest event message says to write a spoken link, set this to ${dj.lengthPhrase('link')} of natural speech in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). ${clockRule} When the event says stay silent, set this to null`;
   return base.extend({
-    say: z.string().nullable().describe(`when the latest event message says to write a spoken link, set this to ${dj.lengthPhrase('link')} of natural speech in the DJ voice that INTRODUCE the track you are about to play — set it up, name the artist or capture its feel, vary your opener. Do NOT back-announce, recap, or name the track that just played (a listener request may slip in ahead of your pick, so what aired right before it is not certain). ${clockRule} When the event says stay silent, set this to null`),
+    say: z.string().nullable().describe(sayDescription),
   });
 }
 

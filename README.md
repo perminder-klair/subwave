@@ -182,14 +182,15 @@ That repoints the `analyzer` service at `subwave-analyzer-heavy` (CLAP + Demucs,
 also offers it, and Unraid one-click users pull the `subwave-aio-heavy` image
 instead. Only the expressive *voices* above need the separate `tts-heavy` sidecar.
 
-Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead — layer the
-`docker-compose.analyzer-gpu.yml` overlay, which swaps the service to the
-`subwave-analyzer-cuda` image and reserves the GPU (needs the NVIDIA driver +
-Container Toolkit, nothing else):
+Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. For a one-off
+run, layer the `docker-compose.analyzer-gpu.yml` overlay:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.analyzer-gpu.yml up -d
 ```
+
+To keep the overlay across normal rebuilds and restarts, set `COMPOSE_FILE` in
+`.env` to `docker-compose.yml:docker-compose.analyzer-gpu.yml`.
 
 All-in-one installs have no `analyzer` service to swap, so they take the GPU on
 the image instead: pull `subwave-aio-cuda` and hand the container the card

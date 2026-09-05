@@ -68,6 +68,7 @@ interface SkillFileFields {
   cooldown?: string;
   cron?: string;            // cron expression for a dedicated timer (bypasses normal gating)
   cronOnly?: boolean;       // withhold from random selection — fires ONLY on the cron timer
+  cohosts?: boolean;        // use the active host + guest roster as one exchange
   contextFields?: string[]; // "right now" fields the segment may mention (#471)
   window?: 'any' | 'commute'; // custom skills only — emitted when 'commute'
   requiresKey?: string;       // custom skills only — env var the skill needs
@@ -113,6 +114,7 @@ export async function writeSkillFile(fields: SkillFileFields): Promise<void> {
   if (fields.cooldown) lines.push(line('cooldown', fields.cooldown));
   if (fields.cron) lines.push(line('cron', fields.cron));
   if (fields.cronOnly) lines.push('cronOnly: true');
+  if (fields.cohosts) lines.push('cohosts: true');
   // The "right now" fields this segment may weave in (issue #471).
   if (fields.contextFields && fields.contextFields.length) lines.push(line('context', fields.contextFields.join(', ')));
   // Custom-skill knobs. `window: any` is the loader default, so only the

@@ -136,6 +136,7 @@ export {
   KOKORO_LANGS,
   KOKORO_VOICES,
   KOKORO_VOICE_LANGUAGES,
+  LINK_STYLES,
   LLM_PROVIDERS,
   LOUDNESS_SOURCES,
   MAX_OUTPUT_TOKENS_MAX,
@@ -209,7 +210,9 @@ export {
 export {
   agentLanguageReminder,
   agentPersonaPreamble,
+  announceLinks,
   castHouseRulesBlock,
+  castSpeakerIdRule,
   effectiveFrequency,
   effectiveMaxTrackSec,
   effectsActive,

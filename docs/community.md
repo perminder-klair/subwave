@@ -147,6 +147,7 @@ tagline: Liner notes and why this take.   # ≤80 chars (optional)
 frequency: quiet                 # silent | quiet | moderate | chatty | aggressive
 scriptLength: extended           # one-liner | concise | extended | storyteller
 djMode: false                    # true = chattier + transition FX
+linkStyle: natural                # natural | announce (announce = "This is <artist>." / "Next up, <artist>.")
 humour: 3                        # tone dials 0–10 (5 = neutral); also localColour, warmth
 language: English                # free-text on-air language, ≤60 chars (optional)
 ---

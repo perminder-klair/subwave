@@ -26,6 +26,12 @@
 # `docker compose down -v` won't touch it.
 
 x-state: &state-mount ${STATE_DIR:-./state}:/var/sub-wave
+# Optional host relocation for the stem cache (STEMS_DIR in .env). The
+# container path is fixed because compose cannot know which station is active;
+# SUBWAVE_STEMS_DIR hands that path to the controller and the broadcast
+# entrypoint, which re-append the per-station segment under it. Unset leaves
+# the cache under the state dir, exactly as before.
+x-stems: &stems-mount ${STEMS_DIR:-${STATE_DIR:-./state}/stems}:/var/sub-wave/stems
 
 # Cap container log growth (10m × 3 ≈ 30MB/service).
 x-logging: &default-logging
@@ -58,12 +64,18 @@ services:
       - ICECAST_TRUSTED_PROXY_IPS=${ICECAST_TRUSTED_PROXY_IPS:-}
       - ICECAST_TRUSTED_PROXY_HOSTS=${ICECAST_TRUSTED_PROXY_HOSTS:-}
       - TZ=${TZ:-Europe/London}
+      # Container path of the STEMS_DIR bind mount above — empty when the
+      # operator did not relocate, which keeps the cache under the state dir
+      # exactly as before. Named apart from STEMS_DIR on purpose: that one is a
+      # HOST path and reaches the controller through `env_file: ./.env`.
+      - SUBWAVE_STEMS_DIR=${STEMS_DIR:+/var/sub-wave/stems}
     ports:
       - "${BIND_ADDRESS:-0.0.0.0}:${ICECAST_PORT:-7702}:7702"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - *state-mount
+      - *stems-mount
       - ${STATE_DIR:-./state}/logs:/var/log/liquidsoap
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:7702/status-json.xsl > /dev/null"]
@@ -98,6 +110,11 @@ services:
       - TZ=${TZ:-Europe/London}
       - STATE_DIR=/var/sub-wave
       - SOUNDS_DIR=/sounds
+      # Container path of the STEMS_DIR bind mount above — empty when the
+      # operator did not relocate, which keeps the cache under the state dir
+      # exactly as before. Named apart from STEMS_DIR on purpose: that one is a
+      # HOST path and reaches the controller through `env_file: ./.env`.
+      - SUBWAVE_STEMS_DIR=${STEMS_DIR:+/var/sub-wave/stems}
       # Optional Chatterbox/PocketTTS sidecar (--profile tts-heavy);
       # unreachable URL → fall back to Piper.
       - TTS_HEAVY_URL=${TTS_HEAVY_URL:-http://tts-heavy:8080}
@@ -116,6 +133,7 @@ services:
       - "${BIND_ADDRESS:-0.0.0.0}:${CONTROLLER_PORT:-7701}:7701"
     volumes:
       - *state-mount
+      - *stems-mount
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:7701/health > /dev/null"]
       interval: 10s
@@ -263,6 +281,7 @@ services:
       - HF_TOKEN=${HF_TOKEN:-}
     volumes:
       - *state-mount
+      - *stems-mount
       - analyzer-cache:/opt/analyzer/hf-cache
 
 volumes:
