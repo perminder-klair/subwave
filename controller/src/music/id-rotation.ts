@@ -99,39 +99,63 @@ export async function adoptAndPrune(
   return { adopted, pruned };
 }
 
+export interface RotationApplyResult {
+  /** Any state file was rewritten. */
+  applied: boolean;
+  /** Nothing is left to retry — the manifest has been consumed. `false` means
+   *  the track half landed but the playlist half is deferred, so the manifest
+   *  is still on disk and the caller must NOT run the playlist sync. */
+  complete: boolean;
+}
+
 // Controller-side: apply a manifest the tagger child left behind, rewriting
 // every id-keyed state file through its own store module so file and in-memory
-// cache stay consistent. Called from the tagger exit handler (strictly BEFORE
-// syncAllAfterTag — an unmigrated recipe would read as a vanished playlist and
-// be deleted) and once at boot (covers a host-side --reconcile-only run while
-// the controller was down). No manifest → immediate no-op, the every-normal-run
-// path. On failure the manifest stays for the next attempt and the error
-// propagates so the caller can suppress the playlist sync.
-export async function applyPendingRotation(): Promise<{ applied: boolean }> {
+// cache stay consistent. Called on the child's [rotation] sentinel, again at
+// its exit (strictly BEFORE syncAllAfterTag — an unmigrated recipe would read
+// as a vanished playlist and be deleted), and once at boot (covers a host-side
+// --reconcile-only run while the controller was down). No manifest → immediate
+// no-op, the every-normal-run path. On failure the manifest stays for the next
+// attempt and the error propagates so the caller can suppress the playlist sync.
+export async function applyPendingRotation(): Promise<RotationApplyResult> {
   const manifest = await readManifest();
-  if (!manifest) return { applied: false };
+  if (!manifest) return { applied: false, complete: true };
   const trackMap = new Map(Object.entries(manifest.trackMap));
 
   // Playlist ids never ride the manifest — the walk only proves SONG ids — so
-  // they go through the shape transform, checked against the live playlist
-  // index when Navidrome is reachable: a still-live id is kept, a dead id is
-  // replaced only when its canonical image is actually live. Unreachable →
-  // apply the transform unconditionally; it is shape-gated and idempotent, and
-  // a wrong guess degrades exactly like today's stale-playlist handling
-  // (anchor ignored + logged, recipe pruned as vanished).
+  // they are checked against the live playlist index: a still-live id is kept,
+  // a dead id is replaced only when its canonical image is actually live. That
+  // check is the same self-validation the track half gets, and it is the whole
+  // safety story for this half.
+  //
+  // Which is why an unreachable Navidrome DEFERS rather than guesses. Applying
+  // the bare shape transform here would rewrite every show pin and recipe key
+  // with nothing to check them against and then delete the manifest, leaving no
+  // way to notice or retry — and a wrong playlist id is not inert, it is a
+  // recipe that syncAllAfterTag deletes as vanished. The track half is fully
+  // validated and lands anyway; the manifest survives for the next attempt, and
+  // re-running it is a no-op because the old ids are gone from the state files
+  // by then. `complete: false` also tells the caller to hold the playlist sync,
+  // which is exactly right: the sync cannot work against an unreachable server.
+  //
+  // This is the one place where a Navidrome outage costs a retry rather than
+  // data. Boot is the common case for it — the controller comes up before
+  // Navidrome answers more often than not.
   let livePlaylists: Set<string> | null = null;
   try {
     livePlaylists = new Set(
       ((await subsonic.getPlaylists()) as Array<{ id: string }>).map((p) => String(p.id)),
     );
-  } catch {
-    livePlaylists = null;
+  } catch (err: any) {
+    console.warn(
+      `[id-rotation] playlist index unreachable (${err?.message || err}) — migrating track ids only; ` +
+        'playlist pins/recipes stay for the next attempt',
+    );
   }
   const mapPlaylistId = (id: string): string => {
-    if (livePlaylists?.has(id)) return id;
+    if (!livePlaylists) return id;
+    if (livePlaylists.has(id)) return id;
     const c = canonicalId(id);
-    if (c === id) return id;
-    if (livePlaylists && !livePlaylists.has(c)) return id;
+    if (c === id || !livePlaylists.has(c)) return id;
     return c;
   };
 
@@ -140,12 +164,14 @@ export async function applyPendingRotation(): Promise<{ applied: boolean }> {
   const recipes = playlistRecipes.remapIds(trackMap, mapPlaylistId);
   const shows = await remapShowPlaylistIds(mapPlaylistId);
 
-  await rm(manifestPath(), { force: true });
+  const complete = livePlaylists !== null;
+  if (complete) await rm(manifestPath(), { force: true });
   console.log(
     `[id-rotation] state files migrated (${trackMap.size} track id(s)): ` +
-      `${blocked} blocklist, ${liked} like(s), ${recipes} recipe field(s), ${shows} show pin(s)`,
+      `${blocked} blocklist, ${liked} like(s), ${recipes} recipe field(s), ${shows} show pin(s)` +
+      (complete ? '' : ' — playlist half deferred, manifest kept'),
   );
-  return { applied: true };
+  return { applied: true, complete };
 }
 
 // Show playlist anchors/exclusions, moved through the real settings write path
@@ -162,11 +188,15 @@ async function remapShowPlaylistIds(mapPlaylistId: (id: string) => string): Prom
     if (next !== id) changed++;
     return next;
   };
-  const next = shows.map((s) => ({
-    ...s,
-    playlistIds: (s.playlistIds ?? []).map(mapOne),
-    excludedPlaylistIds: (s.excludedPlaylistIds ?? []).map(mapOne),
-  }));
+  // Spread, then overwrite only the keys the show actually had: normalising an
+  // absent playlistIds into [] would push a change through settings.update for
+  // every show on the schedule, on a write that is meant to touch pins alone.
+  const next = shows.map((s) => {
+    const out: Record<string, unknown> = { ...s };
+    if (s.playlistIds) out.playlistIds = s.playlistIds.map(mapOne);
+    if (s.excludedPlaylistIds) out.excludedPlaylistIds = s.excludedPlaylistIds.map(mapOne);
+    return out;
+  });
   if (changed) await settings.update({ shows: next });
   return changed;
 }

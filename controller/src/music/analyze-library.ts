@@ -155,6 +155,14 @@ async function main() {
     // recomputed), then drop rows for tracks genuinely no longer in Navidrome
     // so the analysis scope reflects the live catalogue, not orphans from past
     // full rescans. Guarded on a non-empty walk (a complete, authoritative pass).
+    //
+    // Note this is NOT a recovery path an operator can reach from the admin UI:
+    // `shouldWalk` is false on a populated catalogue and startAnalyzer passes no
+    // --walk, so after a rotation (where the catalogue is full of stale rows)
+    // only a host-side `--walk` run gets here. The two real recovery paths are
+    // the tagger run and Library → Reconcile with Navidrome. Adoption is wired
+    // here anyway so the CLI can't be the one path that prunes what the others
+    // adopt.
     if (walked > 0) {
       const { pruned } = await adoptAndPrune(liveIds);
       if (pruned > 0) {

@@ -119,8 +119,10 @@ let rotationApply: Promise<boolean> = Promise.resolve(true);
 function applyRotationNow(): Promise<boolean> {
   const next = rotationApply.then(async () => {
     try {
-      await applyPendingRotation();
-      return true;
+      // `complete: false` = the track half landed but the playlist half is
+      // deferred (Navidrome unreachable). The manifest is still on disk, so
+      // this is "not settled" and the playlist sync must not run.
+      return (await applyPendingRotation()).complete;
     } catch (err: any) {
       queue.log('error', `id-rotation state migration failed (will retry): ${err?.message || err}`);
       return false;

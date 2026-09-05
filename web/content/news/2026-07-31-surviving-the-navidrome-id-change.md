@@ -10,7 +10,7 @@ There is a change coming to Navidrome that would normally hurt. A pending update
 
 ## What's new
 
-SUB/WAVE now recognises the migration when it happens. The library sync replays Navidrome's exact ID transform against its own records, checks each mapping against the live server, and moves everything across in place: mood tags, acoustic analysis, sound embeddings, MusicBrainz years, the stem cache, play history, listener likes, the never-play blocklist, show playlist pins and playlist sync recipes. Nothing gets re-derived, nothing gets lost. If the Navidrome change never reaches your server, the whole feature stays dormant.
+SUB/WAVE now recognises the migration when it happens. The library sync replays Navidrome's exact ID transform against its own records, checks each mapping against the live server, and moves everything across in place: mood tags, acoustic analysis (including the dead-air trim measurements), sound embeddings, MusicBrainz years, the stem cache, play history, listener likes, the never-play blocklist and its rules, show playlist pins and playlist sync recipes. Nothing measured gets measured again. If the Navidrome change never reaches your server, the whole feature stays dormant.
 
 ## What to do when the update lands
 
@@ -20,7 +20,7 @@ Upgrade Navidrome as you normally would (back up its database first, their relea
 Re-linked 9,412 tracks after a Navidrome ID migration
 ```
 
-A full tagger run does the same job if you'd rather wait for your next scheduled one. Until you reconcile, the station keeps playing from its hourly fallback playlist, so there is no rush and no dead air.
+A full tagger run does the same job if you'd rather wait for your next scheduled one — but don't leave it for days. Until you reconcile, SUB/WAVE is still asking Navidrome for tracks by their old IDs: DJ picks won't resolve, and the hourly fallback playlist thins out to whatever it can pull live from the server. Reconcile is a couple of minutes and it puts the station straight back.
 
 ## Why it helps
 
