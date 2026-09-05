@@ -225,15 +225,18 @@ export function repairScheduleForLoad(raw: unknown, showIds: string[]): Schedule
 
 // ── Timed takeover (#930) ────────────────────────────────────────────────────
 
-/** Pin one show for a bounded window, then the weekly grid resumes. */
+/**
+ * A bounded takeover target. `showId: null` means Default programming; an
+ * outer `scheduleOverride: null` means there is no takeover at all.
+ */
 export interface ScheduleOverride {
-  showId: string;
+  showId: string | null;
   startedAt: number;
   expiresAt: number;
 }
 
 export interface ScheduleOverrideContext {
-  /** Show ids the pin may name, or null when this caller cannot check. */
+  /** Show ids a string target may name, or null when this caller cannot check. */
   showIds: string[] | null;
   /**
    * Epoch-ms "now", or null to not judge expiry at all.
@@ -250,7 +253,10 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
   return z
     .object(
       {
-        showId: z.string({ error: 'must be a show id' }).min(1, 'must be a show id'),
+        showId: z.union(
+          [z.string({ error: 'must be a show id' }).min(1, 'must be a show id'), z.null()],
+          { error: 'must be a show id or null' },
+        ),
         startedAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
         expiresAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
       },
@@ -262,7 +268,7 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
     )
     .check((c) => {
       const { showId, startedAt, expiresAt } = c.value;
-      if (ctx.showIds && !ctx.showIds.includes(showId)) {
+      if (typeof showId === 'string' && ctx.showIds && !ctx.showIds.includes(showId)) {
         c.issues.push({
           code: 'custom',
           input: showId,
@@ -299,15 +305,20 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
 /**
  * POST /schedule/override's body.
  *
- * `minutes` is coerced because the hand-rolled route ran `Number(req.body
- * ?.minutes)` and therefore accepted the string "60". An EMPTY showId now 400s
+ * `showId: null` requests Default programming; an outer missing field is still
+ * malformed. `minutes` is coerced because the hand-rolled route ran
+ * `Number(req.body?.minutes)` and therefore accepted the string "60". An EMPTY
+ * showId now 400s
  * where it used to reach the roster lookup and 404 as `no such show: ` — a
  * missing field is a malformed request, not a missing show. A real id that
  * isn't in the roster still 404s from the handler, which is the answer that
  * needs server state.
  */
 export const scheduleOverrideRequestSchema = z.object({
-  showId: z.string({ error: 'pick a show to pin' }).min(1, 'pick a show to pin'),
+  showId: z.union(
+    [z.string({ error: 'pick a show or Default programming' }).min(1, 'pick a show or Default programming'), z.null()],
+    { error: 'pick a show or Default programming' },
+  ),
   minutes: z.coerce
     .number({ error: `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}` })
     .int(`must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`)

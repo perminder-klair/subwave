@@ -2093,8 +2093,9 @@ export async function update(patch) {
         }
       }
     }
-    // A takeover pinning a show that no longer exists dies with the show.
-    if (next.scheduleOverride && !showIds.includes(next.scheduleOverride.showId)) {
+    // A takeover pinning a show that no longer exists dies with the show. A
+    // null target is Default programming, not an orphan.
+    if (next.scheduleOverride && typeof next.scheduleOverride.showId === 'string' && !showIds.includes(next.scheduleOverride.showId)) {
       next.scheduleOverride = null;
     }
     if (!personaIds.includes(next.activePersonaId)) next.activePersonaId = personaIds[0];

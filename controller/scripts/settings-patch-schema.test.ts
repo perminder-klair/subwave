@@ -588,6 +588,14 @@ test('update() refuses a bad value with the pre-conversion message', async () =>
   });
 });
 
+test('update() keeps a Default programming takeover when the show roster changes', async () => {
+  const now = Date.now();
+  const override = { showId: null, startedAt: now, expiresAt: now + 60 * 60_000 };
+  await settings.update({ scheduleOverride: override });
+  const result = await settings.update({ shows: [] });
+  assert.deepEqual(result.saved.scheduleOverride, override);
+});
+
 test('update() still tolerates a key it has never heard of', async () => {
   // This is the half backup restore depends on: routes/backup.ts hands update()
   // a whole settings.json, and a key from a newer version must cost one setting
@@ -709,8 +717,12 @@ test('the djPrompt trio: pure rules convert, cross-key ones stay in update()', (
 });
 
 test('scheduleOverride validates SHAPE at the route, roster membership in update()', () => {
-  // Clearing the pin is how a takeover is cancelled, so null is legal.
+  // Clearing the takeover is outer null; an object with showId null is a live
+  // Default programming takeover and must remain distinct.
   assert.equal(validateSettingsPatch({ scheduleOverride: null }), null);
+  assert.equal(validateSettingsPatch({
+    scheduleOverride: { showId: null, startedAt: 1, expiresAt: 2 },
+  }), null);
   const bad = validateSettingsPatch({
     scheduleOverride: { showId: '', startedAt: 1, expiresAt: 2 },
   });

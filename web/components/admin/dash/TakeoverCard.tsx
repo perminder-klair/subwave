@@ -1,6 +1,7 @@
 'use client';
 
-// Show takeover (#930) — pin one show over the weekly grid for a bounded window.
+// Show takeover (#930/#1507) — pin a show or Default programming over the
+// weekly grid for a bounded window.
 // Unlike the other dash cards this one fetches for itself: GET /schedule and the two
 // /schedule/override mutations are the only calls on this screen no other card wants.
 
@@ -40,6 +41,9 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
   const [now, setNow] = useState(() => Date.now());
 
+  // Empty string is the untouched picker and remains invalid; null is a
+  // deliberate Default programming selection. The shared schema preserves that
+  // distinction all the way to POST /schedule/override.
   const form = useZodForm(scheduleOverrideRequestSchema, { showId: '', minutes: 60 });
   // The 30s tick refreshes `shows` and `override`, never the form — a poll must
   // not clobber a half-typed window. This is why there is no `values` prop here.
@@ -75,7 +79,8 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   const showById = (id: string) => shows.find(s => s.id === id) ?? null;
 
   const live = override && override.expiresAt > now ? override : null;
-  const pinned = live ? showById(live.showId) : null;
+  const pinned = live && typeof live.showId === 'string' ? showById(live.showId) : null;
+  const defaultProgramming = !!live && live.showId === null;
   const minutesLeft = live ? Math.max(1, Math.ceil((live.expiresAt - now) / 60_000)) : 0;
 
   interface PinResult {
@@ -86,7 +91,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
       super(message);
     }
   }
-  const pinMutation = useAdminMutation<PinResult, { showId: string; minutes: number }>({
+  const pinMutation = useAdminMutation<PinResult, { showId: string | null; minutes: number }>({
     adminFetch,
     toastOnError: false,
     request: async (values, fetcher) => {
@@ -127,8 +132,12 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   const pin = form.handleSubmit(async (values) => {
     try {
       await pinMutation.mutateAsync(values);
-      const name = showById(values.showId)?.name || 'show';
-      notify.ok(`“${name}” takes over — the switch airs on the next track.`);
+      if (values.showId === null) {
+        notify.ok('Default programming takes over — the switch airs on the next track.');
+      } else {
+        const name = showById(values.showId)?.name || 'show';
+        notify.ok(`“${name}” takes over — the switch airs on the next track.`);
+      }
     } catch (e) {
       if (e instanceof TakeoverError) applyServerFieldErrors(form, e.fieldErrors);
       notify.err(errorMessage(e));
@@ -148,7 +157,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
     }
   };
 
-  const onAir = !!(live && pinned);
+  const onAir = !!(live && (pinned || defaultProgramming));
 
   return (
     <Card
@@ -174,18 +183,24 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
         </span>
       }
     >
-      {live && pinned ? (
+      {live && (pinned || defaultProgramming) ? (
         <div className="grid gap-2.5">
           <div className="grid gap-1 border border-[color-mix(in_oklab,var(--accent)_35%,transparent)] bg-[var(--accent-soft)] px-2.5 py-2">
             <div className="flex items-baseline gap-2">
-              <ColorChip color={colorOf(pinned.id)} className="size-[11px] self-center" />
-              <span className="min-w-0 truncate text-[13px] font-bold text-ink">{pinned.name}</span>
+              <ColorChip
+                color={pinned ? colorOf(pinned.id) : null}
+                className="size-[11px] self-center"
+              />
+              <span className="min-w-0 truncate text-[13px] font-bold text-ink">
+                {pinned?.name ?? 'Default programming'}
+              </span>
               <span className="mono-num ml-auto flex-none text-[10px] whitespace-nowrap text-muted">
                 ends {fmtClock(live.expiresAt, tz, locale)}
               </span>
             </div>
             <div className="text-[10px] text-muted">
-              on air over the schedule · {minutesLeft} min left
+              {defaultProgramming ? 'autonomous music · default DJ' : 'on air over the schedule'}
+              {' · '}{minutesLeft} min left
             </div>
           </div>
           <Btn sm className="w-full" disabled={busy} onClick={cancel}>
@@ -206,13 +221,20 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
             name="showId"
             render={({ field }) => (
               <SlotMenu
-                ariaLabel="Pin a show"
+                ariaLabel="Choose takeover programming"
                 // justify-self, not self-start: the grid otherwise stretches the slot to
                 // full width, where it reads as a text field rather than a value you pick.
                 className="min-h-9 justify-self-start text-[12px] sm:min-h-0"
-                label={showById(field.value)?.name ?? 'Pin a show…'}
-                chipColor={field.value ? colorOf(field.value) : undefined}
-                options={shows.map(s => ({ key: s.id, label: s.name, chipColor: colorOf(s.id) }))}
+                label={field.value === null
+                  ? 'Default programming'
+                  : showById(field.value)?.name ?? 'Choose programming…'}
+                chipColor={field.value === null
+                  ? null
+                  : field.value ? colorOf(field.value) : undefined}
+                options={[
+                  { key: null, label: 'Default programming', chipColor: null },
+                  ...shows.map(s => ({ key: s.id, label: s.name, chipColor: colorOf(s.id) })),
+                ]}
                 onSelect={field.onChange}
               />
             )}
@@ -246,7 +268,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
             disabled={busy || !form.formState.isValid}
             onClick={pin}
           >
-            {busy ? 'pinning…' : 'Pin to air →'}
+            {busy ? 'starting…' : 'Take over →'}
           </Btn>
           <div className="text-[10px] text-muted">
             the switch airs on the next track · the schedule picks up again after

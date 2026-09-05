@@ -234,10 +234,17 @@ test('repairScheduleForLoad lands on a value the strict path accepts', () => {
 
 const NOW = 1_800_000_000_000;
 const okOverride = { showId: 'night_loop', startedAt: NOW, expiresAt: NOW + 60 * 60_000 };
+const defaultOverride = { showId: null, startedAt: NOW, expiresAt: NOW + 60 * 60_000 };
 
-test('override: accepts a well-formed window', () => {
-  const r = scheduleOverrideSchema({ showIds: IDS, now: null }).parse(okOverride);
-  assert.deepEqual(r, okOverride);
+test('override: accepts named-show and Default programming windows', () => {
+  const schema = scheduleOverrideSchema({ showIds: IDS, now: null });
+  assert.deepEqual(schema.parse(okOverride), okOverride);
+  assert.deepEqual(schema.parse(defaultOverride), defaultOverride);
+});
+
+test('override: Default programming is distinct from a cleared outer override', () => {
+  assert.deepEqual(validateScheduleOverrideStrict(defaultOverride, SHOWS), defaultOverride);
+  assert.equal(validateScheduleOverrideStrict(null, SHOWS), null);
 });
 
 test('override: refuses an unknown show, a backwards window and an over-long one', () => {
@@ -286,19 +293,22 @@ test('lenient override: a dangling or expired pin loads as null', () => {
   assert.equal(normalizeScheduleOverride(null, IDS), null);
 });
 
-test('lenient override: a live pin survives the boot', () => {
+test('lenient override: live show and Default programming takeovers survive boot', () => {
   const live = {
     showId: 'night_loop',
     startedAt: Date.now() - 60_000,
     expiresAt: Date.now() + 60 * 60_000,
   };
+  const liveDefault = { ...live, showId: null };
   assert.deepEqual(normalizeScheduleOverride(live, IDS), live);
+  assert.deepEqual(normalizeScheduleOverride(liveDefault, IDS), liveDefault);
 });
 
 // --- POST /schedule/override ------------------------------------------------
 
-test('override request: accepts the bounds and coerces a numeric string', () => {
+test('override request: accepts named shows, Default programming, and coerces a numeric string', () => {
   assert.equal(scheduleOverrideRequestSchema.parse({ showId: 'x', minutes: 60 }).minutes, 60);
+  assert.equal(scheduleOverrideRequestSchema.parse({ showId: null, minutes: 60 }).showId, null);
   // The hand-rolled route ran Number(req.body?.minutes), so "60" was accepted.
   assert.equal(scheduleOverrideRequestSchema.parse({ showId: 'x', minutes: '60' }).minutes, 60);
 });
@@ -324,6 +334,7 @@ test('override request: refuses out-of-range and non-integer minutes', () => {
 test('override request: an empty showId is a 400, not a lookup that 404s on ""', () => {
   assert.equal(scheduleOverrideRequestSchema.safeParse({ minutes: 60 }).success, false);
   assert.equal(scheduleOverrideRequestSchema.safeParse({ showId: '', minutes: 60 }).success, false);
+  assert.equal(scheduleOverrideRequestSchema.safeParse({ showId: undefined, minutes: 60 }).success, false);
 });
 
 test('override request: the minutes message names the real bounds', () => {

@@ -197,29 +197,39 @@ router.post('/shows', requireAdmin, validateBodyAsync(showPostContext), async (r
 });
 
 // ---------------------------------------------------------------------------
-// POST /schedule/override — pin a show for N minutes (#930): a timed takeover
-// that outranks the weekly grid in resolveActiveShow, then lapses back to
+// POST /schedule/override — select a show or Default programming for N minutes:
+// a timed takeover that outranks the weekly grid, then lapses back to
 // normal programming on its own. Re-POSTing while one is live replaces it
 // (switch show or extend the window). The session roll is fire-and-forget —
 // the response returns as soon as the override is persisted; the on-air
 // handoff (LLM + TTS) airs in the background, and the switch fully lands at
 // the next track boundary like any show change.
 // ---------------------------------------------------------------------------
-// The shape (a show id, an integer minute count inside the bounds) comes from
-// the shared schema; the roster lookup below stays here because "no such show"
-// needs server state and answers 404, not 400.
+// The shape (a show id or the explicit null Default target, plus an integer
+// minute count inside the bounds) comes from the shared schema; the roster
+// lookup stays here for string targets because "no such show" needs server
+// state and answers 404, not 400.
 router.post('/schedule/override', requireAdmin, validateBody(scheduleOverrideRequestSchema), async (req, res) => {
-  const { showId, minutes } = req.body as { showId: string; minutes: number };
+  const { showId, minutes } = req.body as { showId: string | null; minutes: number };
 
   await settings.load();
-  const show = (settings.get().shows || []).find((s: any) => s.id === showId);
-  if (!show) return res.status(404).json({ error: `no such show: ${showId}` });
+  const show = typeof showId === 'string'
+    ? (settings.get().shows || []).find((s: any) => s.id === showId)
+    : null;
+  if (typeof showId === 'string' && !show) {
+    return res.status(404).json({ error: `no such show: ${showId}` });
+  }
 
   const startedAt = Date.now();
   const override = { showId, startedAt, expiresAt: startedAt + minutes * 60_000 };
   try {
     await settings.update({ scheduleOverride: override });
-    queue.log('scheduler', `[takeover] "${show.name}" pinned for ${minutes} min via admin UI`);
+    queue.log(
+      'scheduler',
+      show
+        ? `[takeover] "${show.name}" pinned for ${minutes} min via admin UI`
+        : `[takeover] Default programming selected for ${minutes} min via admin UI`,
+    );
     void rollSessionNow();
     res.json({ override });
   } catch (err: any) {

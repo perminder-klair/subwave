@@ -344,7 +344,7 @@ def takeover(page):
     check used to pass by silently riding a show shows() left behind before
     that check's own teardown was fixed (commit f94c0738); now that shows()
     cleans up after itself, a takeover() run against a freshly booted stack
-    (no shows at all) hung at `get_by_label("Pin a show")`. Seeded/torn down
+    (no shows at all) hung waiting for the takeover picker. Seeded/torn down
     the same try/finally pattern shows()/skills()/imaging() use, so this
     check is self-contained and order-independent within the file.
     """
@@ -383,23 +383,26 @@ def takeover(page):
         assert_field_error(page, minutes, "must be an integer between 15 and 720")
 
         # Save must be gated while invalid.
-        pin = page.get_by_role("button", name="Pin to air")
+        pin = page.get_by_role("button", name="Take over")
         assert pin.is_disabled(), "Save enabled with an out-of-range window"
 
-        # 3. Save — pick a real show, a valid window, confirm it persists.
+        # 3. Save — choose Default programming, confirm the explicit null
+        # target persists and presents as a live takeover.
         minutes.fill("60")
-        page.get_by_label("Pin a show").click()
-        page.locator("[role=menuitem], [role=option]").first.click()
+        page.get_by_label("Choose takeover programming").click()
+        page.get_by_role("menuitem", name="Default programming").click()
         pin.click()
-        page.wait_for_selector("text=on air")
-        assert '"expiresAt"' in api("/schedule"), "override did not persist"
+        page.get_by_text("Default programming", exact=True).wait_for()
+        page.get_by_text("autonomous music · default DJ", exact=False).wait_for()
+        stored = json.loads(api("/schedule")).get("override")
+        assert stored and stored.get("showId", "missing") is None, stored
 
         # 4. Poll safety — the 30s tick must not clobber a half-typed window.
         #    fast_forward past the real interval so the tick genuinely fires
         #    (see assert_survives_poll's docstring for why a dispatched focus
         #    event and a short sleep cannot prove this).
         page.get_by_role("button", name="Cancel takeover").click()
-        page.wait_for_selector("text=Pin a show")
+        page.wait_for_selector("text=Choose programming")
         minutes.fill("123")
         assert_survives_poll(page, minutes, "123")
     finally:

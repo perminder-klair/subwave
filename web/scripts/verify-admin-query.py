@@ -3324,7 +3324,7 @@ def shows_dashboard_takeover_roster_reconciliation(page):
         return [show["name"] for show in hits[0]["shows"]]
 
     page.goto(f"{WEB}/admin/dash", wait_until="domcontentloaded")
-    page.get_by_label("Pin a show").wait_for(state="visible")
+    page.get_by_label("Choose takeover programming").wait_for(state="visible")
     assert cached_names() == [original["name"]], cached_names()
     initial_schedule_reads = request_count(page, "/schedule", authenticated=True)
 
@@ -3428,7 +3428,7 @@ def schedule_save_refresh(page):
 
 @check
 def schedule_dashboard_override_reconciliation(page):
-    """Dashboard pin/cancel reaches the prewarmed Rundown cache immediately."""
+    """Dashboard Default programming/cancel reaches Rundown cache immediately."""
     settings, show, _week = programming_fixture()
     current = {"override": None}
     stub_dashboard(page)
@@ -3462,17 +3462,20 @@ def schedule_dashboard_override_reconciliation(page):
 
     click_admin_link(page, "Dash", "/admin/dash")
     page.wait_for_timeout(250)  # incoming route must own the click after the shell crossfade
-    page.get_by_label("Pin a show").click()
-    page.locator("[role=menuitem], [role=option]").first.click()
+    page.get_by_label("Choose takeover programming").click()
+    page.get_by_role("menuitem", name="Default programming").click()
     with page.expect_response(
         lambda response: is_admin_request(response.request, "/schedule/override", "POST")
     ):
-        page.get_by_role("button", name="Pin to air →").click()
+        page.get_by_role("button", name="Take over →").click()
     page.get_by_role("button", name="Cancel takeover").wait_for(state="visible")
+    assert current["override"]["showId"] is None, current
     reads_after_pin = request_count(page, "/schedule", authenticated=True)
 
     click_admin_link(page, "Schedule", "/admin/shows/schedule")
     page.get_by_text("On air · takeover", exact=True).wait_for(state="visible")
+    page.get_by_text("Default programming", exact=True).wait_for(state="visible")
+    page.get_by_text("autonomous music · default DJ", exact=True).wait_for(state="visible")
     # Dashboard owns a live query and may perform its exact post-write refresh;
     # returning within the stale window must add no request or wait for a poll.
     assert request_count(page, "/schedule", authenticated=True) == reads_after_pin, page.request_log
@@ -3482,14 +3485,36 @@ def schedule_dashboard_override_reconciliation(page):
         lambda response: is_admin_request(response.request, "/schedule/override", "DELETE")
     ):
         page.get_by_role("button", name="Cancel takeover").click()
-    page.get_by_label("Pin a show").wait_for(state="visible")
+    page.get_by_label("Choose takeover programming").wait_for(state="visible")
     reads_after_cancel = request_count(page, "/schedule", authenticated=True)
     click_admin_link(page, "Schedule", "/admin/shows/schedule")
     page.get_by_text("On air", exact=True).wait_for(state="visible")
     assert page.get_by_text("On air · takeover", exact=True).count() == 0
     assert request_count(page, "/schedule", authenticated=True) == reads_after_cancel, page.request_log
     assert reads_after_pin - initial_reads <= 3, page.request_log
-    assert reads_after_cancel - reads_after_pin <= 2, page.request_log
+    # Returning to Dash may mount its staleTime=0 live query, and DELETE does
+    # one exact post-write refresh. Navigation back to Schedule is pinned by the
+    # exact equality above and must add no request.
+    assert reads_after_cancel - reads_after_pin <= 3, page.request_log
+
+    # The nullable target extends, rather than replaces, named-show pins. Repeat
+    # the same cache handoff with the configured show so its existing behavior
+    # stays covered alongside Default programming.
+    click_admin_link(page, "Dash", "/admin/dash")
+    page.wait_for_timeout(250)
+    page.get_by_label("Choose takeover programming").click()
+    page.get_by_role("menuitem", name=show["name"]).click()
+    with page.expect_response(
+        lambda response: is_admin_request(response.request, "/schedule/override", "POST")
+    ):
+        page.get_by_role("button", name="Take over →").click()
+    page.get_by_role("button", name="Cancel takeover").wait_for(state="visible")
+    assert current["override"]["showId"] == show["id"], current
+    named_reads = request_count(page, "/schedule", authenticated=True)
+    click_admin_link(page, "Schedule", "/admin/shows/schedule")
+    page.get_by_text("On air · takeover", exact=True).wait_for(state="visible")
+    page.get_by_text(show["name"], exact=True).first.wait_for(state="visible")
+    assert request_count(page, "/schedule", authenticated=True) == named_reads, page.request_log
 
 
 def stub_playlist_programming(page):
