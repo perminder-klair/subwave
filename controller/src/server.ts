@@ -241,10 +241,16 @@ app.listen(config.server.port, async () => {
 
   // Apply a pending Navidrome ID-rotation manifest (music/id-rotation.ts) —
   // covers a host-side tagger/reconcile run made while the controller was
-  // down. Normal boots see no manifest and skip in one stat call. Must run
-  // after blocklist.load() (the hook rewrites its in-memory index) and before
-  // anything can trigger a playlist sync against unmigrated recipe ids. A
-  // failure keeps the manifest for the next boot; never fatal.
+  // down, and a managed run whose in-run apply couldn't finish. Normal boots
+  // see no manifest and skip in one stat call. Must run after blocklist.load()
+  // (the hook rewrites its in-memory index) and before anything can trigger a
+  // playlist sync against unmigrated recipe ids. A failure keeps the manifest
+  // for the next boot; never fatal.
+  //
+  // Navidrome is routinely not answering yet at this point, which is exactly
+  // the case applyPendingRotation defers on: the track half lands, the playlist
+  // half and the manifest wait for the next attempt. Nothing to do here but let
+  // it — the next tagger run or the next boot picks it up.
   try {
     const { applyPendingRotation } = await import('./music/id-rotation.js');
     await applyPendingRotation();
