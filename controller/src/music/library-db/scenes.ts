@@ -20,6 +20,7 @@
 import { requireDb } from './handle.js';
 import { invalidateStats } from './stats.js';
 import { safeParseArray } from './rows.js';
+import { dedupeScenes } from '../scene-vocab.js';
 
 export interface SceneCount {
   value: string;
@@ -63,8 +64,12 @@ export function sceneVocabulary(): SceneCount[] {
  */
 export function mergeScenes(sources: readonly string[], target: string): SceneMergeResult {
   const to = String(target ?? '').trim();
+  // A source is dropped only when it is the target VERBATIM — the same test
+  // planAliases applies, so the two halves of a merge agree on what has work to
+  // do. A case-insensitive test here dropped "rock" ticked onto "Rock", so a
+  // pure case merge rewrote nothing while reporting success.
   const from = [...new Set(sources.map((s) => String(s ?? '')).filter((s) => s.trim() !== ''))]
-    .filter((s) => s.toLowerCase() !== to.toLowerCase());
+    .filter((s) => s !== to);
   if (!to || from.length === 0) return { sources: [], tracksChanged: 0, vectorsDirtied: 0 };
 
   const d = requireDb();
@@ -89,13 +94,15 @@ export function mergeScenes(sources: readonly string[], target: string): SceneMe
   const tx = d.transaction(() => {
     for (const row of rows) {
       const before = safeParseArray(row.genres);
-      const after: string[] = [];
-      for (const raw of before) {
-        if (retired.has(raw)) hit.add(raw);
-        const value = (retired.has(raw) ? to : raw).trim();
-        if (!value) continue;
-        if (!after.some((x) => x.toLowerCase() === value.toLowerCase())) after.push(value);
-      }
+      const substituted = before.map((raw) => {
+        if (!retired.has(raw)) return raw;
+        hit.add(raw);
+        return to;
+      });
+      // The trim-and-dedupe is scene-vocab's, shared with the ingest half via
+      // applyAliases — a track carrying both spellings must collapse to one tag
+      // the same way whichever half of the merge reaches it first.
+      const after = dedupeScenes(substituted);
       const next = JSON.stringify(after);
       if (next === JSON.stringify(before)) continue;
       update.run(next, row.id);

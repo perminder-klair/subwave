@@ -321,11 +321,21 @@ router.get('/library/genres/related', requireAdmin, async (_req, res) => {
 // actually reach. Sorting is the client's — the whole vocabulary is a few
 // hundred rows at worst, and paging a list you are ticking boxes down is worse
 // than sending it.
+//
+// Building that list is a full json_each walk of `tracks` (the shape stats()
+// TTL-caches), so it is a scan whatever the row count is — which is why it is
+// fetched on EXPAND and on a merge, never polled.
 // ---------------------------------------------------------------------------
+
+/** The listing both reads answer with: the vocabulary and the rules over it. */
+function sceneListing() {
+  return { scenes: library.scenes(), aliases: sceneVocab.list() };
+}
+
 router.get('/library/scenes', requireAdmin, async (_req, res) => {
   try {
     await library.load();
-    res.json({ scenes: library.scenes(), aliases: sceneVocab.list() });
+    res.json(sceneListing());
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -340,27 +350,31 @@ router.post(
     try {
       await library.load();
       const result = await library.consolidateScenes(from, to);
-      // Nothing matched: the listing the operator ticked is stale (a walk ran,
-      // or another admin merged first). Say so rather than reporting a
-      // successful no-op — the rule IS recorded either way, which is why this
-      // is a 200 with a count and not an error.
+      // Three outcomes, and the log must not flatten them. Rows rewritten is
+      // the ordinary one. No rows but a rule recorded means the listing the
+      // operator ticked is stale (a walk ran, or another admin merged first)
+      // and the fold still applies from the next scan. Neither means the merge
+      // asked for nothing this rule set does not already do — a 200 with zero
+      // counts, not an error, but it must not claim a rule was recorded.
       queue.log(
         'info',
         result.tracksChanged > 0
           ? `scenes: merged ${result.sources.map(s => `"${s}"`).join(', ')} → "${result.target}" (${result.tracksChanged} track${result.tracksChanged === 1 ? '' : 's'})`
-          : `scenes: nothing to rewrite for "${result.target}" — rule recorded for the next library scan`,
+          : result.recorded.length > 0
+            ? `scenes: nothing to rewrite for "${result.target}" — rule recorded for the next library scan`
+            : `scenes: nothing to do — "${result.target}" already survives every value picked`,
       );
       res.json({
         ok: true,
         target: result.target,
         sources: result.sources,
+        recorded: result.recorded,
         tracksChanged: result.tracksChanged,
         vectorsDirtied: result.vectorsDirtied,
         // The refreshed listing rides back on the same response: after a merge
         // every count on the client is wrong, and a merge is usually one of
         // several in a sitting.
-        scenes: library.scenes(),
-        aliases: sceneVocab.list(),
+        ...sceneListing(),
       });
     } catch (err) {
       queue.log('error', `/library/scenes/merge failed: ${err.message}`);
@@ -378,6 +392,9 @@ router.delete('/library/scenes/aliases/:from', requireAdmin, async (req, res) =>
     const removed = await sceneVocab.forget(req.params.from);
     if (!removed) return res.status(404).json({ error: 'no such scene rule' });
     queue.log('info', `scenes: dropped the rule for "${req.params.from}"`);
+    // Aliases only, deliberately: forgetting a rule rewrites no row, so every
+    // count the client holds is still correct and re-running the scan for it
+    // would be a full table walk for an unchanged answer.
     res.json({ ok: true, aliases: sceneVocab.list() });
   } catch (err) {
     res.status(500).json({ error: err.message });

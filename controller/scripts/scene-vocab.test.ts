@@ -67,10 +67,69 @@ test('merging onto a target that is itself retired lands on the final survivor',
   assert.equal(sceneVocab.aliasMapOf(second.aliases).get('indie rock'), 'Alternative');
 });
 
-test('a value merged onto itself records no rule', () => {
-  const plan = sceneVocab.planAliases([], ['Rock', 'rock'], 'Rock', '2026-01-01T00:00:00Z');
+test('a value merged onto itself VERBATIM records no rule', () => {
+  const plan = sceneVocab.planAliases([], ['Rock'], 'Rock', '2026-01-01T00:00:00Z');
   assert.deepEqual(plan.aliases, []);
   assert.deepEqual(plan.recorded, []);
+});
+
+test('a case-only merge is a real merge, not a self-merge', () => {
+  // "rock" and "Rock" share a fold key but are two distinct stored rows the
+  // operator ticked, and the walk re-reads whatever the FILE says. Treating
+  // them as a self-merge recorded nothing, so the rewrite stood until the next
+  // tag pass wrote "rock" straight back — the exact failure the rule exists to
+  // stop, hidden behind a success message.
+  const plan = sceneVocab.planAliases([], ['Rock', 'rock'], 'Rock', '2026-01-01T00:00:00Z');
+  assert.deepEqual(plan.recorded, ['rock']);
+  assert.equal(sceneVocab.aliasMapOf(plan.aliases).get('rock'), 'Rock');
+  assert.equal(sceneVocab.applyAliases(['rock'], sceneVocab.aliasMapOf(plan.aliases))[0], 'Rock');
+});
+
+test('reversing an earlier merge repoints the rule instead of cancelling itself', () => {
+  // The operator merges, then decides the other spelling was the better one.
+  // Resolving the target through the map sent it back to the source of this
+  // very merge, so every source dropped out as a self-merge: no rule, no
+  // rewrite, and a 200 announcing the value being REPLACED as the survivor.
+  const first = sceneVocab.planAliases([], ['Hip-Hop'], 'Hip Hop', '2026-01-01T00:00:00Z');
+  assert.equal(first.target, 'Hip Hop');
+
+  const back = sceneVocab.planAliases(first.aliases, ['Hip Hop'], 'Hip-Hop', '2026-01-02T00:00:00Z');
+  assert.equal(back.target, 'Hip-Hop');
+  assert.deepEqual(back.recorded, ['hip hop']);
+  const map = sceneVocab.aliasMapOf(back.aliases);
+  assert.equal(map.get('hip hop'), 'Hip-Hop');
+  // Still flat and still one hop: nothing in the set points at a retired value.
+  assert.equal([...map.values()].every(v => v === 'Hip-Hop'), true);
+  assert.equal(sceneVocab.applyAliases(['Hip Hop'], map)[0], 'Hip-Hop');
+});
+
+test('a rule that reads like an identity still survives a reload', () => {
+  // `from` is a fold KEY and `to` a stored spelling, so "rock" → "Rock" — and
+  // even "rock" → "rock" — does real work: it canonicalises every case and
+  // spacing variant. Dropping those on load undid a case merge at the next
+  // restart, silently.
+  const plan = sceneVocab.planAliases([], ['ROCK'], 'rock', '2026-01-01T00:00:00Z');
+  assert.deepEqual(plan.recorded, ['rock']);
+  const reloaded = sceneVocab.aliasMapOf(
+    JSON.parse(JSON.stringify(plan.aliases)) as sceneVocab.SceneAlias[],
+  );
+  assert.equal(sceneVocab.applyAliases(['ROCK'], reloaded)[0], 'rock');
+});
+
+test('at the cap it is the OLDEST rule that goes, never the one just recorded', () => {
+  // planAliases appends new keys after the existing ones, so a head slice
+  // dropped the rule the caller just made while its row rewrite still
+  // committed — a merge that unwinds at the next walk.
+  const existing = Array.from({ length: sceneVocab.SCENE_ALIASES_MAX }, (_, i) => ({
+    from: `old${i}`,
+    to: 'Ancient',
+    at: '2020-01-01T00:00:00Z',
+  }));
+  const plan = sceneVocab.planAliases(existing, ['Brand New'], 'Survivor', '2026-01-01T00:00:00Z');
+  const kept = sceneVocab.capForTests(plan.aliases);
+  assert.equal(kept.length, sceneVocab.SCENE_ALIASES_MAX);
+  assert.equal(sceneVocab.aliasMapOf(kept).get('brand new'), 'Survivor');
+  assert.equal(kept.some(a => a.from === 'old0'), false);
 });
 
 test('applying the map dedupes a track that carried both spellings', () => {
@@ -165,6 +224,38 @@ test('merging a value nothing carries changes no rows but still records the rule
   assert.equal(result.tracksChanged, 0);
   assert.deepEqual(result.sources, []);
   assert.deepEqual(result.recorded, ['vaporwave']);
+});
+
+test('a case-only merge rewrites the rows AND survives the next walk', async () => {
+  seed('t11', ['shoegaze']);
+  seed('t12', ['Shoegaze']);
+  const result = await library.consolidateScenes(['shoegaze', 'Shoegaze'], 'Shoegaze');
+
+  // Both halves fire. The rewrite lands now…
+  assert.equal(result.tracksChanged, 1);
+  assert.deepEqual(result.sources, ['shoegaze']);
+  assert.deepEqual(db.getTrack('t11')!.genres, ['Shoegaze']);
+  // …and the rule keeps it landed, which is the half a case-insensitive
+  // self-merge test dropped: the walk re-reads the FILE's "shoegaze".
+  assert.deepEqual(result.recorded, ['shoegaze']);
+  assert.deepEqual(subsonic.songGenres({ genre: 'shoegaze' }), ['Shoegaze']);
+});
+
+test('reversing a merge rewrites the rows back', async () => {
+  seed('t13', ['Synthpop']);
+  await library.consolidateScenes(['Synth Pop'], 'Synthpop');
+
+  // Now the other way round. Nothing here may quietly no-op: the rows say
+  // "Synthpop" and the operator asked for "Synth Pop".
+  const back = await library.consolidateScenes(['Synthpop'], 'Synth Pop');
+  assert.equal(back.target, 'Synth Pop');
+  assert.equal(back.tracksChanged, 1);
+  assert.deepEqual(back.sources, ['Synthpop']);
+  assert.deepEqual(back.recorded, ['synthpop']);
+  assert.deepEqual(db.getTrack('t13')!.genres, ['Synth Pop']);
+  // And the walk agrees, in one hop, with no rule left pointing the old way.
+  assert.deepEqual(subsonic.songGenres({ genre: 'Synthpop' }), ['Synth Pop']);
+  assert.deepEqual(subsonic.songGenres({ genre: 'Synth Pop' }), ['Synth Pop']);
 });
 
 // ---------------------------------------------------------------------------

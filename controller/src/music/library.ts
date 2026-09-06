@@ -652,6 +652,9 @@ export function stats() {
 // (library-db, one transaction). This is where they are paired, so a route
 // cannot do one and forget the other.
 
+// Not a bare re-export: routes reach the library through this module, and the
+// `loaded` guard is the same one every other read here carries — an unopened
+// DB answers "no vocabulary yet", never throws at the route boundary.
 export function scenes(): db.SceneCount[] {
   if (!loaded) return [];
   return db.sceneVocabulary();
