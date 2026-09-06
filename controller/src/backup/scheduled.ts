@@ -48,6 +48,8 @@ import {
   isScheduledBackupTempName,
   lastScheduledBackupAt,
   scheduledBackupName,
+  FREE_SPACE_HEADROOM_BYTES,
+  freeSpaceShortfall,
 } from './pure.js';
 
 export interface ScheduledBackupResult {
@@ -74,10 +76,6 @@ const idle = (skipped: NonNullable<ScheduledBackupResult['skipped']>): Scheduled
 const failed = (message: string): ScheduledBackupResult => ({
   skipped: null, written: null, bytes: 0, pruned: [], sweptTemps: [], errors: [message],
 });
-
-// Headroom kept free beyond the archive itself, so a backup can never be the
-// write that takes the last byte on the volume the station is running from.
-const FREE_SPACE_HEADROOM_BYTES = 64 * 1024 * 1024;
 
 /**
  * Take a scheduled backup if one is due, then apply retention.
@@ -125,7 +123,7 @@ export async function runScheduledBackup(now: Date = new Date()): Promise<Schedu
     // corrupt restore point behind.
     const buf = (await buildBackupZip()).toBuffer();
     bytes = buf.length;
-    const shortfall = await freeSpaceShortfall(bytes);
+    const shortfall = freeSpaceShortfall(await freeSpaceBytes(), bytes);
     if (shortfall !== null) {
       // Declining costs the operator this cadence's backup and says so. Writing
       // anyway costs them the station: STATE_DIR is where session.json, the tag
@@ -164,22 +162,17 @@ export async function runScheduledBackup(now: Date = new Date()): Promise<Schedu
 const mb = (bytes: number) => Math.max(1, Math.round(bytes / 1_000_000));
 
 /**
- * How many bytes short the state dir's volume is of holding `bytes` plus the
- * headroom, or null when it fits (or when we cannot tell).
- *
- * FAILS OPEN. `statfs` is unavailable or meaningless on some mounts, and the
- * feature's job is to take the backup — a filesystem we cannot measure gets the
- * write attempted, and `writeFileAtomic` cleans up after an ENOSPC.
+ * Free bytes on the state dir's volume, or NaN when the question cannot be
+ * answered — `statfs` is unavailable or meaningless on some mounts. The
+ * decision itself, including what an unanswerable NaN means, is
+ * `freeSpaceShortfall` in pure.ts.
  */
-async function freeSpaceShortfall(bytes: number): Promise<number | null> {
+async function freeSpaceBytes(): Promise<number> {
   try {
     const fs = await statfs(STATE_DIR);
-    const free = Number(fs.bavail) * Number(fs.bsize);
-    if (!Number.isFinite(free) || free <= 0) return null;
-    const need = bytes + FREE_SPACE_HEADROOM_BYTES;
-    return free < need ? need - free : null;
+    return Number(fs.bavail) * Number(fs.bsize);
   } catch {
-    return null;
+    return Number.NaN;
   }
 }
 

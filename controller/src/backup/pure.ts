@@ -181,6 +181,34 @@ export function backupDue({
  * to the floor of 1 — the same answer `settings.load()`'s normaliser gives, so
  * the module that deletes cannot be the one that guesses most destructively.
  */
+/**
+ * Headroom kept free beyond the archive itself, so a scheduled backup can never
+ * be the write that takes the last byte on the volume the station runs from.
+ *
+ * Decimal MB, not MiB, because the operator reads this number back out of an
+ * error message rendered by the same divisor. 64 * 1024 * 1024 would be a
+ * constant that says 64 and a message that says 67.
+ */
+export const FREE_SPACE_HEADROOM_BYTES = 64_000_000;
+
+/**
+ * How many bytes short `freeBytes` is of holding `needBytes` plus the headroom,
+ * or null when it fits — and null ALSO when the free figure is unusable.
+ *
+ * That second null is the fail-open: `statfs` is meaningless or unavailable on
+ * some mounts, and the feature's whole job is taking the backup, so a
+ * filesystem we cannot measure gets the write attempted. Only a filesystem we
+ * CAN measure, and which genuinely will not fit it, declines — because
+ * STATE_DIR is also where session.json, the tag DB and the archive live, and
+ * filling it stops all three.
+ */
+export function freeSpaceShortfall(freeBytes: number, needBytes: number): number | null {
+  if (!Number.isFinite(freeBytes) || freeBytes <= 0) return null;
+  if (!Number.isFinite(needBytes) || needBytes < 0) return null;
+  const need = needBytes + FREE_SPACE_HEADROOM_BYTES;
+  return freeBytes < need ? need - freeBytes : null;
+}
+
 export function backupsToPrune(names: readonly string[], keep: unknown): string[] {
   const ours = names.filter(isScheduledBackupName).sort().reverse();
   return ours.slice(clampBackupKeep(keep));

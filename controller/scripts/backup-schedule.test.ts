@@ -47,6 +47,8 @@ const {
   SCHEDULED_BACKUP_RE,
   backupDue,
   backupsToPrune,
+  freeSpaceShortfall,
+  FREE_SPACE_HEADROOM_BYTES,
   isScheduledBackupName,
   isScheduledBackupTempName,
   lastScheduledBackupAt,
@@ -605,6 +607,39 @@ test('a run sweeps half-written backups a killed run left, and only those', asyn
   assert.ok(!left.includes(stale), 'our half-written file must be swept');
   assert.ok(left.includes(foreign), "another writer's in-flight file must survive");
   unlinkSync(path.join(stateRoot, foreign));
+});
+
+test('the free-space decision declines only what genuinely will not fit', () => {
+  // Verified live against a container's 64 MB /dev/shm: the run declined, wrote
+  // no file and left no partial temp. This pins the arithmetic behind it.
+  const ARCHIVE = 1_500_000;
+  const need = ARCHIVE + FREE_SPACE_HEADROOM_BYTES;
+
+  // Room to spare, and exactly enough, both fit.
+  assert.equal(freeSpaceShortfall(500e9, ARCHIVE), null);
+  assert.equal(freeSpaceShortfall(need, ARCHIVE), null);
+
+  // One byte short is short, and the shortfall is what is missing.
+  assert.equal(freeSpaceShortfall(need - 1, ARCHIVE), 1);
+  assert.equal(freeSpaceShortfall(need - 5_000_000, ARCHIVE), 5_000_000);
+
+  // The headroom is the point: an archive that would technically fit, on a
+  // volume with nothing left afterwards, is still refused. STATE_DIR is where
+  // session.json and the tag DB live.
+  assert.ok(freeSpaceShortfall(ARCHIVE + 1, ARCHIVE) !== null,
+    'a write that would leave the volume full must be declined');
+
+  // FAILS OPEN on anything unmeasurable — the write is attempted, because
+  // taking the backup is the whole job.
+  for (const unmeasurable of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(freeSpaceShortfall(unmeasurable, ARCHIVE), null,
+      `free=${unmeasurable} must fail open`);
+  }
+
+  // Decimal MB, not MiB: the operator reads this figure back out of an error
+  // message rendered by the same divisor, so 64 * 1024 * 1024 would be a
+  // constant saying 64 and a message saying 67. (Caught on a live station.)
+  assert.equal(Math.round(FREE_SPACE_HEADROOM_BYTES / 1_000_000), 64);
 });
 
 test('a normal run is not blocked by the free-space pre-flight', async () => {
