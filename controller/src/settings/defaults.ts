@@ -12,6 +12,7 @@ import {
   BEDS_THRESHOLD_SEC_BOUNDS,
   CROSSFADE_DURATION_BOUNDS,
   DUCK_DEPTH_BOUNDS,
+  HANDOVER_OFFSET_BOUNDS,
   JINGLE_RATIO_BOUNDS,
   LOUDNESS_MAX_BOOST_DB_BOUNDS,
   LOUDNESS_TARGET_LUFS_BOUNDS,
@@ -217,6 +218,21 @@ export const DEFAULTS = {
   // bound it. Policy lives in exactly one place — broadcast/talk-air.ts.
   // Applies live; no restart.
   djTalkOnlyBetweenTracks: false,
+  // Show handover timing (#1576). How many station-clock minutes BEFORE a show
+  // boundary the outgoing host signs off — the programme outro beat's window.
+  // 5 is exactly where the beat has always fired (:55 of the final hour), so an
+  // upgrade is byte-identical; raise it to give the sign-off more room to
+  // breathe before the incoming host opens.
+  //
+  // Must be a multiple of HANDOVER_OFFSET_STEP_MINUTES: the talk table's
+  // programme row samples the station clock on that stride, and a window it
+  // cannot land on is a sign-off that never airs. Enforced at the save path and
+  // repaired at load.
+  //
+  // The ORDERING half of the handover carries no dial: whatever the offset, the
+  // incoming host waits for one closing track rather than following the
+  // sign-off straight onto the air (broadcast/handover-policy.ts).
+  handover: { offsetMinutes: 5 },
   // One persona is active at a time; a scheduled show can override who is on air.
   personas: SEED_PERSONAS,
   activePersonaId: SEED_PERSONAS[0].id,
@@ -657,6 +673,7 @@ export const BOUNDS = {
   crossfadeDuration: { ...CROSSFADE_DURATION_BOUNDS, type: 'float' },
   duckingVoice: { ...DUCK_DEPTH_BOUNDS, type: 'float' },
   duckingIntro: { ...DUCK_DEPTH_BOUNDS, type: 'float' },
+  handoverOffsetMinutes: { ...HANDOVER_OFFSET_BOUNDS, type: 'int' },
   bedsThresholdSec: { ...BEDS_THRESHOLD_SEC_BOUNDS, type: 'float' },
   bedsCrossSec: { ...BEDS_CROSS_SEC_BOUNDS, type: 'float' },
   bedsTailSec: { ...BEDS_TAIL_SEC_BOUNDS, type: 'float' },

@@ -381,6 +381,32 @@ export const CROSSFADE_DURATION_BOUNDS: SettingsNumericBound = { min: 0, max: 30
 // the music-paused interlude — the music keeps rolling underneath, silenced.
 // Shared by both layers because they are the same knob at two depths.
 export const DUCK_DEPTH_BOUNDS: SettingsNumericBound = { min: 0, max: 1 };
+
+// How long BEFORE a show boundary the outgoing host signs off — the programme
+// outro beat's placement, in station-clock minutes (`handover.offsetMinutes`).
+//
+// The step is not decoration. The outro is a window on the STATION clock that
+// the talk table's programme row samples on a fixed PROCESS stride (see
+// HANDOVER_OFFSET_STEP_MINUTES); the row gets exactly one sample inside a
+// window only while that window is as wide as the stride and opens on a
+// multiple of it. An offset the stride cannot land on is an outro that never
+// airs at all, so the constraint is enforced at the save path rather than left
+// to be discovered on air.
+//
+// The maximum keeps the moved window clear of the feature beat at :35–:39: at
+// 20 the outro opens at :40, and anything larger would have the show sign off
+// on top of its own feature.
+export const HANDOVER_OFFSET_BOUNDS: SettingsNumericBound = { min: 5, max: 20 };
+
+// The process-minute stride the talk table's programme row samples the station
+// clock on, and therefore the width and alignment every station-clock beat
+// window must have. Lives here — with the bound it constrains — rather than as
+// a literal in the table, so the row and the operator's offset cannot drift
+// apart: broadcast/talk-scheduler.ts imports it as the row's `stride`.
+//
+// 5 works for every real IANA zone because every offset is a multiple of 15
+// minutes, so process and station minutes always agree modulo 5.
+export const HANDOVER_OFFSET_STEP_MINUTES = 5;
 // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
 // 0 disables boosting entirely (cut-only levelling); 12 dB is plenty.
@@ -481,6 +507,21 @@ export const duckingPatchSchema = settingsBlockOf({
     DUCK_DEPTH_BOUNDS,
     `ducking.intro must be number in [${DUCK_DEPTH_BOUNDS.min}, ${DUCK_DEPTH_BOUNDS.max}]`,
   ),
+});
+
+// Show handover timing (#1576). One field today, a block because the ordering
+// half of the handover is a placement rule with no dial — a second timing knob
+// belongs beside this one rather than as another flat top-level key.
+export const handoverOffsetMinutesSchema = settingsIntLike(
+  HANDOVER_OFFSET_BOUNDS,
+  `handover.offsetMinutes must be int in [${HANDOVER_OFFSET_BOUNDS.min}, ${HANDOVER_OFFSET_BOUNDS.max}]`,
+).refine(
+  v => v % HANDOVER_OFFSET_STEP_MINUTES === 0,
+  `handover.offsetMinutes must be a multiple of ${HANDOVER_OFFSET_STEP_MINUTES}`,
+);
+
+export const handoverPatchSchema = settingsBlockOf({
+  offsetMinutes: handoverOffsetMinutesSchema,
 });
 
 export const transitionsPatchSchema = settingsBlockOf({

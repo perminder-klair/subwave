@@ -70,7 +70,7 @@ export const SECTIONS = [
   {
     id: 'tts', group: 'the dj', label: 'TTS voice',
     hint: 'default engine', icon: Mic,
-    formKeys: ['tts', 'kokoroLang', 'djTalkOnlyBetweenTracks'],
+    formKeys: ['tts', 'kokoroLang', 'djTalkOnlyBetweenTracks', 'handoverOffsetMinutes'],
   },
   {
     id: 'library', group: 'the dj', label: 'Library tagger',
@@ -231,6 +231,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   // ── tts voice ──────────────────────────────────────────────────────────────
   { label: 'DJ speech', section: 'tts', card: 'Station voice', keywords: 'on air music only mute silent' },
   { label: 'Talk placement', section: 'tts', card: 'Station voice', keywords: 'between tracks boundary interrupt over song duck mid-song' },
+  { label: 'Show handover', section: 'tts', card: 'Station voice', keywords: 'sign-off outro handover changeover boundary closing track programme' },
   { label: 'Engine', section: 'tts', card: 'Voice engine', keywords: 'piper kokoro chatterbox pocket-tts cloud remote' },
   { label: 'Voice', section: 'tts', card: 'Voice engine', keywords: 'speaker accent alba amy' },
   { label: 'Voice level (dB)', section: 'tts', card: 'Voice engine', keywords: 'gain trim loudness decibel' },

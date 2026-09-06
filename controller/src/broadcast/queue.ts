@@ -40,6 +40,7 @@ import * as settings from '../settings.js';
 import { logEvent } from '../observability/events.js';
 import { djCallsAllowed, presentListeners } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
+import { holdsForClosingTrack } from './handover-policy.js';
 import { speakClockAllowed, stationIdDaypartDrifted, stationIdDaypartStamp } from './clock-policy.js';
 import { currentTalkAir } from './talk-air.js';
 import * as webhooks from './webhooks.js';
@@ -195,6 +196,8 @@ class Queue {
   _resolveFailStreak = 0;       // consecutive pushes Liquidsoap never resolved — re-pick budget, see onPushResolveFailed
   _deadlinePickAt = 0;          // last deadline-pick ATTEMPT (ms epoch) — failure-retry cooldown, see maybeDeadlinePick
   _pendingVoice: PendingVoice | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
+  _trackStarts = 0;             // monotonic count of track boundaries seen — the clock the handover ordering rule is measured on
+  _handover: { atTrackStarts: number; heldOpportunities: number } | null = null; // stamped when a sign-off airs, read by closingTrackHolds() — see broadcast/handover-policy.ts
   _introRenders = new IntroRenderTracker<QueueItem>(); // timed-out pre-renders stay reusable by airIntro
   _pendingJingles = new Map<string, number>(); // manual jingle presses handed over but not yet heard — see playJingle
 
@@ -473,6 +476,50 @@ class Queue {
       if (VOICE_KINDS.has(entry.kind)) return new Date(entry.t).getTime();
     }
     return 0;
+  }
+
+  // ---------------------------------------------------------------------------
+  // SHOW HANDOVER ORDERING (#1576)
+  // The rule itself lives in broadcast/handover-policy.ts; these two methods are
+  // the state it reads. They live on the queue because the queue is the only
+  // thing that sees BOTH halves of the question — what aired (onSpoken, the one
+  // post-air bookkeeping site) and how many tracks have started since.
+  // ---------------------------------------------------------------------------
+
+  // Post-air hook: a programme outro just reached the stream, so a show is
+  // signing off and the incoming host owes the listener a closing track first.
+  //
+  // Keyed on the kind rather than on the scheduler having FIRED the beat,
+  // because the two are not the same thing: an operator pressing the outro pad
+  // on the DJ page is signing the show off just as much as the beat is, and a
+  // beat that was fired but never aired (voice off, TTS failure) has not.
+  // Manual triggers are exempt from every automatic GATE, but this is not a
+  // gate — it is a record of what the listener heard.
+  //
+  // Re-stamping is deliberate: a second sign-off restarts the wait rather than
+  // inheriting a satisfied one.
+  noteHandoverSpeech(kind: string) {
+    if (kind !== 'programme-outro') return;
+    this._handover = { atTrackStarts: this._trackStarts, heldOpportunities: 0 };
+  }
+
+  // Whether the incoming host must wait for the closing track. ASKED ONCE PER
+  // HANDOVER OPPORTUNITY — a `true` answer records the opportunity it declined,
+  // which is half of what the rule counts (see handover-policy.ts for why a
+  // boundary count alone is wrong in both drain modes).
+  //
+  // The side effect is why this is a method on the queue rather than a getter
+  // the policy reads: the counter has to advance exactly where the decision is
+  // taken, and every caller here is a real handover moment being passed up.
+  closingTrackHolds(): boolean {
+    const h = this._handover;
+    if (!h) return false;
+    const hold = holdsForClosingTrack({
+      boundariesSince: this._trackStarts - h.atTrackStarts,
+      heldOpportunities: h.heldOpportunities,
+    });
+    if (hold) h.heldOpportunities++;
+    return hold;
   }
 
   // Add a track to `upcoming` and kick off the Liquidsoap sender.
@@ -1550,6 +1597,7 @@ class Queue {
     void handoff.aired.then(airedAt => {
       try {
         this.log(kind, logText ?? text);
+        this.noteHandoverSpeech(kind);
         session.appendTurn({
           role: 'segment',
           kind,
@@ -2059,6 +2107,12 @@ class Queue {
       return;
     }
     this.lastSeenKey = key;
+    // The clock the handover ordering rule runs on (#1576). Counted here rather
+    // than timed, because "one closing track" is a count of songs and a track
+    // length is whatever the library says; incremented before airPendingVoice
+    // so anything this boundary airs is measured against the boundary it aired
+    // AT, not the one before it.
+    this._trackStarts++;
 
     // A fresh track boundary — air any boundary-deferred segment (station
     // ident) now, unless this boundary already carries the incoming track's own
@@ -2340,7 +2394,21 @@ class Queue {
         // the mic-pass lands over its outro into the transition — a working
         // DJ's hand-off spot; deliberate, see stem-transitions research.)
         try {
-          if (session.pendingHandoff()) {
+          // The ordering rule (#1576): a show that has just signed off owes the
+          // listener one closing track before the incoming host opens. Asked
+          // only when a mic-pass is actually pending, so this cycle counts at
+          // most one declined opportunity — the standalone-intro path
+          // (programme.maybeRunIntro) stands down on `pendingHandoff` before it
+          // reaches the same question.
+          //
+          // A held mic-pass is left PENDING, never marked aired: the next pick
+          // cycle airs it, and its own 20-minute staleness (HANDOFF_MAX_AGE_MS)
+          // is what bounds the wait if no next cycle ever comes.
+          const pendingMicPass = !!session.pendingHandoff();
+          if (pendingMicPass && this.closingTrackHolds()) {
+            this.log('scheduler',
+              'Holding the show handover — the outgoing DJ just signed off, so a closing track plays first');
+          } else if (pendingMicPass) {
             this.dropPendingVoice('the show handoff covers this boundary');
             // Identity looks ahead; the CLOCK must not. `ctx` describes
             // showAt — up to a track-length plus the look-ahead margin from

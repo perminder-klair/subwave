@@ -43,6 +43,7 @@
 import {
   BANTER_SLOTS, BANTER_WINDOW_MINUTES, BANTER_MIN_GAP_MS,
 } from './banter-policy.js';
+import { HANDOVER_OFFSET_STEP_MINUTES } from '../schemas/settings.js';
 import { pendingVoiceValidForMs } from './queue/kinds.js';
 import type { PendingTalk } from './queue/kinds.js';
 
@@ -118,8 +119,16 @@ export type TalkSlot = {
   // Only evaluate this row on process minutes divisible by `stride`. Exists so
   // the programme row keeps being sampled exactly where its old `*/5` cron
   // sampled it: with every real IANA offset a multiple of 15 minutes, a 5-minute
-  // stride lands one tick inside each beat window (:35-:39, :55+) whatever the
-  // zone, and a per-minute row would add retries the old cron never had.
+  // stride lands one tick inside each beat window whatever the zone, and a
+  // per-minute row would add retries the old cron never had.
+  //
+  // For the programme row that is a CONTRACT, not a convenience, and #1576 made
+  // it one the operator can now break: the sign-off's window moved off the
+  // hardcoded :55 and onto `handover.offsetMinutes`. A window narrower than the
+  // stride, or opening off a multiple of it, is one this row never samples — and
+  // the failure is silent, a show that simply stops signing off. So the stride
+  // and the bound on that setting are the SAME constant, declared once in
+  // schemas/settings.ts and imported at both ends.
   stride: number;
   // Whether the row remembers that a slot has already spoken. Banter needs it
   // (a per-minute window would otherwise stream exchanges); programme does NOT,
@@ -143,14 +152,23 @@ export type TalkSlot = {
 // the back of a segment that just finished — which is the whole of #310,
 // stated as a number instead of as an absent cron minute.
 export const TALK_SLOTS: readonly TalkSlot[] = [
-  // Programme beats — the feature mid-hour and the outro in the final minutes
-  // of the show's last hour, both placed on the station clock by
-  // programme.dueBeat(). Gating lives in programme.ts; this row only says when
-  // to ask. It leads the table because it is the one row that CANNOT retry:
-  // `dueBeat` is a window on the station clock that this row samples once, so a
-  // beat that yields is a beat the episode never gets. It takes no gap for the
-  // same reason — a planned episode's beats are the show, not an interruption
-  // of it.
+  // Programme beats — the feature mid-hour and the outro (the show's sign-off)
+  // in the final hour, both placed on the station clock by programme.dueBeat().
+  // Gating lives in programme.ts; this row only says when to ask. It leads the
+  // table because it is the one row that CANNOT retry: `dueBeat` is a window on
+  // the station clock that this row samples once, so a beat that yields is a
+  // beat the episode never gets. It takes no gap for the same reason — a planned
+  // episode's beats are the show, not an interruption of it.
+  //
+  // The outro's window is the one placement here an operator can move
+  // (`handover.offsetMinutes`, #1576: 5 keeps it at :55-:59, 20 opens it at
+  // :40). Moving it is a WINDOW MOVE and never a resize — it stays one `stride`
+  // wide and aligned to a multiple of `stride`, which is the only shape this
+  // row's single sample is guaranteed to land inside. That is why the offset is
+  // bounded to multiples of the stride at the save path, and why the stride
+  // below is the imported constant rather than a literal 5: the table and the
+  // setting have to be the same number, and a row this sparse gives no second
+  // chance to notice they stopped being one.
   {
     kind: 'programme',
     opens: 'external',
@@ -160,7 +178,7 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     role: 'slot',
     priority: 1,
     clock: 'station',
-    stride: 5,
+    stride: HANDOVER_OFFSET_STEP_MINUTES,
     oneFirePerSlot: false,
   },
   // Top of the hour: the DJ checks in. The window runs to :09 — past that it is

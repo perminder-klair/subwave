@@ -29,7 +29,11 @@ import {
   type ShowSchemaContext,
 } from '../schemas/show.js';
 import { resolveShowIds } from '../schemas/show-server.js';
-import { DUCK_DEPTH_BOUNDS } from '../schemas/settings.js';
+import {
+  DUCK_DEPTH_BOUNDS,
+  HANDOVER_OFFSET_BOUNDS,
+  HANDOVER_OFFSET_STEP_MINUTES,
+} from '../schemas/settings.js';
 // The persona + prompt-library rules themselves, so this lenient path and
 // update()'s strict one cannot restate them differently.
 import {
@@ -75,6 +79,26 @@ export function normalizeDuckDepth(raw: unknown, fallback: number): number {
     && Number.isFinite(raw)
     && raw >= DUCK_DEPTH_BOUNDS.min
     && raw <= DUCK_DEPTH_BOUNDS.max
+    ? raw
+    : fallback;
+}
+
+// A stored show-handover offset, repaired rather than refused — same posture as
+// normalizeDuckDepth, and for the same reason: load()'s input is a file an
+// operator (or a backup from another version) may have hand-edited.
+//
+// The STEP is checked here as well as the range, and that is the half worth
+// stating: an offset the talk table's programme row cannot sample produces no
+// error anywhere, just a show whose sign-off silently stops airing. Falling
+// back to the default is the pre-existing behaviour, which is what an
+// unreadable value should coerce to. Bounds and step come from the shared
+// schema so this path and the save path cannot drift.
+export function normalizeHandoverOffsetMinutes(raw: unknown, fallback: number): number {
+  return typeof raw === 'number'
+    && Number.isInteger(raw)
+    && raw >= HANDOVER_OFFSET_BOUNDS.min
+    && raw <= HANDOVER_OFFSET_BOUNDS.max
+    && raw % HANDOVER_OFFSET_STEP_MINUTES === 0
     ? raw
     : fallback;
 }

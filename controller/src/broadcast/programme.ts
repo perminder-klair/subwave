@@ -3,7 +3,9 @@
 //
 // The structure is canonical and time-based (no operator rundown): the intro
 // airs at the top of the show, one feature beat airs mid-hour (:35, each
-// scheduled hour), the outro airs at :55 of the final hour. What makes the
+// scheduled hour), the outro airs `handover.offsetMinutes` before the end of
+// the final hour (:55 by default) and the incoming host waits a closing track
+// behind it — both in broadcast/handover-policy.ts. What makes the
 // hour cohere is the EPISODE PLAN — one structured "producer" LLM call at
 // session start (llm/internal/prompts/programme.ts) that turns the show's
 // standing topic brief + the moment into today's angle, per-hour feature
@@ -36,6 +38,8 @@ import { optionalSegmentsAllowed } from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { zonedParts } from '../time.js';
 import { takeoverShowId } from '../schemas/schedule.js';
+import { HANDOVER_OFFSET_STEP_MINUTES } from '../schemas/settings.js';
+import { handoverOffsetMinutes } from './handover-policy.js';
 
 // How long after the intro aired the generic hourly time-check stays
 // suppressed: the intro owns the top of the show's first hour (the same
@@ -63,9 +67,11 @@ function episodeSpan(now: Date): { index: number; total: number } {
 
 // The beat due at this moment on the STATION clock, for the scheduler's
 // 5-minute programme tick (see beatWindow for why crons can't fire on fixed
-// station minutes directly).
+// station minutes directly). The outro's placement is the operator's
+// `handover.offsetMinutes`, resolved through the policy module rather than read
+// from settings here — the same value bounds the talk row's stride.
 export function dueBeat(now = new Date()): 'feature' | 'outro' | null {
-  return beatWindow(zonedParts(now).minute);
+  return beatWindow(zonedParts(now).minute, handoverOffsetMinutes(), HANDOVER_OFFSET_STEP_MINUTES);
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +227,15 @@ export async function maybeRunIntro(queue: QueueApi, ctx: SessionContext, now = 
   // episode twice. Stay pending: the boundary tick re-runs this after
   // runPersonaHandoff, which marks handoffAired on every exit path.
   if (session.pendingHandoff()) return false;
+  // The ordering rule (#1576). A show whose sign-off just aired owes the
+  // listener one closing track, and this is the path that carries the incoming
+  // host's first words when the persona did NOT change — the mic-pass covers
+  // the other one, gated in the queue's own boundary path. Asked after the
+  // pendingHandoff check so exactly one of the two counts the opportunity.
+  //
+  // Stays pending and unmarked, like the voice-switch case below: the next
+  // boundary opens the episode instead.
+  if (queue.closingTrackHolds()) return false;
   // Station voice off → stays pending and unmarked, like the budget case: flip
   // the switch back mid-show and the intro can still open the remaining hours.
   if (!autoVoiceAllowed()) return false;
@@ -338,7 +353,8 @@ export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourInd
   });
 }
 
-// Outro — the sign-off. Cron-driven at :55 of the show's FINAL hour.
+// Outro — the sign-off. Driven by the talk table's programme row in the show's
+// FINAL hour, `handover.offsetMinutes` before the boundary (:55 by default).
 export async function outroTick(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<void> {
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();

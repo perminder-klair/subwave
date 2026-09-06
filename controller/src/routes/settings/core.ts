@@ -98,6 +98,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         jingleRatio: s.jingleRatio,
         crossfadeDuration: s.crossfadeDuration,
         ducking: s.ducking,
+        handover: s.handover,
         maxTrackSeconds: s.maxTrackSeconds,
         // Crossfade-relative floor for a non-zero cap — one rule, shared with the
         // admin/show UI so client hints match server validation.
