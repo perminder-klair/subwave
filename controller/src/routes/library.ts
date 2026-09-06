@@ -366,10 +366,7 @@ router.post(
   async (req, res) => {
     const { from, to } = req.body as SceneMergeBody;
     try {
-      // Rules live in blocklist.json and are only in memory after load(); the
-      // other two stores read themselves. Idempotent.
-      await blocklist.load();
-      res.json({ references: sceneReferences(from, to) });
+      res.json({ references: await sceneReferences(from, to) });
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
@@ -384,11 +381,10 @@ router.post(
     const { from, to } = req.body as SceneMergeBody;
     try {
       await library.load();
-      await blocklist.load();
       // Computed BEFORE the rewrite: the target resolves through the rule set
       // this merge is about to change, so asking afterwards would answer for a
       // different merge than the one the preview warned about.
-      const references = sceneReferences(from, to);
+      const references = await sceneReferences(from, to);
       const result = await library.consolidateScenes(from, to);
       // Three outcomes, and the log must not flatten them. Rows rewritten is
       // the ordinary one. No rows but a rule recorded means the listing the

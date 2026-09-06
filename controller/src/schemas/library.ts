@@ -204,7 +204,8 @@ export function sceneMergeSchema() {
 // through show-filter's normGenre ("rock" → "Rock", "Hip-Hop" → "Hip Hop"), so
 // those merges orphan nothing; a SEMANTIC rename ("trip-hop" → "downtempo")
 // leaves every show, blocklist rule and playlist filter still naming the
-// retired value matching nothing, with no error and no visible cause.
+// retired value selecting nothing on that value, with no error and no visible
+// cause.
 //
 // The scan behind this shape lives in music/scene-references.ts — it needs
 // show-filter's matcher, which this file may not import. Only the SHAPE is
@@ -214,21 +215,23 @@ export function sceneMergeSchema() {
 // Naming the affected shows is the whole value of the warning. A generic "this
 // may affect filters" is the non-advice the operator already assumed.
 
-/** Where a retired scene can still be named. */
-export const SCENE_REFERENCE_KINDS = ['show', 'rule', 'playlist'] as const;
-export type SceneReferenceKind = (typeof SCENE_REFERENCE_KINDS)[number];
+/** Where a retired scene can still be named. A bare union: nothing validates
+ *  against these at a boundary, so there is no runtime list to keep. */
+export type SceneReferenceKind = 'show' | 'rule' | 'playlist';
 
-/** One filter that names a value this merge retires and would stop matching. */
+/** One filter that names a value this merge retires and would stop catching it. */
 export interface SceneReference {
   kind: SceneReferenceKind;
   /** Show id, blocklist rule id, or Navidrome playlist id. */
   id: string;
   /** What the operator calls it: show name, rule label, playlist name. */
   name: string;
-  /** Its genre filter values that matched a retired scene and match nothing
-   *  once the merge lands. */
+  /** Its values that NAME a scene this merge retires — the value IS that
+   *  scene, not something broader that also caught it — and that do not catch
+   *  the survivor. */
   orphaned: string[];
-  /** Its genre filter values that still match something — empty means this
-   *  filter's whole genre constraint goes quiet. */
+  /** The REST of this filter's own list, and nothing more. Empty means the
+   *  orphaned values were all it had; it is NOT a claim that the filter now
+   *  matches no tracks, which would need the whole tag set walked. */
   remaining: string[];
 }

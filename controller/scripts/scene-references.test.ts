@@ -12,6 +12,11 @@
 // "Rock" and "Hip-Hop" → "Hip Hop" orphan nothing, and warning about them is
 // how the operator learns to click past the warning that matters.
 //
+// The same cuts the other way, which is the subtler half: a "Punk" show CATCHES
+// "Punk Rock" by refinement, so retiring "Punk Rock" narrows that show without
+// orphaning anything — every track tagged plain "Punk" still matches. Both
+// directions are pinned below, because only one of them is obvious.
+//
 // Run: npm test -- scene-references
 
 import assert from 'node:assert/strict';
@@ -50,10 +55,16 @@ writeFileSync(
         values: ['Trip-Hop'], season: null, showIds: [], addedAt: '2026-01-01T00:00:00Z',
       },
       {
-        // Same value, different FIELD — a tag that reads like a genre is not a
-        // scene, and the tag vocabulary is untouched by a genre merge.
+        // A tag rule matches trackAllTags, genres included, so it IS in scope —
+        // but by normText EXACT, which does not fold the hyphen the genre
+        // predicate folds. Both halves of that show up below.
         id: 'r_tag', label: 'No trip-hop tag', field: 'tag',
         values: ['trip-hop'], season: null, showIds: [], addedAt: '2026-01-01T00:00:00Z',
+      },
+      {
+        // A mood is a vocabulary a genre merge cannot reach — out of scope.
+        id: 'r_mood', label: 'No melancholy', field: 'mood',
+        values: ['melancholy'], season: null, showIds: [], addedAt: '2026-01-01T00:00:00Z',
       },
     ],
   }),
@@ -83,11 +94,13 @@ const settings = await import('../src/settings.js');
 const blocklist = await import('../src/music/blocklist.js');
 const sceneVocab = await import('../src/music/scene-vocab.js');
 
-type GenreFilter = refs.GenreFilter;
+type SceneFilter = refs.SceneFilter;
 type SceneReferenceRow = refs.SceneReference;
 
-const show = (id: string, name: string, genres: string[]): GenreFilter =>
-  ({ kind: 'show', id, name, genres });
+const show = (id: string, name: string, values: string[]): SceneFilter =>
+  ({ kind: 'show', mode: 'genre', id, name, values });
+const tagRule = (id: string, name: string, values: string[]): SceneFilter =>
+  ({ kind: 'rule', mode: 'tag', id, name, values });
 
 // ---------------------------------------------------------------------------
 // The boundary: which merges orphan a filter and which do not
@@ -138,6 +151,46 @@ test('a filter the survivor still refines is not orphaned', () => {
   assert.deepEqual(out.map(r => r.orphaned), [['Punk Rock']]);
 });
 
+test('a filter that only CATCHES the retired value has narrowed, not broken', () => {
+  // The bug this criterion exists to fix. A "Punk" show catches "Punk Rock" by
+  // refinement, so a one-way test called it orphaned the moment punk rock went
+  // anywhere else — and then, with no other value on the show, the panel said
+  // it would match no tracks at all. Every track tagged plain "Punk" still
+  // matches it. Narrowing is real, but it happens on nearly every merge that
+  // touches an overlapping genre, and a list mixing it with real breakage is
+  // the generic non-advice this feature replaces.
+  assert.deepEqual(
+    refs.orphanedFilters([show('sh1', 'Basement', ['Punk'])], ['Punk Rock'], 'Downtempo'),
+    [],
+  );
+  // The distinction is mutual coverage, and the matcher answers both halves.
+  assert.equal(refs.filterCatchesScene('genre', 'Punk', 'Punk Rock'), true);
+  assert.equal(refs.filterNamesScene('genre', 'Punk', 'Punk Rock'), false);
+  // …while a value that IS the retired spelling names it, punctuation and all.
+  assert.equal(refs.filterNamesScene('genre', 'Trip Hop', 'trip-hop'), true);
+  assert.equal(refs.filterNamesScene('genre', 'Hip-Hop', 'Hip Hop'), true);
+});
+
+test('a tag rule uses its own stricter predicate', () => {
+  // field: 'tag' matches trackAllTags — genres among them — by normText EXACT,
+  // which folds case and whitespace but NOT punctuation. So a tag rule naming
+  // the retired spelling goes quiet on that namespace…
+  assert.deepEqual(
+    refs.orphanedFilters([tagRule('r1', 'No trip hop', ['trip hop'])], ['Trip Hop'], 'Downtempo')
+      .map(r => r.orphaned),
+    [['trip hop']],
+  );
+  // …but a punctuation variant is a different tag entirely, where the genre
+  // predicate would have folded the two together.
+  assert.deepEqual(
+    refs.orphanedFilters([tagRule('r1', 'No trip-hop', ['trip-hop'])], ['Trip Hop'], 'Downtempo'),
+    [],
+  );
+  // And refinement is not a tag match at all, in either direction.
+  assert.equal(refs.filterCatchesScene('tag', 'Punk', 'Punk Rock'), false);
+  assert.equal(refs.filterCatchesScene('genre', 'Punk', 'Punk Rock'), true);
+});
+
 test('a filter that never named the retired value is untouched', () => {
   assert.deepEqual(
     refs.orphanedFilters([show('sh1', 'Loud Hour', ['Rock', 'Metal'])], ['trip-hop'], 'Downtempo'),
@@ -145,7 +198,7 @@ test('a filter that never named the retired value is untouched', () => {
   );
 });
 
-test('remaining says whether the whole genre constraint goes quiet', () => {
+test('remaining is the rest of that filter\'s own list', () => {
   const out = refs.orphanedFilters(
     [show('sh1', 'Slow Motion', ['Trip-Hop', 'Ambient'])],
     ['trip-hop'],
@@ -153,8 +206,9 @@ test('remaining says whether the whole genre constraint goes quiet', () => {
   );
   assert.equal(out.length, 1);
   assert.deepEqual(out[0].orphaned, ['Trip-Hop']);
-  // Ambient still selects tracks, so this show narrows rather than dies — the
-  // difference between "fix this now" and "have a look".
+  // The other value on the SAME show, and nothing more — deliberately not a
+  // claim that Ambient still matches anything, which would need the whole tag
+  // set walked.
   assert.deepEqual(out[0].remaining, ['Ambient']);
 });
 
@@ -182,18 +236,24 @@ test('shows project on genres, and a show with none is not a filter', () => {
       { id: 'sh2', name: 'Freeform', genres: [] },
       { id: 'sh3', name: 'Legacy' },
     ]),
-    [{ kind: 'show', id: 'sh1', name: 'Night Bus', genres: ['Trip Hop'] }],
+    [{ kind: 'show', mode: 'genre', id: 'sh1', name: 'Night Bus', values: ['Trip Hop'] }],
   );
 });
 
-test('only field=genre blocklist rules are scanned', () => {
+test('genre AND tag rules are scanned, each with its own predicate', () => {
+  // A tag rule matches trackAllTags, which is genres ∪ moods ∪ audio moods ∪
+  // Last.fm tags — so a genre merge silences it on the genre namespace exactly
+  // like a genre rule. The five other fields name values from vocabularies a
+  // genre merge cannot reach.
   const rules = [
     { id: 'r1', label: 'No trip-hop', field: 'genre' as const, values: ['Trip-Hop'], season: null, showIds: [], addedAt: '' },
     { id: 'r2', label: 'No trip-hop tag', field: 'tag' as const, values: ['trip-hop'], season: null, showIds: [], addedAt: '' },
-    { id: 'r3', label: 'Empty', field: 'genre' as const, values: [], season: null, showIds: [], addedAt: '' },
+    { id: 'r3', label: 'No sad songs', field: 'mood' as const, values: ['melancholy'], season: null, showIds: [], addedAt: '' },
+    { id: 'r4', label: 'Empty', field: 'genre' as const, values: [], season: null, showIds: [], addedAt: '' },
   ];
   assert.deepEqual(refs.ruleFilters(rules), [
-    { kind: 'rule', id: 'r1', name: 'No trip-hop', genres: ['Trip-Hop'] },
+    { kind: 'rule', mode: 'genre', id: 'r1', name: 'No trip-hop', values: ['Trip-Hop'] },
+    { kind: 'rule', mode: 'tag', id: 'r2', name: 'No trip-hop tag', values: ['trip-hop'] },
   ]);
 });
 
@@ -211,7 +271,7 @@ test('playlist recipes project on knobs.genres', () => {
     },
   ];
   assert.deepEqual(refs.recipeFilters(entries), [
-    { kind: 'playlist', id: 'pl_1', name: 'Comedown', genres: ['Trip Hop'] },
+    { kind: 'playlist', mode: 'genre', id: 'pl_1', name: 'Comedown', values: ['Trip Hop'] },
   ]);
 });
 
@@ -223,39 +283,60 @@ test('the scan reads shows, blocklist rules and playlist recipes', async () => {
   await settings.load();
   await blocklist.load();
 
-  const found = refs.collectGenreFilters();
+  const found = refs.collectSceneFilters();
   const byId = new Map(found.map(f => [f.id, f]));
   // A pure test would pass on all of this while reading the wrong store, or
   // the wrong field of the right one.
   assert.equal(byId.get('sh_night')?.kind, 'show');
-  assert.deepEqual(byId.get('sh_night')?.genres, ['Trip Hop']);
+  assert.deepEqual(byId.get('sh_night')?.values, ['Trip Hop']);
   assert.equal(byId.get('r_trip')?.kind, 'rule');
+  assert.equal(byId.get('r_trip')?.mode, 'genre');
   assert.equal(byId.get('r_trip')?.name, 'No trip-hop before noon');
+  assert.equal(byId.get('r_tag')?.mode, 'tag');
   assert.equal(byId.get('pl_1')?.kind, 'playlist');
-  assert.deepEqual(byId.get('pl_1')?.genres, ['Trip Hop', 'Downtempo']);
-  // A show with no genres, a non-genre rule and a knobless recipe are not
-  // genre filters at all.
+  assert.deepEqual(byId.get('pl_1')?.values, ['Trip Hop', 'Downtempo']);
+  // A show with no genres, a rule on a vocabulary a genre merge cannot reach,
+  // and a knobless recipe are not filters over scene values at all.
   assert.equal(byId.has('sh_open'), false);
-  assert.equal(byId.has('r_tag'), false);
+  assert.equal(byId.has('r_mood'), false);
   assert.equal(byId.has('pl_2'), false);
 });
 
-test('a semantic rename names every kind that still references it', () => {
-  const out = refs.sceneReferences(['Trip-Hop', 'trip-hop', 'Trip Hop'], 'Downtempo');
+test('a semantic rename names every kind that still references it', async () => {
+  const out = await refs.sceneReferences(['Trip-Hop', 'trip-hop', 'Trip Hop'], 'Downtempo');
   const names = out.map(r => `${r.kind}:${r.id}`).sort();
-  assert.deepEqual(names, ['playlist:pl_1', 'rule:r_trip', 'show:sh_mixed', 'show:sh_night']);
+  // The tag rule is in because this merge retires "trip-hop" VERBATIM, which
+  // is its value; the route test below shows the same rule staying out when
+  // only the spaced spelling is retired.
+  assert.deepEqual(
+    names,
+    ['playlist:pl_1', 'rule:r_tag', 'rule:r_trip', 'show:sh_mixed', 'show:sh_night'],
+  );
   // The mixed show keeps Ambient; the playlist keeps Downtempo, which IS the
   // survivor — so neither goes fully quiet and the row says so.
   assert.deepEqual(out.find(r => r.id === 'sh_mixed')?.remaining, ['Ambient']);
   assert.deepEqual(out.find(r => r.id === 'pl_1')?.remaining, ['Downtempo']);
   assert.deepEqual(out.find(r => r.id === 'sh_night')?.remaining, []);
-  // The Rock show and the tag rule are not in it at all.
-  assert.equal(out.some(r => r.id === 'sh_rock' || r.id === 'r_tag'), false);
+  // The Rock show and the mood rule are not in it at all.
+  assert.equal(out.some(r => r.id === 'sh_rock' || r.id === 'r_mood'), false);
 });
 
-test('the harmless merge produces no warning against the real stores', () => {
-  assert.deepEqual(refs.sceneReferences(['rock'], 'Rock'), []);
-  assert.deepEqual(refs.sceneReferences(['Trip-Hop'], 'trip hop'), []);
+test('the harmless merge produces no warning against the real stores', async () => {
+  assert.deepEqual(await refs.sceneReferences(['rock'], 'Rock'), []);
+});
+
+test('a punctuation merge is harmless to genre filters and NOT to a tag rule', async () => {
+  // "Trip-Hop" → "trip hop" is a pure punctuation fold, so every genre filter
+  // rides it out — normGenre never saw the hyphen. The tag rule spelled
+  // "trip-hop" does not: its predicate folds case and whitespace only, so the
+  // genre it used to catch is now spelled a way it cannot match. This is the
+  // whole reason tag rules are scanned with their own predicate rather than
+  // waved off as "not scenes" — a scan that ran one fold over both stores
+  // would report this merge as harmless, and it is not.
+  const out = await refs.sceneReferences(['Trip-Hop'], 'trip hop');
+  assert.deepEqual(out.map(r => r.id), ['r_tag']);
+  assert.deepEqual(out[0]!.orphaned, ['trip-hop']);
+  assert.deepEqual(out[0]!.remaining, []);
 });
 
 test('the target is resolved through the rule set before the scan', async () => {
@@ -264,15 +345,14 @@ test('the target is resolved through the rule set before the scan', async () => 
   // otherwise the preview names a show the merge will not actually break.
   await sceneVocab.recordMerge(['Downtempo'], 'Ambient Techno');
   try {
-    // Slow Motion filters on "Ambient", which the retired "Ambient Dub"
-    // matches. What actually survives is "Ambient Techno" — which "Ambient"
-    // matches too, so the show loses nothing. Judged against the TYPED
-    // "Downtempo" it would have been reported as breaking.
-    const out = refs.sceneReferences(['Ambient Dub'], 'Downtempo');
+    // Slow Motion filters on "Ambient", which is the retired spelling. What
+    // actually survives is "Ambient Techno" — which "Ambient" still catches by
+    // refinement — so the show loses nothing.
+    const out = await refs.sceneReferences(['ambient'], 'Downtempo');
     assert.equal(out.some(r => r.id === 'sh_mixed'), false);
-    // And the same scan against a target that resolves nowhere DOES report it,
+    // Judged against the TYPED target it would have been reported as breaking,
     // so this is the resolution doing the work and not an unreachable filter.
-    const typed = refs.orphanedFilters(refs.collectGenreFilters(), ['Ambient Dub'], 'Downtempo');
+    const typed = refs.orphanedFilters(refs.collectSceneFilters(), ['ambient'], 'Downtempo');
     assert.deepEqual(typed.find(r => r.id === 'sh_mixed')?.orphaned, ['Ambient']);
   } finally {
     await sceneVocab.forget('downtempo');
@@ -326,7 +406,9 @@ test('POST /library/scenes/references names what a rename would orphan', async (
   const found = res.body.references as SceneReferenceRow[];
   // Every spelling that folds onto "Trip Hop" through normGenre is named, not
   // just the one the operator ticked: Slow Motion's "trip-hop" is the same
-  // filter as far as the picker is concerned.
+  // filter as far as the picker is concerned. The TAG rule spelled "trip-hop"
+  // is not, because its own predicate does not fold the hyphen — the two
+  // stores disagree here on purpose, and the scan has to disagree with them.
   assert.deepEqual(
     found.map(r => `${r.kind}:${r.id}`).sort(),
     ['playlist:pl_1', 'rule:r_trip', 'show:sh_mixed', 'show:sh_night'],

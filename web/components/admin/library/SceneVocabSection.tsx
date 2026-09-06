@@ -17,7 +17,7 @@
 import { useMemo, useState } from 'react';
 import { useDebounceValue } from 'usehooks-ts';
 import { Tags, Loader2, X, AlertTriangle } from 'lucide-react';
-import { adminJson, useAdminQuery as useSharedAdminQuery } from '../../../lib/admin-query';
+import { adminJson } from '../../../lib/admin-query';
 import { notify } from '../../../lib/notify';
 import { Btn } from '../ui';
 import { Input } from '../../ui/input';
@@ -25,7 +25,6 @@ import { Checkbox } from '../../ui/checkbox';
 import { V3Alert } from '../../ui/alert';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { cn } from '../../../lib/cn';
-import { useLibrary } from './LibraryContext';
 import { libraryKeys } from './queries';
 import type { SceneAlias, SceneCount, SceneReference } from './types';
 import { useAdminMutation, useAdminQuery } from './useAdminQuery';
@@ -71,9 +70,15 @@ const KIND_LABEL: Record<SceneReference['kind'], string> = {
 };
 
 /**
- * The warning body: one line per filter, NAMING it. `remaining` empty means the
- * filter's whole genre constraint goes quiet, which is the difference between
- * a show that narrows and a show that airs nothing.
+ * The warning body: one line per filter, NAMING it.
+ *
+ * `remaining` is the REST of that filter's own list and nothing more, so the
+ * copy claims nothing more either. It is tempting to read an empty `remaining`
+ * as "this filter now matches no tracks", and that is not established: the
+ * value may still be caught by another spelling in the vocabulary, and a tag
+ * rule reaches moods and Last.fm tags too. Saying it would need the whole tag
+ * set walked on every keystroke, which is the scan the scenes listing is
+ * fetched-on-expand to avoid.
  */
 function ReferenceLines({ items }: { items: readonly SceneReference[] }) {
   return (
@@ -81,10 +86,11 @@ function ReferenceLines({ items }: { items: readonly SceneReference[] }) {
       {items.map(r => (
         <li key={`${r.kind}:${r.id}`} className="text-[12px] leading-[1.45]">
           <span className="caption !tracking-[0.04em]">{KIND_LABEL[r.kind]}</span>{' '}
-          <b>{r.name}</b> filters on {r.orphaned.map(v => `“${v}”`).join(', ')}
+          <b>{r.name}</b> filters on {r.orphaned.map(v => `“${v}”`).join(', ')}, which this
+          merge retires
           {r.remaining.length
-            ? ` — it still has ${r.remaining.map(v => `“${v}”`).join(', ')} to go on.`
-            : ' — nothing else, so it will match no tracks at all.'}
+            ? ` — it also filters on ${r.remaining.map(v => `“${v}”`).join(', ')}.`
+            : ' — it has no other value.'}
         </li>
       ))}
     </ul>
@@ -150,29 +156,23 @@ export default function SceneVocabSection() {
   // do, a semantic rename does not), and a second copy of that rule in the
   // browser would drift into warning on every harmless "rock" → "Rock".
   //
-  // Not the library-scoped useAdminQuery: this read is a POST, because the body
-  // carries up to 100 ticked values and a query string that long does not
-  // survive every proxy. The shared hook takes the request outright.
-  const { adminFetch, ready } = useLibrary();
+  // A POST, because the body carries up to 100 ticked values and a query string
+  // that long does not survive every proxy — hence `init`, which is the only
+  // reason this is not a plain path read.
+  //
   // Only the typed survivor is debounced. Ticking a box is one step at a time,
   // and waiting a beat to hear about it reads as lag.
   const [debouncedTo] = useDebounceValue(to, 250);
   const staged = sources.length > 0 && debouncedTo.length > 0;
-  const warn = useSharedAdminQuery<ReferencesResponse>({
+  const warn = useAdminQuery<ReferencesResponse>({
     key: libraryKeys.sceneReferences(sources, debouncedTo),
-    adminFetch,
-    request: (fetcher, signal) =>
-      adminJson<ReferencesResponse>(
-        fetcher,
-        '/library/scenes/references',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: sources, to: debouncedTo }),
-        },
-        signal,
-      ),
-    enabled: open && ready && staged,
+    path: '/library/scenes/references',
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: sources, to: debouncedTo }),
+    },
+    enabled: open && staged,
     // Silent on failure, deliberately: this is advisory, and a station whose
     // controller predates the endpoint would otherwise toast on every tick.
     toastOnError: false,
@@ -369,7 +369,7 @@ export default function SceneVocabSection() {
                 <div className="basis-full border border-vermilion bg-bg px-2.5 py-2 text-vermilion">
                   <span className="caption flex items-center gap-1.5 !text-vermilion">
                     <AlertTriangle size={12} />
-                    {references.length} filter{references.length === 1 ? '' : 's'} still name
+                    {references.length} filter{references.length === 1 ? '' : 's'} name
                     {references.length === 1 ? 's' : ''} a spelling this merge retires
                   </span>
                   <div className="mt-1 text-ink">
@@ -458,7 +458,7 @@ export default function SceneVocabSection() {
             {references.length > 0 && (
               <span className="mt-3 block border border-destructive px-2.5 py-2 text-destructive">
                 <span className="caption block !text-destructive">
-                  These stop matching
+                  These name a spelling you are retiring
                 </span>
                 <span className="mt-1 block text-ink">
                   <ReferenceLines items={references} />
