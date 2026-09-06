@@ -214,14 +214,21 @@ export async function get() {
   // 99.5%+ (e.g. 999/1000), which reads as done when a track still needs work —
   // and pushed coverage-status.ts to 'complete' one track early. Floor keeps the
   // meter at 99% until the last track lands; count===total is the only exact 100.
-  const percent =
-    total != null && total > 0 ? Math.floor((tagged / total) * 100) : null;
-  const analysedPercent =
-    total != null && total > 0 ? Math.floor((analysed / total) * 100) : null;
-  const audioEmbeddedPercent =
-    total != null && total > 0 ? Math.floor((audioEmbedded / total) * 100) : null;
-  const vocalAnalyzedPercent =
-    total != null && total > 0 ? Math.floor((vocalAnalyzed / total) * 100) : null;
+  // Capped at 100 as well as floored. The two sides of every ratio come from
+  // DIFFERENT places — the numerator is a live library.db count, the
+  // denominator the last Navidrome walk — so they drift apart by design now
+  // that nothing recounts unattended (#1570): tracks pulled from the music
+  // server stay in library.db until a reconcile, and the total only moves when
+  // someone asks. Uncapped, that renders as "2943% tagged", which reads as a
+  // broken meter rather than a stale count. The progress bars already clamped
+  // their aria-valuenow, so only the printed figure was exposed. `scannedAt` is
+  // what tells the operator the denominator may be old.
+  const pctOf = (n: number) =>
+    total != null && total > 0 ? Math.min(100, Math.floor((n / total) * 100)) : null;
+  const percent = pctOf(tagged);
+  const analysedPercent = pctOf(analysed);
+  const audioEmbeddedPercent = pctOf(audioEmbedded);
+  const vocalAnalyzedPercent = pctOf(vocalAnalyzed);
   // Embedding-index provenance: the model the vectors were built with vs what the
   // current settings would embed with (same activeModelLabel() format on both
   // sides, so no prefix/default drift). When they differ, a tag run hits a hard

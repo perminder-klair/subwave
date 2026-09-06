@@ -96,6 +96,27 @@ test('a library reset does not recount Navidrome', async () => {
   );
 });
 
+test('every percentage is capped at 100, not just floored', async () => {
+  // The numerator of each ratio is a live library.db count; the denominator is
+  // the last Navidrome walk. Since nothing recounts unattended they drift by
+  // design — tracks pulled from the music server linger in library.db until a
+  // reconcile, and the total only moves when someone asks. Found live: a real
+  // controller with a 1413-track library.db against a 48-song server rendered
+  // "2943% tagged", which reads as a broken meter rather than a stale count.
+  // The progress BARS already clamped their aria-valuenow; only the printed
+  // figure was exposed, so the clamp belongs at the source both read from.
+  const src = codeOnly(await readFile(SRC, 'utf8'));
+  const body = src.slice(src.indexOf('const pctOf'), src.indexOf('const embeddedMeta'));
+  assert.match(body, /Math\.min\(\s*100/, 'the percentage helper must cap at 100');
+  assert.match(body, /Math\.floor/, 'and must still floor — 100% has to mean truly complete');
+  for (const field of ['percent', 'analysedPercent', 'audioEmbeddedPercent', 'vocalAnalyzedPercent']) {
+    assert.match(
+      body, new RegExp(`const ${field} = pctOf\\(`),
+      `${field} must go through the shared capped helper, not its own expression`,
+    );
+  }
+});
+
 // --- 2. persistence --------------------------------------------------------
 
 test('a stored count is restored on boot, with its original age', async () => {
