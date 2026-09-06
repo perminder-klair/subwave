@@ -331,6 +331,31 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
 }
 
 /**
+ * How a takeover's end is chosen (#1601).
+ *
+ * `'fixed'` is `minutes` from now — the only shape before this, and the
+ * DEFAULT, so a client that posts `{ showId, minutes }` is byte-identical.
+ * `'schedule-change'` asks the server to resolve the next weekly-grid boundary
+ * and end the pin there instead ("hold this until the grid would have moved on
+ * anyway").
+ *
+ * It rides on the REQUEST and never on `ScheduleOverride`: `expiresAt` has
+ * always been an absolute instant rather than a duration, so once the boundary
+ * is resolved the pin is an ordinary window that the resolver, the janitor
+ * sweep, the programme span and the roster sweep all keep reading unchanged.
+ * A stored discriminator would be a second thing those five could read
+ * differently.
+ */
+export const TAKEOVER_UNTIL = ['fixed', 'schedule-change'] as const;
+export type TakeoverUntil = (typeof TAKEOVER_UNTIL)[number];
+
+// One string, four constraints — the bounds message names both ends whichever
+// one a value missed, because "must be an integer" alone leaves an operator
+// guessing at the range.
+const OVERRIDE_MINUTES_MESSAGE =
+  `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`;
+
+/**
  * POST /schedule/override's body.
  *
  * `showId: null` requests Default programming; an outer missing field is still
@@ -341,15 +366,45 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
  * missing field is a malformed request, not a missing show. A real id that
  * isn't in the roster still 404s from the handler, which is the answer that
  * needs server state.
+ *
+ * `minutes` is REQUIRED under `until: 'fixed'` and REFUSED under
+ * `until: 'schedule-change'`, where the server resolves the window itself.
+ * Both halves are the same rule: the two fields must not be able to disagree
+ * about what the caller asked for. Demanding a duration that is then ignored is
+ * one way to let them; silently discarding one the caller did send is the
+ * other, and it is the worse of the two, since the caller has no way to learn
+ * its number went nowhere. A fixed window with no minutes still fails with the
+ * bounds message it always did.
  */
-export const scheduleOverrideRequestSchema = z.object({
-  showId: z
-    .string({ error: 'pick a show or Default programming' })
-    .min(1, 'pick a show or Default programming')
-    .nullable(),
-  minutes: z.coerce
-    .number({ error: `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}` })
-    .int(`must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`)
-    .min(OVERRIDE_MIN_MINUTES, `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`)
-    .max(OVERRIDE_MAX_MINUTES, `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`),
-});
+export const scheduleOverrideRequestSchema = z
+  .object({
+    showId: z
+      .string({ error: 'pick a show or Default programming' })
+      .min(1, 'pick a show or Default programming')
+      .nullable(),
+    until: z.enum(TAKEOVER_UNTIL, { error: "must be 'fixed' or 'schedule-change'" }).default('fixed'),
+    minutes: z.coerce
+      .number({ error: OVERRIDE_MINUTES_MESSAGE })
+      .int(OVERRIDE_MINUTES_MESSAGE)
+      .min(OVERRIDE_MIN_MINUTES, OVERRIDE_MINUTES_MESSAGE)
+      .max(OVERRIDE_MAX_MINUTES, OVERRIDE_MINUTES_MESSAGE)
+      .optional(),
+  })
+  .check((c) => {
+    if (c.value.until === 'fixed' && c.value.minutes == null) {
+      c.issues.push({
+        code: 'custom',
+        input: c.value.minutes,
+        path: ['minutes'],
+        message: OVERRIDE_MINUTES_MESSAGE,
+      });
+    }
+    if (c.value.until === 'schedule-change' && c.value.minutes != null) {
+      c.issues.push({
+        code: 'custom',
+        input: c.value.minutes,
+        path: ['minutes'],
+        message: 'must be omitted when the window ends at the schedule change',
+      });
+    }
+  });

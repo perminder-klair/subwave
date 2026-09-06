@@ -301,9 +301,20 @@ router.get('/now-playing', async (req, res) => {
         }
       : null;
     const s = session.getSession();
+    // The listener payload carries the context object nearly whole — it is the
+    // station's picture of the moment and the skins render most of it. What it
+    // must NOT carry is controller plumbing: `clock.spokenTimeOptions` is the
+    // hourly check's phrasing band (#1602), raw material for the picker rather
+    // than a fact about the moment, and a public read never widens to carry a
+    // behaviour internal. `spokenTime` stays — it is a reading, and skins have
+    // always seen it. Stripped here, at the one public boundary, rather than
+    // kept off the context type, so every in-process prompt caller still gets
+    // the band from the same getFullContext they already hold.
+    const publicClock: any = { ...(ctx.clock as any) };
+    delete publicClock.spokenTimeOptions;
     res.json({
       nowPlaying,
-      context: ctx,
+      context: { ...ctx, clock: publicClock },
       dj: {
         name: persona?.name || 'Frequency',
         tagline: persona?.tagline || '',

@@ -6,7 +6,7 @@ import { fetchWithTimeout } from './util/fetch-timeout.js';
 import { resolveActiveShow, resolveOnAirLocation, get as getSettings, moodScheduleFor, weatherMoodFor } from './settings.js';
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
-import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase, spokenTimePhrase, spokenDaypartPhrase } from './time.js';
+import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase, spokenTimePhrases, spokenDaypartPhrase } from './time.js';
 
 // The day-period → {vibe, show} table stays in code (these feed spoken-segment
 // prompts and show resolution). Each period's MOOD is operator-editable
@@ -258,6 +258,11 @@ export function getDateContext(date = new Date()) {
 export function getClockContext(date = new Date()) {
   const { hour: h, minute: m, dow } = zonedParts(date);
   const minutesOfDay = h * 60 + m;
+  // One band build per call, not two: this runs on every listener's 5s
+  // /now-playing poll, and `spokenTime` is by definition the band's first form
+  // (time.ts) — asking for it separately re-walked the table and allocated a
+  // second array for a value already in hand.
+  const spokenTimeForms = spokenTimePhrases(h, m);
   return {
     hhmm: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
     // What the prompts show the model — the model speaks whatever clock shape
@@ -272,7 +277,18 @@ export function getClockContext(date = new Date()) {
     // Minute-aware variant for the hourly time check — "just gone six" only
     // near :00, "half past six" mid-hour (#1282: a manual trigger at 18:31
     // still announced "just gone six in the evening").
-    spokenTime: spokenTimePhrase(h, m),
+    spokenTime: spokenTimeForms[0],
+    // Every equivalent wording of that same rounded time (#1602). The hourly
+    // prompt picks one per check so consecutive checks don't open with the
+    // identical five words; `spokenTime` stays the canonical single string for
+    // anything that wants one.
+    //
+    // CONTROLLER-INTERNAL: this is the picker's raw material, not a station
+    // fact, and routes/public.ts strips it before /now-playing goes out — a
+    // public read never widens to carry a behaviour internal. Anything else
+    // added here that is prompt plumbing rather than a fact about the moment
+    // belongs on that strip list too.
+    spokenTimeOptions: spokenTimeForms,
     // Daypart only, for the station ident — the one segment that must not
     // name the hour, because it airs minutes after it is written and the
     // hour can change in between ("three in the afternoon" on air at 3:50).

@@ -380,7 +380,10 @@ export const voiceImportSchema = z.object({
 // /library/manual-tag` (tag this track, or its whole album, by hand — no LLM
 // involved) and `POST /library/original-year` (the operator's own answer to
 // "what year was this actually recorded", behind the same row editor), and
-// `POST /library/scenes/merge` (consolidate near-duplicate genre tags).
+// `POST /library/scenes/merge` (consolidate near-duplicate genre tags), plus
+// the one RESPONSE shape that crosses the same boundary — the referenced-by
+// warning a scene merge carries (#1593), which the browser renders before the
+// operator confirms.
 //
 // HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
 // the web bundle, so a project import or a node builtin here breaks the mirror.
@@ -570,6 +573,43 @@ export function sceneMergeSchema() {
       return value;
     }),
   });
+}
+
+// ── The referenced-by warning on a scene merge (#1593) ───────────────────────
+// A merge retires a source value. Case and punctuation variants keep matching
+// through show-filter's normGenre ("rock" → "Rock", "Hip-Hop" → "Hip Hop"), so
+// those merges orphan nothing; a SEMANTIC rename ("trip-hop" → "downtempo")
+// leaves every show, blocklist rule and playlist filter still naming the
+// retired value selecting nothing on that value, with no error and no visible
+// cause.
+//
+// The scan behind this shape lives in music/scene-references.ts — it needs
+// show-filter's matcher, which this file may not import. Only the SHAPE is
+// here, because it crosses to the browser: the Scene vocabulary section shows
+// the warning before the operator confirms, and again on the merge response.
+//
+// Naming the affected shows is the whole value of the warning. A generic "this
+// may affect filters" is the non-advice the operator already assumed.
+
+/** Where a retired scene can still be named. A bare union: nothing validates
+ *  against these at a boundary, so there is no runtime list to keep. */
+export type SceneReferenceKind = 'show' | 'rule' | 'playlist';
+
+/** One filter that names a value this merge retires and would stop catching it. */
+export interface SceneReference {
+  kind: SceneReferenceKind;
+  /** Show id, blocklist rule id, or Navidrome playlist id. */
+  id: string;
+  /** What the operator calls it: show name, rule label, playlist name. */
+  name: string;
+  /** Its values that NAME a scene this merge retires — the value IS that
+   *  scene, not something broader that also caught it — and that do not catch
+   *  the survivor. */
+  orphaned: string[];
+  /** The REST of this filter's own list, and nothing more. Empty means the
+   *  orphaned values were all it had; it is NOT a claim that the filter now
+   *  matches no tracks, which would need the whole tag set walked. */
+  remaining: string[];
 }
 
 // ─── from controller/src/schemas/onboarding.ts ───────────────────────────
@@ -2253,6 +2293,31 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
 }
 
 /**
+ * How a takeover's end is chosen (#1601).
+ *
+ * `'fixed'` is `minutes` from now — the only shape before this, and the
+ * DEFAULT, so a client that posts `{ showId, minutes }` is byte-identical.
+ * `'schedule-change'` asks the server to resolve the next weekly-grid boundary
+ * and end the pin there instead ("hold this until the grid would have moved on
+ * anyway").
+ *
+ * It rides on the REQUEST and never on `ScheduleOverride`: `expiresAt` has
+ * always been an absolute instant rather than a duration, so once the boundary
+ * is resolved the pin is an ordinary window that the resolver, the janitor
+ * sweep, the programme span and the roster sweep all keep reading unchanged.
+ * A stored discriminator would be a second thing those five could read
+ * differently.
+ */
+export const TAKEOVER_UNTIL = ['fixed', 'schedule-change'] as const;
+export type TakeoverUntil = (typeof TAKEOVER_UNTIL)[number];
+
+// One string, four constraints — the bounds message names both ends whichever
+// one a value missed, because "must be an integer" alone leaves an operator
+// guessing at the range.
+const OVERRIDE_MINUTES_MESSAGE =
+  `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`;
+
+/**
  * POST /schedule/override's body.
  *
  * `showId: null` requests Default programming; an outer missing field is still
@@ -2263,18 +2328,48 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
  * missing field is a malformed request, not a missing show. A real id that
  * isn't in the roster still 404s from the handler, which is the answer that
  * needs server state.
+ *
+ * `minutes` is REQUIRED under `until: 'fixed'` and REFUSED under
+ * `until: 'schedule-change'`, where the server resolves the window itself.
+ * Both halves are the same rule: the two fields must not be able to disagree
+ * about what the caller asked for. Demanding a duration that is then ignored is
+ * one way to let them; silently discarding one the caller did send is the
+ * other, and it is the worse of the two, since the caller has no way to learn
+ * its number went nowhere. A fixed window with no minutes still fails with the
+ * bounds message it always did.
  */
-export const scheduleOverrideRequestSchema = z.object({
-  showId: z
-    .string({ error: 'pick a show or Default programming' })
-    .min(1, 'pick a show or Default programming')
-    .nullable(),
-  minutes: z.coerce
-    .number({ error: `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}` })
-    .int(`must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`)
-    .min(OVERRIDE_MIN_MINUTES, `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`)
-    .max(OVERRIDE_MAX_MINUTES, `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`),
-});
+export const scheduleOverrideRequestSchema = z
+  .object({
+    showId: z
+      .string({ error: 'pick a show or Default programming' })
+      .min(1, 'pick a show or Default programming')
+      .nullable(),
+    until: z.enum(TAKEOVER_UNTIL, { error: "must be 'fixed' or 'schedule-change'" }).default('fixed'),
+    minutes: z.coerce
+      .number({ error: OVERRIDE_MINUTES_MESSAGE })
+      .int(OVERRIDE_MINUTES_MESSAGE)
+      .min(OVERRIDE_MIN_MINUTES, OVERRIDE_MINUTES_MESSAGE)
+      .max(OVERRIDE_MAX_MINUTES, OVERRIDE_MINUTES_MESSAGE)
+      .optional(),
+  })
+  .check((c) => {
+    if (c.value.until === 'fixed' && c.value.minutes == null) {
+      c.issues.push({
+        code: 'custom',
+        input: c.value.minutes,
+        path: ['minutes'],
+        message: OVERRIDE_MINUTES_MESSAGE,
+      });
+    }
+    if (c.value.until === 'schedule-change' && c.value.minutes != null) {
+      c.issues.push({
+        code: 'custom',
+        input: c.value.minutes,
+        path: ['minutes'],
+        message: 'must be omitted when the window ends at the schedule change',
+      });
+    }
+  });
 
 // ─── from controller/src/schemas/settings.ts ─────────────────────────────
 
@@ -3873,8 +3968,15 @@ function showStringList(opts: {
 // the load path's repairEraWindow (below) so the two can never disagree about
 // what a valid year is. null / '' means "open end". A numeric string is
 // accepted because that is what an <input type="number"> posts.
+//
+// `validEraYear` is EXPORTED so it rides the mirror into the admin show
+// editor's add-a-range control (#1599), which has to refuse a year the save
+// would then reject. It owns only the integer-and-range test; the editor keeps
+// its own trim, because eraYearOf deliberately does not trim (' ' reaching the
+// wire is a malformed post, not an open end) and a draft box legitimately holds
+// whitespace mid-keystroke.
 const eraYearOf = (v: unknown): number | null => (v == null || v === '' ? null : Number(v));
-const validEraYear = (n: number | null): boolean =>
+export const validEraYear = (n: number | null): boolean =>
   n == null || (Number.isInteger(n) && n >= SHOW_YEAR_MIN && n <= SHOW_YEAR_MAX);
 
 const showYear = z

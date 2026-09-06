@@ -15,16 +15,18 @@
 // something anyone watches change, and the list is the whole tag set.
 
 import { useMemo, useState } from 'react';
-import { Tags, Loader2, X } from 'lucide-react';
+import { useDebounceValue } from 'usehooks-ts';
+import { Tags, Loader2, X, AlertTriangle } from 'lucide-react';
 import { adminJson } from '../../../lib/admin-query';
 import { notify } from '../../../lib/notify';
 import { Btn } from '../ui';
 import { Input } from '../../ui/input';
 import { Checkbox } from '../../ui/checkbox';
+import { V3Alert } from '../../ui/alert';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { cn } from '../../../lib/cn';
 import { libraryKeys } from './queries';
-import type { SceneAlias, SceneCount } from './types';
+import type { SceneAlias, SceneCount, SceneReference } from './types';
 import { useAdminMutation, useAdminQuery } from './useAdminQuery';
 
 interface SceneVocabResponse {
@@ -40,6 +42,14 @@ interface MergeResponse extends SceneVocabResponse {
    *  listing and must not be reported as one. */
   recorded: string[];
   tracksChanged: number;
+  /** Shows / rules / playlists that named a retired value and now match
+   *  nothing. The same answer the preview gave before the confirm. */
+  references: SceneReference[];
+}
+
+/** POST /library/scenes/references — the same question, asked first. */
+interface ReferencesResponse {
+  references: SceneReference[];
 }
 
 type Sort = 'tracks' | 'name';
@@ -50,6 +60,42 @@ const TAIL_MAX = 3;
 
 const NO_SCENES: SceneCount[] = [];
 const NO_ALIASES: SceneAlias[] = [];
+const NO_REFERENCES: SceneReference[] = [];
+
+/** What the operator calls each kind, singular, for the warning line. */
+const KIND_LABEL: Record<SceneReference['kind'], string> = {
+  show: 'Show',
+  rule: 'Never-play rule',
+  playlist: 'Playlist',
+};
+
+/**
+ * The warning body: one line per filter, NAMING it.
+ *
+ * `remaining` is the REST of that filter's own list and nothing more, so the
+ * copy claims nothing more either. It is tempting to read an empty `remaining`
+ * as "this filter now matches no tracks", and that is not established: the
+ * value may still be caught by another spelling in the vocabulary, and a tag
+ * rule reaches moods and Last.fm tags too. Saying it would need the whole tag
+ * set walked on every keystroke, which is the scan the scenes listing is
+ * fetched-on-expand to avoid.
+ */
+function ReferenceLines({ items }: { items: readonly SceneReference[] }) {
+  return (
+    <ul className="flex flex-col gap-1">
+      {items.map(r => (
+        <li key={`${r.kind}:${r.id}`} className="text-[12px] leading-[1.45]">
+          <span className="caption !tracking-[0.04em]">{KIND_LABEL[r.kind]}</span>{' '}
+          <b>{r.name}</b> filters on {r.orphaned.map(v => `“${v}”`).join(', ')}, which this
+          merge retires
+          {r.remaining.length
+            ? ` — it also filters on ${r.remaining.map(v => `“${v}”`).join(', ')}.`
+            : ' — it has no other value.'}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 export default function SceneVocabSection() {
   const [open, setOpen] = useState(false);
@@ -58,6 +104,10 @@ export default function SceneVocabSection() {
   const [picked, setPicked] = useState<string[]>([]);
   const [target, setTarget] = useState('');
   const [confirming, setConfirming] = useState(false);
+  // What the LAST merge broke. Kept on screen rather than toasted: the whole
+  // point is a list of show names the operator has to go and fix, and a toast
+  // is gone before they have read the second one.
+  const [aftermath, setAftermath] = useState<SceneReference[] | null>(null);
 
   const vocab = useAdminQuery<SceneVocabResponse>({
     key: libraryKeys.scenes(),
@@ -96,6 +146,39 @@ export default function SceneVocabSection() {
   const sources = picked.filter(v => v !== to);
   const affected = sources.reduce((n, v) => n + (scenes.find(s => s.value === v)?.tracks ?? 0), 0);
 
+  // ── The referenced-by warning, BEFORE the confirm (#1593) ─────────────────
+  // A merge retires a spelling; a show, blocklist rule or playlist filter still
+  // naming it then matches nothing, silently. Which ones is the whole value —
+  // "this may affect filters" is the non-advice the operator already assumed.
+  //
+  // The judgement stays on the server: it is show-filter's own matcher that
+  // decides whether a filter survives the fold (case and punctuation variants
+  // do, a semantic rename does not), and a second copy of that rule in the
+  // browser would drift into warning on every harmless "rock" → "Rock".
+  //
+  // A POST, because the body carries up to 100 ticked values and a query string
+  // that long does not survive every proxy — hence `init`, which is the only
+  // reason this is not a plain path read.
+  //
+  // Only the typed survivor is debounced. Ticking a box is one step at a time,
+  // and waiting a beat to hear about it reads as lag.
+  const [debouncedTo] = useDebounceValue(to, 250);
+  const staged = sources.length > 0 && debouncedTo.length > 0;
+  const warn = useAdminQuery<ReferencesResponse>({
+    key: libraryKeys.sceneReferences(sources, debouncedTo),
+    path: '/library/scenes/references',
+    init: {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: sources, to: debouncedTo }),
+    },
+    enabled: open && staged,
+    // Silent on failure, deliberately: this is advisory, and a station whose
+    // controller predates the endpoint would otherwise toast on every tick.
+    toastOnError: false,
+  });
+  const references = staged ? (warn.data?.references ?? NO_REFERENCES) : NO_REFERENCES;
+
   const merge = useAdminMutation<MergeResponse, { from: string[]; to: string }>({
     request: (vars, fetcher) =>
       adminJson<MergeResponse>(fetcher, '/library/scenes/merge', {
@@ -112,6 +195,9 @@ export default function SceneVocabSection() {
             ? `Nothing to rewrite — “${data.target}” will be applied on the next library scan`
             : `Nothing to do — “${data.target}” already survives every spelling you picked`,
       );
+      // The server's own answer, not the preview's: it was computed against the
+      // rule set as it stood at the merge, so it is what actually happened.
+      setAftermath(data.references?.length ? data.references : null);
       setPicked([]);
       setTarget('');
       // The response carries the refreshed listing: after a merge every count
@@ -279,7 +365,45 @@ export default function SceneVocabSection() {
                   ? 'Everything ticked already IS the target — type a new name above to rename it.'
                   : `${affected} track tag${affected === 1 ? '' : 's'} will be rewritten to “${to}”.`}
               </span>
+              {references.length > 0 && (
+                <div className="basis-full border border-vermilion bg-bg px-2.5 py-2 text-vermilion">
+                  <span className="caption flex items-center gap-1.5 !text-vermilion">
+                    <AlertTriangle size={12} />
+                    {references.length} filter{references.length === 1 ? '' : 's'} name
+                    {references.length === 1 ? 's' : ''} a spelling this merge retires
+                  </span>
+                  <div className="mt-1 text-ink">
+                    <ReferenceLines items={references} />
+                  </div>
+                  {/* The merge is not blocked and the filter is not rewritten:
+                      genre matching is one-directional, so a filter cannot be
+                      repointed without changing what the show MEANS. */}
+                  <span className="caption mt-1 block !tracking-[0.04em] !normal-case">
+                    The merge is still fine to run — these just need repointing at “{to}”
+                    afterwards, by hand.
+                  </span>
+                </div>
+              )}
             </div>
+          )}
+
+          {aftermath && aftermath.length > 0 && (
+            <V3Alert
+              tone="error"
+              title={`${aftermath.length} filter${aftermath.length === 1 ? '' : 's'} to repoint`}
+            >
+              <ReferenceLines items={aftermath} />
+              <div className="caption mt-1.5 flex items-center gap-2 !tracking-[0.04em] !normal-case">
+                The merge is done; nothing repointed these for you.
+                <button
+                  type="button"
+                  className="caption cursor-pointer underline"
+                  onClick={() => setAftermath(null)}
+                >
+                  Dismiss
+                </button>
+              </div>
+            </V3Alert>
           )}
 
           {aliases.length > 0 && (
@@ -327,9 +451,21 @@ export default function SceneVocabSection() {
         onOpenChange={setConfirming}
         title={`Merge into “${to}”?`}
         description={
-          `${sources.map(s => `“${s}”`).join(', ')} will be rewritten to “${to}” on ` +
-          `${affected} track tag${affected === 1 ? '' : 's'}, and folded the same way on every ` +
-          `future library scan. The old spellings are not recoverable.`
+          <>
+            {`${sources.map(s => `“${s}”`).join(', ')} will be rewritten to “${to}” on ` +
+              `${affected} track tag${affected === 1 ? '' : 's'}, and folded the same way on every ` +
+              `future library scan. The old spellings are not recoverable.`}
+            {references.length > 0 && (
+              <span className="mt-3 block border border-destructive px-2.5 py-2 text-destructive">
+                <span className="caption block !text-destructive">
+                  These name a spelling you are retiring
+                </span>
+                <span className="mt-1 block text-ink">
+                  <ReferenceLines items={references} />
+                </span>
+              </span>
+            )}
+          </>
         }
         confirmLabel="merge"
         danger

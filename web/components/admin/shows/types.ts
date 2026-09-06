@@ -15,7 +15,10 @@ import {
   SHOW_TAG_RE,
   SHOW_TOPIC_MAX,
   SHOW_VOCALS,
+  SHOW_YEAR_MAX,
+  SHOW_YEAR_MIN,
   TAGS_PER_SHOW_LIMIT,
+  validEraYear,
 } from '@/lib/schemas.generated';
 
 export const NAME_MAX = SHOW_NAME_MAX;
@@ -29,6 +32,12 @@ export const EXCLUDED_PLAYLISTS_MAX = EXCLUDED_PLAYLISTS_PER_SHOW;
 export const TAGS_MAX = TAGS_PER_SHOW_LIMIT;
 export const TAG_MAX = SHOW_TAG_MAX;
 export const TAG_RE = SHOW_TAG_RE;
+// The era-window year bounds the schema's own showYear enforces. Re-exported
+// for the <input min/max> and the error copy only — the TEST itself is the
+// schema's own `validEraYear`, imported rather than re-derived from these two,
+// so the Add button can never accept a year the save then refuses.
+export const YEAR_MIN = SHOW_YEAR_MIN;
+export const YEAR_MAX = SHOW_YEAR_MAX;
 
 /** How much the panel knows about the live Navidrome playlist index.
  *
@@ -159,7 +168,47 @@ export function sameEra(a: EraWindow, b: { from: number | null; to: number | nul
   const bt = 'to' in b ? b.to : b.toYear;
   return a.fromYear === bf && a.toYear === bt;
 }
-/** Preset label ("90s") or the raw window ("1975–1984") for a custom one set via API. */
+/** Resolve the add-a-range inputs into a window to push onto `eras` (#1599).
+ *
+ * Returns a reason rather than throwing: the two inputs sit inside the eras
+ * group, so a bad draft is reported next to the Add button and nothing reaches
+ * the form array. Either bound may be blank — an open-ended "2026+" is a legal
+ * window — but a window with NO bound is the absent state the schema drops,
+ * not a filter. Duplicates are refused rather than appended so that a range
+ * spelling out a decade lights that chip instead of stacking beside it.
+ *
+ * The year test is the schema's own `validEraYear` off the mirror, never a
+ * local re-derivation of it around YEAR_MIN/YEAR_MAX: half the rule restated
+ * is half the rule free to drift. */
+export function resolveEraDraft(
+  from: string,
+  to: string,
+  existing: EraWindow[],
+): { window: EraWindow } | { error: string } {
+  const parse = (raw: string): number | null | undefined => {
+    // The trim is the editor's, not the schema's: a draft box legitimately
+    // holds whitespace mid-keystroke, while `eraYearOf` on the wire reads a
+    // blank-but-not-empty string as malformed rather than as an open end.
+    const v = raw.trim();
+    if (!v) return null;
+    const n = Number(v);
+    return validEraYear(n) ? n : undefined;
+  };
+  const fromYear = parse(from);
+  const toYear = parse(to);
+  if (fromYear === undefined || toYear === undefined) {
+    return { error: `Years must be whole numbers between ${YEAR_MIN} and ${YEAR_MAX}.` };
+  }
+  if (fromYear == null && toYear == null) return { error: 'Enter a start year, an end year, or both.' };
+  if (fromYear != null && toYear != null && fromYear > toYear) {
+    return { error: 'The start year must not be after the end year.' };
+  }
+  const w = { fromYear, toYear };
+  if (existing.some(e => sameEra(e, w))) return { error: 'That range is already selected.' };
+  return { window: w };
+}
+
+/** Preset label ("90s") or the raw window ("1975–1984") for a custom one. */
 export function eraLabelOf(e: EraWindow): string {
   const hit = DECADES.find(d => sameEra(e, d));
   if (hit) return hit.label;

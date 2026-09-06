@@ -213,3 +213,7 @@ export interface SceneAlias {
   to: string;
   at: string;
 }
+
+/** The referenced-by warning a merge carries (#1593) — re-exported from the
+ *  schema mirror so the browser and the controller name one shape. */
+export type { SceneReference, SceneReferenceKind } from '@/lib/schemas.generated';

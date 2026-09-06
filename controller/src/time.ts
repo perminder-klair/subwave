@@ -159,20 +159,97 @@ export function spokenDaypartPhrase(hour: number) {
   return 'at night';
 }
 
-// The time as a radio DJ would round it — minute-aware, deliberately coarse
+// The minute bands a radio DJ rounds the clock into — deliberately coarse
 // (radio rounds, it doesn't read a watch). The hourly check normally rides the
 // :00 cron where "just gone six" is honest, but manual /dj/segment triggers
 // and voice-queue holds can land it anywhere in the hour, and the hour-only
-// phrase said "just gone six" at 6:31 (#1282). Past :40 the phrase leans on
-// the NEXT hour ("quarter to seven") — spokenHourPhrase normalises h+1 at the
-// day edge, so 23:50 reads "coming up on midnight".
-export function spokenTimePhrase(hour: number, minute: number) {
+// phrase said "just gone six" at 6:31 (#1282). Past :40 a band leans on the
+// NEXT hour (`ahead`) — spokenHourPhrase normalises h+1 at the day edge, so
+// 23:50 reads "coming up on midnight".
+//
+// Each band carries SEVERAL wordings of the one rounded time (#1602): the
+// single fixed string made every hour of every day open with the identical
+// five words, because the check almost always fires in the first band and the
+// prompt is told to say it verbatim. The wordings vary, the reading does not —
+// every form in a band must be interchangeable at every minute IN that band,
+// INCLUDING the minute it opens on. That last clause is the one that is easy
+// to lose: a form is measured against the band's widest minute AND its first,
+// so nothing here may sharpen "half past" into a count of minutes (wrong on
+// the near side of :30), nothing may claim a band's boundary has been passed
+// when the band opens exactly on it, and nothing may drop the qualifier and
+// leave a bare hour. Every band with an obvious near-miss form carries a note
+// naming the form it REFUSES and why, because the refusals are the part of
+// the table a new form gets checked against. The broadcast buffer does not
+// count as an argument for keeping a form: a listener does hear this
+// stream.bufferSeconds late, but that is a number defined in another module
+// and an operator dial, so a form whose honesty depends on it stops being
+// honest the moment the dial moves. The hour word is always spokenHourPhrase's — never
+// re-derived here, or the day-edge normalisation goes with it. `forms[0]` is
+// the wording that shipped before the variants, and spokenTimePhrase still
+// returns it.
+const TIME_BANDS: readonly {
+  upTo: number;
+  ahead: boolean;
+  forms: readonly ((hour: string) => string)[];
+}[] = [
+  // No "a minute or so past" here: the band opens at :00, the minute this row's
+  // cron fires on almost every time, and nothing is a minute past the hour at
+  // the hour.
+  { upTo: 4, ahead: false, forms: [
+    (h) => `just gone ${h}`,
+    (h) => `just past ${h}`,
+    (h) => `just turned ${h}`,
+  ] },
+  { upTo: 14, ahead: false, forms: [
+    (h) => `just after ${h}`,
+    (h) => `a few minutes past ${h}`,
+    (h) => `a little after ${h}`,
+  ] },
+  // No "gone quarter past" here, for the reason the :25-:39 band refuses "gone
+  // half past": the band opens exactly ON quarter past, so at :15 nothing has
+  // gone anywhere. "around" is the safe direction — it widens the claim rather
+  // than sharpening it, and reads true across the whole :15-:24 span.
+  { upTo: 24, ahead: false, forms: [
+    (h) => `quarter past ${h}`,
+    (h) => `a quarter past ${h}`,
+    (h) => `around quarter past ${h}`,
+  ] },
+  // No "gone half past" here: the band opens at :25, so half of it is on the
+  // near side of the half hour. This is the refusal the other two are modelled
+  // on.
+  { upTo: 39, ahead: false, forms: [
+    (h) => `half past ${h}`,
+    (h) => `around half past ${h}`,
+    (h) => `half past ${h}, give or take`,
+  ] },
+  { upTo: 49, ahead: true, forms: [
+    (h) => `quarter to ${h}`,
+    (h) => `a quarter to ${h}`,
+    (h) => `around quarter to ${h}`,
+  ] },
+  { upTo: 59, ahead: true, forms: [
+    (h) => `coming up on ${h}`,
+    (h) => `coming up to ${h}`,
+    (h) => `nearly ${h}`,
+    (h) => `almost ${h}`,
+  ] },
+];
+
+// Every equivalent wording of the rounded time, canonical form first. The
+// caller picks one (llm/internal/prompts/context.ts's no-repeat picker, the
+// same rule that keeps narrative angles from settling) and the prompt still
+// dictates that ONE string — the model is never handed the set to choose from,
+// because a time clause offering options is the latitude #1282 removed.
+export function spokenTimePhrases(hour: number, minute: number): string[] {
   const h = ((hour % 24) + 24) % 24;
   const m = ((Math.trunc(minute) % 60) + 60) % 60;
-  if (m <= 4) return `just gone ${spokenHourPhrase(h)}`;
-  if (m <= 14) return `just after ${spokenHourPhrase(h)}`;
-  if (m <= 24) return `quarter past ${spokenHourPhrase(h)}`;
-  if (m <= 39) return `half past ${spokenHourPhrase(h)}`;
-  if (m <= 49) return `quarter to ${spokenHourPhrase(h + 1)}`;
-  return `coming up on ${spokenHourPhrase(h + 1)}`;
+  const band = TIME_BANDS.find((b) => m <= b.upTo) ?? TIME_BANDS[TIME_BANDS.length - 1];
+  const spokenHour = spokenHourPhrase(band.ahead ? h + 1 : h);
+  return band.forms.map((f) => f(spokenHour));
+}
+
+// The rounded time in the wording that predates the variants — every caller
+// that wants one string with no rotation state behind it.
+export function spokenTimePhrase(hour: number, minute: number) {
+  return spokenTimePhrases(hour, minute)[0];
 }

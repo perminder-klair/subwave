@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import { Controller } from 'react-hook-form';
+import type { z } from 'zod';
 import Link from 'next/link';
 import { useAdminAuth } from '../../../lib/adminAuth';
 import { useAdminMutation, useAdminQuery } from '../../../lib/admin-query';
@@ -31,13 +32,40 @@ import {
   OVERRIDE_MAX_MINUTES,
   type ScheduleOverride,
 } from '@/lib/schemas.generated';
-import { dashKeys, fetchTakeover, writeTakeoverOverride, type TakeoverData } from './queries';
+import {
+  dashKeys,
+  fetchTakeover,
+  fetchTakeoverWindow,
+  writeTakeoverOverride,
+  type TakeoverData,
+  type TakeoverWindow,
+} from './queries';
 
 const PRESETS = [
   { minutes: 60, label: '1h' },
   { minutes: 120, label: '2h' },
   { minutes: 180, label: '3h' },
 ];
+
+// The Seg's id for "until the schedule changes" (#1601) — not a duration, so it
+// cannot be a minute count like the three presets beside it.
+const SCHEDULE_SEG = 'schedule';
+
+// The submitted body IS the schema's output, spelled that way rather than
+// re-typed, so a field added to the request cannot be dropped silently on its
+// way to POST /schedule/override.
+type PinVars = z.output<typeof scheduleOverrideRequestSchema>;
+
+// One line saying WHY the resolved end is where it is, keyed by the source the
+// controller reports. This is the whole reason the option is not a black box:
+// an operator who asked for "until the schedule changes" and got twelve hours
+// deserves to be told the grid has no change in reach. There is no 'minimum' —
+// a near boundary resolves to that boundary, so 'schedule' covers it.
+const WINDOW_REASON: Record<TakeoverWindow['source'], string> = {
+  schedule: 'when the schedule moves on',
+  maximum: 'no schedule change in reach',
+  ceiling: 'the next change is further out than a takeover can run',
+};
 
 export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLocale }) {
   const { adminFetch, needsAuth, hydrated } = useAdminAuth();
@@ -46,7 +74,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   // Empty string is the untouched picker and remains invalid; null is a
   // deliberate Default programming selection. The shared schema preserves that
   // distinction all the way to POST /schedule/override.
-  const form = useZodForm(scheduleOverrideRequestSchema, { showId: '', minutes: 60 });
+  const form = useZodForm(scheduleOverrideRequestSchema, { showId: '', minutes: 60, until: 'fixed' });
   // The 30s tick refreshes `shows` and `override`, never the form — a poll must
   // not clobber a half-typed window. This is why there is no `values` prop here.
 
@@ -62,6 +90,34 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   });
   const shows = takeoverQuery.data?.shows ?? [];
   const override = takeoverQuery.data?.override ?? null;
+
+  // The resolved end time for "until the schedule changes", fetched only while
+  // that option is the selected one — the controller's scan walks a minute at a
+  // time across twelve hours, and an idle dashboard has no use for the answer.
+  const minutes = form.watch('minutes');
+  const untilSchedule = form.watch('until') === 'schedule-change';
+  const windowQuery = useAdminQuery<TakeoverWindow>({
+    key: dashKeys.takeoverWindow(),
+    adminFetch,
+    enabled: hydrated && !needsAuth && untilSchedule,
+    staleTime: 0,
+    refetchInterval: () => 30_000,
+    request: fetchTakeoverWindow,
+  });
+  // When this selection began. React Query keeps `data` both while a query is
+  // DISABLED and after a refetch FAILS, so `windowQuery.data` alone answers
+  // "the last thing the controller ever said", not "what it says now" — and an
+  // `expiresAt` is an absolute instant, so a cached one from an earlier visit
+  // to this option paints a concrete end time that may already be in the past.
+  // Requiring the data to be newer than the selection is what makes re-entry
+  // show "reading the schedule…" for one round trip instead of a stale answer.
+  const [selectedAt, setSelectedAt] = useState(0);
+  useEffect(() => { setSelectedAt(untilSchedule ? Date.now() : 0); }, [untilSchedule]);
+  const windowIsCurrent = untilSchedule
+    && selectedAt > 0
+    && !windowQuery.isError
+    && windowQuery.dataUpdatedAt >= selectedAt;
+  const resolvedWindow = windowIsCurrent ? windowQuery.data ?? null : null;
   useEffect(() => {
     if (takeoverQuery.dataUpdatedAt) setNow(Date.now());
   }, [takeoverQuery.dataUpdatedAt]);
@@ -94,7 +150,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
       super(message);
     }
   }
-  const pinMutation = useAdminMutation<PinResult, { showId: string | null; minutes: number }>({
+  const pinMutation = useAdminMutation<PinResult, PinVars>({
     adminFetch,
     toastOnError: false,
     request: async (values, fetcher) => {
@@ -154,7 +210,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
       // Back to a clean picker rather than re-showing the just-cancelled pick:
       // one form stands behind both branches of the ternary, so a stale value
       // would otherwise survive the remount.
-      form.reset({ showId: '', minutes: 60 });
+      form.reset({ showId: '', minutes: 60, until: 'fixed' });
       notify.ok('Takeover cancelled — back to the weekly schedule.');
     } catch (e) {
       notify.err(errorMessage(e));
@@ -251,27 +307,64 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
             }}
           />
           <div className="flex flex-wrap items-center gap-2.5">
+            {/* One control over two form fields: the three presets set a fixed
+                window, the fourth switches to the boundary the controller
+                resolves. Picking it CLEARS `minutes` rather than leaving the
+                old value under the hidden input — a half-typed 5 would
+                otherwise keep the form invalid with nothing on screen to say
+                why. Every route back to a fixed window goes through a preset,
+                which writes the field again. */}
             <Controller
               control={form.control}
-              name="minutes"
+              name="until"
               render={({ field }) => (
                 <Seg
-                  value={String(field.value)}
-                  options={PRESETS.map(p => ({ id: String(p.minutes), label: p.label }))}
-                  onChange={id => field.onChange(Number(id))}
+                  value={field.value === 'schedule-change' ? SCHEDULE_SEG : String(minutes ?? '')}
+                  options={[
+                    ...PRESETS.map(p => ({ id: String(p.minutes), label: p.label })),
+                    { id: SCHEDULE_SEG, label: 'til change', title: 'End when the weekly schedule would have moved on' },
+                  ]}
+                  onChange={id => {
+                    if (id === SCHEDULE_SEG) {
+                      field.onChange('schedule-change');
+                      form.setValue('minutes', undefined, { shouldValidate: true });
+                      return;
+                    }
+                    field.onChange('fixed');
+                    form.setValue('minutes', Number(id), { shouldValidate: true });
+                  }}
                 />
               )}
             />
-            <TextField
-              control={form.control}
-              name="minutes"
-              label="Takeover minutes"
-              numeric
-              className="max-w-32"
-              min={OVERRIDE_MIN_MINUTES}
-              max={OVERRIDE_MAX_MINUTES}
-            />
+            {/* Hidden rather than disabled under the schedule option: a minute
+                box beside a window the server resolves reads as the thing being
+                submitted, and it is not. */}
+            {!untilSchedule && (
+              <TextField
+                control={form.control}
+                name="minutes"
+                label="Takeover minutes"
+                numeric
+                className="max-w-32"
+                min={OVERRIDE_MIN_MINUTES}
+                max={OVERRIDE_MAX_MINUTES}
+              />
+            )}
           </div>
+          {/* The failure states are checked FIRST inside this line. Reading
+              `data` first was a bug: it survives an error and a disable, so
+              once one fetch had landed the outage copy could never be reached
+              and the card answered a dead controller with the last time it
+              happened to know. */}
+          {untilSchedule && (
+            <div className="mono-num text-[10px] text-muted">
+              {windowQuery.isError
+                ? 'could not read the schedule — the window is resolved again when you start it'
+                : resolvedWindow
+                  ? `ends ${fmtClock(resolvedWindow.expiresAt, tz, locale)} · ${resolvedWindow.minutes} min · ${WINDOW_REASON[resolvedWindow.source]}`
+                  : 'reading the schedule…'}
+            </div>
+          )}
           <Btn
             tone="accent"
             sm

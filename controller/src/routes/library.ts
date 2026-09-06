@@ -13,6 +13,7 @@ import * as analyzer from '../music/analyzer.js';
 import * as coverage from '../music/library-coverage.js';
 import * as subsonic from '../music/subsonic.js';
 import * as sceneVocab from '../music/scene-vocab.js';
+import { sceneReferences } from '../music/scene-references.js';
 import * as lastfm from '../music/lastfm.js';
 import * as musicbrainz from '../music/musicbrainz.js';
 import * as settings from '../settings.js';
@@ -316,6 +317,8 @@ router.get('/library/genres/related', requireAdmin, async (_req, res) => {
 //
 //   GET    /library/scenes                  every distinct value + track count,
 //                                           plus the consolidation rules in force
+//   POST   /library/scenes/references       { from: string[], to } — what would
+//                                           stop matching. A READ; see below.
 //   POST   /library/scenes/merge            { from: string[], to } — retire values
 //   DELETE /library/scenes/aliases/:from    stop applying one rule
 //
@@ -329,6 +332,10 @@ router.get('/library/genres/related', requireAdmin, async (_req, res) => {
 // TTL-caches), so it is a scan whatever the row count is — which is why it is
 // fetched on EXPAND and on a merge, never polled.
 // ---------------------------------------------------------------------------
+
+/** How many orphaned filters the booth log names before it says "and N more".
+ *  The response and the admin panel carry all of them; this bounds one line. */
+const SCENE_REFERENCES_LOGGED = 5;
 
 /** The listing both reads answer with: the vocabulary and the rules over it. */
 function sceneListing() {
@@ -344,6 +351,28 @@ router.get('/library/scenes', requireAdmin, async (_req, res) => {
   }
 });
 
+// The referenced-by warning (#1593), asked BEFORE the merge. A read, but a
+// POST: the body carries up to SCENE_MERGE_SOURCES_MAX values of up to
+// SCENE_VALUE_MAX characters each — ticking a whole noisy tail is the point of
+// the section — and that does not fit in a request line every proxy in front of
+// the controller will carry.
+//
+// Same body as the merge, and the same call, so the preview and the merge
+// response cannot say different things about the same click.
+router.post(
+  '/library/scenes/references',
+  requireAdmin,
+  validateBody(sceneMergeSchema(), { messages: 'verbatim' }),
+  async (req, res) => {
+    const { from, to } = req.body as SceneMergeBody;
+    try {
+      res.json({ references: await sceneReferences(from, to) });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
 router.post(
   '/library/scenes/merge',
   requireAdmin,
@@ -352,6 +381,10 @@ router.post(
     const { from, to } = req.body as SceneMergeBody;
     try {
       await library.load();
+      // Computed BEFORE the rewrite: the target resolves through the rule set
+      // this merge is about to change, so asking afterwards would answer for a
+      // different merge than the one the preview warned about.
+      const references = await sceneReferences(from, to);
       const result = await library.consolidateScenes(from, to);
       // Three outcomes, and the log must not flatten them. Rows rewritten is
       // the ordinary one. No rows but a rule recorded means the listing the
@@ -367,6 +400,21 @@ router.post(
             ? `scenes: nothing to rewrite for "${result.target}" — rule recorded for the next library scan`
             : `scenes: nothing to do — "${result.target}" already survives every value picked`,
       );
+      // Named, not counted. The operator confirmed past this warning in the UI;
+      // the point of the booth log is that it is still readable next week, when
+      // the only symptom is a show that airs nothing. Capped so one careless
+      // merge cannot push a whole page of names into the log — the response and
+      // the panel carry the full list.
+      if (references.length) {
+        const named = references
+          .slice(0, SCENE_REFERENCES_LOGGED)
+          .map(r => `${r.kind} "${r.name}" (${r.orphaned.map(v => `"${v}"`).join(', ')})`);
+        const rest = references.length - named.length;
+        queue.log(
+          'warn',
+          `scenes: merging into "${result.target}" retires values still filtered by ${named.join(', ')}${rest > 0 ? ` and ${rest} more` : ''} — repoint them by hand`,
+        );
+      }
       res.json({
         ok: true,
         target: result.target,
@@ -374,6 +422,11 @@ router.post(
         recorded: result.recorded,
         tracksChanged: result.tracksChanged,
         vectorsDirtied: result.vectorsDirtied,
+        // Shows / rules / playlists that named a retired value and now match
+        // nothing. A warning, never a block: the merge is what the operator
+        // asked for, and genre matching is one-directional, so the filter
+        // cannot be rewritten without changing what the show means.
+        references,
         // The refreshed listing rides back on the same response: after a merge
         // every count on the client is wrong, and a merge is usually one of
         // several in a sitting.

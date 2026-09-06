@@ -30,6 +30,7 @@ import { readCommunityShow } from '../shows/community.js';
 import { SLUG_RE } from '../skills/loader.js';
 import { queue } from '../broadcast/queue.js';
 import { rollSessionNow } from '../broadcast/scheduler.js';
+import { resolveTakeoverWindowNow } from '../broadcast/takeover-window.js';
 import { diagnoseShowCandidates } from '../music/show-candidates.js';
 
 export const router = express.Router();
@@ -200,20 +201,53 @@ router.post('/shows', requireAdmin, validateBodyAsync(showPostContext), async (r
 });
 
 // ---------------------------------------------------------------------------
-// POST /schedule/override — select a show or Default programming for N minutes:
-// a timed takeover that outranks the weekly grid, then lapses back to
+// GET /schedule/next-change — what `until: 'schedule-change'` would resolve to
+// if the takeover were started right now, so the dialog can show the operator a
+// concrete end time before they commit rather than a black box.
+//
+// Advisory only: POST /schedule/override resolves the window again at its own
+// `startedAt`, which is the authoritative answer. Deliberately NOT folded into
+// the public GET /schedule the dialog already polls — the scan walks a minute
+// at a time across a twelve-hour horizon, and that is not a cost to hand every
+// listener-facing schedule read.
+// ---------------------------------------------------------------------------
+router.get('/schedule/next-change', requireAdmin, async (_req, res) => {
+  try {
+    await settings.load();
+    res.json(resolveTakeoverWindowNow());
+  } catch (err: any) {
+    queue.log('error', `GET /schedule/next-change failed: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /schedule/override — select a show or Default programming for a bounded
+// window: a timed takeover that outranks the weekly grid, then lapses back to
 // normal programming on its own. Re-POSTing while one is live replaces it
 // (switch show or extend the window). The session roll is fire-and-forget —
 // the response returns as soon as the override is persisted; the on-air
 // handoff (LLM + TTS) airs in the background, and the switch fully lands at
 // the next track boundary like any show change.
 // ---------------------------------------------------------------------------
-// The shape (a show id or the explicit null Default target, plus an integer
-// minute count inside the bounds) comes from the shared schema; the roster
-// lookup stays here for string targets because "no such show" needs server
-// state and answers 404, not 400.
+// The shape (a show id or the explicit null Default target, plus how the window
+// ends) comes from the shared schema; the roster lookup stays here for string
+// targets because "no such show" needs server state and answers 404, not 400.
+//
+// `until: 'schedule-change'` (#1601) resolves `expiresAt` from the next weekly-
+// grid boundary instead of `now + N`. What is STORED is an ordinary
+// ScheduleOverride either way — the choice is spent here and never persisted,
+// so nothing downstream judges expiry differently. It is offered for a Default
+// programming takeover on the same terms as a show pin: "drop the scheduled
+// show and coast until the grid moves on" is the same gesture pointed at the
+// null target, and the boundary it resolves to is a property of the grid rather
+// than of what is being pinned over it.
 router.post('/schedule/override', requireAdmin, validateBody(scheduleOverrideRequestSchema), async (req, res) => {
-  const { showId, minutes } = req.body as { showId: string | null; minutes: number };
+  const { showId, minutes, until } = req.body as {
+    showId: string | null;
+    minutes?: number;
+    until: 'fixed' | 'schedule-change';
+  };
 
   await settings.load();
   // The same two predicates the resolver reads the stored target with, asked
@@ -226,14 +260,32 @@ router.post('/schedule/override', requireAdmin, validateBody(scheduleOverrideReq
   }
 
   const startedAt = Date.now();
-  const override = { showId, startedAt, expiresAt: startedAt + minutes * 60_000 };
+  // Resolved AFTER settings.load(), against the grid the pin is about to sit
+  // over — a window resolved from a stale roster would end at a boundary the
+  // saved schedule no longer has.
+  const resolved = until === 'schedule-change' ? resolveTakeoverWindowNow(startedAt) : null;
+  // `minutes` is optional in the request schema ONLY under 'schedule-change' —
+  // a fixed window without one is already a 400 — so the branch that reads it
+  // is exactly the branch the schema guarantees it in.
+  const windowMinutes = resolved ? resolved.minutes : minutes!;
+  const expiresAt = resolved ? resolved.expiresAt : startedAt + minutes! * 60_000;
+  const override = { showId, startedAt, expiresAt };
+  // Why the window is what it is, so the booth log records a clamp rather than
+  // an unexplained duration an operator did not choose.
+  const reason = resolved
+    ? {
+      schedule: ' (until the schedule changes)',
+      maximum: ' (the schedule has no change in reach)',
+      ceiling: ' (the next change is further out than a takeover can run)',
+    }[resolved.source]
+    : '';
   try {
     await settings.update({ scheduleOverride: override });
     queue.log(
       'scheduler',
       show
-        ? `[takeover] "${show.name}" pinned for ${minutes} min via admin UI`
-        : `[takeover] Default programming selected for ${minutes} min via admin UI`,
+        ? `[takeover] "${show.name}" pinned for ${windowMinutes} min${reason} via admin UI`
+        : `[takeover] Default programming selected for ${windowMinutes} min${reason} via admin UI`,
     );
     void rollSessionNow({ manual: true, reason: 'takeover started' });
     res.json({ override });

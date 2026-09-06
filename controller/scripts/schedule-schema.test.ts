@@ -32,6 +32,7 @@ const {
   scheduleSaveSchema,
   scheduleSchema,
   takeoverShowId,
+  TAKEOVER_UNTIL,
 } = await import('../src/schemas/schedule.js');
 const { validateScheduleStrict, validateScheduleOverrideStrict } = await import(
   '../src/settings/validate.js'
@@ -365,6 +366,45 @@ test('override request: an empty showId is a 400, not a lookup that 404s on ""',
   assert.equal(scheduleOverrideRequestSchema.safeParse({ minutes: 60 }).success, false);
   assert.equal(scheduleOverrideRequestSchema.safeParse({ showId: '', minutes: 60 }).success, false);
   assert.equal(scheduleOverrideRequestSchema.safeParse({ showId: undefined, minutes: 60 }).success, false);
+});
+
+test("override request: 'until' defaults to the fixed window every older client posts", () => {
+  // A body written before #1601 must parse to exactly what it used to mean.
+  const r = scheduleOverrideRequestSchema.parse({ showId: 'x', minutes: 60 });
+  assert.equal(r.until, 'fixed');
+  assert.equal(r.minutes, 60);
+  assert.deepEqual([...TAKEOVER_UNTIL], ['fixed', 'schedule-change']);
+  assert.equal(scheduleOverrideRequestSchema.safeParse({ showId: 'x', minutes: 60, until: 'soon' }).success, false);
+});
+
+test("override request: 'schedule-change' needs no minutes, 'fixed' still does", () => {
+  // The server resolves the window itself, so demanding a duration it then
+  // ignores would let the two fields disagree about what was asked for.
+  const r = scheduleOverrideRequestSchema.safeParse({ showId: 'x', until: 'schedule-change' });
+  assert.equal(r.success, true);
+  assert.equal(r.data!.minutes, undefined);
+  // Default programming asks the same way — the boundary belongs to the grid,
+  // not to what is pinned over it.
+  assert.equal(scheduleOverrideRequestSchema.safeParse({ showId: null, until: 'schedule-change' }).success, true);
+  // A minutes value alongside it is REFUSED, not silently discarded: the server
+  // resolves the window, so a caller that sent a duration has to learn its
+  // number went nowhere rather than watch a pin ignore it.
+  const withMinutes = scheduleOverrideRequestSchema.safeParse({
+    showId: 'x', until: 'schedule-change', minutes: 60,
+  });
+  assert.equal(withMinutes.success, false);
+  assert.equal(withMinutes.error!.issues[0]!.path[0], 'minutes');
+  assert.match(withMinutes.error!.issues[0]!.message, /must be omitted/);
+  // Out of range alongside it is refused too — by the bounds, before the rule
+  // above ever runs.
+  assert.equal(
+    scheduleOverrideRequestSchema.safeParse({ showId: 'x', until: 'schedule-change', minutes: 1 }).success,
+    false,
+  );
+  // And the fixed window keeps its old refusal.
+  const fixed = scheduleOverrideRequestSchema.safeParse({ showId: 'x', until: 'fixed' });
+  assert.equal(fixed.success, false);
+  assert.equal(fixed.error!.issues[0]!.path[0], 'minutes');
 });
 
 test('override request: the minutes message names the real bounds', () => {

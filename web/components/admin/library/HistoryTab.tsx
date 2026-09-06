@@ -8,8 +8,9 @@ import { num } from '../LibraryTaggingPanel';
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PAGE_SIZE } from './types';
-import type { PlayEntry, Track } from './types';
+import type { BlockType, LikeIndex, PlayEntry, Track } from './types';
 import { Thumb } from './bits';
+import { BlockMenu, HeartButton, likeStateFor } from './row-actions';
 
 function playDayLabel(iso: string): string {
   const d = new Date(iso);
@@ -20,13 +21,33 @@ function playDayLabel(iso: string): string {
   return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
+// A play is an air-time snapshot, not a library row, so the thumb and the shared
+// row actions get a Track composed from it. `trackId` is null when the annotated
+// URI carried no `subsonic_id` — untracked auto-playlist plays, mainly (see the
+// `sourceTrackId` note in broadcast/queue.ts). Nothing is ever nulled after the
+// fact, so this says nothing about whether the track is still in the library: a
+// removed track keeps its id here and its actions fail at the server. The thumb
+// still gets the words for its letter tile, but an id-less play has nothing to
+// heart, block or queue, so it renders the dash below instead of dead buttons.
+function historyTrack(p: PlayEntry): Track {
+  return {
+    id: p.trackId || '',
+    title: p.title || undefined,
+    artist: p.artist || undefined,
+    album: p.album || undefined,
+  };
+}
+
 function playSourceLabel(p: PlayEntry): string {
   if (p.source === 'request') return p.requestedBy ? `request · ${p.requestedBy}` : 'request';
   if (p.source === 'ai') return 'DJ pick';
   return 'auto';
 }
 
-export function HistoryTab({ rows, total, page, setPage, loading, queuing, onQueue, onRefresh }: {
+export function HistoryTab({
+  rows, total, page, setPage, loading, queuing, onQueue, onRefresh,
+  likeIndex, liking, onToggleLike, blocking, onBlock,
+}: {
   rows: PlayEntry[] | null;
   total: number;
   page: number;
@@ -35,6 +56,14 @@ export function HistoryTab({ rows, total, page, setPage, loading, queuing, onQue
   queuing: string | null;
   onQueue: (t: Track) => void;
   onRefresh: () => void;
+  // Same actions, same handlers and same optimistic cache as the Browse rows —
+  // the heart state comes from the shared index, so a heart set on either tab
+  // shows on the other with no refetch (#1600).
+  likeIndex: LikeIndex;
+  liking: string | null;
+  onToggleLike: (t: Track, liked: boolean) => void;
+  blocking: string | null;
+  onBlock: (t: Track, type: BlockType) => void;
 }) {
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   return (
@@ -66,6 +95,7 @@ export function HistoryTab({ rows, total, page, setPage, loading, queuing, onQue
               const prev = i > 0 ? rows[i - 1] : null;
               const prevDay = prev ? playDayLabel(prev.playedAt) : null;
               const time = new Date(p.playedAt).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+              const track = historyTrack(p);
               return (
                 <Fragment key={p.id}>
                   {day !== prevDay && (
@@ -75,7 +105,7 @@ export function HistoryTab({ rows, total, page, setPage, loading, queuing, onQue
                     <span className="mono-num w-11 shrink-0 text-[11px] text-muted" title={new Date(p.playedAt).toLocaleString('en-GB')}>
                       {time}
                     </span>
-                    <Thumb track={{ id: p.trackId || '', title: p.title || undefined, artist: p.artist || undefined, album: p.album || undefined }} />
+                    <Thumb track={track} />
                     <div className="min-w-0 flex-1">
                       <div className="lib-title">{p.title || 'unknown'}</div>
                       <div className="lib-artist">{p.artist || ''}{p.album ? ` · ${p.album}` : ''}</div>
@@ -86,14 +116,41 @@ export function HistoryTab({ rows, total, page, setPage, loading, queuing, onQue
                     <span className="hidden w-24 shrink-0 text-right text-[11px] text-muted sm:block" title="how it was picked">
                       {playSourceLabel(p)}
                     </span>
-                    <Btn
-                      sm
-                      onClick={() => onQueue({ id: p.trackId!, title: p.title || undefined, artist: p.artist || undefined, album: p.album || undefined })}
-                      disabled={!p.trackId || !!queuing}
-                      title={p.trackId ? 'queue this track again' : 'no track id recorded for this play'}
-                    >
-                      {queuing && queuing === p.trackId ? '…' : <><ListPlus size={12} /> Queue</>}
-                    </Btn>
+                    {!p.trackId ? (
+                      /* Says WHY the row is action-less. Without it an operator
+                         cannot tell a play with no id from buttons that failed to
+                         render — which is the work the old disabled Queue button's
+                         tooltip was doing. */
+                      <span className="shrink-0 text-[11px] text-muted" title="no track id recorded for this play">—</span>
+                    ) : (
+                      /* Three buttons where there was one, so Queue drops to its icon
+                         below sm: — the row still has to leave the title readable on a
+                         phone. */
+                      <span className="flex shrink-0 items-center gap-1.5">
+                        <HeartButton
+                          track={track}
+                          like={likeStateFor(track, likeIndex)}
+                          busy={liking === track.id}
+                          onToggle={onToggleLike}
+                        />
+                        <BlockMenu
+                          track={track}
+                          busy={blocking === track.id}
+                          disabled={!!blocking}
+                          onBlock={onBlock}
+                        />
+                        <Btn
+                          sm
+                          onClick={() => onQueue(track)}
+                          disabled={!!queuing}
+                          title="queue this track again"
+                        >
+                          {queuing === track.id ? '…' : (
+                            <><ListPlus size={12} /><span className="hidden sm:inline"> Queue</span></>
+                          )}
+                        </Btn>
+                      </span>
+                    )}
                   </div>
                 </Fragment>
               );
