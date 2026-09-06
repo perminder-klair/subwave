@@ -68,9 +68,40 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
   // The helper is mirrored from controller/src/schemas/persona.ts so the browser
   // and the server answer "would this persona follow?" the same way.
   const personas = (((data.values ?? {}) as { personas?: unknown }).personas) as
-    | Array<{ id?: unknown; name?: unknown; tts?: { engine?: unknown } | null }>
+    | Array<{
+        id?: unknown;
+        name?: unknown;
+        tts?: { engine?: unknown; cloudProvider?: unknown } | null;
+      }>
     | undefined;
-  const pinned = personasPinningOtherEngine(personas, 'cloud');
+  // 'openai-compatible' and not just 'cloud': the four cloud providers share one
+  // dispatcher but are independent targets, so a persona pinned to cloud/openai
+  // is no more able to reach the DJ Brain voice than one pinned to piper. Naming
+  // the provider is what stops the warning reporting "nothing outstanding" about
+  // a roster that still cannot speak through the voice being paid for.
+  const pinned = personasPinningOtherEngine(personas, 'cloud', 'openai-compatible');
+
+  // The station's current TTS engine, and whether Save may take it.
+  //
+  // JUDGEMENT CALL, resolved to the SAFER side: Save used to set
+  // tts.defaultEngine: 'cloud' unconditionally, so an operator who had
+  // deliberately put the station on Kokoro and came back only to rotate the
+  // token or fix a model id silently lost that choice, with nothing to undo it
+  // by. An engine already on 'piper' is the shipped default nobody chose, so
+  // taking that one is what "wire the brain and its voice" means; anything else
+  // is a decision the operator made and Save now leaves it alone and says so,
+  // with a button to change it deliberately.
+  const stationEngine = String(
+    (((data.values ?? {}) as { tts?: { defaultEngine?: unknown } }).tts ?? {})
+      .defaultEngine ?? 'piper',
+  );
+  const engineIsDeliberate = stationEngine !== 'piper' && stationEngine !== 'cloud';
+
+  // Point the station's default engine at the cloud voice, on its own.
+  const useCloudEngine = async () => {
+    await saveSettings({ tts: { defaultEngine: 'cloud' } });
+    refresh();
+  };
 
   // One click: point exactly those personas at the station default and leave
   // every other field alone. update() replaces the whole personas array, so the
@@ -161,10 +192,12 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
         ...(typedToken ? { apiKey: typedToken } : {}),
       },
       tts: {
-        // The voice half of "wire the brain and its voice". Without this the
-        // cloud block is configured and never reached: tts.defaultEngine stays
-        // piper and every persona on 'inherit' follows it.
-        defaultEngine: 'cloud',
+        // The voice half of "wire the brain and its voice": without it the cloud
+        // block is configured and never reached, because tts.defaultEngine stays
+        // piper and every persona on 'inherit' follows it. Withheld when the
+        // operator has deliberately chosen some other engine — see
+        // engineIsDeliberate above; the notice offers it as an explicit click.
+        ...(engineIsDeliberate ? {} : { defaultEngine: 'cloud' }),
         cloud: {
           enabled: true,
           provider: 'openai-compatible',
@@ -274,6 +307,24 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
               blank to let the server pick its default.
             </div>
           </div>
+
+          {engineIsDeliberate && (
+            <div className="field grid gap-2 border border-ink bg-[var(--ink-softer)] p-3">
+              <span className="caption">station voice left as {stationEngine}</span>
+              <span className="text-[11px] leading-[1.5] text-muted">
+                Saving here configures the DJ Brain voice but does not switch the
+                station onto it, because <strong>Settings → TTS voice</strong> is
+                set to <strong>{stationEngine}</strong> and that was a deliberate
+                choice. Personas following the station default will keep using
+                {' '}{stationEngine} until you switch it.
+              </span>
+              <div>
+                <Btn onClick={useCloudEngine} disabled={busy}>
+                  {busy ? 'Saving…' : 'Switch station voice to the DJ Brain'}
+                </Btn>
+              </div>
+            </div>
+          )}
 
           {pinned.length > 0 && (
             <div className="field grid gap-2 border border-[var(--danger)] bg-[var(--ink-softer)] p-3">

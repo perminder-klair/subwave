@@ -109,7 +109,10 @@ export interface SettingsResponse {
     djPrompts?: Array<Partial<DjPromptPreset>>;
     activeDjPromptId?: string;
     djHouseRules?: string;
-    tts?: { defaultEngine?: string };
+    // The slice resolvePersonaVoiceSlot() needs: an 'inherit' persona takes its
+    // engine from defaultEngine and, when that is cloud, its provider + voice
+    // from this block. Kept in step with StationVoiceDefaults in the mirror.
+    tts?: { defaultEngine?: string; cloud?: { provider?: string; voice?: string } | null };
   };
   defaults?: { djPrompt?: string };
   skills?: { catalog?: SkillCatalogEntry[] };

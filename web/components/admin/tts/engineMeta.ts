@@ -32,6 +32,22 @@ export const INHERIT_ENGINE: EngineMeta = {
 
 export const PERSONA_ENGINES: EngineMeta[] = [INHERIT_ENGINE, ...ENGINES];
 
+/**
+ * The engine id as a roster/table chip. Real engine ids read fine as-is; the
+ * sentinel does not — a chip saying "inherit" tells the operator nothing about
+ * what will speak, and it is the shipped default for the whole seed roster.
+ * Surfaces with the station block to hand should prefer personas/helpers.ts's
+ * engineLabel(), which resolves it to the engine actually on air.
+ */
+export function engineChipLabel(engine: string): string {
+  return isInheritEngine(engine) ? 'station default' : engine;
+}
+
+/** Whether a slot follows the station rather than naming an engine. */
+export function isInheritEngine(engine: string): boolean {
+  return engine === INHERIT_ENGINE.id;
+}
+
 export const ENGINE_META: Record<string, EngineMeta> = Object.fromEntries(
   [INHERIT_ENGINE, ...ENGINES].map(e => [e.id, e]),
 );

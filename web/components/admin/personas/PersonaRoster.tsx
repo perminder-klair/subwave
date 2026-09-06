@@ -4,6 +4,7 @@
 import { Users } from 'lucide-react';
 import { API_BASE, PERSONA_MAX } from './constants';
 import { initialsFor } from './helpers';
+import { engineChipLabel, isInheritEngine } from '../tts/engineMeta';
 import type { PersonaRosterEntry, PersonaSort } from './roster-order';
 import { PERSONA_SORTS, PERSONA_SORT_LABELS } from './roster-order';
 import { cn } from '../../../lib/cn';
@@ -201,8 +202,8 @@ export function PersonaRoster({
                     ))}
                     <MetaChip>{p.frequency}</MetaChip>
                     {p.scriptLength !== 'concise' && <MetaChip>{p.scriptLength}</MetaChip>}
-                    <MetaChip>{p.tts.engine}</MetaChip>
-                    {p.tts.engine !== 'piper' && p.tts.voice.trim() && (
+                    <MetaChip>{engineChipLabel(p.tts.engine)}</MetaChip>
+                    {p.tts.engine !== 'piper' && !isInheritEngine(p.tts.engine) && p.tts.voice.trim() && (
                       <MetaChip className="max-w-[140px] truncate">{p.tts.voice.trim()}</MetaChip>
                     )}
                   </div>

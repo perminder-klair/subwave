@@ -19,6 +19,7 @@ import { fieldAria } from '@/lib/form';
 import { Field, FieldLabel, FieldError } from '@/components/ui/field';
 import { Card } from '../ui';
 import { EngineVoiceFields, ENGINE_UNAVAILABLE } from '../tts/EngineVoiceFields';
+import { effectiveTts } from './helpers';
 import { Label } from '../../ui/label';
 import { VoiceMeter } from './VoiceMeter';
 import { cn } from '../../../lib/cn';
@@ -48,8 +49,14 @@ export function PersonaVoiceCard({
 
   const speed = tts.speed ?? 1;
   // Only Piper/Kokoro/cloud honour speed; the other workers ignore it, so the
-  // control is shown but disabled with a hint.
-  const speedSupported = tts.engine !== 'chatterbox' && tts.engine !== 'pocket-tts' && tts.engine !== 'remote';
+  // control is shown but disabled with a hint. Asked of the RESOLVED engine: a
+  // persona on the station default has no engine of its own, and reading the
+  // raw slot offered a live speed dial that whatever the station is set to may
+  // quietly ignore.
+  const resolved = effectiveTts({ tts }, data);
+  const resolvedEngine = resolved?.engine;
+  const speedSupported =
+    resolvedEngine !== 'chatterbox' && resolvedEngine !== 'pocket-tts' && resolvedEngine !== 'remote';
 
   return (
     <Card flat title="Voice" sub="text-to-speech engine">
@@ -75,6 +82,7 @@ export function PersonaVoiceCard({
               </>
             )}
             allowInherit
+            inheritResolvesTo={resolved ?? null}
             engineHint={<>
               Each persona can use its own engine and voice, or follow the
               station. The badge on each card shows whether it&apos;s ready in
@@ -82,10 +90,16 @@ export function PersonaVoiceCard({
             </>}
             inheritNote={<>
               This persona follows <strong>Settings → TTS voice</strong>, which is
-              currently <strong>{defaultEngine}</strong>. On a local engine it
-              keeps the voice below; on the cloud voice it uses the station&apos;s
-              cloud provider and voice, because a local voice id means nothing to
-              a cloud provider.
+              currently <strong>{defaultEngine}</strong>.{' '}
+              {resolvedEngine === 'piper' || resolvedEngine === 'kokoro'
+                ? <>Piper and Kokoro share one voice id-space, so the voice below
+                    is the one that will speak — and it follows the station if you
+                    switch between those two.</>
+                : <>{defaultEngine} takes its voice from the station rather than
+                    from this persona, so there is no voice to set here. Switch the
+                    station to Piper or Kokoro, or pin an engine above, to give
+                    this persona a voice of its own.</>}{' '}
+              The sample below plays what will actually air.
             </>}
             unavailableNote={engine => (
               <>{ENGINE_UNAVAILABLE[engine]} This persona falls back to{' '}

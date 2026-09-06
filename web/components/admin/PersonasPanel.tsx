@@ -587,6 +587,7 @@ export default function PersonasPanel() {
         onAirShow={onAirShow}
         defaultEngine={defaultEngine}
         onAirCloudIssue={onAirCloudIssue}
+        data={data}
       />
 
       <SystemPromptModal

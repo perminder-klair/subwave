@@ -7,6 +7,7 @@
 import { useMemo } from 'react';
 import { API_BASE } from './constants';
 import { initialsFor } from './helpers';
+import { engineChipLabel, isInheritEngine } from '../tts/engineMeta';
 import type { PersonaRosterEntry } from './roster-order';
 import { Pill, MetaChip } from '../ui';
 import { RosterTable } from '../RosterTable';
@@ -83,8 +84,8 @@ export function PersonaTable({
       className: 'hidden md:table-cell whitespace-nowrap',
       render: ({ persona: p }) => (
         <span className="flex items-center gap-1">
-          <MetaChip>{p.tts.engine}</MetaChip>
-          {p.tts.engine !== 'piper' && p.tts.voice.trim() && (
+          <MetaChip>{engineChipLabel(p.tts.engine)}</MetaChip>
+          {p.tts.engine !== 'piper' && !isInheritEngine(p.tts.engine) && p.tts.voice.trim() && (
             <MetaChip className="max-w-[120px] truncate">{p.tts.voice.trim()}</MetaChip>
           )}
         </span>

@@ -4,6 +4,26 @@ import {
   CHATTERBOX_VOICE_RE, POCKET_TTS_VOICE_RE,
 } from './constants';
 import { CLOUD_PROVIDER_ENV_KEY, cloudProviderLabel } from '../tts/cloudProviderMeta';
+import { PERSONA_TTS_INHERIT, resolvePersonaVoiceSlot } from '../../../lib/schemas.generated';
+
+/**
+ * The slot a persona will ACTUALLY be voiced by — the 'inherit' sentinel
+ * resolved against the station's TTS block.
+ *
+ * Every admin surface that answers "which engine is this persona on?" goes
+ * through here rather than reading `persona.tts.engine` raw, because a raw read
+ * describes the stored intent and not the outcome: an inherit persona would
+ * read as piper (engineLabel's fallthrough), show no cloud-key warning, and
+ * offer a speed dial the resolved engine ignores. The resolver itself is the
+ * controller's, mirrored from schemas/persona.ts, so the label the operator
+ * reads and the engine that speaks cannot disagree.
+ */
+export function effectiveTts(
+  persona: { tts?: Partial<Persona['tts']> } | undefined,
+  data: SettingsResponse | null,
+) {
+  return resolvePersonaVoiceSlot(persona?.tts, data?.values?.tts ?? null);
+}
 
 // Client-minted opaque id ('p_' personas, 'dp_' prompt presets). The server
 // re-mints anything that fails its ID_RE, so these only need to be unique
@@ -181,8 +201,13 @@ export function voiceForSave(engine: string, voice: string): string {
 // which reads env presence directly. So credentials are checked first and the
 // readiness flag only speaks for what's left: the station switch.
 export function cloudIssue(persona: Persona | undefined, data: SettingsResponse | null): string | null {
-  if (persona?.tts?.engine !== 'cloud') return null;
-  const provider = persona.tts.cloudProvider;
+  // Resolved, not raw: a persona following the station default is voiced by the
+  // cloud whenever the STATION is, and that is exactly the persona whose missing
+  // key the operator most needs told about — it is the shipped default for the
+  // whole seed roster.
+  const tts = effectiveTts(persona, data);
+  if (tts?.engine !== 'cloud') return null;
+  const provider = tts.cloudProvider;
   // openai-compatible has no env-key convention — its URL, model, and optional
   // bearer live in tts.cloud settings rather than state/secrets.env.
   if (provider === 'openai-compatible') return null;
@@ -202,11 +227,23 @@ export function cloudIssue(persona: Persona | undefined, data: SettingsResponse 
   return null;
 }
 
-export function engineLabel(p: Persona): string {
-  if (p.tts.engine === 'kokoro') return `kokoro / ${p.tts.voice.trim() || '—'}`;
-  if (p.tts.engine === 'chatterbox') return `chatterbox / ${p.tts.voice.trim() || 'built-in'}`;
-  if (p.tts.engine === 'pocket-tts') return `pocket-tts / ${p.tts.voice.trim() || 'alba'}`;
-  if (p.tts.engine === 'cloud') return `cloud / ${p.tts.cloudProvider} / ${p.tts.voice.trim() || '—'}`;
-  if (p.tts.engine === 'remote') return `remote / ${p.tts.voice.trim() || '—'}`;
-  return `piper / ${p.tts.voice.trim() || 'built-in'}`;
+/**
+ * "engine / voice" for the on-air strip and the roster chips.
+ *
+ * Pass `data` so a persona on the station default reports what will actually
+ * speak, suffixed to say it is following rather than pinned. Without it the
+ * function still answers, but an inherit persona falls through to the piper
+ * branch and states an engine the station may not be on at all.
+ */
+export function engineLabel(p: Persona, data: SettingsResponse | null = null): string {
+  const inherits = p.tts.engine === PERSONA_TTS_INHERIT;
+  const t = inherits ? effectiveTts(p, data) : p.tts;
+  const voice = (t?.voice ?? '').trim();
+  const suffix = inherits ? ' (station default)' : '';
+  if (t?.engine === 'kokoro') return `kokoro / ${voice || '—'}${suffix}`;
+  if (t?.engine === 'chatterbox') return `chatterbox / ${voice || 'built-in'}${suffix}`;
+  if (t?.engine === 'pocket-tts') return `pocket-tts / ${voice || 'alba'}${suffix}`;
+  if (t?.engine === 'cloud') return `cloud / ${t.cloudProvider} / ${voice || '—'}${suffix}`;
+  if (t?.engine === 'remote') return `remote / ${voice || '—'}${suffix}`;
+  return `piper / ${voice || 'built-in'}${suffix}`;
 }

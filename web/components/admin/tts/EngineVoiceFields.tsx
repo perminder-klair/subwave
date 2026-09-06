@@ -20,7 +20,7 @@ import { CloudProviderSelector } from './CloudProviderSelector';
 import { resolveKeyPresence } from './cloudProviderMeta';
 import { VoicePreviewButton } from './VoicePreviewButton';
 import { VoicePicker, type VoicePickerGroup } from './VoicePicker';
-import { ENGINES, PERSONA_ENGINES, type EngineAvailability } from './engineMeta';
+import { ENGINES, INHERIT_ENGINE, PERSONA_ENGINES, type EngineAvailability } from './engineMeta';
 import { Input } from '../../ui/input';
 import { Label } from '../../ui/label';
 import {
@@ -105,14 +105,33 @@ interface EngineVoiceFieldsProps {
   // since only it knows which engine the station is on.
   allowInherit?: boolean;
   inheritNote?: ReactNode;
+  // The slot 'inherit' currently resolves to — resolvePersonaVoiceSlot(value,
+  // station), supplied by the caller for the same reason inheritNote is: this
+  // component has no station block. Two things need it. The preview must post a
+  // REAL engine (the controller rejects 'inherit' outright, so "Play sample" was
+  // dead for every persona on the station default — the shipped state of the
+  // whole seed roster). And only piper/kokoro carry the persona's own voice id,
+  // so only they should offer a voice field while inheriting; every other
+  // resolved engine takes its voice from the station and editing one here would
+  // write an id the resolver then drops.
+  inheritResolvesTo?: VoiceSlot | null;
 }
 
 export function EngineVoiceFields({
   value, onChange, data, adminFetch,
   previewSpeed, previewLanguage,
   unavailableNote, cloudIssue, engineHint, previewHint,
-  allowInherit = false, inheritNote,
+  allowInherit = false, inheritNote, inheritResolvesTo,
 }: EngineVoiceFieldsProps) {
+  const inheriting = value.engine === INHERIT_ENGINE.id;
+  // What will actually speak. Identical to `value` unless the slot inherits.
+  const effective = inheriting && inheritResolvesTo ? inheritResolvesTo : value;
+  // Which engine's voice field to render. While inheriting that is only
+  // piper/kokoro — the one shared id-space the persona's stored voice belongs
+  // to (see TTS_INHERITABLE_VOICE_ENGINES in the controller's schemas/persona).
+  const voiceEngine = inheriting
+    ? (effective.engine === 'piper' || effective.engine === 'kokoro' ? effective.engine : '')
+    : value.engine;
   const kokoroVoices: string[] = data?.tts?.kokoroVoices || [];
   const kokoroLanguages = data?.tts?.kokoroVoiceLanguages || {};
   const pocketTtsVoices = data?.tts?.pocketTtsVoices || [];
@@ -143,7 +162,7 @@ export function EngineVoiceFields({
   const selectEngine = (v: string) => {
     const patch: Partial<VoiceSlot> = { engine: v };
     const cur = value.voice.trim();
-    if (v === 'inherit') {
+    if (v === INHERIT_ENGINE.id) {
       // No engine is known yet, so there is no rule to normalise against — and
       // the stored id is still wanted if the station is on a local engine.
       // resolvePersonaVoiceSlot drops it at speak time when it isn't.
@@ -207,11 +226,21 @@ export function EngineVoiceFields({
         {engineHint && <div className="field-hint max-w-[70ch]">{engineHint}</div>}
       </div>
 
-      {value.engine === 'inherit' && inheritNote && (
+      {inheriting && inheritNote && (
         <div className="field-hint mb-4 max-w-[70ch]">{inheritNote}</div>
       )}
 
-      {value.engine === 'piper' && (() => {
+      {/* The cloud-key alarm renders inside the cloud block below, which an
+          inheriting slot never shows — so repeat it here. A persona following a
+          station whose cloud voice has no key is exactly the one the warning is
+          for, and it is the shipped default for the whole seed roster. */}
+      {inheriting && effective.engine === 'cloud' && cloudIssue && (
+        <div role="alert" className="mb-3.5 border border-[var(--danger)] px-3 py-2.5 text-[11px] leading-[1.6] text-[var(--danger)]">
+          {cloudIssue}
+        </div>
+      )}
+
+      {voiceEngine === 'piper' && (() => {
         const piperVoices: string[] = data?.tts?.piperVoices || [];
         const selected = value.voice || CB_DEFAULT_VOICE;
         // The default entry auditions with voice '' (the engine's built-in);
@@ -246,7 +275,7 @@ export function EngineVoiceFields({
         );
       })()}
 
-      {value.engine === 'kokoro' && (() => {
+      {voiceEngine === 'kokoro' && (() => {
         const voice = value.voice || 'bf_isabella';
         const langPrefix = voice.charAt(0);
         const filtered = kokoroVoices.filter(v => v.startsWith(langPrefix));
@@ -298,7 +327,7 @@ export function EngineVoiceFields({
         );
       })()}
 
-      {value.engine === 'chatterbox' && (() => {
+      {voiceEngine === 'chatterbox' && (() => {
         const cbVoices: string[] = data?.tts?.chatterboxVoices || [];
         // Shared voice folder (issue #213).
         const cbDir = 'state/voices/';
@@ -334,7 +363,7 @@ export function EngineVoiceFields({
         );
       })()}
 
-      {value.engine === 'pocket-tts' && (() => {
+      {voiceEngine === 'pocket-tts' && (() => {
         const ptAvailable = data?.tts?.available?.['pocket-tts'] !== false;
         const customVoices: string[] = data?.tts?.pocketTtsCustomVoices || [];
         const selected = value.voice || 'alba';
@@ -391,7 +420,7 @@ export function EngineVoiceFields({
         );
       })()}
 
-      {value.engine === 'remote' && (() => {
+      {voiceEngine === 'remote' && (() => {
         const remoteAvail = data?.tts?.available?.remote;
         return (
           <div className="field max-w-[360px]">
@@ -522,9 +551,9 @@ export function EngineVoiceFields({
 
       <div className="mt-4">
         <VoicePreviewButton
-          engine={value.engine}
-          voice={value.voice}
-          cloudProvider={value.cloudProvider}
+          engine={effective.engine}
+          voice={effective.voice}
+          cloudProvider={effective.cloudProvider}
           speed={previewSpeed}
           language={previewLanguage}
           adminFetch={adminFetch}
