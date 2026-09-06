@@ -75,6 +75,10 @@ export interface Show {
    *  0 = unlimited (opt this show out of the cap so it can air long mixes);
    *  >0 = this show's own cap. */
   maxTrackSeconds: number | null;
+  /** Fade this show's last track out at the show change instead of letting it
+   *  spill into the next show (#1574). TRI-STATE: null = inherit the station
+   *  default, true/false = this show's own answer. */
+  fadeAtShowEnd: boolean | null;
   /** The union of these playlists becomes the show's candidate pool. Empty = no anchor. */
   playlistIds: string[];
   /** With ≥1 playlist pinned, the playlist is the show's ENTIRE universe;
@@ -137,6 +141,10 @@ export const ENERGY_OPTIONS: readonly string[] = SHOW_ENERGY;
 const VOCAL_LABELS: Record<string, string> = { instrumental: 'instrumental', vocal: 'vocals' };
 export const VOCAL_OPTIONS = SHOW_VOCALS.map((key) => ({ key, label: VOCAL_LABELS[key] ?? key }));
 export const ANY_SENTINEL = '__any__';
+// Radix Select refuses an empty string value, and `null` is not a value at
+// all — the tri-state "inherit" needs its own token, exactly as ANY_SENTINEL
+// stands in for ''.
+export const INHERIT_SENTINEL = '__inherit__';
 export const FILTER_VALUES_MAX = SHOW_FILTER_VALUES_MAX;
 
 export function sameEra(a: EraWindow, b: { from: number | null; to: number | null } | EraWindow): boolean {

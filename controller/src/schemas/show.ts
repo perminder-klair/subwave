@@ -406,6 +406,15 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           (n) => n == null || n === 0 || ctx.minTrackSeconds == null || n >= ctx.minTrackSeconds,
           `must be 0 (inherit/unlimited) or at least the station's minimum track length`,
         ),
+      // Show-boundary fade (#1574). TRI-STATE, exactly like maxTrackSeconds
+      // above: null = inherit the station default, true/false = this show's own
+      // answer. A plain showBool() would read an untouched show as an explicit
+      // `false` and silently opt every existing show OUT of a station default
+      // the operator had just turned on.
+      fadeAtShowEnd: z
+        .union([z.null(), z.literal(''), z.boolean()])
+        .optional()
+        .transform((v) => (v == null || v === '' ? null : v)),
       // Shape-checked only: ids resolve against the live Navidrome at pick
       // time, so a stale one contributes nothing rather than failing a save.
       playlistIds: showStringList({

@@ -296,6 +296,9 @@ export interface FormState {
   crossfadeDuration: string;
   ducking: DuckingForm;
   maxTrackSeconds: string;
+  /** Station default for the show-boundary fade (#1574). A show's own
+   *  tri-state overrides it; this level is only ever on or off. */
+  fadeAtShowEnd: boolean;
   silenceTrim: SilenceTrimForm;
   transitions: TransitionsForm;
   archive: ArchiveForm;
@@ -357,6 +360,9 @@ export interface SettingsData {
     };
     loudness?: { targetLufs?: number; maxBoostDb?: number; source?: LoudnessSource };
     silenceTrim?: { enabled?: boolean; minGapMs?: number };
+    /** Absent on a settings.json predating the key — false, like the
+     *  controller's own coercion. */
+    fadeAtShowEnd?: boolean;
     station?: string;
     stationDescription?: string;
     timezone?: string;

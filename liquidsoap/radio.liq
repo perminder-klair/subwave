@@ -488,8 +488,21 @@ def dj_transition(a, b) =
   # Precedence: a loop beats everything (the loop IS the transition; garnishing
   # it chokes the gesture), then the washout, which may carry the length-cap
   # auto-arm. The queue strips the losers upstream; enforced here too.
-  washing = a.metadata["liq_washout"] == "true"
-  looping = a.metadata["liq_loop"] == "true" and not washing
+  # SHOW-BOUNDARY FADE (#1574) — the controller stamped liq_cue_out at a show
+  # change, so this track is being CUT, not ending. Both gestures that ride the
+  # ending track are built around an ending that will not happen: the washout's
+  # echo tail is a dissolve out of an outro, and the loop captures the last bar
+  # of the record. The loop is the one that matters — its branch applies NO
+  # fader to the outgoing (it rides its own gain after the comb cascade), so a
+  # boundary cut under an armed loop is exactly the hard stop this feature
+  # exists to avoid. Suppressing both here drops the transition back to the
+  # default `fade.out(duration=d)` below, which spans the WHOLE cross buffer —
+  # the crossfade invariant, unchanged. The incoming pick's own gestures
+  # (sweep/dissolve/chop) are untouched: why the outgoing stopped is none of
+  # their business, and their fade shapes already span the same buffer.
+  boundary_fading = a.metadata["liq_show_fade"] == "true"
+  washing = a.metadata["liq_washout"] == "true" and not boundary_fading
+  looping = a.metadata["liq_loop"] == "true" and not washing and not boundary_fading
   sweeping = b.metadata["liq_sweep"] == "true" and not looping
   dissolving = b.metadata["liq_dissolve"] == "true" and not washing and not looping
   chopping = b.metadata["liq_chop"] == "true" and not washing and not looping

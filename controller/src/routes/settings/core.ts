@@ -106,6 +106,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         stream: s.stream,
         loudness: s.loudness,
         silenceTrim: s.silenceTrim,
+        fadeAtShowEnd: s.fadeAtShowEnd,
         station: s.station,
         stationDescription: s.stationDescription,
         timezone: s.timezone,

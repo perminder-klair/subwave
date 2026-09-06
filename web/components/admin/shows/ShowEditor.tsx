@@ -31,6 +31,7 @@ import { fieldAria } from '@/lib/form';
 import { SwitchField, TextField, TextareaField, ToggleGroupField } from '@/lib/form-fields';
 import {
   ANY_SENTINEL,
+  INHERIT_SENTINEL,
   DECADES,
   ENERGY_OPTIONS,
   FILTER_VALUES_MAX,
@@ -59,6 +60,7 @@ const FIELD_LABELS: Record<string, string> = {
   personaId: 'host',
   guestPersonaIds: 'guests',
   maxTrackSeconds: 'track length cap',
+  fadeAtShowEnd: 'fade at show end',
   segmentSkill: 'feature skill',
   playlistIds: 'playlists',
   excludedPlaylistIds: 'excluded playlists',
@@ -169,6 +171,7 @@ export function ShowEditor({
   const vocalsCtl = useController({ control, name: path('vocals') });
   const genresCtl = useController({ control, name: path('genres') });
   const maxTrackSecondsCtl = useController({ control, name: path('maxTrackSeconds') });
+  const fadeAtShowEndCtl = useController({ control, name: path('fadeAtShowEnd') });
   const tagsCtl = useController({ control, name: path('tags') });
 
   const candidateKey = JSON.stringify(showPayload(show));
@@ -236,6 +239,7 @@ export function ShowEditor({
   const vocalsAria = fieldAria(`${uid}-${path('vocals')}`, vocalsCtl.fieldState.error, { hasDescription: true });
   const genresAria = fieldAria(`${uid}-${path('genres')}`, genresCtl.fieldState.error, { hasDescription: true });
   const maxTrackSecondsAria = fieldAria(`${uid}-${path('maxTrackSeconds')}`, maxTrackSecondsCtl.fieldState.error, { hasDescription: true });
+  const fadeAtShowEndAria = fieldAria(`${uid}-${path('fadeAtShowEnd')}`, fadeAtShowEndCtl.fieldState.error, { hasDescription: true });
   const tagsAria = fieldAria(`${uid}-${path('tags')}`, tagsCtl.fieldState.error, { hasDescription: true });
 
   return (
@@ -750,6 +754,35 @@ export function ShowEditor({
               least {minTrackSeconds ?? 30}s to cap it here.
             </FieldDescription>
             <FieldError {...maxTrackSecondsAria.errorProps} errors={maxTrackSecondsCtl.fieldState.error ? [maxTrackSecondsCtl.fieldState.error] : undefined} />
+          </div>
+
+          {/* Tri-state, so a Switch would be wrong: "inherit" is a real answer
+              and the commonest one, and a two-state control would turn every
+              untouched show into an explicit no. */}
+          <div className="field">
+            <Label {...fadeAtShowEndAria.labelProps}>fade out at the show change</Label>
+            <Select
+              value={fadeAtShowEndCtl.field.value == null ? INHERIT_SENTINEL : String(fadeAtShowEndCtl.field.value)}
+              onValueChange={val => fadeAtShowEndCtl.field.onChange(val === INHERIT_SENTINEL ? null : val === 'true')}
+            >
+              <SelectTrigger {...fadeAtShowEndAria.controlProps} onBlur={fadeAtShowEndCtl.field.onBlur} ref={fadeAtShowEndCtl.field.ref} aria-label="Fade out at the show change">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value={INHERIT_SENTINEL}>Station default</SelectItem>
+                  <SelectItem value="true">Fade at the boundary</SelectItem>
+                  <SelectItem value="false">Let it run over</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <FieldDescription {...fadeAtShowEndAria.descriptionProps}>
+              When this show ends, a track still playing is faded out at the
+              boundary instead of running into the next show. Worth turning on
+              for long-form music (ambient, classical, prog) where one record
+              can outlast the slot; a short overrun is left alone either way.
+            </FieldDescription>
+            <FieldError {...fadeAtShowEndAria.errorProps} errors={fadeAtShowEndCtl.fieldState.error ? [fadeAtShowEndCtl.fieldState.error] : undefined} />
           </div>
         </Card>
       </div>

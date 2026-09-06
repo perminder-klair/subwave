@@ -48,6 +48,12 @@ export const DEFAULTS = {
   // show's own maxTrackSeconds overrides it (0 there = unlimited). Listener
   // requests always bypass it.
   maxTrackSeconds: 0,
+  // Fade a long track out at the next show change instead of letting it spill
+  // into the following show (#1574). Off by default, and a show's own
+  // `fadeAtShowEnd` (null = inherit) overrides it — absent at both levels is
+  // the pre-existing behaviour, so an upgrade sounds byte-identical. The cut
+  // rides the #447 liq_cue_out stamp; the policy is broadcast/show-boundary.ts.
+  fadeAtShowEnd: false,
   // Hourly archive output. Off by default — the second MP3 encoder is the
   // largest constant CPU cost in the broadcast container (#137). retentionDays
   // bounds disk growth (~1.4 GB/day at 128 kbps); normalizeArchiveRetentionDays

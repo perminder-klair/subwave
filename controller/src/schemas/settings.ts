@@ -646,6 +646,17 @@ export const djTalkOnlyBetweenTracksSchema = z.boolean({
 });
 
 /**
+ * Station default for the show-boundary fade (#1574). Strict boolean, the same
+ * posture as the two switches above and for the same reason — the key is new,
+ * so there is no hand-rolled branch whose accidental leniency has to be
+ * preserved. A show's own `fadeAtShowEnd` (schemas/show.ts) is the tri-state
+ * that overrides it; this one is only ever true or false.
+ */
+export const fadeAtShowEndSchema = z.boolean({
+  error: 'fadeAtShowEnd must be a boolean',
+});
+
+/**
  * Trim FIRST, then a strict pair — ' en-GB ' saves, 'en-gb' does not.
  *
  * Not settingsStrictOneOf: that tests the raw value, which is right for

@@ -22,6 +22,7 @@ import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
 import * as loudness from '../music/loudness.js';
 import * as silenceTrim from '../music/silence-trim.js';
+import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
 import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
 import { albumKeyFor } from '../music/album-facts.js';
@@ -1077,6 +1078,57 @@ class Queue {
     return remaining;
   }
 
+  // Where this pick should be cued out so it ends at the next show change, or
+  // null to leave it alone (#1574). Thin: every rule lives in
+  // broadcast/show-boundary.ts, because the same question is asked from the
+  // drain and — the moment anything else wants it — from wherever the operator
+  // previews a schedule.
+  //
+  // Three exemptions, each for its own reason:
+  //   * a LISTENER REQUEST is an explicit ask and is never cut, mirroring the
+  //     #447 cap's exemption;
+  //   * an UNKNOWABLE clock (boot, recover, an untracked auto play ahead in the
+  //     chain) means there is no expected air time to measure a boundary from,
+  //     and guessing "now" would cut a track that has not started yet by
+  //     however long it waits in dj_queue;
+  //   * the SWITCH being off, resolved against the show on air at the expected
+  //     air time rather than the one on air now.
+  private resolveBoundaryCut(
+    item: QueueItem,
+    durSec: number,
+    trim: { cueInSec: number | null; cueOutSec: number | null },
+    maxDurationSec: number | null,
+  ): number | null {
+    if (item.requestedBy) return null;
+    const untilAirs = this.remainingUntilItemAirs(item);
+    if (untilAirs == null) return null;
+    const startMs = Date.now() + untilAirs * 1000;
+    if (!showBoundary.fadeAtShowEndActive(new Date(startMs))) return null;
+    // The span that would actually air, after the cap and the trimmed tail —
+    // never the tagged duration. A track the #447 cap already stops before the
+    // boundary has no overshoot to cut, and asking about the raw length would
+    // invent one.
+    const early = [maxDurationSec, trim.cueOutSec]
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
+    const playable = playableDurationSec(
+      durSec,
+      early.length ? Math.min(...early) : null,
+      trim.cueInSec,
+    );
+    if (playable == null || playable <= 0) return null;
+    const boundaryMs = showBoundary.nextShowBoundaryMs(startMs, playable);
+    const cut = showBoundary.resolveBoundaryCueSec({
+      startMs,
+      cueInSec: trim.cueInSec ?? 0,
+      playableSec: playable,
+      boundaryMs,
+    });
+    if (cut != null) {
+      this.log('mix', `show boundary fade: "${item.track.title}" cued out at ${cut}s — it would have run ${Math.round(playable - (cut - (trim.cueInSec ?? 0)))}s into the next show`);
+    }
+    return cut;
+  }
+
   // Whether pair-aware drains are in effect. The toggle is transitions.
   // pairDrain, but the feature only pays off under a DJ-mode persona — both
   // consumers of the hold (applyPairStamps, maybeRenderBlend) no-op without
@@ -1281,6 +1333,16 @@ class Queue {
         // rendered FROM the two regions the trim can remove and has to be told.
         const trim = silenceTrim.resolveSilenceTrim(item.track);
 
+        // Show-boundary fade (#1574): a show built on 20-30 minute material
+        // picks one last track minutes before its slot ends and is still
+        // playing deep into the next show, so the incoming presenter's opening
+        // link airs over the outgoing show's music. Resolve the cut HERE, next
+        // to the trim and above the stem-blend attempt, for the same two
+        // reasons the trim is: it is one more "stop early" offset that folds
+        // into the same arbitration below, and a rendered blend is mixed FROM
+        // the tail this would remove, so the blend has to be told.
+        const boundaryCueSec = this.resolveBoundaryCut(item, itemDurSec, trim, maxDurationSec);
+
         // Pair stamps for THIS item's own exit (the seam into its successor)
         // — only when the successor is known at annotate time. Resolved fresh
         // after the awaits above: an operator cancel during the TTS render
@@ -1311,7 +1373,10 @@ class Queue {
               const inTrim = silenceTrim.resolveSilenceTrim(successor.track);
               const blend = await stemBlend.maybeRenderBlend(
                 item.track, successor.track, this.remainingUntilItemAirs(item), {
-                  outCapped: cappedExit,
+                  // A boundary cut is a capped exit as far as the blend is
+                  // concerned — same veto, same reason: the clip describes a
+                  // tail that will not air.
+                  outCapped: cappedExit || boundaryCueSec != null,
                   outTrimEndSec: trim.cueOutSec,
                   inHeadTrimmed: inTrim.cueInSec != null,
                 },
@@ -1347,6 +1412,16 @@ class Queue {
         // late by exactly the silence we just cut.
         if (cappedExit) item.cueOutSec = Math.min(item.cueOutSec ?? Infinity, maxDurationSec!);
         if (trim.cueOutSec != null) item.cueOutSec = Math.min(item.cueOutSec ?? Infinity, trim.cueOutSec);
+        if (boundaryCueSec != null) {
+          item.cueOutSec = Math.min(item.cueOutSec ?? Infinity, boundaryCueSec);
+          // The mixer needs to know WHY this track stops: a cut is not the
+          // track's own ending, so the exit gestures stamped for that ending
+          // (washout, loop) must not air over it. radio.liq reads liq_show_fade
+          // off the OUTGOING track and falls back to the plain full-buffer
+          // fade — the loop branch applies no fader at all, which is the one
+          // path where a boundary cut really would land as a hard stop.
+          item.track.showFade = true;
+        }
         // Stem-seam cue points: the blend's cut on the way out, the clip's
         // hand-off on the way in (stamped when the INCOMING item drains).
         // Per-attempt identity for proto_subhttp's explicit completion signal.
@@ -1362,7 +1437,7 @@ class Queue {
         // seam's cue-in is DEEPER into the track than any leading silence (the
         // clip already played that head), so the later of the two is the one
         // that leaves no audio played twice.
-        const cueOutCandidates = [item.stemBlend?.blendStartSec, trim.cueOutSec]
+        const cueOutCandidates = [item.stemBlend?.blendStartSec, trim.cueOutSec, boundaryCueSec]
           .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);
         const cueInCandidates = [item.stemSeam ? item.stemCueInSec : null, trim.cueInSec]
           .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v > 0);

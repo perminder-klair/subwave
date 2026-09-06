@@ -2686,6 +2686,17 @@ export const djTalkOnlyBetweenTracksSchema = z.boolean({
 });
 
 /**
+ * Station default for the show-boundary fade (#1574). Strict boolean, the same
+ * posture as the two switches above and for the same reason — the key is new,
+ * so there is no hand-rolled branch whose accidental leniency has to be
+ * preserved. A show's own `fadeAtShowEnd` (schemas/show.ts) is the tri-state
+ * that overrides it; this one is only ever true or false.
+ */
+export const fadeAtShowEndSchema = z.boolean({
+  error: 'fadeAtShowEnd must be a boolean',
+});
+
+/**
  * Trim FIRST, then a strict pair — ' en-GB ' saves, 'en-gb' does not.
  *
  * Not settingsStrictOneOf: that tests the raw value, which is right for
@@ -3716,6 +3727,15 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           (n) => n == null || n === 0 || ctx.minTrackSeconds == null || n >= ctx.minTrackSeconds,
           `must be 0 (inherit/unlimited) or at least the station's minimum track length`,
         ),
+      // Show-boundary fade (#1574). TRI-STATE, exactly like maxTrackSeconds
+      // above: null = inherit the station default, true/false = this show's own
+      // answer. A plain showBool() would read an untouched show as an explicit
+      // `false` and silently opt every existing show OUT of a station default
+      // the operator had just turned on.
+      fadeAtShowEnd: z
+        .union([z.null(), z.literal(''), z.boolean()])
+        .optional()
+        .transform((v) => (v == null || v === '' ? null : v)),
       // Shape-checked only: ids resolve against the live Navidrome at pick
       // time, so a stale one contributes nothing rather than failing a save.
       playlistIds: showStringList({

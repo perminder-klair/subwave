@@ -628,7 +628,7 @@ test('the converted keys are exactly the ones with schemas', () => {
   assert.deepEqual(Object.keys(SETTINGS_PATCH_SCHEMAS).sort(), [
     'activeDjPromptId', 'archive', 'audio', 'beds', 'crossfadeDuration',
     'djHouseRules', 'djPrompt', 'djPrompts', 'djSpeakClock',
-    'djTalkOnlyBetweenTracks', 'ducking', 'festivals',
+    'djTalkOnlyBetweenTracks', 'ducking', 'fadeAtShowEnd', 'festivals',
     'jingleRatio', 'likes',
     'locale', 'loudness', 'maxTrackSeconds', 'moodSchedule', 'moods', 'personas',
     'picker',

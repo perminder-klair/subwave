@@ -51,6 +51,10 @@ export interface Track {
   loop?: boolean;
   loopBar?: number;
   crossSec?: number;
+  // Show-boundary fade (#1574): this track was cued out at a show change, so
+  // its ending is a cut rather than its own. radio.liq reads liq_show_fade off
+  // the OUTGOING track and suppresses the exit gestures above.
+  showFade?: boolean;
   [k: string]: unknown;
 }
 

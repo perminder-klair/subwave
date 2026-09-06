@@ -315,6 +315,7 @@ export default function SettingsPanel() {
         intro: String(v.ducking?.intro ?? 0.3),
       },
       maxTrackSeconds: String(v.maxTrackSeconds ?? 0),
+      fadeAtShowEnd: v.fadeAtShowEnd === true,
       silenceTrim: {
         enabled: v.silenceTrim?.enabled ?? false,
         minGapMs: String(v.silenceTrim?.minGapMs ?? 1500),
@@ -691,6 +692,7 @@ export default function SettingsPanel() {
         intro: n.float('ducking.intro', form.ducking.intro),
       },
       maxTrackSeconds: n.int('maxTrackSeconds', form.maxTrackSeconds),
+      fadeAtShowEnd: form.fadeAtShowEnd,
       silenceTrim: {
         enabled: form.silenceTrim.enabled,
         minGapMs: n.int('silenceTrim.minGapMs', form.silenceTrim.minGapMs),
@@ -1404,6 +1406,34 @@ export default function SettingsPanel() {
             )}
 
             {form && (
+              <Card title="Show boundaries" sub="stop a long track spilling into the next show">
+                <div className="field">
+                  <Label>Fade out at a show change</Label>
+                  <div className="flex items-center gap-2">
+                    <Seg
+                      options={[
+                        { id: 'on', label: 'On' },
+                        { id: 'off', label: 'Off' },
+                      ]}
+                      value={form.fadeAtShowEnd ? 'on' : 'off'}
+                      onChange={id => setForm(f => (f ? { ...f, fadeAtShowEnd: id === 'on' } : f))}
+                    />
+                  </div>
+                  <SettingsFieldError path="fadeAtShowEnd" errors={fieldErrors} />
+                  <div className="field-hint">
+                    On a schedule built from long records — ambient, classical, prog — the last
+                    track of a show can still be playing well into the next one, so the incoming
+                    host talks over the outgoing show&rsquo;s music. With this on, a track that
+                    would run past the boundary is faded out there instead. A short overrun is
+                    left alone, a track is never cut down to a stub, and listener requests always
+                    play in full. Each show can override this. Applies on the next pick; no
+                    restart needed.
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
               <Card title="Dead-air trim" sub="cut silent gaps off track edges">
                 <div className="grid gap-3">
                   <div className="field">
@@ -1978,7 +2008,7 @@ export default function SettingsPanel() {
               onSave={saveDanger}
               saveLabel="Save danger zone"
               errors={fieldErrors}
-              ownedKeys={['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'silenceTrim', 'transitions', 'audio', 'loudness', 'stream']}
+              ownedKeys={['crossfadeDuration', 'ducking', 'maxTrackSeconds', 'fadeAtShowEnd', 'silenceTrim', 'transitions', 'audio', 'loudness', 'stream']}
             />
           </>
         )}

@@ -223,6 +223,7 @@ export {
   announceLinks,
   castHouseRulesBlock,
   castSpeakerIdRule,
+  effectiveFadeAtShowEnd,
   effectiveFrequency,
   effectiveMaxTrackSec,
   effectsActive,
@@ -403,6 +404,13 @@ export async function load() {
       intro: normalizeDuckDepth(stored.ducking?.intro, DEFAULTS.ducking.intro),
     },
     maxTrackSeconds: coerceMaxTrackSeconds(rawMaxTrackSec(stored), false) ?? DEFAULTS.maxTrackSeconds,
+    // Station default for the show-boundary fade (#1574). Anything but an
+    // explicit boolean reads as the shipped default (off), which is what makes
+    // an install that predates the key sound byte-identical.
+    fadeAtShowEnd:
+      typeof stored.fadeAtShowEnd === 'boolean'
+        ? stored.fadeAtShowEnd
+        : DEFAULTS.fadeAtShowEnd,
     archive: {
       enabled:
         typeof stored.archive?.enabled === 'boolean'
@@ -1439,6 +1447,12 @@ export async function update(patch) {
   if ('djTalkOnlyBetweenTracks' in patch) {
     next.djTalkOnlyBetweenTracks =
       parseSettingsPatchKey<boolean>('djTalkOnlyBetweenTracks', patch.djTalkOnlyBetweenTracks);
+  }
+  // Show-boundary fade (#1574). Read live by the drain (it stamps liq_cue_out
+  // on the next pick that would cross a show change), so no restart and no
+  // Liquidsoap handoff file.
+  if ('fadeAtShowEnd' in patch) {
+    next.fadeAtShowEnd = parseSettingsPatchKey<boolean>('fadeAtShowEnd', patch.fadeAtShowEnd);
   }
   if ('personas' in patch) {
     next.personas = validatePersonasStrict(patch.personas);

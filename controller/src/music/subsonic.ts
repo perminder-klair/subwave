@@ -997,6 +997,12 @@ export function getAnnotatedUri(song, opts: { maxDurationSec?: number | null; cu
   // like the washout's. radio.liq reads both off the OUTGOING track.
   if (song.loop) fields.push('liq_loop="true"');
   if (song.loopBar != null) fields.push(`liq_loop_bar="${escAnnotate(song.loopBar)}"`);
+  // Show-boundary fade (#1574): this track is cued out at a show change, so its
+  // ending is a cut and not its own. radio.liq reads liq_show_fade off the
+  // OUTGOING track and suppresses the exit gestures stamped for the ending that
+  // will not happen (washout, loop), leaving the plain fade that spans the full
+  // cross buffer. Absent → today's behaviour.
+  if (song.showFade) fields.push('liq_show_fade="true"');
   // DJ blend (spectral handover): validated same-lane picks trade the spectrum
   // with their predecessor across the cross — dj_transition reads liq_blend on
   // the INCOMING track, like the sweep.
