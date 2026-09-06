@@ -240,6 +240,29 @@ async function pingWithOnce({
   }
 }
 
+// Subsonic/OpenSubsonic startScan — asks Navidrome to re-index its library
+// now, rather than waiting for its own scheduled scan. Used by
+// broadcast/never-play-again.ts right after music/never-play-ignore.ts writes
+// a fresh `.ndignore` exclusion, so the change doesn't sit unapplied until
+// Navidrome's own cadence gets to it.
+//
+// Best-effort by design and NEVER throws: a Navidrome version without this
+// endpoint (404), or a scan already in progress, both degrade to "the
+// exclusion lands on Navidrome's own next scan instead," not a caller-visible
+// failure — same posture as ping()/pingWith() above, which never throw
+// either. Deliberately not polled to completion (no getScanStatus loop
+// anywhere in this codebase) — a full scan is library-size-dependent and can
+// run seconds to minutes, which does not fit inside an interactive admin
+// action the way music/blocklist.ts's in-memory index rebuild does.
+export async function startScan(): Promise<{ ok: boolean; scanning?: boolean }> {
+  try {
+    const r = await call('startScan', {});
+    return { ok: true, scanning: r.scanStatus?.scanning === true };
+  } catch {
+    return { ok: false };
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Station-archive guard
 // ---------------------------------------------------------------------------

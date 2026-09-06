@@ -160,6 +160,15 @@ services:
     volumes:
       - *state-mount
       - *stems-mount
+      # Optional, for "Never Play Again"'s Navidrome-wide exclusion (see
+      # NEVER_PLAY_LIBRARY_PATH in .env.example) — mount your Navidrome
+      # music-library root here, READ-WRITE, pointed at the SAME directory
+      # Navidrome itself scans. Uncomment and set HOST_MUSIC_PATH in .env,
+      # then set NEVER_PLAY_LIBRARY_PATH=/music to match. Leave both unset
+      # and the feature still works — "Never Play Again" still permanently
+      # blocks a track inside SUB/WAVE and skips it immediately either way;
+      # this mount only extends that to Navidrome's own catalog too.
+      # - \${HOST_MUSIC_PATH}:/music
     # curl is in the controller image; /health is served at the router root.
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:7701/health > /dev/null"]
@@ -474,6 +483,10 @@ services:
     volumes:
       - *state-mount
       - *stems-mount
+      # Optional, for "Never Play Again"'s Navidrome-wide exclusion (see
+      # NEVER_PLAY_LIBRARY_PATH in .env.example) — same guidance as the
+      # default docker-compose.yml's controller service.
+      # - \${HOST_MUSIC_PATH}:/music
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS http://localhost:7701/health > /dev/null"]
       interval: 10s
@@ -1114,6 +1127,34 @@ SITE_URL=
 # mismatch falls back to streaming, so it is safe to leave on — it just does
 # nothing for the tracks whose paths don't line up.
 # MUSIC_LIBRARY_PATH=
+#
+# "Never Play Again" is the admin dashboard's block-and-skip action: it
+# always permanently blocks the current track inside SUB/WAVE (it's never
+# picked or requestable again) and skips it immediately, with no extra
+# config needed. NEVER_PLAY_LIBRARY_PATH is OPTIONAL and extends that to
+# Navidrome's own catalog too, by writing the track's library-relative path
+# (as an escaped, literal gitignore-syntax line) to <this path>/.ndignore and
+# triggering a Navidrome library scan — so the track also stops showing up
+# in Navidrome itself and any other client pointed at it, not just SUB/WAVE.
+#
+# Set this to where you bind-mount your Navidrome music-library ROOT inside
+# the CONTROLLER container, READ-WRITE, generic example: /music. It must be
+# the exact same directory Navidrome itself is configured to scan — see the
+# controller service's \`volumes:\` in docker-compose.yml for the matching
+# bind-mount line. Leave it unset (the default) and Never Play Again still
+# works fully on the SUB/WAVE side; Navidrome's own catalog just doesn't
+# change.
+#
+# Deliberately separate from MUSIC_LIBRARY_PATH above: that one re-routes
+# PLAYBACK and needs the BROADCAST container too. This one is read only by
+# the controller, only to maintain that one ignore file.
+# NEVER_PLAY_LIBRARY_PATH=
+#
+# The HOST-side path bind-mounted to NEVER_PLAY_LIBRARY_PATH above — used by
+# the commented controller volume line in docker-compose.yml
+# (\`- \${HOST_MUSIC_PATH}:/music\`). Generic example: /srv/music. Must be the
+# same directory your Navidrome instance is configured to scan.
+# HOST_MUSIC_PATH=
 # TTS_SPEED=0.85
 # AUTO_QUEUE_REFRESH_MINUTES=60
 # Convenience only — seeds the News skill's feed on first boot. After that the

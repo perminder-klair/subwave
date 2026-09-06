@@ -64,6 +64,13 @@ export interface BlockEntry {
   artist: string | null;
   album: string | null;
   addedAt: string;
+  // The exact song.path this entry also wrote into
+  // <NEVER_PLAY_LIBRARY_PATH>/.ndignore (music/never-play-ignore.ts), or null
+  // when that feature was disabled/unavailable/inapplicable at block time.
+  // Set only by broadcast/never-play-again.ts (POST /dj/never-play-again) —
+  // the plain admin Blocked-tab / POST /library/blocklist path never sets it.
+  // Persisted so DELETE /library/blocklist/:type/:id can reverse both halves.
+  libraryPath?: string | null;
 }
 
 const FILE_PATH = `${config.stateDir}/blocklist.json`;
@@ -199,6 +206,7 @@ export async function load() {
       artist: e.artist ?? null,
       album: e.album ?? null,
       addedAt: e.addedAt ?? new Date().toISOString(),
+      libraryPath: typeof e.libraryPath === 'string' && e.libraryPath ? e.libraryPath : null,
     }));
     // Rules: pre-rules files carry no `rules` key → []. Records that don't
     // parse are dropped (state files never block boot), loudly.
@@ -246,7 +254,7 @@ export function isEmpty(): boolean {
 }
 
 // Add an entry; returns it, or null when (type, id) is already blocked.
-export async function add(input: { type: BlockType; id: string; name?: string | null; artist?: string | null; album?: string | null }): Promise<BlockEntry | null> {
+export async function add(input: { type: BlockType; id: string; name?: string | null; artist?: string | null; album?: string | null; libraryPath?: string | null }): Promise<BlockEntry | null> {
   if (entries.some((e) => e.type === input.type && e.id === input.id)) return null;
   const entry: BlockEntry = {
     type: input.type,
@@ -255,9 +263,38 @@ export async function add(input: { type: BlockType; id: string; name?: string | 
     artist: input.artist ?? null,
     album: input.album ?? null,
     addedAt: new Date().toISOString(),
+    libraryPath: input.libraryPath ?? null,
   };
   entries.push(entry);
   rebuildIndex();
+  await persist();
+  return entry;
+}
+
+// Direct (type, id) lookup — an exact key read, unlike matchOf() which takes
+// a song-shaped row and applies the id-then-name precedence. Used by the
+// never-play-again unblock path (routes/library.ts) to read an entry's
+// libraryPath before remove() discards it.
+export function getEntry(type: BlockType, id: string): BlockEntry | null {
+  return entries.find((e) => e.type === type && e.id === id) ?? null;
+}
+
+// Narrow update: set (or clear) ONLY libraryPath on an existing entry —
+// never addedAt, name, artist or album — so an "already blocked" hit in
+// never-play-again (routes/dj.ts) can be UPGRADED with the Navidrome-side
+// exclusion path once it resolves, without a remove()+add() round trip that
+// would mint a new addedAt and briefly make the track unblocked. A no-op
+// (returns the entry unchanged, no write) when the value already matches, so
+// re-running never-play-again on an already-upgraded entry costs nothing.
+// Returns null when (type, id) isn't blocked at all — mirrors getEntry().
+export async function setLibraryPath(type: BlockType, id: string, libraryPath: string | null): Promise<BlockEntry | null> {
+  const entry = entries.find((e) => e.type === type && e.id === id);
+  if (!entry) return null;
+  if (entry.libraryPath === libraryPath) return entry;
+  entry.libraryPath = libraryPath;
+  // libraryPath plays no part in trackIds/albumIds/artistIds/name-fallback
+  // matching, so no rebuildIndex() is needed — only the persisted snapshot
+  // needs to change.
   await persist();
   return entry;
 }
