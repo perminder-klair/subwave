@@ -262,10 +262,13 @@ export function echoesRecentRequest(
 //
 // Pure, and it stays pure: `playableSec` comes from music/silence-trim.ts (the
 // span AFTER the trim, because a trimmed head or tail is precisely what the
-// buffer eats) and `crossfadeSec` from settings.crossfadeDuration. Here rather
-// than at the call site because both request paths reach the same question —
-// routes/request.ts' three resolutions and broadcast/dj-agent.ts' agent path —
-// and a second copy of it is the bug.
+// buffer eats) and `crossfadeSec` from settings.crossfadeDuration. Its one
+// caller is queue.push(), the chokepoint all three request pushes funnel
+// through (routes/request.ts' more-like-this and cascade resolutions, and
+// dj-agent.ts' agent path) — so no request path holds a branch of its own.
+// It lives HERE rather than in queue.ts because that is what keeps it pure and
+// testable, and because it is request policy: it belongs beside the rules that
+// already decide what an explicit ask may and may not do.
 //
 // Both unknowns answer FALSE, which is the only safe direction: this decides
 // whether to warn the operator that a request will not be heard, and a warning

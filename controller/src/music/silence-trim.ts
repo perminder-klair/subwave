@@ -113,39 +113,31 @@ function measure(track: SilenceTrimTrack): Measured {
   return { leadMs, tailMs, tailStartMs, durSec };
 }
 
-// Resolve the cue points for a track. Track object first, else the library
-// record — the same precedence queue.mixAnalysisFor uses, so a track carrying
-// fresh analysis doesn't get a stale answer from the DB.
+// Where the analyzer's own decode ENDED, in file-absolute seconds — the ONE
+// answer to "how long is this track really", shared by the cue_out arithmetic
+// and the playable span so the two cannot drift apart.
 //
-// The end reference is what makes the tail side safe: a cue_out is an ABSOLUTE
-// offset, so it can only be computed against a known end. `tailStartMs` is that
-// end measured off the analyzed decode itself; the tagged duration is the
-// fallback. Neither known → no cue_out rather than a guess.
-export function resolveSilenceTrim(
-  track: SilenceTrimTrack | null | undefined,
-): SilenceTrimResult {
-  if (!track) return NONE;
-  const cfg = settings.get()?.silenceTrim;
-  if (cfg?.enabled !== true) return NONE;
-  const minGapMs = Number.isFinite(cfg.minGapMs as number) ? (cfg.minGapMs as number) : Infinity;
-
-  const { leadMs, tailMs, tailStartMs, durSec } = measure(track);
-
-  const leadSec = usableTrimSec(leadMs, minGapMs);
-  const tailSec = usableTrimSec(tailMs, minGapMs);
-
-  // Where the analyzer's own decode ENDED, in file-absolute seconds.
-  //
-  // Preferred over the tagged duration, and not as a nicety: a cue_out is an
-  // absolute offset, so deriving it as (duration - gap) silently inherits every
-  // disagreement between the container tag and the decoded file. `tailStartMs`
-  // and `tailMs` come off the SAME buffer, so their sum is the end the
-  // measurement actually saw. The tagged duration stays the fallback for rows
-  // analysed before the column existed.
-  const measuredEndSec = tailStartMs != null && tailMs != null
-    ? (tailStartMs + tailMs) / 1000
+// Preferred over the tagged duration, and not as a nicety: a cue_out is an
+// absolute offset, so deriving it as (duration - gap) silently inherits every
+// disagreement between the container tag and the decoded file. `tailStartMs`
+// and `tailMs` come off the SAME buffer, so their sum is the end the
+// measurement actually saw. The tagged duration stays the fallback for rows
+// analysed before the column existed, and null when neither is known — the
+// caller must not guess an end.
+function endReferenceSec(m: Measured): number | null {
+  const measuredEndSec = m.tailStartMs != null && m.tailMs != null
+    ? (m.tailStartMs + m.tailMs) / 1000
     : null;
-  const endRefSec = measuredEndSec ?? (durSec > 0 ? durSec : null);
+  return measuredEndSec ?? (m.durSec > 0 ? m.durSec : null);
+}
+
+// The cue-point arithmetic over an already-resolved measurement set. Split from
+// resolveSilenceTrim so playableSpanSec can reach both halves — the cue points
+// AND the end reference they were computed against — from ONE measure() call.
+function trimFrom(m: Measured, minGapMs: number): SilenceTrimResult {
+  const leadSec = usableTrimSec(m.leadMs, minGapMs);
+  const tailSec = usableTrimSec(m.tailMs, minGapMs);
+  const endRefSec = endReferenceSec(m);
 
   // A cue_out needs an end to subtract from, and the result must still leave
   // audible track behind it — a degenerate pair (a mis-measured tail longer
@@ -163,23 +155,49 @@ export function resolveSilenceTrim(
   };
 }
 
+// The operator's min-gap dial, or Infinity — which filters every gap out, i.e.
+// no trim. An unreadable dial must not become a permissive 0.
+function minGapOf(cfg: { minGapMs?: unknown } | null | undefined): number {
+  return Number.isFinite(cfg?.minGapMs as number) ? (cfg?.minGapMs as number) : Infinity;
+}
+
+// Resolve the cue points for a track. Track object first, else the library
+// record — the same precedence queue.mixAnalysisFor uses, so a track carrying
+// fresh analysis doesn't get a stale answer from the DB.
+//
+// The end reference is what makes the tail side safe: a cue_out is an ABSOLUTE
+// offset, so it can only be computed against a known end. See endReferenceSec.
+export function resolveSilenceTrim(
+  track: SilenceTrimTrack | null | undefined,
+): SilenceTrimResult {
+  if (!track) return NONE;
+  const cfg = settings.get()?.silenceTrim;
+  if (cfg?.enabled !== true) return NONE;
+  return trimFrom(measure(track), minGapOf(cfg));
+}
+
 // How many seconds of this track will actually MAKE SOUND, after the trim has
 // had its say. Null when the length is unknown (an unanalysed track with no
 // tagged duration and no library row) — the caller must treat that as "no
 // answer", never as zero.
 //
 // Here rather than at the call site because the trim owns what cueIn/cueOut
-// MEAN, and "playable span" is just those two read together: a track with a 6s
-// leading blank and a 9s trailing one is 15s shorter on air than its tag says,
-// and that difference is exactly what a cross buffer measures itself against
-// (#1594). Subtracting the cue points locally is the drift this module exists
-// to prevent — same rule as shiftOnsetMs and absoluteOffsetSec below.
+// MEAN, and "playable span" is just those two read against the end: a track
+// with a 6s leading blank and a 9s trailing one is 15s shorter on air than its
+// tag says, and that difference is exactly what a cross buffer measures itself
+// against (#1594). Subtracting the cue points locally is the drift this module
+// exists to prevent — same rule as shiftOnsetMs and absoluteOffsetSec below.
 //
-// The end is `cueOutSec ?? the tagged duration`, and the fallback is not a
-// guess: no tail trim means the tail plays, so the file's own end IS the end.
-// `measuredEndSec` is deliberately not consulted here — it exists to make the
-// cue_out arithmetic safe, and where no cue_out was stamped the whole file
-// plays whatever the analyzer's decode measured.
+// The end is `cueOutSec ?? endReferenceSec`, i.e. the SAME end the cue_out was
+// derived from, never the tagged duration directly. The distinction is real and
+// it is not cosmetic: a tail gap under the operator's min-gap dial, or one the
+// degenerate-pair guard rejects, leaves no cue_out at all — and reading the tag
+// there would answer with a length this module has already decided it trusts
+// less than the decoded one it is holding. One track, one end.
+//
+// It resolves the measurements ONCE and drives both halves off that, because
+// measure() is a library read: the extraction exists to make it one lookup, and
+// the first consumer calling it twice would defeat that.
 //
 // What this does NOT include is the #447 length cap. That cap is an on-air cut
 // applied by getAnnotatedUri, not a property of the track, and the one caller
@@ -188,9 +206,12 @@ export function playableSpanSec(
   track: SilenceTrimTrack | null | undefined,
 ): number | null {
   if (!track) return null;
-  const { cueInSec, cueOutSec } = resolveSilenceTrim(track);
-  const { durSec } = measure(track);
-  const endSec = cueOutSec ?? (durSec > 0 ? durSec : null);
+  const m = measure(track);
+  const cfg = settings.get()?.silenceTrim;
+  // The trim is only applied when the operator has it on; with it off the file
+  // plays whole and the span is the end reference alone.
+  const { cueInSec, cueOutSec } = cfg?.enabled === true ? trimFrom(m, minGapOf(cfg)) : NONE;
+  const endSec = cueOutSec ?? endReferenceSec(m);
   if (endSec == null) return null;
   const span = endSec - (cueInSec ?? 0);
   return span > 0 ? Math.round(span * 1000) / 1000 : null;

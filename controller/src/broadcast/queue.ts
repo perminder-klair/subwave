@@ -711,20 +711,34 @@ class Queue {
   // head or tail is exactly what the buffer eats, and subtracting cue points
   // here instead is the drift that module exists to prevent.
   //
-  // One honest limit, stated in the line itself: `crossfadeDuration` is the
-  // CONFIGURED figure. radio.liq reads liquidsoap_crossfade.txt once at mixer
+  // One honest limit, which the LINE ITSELF carries rather than only this
+  // comment — the line is what the operator reads. `crossfadeDuration` is the
+  // CONFIGURED figure; radio.liq reads liquidsoap_crossfade.txt once at mixer
   // startup, so between a crossfade change and a /restart-mixer the mixer is
-  // still buffering the old value and this warning is measured against the new
-  // one. Nothing in the controller can read the live figure, and warning
+  // still buffering the old value while this warning is measured against the
+  // new one. Nothing in the controller can read the live figure, and warning
   // against the setting the operator can actually act on is the useful half.
+  //
+  // THE WHOLE BODY IS INSIDE A try/catch, and that is the load-bearing line
+  // here rather than defensiveness. `playableSpanSec` resolves through
+  // `library.get` → `db.getTrack`, which makes this the FIRST sqlite read on
+  // the request critical path — everything push() touched before it (the
+  // blocklist hit, the dedup scan) is in-memory. `library.get` guards
+  // `!loaded` but not a DB error, so an unreadable library.db would throw out
+  // of push(), out of the route, and turn a listener request into a 500. A
+  // purely informational log line may not decide whether a request is queued.
+  // The swallow is silent: the operator is already missing this warning, and
+  // an error line about the warning that failed to fire is noise about noise.
   warnIfSwallowedByCrossfade(item: QueueItem) {
-    if (!item.requestedBy) return;
-    const crossSec = Number(settings.get()?.crossfadeDuration);
-    const spanSec = silenceTrim.playableSpanSec(item.track);
-    if (!swallowedByCrossfade(spanSec, crossSec)) return;
-    this.log('crossfade',
-      `"${item.track?.title} — ${item.track?.artist}" (requested by ${item.requestedBy}) has only ${Math.round(spanSec as number)}s of playable audio, under the ${crossSec}s crossfade — Liquidsoap buffers the whole track into the transition, so it will leave the queue without ever being heard. Nothing declined it: requests are exempt from the length rules on purpose. Lower the crossfade (and restart the mixer) to air clips this short.`,
-      { requestedBy: item.requestedBy, trackId: item.track?.id ?? null, spanSec, crossSec });
+    try {
+      if (!item.requestedBy) return;
+      const crossSec = Number(settings.get()?.crossfadeDuration);
+      const spanSec = silenceTrim.playableSpanSec(item.track);
+      if (spanSec == null || !swallowedByCrossfade(spanSec, crossSec)) return;
+      this.log('crossfade',
+        `"${item.track?.title} — ${item.track?.artist}" (requested by ${item.requestedBy}) has only ${Math.round(spanSec)}s of playable audio, under the ${crossSec}s crossfade — Liquidsoap buffers the whole track into the transition, so it will leave the queue without ever being heard. Nothing declined it: requests are exempt from the length rules on purpose. To air clips this short, lower the crossfade and restart the mixer — the mixer reads that setting once at startup, so until it does it is still buffering the old value.`,
+        { requestedBy: item.requestedBy, trackId: item.track?.id ?? null, spanSec, crossSec });
+    } catch { /* informational only — never let it decide the request's fate */ }
   }
 
   // Drop now-blocked tracks from the upcoming queue — called when a blocklist

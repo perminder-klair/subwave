@@ -26,7 +26,9 @@
 //  - NOTHING IS DECLINED. Requests are exempt from maxTrackSeconds and from
 //    picker.minTrackLengthSeconds because an explicit ask is not a pick. A
 //    warning that started refusing would be a change to what the station
-//    promises a listener, made in a log line's clothing.
+//    promises a listener, made in a log line's clothing. That includes
+//    FAILING: resolving the span is the first sqlite read on the request
+//    critical path, and a throw there would turn a listener request into a 500.
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync } from 'node:fs';
@@ -49,7 +51,7 @@ await settings.load();
 
 const db = await import('../src/music/library-db.js');
 const library = await import('../src/music/library.js');
-const { playableSpanSec } = await import('../src/music/silence-trim.js');
+const { playableSpanSec, resolveSilenceTrim } = await import('../src/music/silence-trim.js');
 const { swallowedByCrossfade } = await import('../src/util/request-guard.js');
 const { queue } = await import('../src/broadcast/queue.js');
 
@@ -119,6 +121,23 @@ test('the playable span is the TRIMMED span, not the tagged duration', () => {
   assert.equal(playableSpanSec(RECORD), 232.5);
 });
 
+test('the span reads the same end the cue_out was derived from', () => {
+  // A tail gap UNDER the operator's min-gap dial (1.5s here) earns no cue_out,
+  // so the span falls back to the end reference — and that reference is the
+  // analyzer's decoded end, not the container tag, exactly as the cue_out
+  // arithmetic prefers it. Two answers for "how long is this track" is how the
+  // module drifts against itself.
+  //
+  // Decoded end = 30.8s (tailStart 30_000 + tail 800). Tag says 34s, which is
+  // the disagreement being pinned. cue_in = 4000 - 250 margin = 3.75s.
+  const tagLies = {
+    id: 'tag-lies', title: 'Tag Lies', artist: 'X',
+    duration: 34, leadSilenceMs: 4_000, tailSilenceMs: 800, tailStartMs: 30_000,
+  };
+  assert.equal(resolveSilenceTrim(tagLies).cueOutSec, null, 'the sub-dial tail earns no cue_out');
+  assert.equal(playableSpanSec(tagLies), 27.05, 'the decoded end, not the 34s tag');
+});
+
 test('an untrimmed track spans its whole tagged duration', () => {
   // No measurements and no library row → nothing to trim, so the file plays
   // whole. Absent input must coerce to today's behaviour, not to zero.
@@ -180,6 +199,25 @@ test('a request whose length is unknown is not warned about', async () => {
   reset();
   await queue.push({ track: { id: 'mystery', title: 'Mystery', artist: 'Nobody' }, requestedBy: 'ada' });
   assert.deepEqual(crossfadeLines(), [], 'an unmeasured request must fail toward silence, not toward a false alarm');
+});
+
+test('a THROW while resolving the span still queues the request', async () => {
+  reset();
+  // The span resolves through library.get → db.getTrack, which is the first
+  // sqlite read push() makes — everything before it (the blocklist hit, the
+  // dedup scan) is in-memory, and library.get guards `!loaded` but not a DB
+  // error. Raising from the track's own duration getter puts the throw inside
+  // that same resolution without reaching into a frozen module namespace.
+  const cursed: any = { id: 'cursed', title: 'Cursed', artist: 'X' };
+  Object.defineProperty(cursed, 'duration', {
+    enumerable: true,
+    get() { throw new Error('library.db is unreadable'); },
+  });
+
+  const pos = await queue.push({ track: cursed, requestedBy: 'ada' });
+  assert.equal(pos, 1, 'an informational warning may never decide the request\'s fate');
+  assert.equal(queue.upcoming.length, 1);
+  assert.deepEqual(crossfadeLines(), [], 'and it stays silent rather than half-warning');
 });
 
 test('no crossfade configured → no warning, however short the request', async () => {
