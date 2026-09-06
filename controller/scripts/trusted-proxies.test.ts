@@ -37,7 +37,7 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, statSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -176,8 +176,71 @@ function render(
   };
 }
 
+// Every address the shape test must accept or refuse. The hex-only words are
+// the ones a character class silently KEPT: `''|*[!0-9a-fA-F.:]*` accepts
+// `cafe`, `beef`, `ace`, `ff` and a bare `a` while correctly dropping `caddy`
+// and `localhost`, so those reached icecast.xml as <x-forwarded-for> entries
+// no peer can ever equal. Harmless on air, and exactly the kind of entry the
+// marker would have counted as a trusted proxy in front of the operator.
+const SHAPES: [addr: string, valid: boolean, why: string][] = [
+  ['172.20.0.100', true, 'the documented bundled-Caddy pin'],
+  ['127.0.0.1', true, 'the AIO default'],
+  ['0.0.0.0', true, 'edges of the octet range are addresses'],
+  ['255.255.255.255', true, 'edges of the octet range are addresses'],
+  ['::1', true, 'the AIO default, v6 half'],
+  ['fd00::1', true, 'an ordinary ULA'],
+  ['2001:db8::1', true, 'an ordinary global v6'],
+  ['::ffff:1.2.3.4', true, 'the v4-mapped form carries dots and a colon'],
+  ['cafe', false, 'a hex-only HOSTNAME — the measured miss'],
+  ['beef', false, 'a hex-only hostname'],
+  ['ace', false, 'a hex-only hostname'],
+  ['ff', false, 'a hex-only hostname'],
+  ['a', false, 'one hex digit is not an address'],
+  ['caddy', false, 'a hostname the old test already dropped — keep dropping it'],
+  ['localhost', false, 'a hostname the old test already dropped'],
+  ['10.0.0.0/8', false, 'icecast matches an exact IP; a CIDR never matches'],
+  ['1.2.3', false, 'three octets is not a quad'],
+  ['1.2.3.4.5', false, 'five octets is not a quad'],
+  ['256.1.1.1', false, 'an octet above 255'],
+  ['1..3.4', false, 'an empty octet'],
+  ['1.2.3.4a', false, 'trailing junk on a real address'],
+  ['99999999999999999999.1.1.1', false, 'too long to be an octet — and never an arithmetic error'],
+  [':::::', false, 'colons with no hex digit is not an address'],
+  ['', false, 'empty'],
+];
+
 for (const s of SUPERVISORS) {
   assert.ok(existsSync(s.path), `${s.name} not found at ${s.path}`);
+
+  test(`${s.name}: the address test checks SHAPE, not characters`, () => {
+    // Driven as one bash run: a process per row is 24 spawns per supervisor.
+    const rows = SHAPES.map(([addr]) => addr);
+    const script = `set -eu; ${s.lib}=1 source "$1"; shift; ` +
+      'for a in "$@"; do if trusted_proxy_valid "$a"; then echo keep; else echo drop; fi; done';
+    const out = execFileSync('bash', ['-c', script, 'bash', s.path, ...rows], {
+      encoding: 'utf8', env: { ...process.env, PATH: process.env.PATH ?? '' },
+    }).trim().split('\n');
+    assert.equal(out.length, SHAPES.length, `expected one verdict per row: ${out.join(',')}`);
+    SHAPES.forEach(([addr, valid, why], i) => {
+      assert.equal(
+        out[i], valid ? 'keep' : 'drop',
+        `${JSON.stringify(addr)} should ${valid ? 'keep' : 'drop'} — ${why}`,
+      );
+    });
+  });
+
+  test(`${s.name}: a hex-only hostname is dropped, not written into icecast.xml`, () => {
+    // End to end, because the shape test only matters if the render uses it:
+    // before this, `cafe` was rendered AND counted as a trusted proxy.
+    const r = render(s.path, s.lib, 'ICECAST_TRUSTED_PROXY_IPS', 'cafe 172.20.0.100');
+    assert.equal(r.status, 0, r.out);
+    assert.equal(r.xml, '        <x-forwarded-for>172.20.0.100</x-forwarded-for>\n');
+    assert.match(r.out, /WARNING ignoring malformed trusted proxy 'cafe'/);
+    const state = trustedProxyState(r.marker);
+    assert.equal(state.count, 1, 'the count the dash shows must not include an unmatchable entry');
+    assert.deepEqual(state.proxies, ['172.20.0.100']);
+    assert.deepEqual(state.dropped, ['cafe']);
+  });
 
   test(`${s.name}: a resolved list reaches both the XML and the marker`, () => {
     const r = render(s.path, s.lib, 'ICECAST_TRUSTED_PROXY_IPS', '172.20.0.100 ::1');
@@ -279,14 +342,32 @@ for (const s of SUPERVISORS) {
     assert.equal(existsSync(join(dir, 'trusted-proxies.json.tmp')), false);
   });
 
+  test(`${s.name}: the marker is world-READABLE, not world-writable`, () => {
+    // The controller reads it as another uid, and nothing else writes it. 666
+    // would put a second writer's permission on a single-writer file for no
+    // reason; the rest of the state dir is 777 because other containers write
+    // THERE.
+    const r = render(s.path, s.lib, 'ICECAST_TRUSTED_PROXY_IPS', '172.20.0.100');
+    assert.equal(r.status, 0, r.out);
+    const mode = statSync(join(r.dir, 'trusted-proxies.json')).mode & 0o777;
+    assert.equal(mode & 0o004, 0o004, `not readable by the controller (mode ${mode.toString(8)})`);
+    assert.equal(mode & 0o022, 0, `writable by others (mode ${mode.toString(8)})`);
+  });
+
   test(`${s.name}: the resolution has exactly one caller`, () => {
     // Both files used to carry the block inline, which is how the two copies
     // drift. A second call site here means the duplicate came back.
     const src = readFileSync(s.path, 'utf8');
     const calls = src.split('\n').filter(l => /^\s*render_trusted_proxies /.test(l));
     assert.equal(calls.length, 1, `expected one call site, found ${calls.length}`);
+    // Comments discuss the tag; only a second line that WRITES one is the bug.
+    const code = src
+      .split('\n')
+      .filter(l => !/^\s*#/.test(l))
+      .filter(l => !/^\s*echo\s+".*x-forwarded-for/.test(l))
+      .join('\n');
     assert.doesNotMatch(
-      src.replace(/^\s*echo\s+".*x-forwarded-for.*$/gm, ''),
+      code,
       /<x-forwarded-for>/,
       'an inline <x-forwarded-for> writer outside render_trusted_proxies',
     );

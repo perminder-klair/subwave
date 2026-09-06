@@ -468,6 +468,49 @@ trusted_proxy_token() {
 	printf '%s' "$1" | tr -cd '0-9A-Za-z.:/_-' | cut -c1-48
 }
 
+# True when $1 has the SHAPE of an address icecast can match. A character class
+# is not enough and that is measured: `''|*[!0-9a-fA-F.:]*` — the test both
+# copies carried — accepts every hex-only word, so `cafe`, `beef`, `ace`, `ff`
+# and a bare `a` were written into icecast.xml while `caddy` and `localhost`
+# were dropped. Each one is an <x-forwarded-for> entry that no peer can ever
+# equal, so it changed nothing on air; what makes it worth fixing is the count
+# now in front of the operator, which would report three proxies trusted when
+# one of them cannot match. A hint that lies is worse than the silence it
+# replaced.
+#
+# Shape only, deliberately: whether the address is the RIGHT one is the
+# operator's to know, and this must keep dropping rather than repairing.
+trusted_proxy_valid() {
+	local addr=$1 rest octet n=0
+	# Anything with a colon is IPv6 (dots allowed for the ::ffff:1.2.3.4 form).
+	# Not a full parser — a hex-digit requirement plus the charset is enough to
+	# reject the words this exists to catch, and icecast's own exact match is
+	# the real arbiter.
+	case "$addr" in
+		*:*)
+			case "$addr" in *[!0-9a-fA-F:.]*) return 1 ;; esac
+			case "$addr" in *[0-9a-fA-F]*) return 0 ;; *) return 1 ;; esac
+			;;
+	esac
+	# IPv4: exactly four dot-separated decimal octets, each 0-255.
+	rest=$addr
+	while [ "$n" -lt 4 ]; do
+		case "$rest" in
+			*.*) octet=${rest%%.*}; rest=${rest#*.} ;;
+			*)   octet=$rest; rest='' ;;
+		esac
+		n=$(( n + 1 ))
+		case "$octet" in ''|*[!0-9]*) return 1 ;; esac
+		# Length first: `[ 99999999999999999999 -le 255 ]` is an arithmetic
+		# error, not a false, and would print before the drop.
+		[ "${#octet}" -le 3 ] || return 1
+		[ "$octet" -le 255 ] || return 1
+		[ "$n" -eq 4 ] || [ -n "$rest" ] || return 1
+	done
+	[ -z "$rest" ] || return 1
+	return 0
+}
+
 write_trusted_proxy_marker() {
 	# $1 = count, $2 = source label, $3 = proxies JSON array, $4 = dropped array
 	local dir=${STATE_DIR:-}
@@ -477,7 +520,7 @@ write_trusted_proxy_marker() {
 	if printf '{"count":%s,"source":"%s","proxies":%s,"dropped":%s,"at":%s}\n' \
 			"$1" "$2" "$3" "$4" "$(date +%s)" > "$tmp" 2>/dev/null \
 		&& mv -f "$tmp" "$marker" 2>/dev/null; then
-		chmod 666 "$marker" 2>/dev/null || true
+		chmod 644 "$marker" 2>/dev/null || true
 	else
 		rm -f "$tmp" 2>/dev/null || true
 		state_warn "could not write $marker — the station is unaffected, but the admin Listeners table cannot explain a missing trusted proxy"
@@ -491,14 +534,18 @@ render_trusted_proxies() {
 	shift 2
 	local ip names="" kept="" dropped="" count=0
 	: > "$xml" 2>/dev/null || true
+	# Candidates arrive already word-split, so an operator who wrote prose
+	# ("not a host") sees each WORD dropped separately rather than the phrase.
+	# Left alone on purpose: the list has always been space-separated — it is
+	# how the DNS path returns several addresses for one name, and how
+	# ICECAST_TRUSTED_PROXY_IPS="1.2.3.4 5.6.7.8" has always been accepted —
+	# and every one of those words is genuinely something that was not used.
 	for ip in "$@"; do
-		case "$ip" in
-			''|*[!0-9a-fA-F.:]*)
-				state_warn "ignoring malformed trusted proxy '$ip' — icecast matches an exact IP, so a CIDR or a hostname never matches"
-				dropped="$dropped,\"$(trusted_proxy_token "$ip")\""
-				continue
-				;;
-		esac
+		if ! trusted_proxy_valid "$ip"; then
+			state_warn "ignoring malformed trusted proxy '$ip' — icecast matches an exact IP, so a CIDR, a hostname or anything else that is not an address never matches"
+			dropped="$dropped,\"$(trusted_proxy_token "$ip")\""
+			continue
+		fi
 		echo "        <x-forwarded-for>$ip</x-forwarded-for>" >> "$xml"
 		names="$names $ip"
 		kept="$kept,\"$ip\""
