@@ -11,9 +11,13 @@
 //    a resolver that scanned through it would answer "when does the pin I am
 //    replacing run out" — which is why re-pinning during a takeover has its own
 //    assertion below.
-//  - Both clamps fire, in opposite directions: an empty grid must not pin
-//    forever, and a boundary two minutes out must not store a window that
-//    expires before the switch can reach a track boundary.
+//  - There is a CEILING and NO FLOOR, and the asymmetry is the point: an empty
+//    grid must not pin forever, but a boundary two minutes out must resolve to
+//    that boundary and no later. `OVERRIDE_MIN_MINUTES` used to be applied here
+//    as the ceiling's mirror image, which made "end at the change" end AFTER
+//    the change — so the floor case below asserts the boundary is stored
+//    verbatim, and that the floor still governs `until: 'fixed'`, where it is a
+//    bound on typed input rather than on a resolved instant.
 //  - The scan is on the STATION clock, so a zone at a :30 offset moves the
 //    answer by half an hour rather than rounding to the process hour.
 //
@@ -39,6 +43,7 @@ const {
 const {
   OVERRIDE_MAX_MINUTES,
   OVERRIDE_MIN_MINUTES,
+  scheduleOverrideRequestSchema,
   scheduleOverrideSchema,
 } = await import('../src/schemas/schedule.js');
 
@@ -67,31 +72,65 @@ test('no change in reach is a bounded pin, never an open one', () => {
   }
 });
 
-test('a change nearer than the floor is held to the floor', () => {
-  // A pin that expires before the switch reaches a track boundary airs nothing
-  // and costs two session rolls — the station's own "shorter than this is not a
-  // takeover" number is the floor.
-  const w = resolveTakeoverWindow({ startedAt: T0, nextChangeAt: T0 + 2 * MIN });
-  assert.equal(w.source, 'minimum');
-  assert.equal(w.minutes, OVERRIDE_MIN_MINUTES);
-  assert.equal(w.nextChangeAt, T0 + 2 * MIN, 'the boundary is still reported, so the dialog can say why');
-  // Exactly at the floor is not a clamp.
-  const exact = resolveTakeoverWindow({ startedAt: T0, nextChangeAt: T0 + OVERRIDE_MIN_MINUTES * MIN });
+test('a change nearer than the request floor is still the change itself', () => {
+  // The regression this exists for: OVERRIDE_MIN_MINUTES used to be applied
+  // here, so a boundary five minutes out stored a fifteen-minute pin that ran
+  // TEN MINUTES PAST the change it was asked to end at — shadowing the incoming
+  // show, which is the one harm the option exists to remove. A ceiling trims a
+  // window that is otherwise valid; a floor cannot lengthen one that is
+  // genuinely short, it can only replace the request with a different one.
+  for (const away of [1, 2, 5, OVERRIDE_MIN_MINUTES - 1]) {
+    const at = T0 + away * MIN;
+    const w = resolveTakeoverWindow({ startedAt: T0, nextChangeAt: at });
+    assert.equal(w.expiresAt, at, `a boundary ${away} min out is stored verbatim`);
+    assert.equal(w.source, 'schedule', 'a near boundary is still the schedule\'s own answer');
+    assert.equal(w.minutes, away);
+    assert.ok(w.expiresAt <= at, 'a resolved window may never outlive the change it ends at');
+  }
+  // And it is storable: the stored shape has no minimum, only
+  // `expiresAt > startedAt` and the cap.
+  const schema = scheduleOverrideSchema({ showIds: ['early'], now: null });
+  const short = resolveTakeoverWindow({ startedAt: T0, nextChangeAt: T0 + 1 * MIN });
+  assert.equal(schema.safeParse({ showId: 'early', startedAt: T0, expiresAt: short.expiresAt }).success, true);
+});
+
+test('the floor still governs the FIXED window, where it bounds typed input', () => {
+  // The floor did not move, it stopped being applied to a resolved instant. A
+  // duration an operator types is exactly where it belongs.
+  assert.equal(
+    scheduleOverrideRequestSchema.safeParse({ showId: 'x', minutes: OVERRIDE_MIN_MINUTES - 1 }).success,
+    false,
+  );
+  assert.equal(
+    scheduleOverrideRequestSchema.safeParse({ showId: 'x', minutes: OVERRIDE_MIN_MINUTES }).success,
+    true,
+  );
+});
+
+test('a change past the ceiling is trimmed to the ceiling, under its own source', () => {
+  // Unreachable from resolveTakeoverWindowNow (the scan's horizon IS the
+  // ceiling) — a guard on a caller passing its own instant. It must not report
+  // 'maximum': that one means the grid never moves on, which is the opposite of
+  // what happened here.
+  const w = resolveTakeoverWindow({ startedAt: T0, nextChangeAt: T0 + (OVERRIDE_MAX_MINUTES + 60) * MIN });
+  assert.equal(w.source, 'ceiling');
+  assert.equal(w.minutes, OVERRIDE_MAX_MINUTES);
+  // Exactly at the ceiling is not a trim.
+  const exact = resolveTakeoverWindow({ startedAt: T0, nextChangeAt: T0 + OVERRIDE_MAX_MINUTES * MIN });
   assert.equal(exact.source, 'schedule');
 });
 
-test('a change past the ceiling is held to the ceiling', () => {
-  const w = resolveTakeoverWindow({ startedAt: T0, nextChangeAt: T0 + (OVERRIDE_MAX_MINUTES + 60) * MIN });
-  assert.equal(w.source, 'maximum');
-  assert.equal(w.minutes, OVERRIDE_MAX_MINUTES);
-});
-
-test('every resolved window is one the stored-override schema accepts', () => {
+test('every resolved window is storable, and none outlives its own boundary', () => {
+  // The storability half alone would have passed with the floor still applied —
+  // it is the second assertion that pins the rule, so keep them together.
   const schema = scheduleOverrideSchema({ showIds: ['early'], now: null });
   for (const nextChangeAt of [null, T0 + 1 * MIN, T0 + 47 * MIN, T0 + 999 * MIN]) {
     const { expiresAt } = resolveTakeoverWindow({ startedAt: T0, nextChangeAt });
     const r = schema.safeParse({ showId: 'early', startedAt: T0, expiresAt });
     assert.equal(r.success, true, `nextChangeAt=${String(nextChangeAt)} produced an unstorable window`);
+    if (nextChangeAt != null) {
+      assert.ok(expiresAt <= nextChangeAt, `nextChangeAt=${nextChangeAt} resolved PAST its own change`);
+    }
   }
 });
 
@@ -179,6 +218,18 @@ test('the horizon is the longest pin the station allows', async () => {
   assert.equal(resolveTakeoverWindowNow(at).source, 'maximum');
   // A wider horizon does see it — the ceiling is the reason, not the scan.
   assert.equal(nextGridChangeAt(at, 24 * 60), Date.UTC(2026, 0, 16, 9, 0));
+});
+
+test('a boundary minutes away resolves live to that boundary, not past it', async () => {
+  await seed('UTC');
+  // The end-to-end shape of the regression: station 10:55, Early ends at 11:00.
+  // The pin must end at 11:00. Applying OVERRIDE_MIN_MINUTES here ended it at
+  // 11:10, ten minutes deep into Late's slot.
+  const at = Date.UTC(2026, 0, 15, 10, 55);
+  const w = resolveTakeoverWindowNow(at);
+  assert.equal(w.expiresAt, Date.UTC(2026, 0, 15, 11, 0));
+  assert.equal(w.source, 'schedule');
+  assert.equal(w.minutes, 5);
 });
 
 test('a Default programming takeover resolves the same boundary', async () => {

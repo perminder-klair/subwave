@@ -2283,10 +2283,14 @@ const OVERRIDE_MINUTES_MESSAGE =
  * isn't in the roster still 404s from the handler, which is the answer that
  * needs server state.
  *
- * `minutes` is optional ONLY under `until: 'schedule-change'`, where the server
- * resolves the window itself: requiring a duration that is then ignored makes
- * the two fields disagree about what the caller asked for. A fixed window with
- * no minutes still fails with the bounds message it always did.
+ * `minutes` is REQUIRED under `until: 'fixed'` and REFUSED under
+ * `until: 'schedule-change'`, where the server resolves the window itself.
+ * Both halves are the same rule: the two fields must not be able to disagree
+ * about what the caller asked for. Demanding a duration that is then ignored is
+ * one way to let them; silently discarding one the caller did send is the
+ * other, and it is the worse of the two, since the caller has no way to learn
+ * its number went nowhere. A fixed window with no minutes still fails with the
+ * bounds message it always did.
  */
 export const scheduleOverrideRequestSchema = z
   .object({
@@ -2309,6 +2313,14 @@ export const scheduleOverrideRequestSchema = z
         input: c.value.minutes,
         path: ['minutes'],
         message: OVERRIDE_MINUTES_MESSAGE,
+      });
+    }
+    if (c.value.until === 'schedule-change' && c.value.minutes != null) {
+      c.issues.push({
+        code: 'custom',
+        input: c.value.minutes,
+        path: ['minutes'],
+        message: 'must be omitted when the window ends at the schedule change',
       });
     }
   });

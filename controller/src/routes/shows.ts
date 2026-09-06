@@ -275,8 +275,8 @@ router.post('/schedule/override', requireAdmin, validateBody(scheduleOverrideReq
   const reason = resolved
     ? {
       schedule: ' (until the schedule changes)',
-      minimum: ' (the schedule changes sooner than a takeover can run)',
       maximum: ' (the schedule has no change in reach)',
+      ceiling: ' (the next change is further out than a takeover can run)',
     }[resolved.source]
     : '';
   try {

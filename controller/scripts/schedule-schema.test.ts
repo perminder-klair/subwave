@@ -386,7 +386,17 @@ test("override request: 'schedule-change' needs no minutes, 'fixed' still does",
   // Default programming asks the same way — the boundary belongs to the grid,
   // not to what is pinned over it.
   assert.equal(scheduleOverrideRequestSchema.safeParse({ showId: null, until: 'schedule-change' }).success, true);
-  // A minutes value alongside it is still bounds-checked rather than ignored.
+  // A minutes value alongside it is REFUSED, not silently discarded: the server
+  // resolves the window, so a caller that sent a duration has to learn its
+  // number went nowhere rather than watch a pin ignore it.
+  const withMinutes = scheduleOverrideRequestSchema.safeParse({
+    showId: 'x', until: 'schedule-change', minutes: 60,
+  });
+  assert.equal(withMinutes.success, false);
+  assert.equal(withMinutes.error!.issues[0]!.path[0], 'minutes');
+  assert.match(withMinutes.error!.issues[0]!.message, /must be omitted/);
+  // Out of range alongside it is refused too — by the bounds, before the rule
+  // above ever runs.
   assert.equal(
     scheduleOverrideRequestSchema.safeParse({ showId: 'x', until: 'schedule-change', minutes: 1 }).success,
     false,

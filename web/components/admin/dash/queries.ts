@@ -104,12 +104,13 @@ export interface TakeoverData {
  *
  * Advisory: POST /schedule/override resolves it again at its own `startedAt`,
  * so this is what the pin would be, never what it is. `source` says which rule
- * decided — the grid's own change, or one of the two clamps.
+ * decided — the grid's own change (however near it is: there is no floor on
+ * this path), or the ceiling, under either of its two meanings.
  */
 export interface TakeoverWindow {
   expiresAt: number;
   minutes: number;
-  source: 'schedule' | 'minimum' | 'maximum';
+  source: 'schedule' | 'maximum' | 'ceiling';
   nextChangeAt: number | null;
 }
 

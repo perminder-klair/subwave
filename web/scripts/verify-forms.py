@@ -50,6 +50,7 @@ fieldAria's groupProps carries no id, see lib/form.ts).
 import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -417,7 +418,14 @@ def takeover(page):
         resolved = page.wait_for_selector("text=/^ends .* min · /")
         preview = json.loads(api("/schedule/next-change"))
         assert preview["expiresAt"] > 0, preview
-        assert f"{preview['minutes']} min" in resolved.inner_text(), resolved.inner_text()
+        # Compared with a tolerance of 1, not for equality. `minutes` is
+        # round((expiresAt - now) / 60_000) with `now` taken per request, so it
+        # ticks down continuously and crosses a rounding half-point once a
+        # minute; the browser's fetch and this curl are a second or so apart, so
+        # roughly one run in sixty would straddle that point and read N vs N-1.
+        # An exact match here is a flake, not a stronger assertion.
+        shown = int(re.search(r"· (\d+) min ·", resolved.inner_text()).group(1))
+        assert abs(shown - preview["minutes"]) <= 1, (shown, preview)
 
         page.get_by_label("Choose takeover programming").click()
         page.get_by_role("menuitem", name="Default programming").click()

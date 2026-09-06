@@ -57,13 +57,14 @@ const SCHEDULE_SEG = 'schedule';
 type PinVars = z.output<typeof scheduleOverrideRequestSchema>;
 
 // One line saying WHY the resolved end is where it is, keyed by the source the
-// controller reports. The clamps are the whole reason this is not a black box:
+// controller reports. This is the whole reason the option is not a black box:
 // an operator who asked for "until the schedule changes" and got twelve hours
-// deserves to be told the grid has no change in reach.
+// deserves to be told the grid has no change in reach. There is no 'minimum' —
+// a near boundary resolves to that boundary, so 'schedule' covers it.
 const WINDOW_REASON: Record<TakeoverWindow['source'], string> = {
   schedule: 'when the schedule moves on',
-  minimum: 'the schedule moves on sooner than a takeover can run',
   maximum: 'no schedule change in reach',
+  ceiling: 'the next change is further out than a takeover can run',
 };
 
 export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLocale }) {
@@ -103,7 +104,20 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
     refetchInterval: () => 30_000,
     request: fetchTakeoverWindow,
   });
-  const resolvedWindow = untilSchedule ? windowQuery.data ?? null : null;
+  // When this selection began. React Query keeps `data` both while a query is
+  // DISABLED and after a refetch FAILS, so `windowQuery.data` alone answers
+  // "the last thing the controller ever said", not "what it says now" — and an
+  // `expiresAt` is an absolute instant, so a cached one from an earlier visit
+  // to this option paints a concrete end time that may already be in the past.
+  // Requiring the data to be newer than the selection is what makes re-entry
+  // show "reading the schedule…" for one round trip instead of a stale answer.
+  const [selectedAt, setSelectedAt] = useState(0);
+  useEffect(() => { setSelectedAt(untilSchedule ? Date.now() : 0); }, [untilSchedule]);
+  const windowIsCurrent = untilSchedule
+    && selectedAt > 0
+    && !windowQuery.isError
+    && windowQuery.dataUpdatedAt >= selectedAt;
+  const resolvedWindow = windowIsCurrent ? windowQuery.data ?? null : null;
   useEffect(() => {
     if (takeoverQuery.dataUpdatedAt) setNow(Date.now());
   }, [takeoverQuery.dataUpdatedAt]);
@@ -337,12 +351,17 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
               />
             )}
           </div>
+          {/* The failure states are checked FIRST inside this line. Reading
+              `data` first was a bug: it survives an error and a disable, so
+              once one fetch had landed the outage copy could never be reached
+              and the card answered a dead controller with the last time it
+              happened to know. */}
           {untilSchedule && (
             <div className="mono-num text-[10px] text-muted">
-              {resolvedWindow
-                ? `ends ${fmtClock(resolvedWindow.expiresAt, tz, locale)} · ${resolvedWindow.minutes} min · ${WINDOW_REASON[resolvedWindow.source]}`
-                : windowQuery.isError
-                  ? 'could not read the schedule — the window is resolved again when you start it'
+              {windowQuery.isError
+                ? 'could not read the schedule — the window is resolved again when you start it'
+                : resolvedWindow
+                  ? `ends ${fmtClock(resolvedWindow.expiresAt, tz, locale)} · ${resolvedWindow.minutes} min · ${WINDOW_REASON[resolvedWindow.source]}`
                   : 'reading the schedule…'}
             </div>
           )}

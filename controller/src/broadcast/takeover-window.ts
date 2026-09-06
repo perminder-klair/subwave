@@ -22,18 +22,34 @@
 //    is `show-boundary.ts`'s `nextShowChangeMs`, reused rather than copied —
 //    with no `extra` candidates, because a takeover's own start/expiry are
 //    exactly what this question excludes.
-//  - The answer is CLAMPED at both ends, and neither clamp is decoration. A
-//    grid that never changes inside the horizon must still produce a bounded
-//    pin (schemas/schedule.ts: the cap exists so a forgotten pin can't shadow
-//    the grid for days), and a boundary a couple of minutes out would store a
-//    window shorter than any takeover can act on — the switch lands at the next
-//    track boundary, so a pin that expires before one arrives airs nothing at
-//    all and costs two session rolls.
+//  - There is a CEILING and there is NO FLOOR, and that asymmetry is the whole
+//    point. It is the same asymmetry root CLAUDE.md draws between the
+//    track-length cap and the track-length floor: a ceiling TRIMS a window that
+//    is otherwise valid, so applying it costs nothing the operator asked for; a
+//    floor cannot LENGTHEN a window that is genuinely short, so applying it
+//    replaces the request with a different one. A grid that never changes
+//    inside the horizon must still produce a bounded pin (schemas/schedule.ts:
+//    the cap exists so a forgotten pin can't shadow the grid for days) — that
+//    is the ceiling, and it stays. `OVERRIDE_MIN_MINUTES` used to be applied
+//    here too, as its mirror image, and unifying the two is exactly what made
+//    "end at the change" run PAST the change: a boundary five minutes out was
+//    held to fifteen, so the pin shadowed the incoming show for ten minutes —
+//    the one harm this option exists to remove, produced by the option itself.
+//    `scheduleOverrideSchema` imposes no minimum (only `expiresAt > startedAt`
+//    and the cap), so a five-minute pin is an ordinary stored override. The
+//    floor stays on `until: 'fixed'`, where it is a bound on what an operator
+//    may TYPE and belongs.
+//
+//    The trade that buys, stated rather than discovered: the switch lands at
+//    the next track boundary, so a window shorter than the track now on air may
+//    air the takeover late — or lapse having aired nothing at all, costing a
+//    session roll each way. That is accepted. A pin asked to end at the change
+//    ending early is a disappointment; one that runs past the change is the bug.
 //
 // The pure resolution and the impure scan are split so scripts/takeover-window.test.ts
-// can drive every clamp without standing a schedule up.
+// can drive the ceiling and the boundary cases without standing a schedule up.
 
-import { OVERRIDE_MAX_MINUTES, OVERRIDE_MIN_MINUTES } from '../schemas/schedule.js';
+import { OVERRIDE_MAX_MINUTES } from '../schemas/schedule.js';
 import { zonedParts } from '../time.js';
 import * as settings from '../settings.js';
 import { nextShowChangeMs } from './show-boundary.js';
@@ -41,12 +57,15 @@ import { nextShowChangeMs } from './show-boundary.js';
 /** Which rule decided the end instant — the reason the dialog shows and the
  *  booth log prints, so an operator is never told a time without its why. */
 export type TakeoverWindowSource =
-  /** The grid's own next change. */
+  /** The grid's own next change, however near it is. */
   | 'schedule'
-  /** The change is nearer than a takeover can act in — held to the floor. */
-  | 'minimum'
   /** No change within reach — held to the longest pin the station allows. */
-  | 'maximum';
+  | 'maximum'
+  /** A change was supplied but sits past the longest pin the station allows, so
+   *  the window was trimmed to it. Distinct from 'maximum' because the two are
+   *  opposite news — "the grid never moves on" versus "it moves on, later than
+   *  a takeover can run" — and one reason string cannot say both. */
+  | 'ceiling';
 
 export interface TakeoverWindow {
   /** The absolute instant to store as `ScheduleOverride.expiresAt`. */
@@ -63,29 +82,30 @@ export interface TakeoverWindow {
  * The window a `until: 'schedule-change'` takeover starting at `startedAt`
  * would get, given the next grid change (or null for none in reach).
  *
- * Pure. The clamps are the same pair the request bounds are written in, so a
- * resolved window is always one `scheduleOverrideSchema` would accept.
+ * Pure, and one-directional: the returned `expiresAt` is never LATER than
+ * `nextChangeAt`. Only the ceiling can move it, and only earlier. A resolved
+ * window is therefore always one `scheduleOverrideSchema` would accept — it
+ * enforces `expiresAt > startedAt` (the scan yields instants strictly after
+ * `startedAt`) and the cap, and no minimum at all.
  */
 export function resolveTakeoverWindow(input: {
   startedAt: number;
   nextChangeAt: number | null;
 }): TakeoverWindow {
   const { startedAt } = input;
-  const floor = startedAt + OVERRIDE_MIN_MINUTES * 60_000;
   const ceiling = startedAt + OVERRIDE_MAX_MINUTES * 60_000;
   const at = Number.isFinite(input.nextChangeAt) ? (input.nextChangeAt as number) : null;
 
   let expiresAt = at ?? ceiling;
   let source: TakeoverWindowSource = at == null ? 'maximum' : 'schedule';
-  // Order matters only in that the floor is checked first: with a horizon of
-  // OVERRIDE_MAX_MINUTES the scan cannot return anything past the ceiling, so
-  // that branch is a guard on a caller passing its own instant in.
-  if (expiresAt < floor) {
-    expiresAt = floor;
-    source = 'minimum';
-  } else if (expiresAt > ceiling) {
+  // `resolveTakeoverWindowNow` cannot reach this: the scan's horizon IS the
+  // ceiling and its candidates are inclusive of it. It is a guard on a caller
+  // passing its own instant in, which is why it gets its own source rather than
+  // borrowing 'maximum' — that one means the grid never moves on, and telling
+  // an operator so when it does, just later, is the wrong news.
+  if (expiresAt > ceiling) {
     expiresAt = ceiling;
-    source = 'maximum';
+    source = 'ceiling';
   }
   return {
     expiresAt,
