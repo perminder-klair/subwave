@@ -626,7 +626,7 @@ test('the converted keys are exactly the ones with schemas', () => {
   // resists a stateless schema (clamps that fall back to the CURRENT value,
   // post-merge cross-field rules, write-throughs into another key).
   assert.deepEqual(Object.keys(SETTINGS_PATCH_SCHEMAS).sort(), [
-    'activeDjPromptId', 'archive', 'audio', 'beds', 'crossfadeDuration',
+    'activeDjPromptId', 'archive', 'audio', 'backups', 'beds', 'crossfadeDuration',
     'djHouseRules', 'djPrompt', 'djPrompts', 'djSpeakClock',
     'djTalkOnlyBetweenTracks', 'ducking', 'festivals',
     'jingleRatio', 'likes',

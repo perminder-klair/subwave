@@ -8,8 +8,9 @@
 //     now-playing digs, facts, web search) filling the minutes none of them
 //     want — plus the unconditional :00 session roll
 //   - maintenance: auto-playlist refresh, voice/WAL cleanup, takeover expiry,
-//     the nightly doctor and the operator's own skill crons. These have no
-//     arbitration concern and stay on crons of their own.
+//     the nightly doctor, the hourly scheduled backup and the operator's own
+//     skill crons. These have no arbitration concern and stay on crons of their
+//     own.
 
 import cron, { type ScheduledTask } from 'node-cron';
 import { config } from '../config.js';
@@ -35,6 +36,7 @@ import * as session from './session.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import { cleanupOldVoices } from '../audio/tts.js';
+import { warmHeavy } from '../audio/ttsHeavyClient.js';
 import { shouldFire } from './dj-gate.js';
 import { speakClockAllowed, stationIdDaypartStamp } from './clock-policy.js';
 import { talkOnlyBetweenTracks, withTalkAir } from './talk-air.js';
@@ -51,6 +53,7 @@ import * as archives from './archives.js';
 import * as stemCacheStore from '../music/stem-cache.js';
 import * as stemBlendStore from './stem-blend.js';
 import * as doctor from '../doctor.js';
+import * as backup from '../backup/scheduled.js';
 
 // Pool size: 40 (was 30). The old non-show weights summed to 32 > 30 and
 // take() hard-stops at the target, so the random top-up below was structurally
@@ -963,6 +966,21 @@ function talkEligible(kind: TalkKind, now: Date, rolled: SessionRoll | null): bo
 // switch, the clock switch and the frequency ladder already carry, by the same
 // mechanism (the manual route never reaches the gate).
 async function runTalkSlot(plan: Extract<TalkPlan, { act: 'fire' }>) {
+  // The station has just decided it is going to talk this minute, which is the
+  // earliest honest signal that a heavy engine the sidecar idle-unloaded
+  // (#1579) is about to be needed. The idle-pause release
+  // (broadcast/stream-idle.ts) is the other signal and the better one — it
+  // buys minutes — but it only exists when stream.idleWhenEmpty is ON, and
+  // that defaults OFF, so a stock station warmed the sidecar nowhere at all
+  // and paid every reload as a stall on the line itself. From here the load at
+  // least overlaps writing the script and rendering it.
+  //
+  // Fired at the FIRE, never on an open window: the talk rows cover ~50
+  // minutes of the hour, so warming whenever a window is open would reload the
+  // model within a tick of every unload and quietly switch the feature off.
+  // Fire-and-forget and total, exactly like the idle-pause call — a warm that
+  // fails costs the render a model load, which is the un-warmed behaviour.
+  void warmHeavy();
   return withTalkAir(plan.air, () => runTalkSlotInner(plan));
 }
 
@@ -1168,6 +1186,47 @@ async function nightlyDoctor() {
 }
 
 // ---------------------------------------------------------------------------
+// SCHEDULED BACKUPS (#1570)
+// Write a config + tag-DB snapshot into STATE_DIR on the operator's cadence and
+// keep the last N. Off by default; the decision, the name grammar and the
+// retention choice are all in backup/pure.ts, and this tick only reports.
+//
+// Hourly rather than nightly on purpose — see backup/scheduled.ts. Not a talk
+// slot: nothing here reaches a listener, so it owes the talk tick's arbitration
+// nothing and stays a cron of its own alongside the other maintenance jobs.
+//
+// Every failure is logged and swallowed. A station whose disk filled must keep
+// picking tracks, and losing the scheduler to a backup would take the auto
+// playlist, the talk tick and the takeover janitor with it.
+// ---------------------------------------------------------------------------
+
+async function scheduledBackupTick() {
+  try {
+    const r = await backup.runScheduledBackup();
+    if (r.written) {
+      queue.log('scheduler',
+        `Scheduled backup: wrote ${r.written} (${Math.round(r.bytes / 1_000_000)} MB)`
+        + (r.pruned.length ? `, removed ${r.pruned.length} older backup(s)` : ''));
+    } else if (r.pruned.length) {
+      // A retention lowered between cadence boundaries.
+      queue.log('scheduler', `Scheduled backup retention: removed ${r.pruned.length} older backup(s)`);
+    }
+    if (r.sweptTemps.length) {
+      // A previous run was killed mid-write. Worth a line: it is the only trace
+      // the operator gets that a backup they expected never landed.
+      queue.log('scheduler',
+        `Scheduled backup: cleaned up ${r.sweptTemps.length} half-written backup file(s) `
+        + 'left by an interrupted run');
+    }
+    // Errors are reported even when a backup WAS written — a successful write
+    // followed by a failed prune is the disk quietly filling up.
+    for (const e of r.errors) queue.log('error', `Scheduled backup: ${e}`);
+  } catch (err) {
+    queue.log('error', `Scheduled backup failed: ${err.message}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // SKILL CRONS
 // Per-skill cron tasks, registered from the `cron:` frontmatter field in
 // SKILL.md. When a timer fires it calls runCapability() directly — same path
@@ -1330,6 +1389,12 @@ export function startScheduler() {
   // Nightly health check at 04:17 — populates the DJ Doc last-run cache + header
   // badge without the operator having to open the panel. Deterministic (no LLM).
   cron.schedule('17 4 * * *', nightlyDoctor);
+
+  // Scheduled backups — hourly so a station that is only up part of the day
+  // still gets its daily snapshot; the cadence itself is elapsed-time and lives
+  // in backup/pure.ts. :23 keeps it off the :00 cleanup and the */5 janitor.
+  // Off by default: an upgraded station never writes a file.
+  cron.schedule('23 * * * *', scheduledBackupTick);
 
   syncSkillCrons();
   // Each task bakes the zone in at registration, so a live timezone change has

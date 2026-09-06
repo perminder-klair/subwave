@@ -9,6 +9,8 @@ import {
   BEDS_CROSS_SEC_BOUNDS,
   BEDS_TAIL_SEC_BOUNDS,
   SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
+  BACKUP_KEEP_BOUNDS,
+  BACKUP_KEEP_DEFAULT,
   BEDS_THRESHOLD_SEC_BOUNDS,
   CROSSFADE_DURATION_BOUNDS,
   DUCK_DEPTH_BOUNDS,
@@ -53,6 +55,11 @@ export const DEFAULTS = {
   // bounds disk growth (~1.4 GB/day at 128 kbps); normalizeArchiveRetentionDays
   // keeps pre-existing keep-forever installs at 0 so upgrades never delete tapes.
   archive: { enabled: false, bitrate: 128, retentionDays: 30 },
+  // Scheduled, rotating config backups (#1570). OFF by default and that is
+  // load-bearing: this is the only scheduled job that DELETES operator files,
+  // so an upgrade that changes nothing must produce byte-identical behaviour —
+  // no zips written, no zips pruned. `keep` is inert until a cadence is picked.
+  backups: { cadence: 'off' as const, keep: BACKUP_KEEP_DEFAULT },
   stream: {
     // Secondary Ogg-Opus mount (/stream.opus). Off by default — only Blink
     // selects it (web/hooks/usePlayer.ts), and it costs a continuous encoder
@@ -677,6 +684,7 @@ export const BOUNDS = {
   // reason. Far lower than the cap's — see SHOW_MIN_TRACK_LENGTH_MAX.
   minTrackLengthSeconds: { min: 0, max: SHOW_MIN_TRACK_LENGTH_MAX, type: 'int' },
   silenceTrimMinGapMs: { ...SILENCE_TRIM_MIN_GAP_MS_BOUNDS, type: 'int' },
+  backupsKeep: { ...BACKUP_KEEP_BOUNDS, type: 'int' },
   loudnessTargetLufs: { ...LOUDNESS_TARGET_LUFS_BOUNDS, type: 'float' },
   loudnessMaxBoostDb: { ...LOUDNESS_MAX_BOOST_DB_BOUNDS, type: 'float' },
 };
