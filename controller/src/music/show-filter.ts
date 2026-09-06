@@ -469,7 +469,7 @@ export function applyStrictLocks<T extends FilterTrack>(
   locks: StrictLocks,
   { starve }: { starve: boolean },
 ): T[] {
-  let pool = tracks;
+  let pool: T[] = tracks;
   const step = (next: T[]) => {
     if (starve || next.length) pool = next;
   };
@@ -478,5 +478,11 @@ export function applyStrictLocks<T extends FilterTrack>(
   if (locks.moods?.length) step(onlyMood(pool, locks.moods));
   if (locks.energies?.length) step(onlyEnergy(pool, locks.energies));
   if (locks.vocals) step(onlyVocals(pool, locks.vocals));
-  return pool;
+  // Never hand the INPUT array back. With no lock set, or with every step
+  // skipped by never-starve, `pool` is still `tracks` — and the auto.m3u coast
+  // rebuilds its pool in place (`pool.length = 0; pool.push(...filtered)`),
+  // which would clear the very array it then spreads back in. Reachable today:
+  // a strict show whose only genre resolves to no library tag runs zero steps.
+  // Same contract as music/track-floor.applyTrackFloor.
+  return pool === tracks ? tracks.slice() : pool;
 }

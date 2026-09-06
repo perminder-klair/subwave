@@ -33,8 +33,15 @@ export interface LengthTrack {
 // recency.durationSeconds applies to the cap, restated here rather than
 // imported so this module stays free of every other pick-path concern.
 export function trackLengthSeconds(t: LengthTrack | null | undefined): number | null {
-  const d = t?.duration ?? t?.durationSec;
-  return Number.isFinite(d) && (d as number) > 0 ? Number(d) : null;
+  // First USABLE value, not first PRESENT one. `duration ?? durationSec` reads
+  // the same until a source carries `duration: 0` (a Subsonic child whose server
+  // never measured it) alongside a real `durationSec`: `??` only falls through
+  // on null/undefined, so the row would read as unmeasured and slip past the
+  // floor. music/recency.durationSeconds delegates here so the cap and the
+  // floor cannot answer this differently.
+  const usable = (d: unknown): number | null =>
+    Number.isFinite(d) && (d as number) > 0 ? Number(d) : null;
+  return usable(t?.duration) ?? usable(t?.durationSec);
 }
 
 /**
@@ -74,8 +81,14 @@ export function applyTrackFloor<T extends LengthTrack>(
   min: number | null | undefined,
   { starve }: { starve: boolean },
 ): T[] {
-  if (!min || min <= 0) return tracks;
+  // NEVER hand the input array back. A caller that rebuilds its pool in place
+  // — `pool.length = 0; pool.push(...kept)`, the shape the auto.m3u coast uses
+  // — would otherwise clear the very array it is about to spread back in, and
+  // the never-starve branch (which returns everything) is exactly where that
+  // fires. A guard that empties the pool it exists to protect is worse than no
+  // guard, so the aliasing is closed here rather than at each call site.
+  if (!min || min <= 0) return tracks.slice();
   const kept = tracks.filter((t) => !belowTrackFloor(t, min));
-  if (!starve && kept.length === 0) return tracks;
+  if (!starve && kept.length === 0) return tracks.slice();
   return kept;
 }

@@ -32,6 +32,9 @@ const { applyTrackFloor, belowTrackFloor, trackLengthSeconds } =
 const { setCache } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');
 const { buildShowCandidateDiagnostic } = await import('../src/music/show-candidates.js');
+const { PICKER_MIN_TRACK_LENGTH_BOUNDS } = await import('../src/schemas/settings.js');
+const { SHOW_MIN_TRACK_LENGTH_MAX } = await import('../src/schemas/show.js');
+const { durationSeconds } = await import('../src/music/recency.js');
 
 const SETTINGS_PATH = path.join(stateRoot, 'settings.json');
 
@@ -218,13 +221,29 @@ test('the diagnostic counts what the picker will actually see', () => {
     show: {}, libraryRows: LIB, playlistRows: null, excludedIds: null, locks: NO_LOCKS,
   });
   assert.equal(off.library.indexed, 2, 'no floor: both counted');
+  assert.equal(off.library.effective, 2);
 
   const on = buildShowCandidateDiagnostic({
     show: {}, libraryRows: LIB, playlistRows: null, excludedIds: null, locks: NO_LOCKS,
     minTrackSec: 60,
   });
-  assert.equal(on.library.indexed, 1);
-  assert.equal(on.library.effective, 1);
+  assert.equal(on.library.effective, 1, 'the floor removes the skit from the pool');
+});
+
+test('the funnel\'s INPUT counts stay pre-floor — a labelled field keeps its meaning', () => {
+  // `library.indexed` is the indexed library and `playlist.total` is the
+  // playlist; the show editor renders the latter verbatim as "Playlist anchor:
+  // N tracks". Moving them post-floor made both fields report something other
+  // than their own name. The floor belongs in the DROP to the steps below,
+  // which is the entire point of a funnel.
+  const d = buildShowCandidateDiagnostic({
+    show: {}, libraryRows: LIB, playlistRows: LIB, excludedIds: null, locks: NO_LOCKS,
+    minTrackSec: 60,
+  });
+  assert.equal(d.library.indexed, 2, 'indexed still means indexed');
+  assert.equal(d.playlist!.total, 2, 'total still means the whole playlist');
+  assert.equal(d.library.effective, 1);
+  assert.equal(d.playlist!.effective, 1);
 });
 
 test('the floor applies to a pinned playlist too, and is NOT gated on strict', () => {
@@ -235,6 +254,78 @@ test('the floor applies to a pinned playlist too, and is NOT gated on strict', (
     excludedIds: null, locks: NO_LOCKS, minTrackSec: 60,
   });
   assert.equal(d.strict, false);
-  assert.equal(d.playlist!.total, 1);
+  assert.equal(d.playlist!.matchingFilters, 1);
   assert.equal(d.playlist!.effective, 1);
+});
+
+// ── the aliasing contract ──────────────────────────────────────────────────
+//
+// THE DEFECT THIS GUARDS. The auto.m3u coast rebuilds its pool IN PLACE
+// (`pool.length = 0; pool.push(...kept)`) because `pool` is owned by the
+// balanced pool builder. A filter that answers "keep everything" by handing its
+// input straight back therefore hands the caller the very array it is about to
+// clear — and the never-starve branch, which exists to stop the coast going
+// silent, is precisely where that fires. The result was an empty auto.m3u: a
+// dead-air guard that produced dead air.
+
+test('applyTrackFloor NEVER returns its input array, on any branch', () => {
+  const pool = [{ id: 'a', duration: 30 }, { id: 'b', duration: 40 }];
+  // no floor
+  assert.notEqual(applyTrackFloor(pool, 0, { starve: false }), pool);
+  assert.notEqual(applyTrackFloor(pool, null, { starve: true }), pool);
+  // never-starve rescue: everything is below the floor, so everything is kept
+  assert.notEqual(applyTrackFloor(pool, 90, { starve: false }), pool);
+  // ordinary filtering already allocated
+  assert.notEqual(applyTrackFloor(pool, 35, { starve: false }), pool);
+  // and the contents are still right on every one of them
+  assert.deepEqual(applyTrackFloor(pool, 0, { starve: false }).map(t => t.id), ['a', 'b']);
+  assert.deepEqual(applyTrackFloor(pool, 90, { starve: false }).map(t => t.id), ['a', 'b']);
+});
+
+test('the coast\'s in-place pool rebuild survives the never-starve rescue', () => {
+  // The scheduler idiom, verbatim. Before the fix this left `pool` empty and
+  // auto.m3u was written with nothing but its #EXTM3U header.
+  const pool = [{ id: 'skit', duration: 30 }, { id: 'interlude', duration: 40 }];
+  const longEnough = applyTrackFloor(pool, 90, { starve: false });
+  pool.length = 0;
+  pool.push(...longEnough);
+  assert.deepEqual(pool.map(t => t.id), ['skit', 'interlude'],
+    'never-starve must leave the coast something to play, not empty it');
+});
+
+test('a zero duration beside a real durationSec reads as the real one', () => {
+  // `duration ?? durationSec` only falls through on null/undefined, so a
+  // Subsonic child whose server never measured the track (duration: 0) shadowed
+  // the library row's true length sitting next to it and slipped past the floor.
+  assert.equal(trackLengthSeconds({ duration: 0, durationSec: 300 }), 300);
+  assert.equal(belowTrackFloor({ duration: 0, durationSec: 30 }, 60), true);
+  assert.equal(belowTrackFloor({ duration: 0, durationSec: 300 }, 60), false);
+  // Still unknown when NEITHER field is usable — unknown always passes.
+  assert.equal(trackLengthSeconds({ duration: 0, durationSec: 0 }), null);
+  assert.equal(belowTrackFloor({ duration: 0, durationSec: 0 }, 60), false);
+});
+
+test('the cap and the floor cannot disagree about how long a track is', () => {
+  // recency.durationSeconds (the cap's reader) delegates to trackLengthSeconds
+  // rather than restating it — two copies of this rule is how the two ends of
+  // the same setting drift apart.
+  for (const t of [
+    { duration: 0, durationSec: 300 },
+    { duration: 240 },
+    { durationSec: 38 },
+    { duration: -1, durationSec: null },
+    {},
+  ]) {
+    assert.equal(durationSeconds(t as any), trackLengthSeconds(t as any));
+  }
+});
+
+test('the two 3600 ceilings that "must move together" actually match', () => {
+  // The per-show override and the station default bound the same number, but a
+  // mirrored schema module may import only zod, so they are two declarations.
+  // defaults.ts BOUNDS clamps loads against the SHOW one while the patch schema
+  // validates saves against the PICKER one — drift would let update() accept a
+  // value the next cold load silently clamps away.
+  assert.equal(PICKER_MIN_TRACK_LENGTH_BOUNDS.max, SHOW_MIN_TRACK_LENGTH_MAX);
+  assert.equal(PICKER_MIN_TRACK_LENGTH_BOUNDS.min, 0);
 });

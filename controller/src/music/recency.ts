@@ -1,3 +1,5 @@
+import { trackLengthSeconds } from './track-floor.js';
+
 export const DEFAULT_TRACK_RECENCY_HOURS = 12;
 export const DEFAULT_ARTIST_RECENCY_HOURS = 2;
 const DIVERSE_LIBRARY_ARTISTS = 48;
@@ -98,9 +100,14 @@ interface CandidateFilterState {
 // unknown. Zero/negative/non-finite all read as unknown — we only ever act on a
 // positive, trustworthy duration (the hour-long album mixes #447 targets report
 // one reliably).
+//
+// Delegates to music/track-floor.ts rather than restating the rule: the track
+// length CAP reads this and the FLOOR reads that, and two copies answering
+// "how long is this track?" differently is exactly the drift #1573 warns about.
+// track-floor.ts is itself pure and import-free, so this module stays free of
+// every library / settings / mixer concern.
 export function durationSeconds(song: CandidateLike): number | null {
-  const d = song?.duration ?? song?.durationSec;
-  return Number.isFinite(d) && (d as number) > 0 ? Number(d) : null;
+  return trackLengthSeconds(song);
 }
 
 export function artistKey(song: CandidateLike): string {
