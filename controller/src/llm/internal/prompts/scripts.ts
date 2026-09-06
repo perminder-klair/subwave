@@ -6,7 +6,7 @@
 import * as settings from '../../../settings.js';
 import { djText } from '../strategy/text.js';
 import { djSystem, lengthPhrase } from './system.js';
-import { buildContextLines, decoratePrompt, randomSeed } from './context.js';
+import { buildContextLines, decoratePrompt, pickTimePhrase, randomSeed } from './context.js';
 import { speakClockAllowed } from '../../../broadcast/clock-policy.js';
 import { isNamedRequester } from '../../../util/request-guard.js';
 import { introBudgetPhrase, introMsFor, firstVocalMsFor, bpmKeyFor } from './intro-budget.js';
@@ -371,23 +371,37 @@ export async function generateLink({ previous, current, context, clockIsAirTime 
       });
 }
 
+// The time clause of the hourly check — the one sentence that fixes what the
+// DJ may say the time is. The time is converted to words in code
+// (context.clock.spokenTime*) rather than asking the model to read the clock
+// line itself — small models get the 24-hour conversion wrong at the edges
+// ("00:03" announced as "one in the morning"). The minute-aware phrase
+// replaced the old hour-only one, which hardcoded "just gone X" whatever the
+// minute — right on the :00 cron this normally rides, but a manual trigger at
+// 18:31 still said "just gone six in the evening" (#1282).
+//
+// What varies is the WORDING, never the reading (#1602): the check almost
+// always fires in the first minute band, so one fixed string per band opened
+// every hour of every day with the identical five words. `spokenTimeOptions`
+// is that band — equivalent phrasings of the same rounded time — and one of
+// them is picked HERE, then dictated as before. The fallbacks keep the old
+// behaviour for a context that predates the options, then for one that
+// predates spokenTime, then for a bare context.
+export function hourlyTimeClause(clock: any) {
+  const spokenTime = pickTimePhrase(clock?.spokenTimeOptions) ?? clock?.spokenTime;
+  const spoken = clock?.spokenHour;
+  if (spokenTime) {
+    return `The time to announce is "${spokenTime}" — say exactly that time, in natural spoken words — never digits or 24-hour form, never a different time.`;
+  }
+  if (spoken) {
+    return `The hour to announce is ${spoken} — say exactly that hour, in natural spoken words ("just gone ${spoken}", or similar) — never digits or 24-hour form, never a different hour.`;
+  }
+  return `Say the time in natural spoken words ("two in the afternoon", "just gone eight") — never digits or 24-hour form.`;
+}
+
 export async function generateHourlyTime({ recap = null, context = null, recentOpeners = null, persona = null }: any = {}) {
   const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
-  // The time is converted to words in code (context.clock.spokenTime) rather
-  // than asking the model to read the clock line itself — small models get
-  // the 24-hour conversion wrong at the edges ("00:03" announced as "one in
-  // the morning"). The minute-aware phrase replaces the old hour-only one,
-  // which hardcoded "just gone X" whatever the minute — right on the :00 cron
-  // this normally rides, but a manual trigger at 18:31 still said "just gone
-  // six in the evening" (#1282). The fallbacks keep the old behaviour for
-  // contexts that predate spokenTime, then for a bare context.
-  const spokenTime = context?.clock?.spokenTime;
-  const spoken = context?.clock?.spokenHour;
-  const timeClause = spokenTime
-    ? `The time to announce is "${spokenTime}" — say exactly that time, in natural spoken words — never digits or 24-hour form, never a different time.`
-    : spoken
-      ? `The hour to announce is ${spoken} — say exactly that hour, in natural spoken words ("just gone ${spoken}", or similar) — never digits or 24-hour form, never a different hour.`
-      : `Say the time in natural spoken words ("two in the afternoon", "just gone eight") — never digits or 24-hour form.`;
+  const timeClause = hourlyTimeClause(context?.clock);
   ctxLines.push(`Task: a brief top-of-the-hour time check, in character. ${lengthPhrase('hourly', persona || undefined)}. ${timeClause}`);
   return djText({
     system: djSystem(persona || undefined),
