@@ -85,6 +85,7 @@ import {
   MP3_BITRATE_SET,
   OPUS_BITRATE_SET,
   coerceMaxTrackSeconds,
+  coerceMinTrackLengthSeconds,
   rawMaxTrackSec,
 } from './settings/defaults.js';
 import { validateCompatParams } from './settings/compat-params.js';
@@ -225,6 +226,7 @@ export {
   castSpeakerIdRule,
   effectiveFrequency,
   effectiveMaxTrackSec,
+  effectiveMinTrackSec,
   effectsActive,
   getActivePersona,
   getEffectivePersona,
@@ -1111,6 +1113,14 @@ export async function load() {
             Math.max(PICKER_ALBUM_HOURS_BOUNDS.min, Number(stored.picker.albumHours)),
           )
         : DEFAULTS.picker.albumHours,
+      // Minimum-track-length floor (#1573). Same lenient clamp, and the same
+      // reason it has to be listed HERE and not just in DEFAULTS: this block
+      // composes explicitly. The crossfade floor is NOT re-applied on load —
+      // load is lenient by contract, and a crossfade lowered after the fact
+      // must not delete a floor the operator set deliberately.
+      minTrackLengthSeconds:
+        coerceMinTrackLengthSeconds(stored.picker?.minTrackLengthSeconds, false)
+        ?? DEFAULTS.picker.minTrackLengthSeconds,
     },
     likes: {
       enabled:
@@ -1794,6 +1804,28 @@ export async function update(patch) {
   if ('picker' in patch) {
     const pk = parseSettingsPatchKey<Record<string, unknown>>('picker', patch.picker);
     if (pk.albumHours !== undefined) next.picker.albumHours = pk.albumHours as number;
+    if (pk.minTrackLengthSeconds !== undefined) {
+      // Whole seconds — the schema's bounds check is deliberately number-like
+      // (it also serves albumHours, where a fraction is a real answer), so the
+      // rounding lands here rather than widening that shared helper.
+      const v = Math.round(pk.minTrackLengthSeconds as number);
+      // A positive FLOOR must clear the crossfade-derived minimum, the same
+      // figure maxTrackSeconds is bounded by above and for the same reason: a
+      // track shorter than 2x the crossfade never gets solo airtime, so the
+      // smallest floor worth expressing is the one the mixer already imposes.
+      // 0 (= off) always stays allowed, which is what keeps an untouched
+      // station byte-identical. Uses next's crossfade, already applied above if
+      // this same patch changed it.
+      const floor = minTrackSeconds(next);
+      if (v !== 0 && v < floor) {
+        throw new Error(
+          `picker.minTrackLengthSeconds must be 0 (no floor) or at least ${floor}s`,
+        );
+      }
+      // Read live by both pick paths and the auto-playlist refresh; no
+      // Liquidsoap file is written, so no mixer restart.
+      next.picker.minTrackLengthSeconds = v;
+    }
   }
   if ('search' in patch) {
     const sr = parseSettingsPatchKey<Record<string, unknown>>('search', patch.search);

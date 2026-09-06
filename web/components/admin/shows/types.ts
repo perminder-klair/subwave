@@ -75,6 +75,12 @@ export interface Show {
    *  0 = unlimited (opt this show out of the cap so it can air long mixes);
    *  >0 = this show's own cap. */
   maxTrackSeconds: number | null;
+  /** Per-show minimum track length (seconds) — the floor that keeps 40-second
+   *  skits, interludes and album intros out of the pick pool (#1573). null =
+   *  inherit the station default; 0 = no floor; >0 = this show's own floor.
+   *  Unlike the cap this is a SELECTION filter: a short track cannot be
+   *  lengthened on air the way a long one is cut. */
+  minTrackLengthSeconds: number | null;
   /** The union of these playlists becomes the show's candidate pool. Empty = no anchor. */
   playlistIds: string[];
   /** With ≥1 playlist pinned, the playlist is the show's ENTIRE universe;
@@ -112,6 +118,7 @@ export interface CommunityShow {
   programme: boolean;
   segmentSkill: string;
   maxTrackSeconds: number | null;
+  minTrackLengthSeconds: number | null;
   submittedBy?: string;   // GitHub login of the contributor who submitted it
   dateAdded?: string;     // ISO date (YYYY-MM-DD) it first entered the catalog
   dateModified?: string;  // ISO date (YYYY-MM-DD) of the last catalog change
@@ -204,8 +211,12 @@ export interface SettingsResponse {
     shows?: Array<Partial<Show>>;
     schedule?: Schedule;
     personas?: Persona[];
-    /** Crossfade-relative floor for a non-zero per-show cap (server-computed). */
+    /** Crossfade-relative floor for a non-zero per-show cap OR minimum track
+     *  length (server-computed). */
     minTrackSeconds?: number;
+    /** Station-wide picking windows; `minTrackLengthSeconds` is the default a
+     *  show inherits when its own field is null. */
+    picker?: { albumHours?: number; minTrackLengthSeconds?: number };
   };
   tts?: { moods?: string[] };
 }

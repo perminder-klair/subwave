@@ -28,6 +28,7 @@ import { resolveShowPlaylistPool, resolveExcludedPlaylistIds } from '../music/sh
 import { getFullContext } from '../context.js';
 import { queue } from './queue.js';
 import { createPoolBuilder } from './auto-pool.js';
+import { applyTrackFloor } from '../music/track-floor.js';
 import { autoPlaylistShowLabel, createShowBuildTracker } from './auto-playlist-show.js';
 import { reloadAutoPlaylist } from './liquidsoap-control.js';
 import * as session from './session.js';
@@ -223,6 +224,11 @@ async function refreshAutoPlaylistInner() {
   // resolved in seconds. null = no cap. Now that the fallback honours the show's
   // genre/era it honours its track-length cap too.
   const maxDurationSec = settings.effectiveMaxTrackSec(show);
+  // Minimum track length (#1573) — the cap's mirror image, and the reason it
+  // cannot be stamped on the entry the way the cap is: an over-long track is
+  // cut at the seam, a too-short one has to be kept OUT of the pool. Applied to
+  // the assembled pool below, never-starve.
+  const minDurationSec = settings.effectiveMinTrackSec(show);
 
   // Balanced pool builder — applies the recency / dedup / artist-cap guards on
   // every candidate. Recency and dedup key on BOTH id and `title|artist` so a
@@ -464,6 +470,17 @@ async function refreshAutoPlaylistInner() {
     }, { starve: false });
     pool.length = 0;
     pool.push(...filtered);
+  }
+
+  // Minimum track length: drop everything under the floor, never-starve. This
+  // coast IS the last dead-air guard, so it takes the same posture as the
+  // strict-playlist and blocklist blocks around it — a floor that would empty
+  // the pool is skipped rather than leaving auto.m3u with nothing to play.
+  // A floor of 0/null (the shipped default) leaves the pool untouched.
+  if (minDurationSec) {
+    const longEnough = applyTrackFloor(pool, minDurationSec, { starve: false });
+    pool.length = 0;
+    pool.push(...longEnough);
   }
 
   // Excluded playlists (blocklist): drop every track from a blocklisted

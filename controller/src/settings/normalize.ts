@@ -15,7 +15,7 @@ import {
   Webhook,
   emptyWeek,
 } from './vocab.js';
-import { DEFAULTS, coerceMaxTrackSeconds } from './defaults.js';
+import { DEFAULTS, coerceMaxTrackSeconds, coerceMinTrackLengthSeconds } from './defaults.js';
 // The webhook rules themselves, so this lenient path and update()'s strict one
 // cannot restate them differently — see normalizeWebhooks below.
 import { WEBHOOK_ID_RE, webhookSchema, type WebhookParsed } from '../schemas/webhook.js';
@@ -205,13 +205,14 @@ export function normalizeShows(raw: unknown, personaIds: string[]): NormalizedSh
     // drift from the schema, and the failure mode of that drift is the parse
     // failing and `continue` silently deleting a working show on the next
     // boot. What stays at this call site is only what the schema module cannot
-    // own: maxTrackSeconds clamps through coerceMaxTrackSeconds, whose bounds
-    // defaults.ts derives from the schema's own ceiling. Clamp rather than
-    // reject: an out-of-range cap from a hand-edited file should bound the
-    // show, not delete it.
+    // own: the two track-length fields clamp through coerceMaxTrackSeconds /
+    // coerceMinTrackLengthSeconds, whose bounds defaults.ts derives from the
+    // schema's own ceilings. Clamp rather than reject: an out-of-range cap or
+    // floor from a hand-edited file should bound the show, not delete it.
     const parsed = schema.safeParse({
       ...repairShowForLoad(migrated, personaIds),
       maxTrackSeconds: coerceMaxTrackSeconds(migrated.maxTrackSeconds, true),
+      minTrackLengthSeconds: coerceMinTrackLengthSeconds(migrated.minTrackLengthSeconds, true),
     });
     // What survives a drop: a nameless show, one whose host no longer exists.
     // Both are shows with no owner or no identity, which is what the

@@ -254,6 +254,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
       // config. It rides in the same PATCH because it is edited on this card.
       picker: {
         albumHours: Math.max(0, parseFloat(form.picker.albumHours) || 0),
+        minTrackLengthSeconds: Math.max(0, parseInt(form.picker.minTrackLengthSeconds, 10) || 0),
       },
     });
     // Save API keys if typed — these go to secrets.env, not settings.json
@@ -1154,6 +1155,32 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             that one it yields rather than starving the pool, and compilations and
             various-artists albums are exempt, since two tracks off one sampler is
             ordinary radio. {' '}<strong>0 = off</strong> (the default). 0&ndash;72.
+          </div>
+        </div>
+
+        <div className="field mt-4">
+          <Label>Minimum track length (seconds)</Label>
+          <Input
+            type="number"
+            min={0}
+            max={3600}
+            step={1}
+            value={form.picker.minTrackLengthSeconds}
+            onChange={(e: ChangeEvent<HTMLInputElement>) =>
+              setForm(f => ({ ...f, picker: { ...f.picker, minTrackLengthSeconds: e.target.value } }))
+            }
+            placeholder="0"
+            className="max-w-[200px]"
+          />
+          <div className="field-hint">
+            The shortest a track can be to get picked, on both pickers and the
+            offline fallback playlist &mdash; the way to keep 40-second skits,
+            interludes and album intros off air. The mirror of the max track
+            length in Broadcast, but a <em>selection</em> filter: a short track is
+            never chosen, where a long one is simply faded out at the cap. A show
+            can set its own; listener requests are always exempt.
+            {' '}<strong>0 = off</strong> (the default). A non-zero value has to
+            clear the same crossfade-derived minimum the track-length cap does.
           </div>
         </div>
       </Card>

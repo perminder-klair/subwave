@@ -1,9 +1,11 @@
 import * as library from './library.js';
+import * as settings from '../settings.js';
 import * as subsonic from './subsonic.js';
 import { applyStrictLocks, hasEraBound, type VocalMode } from './show-filter.js';
+import { applyTrackFloor } from './track-floor.js';
 import { resolveExcludedPlaylistIds, resolveShowPlaylistPool } from './show-playlist.js';
 
-export type Candidate = { id?: string; title?: string | null; artist?: string | null; year?: number | null; originalYear?: number | null; isCompilation?: boolean | null; yearUntrusted?: boolean | null; genres?: string[] | null; genre?: string | null; moods?: string[] | null; audioMoods?: string[] | null; energy?: string | null; vocalRanges?: unknown[] | null };
+export type Candidate = { id?: string; title?: string | null; artist?: string | null; year?: number | null; originalYear?: number | null; isCompilation?: boolean | null; yearUntrusted?: boolean | null; genres?: string[] | null; genre?: string | null; moods?: string[] | null; audioMoods?: string[] | null; energy?: string | null; vocalRanges?: unknown[] | null; duration?: number | null; durationSec?: number | null };
 type Locks = { genres: string[]; eras: Array<{ fromYear?: number | null; toYear?: number | null }>; moods: string[]; energies: string[]; vocals: VocalMode | null };
 export interface ShowCandidateDiagnostic { strict: boolean; library: { indexed: number; matchingFilters: number; afterExclusions: number; effective: number }; playlist: null | { total: number; matchingFilters: number; afterExclusions: number; effective: number }; warnings: string[] }
 export type CandidateCoverage = { mood: boolean; energy: boolean; vocal: boolean };
@@ -27,17 +29,25 @@ export function candidateCoverage(rows: Candidate[]): CandidateCoverage {
 
 // Pure count funnel. It deliberately excludes recency and journey state: those
 // are transient discovery constraints, not properties of a show configuration.
-export function buildShowCandidateDiagnostic({ show, libraryRows, playlistRows, excludedIds, locks, warnings = [] }: { show: any; libraryRows: Candidate[]; playlistRows: Candidate[] | null; excludedIds: Set<string> | null; locks: Locks; warnings?: string[] }): ShowCandidateDiagnostic {
+export function buildShowCandidateDiagnostic({ show, libraryRows, playlistRows, excludedIds, locks, minTrackSec = null, warnings = [] }: { show: any; libraryRows: Candidate[]; playlistRows: Candidate[] | null; excludedIds: Set<string> | null; locks: Locks; minTrackSec?: number | null; warnings?: string[] }): ShowCandidateDiagnostic {
   const strict = show?.filtersStrict === true && hasMusicFilter(show);
-  const libraryFiltered = filtered(libraryRows, locks);
-  const playlistFiltered = playlistRows ? filtered(playlistRows, locks) : null;
-  const libraryEffective = exclude(strict ? libraryFiltered : libraryRows, excludedIds);
-  const playlistEffective = playlistFiltered == null ? null : exclude(strict ? playlistFiltered : playlistRows!, excludedIds);
+  // Minimum track length (#1573) is applied FIRST and to both universes, before
+  // the strict split below, because unlike the music locks it is not gated on
+  // filtersStrict — a too-short track is never picked by any path, so a funnel
+  // that counted it would over-promise on exactly the shows this field exists
+  // for. starve:true: a diagnostic reports what the pickers will see, and the
+  // never-starve rescue those paths apply is a dead-air guard, not a candidate.
+  const libraryPool = applyTrackFloor(libraryRows, minTrackSec, { starve: true });
+  const playlistPool = playlistRows ? applyTrackFloor(playlistRows, minTrackSec, { starve: true }) : null;
+  const libraryFiltered = filtered(libraryPool, locks);
+  const playlistFiltered = playlistPool ? filtered(playlistPool, locks) : null;
+  const libraryEffective = exclude(strict ? libraryFiltered : libraryPool, excludedIds);
+  const playlistEffective = playlistFiltered == null ? null : exclude(strict ? playlistFiltered : playlistPool!, excludedIds);
   const playlistStrict = !!(show?.playlistStrict && playlistRows);
   return {
     strict,
-    library: { indexed: libraryRows.length, matchingFilters: libraryFiltered.length, afterExclusions: exclude(libraryFiltered, excludedIds).length, effective: playlistStrict ? (playlistEffective?.length ?? 0) : libraryEffective.length },
-    playlist: playlistRows == null ? null : { total: playlistRows.length, matchingFilters: playlistFiltered!.length, afterExclusions: exclude(playlistFiltered!, excludedIds).length, effective: playlistEffective!.length },
+    library: { indexed: libraryPool.length, matchingFilters: libraryFiltered.length, afterExclusions: exclude(libraryFiltered, excludedIds).length, effective: playlistStrict ? (playlistEffective?.length ?? 0) : libraryEffective.length },
+    playlist: playlistPool == null ? null : { total: playlistPool.length, matchingFilters: playlistFiltered!.length, afterExclusions: exclude(playlistFiltered!, excludedIds).length, effective: playlistEffective!.length },
     warnings,
   };
 }
@@ -62,5 +72,12 @@ export async function diagnoseShowCandidates(show: any): Promise<ShowCandidateDi
   const [playlistPool, excludedIds] = await Promise.all([resolveShowPlaylistPool(show), resolveExcludedPlaylistIds(show)]);
   if (show?.playlistIds?.length && !playlistPool) warnings.push('None of the pinned playlists could be resolved to tracks.');
   if (show?.filtersStrict !== true && hasMusicFilter(show)) warnings.push('Strict filter is off: matching filters is advisory; the show may draw from the wider library.');
-  return buildShowCandidateDiagnostic({ show, libraryRows, playlistRows: playlistPool?.tracks ?? null, excludedIds, locks, warnings });
+  // The floor the pick paths will actually run under: the show's own when the
+  // draft sets one, else the station default (#1573). Resolved through the same
+  // settings resolver both pickers use, so the count cannot promise tracks a
+  // pick would refuse. Named in a warning because a smaller "indexed" figure
+  // with no explanation reads as a broken library.
+  const minTrackSec = settings.effectiveMinTrackSec(show);
+  if (minTrackSec) warnings.push(`Tracks shorter than ${minTrackSec}s are never picked, so they are excluded from every count below.`);
+  return buildShowCandidateDiagnostic({ show, libraryRows, playlistRows: playlistPool?.tracks ?? null, excludedIds, locks, minTrackSec, warnings });
 }

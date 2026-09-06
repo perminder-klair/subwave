@@ -414,6 +414,20 @@ export const STREAM_MAX_LISTENERS_BOUNDS: SettingsNumericBound = { min: 1, max: 
 // starvation cascade every pick.
 export const PICKER_ALBUM_HOURS_BOUNDS: SettingsNumericBound = { min: 0, max: 72 };
 
+// Station-wide minimum track length, in SECONDS: a track shorter than this is
+// never PICKED (#1573). 0 = off, and off is the shipped default so an upgrade
+// picks byte-identically.
+//
+// This is NOT settings.minTrackSeconds(), which is the crossfade-derived floor
+// on the max-track-length CAP. That figure is this key's own lower bound (a
+// positive value below it is refused in update(), where the crossfade is
+// known), which is why the two must not share a name.
+//
+// The ceiling twins schemas/show.ts's SHOW_MIN_TRACK_LENGTH_MAX, which bounds
+// the per-show override — a mirrored module may import only zod, so the two are
+// separate declarations of one number and must move together.
+export const PICKER_MIN_TRACK_LENGTH_BOUNDS: SettingsNumericBound = { min: 0, max: 3600 };
+
 export const SETTINGS_STATION_DEFAULT_NAME = 'SUB/WAVE';
 export const SETTINGS_STATION_NAME_MAX = 80;
 export const SETTINGS_STATION_DESCRIPTION_MAX = 200;
@@ -687,6 +701,13 @@ export const pickerPatchSchema = settingsBlockOf({
   albumHours: settingsNumberLike(
     PICKER_ALBUM_HOURS_BOUNDS,
     `picker.albumHours must be between ${PICKER_ALBUM_HOURS_BOUNDS.min} and ${PICKER_ALBUM_HOURS_BOUNDS.max} (0 = off)`,
+  ),
+  // Bounds only. The crossfade-derived lower bound on a POSITIVE value is a
+  // function of settings.crossfadeDuration, which a stateless schema does not
+  // have — update() enforces it, exactly as it does for maxTrackSeconds.
+  minTrackLengthSeconds: settingsNumberLike(
+    PICKER_MIN_TRACK_LENGTH_BOUNDS,
+    `picker.minTrackLengthSeconds must be between ${PICKER_MIN_TRACK_LENGTH_BOUNDS.min} and ${PICKER_MIN_TRACK_LENGTH_BOUNDS.max} (0 = off)`,
   ),
 });
 

@@ -99,8 +99,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
         crossfadeDuration: s.crossfadeDuration,
         ducking: s.ducking,
         maxTrackSeconds: s.maxTrackSeconds,
-        // Crossfade-relative floor for a non-zero cap — one rule, shared with the
-        // admin/show UI so client hints match server validation.
+        // Crossfade-relative floor for a non-zero cap OR a non-zero
+        // minimum-track-length floor — one rule, shared with the admin/show UI
+        // so client hints match server validation.
         minTrackSeconds: settings.minTrackSeconds(s),
         archive: s.archive,
         stream: s.stream,
@@ -131,6 +132,11 @@ router.get('/settings', requireAdmin, async (req, res) => {
         search: s.search,
         embedding: s.embedding,
         likes: s.likes,
+        // Track-selection windows (album cooldown, minimum track length). The
+        // admin form reads `values.picker` to populate those inputs, so without
+        // this line every load shows them at 0 and the next save on that card
+        // silently writes the operator's own setting away.
+        picker: s.picker,
         audio: s.audio,
         transitions: s.transitions,
         sfx: s.sfx,

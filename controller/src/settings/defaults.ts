@@ -16,7 +16,7 @@ import {
   LOUDNESS_MAX_BOOST_DB_BOUNDS,
   LOUDNESS_TARGET_LUFS_BOUNDS,
 } from '../schemas/settings.js';
-import { SHOW_MAX_TRACK_SECONDS } from '../schemas/show.js';
+import { SHOW_MAX_TRACK_SECONDS, SHOW_MIN_TRACK_LENGTH_MAX } from '../schemas/show.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
 import {
   AAC_BITRATES,
@@ -635,6 +635,16 @@ export const DEFAULTS = {
   // byte-identical. See music/recency.ts albumKey.
   picker: {
     albumHours: 0,
+    // Minimum track length in SECONDS below which a track is never PICKED
+    // (#1573) — the floor operators with libraries full of 40-second skits,
+    // interludes and album intros want. 0 = OFF, and off is the shipped
+    // default so an upgrade picks byte-identically; a show's own
+    // `minTrackLengthSeconds` (when set) overrides it. Named apart from
+    // settings.minTrackSeconds(), which is the crossfade-derived floor and a
+    // different number entirely — that one is this key's LOWER BOUND.
+    //
+    // Listener requests are exempt: an explicit ask is not a pick.
+    minTrackLengthSeconds: 0,
   },
 
   // The player heart button (#991). `starInNavidrome` mirrors each first like
@@ -663,6 +673,9 @@ export const BOUNDS = {
   // Ceiling from the shared show schema: the strict show validator bounds-checks
   // a show's override against this station figure, so two copies would drift.
   maxTrackSeconds: { min: 0, max: SHOW_MAX_TRACK_SECONDS, type: 'int' },
+  // The FLOOR's ceiling (#1573), from the same schema module for the same
+  // reason. Far lower than the cap's — see SHOW_MIN_TRACK_LENGTH_MAX.
+  minTrackLengthSeconds: { min: 0, max: SHOW_MIN_TRACK_LENGTH_MAX, type: 'int' },
   silenceTrimMinGapMs: { ...SILENCE_TRIM_MIN_GAP_MS_BOUNDS, type: 'int' },
   loudnessTargetLufs: { ...LOUDNESS_TARGET_LUFS_BOUNDS, type: 'float' },
   loudnessMaxBoostDb: { ...LOUDNESS_MAX_BOOST_DB_BOUNDS, type: 'float' },
@@ -700,6 +713,18 @@ export function coerceMaxTrackSeconds(raw: unknown, allowNull: boolean): number 
   const n = Math.round(Number(raw));
   if (!Number.isFinite(n)) return allowNull ? null : 0;
   return Math.min(BOUNDS.maxTrackSeconds.max, Math.max(0, n));
+}
+
+// Coerce a stored/per-show minimum-track-length FLOOR to a clean integer SECOND
+// count (#1573). Same two callers and the same allowNull split as
+// coerceMaxTrackSeconds above — station default has no "unset" state (missing →
+// 0 = no floor), a per-show value uses null for "inherit". Clamps rather than
+// throws, so a hand-edited file bounds the show instead of deleting it.
+export function coerceMinTrackLengthSeconds(raw: unknown, allowNull: boolean): number | null {
+  if (raw == null || raw === '') return allowNull ? null : 0;
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n)) return allowNull ? null : 0;
+  return Math.min(BOUNDS.minTrackLengthSeconds.max, Math.max(0, n));
 }
 
 // Back-compat: this cap was stored in MINUTES (`maxTrackMinutes`) before it moved

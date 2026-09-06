@@ -63,6 +63,7 @@ const FAULTLINE = {
   playlistStrict: true,
   excludedPlaylistIds: [],
   maxTrackSeconds: null,
+  minTrackLengthSeconds: null,
 };
 
 const withField = (patch: Record<string, unknown>) => ({ ...FAULTLINE, ...patch });
@@ -102,6 +103,9 @@ test('every field the pool is steered by moves the key', () => {
     playlistStrict: false,
     excludedPlaylistIds: ['blocked-playlist'],
     maxTrackSeconds: 420,
+    // The minimum-track-length floor (#1573) changes WHICH tracks the coast may
+    // contain, not just how they are stamped — so it has to rebuild too.
+    minTrackLengthSeconds: 120,
   };
   for (const [field, value] of Object.entries(steering)) {
     assert.notEqual(

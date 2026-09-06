@@ -100,6 +100,7 @@ router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => 
     vocals: cs.vocals,
     filtersStrict: cs.filtersStrict,
     maxTrackSeconds: cs.maxTrackSeconds,
+    minTrackLengthSeconds: cs.minTrackLengthSeconds,
     playlistIds: [],
     playlistStrict: false,
     excludedPlaylistIds: [],

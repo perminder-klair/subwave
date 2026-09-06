@@ -208,6 +208,9 @@ export interface ScrobbleForm {
 export interface PickerForm {
   // Hours, as typed. 0/'' = off.
   albumHours: string;
+  // Seconds, as typed. 0/'' = off (the shipped default). A show's own
+  // minTrackLengthSeconds overrides this; listener requests are exempt.
+  minTrackLengthSeconds: string;
 }
 
 export interface LikesForm {
@@ -429,6 +432,7 @@ export interface SettingsData {
     };
     picker?: {
       albumHours?: number;
+      minTrackLengthSeconds?: number;
     };
     likes?: {
       enabled?: boolean;
