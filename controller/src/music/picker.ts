@@ -17,6 +17,7 @@ import { shuffle } from '../util/shuffle.js';
 import { mapPool } from '../util/async-pool.js';
 import { artistRootKey, filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
 import { albumKeyFor } from './album-facts.js';
+import { applyTrackFloor } from './track-floor.js';
 import { AIRING_RANK_WEIGHT, freshness, freshnessBiasedOrder, lastAiredMsOf, unairedFlag, type AiredIndex } from './airing.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, preferVocals, applyStrictLocks, hasEraBound, eraSpan, type YearRange, type VocalMode } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
@@ -43,6 +44,11 @@ interface Candidate {
   year?: number | string | null;
   genre?: string | null;
   duration?: number | null;
+  // Track length as the LIBRARY sources spell it (slimTrack / songsByMood).
+  // A Subsonic child carries `duration` instead; music/track-floor.ts reads
+  // whichever is present, so the minimum-track-length floor (#1573) has to see
+  // both names or it would read every library row as unknown length.
+  durationSec?: number | null;
   moods?: string[] | null;
   energy?: string | null;
   paceMean?: number | null;
@@ -305,7 +311,7 @@ async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max:
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, recentAlbums: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, recentAlbums: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }, minTrackSec: number | null = null) {
   await library.load();
   // Airing memory (music/airing.ts) — orders the similarity sources so the
   // unexplored shelf survives their small caps; and the id-level recency union
@@ -729,7 +735,15 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // current track's own analysis when no run is active.
   const curAnalysis = rankTarget
     || (currentTrack?.id ? analysisFor(currentTrack) : { bpm: null, key: null });
-  const final = filterPickerCandidates(softRankByCompat(selectionPool, curAnalysis, library.lastAiredInfo()), {
+  // Minimum track length (#1573) — a SELECTION filter, unlike the max cap,
+  // which is a cue_out cut and deliberately leaves over-long tracks eligible
+  // (see filterPickerCandidates' note). Applied here, at the point of choice,
+  // rather than inside the discovery sources: same rule as the album cooldown
+  // and #618's artist strip — filtering inside the tools guts thin similarity
+  // pools. never-starve, because this IS the wider scope the agent path's hard
+  // floor falls back into. null (the default) is a no-op.
+  const longEnough = applyTrackFloor(selectionPool, minTrackSec, { starve: false });
+  const final = filterPickerCandidates(softRankByCompat(longEnough, curAnalysis, library.lastAiredInfo()), {
     recentIds,
     recentKeys,
     recentArtists,
@@ -894,7 +908,12 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     const key = artistRootKey({ artist: opts.avoidArtist });
     if (key) blockedArtists.add(key);
   }
-  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution);
+  // Minimum track length (#1573): the show's own floor when it sets one, else
+  // the station default. Resolved from the SAME show object the rest of the
+  // pool build steers by, so a look-ahead pick across a show boundary uses the
+  // floor that will be in force when it airs.
+  const minTrackSec = settings.effectiveMinTrackSec(activeShow);
+  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, minTrackSec);
 
   // Excluded playlists (blocklist): drop any track whose id appears in the
   // show's excluded playlist union. Applied after buildCandidates so the full
@@ -1009,8 +1028,10 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           moods: moods.length ? moods : undefined,
           energy: c.energy || rec?.energy || undefined,
           // Track length in seconds — lets the pick weigh a 9-minute epic
-          // against the daypart (length is an on-air cut, never a pool filter
-          // — #447 — so the model is the only place it can be weighed).
+          // against the daypart. The CAP is an on-air cue_out cut and never a
+          // pool filter (#447), so the model is the only place the upper end
+          // can be weighed; the FLOOR (#1573) is a selection filter and has
+          // already run in buildCandidates, so nothing under it reaches here.
           secs: c.duration ?? rec?.duration_sec ?? undefined,
           // Measured acoustic facts — omitted (undefined) when un-analysed so
           // the LLM only sees them when they're real.

@@ -291,8 +291,13 @@ async function detectOllamaUrl(): Promise<string | null> {
   return null;
 }
 
-const LLM_PROVIDER_OPTIONS: Array<{ value: LlmProvider | 'later'; label: string; hint: string }> = [
+// 'dj-brain' is a preset, not a provider: it resolves to openai-compatible
+// pointed at the hosted SUB/WAVE DJ Brain (my.getsubwave.com/brain), so the
+// controller never learns a new provider id.
+const DJ_BRAIN_BASE_URL = 'https://my.getsubwave.com/v1';
+const LLM_PROVIDER_OPTIONS: Array<{ value: LlmProvider | 'later' | 'dj-brain'; label: string; hint: string }> = [
   { value: 'ollama',            label: 'Ollama — local homelab',          hint: 'no API key — point at your homelab box' },
+  { value: 'dj-brain',          label: 'SUB/WAVE DJ Brain — hosted',       hint: 'no model to run — one key from my.getsubwave.com/brain, from £5/mo' },
   { value: 'openai-compatible', label: 'OpenAI-compatible — self-hosted',  hint: 'llama.cpp, vLLM, LM Studio — your own server URL' },
   { value: 'locca',             label: 'locca — local llama.cpp',          hint: 'no API key — defaults to the host locca server' },
   { value: 'anthropic',         label: 'Anthropic — Claude',               hint: 'needs ANTHROPIC_API_KEY' },
@@ -320,13 +325,23 @@ const EXAMPLE_MODEL: Record<Exclude<LlmProvider, 'ollama'>, string> = {
 
 async function collectLlm(): Promise<LlmChoice> {
   header('LLM provider');
-  const choice = exitIfCancelled(await p.select<LlmProvider | 'later'>({
+  const choice = exitIfCancelled(await p.select<LlmProvider | 'later' | 'dj-brain'>({
     message: 'Which LLM should the AI DJ talk to?',
     initialValue: 'ollama',
     options: LLM_PROVIDER_OPTIONS,
   }), { backOnCancel: false });
 
   if (choice === 'later') return { provider: null };
+
+  if (choice === 'dj-brain') {
+    info(`Get a key at ${accent('https://my.getsubwave.com/brain')} — the same key also unlocks the cloud voice tier in admin → Settings → DJ Brain.`);
+    const apiKey = exitIfCancelled(await p.password({
+      message: 'DJ Brain access token',
+      mask: '*',
+      validate: (v: string) => (!v ? 'required' : undefined),
+    }), { backOnCancel: false });
+    return { provider: 'openai-compatible', baseUrl: DJ_BRAIN_BASE_URL, model: 'dj-brain', apiKey };
+  }
 
   if (choice === 'ollama') {
     const detected = await detectOllamaUrl();

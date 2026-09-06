@@ -31,6 +31,7 @@ import { fieldAria } from '@/lib/form';
 import { SwitchField, TextField, TextareaField, ToggleGroupField } from '@/lib/form-fields';
 import {
   ANY_SENTINEL,
+  INHERIT_SENTINEL,
   DECADES,
   ENERGY_OPTIONS,
   FILTER_VALUES_MAX,
@@ -59,6 +60,8 @@ const FIELD_LABELS: Record<string, string> = {
   personaId: 'host',
   guestPersonaIds: 'guests',
   maxTrackSeconds: 'track length cap',
+  minTrackLengthSeconds: 'minimum track length',
+  fadeAtShowEnd: 'fade at show end',
   segmentSkill: 'feature skill',
   playlistIds: 'playlists',
   excludedPlaylistIds: 'excluded playlists',
@@ -109,6 +112,10 @@ interface ShowEditorProps {
   apiBase: string;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   minTrackSeconds?: number;
+  // The station-wide minimum track length a blank field inherits, so the hint
+  // can say what "inherit" actually means today instead of leaving the operator
+  // to open the Settings page to find out.
+  stationMinTrackLengthSeconds?: number;
   busy: boolean;
   isNew: boolean;       // show the AI-draft field only while creating
   valid: boolean;
@@ -123,7 +130,7 @@ interface ShowEditorProps {
 export function ShowEditor({
   show, index, control, trigger, errors, editorRef, personas, moods, themes, skills, activeThemeId, genres, tagSuggestions, playlists,
   playlistsStatus, apiBase,
-  adminFetch, minTrackSeconds, busy, isNew, valid, onApplyDraft,
+  adminFetch, minTrackSeconds, stationMinTrackLengthSeconds, busy, isNew, valid, onApplyDraft,
   onSave, onClose, onRemove,
 }: ShowEditorProps) {
   const uid = useId();
@@ -169,6 +176,8 @@ export function ShowEditor({
   const vocalsCtl = useController({ control, name: path('vocals') });
   const genresCtl = useController({ control, name: path('genres') });
   const maxTrackSecondsCtl = useController({ control, name: path('maxTrackSeconds') });
+  const minTrackLengthSecondsCtl = useController({ control, name: path('minTrackLengthSeconds') });
+  const fadeAtShowEndCtl = useController({ control, name: path('fadeAtShowEnd') });
   const tagsCtl = useController({ control, name: path('tags') });
 
   const candidateKey = JSON.stringify(showPayload(show));
@@ -236,6 +245,8 @@ export function ShowEditor({
   const vocalsAria = fieldAria(`${uid}-${path('vocals')}`, vocalsCtl.fieldState.error, { hasDescription: true });
   const genresAria = fieldAria(`${uid}-${path('genres')}`, genresCtl.fieldState.error, { hasDescription: true });
   const maxTrackSecondsAria = fieldAria(`${uid}-${path('maxTrackSeconds')}`, maxTrackSecondsCtl.fieldState.error, { hasDescription: true });
+  const minTrackLengthSecondsAria = fieldAria(`${uid}-${path('minTrackLengthSeconds')}`, minTrackLengthSecondsCtl.fieldState.error, { hasDescription: true });
+  const fadeAtShowEndAria = fieldAria(`${uid}-${path('fadeAtShowEnd')}`, fadeAtShowEndCtl.fieldState.error, { hasDescription: true });
   const tagsAria = fieldAria(`${uid}-${path('tags')}`, tagsCtl.fieldState.error, { hasDescription: true });
 
   return (
@@ -750,6 +761,68 @@ export function ShowEditor({
               least {minTrackSeconds ?? 30}s to cap it here.
             </FieldDescription>
             <FieldError {...maxTrackSecondsAria.errorProps} errors={maxTrackSecondsCtl.fieldState.error ? [maxTrackSecondsCtl.fieldState.error] : undefined} />
+          </div>
+
+          {/* The cap's twin, and the same Raw Controller reason. Separate field
+              rather than a range input: each side is independently inheritable
+              (blank), and a range control cannot express "floor set, cap
+              inherited". */}
+          <div className="field">
+            <Label {...minTrackLengthSecondsAria.labelProps}>minimum track length (seconds)</Label>
+            <Input
+              {...minTrackLengthSecondsAria.controlProps}
+              type="number"
+              min={0}
+              max={3600}
+              placeholder="inherit"
+              value={minTrackLengthSecondsCtl.field.value ?? ''}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => {
+                const raw = e.target.value.trim();
+                minTrackLengthSecondsCtl.field.onChange(raw === '' ? null : Math.max(0, parseInt(raw, 10) || 0));
+              }}
+              onBlur={minTrackLengthSecondsCtl.field.onBlur}
+              ref={minTrackLengthSecondsCtl.field.ref}
+            />
+            <FieldDescription {...minTrackLengthSecondsAria.descriptionProps}>
+              The shortest a track can be to get picked for this show &mdash; the
+              way to keep 40-second skits, interludes and album intros off air.
+              Unlike the cap above this drops the track from the pool rather than
+              trimming it, so nothing short is ever chosen. Blank uses the
+              station setting{stationMinTrackLengthSeconds
+                ? ` (${stationMinTrackLengthSeconds}s)`
+                : ' (currently off)'}, 0 means no floor, or set at
+              least {minTrackSeconds ?? 30}s to set one here. Listener requests
+              are always exempt.
+            </FieldDescription>
+            <FieldError {...minTrackLengthSecondsAria.errorProps} errors={minTrackLengthSecondsCtl.fieldState.error ? [minTrackLengthSecondsCtl.fieldState.error] : undefined} />
+          </div>
+          {/* Tri-state, so a Switch would be wrong: "inherit" is a real answer
+              and the commonest one, and a two-state control would turn every
+              untouched show into an explicit no. */}
+          <div className="field">
+            <Label {...fadeAtShowEndAria.labelProps}>fade out at the show change</Label>
+            <Select
+              value={fadeAtShowEndCtl.field.value == null ? INHERIT_SENTINEL : String(fadeAtShowEndCtl.field.value)}
+              onValueChange={val => fadeAtShowEndCtl.field.onChange(val === INHERIT_SENTINEL ? null : val === 'true')}
+            >
+              <SelectTrigger {...fadeAtShowEndAria.controlProps} onBlur={fadeAtShowEndCtl.field.onBlur} ref={fadeAtShowEndCtl.field.ref} aria-label="Fade out at the show change">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectGroup>
+                  <SelectItem value={INHERIT_SENTINEL}>Station default</SelectItem>
+                  <SelectItem value="true">Fade at the boundary</SelectItem>
+                  <SelectItem value="false">Let it run over</SelectItem>
+                </SelectGroup>
+              </SelectContent>
+            </Select>
+            <FieldDescription {...fadeAtShowEndAria.descriptionProps}>
+              When this show ends, a track still playing is faded out at the
+              boundary instead of running into the next show. Worth turning on
+              for long-form music (ambient, classical, prog) where one record
+              can outlast the slot; a short overrun is left alone either way.
+            </FieldDescription>
+            <FieldError {...fadeAtShowEndAria.errorProps} errors={fadeAtShowEndCtl.fieldState.error ? [fadeAtShowEndCtl.fieldState.error] : undefined} />
           </div>
         </Card>
       </div>

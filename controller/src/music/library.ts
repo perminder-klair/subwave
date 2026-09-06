@@ -11,6 +11,7 @@
 
 import * as db from './library-db.js';
 import * as blocklist from './blocklist.js';
+import * as sceneVocab from './scene-vocab.js';
 import { resolveEmbeddingDim } from './embeddings.js';
 import { openingKeyFrom, endingKeyFrom } from './mix.js';
 import { DEEP_CUT_DAYS, EMPTY_AIRED_INDEX, type AiredIndex } from './airing.js';
@@ -652,6 +653,43 @@ export function stats() {
     // model out from under an existing index.
     embeddingMeta: db.getEmbeddingMeta(),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Scene vocabulary (#1577)
+// ---------------------------------------------------------------------------
+// The genre tag set as the operator sees it, and the consolidation that merges
+// near-duplicates. Two halves that must happen together and are owned by two
+// modules: the durable RULE (scene-vocab.ts, so the next Navidrome walk lands
+// on the same name) and the in-place REWRITE of the rows already stored
+// (library-db, one transaction). This is where they are paired, so a route
+// cannot do one and forget the other.
+
+// Not a bare re-export: routes reach the library through this module, and the
+// `loaded` guard is the same one every other read here carries — an unopened
+// DB answers "no vocabulary yet", never throws at the route boundary.
+export function scenes(): db.SceneCount[] {
+  if (!loaded) return [];
+  return db.sceneVocabulary();
+}
+
+export interface SceneConsolidation extends db.SceneMergeResult {
+  target: string;
+  /** Alias keys now recorded — what a later walk will rewrite. */
+  recorded: string[];
+}
+
+export async function consolidateScenes(
+  sources: readonly string[],
+  target: string,
+): Promise<SceneConsolidation> {
+  // The rule is recorded FIRST. If the rewrite then fails half way, the
+  // transaction rolls the rows back and the next walk still consolidates them
+  // — the reverse order can leave rewritten rows with no rule, which the next
+  // walk silently undoes.
+  const { target: resolved, recorded } = await sceneVocab.recordMerge(sources, target);
+  const merged = db.mergeScenes(sources, resolved);
+  return { ...merged, target: resolved, recorded };
 }
 
 // Share of text vectors that embed nothing but the artist/title/album label —

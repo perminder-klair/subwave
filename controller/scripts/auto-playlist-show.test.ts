@@ -63,6 +63,7 @@ const FAULTLINE = {
   playlistStrict: true,
   excludedPlaylistIds: [],
   maxTrackSeconds: null,
+  minTrackLengthSeconds: null,
 };
 
 const withField = (patch: Record<string, unknown>) => ({ ...FAULTLINE, ...patch });
@@ -102,6 +103,9 @@ test('every field the pool is steered by moves the key', () => {
     playlistStrict: false,
     excludedPlaylistIds: ['blocked-playlist'],
     maxTrackSeconds: 420,
+    // The minimum-track-length floor (#1573) changes WHICH tracks the coast may
+    // contain, not just how they are stamped — so it has to rebuild too.
+    minTrackLengthSeconds: 120,
   };
   for (const [field, value] of Object.entries(steering)) {
     assert.notEqual(
@@ -214,8 +218,20 @@ test('every refresh stamps what the file now holds', () => {
 // The four paths the report names. Each hands rollSessionNow its own reason, so
 // the booth log distinguishes them — the reporter diagnosed this from the log.
 test('all four show transitions run the boundary sequence', () => {
-  assert.match(scheduler, /rollSessionNow\(\{ airHandoff: false, reason: 'scheduled boundary' \}\)/);
-  assert.match(scheduler, /rollSessionNow\(\{ reason: 'takeover expired' \}\)/);
-  assert.match(shows, /rollSessionNow\(\{ reason: 'takeover started' \}\)/);
-  assert.match(shows, /rollSessionNow\(\{ reason: 'takeover cancelled' \}\)/);
+  assert.match(scheduler, /rollSessionNow\(\{[^}]*reason: 'scheduled boundary'[^}]*\}\)/);
+  assert.match(scheduler, /rollSessionNow\(\{[^}]*reason: 'takeover expired'[^}]*\}\)/);
+  assert.match(shows, /rollSessionNow\(\{[^}]*reason: 'takeover started'[^}]*\}\)/);
+  assert.match(shows, /rollSessionNow\(\{[^}]*reason: 'takeover cancelled'[^}]*\}\)/);
+});
+
+// Which of those four an OPERATOR drove, since #1576 gates the automatic ones
+// on the show-handover ordering rule. The two takeover routes are explicit
+// actions and stay exempt (manual triggers are exempt from every automatic
+// gate); the expiry is a timer nobody pressed and must wait for its closing
+// track like any other changeover.
+test('only the operator-driven takeovers are exempt from the handover rule', () => {
+  assert.match(shows, /rollSessionNow\(\{ manual: true, reason: 'takeover started' \}\)/);
+  assert.match(shows, /rollSessionNow\(\{ manual: true, reason: 'takeover cancelled' \}\)/);
+  assert.doesNotMatch(scheduler, /rollSessionNow\(\{[^}]*manual: true[^}]*reason: 'takeover expired'[^}]*\}\)/,
+    'the expiry is automatic — it must not claim the operator exemption');
 });

@@ -14,8 +14,19 @@
 // same path can't rename each other's half-written temp into place. The temp
 // lives next to the target, so the rename never crosses a filesystem boundary.
 
+// A FAILED write must not leave its temp behind. The random suffix that makes
+// concurrent writers safe also means nothing can ever find the file again: no
+// later call reuses the name, and a `.tmp` is invisible to every consumer that
+// scans the state dir by extension. For the small JSON writers that is a stray
+// few hundred bytes; for the scheduled backup (backup/scheduled.ts) it is a
+// partial multi-hundred-MB zip, dropped by exactly the failures that leave the
+// disk least able to afford it — ENOSPC, or the controller being restarted
+// mid-write. So the temp is removed on the way out of both failing steps, and
+// the ORIGINAL error is what propagates: the cleanup is bookkeeping, and a
+// failure to unlink must not mask why the write failed.
+
 import { randomBytes } from 'node:crypto';
-import { rename, writeFile } from 'node:fs/promises';
+import { rename, unlink, writeFile } from 'node:fs/promises';
 
 export async function writeFileAtomic(
   path: string,
@@ -23,6 +34,13 @@ export async function writeFileAtomic(
   { mode }: { mode?: number } = {},
 ): Promise<void> {
   const tmp = `${path}.${randomBytes(4).toString('hex')}.tmp`;
-  await writeFile(tmp, contents, mode != null ? { mode } : {});
-  await rename(tmp, path);
+  try {
+    await writeFile(tmp, contents, mode != null ? { mode } : {});
+    await rename(tmp, path);
+  } catch (err) {
+    // Swallowed: a writeFile that failed before creating the file leaves
+    // nothing to remove, and that is not a second failure worth reporting.
+    await unlink(tmp).catch(() => {});
+    throw err;
+  }
 }

@@ -8,6 +8,9 @@
 
 import assert from 'node:assert/strict';
 import { showSpan, overrideSpan, planFeature, beatWindow } from '../src/broadcast/programme-pure.js';
+// The stride is REQUIRED by beatWindow — a default there would be a second copy
+// of the constant talk-scheduler.ts imports (#1576).
+import { HANDOVER_OFFSET_STEP_MINUTES as STRIDE } from '../src/schemas/settings.js';
 
 // A 7×24 grid with every slot null.
 function emptyWeek(): Record<number, (string | null)[]> {
@@ -105,30 +108,48 @@ function emptyWeek(): Record<number, (string | null)[]> {
 
 // ── beatWindow ───────────────────────────────────────────────────────────────
 
-// Station-minute windows: feature :35–:39, outro :55–:59, silence elsewhere.
+// Station-minute windows at the DEFAULT handover offset: feature :35–:39,
+// outro :55–:59, silence elsewhere — byte-identical to the hardcoded :55 the
+// beat fired at before the offset existed (#1576).
 {
-  assert.equal(beatWindow(34), null, ':34 is quiet');
-  assert.equal(beatWindow(35), 'feature', ':35 opens the feature window');
-  assert.equal(beatWindow(39), 'feature', ':39 still feature');
-  assert.equal(beatWindow(40), null, ':40 is quiet again');
-  assert.equal(beatWindow(54), null, ':54 is quiet');
-  assert.equal(beatWindow(55), 'outro', ':55 opens the outro window');
-  assert.equal(beatWindow(59), 'outro', ':59 still outro');
-  assert.equal(beatWindow(0), null, 'top of the hour belongs to the hourly/intro');
+  assert.equal(beatWindow(34, 5, STRIDE), null, ':34 is quiet');
+  assert.equal(beatWindow(35, 5, STRIDE), 'feature', ':35 opens the feature window');
+  assert.equal(beatWindow(39, 5, STRIDE), 'feature', ':39 still feature');
+  assert.equal(beatWindow(40, 5, STRIDE), null, ':40 is quiet again');
+  assert.equal(beatWindow(54, 5, STRIDE), null, ':54 is quiet');
+  assert.equal(beatWindow(55, 5, STRIDE), 'outro', ':55 opens the outro window');
+  assert.equal(beatWindow(59, 5, STRIDE), 'outro', ':59 still outro');
+  assert.equal(beatWindow(0, 5, STRIDE), null, 'top of the hour belongs to the hourly/intro');
+}
+
+// A raised offset MOVES the outro window earlier; it never widens it, and it
+// never touches the feature beat.
+{
+  assert.equal(beatWindow(55, 10, STRIDE), null, ':55 is quiet once the sign-off moved to :50');
+  assert.equal(beatWindow(50, 10, STRIDE), 'outro', ':50 opens the outro window at offset 10');
+  assert.equal(beatWindow(54, 10, STRIDE), 'outro', ':54 still outro at offset 10');
+  assert.equal(beatWindow(40, 20, STRIDE), 'outro', 'the largest offset opens the outro at :40');
+  assert.equal(beatWindow(39, 20, STRIDE), 'feature', 'and stops one minute short of the feature window');
+  assert.equal(beatWindow(45, 20, STRIDE), null, ':45 is quiet at offset 20 — the window moved, it did not stretch');
 }
 
 // Every 15-minute zone offset lands a */5 process cron inside each window
 // exactly once — the invariant that lets one 5-min tick serve IST/Nepal/etc.
+// Now checked at EVERY permitted handover offset, because the operator can move
+// the outro window and a window the row never samples is a silent failure.
 {
-  for (let offset = 0; offset < 60; offset += 15) {
-    for (const [start, kind] of [[35, 'feature'], [55, 'outro']] as const) {
-      const hits = [];
-      for (let p = 0; p < 60; p += 5) {
-        const stationMin = (p + offset) % 60;
-        const w = beatWindow(stationMin);
-        if (w === kind && stationMin >= start && stationMin < start + 5) hits.push(p);
+  for (const handover of [5, 10, 15, 20]) {
+    for (let offset = 0; offset < 60; offset += 15) {
+      for (const [start, kind] of [[35, 'feature'], [60 - handover, 'outro']] as const) {
+        const hits = [];
+        for (let p = 0; p < 60; p += 5) {
+          const stationMin = (p + offset) % 60;
+          const w = beatWindow(stationMin, handover, STRIDE);
+          if (w === kind && stationMin >= start && stationMin < start + 5) hits.push(p);
+        }
+        assert.equal(hits.length, 1,
+          `handover ${handover}, offset ${offset}: exactly one */5 tick lands in the ${kind} window`);
       }
-      assert.equal(hits.length, 1, `offset ${offset}: exactly one */5 tick lands in the ${kind} window`);
     }
   }
 }

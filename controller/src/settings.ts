@@ -85,6 +85,7 @@ import {
   MP3_BITRATE_SET,
   OPUS_BITRATE_SET,
   coerceMaxTrackSeconds,
+  coerceMinTrackLengthSeconds,
   rawMaxTrackSec,
 } from './settings/defaults.js';
 import { validateCompatParams } from './settings/compat-params.js';
@@ -96,13 +97,16 @@ import {
   STREAM_GEOIP_DB_PATH_MAX,
   STREAM_MAX_LISTENERS_BOUNDS,
   maxTrackSecondsValueSchema,
+  type ScheduledBackupSettings,
 } from './schemas/settings.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
   normalizeArchiveRetentionDays,
+  normalizeBackups,
   normalizeDjPrompts,
   normalizeDuckDepth,
+  normalizeHandoverOffsetMinutes,
   normalizePersonaArray,
   normalizeTtsFallback,
   normalizeSchedule,
@@ -223,8 +227,10 @@ export {
   announceLinks,
   castHouseRulesBlock,
   castSpeakerIdRule,
+  effectiveFadeAtShowEnd,
   effectiveFrequency,
   effectiveMaxTrackSec,
+  effectiveMinTrackSec,
   effectsActive,
   getActivePersona,
   getEffectivePersona,
@@ -403,6 +409,13 @@ export async function load() {
       intro: normalizeDuckDepth(stored.ducking?.intro, DEFAULTS.ducking.intro),
     },
     maxTrackSeconds: coerceMaxTrackSeconds(rawMaxTrackSec(stored), false) ?? DEFAULTS.maxTrackSeconds,
+    // Station default for the show-boundary fade (#1574). Anything but an
+    // explicit boolean reads as the shipped default (off), which is what makes
+    // an install that predates the key sound byte-identical.
+    fadeAtShowEnd:
+      typeof stored.fadeAtShowEnd === 'boolean'
+        ? stored.fadeAtShowEnd
+        : DEFAULTS.fadeAtShowEnd,
     archive: {
       enabled:
         typeof stored.archive?.enabled === 'boolean'
@@ -413,6 +426,13 @@ export async function load() {
       // enabled archive without a stored value stays at 0, never pruned.
       retentionDays: normalizeArchiveRetentionDays(stored.archive),
     },
+    // Scheduled backups (#1570). An absent block reads as `{ cadence: 'off' }`,
+    // which is the pre-existing station exactly. This block does NOT spread
+    // DEFAULTS — a field missing from here saves, works for the rest of the
+    // process and then vanishes on the next cold load (controller/CLAUDE.md's
+    // THREE edits), which for a cadence means backups silently stopping.
+    // Pinned by a cold-load round trip in scripts/backup-schedule.test.ts.
+    backups: normalizeBackups(stored.backups),
     stream: {
       opusEnabled:
         typeof stored.stream?.opusEnabled === 'boolean'
@@ -548,6 +568,14 @@ export async function load() {
       typeof stored.djTalkOnlyBetweenTracks === 'boolean'
         ? stored.djTalkOnlyBetweenTracks
         : DEFAULTS.djTalkOnlyBetweenTracks,
+    // Repaired rather than refused, like ducking above: an offset the talk
+    // table's programme row cannot sample is a sign-off that never airs, and a
+    // hand-edited settings.json is this path's input.
+    handover: {
+      offsetMinutes: normalizeHandoverOffsetMinutes(
+        stored.handover?.offsetMinutes, DEFAULTS.handover.offsetMinutes,
+      ),
+    },
     station:
       typeof stored.station === 'string' && stored.station.trim()
         ? stored.station.trim().slice(0, 80)
@@ -768,6 +796,10 @@ export async function load() {
           typeof stored.tts?.cloud?.voiceUseSpeakerBoost === 'boolean'
             ? stored.tts.cloud.voiceUseSpeakerBoost
             : DEFAULTS.tts.cloud.voiceUseSpeakerBoost,
+        sendSpeed:
+          typeof stored.tts?.cloud?.sendSpeed === 'boolean'
+            ? stored.tts.cloud.sendSpeed
+            : DEFAULTS.tts.cloud.sendSpeed,
         // Fish Audio controls — lenient load for hand-edited/older settings.
         // Only the Fish provider sends these fields on the wire.
         temperature:
@@ -1111,6 +1143,14 @@ export async function load() {
             Math.max(PICKER_ALBUM_HOURS_BOUNDS.min, Number(stored.picker.albumHours)),
           )
         : DEFAULTS.picker.albumHours,
+      // Minimum-track-length floor (#1573). Same lenient clamp, and the same
+      // reason it has to be listed HERE and not just in DEFAULTS: this block
+      // composes explicitly. The crossfade floor is NOT re-applied on load —
+      // load is lenient by contract, and a crossfade lowered after the fact
+      // must not delete a floor the operator set deliberately.
+      minTrackLengthSeconds:
+        coerceMinTrackLengthSeconds(stored.picker?.minTrackLengthSeconds, false)
+        ?? DEFAULTS.picker.minTrackLengthSeconds,
     },
     likes: {
       enabled:
@@ -1222,6 +1262,17 @@ export async function update(patch) {
       // restart involved.
       next.archive.retentionDays = a.retentionDays;
     }
+  }
+  if ('backups' in patch) {
+    const b = parseSettingsPatchKey<Partial<ScheduledBackupSettings>>(
+      'backups',
+      patch.backups,
+    );
+    // Read live by the scheduler's hourly tick — nothing is handed to
+    // Liquidsoap, so no restart, and a cadence change takes effect on the next
+    // tick rather than needing one.
+    if (b.cadence !== undefined) next.backups.cadence = b.cadence;
+    if (b.keep !== undefined) next.backups.keep = b.keep;
   }
   if ('stream' in patch) {
     const st = parseSettingsPatchKey<Record<string, number | boolean | undefined>>(
@@ -1440,6 +1491,18 @@ export async function update(patch) {
     next.djTalkOnlyBetweenTracks =
       parseSettingsPatchKey<boolean>('djTalkOnlyBetweenTracks', patch.djTalkOnlyBetweenTracks);
   }
+  if ('handover' in patch) {
+    // No mixer restart: the offset is read live by broadcast/handover-policy.ts
+    // at each programme tick, not handed to liquidsoap as a startup file.
+    const hv = parseSettingsPatchKey<{ offsetMinutes?: number }>('handover', patch.handover);
+    if (hv.offsetMinutes !== undefined) next.handover.offsetMinutes = hv.offsetMinutes;
+  }
+  // Show-boundary fade (#1574). Read live by the drain (it stamps liq_cue_out
+  // on the next pick that would cross a show change), so no restart and no
+  // Liquidsoap handoff file.
+  if ('fadeAtShowEnd' in patch) {
+    next.fadeAtShowEnd = parseSettingsPatchKey<boolean>('fadeAtShowEnd', patch.fadeAtShowEnd);
+  }
   if ('personas' in patch) {
     next.personas = validatePersonasStrict(patch.personas);
   }
@@ -1635,6 +1698,12 @@ export async function update(patch) {
       if (c.voiceUseSpeakerBoost !== undefined) {
         next.tts.cloud.voiceUseSpeakerBoost = !!c.voiceUseSpeakerBoost;
       }
+      // openai-compatible: send `speed` upstream vs. stretch locally (see
+      // speedDirective / issue #942). Plain boolean coercion — only consulted on
+      // the compat path, inert elsewhere.
+      if (c.sendSpeed !== undefined) {
+        next.tts.cloud.sendSpeed = !!c.sendSpeed;
+      }
       // Fish Audio synthesis controls. Clamp numeric knobs like the existing
       // ElevenLabs sliders; reject an unknown enum so a typo cannot silently
       // turn into a provider-side 422 and a different fallback voice.
@@ -1794,6 +1863,28 @@ export async function update(patch) {
   if ('picker' in patch) {
     const pk = parseSettingsPatchKey<Record<string, unknown>>('picker', patch.picker);
     if (pk.albumHours !== undefined) next.picker.albumHours = pk.albumHours as number;
+    if (pk.minTrackLengthSeconds !== undefined) {
+      // Whole seconds — the schema's bounds check is deliberately number-like
+      // (it also serves albumHours, where a fraction is a real answer), so the
+      // rounding lands here rather than widening that shared helper.
+      const v = Math.round(pk.minTrackLengthSeconds as number);
+      // A positive FLOOR must clear the crossfade-derived minimum, the same
+      // figure maxTrackSeconds is bounded by above and for the same reason: a
+      // track shorter than 2x the crossfade never gets solo airtime, so the
+      // smallest floor worth expressing is the one the mixer already imposes.
+      // 0 (= off) always stays allowed, which is what keeps an untouched
+      // station byte-identical. Uses next's crossfade, already applied above if
+      // this same patch changed it.
+      const floor = minTrackSeconds(next);
+      if (v !== 0 && v < floor) {
+        throw new Error(
+          `picker.minTrackLengthSeconds must be 0 (no floor) or at least ${floor}s`,
+        );
+      }
+      // Read live by both pick paths and the auto-playlist refresh; no
+      // Liquidsoap file is written, so no mixer restart.
+      next.picker.minTrackLengthSeconds = v;
+    }
   }
   if ('search' in patch) {
     const sr = parseSettingsPatchKey<Record<string, unknown>>('search', patch.search);

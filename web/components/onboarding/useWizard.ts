@@ -226,6 +226,14 @@ export function useWizard() {
         // admin LLM panel omits the field the same way unless one is typed.
         baseUrl: data.llm.baseUrl,
         ollamaUrl: data.llm.ollamaUrl,
+        // The one exception: openai-compatible has no env var, its key lives
+        // inline in settings.llm.apiKey (applyInlineKey). Sent ONLY when the
+        // operator typed one this run — still absent otherwise, so #1351's
+        // "re-running onboarding clears the key" can't come back. This is the
+        // path the hosted DJ Brain preset in LlmStep relies on.
+        ...(data.llm.provider === 'openai-compatible' && data.llm.apiKey
+          ? { apiKey: data.llm.apiKey }
+          : {}),
       },
       tts: {
         defaultEngine: data.tts.defaultEngine,

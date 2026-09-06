@@ -27,6 +27,7 @@
 //   audio-moods.ts  zero-shot moods scored from CLAP audio vectors
 //   queries.ts      mood- and tag-keyed reads, genre centroids
 //   browse.ts       the admin browse filter + Observatory rows
+//   scenes.ts       the genre-tag vocabulary + its in-place merge
 //   plays.ts        play history
 
 export * from './library-db/handle.js';
@@ -42,4 +43,5 @@ export * from './library-db/vectors.js';
 export * from './library-db/audio-moods.js';
 export * from './library-db/queries.js';
 export * from './library-db/browse.js';
+export * from './library-db/scenes.js';
 export * from './library-db/plays.js';

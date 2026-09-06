@@ -75,6 +75,16 @@ export interface Show {
    *  0 = unlimited (opt this show out of the cap so it can air long mixes);
    *  >0 = this show's own cap. */
   maxTrackSeconds: number | null;
+  /** Per-show minimum track length (seconds) — the floor that keeps 40-second
+   *  skits, interludes and album intros out of the pick pool (#1573). null =
+   *  inherit the station default; 0 = no floor; >0 = this show's own floor.
+   *  Unlike the cap this is a SELECTION filter: a short track cannot be
+   *  lengthened on air the way a long one is cut. */
+  minTrackLengthSeconds: number | null;
+  /** Fade this show's last track out at the show change instead of letting it
+   *  spill into the next show (#1574). TRI-STATE: null = inherit the station
+   *  default, true/false = this show's own answer. */
+  fadeAtShowEnd: boolean | null;
   /** The union of these playlists becomes the show's candidate pool. Empty = no anchor. */
   playlistIds: string[];
   /** With ≥1 playlist pinned, the playlist is the show's ENTIRE universe;
@@ -112,6 +122,7 @@ export interface CommunityShow {
   programme: boolean;
   segmentSkill: string;
   maxTrackSeconds: number | null;
+  minTrackLengthSeconds: number | null;
   submittedBy?: string;   // GitHub login of the contributor who submitted it
   dateAdded?: string;     // ISO date (YYYY-MM-DD) it first entered the catalog
   dateModified?: string;  // ISO date (YYYY-MM-DD) of the last catalog change
@@ -137,6 +148,10 @@ export const ENERGY_OPTIONS: readonly string[] = SHOW_ENERGY;
 const VOCAL_LABELS: Record<string, string> = { instrumental: 'instrumental', vocal: 'vocals' };
 export const VOCAL_OPTIONS = SHOW_VOCALS.map((key) => ({ key, label: VOCAL_LABELS[key] ?? key }));
 export const ANY_SENTINEL = '__any__';
+// Radix Select refuses an empty string value, and `null` is not a value at
+// all — the tri-state "inherit" needs its own token, exactly as ANY_SENTINEL
+// stands in for ''.
+export const INHERIT_SENTINEL = '__inherit__';
 export const FILTER_VALUES_MAX = SHOW_FILTER_VALUES_MAX;
 
 export function sameEra(a: EraWindow, b: { from: number | null; to: number | null } | EraWindow): boolean {
@@ -204,8 +219,12 @@ export interface SettingsResponse {
     shows?: Array<Partial<Show>>;
     schedule?: Schedule;
     personas?: Persona[];
-    /** Crossfade-relative floor for a non-zero per-show cap (server-computed). */
+    /** Crossfade-relative floor for a non-zero per-show cap OR minimum track
+     *  length (server-computed). */
     minTrackSeconds?: number;
+    /** Station-wide picking windows; `minTrackLengthSeconds` is the default a
+     *  show inherits when its own field is null. */
+    picker?: { albumHours?: number; minTrackLengthSeconds?: number };
   };
   tts?: { moods?: string[] };
 }

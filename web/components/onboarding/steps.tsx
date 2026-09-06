@@ -215,6 +215,14 @@ const llmStepSchema = z.object({
   }
 });
 
+// The hosted DJ Brain is a preset over the openai-compatible provider, not a
+// provider of its own: one click fills base URL + model, the operator pastes
+// the token, and everything downstream (probe, save, admin) is the ordinary
+// compat path. Voice comes later from admin → Settings → DJ Brain.
+const DJ_BRAIN_BASE_URL = 'https://my.getsubwave.com/v1';
+const DJ_BRAIN_MODEL = 'dj-brain';
+const DJ_BRAIN_SIGNUP_URL = 'https://my.getsubwave.com/brain';
+
 export function LlmStep({ w }: { w: WizardController }) {
   const [busy, setBusy] = useState(false);
   const form = useZodForm(llmStepSchema, {
@@ -232,8 +240,15 @@ export function LlmStep({ w }: { w: WizardController }) {
   const isOllama = provider === 'ollama';
   const isLocca = provider === 'locca';
   const isCustom = provider === 'openai-compatible';
+  const isDjBrain = isCustom && baseUrl.trim() === DJ_BRAIN_BASE_URL;
 
   const providerField = useController({ control, name: 'provider' });
+  const useDjBrain = () => {
+    form.setValue('provider', 'openai-compatible', { shouldValidate: true });
+    form.setValue('baseUrl', DJ_BRAIN_BASE_URL, { shouldValidate: true });
+    form.setValue('model', DJ_BRAIN_MODEL, { shouldValidate: true });
+    form.setValue('ollamaUrl', '', { shouldValidate: true });
+  };
   const modelField = useController({ control, name: 'model' });
   const modelAria = fieldAria('llm-model', modelField.fieldState.error);
 
@@ -282,6 +297,19 @@ export function LlmStep({ w }: { w: WizardController }) {
         blurb="The DJ talks between tracks. Ollama running on the host is the homelab default — no API key needed."
       />
       <div className="grid gap-3">
+        <div className="flex flex-wrap items-center justify-between gap-3 border border-ink bg-accent-soft p-3">
+          <div className="grid gap-0.5">
+            <span className={WIZARD_LABEL_CLASS}>No model to run?</span>
+            <span className="text-sm text-ink">
+              SUB/WAVE DJ Brain is a hosted brain for this station — one key, from £5/month.{' '}
+              <a href={DJ_BRAIN_SIGNUP_URL} target="_blank" rel="noreferrer" className="underline">Get a key</a>
+              {isDjBrain ? ', then paste it below.' : '.'}
+            </span>
+          </div>
+          <Button type="button" variant={isDjBrain ? 'solid' : 'outline'} onClick={useDjBrain} disabled={isDjBrain}>
+            {isDjBrain ? '✓ Using DJ Brain' : 'Use DJ Brain'}
+          </Button>
+        </div>
         {/* Bare span, not FieldLabel: ProviderSelector renders its own
             role="radiogroup" aria-label, and a wrapping <label> around a
             radiogroup of buttons hijacks clicks. Raw useController (not
@@ -310,7 +338,7 @@ export function LlmStep({ w }: { w: WizardController }) {
             control={control}
             name="baseUrl"
             label="Base URL"
-            description="e.g. http://localhost:8080/v1 (llama.cpp / vLLM / LM Studio)"
+            description={isDjBrain ? 'The hosted DJ Brain proxy' : 'e.g. http://localhost:8080/v1 (llama.cpp / vLLM / LM Studio)'}
           />
         )}
         {isLocca && (
@@ -329,7 +357,11 @@ export function LlmStep({ w }: { w: WizardController }) {
             label="API key"
             type="password"
             autoComplete="off"
-            description="Stored in state/secrets.env (mode 0600), not in settings.json"
+            description={isDjBrain
+              ? 'Your DJ Brain access token from my.getsubwave.com/brain — stored in settings.json'
+              : isCustom
+                ? 'Optional for most self-hosted servers — stored in settings.json'
+                : 'Stored in state/secrets.env (mode 0600), not in settings.json'}
           />
         )}
         {/* Bare span, not FieldLabel: the combobox trigger is a <button>, and

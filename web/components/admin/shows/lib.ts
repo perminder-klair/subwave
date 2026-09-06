@@ -48,6 +48,9 @@ export function hydrateShow(s: Partial<Show>): Show {
     vocals: m.vocals === 'instrumental' || m.vocals === 'vocal' ? m.vocals : '',
     filtersStrict: m.filtersStrict ?? false,
     maxTrackSeconds: m.maxTrackSeconds ?? null,
+    minTrackLengthSeconds: m.minTrackLengthSeconds ?? null,
+    // Tri-state: only an explicit boolean is an opinion; anything else inherits.
+    fadeAtShowEnd: typeof m.fadeAtShowEnd === 'boolean' ? m.fadeAtShowEnd : null,
     playlistIds: Array.isArray(m.playlistIds) ? m.playlistIds : [],
     playlistStrict: m.playlistStrict ?? false,
     excludedPlaylistIds: Array.isArray(m.excludedPlaylistIds) ? m.excludedPlaylistIds : [],
@@ -118,6 +121,10 @@ export function showPayload(s: Show) {
     // Strict only means something with at least one music filter set.
     filtersStrict: hasAnyMusicFilter(s) && s.filtersStrict,
     maxTrackSeconds: s.maxTrackSeconds,
+    minTrackLengthSeconds: s.minTrackLengthSeconds,
+    // null rides through as null: it is "inherit", not "off", and coercing it
+    // here would opt every saved show out of a station default.
+    fadeAtShowEnd: typeof s.fadeAtShowEnd === 'boolean' ? s.fadeAtShowEnd : null,
     playlistIds: s.playlistIds || [],
     // Strict only means something with at least one playlist pinned.
     playlistStrict: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict,
@@ -154,6 +161,15 @@ export function showFacets(s: Show): ShowFacet[] {
   if (nEx) facets.push({ key: 'excluded', label: `${nEx} excluded` });
   if (s.maxTrackSeconds != null) {
     facets.push({ key: 'length', label: s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s` });
+  }
+  // The floor gets its own facet rather than being folded into the one above:
+  // the two are independent overrides and a show may set either alone, so one
+  // combined "60–600s" chip would have to invent a bound the operator did not.
+  if (s.minTrackLengthSeconds) {
+    facets.push({ key: 'min-length', label: `≥${s.minTrackLengthSeconds}s` });
+  }
+  if (typeof s.fadeAtShowEnd === 'boolean') {
+    facets.push({ key: 'boundary-fade', label: s.fadeAtShowEnd ? 'fades at end' : 'runs over' });
   }
   return facets;
 }

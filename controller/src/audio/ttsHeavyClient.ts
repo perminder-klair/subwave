@@ -20,6 +20,10 @@ import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { cachedHealthProbe } from '../util/health-probe.js';
 
 const PROBE_TIMEOUT_MS = 5_000;
+// /warm only ARMS a load and returns; it never waits for the model. Short
+// ceiling on purpose — a slow warm is not worth holding anything for, because
+// the render path reloads on its own if this call never lands.
+const WARM_TIMEOUT_MS = 5_000;
 
 export type RemoteEngine = 'chatterbox' | 'pocket-tts';
 
@@ -39,7 +43,14 @@ export type ProbeMeta = { voiceCloning: boolean | null };
 // this engine disabled via TTS_HEAVY_ENGINES". `enabled` is the sidecar's
 // configured engine list; null when the sidecar is unreachable OR is an older
 // image that doesn't report the field (so callers fall back to old behaviour).
-let cachedHealth: { up: boolean; enabled: string[] | null } = { up: false, enabled: null };
+// `cold` is the engines the sidecar's idle unload has parked (#1579) — still
+// routable, but their next line pays a model load. null when unknown: the
+// sidecar is down, or is an older image that doesn't report the field.
+let cachedHealth: { up: boolean; enabled: string[] | null; cold: string[] | null } = {
+  up: false,
+  enabled: null,
+  cold: null,
+};
 
 // The tts-heavy sidecar's configured engines (TTS_HEAVY_ENGINES). Returns null
 // when not in sidecar mode, the sidecar is unreachable, or it's too old to
@@ -48,6 +59,14 @@ let cachedHealth: { up: boolean; enabled: string[] | null } = { up: false, enabl
 export function heavyEnabledEngines(): string[] | null {
   if (!config.ttsHeavy.url) return null;
   return cachedHealth.up ? cachedHealth.enabled : null;
+}
+
+// Engines the sidecar has idle-unloaded (#1579). Same null-means-unknown rule
+// as heavyEnabledEngines(). Diagnostic only — a cold engine is still
+// available, so nothing routes on this.
+export function heavyColdEngines(): string[] | null {
+  if (!config.ttsHeavy.url) return null;
+  return cachedHealth.up ? cachedHealth.cold : null;
 }
 
 // One /health probe. `available` is true iff the sidecar reports ok and lists
@@ -62,20 +81,27 @@ async function probeOnce(engine: RemoteEngine): Promise<{ available: boolean; me
   try {
     const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: PROBE_TIMEOUT_MS, bodyDeadline: true });
     if (!res.ok) {
-      cachedHealth = { up: false, enabled: null };
+      cachedHealth = { up: false, enabled: null, cold: null };
       return miss;
     }
     const body = (await res.json()) as {
       ok?: boolean;
       engines?: string[];
       enabled?: string[];
+      cold?: string[];
       pocket_voice_cloning?: boolean | null;
     };
     // Refresh the sidecar-wide snapshot on every probe (see cachedHealth).
     cachedHealth = {
       up: !!body.ok,
       enabled: Array.isArray(body.enabled) ? body.enabled : null,
+      cold: Array.isArray(body.cold) ? body.cold : null,
     };
+    // `engines` is what the sidecar says we may route to, which by design
+    // includes an idle-unloaded engine (it is one on-demand load from
+    // speaking). Do NOT subtract `cold` here: treating a cold engine as
+    // unavailable would stop the dispatcher ever calling /speak on it, and a
+    // sidecar only ever wakes an engine because someone asked it to (#1579).
     const available =
       !!body.ok && Array.isArray(body.engines) && body.engines.includes(engine);
     const voiceCloning =
@@ -84,8 +110,47 @@ async function probeOnce(engine: RemoteEngine): Promise<{ available: boolean; me
         : null;
     return { available, meta: { voiceCloning } };
   } catch {
-    cachedHealth = { up: false, enabled: null };
+    cachedHealth = { up: false, enabled: null, cold: null };
     return miss;
+  }
+}
+
+// Ask the sidecar to start reloading anything its idle unload parked, without
+// waiting for the load to finish (#1579).
+//
+// This is what keeps the unload from being heard: broadcast/stream-idle.ts
+// calls it the moment the programme's idle pause releases, so the model comes
+// back while the music does rather than on the first spoken line, minutes
+// later. Deliberately total — it resolves on every failure path (no sidecar
+// configured, sidecar down, an older image with no /warm route) because
+// nothing downstream depends on it: a warm that never lands just means the
+// next render pays the load itself, which is the un-warmed behaviour.
+export async function warmHeavy(): Promise<void> {
+  const url = config.ttsHeavy.url;
+  if (!url) return;
+  try {
+    const res = await fetchWithTimeout(`${url}/warm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // No engine named: warm everything the sidecar has enabled. The caller
+      // is a station-wide event and can't know which persona speaks first.
+      body: JSON.stringify({ engine: '' }),
+      timeoutMs: WARM_TIMEOUT_MS,
+      // The deadline covers the body read too, like the probe above. Nobody
+      // awaits this call, so a body that never drains would otherwise sit on
+      // undici's ~300s default holding a socket and a dangling promise for a
+      // reply we only log.
+      bodyDeadline: true,
+    });
+    if (!res.ok) return;
+    const body = (await res.json()) as { warming?: string[] };
+    // Only worth a line when it actually started something — an already-warm
+    // sidecar is the common case and says nothing.
+    if (Array.isArray(body.warming) && body.warming.length > 0) {
+      console.log(`[tts-heavy] warming idle-unloaded engine(s): ${body.warming.join(', ')}`);
+    }
+  } catch {
+    /* see above — a failed warm costs the next render a model load, nothing more */
   }
 }
 

@@ -488,11 +488,34 @@ def dj_transition(a, b) =
   # Precedence: a loop beats everything (the loop IS the transition; garnishing
   # it chokes the gesture), then the washout, which may carry the length-cap
   # auto-arm. The queue strips the losers upstream; enforced here too.
-  washing = a.metadata["liq_washout"] == "true"
-  looping = a.metadata["liq_loop"] == "true" and not washing
-  sweeping = b.metadata["liq_sweep"] == "true" and not looping
-  dissolving = b.metadata["liq_dissolve"] == "true" and not washing and not looping
-  chopping = b.metadata["liq_chop"] == "true" and not washing and not looping
+  # SHOW-BOUNDARY FADE (#1574) — the controller stamped liq_cue_out at a show
+  # change, so this track is being CUT, not ending, and EVERY gesture stands
+  # down: the seam is the plain `fade.out(duration=d)` below, spanning the whole
+  # cross buffer (the crossfade invariant, unchanged).
+  #
+  # The two on `a` are the obvious ones — the washout's echo tail is a dissolve
+  # out of an outro and the loop captures the last bar of the record, neither of
+  # which is happening. The loop is the one that bites: its branch applies NO
+  # fader to the outgoing (it rides its own gain after the comb cascade), so a
+  # boundary cut under an armed loop is exactly the hard stop this feature
+  # exists to avoid.
+  #
+  # The four on `b` stand down too, and that is NOT because they garnish the
+  # incoming — every one of them reshapes `a_source`: sweep chokes it through a
+  # filter cascade, blend high-passes it, and sweep/chop swap the outgoing onto
+  # the LOG fade that deliberately holds it hot so the effect does the removing.
+  # Over a mid-record cut there is no ending for any of that to describe, and a
+  # held-hot outgoing that then stops is the same failure as the loop in a
+  # gentler key. They are also armed from the PAIR (mix.effectAllowedFor), and
+  # what the pair is here is an accident of where the boundary fell. Note this
+  # is why they cannot simply be left alone: with washing/looping forced false
+  # they would ARM on seams where the outgoing gesture used to suppress them.
+  boundary_fading = a.metadata["liq_show_fade"] == "true"
+  washing = a.metadata["liq_washout"] == "true" and not boundary_fading
+  looping = a.metadata["liq_loop"] == "true" and not washing and not boundary_fading
+  sweeping = b.metadata["liq_sweep"] == "true" and not looping and not boundary_fading
+  dissolving = b.metadata["liq_dissolve"] == "true" and not washing and not looping and not boundary_fading
+  chopping = b.metadata["liq_chop"] == "true" and not washing and not looping and not boundary_fading
   # FADE SHAPE per effect. The exp fade drops the dry EARLY so the washout's
   # tail reads as a dissolve — that sums below unity mid-cross, a dip, which is
   # the effect (the +6 dB hazard is only for fades that hold full level early).
@@ -586,7 +609,7 @@ def dj_transition(a, b) =
   # full-spectrum piece of music whose ingredients are swapping — club "EQ
   # mixing". Armed only between COMPATIBLE tracks (mix.effectAllowedFor). At
   # e=0 the HPF sits at 30 Hz ≈ transparent, so the engage is seamless.
-  blending = b.metadata["liq_blend"] == "true" and not looping
+  blending = b.metadata["liq_blend"] == "true" and not looping and not boundary_fading
   a_source =
     if blending then
       log("DJ blend: spectral handover into the next track (d=#{d}s)")
