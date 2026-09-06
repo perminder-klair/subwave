@@ -44,7 +44,6 @@ import {
   TTS_CLOUD_PROVIDERS as TTS_CLOUD_PROVIDER_VALUES,
   TTS_ENGINES as TTS_ENGINE_VALUES,
   PERSONA_TTS_INHERIT,
-  PERSONA_TTS_ENGINES as PERSONA_TTS_ENGINE_VALUES,
   TTS_GAIN_CLAMP_DB as TTS_GAIN_CLAMP_DB_VALUE,
   TTS_KOKORO_VOICE_RE,
   TTS_POCKET_VOICE_RE,
@@ -160,10 +159,11 @@ export function personaToneDirectives(persona: unknown): string {
 // every engine on isAvailable(), so settings can name one whose runtime is
 // absent and it simply falls back to Piper.
 export const TTS_ENGINES: readonly string[] = TTS_ENGINE_VALUES;
-// Persona-only engine vocabulary — TTS_ENGINES plus the 'inherit' sentinel.
-// Re-exported here like every other schema constant so no call site has to
-// reach into src/schemas/ directly.
-export const PERSONA_TTS_ENGINES: readonly string[] = PERSONA_TTS_ENGINE_VALUES;
+// The persona-only 'inherit' sentinel, re-exported like every other schema
+// constant so no call site has to reach into src/schemas/ directly. The
+// PERSONA_TTS_ENGINES list is deliberately NOT re-exported: nothing outside the
+// schema needs the vocabulary (ttsVoiceSlotSchema's `allowInherit` flag is the
+// only way in), and a re-export with no reader is a name that drifts unnoticed.
 export { PERSONA_TTS_INHERIT };
 
 // DJ-voice level trim, in dB. A per-engine gain levels the loudness gap between
