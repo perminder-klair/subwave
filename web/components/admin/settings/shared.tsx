@@ -208,6 +208,9 @@ export interface ScrobbleForm {
 export interface PickerForm {
   // Hours, as typed. 0/'' = off.
   albumHours: string;
+  // Seconds, as typed. 0/'' = off (the shipped default). A show's own
+  // minTrackLengthSeconds overrides this; listener requests are exempt.
+  minTrackLengthSeconds: string;
 }
 
 export interface LikesForm {
@@ -341,6 +344,10 @@ export interface SettingsData {
     maxTrackSeconds?: number;
     minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number; retentionDays?: number };
+    /** Scheduled backups (#1570). No FormState entry and no settings section —
+     *  the schedule is edited from the Backup panel, beside Export/Restore, and
+     *  posts `{ backups }` through the same POST /settings chokepoint. */
+    backups?: { cadence?: string; keep?: number };
     transitions?: { pairDrain?: boolean; stemBlends?: boolean };
     audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean; stemCacheGb?: number };
     stream?: {
@@ -435,6 +442,7 @@ export interface SettingsData {
     };
     picker?: {
       albumHours?: number;
+      minTrackLengthSeconds?: number;
     };
     likes?: {
       enabled?: boolean;

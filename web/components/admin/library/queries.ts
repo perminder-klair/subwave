@@ -37,6 +37,10 @@ export const libraryKeys = {
   analysisFailures: () => ['library', 'analysis-failures'] as const,
   moodVocab: () => ['library', 'mood-vocab'] as const,
   genres: () => ['library', 'genres'] as const,
+  // The genre-tag vocabulary as a curatable list, with its consolidation rules
+  // (#1577). Separate from `genres`, which merges in Navidrome's own index for
+  // the show/browse pickers — this one is only what the mirror actually holds.
+  scenes: () => ['library', 'scenes'] as const,
   playlists: () => ['library', 'playlists'] as const,
   rulePlaylists: () => ['library', 'rule-playlists'] as const,
 };

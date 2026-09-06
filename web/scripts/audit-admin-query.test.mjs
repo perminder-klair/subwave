@@ -18,9 +18,11 @@ const validImperativeFixtures = {
   // admin-query-imperative: archive-download
   return adminResponse(adminFetch, \`/archives/file/\${'x'}\`);
 }\n`,
-  'BackupPanel.tsx': `export async function run(adminFetch) {
+  'BackupPanel.tsx': `export async function run(adminFetch, name) {
   // admin-query-imperative: backup-export
-  return adminResponse(adminFetch, '/backup/export');
+  await adminResponse(adminFetch, '/backup/export');
+  // admin-query-imperative: backup-download-file
+  return adminResponse(adminFetch, \`/backup/file/\${name}\`);
 }\n`,
   'DoctorPanel.tsx': `export async function run(adminFetch) {
   // admin-query-imperative: diagnosis-command

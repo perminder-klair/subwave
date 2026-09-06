@@ -239,6 +239,11 @@ export function candidateFilterTracks(): Array<{
   audioMoods: string[];
   energy: EnergyValue;
   vocalRanges: unknown[] | null;
+  // Track length, for the minimum-track-length floor (#1573). The diagnostic
+  // has to apply the SAME rule the pick paths do, and music/track-floor.ts
+  // reads a positive duration — a column missing from this projection would
+  // make every row read as unknown length and the funnel would over-count.
+  durationSec: number | null;
 }> {
   type CandidateFilterRow = {
     id: string;
@@ -254,9 +259,10 @@ export function candidateFilterTracks(): Array<{
     audio_moods: string | null;
     energy: EnergyValue;
     vocal_range_count: number | null;
+    duration_sec: number | null;
   };
   const rows = requireDb().prepare(`SELECT id, title, artist, year, original_year,
-    is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy,
+    is_compilation, era_untrusted, genres, genre, moods, audio_moods, energy, duration_sec,
     CASE
       WHEN vocal_ranges_json IS NULL THEN NULL
       WHEN json_valid(vocal_ranges_json) AND json_type(vocal_ranges_json) = 'array'
@@ -285,5 +291,6 @@ export function candidateFilterTracks(): Array<{
     vocalRanges: row.vocal_range_count == null
       ? null
       : row.vocal_range_count === 0 ? [] : [{}],
+    durationSec: row.duration_sec ?? null,
   }));
 }

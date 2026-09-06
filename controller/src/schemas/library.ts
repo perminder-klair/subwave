@@ -2,7 +2,8 @@
 // /library that carry typed input rather than a bare id: `POST
 // /library/manual-tag` (tag this track, or its whole album, by hand — no LLM
 // involved) and `POST /library/original-year` (the operator's own answer to
-// "what year was this actually recorded", behind the same row editor).
+// "what year was this actually recorded", behind the same row editor), and
+// `POST /library/scenes/merge` (consolidate near-duplicate genre tags).
 //
 // HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
 // the web bundle, so a project import or a node builtin here breaks the mirror.
@@ -133,5 +134,64 @@ export function originalYearSchema() {
     // `=== true`, matching manualTagSchema. An anthology is wrong a whole album
     // at a time, so this is the common case here rather than the exception.
     applyToAlbum: z.unknown().optional().transform((v) => v === true),
+  });
+}
+
+// ── POST /library/scenes/merge ───────────────────────────────────────────────
+// Scene-vocabulary consolidation (issue #1577). "Scene" is the operator-facing
+// word for a genre tag; the body names the values to retire and the one that
+// survives. Both halves are typed here because a wrong `to` is not recoverable
+// from the UI: the rows are rewritten in place, so the retired spellings are
+// gone until the next Navidrome walk.
+
+/** How many values one merge may retire at once. Ticking a whole noisy tail is
+ *  the point, so this is generous; it exists to bound the SQL parameter list. */
+export const SCENE_MERGE_SOURCES_MAX = 100;
+
+/** Longest scene value accepted as a merge target. Navidrome genre tags are
+ *  short; a longer string is a paste accident, not a genre. */
+export const SCENE_VALUE_MAX = 120;
+
+export function sceneMergeSchema() {
+  return z.object({
+    // Every entry is matched against the EXACT stored value, which is what the
+    // listing hands the operator — so blanks and non-strings are refused
+    // rather than trimmed into something that matches a different row.
+    from: z
+      .array(z.unknown(), { error: 'from must be an array of scene values' })
+      .transform((items, c) => {
+        if (items.some((v) => typeof v !== 'string' || !(v as string).trim())) {
+          c.addIssue({ code: 'custom', message: 'from must be an array of scene values' });
+          return z.NEVER;
+        }
+        const values = [...new Set(items as string[])];
+        if (values.length < 1) {
+          c.addIssue({ code: 'custom', message: 'pick at least one scene to merge' });
+          return z.NEVER;
+        }
+        if (values.length > SCENE_MERGE_SOURCES_MAX) {
+          c.addIssue({
+            code: 'custom',
+            message: `at most ${SCENE_MERGE_SOURCES_MAX} scenes per merge`,
+          });
+          return z.NEVER;
+        }
+        return values;
+      }),
+    // Trimmed, because this one is TYPED (the target may be a new spelling that
+    // is in no list yet) and a trailing space would file a second scene beside
+    // the one the operator meant.
+    to: z.unknown().transform((raw, c) => {
+      const value = typeof raw === 'string' ? raw.trim() : '';
+      if (!value) {
+        c.addIssue({ code: 'custom', message: 'to (the surviving scene) is required' });
+        return z.NEVER;
+      }
+      if (value.length > SCENE_VALUE_MAX) {
+        c.addIssue({ code: 'custom', message: `to must be at most ${SCENE_VALUE_MAX} characters` });
+        return z.NEVER;
+      }
+      return value;
+    }),
   });
 }

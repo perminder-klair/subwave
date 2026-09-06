@@ -1,3 +1,5 @@
+import { trackLengthSeconds } from './track-floor.js';
+
 export const DEFAULT_TRACK_RECENCY_HOURS = 12;
 export const DEFAULT_ARTIST_RECENCY_HOURS = 2;
 const DIVERSE_LIBRARY_ARTISTS = 48;
@@ -98,9 +100,14 @@ interface CandidateFilterState {
 // unknown. Zero/negative/non-finite all read as unknown — we only ever act on a
 // positive, trustworthy duration (the hour-long album mixes #447 targets report
 // one reliably).
+//
+// Delegates to music/track-floor.ts rather than restating the rule: the track
+// length CAP reads this and the FLOOR reads that, and two copies answering
+// "how long is this track?" differently is exactly the drift #1573 warns about.
+// track-floor.ts is itself pure and import-free, so this module stays free of
+// every library / settings / mixer concern.
 export function durationSeconds(song: CandidateLike): number | null {
-  const d = song?.duration ?? song?.durationSec;
-  return Number.isFinite(d) && (d as number) > 0 ? Number(d) : null;
+  return trackLengthSeconds(song);
 }
 
 export function artistKey(song: CandidateLike): string {
@@ -341,10 +348,17 @@ export function filterPickerCandidates<T extends CandidateLike>(
     blockedArtists = new Set<string>(),
   }: CandidateFilterState = {},
 ): T[] {
-  // Track length is NOT a selection criterion: max-track-length (issue #447) is
-  // enforced as an on-air cue_out cut, so an over-length track stays eligible
-  // and simply crossfades out at the cap. Filtering it here would only starve
-  // the pool — e.g. a 60s cap leaving nothing but short skits/interludes.
+  // The track-length CAP is NOT a selection criterion: max-track-length (issue
+  // #447) is enforced as an on-air cue_out cut, so an over-length track stays
+  // eligible and simply crossfades out at the cap. Filtering it here would only
+  // starve the pool — e.g. a 60s cap leaving nothing but short skits/interludes.
+  //
+  // The FLOOR is the opposite case and is enforced (#1573), but NOT here: a
+  // short track cannot be lengthened, so it has to leave the pool — and the
+  // posture differs per pick path (hard in the agent's tools, never-starve in
+  // the pool picker and the coast), which is a decision this filter has no way
+  // to make. It lives in music/track-floor.ts and is applied by each call site
+  // just before this one. Don't fold it in here.
   const pool = list || [];
 
   // Relaxation cascade: each mode drops a guard so a starved pool still yields

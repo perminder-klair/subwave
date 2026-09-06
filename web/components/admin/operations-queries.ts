@@ -44,6 +44,11 @@ export interface RestorableFile {
   name: string;
   size: number;
   mtime: string;
+  /** Written by the backup schedule (#1570) rather than copied in by hand.
+   *  Resolved server-side from the same name grammar retention prunes by, so
+   *  the badge and the sweep cannot disagree about which files are the
+   *  station's own. Absent on an older controller → reads as false. */
+  auto?: boolean;
 }
 
 export interface RestorableBackups {

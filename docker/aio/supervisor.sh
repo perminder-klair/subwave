@@ -309,6 +309,53 @@ warn_if_analyzer_heavy_ignored() {
 }
 
 # ---------------------------------------------------------------------------
+# ANALYZER_REPLICAS=0 removes the compose `analyzer` SERVICE (#1570). The AIO
+# has no services — the analyzer is an in-process venv the controller drives
+# over stdio — so the variable is inert here, exactly like ANALYZER_HEAVY above.
+#
+# It fails worse than ANALYZER_HEAVY did, which is why it gets its own warning
+# rather than a docs line. ANALYZER_HEAVY set on a lean AIO withholds a feature
+# the operator wanted; ANALYZER_REPLICAS=0 set on an AIO withholds NOTHING and
+# silently keeps charging for it — the whole point of setting 0 is usually to
+# stop paying for analysis, and here analysis carries on with its RAM and its
+# CPU while the operator believes it is off. Nothing in the UI contradicts them
+# either: the acoustic engine keeps reading "on", which looks like the switch
+# is broken rather than absent.
+#
+# So the warning names the knob that DOES work here: an empty ANALYZE_PYTHON.
+# config.ts reads `envStr('ANALYZE_PYTHON', '')` and analyzer.ts's
+# localConfigured() requires a non-empty existing path, so blanking the
+# variable this image bakes in resolves no local backend at all.
+#
+# Only 0 warns. Any other value asks for the analyzer to RUN, which is what an
+# AIO does anyway, so it earns the same quiet note ANALYZER_HEAVY gets on a
+# heavy build: still inert, but the outcome already matches the request, and a
+# scary box would send an operator whose setup is fine chasing a non-problem.
+# ---------------------------------------------------------------------------
+warn_if_analyzer_replicas_ignored() {
+	[ -n "${ANALYZER_REPLICAS:-}" ] || return 0
+	if [ "${ANALYZER_REPLICAS}" != "0" ]; then
+		log "note: ANALYZER_REPLICAS is a docker-compose setting and has no effect"
+		log "  on the all-in-one image — but it is not 0, so you are asking for the"
+		log "  analyzer to run, which this image does in-process anyway. Nothing to do."
+		return 0
+	fi
+	log "################################################################"
+	log "WARNING: ANALYZER_REPLICAS=0 is set, and it does NOTHING on this image."
+	log "  It is a docker-compose variable that sets the analyzer SERVICE's"
+	log "  replica count. The all-in-one image has no analyzer service — it runs"
+	log "  the analyzer IN-PROCESS (a librosa venv the controller drives), so"
+	log "  analysis is still running and still using RAM and CPU right now."
+	log "  The admin Library panel will keep reporting the acoustic engine as ON."
+	log "  To actually stop analysis on this image, blank ANALYZE_PYTHON instead:"
+	log "    ANALYZE_PYTHON=          (empty value — no local analysis backend)"
+	log "  To send analysis to another machine, set ANALYZE_URL at it; a"
+	log "  reachable sidecar wins over the in-process venv."
+	log "  https://github.com/perminder-klair/subwave/issues/1570"
+	log "################################################################"
+}
+
+# ---------------------------------------------------------------------------
 # Resolve the ICECAST_*_PASSWORD values. Precedence: env override > persisted
 # secrets file > freshly generated. Written back for operator visibility + the
 # documented rotate path; exported for liquidsoap.
@@ -593,6 +640,7 @@ fi
 
 warn_if_state_unmounted
 warn_if_analyzer_heavy_ignored
+warn_if_analyzer_replicas_ignored
 init_state
 init_secrets
 

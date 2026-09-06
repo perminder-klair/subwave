@@ -373,7 +373,8 @@ export const voiceImportSchema = z.object({
 // /library that carry typed input rather than a bare id: `POST
 // /library/manual-tag` (tag this track, or its whole album, by hand — no LLM
 // involved) and `POST /library/original-year` (the operator's own answer to
-// "what year was this actually recorded", behind the same row editor).
+// "what year was this actually recorded", behind the same row editor), and
+// `POST /library/scenes/merge` (consolidate near-duplicate genre tags).
 //
 // HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
 // the web bundle, so a project import or a node builtin here breaks the mirror.
@@ -503,6 +504,65 @@ export function originalYearSchema() {
     // `=== true`, matching manualTagSchema. An anthology is wrong a whole album
     // at a time, so this is the common case here rather than the exception.
     applyToAlbum: z.unknown().optional().transform((v) => v === true),
+  });
+}
+
+// ── POST /library/scenes/merge ───────────────────────────────────────────────
+// Scene-vocabulary consolidation (issue #1577). "Scene" is the operator-facing
+// word for a genre tag; the body names the values to retire and the one that
+// survives. Both halves are typed here because a wrong `to` is not recoverable
+// from the UI: the rows are rewritten in place, so the retired spellings are
+// gone until the next Navidrome walk.
+
+/** How many values one merge may retire at once. Ticking a whole noisy tail is
+ *  the point, so this is generous; it exists to bound the SQL parameter list. */
+export const SCENE_MERGE_SOURCES_MAX = 100;
+
+/** Longest scene value accepted as a merge target. Navidrome genre tags are
+ *  short; a longer string is a paste accident, not a genre. */
+export const SCENE_VALUE_MAX = 120;
+
+export function sceneMergeSchema() {
+  return z.object({
+    // Every entry is matched against the EXACT stored value, which is what the
+    // listing hands the operator — so blanks and non-strings are refused
+    // rather than trimmed into something that matches a different row.
+    from: z
+      .array(z.unknown(), { error: 'from must be an array of scene values' })
+      .transform((items, c) => {
+        if (items.some((v) => typeof v !== 'string' || !(v as string).trim())) {
+          c.addIssue({ code: 'custom', message: 'from must be an array of scene values' });
+          return z.NEVER;
+        }
+        const values = [...new Set(items as string[])];
+        if (values.length < 1) {
+          c.addIssue({ code: 'custom', message: 'pick at least one scene to merge' });
+          return z.NEVER;
+        }
+        if (values.length > SCENE_MERGE_SOURCES_MAX) {
+          c.addIssue({
+            code: 'custom',
+            message: `at most ${SCENE_MERGE_SOURCES_MAX} scenes per merge`,
+          });
+          return z.NEVER;
+        }
+        return values;
+      }),
+    // Trimmed, because this one is TYPED (the target may be a new spelling that
+    // is in no list yet) and a trailing space would file a second scene beside
+    // the one the operator meant.
+    to: z.unknown().transform((raw, c) => {
+      const value = typeof raw === 'string' ? raw.trim() : '';
+      if (!value) {
+        c.addIssue({ code: 'custom', message: 'to (the surviving scene) is required' });
+        return z.NEVER;
+      }
+      if (value.length > SCENE_VALUE_MAX) {
+        c.addIssue({ code: 'custom', message: `to must be at most ${SCENE_VALUE_MAX} characters` });
+        return z.NEVER;
+      }
+      return value;
+    }),
   });
 }
 
@@ -2454,6 +2514,20 @@ export const STREAM_MAX_LISTENERS_BOUNDS: SettingsNumericBound = { min: 1, max: 
 // starvation cascade every pick.
 export const PICKER_ALBUM_HOURS_BOUNDS: SettingsNumericBound = { min: 0, max: 72 };
 
+// Station-wide minimum track length, in SECONDS: a track shorter than this is
+// never PICKED (#1573). 0 = off, and off is the shipped default so an upgrade
+// picks byte-identically.
+//
+// This is NOT settings.minTrackSeconds(), which is the crossfade-derived floor
+// on the max-track-length CAP. That figure is this key's own lower bound (a
+// positive value below it is refused in update(), where the crossfade is
+// known), which is why the two must not share a name.
+//
+// The ceiling twins schemas/show.ts's SHOW_MIN_TRACK_LENGTH_MAX, which bounds
+// the per-show override — a mirrored module may import only zod, so the two are
+// separate declarations of one number and must move together.
+export const PICKER_MIN_TRACK_LENGTH_BOUNDS: SettingsNumericBound = { min: 0, max: 3600 };
+
 export const SETTINGS_STATION_DEFAULT_NAME = 'SUB/WAVE';
 export const SETTINGS_STATION_NAME_MAX = 80;
 export const SETTINGS_STATION_DESCRIPTION_MAX = 200;
@@ -2574,6 +2648,76 @@ export const archivePatchSchema = settingsBlockOf({
   retentionDays: settingsIntLike(
     { min: 0, max: 3650 },
     'archive.retentionDays must be 0 (keep forever) or 1–3650 days',
+  ),
+});
+
+// Scheduled, rotating backups (#1570). `off` is the default and MUST be first:
+// a station that upgrades and changes nothing has no `backups` block at all,
+// reads as `off`, and writes nothing — the absent-coerces-to-prior-behaviour
+// rule, which for a feature that DELETES files is the whole safety story.
+//
+// Cadences are elapsed-time, not calendar (`monthly` is 30 days); the tick that
+// applies them is hourly, so a station that is only up for part of the day
+// still gets its backup. See backup/pure.ts.
+export const SETTINGS_BACKUP_CADENCES = ['off', 'daily', 'weekly', 'monthly'] as const;
+
+// The vocabulary and the block shape, named once. Every path that handles a
+// schedule — the normaliser, `update()`, the runner, the admin card's labels —
+// spells the same two names instead of restating `{ cadence: string; keep:
+// number }`, so a cadence added here is a compile error everywhere it is not
+// handled rather than a silent `?? id` fallback (#1585 review).
+export type BackupCadence = (typeof SETTINGS_BACKUP_CADENCES)[number];
+export interface ScheduledBackupSettings {
+  cadence: BackupCadence;
+  keep: number;
+}
+
+// Keep-last-N. The floor is 1, not 0: a retention that could delete the backup
+// the run just wrote is a schedule that runs forever and leaves nothing behind.
+// The ceiling is disk sympathy — a tag DB for a 30k-track library is >100 MB,
+// so 100 kept dailies is already a hundred gigabytes.
+export const BACKUP_KEEP_BOUNDS: SettingsNumericBound = { min: 1, max: 100 };
+
+// The shipped retention, named rather than spelled `7` in three files. It is
+// also the answer every lenient path gives for a `keep` it cannot read — see
+// clampBackupKeep.
+export const BACKUP_KEEP_DEFAULT = 7;
+
+/**
+ * The one lenient reading of `keep`, shared by every path that repairs rather
+ * than refuses: `settings.load()`'s normaliser and the retention sweep itself.
+ *
+ * An unreadable value falls to BACKUP_KEEP_DEFAULT, never to the floor. The
+ * floor is 1 — "keep only the newest" — which is the most destructive answer
+ * available, and this is the only scheduled job in the station that deletes
+ * operator files. Two copies of this clamp disagreeing about that direction is
+ * exactly the drift the module boundary exists to stop, so there is one copy
+ * and it lives beside the bound it enforces.
+ *
+ * The strict path (`backupsPatchSchema`) still REFUSES what this repairs — the
+ * usual normalize-vs-validate split, neither restating the other's rule.
+ */
+export function clampBackupKeep(raw: unknown): number {
+  // Absent and empty are NO answer, not zero. `Number(null)` and `Number('')`
+  // are both 0, which would clamp to the floor of 1 — the most destructive
+  // reading available — for a settings block that simply has no `keep` in it.
+  if (raw === null || raw === undefined || raw === '') return BACKUP_KEEP_DEFAULT;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return BACKUP_KEEP_DEFAULT;
+  return Math.min(BACKUP_KEEP_BOUNDS.max, Math.max(BACKUP_KEEP_BOUNDS.min, Math.floor(n)));
+}
+
+export const backupsPatchSchema = settingsBlockOf({
+  cadence: settingsStrictOneOf(
+    SETTINGS_BACKUP_CADENCES,
+    `backups.cadence must be one of: ${SETTINGS_BACKUP_CADENCES.join(', ')}`,
+  ),
+  // parseInt-family, like archive.retentionDays next door: the admin number
+  // input posts a string on some paths and a float here is a typo worth
+  // truncating rather than a body worth refusing.
+  keep: settingsIntLike(
+    BACKUP_KEEP_BOUNDS,
+    `backups.keep must be int in [${BACKUP_KEEP_BOUNDS.min}, ${BACKUP_KEEP_BOUNDS.max}]`,
   ),
 });
 
@@ -2738,6 +2882,13 @@ export const pickerPatchSchema = settingsBlockOf({
   albumHours: settingsNumberLike(
     PICKER_ALBUM_HOURS_BOUNDS,
     `picker.albumHours must be between ${PICKER_ALBUM_HOURS_BOUNDS.min} and ${PICKER_ALBUM_HOURS_BOUNDS.max} (0 = off)`,
+  ),
+  // Bounds only. The crossfade-derived lower bound on a POSITIVE value is a
+  // function of settings.crossfadeDuration, which a stateless schema does not
+  // have — update() enforces it, exactly as it does for maxTrackSeconds.
+  minTrackLengthSeconds: settingsNumberLike(
+    PICKER_MIN_TRACK_LENGTH_BOUNDS,
+    `picker.minTrackLengthSeconds must be between ${PICKER_MIN_TRACK_LENGTH_BOUNDS.min} and ${PICKER_MIN_TRACK_LENGTH_BOUNDS.max} (0 = off)`,
   ),
 });
 
@@ -3335,8 +3486,8 @@ export function djPromptTextSchema(bounds: { min: number; max: number }) {
 //
 // WHY A FACTORY. Unlike webhooks and stations, a show cannot be validated
 // against itself: `personaId` must name a real persona, `moods` a live mood,
-// `themeId` an installed theme, and `maxTrackSeconds` clears a crossfade-derived
-// floor. Those four travel as ONE ShowSchemaContext value rather than separate
+// `themeId` an installed theme, and the two track-length fields clear a
+// crossfade-derived floor. Those four travel as ONE ShowSchemaContext value rather than separate
 // arguments — the same "one scope value, never unpacked" rule PickerScope
 // follows. Both sides can build it; the admin panel already fetches personas,
 // moods, themes and the station settings.
@@ -3377,6 +3528,15 @@ export const SHOW_YEAR_MAX = 2100;
 // from here, because the strict show validator has always bounds-checked a
 // show's override against the station figure and two copies would drift.
 export const SHOW_MAX_TRACK_SECONDS = 36000;
+// Ceiling on the per-show minimum-track-length FLOOR (#1573). Deliberately far
+// below SHOW_MAX_TRACK_SECONDS: a cap of ten hours is a harmless "no cap", but a
+// FLOOR of ten hours is a show that can never pick anything, and the pick paths
+// would spend every pool build discovering that. An hour is already past every
+// real answer (the field exists to skip 40-second skits and interludes).
+// Twinned with schemas/settings.ts's PICKER_MIN_TRACK_LENGTH_BOUNDS.max, which
+// bounds the STATION-wide default — a mirrored module may import only zod, so
+// the two are separate declarations of one number and must move together.
+export const SHOW_MIN_TRACK_LENGTH_MAX = 3600;
 
 export const SHOW_ENERGY = ['low', 'medium', 'high'] as const;
 export const SHOW_VOCALS = ['instrumental', 'vocal'] as const;
@@ -3397,7 +3557,8 @@ export type EraWindow = { fromYear: number | null; toYear: number | null };
  *     strip an operator's own moods. A stale mood just matches nothing on air.
  *   - `themeIds: null` — load has no theme registry to consult. A stale id is
  *     harmless: GET /themes falls back to the station default at serve time.
- *   - `minTrackSeconds: null` — the crossfade-derived floor. Load clamps to the
+ *   - `minTrackSeconds: null` — the crossfade-derived floor, the lower bound on
+ *     BOTH `maxTrackSeconds` and `minTrackLengthSeconds`. Load clamps to the
  *     hard bounds instead of enforcing it.
  *
  * `personaIds` is NOT nullable: a show whose host does not exist has no owner
@@ -3727,6 +3888,33 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           (n) => n == null || n === 0 || ctx.minTrackSeconds == null || n >= ctx.minTrackSeconds,
           `must be 0 (inherit/unlimited) or at least the station's minimum track length`,
         ),
+      // Minimum track length (#1573) — the FLOOR, the twin of the cap above.
+      // null = inherit the station default (picker.minTrackLengthSeconds),
+      // 0 = no floor, >0 = this show's own floor in seconds.
+      //
+      // Unlike the cap, this one is a SELECTION filter: a 40-second interlude
+      // cannot be lengthened on air the way an over-long mix can be cut, so it
+      // has to be kept out of the pool rather than trimmed at the seam.
+      //
+      // It carries the SAME crossfade-derived lower bound as the cap, and for
+      // the same reason: a track shorter than 2x the crossfade has no solo
+      // airtime at all, so the smallest floor worth expressing is the one the
+      // mixer already imposes. 0 (inherit/off) always stays allowed, so a
+      // station that never touches the field is byte-identical to today.
+      minTrackLengthSeconds: z
+        .union([z.null(), z.literal(''), z.number(), z.string()])
+        .optional()
+        .transform((v) => (v == null || v === '' ? null : Number(v)))
+        .refine(
+          (n) =>
+            n == null ||
+            (Number.isInteger(n) && n >= 0 && n <= SHOW_MIN_TRACK_LENGTH_MAX),
+          `must be an integer between 0 and ${SHOW_MIN_TRACK_LENGTH_MAX}`,
+        )
+        .refine(
+          (n) => n == null || n === 0 || ctx.minTrackSeconds == null || n >= ctx.minTrackSeconds,
+          `must be 0 (inherit/no floor) or at least the station's minimum track length`,
+        ),
       // Show-boundary fade (#1574). TRI-STATE, exactly like maxTrackSeconds
       // above: null = inherit the station default, true/false = this show's own
       // answer. A plain showBool() would read an untouched show as an explicit
@@ -3878,7 +4066,8 @@ export function repairShowTags(raw: unknown): string[] | undefined {
  *
  * maxTrackSeconds is deliberately NOT repaired here: its clamp bounds are owned
  * by settings/defaults.ts (coerceMaxTrackSeconds), which already reads its
- * ceiling from this module's SHOW_MAX_TRACK_SECONDS.
+ * ceiling from this module's SHOW_MAX_TRACK_SECONDS. minTrackLengthSeconds
+ * follows it for the same reason (coerceMinTrackLengthSeconds).
  */
 export function repairShowForLoad(
   raw: Record<string, unknown>,

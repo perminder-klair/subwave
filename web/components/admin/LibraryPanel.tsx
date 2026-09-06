@@ -110,6 +110,8 @@ function LibraryBody() {
         onStop={tag.stopTagger}
         onRescan={tag.rescanTagger}
         onReconcile={tag.reconcile}
+        onCountLibrary={tag.countLibrary}
+        countingLibrary={tag.countingLibrary}
         onReset={tag.resetLibrary}
         audioEnabled={tag.audioEnabled}
         onToggleAudio={tag.toggleAudio}

@@ -34,6 +34,7 @@ export interface AutoPlaylistShow {
   playlistStrict?: unknown;
   excludedPlaylistIds?: unknown;
   maxTrackSeconds?: unknown;
+  minTrackLengthSeconds?: unknown;
 }
 
 const strings = (v: unknown): string[] =>
@@ -65,6 +66,11 @@ export function autoPlaylistShowKey(show: AutoPlaylistShow | null | undefined): 
     playlistStrict: show.playlistStrict === true,
     excludedPlaylistIds: strings(show.excludedPlaylistIds),
     maxTrackSeconds: typeof show.maxTrackSeconds === 'number' ? show.maxTrackSeconds : null,
+    // The minimum-track-length floor (#1573) changes WHICH tracks the fallback
+    // may contain, not just how they are stamped — so, like every other pool
+    // input above, editing it on the live show has to rebuild the file.
+    minTrackLengthSeconds:
+      typeof show.minTrackLengthSeconds === 'number' ? show.minTrackLengthSeconds : null,
   });
 }
 

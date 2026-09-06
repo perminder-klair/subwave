@@ -13,6 +13,7 @@ import type {
   AnalysisFailure,
   Batch,
   BudgetMode,
+  Coverage,
   LibraryStatsLite,
   RescanOpts,
   TagSteps,
@@ -22,10 +23,10 @@ import type { SettingsResponse } from './types';
 // The tagging/analysis half of the library page: the slow /settings poll and
 // every operator action the Tagging panel fires.
 //
-// The two FAST loops (coverage + the tagger snapshot) live in LibraryContext,
-// since the tagger snapshot sets the coverage cadence and Search reads coverage
-// too. This slow loop never touches tagger state, which is what keeps the two
-// from racing.
+// The tagger snapshot's fast loop, and the coverage read it paces, live in
+// LibraryContext, since the tagger snapshot sets the coverage cadence and
+// Search reads coverage too. This slow loop never touches tagger state, which
+// is what keeps the two from racing.
 
 // POST /settings with one nested block, the shape all four toggles share.
 async function postAudioSetting(
@@ -135,6 +136,28 @@ export function useTaggerControls() {
   }, [adminFetch, qc, ready, reloadCoverage]);
 
   const remaining = coverage?.total != null ? Math.max(0, coverage.total - coverage.tagged) : null;
+
+  // --- counting the library ------------------------------------------------
+  // The one expensive thing on this page, and now the only one the operator
+  // has to ask for (#1570). `total` comes from walking every album in
+  // Navidrome — thousands of requests on a big library — so the controller
+  // never starts that walk on a read, and this button is what does.
+  //
+  // Its own POST rather than a flag on the coverage GET: this has a side
+  // effect measured in minutes, and a read that can start it is the shape
+  // something eventually polls by accident — which is the bug being fixed.
+  // The response carries the snapshot the scan is starting from, so the meter
+  // flips to "counting…" without waiting for the next poll to say so.
+  const countLibraryM = useAdminMutation<{ coverage?: Coverage }, void>({
+    request: (_v, fetcher) => adminJson<{ coverage?: Coverage }>(
+      fetcher, '/library/coverage/refresh', { method: 'POST' },
+    ),
+    onDone: (data, _v, client) => {
+      if (data.coverage) client.setQueryData(libraryKeys.coverage(), data.coverage);
+      else void client.invalidateQueries({ queryKey: libraryKeys.coverage() });
+      notify.ok('counting your library — this can take a while on a big one');
+    },
+  });
 
   // --- the runs ------------------------------------------------------------
   // Each opens the log and refreshes the tagger snapshot; failures toast
@@ -251,8 +274,8 @@ export function useTaggerControls() {
             : 'vocal-activity analysis enabled'
           : 'vocal-activity analysis disabled',
       );
-      // The coverage-driven bits (vocalStatus, the vocal meter row) shouldn't
-      // wait out the 60s poll.
+      // Nothing polls coverage while the station is idle, so the
+      // coverage-driven bits (vocalStatus, the vocal meter row) need this.
       void reloadCoverage();
     },
   });
@@ -313,6 +336,8 @@ export function useTaggerControls() {
     toggleVocal: () => { if (vocalEnabled != null) toggleVocalM.mutate(!vocalEnabled); },
     toggleQuiet: () => { if (quietEnabled != null) toggleQuietM.mutate(!quietEnabled); },
     saveQuietMinutes: (minutes: number) => { saveQuietMinutesM.mutate(minutes); },
+    countLibrary: () => { countLibraryM.mutate(); },
+    countingLibrary: countLibraryM.isPending,
     loadFailures, clearFailures,
   };
 }

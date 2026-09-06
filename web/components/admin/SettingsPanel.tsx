@@ -553,6 +553,11 @@ export default function SettingsPanel() {
         // 0 = off, and that IS the shipped default — an absent key must read as
         // off rather than inventing a cooldown the operator never asked for.
         albumHours: String(typeof v.picker?.albumHours === 'number' ? v.picker.albumHours : 0),
+        // Same rule: absent reads as 0 = no floor, which is the shipped
+        // default and today's behaviour.
+        minTrackLengthSeconds: String(
+          typeof v.picker?.minTrackLengthSeconds === 'number' ? v.picker.minTrackLengthSeconds : 0,
+        ),
       },
       likes: {
         enabled: v.likes?.enabled ?? true,

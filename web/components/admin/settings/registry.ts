@@ -65,7 +65,11 @@ export const SECTIONS = [
   {
     id: 'llm', group: 'the dj', label: 'LLM provider',
     hint: 'model routing', icon: Cpu,
-    formKeys: ['llm'],
+    // `picker` rides this section because its two controls (album cooldown,
+    // minimum track length) are edited on this card and saved by the same
+    // PATCH — without it here the section's dirty dot and save bar are blind
+    // to a change the operator just made.
+    formKeys: ['llm', 'picker'],
   },
   {
     id: 'tts', group: 'the dj', label: 'TTS voice',

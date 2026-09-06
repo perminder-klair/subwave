@@ -19,55 +19,36 @@
 // over 100 MB) can exceed an edge proxy's upload cap — Cloudflare 413s before
 // the request reaches the controller — and dropping the file into state/
 // bypasses that entirely. GET /backup/restorable lists candidates (#612).
+//
+// The EXPORT side is symmetrically shared: `buildBackupZip()` (backup/zip.ts)
+// is the one assembly, because the scheduled backup (#1570) writes the same
+// archive to disk and `POST /backup/import-file` cannot tell the two apart.
 import express from 'express';
 import AdmZip from 'adm-zip';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { mkdtemp, rm, readdir, stat, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { STATE_DIR } from '../config.js';
 import * as settings from '../settings.js';
 import * as library from '../music/library.js';
 import * as libraryDb from '../music/library-db.js';
+import {
+  BACKUP_FORMAT,
+  BACKUP_VERSION,
+  INCLUDE_DIRS,
+  INCLUDE_FILES,
+  buildBackupZip,
+} from '../backup/zip.js';
+import { isScheduledBackupName } from '../backup/pure.js';
 import { clearUserThemeCache } from '../themes.js';
 import { requireAdmin } from '../middleware/auth.js';
 
 export const router = express.Router();
 
-const BACKUP_FORMAT = 'subwave-backup';
-const BACKUP_VERSION = 1;
-
-// Top-level state files copied verbatim (settings.json + library.db are handled
-// specially; manifest.json is generated).
-const INCLUDE_FILES = ['jingles.json', 'jingles.m3u', 'sfx.json'] as const;
-// Top-level state directories copied whole.
-const INCLUDE_DIRS = [
-  'persona-avatars',
-  'jingles',
-  'sfx',
-  'voices',
-  'themes',
-  'skills',
-] as const;
 // Everything an import is allowed to write under STATE_DIR (besides the
 // specially-handled settings.json / library.db).
 const RESTORABLE = new Set<string>([...INCLUDE_FILES, ...INCLUDE_DIRS]);
-
-const appVersion = (() => {
-  // Build-arg wins (set from `git describe` by scripts/update.sh and the
-  // publish-images CI) so an image built off `develop` reports its true version
-  // rather than the stale package.json number, which only bumps on `main`.
-  // Mirrors web/next.config.js.
-  const fromEnv = process.env.SUBWAVE_BUILD_VERSION;
-  if (fromEnv) return fromEnv.replace(/^v/, '');
-  try {
-    const p = fileURLToPath(new URL('../../package.json', import.meta.url));
-    return JSON.parse(readFileSync(p, 'utf8')).version || 'unknown';
-  } catch {
-    return 'unknown';
-  }
-})();
 
 // The top-level path segment of a zip entry ('jingles/foo.wav' -> 'jingles').
 function topSegment(entryName: string): string {
@@ -86,45 +67,8 @@ function isSafeEntry(entryName: string): boolean {
 // GET /backup/export — download a zip snapshot of station config + tag DB.
 // ---------------------------------------------------------------------------
 router.get('/backup/export', requireAdmin, async (req, res) => {
-  let tmpDir: string | null = null;
   try {
-    await settings.load();
-    const zip = new AdmZip();
-
-    // Settings — redacted so API keys / webhook auth never leave the box. This
-    // object also carries shows + schedule, so they round-trip too.
-    zip.addFile(
-      'settings.json',
-      Buffer.from(JSON.stringify(settings.getRedacted(), null, 2)),
-    );
-
-    // Tag DB — consistent online backup (WAL-safe), not a raw file copy.
-    if (existsSync(join(STATE_DIR, 'library.db'))) {
-      tmpDir = await mkdtemp(join(tmpdir(), 'subwave-backup-'));
-      const dbTmp = join(tmpDir, 'library.db');
-      await library.load(); // ensure the DB handle is open before backing up
-      await libraryDb.backup(dbTmp);
-      zip.addLocalFile(dbTmp, '', 'library.db');
-    }
-
-    for (const f of INCLUDE_FILES) {
-      const p = join(STATE_DIR, f);
-      if (existsSync(p)) zip.addLocalFile(p, '', f);
-    }
-    for (const d of INCLUDE_DIRS) {
-      const p = join(STATE_DIR, d);
-      if (existsSync(p)) zip.addLocalFolder(p, d);
-    }
-
-    const manifest = {
-      format: BACKUP_FORMAT,
-      version: BACKUP_VERSION,
-      appVersion,
-      createdAt: new Date().toISOString(),
-      contents: zip.getEntries().map(e => e.entryName),
-    };
-    zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2)));
-
+    const zip = await buildBackupZip();
     const stamp = new Date().toISOString().slice(0, 10);
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader(
@@ -134,8 +78,6 @@ router.get('/backup/export', requireAdmin, async (req, res) => {
     res.send(zip.toBuffer());
   } catch (err: any) {
     res.status(500).json({ error: err.message });
-  } finally {
-    if (tmpDir) await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
   }
 });
 
@@ -276,23 +218,62 @@ function isSafeBackupName(name: string): boolean {
 // The escape hatch when a backup is too big to upload through an edge proxy:
 // the operator copies the zip into the station's state/ folder and restores it
 // from here without it ever traversing the proxy. See #612.
+//
+// `auto` marks the ones the schedule wrote (#1570) — the same grammar retention
+// prunes by, asked once here rather than re-spelled in the browser, so the list
+// cannot disagree with the sweep about which files are the station's own.
 // ---------------------------------------------------------------------------
 router.get('/backup/restorable', requireAdmin, async (_req, res) => {
   try {
     const names = await readdir(STATE_DIR).catch(() => [] as string[]);
-    const files: { name: string; size: number; mtime: string }[] = [];
+    const files: { name: string; size: number; mtime: string; auto: boolean }[] = [];
     for (const name of names) {
       if (!isSafeBackupName(name)) continue;
       try {
         const st = await stat(join(STATE_DIR, name));
         if (!st.isFile()) continue;
-        files.push({ name, size: st.size, mtime: st.mtime.toISOString() });
+        files.push({
+          name,
+          size: st.size,
+          mtime: st.mtime.toISOString(),
+          auto: isScheduledBackupName(name),
+        });
       } catch {
         /* vanished between readdir and stat — skip */
       }
     }
     files.sort((a, b) => b.mtime.localeCompare(a.mtime));
     res.json({ stateDir: STATE_DIR, files });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// GET /backup/file/:name — download a zip that is ALREADY in STATE_DIR.
+//
+// GET /backup/export builds a fresh archive, which is the wrong thing for a
+// scheduled backup: the operator wants the snapshot taken at 04:23 last
+// Tuesday, not a new one taken now. Without this, every file the schedule
+// writes lives only on the disk it exists to protect (#1570).
+//
+// Same name guard as the restore side (`isSafeBackupName` — basename-identical,
+// `.zip` only), so this can no more read outside STATE_DIR than
+// POST /backup/import-file can.
+// ---------------------------------------------------------------------------
+router.get('/backup/file/:name', requireAdmin, async (req, res) => {
+  try {
+    const name = req.params.name;
+    if (!isSafeBackupName(name)) {
+      return res.status(400).json({ error: 'invalid backup file name' });
+    }
+    const path = join(STATE_DIR, name);
+    if (!existsSync(path)) {
+      return res.status(404).json({ error: `no such backup in state dir: ${name}` });
+    }
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.send(await readFile(path));
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
