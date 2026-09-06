@@ -20,6 +20,10 @@ import {
   SectionHeader, SaveBar, KeyStatus, KeyTestResult, KEY_HINTS,
   type SectionProps,
 } from './shared';
+// The floor's ceiling, from the same schema module the server bounds-checks
+// against — a hardcoded copy here is a client hint that can disagree with the
+// save it is meant to pre-empt.
+import { PICKER_MIN_TRACK_LENGTH_BOUNDS } from '@/lib/schemas.generated';
 
 // Provider descriptors, the cloud-key env-var map and the badge logic live in
 // ./llm/providerMeta — don't redefine them here.
@@ -1163,7 +1167,7 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
           <Input
             type="number"
             min={0}
-            max={3600}
+            max={PICKER_MIN_TRACK_LENGTH_BOUNDS.max}
             step={1}
             value={form.picker.minTrackLengthSeconds}
             onChange={(e: ChangeEvent<HTMLInputElement>) =>
@@ -1180,7 +1184,8 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
             never chosen, where a long one is simply faded out at the cap. A show
             can set its own; listener requests are always exempt.
             {' '}<strong>0 = off</strong> (the default). A non-zero value has to
-            clear the same crossfade-derived minimum the track-length cap does.
+            be at least {data?.values?.minTrackSeconds ?? 30}s &mdash; the same
+            crossfade-derived minimum the track-length cap clears.
           </div>
         </div>
       </Card>

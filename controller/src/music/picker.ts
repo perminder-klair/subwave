@@ -1028,8 +1028,10 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
           moods: moods.length ? moods : undefined,
           energy: c.energy || rec?.energy || undefined,
           // Track length in seconds — lets the pick weigh a 9-minute epic
-          // against the daypart (length is an on-air cut, never a pool filter
-          // — #447 — so the model is the only place it can be weighed).
+          // against the daypart. The CAP is an on-air cue_out cut and never a
+          // pool filter (#447), so the model is the only place the upper end
+          // can be weighed; the FLOOR (#1573) is a selection filter and has
+          // already run in buildCandidates, so nothing under it reaches here.
           secs: c.duration ?? rec?.duration_sec ?? undefined,
           // Measured acoustic facts — omitted (undefined) when un-analysed so
           // the LLM only sees them when they're real.

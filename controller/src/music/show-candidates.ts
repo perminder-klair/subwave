@@ -35,8 +35,16 @@ export function buildShowCandidateDiagnostic({ show, libraryRows, playlistRows, 
   // the strict split below, because unlike the music locks it is not gated on
   // filtersStrict — a too-short track is never picked by any path, so a funnel
   // that counted it would over-promise on exactly the shows this field exists
-  // for. starve:true: a diagnostic reports what the pickers will see, and the
-  // never-starve rescue those paths apply is a dead-air guard, not a candidate.
+  // for. starve:true: a diagnostic reports what the FILTERS do, and the
+  // never-starve rescue the pick paths apply is a dead-air guard, not a
+  // candidate — the warning below says so, so a zero here never reads as
+  // "the station will go quiet".
+  //
+  // It does NOT move the funnel's two INPUT figures: `library.indexed` is the
+  // indexed library and `playlist.total` is the playlist (which the show editor
+  // renders as "Playlist anchor: N tracks"). A field labelled with what it
+  // counts has to keep counting it; the floor's effect shows up as the drop to
+  // the steps below, which is what a funnel is for.
   const libraryPool = applyTrackFloor(libraryRows, minTrackSec, { starve: true });
   const playlistPool = playlistRows ? applyTrackFloor(playlistRows, minTrackSec, { starve: true }) : null;
   const libraryFiltered = filtered(libraryPool, locks);
@@ -46,8 +54,8 @@ export function buildShowCandidateDiagnostic({ show, libraryRows, playlistRows, 
   const playlistStrict = !!(show?.playlistStrict && playlistRows);
   return {
     strict,
-    library: { indexed: libraryPool.length, matchingFilters: libraryFiltered.length, afterExclusions: exclude(libraryFiltered, excludedIds).length, effective: playlistStrict ? (playlistEffective?.length ?? 0) : libraryEffective.length },
-    playlist: playlistPool == null ? null : { total: playlistPool.length, matchingFilters: playlistFiltered!.length, afterExclusions: exclude(playlistFiltered!, excludedIds).length, effective: playlistEffective!.length },
+    library: { indexed: libraryRows.length, matchingFilters: libraryFiltered.length, afterExclusions: exclude(libraryFiltered, excludedIds).length, effective: playlistStrict ? (playlistEffective?.length ?? 0) : libraryEffective.length },
+    playlist: playlistRows == null ? null : { total: playlistRows.length, matchingFilters: playlistFiltered!.length, afterExclusions: exclude(playlistFiltered!, excludedIds).length, effective: playlistEffective!.length },
     warnings,
   };
 }
@@ -78,6 +86,6 @@ export async function diagnoseShowCandidates(show: any): Promise<ShowCandidateDi
   // pick would refuse. Named in a warning because a smaller "indexed" figure
   // with no explanation reads as a broken library.
   const minTrackSec = settings.effectiveMinTrackSec(show);
-  if (minTrackSec) warnings.push(`Tracks shorter than ${minTrackSec}s are never picked, so they are excluded from every count below.`);
+  if (minTrackSec) warnings.push(`Minimum track length is ${minTrackSec}s, so shorter tracks are excluded from the counts below. If that leaves nothing, the station still plays: the pool picker and the offline fallback both keep going rather than go quiet.`);
   return buildShowCandidateDiagnostic({ show, libraryRows, playlistRows: playlistPool?.tracks ?? null, excludedIds, locks, minTrackSec, warnings });
 }
