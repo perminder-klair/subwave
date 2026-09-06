@@ -101,6 +101,7 @@ import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
   normalizeArchiveRetentionDays,
+  normalizeBackups,
   normalizeDjPrompts,
   normalizeDuckDepth,
   normalizePersonaArray,
@@ -413,6 +414,13 @@ export async function load() {
       // enabled archive without a stored value stays at 0, never pruned.
       retentionDays: normalizeArchiveRetentionDays(stored.archive),
     },
+    // Scheduled backups (#1570). An absent block reads as `{ cadence: 'off' }`,
+    // which is the pre-existing station exactly. This block does NOT spread
+    // DEFAULTS — a field missing from here saves, works for the rest of the
+    // process and then vanishes on the next cold load (controller/CLAUDE.md's
+    // THREE edits), which for a cadence means backups silently stopping.
+    // Pinned by a cold-load round trip in scripts/backup-schedule.test.ts.
+    backups: normalizeBackups(stored.backups),
     stream: {
       opusEnabled:
         typeof stored.stream?.opusEnabled === 'boolean'
@@ -1222,6 +1230,17 @@ export async function update(patch) {
       // restart involved.
       next.archive.retentionDays = a.retentionDays;
     }
+  }
+  if ('backups' in patch) {
+    const b = parseSettingsPatchKey<{ cadence?: string; keep?: number }>(
+      'backups',
+      patch.backups,
+    );
+    // Read live by the scheduler's hourly tick — nothing is handed to
+    // Liquidsoap, so no restart, and a cadence change takes effect on the next
+    // tick rather than needing one.
+    if (b.cadence !== undefined) next.backups.cadence = b.cadence;
+    if (b.keep !== undefined) next.backups.keep = b.keep;
   }
   if ('stream' in patch) {
     const st = parseSettingsPatchKey<Record<string, number | boolean | undefined>>(

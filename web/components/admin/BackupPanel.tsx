@@ -4,14 +4,27 @@
 // here (discussion #404). Restore has two paths because a large-library tag DB
 // can exceed Cloudflare's 100 MB upload cap and bounce with a 413 — the disk
 // restore skips the upload entirely (#612).
+//
+// The SCHEDULE (#1570) sits here rather than in a settings section because it
+// writes into the same folder the disk-restore list reads: a scheduled zip and
+// a hand-copied one are restored by the identical button below, and an operator
+// setting a cadence wants to see where the files land. It is an ordinary
+// settings key for all that — `{ backups }` through POST /settings, validated
+// by the mirrored schema before it leaves the browser.
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { AdminResponseError, adminResponse } from '../../lib/admin-query';
-import { Card, Btn, Eyebrow, Pill } from './ui';
+import { BACKUP_KEEP_BOUNDS, SETTINGS_BACKUP_CADENCES, backupsPatchSchema } from '@/lib/schemas.generated';
+import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
+import { Input } from '../ui/input';
+import { Label } from '../ui/label';
+import { FieldError } from '../ui/field';
 import { V3AlertDialog } from '../ui/alert-dialog';
-import { useRestorableBackupsQuery } from './operations-queries';
+import { operationKeys, useRestorableBackupsQuery } from './operations-queries';
+import { useSettingsMutation, useSettingsQuery } from './settings/queries';
+import type { SettingsData } from './settings/shared';
 
 interface ImportResult {
   ok?: boolean;
@@ -32,10 +45,28 @@ function fmtSize(bytes: number): string {
   return `${bytes} B`;
 }
 
+const CADENCE_LABELS: Record<string, string> = {
+  off: 'Off',
+  daily: 'Daily',
+  weekly: 'Weekly',
+  monthly: 'Monthly',
+};
+
+// What each cadence means in practice. Elapsed time, not a calendar step, and
+// checked hourly — so a station that is only powered on for part of the day
+// still gets its backup. Kept next to the labels so the two can't drift.
+const CADENCE_HINTS: Record<string, string> = {
+  off: 'No backups are written and nothing is ever deleted.',
+  daily: 'A snapshot roughly every 24 hours.',
+  weekly: 'A snapshot roughly every 7 days.',
+  monthly: 'A snapshot roughly every 30 days.',
+};
+
 export default function BackupPanel() {
   const { adminFetch, hydrated, needsAuth } = useAdminAuth();
   const queryClient = useQueryClient();
-  const backupsQuery = useRestorableBackupsQuery(adminFetch, hydrated && !needsAuth);
+  const ready = hydrated && !needsAuth;
+  const backupsQuery = useRestorableBackupsQuery(adminFetch, ready);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [exporting, setExporting] = useState(false);
@@ -48,6 +79,80 @@ export default function BackupPanel() {
   const [result, setResult] = useState<ImportResult | null>(null);
 
   const [restarting, setRestarting] = useState(false);
+
+  // ── the schedule ─────────────────────────────────────────────────────────
+  // Hydrate-once, like every other settings form: the query keeps polling
+  // (SettingsPanel shares this key), and re-seeding the inputs from each poll
+  // would overwrite whatever the operator is mid-way through typing.
+  const settingsQuery = useSettingsQuery<SettingsData>({ adminFetch, enabled: ready });
+  const saveSchedule = useSettingsMutation<SettingsData>({ adminFetch });
+  const [schedule, setSchedule] = useState<{ cadence: string; keep: string } | null>(null);
+  const [scheduleErr, setScheduleErr] = useState<string | null>(null);
+  const [scheduleFieldErrs, setScheduleFieldErrs] = useState<Record<string, string>>({});
+  const [scheduleSaved, setScheduleSaved] = useState(false);
+
+  const storedBackups = settingsQuery.data?.values?.backups;
+  useEffect(() => {
+    if (!storedBackups || schedule) return;
+    setSchedule({
+      cadence: storedBackups.cadence ?? 'off',
+      keep: String(storedBackups.keep ?? 7),
+    });
+  }, [storedBackups, schedule]);
+
+  const commitSchedule = async () => {
+    if (!schedule) return;
+    setScheduleErr(null);
+    setScheduleFieldErrs({});
+    setScheduleSaved(false);
+    // Pre-flight through the mirrored schema so a bad retention is caught
+    // before a round trip, with the same message the server would send.
+    const parsed = backupsPatchSchema.safeParse({
+      cadence: schedule.cadence,
+      // `keep` is inert while the cadence is off, and a blank box must not
+      // become a refusal on a save that only means "stop backing up".
+      ...(schedule.cadence === 'off' ? {} : { keep: schedule.keep }),
+    });
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0];
+      // The dotted path is what keys fieldErrors, matching what the server
+      // would send back for the same value.
+      const path = ['backups', ...(issue?.path ?? [])].join('.');
+      const message = issue?.message ?? 'the backup schedule is not valid';
+      setScheduleFieldErrs({ [path]: message });
+      setScheduleErr(message);
+      return;
+    }
+    try {
+      const receipt = await saveSchedule.mutateAsync({ backups: parsed.data });
+      setScheduleSaved(true);
+      // A committed POST whose confirming GET failed. The schedule IS saved —
+      // saying nothing would leave the Save button lit with no explanation,
+      // and saying "saved" alone would hide that the panel is now reading a
+      // stale envelope.
+      if (receipt.refreshError) {
+        setScheduleErr(
+          `Saved, but the station's settings could not be re-read (${receipt.refreshError}). Refresh to confirm.`,
+        );
+      }
+      // The next run may write or prune a file in the list below.
+      await queryClient.invalidateQueries({ queryKey: operationKeys.restorableBackups() });
+    } catch (e) {
+      if (e instanceof AdminResponseError) {
+        setScheduleFieldErrs(e.body?.fieldErrors ?? {});
+        setScheduleErr(
+          typeof e.body?.error === 'string' ? e.body.error : e.message,
+        );
+      } else {
+        setScheduleErr(e instanceof Error ? e.message : String(e));
+      }
+    }
+  };
+
+  const scheduleDirty = !!schedule && !!storedBackups && (
+    schedule.cadence !== (storedBackups.cadence ?? 'off')
+    || schedule.keep !== String(storedBackups.keep ?? 7)
+  );
 
   const diskFiles = backupsQuery.data?.files ?? null;
   const stateDir = backupsQuery.data?.stateDir ?? null;
@@ -179,6 +284,97 @@ export default function BackupPanel() {
       </Card>
 
       <Card
+        title="Schedule"
+        sub="Write a snapshot into the station folder on a cadence, keeping the last few."
+        right={
+          schedule && schedule.cadence !== 'off'
+            ? <Pill tone="accent">on</Pill>
+            : <Pill tone="ink">off</Pill>
+        }
+      >
+        {!schedule ? (
+          <div className="text-[12px] text-muted">Loading the schedule…</div>
+        ) : (
+          <div className="grid gap-3">
+            <div className="field">
+              <Label>Cadence</Label>
+              <Seg
+                value={schedule.cadence}
+                accent
+                options={SETTINGS_BACKUP_CADENCES.map(id => ({
+                  id,
+                  label: CADENCE_LABELS[id] ?? id,
+                  title: CADENCE_HINTS[id],
+                }))}
+                onChange={(v) => {
+                  setScheduleSaved(false);
+                  setSchedule(s => (s ? { ...s, cadence: v } : s));
+                }}
+              />
+              {scheduleFieldErrs['backups.cadence'] && (
+                <FieldError errors={[{ message: scheduleFieldErrs['backups.cadence'] }]} />
+              )}
+              <div className="field-hint">
+                {CADENCE_HINTS[schedule.cadence]} The check runs every hour and measures
+                elapsed time, so a station that is only switched on for part of the day
+                still gets its backup.
+              </div>
+            </div>
+
+            <div className="field">
+              <Label htmlFor="backups-keep">Keep the last</Label>
+              <div className="flex items-center gap-2">
+                <Input
+                  id="backups-keep"
+                  className="mono-num w-24"
+                  type="number"
+                  step={1}
+                  min={BACKUP_KEEP_BOUNDS.min}
+                  max={BACKUP_KEEP_BOUNDS.max}
+                  disabled={schedule.cadence === 'off'}
+                  value={schedule.keep}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
+                    setScheduleSaved(false);
+                    setSchedule(s => (s ? { ...s, keep: e.target.value } : s));
+                  }}
+                />
+                <span className="text-[12px] text-muted">scheduled backups</span>
+              </div>
+              {scheduleFieldErrs['backups.keep'] && (
+                <FieldError errors={[{ message: scheduleFieldErrs['backups.keep'] }]} />
+              )}
+              <div className="field-hint">
+                Older ones are deleted once a new snapshot lands. Retention only ever
+                touches files the schedule wrote itself
+                (<code className="text-ink">subwave-auto-backup-…</code>) — a backup you
+                downloaded or copied into the folder by hand is never removed, however
+                low this is set. Each snapshot is a full copy including the tag database,
+                so on a large library these are not small.
+              </div>
+            </div>
+
+            {scheduleErr && (
+              <div className="text-[12px] leading-[1.6] text-[var(--danger)]">
+                {scheduleErr}
+              </div>
+            )}
+            <div className="flex flex-wrap items-center gap-2">
+              <Btn
+                tone="accent"
+                onClick={() => { void commitSchedule(); }}
+                disabled={saveSchedule.isPending || !scheduleDirty}
+              >
+                {saveSchedule.isPending ? 'Saving…' : 'Save schedule'}
+              </Btn>
+              {scheduleSaved && !scheduleDirty && (
+                <span className="text-[12px] text-muted">Saved.</span>
+              )}
+            </div>
+          </div>
+        )}
+      </Card>
+
+      <Card
         title="Restore"
         sub="Overwrite this station's config + tags from a backup zip."
         right={<Pill tone="accent">overwrites</Pill>}
@@ -258,7 +454,13 @@ export default function BackupPanel() {
                 className="flex items-center justify-between gap-3 border border-ink/15 p-2"
               >
                 <div className="min-w-0">
-                  <div className="truncate text-[12px] font-bold">{f.name}</div>
+                  <div className="flex items-center gap-2">
+                    <div className="truncate text-[12px] font-bold">{f.name}</div>
+                    {/* Which files retention owns — the same grammar the sweep
+                        uses, so an operator can see at a glance that the zip
+                        they copied in is not on the schedule's list. */}
+                    {f.auto && <Pill tone="ink">scheduled</Pill>}
+                  </div>
                   <div className="text-[11px] text-muted">
                     {fmtSize(f.size)} · {new Date(f.mtime).toLocaleString()}
                   </div>

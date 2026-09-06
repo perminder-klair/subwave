@@ -29,7 +29,11 @@ import {
   type ShowSchemaContext,
 } from '../schemas/show.js';
 import { resolveShowIds } from '../schemas/show-server.js';
-import { DUCK_DEPTH_BOUNDS } from '../schemas/settings.js';
+import {
+  BACKUP_KEEP_BOUNDS,
+  DUCK_DEPTH_BOUNDS,
+  SETTINGS_BACKUP_CADENCES,
+} from '../schemas/settings.js';
 // The persona + prompt-library rules themselves, so this lenient path and
 // update()'s strict one cannot restate them differently.
 import {
@@ -61,6 +65,27 @@ export function normalizeArchiveRetentionDays(archive: any): number {
   if (Number.isInteger(v) && v >= 0) return v;
   if (archive?.enabled === true) return 0;
   return DEFAULTS.archive.retentionDays;
+}
+
+// The scheduled-backup block, repaired rather than refused — load()'s input is
+// a hand-editable file and a backup restore is the other way in.
+//
+// Both repairs fall the SAME way on purpose: toward the shipped default, which
+// for the cadence is `off`. This is the only scheduled job that deletes
+// operator files, so an unreadable cadence must mean "do nothing" rather than
+// "guess daily" — an upgrade, a typo and a settings.json from a newer version
+// all land on the pre-existing behaviour. `keep` is clamped instead of dropped
+// because a cadence the operator DID set must not be disarmed by a bad
+// retention number sitting next to it.
+export function normalizeBackups(backups: any): { cadence: string; keep: number } {
+  const cadence = SETTINGS_BACKUP_CADENCES.includes(backups?.cadence)
+    ? backups.cadence
+    : DEFAULTS.backups.cadence;
+  const raw = Number(backups?.keep);
+  const keep = Number.isFinite(raw)
+    ? Math.min(BACKUP_KEEP_BOUNDS.max, Math.max(BACKUP_KEEP_BOUNDS.min, Math.floor(raw)))
+    : DEFAULTS.backups.keep;
+  return { cadence, keep };
 }
 
 // A stored `smooth_add` duck depth, repaired rather than refused — load()'s

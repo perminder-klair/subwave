@@ -103,6 +103,10 @@ router.get('/settings', requireAdmin, async (req, res) => {
         // admin/show UI so client hints match server validation.
         minTrackSeconds: settings.minTrackSeconds(s),
         archive: s.archive,
+        // Edited from the Backup panel rather than a settings section — the
+        // schedule belongs beside Export/Restore, but it saves through the one
+        // POST /settings chokepoint like every other key.
+        backups: s.backups,
         stream: s.stream,
         loudness: s.loudness,
         silenceTrim: s.silenceTrim,
