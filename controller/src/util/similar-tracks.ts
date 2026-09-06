@@ -11,17 +11,24 @@
 //      an API consumer unable to tell "ask me again after the analysis pass"
 //      from "your track id is wrong". The route always answers 200; the reason
 //      carries the difference.
-//   2. The PUBLIC track shape. This endpoint is reachable by listeners, so it
-//      returns a strict SUBSET of the admin sound-search row — no tagger
-//      provenance (`source`, `originalYearSource`), no era-trust internals, no
-//      blocklist annotation (blocked rows are already gone, see below). Widening
-//      it is the bug; adding a field here publishes it to the internet.
+//   2. The PUBLIC track shape. This endpoint is reachable by listeners, so
+//      every field it carries is one some EXISTING unauthenticated or admin
+//      read already publishes: the scalars of /now-playing (`genre`/`genres`,
+//      `moods`, `energy`, `bpm`, `musicalKey`, the era `year`) plus `album`,
+//      `duration`, `instrumental` and `similarity` from the admin sound-search
+//      row. Nothing tagger-internal — no provenance (`source`,
+//      `originalYearSource`), no era-trust flags, no blocklist annotation
+//      (blocked rows are already gone, see below), and no `audioMoods`: the
+//      CLAP-derived labels are an admin-console surface (/library/browse) and
+//      this route is NOT the place they first go public. Widening it is the
+//      bug; adding a field here publishes it to the internet.
 //
 // The blocklist is NOT applied here. `library.tracksLikeThisAudio` already runs
 // every row through `blocklist.rejectBlocked` — the existing chokepoint — and a
 // second filter at this call site is exactly the duplication the root CLAUDE.md
 // warns about.
 import { resolveEraYear } from '../music/era-year.js';
+import { isInstrumental } from '../music/lyric-vocal.js';
 
 // Result-count bounds. The default matches subwave_search_library's 12-result
 // page; the cap keeps a single call from walking a large KNN for a caller who
@@ -30,8 +37,8 @@ export const SIMILAR_LIMIT_DEFAULT = 12;
 export const SIMILAR_LIMIT_MAX = 50;
 
 // Pull a wide KNN and cap AFTER the archive/blocklist filters, so junk rows
-// don't eat result slots — same shape as /library/search-sound.
-export const SIMILAR_KNN_FLOOR = 60;
+// don't eat result slots.
+export const SOUND_KNN_FLOOR = 60;
 
 export function parseSimilarLimit(raw: unknown): number {
   const n = parseInt(String(raw ?? ''), 10);
@@ -39,8 +46,12 @@ export function parseSimilarLimit(raw: unknown): number {
   return Math.min(Math.max(n, 1), SIMILAR_LIMIT_MAX);
 }
 
-export function similarKnnWidth(limit: number): number {
-  return Math.max(limit * 2, SIMILAR_KNN_FLOOR);
+// Shared by BOTH audio-KNN reads — /similar-tracks here and the admin
+// /library/search-sound — because they cap the same way for the same reason
+// and two inlined copies of `Math.max(limit * 2, 60)` drift the moment either
+// gains a filter. Not named "similar*": search-sound is the other caller.
+export function soundKnnWidth(limit: number): number {
+  return Math.max(limit * 2, SOUND_KNN_FLOOR);
 }
 
 export type SimilarReason =
@@ -53,13 +64,22 @@ export type SimilarReason =
 export interface SimilarOutcomeInputs {
   /** library.stats().withAudioEmbedding — how many tracks carry a CLAP vector. */
   audioIndexSize: number;
-  /** library.stats().total — tagged tracks, for the coverage sentence. */
+  /**
+   * library.stats().mirrorTotal — every row in the library mirror, for the
+   * coverage sentence. NOT `total`, which counts only tracks the TAGGER has
+   * reached: the analyzer writes CLAP vectors on its own schedule, so on a
+   * station where analysis has run ahead of tagging `withAudioEmbedding`
+   * exceeds `total` and the sentence reads "covers 900 of 500 tracks".
+   */
   libraryTotal: number;
   /** A library track matched the id (or the free-text seed). */
   seedFound: boolean;
   /** That track carries a CLAP audio vector. */
   seedHasVector: boolean;
-  /** Rows left after the archive filter and the blocklist chokepoint. */
+  /**
+   * Rows left after the blocklist chokepoint, the station-archive filter and
+   * the seed's own self-exclusion — i.e. what the caller actually receives.
+   */
   neighbourCount: number;
 }
 
@@ -93,7 +113,9 @@ export function similarTracksOutcome(i: SimilarOutcomeInputs): SimilarOutcome {
   if (i.neighbourCount <= 0) {
     return {
       reason: 'no-neighbours',
-      message: 'the seed is analysed, but nothing close to it survived the never-play list.',
+      message:
+        'the seed is analysed, but nothing close to it survived filtering (the ' +
+        'never-play list, the station archive, and the seed itself).',
     };
   }
   return { reason: 'ok', message: null };
@@ -111,7 +133,6 @@ export interface SimilarSourceRow {
   genres?: string[] | null;
   genre?: string | null;
   moods?: string[] | null;
-  audioMoods?: string[] | null;
   energy?: string | null;
   durationSec?: number | null;
   bpm?: number | null;
@@ -130,7 +151,6 @@ export interface PublicSimilarTrack {
   genres: string[];
   duration: number | null;
   moods: string[];
-  audioMoods: string[];
   energy: string | null;
   bpm: number | null;
   musicalKey: string | null;
@@ -156,15 +176,12 @@ export function publicSimilarTrack(t: SimilarSourceRow): PublicSimilarTrack {
     genres: t.genres ?? [],
     duration: t.durationSec ?? null,
     moods: t.moods ?? [],
-    // Sound-derived moods, kept separate from the editorial ones — this is a
-    // sound-similarity endpoint, so the audio labels are the relevant ones.
-    audioMoods: t.audioMoods ?? [],
     energy: t.energy ?? null,
     bpm: t.bpm ?? null,
     musicalKey: t.musicalKey ?? null,
     // Same derivation as /library/browse: [] = analysed, no vocals detected;
     // null = never analysed.
-    instrumental: t.vocalRanges == null ? null : t.vocalRanges.length === 0,
+    instrumental: isInstrumental(t.vocalRanges),
     similarity: typeof t._similarity === 'number' ? t._similarity : null,
   };
 }

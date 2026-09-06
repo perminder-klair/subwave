@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import * as subsonic from '../music/subsonic.js';
 import * as library from '../music/library.js';
+import * as blocklist from '../music/blocklist.js';
 import * as settings from '../settings.js';
 import { getFullContext, geocodePlace } from '../context.js';
 import { queue } from '../broadcast/queue.js';
@@ -32,7 +33,7 @@ import { resolveThemeProvenance } from '../util/theme-provenance.js';
 import {
   parseSimilarLimit,
   publicSimilarTrack,
-  similarKnnWidth,
+  soundKnnWidth,
   similarTracksOutcome,
 } from '../util/similar-tracks.js';
 import { checkAuthRateLimit, clientIp, listenerAuthFailureDelayMs } from '../middleware/ratelimit.js';
@@ -669,6 +670,18 @@ router.post(
   },
 );
 
+// The one seed resolution both /similar-tracks paths share: a library row by
+// id, echoed back as `seed` — or null when there is no such track OR it is on
+// the never-play list. library.slimById carries albumId/artistId, so
+// blocklist.matchOf reaches its exact id tiers instead of falling back to
+// (album name, artist), which a compilation defeats. The blocklist is the
+// existing hitOf()/isBlocked() chokepoint, not a second rule filter.
+function seedRowFor(id: string): { id: string; title: string | null; artist: string | null } | null {
+  const row = library.slimById(id);
+  if (!row || blocklist.isBlocked(row)) return null;
+  return { id, title: row.title ?? null, artist: row.artist ?? null };
+}
+
 // ---------------------------------------------------------------------------
 // GET /similar-tracks?id=<trackId>|q=<terms>&limit=N — the CLAP "sounds like
 // this" lookup, outside the admin library panel (#1575). An operator building
@@ -687,8 +700,14 @@ router.post(
 // operator watching a capability flag) tells an API consumer none of them
 // apart. util/similar-tracks.ts owns which is which.
 //
-// Blocklist: applied once, inside library.tracksLikeThisAudio's existing
-// rejectBlocked chokepoint. Never add a second filter here.
+// Blocklist: the neighbours are filtered once, inside
+// library.tracksLikeThisAudio's existing rejectBlocked chokepoint — never add
+// a second filter over THOSE. The seed echo is the separate case: it is
+// resolved by id / free text, and both library.get() and library.filter() are
+// blocklist-blind, so without the isBlocked() call in seedRowFor below a
+// never-play track's id, title and artist come back in `seed` — and on a
+// public station `q` makes that an unauthenticated way to look one up by name.
+// The blocklist is absolute, so a blocked seed reads as `seed-not-found`.
 // ---------------------------------------------------------------------------
 router.get('/similar-tracks', requireStationAuth, async (req, res) => {
   const id = (typeof req.query?.id === 'string' ? req.query.id : '').trim();
@@ -711,31 +730,30 @@ router.get('/similar-tracks', requireStationAuth, async (req, res) => {
     let seedFound = false;
 
     if (id) {
-      const t = library.get(id);
-      if (t) {
+      const row = seedRowFor(id);
+      if (row) {
         seedFound = true;
-        seedRow = { id, title: t.title ?? null, artist: t.artist ?? null };
+        seedRow = row;
         if (library.hasAudioVector(id)) seedId = id;
       }
     }
     if (!seedId && q) {
-      const rows = library.filter({ q, limit: 8 }).rows;
-      if (rows.length) {
+      for (const cand of library.filter({ q, limit: 8 }).rows) {
+        const row = seedRowFor(cand.id);
+        if (!row) continue;
         seedFound = true;
         // Report the best text match even when none of them is analysed —
         // that is what makes 'seed-not-analysed' actionable.
-        if (!seedRow) seedRow = { id: rows[0].id, title: rows[0].title ?? null, artist: rows[0].artist ?? null };
-        for (const row of rows) {
-          if (library.hasAudioVector(row.id)) {
-            seedId = row.id;
-            seedRow = { id: row.id, title: row.title ?? null, artist: row.artist ?? null };
-            break;
-          }
+        if (!seedRow) seedRow = row;
+        if (library.hasAudioVector(cand.id)) {
+          seedId = cand.id;
+          seedRow = row;
+          break;
         }
       }
     }
 
-    const hits = seedId ? library.tracksLikeThisAudio(seedId, similarKnnWidth(limit)) : [];
+    const hits = seedId ? library.tracksLikeThisAudio(seedId, soundKnnWidth(limit)) : [];
     const results = hits
       // The station's own hourly archive mixdowns are not music (issue #273);
       // a co-located Navidrome that scans state/archive puts them in the index.
@@ -746,7 +764,10 @@ router.get('/similar-tracks', requireStationAuth, async (req, res) => {
 
     const outcome = similarTracksOutcome({
       audioIndexSize: stats.withAudioEmbedding ?? 0,
-      libraryTotal: stats.total ?? 0,
+      // mirrorTotal, not total: the analyzer writes CLAP vectors independently
+      // of the tagger, so `total` (tagged only) can be the SMALLER number and
+      // the coverage sentence turns into nonsense.
+      libraryTotal: stats.mirrorTotal ?? 0,
       seedFound,
       seedHasVector: Boolean(seedId),
       neighbourCount: results.length,

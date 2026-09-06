@@ -170,13 +170,30 @@ export function commitGlobalRateLimit() {
 // brute-forceable over HTTP. In-memory like the above; a controller restart
 // resets it, which is fine — an attacker gains one window, not the password.
 // ---------------------------------------------------------------------------
+//
+// Each SURFACE gets its own bucket, keyed (surface, ip). The player's password
+// box and the station-gated API reads (GET /similar-tracks) share the ceiling
+// SHAPE but never the counter: an operator's call-in agent left polling with a
+// stale password would otherwise burn the twenty attempts a HUMAN on that
+// address needs to get into the player, so a misconfigured integration could
+// lock a listener out of the station. Each surface keeps its own brute-force
+// bound — the split loosens nothing, it just stops one surface starving
+// another. Pass the surface explicitly; the default is the password box.
+// ---------------------------------------------------------------------------
 const AUTH_WINDOW_MS = 15 * 60_000;
 const AUTH_WINDOW_CAP = 20;
-const authHistory = new Map(); // ip → [ts, ...]
+const authHistories = new Map(); // surface → Map(ip → [ts, ...])
 
-export function checkAuthRateLimit(ip) {
+function authHistoryFor(surface) {
+  let h = authHistories.get(surface);
+  if (!h) { h = new Map(); authHistories.set(surface, h); }
+  return h;
+}
+
+export function checkAuthRateLimit(ip, surface = 'station-auth') {
   const now = Date.now();
   const cutoff = now - AUTH_WINDOW_MS;
+  const authHistory = authHistoryFor(surface);
   const hits = (authHistory.get(ip) || []).filter(t => t > cutoff);
   if (hits.length >= AUTH_WINDOW_CAP) {
     return { ok: false, retryAfter: Math.ceil((hits[0] + AUTH_WINDOW_MS - now) / 1000) };

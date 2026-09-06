@@ -15,6 +15,7 @@ import { resolveEmbeddingDim } from './embeddings.js';
 import { openingKeyFrom, endingKeyFrom } from './mix.js';
 import { DEEP_CUT_DAYS, EMPTY_AIRED_INDEX, type AiredIndex } from './airing.js';
 import { trackKey, type CandidateLike } from './recency.js';
+import { isInstrumental } from './lyric-vocal.js';
 
 let loaded = false;
 
@@ -229,6 +230,18 @@ export function countTagged(): number {
 // Lean whole-library projection for the explicitly requested Show-editor candidate diagnostic.
 export function candidateFilterTracks() {
   return loaded ? db.candidateFilterTracks() : [];
+}
+
+// One library row in the SAME slim shape every pool source hands back — the
+// shape blocklist.matchOf reads, so it carries albumId/artistId and can reach
+// the exact id tiers rather than falling back to (album name, artist). Exists
+// because a caller that resolves a track BY ID still has to run it through the
+// blocklist chokepoint, and get()'s projection carries no ids (and parses the
+// heavy acoustic blobs on the way). null when the track has no library row.
+export function slimById(songId: string): any {
+  if (!loaded || !songId) return null;
+  const t = db.getTrack(songId);
+  return t ? slimTrack(t) : null;
 }
 
 // The album-cooldown exemption facts (#1485 FR 3) — is_compilation +
@@ -742,7 +755,7 @@ export function filter(opts: FilterOpts = {}): { total: number; rows: FilteredRo
       musicalKey: r.musicalKey,
       loudnessLufs: r.loudnessLufs,
       paceMean: paceMeanOf(r.pace),
-      instrumental: r.vocalRanges == null ? null : r.vocalRanges.length === 0,
+      instrumental: isInstrumental(r.vocalRanges),
     })),
   };
 }

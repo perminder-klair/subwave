@@ -87,7 +87,14 @@ export function stationAuthDecision(opts: {
 //   ?auth=<password>                  the SAME query token Icecast forwards on
 //                                     the stream mount (web/lib/stationAuth.ts
 //                                     withStreamAuth), so a client that already
-//                                     built a stream URL needs nothing new
+//                                     built a stream URL needs nothing new.
+//                                     LAST on purpose and documented as the
+//                                     fallback: a query string lands in
+//                                     reverse-proxy access logs, browser
+//                                     history and Referer, which a header does
+//                                     not. It stays supported because the
+//                                     stream mount has no header to use, not
+//                                     because it is the good option.
 //
 // Kept pure and beside stationAuthDecision so the read path and the save path
 // can't drift on what counts as a credential. First non-empty wins; a repeated

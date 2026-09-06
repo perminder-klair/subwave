@@ -36,6 +36,17 @@ export interface LyricVocalResult {
   introMs: number | null; // first vocal onset, or null for an instrumental
 }
 
+// The one reading of a STORED track's vocalRanges column, shared by every row
+// mapper that publishes an `instrumental` field (/library/browse,
+// /library/search-sound, /dj/search, the library filter projection, and
+// /similar-tracks). Three states, and the third is the one an inlined
+// `!ranges?.length` quietly loses: [] means the analysis RAN and found no
+// singing; null/undefined means it never ran. A consumer that can't tell those
+// apart renders "instrumental" over every un-analysed track in the library.
+export function isInstrumental(vocalRanges: unknown[] | null | undefined): boolean | null {
+  return vocalRanges == null ? null : vocalRanges.length === 0;
+}
+
 // A lyric "body" that is really a no-lyrics/instrumental marker, not sung words.
 // Covers the LRC `[au: instrumental]` metadata tag some players surface as a
 // line and the common single-line "Instrumental" placeholder. Anchored to the

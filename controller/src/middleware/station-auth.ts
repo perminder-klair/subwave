@@ -18,15 +18,22 @@
 import type { NextFunction, Request, Response } from 'express';
 import * as settings from '../settings.js';
 import { stationAuthCandidate, stationAuthDecision } from '../util/listener-auth.js';
-import { checkAuthRateLimit, clientIp } from '../middleware/ratelimit.js';
+import { checkAuthRateLimit, clientIp } from './ratelimit.js';
 
-// Only FAILURES are counted against the shared station-password bucket, unlike
-// POST /station-auth which counts every attempt. That endpoint is a password
-// box a human pokes a handful of times; this one is a read an agent may poll,
-// and charging correct calls to a 20-per-15-min ceiling would throttle the
-// authorised caller this route exists for. Counting failures alone keeps the
-// brute-force bound without inventing a new oracle: a wrong password already
-// answers "no", and 429-instead-of-401 says nothing 401 didn't.
+// Two deliberate differences from POST /station-auth's use of the same limiter.
+//
+// Only FAILURES are counted. That endpoint is a password box a human pokes a
+// handful of times; this one is a read an agent may poll, and charging correct
+// calls to a 20-per-15-min ceiling would throttle the authorised caller this
+// route exists for. Counting failures alone keeps the brute-force bound
+// without inventing a new oracle: a wrong password already answers "no", and
+// 429-instead-of-401 says nothing 401 didn't.
+//
+// And they are counted in this route's OWN bucket, not the password box's. The
+// ceiling is per (surface, ip), so an operator's call-in agent left polling
+// with a stale password spends its own twenty attempts and never the ones a
+// HUMAN on that address needs to unlock the player. A misconfigured
+// integration must not be able to lock a listener out of the station.
 export async function requireStationAuth(req: Request, res: Response, next: NextFunction) {
   await settings.load();
   const s = settings.get();
@@ -42,7 +49,7 @@ export async function requireStationAuth(req: Request, res: Response, next: Next
   });
   if (ok) return next();
 
-  const gate = checkAuthRateLimit(clientIp(req));
+  const gate = checkAuthRateLimit(clientIp(req), 'station-read');
   if (!gate.ok) {
     res.setHeader('Retry-After', String(gate.retryAfter));
     return res.status(429).json({ error: 'too many attempts' });
@@ -50,6 +57,7 @@ export async function requireStationAuth(req: Request, res: Response, next: Next
   return res.status(401).json({
     error:
       'station password required — this station is private. Send it as an ' +
-      'x-station-auth header, an Authorization: Bearer token, or an ?auth= query param.',
+      'x-station-auth header (preferred), an Authorization: Bearer token, or ' +
+      'an ?auth= query param (logged by proxies — a header is safer).',
   });
 }

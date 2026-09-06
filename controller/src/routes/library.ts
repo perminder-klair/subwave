@@ -16,6 +16,8 @@ import * as musicbrainz from '../music/musicbrainz.js';
 import * as settings from '../settings.js';
 import * as embeddings from '../music/embeddings.js';
 import { resolveEraYear } from '../music/show-filter.js';
+import { isInstrumental } from '../music/lyric-vocal.js';
+import { soundKnnWidth } from '../util/similar-tracks.js';
 import { buildGenreSuggest } from '../music/genre-suggest.js';
 import { tagBatch, TAGGER_CONTRACT_VERSION } from '../music/tagger-core.js';
 import { promptVocabHash } from '../music/embeddings.js';
@@ -172,7 +174,7 @@ router.get('/library/liked', requireAdmin, async (req, res) => {
         bpm: rec?.bpm ?? null,
         musicalKey: rec?.musicalKey ?? null,
         loudnessLufs: rec?.loudnessLufs ?? null,
-        instrumental: rec?.vocalRanges == null ? null : rec.vocalRanges.length === 0,
+        instrumental: isInstrumental(rec?.vocalRanges),
         likeCount: entry.count,
         likedByOperator: entry.operator,
         lastLikedAt: entry.lastLikedAt,
@@ -233,7 +235,8 @@ router.get('/library/search-sound', requireAdmin, async (req, res) => {
       });
     }
     // Wide KNN, capped after the archive filter so junk rows don't eat slots.
-    const hits = library.tracksByAudioVector(vecs[0], Math.max(limit * 2, 60));
+    // Same width rule as GET /similar-tracks — shared, not restated.
+    const hits = library.tracksByAudioVector(vecs[0], soundKnnWidth(limit));
     const results = hits
       .filter((t) => !subsonic.isStationArchive(t))
       .slice(0, limit)
@@ -255,7 +258,7 @@ router.get('/library/search-sound', requireAdmin, async (req, res) => {
         bpm: t.bpm ?? null,
         musicalKey: t.musicalKey ?? null,
         loudnessLufs: t.loudnessLufs ?? null,
-        instrumental: t.vocalRanges == null ? null : t.vocalRanges.length === 0,
+        instrumental: isInstrumental(t.vocalRanges),
         similarity: typeof t._similarity === 'number' ? t._similarity : null,
       }));
     res.json({ results: blocklist.annotate(results) });

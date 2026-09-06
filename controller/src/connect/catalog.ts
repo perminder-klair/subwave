@@ -275,8 +275,10 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
           'works for instrumentals and non-English tracks. Pass `id` (a track id, ' +
           'e.g. now-playing\'s `subsonic_id`) or `q` (free text resolved to a seed). ' +
           'Gated by the STATION password, not the admin one: open on a public ' +
-          'station, and on a private one send it as an `x-station-auth` header, an ' +
-          '`Authorization: Bearer` token, or an `?auth=` query param. Never-play ' +
+          'station, and on a private one send it as an `x-station-auth` header ' +
+          '(preferred), an `Authorization: Bearer` token, or an `?auth=` query ' +
+          'param — the last only where a header is not available, since a query ' +
+          'string lands in proxy access logs. Never-play ' +
           'tracks are already filtered out. It never errors on a library without ' +
           'audio analysis — `results` comes back empty with a `reason` ' +
           '(`no-audio-index`, `seed-not-found`, `seed-not-analysed`, `no-neighbours`).',
@@ -299,7 +301,6 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
               genres: ['Electronic', 'Downtempo'],
               duration: 292,
               moods: ['hypnotic'],
-              audioMoods: ['nocturnal'],
               energy: 'medium',
               bpm: 112,
               musicalKey: 'Am',

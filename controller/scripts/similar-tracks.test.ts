@@ -32,7 +32,7 @@ const {
   SIMILAR_LIMIT_MAX,
   parseSimilarLimit,
   publicSimilarTrack,
-  similarKnnWidth,
+  soundKnnWidth,
   similarTracksOutcome,
 } = await import('../src/util/similar-tracks.js');
 const { stationAuthCandidate, stationAuthDecision } = await import('../src/util/listener-auth.js');
@@ -80,8 +80,8 @@ test('limit clamps rather than trusting the caller', () => {
 
   // The KNN is deliberately WIDER than the page: the archive filter and the
   // blocklist cut rows after the search, so a narrow pull returns short pages.
-  assert.equal(similarKnnWidth(12), 60);
-  assert.equal(similarKnnWidth(50), 100);
+  assert.equal(soundKnnWidth(12), 60);
+  assert.equal(soundKnnWidth(50), 100);
 });
 
 // --- the public row shape -------------------------------------------------
@@ -117,12 +117,20 @@ test('the published row is a fixed, non-widening subset', () => {
   assert.deepEqual(
     Object.keys(row).sort(),
     [
-      'album', 'artist', 'audioMoods', 'bpm', 'duration', 'energy', 'genre',
-      'genres', 'id', 'instrumental', 'moods', 'musicalKey', 'similarity',
-      'title', 'year',
+      'album', 'artist', 'bpm', 'duration', 'energy', 'genre', 'genres', 'id',
+      'instrumental', 'moods', 'musicalKey', 'similarity', 'title', 'year',
     ],
     'adding a key here publishes it to the internet — do it deliberately',
   );
+});
+
+test('the CLAP-derived audioMoods stay an admin surface', () => {
+  // The seed row carries audioMoods and /library/browse publishes them behind
+  // requireAdmin. This route is reachable with NO credential on a public
+  // station, so it is not the place they first go public — the issue's
+  // constraint is "never widen it", and the widest reading of that is the one
+  // that can't leak.
+  assert.equal('audioMoods' in publicSimilarTrack(SEED_ROW as never), false);
 });
 
 test('the year is the ERA year, never the raw release year', () => {
@@ -282,6 +290,32 @@ test('a lock with no password on file is closed, not open', async () => {
     stationAuthDecision({ privatePlayer: true, listenerAuth: false, password: '', candidate: '' }),
     false,
   );
+});
+
+// --- the failure counter is this route's own ------------------------------
+
+test('a failing API read cannot spend the player password box\'s attempts', async () => {
+  // Both surfaces use checkAuthRateLimit with the same 20-per-15-min ceiling,
+  // but on separate counters. An operator's call-in agent left polling with a
+  // stale password must not burn the twenty attempts a HUMAN on that address
+  // needs to unlock the player — a misconfigured integration locking a
+  // listener out of the station is a worse failure than the one the cap is for.
+  const { checkAuthRateLimit } = await import('../src/middleware/ratelimit.js');
+  const ip = '198.51.100.7';
+
+  for (let i = 0; i < 20; i++) {
+    assert.equal(checkAuthRateLimit(ip, 'station-read').ok, true, `read attempt ${i + 1} is within cap`);
+  }
+  const tripped = checkAuthRateLimit(ip, 'station-read');
+  assert.equal(tripped.ok, false, 'the read surface still has a brute-force bound');
+  assert.ok(Number(tripped.retryAfter) > 0);
+
+  // Same IP, same instant, other surface: untouched.
+  assert.equal(checkAuthRateLimit(ip, 'station-auth').ok, true, 'the password box is unaffected');
+
+  // And the default argument is the password box, so the existing call in
+  // POST /station-auth keeps its historical counter.
+  assert.equal(checkAuthRateLimit('203.0.113.250').ok, true);
 });
 
 // --- the route is actually behind the gate --------------------------------
