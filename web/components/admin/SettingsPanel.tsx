@@ -1445,20 +1445,18 @@ export default function SettingsPanel() {
                     restart needed.
                   </div>
                   {(() => {
-                    // Both floors together — a cut needs a real overrun to prevent AND
-                    // enough of the track aired before the boundary — mean nothing shorter
-                    // than this can ever be cut. A max-track-length cap at or below it
-                    // therefore switches this switch off, silently, which is exactly the
-                    // combination an operator sets deliberately and then reports as broken.
+                    // The minimum play time plus overrun tolerance prevents boundary
+                    // cuts at this cap. Shows can override the station cap.
                     const floor = data?.values?.boundaryFadeMinTrackSeconds ?? 150;
                     const cap = Number(form.maxTrackSeconds);
                     if (!form.fadeAtShowEnd || !Number.isFinite(cap) || cap <= 0 || cap > floor) return null;
                     return (
                       <div className="field-hint italic">
-                        Nothing will be cut while <b>Maximum track length</b> is {cap}s: a fade
-                        only arms on a track longer than {floor}s, because it needs a real
-                        overrun to prevent and enough of the record aired before the boundary to
-                        be worth cutting. The {cap}s cap already stops the spill on its own.
+                        With <b>Maximum track length</b> at {cap}s, boundary fading cannot apply
+                        to tracks using this cap: it requires more than {floor}s of playable
+                        music. The cap limits track length, but a track starting near the end
+                        of a show can still run into the next one. Shows that override this
+                        cap may still use boundary fading.
                       </div>
                     );
                   })()}
