@@ -217,6 +217,8 @@ services:
         WITH_DEMUCS: ${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
     # 0 = don't create this container at all (see the off switch above).
+    # 0 and 1 are the ONLY valid values: container_name is fixed above, and
+    # compose refuses a fixed name for >1 replica, so 2 fails every command.
     deploy:
       replicas: ${ANALYZER_REPLICAS:-1}
     restart: unless-stopped

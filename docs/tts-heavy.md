@@ -78,6 +78,15 @@ Then `docker compose up -d`. The container is **stopped and removed**, and stays
 gone across every subsequent `up`, `restart` and reboot. Set the line back to
 `1` (or delete it) and the next `up -d` recreates it.
 
+**`0` and `1` are the only valid values.** The service pins
+`container_name: sub-wave-analyzer` so the rest of the stack and the docs can
+name it, and Compose refuses a fixed container name for more than one replica —
+so `ANALYZER_REPLICAS=2` fails *every* Compose command with
+`can't set container_name and analyzer as container name must be unique`, not
+just `up`. A non-integer (`ANALYZER_REPLICAS=false`) is likewise a hard
+interpolation error rather than a silent fallback; the variable is named for a
+count, not a boolean, so that nobody reaches for `false` and then cannot boot.
+
 This replaces the old advice of `docker compose stop analyzer`, which had to be
 repeated after *every* `up -d` — `up` restarts a service you stopped by hand.
 
@@ -88,7 +97,7 @@ configured, and otherwise resolves **no backend at all**. An analysis pass then
 returns immediately with a single log line —
 
 ```
-[analyze] no analysis backend (analyzer sidecar / ANALYZE_URL / local librosa venv) — skipping
+[analyze] no analysis backend (ANALYZE_URL sidecar / ANALYZE_PYTHON venv) — skipping
 ```
 
 — rather than erroring per track. **Text tagging is untouched**: it runs on the
@@ -99,8 +108,12 @@ panel simply reads "acoustic engine off" until a backend answers again.
 **It's Compose-only.** The AIO one-click image runs the analyzer **in-process**
 (a `librosa` venv the controller drives over stdio), not as a service, so there
 is no container for `ANALYZER_REPLICAS` to remove and the variable does nothing
-there. To send an AIO's analysis elsewhere, set `ANALYZE_URL` — a reachable
-sidecar wins over the in-process venv.
+there. Setting it to `0` on an AIO is the trap: analysis keeps running and keeps
+its RAM, so the supervisor logs a warning at boot naming the variable that
+*does* work there. To actually stop an AIO analysing, blank the built-in
+`ANALYZE_PYTHON` variable (set it to an empty value) — the controller reads an
+empty path as "no local backend". To send an AIO's analysis elsewhere instead,
+set `ANALYZE_URL`: a reachable sidecar wins over the in-process venv.
 
 > **Why a replica count and not a Compose profile?** Profiles are strictly
 > opt-in: there is no way to spell "on unless you say otherwise". Gating the

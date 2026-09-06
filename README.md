@@ -182,6 +182,18 @@ That repoints the `analyzer` service at `subwave-analyzer-heavy` (CLAP + Demucs,
 also offers it, and Unraid one-click users pull the `subwave-aio-heavy` image
 instead. Only the expressive *voices* above need the separate `tts-heavy` sidecar.
 
+If analysis already runs somewhere else — a GPU box you point `ANALYZE_URL` at —
+you can drop the redundant local container entirely with one more line:
+
+```bash
+# in your root .env — 0 or 1 only; unset means 1 (the default-on station)
+ANALYZER_REPLICAS=0
+```
+
+The next `docker compose up -d` removes it and it stays gone. This is a Compose
+setting, so it does nothing on the all-in-one image, which runs the analyzer
+in-process. See [`docs/tts-heavy.md`](docs/tts-heavy.md#turning-the-analyzer-off).
+
 Hosts with an NVIDIA GPU can run the heavy stack on CUDA instead. For a one-off
 run, layer the `docker-compose.analyzer-gpu.yml` overlay:
 

@@ -297,6 +297,8 @@ services:
         WITH_DEMUCS: \${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
     # 0 = don't create this container at all (see the off switch above).
+    # 0 and 1 are the ONLY valid values: container_name is fixed above, and
+    # compose refuses a fixed name for >1 replica, so 2 fails every command.
     deploy:
       replicas: \${ANALYZER_REPLICAS:-1}
     restart: unless-stopped
@@ -608,6 +610,8 @@ services:
         WITH_DEMUCS: \${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
     # 0 = don't create this container at all (see the off switch above).
+    # 0 and 1 are the ONLY valid values: container_name is fixed above, and
+    # compose refuses a fixed name for >1 replica, so 2 fails every command.
     deploy:
       replicas: \${ANALYZER_REPLICAS:-1}
     restart: unless-stopped
@@ -869,6 +873,8 @@ services:
         WITH_DEMUCS: \${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
     # 0 = don't create this container at all (see the off switch above).
+    # 0 and 1 are the ONLY valid values: container_name is fixed above, and
+    # compose refuses a fixed name for >1 replica, so 2 fails every command.
     deploy:
       replicas: \${ANALYZER_REPLICAS:-1}
     restart: unless-stopped
@@ -1189,8 +1195,11 @@ SITE_URL=
 # another machine (ANALYZE_URL below), or you don't want acoustic data? Set the
 # replica count to zero. The next \`docker compose up -d\` stops and REMOVES the
 # container; unset (or empty) means 1, i.e. the default-on station, unchanged.
+# ONLY 0 AND 1 ARE VALID: the service pins container_name, which compose refuses
+# for more than one replica, so 2 (or a non-integer like \`false\`) fails every
+# compose command rather than falling back.
 # Compose-only: the AIO one-click image runs the analyzer in-process, so there
-# is no container for this to switch off there.
+# is no container for this to switch off there — blank ANALYZE_PYTHON instead.
 # ANALYZER_REPLICAS=0
 #
 # On NVIDIA hosts, persist the CUDA overlay for all Compose commands:

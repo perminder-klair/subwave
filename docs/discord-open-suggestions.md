@@ -8,8 +8,8 @@ Captured 2026-09-06 — 65 of 125 threads, checked against all 334 issues (28 op
 
 | Status | Count | Meaning |
 | --- | ---: | --- |
-| ✅ Shipped | 7 | Delivered on `develop`; the thread can be closed out. |
-| 🔨 Tracked | 12 | An **open** GitHub issue covers it. |
+| ✅ Shipped | 6 | Delivered on `develop`; the thread can be closed out. |
+| 🔨 Tracked | 13 | An **open** GitHub issue covers it. |
 | 🟡 Partly covered | 20 | Related work has landed, but the specific ask has not. |
 | ⬜ No issue | 26 | Nothing on GitHub — needs filing or an explicit reply. |
 
@@ -133,7 +133,7 @@ Refs: [#1105](https://github.com/perminder-klair/subwave/issues/1105) · [#722](
 
 > Since I run the Analyzer on another PC, and the YAML files need updating some times, is it possible to add some syntax to the .env file that would allow me to…
 
-**✅ Shipped** — Filed as #1570 and delivered: `ANALYZER_REPLICAS=0` in the root `.env` removes the local analyzer container across all three composes, for operators running analysis elsewhere via ANALYZE_URL (#1538 added the concurrency control for that remote path).
+**🔨 Tracked** — Tracked as an item on the open triage issue #1570, and the work has landed on `develop`: `ANALYZER_REPLICAS=0` in the root `.env` removes the local analyzer container across all three composes, for operators running analysis elsewhere via ANALYZE_URL (#1538 added the concurrency control for that remote path). Moves to ✅ Shipped when #1570 closes.
 
 Refs: [#1570](https://github.com/perminder-klair/subwave/issues/1570) · [#1538](https://github.com/perminder-klair/subwave/issues/1538)
 

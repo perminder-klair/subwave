@@ -169,14 +169,19 @@ container, which **starts by default** (a lean, multi-arch image, so it also
 runs on arm64 Unraid boxes). On the split stack it comes up with the rest of the
 services; on the **all-in-one** image it's baked in-process. Nothing to enable —
 just run **admin → Library → Rescan** (tick *re-analyse*). If the **acoustic
-engine reads "off"**, the analyzer container was stopped — `Pull & Up` (split
-stack) or check its logs.
+engine reads "off"** on the split stack, first check whether you turned it off
+on purpose: `ANALYZER_REPLICAS=0` (below) keeps the container gone across every
+`Pull & Up`. If you did not, the container stopped on its own — `Pull & Up`
+brings it back, or check its logs.
 
 **Don't want it at all?** On the split stack, add `ANALYZER_REPLICAS=0` to your
 **.env**, **Save**, then **Pull & Up** — the container is removed and stays gone.
 That's the one to use if analysis runs on another machine (point `ANALYZE_URL` at
-it). It's a Compose setting, so it does nothing on the all-in-one image, which
-runs the analyzer in-process. Full notes in
+it). **Only `0` and `1` are valid** — the service has a fixed `container_name`,
+so `2` fails every Compose command rather than scaling. On the **all-in-one**
+image the variable does nothing at all (there is no analyzer service; the
+supervisor logs a warning if you set `0`) — to stop analysis there, blank the
+`ANALYZE_PYTHON` variable instead. Full notes in
 [`tts-heavy.md`](tts-heavy.md#turning-the-analyzer-off).
 
 **"Sounds-like" + vocal ranges (the heavy dimensions)** need a CPU-torch stack
