@@ -9,6 +9,7 @@ import {
   getConnections,
   groupConnections,
 } from '../broadcast/listeners.js';
+import { currentTrustedProxies } from '../broadcast/trusted-proxies.js';
 
 export const router = express.Router();
 
@@ -43,9 +44,19 @@ router.get('/listeners', requireAdmin, async (req, res) => {
 router.get('/listeners/connections', requireAdmin, async (_req, res) => {
   try {
     // Group by IP+UA so Safari's duplicate socket is one row + one count, not
-    // two — same dedup the headline listener count uses.
+    // two — same dedup the headline listener count uses. Deliberately NOT by
+    // IP: the forwarded address may be untrusted, and one NAT is many
+    // listeners. Nothing below changes that.
     const connections = groupConnections(await getConnections());
-    res.json({ count: connections.length, connections });
+    // What the icecast render trusted (#1613), on the SAME response that
+    // carries the rows: a BYO stack has no `caddy` name to resolve, so every
+    // row is the edge's container address and the operator's only clue used to
+    // be a line in the broadcast container's log. Advisory — it gates nothing.
+    res.json({
+      count: connections.length,
+      connections,
+      trustedProxies: currentTrustedProxies(),
+    });
   } catch (err: any) {
     res.status(502).json({ error: err.message });
   }

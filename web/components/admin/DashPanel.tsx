@@ -66,6 +66,7 @@ import {
   SEGMENTS,
   maskIp,
   sortConnections,
+  trustedProxyHint,
 } from './dash/types';
 import {
   dashKeys,
@@ -135,6 +136,7 @@ export default function DashPanel() {
   const status = statusQuery.data ?? null;
   const err = statusQuery.error ? errorMessage(statusQuery.error) : null;
   const conns = connectionsQuery.data ?? null;
+  const proxyHint = trustedProxyHint(conns?.trustedProxies);
   const connErr = connectionsQuery.error ? errorMessage(connectionsQuery.error) : null;
   const stats = statsQuery.data ?? null;
   const requests = requestsQuery.data ?? null;
@@ -669,6 +671,22 @@ export default function DashPanel() {
           ) : null
         }
       >
+        {/* Why the IP column may be showing one repeated private address
+            (#1613). Advisory: it appears only when the icecast render itself
+            reported a miss, and never on a broadcast image too old to say. */}
+        {!connErr && conns && proxyHint ? (
+          <div className="mb-2 border-l-2 border-separator-strong pl-2 text-[11px] text-muted">
+            {proxyHint}{' '}
+            <a
+              className="underline hover:text-ink"
+              href="https://github.com/perminder-klair/subwave/blob/main/docs/reverse-proxy.md"
+              target="_blank"
+              rel="noreferrer"
+            >
+              reverse-proxy guide
+            </a>
+          </div>
+        ) : null}
         {connErr ? (
           <div className="text-muted italic">can’t reach Icecast admin: {connErr}</div>
         ) : !conns ? (

@@ -2,13 +2,14 @@ import type { QueryClient } from '@tanstack/react-query';
 import type { SessionTurn } from '../../../lib/types';
 import { AdminResponseError, adminJson, type AdminFetch } from '../../../lib/admin-query';
 import type { ScheduleOverride } from '../../../lib/schemas.generated';
-import type {
-  ActResponse,
-  ConnectionsState,
-  DashStatus,
-  HealthStats,
-  QueueState,
-  RequestEntry,
+import {
+  UNKNOWN_TRUSTED_PROXIES,
+  type ActResponse,
+  type ConnectionsState,
+  type DashStatus,
+  type HealthStats,
+  type QueueState,
+  type RequestEntry,
 } from './types';
 import { scheduleKeys, type ScheduleLiveData } from '../schedule/queries';
 
@@ -52,7 +53,13 @@ export async function fetchConnections(fetcher: AdminFetch, signal: AbortSignal)
   const body = await adminJson<Partial<ConnectionsState>>(
     fetcher, '/listeners/connections', undefined, signal,
   );
-  return { count: body?.count ?? 0, connections: body?.connections ?? [] };
+  return {
+    count: body?.count ?? 0,
+    connections: body?.connections ?? [],
+    // An older controller omits the key entirely; `known: false` is the same
+    // "say nothing" verdict the controller's own unknown case produces.
+    trustedProxies: body?.trustedProxies ?? UNKNOWN_TRUSTED_PROXIES,
+  };
 }
 
 export function fetchHealthStats(fetcher: AdminFetch, signal: AbortSignal): Promise<HealthStats> {

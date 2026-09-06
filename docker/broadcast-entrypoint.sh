@@ -24,6 +24,7 @@ set -eu
 # docker/aio/supervisor.sh keeps the same functions, list and messages;
 # scripts/state-bootstrap.test.ts drives both through one table.
 state_warn() { echo "broadcast: WARNING $*" >&2; }
+state_log() { echo "broadcast: $*" >&2; }
 
 # True when `other` can write the dir. The warning keys on this rather than on
 # chmod's exit status: a mount that is already world-writable and merely
@@ -134,6 +135,83 @@ resolve_max_clients() {
         *[!0-9]*|''|0) echo "100 fallback:$_v@$_src" ;;
         *) echo "$_v $_src" ;;
     esac
+}
+
+# ---- Trusted reverse proxies ------------------------------------------------
+# Real listener IPs in admin -> Listeners instead of the edge's container
+# address. icecast-KH matches an EXACT IP: a CIDR is accepted and then silently
+# never matches, so a malformed entry is DROPPED and named rather than
+# interpolated — invalid XML here would turn a cosmetic setting into a station
+# that won't boot.
+#
+#   $1 = XML fragment path, $2 = the source label the candidates came from,
+#   $3.. = the candidate addresses (may be empty — a DNS lookup that resolved
+#          nothing is the documented first-cold-boot case).
+#
+# Besides the fragment this writes $STATE_DIR/trusted-proxies.json — the count,
+# the addresses, the source that produced them and anything dropped. Until
+# #1613 the operator's only signal was one stderr line in this container,
+# three layers away from the admin table showing one repeated private address,
+# so the setting that fixes it was undiscoverable from where the symptom shows.
+# The marker is rewritten on EVERY render, so it can never describe a config
+# icecast is not running, and failing to write it is never fatal — same rule as
+# the state bootstrap above.
+#
+# docker/aio/supervisor.sh carries the same function and the same messages;
+# scripts/trusted-proxies.test.ts drives both from one table.
+
+# A dropped entry is operator input on its way into JSON, so it is reduced to a
+# safe token first: address / CIDR / hostname characters only, length capped. A
+# quote or backslash here would produce a marker the controller cannot parse,
+# which is the one failure that would take the hint down along with the config
+# it exists to explain.
+trusted_proxy_token() {
+    printf '%s' "$1" | tr -cd '0-9A-Za-z.:/_-' | cut -c1-48
+}
+
+write_trusted_proxy_marker() {
+    # $1 = count, $2 = source label, $3 = proxies JSON array, $4 = dropped array
+    local dir=${STATE_DIR:-}
+    [ -n "$dir" ] || return 0
+    local marker=$dir/trusted-proxies.json
+    local tmp=$marker.tmp
+    if printf '{"count":%s,"source":"%s","proxies":%s,"dropped":%s,"at":%s}\n' \
+            "$1" "$2" "$3" "$4" "$(date +%s)" > "$tmp" 2>/dev/null \
+        && mv -f "$tmp" "$marker" 2>/dev/null; then
+        chmod 666 "$marker" 2>/dev/null || true
+    else
+        rm -f "$tmp" 2>/dev/null || true
+        state_warn "could not write $marker — the station is unaffected, but the admin Listeners table cannot explain a missing trusted proxy"
+    fi
+    return 0
+}
+
+render_trusted_proxies() {
+    local xml=$1
+    local source=$2
+    shift 2
+    local ip names="" kept="" dropped="" count=0
+    : > "$xml" 2>/dev/null || true
+    for ip in "$@"; do
+        case "$ip" in
+            ''|*[!0-9a-fA-F.:]*)
+                state_warn "ignoring malformed trusted proxy '$ip' — icecast matches an exact IP, so a CIDR or a hostname never matches"
+                dropped="$dropped,\"$(trusted_proxy_token "$ip")\""
+                continue
+                ;;
+        esac
+        echo "        <x-forwarded-for>$ip</x-forwarded-for>" >> "$xml"
+        names="$names $ip"
+        kept="$kept,\"$ip\""
+        count=$(( count + 1 ))
+    done
+    if [ "$count" -gt 0 ]; then
+        state_log "trusting X-Forwarded-For from$names (from $source)"
+    else
+        state_log "no trusted proxy resolved from $source — listener IPs will show the connecting peer (docs/reverse-proxy.md)"
+    fi
+    write_trusted_proxy_marker "$count" "$source" "[${kept#,}]" "[${dropped#,}]"
+    return 0
 }
 
 # Sourcing with SUBWAVE_BROADCAST_LIB=1 defines the helpers above WITHOUT
@@ -304,23 +382,26 @@ emit_mount /stream.opus "$OPUS_BITRATE"
 emit_mount /stream.flac "$FLAC_BITRATE_EST"
 emit_mount /stream.aac  "$AAC_BITRATE"
 
-# Trusted reverse proxies — real listener IPs in admin → Listeners instead of
-# the edge's container address. icecast-KH matches an EXACT IP only (a CIDR is
-# accepted and then silently never matches), so the address must be resolved.
+# Trusted reverse proxies — see render_trusted_proxies above for the exact-IP
+# rule, the marker it writes and the AIO copy it stays in lockstep with.
 # ICECAST_TRUSTED_PROXY_IPS (explicit) wins over DNS for
 # ICECAST_TRUSTED_PROXY_HOSTS (default 'caddy', the bundled edge).
 #
 # The DNS path is deliberately best-effort and misses the first cold boot:
 # caddy depends_on this container being healthy, so the name cannot resolve
 # yet — every later restart picks it up. A miss degrades to the old behaviour
-# (proxy IP shown), never to a wrong IP. For first-boot accuracy, pin the edge
-# and set ICECAST_TRUSTED_PROXY_IPS (docs/deployment.md).
+# (proxy IP shown), never to a wrong IP. It also misses FOREVER on
+# docker-compose.byo.yml, where there is no caddy service to resolve at all —
+# which is why the marker records the source that was tried, not just the
+# count (#1613). For first-boot accuracy, or on BYO, pin the edge and set
+# ICECAST_TRUSTED_PROXY_IPS (docs/deployment.md, docs/reverse-proxy.md).
 TRUSTED_XML=/etc/icecast2/trusted-proxies.xml
-: > "$TRUSTED_XML"
 TRUSTED_LIST=""
+TRUSTED_SOURCE=ICECAST_TRUSTED_PROXY_IPS
 if [ -n "${ICECAST_TRUSTED_PROXY_IPS:-}" ]; then
     TRUSTED_LIST=$(echo "$ICECAST_TRUSTED_PROXY_IPS" | tr ',' ' ')
 else
+    TRUSTED_SOURCE=ICECAST_TRUSTED_PROXY_HOSTS
     for _host in $(echo "${ICECAST_TRUSTED_PROXY_HOSTS:-caddy}" | tr ',' ' '); do
         # ahosts, not hosts: `getent hosts` returns ONE address family, so on a
         # dual-stack network it can hand back only the IPv6 while Caddy dials
@@ -329,26 +410,9 @@ else
         [ -n "$_found" ] && TRUSTED_LIST="$TRUSTED_LIST $_found"
     done
 fi
-
-# Only hex/dot/colon runs are addresses. A malformed entry is dropped rather
-# than interpolated — invalid XML here would turn a cosmetic setting into a
-# station that won't boot.
-TRUSTED_COUNT=0
-for _ip in $TRUSTED_LIST; do
-    case "$_ip" in
-        ''|*[!0-9a-fA-F.:]*)
-            echo "broadcast: WARNING ignoring malformed trusted proxy '$_ip'" >&2
-            continue
-            ;;
-    esac
-    echo "        <x-forwarded-for>$_ip</x-forwarded-for>" >> "$TRUSTED_XML"
-    TRUSTED_COUNT=$(( TRUSTED_COUNT + 1 ))
-done
-if [ "$TRUSTED_COUNT" -gt 0 ]; then
-    echo "broadcast: trusting X-Forwarded-For from$(sed 's/.*<x-forwarded-for>/ /;s|</x-forwarded-for>||' "$TRUSTED_XML" | tr '\n' ' ')" >&2
-else
-    echo "broadcast: no trusted proxy resolved — listener IPs will show the connecting peer" >&2
-fi
+# Unquoted on purpose — the list is space-separated candidates.
+# shellcheck disable=SC2086
+render_trusted_proxies "$TRUSTED_XML" "$TRUSTED_SOURCE" $TRUSTED_LIST
 
 # `r` splices the generated blocks (empty file = nothing) where each marker
 # sits, then the marker line itself is deleted.

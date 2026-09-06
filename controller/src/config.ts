@@ -266,6 +266,14 @@ export const config = {
     // the controller can tell a live outage from a marker left behind by a
     // mixer that died mid-outage. Read via broadcast/music-starve.ts.
     musicStarvedFile: `${STATE_DIR}/music-starved.json`,
+    // Written by docker/broadcast-entrypoint.sh and the AIO supervisor's
+    // render_icecast() on every icecast render (#1613), NOT by radio.liq:
+    // {count, source, proxies, dropped, at}. It records which trusted-proxy
+    // source won so the admin Listeners table can say WHY it is showing one
+    // repeated private address instead of real client IPs. Read via
+    // broadcast/trusted-proxies.ts; absent (an older broadcast image) is the
+    // unknown case and surfaces nothing.
+    trustedProxiesFile: `${STATE_DIR}/trusted-proxies.json`,
   },
   session: {
     // The live DJ session — a chat-history JSON the controller rewrites as
