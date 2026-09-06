@@ -1676,10 +1676,10 @@ def shows(page):
     finally:
         page.unroute("**/settings", mock_settings_get)
 
-    # 2 & 3, and the final valid save — one continuous "Add show" session,
+    # 2, 3 & 4, and the final valid save — one continuous "Add show" session,
     # against the REAL (unmocked) controller. Wrapped in try/finally like
     # skills()/blockrules()/imaging()/personas() — a real, persisted show is
-    # created in step 4 below, and a run that fails partway through must not
+    # created in step 5 below, and a run that fails partway through must not
     # leave it behind to poison the next run.
     try:
         page.goto(f"{WEB}/admin/shows")
@@ -1770,6 +1770,31 @@ def shows(page):
         add_range.click()
         eras_group.get_by_role("button", name="2026–2026").wait_for()
 
+        # The OPEN-ENDED window — one bound left blank, which is a legal filter
+        # and the only shape eraLabelOf renders through its no-toYear branch.
+        # Driven separately because a closed range proves nothing about it: the
+        # blank side has to survive parse() as null rather than as a refusal.
+        era_from.fill("2030")
+        era_to.fill("")
+        add_range.click()
+        eras_group.get_by_role("button", name="2030+").wait_for()
+
+        # Acceptance criterion 2 of #1599 — toggling a decade chip must not
+        # disturb the custom windows sharing the array with it. Wait on the
+        # chip's own aria-pressed before counting, so the assertion reads
+        # settled state rather than racing the re-render.
+        eras_group.get_by_role("button", name="90s").click()
+        eras_group.get_by_role("button", name="90s", pressed=False).wait_for()
+        for label in ("2026–2026", "2030+"):
+            assert eras_group.get_by_role("button", name=label).count() == 1, \
+                f"untoggling a decade chip dropped the custom era window {label}"
+
+        # Re-light it for the save below. It lands at the END of the array now:
+        # untoggling REMOVED that window and toggling APPENDS a fresh one, which
+        # is exactly why the assertion spells the order out rather than sorting.
+        eras_group.get_by_role("button", name="90s").click()
+        eras_group.get_by_role("button", name="90s", pressed=True).wait_for()
+
         # 5. Save — a genuinely valid show persists through a real POST /shows
         #    round trip.
         save.click()
@@ -1777,9 +1802,10 @@ def shows(page):
         saved = find_show(SHOW_VERIFY_NAME)
         assert saved, "new show did not persist"
         assert saved.get("eras") == [
-            {"fromYear": 1990, "toYear": 1999},
             {"fromYear": 2026, "toYear": 2026},
-        ], f"chip + custom era window did not both persist: {saved.get('eras')!r}"
+            {"fromYear": 2030, "toYear": None},
+            {"fromYear": 1990, "toYear": 1999},
+        ], f"chip + custom era windows did not all persist: {saved.get('eras')!r}"
     finally:
         # Runs whether the assertions above passed or raised — a failed run
         # must not leave "Verify Show" behind to poison the NEXT run, and a

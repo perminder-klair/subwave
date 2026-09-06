@@ -3867,8 +3867,15 @@ function showStringList(opts: {
 // the load path's repairEraWindow (below) so the two can never disagree about
 // what a valid year is. null / '' means "open end". A numeric string is
 // accepted because that is what an <input type="number"> posts.
+//
+// `validEraYear` is EXPORTED so it rides the mirror into the admin show
+// editor's add-a-range control (#1599), which has to refuse a year the save
+// would then reject. It owns only the integer-and-range test; the editor keeps
+// its own trim, because eraYearOf deliberately does not trim (' ' reaching the
+// wire is a malformed post, not an open end) and a draft box legitimately holds
+// whitespace mid-keystroke.
 const eraYearOf = (v: unknown): number | null => (v == null || v === '' ? null : Number(v));
-const validEraYear = (n: number | null): boolean =>
+export const validEraYear = (n: number | null): boolean =>
   n == null || (Number.isInteger(n) && n >= SHOW_YEAR_MIN && n <= SHOW_YEAR_MAX);
 
 const showYear = z

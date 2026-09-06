@@ -9,8 +9,8 @@ Captured 2026-09-06 — 65 of 125 threads, checked against all 334 issues (28 op
 | Status | Count | Meaning |
 | --- | ---: | --- |
 | ✅ Shipped | 6 | Delivered on `develop`; the thread can be closed out. |
-| 🔨 Tracked | 13 | An **open** GitHub issue covers it. |
-| 🟡 Partly covered | 20 | Related work has landed, but the specific ask has not. |
+| 🔨 Tracked | 14 | An **open** GitHub issue covers it. |
+| 🟡 Partly covered | 19 | Related work has landed, but the specific ask has not. |
 | ⬜ No issue | 26 | Nothing on GitHub — needs filing or an explicit reply. |
 
 Open GitHub issues doing the most work here: [#1485](https://github.com/perminder-klair/subwave/issues/1485) (the follow-up tracker, 5 threads), [#1486](https://github.com/perminder-klair/subwave/issues/1486) (CarPlay + Android Auto, 2 threads) and [#1400](https://github.com/perminder-klair/subwave/issues/1400) (skill-aimed banter, 2 threads).
@@ -501,9 +501,9 @@ PwrBlackout · 2026-08-10
 
 > i have a "new music monday" show that i want to only play 2026 music. the API already allows me to manually pass in "fromYear" and "toYear", the UI even shows that…
 
-**🟡 Partly covered** — Era resolution itself was fixed (#842, #1418). Exposing the API's fromYear/toYear as a show-level UI control is not tracked.
+**🔨 Tracked** — #1599 is the open issue, and it is exactly this ask: an add-a-range control beside the show editor's decade chips, so a single year ("2026 only") or an open-ended window is reachable from the admin UI rather than only through a hand-written PATCH. Implemented and in review, not yet on `develop`. Era resolution itself was fixed earlier (#842, #1418). Moves to ✅ Shipped when #1599 closes.
 
-Refs: [#842](https://github.com/perminder-klair/subwave/issues/842) · [#1418](https://github.com/perminder-klair/subwave/issues/1418)
+Refs: [#1599](https://github.com/perminder-klair/subwave/issues/1599) *(open)* · [#842](https://github.com/perminder-klair/subwave/issues/842) · [#1418](https://github.com/perminder-klair/subwave/issues/1418)
 
 ### [Skill-blocks, triggered at a specific time](https://discord.com/channels/1514647956333002812/1536054559045062866)
 

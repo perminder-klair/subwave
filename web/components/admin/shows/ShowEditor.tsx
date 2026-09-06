@@ -223,6 +223,16 @@ export function ShowEditor({
   const [eraFrom, setEraFrom] = useState('');
   const [eraTo, setEraTo] = useState('');
   const [eraDraftError, setEraDraftError] = useState('');
+  // EVERY write to `eras` goes through here, because every write can falsify
+  // the draft error. That message is a verdict on one Add press against the
+  // array as it stood: untoggle the decade chip a range collided with and
+  // "That range is already selected." is still standing — inside a live
+  // region, over a range that would now add cleanly. Clearing it inside each
+  // handler instead only holds until someone adds a third.
+  const setEras = (next: EraWindow[]) => {
+    erasCtl.field.onChange(next);
+    setEraDraftError('');
+  };
   const addEraRange = () => {
     const current: EraWindow[] = erasCtl.field.value ?? [];
     if (current.length >= FILTER_VALUES_MAX) return;
@@ -230,8 +240,8 @@ export function ShowEditor({
     if ('error' in r) { setEraDraftError(r.error); return; }
     // A range spelling out a decade lands in the same array the chips write to,
     // so it lights that chip rather than appearing twice.
-    erasCtl.field.onChange([...current, r.window]);
-    setEraFrom(''); setEraTo(''); setEraDraftError('');
+    setEras([...current, r.window]);
+    setEraFrom(''); setEraTo('');
   };
   // Genres no track carries. The controller resolves free text onto the nearest
   // library tag, silently broadening the show ("Pop Punk" → "Pop") or dropping the
@@ -254,9 +264,13 @@ export function ShowEditor({
   const guestIds: string[] = guestsCtl.field.value ?? [];
   const eras: EraWindow[] = erasCtl.field.value ?? [];
   // Windows matching no decade preset. They get their own removable chips, and
-  // they are the slice of the schema's cap the decade row cannot see — it caps
-  // on what IT has selected, so without this the chips would still offer a
-  // ninth window on an `eras` array already at FILTER_VALUES_MAX.
+  // they are the slice of the schema's cap the decade row cannot see — that row
+  // caps on what IT has selected, and 8 chips against a FILTER_VALUES_MAX of 15
+  // never reach it on their own. Handing it the REMAINING budget is required BY
+  // this feature rather than tidying alongside it: before the add-a-range
+  // control, filling `eras` took 15 API-set windows, and now the operator can
+  // fill it right here — at which point an uncapped chip row offers a 16th, the
+  // schema refuses the save, and nothing on screen says why.
   const customEras = eras.filter(e => !DECADES.some(d => sameEra(e, d)));
 
   // Guests group — a chip/card multi-select has no single labelable element,
@@ -513,7 +527,7 @@ export function ShowEditor({
                 onToggle={key => {
                   const d = DECADES.find(x => x.key === key)!;
                   const existing = eras.find(e => sameEra(e, d));
-                  erasCtl.field.onChange(
+                  setEras(
                     existing
                       ? eras.filter(e => e !== existing)
                       : [...eras, { fromYear: d.from, toYear: d.to }],
@@ -529,7 +543,7 @@ export function ShowEditor({
                     <button
                       key={`${e.fromYear ?? ''}-${e.toYear ?? ''}-${i}`}
                       type="button"
-                      onClick={() => erasCtl.field.onChange(eras.filter(x => x !== e))}
+                      onClick={() => setEras(eras.filter(x => x !== e))}
                       className="min-h-9 border border-ink bg-ink px-2 py-0.5 text-[12px] text-bg sm:min-h-0"
                       title="Remove this custom era window"
                     >
