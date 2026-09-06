@@ -373,9 +373,65 @@ load. If a persona is still pointed at the disabled engine, its `/speak` calls
 return a clean `503` and the DJ falls back to Piper — nothing goes silent.
 
 `GET /health` on the sidecar reports `enabled: [...]` (what it was told to load)
-alongside `engines: [...]` (what's currently ready), so you can confirm the
-selection took. An empty or all-typo value falls back to loading both, so a bad
-entry never silently disables all heavy TTS.
+alongside `engines: [...]` (what it can speak with right now), so you can
+confirm the selection took. An empty or all-typo value falls back to loading
+both, so a bad entry never silently disables all heavy TTS.
+
+### Let an idle engine go (memory back while the station is quiet)
+
+`TTS_HEAVY_ENGINES` is the answer for an engine you *never* want. For one you
+want at 8pm and not at 4am, the sidecar releases it on its own.
+
+Chatterbox is around 4 GB resident — the weights, plus torch's CUDA context on
+a GPU host — and it used to hold that for the life of the container whether or
+not the station had said a word all day. The programme's idle pause
+(**Settings → Stream → pause when the room is empty**) stands the *music* down,
+but it has no reach into this container, so the engines stayed warm through the
+whole quiet stretch. Now each engine keeps its own idle clock: after
+`TTS_HEAVY_IDLE_UNLOAD_S` seconds without a spoken line, its worker is stopped
+and the memory goes back to the host.
+
+```ini
+# root .env — seconds; empty = 1800 on cuda, 3600 on cpu; 0 = always resident
+TTS_HEAVY_IDLE_UNLOAD_S=1800
+# CHATTERBOX_IDLE_UNLOAD_S=      # per-engine overrides win over the shared value
+# POCKET_TTS_IDLE_UNLOAD_S=0     # e.g. keep the small, fast engine loaded
+```
+
+Three things worth knowing:
+
+- **The reload is real, and it is paid by whoever speaks next** — 30–60 s for a
+  Chatterbox that has to come back from a warm cache. The defaults sit far
+  above any gap a talking station produces (the DJ can be offered a slot every
+  five minutes), so the release only fires when the station has genuinely gone
+  quiet. Shortening the window to a few minutes converts a memory problem into
+  a latency problem.
+- **You mostly won't hear it.** When the idle pause releases, the controller
+  tells the sidecar to start reloading straight away — so the model comes back
+  while the music does, minutes before the first link.
+- **Nothing goes silent if the reload fails.** A load that doesn't arrive in
+  `TTS_HEAVY_LOAD_TIMEOUT_S` (90 s) returns a `503`, the DJ falls through to its
+  rescue voice exactly as it would for a sidecar that was down, and the music
+  never stops either way.
+
+The container log names each release and each wake, and `GET /health` carries
+the same state: `cold: [...]` is the engines currently unloaded (still listed in
+`engines`, because they are one on-demand load from speaking), `unloads` counts
+the releases per engine, and `chatterbox_loaded` / `pocket_loaded` say what is
+resident this second. That is the honest way to confirm the reclaim — watching
+`docker stats` alone can't tell a released model from a quiet one.
+
+```bash
+docker exec sub-wave-controller wget -qO- http://tts-heavy:8080/health
+# {"ok":true,"engines":["chatterbox"],"cold":["chatterbox"],"unloads":{"chatterbox":3},...}
+```
+
+To force a reload by hand — before a show, say — `POST /warm`:
+
+```bash
+docker exec sub-wave-controller wget -qO- --post-data '{"engine":""}' \
+  --header 'Content-Type: application/json' http://tts-heavy:8080/warm
+```
 
 ---
 

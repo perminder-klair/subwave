@@ -9,7 +9,7 @@ import * as kokoro from './kokoro.js';
 import { applyEdgeFades } from './wav-edges.js';
 import * as chatterbox from './chatterbox.js';
 import * as pocketTts from './pocketTts.js';
-import { heavyEnabledEngines } from './ttsHeavyClient.js';
+import { heavyColdEngines, heavyEnabledEngines } from './ttsHeavyClient.js';
 import * as remoteTts from './remoteTts.js';
 import { normalizeForSpeech } from './speech-text.js';
 import { scrubCjkForSpeech } from './spoken-script-policy.js';
@@ -618,6 +618,12 @@ export function availableEngines() {
     // badge separate "engine off" (sidecar up, engine disabled) from "sidecar
     // off" (whole sidecar down). See engineMeta.engineStatus.
     heavyEnabled: heavyEnabledEngines(),
+    // Which of those the sidecar has idle-unloaded (#1579): still available —
+    // the next line just pays a model load first — so this changes nothing
+    // about routing and is here only so the admin badge can say "cold" rather
+    // than leaving an operator to read `docker stats` and guess. Same
+    // null-means-unknown rule as heavyEnabled.
+    heavyCold: heavyColdEngines(),
     // Whether PocketTTS can clone voices (gated weights present). null = not
     // yet known. The admin UI uses this to warn that a cloned .wav voice will
     // silently revert to a built-in when cloning is unavailable (issue #238).

@@ -250,6 +250,14 @@ services:
       # Which engines to load (comma-separated). Each costs RAM + a first-boot
       # weight download; set a single engine if you only use one.
       - TTS_HEAVY_ENGINES=${TTS_HEAVY_ENGINES:-chatterbox,pocket-tts}
+      # Idle seconds before an engine's worker is stopped and its memory
+      # returned (0 = always resident). Empty picks the device-aware default:
+      # 1800 on cuda, 3600 on cpu. Reloads on the next spoken line, or ahead of
+      # one when the idle pause releases (#1579). Per-engine overrides:
+      # CHATTERBOX_IDLE_UNLOAD_S / POCKET_TTS_IDLE_UNLOAD_S.
+      - TTS_HEAVY_IDLE_UNLOAD_S=${TTS_HEAVY_IDLE_UNLOAD_S:-}
+      - CHATTERBOX_IDLE_UNLOAD_S=${CHATTERBOX_IDLE_UNLOAD_S:-}
+      - POCKET_TTS_IDLE_UNLOAD_S=${POCKET_TTS_IDLE_UNLOAD_S:-}
       # Optional — PocketTTS voice CLONING (#238): the cloning weights are
       # gated on HF; accept the terms at huggingface.co/kyutai/pocket-tts and
       # set HF_TOKEN. Without it, cloned .wav voices revert to a built-in.

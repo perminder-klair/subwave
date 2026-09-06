@@ -184,6 +184,12 @@ services:
       - POCKET_TTS_VOICE=${POCKET_TTS_VOICE:-alba}
       # Which engines to load (comma-separated); each costs RAM + weights.
       - TTS_HEAVY_ENGINES=${TTS_HEAVY_ENGINES:-chatterbox,pocket-tts}
+      # Idle seconds before an engine's worker is stopped and its memory
+      # returned (empty = 1800 cuda / 3600 cpu; 0 = always resident). See
+      # .env.example and #1579.
+      - TTS_HEAVY_IDLE_UNLOAD_S=${TTS_HEAVY_IDLE_UNLOAD_S:-}
+      - CHATTERBOX_IDLE_UNLOAD_S=${CHATTERBOX_IDLE_UNLOAD_S:-}
+      - POCKET_TTS_IDLE_UNLOAD_S=${POCKET_TTS_IDLE_UNLOAD_S:-}
       # Optional — PocketTTS voice cloning (#238); weights gated on HF.
       - HF_TOKEN=${HF_TOKEN:-}
     volumes:
