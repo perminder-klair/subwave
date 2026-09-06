@@ -9,6 +9,8 @@ import {
   BEDS_CROSS_SEC_BOUNDS,
   BEDS_TAIL_SEC_BOUNDS,
   SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
+  BACKUP_KEEP_BOUNDS,
+  BACKUP_KEEP_DEFAULT,
   BEDS_THRESHOLD_SEC_BOUNDS,
   CROSSFADE_DURATION_BOUNDS,
   DUCK_DEPTH_BOUNDS,
@@ -17,7 +19,7 @@ import {
   LOUDNESS_MAX_BOOST_DB_BOUNDS,
   LOUDNESS_TARGET_LUFS_BOUNDS,
 } from '../schemas/settings.js';
-import { SHOW_MAX_TRACK_SECONDS } from '../schemas/show.js';
+import { SHOW_MAX_TRACK_SECONDS, SHOW_MIN_TRACK_LENGTH_MAX } from '../schemas/show.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
 import {
   AAC_BITRATES,
@@ -49,11 +51,22 @@ export const DEFAULTS = {
   // show's own maxTrackSeconds overrides it (0 there = unlimited). Listener
   // requests always bypass it.
   maxTrackSeconds: 0,
+  // Fade a long track out at the next show change instead of letting it spill
+  // into the following show (#1574). Off by default, and a show's own
+  // `fadeAtShowEnd` (null = inherit) overrides it — absent at both levels is
+  // the pre-existing behaviour, so an upgrade sounds byte-identical. The cut
+  // rides the #447 liq_cue_out stamp; the policy is broadcast/show-boundary.ts.
+  fadeAtShowEnd: false,
   // Hourly archive output. Off by default — the second MP3 encoder is the
   // largest constant CPU cost in the broadcast container (#137). retentionDays
   // bounds disk growth (~1.4 GB/day at 128 kbps); normalizeArchiveRetentionDays
   // keeps pre-existing keep-forever installs at 0 so upgrades never delete tapes.
   archive: { enabled: false, bitrate: 128, retentionDays: 30 },
+  // Scheduled, rotating config backups (#1570). OFF by default and that is
+  // load-bearing: this is the only scheduled job that DELETES operator files,
+  // so an upgrade that changes nothing must produce byte-identical behaviour —
+  // no zips written, no zips pruned. `keep` is inert until a cadence is picked.
+  backups: { cadence: 'off' as const, keep: BACKUP_KEEP_DEFAULT },
   stream: {
     // Secondary Ogg-Opus mount (/stream.opus). Off by default — only Blink
     // selects it (web/hooks/usePlayer.ts), and it costs a continuous encoder
@@ -651,6 +664,16 @@ export const DEFAULTS = {
   // byte-identical. See music/recency.ts albumKey.
   picker: {
     albumHours: 0,
+    // Minimum track length in SECONDS below which a track is never PICKED
+    // (#1573) — the floor operators with libraries full of 40-second skits,
+    // interludes and album intros want. 0 = OFF, and off is the shipped
+    // default so an upgrade picks byte-identically; a show's own
+    // `minTrackLengthSeconds` (when set) overrides it. Named apart from
+    // settings.minTrackSeconds(), which is the crossfade-derived floor and a
+    // different number entirely — that one is this key's LOWER BOUND.
+    //
+    // Listener requests are exempt: an explicit ask is not a pick.
+    minTrackLengthSeconds: 0,
   },
 
   // The player heart button (#991). `starInNavidrome` mirrors each first like
@@ -680,7 +703,11 @@ export const BOUNDS = {
   // Ceiling from the shared show schema: the strict show validator bounds-checks
   // a show's override against this station figure, so two copies would drift.
   maxTrackSeconds: { min: 0, max: SHOW_MAX_TRACK_SECONDS, type: 'int' },
+  // The FLOOR's ceiling (#1573), from the same schema module for the same
+  // reason. Far lower than the cap's — see SHOW_MIN_TRACK_LENGTH_MAX.
+  minTrackLengthSeconds: { min: 0, max: SHOW_MIN_TRACK_LENGTH_MAX, type: 'int' },
   silenceTrimMinGapMs: { ...SILENCE_TRIM_MIN_GAP_MS_BOUNDS, type: 'int' },
+  backupsKeep: { ...BACKUP_KEEP_BOUNDS, type: 'int' },
   loudnessTargetLufs: { ...LOUDNESS_TARGET_LUFS_BOUNDS, type: 'float' },
   loudnessMaxBoostDb: { ...LOUDNESS_MAX_BOOST_DB_BOUNDS, type: 'float' },
 };
@@ -717,6 +744,18 @@ export function coerceMaxTrackSeconds(raw: unknown, allowNull: boolean): number 
   const n = Math.round(Number(raw));
   if (!Number.isFinite(n)) return allowNull ? null : 0;
   return Math.min(BOUNDS.maxTrackSeconds.max, Math.max(0, n));
+}
+
+// Coerce a stored/per-show minimum-track-length FLOOR to a clean integer SECOND
+// count (#1573). Same two callers and the same allowNull split as
+// coerceMaxTrackSeconds above — station default has no "unset" state (missing →
+// 0 = no floor), a per-show value uses null for "inherit". Clamps rather than
+// throws, so a hand-edited file bounds the show instead of deleting it.
+export function coerceMinTrackLengthSeconds(raw: unknown, allowNull: boolean): number | null {
+  if (raw == null || raw === '') return allowNull ? null : 0;
+  const n = Math.round(Number(raw));
+  if (!Number.isFinite(n)) return allowNull ? null : 0;
+  return Math.min(BOUNDS.minTrackLengthSeconds.max, Math.max(0, n));
 }
 
 // Back-compat: this cap was stored in MINUTES (`maxTrackMinutes`) before it moved

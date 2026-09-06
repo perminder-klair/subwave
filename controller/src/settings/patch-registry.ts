@@ -1,8 +1,8 @@
 // The `POST /settings` patch registry (#1348).
 //
-// `settings.update()` takes a PARTIAL patch over 44 top-level keys and validates
+// `settings.update()` takes a PARTIAL patch over 49 top-level keys and validates
 // it in a long chain of `if ('<key>' in patch)` branches — a route that owns
-// forty-four shapes doesn't fit #1337's one-schema-per-form recipe.
+// forty-nine shapes doesn't fit #1337's one-schema-per-form recipe.
 //
 // This module is the frame the conversion lands in, one key at a time:
 //
@@ -31,6 +31,7 @@ import { ZodError, type ZodType } from 'zod';
 import {
   archivePatchSchema,
   audioPatchSchema,
+  backupsPatchSchema,
   bedsPatchSchema,
   silenceTrimPatchSchema,
   crossfadeDurationSchema,
@@ -39,6 +40,7 @@ import {
   djHouseRulesSchema,
   djSpeakClockSchema,
   djTalkOnlyBetweenTracksSchema,
+  fadeAtShowEndSchema,
   festivalsSchema,
   jingleRatioSchema,
   likesPatchSchema,
@@ -108,6 +110,7 @@ export const SETTINGS_PATCH_KEYS = [
   'maxTrackSeconds',
   'maxTrackMinutes',
   'archive',
+  'backups',
   'stream',
   'loudness',
   'weather',
@@ -126,6 +129,7 @@ export const SETTINGS_PATCH_KEYS = [
   'djHouseRules',
   'djSpeakClock',
   'djTalkOnlyBetweenTracks',
+  'fadeAtShowEnd',
   'personas',
   'shows',
   'schedule',
@@ -198,6 +202,7 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   ducking: duckingPatchSchema,
   handover: handoverPatchSchema,
   archive: archivePatchSchema,
+  backups: backupsPatchSchema,
   stream: streamPatchSchema,
   loudness: loudnessPatchSchema,
   weather: weatherPatchSchema,
@@ -208,6 +213,7 @@ export const SETTINGS_PATCH_SCHEMAS: Readonly<Partial<Record<SettingsPatchKey, S
   djHouseRules: djHouseRulesSchema,
   djSpeakClock: djSpeakClockSchema,
   djTalkOnlyBetweenTracks: djTalkOnlyBetweenTracksSchema,
+  fadeAtShowEnd: fadeAtShowEndSchema,
   search: searchPatchSchema,
   audio: audioPatchSchema,
   transitions: transitionsPatchSchema,

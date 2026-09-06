@@ -164,3 +164,21 @@ export function shiftOnsetMs(
   if (cueInSec == null) return onsetMs;
   return Math.max(0, Math.round(onsetMs - cueInSec * 1000));
 }
+
+// The inverse of shiftOnsetMs: a PLAYED-timeline offset (seconds since playback
+// began) back onto the file's own timeline, which is what `liq_cue_out` carries.
+//
+// Pure, and it takes an already-resolved `cueInSec` rather than a track, so the
+// callers that have the trim in hand (the show-boundary cut) don't resolve it
+// twice. It lives here anyway: the trim owns what cueInSec MEANS, and the two
+// directions of that shift drifting apart is exactly the failure the
+// never-by-local-subtraction rule exists to prevent.
+export function absoluteOffsetSec(
+  cueInSec: number | null | undefined,
+  playedSec: number,
+): number {
+  const cueIn = typeof cueInSec === 'number' && Number.isFinite(cueInSec) && cueInSec > 0
+    ? cueInSec
+    : 0;
+  return cueIn + playedSec;
+}

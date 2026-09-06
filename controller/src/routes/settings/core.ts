@@ -106,13 +106,19 @@ router.get('/settings', requireAdmin, async (req, res) => {
         // the same function (#1576).
         handover: { offsetMinutes: handoverOffsetMinutes() },
         maxTrackSeconds: s.maxTrackSeconds,
-        // Crossfade-relative floor for a non-zero cap — one rule, shared with the
-        // admin/show UI so client hints match server validation.
+        // Crossfade-relative floor for a non-zero cap OR a non-zero
+        // minimum-track-length floor — one rule, shared with the admin/show UI
+        // so client hints match server validation.
         minTrackSeconds: settings.minTrackSeconds(s),
         archive: s.archive,
+        // Edited from the Backup panel rather than a settings section — the
+        // schedule belongs beside Export/Restore, but it saves through the one
+        // POST /settings chokepoint like every other key.
+        backups: s.backups,
         stream: s.stream,
         loudness: s.loudness,
         silenceTrim: s.silenceTrim,
+        fadeAtShowEnd: s.fadeAtShowEnd,
         station: s.station,
         stationDescription: s.stationDescription,
         timezone: s.timezone,
@@ -138,6 +144,11 @@ router.get('/settings', requireAdmin, async (req, res) => {
         search: s.search,
         embedding: s.embedding,
         likes: s.likes,
+        // Track-selection windows (album cooldown, minimum track length). The
+        // admin form reads `values.picker` to populate those inputs, so without
+        // this line every load shows them at 0 and the next save on that card
+        // silently writes the operator's own setting away.
+        picker: s.picker,
         audio: s.audio,
         transitions: s.transitions,
         sfx: s.sfx,

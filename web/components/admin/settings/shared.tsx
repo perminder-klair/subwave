@@ -208,6 +208,9 @@ export interface ScrobbleForm {
 export interface PickerForm {
   // Hours, as typed. 0/'' = off.
   albumHours: string;
+  // Seconds, as typed. 0/'' = off (the shipped default). A show's own
+  // minTrackLengthSeconds overrides this; listener requests are exempt.
+  minTrackLengthSeconds: string;
 }
 
 export interface LikesForm {
@@ -296,6 +299,9 @@ export interface FormState {
   crossfadeDuration: string;
   ducking: DuckingForm;
   maxTrackSeconds: string;
+  /** Station default for the show-boundary fade (#1574). A show's own
+   *  tri-state overrides it; this level is only ever on or off. */
+  fadeAtShowEnd: boolean;
   silenceTrim: SilenceTrimForm;
   transitions: TransitionsForm;
   archive: ArchiveForm;
@@ -344,6 +350,10 @@ export interface SettingsData {
     maxTrackSeconds?: number;
     minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number; retentionDays?: number };
+    /** Scheduled backups (#1570). No FormState entry and no settings section —
+     *  the schedule is edited from the Backup panel, beside Export/Restore, and
+     *  posts `{ backups }` through the same POST /settings chokepoint. */
+    backups?: { cadence?: string; keep?: number };
     transitions?: { pairDrain?: boolean; stemBlends?: boolean };
     audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean; stemCacheGb?: number };
     stream?: {
@@ -363,6 +373,9 @@ export interface SettingsData {
     };
     loudness?: { targetLufs?: number; maxBoostDb?: number; source?: LoudnessSource };
     silenceTrim?: { enabled?: boolean; minGapMs?: number };
+    /** Absent on a settings.json predating the key — false, like the
+     *  controller's own coercion. */
+    fadeAtShowEnd?: boolean;
     station?: string;
     stationDescription?: string;
     timezone?: string;
@@ -438,6 +451,7 @@ export interface SettingsData {
     };
     picker?: {
       albumHours?: number;
+      minTrackLengthSeconds?: number;
     };
     likes?: {
       enabled?: boolean;

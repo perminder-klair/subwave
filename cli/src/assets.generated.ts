@@ -259,6 +259,17 @@ services:
       # Which engines to load (comma-separated). Each costs RAM + a first-boot
       # weight download; set a single engine if you only use one.
       - TTS_HEAVY_ENGINES=\${TTS_HEAVY_ENGINES:-chatterbox,pocket-tts}
+      # Idle seconds before an engine's worker is stopped and its memory
+      # returned (0 = always resident). Empty picks the device-aware default:
+      # 1800 on cuda, 3600 on cpu. Reloads on the next spoken line, or ahead of
+      # one when the idle pause releases (#1579). Per-engine overrides:
+      # CHATTERBOX_IDLE_UNLOAD_S / POCKET_TTS_IDLE_UNLOAD_S.
+      - TTS_HEAVY_IDLE_UNLOAD_S=\${TTS_HEAVY_IDLE_UNLOAD_S:-}
+      - CHATTERBOX_IDLE_UNLOAD_S=\${CHATTERBOX_IDLE_UNLOAD_S:-}
+      - POCKET_TTS_IDLE_UNLOAD_S=\${POCKET_TTS_IDLE_UNLOAD_S:-}
+      # Seconds /speak waits for a cold engine to load before giving up and
+      # letting the DJ fall through to its rescue voice.
+      - TTS_HEAVY_LOAD_TIMEOUT_S=\${TTS_HEAVY_LOAD_TIMEOUT_S:-}
       # Optional — PocketTTS voice CLONING (#238): the cloning weights are
       # gated on HF; accept the terms at huggingface.co/kyutai/pocket-tts and
       # set HF_TOKEN. Without it, cloned .wav voices revert to a built-in.
@@ -275,8 +286,14 @@ services:
   # ANALYZER — acoustic-analysis sidecar (bpm/key/intro/loudness; optional
   # CLAP "sounds-like" embeddings + Demucs vocal ranges)
   # -------------------------------------------------------------------------
-  # Starts by default (only the tts-heavy voices stay opt-in). To skip it,
-  # \`docker compose stop analyzer\` after boot.
+  # Starts by default (only the tts-heavy voices stay opt-in).
+  # Off switch: ANALYZER_REPLICAS=0 in .env removes the container (the next
+  # \`up -d\` stops and deletes it) — for operators who run analysis elsewhere via
+  # ANALYZE_URL and don't want a redundant idle image. Unset/empty = 1 = the
+  # default-on station, unchanged. A PROFILE can't express this: profiles are
+  # opt-in only, and an empty interpolated profile drops the service for anyone
+  # who sets COMPOSE_PROFILES at all (which docs/tts-heavy.md tells Unraid and
+  # Portainer operators to do). See docs/tts-heavy.md#turning-the-analyzer-off.
   analyzer:
     # Default: LEAN multi-arch image. ANALYZER_HEAVY=1 in .env switches to the
     # CLAP + Demucs \`subwave-analyzer-heavy\` image (amd64-only; on arm64 also
@@ -290,6 +307,11 @@ services:
         WITH_CLAP: \${ANALYZER_HEAVY:+1}
         WITH_DEMUCS: \${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
+    # 0 = don't create this container at all (see the off switch above).
+    # 0 and 1 are the ONLY valid values: container_name is fixed above, and
+    # compose refuses a fixed name for >1 replica, so 2 fails every command.
+    deploy:
+      replicas: \${ANALYZER_REPLICAS:-1}
     restart: unless-stopped
     logging: *default-logging
     # OOM containment: a runaway analysis dies here instead of triggering the
@@ -564,6 +586,15 @@ services:
       - POCKET_TTS_VOICE=\${POCKET_TTS_VOICE:-alba}
       # Which engines to load (comma-separated); each costs RAM + weights.
       - TTS_HEAVY_ENGINES=\${TTS_HEAVY_ENGINES:-chatterbox,pocket-tts}
+      # Idle seconds before an engine's worker is stopped and its memory
+      # returned (empty = 1800 cuda / 3600 cpu; 0 = always resident). See
+      # .env.example and #1579.
+      - TTS_HEAVY_IDLE_UNLOAD_S=\${TTS_HEAVY_IDLE_UNLOAD_S:-}
+      - CHATTERBOX_IDLE_UNLOAD_S=\${CHATTERBOX_IDLE_UNLOAD_S:-}
+      - POCKET_TTS_IDLE_UNLOAD_S=\${POCKET_TTS_IDLE_UNLOAD_S:-}
+      # Seconds /speak waits for a cold engine to load before giving up and
+      # letting the DJ fall through to its rescue voice.
+      - TTS_HEAVY_LOAD_TIMEOUT_S=\${TTS_HEAVY_LOAD_TIMEOUT_S:-}
       # Optional — PocketTTS voice cloning (#238): accept the terms at
       # huggingface.co/kyutai/pocket-tts and set HF_TOKEN.
       - HF_TOKEN=\${HF_TOKEN:-}
@@ -578,8 +609,14 @@ services:
   # ANALYZER — acoustic-analysis sidecar (bpm/key/intro/loudness; optional
   # CLAP "sounds-like" embeddings + Demucs vocal ranges)
   # -------------------------------------------------------------------------
-  # Starts by default; only the tts-heavy voices stay opt-in. To skip it,
-  # \`docker compose stop analyzer\`.
+  # Starts by default; only the tts-heavy voices stay opt-in.
+  # Off switch: ANALYZER_REPLICAS=0 in .env removes the container (the next
+  # \`up -d\` stops and deletes it) — for operators who run analysis elsewhere via
+  # ANALYZE_URL and don't want a redundant idle image. Unset/empty = 1 = the
+  # default-on station, unchanged. A PROFILE can't express this: profiles are
+  # opt-in only, and an empty interpolated profile drops the service for anyone
+  # who sets COMPOSE_PROFILES at all (which docs/tts-heavy.md tells Unraid and
+  # Portainer operators to do). See docs/tts-heavy.md#turning-the-analyzer-off.
   analyzer:
     # Default: LEAN multi-arch. ANALYZER_HEAVY=1 in .env → CLAP + Demucs heavy
     # image (amd64-only; on arm64 also set DOCKER_DEFAULT_PLATFORM=linux/amd64).
@@ -592,6 +629,11 @@ services:
         WITH_CLAP: \${ANALYZER_HEAVY:+1}
         WITH_DEMUCS: \${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
+    # 0 = don't create this container at all (see the off switch above).
+    # 0 and 1 are the ONLY valid values: container_name is fixed above, and
+    # compose refuses a fixed name for >1 replica, so 2 fails every command.
+    deploy:
+      replicas: \${ANALYZER_REPLICAS:-1}
     restart: unless-stopped
     logging: *default-logging
     # OOM containment: a runaway analysis dies here, not via the host
@@ -818,6 +860,15 @@ services:
       - POCKET_TTS_VOICE=\${POCKET_TTS_VOICE:-alba}
       # Which engines to load (comma-separated); each costs RAM + weights.
       - TTS_HEAVY_ENGINES=\${TTS_HEAVY_ENGINES:-chatterbox,pocket-tts}
+      # Idle seconds before an engine's worker is stopped and its memory
+      # returned (empty = 1800 cuda / 3600 cpu; 0 = always resident). See
+      # .env.example and #1579.
+      - TTS_HEAVY_IDLE_UNLOAD_S=\${TTS_HEAVY_IDLE_UNLOAD_S:-}
+      - CHATTERBOX_IDLE_UNLOAD_S=\${CHATTERBOX_IDLE_UNLOAD_S:-}
+      - POCKET_TTS_IDLE_UNLOAD_S=\${POCKET_TTS_IDLE_UNLOAD_S:-}
+      # Seconds /speak waits for a cold engine to load before giving up and
+      # letting the DJ fall through to its rescue voice.
+      - TTS_HEAVY_LOAD_TIMEOUT_S=\${TTS_HEAVY_LOAD_TIMEOUT_S:-}
       # Optional — PocketTTS voice cloning (#238); weights gated on HF.
       - HF_TOKEN=\${HF_TOKEN:-}
     volumes:
@@ -832,6 +883,13 @@ services:
   # CLAP "sounds-like" embeddings + Demucs vocal ranges)
   # -------------------------------------------------------------------------
   # Starts by default; only the tts-heavy voices stay opt-in.
+  # Off switch: ANALYZER_REPLICAS=0 in .env removes the container (the next
+  # \`up -d\` stops and deletes it) — for operators who run analysis elsewhere via
+  # ANALYZE_URL and don't want a redundant idle image. Unset/empty = 1 = the
+  # default-on station, unchanged. A PROFILE can't express this: profiles are
+  # opt-in only, and an empty interpolated profile drops the service for anyone
+  # who sets COMPOSE_PROFILES at all (which docs/tts-heavy.md tells Unraid and
+  # Portainer operators to do). See docs/tts-heavy.md#turning-the-analyzer-off.
   analyzer:
     # Default: LEAN multi-arch. ANALYZER_HEAVY=1 → CLAP + Demucs heavy image.
     image: ghcr.io/perminder-klair/subwave-analyzer\${ANALYZER_HEAVY:+-heavy}:\${SUBWAVE_VERSION:-latest}
@@ -843,6 +901,11 @@ services:
         WITH_CLAP: \${ANALYZER_HEAVY:+1}
         WITH_DEMUCS: \${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
+    # 0 = don't create this container at all (see the off switch above).
+    # 0 and 1 are the ONLY valid values: container_name is fixed above, and
+    # compose refuses a fixed name for >1 replica, so 2 fails every command.
+    deploy:
+      replicas: \${ANALYZER_REPLICAS:-1}
     restart: unless-stopped
     logging: *default-logging
     # OOM containment: a runaway analysis dies here, not via the host
@@ -1157,6 +1220,17 @@ SITE_URL=
 # pulling the heavy analyzer image (a one-liner, no rebuild):
 # ANALYZER_HEAVY=1   # switch the \`analyzer\` service to subwave-analyzer-heavy
 #
+# Don't want the local analyzer container at all — because analysis runs on
+# another machine (ANALYZE_URL below), or you don't want acoustic data? Set the
+# replica count to zero. The next \`docker compose up -d\` stops and REMOVES the
+# container; unset (or empty) means 1, i.e. the default-on station, unchanged.
+# ONLY 0 AND 1 ARE VALID: the service pins container_name, which compose refuses
+# for more than one replica, so 2 (or a non-integer like \`false\`) fails every
+# compose command rather than falling back.
+# Compose-only: the AIO one-click image runs the analyzer in-process, so there
+# is no container for this to switch off there — blank ANALYZE_PYTHON instead.
+# ANALYZER_REPLICAS=0
+#
 # On NVIDIA hosts, persist the CUDA overlay for all Compose commands:
 # COMPOSE_FILE=docker-compose.yml:docker-compose.analyzer-gpu.yml
 # For a one-off run, use the two-file command in docs/tts-heavy.md.
@@ -1170,6 +1244,8 @@ SITE_URL=
 # stem caching. Without one, analysis retries by URL after the path probe:
 #   docs/tts-heavy.md#running-the-analyzer-on-another-machine
 # ANALYZE_URL=http://192.168.1.101:8080   # overrides the in-compose analyzer
+#                                         # pair with ANALYZER_REPLICAS=0 above
+#                                         # to drop the redundant local one
 # ANALYZE_CONCURRENCY=1  # max in-flight sidecar jobs / worker processes (1-8).
 #                        # Default 1 preserves existing behaviour. For a remote
 #                        # GPU analyzer, start with 2-4 and set the SAME value on
@@ -1238,6 +1314,36 @@ SITE_URL=
 # never loads. Comma-separated; default loads both. Only matters with
 # --profile tts-heavy.
 # TTS_HEAVY_ENGINES=pocket-tts     # or: chatterbox  |  chatterbox,pocket-tts
+#
+# How long an idle heavy-TTS engine stays loaded. Chatterbox is ~4GB resident
+# (weights, plus torch's CUDA context on a GPU host) and used to be held for
+# the life of the container whether or not the station had spoken all day —
+# the programme's idle pause stands the music down but has no reach into the
+# sidecar. After this many seconds without a spoken line the sidecar stops
+# that engine's worker and hands the memory back, reloading it on the next
+# line — or ahead of one, since the controller warms the sidecar both when the
+# programme's idle pause releases and when the DJ decides to talk. The first
+# of those hides the reload completely but needs the idle pause switched ON
+# (Settings -> Stream, off by default); with it off you get only the second,
+# which overlaps the load with writing the script, so part of a cold reload is
+# still audible as a longer gap before the first line. Empty = 1800 on cuda,
+# 3600 on cpu; both sit far above any gap a talking station produces, so this
+# only fires when the station really has gone quiet. 0 keeps the old
+# always-resident behaviour — worth it if you have RAM to spare and never want
+# a cold reload. Per-engine overrides win over the shared value. Only matters
+# with --profile tts-heavy.
+# TTS_HEAVY_IDLE_UNLOAD_S=1800
+# CHATTERBOX_IDLE_UNLOAD_S=      # just Chatterbox (the expensive one)
+# POCKET_TTS_IDLE_UNLOAD_S=0     # e.g. keep the small, fast engine resident
+#
+# Seconds /speak waits for a cold engine to load before giving up and letting
+# the DJ fall through to its rescue voice. Raise it on a slow disk or a first
+# load that still has weights to fetch; the ceiling has to leave room inside
+# TTS_HEAVY_TIMEOUT_MS (180000) for the render that follows. This is only a
+# CEILING — a load the sidecar abandons sooner (missing venv, fatal model
+# error) fails its caller straight away. Floored at 5; anything unparseable is
+# ignored with a warning rather than stopping the sidecar booting.
+# TTS_HEAVY_LOAD_TIMEOUT_S=90
 #
 # Own TTS server? There's nothing to set here — the *Remote* engine points the
 # DJ at any HTTP server that answers GET /health and returns rendered audio from

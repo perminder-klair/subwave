@@ -247,6 +247,15 @@ export function fitToCount(
 // an unknown value (null/undefined/<=0) keeps it — a partly-un-analysed library
 // must still fill. Callers wrap these in revertIfStarved for the relax path.
 
+// NOT the station's minimum-track-length floor (#1573, music/track-floor.ts).
+// This is the Playlist Builder's own recipe BAND — an operator tool with its
+// own knobs, no show scope and a revertIfStarved wrapper, applied to a
+// generated playlist rather than to a pick. The two agree on the rule that
+// matters (an unknown length always passes) and must keep agreeing; they are
+// kept apart because a band does not decompose into a floor without restating
+// the ceiling half, and because this module is deliberately import-free. If a
+// THIRD copy of "is this track too short?" is ever needed, fold it into
+// track-floor.ts instead of adding one here.
 export function filterByDurationBand(pool: PoolTrack[], minSec: number, maxSec: number): PoolTrack[] {
   if (!minSec && !maxSec) return [...pool];
   return pool.filter((t) => {

@@ -990,6 +990,9 @@ export interface NormalizedShow {
   vocals: string;
   filtersStrict: boolean;
   maxTrackSeconds: number | null;
+  /** Minimum track length in seconds (#1573). null = inherit the station
+   *  default, 0 = no floor. See settings/persona.effectiveMinTrackSec. */
+  minTrackLengthSeconds: number | null;
   playlistIds: string[];
   playlistStrict: boolean;
   excludedPlaylistIds: string[];
