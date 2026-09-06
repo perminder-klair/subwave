@@ -48,10 +48,12 @@ const {
   backupDue,
   backupsToPrune,
   isScheduledBackupName,
+  isScheduledBackupTempName,
   lastScheduledBackupAt,
   scheduledBackupName,
   scheduledBackupStamp,
 } = await import('../src/backup/pure.js');
+const { normalizeBackups } = await import('../src/settings/normalize.js');
 const { setCache } = await import('../src/settings/store.js');
 const settings = await import('../src/settings.js');
 const { DEFAULTS } = await import('../src/settings/defaults.js');
@@ -173,22 +175,69 @@ test('the prune never names a file it could not have written itself', () => {
   for (const f of foreign) assert.ok(!pruned.includes(f), `${f} must never be pruned`);
 });
 
-test('a junk keep cannot widen the prune', () => {
+// Ten of ours, so a fallback to the shipped default (7) is visible as a count
+// rather than as "nothing was pruned".
+const TEN_AUTO = Array.from({ length: 10 }, (_, i) =>
+  `subwave-auto-backup-2026-09-${String(i + 1).padStart(2, '0')}-042300.zip`);
+
+test('an out-of-range keep clamps, but an UNREADABLE one falls to the default', () => {
   // keep arrives from settings, which the schema bounds and load() repairs —
-  // but this is the function that unlinks, so it re-bounds rather than trusting
-  // its caller. Every unusable value falls to the FLOOR of 1, which keeps the
-  // newest backup; falling to 0 would delete the one just written.
-  for (const bad of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, undefined, null, 'seven']) {
-    const pruned = backupsToPrune(AUTO, bad as number);
-    assert.equal(pruned.length, AUTO.length - BACKUP_KEEP_BOUNDS.min,
-      `keep=${JSON.stringify(bad)} should keep exactly ${BACKUP_KEEP_BOUNDS.min}`);
-    assert.ok(!pruned.includes('subwave-auto-backup-2026-09-04-042300.zip'),
-      'the newest backup must survive any junk retention');
+  // but this is the function that unlinks, so it re-reads rather than trusting
+  // its caller. The two directions are different on purpose (#1585 review):
+  //
+  //   a number out of range is an answer, so it clamps to the nearest bound;
+  //   a value that is not a number at all is NO answer, so it falls to the
+  //   shipped default — the same answer normalizeBackups() gives.
+  //
+  // Falling to the FLOOR instead would make the one module in the station that
+  // deletes operator files the one that guesses most destructively.
+  for (const unreadable of [Number.NaN, Number.POSITIVE_INFINITY, undefined, null, '', 'seven', {}]) {
+    const pruned = backupsToPrune(TEN_AUTO, unreadable);
+    assert.equal(pruned.length, TEN_AUTO.length - DEFAULTS.backups.keep,
+      `keep=${JSON.stringify(unreadable)} should keep the default ${DEFAULTS.backups.keep}`);
+  }
+  // Finite but impossible: clamp. 0 would delete the backup just written.
+  for (const bad of [0, -5]) {
+    assert.equal(backupsToPrune(TEN_AUTO, bad).length, TEN_AUTO.length - BACKUP_KEEP_BOUNDS.min);
+  }
+  // The newest survives every one of those, readable or not.
+  for (const any of [0, -5, Number.NaN, undefined, null, 'seven']) {
+    assert.ok(!backupsToPrune(TEN_AUTO, any).includes(TEN_AUTO[TEN_AUTO.length - 1]),
+      'the newest backup must survive any retention this function is handed');
   }
   // A float truncates rather than refusing — the parseInt family this key uses.
   assert.equal(backupsToPrune(AUTO, 2.9).length, 2);
   // Above the ceiling clamps down, which can only ever keep MORE than asked.
   assert.deepEqual(backupsToPrune(AUTO, 10_000), []);
+  // A numeric STRING is readable — the admin number input posts one.
+  assert.equal(backupsToPrune(TEN_AUTO, '3').length, 7);
+});
+
+test('the prune and the load path agree about an unreadable retention', () => {
+  // The finding this pins: two clamps, one in each module, disagreeing about
+  // the direction to fail in. They are now one function.
+  const viaLoad = normalizeBackups({ cadence: 'daily', keep: 'nonsense' }).keep;
+  assert.equal(viaLoad, DEFAULTS.backups.keep);
+  assert.equal(backupsToPrune(TEN_AUTO, 'nonsense').length, TEN_AUTO.length - viaLoad);
+});
+
+test('a future-dated backup is kept, not ranked away', () => {
+  // The pair of `lastScheduledBackupAt` ignoring a future stamp. There the safe
+  // direction is "take a backup anyway"; here it is "do not DELETE a real
+  // snapshot on the word of a clock that has already been wrong once", so the
+  // name still decides the order and the odd file simply costs a slot.
+  const future = 'subwave-auto-backup-2031-01-01-000000.zip';
+  const pruned = backupsToPrune([...AUTO, future], 2);
+  // keep:2 leaves the 2031 file and the newest real one — the odd file costs a
+  // slot rather than being deleted or being pruned around.
+  assert.deepEqual(pruned, [
+    'subwave-auto-backup-2026-09-03-042300.zip',
+    'subwave-auto-backup-2026-09-02-042300.zip',
+    'subwave-auto-backup-2026-09-01-042300.zip',
+  ]);
+  assert.ok(!pruned.includes(future));
+  // And the due decision still ignores it, so the schedule is not wedged shut.
+  assert.equal(lastScheduledBackupAt([...AUTO, future], NOW), Date.parse('2026-09-04T04:23:00Z'));
 });
 
 // ---------------------------------------------------------------------------
@@ -467,4 +516,137 @@ test('retention keeps the last N of its own and never the operator\'s', async ()
   assert.deepEqual(ours, written.slice(-2).sort());
   // And no half-written temp survived the atomic rename.
   assert.deepEqual(left.filter(n => n.endsWith('.tmp')), []);
+});
+
+// ---------------------------------------------------------------------------
+// 7. Not making things worse
+//
+// This job writes the largest file the station produces into the directory it
+// exists to protect, and it retries hourly until it succeeds. Both guards below
+// exist so a run that FAILS cannot compound into the disk filling up — which is
+// the one condition where an operator needs the rest of the station working.
+// ---------------------------------------------------------------------------
+
+test('the temp grammar is as narrow as the finished one', () => {
+  // The sweep DELETES, so the same rule applies as to the prune: only a name
+  // this writer could itself have produced. Every other *.tmp in the state dir
+  // is another writer's in-flight file, and settings.json is written the same
+  // way — eating one of those mid-flight would be far worse than the leak.
+  const ours = 'subwave-auto-backup-2026-09-06-042317.zip.a1b2c3d4.tmp';
+  assert.ok(isScheduledBackupTempName(ours));
+  assert.ok(isScheduledBackupTempName(`${scheduledBackupName(new Date(NOW))}.deadbeef.tmp`));
+  for (const foreign of [
+    'settings.json.a1b2c3d4.tmp',                    // another writer, mid-flight
+    'session.json.a1b2c3d4.tmp',
+    'queue.json.a1b2c3d4.tmp',
+    'auto.m3u.a1b2c3d4.tmp',
+    'subwave-backup-2026-09-06.zip.a1b2c3d4.tmp',    // the MANUAL export's name
+    'my-subwave-auto-backup-2026-09-06-042317.zip.a1b2c3d4.tmp', // anchored
+    'subwave-auto-backup-2026-09-06-042317.zip',     // the finished file
+    'subwave-auto-backup-2026-09-06-042317.tmp',     // no .zip in the stem
+    'subwave-auto-backup-2026-09-06-042317.zip.tmp', // no random suffix
+    'subwave-auto-backup-2026-09-06-042317.zip.zzzz.tmp', // not hex
+    '',
+  ]) {
+    assert.equal(isScheduledBackupTempName(foreign), false,
+      `${JSON.stringify(foreign)} is not ours to delete`);
+  }
+  for (const junk of [null, undefined, 7, {}, []]) {
+    assert.equal(isScheduledBackupTempName(junk), false);
+  }
+  // And a temp is invisible to BOTH the finished-name readers, which is exactly
+  // why it needs its own sweep: nothing else would ever look at it again.
+  assert.equal(isScheduledBackupName(ours), false);
+});
+
+test('writeFileAtomic removes its own temp when the write fails', async () => {
+  // The in-process half of the leak. A failed rename used to leave the temp
+  // behind under a random name no later call reuses — a few hundred bytes for
+  // the JSON writers, a partial multi-hundred-MB zip for this one.
+  const { writeFileAtomic } = await import('../src/util/atomic-file.js');
+  const { mkdirSync, readdirSync, rmSync } = await import('node:fs');
+
+  const blocked = path.join(stateRoot, 'blocked-target.zip');
+  mkdirSync(blocked, { recursive: true }); // rename onto a directory fails
+  await assert.rejects(
+    () => writeFileAtomic(blocked, Buffer.from('some backup bytes')),
+    'the original error must still propagate — cleanup is bookkeeping',
+  );
+  assert.deepEqual(
+    readdirSync(stateRoot).filter(n => n.startsWith('blocked-target.zip.')),
+    [],
+    'the temp must not survive a failed write',
+  );
+  rmSync(blocked, { recursive: true, force: true });
+});
+
+test('a run sweeps half-written backups a killed run left, and only those', async () => {
+  // The out-of-process half: an OOM kill or `docker compose restart` mid-write
+  // gets no catch block, so every run tidies up on the way in. Doing it before
+  // the due check matters — a monthly schedule must not sit on the wreckage of
+  // an interrupted run for a month.
+  const { runScheduledBackup } = await import('../src/backup/scheduled.js');
+  const { readdirSync, unlinkSync } = await import('node:fs');
+  await coldLoad({ cadence: 'daily', keep: 3 });
+
+  const stale = 'subwave-auto-backup-2026-09-05-042300.zip.deadbeef.tmp';
+  const foreign = 'settings.json.deadbeef.tmp';
+  writeFileSync(path.join(stateRoot, stale), 'half a zip');
+  writeFileSync(path.join(stateRoot, foreign), '{"mid":"flight"}');
+
+  // An hour after the newest backup the previous test left, so this run is NOT
+  // due — which also pins that the sweep does not ride on the writing path.
+  const r = await runScheduledBackup(new Date(NOW + 3 * DAY + 60 * 60_000));
+  assert.equal(r.skipped, 'not-due');
+  assert.deepEqual(r.sweptTemps, [stale]);
+  assert.deepEqual(r.errors, []);
+
+  const left = readdirSync(stateRoot);
+  assert.ok(!left.includes(stale), 'our half-written file must be swept');
+  assert.ok(left.includes(foreign), "another writer's in-flight file must survive");
+  unlinkSync(path.join(stateRoot, foreign));
+});
+
+test('a normal run is not blocked by the free-space pre-flight', async () => {
+  // The pre-flight FAILS OPEN and only declines a write that genuinely will not
+  // fit. On any ordinary disk the backup still lands — the guard must never
+  // become the reason a station stops taking backups.
+  const { runScheduledBackup } = await import('../src/backup/scheduled.js');
+  const { readdirSync, unlinkSync } = await import('node:fs');
+  await coldLoad({ cadence: 'daily', keep: 3 });
+  for (const n of readdirSync(stateRoot).filter(isScheduledBackupName)) {
+    unlinkSync(path.join(stateRoot, n));
+  }
+  const r = await runScheduledBackup(new Date(NOW + 5 * DAY));
+  assert.deepEqual(r.errors, []);
+  assert.ok(r.written, 'a due run on a disk with room must write');
+  assert.ok(r.bytes > 0);
+});
+
+test('an undeletable file does not abandon the rest of the prune', async () => {
+  // One unremovable file (ownership on a bind mount) must cost its own line in
+  // `errors`, not the sweep — otherwise a single stuck file freezes retention
+  // and the disk fills anyway.
+  const { runScheduledBackup } = await import('../src/backup/scheduled.js');
+  const { chmodSync, mkdirSync, readdirSync, rmSync, unlinkSync } = await import('node:fs');
+  await coldLoad({ cadence: 'daily', keep: 1 });
+  for (const n of readdirSync(stateRoot).filter(isScheduledBackupName)) {
+    unlinkSync(path.join(stateRoot, n));
+  }
+
+  // A DIRECTORY carrying one of our names: unlink() refuses it (EISDIR/EPERM)
+  // the way a file the controller may not remove would.
+  const stuck = 'subwave-auto-backup-2026-09-01-000000.zip';
+  const alsoOld = 'subwave-auto-backup-2026-09-02-000000.zip';
+  mkdirSync(path.join(stateRoot, stuck), { recursive: true });
+  writeFileSync(path.join(stateRoot, alsoOld), 'an older backup');
+
+  const r = await runScheduledBackup(new Date(NOW + 10 * DAY));
+  assert.ok(r.written, 'the backup itself still happens');
+  assert.ok(r.pruned.includes(alsoOld), 'the removable older backup is still pruned');
+  assert.equal(r.errors.length, 1, 'exactly one failure reported');
+  assert.match(r.errors[0], /could not remove subwave-auto-backup-2026-09-01-000000\.zip/);
+
+  chmodSync(path.join(stateRoot, stuck), 0o755);
+  rmSync(path.join(stateRoot, stuck), { recursive: true, force: true });
 });

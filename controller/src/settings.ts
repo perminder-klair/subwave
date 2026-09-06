@@ -96,6 +96,7 @@ import {
   STREAM_GEOIP_DB_PATH_MAX,
   STREAM_MAX_LISTENERS_BOUNDS,
   maxTrackSecondsValueSchema,
+  type ScheduledBackupSettings,
 } from './schemas/settings.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
@@ -1232,7 +1233,7 @@ export async function update(patch) {
     }
   }
   if ('backups' in patch) {
-    const b = parseSettingsPatchKey<{ cadence?: string; keep?: number }>(
+    const b = parseSettingsPatchKey<Partial<ScheduledBackupSettings>>(
       'backups',
       patch.backups,
     );

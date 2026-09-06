@@ -21,7 +21,22 @@
 // must survive a full disk, a read-only mount, a state file that vanished
 // mid-sweep. Failures come back as strings in `errors` for the caller to log,
 // and one undeletable file does not abandon the rest of the prune.
-import { readdir, unlink } from 'node:fs/promises';
+//
+// A FAILING RUN MUST NOT MAKE THINGS WORSE
+// ----------------------------------------
+// This job writes the largest file the station produces into the directory it
+// is protecting, and it retries hourly until it succeeds. Two guards keep a
+// failure from compounding into the disk filling up:
+//
+//   - Every run first sweeps its OWN half-written temps. `writeFileAtomic`
+//     removes one when the write itself fails, but a container restart or an
+//     OOM kill mid-write gets no such chance, and the leftover is invisible to
+//     the restorable listing and to retention alike (neither is a `.zip`).
+//   - A free-space pre-flight declines a write that would not fit. The archive
+//     is already in memory by then, so the size is known exactly rather than
+//     guessed. It FAILS OPEN — an unreadable filesystem means "try the write",
+//     because the whole point of the feature is taking the backup.
+import { readdir, statfs, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { STATE_DIR } from '../config.js';
 import * as settings from '../settings.js';
@@ -30,6 +45,7 @@ import { buildBackupZip } from './zip.js';
 import {
   backupDue,
   backupsToPrune,
+  isScheduledBackupTempName,
   lastScheduledBackupAt,
   scheduledBackupName,
 } from './pure.js';
@@ -43,13 +59,25 @@ export interface ScheduledBackupResult {
   bytes: number;
   /** Files retention removed. */
   pruned: string[];
+  /** Half-written temps from a killed earlier run, cleaned up on the way in. */
+  sweptTemps: string[];
   /** Human-readable failures. Non-empty does not mean nothing was written. */
   errors: string[];
 }
 
-const NOTHING = (skipped: ScheduledBackupResult['skipped']): ScheduledBackupResult => ({
-  skipped, written: null, bytes: 0, pruned: [], errors: [],
+/** Nothing to do, and nothing went wrong: the schedule is off, or not yet due. */
+const idle = (skipped: NonNullable<ScheduledBackupResult['skipped']>): ScheduledBackupResult => ({
+  skipped, written: null, bytes: 0, pruned: [], sweptTemps: [], errors: [],
 });
+
+/** The run was due and did not produce a backup. `skipped` is null: it tried. */
+const failed = (message: string): ScheduledBackupResult => ({
+  skipped: null, written: null, bytes: 0, pruned: [], sweptTemps: [], errors: [message],
+});
+
+// Headroom kept free beyond the archive itself, so a backup can never be the
+// write that takes the last byte on the volume the station is running from.
+const FREE_SPACE_HEADROOM_BYTES = 64 * 1024 * 1024;
 
 /**
  * Take a scheduled backup if one is due, then apply retention.
@@ -62,22 +90,30 @@ export async function runScheduledBackup(now: Date = new Date()): Promise<Schedu
   // An absent block reads as `off` in pure.ts, but short-circuit here too so an
   // upgraded station that never touches this doesn't even readdir the state dir
   // once an hour.
-  if (!cadence || cadence === 'off') return NOTHING('off');
+  if (!cadence || cadence === 'off') return idle('off');
 
   const errors: string[] = [];
   let names: string[];
   try {
     names = await readdir(STATE_DIR);
   } catch (err: any) {
-    return { ...NOTHING(null), errors: [`could not read the state dir: ${err.message}`] };
+    return failed(`could not read the state dir: ${err.message}`);
   }
+
+  // Before anything else, and whether or not a backup is due: an earlier run
+  // killed mid-write left a partial archive that nothing else in the station
+  // will ever look at again. Doing it here rather than only on the writing path
+  // means a schedule that has gone quiet (not due for a month) still tidies up
+  // after the restart that interrupted it.
+  const sweptTemps = await sweepStaleTemps(names, errors);
 
   const nowMs = now.getTime();
   if (!backupDue({ cadence, lastRunMs: lastScheduledBackupAt(names, nowMs), nowMs })) {
     // Still prune: a retention lowered between runs must take effect now rather
     // than on the next cadence boundary, which for `monthly` is a month of the
     // operator watching the disk not shrink.
-    return { ...NOTHING('not-due'), ...(await prune(names, cfg?.keep)) };
+    const p = await prune(names, cfg?.keep);
+    return { ...idle('not-due'), sweptTemps, pruned: p.pruned, errors: [...errors, ...p.errors] };
   }
 
   const name = scheduledBackupName(now);
@@ -89,10 +125,22 @@ export async function runScheduledBackup(now: Date = new Date()): Promise<Schedu
     // corrupt restore point behind.
     const buf = (await buildBackupZip()).toBuffer();
     bytes = buf.length;
+    const shortfall = await freeSpaceShortfall(bytes);
+    if (shortfall !== null) {
+      // Declining costs the operator this cadence's backup and says so. Writing
+      // anyway costs them the station: STATE_DIR is where session.json, the tag
+      // DB and the archive live, and a full volume stops all three. No file is
+      // written, so no stamp is recorded and the next tick tries again — by
+      // which time the sweep above may have freed exactly what was missing.
+      const why = `backup skipped — needs ${mb(bytes)} MB plus ${mb(FREE_SPACE_HEADROOM_BYTES)} MB `
+        + `headroom, ${mb(shortfall)} MB short on ${STATE_DIR}`;
+      return { ...failed(why), sweptTemps, errors: [...errors, why] };
+    }
     await writeFileAtomic(join(STATE_DIR, name), buf);
   } catch (err: any) {
     // No file was written, so no stamp was recorded and the next tick retries.
-    return { ...NOTHING(null), errors: [`backup failed: ${err.message}`] };
+    const why = `backup failed: ${err.message}`;
+    return { ...failed(why), sweptTemps, errors: [...errors, why] };
   }
 
   // Re-list rather than appending to `names`: the write just changed the dir,
@@ -108,8 +156,48 @@ export async function runScheduledBackup(now: Date = new Date()): Promise<Schedu
     written: name,
     bytes,
     pruned: pruneResult.pruned,
+    sweptTemps,
     errors: [...errors, ...pruneResult.errors],
   };
+}
+
+const mb = (bytes: number) => Math.max(1, Math.round(bytes / 1_000_000));
+
+/**
+ * How many bytes short the state dir's volume is of holding `bytes` plus the
+ * headroom, or null when it fits (or when we cannot tell).
+ *
+ * FAILS OPEN. `statfs` is unavailable or meaningless on some mounts, and the
+ * feature's job is to take the backup — a filesystem we cannot measure gets the
+ * write attempted, and `writeFileAtomic` cleans up after an ENOSPC.
+ */
+async function freeSpaceShortfall(bytes: number): Promise<number | null> {
+  try {
+    const fs = await statfs(STATE_DIR);
+    const free = Number(fs.bavail) * Number(fs.bsize);
+    if (!Number.isFinite(free) || free <= 0) return null;
+    const need = bytes + FREE_SPACE_HEADROOM_BYTES;
+    return free < need ? need - free : null;
+  } catch {
+    return null;
+  }
+}
+
+// Remove half-written archives from a run that was killed before its rename.
+// Only names `isScheduledBackupTempName` recognises — see pure.ts on why that
+// set is narrow: every other `*.tmp` in the state dir is another writer's
+// in-flight settings.json or session.json.
+async function sweepStaleTemps(names: readonly string[], errors: string[]): Promise<string[]> {
+  const swept: string[] = [];
+  for (const name of names.filter(isScheduledBackupTempName)) {
+    try {
+      await unlink(join(STATE_DIR, name));
+      swept.push(name);
+    } catch (err: any) {
+      if (err?.code !== 'ENOENT') errors.push(`could not remove stale temp ${name}: ${err.message}`);
+    }
+  }
+  return swept;
 }
 
 // Delete only what backupsToPrune names — see pure.ts on why that set is
@@ -121,7 +209,7 @@ async function prune(
 ): Promise<{ pruned: string[]; errors: string[] }> {
   const pruned: string[] = [];
   const errors: string[] = [];
-  for (const name of backupsToPrune(names, Number(keep))) {
+  for (const name of backupsToPrune(names, keep)) {
     try {
       await unlink(join(STATE_DIR, name));
       pruned.push(name);

@@ -10,6 +10,7 @@ import {
   BEDS_TAIL_SEC_BOUNDS,
   SILENCE_TRIM_MIN_GAP_MS_BOUNDS,
   BACKUP_KEEP_BOUNDS,
+  BACKUP_KEEP_DEFAULT,
   BEDS_THRESHOLD_SEC_BOUNDS,
   CROSSFADE_DURATION_BOUNDS,
   DUCK_DEPTH_BOUNDS,
@@ -58,7 +59,7 @@ export const DEFAULTS = {
   // load-bearing: this is the only scheduled job that DELETES operator files,
   // so an upgrade that changes nothing must produce byte-identical behaviour —
   // no zips written, no zips pruned. `keep` is inert until a cadence is picked.
-  backups: { cadence: 'off', keep: 7 },
+  backups: { cadence: 'off' as const, keep: BACKUP_KEEP_DEFAULT },
   stream: {
     // Secondary Ogg-Opus mount (/stream.opus). Off by default — only Blink
     // selects it (web/hooks/usePlayer.ts), and it costs a continuous encoder

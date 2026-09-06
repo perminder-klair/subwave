@@ -27,16 +27,37 @@
 // tick still reads the older stamp and retries, rather than a marker file
 // claiming success for a backup that isn't there.
 
-import { BACKUP_KEEP_BOUNDS, SETTINGS_BACKUP_CADENCES } from '../schemas/settings.js';
+import { clampBackupKeep, type BackupCadence } from '../schemas/settings.js';
 
-// The vocabulary and the bound live in the mirrored schema, never a copy: the
-// save path, the browser pre-flight and this module all have to agree, and the
-// admin select is built from the same list.
-export type BackupCadence = (typeof SETTINGS_BACKUP_CADENCES)[number];
+// The vocabulary, the bound and the clamp all live in the mirrored schema,
+// never a copy: the save path, the browser pre-flight and this module have to
+// agree, and the admin select is built from the same list.
+export type { BackupCadence };
+
+// The one spelling of the name. Both patterns below anchor it rather than
+// restating it, so the finished form and the half-written form cannot drift
+// apart — and they must not: the sweep keys on one, the prune on the other, and
+// each of them DELETES.
+const SCHEDULED_BACKUP_STEM =
+  String.raw`subwave-auto-backup-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})\.zip`;
 
 /** Anchored — the whole basename or nothing. See the header. */
-export const SCHEDULED_BACKUP_RE =
-  /^subwave-auto-backup-(\d{4})-(\d{2})-(\d{2})-(\d{2})(\d{2})(\d{2})\.zip$/;
+export const SCHEDULED_BACKUP_RE = new RegExp(`^${SCHEDULED_BACKUP_STEM}$`);
+
+/**
+ * The half-written form of the same name: `writeFileAtomic` writes
+ * `<target>.<hex>.tmp` and renames it into place, so a run killed mid-write
+ * (a container restart, an OOM) leaves one of these behind.
+ *
+ * It gets its own anchored pattern, built from the same stem, for the same
+ * reason the finished name has one: the sweep that removes these DELETES, and
+ * every other `*.tmp` in the state dir belongs to another writer — settings.json
+ * and session.json are written the same way, and eating one of those mid-flight
+ * would be a far worse bug than the leak this fixes. Only a name this writer
+ * could itself have produced is ours to remove.
+ */
+export const SCHEDULED_BACKUP_TMP_RE =
+  new RegExp(String.raw`^${SCHEDULED_BACKUP_STEM}\.[0-9a-f]+\.tmp$`);
 
 const DAY_MS = 86_400_000;
 
@@ -59,6 +80,11 @@ export const BACKUP_DUE_SLACK_MS = 30 * 60_000;
 
 export function isScheduledBackupName(name: unknown): boolean {
   return typeof name === 'string' && SCHEDULED_BACKUP_RE.test(name);
+}
+
+/** A temp file only the scheduled writer could have dropped. See the pattern. */
+export function isScheduledBackupTempName(name: unknown): boolean {
+  return typeof name === 'string' && SCHEDULED_BACKUP_TMP_RE.test(name);
 }
 
 /** The name a run at `now` writes. UTC, so the sort order is the time order. */
@@ -142,11 +168,20 @@ export function backupDue({
  * stamp is fixed-width UTC — no Date parsing, so a name with an impossible date
  * still lands in a stable place instead of vanishing from the count and living
  * forever.
+ *
+ * A file stamped in the FUTURE therefore sorts first and is kept until the
+ * clock catches up, costing one slot of the operator's N. That is deliberate,
+ * and it is the pair of `lastScheduledBackupAt` ignoring the same file: there
+ * the safe direction is "take a backup anyway", here it is "do not delete a
+ * real snapshot because its name disagrees with a clock that has already been
+ * wrong once". Ranking by anything but the name would mean deleting files on
+ * the strength of that clock.
+ *
+ * An unreadable `keep` falls to the shipped default via `clampBackupKeep`, NOT
+ * to the floor of 1 — the same answer `settings.load()`'s normaliser gives, so
+ * the module that deletes cannot be the one that guesses most destructively.
  */
-export function backupsToPrune(names: readonly string[], keep: number): string[] {
-  const bounded = Number.isFinite(keep)
-    ? Math.min(BACKUP_KEEP_BOUNDS.max, Math.max(BACKUP_KEEP_BOUNDS.min, Math.floor(keep)))
-    : BACKUP_KEEP_BOUNDS.min;
+export function backupsToPrune(names: readonly string[], keep: unknown): string[] {
   const ours = names.filter(isScheduledBackupName).sort().reverse();
-  return ours.slice(bounded);
+  return ours.slice(clampBackupKeep(keep));
 }

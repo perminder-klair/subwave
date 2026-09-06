@@ -30,9 +30,11 @@ import {
 } from '../schemas/show.js';
 import { resolveShowIds } from '../schemas/show-server.js';
 import {
-  BACKUP_KEEP_BOUNDS,
   DUCK_DEPTH_BOUNDS,
   SETTINGS_BACKUP_CADENCES,
+  clampBackupKeep,
+  type BackupCadence,
+  type ScheduledBackupSettings,
 } from '../schemas/settings.js';
 // The persona + prompt-library rules themselves, so this lenient path and
 // update()'s strict one cannot restate them differently.
@@ -76,16 +78,14 @@ export function normalizeArchiveRetentionDays(archive: any): number {
 // "guess daily" — an upgrade, a typo and a settings.json from a newer version
 // all land on the pre-existing behaviour. `keep` is clamped instead of dropped
 // because a cadence the operator DID set must not be disarmed by a bad
-// retention number sitting next to it.
-export function normalizeBackups(backups: any): { cadence: string; keep: number } {
-  const cadence = SETTINGS_BACKUP_CADENCES.includes(backups?.cadence)
+// retention number sitting next to it — through `clampBackupKeep`, the one
+// copy of that clamp, which the retention sweep reads too so the two cannot
+// disagree about what an unreadable retention means (#1585 review).
+export function normalizeBackups(backups: any): ScheduledBackupSettings {
+  const cadence: BackupCadence = SETTINGS_BACKUP_CADENCES.includes(backups?.cadence)
     ? backups.cadence
     : DEFAULTS.backups.cadence;
-  const raw = Number(backups?.keep);
-  const keep = Number.isFinite(raw)
-    ? Math.min(BACKUP_KEEP_BOUNDS.max, Math.max(BACKUP_KEEP_BOUNDS.min, Math.floor(raw)))
-    : DEFAULTS.backups.keep;
-  return { cadence, keep };
+  return { cadence, keep: clampBackupKeep(backups?.keep) };
 }
 
 // A stored `smooth_add` duck depth, repaired rather than refused — load()'s

@@ -1171,6 +1171,13 @@ async function scheduledBackupTick() {
       // A retention lowered between cadence boundaries.
       queue.log('scheduler', `Scheduled backup retention: removed ${r.pruned.length} older backup(s)`);
     }
+    if (r.sweptTemps.length) {
+      // A previous run was killed mid-write. Worth a line: it is the only trace
+      // the operator gets that a backup they expected never landed.
+      queue.log('scheduler',
+        `Scheduled backup: cleaned up ${r.sweptTemps.length} half-written backup file(s) `
+        + 'left by an interrupted run');
+    }
     // Errors are reported even when a backup WAS written — a successful write
     // followed by a failed prune is the disk quietly filling up.
     for (const e of r.errors) queue.log('error', `Scheduled backup: ${e}`);
