@@ -1,6 +1,6 @@
 // The `POST /settings` patch registry (#1348).
 //
-// `settings.update()` takes a PARTIAL patch over 44 top-level keys and validates
+// `settings.update()` takes a PARTIAL patch over 48 top-level keys and validates
 // it in a long chain of `if ('<key>' in patch)` branches — a route that owns
 // forty-four shapes doesn't fit #1337's one-schema-per-form recipe.
 //
