@@ -405,6 +405,30 @@ def takeover(page):
         page.wait_for_selector("text=Choose programming")
         minutes.fill("123")
         assert_survives_poll(page, minutes, "123")
+
+        # 5. "Til change" (#1601) — the window the CONTROLLER resolves from the
+        #    weekly grid rather than a duration typed here. Two things to see:
+        #    the minute box goes away (it is not what gets submitted, and a box
+        #    holding 123 beside a server-resolved window reads as if it were),
+        #    and the concrete end time is on screen BEFORE the pin, which is the
+        #    whole point of the option not being a black box.
+        page.get_by_text("til change", exact=True).click()
+        page.get_by_label("Takeover minutes").wait_for(state="detached")
+        resolved = page.wait_for_selector("text=/^ends .* min · /")
+        preview = json.loads(api("/schedule/next-change"))
+        assert preview["expiresAt"] > 0, preview
+        assert f"{preview['minutes']} min" in resolved.inner_text(), resolved.inner_text()
+
+        page.get_by_label("Choose takeover programming").click()
+        page.get_by_role("menuitem", name="Default programming").click()
+        page.get_by_role("button", name="Take over").click()
+        page.get_by_text("autonomous music · default DJ", exact=False).wait_for()
+        stored = json.loads(api("/schedule")).get("override")
+        # The pin resolves the window again at its own startedAt, so the two
+        # answers agree on a grid boundary exactly and on a clamped one to
+        # within the seconds between the two calls.
+        assert stored and abs(stored["expiresAt"] - preview["expiresAt"]) < 10_000, (stored, preview)
+        page.get_by_role("button", name="Cancel takeover").click()
     finally:
         # Runs whether the assertions above passed or raised — a failed run
         # must not leave the fixture show behind to poison the NEXT run.

@@ -20,6 +20,9 @@ export const dashKeys = {
   requests: () => ['dash', 'requests'] as const,
   suggestions: () => ['dash', 'suggestions'] as const,
   takeover: () => ['dash', 'takeover'] as const,
+  // Nested under takeover() on purpose: a pin write invalidates that prefix,
+  // and the preview it invalidates alongside is stale the moment one lands.
+  takeoverWindow: () => ['dash', 'takeover', 'window'] as const,
   navidrome: () => ['dash', 'banner', 'navidrome'] as const,
   musicStarved: () => ['dash', 'banner', 'music-starved'] as const,
 };
@@ -93,6 +96,25 @@ export interface TakeoverShow {
 export interface TakeoverData {
   shows: TakeoverShow[];
   override: ScheduleOverride | null;
+}
+
+/**
+ * What `until: 'schedule-change'` would resolve to right now (#1601) — the
+ * concrete end time the dialog shows before the operator commits.
+ *
+ * Advisory: POST /schedule/override resolves it again at its own `startedAt`,
+ * so this is what the pin would be, never what it is. `source` says which rule
+ * decided — the grid's own change, or one of the two clamps.
+ */
+export interface TakeoverWindow {
+  expiresAt: number;
+  minutes: number;
+  source: 'schedule' | 'minimum' | 'maximum';
+  nextChangeAt: number | null;
+}
+
+export function fetchTakeoverWindow(fetcher: AdminFetch, signal: AbortSignal): Promise<TakeoverWindow> {
+  return adminJson(fetcher, '/schedule/next-change', undefined, signal);
 }
 
 /** One `/schedule/override` write owns both route-specific views of the pin. */
