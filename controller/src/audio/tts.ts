@@ -658,8 +658,19 @@ function isPocketClone(voice?: string | null): boolean {
 // operator can see *who speaks* without waiting for a segment to air.
 export function describeRouting() {
   const persona = settings.getEffectivePersona();
-  const personaTts = persona?.tts || null;
   const tts = settings.get().tts || {};
+  // Resolved, like djPersonaTts() — this function reproduces the same
+  // per-engine comparisons the dispatcher makes, so it needs the same input.
+  // Against a raw slot every one of them reads false for a persona following
+  // the station: `requested` reported the literal sentinel, the voice fell
+  // through to the engine's GLOBAL default instead of the persona's own, and
+  // `fellBack` compared 'inherit' against the engine that actually spoke and
+  // was therefore true on a station where nothing fell back at all. That last
+  // one is the expensive direction — /debug's TTS panel and the nightly
+  // doctor's "active routing" check both exist to spot a SILENT fallback, and
+  // a warning that fires for the shipped default roster is the noise that
+  // teaches an operator to ignore the real one.
+  const personaTts = resolvePersonaVoiceSlot(persona?.tts || null, tts);
   const requested = personaTts?.engine || tts.defaultEngine || 'piper';
   const slot = resolveEngine('dj-speak', personaTts);   // any persona-voiced kind
   const engine = slot.engine;
