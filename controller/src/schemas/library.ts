@@ -3,7 +3,10 @@
 // /library/manual-tag` (tag this track, or its whole album, by hand — no LLM
 // involved) and `POST /library/original-year` (the operator's own answer to
 // "what year was this actually recorded", behind the same row editor), and
-// `POST /library/scenes/merge` (consolidate near-duplicate genre tags).
+// `POST /library/scenes/merge` (consolidate near-duplicate genre tags), plus
+// the one RESPONSE shape that crosses the same boundary — the referenced-by
+// warning a scene merge carries (#1593), which the browser renders before the
+// operator confirms.
 //
 // HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
 // the web bundle, so a project import or a node builtin here breaks the mirror.
@@ -194,4 +197,38 @@ export function sceneMergeSchema() {
       return value;
     }),
   });
+}
+
+// ── The referenced-by warning on a scene merge (#1593) ───────────────────────
+// A merge retires a source value. Case and punctuation variants keep matching
+// through show-filter's normGenre ("rock" → "Rock", "Hip-Hop" → "Hip Hop"), so
+// those merges orphan nothing; a SEMANTIC rename ("trip-hop" → "downtempo")
+// leaves every show, blocklist rule and playlist filter still naming the
+// retired value matching nothing, with no error and no visible cause.
+//
+// The scan behind this shape lives in music/scene-references.ts — it needs
+// show-filter's matcher, which this file may not import. Only the SHAPE is
+// here, because it crosses to the browser: the Scene vocabulary section shows
+// the warning before the operator confirms, and again on the merge response.
+//
+// Naming the affected shows is the whole value of the warning. A generic "this
+// may affect filters" is the non-advice the operator already assumed.
+
+/** Where a retired scene can still be named. */
+export const SCENE_REFERENCE_KINDS = ['show', 'rule', 'playlist'] as const;
+export type SceneReferenceKind = (typeof SCENE_REFERENCE_KINDS)[number];
+
+/** One filter that names a value this merge retires and would stop matching. */
+export interface SceneReference {
+  kind: SceneReferenceKind;
+  /** Show id, blocklist rule id, or Navidrome playlist id. */
+  id: string;
+  /** What the operator calls it: show name, rule label, playlist name. */
+  name: string;
+  /** Its genre filter values that matched a retired scene and match nothing
+   *  once the merge lands. */
+  orphaned: string[];
+  /** Its genre filter values that still match something — empty means this
+   *  filter's whole genre constraint goes quiet. */
+  remaining: string[];
 }

@@ -41,6 +41,11 @@ export const libraryKeys = {
   // (#1577). Separate from `genres`, which merges in Navidrome's own index for
   // the show/browse pickers — this one is only what the mirror actually holds.
   scenes: () => ['library', 'scenes'] as const,
+  // What a staged merge would orphan (#1593). Keyed on the merge itself, so
+  // ticking another spelling or typing a different survivor is a different
+  // question with its own cached answer.
+  sceneReferences: (from: readonly string[], to: string) =>
+    ['library', 'scene-references', [...from].sort().join('\u0000'), to] as const,
   playlists: () => ['library', 'playlists'] as const,
   rulePlaylists: () => ['library', 'rule-playlists'] as const,
 };
