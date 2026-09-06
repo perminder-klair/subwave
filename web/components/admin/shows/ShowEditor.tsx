@@ -44,7 +44,10 @@ import {
   TAG_RE,
   TOPIC_MAX,
   VOCAL_OPTIONS,
+  YEAR_MAX,
+  YEAR_MIN,
   eraLabelOf,
+  resolveEraDraft,
   sameEra,
 } from './types';
 import type { EraWindow, Persona, PlaylistIndexStatus, Show, ShowsFormValues, SkillOption, ThemeOption } from './types';
@@ -213,6 +216,23 @@ export function ShowEditor({
   // retyping "trance" once per trance sub-genre. Committing the typed
   // text (Enter/Add) still clears: there the draft *is* the thing consumed.
   const addGenreFromSuggestion = (g: string) => addGenre(g, { keepDraft: true });
+
+  // The custom era range's own text buffers (#1599) — same deal as genreDraft:
+  // remounted per show, not form data. The error is only raised on Add, so
+  // half-typed "20" doesn't scold anyone mid-keystroke.
+  const [eraFrom, setEraFrom] = useState('');
+  const [eraTo, setEraTo] = useState('');
+  const [eraDraftError, setEraDraftError] = useState('');
+  const addEraRange = () => {
+    const current: EraWindow[] = erasCtl.field.value ?? [];
+    if (current.length >= FILTER_VALUES_MAX) return;
+    const r = resolveEraDraft(eraFrom, eraTo, current);
+    if ('error' in r) { setEraDraftError(r.error); return; }
+    // A range spelling out a decade lands in the same array the chips write to,
+    // so it lights that chip rather than appearing twice.
+    erasCtl.field.onChange([...current, r.window]);
+    setEraFrom(''); setEraTo(''); setEraDraftError('');
+  };
   // Genres no track carries. The controller resolves free text onto the nearest
   // library tag, silently broadening the show ("Pop Punk" → "Pop") or dropping the
   // filter — invisible on air unless said here. Mirrors show-filter.normGenre so UI
@@ -233,6 +253,11 @@ export function ShowEditor({
 
   const guestIds: string[] = guestsCtl.field.value ?? [];
   const eras: EraWindow[] = erasCtl.field.value ?? [];
+  // Windows matching no decade preset. They get their own removable chips, and
+  // they are the slice of the schema's cap the decade row cannot see — it caps
+  // on what IT has selected, so without this the chips would still offer a
+  // ninth window on an `eras` array already at FILTER_VALUES_MAX.
+  const customEras = eras.filter(e => !DECADES.some(d => sameEra(e, d)));
 
   // Guests group — a chip/card multi-select has no single labelable element,
   // so it names itself via aria-labelledby/groupProps, same convention as
@@ -484,6 +509,7 @@ export function ShowEditor({
               <ChipRow
                 options={DECADES.map(d => ({ key: d.key, label: d.label }))}
                 selected={DECADES.filter(d => eras.some(e => sameEra(e, d))).map(d => d.key)}
+                cap={FILTER_VALUES_MAX - customEras.length}
                 onToggle={key => {
                   const d = DECADES.find(x => x.key === key)!;
                   const existing = eras.find(e => sameEra(e, d));
@@ -494,11 +520,12 @@ export function ShowEditor({
                   );
                 }}
               />
-              {/* Custom windows (set via the API — no preset matches) stay
-                  visible and removable so they can't silently constrain picks. */}
-              {eras.some(e => !DECADES.some(d => sameEra(e, d))) && (
+              {/* Custom windows — the ones below matching no decade preset —
+                  stay visible and removable so they can't silently constrain
+                  picks. Set here or via the API; the display is the same. */}
+              {customEras.length > 0 && (
                 <div className="flex flex-wrap gap-1">
-                  {eras.filter(e => !DECADES.some(d => sameEra(e, d))).map((e, i) => (
+                  {customEras.map((e, i) => (
                     <button
                       key={`${e.fromYear ?? ''}-${e.toYear ?? ''}-${i}`}
                       type="button"
@@ -511,10 +538,54 @@ export function ShowEditor({
                   ))}
                 </div>
               )}
+              {/* Add a range the decade chips can't spell — a single year
+                  ("2026 only"), a span across two decades, or an open end
+                  ("2026 and later"). Both inputs are plain one-offs inside the
+                  group: they carry their own aria-label because the group title
+                  names the whole field, not either box. */}
+              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <Input
+                  id={`${uid}-show-era-from`}
+                  type="number" inputMode="numeric"
+                  min={YEAR_MIN} max={YEAR_MAX}
+                  aria-label="custom era start year"
+                  className="w-[7.5rem] flex-none"
+                  value={eraFrom}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => { setEraFrom(e.target.value); setEraDraftError(''); }}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addEraRange(); } }}
+                  placeholder="from"
+                  disabled={eras.length >= FILTER_VALUES_MAX}
+                />
+                <span aria-hidden="true" className="text-[12px] text-muted">–</span>
+                <Input
+                  id={`${uid}-show-era-to`}
+                  type="number" inputMode="numeric"
+                  min={YEAR_MIN} max={YEAR_MAX}
+                  aria-label="custom era end year"
+                  className="w-[7.5rem] flex-none"
+                  value={eraTo}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => { setEraTo(e.target.value); setEraDraftError(''); }}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addEraRange(); } }}
+                  placeholder="to"
+                  disabled={eras.length >= FILTER_VALUES_MAX}
+                />
+                <Btn
+                  className="min-h-9 flex-none sm:min-h-0"
+                  onClick={addEraRange}
+                  disabled={(!eraFrom.trim() && !eraTo.trim()) || eras.length >= FILTER_VALUES_MAX}
+                >
+                  Add range
+                </Btn>
+              </div>
+              {eraDraftError && (
+                <span role="alert" className="field-hint text-vermilion">{eraDraftError}</span>
+              )}
             </div>
             <FieldDescription {...erasAria.descriptionProps}>
               Pick any decades, even non-adjacent ones ({'"'}90s + 2010s{'"'}).
-              None selected = any era.
+              Or add your own range — a single year (2026 to 2026), or one
+              side left blank for an open end. Up to {FILTER_VALUES_MAX}{' '}
+              windows; none selected = any era.
             </FieldDescription>
             <FieldError {...erasAria.errorProps} errors={erasCtl.fieldState.error ? [erasCtl.fieldState.error] : undefined} />
           </Field>

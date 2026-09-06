@@ -1744,11 +1744,42 @@ def shows(page):
 
         assert not save.is_disabled(), "Save show stayed disabled once the overlap was fixed"
 
-        # 4. Save — a genuinely valid show persists through a real POST /shows
+        # 4. Eras — a custom window beside a decade chip (#1599). Both year
+        #    boxes sit INSIDE the eras group (fieldAria's groupProps carries no
+        #    id), so they are found by their own aria-label and every assertion
+        #    stays scoped to the group, per this file's one convention.
+        eras_group = dialog.locator('[aria-labelledby$=".eras-label"]')
+        eras_group.wait_for()
+        eras_group.get_by_role("button", name="90s").click()
+
+        era_from = dialog.get_by_label("custom era start year")
+        era_to = dialog.get_by_label("custom era end year")
+        add_range = dialog.get_by_role("button", name="Add range")
+
+        # A range spelling out a decade already lit is refused rather than
+        # stacked beside its chip — the duplicate the schema would drop anyway.
+        era_from.fill("1990")
+        era_to.fill("1999")
+        add_range.click()
+        assert "already selected" in eras_group.get_by_role("alert").inner_text(), \
+            "adding a range equal to a lit decade chip was not refused"
+
+        # The window the chips cannot spell: one year.
+        era_from.fill("2026")
+        era_to.fill("2026")
+        add_range.click()
+        eras_group.get_by_role("button", name="2026–2026").wait_for()
+
+        # 5. Save — a genuinely valid show persists through a real POST /shows
         #    round trip.
         save.click()
         dialog.wait_for(state="detached")
-        assert SHOW_VERIFY_NAME in api("/settings"), "new show did not persist"
+        saved = find_show(SHOW_VERIFY_NAME)
+        assert saved, "new show did not persist"
+        assert saved.get("eras") == [
+            {"fromYear": 1990, "toYear": 1999},
+            {"fromYear": 2026, "toYear": 2026},
+        ], f"chip + custom era window did not both persist: {saved.get('eras')!r}"
     finally:
         # Runs whether the assertions above passed or raised — a failed run
         # must not leave "Verify Show" behind to poison the NEXT run, and a
