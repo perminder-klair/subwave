@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as subLog from './subsonic-log.js';
 import * as blocklist from './blocklist.js';
+import * as sceneVocab from './scene-vocab.js';
 import { trackEraYear } from './show-filter.js';
 import { albumEraSuspect } from './era-suspect.js';
 
@@ -328,16 +329,21 @@ export async function getSongsByGenreSampled(genre, { count = 20 } = {}) {
 // The single normaliser for per-track genre ingest — everything downstream
 // (library-db genres column, picker/show filters, annotate) goes through it.
 export function songGenres(song: { genres?: unknown; genre?: unknown } | null | undefined): string[] {
-  const out: string[] = [];
-  const push = (v: unknown) => {
-    const s = String(v ?? '').trim();
-    if (s && !out.some((x) => x.toLowerCase() === s.toLowerCase())) out.push(s);
-  };
+  const raw: string[] = [];
   if (Array.isArray(song?.genres)) {
-    for (const g of song.genres) push(typeof g === 'string' ? g : (g as { name?: unknown })?.name);
+    for (const g of song.genres) {
+      raw.push(String((typeof g === 'string' ? g : (g as { name?: unknown })?.name) ?? ''));
+    }
   }
-  push(song?.genre);
-  return out;
+  raw.push(String(song?.genre ?? ''));
+  // The operator's scene-consolidation rules are applied HERE, at the one
+  // normaliser, so a merge survives the next Navidrome walk — which rewrites
+  // `tracks.genres` from the file tags and would otherwise undo it (#1577).
+  // The alias-then-dedupe rule itself lives in scene-vocab.ts and is shared
+  // with the in-place merge, so the two halves cannot drift on what a
+  // consolidated tag list looks like. Unaliased values pass through untouched,
+  // so a station with no rules normalises byte-identically to before.
+  return sceneVocab.applyAliases(raw, sceneVocab.activeMap());
 }
 
 let genresCache: { genres: any[]; at: number } | null = null;
