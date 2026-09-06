@@ -20,12 +20,14 @@ import { Card, Btn, Pill, Seg } from './ui';
 import { SkeletonForm } from '@/components/ui/skeleton';
 import { ErrorState } from '@/components/ui/error-state';
 import { cn } from '../../lib/cn';
+import { fieldAria } from '../../lib/form';
 import ArchivesPanel from './ArchivesPanel';
 import BackupPanel from './BackupPanel';
 import {
   SETTINGS_AAC_BITRATES,
   SETTINGS_MP3_BITRATES,
   SETTINGS_OPUS_BITRATES,
+  TRANSITION_EFFECTS,
 } from '@/lib/schemas.generated';
 import { AlertTriangle } from 'lucide-react';
 import {
@@ -53,11 +55,8 @@ import {
   useSettingsQuery,
 } from './settings/queries';
 
-// The DJ transition kit (#1565), in the order it reads on the page. The
-// controller's copy of the list is TRANSITION_EFFECTS in
-// controller/src/settings/vocab.ts; this one carries the operator-facing copy,
-// which has no home in the schema mirror. `scripts/transition-effects.test.ts`
-// fails if the two lists stop naming the same six gestures.
+// Operator copy for the shared transition vocabulary. The drift test keeps
+// these labels in the schema's order and ensures every gesture has a hint.
 const TRANSITION_EFFECT_FIELDS = [
   {
     id: 'sweep',
@@ -90,8 +89,6 @@ const TRANSITION_EFFECT_FIELDS = [
     hint: 'A track\u2019s final bar repeats under whatever follows before it cuts away. Needs the track\u2019s measured tempo.',
   },
 ] as const satisfies readonly { id: TransitionEffect; label: string; hint: string }[];
-
-const TRANSITION_EFFECTS = TRANSITION_EFFECT_FIELDS.map(f => f.id);
 
 /**
  * Read one dotted path out of the form. Returns undefined for a missing branch
@@ -1444,34 +1441,38 @@ export default function SettingsPanel() {
                   permission, not a guarantee. Applies live; no restart.
                 </div>
                 <div className="grid gap-3">
-                  {TRANSITION_EFFECT_FIELDS.map(({ id, label, hint }) => (
-                    <div className="field" key={id}>
-                      <Label>{label}</Label>
-                      <div className="flex items-center gap-2">
-                        <Seg
-                          options={[
-                            { id: 'on', label: 'On' },
-                            { id: 'off', label: 'Off' },
-                          ]}
-                          value={form.transitions.effects[id] ? 'on' : 'off'}
-                          onChange={v =>
-                            setForm(f =>
-                              f
-                                ? {
-                                  ...f,
-                                  transitions: {
-                                    ...f.transitions,
-                                    effects: { ...f.transitions.effects, [id]: v === 'on' },
-                                  },
-                                }
-                                : f,
-                            )
-                          }
-                        />
+                  {TRANSITION_EFFECT_FIELDS.map(({ id, label, hint }) => {
+                    const aria = fieldAria(`transition-effect-${id}`, undefined, { hasDescription: true });
+                    return (
+                      <div className="field" key={id}>
+                        <Label {...aria.labelledByProps}>{label}</Label>
+                        <div className="flex items-center gap-2">
+                          <Seg
+                            {...aria.groupProps}
+                            options={[
+                              { id: 'on', label: 'On' },
+                              { id: 'off', label: 'Off' },
+                            ]}
+                            value={form.transitions.effects[id] ? 'on' : 'off'}
+                            onChange={v =>
+                              setForm(f =>
+                                f
+                                  ? {
+                                    ...f,
+                                    transitions: {
+                                      ...f.transitions,
+                                      effects: { ...f.transitions.effects, [id]: v === 'on' },
+                                    },
+                                  }
+                                  : f,
+                              )
+                            }
+                          />
+                        </div>
+                        <div {...aria.descriptionProps} className="field-hint">{hint}</div>
                       </div>
-                      <div className="field-hint">{hint}</div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </Card>
             )}

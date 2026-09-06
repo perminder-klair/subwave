@@ -34,6 +34,7 @@ const root = mkdtempSync(join(tmpdir(), 'subwave-transition-effects-'));
 process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
+const { setCache } = await import('../src/settings/store.js');
 const { TRANSITION_EFFECTS } = await import('../src/settings/vocab.js');
 const { effectEnabled, enabledEffects } = await import('../src/settings/transition-effects.js');
 const dj = await import('../src/llm/dj.js');
@@ -86,6 +87,15 @@ test('a patch naming one effect leaves the other five alone', async () => {
   await settings.update({ transitions: { effects: { chop: false } } });
   assert.equal(settings.get().transitions.pairDrain, false, 'pairDrain survives an effects patch');
   await settings.update({ transitions: { pairDrain: true, effects: { chop: true } } });
+});
+
+test('disabled effects and untouched defaults survive a cold load', async () => {
+  await settings.load();
+  await settings.update({ transitions: { effects: { dissolve: false, chop: false } } });
+  setCache(null);
+  await settings.load();
+  assert.deepEqual(enabledEffects(), TRANSITION_EFFECTS.filter(k => k !== 'dissolve' && k !== 'chop'));
+  await settings.update({ transitions: { effects: { dissolve: true, chop: true } } });
 });
 
 test('the pool prompt drops a switched-off gesture before the model ever sees it', async () => {
@@ -154,9 +164,7 @@ test('the length-cap auto-washout honours the washout switch', async () => {
 });
 
 test('the admin form names the same six gestures the controller does', () => {
-  // The panel cannot import TRANSITION_EFFECTS (the schema mirror carries zod
-  // shapes, not vocabulary), so its list is a hand-kept copy plus the
-  // operator-facing wording. This is what stops the two drifting.
+  // The panel's operator copy must cover the entire shared vocabulary.
   const src = readFileSync(SETTINGS_PANEL, 'utf8');
   const block = src.match(/const TRANSITION_EFFECT_FIELDS = \[[\s\S]*?\n\] as const/);
   assert.ok(block, 'SettingsPanel.tsx still declares TRANSITION_EFFECT_FIELDS');

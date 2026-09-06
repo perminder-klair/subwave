@@ -5,7 +5,7 @@
    resolve to the admin-scoped rules in globals.css. Btn / Seg / Toggle wrap
    shadcn primitives while keeping the original prop API. */
 
-import type { ReactNode, MouseEvent, Ref } from 'react';
+import type { ReactNode, MouseEvent, Ref, AriaAttributes } from 'react';
 import { cn } from '../../lib/cn';
 import { Button } from '../ui/button';
 import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group';
@@ -238,7 +238,7 @@ export interface SegOption {
   title?: string;
 }
 
-export interface SegProps {
+export interface SegProps extends AriaAttributes {
   value: string;
   options: SegOption[];
   accent?: boolean;
@@ -247,9 +247,10 @@ export interface SegProps {
 
 /* Segmented control over shadcn ToggleGroup. Clicking the active item is a
    no-op: the group always keeps a value. */
-export function Seg({ value, options, accent, onChange }: SegProps) {
+export function Seg({ value, options, accent, onChange, ...aria }: SegProps) {
   return (
     <ToggleGroup
+      {...aria}
       type="single"
       value={value}
       onValueChange={(v: string) => { if (v && onChange) onChange(v); }}
@@ -314,4 +315,3 @@ export function Metric({ n, l, accent }: MetricProps) {
     </div>
   );
 }
-

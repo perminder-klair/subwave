@@ -2817,8 +2817,11 @@ export const handoverPatchSchema = settingsBlockOf({
 // the dissolve should not read as a sibling of the pair-drain kill switch.
 //
 // Every field is absent-means-on, so a station that has never written this
-// block keeps the whole kit — the resolver is broadcast/transition-policy.ts
+// block keeps the whole kit — the resolver is settings/transition-effects.ts
 // and it is the only place that rule is stated.
+export const TRANSITION_EFFECTS = ['sweep', 'washout', 'blend', 'dissolve', 'chop', 'loop'] as const;
+export type TransitionEffect = (typeof TRANSITION_EFFECTS)[number];
+
 const transitionEffectsPatchSchema = settingsBlockOf({
   sweep: settingsBoolLike(),
   washout: settingsBoolLike(),

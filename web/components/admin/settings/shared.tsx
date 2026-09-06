@@ -14,6 +14,8 @@ import { Btn, Eyebrow, Metric } from '../ui';
 import { useSectionChrome, useReportDirty } from './section-chrome';
 import { Button } from '../../ui/button';
 import { FieldError } from '../../ui/field';
+import type { TransitionEffect } from '../../../lib/schemas.generated';
+export type { TransitionEffect } from '../../../lib/schemas.generated';
 
 export const KEY_HINTS: Record<string, string> = {
   ANTHROPIC_API_KEY: 'sk-ant-...',
@@ -250,10 +252,6 @@ export interface LoudnessForm {
   maxBoostDb: string;
   source: LoudnessSource;
 }
-
-/** The six DJ transition gestures, per-effect switchable since #1565. Mirrors
- *  TRANSITION_EFFECTS in controller/src/settings/vocab.ts. */
-export type TransitionEffect = 'sweep' | 'washout' | 'blend' | 'dissolve' | 'chop' | 'loop';
 
 export interface TransitionsForm {
   pairDrain: boolean;   // hold picks until the successor is known (#749 fix)

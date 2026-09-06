@@ -168,7 +168,7 @@ export const ADVANCED_CARDS: Partial<Record<SectionId, readonly string[]>> = {
   library: ['seed-phase', 'propagation', 'enrichment'],
   likes: ['ai-dj-influence'],
   danger: [
-    'crossfade', 'duck-depth', 'stem-transitions', 'max-track-length', 'dead-air-trim',
+    'crossfade', 'duck-depth', 'stem-transitions', 'dj-transition-effects', 'max-track-length', 'dead-air-trim',
     'loudness-levelling', 'opus-stream', 'flac-stream', 'ogg-metadata',
     'aac-stream', 'stream-mp3-bitrate', 'listener-buffer', 'max-listeners',
     'listener-country',
