@@ -291,6 +291,31 @@ function spawnChild(mode: TaggerMode, args: string[], detail: string) {
   };
   child.stdout.on('data', makeCapture());
   child.stderr.on('data', makeCapture());
+  // A ChildProcess 'error' event with no listener is THROWN, and nothing above
+  // this catches it — so a spawn that never starts (no `npx` on PATH, a missing
+  // cwd, EACCES on the binary) took the whole controller down with it, and the
+  // station with that. "The station must keep making sound" outranks any
+  // tagging run: report the failure the way a non-zero exit is reported and
+  // stay up. 'error' can also fire AFTER a successful spawn (a kill that
+  // fails), in which case 'exit' still arrives and owns the bookkeeping — so
+  // only the run this handler still owns is finalised here.
+  child.on('error', (err) => {
+    if (activeChild !== child) return;
+    tagger.running = false;
+    activeChild = null;
+    clearPidfile();
+    tagger.lastLog.push(`[error] ${err.message}`);
+    tagger.lastRun = {
+      mode,
+      outcome: 'failed',
+      exitCode: null,
+      signal: null,
+      error: err.message,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+    };
+    queue.log('error', `${label} could not start: ${err.message}`);
+  });
   child.on('exit', (code, signal) => {
     tagger.running = false;
     if (activeChild === child) activeChild = null;
