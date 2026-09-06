@@ -387,7 +387,14 @@ export async function generateLink({ previous, current, context, clockIsAirTime 
 // them is picked HERE, then dictated as before. The fallbacks keep the old
 // behaviour for a context that predates the options, then for one that
 // predates spokenTime, then for a bare context.
-export function hourlyTimeClause(clock: any) {
+//
+// `next` is in the name because this is NOT a pure formatter: picking advances
+// the no-repeat rotation in prompts/context.ts, so calling it to preview or log
+// a clause spends a wording. Advancing on a call whose generation then fails is
+// harmless in the only direction that matters — it can skip a wording, never
+// repeat one — but there is exactly one production caller and it should stay
+// that way.
+export function nextHourlyTimeClause(clock: any) {
   const spokenTime = pickTimePhrase(clock?.spokenTimeOptions) ?? clock?.spokenTime;
   const spoken = clock?.spokenHour;
   if (spokenTime) {
@@ -401,7 +408,7 @@ export function hourlyTimeClause(clock: any) {
 
 export async function generateHourlyTime({ recap = null, context = null, recentOpeners = null, persona = null }: any = {}) {
   const ctxLines = buildContextLines(context, { contextFields: SCRIPT_CONTEXT_FIELDS });
-  const timeClause = hourlyTimeClause(context?.clock);
+  const timeClause = nextHourlyTimeClause(context?.clock);
   ctxLines.push(`Task: a brief top-of-the-hour time check, in character. ${lengthPhrase('hourly', persona || undefined)}. ${timeClause}`);
   return djText({
     system: djSystem(persona || undefined),

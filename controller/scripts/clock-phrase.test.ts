@@ -111,10 +111,14 @@ async function main() {
       }
     }
   });
-  await test('every band offers at least two distinct wordings', () => {
+  // Three is the floor, not two: with the no-repeat picker a two-form band
+  // alternates deterministically, which is a different fixed pattern rather
+  // than variation. Dropping a form that overclaims its band's first minute is
+  // right, but it has to be replaced, not just removed.
+  await test('every band offers at least three distinct wordings', () => {
     for (const m of BAND_MINUTES) {
       const forms = spokenTimePhrases(18, m);
-      assert.ok(forms.length >= 2, `minute ${m} has ${forms.length} form(s)`);
+      assert.ok(forms.length >= 3, `minute ${m} has ${forms.length} form(s)`);
       assert.equal(new Set(forms).size, forms.length, `minute ${m} repeats a form`);
     }
   });
@@ -138,22 +142,31 @@ async function main() {
       }
     }
   });
-  await test('the wordings are pinned per band — a new one must be equivalent at every minute in it', () => {
+  // A SNAPSHOT, not a proof: it pins the lists so adding or changing a wording
+  // shows up as a deliberate diff. The equivalence rule itself — every form
+  // interchangeable at every minute in its band, including the minute the band
+  // opens on — is not mechanically checkable and stays a human check at review
+  // time; the only half that IS machine-checked is the hour word, by the test
+  // above. The two refusals the table spells out (no "a minute or so past" in
+  // a band that opens at :00, no "gone quarter past" in one that opens at :15,
+  // no "gone half past" in one that opens at :25) are what that human check
+  // looks like when it is done properly.
+  await test('the wordings are pinned per band — changing one must be a deliberate diff', () => {
     assert.deepEqual(spokenTimePhrases(18, 2), [
       'just gone six in the evening',
       'just past six in the evening',
       'just turned six in the evening',
-      'a minute or so past six in the evening',
     ]);
     assert.deepEqual(spokenTimePhrases(9, 8), [
       'just after nine in the morning',
       'a few minutes past nine in the morning',
       'a little after nine in the morning',
     ]);
+    // Nothing here may say "gone quarter past": the band opens ON :15.
     assert.deepEqual(spokenTimePhrases(14, 17), [
       'quarter past two in the afternoon',
       'a quarter past two in the afternoon',
-      'gone quarter past two in the afternoon',
+      'around quarter past two in the afternoon',
     ]);
     // Nothing here may say "gone half past": the band opens at :25.
     assert.deepEqual(spokenTimePhrases(18, 31), [

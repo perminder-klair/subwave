@@ -171,35 +171,52 @@ export function spokenDaypartPhrase(hour: number) {
 // single fixed string made every hour of every day open with the identical
 // five words, because the check almost always fires in the first band and the
 // prompt is told to say it verbatim. The wordings vary, the reading does not —
-// every form in a band must be interchangeable at every minute IN that band
-// (so nothing here may sharpen "half past" into a count of minutes, which is
-// wrong on the near side of :30, and nothing may drop the qualifier and leave
-// a bare hour). The hour word is always spokenHourPhrase's — never re-derived
-// here, or the day-edge normalisation goes with it. `forms[0]` is the wording
-// that shipped before the variants, and spokenTimePhrase still returns it.
+// every form in a band must be interchangeable at every minute IN that band,
+// INCLUDING the minute it opens on. That last clause is the one that is easy
+// to lose: a form is measured against the band's widest minute AND its first,
+// so nothing here may sharpen "half past" into a count of minutes (wrong on
+// the near side of :30), nothing may claim a band's boundary has been passed
+// when the band opens exactly on it, and nothing may drop the qualifier and
+// leave a bare hour. Every band with an obvious near-miss form carries a note
+// naming the form it REFUSES and why, because the refusals are the part of
+// the table a new form gets checked against. The broadcast buffer does not
+// count as an argument for keeping a form: a listener does hear this
+// stream.bufferSeconds late, but that is a number defined in another module
+// and an operator dial, so a form whose honesty depends on it stops being
+// honest the moment the dial moves. The hour word is always spokenHourPhrase's — never
+// re-derived here, or the day-edge normalisation goes with it. `forms[0]` is
+// the wording that shipped before the variants, and spokenTimePhrase still
+// returns it.
 const TIME_BANDS: readonly {
   upTo: number;
   ahead: boolean;
   forms: readonly ((hour: string) => string)[];
 }[] = [
+  // No "a minute or so past" here: the band opens at :00, the minute this row's
+  // cron fires on almost every time, and nothing is a minute past the hour at
+  // the hour.
   { upTo: 4, ahead: false, forms: [
     (h) => `just gone ${h}`,
     (h) => `just past ${h}`,
     (h) => `just turned ${h}`,
-    (h) => `a minute or so past ${h}`,
   ] },
   { upTo: 14, ahead: false, forms: [
     (h) => `just after ${h}`,
     (h) => `a few minutes past ${h}`,
     (h) => `a little after ${h}`,
   ] },
+  // No "gone quarter past" here, for the reason the :25-:39 band refuses "gone
+  // half past": the band opens exactly ON quarter past, so at :15 nothing has
+  // gone anywhere. "around" is the safe direction — it widens the claim rather
+  // than sharpening it, and reads true across the whole :15-:24 span.
   { upTo: 24, ahead: false, forms: [
     (h) => `quarter past ${h}`,
     (h) => `a quarter past ${h}`,
-    (h) => `gone quarter past ${h}`,
+    (h) => `around quarter past ${h}`,
   ] },
   // No "gone half past" here: the band opens at :25, so half of it is on the
-  // near side of the half hour.
+  // near side of the half hour. This is the refusal the other two are modelled
+  // on.
   { upTo: 39, ahead: false, forms: [
     (h) => `half past ${h}`,
     (h) => `around half past ${h}`,
