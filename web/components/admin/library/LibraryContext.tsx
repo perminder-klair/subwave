@@ -1,7 +1,7 @@
 'use client';
 
 import {
-  createContext, useCallback, useContext, useMemo, useState,
+  createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -130,21 +130,47 @@ export function LibraryProvider({
   });
   const tagger = taggerQuery.data ?? null;
 
+  // GET /library/coverage is a cheap read — DB counts plus the last-known
+  // Navidrome total — so it still runs on mount. What it must NOT do is run on
+  // a timer: the total behind it is a full album-by-album walk of Navidrome,
+  // and before #1570 an idle Library tab asked for it once a minute forever
+  // while the controller kicked that walk off the read path. The count is now
+  // the operator's own press (useTaggerControls' checkLibrary).
+  //
+  // No `staleTime` key: the client's 30s default is what we want, and passing
+  // an explicit undefined would overwrite it with 0 and refetch on every
+  // remount (see web/CLAUDE.md rule 4).
   const coverageQuery = useQuery({
     queryKey: libraryKeys.coverage(),
     queryFn: ({ signal }) => adminJson<Coverage>(
       adminFetch, '/library/coverage', undefined, signal,
     ),
     enabled: ready,
-    staleTime: 0,
-    // While a run is live, poll faster so the % visibly climbs.
-    refetchInterval: tagger?.running ? 3_000 : 60_000,
+    // The two live states, and only those: a tagging run whose % must visibly
+    // climb, and a count the operator just asked for, whose `scanning` flag we
+    // watch for the new total. Idle, nothing polls.
+    refetchInterval: q => (
+      tagger?.running || q.state.data?.scanning ? 3_000 : false
+    ),
   });
   const coverage = coverageQuery.data ?? null;
   const reloadCoverage = useCallback(
     () => qc.invalidateQueries({ queryKey: libraryKeys.coverage() }).then(() => undefined),
     [qc],
   );
+
+  // The one edge the two live states above can't see. A finished tagger run
+  // has just written its last tags AND kicked a fresh count server-side (it
+  // walked the catalogue anyway), but `running` going false is exactly what
+  // stops the poll — so without this the final figures sit unread until the
+  // next mount. The refetch comes back with `scanning: true` when that recount
+  // is under way, which puts the query back on the 3s loop until it lands.
+  const wasRunning = useRef(false);
+  useEffect(() => {
+    const now = !!tagger?.running;
+    if (wasRunning.current && !now) void reloadCoverage();
+    wasRunning.current = now;
+  }, [tagger?.running, reloadCoverage]);
 
   // Re-marks the rows already loaded: refetching every tab would lose
   // pagination and re-hit Navidrome, and matching client-side would duplicate

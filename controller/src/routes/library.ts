@@ -604,13 +604,34 @@ router.get('/library/untagged', requireAdmin, async (req, res) => {
 // ---------------------------------------------------------------------------
 // GET /library/coverage —
 //   { tagged, analysed, total, percent, analysedPercent, scannedAt, scanning }
-// `total` / `percent` / `analysedPercent` are null until the first background
-// scan completes.
+// A cheap read: DB counts plus the LAST-KNOWN Navidrome total, which is null
+// until somebody has asked for a count. It never walks Navidrome by itself —
+// that walk is thousands of getAlbum calls and the admin Library page polls
+// this on mount (#1570). `?refresh=1` keeps the old opt-in trigger for scripts;
+// the admin panel's button uses the POST below.
 // ---------------------------------------------------------------------------
 router.get('/library/coverage', requireAdmin, async (req, res) => {
   try {
     if (req.query?.refresh === '1') coverage.refresh();
     res.json(await coverage.get());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /library/coverage/refresh — count the Navidrome library, on request.
+// The operator's "Count library" button. A command, not a read: it walks every
+// album to total the songs, so it is deliberately a POST rather than a GET the
+// panel could poll by accident. Returns at once with the snapshot the scan is
+// starting from (`scanning: true`), which the caller polls until it flips.
+// ---------------------------------------------------------------------------
+router.post('/library/coverage/refresh', requireAdmin, async (_req, res) => {
+  try {
+    // Fire-and-forget: doScan() swallows its own failure, and a scan of a big
+    // library outlives any sensible request timeout.
+    coverage.refresh();
+    res.json({ ok: true, coverage: await coverage.get() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

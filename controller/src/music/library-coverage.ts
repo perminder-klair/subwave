@@ -1,11 +1,21 @@
 // Library coverage — total Navidrome song count vs tagged tracks, plus
 // acoustic-analysis coverage (tracks with bpm/key/intro) against that same
 // total.
-// `total` requires walking iterateAllSongs() once (one Subsonic call per
-// 500-album batch) which is too slow to do per request. We cache the count
-// and refresh in the background; the cache is considered stale after 6 h or
-// after a manual refresh. Concurrent /coverage requests share the in-flight
-// scan via a single promise.
+//
+// `total` requires walking iterateAllSongs(), which is ONE getAlbum call per
+// album — a few thousand sequential Navidrome requests on a 29k-track library.
+// That is far too expensive to ride a page view, so get() never starts it:
+// the scan runs only when something explicitly asks (refresh()), and get()
+// serves the last-known count stamped with `scannedAt` so the caller can show
+// its age. Triggers today are the operator's own "count library" press
+// (POST /library/coverage/refresh, GET /library/coverage?refresh=1) and the
+// two runs that have just walked the catalogue anyway — a finished tagger run
+// and a library reset.
+//
+// Before #1570 a stale-after-6h check inside get() kicked the walk from the
+// admin Library page's own mount poll, so opening that page hammered Navidrome
+// with a scan nobody asked for. Never reintroduce a scan on the read path.
+// Concurrent callers share the in-flight scan via a single promise.
 
 import * as subsonic from './subsonic.js';
 import * as library from './library.js';
@@ -15,7 +25,6 @@ import { vocalActivityWanted, audioEmbeddingWanted } from './analyze.js';
 import { activeModelLabel, EMBED_TEXT_VERSION } from './embeddings.js';
 import { dimensionStatus } from './coverage-status.js';
 
-const STALE_MS = 6 * 60 * 60 * 1000; // 6 h
 // Acoustic-analysis backend availability is probed separately: analyzer
 // .isAvailable() can do a 5 s sidecar HTTP probe and doesn't cache a negative
 // result, so we memoise it on a short TTL rather than re-probe on every poll.
@@ -102,17 +111,11 @@ export function refresh() {
   return inflight;
 }
 
-function isStale() {
-  if (!cache.scannedAt) return true;
-  return Date.now() - new Date(cache.scannedAt).getTime() > STALE_MS;
-}
-
-// Snapshot for the API. Triggers a refresh if the cache is stale or empty.
-// Returns total=null/percent=null until the first scan completes — the UI
-// uses that as the "scanning…" cue rather than guessing 100%.
+// Snapshot for the API. Deliberately read-only: it never starts a scan (see
+// the header). `total`/`percent` are null until someone has asked for a count,
+// which the UI reads as "not counted yet" rather than guessing 100%.
 export async function get() {
   await library.load();
-  if (isStale() && !cache.scanning) refresh();
   // First call: probe definitively (≤5 s) so the UI gets a real answer rather
   // than "checking…" for a whole poll cycle. Later calls refresh in the
   // background and serve the last-known value.

@@ -1,8 +1,9 @@
 'use client';
 
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Sparkles, Activity, Play, Square, Terminal, Loader2, Moon } from 'lucide-react';
+import { Sparkles, Activity, Play, Square, Terminal, Loader2, Moon, RefreshCw } from 'lucide-react';
 import { useDynamicStyle } from '../../hooks/useDynamicStyle';
+import { relTime } from '../../lib/format';
 import { Btn, Eyebrow } from './ui';
 import { Input } from '../ui/input';
 import { cn } from '../../lib/cn';
@@ -197,6 +198,10 @@ interface TaggingPanelProps {
   onRescan: (opts: RescanOpts) => void;
   // Walk Navidrome and prune library entries for tracks that no longer exist.
   onReconcile: () => void;
+  // Count the library — the only expensive read on this page, and the operator
+  // asks for it (#1570). `coverage.scannedAt` stamps the answer already shown.
+  onCheckLibrary: () => void;
+  checkingLibrary: boolean;
   // Wipes ALL tagging data and starts fresh, behind a typed confirmation.
   onReset: () => void;
   // sounds-like (CLAP) controls — null until the first settings poll lands.
@@ -373,9 +378,17 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const running = !!p.tagger?.running;
   // Distinct from a FAILED scan, where `scanning` is back to false but `total`
   // stays null: only an active count shows "checking…" and gates Start, so a
-  // failed scan falls through to "Library size unknown".
+  // failed scan falls through to "Library not counted yet" — the same place a
+  // station that has simply never been counted sits.
   const scanning = !!p.coverage?.scanning;
   const libraryCounting = scanning && total == null;
+  // `total` is the ONE figure here that isn't live: it is whatever the last
+  // count found, and counting means walking every album in Navidrome, so it
+  // only happens when the operator presses for it (#1570). Everything else on
+  // this panel is read straight off the library DB. Hence the age stamp — a
+  // number with no date next to it reads as current, and this one may not be.
+  const countedAt = p.coverage?.scannedAt ?? null;
+  const countLabel = scanning ? 'Counting…' : countedAt ? 'Re-count' : 'Count library';
   const analysisOff = p.coverage?.analysisAvailable === false;
   // 'pending-heavy' = lean/older engine that can't do this dimension;
   // 'incapable' = bpm/key ran but produced none. Both are enable-independent,
@@ -620,11 +633,20 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             </span>
             <span className="mono-num text-[13px] font-bold">{pct != null ? `${pct}%` : '—'}</span>
           </div>
-          <div className="mt-2 flex items-baseline gap-2">
+          <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1.5">
             <span className="lib-cov-big mono-num">{num(tagged)}</span>
             <span className="text-[13px] text-muted">
-              / {total != null ? num(total) : p.coverage?.scanning ? 'scanning…' : '—'} tracks
+              / {total != null ? num(total) : scanning ? 'counting…' : '—'} tracks
             </span>
+            <Btn
+              sm
+              onClick={p.onCheckLibrary}
+              disabled={scanning || p.checkingLibrary}
+              title="Counts every track in Navidrome — one request per album, so it takes a while on a big library. Nothing else on this page needs it."
+            >
+              <RefreshCw size={11} className={scanning ? 'animate-spin' : undefined} />{' '}
+              {countLabel}
+            </Btn>
           </div>
           <div
             className="lib-bar mt-3"
@@ -639,19 +661,17 @@ export default function TaggingPanel(p: TaggingPanelProps) {
           <div className="mt-2.5 text-[11px] text-muted">
             {remaining != null && remaining > 0 ? (
               <>
-                <b className="mono-num text-ink">{num(remaining)}</b> tracks still need tags ·{' '}
-                <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}
+                <b className="mono-num text-ink">{num(remaining)}</b> tracks still need tags
               </>
             ) : (
-              <>
-                {remaining === 0
-                  ? 'Every track is tagged'
-                  : scanning
-                    ? 'Coverage updating…'
-                    : 'Library size unknown'}{' '}
-                · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}
-              </>
-            )}
+              remaining === 0
+                ? 'Every track is tagged'
+                : scanning
+                  ? 'Counting your library…'
+                  : 'Library not counted yet'
+            )}{' '}
+            · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}
+            {countedAt && ` · counted ${relTime(countedAt)} ago`}
           </div>
           {embeddingStale && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] text-ink">
@@ -1123,7 +1143,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         <div className="flex flex-wrap items-center gap-4 p-4 sm:p-6">
           <div className="min-w-0 flex-1 text-[13px] sm:min-w-[220px]">
             {libraryCounting ? (
-              <>Counting your library&hellip; this only takes a moment.</>
+              <>Counting your library&hellip; a big one takes a few minutes.</>
             ) : remaining != null && remaining > 0 ? (
               <>
                 <b>{num(remaining)}</b> tracks are waiting. Tag them and they become DJ-ready.
