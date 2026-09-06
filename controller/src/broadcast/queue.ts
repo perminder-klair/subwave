@@ -22,6 +22,7 @@ import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
 import * as loudness from '../music/loudness.js';
 import * as silenceTrim from '../music/silence-trim.js';
+import { swallowedByCrossfade } from '../util/request-guard.js';
 import * as showBoundary from './show-boundary.js';
 import * as blocklist from '../music/blocklist.js';
 import { artistRootKey, trackKey, type CandidateLike } from '../music/recency.js';
@@ -678,9 +679,52 @@ class Queue {
     };
     this.upcoming.push(item);
     this.log('queued', `${track.title} — ${track.artist}`, { requestedBy, queueDepth: this.upcoming.length });
+    this.warnIfSwallowedByCrossfade(item);
     this.persist();
     this.drainToLiquidsoap();  // fire-and-forget
     return this.upcoming.length;
+  }
+
+  // A request the MIXER will silently eat (#1594). Log only — nothing is
+  // declined and nothing is dropped.
+  //
+  // `cross(duration=d)` buffers d seconds of the outgoing track before it can
+  // hand over, so a track whose whole playable span is under d is consumed by
+  // that buffer and never sounds; it leaves dj_queue without airing and without
+  // an error. The controller cannot see that happen — proto_subhttp's outcome
+  // is a curl verdict at resolution time and reports `ready` for any readable
+  // file, so verifyPushResolved marks the handoff healthy and the reconcile
+  // sweep later logs an unattributed "dropped N stale queue item(s)". The
+  // listener gets a silent no with nothing in the booth log naming their
+  // request. That is the whole bug being fixed: the operator learns why.
+  //
+  // Gated on `requestedBy` — the same discriminator as the cap and the boundary
+  // cut exemptions above — because a request is the one path deliberately
+  // exempt from every length rule the controller owns (maxTrackSeconds,
+  // picker.minTrackLengthSeconds), and therefore the only path where a
+  // sub-crossfade track is expected to arrive at all. push() is the chokepoint
+  // every producer funnels through, so the listener route's three resolutions,
+  // the DJ agent's request path, MCP and the studio queue are all covered by
+  // this one call — there is no branch in routes/request.ts.
+  //
+  // The span is the PLAYABLE one, resolved by music/silence-trim.ts: a trimmed
+  // head or tail is exactly what the buffer eats, and subtracting cue points
+  // here instead is the drift that module exists to prevent.
+  //
+  // One honest limit, stated in the line itself: `crossfadeDuration` is the
+  // CONFIGURED figure. radio.liq reads liquidsoap_crossfade.txt once at mixer
+  // startup, so between a crossfade change and a /restart-mixer the mixer is
+  // still buffering the old value and this warning is measured against the new
+  // one. Nothing in the controller can read the live figure, and warning
+  // against the setting the operator can actually act on is the useful half.
+  warnIfSwallowedByCrossfade(item: QueueItem) {
+    if (!item.requestedBy) return;
+    const crossSec = Number(settings.get()?.crossfadeDuration);
+    const spanSec = silenceTrim.playableSpanSec(item.track);
+    if (!swallowedByCrossfade(spanSec, crossSec)) return;
+    this.log('crossfade',
+      `"${item.track?.title} — ${item.track?.artist}" (requested by ${item.requestedBy}) has only ${Math.round(spanSec as number)}s of playable audio, under the ${crossSec}s crossfade — Liquidsoap buffers the whole track into the transition, so it will leave the queue without ever being heard. Nothing declined it: requests are exempt from the length rules on purpose. Lower the crossfade (and restart the mixer) to air clips this short.`,
+      { requestedBy: item.requestedBy, trackId: item.track?.id ?? null, spanSec, crossSec });
   }
 
   // Drop now-blocked tracks from the upcoming queue — called when a blocklist

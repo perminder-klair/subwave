@@ -85,6 +85,34 @@ function usableTrimSec(gapMs: number | null | undefined, minGapMs: number): numb
   return Math.min(MAX_TRIM_SEC, kept / 1000);
 }
 
+// Every measurement this module reasons over, resolved once. Track object
+// first, else the library record — the same precedence queue.mixAnalysisFor
+// uses, so a track carrying fresh analysis doesn't get a stale answer from the
+// DB. One library read for the whole set, which is why it is a helper and not
+// four lookups: the fields are written by one analyzer pass and a partial
+// refresh of them is a shape nothing produces.
+interface Measured {
+  leadMs: number | null | undefined;
+  tailMs: number | null | undefined;
+  tailStartMs: number | null | undefined;
+  durSec: number;
+}
+
+function measure(track: SilenceTrimTrack): Measured {
+  let leadMs = track.leadSilenceMs;
+  let tailMs = track.tailSilenceMs;
+  let tailStartMs = track.tailStartMs;
+  let durSec = Number(track.duration ?? track.durationSec) || 0;
+  if ((leadMs == null || tailMs == null || tailStartMs == null || durSec <= 0) && track.id) {
+    const rec = library.get(track.id);
+    if (leadMs == null) leadMs = rec?.leadSilenceMs ?? null;
+    if (tailMs == null) tailMs = rec?.tailSilenceMs ?? null;
+    if (tailStartMs == null) tailStartMs = rec?.tailStartMs ?? null;
+    if (durSec <= 0) durSec = rec?.durationSec ?? 0;
+  }
+  return { leadMs, tailMs, tailStartMs, durSec };
+}
+
 // Resolve the cue points for a track. Track object first, else the library
 // record — the same precedence queue.mixAnalysisFor uses, so a track carrying
 // fresh analysis doesn't get a stale answer from the DB.
@@ -101,17 +129,7 @@ export function resolveSilenceTrim(
   if (cfg?.enabled !== true) return NONE;
   const minGapMs = Number.isFinite(cfg.minGapMs as number) ? (cfg.minGapMs as number) : Infinity;
 
-  let leadMs = track.leadSilenceMs;
-  let tailMs = track.tailSilenceMs;
-  let tailStartMs = track.tailStartMs;
-  let durSec = Number(track.duration ?? track.durationSec) || 0;
-  if ((leadMs == null || tailMs == null || tailStartMs == null || durSec <= 0) && track.id) {
-    const rec = library.get(track.id);
-    if (leadMs == null) leadMs = rec?.leadSilenceMs ?? null;
-    if (tailMs == null) tailMs = rec?.tailSilenceMs ?? null;
-    if (tailStartMs == null) tailStartMs = rec?.tailStartMs ?? null;
-    if (durSec <= 0) durSec = rec?.durationSec ?? 0;
-  }
+  const { leadMs, tailMs, tailStartMs, durSec } = measure(track);
 
   const leadSec = usableTrimSec(leadMs, minGapMs);
   const tailSec = usableTrimSec(tailMs, minGapMs);
@@ -143,6 +161,39 @@ export function resolveSilenceTrim(
     cueInSec: leadSec != null ? Math.round(leadSec * 1000) / 1000 : null,
     cueOutSec,
   };
+}
+
+// How many seconds of this track will actually MAKE SOUND, after the trim has
+// had its say. Null when the length is unknown (an unanalysed track with no
+// tagged duration and no library row) — the caller must treat that as "no
+// answer", never as zero.
+//
+// Here rather than at the call site because the trim owns what cueIn/cueOut
+// MEAN, and "playable span" is just those two read together: a track with a 6s
+// leading blank and a 9s trailing one is 15s shorter on air than its tag says,
+// and that difference is exactly what a cross buffer measures itself against
+// (#1594). Subtracting the cue points locally is the drift this module exists
+// to prevent — same rule as shiftOnsetMs and absoluteOffsetSec below.
+//
+// The end is `cueOutSec ?? the tagged duration`, and the fallback is not a
+// guess: no tail trim means the tail plays, so the file's own end IS the end.
+// `measuredEndSec` is deliberately not consulted here — it exists to make the
+// cue_out arithmetic safe, and where no cue_out was stamped the whole file
+// plays whatever the analyzer's decode measured.
+//
+// What this does NOT include is the #447 length cap. That cap is an on-air cut
+// applied by getAnnotatedUri, not a property of the track, and the one caller
+// that asks this question — a listener request — is exempt from it.
+export function playableSpanSec(
+  track: SilenceTrimTrack | null | undefined,
+): number | null {
+  if (!track) return null;
+  const { cueInSec, cueOutSec } = resolveSilenceTrim(track);
+  const { durSec } = measure(track);
+  const endSec = cueOutSec ?? (durSec > 0 ? durSec : null);
+  if (endSec == null) return null;
+  const span = endSec - (cueInSec ?? 0);
+  return span > 0 ? Math.round(span * 1000) / 1000 : null;
 }
 
 // Shift a file-relative onset (intro runway, first vocal entry) onto the

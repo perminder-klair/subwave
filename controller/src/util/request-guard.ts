@@ -249,6 +249,50 @@ export function echoesRecentRequest(
   return false;
 }
 
+// Will the mixer eat this pick whole? (#1594)
+//
+// `cross(duration=d)` buffers d seconds of the OUTGOING track before it can
+// hand over, so a source item whose entire playable span is under d is consumed
+// by that buffer and never reaches the output. It leaves dj_queue without
+// airing and without an error: proto_subhttp already stamped it `ready` — that
+// verdict is a curl result at RESOLUTION time, minutes before the seam — so
+// queue.verifyPushResolved sees a healthy handoff and the outcome channel has
+// nothing to report. The tagged duration measured against the configured
+// crossfade at request time is the only honest signal the controller has.
+//
+// Pure, and it stays pure: `playableSec` comes from music/silence-trim.ts (the
+// span AFTER the trim, because a trimmed head or tail is precisely what the
+// buffer eats) and `crossfadeSec` from settings.crossfadeDuration. Here rather
+// than at the call site because both request paths reach the same question —
+// routes/request.ts' three resolutions and broadcast/dj-agent.ts' agent path —
+// and a second copy of it is the bug.
+//
+// Both unknowns answer FALSE, which is the only safe direction: this decides
+// whether to warn the operator that a request will not be heard, and a warning
+// fired on a missing duration is a warning nobody can act on. Two more
+// deliberate falses:
+//
+//  - A crossfade of 0 (the setting's own floor) is no buffer at all, so nothing
+//    is eaten however short the track.
+//  - EQUAL is not swallowed. A span of exactly d is entirely crossfade
+//    material, which is not the same claim as silence, and the measured failure
+//    (#1591, an 18s crossfade against a 15s stinger) is strictly under. Claiming
+//    the boundary case would be guessing about the one track we never measured.
+//
+// It says nothing about whether the track SHOULD air. Requests are exempt from
+// maxTrackSeconds and from picker.minTrackLengthSeconds on purpose — an explicit
+// ask is not a pick — and this predicate leaves that exactly as it was.
+export function swallowedByCrossfade(
+  playableSec: number | null | undefined,
+  crossfadeSec: number | null | undefined,
+): boolean {
+  const span = Number(playableSec);
+  const cross = Number(crossfadeSec);
+  if (!Number.isFinite(span) || span <= 0) return false;
+  if (!Number.isFinite(cross) || cross <= 0) return false;
+  return span < cross;
+}
+
 // One-pending-per-IP hold (routes/request.ts POST /request): an IP's previous
 // request must resolve AND its pick must have fully left `queuedIds` (current
 // + upcoming — i.e. aired to completion) before a new one from that IP is
