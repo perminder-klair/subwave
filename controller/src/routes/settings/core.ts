@@ -20,6 +20,7 @@ import * as chatterbox from '../../audio/chatterbox.js';
 import * as piper from '../../audio/piper.js';
 import * as llmProvider from '../../llm/provider.js';
 import { queue } from '../../broadcast/queue.js';
+import { handoverOffsetMinutes } from '../../broadcast/handover-policy.js';
 import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
@@ -98,7 +99,12 @@ router.get('/settings', requireAdmin, async (req, res) => {
         jingleRatio: s.jingleRatio,
         crossfadeDuration: s.crossfadeDuration,
         ducking: s.ducking,
-        handover: s.handover,
+        // Repaired on the way out, not served raw: a station-profile switch and
+        // a backup restore both reach the cache without passing load(), and the
+        // admin control is four fixed steps — an off-step value matches no
+        // option and reads as permanently dirty. Same rule as the air path, via
+        // the same function (#1576).
+        handover: { offsetMinutes: handoverOffsetMinutes() },
         maxTrackSeconds: s.maxTrackSeconds,
         // Crossfade-relative floor for a non-zero cap — one rule, shared with the
         // admin/show UI so client hints match server validation.

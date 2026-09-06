@@ -57,15 +57,19 @@ export function overrideSpan(
 // HANDOVER_OFFSET_STEP_MINUTES in schemas/settings.ts), not here, because this
 // file stays import-free.
 //
-// The offset is REQUIRED rather than defaulted, so the canonical 5 lives in
-// exactly one place — the settings default — and this file cannot drift from
-// it. The outro is tested first: the bound keeps the moved window clear of the
-// feature at :35–:39, and if a future bound ever let them meet, closing the
-// show beats repeating its middle.
+// BOTH numbers are REQUIRED rather than defaulted, so the canonical 5 lives in
+// exactly one place each — the settings default for the offset,
+// HANDOVER_OFFSET_STEP_MINUTES for the stride — and this file cannot drift from
+// either. A default here would be a second copy of the very constant the stride
+// import in talk-scheduler.ts exists to stop being copied. The outro is tested
+// first: the bound keeps the moved window clear of the feature at :35–:39
+// (pinned by scripts/handover-timing.test.ts, since this file cannot import the
+// bound to assert it against), and if a future bound ever let them meet,
+// closing the show beats repeating its middle.
 export function beatWindow(
   stationMinute: number,
   handoverOffsetMinutes: number,
-  sampleStrideMinutes = 5,
+  sampleStrideMinutes: number,
 ): 'feature' | 'outro' | null {
   const outroOpens = 60 - handoverOffsetMinutes;
   if (stationMinute >= outroOpens && stationMinute < outroOpens + sampleStrideMinutes) return 'outro';

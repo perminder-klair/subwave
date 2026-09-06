@@ -241,11 +241,16 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     // missing — the third question in the same family as `voice` and `clock`.
     talkAir: (() => { try { return talkAirStatus(); } catch (err: any) { return { error: err.message }; } })(),
     // Show handover timing + ordering (settings.handover, #1576). `offsetMinutes`
-    // is how far before a show boundary the sign-off airs; `closingTrack` is the
-    // fixed rule that keeps the incoming host one track behind it — so "the new
-    // DJ hasn't said hello yet" reads as waiting rather than missing, the fourth
-    // question in the family above.
-    handover: (() => { try { return handoverStatus(); } catch (err: any) { return { error: err.message }; } })(),
+    // is how far before a show boundary the sign-off airs and `closingTrack` is
+    // the fixed rule that keeps the incoming host one track behind it — but the
+    // config alone cannot tell "waiting" from "missing", which is the question
+    // this row exists for. `wait` is the LIVE debt: null when no sign-off is
+    // outstanding (so an absent greeting is missing), and the two counters
+    // against those thresholds when one is (so it is waiting, and for what).
+    handover: (() => {
+      try { return { ...handoverStatus(), wait: queue.handoverWait() }; }
+      catch (err: any) { return { error: err.message }; }
+    })(),
     // Done-tool retry churn (D2) — since-boot count of the strategy layer's
     // two "stopped without calling done" retry sites (agent.ts), the same
     // symptom the corrective re-pick in dj-agent.ts exists to salvage.
