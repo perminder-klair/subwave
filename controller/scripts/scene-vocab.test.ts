@@ -103,19 +103,6 @@ test('reversing an earlier merge repoints the rule instead of cancelling itself'
   assert.equal(sceneVocab.applyAliases(['Hip Hop'], map)[0], 'Hip-Hop');
 });
 
-test('a rule that reads like an identity still survives a reload', () => {
-  // `from` is a fold KEY and `to` a stored spelling, so "rock" → "Rock" — and
-  // even "rock" → "rock" — does real work: it canonicalises every case and
-  // spacing variant. Dropping those on load undid a case merge at the next
-  // restart, silently.
-  const plan = sceneVocab.planAliases([], ['ROCK'], 'rock', '2026-01-01T00:00:00Z');
-  assert.deepEqual(plan.recorded, ['rock']);
-  const reloaded = sceneVocab.aliasMapOf(
-    JSON.parse(JSON.stringify(plan.aliases)) as sceneVocab.SceneAlias[],
-  );
-  assert.equal(sceneVocab.applyAliases(['ROCK'], reloaded)[0], 'rock');
-});
-
 test('at the cap it is the OLDEST rule that goes, never the one just recorded', () => {
   // planAliases appends new keys after the existing ones, so a head slice
   // dropped the rule the caller just made while its row rewrite still
@@ -282,6 +269,31 @@ test('an unaliased station normalises exactly as before', () => {
     subsonic.songGenres({ genres: [{ name: ' Post-Punk ' }, { name: 'post-punk' }, 'Dub'] }),
     ['Post-Punk', 'Dub'],
   );
+});
+
+test('a rule that reads like an identity still survives a reload', async () => {
+  // `from` is a fold KEY and `to` a stored spelling, so "rock" → "Rock" — and
+  // even "techno" → "techno" — does real work: it canonicalises every case and
+  // spacing variant. Dropping those on load undid a case merge at the next
+  // restart, silently.
+  //
+  // This MUST go through the file and `coerce()`, which is where the drop
+  // happened. An earlier version of this test built the map with aliasMapOf()
+  // and passed just as happily with the bug reinstated — coerce is never on
+  // that path. Caught by driving a real controller, not by the suite.
+  await sceneVocab.recordMerge(['TECHNO'], 'techno');
+  const onDisk = JSON.parse(readFileSync(ALIAS_FILE, 'utf8')) as {
+    aliases: Array<{ from: string; to: string }>;
+  };
+  assert.deepEqual(
+    onDisk.aliases.find(a => a.from === 'techno'),
+    { from: 'techno', to: 'techno', at: onDisk.aliases.find(a => a.from === 'techno')!.at },
+  );
+
+  sceneVocab._resetForTests(); // next read re-parses the file through coerce()
+  assert.equal(sceneVocab.alias('TECHNO'), 'techno');
+  // …and the walk agrees, which is the thing the operator actually feels.
+  assert.deepEqual(subsonic.songGenres({ genre: 'Techno' }), ['techno']);
 });
 
 test('the rules survive a restart', () => {
