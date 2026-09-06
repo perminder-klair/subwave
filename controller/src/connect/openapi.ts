@@ -3,11 +3,14 @@
 // the catalog shapes are simple enough to map by hand, and this stays a pure,
 // dependency-free function so it can be unit-checked.
 //
-// Every path is emitted under the `/api` prefix (that's how the endpoints are
-// reached from outside the controller, behind Caddy), even though the catalog
-// stores them prefix-free. Admin endpoints carry a basicAuth security
-// requirement, station-gated ones a stationAuth apiKey header; public ones
-// carry none.
+// The `/api` prefix (how these endpoints are reached from outside the
+// controller, behind Caddy) rides on the SERVER url, not on each path: the
+// catalog stores paths prefix-free and they are emitted that way, with
+// `servers[0].url` carrying `<origin>/api`. That is what OpenAPI's base-path
+// model expects, and prefixing both would resolve to `/api/api/...`.
+//
+// Admin endpoints carry a basicAuth security requirement, station-gated ones a
+// stationAuth apiKey header; public ones carry none.
 
 import {
   ENDPOINTS,

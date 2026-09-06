@@ -70,6 +70,18 @@ async function main() {
     const opCount = Object.values(doc.paths).reduce((n, ops) => n + Object.keys(ops).length, 0);
     assert.equal(opCount, ENDPOINTS.length, 'every catalog endpoint should map to one operation');
   });
+  // The /api prefix lives on the SERVER url and NOT on each path key. Putting
+  // it in both resolves to /api/api/..., and a doc that disagrees with the
+  // module's own header comment is how a client gets generated against the
+  // wrong base — this pins which half carries it.
+  await test('the /api prefix rides on servers[0], never on the path keys', () => {
+    const doc = toOpenApi('https://radio.example.com');
+    assert.equal(doc.servers[0].url, 'https://radio.example.com/api');
+    const prefixed = Object.keys(doc.paths).filter(p => p.startsWith('/api/'));
+    assert.deepEqual(prefixed, [], 'path keys are prefix-free');
+    assert.ok(doc.paths['/similar-tracks'], 'station-gated read is keyed prefix-free');
+    assert.ok(doc.paths['/health'], 'public read is keyed prefix-free');
+  });
   await test('Express :id path params become {id}', () => {
     const doc = toOpenApi('https://radio.example.com');
     assert.ok(doc.paths['/request/{id}'], ':id should be rewritten to {id}');
