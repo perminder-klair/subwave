@@ -1166,6 +1166,46 @@ class Queue {
     return cut;
   }
 
+  // Stamp (or un-stamp) an armed boundary cut on the item, and return the cue
+  // the arbitration below should fold in.
+  //
+  // Two things happen together here because they describe one fact — this
+  // track is being CUT, not ending:
+  //   * `liq_show_fade` tells the mixer why, so dj_transition drops the seam
+  //     back to the plain full-buffer fade;
+  //   * the exit gestures stamped for the ending that will not happen come
+  //     OFF, upstream, exactly as the stem-blend seam strips them. radio.liq
+  //     enforces the same precedence, but the flag is the only thing carrying
+  //     it — a controller running ahead of its broadcast image would otherwise
+  //     hand an armed loop to a mixer that has never heard of liq_show_fade,
+  //     and that branch applies no fader at all, which is the hard stop this
+  //     feature exists to avoid.
+  //
+  // Safe against the #447 cap, which arms a washout of its own: an armed
+  // boundary cut is always at least BOUNDARY_TOLERANCE_SEC EARLIER than the
+  // capped end (the overshoot test is what arms it), so the ending being
+  // stripped is never the cap's.
+  //
+  // Called BEFORE applyPairStamps, which bails out on an armed washout or loop
+  // and would otherwise size the exit canvas for an outro that no longer airs.
+  //
+  // The no-cut branch CLEARS the flag rather than leaving it: it rides
+  // item.track, which persists, so the crash-recovery re-drain (the process
+  // died between the URI write and `sent`) must be able to take it back off.
+  applyBoundaryStamps(item: QueueItem, cut: showBoundary.BoundaryCut | null): number | null {
+    if (cut == null) {
+      delete item.track.showFade;
+      return null;
+    }
+    item.track.showFade = true;
+    delete item.track.washout;
+    delete item.track.washoutAuto;
+    delete item.track.washoutDelay;
+    delete item.track.loop;
+    delete item.track.loopBar;
+    return cut.cueOutSec;
+  }
+
   // Whether pair-aware drains are in effect. The toggle is transitions.
   // pairDrain, but the feature only pays off under a DJ-mode persona — both
   // consumers of the hold (applyPairStamps, maybeRenderBlend) no-op without
@@ -1379,37 +1419,7 @@ class Queue {
         // into the same arbitration below, and a rendered blend is mixed FROM
         // the tail this would remove, so the blend has to be told.
         const boundaryCut = this.resolveBoundaryCut(item, itemDurSec, trim, maxDurationSec);
-        const boundaryCueSec = boundaryCut?.cueOutSec ?? null;
-        if (boundaryCueSec != null) {
-          // The mixer needs to know WHY this track stops: a cut is not the
-          // track's own ending, so the gestures stamped for that ending must
-          // not air over it. radio.liq reads liq_show_fade off the OUTGOING
-          // track and drops the seam back to the plain full-buffer fade.
-          item.track.showFade = true;
-          // And the losers come OFF here, upstream, exactly as the stem-blend
-          // seam strips them a few lines down. radio.liq enforces the same
-          // precedence, but the flag is the only thing carrying it: a
-          // controller running ahead of its broadcast image would otherwise
-          // hand an armed loop to a mixer that has never heard of
-          // liq_show_fade, and that branch applies no fader at all — the hard
-          // stop this whole feature exists to avoid.
-          //
-          // Safe against the #447 cap, which arms a washout of its own: an
-          // armed boundary cut is always at least BOUNDARY_TOLERANCE_SEC
-          // EARLIER than the capped end (the overshoot test is what arms it),
-          // so it always wins the arbitration below and the ending being
-          // stripped is never the cap's.
-          //
-          // Stripped BEFORE applyPairStamps, not after, so the pair can size
-          // the exit canvas: it bails out on an armed washout or loop, and
-          // would otherwise leave crossSec sized for the wind-down of an outro
-          // that no longer airs.
-          delete item.track.washout;
-          delete item.track.washoutAuto;
-          delete item.track.washoutDelay;
-          delete item.track.loop;
-          delete item.track.loopBar;
-        }
+        const boundaryCueSec = this.applyBoundaryStamps(item, boundaryCut);
 
         // Pair stamps for THIS item's own exit (the seam into its successor)
         // — only when the successor is known at annotate time. Resolved fresh

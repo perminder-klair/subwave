@@ -175,6 +175,38 @@ test('an armed cut is always earlier than the cap and the trim', async () => {
     'and precedes a trimmed tail by the same margin');
 });
 
+test('an armed cut stamps the flag and strips the gestures it invalidates', async () => {
+  await seed({ station: true });
+  const pick = stage();
+  // Both exit gestures armed by applyMixTransition, as a DJ-mode seam would.
+  Object.assign(pick.track, {
+    washout: true, washoutAuto: true, washoutDelay: 0.3, loop: true, loopBar: 2,
+  });
+  const cut = queue.applyBoundaryStamps(pick, cutFor(pick));
+  assert.ok(cut && cut > 0, 'the cue comes back for the arbitration');
+  assert.equal(pick.track.showFade, true, 'the mixer is told why the track stops');
+  for (const k of ['washout', 'washoutAuto', 'washoutDelay', 'loop', 'loopBar'] as const) {
+    assert.ok(!(k in pick.track),
+      `${k} must be stripped upstream — an old broadcast image ignores liq_show_fade, `
+      + 'and the loop branch applies no fader at all');
+  }
+});
+
+test('a re-drain takes a stale flag back off again', async () => {
+  await seed({ station: true });
+  const pick = stage();
+  queue.applyBoundaryStamps(pick, cutFor(pick));
+  assert.equal(pick.track.showFade, true, 'armed on the first drain');
+  // The crash-recovery path: the process died between the URI write and
+  // `sent`, so this item drains again — and by then the boundary may be gone.
+  // The flag rides item.track, which persists, so leaving it would disarm the
+  // gestures on a seam that is no longer a boundary cut at all.
+  await seed({ station: false });
+  const again = queue.applyBoundaryStamps(pick, cutFor(pick));
+  assert.equal(again, null, 'the switch went off, so nothing arms');
+  assert.ok(!('showFade' in pick.track), 'and the stale flag is cleared, not left behind');
+});
+
 test('a boundary cut is a plain crossfade — every gesture stands down', () => {
   const liq = readFileSync(RADIO_LIQ, 'utf8');
   // Both sides of the seam. The four on `b` matter as much as the two on `a`:
