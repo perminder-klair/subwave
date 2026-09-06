@@ -146,6 +146,19 @@ const ARTIST_ROOT_ALIASES = new Map<string, string>([
   ['bill evans trio', 'bill evans'],
 ]);
 
+// The fold under every artist-NAME comparison: case, curly-vs-straight
+// apostrophes ("Guns N’ Roses" and "Guns N' Roses" are one act, tagged either
+// way depending on which ripper wrote the file) and runs of whitespace. Nothing
+// here changes which act a string names.
+//
+// Exported because the blocklist keys BOTH sides of its artist match with it
+// (#1603) — a stored entry name and an incoming credit. A normaliser copied
+// into the consumer is how a stored value stops matching the value that stored
+// it, so there is one of these.
+export function artistNameKey(raw: unknown): string {
+  return String(raw ?? '').toLowerCase().replace(APOSTROPHES, "'").replace(/\s+/g, ' ').trim();
+}
+
 // The LEAD artist of a credit — `artistKey` collapsed onto its primary act, so
 // a collaboration shares a key with the artist who leads it (#1251):
 //
@@ -177,7 +190,7 @@ const ARTIST_ROOT_ALIASES = new Map<string, string>([
 // queue.recentlyPlayed builds from raw tag text. This is a MATCHING key.
 export function artistRootKey(song: CandidateLike | string): string {
   const raw = typeof song === 'string' ? song : (song?.artist || '');
-  const base = raw.toLowerCase().replace(APOSTROPHES, "'").replace(/\s+/g, ' ').trim();
+  const base = artistNameKey(raw);
   if (!base) return '';
 
   let root = base;
@@ -199,6 +212,60 @@ export function artistRootKey(song: CandidateLike | string): string {
   root = ARTIST_ROOT_ALIASES.get(root) ?? root;
 
   return root || base;
+}
+
+// Every act CREDITED on a track, in credit order — the opposite question to
+// artistRootKey, which asks who LEADS the credit:
+//
+//   "Kanye West (feat. Jay-Z)"  → ["kanye west", "jay-z"]
+//   "Drake ft. Rihanna"         → ["drake", "rihanna"]
+//   "Simon & Garfunkel"         → ["simon & garfunkel"]
+//   "Earth, Wind & Fire"        → ["earth, wind & fire"]
+//
+// Written for the blocklist (#1603): blocking an artist has to reach the tracks
+// they only GUEST on, and the id tiers can't — a Subsonic song carries one
+// `artistId`, the track's lead, and `tracks.artist_id` stores that same single
+// id. There is no participant list anywhere in the library to consult, so the
+// display credit is the only source there is.
+//
+// FEATURE_SPLIT is the whole of what gets split, and that is a deliberate stop
+// rather than a first cut. `&`, `+`, `,` and `x` all sit INSIDE act names far
+// more often than they join two credits — Simon & Garfunkel, Hall & Oates,
+// Florence + the Machine, Earth, Wind & Fire, Tyler, the Creator, Chase & Status
+// — and the caller is the blocklist, which is ABSOLUTE: no never-starve
+// anywhere, listener requests included. A wrong key there silently removes music
+// the operator never blocked, with no starvation fallback to make the loss
+// visible. `feat.`/`ft.`/`featuring` carry no such ambiguity (see FEATURE_SPLIT:
+// always a credit on someone else's track, never part of a name), so they are
+// the only marker that can be split without guessing.
+//
+// The cost is honest under-matching: "Y feat. A & B" keys as ["y", "a & b"], so
+// a block on A alone does not fire. Splitting that tail needs exactly the
+// name-vs-credit judgement the join is refused for, and the tail is where the
+// ambiguous punctuation actually lives.
+//
+// A marker at index 0 is not a marker: `\bft\b\.?\s+` matches the front of
+// "Ft. Lauderdale …", and dropping that head would leave a key naming nobody.
+// Same guard artistRootKey applies, for the same reason.
+//
+// Deliberately NOT artistRootKey's normalisation beyond the shared name fold —
+// no article strip, no root aliases, no join split. Those widen a MATCHING key,
+// which is right for a preference (the repeat guard reads an over-match as "pick
+// someone else") and wrong for a hard drop.
+export function artistParticipantKeys(song: CandidateLike | string): string[] {
+  const raw = typeof song === 'string' ? song : (song?.artist || '');
+  const base = artistNameKey(raw);
+  if (!base) return [];
+  if (base.search(FEATURE_SPLIT) <= 0) return [base];
+
+  const out: string[] = [];
+  for (const part of base.split(FEATURE_SPLIT)) {
+    // The split eats the OPENING bracket of a "(feat. …)" credit; its closing
+    // half rides on the tail.
+    const key = part.replace(/[)\]]+\s*$/, '').trim();
+    if (key && !out.includes(key)) out.push(key);
+  }
+  return out.length ? out : [base];
 }
 
 export function trackKey(song: CandidateLike): string {

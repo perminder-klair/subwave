@@ -92,8 +92,13 @@ test('the public mood source filters a compilation sibling by its album id', () 
 });
 
 test('an artist block matches by id through a credit the name fallback cannot normalise', async () => {
+  // A DUO credit, deliberately: since #1603 the name fallback splits a feature
+  // credit into its acts, but it still refuses to split on `&` — Simon &
+  // Garfunkel and Hall & Oates are single acts, and this list is absolute. So a
+  // co-credit is exactly the shape the name tier cannot reach and the id tier
+  // is stored for.
   db.upsertTrackMeta('t3', {
-    title: 'Guest Spot', artist: 'Second Act feat. Somebody Else', album: 'Elsewhere',
+    title: 'Guest Spot', artist: 'Second Act & Somebody Else', album: 'Elsewhere',
     albumId: 'alb-other', artistId: 'art-second',
   });
   await blocklist.add({ type: 'artist', id: 'art-second', name: 'Second Act' });
@@ -101,10 +106,12 @@ test('an artist block matches by id through a credit the name fallback cannot no
   const t3 = db.getTrack('t3');
   assert.equal(blocklist.isBlocked(t3), true);
   assert.equal(
-    blocklist.isBlocked({ id: 't3', artist: 'Second Act feat. Somebody Else' }),
+    blocklist.isBlocked({ id: 't3', artist: 'Second Act & Somebody Else' }),
     false,
-    'the exact-name fallback cannot match a featured credit — the id tier is what does',
+    'the exact-name fallback cannot match a co-credit — the id tier is what does',
   );
+  // The feature shape it CAN now reach, with no id on the row at all (#1603).
+  assert.equal(blocklist.isBlocked({ id: 't4', artist: 'Somebody Else feat. Second Act' }), true);
 });
 
 test.after(() => {

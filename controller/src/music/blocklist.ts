@@ -14,6 +14,13 @@
 // strings — without it an artist block would leak through the mood/vector
 // sources. Track entries never name-match (covers/re-recordings share titles).
 //
+// The ARTIST fallback reads a credit as every act ON it, not just the one it
+// leads with (#1603) — `recency.artistParticipantKeys`, which splits on
+// `feat.`/`ft.`/`featuring` and nothing else. Blocking an artist has to reach
+// the tracks they only guest on, and no id tier can get there: a song carries
+// one `artistId`, its lead. Read that helper before widening the split; the
+// separators it refuses are refused because this list is absolute.
+//
 // RULE entries (#1300 FR 1, closes #752) live beside the id entries in the same
 // file: attribute/tag predicates ("anything tagged christmas"), an optional
 // seasonal allow-window, an optional show scope. Pure matching lives in
@@ -29,6 +36,7 @@ import { writeFileAtomic } from '../util/atomic-file.js';
 import { zonedParts } from '../time.js';
 import { resolveActiveShow } from '../settings.js';
 import { resolvePlaylistMemberSets } from './show-playlist.js';
+import { artistNameKey, artistParticipantKeys } from './recency.js';
 import {
   compileRules,
   coerceStoredRule,
@@ -80,7 +88,7 @@ let loaded = false;
 let trackIds = new Map<string, BlockEntry>();
 let albumIds = new Map<string, BlockEntry>();
 let artistIds = new Map<string, BlockEntry>();
-let artistNames = new Map<string, BlockEntry>();   // normalised
+let artistNames = new Map<string, BlockEntry>();   // artistNameKey'd
 let albumKeys = new Map<string, BlockEntry>();     // normalised album + KEY_SEP + artist
 
 const norm = (s: unknown) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
@@ -105,7 +113,7 @@ function rebuildIndex() {
       if (e.name) albumKeys.set(albumKey(e.name, e.artist), e);
     } else if (e.type === 'artist') {
       artistIds.set(e.id, e);
-      if (e.name) artistNames.set(norm(e.name), e);
+      if (e.name) artistNames.set(artistNameKey(e.name), e);
     }
   }
   // Rule side: value normalisation happens once per mutation, and the
@@ -300,18 +308,32 @@ export async function removeMany(
 // admin UI names the matched entry and offers to remove exactly it, so the same
 // row must always resolve to the same entry. Ids first, then the name fallback
 // for rows without Subsonic ids (library-db sources, queue items) — artist by
-// name, album by (name, artist) pair so generic titles like "Greatest Hits"
-// can't cross-match another artist's album.
+// participant name, album by (name, artist) pair so generic titles like
+// "Greatest Hits" can't cross-match another artist's album.
 export function matchOf(song: any): BlockEntry | null {
   if (!song || entries.length === 0) return null;
   return (
     (song.id ? trackIds.get(song.id) : undefined)
     ?? (song.albumId ? albumIds.get(song.albumId) : undefined)
     ?? (song.artistId ? artistIds.get(song.artistId) : undefined)
-    ?? (artistNames.size && song.artist ? artistNames.get(norm(song.artist)) : undefined)
+    ?? (artistNames.size && song.artist ? artistNameHit(song.artist) : undefined)
     ?? (albumKeys.size && song.album ? albumKeys.get(albumKey(song.album, song.artist)) : undefined)
     ?? null
   );
+}
+
+// The artist name tier: which entry blocks any act credited on this row.
+// Walks the credit IN ORDER (lead first, then each featured act), so the
+// ordering contract above holds for a row two artist entries could claim —
+// the lead's entry is the one named, which is the block an operator looking at
+// the row will recognise. Allocation-free on the ordinary credit:
+// artistParticipantKeys returns a single-element array when nothing splits.
+function artistNameHit(artist: unknown): BlockEntry | undefined {
+  for (const key of artistParticipantKeys(String(artist ?? ''))) {
+    const hit = artistNames.get(key);
+    if (hit) return hit;
+  }
+  return undefined;
 }
 
 // Which ACTIVE rule blocks this row, or null. First match in list order —
