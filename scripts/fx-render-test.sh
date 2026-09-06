@@ -294,7 +294,9 @@ def t(a, b) =
       amplify(wash_gain, washed)
     else a_src end
   # DISSOLVE — keep in lockstep with radio.liq's dissolve block: 4 parallel
-  # combs at mutually prime delays, shared swell/hold/release feedback,
+  # combs at mutually prime delays, shared swell/hold/release feedback, ONE
+  # -4x dry subtraction for the whole cluster (#1565 — algebraically identical
+  # to the old per-tap pure_tail, and 1.87x cheaper on the streaming thread),
   # cascaded darkening lowpass, late makeup.
   a_src =
     if dissolve_on then
@@ -344,13 +346,13 @@ def t(a, b) =
         x = if e >= t_on then 1.0 else e / t_on end
         3.0 * x * x - 2.0 * x * x * x
       end
-      def pure_tail(tap) =
-        add(normalize=false,
-          [comb(delay=tap, feedback=diss_fb, a_src), amplify(-1., a_src)])
-      end
       washed = add(normalize=false,
-        [amplify(0.7, pure_tail(0.089)), amplify(0.7, pure_tail(0.113)),
-         amplify(0.7, pure_tail(0.151)), amplify(0.7, pure_tail(0.181))])
+        [comb(delay=0.089, feedback=diss_fb, a_src),
+         comb(delay=0.113, feedback=diss_fb, a_src),
+         comb(delay=0.151, feedback=diss_fb, a_src),
+         comb(delay=0.181, feedback=diss_fb, a_src),
+         amplify(-4., a_src)])
+      washed = amplify(0.7, washed)
       washed = filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet,
                  filter.rc(frequency=diss_cut, mode="low", wetness=diss_wet, washed))
       add(normalize=false, [a_src, amplify(diss_gain, washed)])
