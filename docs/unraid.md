@@ -172,6 +172,13 @@ just run **admin → Library → Rescan** (tick *re-analyse*). If the **acoustic
 engine reads "off"**, the analyzer container was stopped — `Pull & Up` (split
 stack) or check its logs.
 
+**Don't want it at all?** On the split stack, add `ANALYZER_REPLICAS=0` to your
+**.env**, **Save**, then **Pull & Up** — the container is removed and stays gone.
+That's the one to use if analysis runs on another machine (point `ANALYZE_URL` at
+it). It's a Compose setting, so it does nothing on the all-in-one image, which
+runs the analyzer in-process. Full notes in
+[`tts-heavy.md`](tts-heavy.md#turning-the-analyzer-off).
+
 **"Sounds-like" + vocal ranges (the heavy dimensions)** need a CPU-torch stack
 that isn't in the lean image (the `-heavy` images are ~1.9 GB):
 

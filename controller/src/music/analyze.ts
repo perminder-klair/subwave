@@ -232,7 +232,10 @@ async function scoreAudioMoods(): Promise<void> {
 
 export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {
   if (!(await analyzer.isAvailable())) {
-    console.log('[analyze] no analysis backend (tts-heavy sidecar / local librosa venv) — skipping');
+    // Names the `analyzer` sidecar, NOT tts-heavy: tts-heavy is TTS-only and is
+    // no longer an analysis backend. This is also the line an operator sees
+    // after ANALYZER_REPLICAS=0, so it has to point at the right container.
+    console.log('[analyze] no analysis backend (analyzer sidecar / ANALYZE_URL / local librosa venv) — skipping');
     return { available: false, backend: 'none', analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0, vocalAnalyzed: 0 };
   }
   const backend = analyzer.backendLabel();

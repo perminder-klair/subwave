@@ -238,8 +238,14 @@ services:
   # ANALYZER — acoustic-analysis sidecar (bpm/key/intro/loudness; optional
   # CLAP "sounds-like" embeddings + Demucs vocal ranges)
   # -------------------------------------------------------------------------
-  # Starts by default; only the tts-heavy voices stay opt-in. To skip it,
-  # `docker compose stop analyzer`.
+  # Starts by default; only the tts-heavy voices stay opt-in.
+  # Off switch: ANALYZER_REPLICAS=0 in .env removes the container (the next
+  # `up -d` stops and deletes it) — for operators who run analysis elsewhere via
+  # ANALYZE_URL and don't want a redundant idle image. Unset/empty = 1 = the
+  # default-on station, unchanged. A PROFILE can't express this: profiles are
+  # opt-in only, and an empty interpolated profile drops the service for anyone
+  # who sets COMPOSE_PROFILES at all (which docs/tts-heavy.md tells Unraid and
+  # Portainer operators to do). See docs/tts-heavy.md#turning-the-analyzer-off.
   analyzer:
     # Default: LEAN multi-arch. ANALYZER_HEAVY=1 in .env → CLAP + Demucs heavy
     # image (amd64-only; on arm64 also set DOCKER_DEFAULT_PLATFORM=linux/amd64).
@@ -252,6 +258,9 @@ services:
         WITH_CLAP: ${ANALYZER_HEAVY:+1}
         WITH_DEMUCS: ${ANALYZER_HEAVY:+1}
     container_name: sub-wave-analyzer
+    # 0 = don't create this container at all (see the off switch above).
+    deploy:
+      replicas: ${ANALYZER_REPLICAS:-1}
     restart: unless-stopped
     logging: *default-logging
     # OOM containment: a runaway analysis dies here, not via the host

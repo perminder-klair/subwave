@@ -8,10 +8,10 @@ Captured 2026-09-06 — 65 of 125 threads, checked against all 334 issues (28 op
 
 | Status | Count | Meaning |
 | --- | ---: | --- |
-| ✅ Shipped | 6 | Delivered on `develop`; the thread can be closed out. |
+| ✅ Shipped | 7 | Delivered on `develop`; the thread can be closed out. |
 | 🔨 Tracked | 12 | An **open** GitHub issue covers it. |
 | 🟡 Partly covered | 20 | Related work has landed, but the specific ask has not. |
-| ⬜ No issue | 27 | Nothing on GitHub — needs filing or an explicit reply. |
+| ⬜ No issue | 26 | Nothing on GitHub — needs filing or an explicit reply. |
 
 Open GitHub issues doing the most work here: [#1485](https://github.com/perminder-klair/subwave/issues/1485) (the follow-up tracker, 5 threads), [#1486](https://github.com/perminder-klair/subwave/issues/1486) (CarPlay + Android Auto, 2 threads) and [#1400](https://github.com/perminder-klair/subwave/issues/1400) (skill-aimed banter, 2 threads).
 
@@ -133,9 +133,9 @@ Refs: [#1105](https://github.com/perminder-klair/subwave/issues/1105) · [#722](
 
 > Since I run the Analyzer on another PC, and the YAML files need updating some times, is it possible to add some syntax to the .env file that would allow me to…
 
-**⬜ No issue** — No issue. The analyzer is a compose service today; remote analysis via ANALYZE_URL is the documented workaround, and #1538 added concurrency control for it.
+**✅ Shipped** — Filed as #1570 and delivered: `ANALYZER_REPLICAS=0` in the root `.env` removes the local analyzer container across all three composes, for operators running analysis elsewhere via ANALYZE_URL (#1538 added the concurrency control for that remote path).
 
-Refs: [#1538](https://github.com/perminder-klair/subwave/issues/1538)
+Refs: [#1570](https://github.com/perminder-klair/subwave/issues/1570) · [#1538](https://github.com/perminder-klair/subwave/issues/1538)
 
 ### [Couple of UI tweaks](https://discord.com/channels/1514647956333002812/1525105702794952825)
 

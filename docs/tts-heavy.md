@@ -44,8 +44,9 @@ start getting tempo/key/loudness.
   Demucs vocal ranges add a CPU-torch stack (the `-heavy` image is ~1.9 GB) that
   isn't in the lean image. Enable them with **one line in `.env`** —
   [see below](#enabling-sounds-like--vocals-the-heavy-tier).
-- **Turn it off.** If you don't want analysis at all, `docker compose stop
-  analyzer` (it won't come back until the next explicit `up`).
+- **Turn it off.** One line in `.env` — `ANALYZER_REPLICAS=0` — and the next
+  `docker compose up -d` removes the container for good.
+  [Full details](#turning-the-analyzer-off).
 - **AIO.** The all-in-one image bundles the analyzer *in-process* (a local
   `librosa` venv the controller drives directly), so the one-click container has
   analysis with no second service. (`subwave-aio` is lean; `subwave-aio-heavy`
@@ -57,6 +58,59 @@ start getting tempo/key/loudness.
 
 Everything under [What analysis adds](#what-analysis-adds) applies here. The rest
 of this page is about the **voices** — a separate opt-in.
+
+### Turning the analyzer off
+
+You may not want a local analyzer container at all — the usual reason is that
+analysis already runs **somewhere else**, on a GPU box you point at with
+`ANALYZE_URL` ([below](#running-the-analyzer-on-another-machine)), so the
+in-compose one just sits there idle holding ~1.1 GB of image. Or you simply
+don't want acoustic data and would rather have the RAM back.
+
+One line in the root `.env`:
+
+```ini
+# root .env — 0 removes the container; unset (or empty) = 1 = the default
+ANALYZER_REPLICAS=0
+```
+
+Then `docker compose up -d`. The container is **stopped and removed**, and stays
+gone across every subsequent `up`, `restart` and reboot. Set the line back to
+`1` (or delete it) and the next `up -d` recreates it.
+
+This replaces the old advice of `docker compose stop analyzer`, which had to be
+repeated after *every* `up -d` — `up` restarts a service you stopped by hand.
+
+**What happens with no analyzer.** Nothing breaks and nothing is lost. The
+controller probes `ANALYZE_URL`, gets no answer, falls back to a
+[local venv](#running-analysis-without-a-sidecar-dev--offline) if one is
+configured, and otherwise resolves **no backend at all**. An analysis pass then
+returns immediately with a single log line —
+
+```
+[analyze] no analysis backend (analyzer sidecar / ANALYZE_URL / local librosa venv) — skipping
+```
+
+— rather than erroring per track. **Text tagging is untouched**: it runs on the
+LLM and never consults the analyzer, so a tagging pass works exactly as before.
+Existing bpm/key/loudness data stays in `state/library.db`; the admin Library
+panel simply reads "acoustic engine off" until a backend answers again.
+
+**It's Compose-only.** The AIO one-click image runs the analyzer **in-process**
+(a `librosa` venv the controller drives over stdio), not as a service, so there
+is no container for `ANALYZER_REPLICAS` to remove and the variable does nothing
+there. To send an AIO's analysis elsewhere, set `ANALYZE_URL` — a reachable
+sidecar wins over the in-process venv.
+
+> **Why a replica count and not a Compose profile?** Profiles are strictly
+> opt-in: there is no way to spell "on unless you say otherwise". Gating the
+> analyzer behind one would mean every existing install had to add
+> `COMPOSE_PROFILES=analyzer` just to keep what it already has. Worse, the
+> obvious workaround — an interpolated profile that's empty by default — drops
+> the service for anyone who sets `COMPOSE_PROFILES` **at all**, which is
+> exactly what [the voices section](#environments-where-you-cant-pass---profile-unraid-portainer-etc)
+> tells Unraid and Portainer operators to do. `deploy.replicas` has neither
+> problem: unset means 1, and default-on installs render byte-identically.
 
 ### Enabling "sounds-like" + vocals (the heavy tier)
 
@@ -293,10 +347,13 @@ checks, in order:
    across a slow share *plus* the DSP can outrun it on a link that is otherwise
    working. Raise it before concluding the URL is wrong.
 
-Keep the local `analyzer` service stopped (`docker compose stop analyzer` after
-each `up -d`, which restarts it) so you aren't paying for an idle image, and
-if you use the shared path, mind that it needs read permission for staged audio
-and write permission for stems under the analyzer's user.
+Turn the local `analyzer` service off so you aren't paying for a redundant idle
+image — add `ANALYZER_REPLICAS=0` to the station host's `.env`
+([details](#turning-the-analyzer-off)). That replaces the old advice of running
+`docker compose stop analyzer` after every `up -d`, which had to be repeated
+because `up` restarts a stopped service. And if you use the shared path, mind
+that it needs read permission for staged audio and write permission for stems
+under the analyzer's user.
 
 > **Not the same as sharing your music library.** Navidrome's music files aren't
 > involved here; the shared directory is SUB/WAVE's own `state/`.
