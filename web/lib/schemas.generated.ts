@@ -747,14 +747,24 @@ export const PERSONA_TTS_INHERIT = 'inherit';
 export const PERSONA_TTS_ENGINES = [PERSONA_TTS_INHERIT, ...TTS_ENGINES] as const;
 
 /**
- * Engines whose voice ids share the seed roster's local id-space (.onnx / .wav
- * / kokoro-shaped / built-in ids). A voice on an INHERIT slot was chosen
- * without knowing which engine would speak it, so it only carries to these —
- * `cloud` and `remote` take provider-specific ids from the station block that
- * names the provider. This is what stops a Piper voice id ("bm_george")
- * reaching a cloud provider as a voice name.
+ * The engines that share ONE voice id-space, and so the only ones a voice on an
+ * INHERIT slot may carry to.
+ *
+ * Piper and Kokoro alone: the strict schema deliberately accepts a Kokoro-shaped
+ * id under piper (the seed roster carries one per persona so switching to Kokoro
+ * yields distinct voices with no editing, #454), and `piper.resolvePiperVoice()`
+ * falls back gracefully for one it cannot find. Every other engine reads the
+ * field as something else entirely — chatterbox and pocket-tts as a reference
+ * `.wav` filename or a built-in id, `cloud` and `remote` as provider-specific
+ * names — so a voice chosen WITHOUT knowing the engine cannot be trusted to
+ * them. They take their voice from the station block, or from their own
+ * default when the station names none.
+ *
+ * Getting this wrong is not cosmetic: "bm_george" under chatterbox resolves to
+ * a reference WAV that does not exist and fails the synth on every line, and
+ * under a cloud provider it is a 400 or a silent substitution.
  */
-export const TTS_LOCAL_ENGINES = ['piper', 'kokoro', 'chatterbox', 'pocket-tts'] as const;
+export const TTS_INHERITABLE_VOICE_ENGINES = ['piper', 'kokoro'] as const;
 
 export const TTS_CLOUD_PROVIDERS = [
   'openai',
@@ -896,15 +906,12 @@ export function ttsVoiceSlotSchema(where: string, opts?: { allowInherit?: boolea
       } else if (voice.length < 1 || voice.length > TTS_VOICE_MAX) {
         return fail(`${where}.voice must be 1-${TTS_VOICE_MAX} chars`);
       }
-    } else if (engine === 'remote') {
-      // Server-specific — the sidecar interprets them. Empty is valid.
-      if (voice.length > TTS_VOICE_MAX) {
-        return fail(`${where}.voice must be 0-${TTS_VOICE_MAX} chars`);
-      }
-    } else if (engine === PERSONA_TTS_INHERIT) {
-      // No engine is known at validation time, so no per-engine voice rule can
-      // apply — only the shared length cap. resolvePersonaVoiceSlot() decides at
-      // speak time whether the id survives the resolved engine.
+    } else if (engine === 'remote' || engine === PERSONA_TTS_INHERIT) {
+      // remote: server-specific ids the sidecar interprets. inherit: no engine
+      // is known at validation time, so no per-engine rule CAN apply —
+      // resolvePersonaVoiceSlot() decides at speak time whether the id survives
+      // the resolved engine. Both leave only the shared length cap, and empty
+      // is valid for both.
       if (voice.length > TTS_VOICE_MAX) {
         return fail(`${where}.voice must be 0-${TTS_VOICE_MAX} chars`);
       }
@@ -982,12 +989,20 @@ export function repairTtsVoiceSlot(raw: unknown, opts?: { allowInherit?: boolean
     voice = '';
   }
   if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
+  // The kokoro floor. PERSONA_TTS_INHERIT is excluded alongside the engines that
+  // read empty as "your own default": an inherit slot has no engine yet, so
+  // there is no id-space to pick a floor FROM, and stamping a Kokoro id here
+  // would hand "bf_isabella" to whatever the station is set to — the same
+  // wrong-id-space failure resolvePersonaVoiceSlot() exists to prevent, and it
+  // would silently overwrite the empty voice every community install is created
+  // with (routes/personas.ts).
   if (
     !voice &&
     engine !== 'cloud' &&
     engine !== 'chatterbox' &&
     engine !== 'piper' &&
-    engine !== 'remote'
+    engine !== 'remote' &&
+    engine !== PERSONA_TTS_INHERIT
   ) {
     voice = 'bf_isabella';
   }
@@ -1400,28 +1415,121 @@ export function repairDjPromptForLoad(
 }
 
 /**
- * Personas that pin an engine which is NOT the one given — the list the admin
- * DJ Brain section warns about before it wires the cloud voice, and the list
- * its one-click fix patches to 'inherit'.
+ * Personas that will NOT speak through the station voice described by
+ * `{engine, provider}` — the list the admin DJ Brain section warns about before
+ * it wires the cloud voice, and the list its one-click fix patches to 'inherit'.
  *
  * A persona already on `inherit` is never listed: it follows the station by
  * definition, which is exactly what the fix would set it to.
+ *
+ * `provider` matters because "pins cloud" is not the same as "pins THIS cloud".
+ * The four cloud providers share one dispatcher but are independent targets: a
+ * persona pinned to cloud/openai speaks through OpenAI, not through the
+ * openai-compatible DJ Brain the operator just wired, and reporting it as
+ * already-following was how the warning could say "nothing outstanding" about a
+ * roster that still could not reach the voice being paid for. Omit `provider`
+ * to compare on engine alone.
  */
 export function personasPinningOtherEngine(
-  personas: Array<{ id?: unknown; name?: unknown; tts?: { engine?: unknown } | null }> | null | undefined,
+  personas:
+    | Array<{
+        id?: unknown;
+        name?: unknown;
+        tts?: { engine?: unknown; cloudProvider?: unknown } | null;
+      }>
+    | null
+    | undefined,
   engine: string,
+  provider?: string,
 ): Array<{ id: string; name: string; engine: string }> {
   if (!Array.isArray(personas)) return [];
   return personas
     .filter((p) => {
       const e = p?.tts?.engine;
-      return typeof e === 'string' && e !== PERSONA_TTS_INHERIT && e !== engine;
+      if (typeof e !== 'string' || e === PERSONA_TTS_INHERIT) return false;
+      if (e !== engine) return true;
+      // Same engine — only a cloud slot can still miss, and only when the
+      // caller named the provider it means.
+      if (e !== 'cloud' || !provider) return false;
+      return p?.tts?.cloudProvider !== provider;
     })
-    .map((p) => ({
-      id: String(p.id ?? ''),
-      name: String(p.name ?? p.id ?? ''),
-      engine: String(p.tts?.engine ?? ''),
-    }));
+    .map((p) => {
+      const e = String(p.tts?.engine ?? '');
+      const cp = p.tts?.cloudProvider;
+      return {
+        id: String(p.id ?? ''),
+        name: String(p.name ?? p.id ?? ''),
+        // A cloud pin is only meaningful with its provider — "cloud" alone
+        // reads as "already on the cloud voice", which is the confusion.
+        engine: e === 'cloud' && typeof cp === 'string' && cp ? `${e} / ${cp}` : e,
+      };
+    });
+}
+
+/** The slice of `settings.tts` the resolution depends on. */
+export interface StationVoiceDefaults {
+  /** settings.tts.defaultEngine — the engine an inherit slot resolves to. */
+  defaultEngine?: unknown;
+  /** settings.tts.cloud — provider + voice used when that engine is 'cloud'. */
+  cloud?: { provider?: unknown; voice?: unknown } | null;
+}
+
+const CARRIES_VOICE: readonly string[] = TTS_INHERITABLE_VOICE_ENGINES;
+
+/**
+ * Resolve a persona voice slot against the station defaults.
+ *
+ * Returns the slot unchanged unless its engine is the inherit sentinel. Null in
+ * (the global-voice kinds, which deliberately carry no persona) is null out, so
+ * callers can hand this whatever djPersonaTts() gave them.
+ */
+export function resolvePersonaVoiceSlot(
+  slot: Partial<TtsVoiceSlot> | null | undefined,
+  station: StationVoiceDefaults | null | undefined,
+): TtsVoiceSlot | null | undefined {
+  if (!slot) return slot as null | undefined;
+  if (slot.engine !== PERSONA_TTS_INHERIT) return slot as TtsVoiceSlot;
+
+  // The station default is the whole point of the sentinel; 'piper' is the same
+  // floor settings.load() coerces an unreadable defaultEngine to, so a broken
+  // settings file resolves to the universal engine rather than to nothing.
+  const engine =
+    typeof station?.defaultEngine === 'string' && station.defaultEngine
+      ? station.defaultEngine
+      : 'piper';
+
+  // gainDb and speed are per-persona dials, not per-engine ones — they survive
+  // the resolution untouched whatever speaks.
+  const gainDb = typeof slot.gainDb === 'number' ? slot.gainDb : 0;
+  const speed = typeof slot.speed === 'number' ? slot.speed : 1;
+
+  if (engine === 'cloud') {
+    const cloud = station?.cloud || {};
+    return {
+      engine,
+      // The station's provider AND the station's voice: an inherit slot has
+      // never named a cloud provider, and its voice belongs to another
+      // id-space. Both come from the block the operator configured together.
+      cloudProvider: typeof cloud.provider === 'string' && cloud.provider ? cloud.provider : 'openai',
+      voice: typeof cloud.voice === 'string' ? cloud.voice : '',
+      gainDb,
+      speed,
+    };
+  }
+
+  return {
+    engine,
+    // Carried through so a later reroute onto `cloud` (the rescue chain's
+    // configured rung) still has a provider to check keys against; it is read
+    // only while the engine IS cloud, which this branch is not.
+    cloudProvider:
+      typeof slot.cloudProvider === 'string' && slot.cloudProvider ? slot.cloudProvider : 'openai',
+    // Only piper/kokoro share the seed roster's id-space, so only they keep the
+    // persona voice. Everywhere else '' is the engine's own default.
+    voice: CARRIES_VOICE.includes(engine) && typeof slot.voice === 'string' ? slot.voice : '',
+    gainDb,
+    speed,
+  };
 }
 
 // ─── from controller/src/schemas/playlist.ts ─────────────────────────────

@@ -3,6 +3,7 @@
 // otherwise the admin-selected active persona — settings.getEffectivePersona).
 
 import * as settings from '../../../settings.js';
+import { resolvePersonaVoiceSlot } from '../../../audio/persona-engine.js';
 import { resolveCloudModelForPersona, resolveCloudProviderForPersona } from '../speech/cloud-speech.js';
 import { cloudExpressionCueFamily } from '../core/pure.js';
 
@@ -57,7 +58,12 @@ export function djSystem(
     // string the DJ speaks as "broadcasting from {location}".
     location: settings.resolveOnAirLocation(s),
   }) + settings.onAirRosterClause(persona);
-  if (persona?.tts?.engine === 'chatterbox') return base + CHATTERBOX_TAG_HINT;
+  // Resolved, not raw: a persona on the 'inherit' sentinel has no engine of its
+  // own, so asking the slot directly reads "pinned to something that is not
+  // chatterbox" and drops the hint on a station whose default IS chatterbox —
+  // the same miss resolvePersonaVoiceSlot() exists to close in cloud-speech.ts.
+  const engine = resolvePersonaVoiceSlot(persona?.tts, s.tts)?.engine;
+  if (engine === 'chatterbox') return base + CHATTERBOX_TAG_HINT;
   // Provider/model resolution is non-empty only when the persona actually
   // resolves to a configured cloud engine — including via the station default
   // when the persona sets no engine. That fail-closed check keeps cues away
