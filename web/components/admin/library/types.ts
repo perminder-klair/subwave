@@ -192,3 +192,24 @@ export interface PlaylistSummary {
   owner: string;
   public: boolean;
 }
+
+
+// Scene vocabulary (#1577) — the genre tag set as one curatable list.
+// Mirrors controller `music/library-db/scenes.ts SceneCount` and
+// `music/scene-vocab.ts SceneAlias`.
+
+/** One distinct genre value in the mirror, with the tracks carrying it. */
+export interface SceneCount {
+  value: string;
+  tracks: number;
+}
+
+/** One consolidation rule. `from` is the FOLDED key the controller matches
+ *  ingested values against — case-insensitive and whitespace-collapsed, which
+ *  is why it does not read back as any one spelling the operator retired.
+ *  `to` is the stored value that gets written. */
+export interface SceneAlias {
+  from: string;
+  to: string;
+  at: string;
+}

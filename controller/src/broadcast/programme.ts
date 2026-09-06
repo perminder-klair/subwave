@@ -3,7 +3,9 @@
 //
 // The structure is canonical and time-based (no operator rundown): the intro
 // airs at the top of the show, one feature beat airs mid-hour (:35, each
-// scheduled hour), the outro airs at :55 of the final hour. What makes the
+// scheduled hour), the outro airs `handover.offsetMinutes` before the end of
+// the final hour (:55 by default) and the incoming host waits a closing track
+// behind it — both in broadcast/handover-policy.ts. What makes the
 // hour cohere is the EPISODE PLAN — one structured "producer" LLM call at
 // session start (llm/internal/prompts/programme.ts) that turns the show's
 // standing topic brief + the moment into today's angle, per-hour feature
@@ -36,6 +38,8 @@ import { optionalSegmentsAllowed } from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { zonedParts } from '../time.js';
 import { takeoverShowId } from '../schemas/schedule.js';
+import { HANDOVER_OFFSET_STEP_MINUTES } from '../schemas/settings.js';
+import { handoverOffsetMinutes } from './handover-policy.js';
 
 // How long after the intro aired the generic hourly time-check stays
 // suppressed: the intro owns the top of the show's first hour (the same
@@ -63,9 +67,11 @@ function episodeSpan(now: Date): { index: number; total: number } {
 
 // The beat due at this moment on the STATION clock, for the scheduler's
 // 5-minute programme tick (see beatWindow for why crons can't fire on fixed
-// station minutes directly).
+// station minutes directly). The outro's placement is the operator's
+// `handover.offsetMinutes`, resolved through the policy module rather than read
+// from settings here — the same value bounds the talk row's stride.
 export function dueBeat(now = new Date()): 'feature' | 'outro' | null {
-  return beatWindow(zonedParts(now).minute);
+  return beatWindow(zonedParts(now).minute, handoverOffsetMinutes(), HANDOVER_OFFSET_STEP_MINUTES);
 }
 
 // ---------------------------------------------------------------------------
@@ -204,7 +210,12 @@ export async function ensurePlan(ctx: SessionContext, now = session.contextDate(
 // half of the mic-pass already opened the show (with the episode angle woven
 // in — see dj-agent), so the standalone intro is skipped and just marked.
 // Returns true when it aired a standalone intro now.
-export async function maybeRunIntro(queue: QueueApi, ctx: SessionContext, now = session.contextDate(ctx)): Promise<boolean> {
+export async function maybeRunIntro(
+  queue: QueueApi,
+  ctx: SessionContext,
+  now = session.contextDate(ctx),
+  { opportunity = false }: { opportunity?: boolean } = {},
+): Promise<boolean> {
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
   if (!prog || prog.beats?.intro) return false;
@@ -225,6 +236,28 @@ export async function maybeRunIntro(queue: QueueApi, ctx: SessionContext, now = 
   // the switch back mid-show and the intro can still open the remaining hours.
   if (!autoVoiceAllowed()) return false;
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return false;  // stays pending — may air later this hour
+  // The ordering rule (#1576). A show whose sign-off just aired owes the
+  // listener one closing track, and this is the path that carries the incoming
+  // host's first words when the persona did NOT change — the mic-pass covers
+  // the other one, gated in the queue's own boundary path. Asked after the
+  // pendingHandoff check so exactly one of the two counts the opportunity.
+  //
+  // LAST of the checks, and that is the point: only a cycle that would
+  // otherwise have aired the intro has really passed an opportunity up. Asking
+  // ahead of the gates let a muted station, an exhausted budget or a quiet hour
+  // spend half the spacer on a cycle that could never have spoken.
+  //
+  // `opportunity` says whether THIS call site is a handover moment at all. The
+  // boundary path is; the wall-clock :00 session roll is not — it asks minutes
+  // before any music has moved, and banking its answer would release the
+  // incoming host at the boundary that ends the sign-off's own track.
+  //
+  // Stays pending and unmarked, like the voice-switch case above: the next
+  // boundary opens the episode instead.
+  if (queue.closingTrackHolds()) {
+    if (opportunity) queue.noteHandoverOpportunityDeclined();
+    return false;
+  }
 
   markIntroAired();
   await runIntro(queue, ctx, now);
@@ -338,7 +371,8 @@ export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourInd
   });
 }
 
-// Outro — the sign-off. Cron-driven at :55 of the show's FINAL hour.
+// Outro — the sign-off. Driven by the talk table's programme row in the show's
+// FINAL hour, `handover.offsetMinutes` before the boundary (:55 by default).
 export async function outroTick(queue: QueueApi, ctx: SessionContext, now = new Date()): Promise<void> {
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
@@ -394,9 +428,20 @@ export async function runOutro(queue: QueueApi, ctx: SessionContext, now = new D
 // still pending. Returns true when a standalone intro aired just now (the
 // hourly cron uses this to skip the generic time check).
 // `now` follows the same contextDate rule as ensurePlan.
-export async function onSessionSettled(queue: QueueApi, ctx: SessionContext, now = session.contextDate(ctx)): Promise<boolean> {
+//
+// `opportunity` is passed straight through to maybeRunIntro and says whether
+// this call site is a real handover moment (#1576): the queue's boundary path
+// is, the hourly cron's wall-clock roll is not. It has no default here for the
+// same reason it has one there — a new call site must state which it is, while
+// the manual runners that reach maybeRunIntro directly stay non-consuming.
+export async function onSessionSettled(
+  queue: QueueApi,
+  ctx: SessionContext,
+  now = session.contextDate(ctx),
+  { opportunity }: { opportunity: boolean },
+): Promise<boolean> {
   if (!activeEpisode(now)) return false;
   await ensurePlan(ctx, now);
-  return maybeRunIntro(queue, ctx, now);
+  return maybeRunIntro(queue, ctx, now, { opportunity });
 }
 

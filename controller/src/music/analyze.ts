@@ -232,7 +232,13 @@ async function scoreAudioMoods(): Promise<void> {
 
 export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<AnalyzeStats> {
   if (!(await analyzer.isAvailable())) {
-    console.log('[analyze] no analysis backend (tts-heavy sidecar / local librosa venv) — skipping');
+    // Names the two things resolveBackend() actually consults, and names them
+    // by the env var that configures each: ANALYZE_URL (the `analyzer` sidecar,
+    // in-compose or remote — one channel, not two) and ANALYZE_PYTHON (the
+    // local/AIO librosa venv). NOT tts-heavy, which is TTS-only and stopped
+    // being an analysis backend at the split. This is also the line an operator
+    // reads after ANALYZER_REPLICAS=0, so it has to point at the real knobs.
+    console.log('[analyze] no analysis backend (ANALYZE_URL sidecar / ANALYZE_PYTHON venv) — skipping');
     return { available: false, backend: 'none', analyzed: 0, failed: 0, scope: 0, audioEmbedded: 0, vocalAnalyzed: 0 };
   }
   const backend = analyzer.backendLabel();

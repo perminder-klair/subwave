@@ -30,6 +30,7 @@
 // scripts/stream-idle.test.ts.
 
 import * as settings from '../settings.js';
+import { warmHeavy } from '../audio/ttsHeavyClient.js';
 import { gatedListenerCount, refresh, setStreamIdle } from './listeners.js';
 import { idleOn, idleOff, idleStatus } from './liquidsoap-control.js';
 import { queue } from './queue.js';
@@ -80,6 +81,15 @@ async function tick() {
       );
     } else if (action === 'resume') {
       await idleOff();
+      // The tts-heavy sidecar unloads an idle engine on its own clock (#1579)
+      // and reloads it on demand, which on a cold Chatterbox is 30-60s — long
+      // enough to be heard if it lands on the first link after the room fills
+      // up. Start that load HERE instead, where we already know the pause is
+      // releasing and the first spoken line is still minutes away. Deliberately
+      // not awaited and never throws: the render path reloads on its own if
+      // this does nothing, so it must not be able to delay idleOff()'s state
+      // update or trip the catch below into holding the pause.
+      void warmHeavy();
       queue.log(
         'scheduler',
         count !== null && count > 0

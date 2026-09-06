@@ -118,6 +118,29 @@ test('maxTrackSeconds honours the crossfade-derived floor, and 0 always passes',
   assert.throws(() => strict({ maxTrackSeconds: 1_000_000 }), /maxTrackSeconds/);
 });
 
+test('minTrackLengthSeconds is the cap\'s twin, not the cap', () => {
+  // The FLOOR (#1573). Same three-state shape as the cap above — null =
+  // inherit the station default, 0 = no floor, >0 = this show's own — and the
+  // SAME crossfade-derived lower bound, which is the whole reason the key is
+  // named apart from settings.minTrackSeconds() rather than overloading it.
+  assert.equal(strict().minTrackLengthSeconds, null, 'absent = inherit = today');
+  assert.equal(strict({ minTrackLengthSeconds: 0 }).minTrackLengthSeconds, 0);
+  assert.equal(strict({ minTrackLengthSeconds: 120 }).minTrackLengthSeconds, 120);
+  assert.equal(strict({ minTrackLengthSeconds: '' }).minTrackLengthSeconds, null);
+  assert.equal(strict({ minTrackLengthSeconds: null }).minTrackLengthSeconds, null);
+  assert.throws(() => strict({ minTrackLengthSeconds: 5 }), /minTrackLengthSeconds/);
+  // Its ceiling is deliberately far below the cap's: a ten-hour cap is a
+  // harmless "no cap", a ten-hour floor is a show that can never pick anything.
+  assert.throws(() => strict({ minTrackLengthSeconds: 36000 }), /minTrackLengthSeconds/);
+  assert.throws(() => strict({ minTrackLengthSeconds: 90.5 }), /minTrackLengthSeconds/);
+});
+
+test('a show may set a floor and a cap independently', () => {
+  const s = strict({ minTrackLengthSeconds: 120, maxTrackSeconds: 600 });
+  assert.equal(s.minTrackLengthSeconds, 120);
+  assert.equal(s.maxTrackSeconds, 600);
+});
+
 test('booleans read as `=== true`, matching both paths before the schema', () => {
   // Deliberately NOT z.boolean(): load and save have always agreed to treat a
   // non-boolean as off, and tightening only one of them would split them.
@@ -224,6 +247,7 @@ test('load repairs what a working show can survive; strict rejects the same inpu
     [{ vocals: 'nonsense' }, (s) => assert.equal(s.vocals, '')],
     [{ energies: ['low', 'bogus'] }, (s) => assert.deepEqual(s.energies, ['low'])],
     [{ maxTrackSeconds: 9_999_999 }, (s) => assert.ok(s.maxTrackSeconds <= 36000)],
+    [{ minTrackLengthSeconds: 9_999_999 }, (s) => assert.ok(s.minTrackLengthSeconds <= 3600)],
     [{ eras: [{ fromYear: 2000, toYear: 1990 }] }, (s) => assert.deepEqual(s.eras, [])],
     [{ guestPersonaIds: ['p_host', 'p_gone', 'p_guest'] },
       (s) => assert.deepEqual(s.guestPersonaIds, ['p_guest'])],

@@ -100,6 +100,7 @@ router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => 
     vocals: cs.vocals,
     filtersStrict: cs.filtersStrict,
     maxTrackSeconds: cs.maxTrackSeconds,
+    minTrackLengthSeconds: cs.minTrackLengthSeconds,
     playlistIds: [],
     playlistStrict: false,
     excludedPlaylistIds: [],
@@ -234,7 +235,7 @@ router.post('/schedule/override', requireAdmin, validateBody(scheduleOverrideReq
         ? `[takeover] "${show.name}" pinned for ${minutes} min via admin UI`
         : `[takeover] Default programming selected for ${minutes} min via admin UI`,
     );
-    void rollSessionNow({ reason: 'takeover started' });
+    void rollSessionNow({ manual: true, reason: 'takeover started' });
     res.json({ override });
   } catch (err: any) {
     queue.log('error', `POST /schedule/override failed: ${err.message}`);
@@ -254,7 +255,7 @@ router.delete('/schedule/override', requireAdmin, async (req, res) => {
     await settings.update({ scheduleOverride: null });
     if (existing) {
       queue.log('scheduler', '[takeover] cancelled via admin UI — back to the weekly schedule');
-      void rollSessionNow({ reason: 'takeover cancelled' });
+      void rollSessionNow({ manual: true, reason: 'takeover cancelled' });
     }
     res.json({ override: null });
   } catch (err: any) {

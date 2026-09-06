@@ -20,6 +20,7 @@ import * as chatterbox from '../../audio/chatterbox.js';
 import * as piper from '../../audio/piper.js';
 import * as llmProvider from '../../llm/provider.js';
 import { queue } from '../../broadcast/queue.js';
+import { handoverOffsetMinutes } from '../../broadcast/handover-policy.js';
 import { streamStatus } from '../../broadcast/liquidsoap-control.js';
 import { requireAdmin } from '../../middleware/auth.js';
 import { validateSettingsBody } from '../../middleware/validate.js';
@@ -98,14 +99,26 @@ router.get('/settings', requireAdmin, async (req, res) => {
         jingleRatio: s.jingleRatio,
         crossfadeDuration: s.crossfadeDuration,
         ducking: s.ducking,
+        // Repaired on the way out, not served raw: a station-profile switch and
+        // a backup restore both reach the cache without passing load(), and the
+        // admin control is four fixed steps — an off-step value matches no
+        // option and reads as permanently dirty. Same rule as the air path, via
+        // the same function (#1576).
+        handover: { offsetMinutes: handoverOffsetMinutes() },
         maxTrackSeconds: s.maxTrackSeconds,
-        // Crossfade-relative floor for a non-zero cap — one rule, shared with the
-        // admin/show UI so client hints match server validation.
+        // Crossfade-relative floor for a non-zero cap OR a non-zero
+        // minimum-track-length floor — one rule, shared with the admin/show UI
+        // so client hints match server validation.
         minTrackSeconds: settings.minTrackSeconds(s),
         archive: s.archive,
+        // Edited from the Backup panel rather than a settings section — the
+        // schedule belongs beside Export/Restore, but it saves through the one
+        // POST /settings chokepoint like every other key.
+        backups: s.backups,
         stream: s.stream,
         loudness: s.loudness,
         silenceTrim: s.silenceTrim,
+        fadeAtShowEnd: s.fadeAtShowEnd,
         station: s.station,
         stationDescription: s.stationDescription,
         timezone: s.timezone,
@@ -131,6 +144,11 @@ router.get('/settings', requireAdmin, async (req, res) => {
         search: s.search,
         embedding: s.embedding,
         likes: s.likes,
+        // Track-selection windows (album cooldown, minimum track length). The
+        // admin form reads `values.picker` to populate those inputs, so without
+        // this line every load shows them at 0 and the next save on that card
+        // silently writes the operator's own setting away.
+        picker: s.picker,
         audio: s.audio,
         transitions: s.transitions,
         sfx: s.sfx,

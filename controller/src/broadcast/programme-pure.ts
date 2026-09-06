@@ -41,15 +41,38 @@ export function overrideSpan(
 }
 
 // Which beat a STATION-ZONE minute belongs to. The arc's placement is a
-// station-clock fact (":55 of the final hour" must be the show's closing
-// minutes), but crons fire on fixed process-local minutes — and station zones
-// sit at :30/:45 offsets (IST, Nepal), so a process-minute :55 cron can land
-// mid-show on the station clock. The scheduler therefore ticks every 5
-// minutes and dispatches on this window instead: offsets are multiples of 15,
-// so a 5-minute cadence always lands inside each 5-minute station window
-// exactly once (the beat flags make repeats no-ops).
-export function beatWindow(stationMinute: number): 'feature' | 'outro' | null {
-  if (stationMinute >= 55) return 'outro';
+// station-clock fact (the sign-off must land in the show's closing minutes),
+// but crons fire on fixed process-local minutes — and station zones sit at
+// :30/:45 offsets (IST, Nepal), so a process-minute :55 cron can land mid-show
+// on the station clock. The scheduler therefore ticks every 5 minutes and
+// dispatches on this window instead: offsets are multiples of 15, so a 5-minute
+// cadence always lands inside each 5-minute station window exactly once (the
+// beat flags make repeats no-ops).
+//
+// `handoverOffsetMinutes` (#1576) moves the OUTRO window earlier in the hour —
+// 5 puts it at :55–:59, exactly where it has always been. Both windows are one
+// sampling stride wide and open on a multiple of it, which is what keeps that
+// one-sample-per-window property true for any offset; the constraint is
+// enforced where the operator sets the value (HANDOVER_OFFSET_BOUNDS and
+// HANDOVER_OFFSET_STEP_MINUTES in schemas/settings.ts), not here, because this
+// file stays import-free.
+//
+// BOTH numbers are REQUIRED rather than defaulted, so the canonical 5 lives in
+// exactly one place each — the settings default for the offset,
+// HANDOVER_OFFSET_STEP_MINUTES for the stride — and this file cannot drift from
+// either. A default here would be a second copy of the very constant the stride
+// import in talk-scheduler.ts exists to stop being copied. The outro is tested
+// first: the bound keeps the moved window clear of the feature at :35–:39
+// (pinned by scripts/handover-timing.test.ts, since this file cannot import the
+// bound to assert it against), and if a future bound ever let them meet,
+// closing the show beats repeating its middle.
+export function beatWindow(
+  stationMinute: number,
+  handoverOffsetMinutes: number,
+  sampleStrideMinutes: number,
+): 'feature' | 'outro' | null {
+  const outroOpens = 60 - handoverOffsetMinutes;
+  if (stationMinute >= outroOpens && stationMinute < outroOpens + sampleStrideMinutes) return 'outro';
   if (stationMinute >= 35 && stationMinute < 40) return 'feature';
   return null;
 }

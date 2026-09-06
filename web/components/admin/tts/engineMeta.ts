@@ -77,6 +77,9 @@ export interface EngineStatus {
 // list (TTS_HEAVY_ENGINES), null when it's unreachable or not in use.
 export interface EngineAvailability {
   heavyEnabled?: string[] | null;
+  // Sidecar engines the idle unload has released (#1579). Still usable — the
+  // next line just pays a model load first — so this NEVER affects `state`.
+  heavyCold?: string[] | null;
   cloudByProvider?: Record<string, boolean>;
   [engine: string]: boolean | string[] | null | Record<string, boolean> | undefined;
 }
@@ -109,7 +112,18 @@ export function engineStatus(
         : { label: 'ready', tone: 'ok', state: 'ready' };
     case 'chatterbox':
     case 'pocket-tts': {
-      if (a[id] !== false) return { label: 'ready', tone: 'ok', state: 'ready' };
+      if (a[id] !== false) {
+        // Released by the sidecar's idle unload (#1579). state stays 'ready'
+        // and the tone stays 'ok' on purpose: nothing is wrong and nothing is
+        // unavailable — the engine is one on-demand load from speaking, and
+        // muting the card would tell the operator to go and fix a station that
+        // is working. The badge exists so the reclaim is visible here instead
+        // of only in `docker stats`.
+        const cold = Array.isArray(a.heavyCold) ? a.heavyCold : null;
+        return cold?.includes(id)
+          ? { label: 'idle · loads on demand', tone: 'ok', state: 'ready' }
+          : { label: 'ready', tone: 'ok', state: 'ready' };
+      }
       // The sidecar's configured engine list says WHY: deliberately disabled vs
       // still loading vs the whole sidecar down.
       const name = ENGINE_META[id]?.label || id;

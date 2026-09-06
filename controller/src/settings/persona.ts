@@ -18,7 +18,7 @@ import {
   personaToneDirectives,
   takeoverShowId,
 } from './vocab.js';
-import { DEFAULTS, coerceMaxTrackSeconds } from './defaults.js';
+import { DEFAULTS, coerceMaxTrackSeconds, coerceMinTrackLengthSeconds } from './defaults.js';
 import { get, peek } from './store.js';
 
 // DJ mode makes a persona behave like a working radio DJ rather than a
@@ -74,6 +74,44 @@ export function effectiveMaxTrackSec(
     : null;
   const sec = showSec != null ? showSec : station;
   return sec && sec > 0 ? sec : null;
+}
+
+// Effective minimum track length in SECONDS for the moment a pick is made, or
+// null for "no floor" (#1573). Exactly the precedence effectiveMaxTrackSec
+// applies to the cap: a scheduled show's own floor (when set) overrides the
+// station default, and 0 at the winning level means off. One resolver so both
+// pick paths, the auto-playlist coast and the show-editor diagnostic cannot
+// disagree about how short is too short.
+//
+// The two are NOT symmetric in what they do with the answer: the cap is an
+// on-air cue_out cut, so an over-long track stays eligible, while the floor is
+// a SELECTION filter — a 40-second interlude cannot be stretched.
+export function effectiveMinTrackSec(
+  show: { minTrackLengthSeconds?: unknown } | null | undefined = resolveActiveShow(),
+  s: { picker?: { minTrackLengthSeconds?: unknown } } | null | undefined = get(),
+): number | null {
+  const station = coerceMinTrackLengthSeconds(s?.picker?.minTrackLengthSeconds, false) ?? 0;
+  const showSec = show && show.minTrackLengthSeconds != null
+    ? coerceMinTrackLengthSeconds(show.minTrackLengthSeconds, false)
+    : null;
+  const sec = showSec != null ? showSec : station;
+  return sec && sec > 0 ? sec : null;
+}
+
+// Whether the show ENDING at a boundary wants its last track faded out there
+// rather than spilling into the next show (#1574). Same precedence shape as
+// effectiveMaxTrackSec above and for the same reason — one resolver, so the
+// drain and any future caller cannot disagree about which level wins.
+//
+// The show's value is TRI-STATE: null means "inherit", so a station that turns
+// the default on gets it on every show that never expressed an opinion. Absent
+// at both levels is false, i.e. the pre-existing behaviour.
+export function effectiveFadeAtShowEnd(
+  show: { fadeAtShowEnd?: unknown } | null | undefined = resolveActiveShow(),
+  s: { fadeAtShowEnd?: unknown } | null | undefined = get(),
+): boolean {
+  if (show && typeof show.fadeAtShowEnd === 'boolean') return show.fadeAtShowEnd;
+  return s?.fadeAtShowEnd === true;
 }
 
 // ── persona / show resolution ───────────────────────────────────────────────
@@ -157,6 +195,16 @@ function resolveShowShape(show, s) {
     // Per-show track-length cap override (seconds). null = inherit the station
     // default; 0 = unlimited; >0 = own cap. See effectiveMaxTrackSec().
     maxTrackSeconds: show.maxTrackSeconds != null ? show.maxTrackSeconds : null,
+    // Per-show minimum-track-length FLOOR (#1573). null = inherit the station
+    // default (picker.minTrackLengthSeconds); 0 = no floor; >0 = own floor.
+    // See effectiveMinTrackSec(). Omitting it here would silently disable the
+    // per-show override on every pick path — resolveShowShape is what they see.
+    minTrackLengthSeconds: show.minTrackLengthSeconds != null ? show.minTrackLengthSeconds : null,
+    // Per-show show-boundary fade override. null = inherit the station default.
+    // See effectiveFadeAtShowEnd() — a resolved show that dropped this field
+    // would read as "inherit" on every path, which is how the #779 blocklist
+    // no-op happened.
+    fadeAtShowEnd: typeof show.fadeAtShowEnd === 'boolean' ? show.fadeAtShowEnd : null,
     // Navidrome playlist anchor: the union of these playlists becomes the show's
     // candidate pool (music/show-playlist.ts). playlistStrict makes it the show's
     // entire universe; soft just lets it dominate. Empty array = no anchor.

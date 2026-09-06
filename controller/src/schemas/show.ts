@@ -13,8 +13,8 @@
 //
 // WHY A FACTORY. Unlike webhooks and stations, a show cannot be validated
 // against itself: `personaId` must name a real persona, `moods` a live mood,
-// `themeId` an installed theme, and `maxTrackSeconds` clears a crossfade-derived
-// floor. Those four travel as ONE ShowSchemaContext value rather than separate
+// `themeId` an installed theme, and the two track-length fields clear a
+// crossfade-derived floor. Those four travel as ONE ShowSchemaContext value rather than separate
 // arguments — the same "one scope value, never unpacked" rule PickerScope
 // follows. Both sides can build it; the admin panel already fetches personas,
 // moods, themes and the station settings.
@@ -56,6 +56,15 @@ export const SHOW_YEAR_MAX = 2100;
 // from here, because the strict show validator has always bounds-checked a
 // show's override against the station figure and two copies would drift.
 export const SHOW_MAX_TRACK_SECONDS = 36000;
+// Ceiling on the per-show minimum-track-length FLOOR (#1573). Deliberately far
+// below SHOW_MAX_TRACK_SECONDS: a cap of ten hours is a harmless "no cap", but a
+// FLOOR of ten hours is a show that can never pick anything, and the pick paths
+// would spend every pool build discovering that. An hour is already past every
+// real answer (the field exists to skip 40-second skits and interludes).
+// Twinned with schemas/settings.ts's PICKER_MIN_TRACK_LENGTH_BOUNDS.max, which
+// bounds the STATION-wide default — a mirrored module may import only zod, so
+// the two are separate declarations of one number and must move together.
+export const SHOW_MIN_TRACK_LENGTH_MAX = 3600;
 
 export const SHOW_ENERGY = ['low', 'medium', 'high'] as const;
 export const SHOW_VOCALS = ['instrumental', 'vocal'] as const;
@@ -76,7 +85,8 @@ export type EraWindow = { fromYear: number | null; toYear: number | null };
  *     strip an operator's own moods. A stale mood just matches nothing on air.
  *   - `themeIds: null` — load has no theme registry to consult. A stale id is
  *     harmless: GET /themes falls back to the station default at serve time.
- *   - `minTrackSeconds: null` — the crossfade-derived floor. Load clamps to the
+ *   - `minTrackSeconds: null` — the crossfade-derived floor, the lower bound on
+ *     BOTH `maxTrackSeconds` and `minTrackLengthSeconds`. Load clamps to the
  *     hard bounds instead of enforcing it.
  *
  * `personaIds` is NOT nullable: a show whose host does not exist has no owner
@@ -406,6 +416,42 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           (n) => n == null || n === 0 || ctx.minTrackSeconds == null || n >= ctx.minTrackSeconds,
           `must be 0 (inherit/unlimited) or at least the station's minimum track length`,
         ),
+      // Minimum track length (#1573) — the FLOOR, the twin of the cap above.
+      // null = inherit the station default (picker.minTrackLengthSeconds),
+      // 0 = no floor, >0 = this show's own floor in seconds.
+      //
+      // Unlike the cap, this one is a SELECTION filter: a 40-second interlude
+      // cannot be lengthened on air the way an over-long mix can be cut, so it
+      // has to be kept out of the pool rather than trimmed at the seam.
+      //
+      // It carries the SAME crossfade-derived lower bound as the cap, and for
+      // the same reason: a track shorter than 2x the crossfade has no solo
+      // airtime at all, so the smallest floor worth expressing is the one the
+      // mixer already imposes. 0 (inherit/off) always stays allowed, so a
+      // station that never touches the field is byte-identical to today.
+      minTrackLengthSeconds: z
+        .union([z.null(), z.literal(''), z.number(), z.string()])
+        .optional()
+        .transform((v) => (v == null || v === '' ? null : Number(v)))
+        .refine(
+          (n) =>
+            n == null ||
+            (Number.isInteger(n) && n >= 0 && n <= SHOW_MIN_TRACK_LENGTH_MAX),
+          `must be an integer between 0 and ${SHOW_MIN_TRACK_LENGTH_MAX}`,
+        )
+        .refine(
+          (n) => n == null || n === 0 || ctx.minTrackSeconds == null || n >= ctx.minTrackSeconds,
+          `must be 0 (inherit/no floor) or at least the station's minimum track length`,
+        ),
+      // Show-boundary fade (#1574). TRI-STATE, exactly like maxTrackSeconds
+      // above: null = inherit the station default, true/false = this show's own
+      // answer. A plain showBool() would read an untouched show as an explicit
+      // `false` and silently opt every existing show OUT of a station default
+      // the operator had just turned on.
+      fadeAtShowEnd: z
+        .union([z.null(), z.literal(''), z.boolean()])
+        .optional()
+        .transform((v) => (v == null || v === '' ? null : v)),
       // Shape-checked only: ids resolve against the live Navidrome at pick
       // time, so a stale one contributes nothing rather than failing a save.
       playlistIds: showStringList({
@@ -548,7 +594,8 @@ export function repairShowTags(raw: unknown): string[] | undefined {
  *
  * maxTrackSeconds is deliberately NOT repaired here: its clamp bounds are owned
  * by settings/defaults.ts (coerceMaxTrackSeconds), which already reads its
- * ceiling from this module's SHOW_MAX_TRACK_SECONDS.
+ * ceiling from this module's SHOW_MAX_TRACK_SECONDS. minTrackLengthSeconds
+ * follows it for the same reason (coerceMinTrackLengthSeconds).
  */
 export function repairShowForLoad(
   raw: Record<string, unknown>,

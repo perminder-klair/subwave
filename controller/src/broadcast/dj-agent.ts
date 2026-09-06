@@ -283,6 +283,13 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
     moodLock,
     energyLock,
     vocalLock,
+    // Minimum track length (#1573) — the show's own floor when it sets one,
+    // else the station default. NOT gated on `strict`, unlike the five locks
+    // above: this is the twin of the max-track-length cap, which every show
+    // gets whether or not it opted into strict filters. The pool picker
+    // resolves the identical figure from the identical show object, so the two
+    // paths cannot disagree about how short is too short.
+    minTrackSec: settings.effectiveMinTrackSec(activeShow),
     playlistLock,
     playlistTracks,
     excludedIds,

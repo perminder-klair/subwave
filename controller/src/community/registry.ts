@@ -102,6 +102,8 @@ export interface CommunityShow {
   programme: boolean;
   segmentSkill: string;
   maxTrackSeconds: number | null;
+  /** Minimum track length in seconds (#1573). null = inherit the station. */
+  minTrackLengthSeconds: number | null;
   submittedBy?: string;
   dateAdded?: string;
   dateModified?: string;
@@ -240,6 +242,7 @@ function normalizeShow(raw: any): CommunityShow | null {
   const name = (str(raw?.name) || str(raw?.displayName)).slice(0, SHOW_NAME_MAX);
   if (!name) return null;
   const seconds = Number(raw?.maxTrackSeconds);
+  const floorSeconds = Number(raw?.minTrackLengthSeconds);
   return {
     slug,
     name,
@@ -259,6 +262,9 @@ function normalizeShow(raw: any): CommunityShow | null {
     programme: raw?.programme === true,
     segmentSkill: str(raw?.segmentSkill).slice(0, SHOW_SEGMENT_SKILL_MAX),
     maxTrackSeconds: Number.isInteger(seconds) && seconds >= 0 ? seconds : null,
+    // Bounds are the show validator's, applied on install — a catalog value out
+    // of range is clamped there rather than dropped here, same as the cap.
+    minTrackLengthSeconds: Number.isInteger(floorSeconds) && floorSeconds >= 0 ? floorSeconds : null,
     submittedBy: optStr(raw?.submittedBy, 80),
     dateAdded: optStr(raw?.dateAdded, 10),
     dateModified: optStr(raw?.dateModified, 10),
