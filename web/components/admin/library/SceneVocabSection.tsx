@@ -24,21 +24,8 @@ import { Checkbox } from '../../ui/checkbox';
 import { V3AlertDialog } from '../../ui/alert-dialog';
 import { cn } from '../../../lib/cn';
 import { libraryKeys } from './queries';
+import type { SceneAlias, SceneCount } from './types';
 import { useAdminMutation, useAdminQuery } from './useAdminQuery';
-
-/** One distinct value in the mirror. Mirrors library-db/scenes.ts SceneCount. */
-export interface SceneCount {
-  value: string;
-  tracks: number;
-}
-
-/** One consolidation rule. Mirrors music/scene-vocab.ts SceneAlias — `from` is
- *  the FOLDED key (lower-cased, whitespace-collapsed), `to` the stored value. */
-export interface SceneAlias {
-  from: string;
-  to: string;
-  at: string;
-}
 
 interface SceneVocabResponse {
   scenes: SceneCount[];
@@ -48,6 +35,10 @@ interface SceneVocabResponse {
 interface MergeResponse extends SceneVocabResponse {
   target: string;
   sources: string[];
+  /** Fold keys the merge actually recorded — empty when the rule set already
+   *  said everything this merge asked for, which is not the same as a stale
+   *  listing and must not be reported as one. */
+  recorded: string[];
   tracksChanged: number;
 }
 
@@ -98,7 +89,11 @@ export default function SceneVocabSection() {
       )[0]!
     : '';
   const to = target.trim() || suggested;
-  const sources = picked.filter(v => v.toLowerCase() !== to.toLowerCase());
+  // Verbatim, matching the server: "rock" ticked onto "Rock" is a real merge,
+  // because the two are distinct stored rows and a walk re-reads whatever each
+  // file says. A case-insensitive filter here disabled the button on exactly
+  // the case-duplicate tail this section exists to clean up.
+  const sources = picked.filter(v => v !== to);
   const affected = sources.reduce((n, v) => n + (scenes.find(s => s.value === v)?.tracks ?? 0), 0);
 
   const merge = useAdminMutation<MergeResponse, { from: string[]; to: string }>({
@@ -113,16 +108,29 @@ export default function SceneVocabSection() {
       notify.ok(
         data.tracksChanged > 0
           ? `${data.tracksChanged} track${data.tracksChanged === 1 ? '' : 's'} now tagged “${data.target}”`
-          : `Nothing to rewrite — “${data.target}” will be applied on the next library scan`,
+          : data.recorded.length > 0
+            ? `Nothing to rewrite — “${data.target}” will be applied on the next library scan`
+            : `Nothing to do — “${data.target}” already survives every spelling you picked`,
       );
       setPicked([]);
       setTarget('');
       // The response carries the refreshed listing: after a merge every count
       // on screen is wrong, and merging is usually several in one sitting.
       qc.setQueryData(libraryKeys.scenes(), { scenes: data.scenes, aliases: data.aliases });
-      // The genre pickers elsewhere (show editor, browse filter) read their own
-      // endpoint and are now stale.
-      await qc.invalidateQueries({ queryKey: libraryKeys.genres() });
+      // A merge rewrites the `genre` scalar on every affected row, so every
+      // cached list OF TRACKS is now showing a retired spelling. `rows` is the
+      // family they all sit under — the same reach a tag edit or a block
+      // re-stamp uses, and the reason a non-Track list must never be filed
+      // there. Skip it and Browse/Tracks keep the old value until remount.
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: libraryKeys.rows }),
+        // The genre pickers elsewhere (show editor, browse filter) read their
+        // own endpoint and are now stale.
+        qc.invalidateQueries({ queryKey: libraryKeys.genres() }),
+        // Coverage's byGenre tally is memoised server-side and was just
+        // invalidated there.
+        qc.invalidateQueries({ queryKey: libraryKeys.coverage() }),
+      ]);
     },
   });
 
@@ -279,6 +287,13 @@ export default function SceneVocabSection() {
               <span className="caption flex items-center gap-2">
                 Folds applied on every scan
                 <span className="mono-num">{aliases.length}</span>
+              </span>
+              {/* The left side is the fold KEY the controller matches against,
+                  not any one spelling that was retired — several can share it,
+                  and saying so is cheaper than showing a lower-cased tag that
+                  matches nothing in the list above. */}
+              <span className="caption mt-0.5 block !tracking-[0.04em] !normal-case">
+                Matched on the left-hand key, ignoring case and spacing.
               </span>
               <ul className="mt-1.5 flex flex-wrap gap-1.5">
                 {aliases.map(a => (
