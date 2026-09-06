@@ -363,6 +363,24 @@ test('the incoming host opening settles the debt', async () => {
   }
 });
 
+test('polling /debug never spends the wait', async () => {
+  // handoverWait() is what the admin /debug row reads, and /debug is polled
+  // every couple of seconds. It answers by asking closingTrackHolds(), so the
+  // question HAS to be free: a side-effecting predicate here would let an open
+  // admin tab burn the one required opportunity within seconds of a sign-off
+  // and release the incoming host a whole track early — the same failure as the
+  // wall-clock roll, arriving through the operator's own dashboard.
+  const { queue: q } = await import('../src/broadcast/queue.js');
+  q._handover = null;
+  q.noteHandoverSpeech('programme-outro');
+
+  for (let poll = 0; poll < 40; poll++) q.handoverWait();
+  assert.equal(q._handover?.heldOpportunities, 0,
+    '40 dashboard polls later the wait is exactly where the sign-off left it');
+  assert.equal(q.closingTrackHolds(), true, 'and the incoming host still owes a closing track');
+  q._handover = null;
+});
+
 test('/debug reads the live wait, not just the configured thresholds', async () => {
   const { queue: q } = await import('../src/broadcast/queue.js');
   q._handover = null;
