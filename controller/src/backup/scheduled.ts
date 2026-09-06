@@ -88,6 +88,15 @@ export async function runScheduledBackup(now: Date = new Date()): Promise<Schedu
   // An absent block reads as `off` in pure.ts, but short-circuit here too so an
   // upgraded station that never touches this doesn't even readdir the state dir
   // once an hour.
+  //
+  // This returns BEFORE the temp sweep below, and that is the intended reading
+  // of "off means off": a station that never asked for this feature must not
+  // have it unlink files, and the readdir it would cost is the whole reason the
+  // short-circuit exists. The consequence is small and documented in
+  // docs/updating.md — a run killed mid-write before the operator turned the
+  // schedule off leaves its `.zip.<hex>.tmp` until the schedule comes back on.
+  // It is invisible to `GET /backup/restorable` and to retention alike (neither
+  // is a `.zip`), so it costs disk and nothing else.
   if (!cadence || cadence === 'off') return idle('off');
 
   const errors: string[] = [];

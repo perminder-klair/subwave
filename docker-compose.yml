@@ -261,6 +261,13 @@ services:
       # Seconds /speak waits for a cold engine to load before giving up and
       # letting the DJ fall through to its rescue voice.
       - TTS_HEAVY_LOAD_TIMEOUT_S=${TTS_HEAVY_LOAD_TIMEOUT_S:-}
+      # Fallback Chatterbox reference WAV for zero-shot cloning: used only when
+      # a spoken line arrives with no persona voice of its own. A path INSIDE
+      # this container — /var/sub-wave is the shared state mount, so
+      # /var/sub-wave/voices/<file>.wav is the one that resolves on both sides.
+      # The local (AIO) chatterbox path already honoured this; forwarding it
+      # here is what makes the sidecar agree (#1591).
+      - CHATTERBOX_REFERENCE_WAV=${CHATTERBOX_REFERENCE_WAV:-}
       # Optional — PocketTTS voice CLONING (#238): the cloning weights are
       # gated on HF; accept the terms at huggingface.co/kyutai/pocket-tts and
       # set HF_TOKEN. Without it, cloned .wav voices revert to a built-in.

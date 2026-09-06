@@ -376,6 +376,9 @@ export interface SettingsData {
     /** Absent on a settings.json predating the key — false, like the
      *  controller's own coercion. */
     fadeAtShowEnd?: boolean;
+    /** Shortest playable track a boundary cut can arm on (seconds), served by
+     *  the controller so the hint cannot drift from the drain's own floors. */
+    boundaryFadeMinTrackSeconds?: number;
     station?: string;
     stationDescription?: string;
     timezone?: string;

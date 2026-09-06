@@ -116,6 +116,15 @@ export const config = {
     // render queued behind a long bulk-analyze item on the single-flight
     // worker.
     renderTimeoutMs: envInt('ANALYZE_RENDER_TIMEOUT_MS', 60_000),
+    // How long a resolved "no backend at all" answer is cached before the
+    // probe runs again. Only the MISS is timed — a backend that answered is
+    // remembered for the process lifetime, exactly as before. A configured
+    // ANALYZE_URL whose host silently drops packets costs the probe's full 5s
+    // timeout, and an uncached miss paid that on every analyze call; this
+    // bounds it to once per interval while still finding a sidecar that comes
+    // up after the controller. Same shape and reasoning as
+    // ttsHeavy.probeIntervalMs below.
+    missProbeIntervalMs: envInt('ANALYZE_PROBE_MS', 60_000, { min: 0 }),
   },
   kokoro: {
     python: envStr('KOKORO_PYTHON', '/opt/kokoro/venv/bin/python'),

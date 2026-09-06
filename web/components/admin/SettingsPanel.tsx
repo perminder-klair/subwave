@@ -1444,6 +1444,24 @@ export default function SettingsPanel() {
                     play in full. Each show can override this. Applies on the next pick; no
                     restart needed.
                   </div>
+                  {(() => {
+                    // Both floors together — a cut needs a real overrun to prevent AND
+                    // enough of the track aired before the boundary — mean nothing shorter
+                    // than this can ever be cut. A max-track-length cap at or below it
+                    // therefore switches this switch off, silently, which is exactly the
+                    // combination an operator sets deliberately and then reports as broken.
+                    const floor = data?.values?.boundaryFadeMinTrackSeconds ?? 150;
+                    const cap = Number(form.maxTrackSeconds);
+                    if (!form.fadeAtShowEnd || !Number.isFinite(cap) || cap <= 0 || cap > floor) return null;
+                    return (
+                      <div className="field-hint italic">
+                        Nothing will be cut while <b>Maximum track length</b> is {cap}s: a fade
+                        only arms on a track longer than {floor}s, because it needs a real
+                        overrun to prevent and enough of the record aired before the boundary to
+                        be worth cutting. The {cap}s cap already stops the spill on its own.
+                      </div>
+                    );
+                  })()}
                 </div>
               </Card>
             )}

@@ -694,14 +694,42 @@ function analyzeViaSidecarPath(path: string, opts: AnalyzeRequestOpts = {}): Pro
 // ---------------------------------------------------------------------------
 
 let _backend: 'sidecar' | 'local' | null = null;
+// When the last MISS was resolved, or 0 for "never asked". A miss is cached for
+// config.analyzer.missProbeIntervalMs and a hit forever — the asymmetry is the
+// point.
+let _missAt = 0;
 
 // Resolve once which backend to use. Sidecar wins when it advertises the
 // 'analyze' capability; otherwise a configured local venv; otherwise none.
+//
+// A HIT is cached for the process lifetime. A MISS is cached too, but only for
+// config.analyzer.missProbeIntervalMs — and that expiry is what makes the
+// caching safe rather than the reason to skip it. Caching nothing meant every
+// caller re-ran the probe: a configured ANALYZE_URL pointing at a host that
+// silently DROPS packets (a firewall, a box that went away with its DNS record
+// intact) answers neither way, so each call paid probeSidecar's full 5s timeout
+// per candidate. That is the slow twin of the fast DNS-miss path this looks
+// like on a station with no analyzer at all, and on a bulk tagging pass it is
+// 5s of dead time per track. Caching the miss FOREVER would be the other bug:
+// the analyzer is a separate container that legitimately comes up after the
+// controller, and a station that probed once during its own boot would never
+// see it. So: bounded, and `refreshCapabilities` is unchanged — it re-reads
+// /health on a resolved sidecar, which is a different question.
 export async function resolveBackend(): Promise<'sidecar' | 'local' | null> {
   if (_backend) return _backend;
+  if (_missAt && Date.now() - _missAt < config.analyzer.missProbeIntervalMs) return null;
   if (await sidecarReachable()) { _backend = 'sidecar'; return _backend; }
   if (localConfigured()) { _backend = 'local'; return _backend; }
+  _missAt = Date.now();
   return null;
+}
+
+// Forget a cached miss so the next resolveBackend() probes again. For tests and
+// for any operator action that could plausibly have just started a backend —
+// never on a read path, which is what the interval above is for.
+export function _resetBackendCacheForTests(): void {
+  _backend = null;
+  _missAt = 0;
 }
 
 export async function isAvailable(): Promise<boolean> {

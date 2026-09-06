@@ -270,6 +270,13 @@ services:
       # Seconds /speak waits for a cold engine to load before giving up and
       # letting the DJ fall through to its rescue voice.
       - TTS_HEAVY_LOAD_TIMEOUT_S=\${TTS_HEAVY_LOAD_TIMEOUT_S:-}
+      # Fallback Chatterbox reference WAV for zero-shot cloning: used only when
+      # a spoken line arrives with no persona voice of its own. A path INSIDE
+      # this container — /var/sub-wave is the shared state mount, so
+      # /var/sub-wave/voices/<file>.wav is the one that resolves on both sides.
+      # The local (AIO) chatterbox path already honoured this; forwarding it
+      # here is what makes the sidecar agree (#1591).
+      - CHATTERBOX_REFERENCE_WAV=\${CHATTERBOX_REFERENCE_WAV:-}
       # Optional — PocketTTS voice CLONING (#238): the cloning weights are
       # gated on HF; accept the terms at huggingface.co/kyutai/pocket-tts and
       # set HF_TOKEN. Without it, cloned .wav voices revert to a built-in.
@@ -595,6 +602,9 @@ services:
       # Seconds /speak waits for a cold engine to load before giving up and
       # letting the DJ fall through to its rescue voice.
       - TTS_HEAVY_LOAD_TIMEOUT_S=\${TTS_HEAVY_LOAD_TIMEOUT_S:-}
+      # Fallback Chatterbox reference WAV when a line has no persona voice of
+      # its own — a path inside this container (see docker-compose.yml).
+      - CHATTERBOX_REFERENCE_WAV=\${CHATTERBOX_REFERENCE_WAV:-}
       # Optional — PocketTTS voice cloning (#238): accept the terms at
       # huggingface.co/kyutai/pocket-tts and set HF_TOKEN.
       - HF_TOKEN=\${HF_TOKEN:-}
@@ -869,6 +879,9 @@ services:
       # Seconds /speak waits for a cold engine to load before giving up and
       # letting the DJ fall through to its rescue voice.
       - TTS_HEAVY_LOAD_TIMEOUT_S=\${TTS_HEAVY_LOAD_TIMEOUT_S:-}
+      # Fallback Chatterbox reference WAV when a line has no persona voice of
+      # its own — a path inside this container (see docker-compose.yml).
+      - CHATTERBOX_REFERENCE_WAV=\${CHATTERBOX_REFERENCE_WAV:-}
       # Optional — PocketTTS voice cloning (#238); weights gated on HF.
       - HF_TOKEN=\${HF_TOKEN:-}
     volumes:
@@ -1252,6 +1265,12 @@ SITE_URL=
 #                        # both station and GPU hosts. Each worker can load its
 #                        # own models, increasing CPU/RAM/VRAM plus network and
 #                        # source-server demand; tune to the smaller host limit.
+# ANALYZE_PROBE_MS=60000  # how long "no analyzer at all" is cached before the
+#                         # /health probe runs again. A backend that ANSWERED is
+#                         # remembered until restart; only the miss is timed, so
+#                         # an analyzer that comes up after the controller is
+#                         # still found within this window. Lower it if you start
+#                         # analyzers by hand and want them picked up sooner.
 # ANALYZE_DEVICE=    # auto (default) / cpu / cuda — torch device for CLAP/Demucs;
 #                    # only meaningful on the cuda analyzer flavour
 # ANALYZE_IDLE_UNLOAD_S=  # seconds of no CLAP/Demucs use before the models are
@@ -1344,6 +1363,13 @@ SITE_URL=
 # error) fails its caller straight away. Floored at 5; anything unparseable is
 # ignored with a warning rather than stopping the sidecar booting.
 # TTS_HEAVY_LOAD_TIMEOUT_S=90
+#
+# Fallback Chatterbox reference WAV, used only for a line whose persona has no
+# voice of its own (a persona voice always wins). The path is read INSIDE the
+# container, so put the file under the shared state mount and name it there —
+# /var/sub-wave/voices/<file>.wav. Only matters with --profile tts-heavy; the
+# all-in-one image reads the same variable for its in-process Chatterbox.
+# CHATTERBOX_REFERENCE_WAV=/var/sub-wave/voices/house.wav
 #
 # Own TTS server? There's nothing to set here — the *Remote* engine points the
 # DJ at any HTTP server that answers GET /health and returns rendered audio from

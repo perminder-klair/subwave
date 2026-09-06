@@ -14,6 +14,7 @@ import { applyNavidromeToLiveConfig, saveSetupConfig } from '../../setup/config.
 import * as library from '../../music/library.js';
 import * as jingles from '../../broadcast/jingles.js';
 import * as settings from '../../settings.js';
+import { BOUNDARY_MIN_PLAY_SEC, BOUNDARY_TOLERANCE_SEC } from '../../broadcast/show-boundary.js';
 import * as tts from '../../audio/tts.js';
 import * as remoteTts from '../../audio/remoteTts.js';
 import * as chatterbox from '../../audio/chatterbox.js';
@@ -119,6 +120,14 @@ router.get('/settings', requireAdmin, async (req, res) => {
         loudness: s.loudness,
         silenceTrim: s.silenceTrim,
         fadeAtShowEnd: s.fadeAtShowEnd,
+        // Shortest playable track a boundary cut can ever arm on: it needs an
+        // overshoot past BOUNDARY_TOLERANCE_SEC *and* BOUNDARY_MIN_PLAY_SEC of
+        // the track aired before the boundary, so anything shorter is left to
+        // run over by construction. Served rather than restated in the admin
+        // hint for the same reason minTrackSeconds is — a maxTrackSeconds cap
+        // at or below this switches the feature off silently, and the number
+        // that says so must be the one the drain actually uses.
+        boundaryFadeMinTrackSeconds: BOUNDARY_MIN_PLAY_SEC + BOUNDARY_TOLERANCE_SEC,
         station: s.station,
         stationDescription: s.stationDescription,
         timezone: s.timezone,

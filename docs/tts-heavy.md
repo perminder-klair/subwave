@@ -448,6 +448,24 @@ alongside `engines: [...]` (what it can speak with right now), so you can
 confirm the selection took. An empty or all-typo value falls back to loading
 both, so a bad entry never silently disables all heavy TTS.
 
+### A house Chatterbox voice for personas that have none
+
+Chatterbox clones a voice from a reference WAV, and normally each persona
+carries its own (**Settings → Voices**, a filename in the voices directory).
+A persona with no voice set falls back to Chatterbox's built-in one. If you'd
+rather it fell back to a voice of yours, name that file once:
+
+```ini
+# root .env — a path INSIDE the container; /var/sub-wave is the shared state
+# mount, so state/voices/house.wav on the host is this:
+CHATTERBOX_REFERENCE_WAV=/var/sub-wave/voices/house.wav
+```
+
+Then `docker compose --profile tts-heavy up -d`. A persona's own voice always
+wins; this only fills the gap. The all-in-one image reads the same variable for
+its in-process Chatterbox — before #1591 the sidecar was the odd one out, and
+setting this with `--profile tts-heavy` did nothing.
+
 ### Let an idle engine go (memory back while the station is quiet)
 
 `TTS_HEAVY_ENGINES` is the answer for an engine you *never* want. For one you

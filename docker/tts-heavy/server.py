@@ -124,11 +124,16 @@ _IDLE_ENV_BY_ENGINE = {
 #
 # Everything else server.py reads is an image-internal path (the per-worker
 # CHATTERBOX_PYTHON / _WORKER / _HF_HOME set in env_extra or the Dockerfile),
-# not something an operator sets. CHATTERBOX_REFERENCE_WAV is the one judgement
-# call: it is read here as the worker's built-in default, but in sidecar mode
-# every /speak carries the persona's own reference_wav in its body, so the env
-# default is unreachable in practice and has never been forwarded or
-# documented. Left as it was — widening it is its own change, not #1579's.
+# not something an operator sets.
+#
+# CHATTERBOX_REFERENCE_WAV was the one judgement call, and #1579 left it out on
+# the grounds that every /speak carries the persona's own reference_wav so the
+# env default is unreachable. It is not: a line spoken by a persona with NO
+# voice of its own arrives with an empty reference_wav, and the worker reads
+# `req.get("reference_wav") or DEFAULT_REFERENCE` — which is exactly what the
+# LOCAL (AIO) chatterbox path has always honoured (controller audio/chatterbox
+# .ts passes it into the worker env). So the two paths disagreed, and the
+# sidecar was the one that dropped it. It is a knob (#1591).
 OPERATOR_ENV_KNOBS = (
     "TTS_HEAVY_DEVICE",
     "TTS_HEAVY_ENGINES",
@@ -137,6 +142,7 @@ OPERATOR_ENV_KNOBS = (
     "CHATTERBOX_IDLE_UNLOAD_S",
     "POCKET_TTS_IDLE_UNLOAD_S",
     "TTS_HEAVY_LOAD_TIMEOUT_S",
+    "CHATTERBOX_REFERENCE_WAV",
 )
 
 

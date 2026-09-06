@@ -193,6 +193,9 @@ services:
       # Seconds /speak waits for a cold engine to load before giving up and
       # letting the DJ fall through to its rescue voice.
       - TTS_HEAVY_LOAD_TIMEOUT_S=${TTS_HEAVY_LOAD_TIMEOUT_S:-}
+      # Fallback Chatterbox reference WAV when a line has no persona voice of
+      # its own — a path inside this container (see docker-compose.yml).
+      - CHATTERBOX_REFERENCE_WAV=${CHATTERBOX_REFERENCE_WAV:-}
       # Optional — PocketTTS voice cloning (#238); weights gated on HF.
       - HF_TOKEN=${HF_TOKEN:-}
     volumes:

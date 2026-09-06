@@ -285,6 +285,84 @@ test('each cadence waits its own interval', () => {
   }
 });
 
+// Everything above is arithmetic on one pair of instants. That is the whole of
+// the daily case — a day is short enough to reason about — but `weekly` and
+// `monthly` were never driven over their own interval, and the two failures
+// that would matter there are both about REPETITION rather than one decision:
+// a schedule that walks the clock until it lands outside the hours a part-time
+// station is up, and one that double-fires because the slack is a larger share
+// of a longer interval than anyone checked.
+//
+// So: run the real hourly tick over 400 simulated days, feeding each run's name
+// back onto disk exactly as `runScheduledBackup` does, and assert the shape of
+// the whole series. No clock waiting — the tick is a loop, and the state it
+// reads is a filename.
+function simulate({
+  cadence,
+  days = 400,
+  upHours,
+}: {
+  cadence: string;
+  days?: number;
+  /** Hours (UTC) the station is powered on. Default: always up. */
+  upHours?: readonly number[];
+}) {
+  const start = Date.parse('2026-01-01T03:17:00.000Z'); // a deliberately odd minute
+  const names: string[] = [];
+  const runs: number[] = [];
+  for (let h = 0; h < days * 24; h++) {
+    const nowMs = start + h * 3_600_000;
+    if (upHours && !upHours.includes(new Date(nowMs).getUTCHours())) continue;
+    if (!backupDue({ cadence, lastRunMs: lastScheduledBackupAt(names, nowMs), nowMs })) continue;
+    names.push(scheduledBackupName(new Date(nowMs)));
+    runs.push(nowMs);
+  }
+  return runs;
+}
+
+test('every cadence holds its interval over 400 days of hourly ticks', () => {
+  for (const [cadence, days] of Object.entries(BACKUP_CADENCE_DAYS)) {
+    const runs = simulate({ cadence });
+    // One at the first tick, then one per interval for the rest of the window.
+    assert.equal(runs.length, 1 + Math.floor((400 - 1) / days),
+      `${cadence} fired ${runs.length} times in 400 days`);
+    for (let i = 1; i < runs.length; i++) {
+      const gap = runs[i] - runs[i - 1];
+      assert.ok(gap >= days * DAY - BACKUP_DUE_SLACK_MS,
+        `${cadence} fired twice inside one interval (gap ${gap / DAY}d at run ${i})`);
+      // The tick is hourly, so a run can be at most an hour late — and never
+      // more, which is the drift check: an interval that crept by an hour each
+      // time would blow this on the second or third run, not the four-hundredth.
+      assert.ok(gap < days * DAY + 3_600_000,
+        `${cadence} drifted to a ${gap / DAY}d gap at run ${i}`);
+    }
+  }
+});
+
+test('a station that is only up four hours a day still gets its weekly and monthly backup', () => {
+  // The reason the cadence is elapsed-time against the stamps on disk rather
+  // than a nightly cron. These are the installs most likely to lose a state dir
+  // — a laptop, a box switched off overnight — and a monthly schedule that
+  // needs to be up at 03:00 on the right date would simply never fire.
+  const upHours = [18, 19, 20, 21];
+  for (const cadence of ['weekly', 'monthly'] as const) {
+    const runs = simulate({ cadence, upHours });
+    const interval = BACKUP_CADENCE_DAYS[cadence] * DAY;
+    assert.ok(runs.length >= Math.floor(400 / BACKUP_CADENCE_DAYS[cadence]),
+      `${cadence} on a part-time station fired only ${runs.length} times in 400 days`);
+    for (let i = 1; i < runs.length; i++) {
+      assert.ok(runs[i] - runs[i - 1] >= interval - BACKUP_DUE_SLACK_MS,
+        `${cadence} fired twice inside one interval`);
+      // The catch-up is bounded by the station being off, not by the schedule:
+      // at worst it waits out the 20 hours it was down.
+      assert.ok(runs[i] - runs[i - 1] < interval + 24 * 3_600_000,
+        `${cadence} missed a whole window`);
+    }
+    // And every run lands inside the hours the station is actually up.
+    for (const ms of runs) assert.ok(upHours.includes(new Date(ms).getUTCHours()));
+  }
+});
+
 test('the slack keeps a daily backup on the same minute instead of walking the clock', () => {
   // The tick is hourly. With a strict `>= 24h` a run at 04:23 is not due at
   // 04:23 the next day (elapsed is 24h to the millisecond only if the tick
