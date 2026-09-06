@@ -1,7 +1,8 @@
 // Admin-gated music-library management surface — backs /admin/library.
 // Browse + filter the tagged index (SQLite library-db), page through
 // untagged tracks, retag a single track inline (through the same bulk
-// pipeline — enrich + embed + LLM tag), and report coverage stats.
+// pipeline — enrich + embed + LLM tag), consolidate the scene (genre tag)
+// vocabulary, and report coverage stats.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import * as library from '../music/library.js';
@@ -11,6 +12,7 @@ import * as db from '../music/library-db.js';
 import * as analyzer from '../music/analyzer.js';
 import * as coverage from '../music/library-coverage.js';
 import * as subsonic from '../music/subsonic.js';
+import * as sceneVocab from '../music/scene-vocab.js';
 import * as lastfm from '../music/lastfm.js';
 import * as musicbrainz from '../music/musicbrainz.js';
 import * as settings from '../settings.js';
@@ -26,11 +28,12 @@ import { refreshAutoPlaylist } from '../broadcast/scheduler.js';
 import * as mapProjection from '../music/map-projection.js';
 import { validateBody, validateBodyAsync } from '../middleware/validate.js';
 import { blockEntrySchema, blockRuleSchema } from '../schemas/blocklist.js';
-import { manualTagSchema, originalYearSchema } from '../schemas/library.js';
+import { manualTagSchema, originalYearSchema, sceneMergeSchema } from '../schemas/library.js';
 import type { z } from 'zod';
 
 type ManualTagBody = z.output<ReturnType<typeof manualTagSchema>>;
 type OriginalYearBody = z.output<ReturnType<typeof originalYearSchema>>;
+type SceneMergeBody = z.output<ReturnType<typeof sceneMergeSchema>>;
 
 export const router = express.Router();
 
@@ -300,6 +303,82 @@ router.get('/library/genres/related', requireAdmin, async (_req, res) => {
   try {
     await library.load();
     res.json(buildGenreSuggest());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Scene vocabulary (#1577) — the genre tag set as one curatable list.
+//
+//   GET    /library/scenes                  every distinct value + track count,
+//                                           plus the consolidation rules in force
+//   POST   /library/scenes/merge            { from: string[], to } — retire values
+//   DELETE /library/scenes/aliases/:from    stop applying one rule
+//
+// Counts come from the mirror rather than from Navidrome's own genre index:
+// this list exists to be edited, and every value on it must be one a merge can
+// actually reach. Sorting is the client's — the whole vocabulary is a few
+// hundred rows at worst, and paging a list you are ticking boxes down is worse
+// than sending it.
+// ---------------------------------------------------------------------------
+router.get('/library/scenes', requireAdmin, async (_req, res) => {
+  try {
+    await library.load();
+    res.json({ scenes: library.scenes(), aliases: sceneVocab.list() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post(
+  '/library/scenes/merge',
+  requireAdmin,
+  validateBody(sceneMergeSchema(), { messages: 'verbatim' }),
+  async (req, res) => {
+    const { from, to } = req.body as SceneMergeBody;
+    try {
+      await library.load();
+      const result = await library.consolidateScenes(from, to);
+      // Nothing matched: the listing the operator ticked is stale (a walk ran,
+      // or another admin merged first). Say so rather than reporting a
+      // successful no-op — the rule IS recorded either way, which is why this
+      // is a 200 with a count and not an error.
+      queue.log(
+        'info',
+        result.tracksChanged > 0
+          ? `scenes: merged ${result.sources.map(s => `"${s}"`).join(', ')} → "${result.target}" (${result.tracksChanged} track${result.tracksChanged === 1 ? '' : 's'})`
+          : `scenes: nothing to rewrite for "${result.target}" — rule recorded for the next library scan`,
+      );
+      res.json({
+        ok: true,
+        target: result.target,
+        sources: result.sources,
+        tracksChanged: result.tracksChanged,
+        vectorsDirtied: result.vectorsDirtied,
+        // The refreshed listing rides back on the same response: after a merge
+        // every count on the client is wrong, and a merge is usually one of
+        // several in a sitting.
+        scenes: library.scenes(),
+        aliases: sceneVocab.list(),
+      });
+    } catch (err) {
+      queue.log('error', `/library/scenes/merge failed: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// Forgetting a rule stops it applying to FUTURE walks; the rows it already
+// rewrote keep the merged value. There is nothing to restore them to — several
+// spellings became one, and which row had which is exactly the information the
+// merge discarded. The UI says this on the button.
+router.delete('/library/scenes/aliases/:from', requireAdmin, async (req, res) => {
+  try {
+    const removed = await sceneVocab.forget(req.params.from);
+    if (!removed) return res.status(404).json({ error: 'no such scene rule' });
+    queue.log('info', `scenes: dropped the rule for "${req.params.from}"`);
+    res.json({ ok: true, aliases: sceneVocab.list() });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

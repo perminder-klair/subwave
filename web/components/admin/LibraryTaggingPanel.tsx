@@ -7,6 +7,7 @@ import { Btn, Eyebrow } from './ui';
 import { Input } from '../ui/input';
 import { cn } from '../../lib/cn';
 import LibraryTaggingModal from './LibraryTaggingModal';
+import SceneVocabSection from './library/SceneVocabSection';
 
 export interface Coverage {
   tagged: number;
@@ -1020,6 +1021,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
         ) : null}
       </div>
       )}
+
+      {/* Scene vocabulary (#1577) — self-contained, so nothing is threaded
+          through this panel's props for it. */}
+      <SceneVocabSection />
 
       {showFailBanner && (
         <div className="mx-4 mt-6 flex flex-wrap items-center gap-x-3 gap-y-1 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] text-ink sm:mx-6">

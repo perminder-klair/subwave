@@ -7,6 +7,7 @@ import { config } from '../config.js';
 import * as settings from '../settings.js';
 import * as subLog from './subsonic-log.js';
 import * as blocklist from './blocklist.js';
+import * as sceneVocab from './scene-vocab.js';
 import { trackEraYear } from './show-filter.js';
 import { albumEraSuspect } from './era-suspect.js';
 
@@ -329,8 +330,14 @@ export async function getSongsByGenreSampled(genre, { count = 20 } = {}) {
 // (library-db genres column, picker/show filters, annotate) goes through it.
 export function songGenres(song: { genres?: unknown; genre?: unknown } | null | undefined): string[] {
   const out: string[] = [];
+  // The operator's scene-consolidation rules are applied HERE, at the one
+  // normaliser, so a merge survives the next Navidrome walk — which rewrites
+  // `tracks.genres` from the file tags and would otherwise undo it (#1577).
+  // Unaliased values pass through untouched, so a station with no rules
+  // normalises byte-identically to before.
+  const aliases = sceneVocab.activeMap();
   const push = (v: unknown) => {
-    const s = String(v ?? '').trim();
+    const s = sceneVocab.aliasValue(String(v ?? '').trim(), aliases).trim();
     if (s && !out.some((x) => x.toLowerCase() === s.toLowerCase())) out.push(s);
   };
   if (Array.isArray(song?.genres)) {
