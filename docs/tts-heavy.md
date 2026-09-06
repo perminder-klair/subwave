@@ -103,7 +103,8 @@ returns immediately with a single log line —
 — rather than erroring per track. **Text tagging is untouched**: it runs on the
 LLM and never consults the analyzer, so a tagging pass works exactly as before.
 Existing bpm/key/loudness data stays in `state/library.db`; the admin Library
-panel simply reads "acoustic engine off" until a backend answers again.
+panel's **Acoustic analysis · bpm / key** row simply reads `engine off` (and
+the sounds-like row with it) until a backend answers again.
 
 **It's Compose-only.** The AIO one-click image runs the analyzer **in-process**
 (a `librosa` venv the controller drives over stdio), not as a service, so there
