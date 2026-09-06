@@ -250,6 +250,36 @@ router.get('/backup/restorable', requireAdmin, async (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /backup/file/:name — download a zip that is ALREADY in STATE_DIR.
+//
+// GET /backup/export builds a fresh archive, which is the wrong thing for a
+// scheduled backup: the operator wants the snapshot taken at 04:23 last
+// Tuesday, not a new one taken now. Without this, every file the schedule
+// writes lives only on the disk it exists to protect (#1570).
+//
+// Same name guard as the restore side (`isSafeBackupName` — basename-identical,
+// `.zip` only), so this can no more read outside STATE_DIR than
+// POST /backup/import-file can.
+// ---------------------------------------------------------------------------
+router.get('/backup/file/:name', requireAdmin, async (req, res) => {
+  try {
+    const name = req.params.name;
+    if (!isSafeBackupName(name)) {
+      return res.status(400).json({ error: 'invalid backup file name' });
+    }
+    const path = join(STATE_DIR, name);
+    if (!existsSync(path)) {
+      return res.status(404).json({ error: `no such backup in state dir: ${name}` });
+    }
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${name}"`);
+    res.send(await readFile(path));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // POST /backup/import-file — restore a zip already present in STATE_DIR. Body is
 // a tiny JSON `{ file }` (handled by the global express.json parser), so the
 // large zip is read off disk instead of being uploaded — sidestepping any proxy

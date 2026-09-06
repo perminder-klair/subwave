@@ -96,6 +96,8 @@ export default function BackupPanel() {
 
   const [exporting, setExporting] = useState(false);
   const [exportErr, setExportErr] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [diskDownloadErr, setDiskDownloadErr] = useState<string | null>(null);
 
   const [pending, setPending] = useState<Pending | null>(null);
   const [confirmRestore, setConfirmRestore] = useState(false);
@@ -235,6 +237,32 @@ export default function BackupPanel() {
       setExportErr(e instanceof Error ? e.message : String(e));
     } finally {
       setExporting(false);
+    }
+  };
+
+  // Download a zip that is already in the station folder, byte for byte. Same
+  // blob-and-anchor shape as the export above, but against the stored file:
+  // GET /backup/export would hand back a NEW archive taken now, which is not
+  // the snapshot the operator clicked on.
+  const downloadDiskBackup = async (name: string) => {
+    setDownloading(name);
+    setDiskDownloadErr(null);
+    try {
+      // admin-query-imperative: backup-download-file
+      const r = await adminResponse(adminFetch, `/backup/file/${encodeURIComponent(name)}`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setDiskDownloadErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDownloading(null);
     }
   };
 
@@ -504,6 +532,11 @@ export default function BackupPanel() {
           , then <strong>Refresh</strong> and restore it here; it never travels through the proxy.
         </div>
         {diskErr && <div className="mb-2 text-[12px] leading-[1.6] text-[var(--danger)]">{diskErr}</div>}
+        {diskDownloadErr && (
+          <div className="mb-2 text-[12px] leading-[1.6] text-[var(--danger)]">
+            download failed: {diskDownloadErr}
+          </div>
+        )}
         {diskFiles && diskFiles.length === 0 && !diskErr && (
           <div className="text-[12px] text-muted">
             No <code className="text-ink">.zip</code> backups found in the station folder yet.
@@ -528,17 +561,30 @@ export default function BackupPanel() {
                     {fmtSize(f.size)} · {new Date(f.mtime).toLocaleString()}
                   </div>
                 </div>
-                <Btn
-                  sm
-                  tone="solid"
-                  onClick={() => pickDisk(f.name)}
-                  disabled={importing}
-                  className="shrink-0"
-                >
-                  {importing && pending?.kind === 'disk' && pending.name === f.name
-                    ? 'Restoring…'
-                    : 'Restore'}
-                </Btn>
+                <div className="flex shrink-0 items-center gap-2">
+                  {/* Download the file AS IT IS. Export above builds a fresh
+                      archive, which is the wrong thing for a scheduled backup:
+                      a rotation that only ever writes to the disk it protects
+                      is half a backup story, and this is how a snapshot gets
+                      off the box. */}
+                  <Btn
+                    sm
+                    onClick={() => { void downloadDiskBackup(f.name); }}
+                    disabled={downloading === f.name}
+                  >
+                    {downloading === f.name ? 'Preparing…' : 'Download'}
+                  </Btn>
+                  <Btn
+                    sm
+                    tone="solid"
+                    onClick={() => pickDisk(f.name)}
+                    disabled={importing}
+                  >
+                    {importing && pending?.kind === 'disk' && pending.name === f.name
+                      ? 'Restoring…'
+                      : 'Restore'}
+                  </Btn>
+                </div>
               </li>
             ))}
           </ul>
