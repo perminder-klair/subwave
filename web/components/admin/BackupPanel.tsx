@@ -16,7 +16,12 @@ import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAdminAuth } from '../../lib/adminAuth';
 import { AdminResponseError, adminResponse } from '../../lib/admin-query';
-import { BACKUP_KEEP_BOUNDS, SETTINGS_BACKUP_CADENCES, backupsPatchSchema } from '@/lib/schemas.generated';
+import {
+  BACKUP_KEEP_BOUNDS,
+  BACKUP_KEEP_DEFAULT,
+  SETTINGS_BACKUP_CADENCES,
+  backupsPatchSchema,
+} from '@/lib/schemas.generated';
 import { Card, Btn, Eyebrow, Pill, Seg } from './ui';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
@@ -45,7 +50,27 @@ function fmtSize(bytes: number): string {
   return `${bytes} B`;
 }
 
-const CADENCE_LABELS: Record<string, string> = {
+type BackupCadence = (typeof SETTINGS_BACKUP_CADENCES)[number];
+
+// The schedule card's inputs. `keep` is a STRING because it is bound to a
+// number input the operator can empty mid-edit; it becomes a number only in the
+// schema pre-flight.
+interface ScheduleForm {
+  cadence: BackupCadence;
+  keep: string;
+}
+
+function asForm(stored: { cadence?: string; keep?: number }): ScheduleForm {
+  const cadence = (SETTINGS_BACKUP_CADENCES as readonly string[]).includes(stored.cadence ?? '')
+    ? (stored.cadence as BackupCadence)
+    : 'off';
+  return { cadence, keep: String(stored.keep ?? BACKUP_KEEP_DEFAULT) };
+}
+
+/** Value identity for a form, so an effect can key on it and dirty can test it. */
+const formKey = (f: ScheduleForm) => `${f.cadence}/${f.keep}`;
+
+const CADENCE_LABELS: Record<BackupCadence, string> = {
   off: 'Off',
   daily: 'Daily',
   weekly: 'Weekly',
@@ -55,7 +80,7 @@ const CADENCE_LABELS: Record<string, string> = {
 // What each cadence means in practice. Elapsed time, not a calendar step, and
 // checked hourly — so a station that is only powered on for part of the day
 // still gets its backup. Kept next to the labels so the two can't drift.
-const CADENCE_HINTS: Record<string, string> = {
+const CADENCE_HINTS: Record<BackupCadence, string> = {
   off: 'No backups are written and nothing is ever deleted.',
   daily: 'A snapshot roughly every 24 hours.',
   weekly: 'A snapshot roughly every 7 days.',
@@ -81,24 +106,41 @@ export default function BackupPanel() {
   const [restarting, setRestarting] = useState(false);
 
   // ── the schedule ─────────────────────────────────────────────────────────
-  // Hydrate-once, like every other settings form: the query keeps polling
-  // (SettingsPanel shares this key), and re-seeding the inputs from each poll
-  // would overwrite whatever the operator is mid-way through typing.
+  // Seeded from the stored value and re-seeded only when that value actually
+  // MOVES: the query keeps polling (SettingsPanel shares this key), so
+  // re-seeding on every poll would overwrite whatever the operator is mid-way
+  // through typing, while never re-seeding leaves the card showing a
+  // pre-restore schedule after the Restore button below rewrites settings.json.
   const settingsQuery = useSettingsQuery<SettingsData>({ adminFetch, enabled: ready });
   const saveSchedule = useSettingsMutation<SettingsData>({ adminFetch });
-  const [schedule, setSchedule] = useState<{ cadence: string; keep: string } | null>(null);
+  const [schedule, setSchedule] = useState<ScheduleForm | null>(null);
   const [scheduleErr, setScheduleErr] = useState<string | null>(null);
   const [scheduleFieldErrs, setScheduleFieldErrs] = useState<Record<string, string>>({});
   const [scheduleSaved, setScheduleSaved] = useState(false);
+  // What the inputs were last seeded FROM. Comparing against this rather than
+  // against the live query is what lets the effect below tell "the operator
+  // edited the box" apart from "the stored value moved underneath us" — a
+  // hydrate-once effect cannot distinguish the two, so it never notices the
+  // second and shows a pre-restore schedule for as long as the tab is open.
+  const seededFrom = useRef<ScheduleForm | null>(null);
 
   const storedBackups = settingsQuery.data?.values?.backups;
+  const storedForm = storedBackups ? asForm(storedBackups) : null;
+  // The query hands back a fresh object every poll, so the effect keys on the
+  // VALUE. Re-seeding on each poll would overwrite whatever is half-typed.
+  const storedKey = storedForm ? formKey(storedForm) : null;
+
   useEffect(() => {
-    if (!storedBackups || schedule) return;
-    setSchedule({
-      cadence: storedBackups.cadence ?? 'off',
-      keep: String(storedBackups.keep ?? 7),
-    });
-  }, [storedBackups, schedule]);
+    if (!storedForm) return;
+    const seeded = seededFrom.current;
+    seededFrom.current = storedForm;
+    // First paint, or the operator has no unsaved edits: adopt the stored
+    // value. Unsaved edits are theirs to keep — the dirty marker then shows
+    // that the boxes and the station disagree.
+    if (!seeded || !schedule || formKey(schedule) === formKey(seeded)) {
+      setSchedule(storedForm);
+    }
+  }, [storedKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const commitSchedule = async () => {
     if (!schedule) return;
@@ -107,12 +149,17 @@ export default function BackupPanel() {
     setScheduleSaved(false);
     // Pre-flight through the mirrored schema so a bad retention is caught
     // before a round trip, with the same message the server would send.
-    const parsed = backupsPatchSchema.safeParse({
-      cadence: schedule.cadence,
-      // `keep` is inert while the cadence is off, and a blank box must not
-      // become a refusal on a save that only means "stop backing up".
-      ...(schedule.cadence === 'off' ? {} : { keep: schedule.keep }),
-    });
+    // `keep` goes in every patch, including a save that only means "stop
+    // backing up". Dropping it there left the stored retention behind whatever
+    // the box showed, and since the dirty check compares both fields the Save
+    // button then stayed lit with no save that could ever clear it. It is
+    // inert while the cadence is off, so sending it costs nothing — but a
+    // blank box must still not turn "stop backing up" into a validation
+    // refusal, so an empty retention falls back to what is stored.
+    const keep = schedule.keep.trim() === '' && schedule.cadence === 'off'
+      ? String(storedBackups?.keep ?? BACKUP_KEEP_DEFAULT)
+      : schedule.keep;
+    const parsed = backupsPatchSchema.safeParse({ cadence: schedule.cadence, keep });
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
       // The dotted path is what keys fieldErrors, matching what the server
@@ -125,6 +172,11 @@ export default function BackupPanel() {
     }
     try {
       const receipt = await saveSchedule.mutateAsync({ backups: parsed.data });
+      // Show what was actually stored, not what was typed: the fallback above
+      // and the schema's own coercion can both differ from the raw box.
+      const saved: ScheduleForm = { cadence: schedule.cadence, keep: String(parsed.data.keep) };
+      seededFrom.current = saved;
+      setSchedule(saved);
       setScheduleSaved(true);
       // A committed POST whose confirming GET failed. The schedule IS saved —
       // saying nothing would leave the Save button lit with no explanation,
@@ -149,10 +201,12 @@ export default function BackupPanel() {
     }
   };
 
-  const scheduleDirty = !!schedule && !!storedBackups && (
-    schedule.cadence !== (storedBackups.cadence ?? 'off')
-    || schedule.keep !== String(storedBackups.keep ?? 7)
-  );
+  const scheduleDirty = !!schedule && !!storedForm && formKey(schedule) !== formKey(storedForm);
+  // useSettingsQuery is configured toastOnError:false, so without this the card
+  // sits on "Loading the schedule…" forever when /settings is unreachable.
+  const scheduleLoadErr = settingsQuery.error
+    ? (settingsQuery.error instanceof Error ? settingsQuery.error.message : String(settingsQuery.error))
+    : null;
 
   const diskFiles = backupsQuery.data?.files ?? null;
   const stateDir = backupsQuery.data?.stateDir ?? null;
@@ -287,13 +341,22 @@ export default function BackupPanel() {
         title="Schedule"
         sub="Write a snapshot into the station folder on a cadence, keeping the last few."
         right={
-          schedule && schedule.cadence !== 'off'
+          // The STORED cadence, not the form's: this badge says what the
+          // station is doing, and reading unsaved local state made it flip to
+          // "on" before anything had been saved.
+          storedForm && storedForm.cadence !== 'off'
             ? <Pill tone="accent">on</Pill>
             : <Pill tone="ink">off</Pill>
         }
       >
         {!schedule ? (
-          <div className="text-[12px] text-muted">Loading the schedule…</div>
+          scheduleLoadErr ? (
+            <div className="text-[12px] leading-[1.6] text-[var(--danger)]">
+              The schedule could not be read: {scheduleLoadErr}
+            </div>
+          ) : (
+            <div className="text-[12px] text-muted">Loading the schedule…</div>
+          )
         ) : (
           <div className="grid gap-3">
             <div className="field">
@@ -308,7 +371,7 @@ export default function BackupPanel() {
                 }))}
                 onChange={(v) => {
                   setScheduleSaved(false);
-                  setSchedule(s => (s ? { ...s, cadence: v } : s));
+                  setSchedule(s => (s ? { ...s, cadence: v as BackupCadence } : s));
                 }}
               />
               {scheduleFieldErrs['backups.cadence'] && (
