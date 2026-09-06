@@ -1005,6 +1005,9 @@ export interface NormalizedShow {
   minTrackLengthSeconds: number | null;
   playlistIds: string[];
   playlistStrict: boolean;
+  /** Full rotation (#1612): with playlistStrict on, every track in the anchor
+   *  airs once before any of them repeats. Inert without it. */
+  playlistExhaust: boolean;
   excludedPlaylistIds: string[];
   /** Operator organisation tags. Filters the admin list; steers nothing on
    *  air, which is why resolveShow() does not carry them through. */

@@ -411,6 +411,35 @@ export function effectiveNoRepeatWindow(
   return eff < NO_REPEAT_MIN_EFFECTIVE ? 0 : eff;
 }
 
+// Headroom the EXHAUSTIVE window leaves under the rotation it governs, and both
+// slots it reserves are load-bearing:
+//   * queue.recentlyPlayedByCount(n) blocks the ON-AIR track on top of the n
+//     ended plays it counts — `current` is appended to the recent-plays sidecar
+//     when it ENDS, so a window of n withholds n+1 identities, not n;
+//   * one identity has to survive it. The count-based guard is checked OUTSIDE
+//     the starvation cascade, so a window that withholds the whole rotation is
+//     an empty pool, and an empty pool is the LLM pick skipped.
+// A rotation of S identities therefore takes S-2: S-1 withheld, exactly one
+// left — the one that has waited longest — and the repeat lands on pick S+1.
+const EXHAUSTIVE_WINDOW_HEADROOM = 2;
+
+// The window that makes a rotation exhaust ITSELF: every identity in the
+// universe airs once before any of them airs again (#1612).
+//
+// Deliberately free of effectiveNoRepeatWindow's library-fraction ceiling and
+// minimum-effective floor. Both of those exist to stop a number the operator
+// TYPED from swallowing a catalogue it was never measured against; this number
+// is derived from the universe it governs, so clamping it to 37.5% of that same
+// universe would only ever mean "don't do the thing you were asked to do".
+//
+// A universe too small to leave the headroom returns 0 — the guard switches off
+// and the relaxable recency cascade carries the rotation, exactly as today.
+// That IS the never-starve: a rotation is not worth dead air.
+export function exhaustiveNoRepeatWindow(universeSize: number | null | undefined): number {
+  const total = Math.floor(Number(universeSize) || 0);
+  return Math.max(0, total - EXHAUSTIVE_WINDOW_HEADROOM);
+}
+
 export function filterPickerCandidates<T extends CandidateLike>(
   list: T[],
   {

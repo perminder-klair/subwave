@@ -15,13 +15,13 @@ import * as settings from '../settings.js';
 import { bpmCompat, keyCompat } from './mix.js';
 import { shuffle } from '../util/shuffle.js';
 import { mapPool } from '../util/async-pool.js';
-import { artistRootKey, filterPickerCandidates, recencyWindowsForLibrary } from './recency.js';
+import { artistRootKey, filterPickerCandidates, recencyWindowsForLibrary, trackKey } from './recency.js';
 import { albumKeyFor } from './album-facts.js';
 import { applyTrackFloor } from './track-floor.js';
 import { AIRING_RANK_WEIGHT, freshness, freshnessBiasedOrder, lastAiredMsOf, unairedFlag, type AiredIndex } from './airing.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, preferGenre, preferEra, inYearRange, preferEnergy, preferEnergyStrict, preferMood, preferVocals, applyStrictLocks, hasEraBound, eraSpan, type YearRange, type VocalMode } from './show-filter.js';
 import { resolveShowPlaylistPool, resolveExcludedPlaylistIds, type PlaylistPool } from './show-playlist.js';
-import { effectiveShowNoRepeatWindow } from './show-recency.js';
+import { showNoRepeatGuard } from './show-recency.js';
 import * as likes from '../broadcast/likes.js';
 
 // A track flowing through the pool builder — a raw Subsonic child, a slimTrack
@@ -290,12 +290,33 @@ function sampleFresh(items: Candidate[], recentIds: Set<string>, cap: number): C
 //
 // Recency still wins whenever anything fresh exists; this fires only when the
 // alternative is abandoning the show's own universe. The HARD no-repeat guard is
-// applied later by filterPickerCandidates and is not relaxed here, so a track
-// that just aired still cannot come back — only the softer time-window set is
-// re-admitted.
-function sampleShowSource(items: Candidate[], recentIds: Set<string>, cap: number): Candidate[] {
-  const fresh = items.filter(notRecent(recentIds));
-  return (fresh.length > 0 ? fresh : items).slice(0, cap);
+// never relaxed here, so a track that just aired still cannot come back — only
+// the softer time-window set is re-admitted.
+//
+// `hardRecent` is the count-based guard's set — tracks that can NEVER be
+// picked, because filterPickerCandidates drops them outside the starvation
+// cascade. Pruning them BEFORE the cap costs nothing on an ordinary show and is
+// what makes a full-rotation anchor (#1612) work at all: that window withholds
+// all but one track of the playlist, and an un-pruned 24-slot sample of a
+// 40-track anchor misses the one eligible track ~40% of the time — the strict
+// show then falls out to its never-starve for no reason a log could explain.
+// Only passed when the guard is the show's own exhaustive window, so every
+// other show samples exactly as it did before. Never-starve is preserved twice
+// over: a wholly-blocked list falls back whole, and so does a wholly-recent one.
+function sampleShowSource(
+  items: Candidate[],
+  recentIds: Set<string>,
+  cap: number,
+  hardRecent: { ids: Set<string>; keys: Set<string> } | null = null,
+): Candidate[] {
+  let base = items;
+  if (hardRecent && (hardRecent.ids.size || hardRecent.keys.size)) {
+    const pickable = items.filter((t) =>
+      !(t?.id && hardRecent.ids.has(t.id)) && !hardRecent.keys.has(trackKey(t)));
+    if (pickable.length) base = pickable;
+  }
+  const fresh = base.filter(notRecent(recentIds));
+  return (fresh.length > 0 ? fresh : base).slice(0, cap);
 }
 
 // Walk a list of albums and return up to `perAlbum` tracks from each, capped.
@@ -311,7 +332,7 @@ async function tracksFromAlbums(albums: { id: string }[], perAlbum: number, max:
   return out;
 }
 
-async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, recentAlbums: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }, minTrackSec: number | null = null) {
+async function buildCandidates(mood: string | null | undefined, recentIds: Set<string>, recentKeys: Set<string>, recentArtists: Set<string>, recentAlbums: Set<string>, currentTrack: Candidate | null, rankTarget: { bpm: number | null; key: string | null } | null = null, audioWaypoint: number[] | null = null, showFilter: ShowFilter = null, hardRecentIds: Set<string> = new Set(), hardRecentKeys: Set<string> = new Set(), playlistPool: PlaylistPool | null = null, playlistStrict = false, blockedArtists: Set<string> = new Set(), strictGenreResolution: StrictGenreResolution = { genres: [], warnings: [] }, minTrackSec: number | null = null, exhaustiveRotation = false) {
   await library.load();
   // Airing memory (music/airing.ts) — orders the similarity sources so the
   // unexplored shelf survives their small caps; and the id-level recency union
@@ -522,7 +543,7 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   // is hard-filtered to its ids below); in soft mode it's just the dominant
   // source, with the discovery sources contributing a (narrowed) minority.
   if (hasPlaylist) {
-    add('show-playlist', sampleShowSource(shuffle(playlistPool!.tracks), recentIds, strictPlaylist ? CAP_SHOW_PLAYLIST_STRICT : CAP_SHOW_PLAYLIST));
+    add('show-playlist', sampleShowSource(shuffle(playlistPool!.tracks), recentIds, strictPlaylist ? CAP_SHOW_PLAYLIST_STRICT : CAP_SHOW_PLAYLIST, exhaustiveRotation ? { ids: hardRecentIds, keys: hardRecentKeys } : null));
   }
 
   // 2. Mood-tagged library (LLM-built tags, may be sparse). A multi-mood show
@@ -881,11 +902,17 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
   // Resolve once, before both capacity and candidate filtering. A fuzzy genre
   // alias must narrow the hard-window universe exactly as it narrows the pool.
   const strictGenreResolution = await resolveStrictGenres(showFilter);
+  // Minimum track length (#1573): the show's own floor when it sets one, else
+  // the station default. Resolved from the SAME show object the rest of the
+  // pool build steers by, so a look-ahead pick across a show boundary uses the
+  // floor that will be in force when it airs. Resolved BEFORE the no-repeat
+  // guard below, which counts the rotation this floor has already thinned.
+  const minTrackSec = settings.effectiveMinTrackSec(activeShow);
   // Count-based HARD no-repeat guard (last N distinct plays) — non-relaxable,
   // survives buildCandidates' starvation cascade. A resolved strict playlist
   // is its own catalogue, so clamp to its post-filter/post-exclusion identity
   // count; soft/unresolved anchors remain library-scoped. Mirrors the agent.
-  const effN = effectiveShowNoRepeatWindow(
+  const noRepeat = showNoRepeatGuard(
     settings.get().llm?.noRepeatWindow ?? 0,
     librarySize,
     {
@@ -893,8 +920,10 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
       playlistTracks: playlistPool?.tracks ?? null,
       excludedIds,
       resolvedGenres: strictGenreResolution.genres,
+      minTrackSec,
     },
   );
+  const effN = noRepeat.window;
   const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
   // Pinned anchor resolved to nothing → the show is silently un-anchored.
   // Surface it (same warning as the agent path in dj-agent.ts).
@@ -908,12 +937,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     const key = artistRootKey({ artist: opts.avoidArtist });
     if (key) blockedArtists.add(key);
   }
-  // Minimum track length (#1573): the show's own floor when it sets one, else
-  // the station default. Resolved from the SAME show object the rest of the
-  // pool build steers by, so a look-ahead pick across a show boundary uses the
-  // floor that will be in force when it airs.
-  const minTrackSec = settings.effectiveMinTrackSec(activeShow);
-  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, minTrackSec);
+  const { candidates: rawCandidates, sources, strictInfo, playlistInfo } = await buildCandidates(ctx.dominantMood, recentIds, recentKeys, recentArtists, recentAlbums, currentTrack, rankTarget, audioWaypoint, showFilter, hardRecentIds, hardRecentKeys, playlistPool, playlistStrict, blockedArtists, strictGenreResolution, minTrackSec, noRepeat.exhaustive);
 
   // Excluded playlists (blocklist): drop any track whose id appears in the
   // show's excluded playlist union. Applied after buildCandidates so the full
@@ -933,7 +957,7 @@ export async function pickViaPool(queue, ctx, rankTarget: { bpm: number | null; 
     'picker',
     `pool ${candidates.length} (${Object.entries(sources)
       .map(([k, v]) => `${k}=${v}`)
-      .join(' ')})${effN > 0 ? ` no-repeat=${effN}` : ''}`,
+      .join(' ')})${effN > 0 ? ` no-repeat=${effN}${noRepeat.exhaustive ? ' (full rotation)' : ''}` : ''}`,
   );
 
   // Strict-genre visibility — make the never-starve fallback audible in the log

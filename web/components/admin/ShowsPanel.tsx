@@ -294,7 +294,7 @@ export default function ShowsPanel() {
       themeId: '', genres: [], eras: [], energies: [], vocals: '',
       filtersStrict: false, maxTrackSeconds: null, minTrackLengthSeconds: null,
       fadeAtShowEnd: null,
-      playlistIds: [], playlistStrict: false, excludedPlaylistIds: [],
+      playlistIds: [], playlistStrict: false, playlistExhaust: false, excludedPlaylistIds: [],
       programme: false, segmentSkill: '', tags: [],
     });
     // errors populate only once a field is touched, so without this the new

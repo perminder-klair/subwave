@@ -746,6 +746,20 @@ export function ShowEditor({
             />
           )}
 
+          {/* Offered only behind the strict toggle: without it the show can
+              leave the playlist, so its universe is the library again and
+              "every track once" has no set to be true of. The controller
+              treats the combination as inert rather than invalid — see the
+              playlistExhaust comment in schemas/show.ts. */}
+          {show.playlistIds.length > 0 && show.playlistStrict && (
+            <SwitchField
+              control={control}
+              name={path('playlistExhaust')}
+              label="Play the whole playlist before repeating"
+              description="On: every track in the pinned playlist(s) airs once before any of them comes round again, however long the playlist is. Off: repeats are governed by the station-wide no-repeat window. Add tracks in Navidrome and the rotation widens on the next pick. A playlist too short to rotate falls back to the station window rather than risking a gap."
+            />
+          )}
+
           <Field>
             <PlaylistIdsField
               control={control}

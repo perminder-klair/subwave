@@ -35,7 +35,7 @@ import { djObject, nearestId, modelTolerant } from '../llm/sdk.js';
 import * as budget from './dj-budget.js';
 import { withTrace, logEvent } from '../observability/events.js';
 import { recencyWindowsForLibrary } from '../music/recency.js';
-import { effectiveShowNoRepeatWindow } from '../music/show-recency.js';
+import { showNoRepeatGuard } from '../music/show-recency.js';
 import { EXPLORE_SEED_PROBABILITY } from '../music/airing.js';
 import { ARTIST_VARIETY_WINDOW, runArtistGuard } from './dj-agent/artist-guard.js';
 import { runAlbumGuard } from './dj-agent/album-guard.js';
@@ -242,12 +242,17 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
     ? (activeShow.vocals as VocalMode)
     : null;
 
+  // The show's own minimum track length (#1573) — resolved here rather than at
+  // the pickerScope call below because the guard counts the rotation this floor
+  // has already thinned; the scope reads the same value further down.
+  const minTrackSec = settings.effectiveMinTrackSec(activeShow);
+
   // Count-based HARD no-repeat guard: the last N distinct plays can't re-air,
   // and (unlike recentIds/recentKeys above) this survives the tool-level
   // starvation cascade. A resolved strict playlist is its own catalogue, so
   // clamp to its real identity count using the same resolved genre lock as the
   // tools; 0 leaves the relaxable window in charge.
-  const effN = effectiveShowNoRepeatWindow(
+  const effN = showNoRepeatGuard(
     settings.get().llm?.noRepeatWindow ?? 0,
     librarySize,
     {
@@ -255,8 +260,9 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
       playlistTracks,
       excludedIds,
       resolvedGenres: genreLock ?? [],
+      minTrackSec,
     },
-  );
+  ).window;
   const { ids: hardRecentIds, keys: hardRecentKeys } = queue.recentlyPlayedByCount(effN);
   // A pinned anchor that resolves to nothing (deleted/recreated playlist →
   // stale id, or a Navidrome error — resolveShowPlaylistPool swallows both)
@@ -290,7 +296,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
     // gets whether or not it opted into strict filters. The pool picker
     // resolves the identical figure from the identical show object, so the two
     // paths cannot disagree about how short is too short.
-    minTrackSec: settings.effectiveMinTrackSec(activeShow),
+    minTrackSec,
     playlistLock,
     playlistTracks,
     excludedIds,

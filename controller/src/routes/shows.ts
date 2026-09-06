@@ -104,6 +104,7 @@ router.post('/shows/community/:slug/install', requireAdmin, async (req, res) => 
     minTrackLengthSeconds: cs.minTrackLengthSeconds,
     playlistIds: [],
     playlistStrict: false,
+    playlistExhaust: false,
     excludedPlaylistIds: [],
   };
 

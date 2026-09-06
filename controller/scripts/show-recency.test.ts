@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { effectiveShowNoRepeatWindow } from '../src/music/show-recency.js';
+import { showNoRepeatGuard } from '../src/music/show-recency.js';
+
+// Every assertion below is about the WINDOW; the guard's `exhaustive` half is
+// pinned by playlist-exhaust.test.ts. One thin reader keeps this file reading
+// the way it did before the guard grew its second field.
+const windowOf = (...args: Parameters<typeof showNoRepeatGuard>) => showNoRepeatGuard(...args).window;
 
 const makeTracks = (n: number) => Array.from({ length: n }, (_, i) => ({
   id: `track-${i + 1}`,
@@ -16,7 +21,7 @@ const tracks = makeTracks(40);
 // the relaxable recency cascade can cycle the show instead of falling out to
 // unrelated library material.
 assert.equal(
-  effectiveShowNoRepeatWindow(100, 27_986, {
+  windowOf(100, 27_986, {
     show: { playlistStrict: true, filtersStrict: false },
     playlistTracks: tracks.slice(0, 21),
     excludedIds: null,
@@ -30,7 +35,7 @@ assert.equal(
 // suite. Below the library ceiling the playlist's own 37.5% governs; above it
 // the operator's configured window is already the smaller number and stands.
 assert.equal(
-  effectiveShowNoRepeatWindow(100, 27_986, {
+  windowOf(100, 27_986, {
     show: { playlistStrict: true, filtersStrict: false },
     playlistTracks: makeTracks(200),
     excludedIds: null,
@@ -39,7 +44,7 @@ assert.equal(
   'a 200-track strict playlist clamps to floor(200 * 0.375), not the configured 100',
 );
 assert.equal(
-  effectiveShowNoRepeatWindow(100, 27_986, {
+  windowOf(100, 27_986, {
     show: { playlistStrict: true, filtersStrict: false },
     playlistTracks: makeTracks(400),
     excludedIds: null,
@@ -55,7 +60,7 @@ for (const scope of [
   { show: { playlistStrict: true }, playlistTracks: null },
 ]) {
   assert.equal(
-    effectiveShowNoRepeatWindow(100, 27_986, { ...scope, excludedIds: null }),
+    windowOf(100, 27_986, { ...scope, excludedIds: null }),
     100,
     'non-strict or unresolved playlist anchors must remain library-scoped',
   );
@@ -65,7 +70,7 @@ for (const scope of [
 // Twenty Jazz tracks remain in each case, which is below the minimum useful
 // hard window and must therefore cycle under the relaxable guard.
 assert.equal(
-  effectiveShowNoRepeatWindow(100, 27_986, {
+  windowOf(100, 27_986, {
     show: { playlistStrict: true, filtersStrict: true, genres: ['Jazz'] },
     playlistTracks: tracks,
     excludedIds: null,
@@ -74,7 +79,7 @@ assert.equal(
   'strict music filters must narrow the no-repeat clamp universe',
 );
 assert.equal(
-  effectiveShowNoRepeatWindow(100, 27_986, {
+  windowOf(100, 27_986, {
     show: { playlistStrict: true, filtersStrict: true, genres: ['Pop Punk'] },
     playlistTracks: tracks.map((track, i) => ({
       ...track,
@@ -87,7 +92,7 @@ assert.equal(
   'capacity must use the same resolved genre alias as candidate filtering',
 );
 assert.equal(
-  effectiveShowNoRepeatWindow(100, 27_986, {
+  windowOf(100, 27_986, {
     show: { playlistStrict: true, filtersStrict: false },
     playlistTracks: tracks,
     excludedIds: new Set(tracks.slice(20).map(track => track.id)),
@@ -104,7 +109,7 @@ const duplicateRips = tracks.slice(0, 20).flatMap(track => [
   { ...track, id: `${track.id}-duplicate` },
 ]);
 assert.equal(
-  effectiveShowNoRepeatWindow(100, 27_986, {
+  windowOf(100, 27_986, {
     show: { playlistStrict: true, filtersStrict: false },
     playlistTracks: duplicateRips,
     excludedIds: null,
@@ -118,7 +123,7 @@ assert.equal(
 // library-wide clamp in one path while leaving the helper tests green.
 for (const file of ['../src/music/picker.ts', '../src/broadcast/dj-agent.ts']) {
   const source = readFileSync(new URL(file, import.meta.url), 'utf8');
-  assert.match(source, /effectiveShowNoRepeatWindow\(/,
+  assert.match(source, /showNoRepeatGuard\(/,
     `${file} must scope its hard no-repeat window through the shared show policy`);
   assert.match(source, /resolvedGenres:/,
     `${file} must use its resolved genre lock for show capacity`);

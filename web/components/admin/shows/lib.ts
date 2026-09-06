@@ -53,6 +53,7 @@ export function hydrateShow(s: Partial<Show>): Show {
     fadeAtShowEnd: typeof m.fadeAtShowEnd === 'boolean' ? m.fadeAtShowEnd : null,
     playlistIds: Array.isArray(m.playlistIds) ? m.playlistIds : [],
     playlistStrict: m.playlistStrict ?? false,
+    playlistExhaust: m.playlistExhaust ?? false,
     excludedPlaylistIds: Array.isArray(m.excludedPlaylistIds) ? m.excludedPlaylistIds : [],
     programme: m.programme ?? false,
     segmentSkill: m.segmentSkill ?? '',
@@ -128,6 +129,9 @@ export function showPayload(s: Show) {
     playlistIds: s.playlistIds || [],
     // Strict only means something with at least one playlist pinned.
     playlistStrict: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict,
+    // And full rotation only means something behind strict: a soft anchor may
+    // leave the playlist, so "every track once" has no set to be true of.
+    playlistExhaust: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict && s.playlistExhaust,
     excludedPlaylistIds: s.excludedPlaylistIds || [],
     programme: s.programme ?? false,
     // A skill pin only means something in programme mode.
@@ -156,7 +160,7 @@ export function showFacets(s: Show): ShowFacet[] {
   if (s.vocals) facets.push({ key: 'vocals', label: s.vocals === 'instrumental' ? 'instrumental' : 'vocals' });
   if (s.filtersStrict && hasAnyMusicFilter(s)) facets.push({ key: 'strict', label: 'strict', accent: true });
   const nPl = s.playlistIds?.length ?? 0;
-  if (nPl) facets.push({ key: 'playlists', label: `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' · strict' : ''}` });
+  if (nPl) facets.push({ key: 'playlists', label: `${nPl} playlist${nPl > 1 ? 's' : ''}${s.playlistStrict ? ' · strict' : ''}${s.playlistStrict && s.playlistExhaust ? ' · full rotation' : ''}` });
   const nEx = s.excludedPlaylistIds?.length ?? 0;
   if (nEx) facets.push({ key: 'excluded', label: `${nEx} excluded` });
   if (s.maxTrackSeconds != null) {

@@ -99,6 +99,9 @@ export interface Show {
   /** With ≥1 playlist pinned, the playlist is the show's ENTIRE universe;
    *  off-playlist tracks only play as a never-starve fallback. */
   playlistStrict: boolean;
+  /** Every track in the anchor plays once before any of them repeats (#1612).
+   *  Inert without playlistStrict — a soft anchor's universe is the library. */
+  playlistExhaust: boolean;
   /** Excluded from the candidate pool regardless of the other filters. */
   excludedPlaylistIds: string[];
   /** The show airs as a produced episode: intro, a planned feature segment
