@@ -82,6 +82,24 @@ class PocketTtsWorker {
       this.failReady(new Error('pocket-tts worker ready timeout'));
     }, READY_TIMEOUT_MS);
 
+    // A spawn that never starts emits 'error', not 'exit'. Node throws an
+    // unhandled 'error' event out of the event loop, which takes the WHOLE
+    // controller down — every engine here is opt-in or build-time-installed
+    // (pocket-tts's interpreter is absent whenever its venv/model install did
+    // not happen), and POST /settings/tts/preview deliberately bypasses
+    // isAvailable() so the operator can test an engine the dispatcher would
+    // skip. That combination turns an admin "Play sample" press into total
+    // dead air. Route it into failReady() like every other boot failure: the
+    // caller's promise rejects, the dispatcher falls back, the station keeps
+    // making sound. piper has always done this (audio/piper.ts).
+    this.proc.on('error', (err: Error) => {
+      console.error(`[pocket-tts] worker spawn failed: ${err.message}`);
+      this.fatalError = err;
+      // No pending requests can exist yet: speak() awaits readyPromise before
+      // it enqueues anything, so rejecting that promise is the whole failure.
+      this.failReady(err);
+    });
+
     this.proc.stdout.on('data', (chunk: Buffer) => this.onStdout(chunk));
     this.proc.stderr.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf8').trimEnd();
