@@ -19,7 +19,7 @@ Endpoints:
   GET  /health   → {ok, engines, cold, chatterbox_loaded, pocket_loaded}
   POST /speak    → {ok, path, duration_s}
     body: {engine, text, voice?, reference_wav?, out}
-  POST /warm     → {ok, warming, engines}
+  POST /warm     → {ok, warming, disabled, loaded, cold}
     body: {engine?}   (omitted / empty = every enabled engine)
 """
 
@@ -114,16 +114,62 @@ _IDLE_ENV_BY_ENGINE = {
 }
 
 
+# The operator-facing env knobs, DECLARED rather than inferred from the reads
+# below (they go through helpers now, so grepping for os.environ finds only
+# half of them). This service has no `env_file:` — its `environment:` list in
+# each compose file is the entire surface — so a name here that is missing from
+# one of those files is a setting the operator can put in the root .env and
+# watch do nothing. #1579 shipped exactly that with TTS_HEAVY_LOAD_TIMEOUT_S.
+# scripts/tts_heavy_idle_test.py drives all three compose copies off this tuple.
+#
+# Everything else server.py reads is an image-internal path (the per-worker
+# CHATTERBOX_PYTHON / _WORKER / _HF_HOME set in env_extra or the Dockerfile),
+# not something an operator sets. CHATTERBOX_REFERENCE_WAV is the one judgement
+# call: it is read here as the worker's built-in default, but in sidecar mode
+# every /speak carries the persona's own reference_wav in its body, so the env
+# default is unreachable in practice and has never been forwarded or
+# documented. Left as it was — widening it is its own change, not #1579's.
+OPERATOR_ENV_KNOBS = (
+    "TTS_HEAVY_DEVICE",
+    "TTS_HEAVY_ENGINES",
+    "POCKET_TTS_VOICE",
+    "TTS_HEAVY_IDLE_UNLOAD_S",
+    "CHATTERBOX_IDLE_UNLOAD_S",
+    "POCKET_TTS_IDLE_UNLOAD_S",
+    "TTS_HEAVY_LOAD_TIMEOUT_S",
+)
+
+
+def _parse_seconds(name: str) -> float | None:
+    """One seconds-valued env var, or None when it is unset or unparseable.
+
+    EVERY seconds knob in this file reads through here, and none of them may
+    raise. A container that refuses to boot over `TTS_HEAVY_LOAD_TIMEOUT_S=90s`
+    takes BOTH engines down and the station loses its heavy voices entirely,
+    which is strictly worse than one knob quietly reading its default. Warn,
+    coerce to the pre-existing behaviour, keep serving — the same posture the
+    state bootstrap takes for the same reason.
+    """
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        log.warning(f"{name}={raw!r} is not a number; ignoring")
+        return None
+
+
 def idle_unload_seconds(engine: str) -> float:
     """Resolve one engine's idle window in seconds. 0 disables."""
     for name in (_IDLE_ENV_BY_ENGINE.get(engine), "TTS_HEAVY_IDLE_UNLOAD_S"):
-        raw = os.environ.get(name, "").strip() if name else ""
-        if not raw:
+        if not name:
             continue
-        try:
-            return max(0.0, float(raw))
-        except ValueError:
-            log.warning(f"{name}={raw!r} is not a number; ignoring")
+        value = _parse_seconds(name)
+        # A junk value falls through to the next source rather than disabling
+        # the feature: an unreadable window is no window at all, not zero.
+        if value is not None:
+            return max(0.0, value)
     # PocketTTS' venv is CPU-torch by construction (see Dockerfile.tts-heavy),
     # so chatterbox is the only engine TTS_HEAVY_DEVICE can actually move.
     if engine == "chatterbox" and DEVICE == "cuda":
@@ -135,7 +181,12 @@ def idle_unload_seconds(engine: str) -> float:
 # and letting the caller fall through the controller's rescue chain. Chatterbox
 # is 30-60s from a warm HF cache; the ceiling leaves the rest of the client's
 # 180s TTS_HEAVY_TIMEOUT_MS budget for the inference that follows.
-LOAD_TIMEOUT_S = float(os.environ.get("TTS_HEAVY_LOAD_TIMEOUT_S", "90"))
+_LOAD_TIMEOUT_ENV = _parse_seconds("TTS_HEAVY_LOAD_TIMEOUT_S")
+# Floored rather than read raw: 0 would 503 every cold /speak (no load lands in
+# no time at all), turning the idle unload into "the heavy voices stop working
+# once the station goes quiet". An operator who wants the engines pinned says
+# so with TTS_HEAVY_IDLE_UNLOAD_S=0, which is the honest way to ask for it.
+LOAD_TIMEOUT_S = max(5.0, _LOAD_TIMEOUT_ENV) if _LOAD_TIMEOUT_ENV is not None else 90.0
 
 
 class TtsWorker:
@@ -381,12 +432,26 @@ class TtsWorker:
         a lock behind a model that is not coming back."""
         if self.ready:
             return
-        if not (self.warm() or self._loading):
+        # warm() is the side effect, not the predicate: it clears `cold`, arms
+        # `_loading` and wakes the supervisor. Hoisted out of the `if` so that
+        # is visible to the next reader.
+        started = self.warm()
+        if not (started or self._loading):
             raise RuntimeError(f"[{self.name}] worker not ready")
         deadline = time.monotonic() + (LOAD_TIMEOUT_S if timeout_s is None else timeout_s)
         while time.monotonic() < deadline:
             if self.ready:
                 return
+            if not self._loading:
+                # The supervisor gave up on this load — start() raised (missing
+                # venv, fatal model error, OOM) and cleared the flag. Sitting
+                # out the rest of the ceiling would hold the caller in silence
+                # waiting for a load that is not coming; degrade NOW, which is
+                # what the rescue chain is for and what a worker that was
+                # merely down has always done. start() clears the flag and sets
+                # `ready` in one synchronous run, so a load that SUCCEEDED can
+                # never be observed through this branch.
+                raise RuntimeError(f"[{self.name}] worker failed to load")
             await asyncio.sleep(0.25)
         raise RuntimeError(f"[{self.name}] worker did not load in time")
 
@@ -408,9 +473,19 @@ class TtsWorker:
         return True
 
     def idle_for(self) -> float:
-        """Seconds since this worker last had something to do."""
-        since = self.last_spoke if self.last_spoke is not None else self.loaded_at
-        return 0.0 if since is None else time.monotonic() - since
+        """Seconds since this worker last had something to do.
+
+        The LATER of the two stamps, never `last_spoke` alone. A RELOAD resets
+        this clock, and it has to: `last_spoke` still holds the render from
+        before the unload, which is by definition already past the window —
+        that gap is what unloaded the worker in the first place. Reading it
+        alone meant a worker /warm had just brought back measured as idle
+        immediately and was dropped again on the very next tick, so the warm
+        bought a full model load and gave nothing back. The /speak path hid
+        this, because it stamps `last_spoke` on its way out.
+        """
+        stamps = [t for t in (self.last_spoke, self.loaded_at) if t is not None]
+        return 0.0 if not stamps else time.monotonic() - max(stamps)
 
     def should_unload(self) -> bool:
         """Whether an idle tick may stop this worker right now. Pure, so the
@@ -667,11 +742,24 @@ async def warm(req: WarmRequest):
     unknown = [e for e in wanted if e not in WORKERS]
     if unknown:
         raise HTTPException(400, f"unknown engine: {unknown[0]}")
+    # A name this image knows but TTS_HEAVY_ENGINES did not ask for has no
+    # worker to wake. Reported rather than just missing from `warming`, where
+    # it read identically to "already warm" — the one answer an operator
+    # checking why their engine never comes back must not be given.
+    disabled = [e for e in wanted if e not in ENABLED_ENGINES]
     warming = [e for e in wanted if e in ENABLED_ENGINES and WORKERS[e].warm()]
     return {
         "ok": True,
         # Engines this call actually started loading (already-warm ones are
         # absent, which is the answer to "did I need to do this?").
         "warming": warming,
-        "engines": [e for e in ENABLED_ENGINES if WORKERS[e].ready],
+        # Named, known, but not enabled in this container — nothing to warm,
+        # and not an error.
+        "disabled": disabled,
+        # Residency right now, the same thing /health's *_loaded booleans say.
+        # Deliberately NOT called `engines`: on /health that key means
+        # ROUTABLE and includes a cold engine, and one name answering two
+        # questions is how a caller ends up reading the wrong one.
+        "loaded": [e for e in ENABLED_ENGINES if WORKERS[e].ready],
+        "cold": [e for e in ENABLED_ENGINES if WORKERS[e].cold],
     }

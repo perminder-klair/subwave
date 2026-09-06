@@ -406,13 +406,23 @@ Three things worth knowing:
   five minutes), so the release only fires when the station has genuinely gone
   quiet. Shortening the window to a few minutes converts a memory problem into
   a latency problem.
-- **You mostly won't hear it.** When the idle pause releases, the controller
-  tells the sidecar to start reloading straight away — so the model comes back
-  while the music does, minutes before the first link.
+- **How much of it you hear depends on the idle pause.** The controller warms
+  the sidecar from two places. The good one is the idle pause releasing
+  (**Settings → Stream → pause when the room is empty**): the reload starts as
+  the room fills up, minutes before the first link, and you hear nothing at
+  all. That switch is **off by default**, though — so on a stock station the
+  only warm is the second one, fired the minute the DJ decides to talk, where
+  the load merely overlaps writing and rendering the script. Expect part of a
+  cold Chatterbox reload to be audible as a longer-than-usual gap before the
+  first line after a quiet stretch. **If the idle unload matters to you, turn
+  the idle pause on as well** — the two features were built for the same quiet
+  station and they work best together.
 - **Nothing goes silent if the reload fails.** A load that doesn't arrive in
-  `TTS_HEAVY_LOAD_TIMEOUT_S` (90 s) returns a `503`, the DJ falls through to its
-  rescue voice exactly as it would for a sidecar that was down, and the music
-  never stops either way.
+  `TTS_HEAVY_LOAD_TIMEOUT_S` (90 s, settable in the root `.env`) returns a
+  `503`, and a load the sidecar abandons sooner than that — a missing venv, a
+  fatal model error — returns one straight away rather than holding the line
+  for the full ceiling. Either way the DJ falls through to its rescue voice
+  exactly as it would for a sidecar that was down, and the music never stops.
 
 The container log names each release and each wake, and `GET /health` carries
 the same state: `cold: [...]` is the engines currently unloaded (still listed in
@@ -426,12 +436,25 @@ docker exec sub-wave-controller wget -qO- http://tts-heavy:8080/health
 # {"ok":true,"engines":["chatterbox"],"cold":["chatterbox"],"unloads":{"chatterbox":3},...}
 ```
 
+The admin **Settings → Voice** engine badge says the same thing in one word:
+a released engine reads `idle · loads on demand` rather than `ready`. It stays
+selectable, because it is still a working voice.
+
 To force a reload by hand — before a show, say — `POST /warm`:
 
 ```bash
 docker exec sub-wave-controller wget -qO- --post-data '{"engine":""}' \
   --header 'Content-Type: application/json' http://tts-heavy:8080/warm
+# {"ok":true,"warming":["chatterbox"],"disabled":[],"loaded":[],"cold":[]}
 ```
+
+It returns at once without waiting for the load. `warming` is what this call
+started — empty means there was nothing to do, which is the normal answer on a
+station that is already talking. `disabled` names an engine you asked for that
+`TTS_HEAVY_ENGINES` never loaded, so a typo'd profile doesn't read as "already
+warm". `loaded` is residency this second and `cold` is what is still released;
+note that `/health`'s `engines` means something different — everything the DJ
+may route to, cold engines included.
 
 ---
 

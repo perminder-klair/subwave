@@ -267,6 +267,9 @@ services:
       - TTS_HEAVY_IDLE_UNLOAD_S=\${TTS_HEAVY_IDLE_UNLOAD_S:-}
       - CHATTERBOX_IDLE_UNLOAD_S=\${CHATTERBOX_IDLE_UNLOAD_S:-}
       - POCKET_TTS_IDLE_UNLOAD_S=\${POCKET_TTS_IDLE_UNLOAD_S:-}
+      # Seconds /speak waits for a cold engine to load before giving up and
+      # letting the DJ fall through to its rescue voice.
+      - TTS_HEAVY_LOAD_TIMEOUT_S=\${TTS_HEAVY_LOAD_TIMEOUT_S:-}
       # Optional — PocketTTS voice CLONING (#238): the cloning weights are
       # gated on HF; accept the terms at huggingface.co/kyutai/pocket-tts and
       # set HF_TOKEN. Without it, cloned .wav voices revert to a built-in.
@@ -578,6 +581,9 @@ services:
       - TTS_HEAVY_IDLE_UNLOAD_S=\${TTS_HEAVY_IDLE_UNLOAD_S:-}
       - CHATTERBOX_IDLE_UNLOAD_S=\${CHATTERBOX_IDLE_UNLOAD_S:-}
       - POCKET_TTS_IDLE_UNLOAD_S=\${POCKET_TTS_IDLE_UNLOAD_S:-}
+      # Seconds /speak waits for a cold engine to load before giving up and
+      # letting the DJ fall through to its rescue voice.
+      - TTS_HEAVY_LOAD_TIMEOUT_S=\${TTS_HEAVY_LOAD_TIMEOUT_S:-}
       # Optional — PocketTTS voice cloning (#238): accept the terms at
       # huggingface.co/kyutai/pocket-tts and set HF_TOKEN.
       - HF_TOKEN=\${HF_TOKEN:-}
@@ -838,6 +844,9 @@ services:
       - TTS_HEAVY_IDLE_UNLOAD_S=\${TTS_HEAVY_IDLE_UNLOAD_S:-}
       - CHATTERBOX_IDLE_UNLOAD_S=\${CHATTERBOX_IDLE_UNLOAD_S:-}
       - POCKET_TTS_IDLE_UNLOAD_S=\${POCKET_TTS_IDLE_UNLOAD_S:-}
+      # Seconds /speak waits for a cold engine to load before giving up and
+      # letting the DJ fall through to its rescue voice.
+      - TTS_HEAVY_LOAD_TIMEOUT_S=\${TTS_HEAVY_LOAD_TIMEOUT_S:-}
       # Optional — PocketTTS voice cloning (#238); weights gated on HF.
       - HF_TOKEN=\${HF_TOKEN:-}
     volumes:
@@ -1265,13 +1274,17 @@ SITE_URL=
 # the programme's idle pause stands the music down but has no reach into the
 # sidecar. After this many seconds without a spoken line the sidecar stops
 # that engine's worker and hands the memory back, reloading it on the next
-# line (or a little ahead of one: the controller warms the sidecar when the
-# idle pause releases, so the reload lands while the music returns rather than
-# on the first link). Empty = 1800 on cuda, 3600 on cpu; both sit far above
-# any gap a talking station produces, so this only fires when the station
-# really has gone quiet. 0 keeps the old always-resident behaviour — worth it
-# if you have RAM to spare and never want a cold reload. Per-engine overrides
-# win over the shared value. Only matters with --profile tts-heavy.
+# line — or ahead of one, since the controller warms the sidecar both when the
+# programme's idle pause releases and when the DJ decides to talk. The first
+# of those hides the reload completely but needs the idle pause switched ON
+# (Settings -> Stream, off by default); with it off you get only the second,
+# which overlaps the load with writing the script, so part of a cold reload is
+# still audible as a longer gap before the first line. Empty = 1800 on cuda,
+# 3600 on cpu; both sit far above any gap a talking station produces, so this
+# only fires when the station really has gone quiet. 0 keeps the old
+# always-resident behaviour — worth it if you have RAM to spare and never want
+# a cold reload. Per-engine overrides win over the shared value. Only matters
+# with --profile tts-heavy.
 # TTS_HEAVY_IDLE_UNLOAD_S=1800
 # CHATTERBOX_IDLE_UNLOAD_S=      # just Chatterbox (the expensive one)
 # POCKET_TTS_IDLE_UNLOAD_S=0     # e.g. keep the small, fast engine resident
@@ -1279,7 +1292,10 @@ SITE_URL=
 # Seconds /speak waits for a cold engine to load before giving up and letting
 # the DJ fall through to its rescue voice. Raise it on a slow disk or a first
 # load that still has weights to fetch; the ceiling has to leave room inside
-# TTS_HEAVY_TIMEOUT_MS (180000) for the render that follows.
+# TTS_HEAVY_TIMEOUT_MS (180000) for the render that follows. This is only a
+# CEILING — a load the sidecar abandons sooner (missing venv, fatal model
+# error) fails its caller straight away. Floored at 5; anything unparseable is
+# ignored with a warning rather than stopping the sidecar booting.
 # TTS_HEAVY_LOAD_TIMEOUT_S=90
 #
 # Own TTS server? There's nothing to set here — the *Remote* engine points the

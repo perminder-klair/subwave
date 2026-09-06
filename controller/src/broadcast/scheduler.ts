@@ -34,6 +34,7 @@ import * as session from './session.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import { cleanupOldVoices } from '../audio/tts.js';
+import { warmHeavy } from '../audio/ttsHeavyClient.js';
 import { shouldFire } from './dj-gate.js';
 import { speakClockAllowed, stationIdDaypartStamp } from './clock-policy.js';
 import { talkOnlyBetweenTracks, withTalkAir } from './talk-air.js';
@@ -939,6 +940,21 @@ function talkEligible(kind: TalkKind, now: Date, rolled: SessionRoll | null): bo
 // switch, the clock switch and the frequency ladder already carry, by the same
 // mechanism (the manual route never reaches the gate).
 async function runTalkSlot(plan: Extract<TalkPlan, { act: 'fire' }>) {
+  // The station has just decided it is going to talk this minute, which is the
+  // earliest honest signal that a heavy engine the sidecar idle-unloaded
+  // (#1579) is about to be needed. The idle-pause release
+  // (broadcast/stream-idle.ts) is the other signal and the better one — it
+  // buys minutes — but it only exists when stream.idleWhenEmpty is ON, and
+  // that defaults OFF, so a stock station warmed the sidecar nowhere at all
+  // and paid every reload as a stall on the line itself. From here the load at
+  // least overlaps writing the script and rendering it.
+  //
+  // Fired at the FIRE, never on an open window: the talk rows cover ~50
+  // minutes of the hour, so warming whenever a window is open would reload the
+  // model within a tick of every unload and quietly switch the feature off.
+  // Fire-and-forget and total, exactly like the idle-pause call — a warm that
+  // fails costs the render a model load, which is the un-warmed behaviour.
+  void warmHeavy();
   return withTalkAir(plan.air, () => runTalkSlotInner(plan));
 }
 

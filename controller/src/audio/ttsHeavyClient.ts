@@ -136,6 +136,11 @@ export async function warmHeavy(): Promise<void> {
       // is a station-wide event and can't know which persona speaks first.
       body: JSON.stringify({ engine: '' }),
       timeoutMs: WARM_TIMEOUT_MS,
+      // The deadline covers the body read too, like the probe above. Nobody
+      // awaits this call, so a body that never drains would otherwise sit on
+      // undici's ~300s default holding a socket and a dangling promise for a
+      // reply we only log.
+      bodyDeadline: true,
     });
     if (!res.ok) return;
     const body = (await res.json()) as { warming?: string[] };

@@ -21,14 +21,26 @@
 #     voice instead of the station going quiet;
 #   - a worker that is DOWN (not cold) fails its caller at once rather than
 #     waiting out the load ceiling — degrading has to be immediate, and a
-#     90-second stall before the rescue voice is worse than no wait at all;
+#     90-second stall before the rescue voice is worse than no wait at all —
+#     and so does one whose load the supervisor has ABANDONED, which is the
+#     same silence arriving by a different route;
+#   - a RELOAD restarts the idle clock, so a worker /warm has just brought back
+#     survives the next tick. Without that the warm buys a whole model load and
+#     the tick 30s later throws it away, leaving the first line after the pause
+#     paying the cold start anyway — the feature's whole point, undone;
 #   - the window resolves per ENGINE, so an operator using one engine doesn't
-#     have the other's idle behaviour decided for them.
+#     have the other's idle behaviour decided for them;
+#   - every knob the sidecar reads is forwarded by all three compose files —
+#     there is no env_file: here, so an unwired knob is one an operator sets
+#     and watches do nothing;
+#   - a malformed seconds value warns and reads its default rather than raising
+#     at import, which would take the whole container (both engines) down.
 
 import asyncio
 import importlib.util
 import json
 import os
+import re
 import sys
 import types
 from pathlib import Path
@@ -178,6 +190,30 @@ async def wait_for(predicate, timeout=2.0, what="condition"):
     raise AssertionError(f"timed out waiting for {what}")
 
 
+def reload_server(**env):
+    """Re-exec server.py under a given env and hand back the fresh module.
+
+    The seconds knobs are read at IMPORT time, so the blast radius of a bad
+    value is "the sidecar never boots" — and the only way to test that is to
+    boot it. Returns a module object independent of the one the rest of the
+    file uses; nothing is started until a lifespan runs.
+    """
+    saved = {k: os.environ.get(k) for k in env}
+    os.environ.update(env)
+    try:
+        spec_ = importlib.util.spec_from_file_location("subwave_tts_heavy_reload", server_path)
+        assert spec_ and spec_.loader
+        mod = importlib.util.module_from_spec(spec_)
+        spec_.loader.exec_module(mod)
+        return mod
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def make_worker(name="chatterbox", idle_unload_s=0.0):
     return server.TtsWorker(
         name=name,
@@ -247,6 +283,23 @@ def _cases():
 
     test("junk window falls back; 0 and negatives disable", case_junk_and_zero)
 
+    def case_junk_ceiling_never_stops_the_boot():
+        # Read at import time, so a typo here doesn't misconfigure one knob —
+        # it stops the container, and BOTH engines go with it. Strictly worse
+        # than quietly reading the default.
+        assert reload_server(TTS_HEAVY_LOAD_TIMEOUT_S="90s").LOAD_TIMEOUT_S == 90.0, (
+            "an unparseable ceiling reads the default instead of raising"
+        )
+        assert reload_server(TTS_HEAVY_LOAD_TIMEOUT_S="45").LOAD_TIMEOUT_S == 45.0
+        assert reload_server(TTS_HEAVY_LOAD_TIMEOUT_S="0").LOAD_TIMEOUT_S >= 5.0, (
+            "0 would 503 every cold /speak — no load lands in no time at all — "
+            "turning the idle unload into 'heavy voices stop working when the "
+            "station goes quiet'. TTS_HEAVY_IDLE_UNLOAD_S=0 is how you ask for "
+            "pinned engines."
+        )
+
+    test("a junk load ceiling never stops the sidecar booting", case_junk_ceiling_never_stops_the_boot)
+
     # --- should_unload precedence ------------------------------------------
     def case_should_unload_guards():
         w = make_worker(idle_unload_s=60.0)
@@ -278,6 +331,26 @@ def _cases():
         )
 
     test("idle clock runs from the last render", case_render_clock_beats_load_clock)
+
+    def case_reload_restarts_the_idle_clock():
+        w = make_worker(idle_unload_s=60.0)
+        w.ready = True
+        # Spoke once, then the station went quiet long enough to be released.
+        w.last_spoke = server.time.monotonic() - 601.0
+        w.loaded_at = None
+        assert w.should_unload(), "the gap that causes the unload in the first place"
+        # …and the reload landed. `last_spoke` still holds the render from
+        # BEFORE the unload, which is by definition past the window — that gap
+        # is what unloaded the worker. Reading it alone made a freshly warmed
+        # engine measure as instantly idle.
+        w.loaded_at = server.time.monotonic()
+        assert not w.should_unload(), (
+            "a reload restarts the idle clock — otherwise /warm buys a whole "
+            "model load, the next tick throws it away, and the first line "
+            "after the pause pays the cold start anyway"
+        )
+
+    test("a reload restarts the idle clock", case_reload_restarts_the_idle_clock)
 
     # --- lifecycle ----------------------------------------------------------
     async def case_unload_then_wake():
@@ -391,6 +464,82 @@ def _cases():
 
     test("a down worker fails the render immediately", lambda: run_async(case_down_worker_fails_immediately()))
 
+    async def case_warm_survives_the_next_idle_tick():
+        # End to end for the clock reset above: the whole point of /warm is
+        # that the engine is READY when the room fills up. An idle loop that
+        # still measures from the pre-unload render undoes it within one tick,
+        # and the operator pays a 4GB load for nothing.
+        procs = install_fake_spawn([])
+        w = make_worker(idle_unload_s=60.0)
+        w.IDLE_TICK_S = 0.01
+        runner = asyncio.create_task(w.run())
+        idler = asyncio.create_task(w.idle_loop())
+        try:
+            await wait_for(lambda: w.ready, what="first load")
+            await w.speak({"id": "1", "text": "hi", "out": "/tmp/x.wav"})
+            # BOTH stamps age, because the clock is the later of the two — a
+            # station that has been quiet since the container booted.
+            w.last_spoke = server.time.monotonic() - 601.0
+            w.loaded_at = server.time.monotonic() - 700.0
+            await wait_for(lambda: w.cold, what="the idle unload")
+            assert w.unloads == 1
+
+            assert w.warm() is True, "the idle pause releasing arms the reload"
+            await wait_for(lambda: w.ready, what="the warm reload")
+            # Many ticks' worth at 10ms. Nothing may take the model away.
+            await asyncio.sleep(0.2)
+            assert w.ready and not w.cold, (
+                "a warmed engine survives the idle ticks — it was reloaded "
+                "seconds ago in anticipation of a room filling up"
+            )
+            assert w.unloads == 1, "and `unloads` didn't invent a second release"
+            assert len(procs) == 2, "one boot, one reload — no thrash"
+        finally:
+            runner.cancel()
+            idler.cancel()
+            await asyncio.gather(runner, idler, return_exceptions=True)
+
+    test("a warmed engine survives the idle ticks", lambda: run_async(case_warm_survives_the_next_idle_tick()))
+
+    async def case_abandoned_load_fails_before_the_ceiling():
+        # A cold worker whose start() cannot succeed (missing venv, fatal model
+        # error, OOM) must fail its caller the moment the supervisor gives up,
+        # NOT at LOAD_TIMEOUT_S. Waiting out the ceiling holds the DJ in
+        # silence for a load that is not coming, when the rescue chain was
+        # ready the whole time — and a worker that was merely down has always
+        # failed at once.
+        async def failing_exec(*_args, **_kwargs):
+            raise OSError("no such venv: /opt/chatterbox/bin/python")
+
+        saved_exec = asyncio.create_subprocess_exec
+        saved_ceiling = server.LOAD_TIMEOUT_S
+        asyncio.create_subprocess_exec = failing_exec
+        server.LOAD_TIMEOUT_S = 5.0
+        w = make_worker(idle_unload_s=60.0)
+        w.START_BACKOFF_S = 5.0  # long enough that a retry can't rescue the wait
+        w.cold = True
+        runner = asyncio.create_task(w.run())
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        try:
+            try:
+                await w.speak({"id": "1", "text": "hi", "out": "/tmp/x.wav"})
+                raise AssertionError("a load that cannot start must fail the render")
+            except RuntimeError:
+                pass
+            elapsed = loop.time() - started
+            assert elapsed < 2.0, (
+                f"the caller waited {elapsed:.1f}s of a {server.LOAD_TIMEOUT_S}s "
+                "ceiling for a load the supervisor had already abandoned"
+            )
+        finally:
+            server.LOAD_TIMEOUT_S = saved_ceiling
+            asyncio.create_subprocess_exec = saved_exec
+            runner.cancel()
+            await asyncio.gather(runner, return_exceptions=True)
+
+    test("an abandoned load fails its caller without waiting out the ceiling", lambda: run_async(case_abandoned_load_fails_before_the_ceiling()))
+
     async def case_second_caller_joins_a_load():
         # The first caller arms the reload and clears `cold`; a second arriving
         # mid-load must wait for the same load, not read the cleared flag as
@@ -440,6 +589,41 @@ def _cases():
         assert not w.cold and w._wake.is_set(), "the supervisor was signalled"
 
     test("warm() starts a cold load once", case_warm_is_idempotent)
+
+    # --- operator surface ---------------------------------------------------
+    def case_every_knob_reaches_the_container():
+        # The service has NO `env_file:` — each compose file's `environment:`
+        # list is the whole surface — so a knob the sidecar reads but compose
+        # never forwards is one an operator can set in the root .env and watch
+        # do nothing, silently. #1579 shipped exactly that: three of its four
+        # new vars were wired up and TTS_HEAVY_LOAD_TIMEOUT_S was documented in
+        # .env.example and docs/tts-heavy.md but forwarded nowhere.
+        #
+        # One table (server.OPERATOR_ENV_KNOBS), three copies, same shape as
+        # max-listeners.test.ts and state-bootstrap.test.ts.
+        repo = Path(__file__).parents[2]
+        knobs = server.OPERATOR_ENV_KNOBS
+        assert len(knobs) >= 6, "the declared knob set looks truncated"
+
+        source = (repo / "docker" / "tts-heavy" / "server.py").read_text()
+        stale = [k for k in knobs if f'"{k}"' not in source]
+        assert not stale, f"declared but no longer read by the sidecar: {stale}"
+
+        for name in ("docker-compose.yml", "docker-compose.dev.yml", "docker-compose.byo.yml"):
+            text = (repo / name).read_text()
+            block = text.split("\n  tts-heavy:\n", 1)
+            assert len(block) == 2, f"{name} has no tts-heavy service"
+            # Up to the next top-level service key (two-space indent).
+            service = re.split(r"\n  [a-z][a-z0-9-]*:\n", block[1])[0]
+            missing = [k for k in knobs if f"- {k}=" not in service]
+            assert not missing, (
+                f"{name} does not pass {', '.join(missing)} into tts-heavy, so "
+                "setting it in the root .env does nothing. Add it to the "
+                "service's environment: list and re-run "
+                "`npm --prefix cli run embed-assets`."
+            )
+
+    test("every operator knob reaches the container in all three composes", case_every_knob_reaches_the_container)
 
     # --- /health contract ---------------------------------------------------
     async def case_health_lists_cold_engines():
@@ -548,6 +732,7 @@ def _cases():
     test("/speak on an engine that won't load answers 503", lambda: run_async(case_speak_503_on_dead_engine()))
 
     async def case_warm_endpoint():
+        saved_enabled = list(server.ENABLED_ENGINES)
         server.ENABLED_ENGINES = ["chatterbox"]
         cb = server.WORKERS["chatterbox"]
         saved = (cb.ready, cb.cold)
@@ -555,17 +740,29 @@ def _cases():
             cb.ready, cb.cold = False, True
             body = await server.warm(server.WarmRequest(engine=""))
             assert body["warming"] == ["chatterbox"], "an empty engine warms everything enabled"
+            assert body["loaded"] == [] and body["cold"] == [], (
+                "residency is REPORTED, not promised — warm() cleared `cold` "
+                "and the load hasn't landed yet"
+            )
             body = await server.warm(server.WarmRequest(engine=""))
             assert body["warming"] == [], "a second warm reports it started nothing"
+
+            # A name this image knows but TTS_HEAVY_ENGINES never loaded. It
+            # must not read as "already warm" — that is the one answer an
+            # operator asking why their engine won't come back must not get.
+            body = await server.warm(server.WarmRequest(engine="pocket-tts"))
+            assert body["warming"] == [] and body["disabled"] == ["pocket-tts"]
+
             try:
                 await server.warm(server.WarmRequest(engine="nope"))
                 raise AssertionError("expected an HTTPException")
             except HTTPException as e:
-                assert e.status_code == 400
+                assert e.status_code == 400, "a typo is still a 400, not a quiet no-op"
         finally:
             cb.ready, cb.cold = saved
+            server.ENABLED_ENGINES = saved_enabled
 
-    test("/warm arms cold engines and rejects unknown ones", lambda: run_async(case_warm_endpoint()))
+    test("/warm arms cold engines, names disabled ones, rejects unknown ones", lambda: run_async(case_warm_endpoint()))
 
 
 if __name__ == "__main__":
