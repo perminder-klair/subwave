@@ -291,6 +291,21 @@ def _cases():
             "an unparseable ceiling reads the default instead of raising"
         )
         assert reload_server(TTS_HEAVY_LOAD_TIMEOUT_S="45").LOAD_TIMEOUT_S == 45.0
+        # EMPTY is the important one, and it is not a typo — it is what every
+        # compose file supplies by default: `${TTS_HEAVY_LOAD_TIMEOUT_S:-}`
+        # sets the var to "", and os.environ.get(name, "90") returns "" rather
+        # than the default for a var that IS set. A bare float("") raises, so
+        # forwarding this knob (which is the other half of the same fix) would
+        # have crash-looped the sidecar on every stock install. Verified
+        # against the pre-fix module end to end: it never bound its port.
+        assert reload_server(TTS_HEAVY_LOAD_TIMEOUT_S="").LOAD_TIMEOUT_S == 90.0, (
+            "an empty var is 'not set', which is what compose passes by default"
+        )
+        for var in ("TTS_HEAVY_IDLE_UNLOAD_S", "CHATTERBOX_IDLE_UNLOAD_S", "POCKET_TTS_IDLE_UNLOAD_S"):
+            mod = reload_server(**{var: ""})
+            assert mod.idle_unload_seconds("chatterbox") == mod.IDLE_UNLOAD_CPU_S, (
+                f"{var}= (empty, the compose default) must read as unset, not 0"
+            )
         assert reload_server(TTS_HEAVY_LOAD_TIMEOUT_S="0").LOAD_TIMEOUT_S >= 5.0, (
             "0 would 503 every cold /speak — no load lands in no time at all — "
             "turning the idle unload into 'heavy voices stop working when the "
@@ -660,6 +675,46 @@ def _cases():
                 w.ready, w.cold, w.ready_meta = ready, cold, meta
 
     test("/health keeps cold engines routable and hides unready ones", lambda: run_async(case_health_lists_cold_engines()))
+
+    async def case_reloading_engine_stays_routable():
+        # A worker mid-RELOAD must stay in /health's `engines`. warm() clears
+        # `cold` and sets `_loading`, so between the wake and the load landing
+        # the engine was in NEITHER list and dropped out of `engines`
+        # altogether. The controller caches that list and routes on it, so for
+        # the 30-60s of a real Chatterbox reload it stopped routing to the
+        # engine and sent the DJ to its rescue voice — across exactly the
+        # window /warm exists to make inaudible, and on exactly the line the
+        # talk scheduler warmed the sidecar for. Seen live in the controller
+        # log as a `sidecar unavailable` / `available` flap around every warm.
+        #
+        # A worker that has NEVER loaded still stays out, which is the
+        # distinction the cold/not-ready split was drawn for: `_loading` is
+        # only set by warm(), warm() only runs on a `cold` worker, and only the
+        # idle unload makes one cold — so `_loading` implies the engine came up
+        # successfully at least once in this container's life. A booting or
+        # crash-looping worker has `_loading` False and is unaffected.
+        server.ENABLED_ENGINES = ["chatterbox", "pocket-tts"]
+        cb, pk = server.WORKERS["chatterbox"], server.WORKERS["pocket-tts"]
+        saved = [(w.ready, w.cold, w._loading) for w in (cb, pk)]
+        try:
+            cb.ready, cb.cold, cb._loading = False, False, True   # mid-reload
+            pk.ready, pk.cold, pk._loading = False, False, False  # never loaded
+            body = await server.health()
+            assert "chatterbox" in body["engines"], (
+                "an engine that is RELOADING must stay routable — /speak waits "
+                "out the load, and dropping it sends the DJ to its rescue voice "
+                "for the whole window /warm exists to hide"
+            )
+            assert "pocket-tts" not in body["engines"], (
+                "a worker that has never loaded still stays out"
+            )
+            assert body["cold"] == [], "reloading is not the same as released"
+            assert body["chatterbox_loaded"] is False, "and it is not resident yet"
+        finally:
+            for w, (ready, cold, loading) in zip((cb, pk), saved):
+                w.ready, w.cold, w._loading = ready, cold, loading
+
+    test("an engine mid-reload stays routable", lambda: run_async(case_reloading_engine_stays_routable()))
 
     def case_reset_keeps_meta_only_when_deliberate():
         w = make_worker()

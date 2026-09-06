@@ -472,6 +472,30 @@ class TtsWorker:
         self._wake.set()
         return True
 
+    def routable(self) -> bool:
+        """Whether the controller may still send this engine a /speak.
+
+        Three states qualify, and the third is the one that is easy to miss:
+        READY (obviously), COLD (one on-demand load away — dropping it is the
+        one-way door /health's comment describes), and RELOADING. A worker
+        between `warm()` and the load landing has had `cold` cleared and
+        `ready` not yet set, so it belonged to neither list and fell out of
+        `engines` entirely — for the whole 30-60s of a real Chatterbox reload
+        the controller stopped routing to it and the DJ took its rescue voice,
+        across exactly the window /warm exists to make inaudible and on
+        exactly the line the talk scheduler warmed the sidecar for. /speak
+        already handles this state correctly: ensure_ready() waits the load
+        out.
+
+        A worker that has never loaded still stays out, which is the whole
+        point of splitting `cold` from `not ready`. `_loading` is only set by
+        warm(), warm() only runs on a `cold` worker, and only the idle unload
+        makes one cold — so `_loading` implies this engine came up
+        successfully at least once. A booting or crash-looping worker has it
+        False and is advertised exactly as before.
+        """
+        return self.ready or self.cold or self._loading
+
     def idle_for(self) -> float:
         """Seconds since this worker last had something to do.
 
@@ -629,15 +653,20 @@ async def health():
     # state: what is resident right now, and what is merely loadable.
     ready_engines: list[str] = []
     cold_engines: list[str] = []
+    routable_engines: list[str] = []
     for name in ENABLED_ENGINES:
         worker = WORKERS[name]
         if worker.ready:
             ready_engines.append(name)
         elif worker.cold:
             cold_engines.append(name)
+        # Routability is the worker's own question and includes a THIRD state
+        # neither list above covers — mid-reload. See TtsWorker.routable().
+        if worker.routable():
+            routable_engines.append(name)
     return {
         "ok": True,
-        "engines": ready_engines + cold_engines,
+        "engines": routable_engines,
         # What TTS_HEAVY_ENGINES asked for, regardless of load state.
         "enabled": ENABLED_ENGINES,
         # Unloaded by the idle policy — usable, but the next line pays a load.
