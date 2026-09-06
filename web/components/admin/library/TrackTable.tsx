@@ -391,7 +391,7 @@ export function RowActionsMenu({
                   <Ban size={13} className="mt-px flex-none" />
                   <span>
                     Never play this artist
-                    <span className="block text-[10px] text-muted">primary credit only — collabs filed under other artists still play</span>
+                    <span className="block text-[10px] text-muted">also blocks tracks they're only featured on — acts joined by & or , stay separate</span>
                   </span>
                 </button>
               )}
@@ -444,7 +444,7 @@ function BlockMenu({ track, busy, disabled, onBlock, className }: {
           {track.artist && (
             <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('artist')}>
               Never play this artist
-              <span className="block text-[10px] text-muted">primary credit only — collabs filed under other artists still play</span>
+              <span className="block text-[10px] text-muted">also blocks tracks they're only featured on — acts joined by & or , stay separate</span>
             </button>
           )}
         </div>

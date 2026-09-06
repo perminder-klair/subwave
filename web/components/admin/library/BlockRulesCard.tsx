@@ -53,7 +53,7 @@ const FIELD_OPTIONS: Array<{ value: RuleField; label: string; hint: string }> = 
   { value: 'tag', label: 'Any tag', hint: 'exact match across genre tags, moods, audio moods and Last.fm tags — the widest net' },
   { value: 'genre', label: 'Genre', hint: 'blocking a genre also blocks its refinements — "Punk" covers "Punk Rock"' },
   { value: 'mood', label: 'Mood', hint: 'editorial + audio moods' },
-  { value: 'artist', label: 'Artist name', hint: 'exact name match — for one specific artist, the row action is more precise' },
+  { value: 'artist', label: 'Artist name', hint: "exact name match against every act credited on a track, so it also blocks tracks they're only featured on — acts joined by & or , stay separate. For one specific artist, the row action is more precise" },
   { value: 'album', label: 'Album name', hint: 'exact name match' },
   { value: 'title', label: 'Track title', hint: 'exact title match' },
   { value: 'playlist', label: 'Playlist', hint: 'blocks every member of the selected Navidrome playlists' },

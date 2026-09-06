@@ -46,10 +46,16 @@ export interface SeasonWindow {
 }
 
 /**
- * Trim, lowercase, collapse whitespace — the same normalisation the blocklist's
- * name fallback uses, so a `tag`/`artist` rule value compares the way an id
- * entry's name snapshot does. Used here only for DEDUPE; the stored value keeps
- * its original casing.
+ * Trim, lowercase, collapse whitespace — the normalisation the `tag`, `mood`,
+ * `album` and `title` rule fields compare with. Used here only for DEDUPE; the
+ * stored value keeps its original casing.
+ *
+ * NOT what the `artist` field compares with any more (#1603): an artist value
+ * and an incoming credit are both keyed by `recency.artistNameKey`, which folds
+ * curly apostrophes as well, and the credit is additionally read as every act
+ * ON it. So two artist values differing only in apostrophe style survive the
+ * dedupe here and compile to one matching key — harmless, but the two are no
+ * longer the same rule.
  */
 export const normText = (s: unknown) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 

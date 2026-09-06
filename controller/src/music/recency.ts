@@ -246,12 +246,27 @@ export function artistRootKey(song: CandidateLike | string): string {
 //
 // A marker at index 0 is not a marker: `\bft\b\.?\s+` matches the front of
 // "Ft. Lauderdale …", and dropping that head would leave a key naming nobody.
-// Same guard artistRootKey applies, for the same reason.
+// Same guard artistRootKey applies, for the same reason. The lead segment is
+// also the one segment the bracket cleanup must not touch: "Sunn O)))" is an
+// act, not a credit with an orphaned closer.
 //
 // Deliberately NOT artistRootKey's normalisation beyond the shared name fold —
 // no article strip, no root aliases, no join split. Those widen a MATCHING key,
 // which is right for a preference (the repeat guard reads an over-match as "pick
 // someone else") and wrong for a hard drop.
+// The split eats the OPENING bracket of a "(feat. …)" credit, so its closing
+// half is left orphaned on the tail. Drops ONE such closer, and only when the
+// segment has more closers than openers — a greedy run, applied to every
+// segment, ate real names instead: "Sunn O))) feat. Someone" keyed its lead
+// "sunn o" and silently missed a block the operator did make, and a balanced
+// suffix ("Y (Live)") lost the bracket it came with. Nested brackets are not
+// balanced properly here; nothing downstream needs them to be.
+function dropOrphanCloser(part: string): string {
+  const closes = (part.match(/[)\]]/g) || []).length;
+  if (!closes || closes <= (part.match(/[([]/g) || []).length) return part;
+  return part.replace(/[)\]](\s*)$/, '$1');
+}
+
 export function artistParticipantKeys(song: CandidateLike | string): string[] {
   const raw = typeof song === 'string' ? song : (song?.artist || '');
   const base = artistNameKey(raw);
@@ -259,10 +274,9 @@ export function artistParticipantKeys(song: CandidateLike | string): string[] {
   if (base.search(FEATURE_SPLIT) <= 0) return [base];
 
   const out: string[] = [];
-  for (const part of base.split(FEATURE_SPLIT)) {
-    // The split eats the OPENING bracket of a "(feat. …)" credit; its closing
-    // half rides on the tail.
-    const key = part.replace(/[)\]]+\s*$/, '').trim();
+  const parts = base.split(FEATURE_SPLIT);
+  for (let i = 0; i < parts.length; i++) {
+    const key = (i > 0 ? dropOrphanCloser(parts[i]!) : parts[i]!).trim();
     if (key && !out.includes(key)) out.push(key);
   }
   return out.length ? out : [base];

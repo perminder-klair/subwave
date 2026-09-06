@@ -4,13 +4,20 @@
 // fallback compared the whole credit string — so "Y feat. X" airs after X is
 // blocked and the operator has to block those tracks one by one.
 //
-// Three things are pinned here, and the middle one is the point:
+// Four things are pinned here, and the middle two are the point:
 //   1. recency.artistParticipantKeys splits a credit into its acts.
 //   2. It splits on `feat.`/`ft.`/`featuring` and NOTHING else. `&`, `+`, `,`
 //      and `x` live inside real act names, and this list is absolute (no
 //      never-starve anywhere, requests included), so a wrong key removes music
 //      the operator never blocked. The named bands below are the collateral.
-//   3. Both halves of the blocklist read the credit the same way — the id
+//   3. The WHOLE credit is still matched, beside the acts in it. A stored entry
+//      name is a display CREDIT, not an artist's name — POST /library/blocklist
+//      resolves an artist block from a track row as `{ id: song.artistId,
+//      name: song.artist }` — so blocking "this artist" on a "Host feat. Guest"
+//      row persists the composite, which no participant key can ever equal.
+//      Matching acts alone stranded every such entry, and rows blocked before
+//      the upgrade would have started airing again.
+//   4. Both halves of the blocklist read the credit the same way — the id
 //      entries' name fallback and the `field: 'artist'` rules — because
 //      blocklist-rules documents its artist case AS the fallback's semantics.
 //
@@ -18,15 +25,22 @@
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { artistNameKey, artistParticipantKeys } from '../src/music/recency.js';
-import { compileRules, ruleMatches, type BlockRule } from '../src/music/blocklist-rules.js';
+// STATE_DIR must be set before config.js resolves it at import time, so EVERY
+// src import here is dynamic and lives below the assignment. A static import of
+// a module that looks pure today (recency, blocklist-rules) is one added import
+// away from pulling config.js in ahead of this line — and this test writes a
+// blocklist.json, so the failure mode is writing into the operator's real state
+// dir rather than a red test.
+const stateDir = mkdtempSync(join(tmpdir(), 'blocklist-feat-test-'));
+process.env.STATE_DIR = stateDir;
 
-// STATE_DIR must be set before config.js resolves it at import time.
-process.env.STATE_DIR = mkdtempSync(join(tmpdir(), 'blocklist-feat-test-'));
+const { artistNameKey, artistParticipantKeys } = await import('../src/music/recency.js');
+const { compileRules, ruleMatches } = await import('../src/music/blocklist-rules.js');
+type BlockRule = import('../src/music/blocklist-rules.js').BlockRule;
 const blocklist = await import('../src/music/blocklist.js');
 
 // ── The key helper ──────────────────────────────────────────────────────────
@@ -43,6 +57,12 @@ test('a feature credit splits into its acts, in credit order', () => {
     ['Someone feat. Guns N’ Roses', ['someone', "guns n' roses"]],
     // Two markers in one credit: every segment is an act.
     ['A feat. B featuring C', ['a', 'b', 'c']],
+    // The bracket cleanup drops the ORPHANED closer the split left behind, and
+    // only that: the lead keeps the brackets that are part of its name, and a
+    // balanced suffix on the tail keeps its own.
+    ['Sunn O))) feat. Someone', ['sunn o)))', 'someone']],
+    ['Sunn O))) (feat. Someone)', ['sunn o)))', 'someone']],
+    ['X feat. Y (Live)', ['x', 'y (live)']],
   ];
   for (const [raw, want] of cases) {
     assert.deepEqual(artistParticipantKeys(raw), want, `"${raw}"`);
@@ -64,6 +84,9 @@ test('nothing but a feature marker splits — real act names stay whole', () => 
     'Crosby, Stills, Nash & Young',
     'Sly & the Family Stone',
     'AC/DC',
+    // Brackets inside a name are part of the name — the orphan-closer cleanup
+    // must not reach a credit that never split.
+    'Sunn O)))',
     // Substrings of the markers are not markers.
     'Feature Cast',
     'Softly',
@@ -130,6 +153,37 @@ test('a band whose name contains a separator is not collateral', async () => {
   assert.equal(blocklist.isBlocked({ id: 'c4', artist: 'Someone feat. Simon & Garfunkel' }), false);
 });
 
+test('an entry whose stored name is a feature credit still blocks that row', async () => {
+  // This is the shape POST /library/blocklist actually persists: an artist
+  // block resolved from a track row carries `name: song.artist`, the row's
+  // display CREDIT, so "Never play this artist" on a featured row stores the
+  // composite. No participant key can equal it, so matching acts ALONE would
+  // strand the entry and un-block a row this station had already blocked.
+  await blocklist.add({ type: 'artist', id: 'art-lead', name: 'Lead Act feat. Sideman' });
+  assert.equal(
+    blocklist.isBlocked({ id: 'w1', artist: 'Lead Act feat. Sideman' }),
+    true,
+    'the pre-#1603 whole-credit tier is still there',
+  );
+
+  // And it is the composite entry the badge names, not a participant entry
+  // that could also claim the row: whole credit first is most-specific-first.
+  await blocklist.add({ type: 'artist', id: 'art-sideman', name: 'Sideman' });
+  assert.equal(blocklist.matchOf({ id: 'w2', artist: 'Lead Act feat. Sideman' })?.id, 'art-lead');
+
+  // The wart the shape leaves behind, pinned so it is not mistaken for the fix:
+  // a composite name is not a participant key, so that entry reaches only the
+  // credit it was stored from. Blocking the guest properly needs an entry named
+  // for the act (art-sideman), which is what the participant tier is for.
+  assert.equal(blocklist.isBlocked({ id: 'w3', artist: 'Lead Act' }), false);
+  assert.equal(blocklist.isBlocked({ id: 'w4', artist: 'Other feat. Lead Act' }), false);
+  assert.equal(blocklist.isBlocked({ id: 'w5', artist: 'Other feat. Sideman' }), true);
+
+  await blocklist.remove('artist', 'art-lead');
+  await blocklist.remove('artist', 'art-sideman');
+  assert.equal(blocklist.isBlocked({ id: 'w6', artist: 'Lead Act feat. Sideman' }), false);
+});
+
 // ── The rule half, which documents itself AS the fallback's semantics ───────
 
 const artistRule = (values: string[]): BlockRule => ({
@@ -151,4 +205,18 @@ test('a field:artist rule reads a credit the same way', () => {
   const guns = compileRules([artistRule(["Guns N' Roses"])])[0]!;
   assert.equal(ruleMatches(guns, { artist: 'Guns N’ Roses' }, null), true);
   assert.equal(ruleMatches(guns, { artist: 'Someone feat. Guns N’ Roses' }, null), true);
+});
+
+test('a field:artist rule value that is itself a credit still matches', () => {
+  // The rule half of the same trap: an operator pastes a credit off a track row
+  // into a rule value. Matching acts alone would compile it to a key no track
+  // can ever produce, and the rule's matchCount would quietly read 0.
+  const cr = compileRules([artistRule(['Lead Act feat. Sideman'])])[0]!;
+  assert.equal(ruleMatches(cr, { artist: 'Lead Act feat. Sideman' }, null), true);
+  assert.equal(ruleMatches(cr, { artist: 'Lead Act' }, null), false);
+  assert.equal(ruleMatches(cr, { artist: 'Sideman' }, null), false);
+});
+
+test.after(() => {
+  rmSync(stateDir, { recursive: true, force: true });
 });
