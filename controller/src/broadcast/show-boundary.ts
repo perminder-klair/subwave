@@ -20,6 +20,7 @@
 // anything. The impure wrappers live at the bottom and are two lines each.
 
 import { zonedParts } from '../time.js';
+import { absoluteOffsetSec } from '../music/silence-trim.js';
 import * as settings from '../settings.js';
 
 // How far past its show's end a track may run before the cut is armed. Below
@@ -101,17 +102,28 @@ export function nextShowChangeMs(input: {
   return null;
 }
 
+/** An armed boundary cut: where to stop, and how much spill it prevents. The
+ *  overshoot rides along because the drain's booth-log line wants it and a
+ *  caller re-deriving it from the cue is a second copy of this rule. */
+export interface BoundaryCut {
+  /** ABSOLUTE offset in the file, the shape `liq_cue_out` carries. */
+  cueOutSec: number;
+  /** Seconds this track would otherwise have run into the next show. */
+  overshootSec: number;
+}
+
 /**
  * Where to cue this track out so it ends at the show boundary, or null to leave
  * it alone.
  *
- * The returned value is an ABSOLUTE offset in the file, the same shape
- * `liq_cue_out` already carries — so a head-trimmed track's cut is measured
- * from byte zero, not from where playback starts. `startMs` is the pick's
- * EXPECTED air time, never "now": a link is written when the pick is made and
- * airs when the pick starts (the forecast rule in broadcast/queue/pure.ts), and
- * a boundary computed from the drain's own clock would cut a track that has not
- * started yet by however long it waits in dj_queue.
+ * The returned offset is ABSOLUTE, the same shape `liq_cue_out` already carries
+ * — so a head-trimmed track's cut is measured from byte zero, not from where
+ * playback starts, and the played-to-absolute shift is `music/silence-trim.ts`'s
+ * to own rather than a local addition here. `startMs` is the pick's EXPECTED
+ * air time, never "now": a link is written when the pick is made and airs when
+ * the pick starts (the forecast rule in broadcast/queue/pure.ts), and a boundary
+ * computed from the drain's own clock would cut a track that has not started yet
+ * by however long it waits in dj_queue — or behind a bed.
  */
 export function resolveBoundaryCueSec(input: {
   startMs: number;
@@ -120,7 +132,7 @@ export function resolveBoundaryCueSec(input: {
   boundaryMs: number | null;
   toleranceSec?: number;
   minPlaySec?: number;
-}): number | null {
+}): BoundaryCut | null {
   const { startMs, boundaryMs } = input;
   const tolerance = input.toleranceSec ?? BOUNDARY_TOLERANCE_SEC;
   const minPlay = input.minPlaySec ?? BOUNDARY_MIN_PLAY_SEC;
@@ -128,7 +140,6 @@ export function resolveBoundaryCueSec(input: {
   if (!Number.isFinite(startMs)) return null;
   const playable = input.playableSec;
   if (!Number.isFinite(playable) || playable <= 0) return null;
-  const cueIn = Number.isFinite(input.cueInSec) && input.cueInSec > 0 ? input.cueInSec : 0;
 
   // Seconds of this track that would air on the far side of the boundary.
   const overshootSec = (startMs + playable * 1000 - boundaryMs) / 1000;
@@ -138,10 +149,13 @@ export function resolveBoundaryCueSec(input: {
   // added back on — playback starts at cueIn, not at zero.
   const playedSec = (boundaryMs - startMs) / 1000;
   if (playedSec < minPlay) return null;
-  const cueOut = cueIn + playedSec;
+  const cueOut = absoluteOffsetSec(input.cueInSec, playedSec);
   // A cut at or before the head is not a cut, it is an empty track.
-  if (!(cueOut > cueIn)) return null;
-  return Math.round(cueOut * 100) / 100;
+  if (!(cueOut > absoluteOffsetSec(input.cueInSec, 0))) return null;
+  return {
+    cueOutSec: Math.round(cueOut * 100) / 100,
+    overshootSec: Math.round(overshootSec * 100) / 100,
+  };
 }
 
 // ── impure wrappers ─────────────────────────────────────────────────────────

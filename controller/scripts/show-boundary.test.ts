@@ -149,7 +149,10 @@ test('the cut is an absolute offset at the boundary', () => {
     playableSec: 25 * 60,
     boundaryMs: T0 + 5 * MIN,
   });
-  assert.equal(cut, 300, 'cut where the boundary falls inside the track');
+  assert.equal(cut?.cueOutSec, 300, 'cut where the boundary falls inside the track');
+  // The overshoot rides back with the cue so the drain's log line doesn't
+  // re-derive it: 25 minutes of track, 5 of them before the boundary.
+  assert.equal(cut?.overshootSec, 20 * 60, 'the prevented spill comes back with the cut');
 
   // With a trimmed head the cut moves by exactly the skipped seconds: playback
   // starts at cue_in, but cue_out is measured from byte zero. A local
@@ -160,7 +163,7 @@ test('the cut is an absolute offset at the boundary', () => {
       cueInSec: 12,
       playableSec: 25 * 60,
       boundaryMs: T0 + 5 * MIN,
-    }),
+    })?.cueOutSec,
     312,
     'a head trim shifts the absolute cue_out',
   );
@@ -185,7 +188,7 @@ test('small overruns are left alone, and a stub is never cut', () => {
       cueInSec: 0,
       playableSec: 600,
       boundaryMs: T0 + (600 - BOUNDARY_TOLERANCE_SEC - 1) * 1000,
-    }),
+    })?.cueOutSec,
     600 - BOUNDARY_TOLERANCE_SEC - 1,
     'one second past the tolerance arms the cut',
   );
@@ -207,7 +210,7 @@ test('small overruns are left alone, and a stub is never cut', () => {
       cueInSec: 0,
       playableSec: 25 * 60,
       boundaryMs: T0 + BOUNDARY_MIN_PLAY_SEC * 1000,
-    }),
+    })?.cueOutSec,
     BOUNDARY_MIN_PLAY_SEC,
     'exactly at the floor still cuts',
   );

@@ -89,13 +89,20 @@ export interface QueueItem {
   // this item, meaning its link airs over the BED rather than over this track
   // (broadcast/bed-policy.ts). The bed's own start is what fires airIntro — see
   // onBedStarted — so this is how that event finds the item it belongs to.
-  // Both bed fields ride persist()'s wholesale item snapshot, which is what
-  // makes the maybePushBed re-drain guard hold across a controller restart.
+  // All three bed fields ride persist()'s wholesale item snapshot, which is
+  // what makes the maybePushBed re-drain guard hold across a controller
+  // restart.
   bedded?: boolean;
   // The predecessor's exit canvas the bed fades in under. The bed's marker
   // fires at cross-FEED time, this many seconds before the bed is dominant —
   // onBedStarted holds the link for what remains of it.
   bedEntrySec?: number;
+  // Seconds the bed really pushes this item back: its own length less the two
+  // crosses it overlaps (the predecessor's exit canvas on the way in, its own
+  // on the way out). A bed is handed straight to next.txt and is NEVER an
+  // `upcoming` entry, so nothing that forecasts an air time from the queue can
+  // see it — this is how the show-boundary cut (#1574) accounts for it.
+  bedDelaySec?: number;
   queuedAt?: string;
   sent?: boolean;
   confirmedInLiquidsoap?: boolean;
