@@ -45,6 +45,22 @@ function toOpenApiPath(path: string): string {
   return path.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
 }
 
+// One table per auth class, so a new class is one row rather than an edit to
+// every ternary that branches on `auth`. `security: null` means "emit no
+// requirement" — the public reads.
+//
+// The station class is OPTIONAL on purpose ({} first): those reads are open on
+// a public station, and a bare [{ stationAuth: [] }] would make every generated
+// client demand a password most stations don't have.
+const AUTH_CLASS: Record<
+  EndpointDoc['auth'],
+  { tag: string; security: Record<string, string[]>[] | null }
+> = {
+  none: { tag: 'public-read', security: null },
+  admin: { tag: 'admin-read', security: [{ basicAuth: [] }] },
+  station: { tag: 'station-read', security: [{}, { stationAuth: [] }] },
+};
+
 function operationFor(ep: EndpointDoc) {
   const parameters = [
     ...paramObjects(ep.pathParams, 'path'),
@@ -55,15 +71,7 @@ function operationFor(ep: EndpointDoc) {
     summary: ep.summary,
     description: ep.description,
     // Group operations in generated clients / Swagger UI by their air-safety.
-    tags: [
-      ep.mutatesAir
-        ? 'mutates-air'
-        : ep.auth === 'admin'
-          ? 'admin-read'
-          : ep.auth === 'station'
-            ? 'station-read'
-            : 'public-read',
-    ],
+    tags: [ep.mutatesAir ? 'mutates-air' : AUTH_CLASS[ep.auth].tag],
     ...(parameters.length ? { parameters } : {}),
     responses: {
       '200': {
@@ -77,11 +85,8 @@ function operationFor(ep: EndpointDoc) {
     },
   };
 
-  if (ep.auth === 'admin') op.security = [{ basicAuth: [] }];
-  // Station-gated reads are OPEN on a public station, so the requirement is
-  // declared as optional ({} first): a generated client must not demand a
-  // password from an operator whose station has no locks on.
-  if (ep.auth === 'station') op.security = [{}, { stationAuth: [] }];
+  const security = AUTH_CLASS[ep.auth].security;
+  if (security) op.security = security;
 
   if (ep.bodyExample) {
     op.requestBody = {

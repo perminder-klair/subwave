@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { useCopyToClipboard } from 'usehooks-ts';
 import { Pill } from '../ui';
+import AuthPill from './AuthPill';
 import { notify } from '../../../lib/notify';
 import type { EndpointDoc } from './types';
 import Playground from './Playground';
@@ -70,11 +71,7 @@ export default function EndpointCard({ endpoint, apiBase, adminFetch }: Props) {
         <code className="shrink-0 text-[12px] font-semibold">{endpoint.path}</code>
         <span className="order-last w-full truncate text-[11px] text-muted sm:order-none sm:w-auto">{endpoint.summary}</span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
-          {endpoint.auth === 'admin'
-            ? <Pill tone="accent">admin</Pill>
-            : endpoint.auth === 'station'
-              ? <Pill tone="accent">station</Pill>
-              : <Pill>public</Pill>}
+          <AuthPill auth={endpoint.auth} />
           {endpoint.mutatesAir && <Pill className="border-vermilion text-vermilion">on-air</Pill>}
         </span>
       </summary>
