@@ -210,7 +210,12 @@ export async function ensurePlan(ctx: SessionContext, now = session.contextDate(
 // half of the mic-pass already opened the show (with the episode angle woven
 // in — see dj-agent), so the standalone intro is skipped and just marked.
 // Returns true when it aired a standalone intro now.
-export async function maybeRunIntro(queue: QueueApi, ctx: SessionContext, now = session.contextDate(ctx)): Promise<boolean> {
+export async function maybeRunIntro(
+  queue: QueueApi,
+  ctx: SessionContext,
+  now = session.contextDate(ctx),
+  { opportunity = false }: { opportunity?: boolean } = {},
+): Promise<boolean> {
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
   if (!prog || prog.beats?.intro) return false;
@@ -227,19 +232,32 @@ export async function maybeRunIntro(queue: QueueApi, ctx: SessionContext, now = 
   // episode twice. Stay pending: the boundary tick re-runs this after
   // runPersonaHandoff, which marks handoffAired on every exit path.
   if (session.pendingHandoff()) return false;
+  // Station voice off → stays pending and unmarked, like the budget case: flip
+  // the switch back mid-show and the intro can still open the remaining hours.
+  if (!autoVoiceAllowed()) return false;
+  if (!djCallsAllowed() || !optionalSegmentsAllowed()) return false;  // stays pending — may air later this hour
   // The ordering rule (#1576). A show whose sign-off just aired owes the
   // listener one closing track, and this is the path that carries the incoming
   // host's first words when the persona did NOT change — the mic-pass covers
   // the other one, gated in the queue's own boundary path. Asked after the
   // pendingHandoff check so exactly one of the two counts the opportunity.
   //
-  // Stays pending and unmarked, like the voice-switch case below: the next
+  // LAST of the checks, and that is the point: only a cycle that would
+  // otherwise have aired the intro has really passed an opportunity up. Asking
+  // ahead of the gates let a muted station, an exhausted budget or a quiet hour
+  // spend half the spacer on a cycle that could never have spoken.
+  //
+  // `opportunity` says whether THIS call site is a handover moment at all. The
+  // boundary path is; the wall-clock :00 session roll is not — it asks minutes
+  // before any music has moved, and banking its answer would release the
+  // incoming host at the boundary that ends the sign-off's own track.
+  //
+  // Stays pending and unmarked, like the voice-switch case above: the next
   // boundary opens the episode instead.
-  if (queue.closingTrackHolds()) return false;
-  // Station voice off → stays pending and unmarked, like the budget case: flip
-  // the switch back mid-show and the intro can still open the remaining hours.
-  if (!autoVoiceAllowed()) return false;
-  if (!djCallsAllowed() || !optionalSegmentsAllowed()) return false;  // stays pending — may air later this hour
+  if (queue.closingTrackHolds()) {
+    if (opportunity) queue.noteHandoverOpportunityDeclined();
+    return false;
+  }
 
   markIntroAired();
   await runIntro(queue, ctx, now);
@@ -410,9 +428,20 @@ export async function runOutro(queue: QueueApi, ctx: SessionContext, now = new D
 // still pending. Returns true when a standalone intro aired just now (the
 // hourly cron uses this to skip the generic time check).
 // `now` follows the same contextDate rule as ensurePlan.
-export async function onSessionSettled(queue: QueueApi, ctx: SessionContext, now = session.contextDate(ctx)): Promise<boolean> {
+//
+// `opportunity` is passed straight through to maybeRunIntro and says whether
+// this call site is a real handover moment (#1576): the queue's boundary path
+// is, the hourly cron's wall-clock roll is not. It has no default here for the
+// same reason it has one there — a new call site must state which it is, while
+// the manual runners that reach maybeRunIntro directly stay non-consuming.
+export async function onSessionSettled(
+  queue: QueueApi,
+  ctx: SessionContext,
+  now = session.contextDate(ctx),
+  { opportunity }: { opportunity: boolean },
+): Promise<boolean> {
   if (!activeEpisode(now)) return false;
   await ensurePlan(ctx, now);
-  return maybeRunIntro(queue, ctx, now);
+  return maybeRunIntro(queue, ctx, now, { opportunity });
 }
 

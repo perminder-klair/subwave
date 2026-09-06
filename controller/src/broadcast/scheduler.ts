@@ -596,10 +596,17 @@ export async function runHourlyCheck() {
 // is explicit and should air promptly, the same reasoning that exempts the
 // manual /dj/segment runners from the budget gate.
 //
+// `manual` marks the call sites an operator drove (the takeover start/cancel
+// routes). Manual triggers are exempt from every automatic gate, so those two
+// air the mic-pass whatever the show-handover ordering rule says; the takeover
+// EXPIRY, which no one pressed, is not exempt and waits for its closing track
+// like any other changeover (#1576).
+//
 // `reason` names the transition in the booth log's auto-playlist line — the one
 // place an operator can tell a scheduled boundary from a takeover.
 export async function rollSessionNow(
-  { airHandoff = true, reason = 'session roll' }: { airHandoff?: boolean; reason?: string } = {},
+  { airHandoff = true, manual = false, reason = 'session roll' }:
+    { airHandoff?: boolean; manual?: boolean; reason?: string } = {},
 ) {
   // The FALLBACK follows the show too, not just the session (#1111): every show
   // transition runs through here, so this is where auto.m3u learns the show
@@ -613,7 +620,7 @@ export async function rollSessionNow(
   let ctx: Awaited<ReturnType<typeof getFullContext>> | null = null;
   try {
     ctx = await getFullContext();
-    await session.maybeRoll(ctx);
+    queue.onSessionRolled((await session.maybeRoll(ctx)).id);
   } catch (err) {
     queue.log('error', `Session roll failed: ${err.message}`);
   }
@@ -634,7 +641,16 @@ export async function rollSessionNow(
   }
   if (airHandoff) {
     try {
-      await djAgent.runPersonaHandoff(queue, ctx);
+      // The ordering rule (#1576) applies to the AUTOMATIC call site (takeover
+      // expiry) and not to the operator's own. Held leaves the mic-pass
+      // pending, so the next boundary airs it — the same place the scheduled
+      // changeover's is aired from — rather than losing it.
+      if (!manual && queue.closingTrackHolds()) {
+        queue.log('scheduler',
+          'Holding the show handover — the outgoing DJ just signed off, so a closing track plays first');
+      } else {
+        await djAgent.runPersonaHandoff(queue, ctx);
+      }
     } catch (err) {
       queue.log('error', `Persona handoff failed: ${err.message}`);
     }
@@ -645,7 +661,11 @@ export async function rollSessionNow(
   // stands down — the same one-talker-per-slot rule as issue #310.
   let introAired = false;
   try {
-    introAired = await programme.onSessionSettled(queue, ctx);
+    // `opportunity: false` — this is a wall-clock tick, not a handover moment.
+    // It may HOLD the intro (and must), but banking its decline would spend the
+    // one required opportunity inside the track the sign-off ducked, releasing
+    // the incoming host a whole track early (#1576).
+    introAired = await programme.onSessionSettled(queue, ctx, undefined, { opportunity: false });
   } catch (err) {
     queue.log('error', `Programme episode hook failed: ${err.message}`);
   }

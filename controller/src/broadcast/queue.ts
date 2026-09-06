@@ -197,7 +197,8 @@ class Queue {
   _deadlinePickAt = 0;          // last deadline-pick ATTEMPT (ms epoch) — failure-retry cooldown, see maybeDeadlinePick
   _pendingVoice: PendingVoice | null = null; // one boundary-deferred segment awaiting the next track start — see announceAtNextTrack
   _trackStarts = 0;             // monotonic count of track boundaries seen — the clock the handover ordering rule is measured on
-  _handover: { atTrackStarts: number; heldOpportunities: number } | null = null; // stamped when a sign-off airs, read by closingTrackHolds() — see broadcast/handover-policy.ts
+  _handover: { atTrackStarts: number; heldOpportunities: number; rolledOnce: boolean } | null = null; // stamped when a sign-off airs, read by closingTrackHolds() — see broadcast/handover-policy.ts
+  _lastSessionId: string | null = null;  // last session id onSessionRolled saw — the clock the handover wait is aged on
   _introRenders = new IntroRenderTracker<QueueItem>(); // timed-out pre-renders stay reusable by airIntro
   _pendingJingles = new Map<string, number>(); // manual jingle presses handed over but not yet heard — see playJingle
 
@@ -498,28 +499,85 @@ class Queue {
   //
   // Re-stamping is deliberate: a second sign-off restarts the wait rather than
   // inheriting a satisfied one.
+  //
+  // The incoming host's own first words settle the debt, so the two kinds that
+  // can carry them clear the stamp. Not required for correctness — the rule
+  // reads false once both counters are met — but a wait that is over should not
+  // linger as live state on /debug, and a cleared stamp is one fewer thing for
+  // onSessionRolled() to have to age out.
   noteHandoverSpeech(kind: string) {
-    if (kind !== 'programme-outro') return;
-    this._handover = { atTrackStarts: this._trackStarts, heldOpportunities: 0 };
+    if (kind === 'programme-outro') {
+      this._handover = { atTrackStarts: this._trackStarts, heldOpportunities: 0, rolledOnce: false };
+      return;
+    }
+    if (kind === 'handoff' || kind === 'programme-intro') this._handover = null;
   }
 
-  // Whether the incoming host must wait for the closing track. ASKED ONCE PER
-  // HANDOVER OPPORTUNITY — a `true` answer records the opportunity it declined,
-  // which is half of what the rule counts (see handover-policy.ts for why a
-  // boundary count alone is wrong in both drain modes).
+  // Age the wait across session rolls, called by both maybeRoll sites with the
+  // session the roll settled on.
   //
-  // The side effect is why this is a method on the queue rather than a getter
-  // the policy reads: the counter has to advance exactly where the decision is
-  // taken, and every caller here is a real handover moment being passed up.
+  // The sign-off airs BEFORE the roll it belongs to (:55, still in the outgoing
+  // show's session), so the FIRST roll after a stamp is the changeover the wait
+  // is owed to and must not clear it. A SECOND roll means the incoming host
+  // never opened — an hour that is neither a programme nor a persona change
+  // asks at neither call site — and the debt is now owed to nobody. Without
+  // this the stamp outlives its show and defers an unrelated mic-pass by a
+  // cycle, which handover-policy.ts is explicit is not what the rule is about:
+  // a persona changeover with no sign-off behind it is a designed two-voice
+  // moment.
+  //
+  // Not a timeout. It is the same "one changeover" the rule is written in terms
+  // of, counted in the same units — nothing here expires on a clock.
+  onSessionRolled(sessionId: string | null) {
+    if (sessionId === this._lastSessionId) return;   // maybeRoll was a no-op
+    this._lastSessionId = sessionId;
+    const h = this._handover;
+    if (!h) return;
+    if (h.rolledOnce) this._handover = null;
+    else h.rolledOnce = true;
+  }
+
+  // Whether the incoming host must wait for the closing track. PURE — asking
+  // costs nothing, so a caller that is not a handover opportunity (the
+  // wall-clock session roll) can ask without spending the wait.
   closingTrackHolds(): boolean {
     const h = this._handover;
     if (!h) return false;
-    const hold = holdsForClosingTrack({
+    return holdsForClosingTrack({
       boundariesSince: this._trackStarts - h.atTrackStarts,
       heldOpportunities: h.heldOpportunities,
     });
-    if (hold) h.heldOpportunities++;
-    return hold;
+  }
+
+  // A real handover opportunity was passed up — record it. This is half of what
+  // the rule counts (see handover-policy.ts for why a boundary count alone is
+  // wrong in both drain modes), and it is separate from the question above
+  // because the two are asked by different callers.
+  //
+  // ONLY a drain/boundary cycle that could itself have carried the incoming
+  // host's first words may call this. The wall-clock :00 roll asks the same
+  // question minutes before any music has moved, and banking its answer spends
+  // the one required opportunity inside the track the sign-off ducked — which
+  // releases the incoming host at the boundary that ends that track, the exact
+  // eager-drain failure the second counter exists to prevent.
+  noteHandoverOpportunityDeclined() {
+    const h = this._handover;
+    if (h) h.heldOpportunities++;
+  }
+
+  // The live wait, for the admin /debug surface. `null` is the overwhelmingly
+  // common case — no sign-off is outstanding — and is what makes the row answer
+  // the question it is there for: an incoming host who has not said hello is
+  // WAITING when this is non-null and holding, and MISSING when it is null.
+  // The thresholds it is measured against live in handoverStatus().
+  handoverWait() {
+    const h = this._handover;
+    if (!h) return null;
+    return {
+      boundariesSince: this._trackStarts - h.atTrackStarts,
+      heldOpportunities: h.heldOpportunities,
+      holding: this.closingTrackHolds(),
+    };
   }
 
   // Add a track to `upcoming` and kick off the Liquidsoap sender.
@@ -2377,7 +2435,7 @@ class Queue {
           showAt = new Date(Date.now() + (leadSec + PICK_SHOW_LOOKAHEAD_SEC) * 1000);
         }
         const ctx = await getFullContext(showAt ?? undefined);
-        await session.maybeRoll(ctx);
+        this.onSessionRolled((await session.maybeRoll(ctx)).id);
         // Plan a programme episode BEFORE the mic-pass so a handoff into a
         // programme show can weave the episode angle into its greeting.
         try {
@@ -2406,6 +2464,10 @@ class Queue {
           // is what bounds the wait if no next cycle ever comes.
           const pendingMicPass = !!session.pendingHandoff();
           if (pendingMicPass && this.closingTrackHolds()) {
+            // A REAL opportunity, passed up: this cycle is the one that would
+            // have aired the mic-pass. Recorded here and nowhere the question
+            // is merely asked — see noteHandoverOpportunityDeclined().
+            this.noteHandoverOpportunityDeclined();
             this.log('scheduler',
               'Holding the show handover — the outgoing DJ just signed off, so a closing track plays first');
           } else if (pendingMicPass) {
@@ -2430,7 +2492,9 @@ class Queue {
         // already (whichever call site settles the session first wins; the
         // beat flag makes the other a no-op).
         try {
-          await programme.onSessionSettled(this, ctx);
+          // `opportunity: true` — this IS a drain/boundary cycle, so a standalone
+          // intro held here has genuinely passed one up (#1576).
+          await programme.onSessionSettled(this, ctx, undefined, { opportunity: true });
         } catch (err) {
           this.log('error', `Programme episode hook failed: ${(err as Error).message}`);
         }

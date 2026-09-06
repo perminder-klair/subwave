@@ -82,6 +82,17 @@ export function handoverOffsetMinutes(): number {
 //     first ask (whenever in the track it fell) was spent on the closing track
 //     rather than on the sign-off's own.
 //
+// Which makes WHO MAY COUNT part of the rule rather than a detail of the
+// caller. An opportunity is a drain/boundary cycle that could itself have
+// carried the incoming host's first words; the wall-clock :00 session roll
+// reaches the same question and is not one. Banking its answer would satisfy
+// the second counter inside the track the sign-off ducked, so the next boundary
+// meets both and the incoming host opens as the closing track begins — the
+// eager-drain row of the table above, restored through the other counter. The
+// queue therefore splits the question (`closingTrackHolds`, pure and free to
+// ask) from the answer (`noteHandoverOpportunityDeclined`, for opportunities
+// only), and each call site states which it is.
+//
 // A pair-drained station therefore hears the incoming host over the closing
 // track's outro, into the transition — the mic-pass's existing spot — and an
 // eagerly-drained one hears them at the boundary that ends it. Both are "one

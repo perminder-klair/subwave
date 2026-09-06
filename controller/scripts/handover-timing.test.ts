@@ -55,17 +55,17 @@ const { setCache } = await import('../src/settings/store.js');
 test('the offset defaults to 5, which is where the sign-off has always aired', async () => {
   await settings.load();
   assert.equal(handoverOffsetMinutes(), 5);
-  assert.equal(beatWindow(55, handoverOffsetMinutes()), 'outro', ':55 opens the outro, as it always did');
-  assert.equal(beatWindow(59, handoverOffsetMinutes()), 'outro');
-  assert.equal(beatWindow(54, handoverOffsetMinutes()), null);
+  assert.equal(beatWindow(55, handoverOffsetMinutes(), HANDOVER_OFFSET_STEP_MINUTES), 'outro', ':55 opens the outro, as it always did');
+  assert.equal(beatWindow(59, handoverOffsetMinutes(), HANDOVER_OFFSET_STEP_MINUTES), 'outro');
+  assert.equal(beatWindow(54, handoverOffsetMinutes(), HANDOVER_OFFSET_STEP_MINUTES), null);
   assert.equal(handoverStatus().offsetMinutes, 5);
 });
 
 test('the offset moves the outro window and is reversible', async () => {
   await settings.update({ handover: { offsetMinutes: 15 } } as never);
   assert.equal(handoverOffsetMinutes(), 15);
-  assert.equal(beatWindow(45, 15), 'outro', 'the sign-off now opens at :45');
-  assert.equal(beatWindow(55, 15), null, 'and :55 is quiet — the window MOVED, it did not widen');
+  assert.equal(beatWindow(45, 15, HANDOVER_OFFSET_STEP_MINUTES), 'outro', 'the sign-off now opens at :45');
+  assert.equal(beatWindow(55, 15, HANDOVER_OFFSET_STEP_MINUTES), null, 'and :55 is quiet — the window MOVED, it did not widen');
 
   await settings.update({ handover: { offsetMinutes: 5 } } as never);
   assert.equal(handoverOffsetMinutes(), 5);
@@ -135,7 +135,7 @@ test('the programme row samples every permitted offset exactly once, in every zo
     for (let zone = 0; zone < 60; zone += 15) {
       let hits = 0;
       for (let processMin = 0; processMin < 60; processMin += row.stride) {
-        if (beatWindow((processMin + zone) % 60, off) === 'outro') hits++;
+        if (beatWindow((processMin + zone) % 60, off, HANDOVER_OFFSET_STEP_MINUTES) === 'outro') hits++;
       }
       assert.equal(hits, 1, `offset ${off}, zone +${zone}: exactly one tick lands in the outro window`);
     }
@@ -145,7 +145,7 @@ test('the programme row samples every permitted offset exactly once, in every zo
 test('the largest offset still leaves the feature beat alone', () => {
   for (let off = HANDOVER_OFFSET_BOUNDS.min; off <= HANDOVER_OFFSET_BOUNDS.max; off += HANDOVER_OFFSET_STEP_MINUTES) {
     for (let m = 35; m < 40; m++) {
-      assert.equal(beatWindow(m, off), 'feature', `offset ${off}: :${m} still belongs to the feature`);
+      assert.equal(beatWindow(m, off, HANDOVER_OFFSET_STEP_MINUTES), 'feature', `offset ${off}: :${m} still belongs to the feature`);
     }
   }
 });
@@ -160,15 +160,25 @@ test('no sign-off, no wait', () => {
 });
 
 // A tiny stand-in for the queue's two counters, so the rule can be walked
-// without a station. `ask()` is one handover opportunity: the mic-pass at a
-// pick cycle, or the standalone programme intro at a session-settled hook.
+// without a station. `ask()` is one handover OPPORTUNITY — a drain/boundary
+// cycle that could itself have carried the incoming host's first words: the
+// mic-pass at a pick cycle, or the standalone programme intro at the
+// session-settled hook the same cycle runs.
+//
+// `peek()` is the other kind of caller, and the distinction is the whole of the
+// fix in this file's second half: the wall-clock :00 session roll asks the same
+// question minutes before any music has moved. It may HOLD on the answer, but
+// it must not bank a decline — see the call-site tests below.
 function station() {
   let boundaries = 0;
   let held = 0;
+  const peek = () =>
+    holdsForClosingTrack({ boundariesSince: boundaries, heldOpportunities: held });
   return {
     trackStarts() { boundaries++; },
+    peek,
     ask() {
-      const hold = holdsForClosingTrack({ boundariesSince: boundaries, heldOpportunities: held });
+      const hold = peek();
       if (hold) held++;
       return hold;
     },
@@ -218,6 +228,26 @@ test('once released, the rule stays released', () => {
   assert.equal(s.ask(), false, 'the hold is a one-track spacer, not a recurring gate');
 });
 
+test('a wall-clock ask holds the intro without spending the closing track', () => {
+  // THE REGRESSION. The :00 session roll reaches the same standalone-intro path
+  // (scheduler.rollSessionNow → programme.onSessionSettled → maybeRunIntro), but
+  // it is a cron minute, not a handover moment: at the default offset the
+  // sign-off airs at :55 over track A and A is usually still playing at :00.
+  //
+  // Banking that answer satisfies the declined-opportunity half inside the very
+  // track the sign-off ducked, so the next boundary — the START of the closing
+  // track — meets both counters and the incoming host opens with no whole track
+  // between the voices at all. That is the eager-drain column of the table this
+  // rule is documented with, reached by the other counter's back door.
+  const s = station();
+  assert.equal(s.peek(), true, ':00 — still inside track A, so the intro waits');
+  assert.equal(s.peek(), true, 'and asking again changes nothing: peeking is free');
+  s.trackStarts();                                   // closing track B begins
+  assert.equal(s.ask(), true, 'B has only just started — the wall-clock ask bought nothing');
+  s.trackStarts();                                   // B ends, C begins
+  assert.equal(s.ask(), false, 'one WHOLE track later, exactly as with no cron ask at all');
+});
+
 test('the thresholds are the ones the rule is documented with', () => {
   assert.equal(HANDOVER_MIN_BOUNDARIES, 1);
   assert.equal(HANDOVER_MIN_HELD, 1);
@@ -244,11 +274,138 @@ test('only a sign-off that reached the stream starts the wait', async () => {
   q.noteHandoverSpeech('programme-outro');
   assert.equal(q.closingTrackHolds(), true, 'the sign-off aired — the incoming host owes a closing track');
   q._trackStarts++;
+  q.noteHandoverOpportunityDeclined();
   assert.equal(q.closingTrackHolds(), false, 'and airs one track later');
 
   // A second sign-off restarts the wait rather than inheriting a satisfied one.
   q.noteHandoverSpeech('programme-outro');
   assert.equal(q.closingTrackHolds(), true);
+  q._handover = null;
+});
+
+// ---------------------------------------------------------------------------
+// THE CALL SITES
+//
+// The rule above is arithmetic and was already pinned; what was NOT pinned is
+// which callers feed it. Both bugs these cover live entirely in the wiring —
+// the pure function is correct in each — so they are asserted against the real
+// queue methods rather than a stand-in.
+// ---------------------------------------------------------------------------
+
+test('asking is free — only a declined OPPORTUNITY spends the closing track', async () => {
+  const { queue: q } = await import('../src/broadcast/queue.js');
+  q._handover = null;
+  q.noteHandoverSpeech('programme-outro');
+
+  // The wall-clock roll's shape: ask, hold, bank nothing. Repeated, because the
+  // cron fires every hour and a station can sit through several with one show.
+  for (let i = 0; i < 3; i++) {
+    assert.equal(q.closingTrackHolds(), true, 'a cron ask inside the sign-off\'s track holds');
+  }
+  assert.equal(q._handover?.heldOpportunities, 0,
+    'and banks nothing — closingTrackHolds() is a question, not a decision');
+
+  q._trackStarts++;                                  // closing track begins
+  assert.equal(q.closingTrackHolds(), true, 'the boundary alone must not release');
+  q.noteHandoverOpportunityDeclined();               // the boundary path's own answer
+  q._trackStarts++;
+  assert.equal(q.closingTrackHolds(), false, 'released one whole track after the sign-off');
+  q._handover = null;
+});
+
+test('a sign-off nobody ever answered does not defer a later mic-pass', async () => {
+  // The leak: the two ask sites are a pending mic-pass and a programme intro,
+  // so an hour that is neither — no persona change, no programme — answers at
+  // neither, and the stamp used to sit there with its opportunity counter at
+  // zero while boundaries piled up. The next unrelated persona changeover then
+  // inherited a hold, which handover-policy.ts is explicit is not what the rule
+  // is about: a changeover with no sign-off behind it is a designed two-voice
+  // moment and must cost nothing.
+  const { queue: q } = await import('../src/broadcast/queue.js');
+  q._handover = null;
+  q._lastSessionId = 'sess-a';
+
+  q.noteHandoverSpeech('programme-outro');           // show A signs off at :55
+  q.onSessionRolled('sess-b');                       // :00 — the roll it is owed to
+  assert.equal(q.closingTrackHolds(), true, 'still owed across the roll it belongs to');
+
+  q._trackStarts += 9;                               // an hour of music, nobody asks
+  q.onSessionRolled('sess-c');                       // the NEXT hour rolls
+  assert.equal(q._handover, null, 'the debt is owed to nobody and is dropped');
+  assert.equal(q.closingTrackHolds(), false, "so show C's mic-pass is not deferred");
+  assert.equal(q.handoverWait(), null, 'and /debug reads "missing", not "waiting"');
+});
+
+test('a repeated maybeRoll with no roll behind it does not age the wait', async () => {
+  // maybeRoll returns the LIVE session when nothing rolled, and both call sites
+  // hand its id straight over — so the no-op case must be a no-op here too, or
+  // a station with frequent track boundaries would age the wait out inside the
+  // very changeover it is owed to.
+  const { queue: q } = await import('../src/broadcast/queue.js');
+  q._handover = null;
+  q._lastSessionId = 'sess-a';
+
+  q.noteHandoverSpeech('programme-outro');
+  for (let i = 0; i < 5; i++) q.onSessionRolled('sess-a');
+  assert.equal(q._handover?.rolledOnce, false, 'no roll happened, so nothing aged');
+  assert.equal(q.closingTrackHolds(), true, 'and the wait still stands');
+  q._handover = null;
+});
+
+test('the incoming host opening settles the debt', async () => {
+  const { queue: q } = await import('../src/broadcast/queue.js');
+  for (const opener of ['handoff', 'programme-intro']) {
+    q._handover = null;
+    q.noteHandoverSpeech('programme-outro');
+    assert.notEqual(q.handoverWait(), null, 'a sign-off is outstanding');
+    q.noteHandoverSpeech(opener);
+    assert.equal(q._handover, null, `"${opener}" is the incoming host — the wait is over`);
+  }
+});
+
+test('/debug reads the live wait, not just the configured thresholds', async () => {
+  const { queue: q } = await import('../src/broadcast/queue.js');
+  q._handover = null;
+  assert.equal(q.handoverWait(), null, 'no sign-off outstanding — an absent greeting is MISSING');
+
+  q.noteHandoverSpeech('programme-outro');
+  assert.deepEqual(q.handoverWait(), { boundariesSince: 0, heldOpportunities: 0, holding: true },
+    'a sign-off outstanding — an absent greeting is WAITING, and for what');
+
+  q._trackStarts++;
+  q.noteHandoverOpportunityDeclined();
+  assert.deepEqual(q.handoverWait(), { boundariesSince: 1, heldOpportunities: 1, holding: false },
+    'both counters met — the next cycle opens the show');
+  q._handover = null;
+});
+
+// ---------------------------------------------------------------------------
+// THE BOUND AND THE FEATURE WINDOW
+// ---------------------------------------------------------------------------
+
+test('the largest permitted offset still clears the feature beat', () => {
+  // HANDOVER_OFFSET_BOUNDS.max is justified by the feature window's literals in
+  // programme-pure.ts, but that file cannot import the bound (it stays
+  // import-free) and schemas/settings.ts may import only zod — so the two
+  // numbers cannot be one constant and this is the only thing standing between
+  // them. Widening the bound, or moving the feature window, fails here rather
+  // than putting a show's sign-off on top of its own feature.
+  for (let off = HANDOVER_OFFSET_BOUNDS.min; off <= HANDOVER_OFFSET_BOUNDS.max; off += HANDOVER_OFFSET_STEP_MINUTES) {
+    for (let m = 0; m < 60; m++) {
+      const w = beatWindow(m, off, HANDOVER_OFFSET_STEP_MINUTES);
+      if (m >= 35 && m < 40) {
+        assert.equal(w, 'feature', `offset ${off}: :${m} belongs to the feature, not the outro`);
+      }
+    }
+  }
+  // And the bound is the LARGEST such offset. One step further opens the outro
+  // ON the feature window, and since the outro is tested first the feature beat
+  // is the one that silently stops happening — which is why the bound is where
+  // it is, and why moving either number has to be a deliberate edit here.
+  const tooFar = HANDOVER_OFFSET_BOUNDS.max + HANDOVER_OFFSET_STEP_MINUTES;
+  assert.equal(60 - tooFar, 35, 'the next step up opens the outro exactly on the feature window');
+  assert.equal(beatWindow(35, tooFar, HANDOVER_OFFSET_STEP_MINUTES), 'outro',
+    'and the sign-off takes the minute, costing the show its feature');
 });
 
 test.after(() => rmSync(root, { recursive: true, force: true }));
