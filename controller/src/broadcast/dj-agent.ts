@@ -41,6 +41,7 @@ import { ARTIST_VARIETY_WINDOW, runArtistGuard } from './dj-agent/artist-guard.j
 import { runAlbumGuard } from './dj-agent/album-guard.js';
 import { albumKeyFor } from '../music/album-facts.js';
 import { hasEraBound, genreResolutionWarningOnce, type VocalMode } from '../music/show-filter.js';
+import type { TransitionEffect } from '../settings/vocab.js';
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { speakClockAllowed } from './clock-policy.js';
@@ -503,12 +504,24 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   if (!fxActive && object.transition && object.transition !== 'normal') {
     queue.log('mix', `transition "${object.transition}" ignored (persona not in DJ mode)`);
   }
-  const sweep = fxActive && object.transition === 'sweep';
-  const washout = fxActive && object.transition === 'washout';
-  const blend = fxActive && object.transition === 'blend';
-  const dissolve = fxActive && object.transition === 'dissolve';
-  const chop = fxActive && object.transition === 'chop';
-  const loop = fxActive && object.transition === 'loop';
+  // Per-effect operator switch (#1565). The agent's PICK_SCHEMA keeps the full
+  // enum whatever the switches say — it is session-anchored, so narrowing it
+  // mid-conversation would contradict the history already in it — and the
+  // prompt guidance names what is off. A model that reaches for a switched-off
+  // gesture anyway is logged for the same reason as the DJ-mode case above,
+  // rather than being dropped in silence.
+  if (fxActive && object.transition && object.transition !== 'normal'
+    && !settings.effectEnabled(object.transition as TransitionEffect)) {
+    queue.log('mix', `transition "${object.transition}" ignored (switched off in settings)`);
+  }
+  const wants = (kind: TransitionEffect) =>
+    fxActive && object.transition === kind && settings.effectEnabled(kind);
+  const sweep = wants('sweep');
+  const washout = wants('washout');
+  const blend = wants('blend');
+  const dissolve = wants('dissolve');
+  const chop = wants('chop');
+  const loop = wants('loop');
   // Attach the link to the pick so it airs as the pick starts (back-announcing
   // the track on-air now), instead of immediately over that on-air track (#189).
   // Stamp `current` as the link's back-announce target so the queue can drop the
@@ -611,14 +624,20 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
   // time like the agent path does — the queue would strip a stale flag anyway
   // (applyMixTransition's dj-mode-off strip), but not stamping it keeps the
   // pick log honest.
+  // The per-effect switches (#1565) are re-checked here for the same reason as
+  // effectsActive: pickNextTrack already narrowed the enum it offered, but the
+  // pick and the enqueue are separated by a model call, so a switch flipped in
+  // between must not reach the annotation.
   const fxActive = settings.effectsActive();
+  const wants = (kind: TransitionEffect) =>
+    fxActive && result.transition === kind && settings.effectEnabled(kind);
   const fx = {
-    sweep: fxActive && result.transition === 'sweep',
-    washout: fxActive && result.transition === 'washout',
-    blend: fxActive && result.transition === 'blend',
-    dissolve: fxActive && result.transition === 'dissolve',
-    chop: fxActive && result.transition === 'chop',
-    loop: fxActive && result.transition === 'loop',
+    sweep: wants('sweep'),
+    washout: wants('washout'),
+    blend: wants('blend'),
+    dissolve: wants('dissolve'),
+    chop: wants('chop'),
+    loop: wants('loop'),
   };
   // `current` is the link's back-announce target (passed to generateLink as
   // `previous`); stamp it so the queue drops the link if a request jumps ahead.

@@ -76,6 +76,7 @@ import {
   normalizeTtsGainMap,
   normalizeTtsSpeedMap,
   takeoverShowId,
+  TRANSITION_EFFECTS,
   validateTtsCorrectionsStrict,
 } from './settings/vocab.js';
 import {
@@ -175,6 +176,7 @@ export {
   SHOW_TOPIC_MAX,
   SOUL_MAX,
   TONE_DIALS,
+  TRANSITION_EFFECTS,
   TTS_CLOUD_PROVIDERS,
   TTS_CORRECTIONS_LIMIT,
   TTS_ENGINES,
@@ -246,6 +248,7 @@ export {
   spokenProperNounDirective,
 } from './settings/persona.js';
 export { writeLiquidsoapSettings } from './settings/liquidsoap.js';
+export { effectEnabled, enabledEffects } from './settings/transition-effects.js';
 export type {
   DjPromptEntry,
   EraWindow,
@@ -1054,6 +1057,15 @@ export async function load() {
     transitions: {
       pairDrain: typeof stored.transitions?.pairDrain === 'boolean' ? stored.transitions.pairDrain : DEFAULTS.transitions.pairDrain,
       stemBlends: typeof stored.transitions?.stemBlends === 'boolean' ? stored.transitions.stemBlends : DEFAULTS.transitions.stemBlends,
+      // Per-effect kill switches (#1565) — same absent-means-default repair as
+      // every sibling, and the default is `true`, so a stored block missing a
+      // field (or missing entirely) normalises to the whole kit on.
+      effects: Object.fromEntries(TRANSITION_EFFECTS.map(k => [
+        k,
+        typeof stored.transitions?.effects?.[k] === 'boolean'
+          ? stored.transitions.effects[k]
+          : DEFAULTS.transitions.effects[k],
+      ])) as typeof DEFAULTS.transitions.effects,
     },
     sfx: {
       enabled: typeof stored.sfx?.enabled === 'boolean' ? stored.sfx.enabled : DEFAULTS.sfx.enabled,
@@ -2091,6 +2103,16 @@ export async function update(patch) {
     const tr = parseSettingsPatchKey<Record<string, unknown>>('transitions', patch.transitions);
     for (const k of ['pairDrain', 'stemBlends'] as const) {
       if (tr[k] !== undefined) (next.transitions as Record<string, unknown>)[k] = tr[k];
+    }
+    // Nested block, so it needs its own per-field loop like scrobble.* does: the
+    // flat copy above would replace the whole `effects` object, and a patch that
+    // sends only `{ dissolve: false }` would silently reset the other five to
+    // whatever the applier happened to write.
+    const fx = tr.effects as Record<string, unknown> | undefined;
+    if (fx !== undefined) {
+      for (const k of TRANSITION_EFFECTS) {
+        if (fx[k] !== undefined) (next.transitions.effects as Record<string, unknown>)[k] = fx[k];
+      }
     }
   }
   // On the shared schema (#1348). The block schemas keep the branches' own

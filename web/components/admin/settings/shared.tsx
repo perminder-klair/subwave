@@ -251,11 +251,18 @@ export interface LoudnessForm {
   source: LoudnessSource;
 }
 
+/** The six DJ transition gestures, per-effect switchable since #1565. Mirrors
+ *  TRANSITION_EFFECTS in controller/src/settings/vocab.ts. */
+export type TransitionEffect = 'sweep' | 'washout' | 'blend' | 'dissolve' | 'chop' | 'loop';
+
 export interface TransitionsForm {
   pairDrain: boolean;   // hold picks until the successor is known (#749 fix)
   stemBlends: boolean;  // pre-rendered stem-blend seams (needs pairDrain + stem cache)
   stemCache: boolean;   // settings.audio.stemCache — persist Demucs stems during analysis
   stemCacheGb: string;  // settings.audio.stemCacheGb — byte budget the LRU sweep enforces
+  /** settings.transitions.effects — which gestures the DJ may reach for. Always
+   *  fully populated in the form; an absent stored field loads as `true`. */
+  effects: Record<TransitionEffect, boolean>;
 }
 
 export interface PrivacyForm {
@@ -354,7 +361,11 @@ export interface SettingsData {
      *  the schedule is edited from the Backup panel, beside Export/Restore, and
      *  posts `{ backups }` through the same POST /settings chokepoint. */
     backups?: { cadence?: string; keep?: number };
-    transitions?: { pairDrain?: boolean; stemBlends?: boolean };
+    transitions?: {
+      pairDrain?: boolean;
+      stemBlends?: boolean;
+      effects?: Partial<Record<TransitionEffect, boolean>>;
+    };
     audio?: { embeddings?: boolean; vocalActivity?: boolean; stemCache?: boolean; stemCacheGb?: number };
     stream?: {
       opusEnabled?: boolean;

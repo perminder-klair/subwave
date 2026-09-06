@@ -31,7 +31,7 @@ import { AlertTriangle } from 'lucide-react';
 import {
   SectionHeader, SaveBar, SettingsFieldError, ELEVENLABS_VS_DEFAULTS, FISH_TTS_DEFAULTS,
   type FormState, type FormUpdater, type SettingsData, type SaveSettings,
-  type LoudnessSource, type LlmForm, type LlmFallbackForm,
+  type LoudnessSource, type LlmForm, type LlmFallbackForm, type TransitionEffect,
 } from './settings/shared';
 import {
   SECTIONS, SECTION_GROUPS, RESTART_PATHS, sectionById, type SectionId,
@@ -52,6 +52,46 @@ import {
   useSettingsMutation,
   useSettingsQuery,
 } from './settings/queries';
+
+// The DJ transition kit (#1565), in the order it reads on the page. The
+// controller's copy of the list is TRANSITION_EFFECTS in
+// controller/src/settings/vocab.ts; this one carries the operator-facing copy,
+// which has no home in the schema mirror. `scripts/transition-effects.test.ts`
+// fails if the two lists stop naming the same six gestures.
+const TRANSITION_EFFECT_FIELDS = [
+  {
+    id: 'sweep',
+    label: 'Sweep',
+    hint: 'The outgoing track sinks under a closing filter while the next one rises clean — the dramatic gear-change across a clashing pair.',
+  },
+  {
+    id: 'washout',
+    label: 'Washout',
+    hint: 'A track dissolves into a tempo-synced echo tail as it ends. Also what makes an over-length track cut by the length cap sound intentional, so switching it off leaves those cuts as plain crossfades.',
+  },
+  {
+    id: 'blend',
+    label: 'Blend',
+    hint: 'A spectral handover between two tempo- and key-locked tracks, so the pair reads as one continuous piece.',
+  },
+  {
+    id: 'dissolve',
+    label: 'Dissolve',
+    hint: 'The outgoing track melts into a beatless reverb wash under the incoming one — the smooth way to hide a jump. The most expensive gesture in the kit: it runs on Liquidsoap\u2019s single streaming thread, so switch it off first if the mixer reports catch-up warnings on a slow host.',
+  },
+  {
+    id: 'chop',
+    label: 'Chop',
+    hint: 'The outgoing track is cut on its own beat, stabs thinning as the next rises through the gaps — the percussive way to lift the energy.',
+  },
+  {
+    id: 'loop',
+    label: 'Exit loop',
+    hint: 'A track\u2019s final bar repeats under whatever follows before it cuts away. Needs the track\u2019s measured tempo.',
+  },
+] as const satisfies readonly { id: TransitionEffect; label: string; hint: string }[];
+
+const TRANSITION_EFFECTS = TRANSITION_EFFECT_FIELDS.map(f => f.id);
 
 /**
  * Read one dotted path out of the form. Returns undefined for a missing branch
@@ -324,6 +364,12 @@ export default function SettingsPanel() {
       transitions: {
         pairDrain: v.transitions?.pairDrain ?? true,
         stemBlends: v.transitions?.stemBlends ?? false,
+        // Absent reads as ON, matching the controller's resolver
+        // (settings/transition-effects.ts) — a station that has never saved
+        // this block has the whole kit.
+        effects: Object.fromEntries(
+          TRANSITION_EFFECTS.map(k => [k, v.transitions?.effects?.[k] !== false]),
+        ) as Record<TransitionEffect, boolean>,
         stemCache: v.audio?.stemCache ?? false,
         stemCacheGb: String(v.audio?.stemCacheGb ?? 15),
       },
@@ -709,6 +755,7 @@ export default function SettingsPanel() {
       transitions: {
         pairDrain: form.transitions.pairDrain,
         stemBlends: form.transitions.stemBlends,
+        effects: form.transitions.effects,
       },
       audio: {
         stemCache: form.transitions.stemCache,
@@ -1384,6 +1431,47 @@ export default function SettingsPanel() {
                       config that can&rsquo;t deliver.
                     </div>
                   </div>
+                </div>
+              </Card>
+            )}
+
+            {form && (
+              <Card title="DJ transition effects" sub="which gestures the DJ may reach for">
+                <div className="field-hint">
+                  Only ever heard when the on-air persona is in DJ mode — this switches off
+                  individual gestures without giving up the rest of the kit. The station still
+                  validates every choice against the audio analysis, so switching one on is
+                  permission, not a guarantee. Applies live; no restart.
+                </div>
+                <div className="grid gap-3">
+                  {TRANSITION_EFFECT_FIELDS.map(({ id, label, hint }) => (
+                    <div className="field" key={id}>
+                      <Label>{label}</Label>
+                      <div className="flex items-center gap-2">
+                        <Seg
+                          options={[
+                            { id: 'on', label: 'On' },
+                            { id: 'off', label: 'Off' },
+                          ]}
+                          value={form.transitions.effects[id] ? 'on' : 'off'}
+                          onChange={v =>
+                            setForm(f =>
+                              f
+                                ? {
+                                  ...f,
+                                  transitions: {
+                                    ...f.transitions,
+                                    effects: { ...f.transitions.effects, [id]: v === 'on' },
+                                  },
+                                }
+                                : f,
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="field-hint">{hint}</div>
+                    </div>
+                  ))}
                 </div>
               </Card>
             )}

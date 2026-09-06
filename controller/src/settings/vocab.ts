@@ -108,6 +108,15 @@ export const LINK_STYLES: readonly string[] = PERSONA_LINK_STYLES;
 // the dial maps to three bands: 0-3 low, 7-10 high, 4-6 neutral. Only a band
 // away from neutral appends a style directive (personaToneDirectives below), so
 // a persona left at the defaults renders a byte-identical prompt to before.
+// The DJ transition kit, in the order it reads on the admin page (#1565). One
+// tuple so the settings block, the normaliser, the patch applier and
+// broadcast/transition-policy.ts all walk the same six names — the stamp keys
+// on a queue item are these exact words. It lives here rather than in the
+// policy module because the settings layer must be able to walk it without
+// importing anything that reads the settings cache.
+export const TRANSITION_EFFECTS = ['sweep', 'washout', 'blend', 'dissolve', 'chop', 'loop'] as const;
+export type TransitionEffect = (typeof TRANSITION_EFFECTS)[number];
+
 export const TONE_DIALS = ['humour', 'localColour', 'warmth'] as const;
 export const DIAL_NEUTRAL = PERSONA_DIAL_NEUTRAL;
 

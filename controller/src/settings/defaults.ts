@@ -579,6 +579,19 @@ export const DEFAULTS = {
     pairDrain: true,
     // Needs pairDrain plus the heavy analyzer with a warmed stem cache.
     stemBlends: false,
+    // Per-effect kill switches (#1565). All on: the kit is what DJ mode IS, and
+    // before this block the only way to drop one gesture was to turn djMode off
+    // and lose all six. Resolved through broadcast/transition-policy.ts, which
+    // reads an absent or malformed block as "all on" — so this default and a
+    // station that has never written the block are the same station.
+    effects: {
+      sweep: true,
+      washout: true,
+      blend: true,
+      dissolve: true,
+      chop: true,
+      loop: true,
+    },
   },
   // When disabled, the segment-director agent is never shown the effect
   // catalogue, so it stops garnishing spoken breaks with stingers. The files stay

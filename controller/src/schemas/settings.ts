@@ -538,12 +538,30 @@ export const handoverPatchSchema = settingsBlockOf({
   offsetMinutes: handoverOffsetMinutesSchema,
 });
 
+// Per-effect kill switches for the DJ transition kit (#1565). A nested block
+// rather than six flat keys beside pairDrain/stemBlends: those two are drain
+// SCHEDULING, these are which gestures may air, and one operator turning off
+// the dissolve should not read as a sibling of the pair-drain kill switch.
+//
+// Every field is absent-means-on, so a station that has never written this
+// block keeps the whole kit — the resolver is broadcast/transition-policy.ts
+// and it is the only place that rule is stated.
+const transitionEffectsPatchSchema = settingsBlockOf({
+  sweep: settingsBoolLike(),
+  washout: settingsBoolLike(),
+  blend: settingsBoolLike(),
+  dissolve: settingsBoolLike(),
+  chop: settingsBoolLike(),
+  loop: settingsBoolLike(),
+});
+
 export const transitionsPatchSchema = settingsBlockOf({
   // stemBlends is documented as needing pairDrain, but that dependency is
   // resolved at drain time in broadcast/drain-policy.ts and has never been a
   // save-time refusal. Do not add one here.
   pairDrain: settingsBoolLike(),
   stemBlends: settingsBoolLike(),
+  effects: transitionEffectsPatchSchema,
 });
 
 export const webhooksPolicyPatchSchema = settingsBlockOf({

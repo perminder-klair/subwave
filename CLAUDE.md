@@ -156,9 +156,10 @@ Rules that are expensive to rediscover. Each links to its full reasoning — **r
 
 ### Audio rules
 
-`radio.liq` has its own set — dead-air guard position, crossfade duration, `smooth_add` ducking, atomic marker writes, `on_metadata` placement. **All of them, with the measured numbers, are in [`liquidsoap/CLAUDE.md`](liquidsoap/CLAUDE.md).** The two most easily broken:
+`radio.liq` has its own set — dead-air guard position, crossfade duration, `smooth_add` ducking, atomic marker writes, `on_metadata` placement. **All of them, with the measured numbers, are in [`liquidsoap/CLAUDE.md`](liquidsoap/CLAUDE.md).** The three most easily broken:
 
 - **Keep fade duration equal to the cross buffer.** Shorter fades inside a fixed buffer let the outgoing track play full while the incoming ramps, summing to +6 dB. Vary the buffer, not the fade.
+- **A transition effect's operator cost is its SHAPE on one thread (#1565).** The dissolve's four combs sum and subtract the dry ONCE — never per tap. The per-tap form was the same arithmetic and twelve more full-frame operators, all on Liquidsoap's single streaming thread, and it stalled the clock on ~1 dissolve in 5 (`Latency is too high`); the fold is 1.87x cheaper for bit-identical output. Neither a shorter filter cascade nor fewer combs is worth taking after it — both were measured. Effects are also individually switchable now (`transitions.effects.*`, all default on, resolved by `settings/transition-effects.ts`), so a host that cannot afford a gesture drops that one instead of `djMode` and all six. → [`liquidsoap/CLAUDE.md`](liquidsoap/CLAUDE.md)
 - **Stick with `smooth_add` for ducking.** An RMS sidechain follower drove `music_bus` to silence (`f38a9af`). `smooth_add` cares only whether the channel has signal. Both depths are operator settings (`ducking.voice` / `ducking.intro`, defaults 0.22 / 0.30) on the usual `liquidsoap_*.txt` lifecycle — read once at mixer startup, so a change needs a restart. `p` is the fraction of the music LEFT UP, so smaller is deeper and the two must not be swapped.
 
 Loudness: both sides of a rendered seam are gained by `music/loudness.ts` `resolveGainDb` — the same figure the drain stamps on a real track — never re-derived from the analyzer's LUFS, which ignores ReplayGain tags and the caps.

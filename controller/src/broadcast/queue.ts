@@ -38,6 +38,7 @@ import type { TurnMeta } from './session.js';
 import type { PromptMemoryEntry } from './prompt-memory.js';
 import { getFullContext, getClockContext, energyForDaypart } from '../context.js';
 import * as settings from '../settings.js';
+import { TRANSITION_EFFECTS } from '../settings/vocab.js';
 import { logEvent } from '../observability/events.js';
 import { djCallsAllowed, presentListeners } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
@@ -925,6 +926,22 @@ class Queue {
       return;
     }
 
+    // Per-effect operator switches (#1565) — the enforcement copy. Both pick
+    // paths already refuse to stamp a switched-off gesture, but a switch can be
+    // flipped between the pick and this drain, and this is the chokepoint every
+    // stamp passes through on its way to getAnnotatedUri.
+    //
+    // Targeted, not stripEffect(): that drops all six at once, which is right
+    // when the whole kit is off (no DJ mode, no predecessor) and wrong here —
+    // sweep shapes ENTRY and washout EXIT, so one pick can legitimately carry
+    // both and switching off the sweep must not take the washout with it.
+    for (const kind of TRANSITION_EFFECTS) {
+      if (item.track[kind] && !settings.effectEnabled(kind)) {
+        delete item.track[kind];
+        this.log('mix', `${kind} dropped (switched off in settings)`);
+      }
+    }
+
     const idx = this.upcoming.indexOf(item);
     const prevTrack = (idx > 0 ? this.upcoming[idx - 1]?.track : null) || this.current?.track || null;
     if (!prevTrack) {
@@ -966,7 +983,11 @@ class Queue {
     // A DJ-chosen loop exit already makes a capped cut sound intentional —
     // don't stack the auto-washout on top of it (both shape the same ending,
     // and radio.liq's washout-wins precedence would silently eat the loop).
-    if (cappedExit && !item.track.washout && !item.track.loop) {
+    // The auto-arm honours the washout switch too (#1565). It is deterministic
+    // rather than a DJ choice, but it is the same gesture at the same cost —
+    // an operator who switched the washout off did not ask for it back on the
+    // capped exits. The cut still happens; it is just a plain crossfade.
+    if (cappedExit && !item.track.washout && !item.track.loop && settings.effectEnabled('washout')) {
       item.track.washout = true;
       item.track.washoutAuto = true;
     }
