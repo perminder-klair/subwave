@@ -22,10 +22,13 @@ function playDayLabel(iso: string): string {
 }
 
 // A play is an air-time snapshot, not a library row, so the thumb and the shared
-// row actions get a Track composed from it. `trackId` is null for a track that has
-// since left the library: the thumb still gets the words for its letter tile, but
-// there is nothing left to heart, block or queue, so those rows render no action
-// cluster at all rather than three dead buttons.
+// row actions get a Track composed from it. `trackId` is null when the annotated
+// URI carried no `subsonic_id` — untracked auto-playlist plays, mainly (see the
+// `sourceTrackId` note in broadcast/queue.ts). Nothing is ever nulled after the
+// fact, so this says nothing about whether the track is still in the library: a
+// removed track keeps its id here and its actions fail at the server. The thumb
+// still gets the words for its letter tile, but an id-less play has nothing to
+// heart, block or queue, so it renders the dash below instead of dead buttons.
 function historyTrack(p: PlayEntry): Track {
   return {
     id: p.trackId || '',
@@ -113,7 +116,13 @@ export function HistoryTab({
                     <span className="hidden w-24 shrink-0 text-right text-[11px] text-muted sm:block" title="how it was picked">
                       {playSourceLabel(p)}
                     </span>
-                    {p.trackId && (
+                    {!p.trackId ? (
+                      /* Says WHY the row is action-less. Without it an operator
+                         cannot tell a play with no id from buttons that failed to
+                         render — which is the work the old disabled Queue button's
+                         tooltip was doing. */
+                      <span className="shrink-0 text-[11px] text-muted" title="no track id recorded for this play">—</span>
+                    ) : (
                       /* Three buttons where there was one, so Queue drops to its icon
                          below sm: — the row still has to leave the title readable on a
                          phone. */

@@ -12,8 +12,10 @@ import { cn } from '../../../lib/cn';
 import type { BlockType, LikeIndex, Track } from './types';
 import { useDismissOnOutside } from './bits';
 
-// The actions column is a FIXED grid track (.lib-row in globals.css). Uncapped, a
-// heavily-liked track widens the cluster until the actions overlap mood/energy.
+// Capped for the Browse grid, where the actions column is a FIXED track (.lib-row
+// in globals.css): uncapped, a heavily-liked track widens the cluster until the
+// actions overlap mood/energy. History rows are a plain flex row and would survive
+// a wider count, but one cap keeps the heart the same size on both.
 const countLabel = (n: number) => (n > 99 ? '99+' : String(n));
 
 // Inline `likedByOperator`/`likeCount` if the row has them, else the shared index.
