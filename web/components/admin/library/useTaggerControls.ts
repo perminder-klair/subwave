@@ -143,11 +143,12 @@ export function useTaggerControls() {
   // Navidrome — thousands of requests on a big library — so the controller
   // never starts that walk on a read, and this button is what does.
   //
-  // A POST, not the GET's ?refresh=1: this has a side effect measured in
-  // minutes, and a GET is the shape something eventually polls by accident.
+  // Its own POST rather than a flag on the coverage GET: this has a side
+  // effect measured in minutes, and a read that can start it is the shape
+  // something eventually polls by accident — which is the bug being fixed.
   // The response carries the snapshot the scan is starting from, so the meter
   // flips to "counting…" without waiting for the next poll to say so.
-  const checkLibraryM = useAdminMutation<{ coverage?: Coverage }, void>({
+  const countLibraryM = useAdminMutation<{ coverage?: Coverage }, void>({
     request: (_v, fetcher) => adminJson<{ coverage?: Coverage }>(
       fetcher, '/library/coverage/refresh', { method: 'POST' },
     ),
@@ -335,8 +336,8 @@ export function useTaggerControls() {
     toggleVocal: () => { if (vocalEnabled != null) toggleVocalM.mutate(!vocalEnabled); },
     toggleQuiet: () => { if (quietEnabled != null) toggleQuietM.mutate(!quietEnabled); },
     saveQuietMinutes: (minutes: number) => { saveQuietMinutesM.mutate(minutes); },
-    checkLibrary: () => { checkLibraryM.mutate(); },
-    checkingLibrary: checkLibraryM.isPending,
+    countLibrary: () => { countLibraryM.mutate(); },
+    countingLibrary: countLibraryM.isPending,
     loadFailures, clearFailures,
   };
 }

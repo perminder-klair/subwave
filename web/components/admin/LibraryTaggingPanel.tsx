@@ -28,6 +28,10 @@ export interface Coverage {
   vocalWanted?: boolean;
   scannedAt: string | null;
   scanning: boolean;
+  // Why the last count failed; null = it worked, or none has run. Optional so an
+  // older controller (which never sends it) reads as "no failure" rather than
+  // rendering an error banner it has no way to clear.
+  scanError?: string | null;
   // null = still probing; false = no analysis backend (sidecar/librosa) running.
   analysisAvailable?: boolean | null;
   analysisBackend?: string | null;
@@ -200,8 +204,8 @@ interface TaggingPanelProps {
   onReconcile: () => void;
   // Count the library — the only expensive read on this page, and the operator
   // asks for it (#1570). `coverage.scannedAt` stamps the answer already shown.
-  onCheckLibrary: () => void;
-  checkingLibrary: boolean;
+  onCountLibrary: () => void;
+  countingLibrary: boolean;
   // Wipes ALL tagging data and starts fresh, behind a typed confirmation.
   onReset: () => void;
   // sounds-like (CLAP) controls — null until the first settings poll lands.
@@ -376,12 +380,10 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   const anyWorkDone = (tagged ?? 0) > 0 || (analysed ?? 0) > 0 || audioOn || vocalOn;
   const remaining = total != null && tagged != null ? Math.max(0, total - tagged) : null;
   const running = !!p.tagger?.running;
-  // Distinct from a FAILED scan, where `scanning` is back to false but `total`
-  // stays null: only an active count shows "checking…" and gates Start, so a
-  // failed scan falls through to "Library not counted yet" — the same place a
-  // station that has simply never been counted sits.
   const scanning = !!p.coverage?.scanning;
-  const libraryCounting = scanning && total == null;
+  // A first count still in flight — `total` is null but a number is coming, so
+  // the CTA says "counting…" rather than offering a run it would gate anyway.
+  const awaitingFirstCount = scanning && total == null;
   // `total` is the ONE figure here that isn't live: it is whatever the last
   // count found, and counting means walking every album in Navidrome, so it
   // only happens when the operator presses for it (#1570). Everything else on
@@ -389,6 +391,11 @@ export default function TaggingPanel(p: TaggingPanelProps) {
   // number with no date next to it reads as current, and this one may not be.
   const countedAt = p.coverage?.scannedAt ?? null;
   const countLabel = scanning ? 'Counting…' : countedAt ? 'Re-count' : 'Count library';
+  // A count that FAILED is not a count that never happened, and the button's
+  // only other feedback is the total appearing — so say so. Suppressed while a
+  // fresh attempt is in flight, so a retry doesn't show the old error under a
+  // spinner.
+  const countError = !scanning ? (p.coverage?.scanError ?? null) : null;
   const analysisOff = p.coverage?.analysisAvailable === false;
   // 'pending-heavy' = lean/older engine that can't do this dimension;
   // 'incapable' = bpm/key ran but produced none. Both are enable-independent,
@@ -640,9 +647,14 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             </span>
             <Btn
               sm
-              onClick={p.onCheckLibrary}
-              disabled={scanning || p.checkingLibrary}
-              title="Counts every track in Navidrome — one request per album, so it takes a while on a big library. Nothing else on this page needs it."
+              onClick={p.onCountLibrary}
+              // Also gated on `running`: a tag run is already walking Navidrome,
+              // and a count pressed on top of it is a second concurrent walk of
+              // the same catalogue. The run refreshes the total at exit anyway.
+              disabled={scanning || p.countingLibrary || running}
+              title={running
+                ? 'A tagging run is already walking Navidrome — it refreshes the total when it finishes.'
+                : 'Counts every track in Navidrome — one request per album, so it takes a while on a big library. Nothing else on this page needs it.'}
             >
               <RefreshCw size={11} className={scanning ? 'animate-spin' : undefined} />{' '}
               {countLabel}
@@ -673,6 +685,12 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             · <span className="mono-num">{moodCount}</span> moods in use · last tag {lastTag}
             {countedAt && ` · counted ${relTime(countedAt)} ago`}
           </div>
+          {countError && (
+            <div className="mt-2 text-[11px] text-[var(--danger)]">
+              Couldn&rsquo;t count the library: {countError}
+              {countedAt ? ' — showing the previous count.' : ''}
+            </div>
+          )}
           {embeddingStale && (
             <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border border-l-[3px] border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_8%,transparent)] px-3 py-2 text-[11px] text-ink">
               <span>
@@ -1142,7 +1160,7 @@ export default function TaggingPanel(p: TaggingPanelProps) {
       {!running ? (
         <div className="flex flex-wrap items-center gap-4 p-4 sm:p-6">
           <div className="min-w-0 flex-1 text-[13px] sm:min-w-[220px]">
-            {libraryCounting ? (
+            {awaitingFirstCount ? (
               <>Counting your library&hellip; a big one takes a few minutes.</>
             ) : remaining != null && remaining > 0 ? (
               <>
@@ -1155,8 +1173,8 @@ export default function TaggingPanel(p: TaggingPanelProps) {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2.5">
-            <Btn lg tone="accent" onClick={() => openModal()} disabled={p.busy || libraryCounting}>
-              {libraryCounting ? (
+            <Btn lg tone="accent" onClick={() => openModal()} disabled={p.busy || awaitingFirstCount}>
+              {awaitingFirstCount ? (
                 <>
                   <Loader2 size={13} className="animate-spin" /> Checking library…
                 </>

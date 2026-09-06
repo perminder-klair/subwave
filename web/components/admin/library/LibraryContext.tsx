@@ -135,11 +135,13 @@ export function LibraryProvider({
   // a timer: the total behind it is a full album-by-album walk of Navidrome,
   // and before #1570 an idle Library tab asked for it once a minute forever
   // while the controller kicked that walk off the read path. The count is now
-  // the operator's own press (useTaggerControls' checkLibrary).
+  // the operator's own press (useTaggerControls' countLibrary).
   //
-  // No `staleTime` key: the client's 30s default is what we want, and passing
-  // an explicit undefined would overwrite it with 0 and refetch on every
-  // remount (see web/CLAUDE.md rule 4).
+  // No `staleTime` key: the client's 30s default is what we want. Rule 4 in
+  // web/CLAUDE.md ("never pass an options key you don't mean") is about
+  // useAdminQuery's conditional spread and doesn't literally apply to a raw
+  // useQuery, but the reason behind it does — an explicit `staleTime: 0` was
+  // what made this refetch on every remount, so the key is simply absent.
   const coverageQuery = useQuery({
     queryKey: libraryKeys.coverage(),
     queryFn: ({ signal }) => adminJson<Coverage>(
