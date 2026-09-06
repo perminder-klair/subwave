@@ -242,6 +242,13 @@ function spawnChild(mode: TaggerMode, args: string[], detail: string) {
   tagger.mode = mode;
   tagger.progress = null;
 
+  // A never-counted library has a null `total`, which nulls every percentage on
+  // the panel — so the hero meter would read "—" for this whole run and only
+  // fill in at exit. Counting is still not on a read path: the operator pressed
+  // Start, and this run is about to walk the catalogue regardless. Guarded on
+  // hasCount() so it fires at most once per install rather than on every run.
+  if (!coverage.hasCount()) coverage.refresh().catch(() => {});
+
   // Write the cross-restart lock: pid is the detached leader, so recoverFromRestart
   // can SIGTERM the whole group after a controller restart. Guarded on a real pid.
   if (child.pid) writePidfile({ pid: child.pid, mode, startedAt, args });
@@ -300,9 +307,10 @@ function spawnChild(mode: TaggerMode, args: string[], detail: string) {
       startedAt,
       finishedAt: new Date().toISOString(),
     };
-    // The run just walked the whole Navidrome catalogue, so library-coverage's
-    // 6h-TTL total is now the stalest number on the page — refresh it in the
-    // background (fire-and-forget) so the hero meter reflects the fresh count.
+    // The run just walked the whole Navidrome catalogue, and since #1570
+    // nothing recounts unattended — so this is the one moment the total can be
+    // refreshed without an operator asking. Fire-and-forget; the panel picks
+    // the new figure up on its next poll.
     coverage.refresh().catch(() => {});
     // A clean tagging/reconcile run may have added new library songs — top up any
     // sync-enabled playlists (append-only, no-op when none exist). Fire-and-forget
