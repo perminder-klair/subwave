@@ -155,9 +155,11 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const [cronInvalid, setCronInvalid] = useState(false);
   const [knownContext, setKnownContext] = useState<string[]>(CONTEXT_FIELDS_FALLBACK);
 
-  // The skill's own declared knobs (news' feed/feedMaxItems, …) — runtime data
-  // read off tool.mjs, not part of the shared schema, so it keeps its own
-  // state + dirty snapshot outside the RHF form (see SkillFormValues above).
+  // The skill's own declared knobs (a tool.mjs `configFields` export, or the
+  // generic feed/feedMaxItems pair every tool-less skill is offered) — runtime
+  // data resolved by the controller's loader, not part of the shared schema, so
+  // it keeps its own state + dirty snapshot outside the RHF form (see
+  // SkillFormValues above).
   const [config, setConfig] = useState<Record<string, string>>({});
   const [configSnapshot, setConfigSnapshot] = useState<string>(() => configKey({}));
   const [tagDraft, setTagDraft] = useState('');   // the tag input's in-progress text

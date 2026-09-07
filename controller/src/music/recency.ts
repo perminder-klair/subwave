@@ -146,18 +146,35 @@ const ARTIST_ROOT_ALIASES = new Map<string, string>([
   ['bill evans trio', 'bill evans'],
 ]);
 
-// The fold under every artist-NAME comparison: case, curly-vs-straight
-// apostrophes ("Guns N’ Roses" and "Guns N' Roses" are one act, tagged either
-// way depending on which ripper wrote the file) and runs of whitespace. Nothing
-// here changes which act a string names.
+// The fold under every free-text NAME comparison — an artist credit, an album
+// title, anything an operator typed against something a ripper tagged: case,
+// curly-vs-straight apostrophes ("Guns N’ Roses" and "Guns N' Roses" are one
+// act, tagged either way depending on which ripper wrote the file) and runs of
+// whitespace. Nothing here changes which thing a string names, which is what
+// makes it safe in front of an ABSOLUTE list.
 //
-// Exported because the blocklist keys BOTH sides of its artist match with it
-// (#1603) — a stored entry name and an incoming credit. A normaliser copied
-// into the consumer is how a stored value stops matching the value that stored
-// it, so there is one of these.
-export function artistNameKey(raw: unknown): string {
+// Exported because the blocklist keys BOTH sides of every name match with it —
+// a stored entry name and an incoming row — across its artist tier (#1603) and
+// its album tier (#1611). A normaliser copied into the consumer is how a stored
+// value stops matching the value that stored it, so there is one of these.
+//
+// Deliberately NOT the rest of artistRootKey's folding (article strip, root
+// aliases, join split): that widens a MATCHING key, which is right for a
+// preference the repeat guard reads as "pick someone else" and wrong for a hard
+// drop with no never-starve behind it.
+//
+// `schemas/blocklist.ts` normText RESTATES this fold rather than importing it —
+// a mirrored schema module may import only zod — so the two are pinned in step
+// by scripts/blocklist-name-fold.test.ts. Change one, change both.
+export function nameKey(raw: unknown): string {
   return String(raw ?? '').toLowerCase().replace(APOSTROPHES, "'").replace(/\s+/g, ' ').trim();
 }
+
+// The artist-facing name for the same fold, kept because every artist call site
+// and every comment about them says `artistNameKey`. One function, two names:
+// an album title is not an artist, and a site keying one through a helper named
+// for the other is what invites a well-meaning local copy back in.
+export const artistNameKey = nameKey;
 
 // The LEAD artist of a credit — `artistKey` collapsed onto its primary act, so
 // a collaboration shares a key with the artist who leads it (#1251):
@@ -342,8 +359,7 @@ export function albumCooldownExempt(song: CandidateLike): boolean {
 // nobody asked for.
 export function albumKey(song: CandidateLike): string {
   if (!song || albumCooldownExempt(song)) return '';
-  const album = String(song.album || '')
-    .toLowerCase().replace(APOSTROPHES, "'").replace(/\s+/g, ' ').trim();
+  const album = nameKey(song.album);
   if (!album) return '';
   const artist = artistRootKey({ artist: song.albumArtist || song.artist });
   if (!artist) return '';

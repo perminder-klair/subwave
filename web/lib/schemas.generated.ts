@@ -57,18 +57,33 @@ export interface SeasonWindow {
 }
 
 /**
- * Trim, lowercase, collapse whitespace — the normalisation the `tag`, `mood`,
- * `album` and `title` rule fields compare with. Used here only for DEDUPE; the
- * stored value keeps its original casing.
+ * Trim, lowercase, collapse whitespace, fold curly apostrophes onto straight
+ * ones — the normalisation the `tag`, `mood`, `album` and `title` rule fields
+ * compare with. Used here only for DEDUPE; the stored value keeps its original
+ * casing.
  *
- * NOT what the `artist` field compares with any more (#1603): an artist value
- * and an incoming credit are both keyed by `recency.artistNameKey`, which folds
- * curly apostrophes as well, and the credit is additionally read as every act
- * ON it. So two artist values differing only in apostrophe style survive the
- * dedupe here and compile to one matching key — harmless, but the two are no
- * longer the same rule.
+ * This is `recency.nameKey` (a.k.a. `artistNameKey`, which the `artist` field
+ * compiles with since #1603), RESTATED rather than imported: a mirrored schema
+ * module may import only zod, so the fold cannot cross into this file. The two
+ * must stay identical and are pinned in step by
+ * `scripts/blocklist-name-fold.test.ts` — change one, change both.
+ *
+ * The apostrophe fold arrived here with #1611, which folded the id list's ALBUM
+ * tier onto the same normaliser as its artist tier. Rules and id entries answer
+ * the same question about the same row, so a fold on one side only would have
+ * moved the disagreement rather than fixed it: an `album` RULE spelled with a
+ * curly apostrophe would still miss the straight-apostrophe row that an album
+ * ENTRY now catches. It WIDENS an absolute list — folding two spellings of one
+ * name into one key blocks rows the previous spelling missed. Nothing about
+ * which thing a string names changes, which is what makes that safe.
+ *
+ * Punctuation beyond the apostrophe is deliberately NOT folded: a hyphen
+ * distinguishes real tag vocabulary (`trip-hop` is not `trip hop` here), and
+ * `music/scene-references.ts` runs this exact predicate to decide whether a
+ * genre merge silences a `tag` rule.
  */
-export const normText = (s: unknown) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+export const normText = (s: unknown) =>
+  String(s ?? '').toLowerCase().replace(/[‘’ʼ´`]/g, "'").replace(/\s+/g, ' ').trim();
 
 // A month/day pair. Both halves are `Number(x)` + an integer/range test, not
 // z.number().int(), because the admin card posts them from <input type=number>
@@ -2664,6 +2679,29 @@ export function settingsRawStringLike(max: number, message: string) {
  * pre-flight and the read path alike.
  */
 export const STREAM_COUNTRY_HEADER_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
+
+/**
+ * `llm.headers` / `llm.fallback.headers` — extra request headers the
+ * openai-compatible transport sends on every call (#1618).
+ *
+ * The NAME grammar is `STREAM_COUNTRY_HEADER_RE`, not a second copy of it:
+ * both fields are naming an HTTP header and the rule is the same RFC 7230
+ * token, so this is an alias for the same reason `settings/vocab.ts`'s `ID_RE`
+ * aliases `SHOW_ID_RE`. The VALUE grammar is printable ASCII on one line — a
+ * header value is latin-1 on the wire, and a CR/LF in one is header injection
+ * rather than a typo, so it is REFUSED rather than repaired.
+ *
+ * They live here for the same reason the country header's rule does: the admin
+ * form runs the mirrored copy so a bad header name is caught before the save,
+ * and the save path (`applyLlmLegPatch`) and the lenient load path
+ * (`normalizeLlmHeaders`) import them rather than each restating the rule.
+ */
+export const LLM_HEADER_NAME_RE = STREAM_COUNTRY_HEADER_RE;
+export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
+
+/** At most this many custom headers per leg, and this long a value. */
+export const LLM_HEADERS_MAX = 10;
+export const LLM_HEADER_VALUE_MAX = 500;
 
 /** Path length cap for `stream.geoipDbPath` — a generous PATH_MAX. */
 export const STREAM_GEOIP_DB_PATH_MAX = 512;

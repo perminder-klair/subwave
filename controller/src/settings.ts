@@ -68,6 +68,7 @@ import {
   coerceGuestPersonaIds,
   isDefaultTakeover,
   mintId,
+  normalizeLlmHeaders,
   normalizeLlmKeys,
   normalizeLlmProviderBaseUrls,
   normalizeMoodMap,
@@ -864,6 +865,13 @@ export async function load() {
       providerBaseUrls: llmBaseUrls,
       baseUrl: llmBaseUrls[llmProvider]
         ?? (typeof stored.llm?.baseUrl === 'string' ? stored.llm.baseUrl.trim() : DEFAULTS.llm.baseUrl),
+      // Extra openai-compatible request headers (#1618). Malformed entries are
+      // dropped rather than throwing — this block does NOT spread DEFAULTS, so
+      // a field missing HERE saves fine and then vanishes on the next cold
+      // load; see repeatPenalty below for what that failure looks like. A
+      // settings.json written before the field existed loads as {}, which sends
+      // no extra headers at all.
+      headers: normalizeLlmHeaders(stored.llm?.headers),
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
       // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
@@ -940,6 +948,7 @@ export async function load() {
           providerBaseUrls: fbBaseUrls,
           baseUrl: fbBaseUrls[fbProvider]
             ?? (typeof fb.baseUrl === 'string' ? fb.baseUrl.trim() : DEFAULTS.llm.fallback.baseUrl),
+          headers: normalizeLlmHeaders(fb.headers),
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
