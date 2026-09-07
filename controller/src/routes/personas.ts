@@ -241,6 +241,9 @@ router.post('/personas/community/:slug/install', requireAdmin, async (req, res) 
 // bundle-pure.personaCloneVoice), and the operator's own jingles whose text
 // names this DJ. Whole-station export stays out of scope: that is what
 // GET /backup/export already is.
+//
+// Refuses (409) when the persona names a clone sample this station no longer
+// has: the zip would be well-formed and the DJ inside it mute.
 // ---------------------------------------------------------------------------
 router.get('/personas/:id/export', requireAdmin, async (req, res) => {
   try {
@@ -249,7 +252,9 @@ router.get('/personas/:id/export', requireAdmin, async (req, res) => {
       return res.status(400).json({ error: `invalid persona id: ${id}` });
     }
     const built = await buildPersonaBundle(id);
-    if (!built) return res.status(404).json({ error: `no such persona: ${id}` });
+    // A 409 here is the export refusing to ship a persona whose clone sample is
+    // gone from this station — the bundle would import 200 into a mute DJ.
+    if (!built.ok) return res.status(built.status).json({ error: built.error });
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader(
       'Content-Disposition',

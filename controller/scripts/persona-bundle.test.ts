@@ -1,7 +1,7 @@
 // Persona bundles (#1620) — export a DJ as one zip, import it on another
 // station and have it actually speak.
 //
-// Four properties carry the feature, and each is a way it can silently be
+// Six properties carry the feature, and each is a way it can silently be
 // wrong rather than visibly broken:
 //
 //  - A cloned voice must TRAVEL. chatterbox/pocket-tts read `tts.voice` as a
@@ -19,6 +19,14 @@
 //  - There is ONE create path. A bundle import and a community install both
 //    go through personas/install.ts, so the roster cap and the duplicate-name
 //    refusal cannot disagree between them.
+//  - An adopted filename is pinned to a CHARACTER CLASS. A jingle filename
+//    becomes a LINE of jingles.m3u, which Liquidsoap reloads on watch, so a
+//    newline inside one adds a rotation entry nobody chose. A bundle is a file
+//    from another operator; an extension test is not a filename check.
+//  - A REFUSED import writes NOTHING — and "nothing" has to be checked against
+//    the jingle dir, jingles.json and jingles.m3u, not just state/voices/.
+//    A stray jingle is not litter, it is audio on air, so the earlier
+//    voices-only assertion is precisely the gap that let a half-write through.
 //
 // STATE_DIR is redirected at a throwaway dir BEFORE the first import so
 // config.ts derives its voice/jingle dirs there — hence the dynamic imports.
@@ -93,6 +101,7 @@ writeFileSync(join(root, 'settings.json'), JSON.stringify({
 const AdmZip = (await import('adm-zip')).default;
 const pure = await import('../src/personas/bundle-pure.js');
 const settings = await import('../src/settings.js');
+const { setCache } = await import('../src/settings/store.js');
 const { buildPersonaBundle, applyPersonaBundle } = await import('../src/personas/bundle.js');
 
 // ── The pure decisions ───────────────────────────────────────────────────────
@@ -159,8 +168,8 @@ let exported: Buffer;
 
 test('the export carries the JSON, the clone sample and only this DJ jingles', async () => {
   const built = await buildPersonaBundle('p_nova');
-  assert.ok(built, 'p_nova must export');
-  exported = built.zip.toBuffer();
+  assert.equal(built.ok, true, (built as any).error);
+  exported = (built as any).zip.toBuffer();
 
   const zip = new AdmZip(exported);
   const names = zip.getEntries().map(e => e.entryName).sort();
@@ -189,7 +198,37 @@ test('the export carries the JSON, the clone sample and only this DJ jingles', a
 });
 
 test('an unknown persona exports nothing rather than an empty zip', async () => {
-  assert.equal(await buildPersonaBundle('p_nobody'), null);
+  const built = await buildPersonaBundle('p_nobody');
+  assert.equal(built.ok, false);
+  assert.equal((built as any).status, 404);
+});
+
+test('a persona whose clone sample is GONE is refused, not shipped mute', async () => {
+  // The bundle would be well-formed — manifest.voice null beside a persona JSON
+  // still naming the file — and would import 200 into a DJ that fails its synth
+  // on every line. This is the only end of the wire that can still fix it.
+  const settingsPath = join(root, 'settings.json');
+  const before = readFileSync(settingsPath, 'utf8');
+  const cfg = JSON.parse(before);
+  cfg.personas.push({
+    id: 'p_ghost',
+    name: 'Ghost',
+    tagline: '',
+    soul: 'Clones from a sample this station lost.',
+    frequency: 'quiet',
+    tts: { engine: 'chatterbox', cloudProvider: 'openai', voice: 'not-here.wav', gainDb: 0, speed: 1 },
+  });
+  writeFileSync(settingsPath, JSON.stringify(cfg));
+  setCache(null);
+
+  const built = await buildPersonaBundle('p_ghost');
+  assert.equal(built.ok, false);
+  assert.equal((built as any).status, 409);
+  assert.match((built as any).error, /not in the voice library/);
+
+  writeFileSync(settingsPath, before);
+  setCache(null);
+  await settings.load();
 });
 
 // ── Import ───────────────────────────────────────────────────────────────────
@@ -288,4 +327,163 @@ test('a member outside the bundle folders is ignored, not fatal', async () => {
   const outcome = await applyPersonaBundle(zip.toBuffer());
   assert.equal(outcome.ok, true, (outcome as any).error);
   assert.equal(readdirSync(root).includes('extras'), false, 'an unknown member must not be written');
+});
+
+// ── Nothing is written behind a refusal ──────────────────────────────────────
+
+/** Every state file the import can touch, as one comparable snapshot. */
+function stateSnapshot() {
+  const read = (p: string) => {
+    try { return readFileSync(p, 'utf8'); } catch { return null; }
+  };
+  return JSON.stringify({
+    voices: readdirSync(VOICES).sort(),
+    jingles: readdirSync(JINGLES).sort(),
+    sidecar: read(join(root, 'jingles.json')),
+    m3u: read(join(root, 'jingles.m3u')),
+    personas: (settings.get().personas || []).map((p: any) => p.name),
+  });
+}
+
+/** A bundle built from parts, so a test can hand-shape a member name. */
+function bundleOf(
+  persona: Record<string, unknown>,
+  members: [string, Buffer][] = [],
+  manifestJingles: unknown[] = [],
+) {
+  const zip = new AdmZip();
+  zip.addFile('persona.json', Buffer.from(JSON.stringify({
+    tagline: '',
+    soul: 'A soul long enough to clear the schema floor comfortably.',
+    frequency: 'moderate',
+    tts: { engine: 'piper', cloudProvider: 'openai', voice: 'bf_isabella', gainDb: 0, speed: 1 },
+    ...persona,
+  })));
+  for (const [name, data] of members) zip.addFile(name, data);
+  zip.addFile('manifest.json', Buffer.from(JSON.stringify({
+    format: 'subwave-persona', version: 1, voice: null, jingles: manifestJingles,
+  })));
+  return zip.toBuffer();
+}
+
+test('a NEWLINE in a jingle member name is refused and writes nothing', async () => {
+  // rewritePlaylist joins DIR + filename with '\n', and Liquidsoap reloads
+  // jingles.m3u on watch — so a name carrying its own newline used to append a
+  // second, attacker-chosen line to the station's rotation. The bundle is a
+  // file the operator was handed by someone else; this is untrusted input.
+  const before = stateSnapshot();
+  const outcome = await applyPersonaBundle(bundleOf(
+    { name: 'Injector' },
+    [['jingles/one.wav\nsomewhere-else.mp3\ntwo.wav', Buffer.from('bytes')]],
+  ));
+  assert.equal(outcome.ok, false);
+  assert.equal((outcome as any).status, 400);
+  assert.match((outcome as any).error, /not a usable jingle filename/);
+  assert.equal(stateSnapshot(), before, 'a refused import must write nothing at all');
+
+  // And the same rule at the pure layer, where the class is stated.
+  assert.equal(pure.JINGLE_FILENAME_RE.test('one.wav\nevil.mp3'), false);
+  assert.equal(pure.JINGLE_FILENAME_RE.test('jingle_nova.wav'), true);
+  assert.equal(pure.JINGLE_FILENAME_RE.test('a b.wav'), false);
+});
+
+test('a voice filename the persona SCHEMA would refuse writes nothing', async () => {
+  // adoptVoice used to take any *.wav, so the name was written to disk and then
+  // put on tts.voice — where TTS_CHATTERBOX_VOICE_RE refused it and the save
+  // 400'd, leaving the sample behind. The two rules are now one rule.
+  const before = stateSnapshot();
+  const outcome = await applyPersonaBundle(bundleOf(
+    {
+      name: 'Spacey',
+      tts: { engine: 'chatterbox', cloudProvider: 'openai', voice: 'ok.wav', gainDb: 0, speed: 1 },
+    },
+    [
+      ['voices/my voice.wav', Buffer.from('wav bytes')],
+      ['jingles/spacey_ident.wav', Buffer.from('stinger bytes')],
+    ],
+  ));
+  assert.equal(outcome.ok, false);
+  assert.match((outcome as any).error, /not a usable reference-voice filename/);
+  assert.equal(stateSnapshot(), before);
+});
+
+test('a bad audio member does not strand the GOOD ones written before it', async () => {
+  // The members are collected and checked in archive order, so the empty one
+  // below sits behind a perfectly good stinger. Under the old write-as-you-go
+  // shape that first jingle was already in jingles.m3u by the time the second
+  // threw — a stinger on air for a DJ that was never created.
+  const before = stateSnapshot();
+  const outcome = await applyPersonaBundle(bundleOf(
+    { name: 'Half Written' },
+    [
+      ['jingles/good_one.wav', Buffer.from('good bytes')],
+      ['jingles/empty_one.wav', Buffer.alloc(0)],
+    ],
+  ));
+  assert.equal(outcome.ok, false);
+  assert.match((outcome as any).error, /is empty/);
+  assert.equal(stateSnapshot(), before);
+});
+
+test('a duplicate name refuses without writing the audio that came with it', async () => {
+  // The roster check already came first, but it is the refusal an operator
+  // actually hits, so it is worth pinning against the full snapshot.
+  const before = stateSnapshot();
+  const outcome = await applyPersonaBundle(bundleOf(
+    { name: 'Nova Reyes' },
+    [['jingles/dupe_ident.wav', Buffer.from('stinger bytes')]],
+  ));
+  assert.equal(outcome.ok, false);
+  assert.equal((outcome as any).status, 409);
+  assert.equal(stateSnapshot(), before);
+});
+
+test('a clone-voice persona with NO sample anywhere is refused, not a silent 200', async () => {
+  // buildPersonaBundle refuses to PRODUCE this, but a hand-built zip never went
+  // through it. Installing would give the operator a DJ that fails every line.
+  const before = stateSnapshot();
+  const outcome = await applyPersonaBundle(bundleOf({
+    name: 'Ghost Voice',
+    tts: { engine: 'chatterbox', cloudProvider: 'openai', voice: 'absent.wav', gainDb: 0, speed: 1 },
+  }));
+  assert.equal(outcome.ok, false);
+  assert.match((outcome as any).error, /fail its synth on every line/);
+  assert.equal(stateSnapshot(), before);
+});
+
+test('...but a sample this station ALREADY has is not a refusal', async () => {
+  // nova.wav is in the library, so the persona works exactly as its JSON asks
+  // and there is nothing to warn about. Refusing here would block the ordinary
+  // "we both already have this voice" share.
+  const outcome = await applyPersonaBundle(bundleOf({
+    name: 'Borrows Nova',
+    tts: { engine: 'chatterbox', cloudProvider: 'openai', voice: 'nova.wav', gainDb: 0, speed: 1 },
+  }));
+  assert.equal(outcome.ok, true, (outcome as any).error);
+  assert.equal((outcome as any).persona.tts.voice, 'nova.wav');
+  assert.equal((outcome as any).voice, null, 'nothing was adopted — the file was already here');
+});
+
+test('a bundle may not carry more jingles than a DJ plausibly has', async () => {
+  const before = stateSnapshot();
+  const many: [string, Buffer][] = [];
+  for (let i = 0; i <= pure.MAX_BUNDLE_JINGLES; i += 1) {
+    many.push([`jingles/many_${i}.wav`, Buffer.from(`stinger ${i}`)]);
+  }
+  const outcome = await applyPersonaBundle(bundleOf({ name: 'Too Many' }, many));
+  assert.equal(outcome.ok, false);
+  assert.match((outcome as any).error, /at most 24 jingles/);
+  assert.equal(stateSnapshot(), before);
+});
+
+test('a jingle text from the manifest is bounded like every operator string', async () => {
+  const outcome = await applyPersonaBundle(bundleOf(
+    { name: 'Wordy' },
+    [['jingles/wordy_ident.wav', Buffer.from('stinger bytes')]],
+    [{ file: 'wordy_ident.wav', text: 'x'.repeat(5000) }],
+  ));
+  assert.equal(outcome.ok, true, (outcome as any).error);
+  const sidecar = JSON.parse(readFileSync(join(root, 'jingles.json'), 'utf8'));
+  const stored = (outcome as any).jingles[0];
+  assert.equal(sidecar.items[stored].text.length, pure.JINGLE_TEXT_MAX);
 });

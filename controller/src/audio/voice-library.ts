@@ -20,6 +20,7 @@ import path from 'node:path';
 import { config } from '../config.js';
 import { slugify } from '../util/slug.js';
 import { uniqueFilename } from '../personas/bundle-pure.js';
+import { TTS_CHATTERBOX_VOICE_RE } from '../schemas/persona.js';
 import {
   transcodeAudio, hasFfmpeg, extOf, baseName, isAcceptedAudio, probeDurationSec,
 } from './audio-import.js';
@@ -234,6 +235,38 @@ export async function removeVoice(file: string): Promise<{ ok: true; file: strin
 }
 
 /**
+ * Is `file` a name adoptVoice() will accept? Pure enough to ask before writing.
+ *
+ * TTS_CHATTERBOX_VOICE_RE rather than a local ".wav" test, because this name is
+ * written onto the incoming persona's `tts.voice` and that field is validated
+ * by exactly that regex on save. A name this accepts but the schema refuses is
+ * a file on disk followed by a 400 — which is how the import came to leave
+ * litter behind a refusal.
+ */
+export function isAdoptableVoiceName(file: unknown): boolean {
+  const raw = String(file ?? '');
+  const wanted = path.basename(raw);
+  if (!wanted || wanted !== raw) return false;
+  return TTS_CHATTERBOX_VOICE_RE.test(wanted);
+}
+
+/**
+ * The name adoptVoice() WOULD use for `file`, without writing anything.
+ *
+ * Split out so an importer can settle the filename, put it on the persona and
+ * validate the whole roster BEFORE the first byte lands — a refusal after the
+ * write leaves a sample nobody points at. Reserving is not locking; see
+ * jingles.reserveNames.
+ */
+export async function reserveVoiceName(file: string): Promise<string> {
+  if (!isAdoptableVoiceName(file)) {
+    throw new Error(`not a reference voice filename: ${file}`);
+  }
+  const existing = await scan();
+  return uniqueFilename(path.basename(String(file)), existing.map(e => e.file));
+}
+
+/**
  * Store an already-canonical reference WAV under a name that is FREE.
  *
  * The bundle-import counterpart of importVoice (#1620), and it diverges on both
@@ -247,19 +280,24 @@ export async function removeVoice(file: string): Promise<{ ok: true; file: strin
  * that field is the only thing tying a persona to a file in here.
  *
  * Never overwrites: the scan it checks against covers the legacy folder too, so
- * a name that only exists there still counts as taken.
+ * a name that only exists there still counts as taken. `reserved` is the name
+ * reserveVoiceName() already returned for this member; omitting it reserves one
+ * here, so a lone caller is still safe.
  */
 export async function adoptVoice(
   buffer: Buffer,
-  { file }: { file: string },
+  { file, reserved = '' }: { file: string; reserved?: string },
 ): Promise<VoiceEntry> {
   if (!buffer?.length) throw new Error('Empty audio file');
-  const wanted = path.basename(String(file || ''));
-  if (!wanted || wanted !== String(file || '') || extOf(wanted) !== 'wav') {
+  if (!isAdoptableVoiceName(file)) {
     throw new Error(`not a reference voice filename: ${file}`);
   }
-  const existing = await scan();
-  const name = uniqueFilename(wanted, existing.map(e => e.file));
+  const name = reserved || await reserveVoiceName(file);
+  // The reservation is the name the persona's `tts.voice` will hold, so it
+  // answers to the schema that field is saved under, not merely to ".wav".
+  if (!TTS_CHATTERBOX_VOICE_RE.test(name)) {
+    throw new Error(`not a reference voice filename: ${name}`);
+  }
 
   const dir = config.voices.dir;
   await mkdir(dir, { recursive: true });

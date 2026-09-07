@@ -1,7 +1,7 @@
 // Pure decisions behind the persona bundle (#1620) — the parts worth pinning
 // without a state dir, a zip or a running station.
 //
-// Two of them are load-bearing:
+// Three of them are load-bearing:
 //
 //   `uniqueFilename` is the "suffix, never overwrite" rule. A persona's voice
 //   is referenced BY FILENAME (`tts.voice` is a basename in the shared voice
@@ -17,6 +17,12 @@
 //   matched on a word boundary: a substring test hands every jingle to a DJ
 //   called "Al". Builtin idents are excluded because they are station furniture
 //   that every install already has and cannot delete.
+//
+//   `JINGLE_FILENAME_RE` pins what an adopted filename may CONTAIN, not just
+//   what it ends in. A jingle filename is emitted as a line of `jingles.m3u`,
+//   which Liquidsoap watches, so a newline inside one is an extra rotation
+//   entry the operator never added. The bundle is a file from another operator;
+//   an extension test is not a filename check.
 
 /** Manifest `format` — the thing that distinguishes a persona bundle from a station backup. */
 export const PERSONA_BUNDLE_FORMAT = 'subwave-persona';
@@ -34,6 +40,44 @@ export const BUNDLE_JINGLE_DIR = 'jingles';
 export const VOICE_NAME_MAX = 80;
 /** Jingle filenames are only ever a sidecar key, so the cap is just sanity. */
 export const JINGLE_NAME_MAX = 120;
+
+/**
+ * The character class an ADOPTED jingle filename must sit inside.
+ *
+ * Same class as TTS_CHATTERBOX_VOICE_RE, and it is not cosmetic. A jingle
+ * filename becomes a line in `jingles.m3u` — `rewritePlaylist` joins the folder
+ * and the name with '\n' — and Liquidsoap reads that playlist with
+ * reload_mode="watch". So a member named "one.wav\n<anything>\ntwo.wav" would
+ * write ITS OWN extra line into the station's jingle rotation, no restart
+ * needed. A bundle is a file the operator was handed by someone else, which
+ * makes that untrusted input by design; checking only the extension (which is
+ * all isAcceptedAudio does) leaves every other byte of the name free.
+ *
+ * The bound is JINGLE_NAME_MAX minus the room `uniqueFilename` needs for a
+ * `-999` suffix, so a name that passes here still passes after a collision.
+ */
+export const JINGLE_FILENAME_RE = /^[A-Za-z0-9_.-]{1,116}$/;
+
+/**
+ * How many jingles one bundle may carry.
+ *
+ * Each member becomes a file, a sidecar row AND a line in the watched playlist,
+ * and the admin UI deletes them one at a time — so an uncapped bundle is a
+ * one-click way to load a station's rotation with more stingers than an
+ * operator can plausibly remove. A DJ with two dozen idents is already an
+ * unusual DJ; the 50 MB request cap alone would allow thousands of tiny WAVs.
+ */
+export const MAX_BUNDLE_JINGLES = 24;
+
+/**
+ * Cap on the spoken text a bundle may claim for a jingle.
+ *
+ * It is written verbatim into jingles.json and shown in the admin list, and it
+ * is the one field in the manifest an importer copies to disk without the
+ * persona schema ever seeing it. A stinger script is a sentence; every other
+ * operator-visible text field in the codebase is bounded, and this one was not.
+ */
+export const JINGLE_TEXT_MAX = 300;
 
 /** The engines that read `tts.voice` as a reference-WAV basename (#213). */
 export const CLONE_VOICE_ENGINES = ['chatterbox', 'pocket-tts'] as const;

@@ -12,6 +12,12 @@
 // The two refusals are 409s rather than repairs on purpose. A roster at
 // PERSONA_LIMIT has no room, and a second DJ with an existing name leaves the
 // operator two indistinguishable rows in every picker that names a persona.
+//
+// personaSlotError is pure over the roster it is handed for the same reason
+// validatePersonasStrict is callable directly: the bundle import has to ask
+// BOTH questions before it writes any audio, and installPersona is reached only
+// once nothing can still refuse. Asking twice is not redundant — this is the
+// answer that counts, the import's is a dry run.
 import * as settings from '../settings.js';
 
 export type PersonaInstallFailure = { ok: false; status: number; error: string };
