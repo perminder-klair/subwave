@@ -57,18 +57,33 @@ export interface SeasonWindow {
 }
 
 /**
- * Trim, lowercase, collapse whitespace — the normalisation the `tag`, `mood`,
- * `album` and `title` rule fields compare with. Used here only for DEDUPE; the
- * stored value keeps its original casing.
+ * Trim, lowercase, collapse whitespace, fold curly apostrophes onto straight
+ * ones — the normalisation the `tag`, `mood`, `album` and `title` rule fields
+ * compare with. Used here only for DEDUPE; the stored value keeps its original
+ * casing.
  *
- * NOT what the `artist` field compares with any more (#1603): an artist value
- * and an incoming credit are both keyed by `recency.artistNameKey`, which folds
- * curly apostrophes as well, and the credit is additionally read as every act
- * ON it. So two artist values differing only in apostrophe style survive the
- * dedupe here and compile to one matching key — harmless, but the two are no
- * longer the same rule.
+ * This is `recency.nameKey` (a.k.a. `artistNameKey`, which the `artist` field
+ * compiles with since #1603), RESTATED rather than imported: a mirrored schema
+ * module may import only zod, so the fold cannot cross into this file. The two
+ * must stay identical and are pinned in step by
+ * `scripts/blocklist-name-fold.test.ts` — change one, change both.
+ *
+ * The apostrophe fold arrived here with #1611, which folded the id list's ALBUM
+ * tier onto the same normaliser as its artist tier. Rules and id entries answer
+ * the same question about the same row, so a fold on one side only would have
+ * moved the disagreement rather than fixed it: an `album` RULE spelled with a
+ * curly apostrophe would still miss the straight-apostrophe row that an album
+ * ENTRY now catches. It WIDENS an absolute list — folding two spellings of one
+ * name into one key blocks rows the previous spelling missed. Nothing about
+ * which thing a string names changes, which is what makes that safe.
+ *
+ * Punctuation beyond the apostrophe is deliberately NOT folded: a hyphen
+ * distinguishes real tag vocabulary (`trip-hop` is not `trip hop` here), and
+ * `music/scene-references.ts` runs this exact predicate to decide whether a
+ * genre merge silences a `tag` rule.
  */
-export const normText = (s: unknown) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+export const normText = (s: unknown) =>
+  String(s ?? '').toLowerCase().replace(/[‘’ʼ´`]/g, "'").replace(/\s+/g, ' ').trim();
 
 // A month/day pair. Both halves are `Number(x)` + an integer/range test, not
 // z.number().int(), because the admin card posts them from <input type=number>

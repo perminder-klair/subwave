@@ -79,8 +79,9 @@ export type { SceneReference, SceneReferenceKind };
  * `genre` is show-filter's `genreMatches` — the one-directional, punctuation-
  * folding, boundary-aware test the pick paths and `field: 'genre'` rules run.
  * `tag` is the `field: 'tag'` rule's own test: `normText` EXACT across every
- * namespace it ingests, which folds case and whitespace but NOT punctuation,
- * so a "Trip-Hop" tag rule is untouched by a merge retiring "Trip Hop".
+ * namespace it ingests, which folds case, whitespace and curly-vs-straight
+ * apostrophes (#1611) but no OTHER punctuation, so a "Trip-Hop" tag rule is
+ * untouched by a merge retiring "Trip Hop".
  */
 export type MatchMode = 'genre' | 'tag';
 

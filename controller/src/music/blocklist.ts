@@ -39,7 +39,7 @@ import { writeFileAtomic } from '../util/atomic-file.js';
 import { zonedParts } from '../time.js';
 import { resolveActiveShow } from '../settings.js';
 import { resolvePlaylistMemberSets } from './show-playlist.js';
-import { artistNameKey, artistParticipantKeys } from './recency.js';
+import { artistNameKey, artistParticipantKeys, nameKey } from './recency.js';
 import {
   compileRules,
   coerceStoredRule,
@@ -91,24 +91,31 @@ let loaded = false;
 let trackIds = new Map<string, BlockEntry>();
 let albumIds = new Map<string, BlockEntry>();
 let artistIds = new Map<string, BlockEntry>();
-let artistNames = new Map<string, BlockEntry>();   // artistNameKey'd
-let albumKeys = new Map<string, BlockEntry>();     // normalised album + KEY_SEP + artist
+let artistNames = new Map<string, BlockEntry>();   // nameKey'd (as artistNameKey)
+let albumKeys = new Map<string, BlockEntry>();     // nameKey'd album + KEY_SEP + artist
 
-const norm = (s: unknown) => String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 // Album keys join two free-text fields, so the separator must be a character
 // neither can contain - otherwise ("a b", "c") and ("a", "b c") collide. It was
 // a bare NUL typed into the source, invisible in every editor and in the comment
 // beside it; naming it keeps the two call sites greppable and safe to edit. The
 // index is in-memory only, so the value is free to change.
 const KEY_SEP = '\u0000';
-// NOTE the normaliser: the artist tier keys with `artistNameKey` (which folds
-// curly apostrophes onto straight ones), this one still keys with `norm` (which
-// does not), so an album entry stored "Guns N' Roses" still misses a credit
-// tagged "Guns N’ Roses". Deliberately left alone here rather than folded in
-// passing: this list is absolute, and widening what an album entry reaches is a
-// behaviour change that belongs in its own PR with its own statement, not a
-// side effect of #1603. Follow-up: #1611.
-const albumKey = (album: unknown, artist: unknown) => `${norm(album)}${KEY_SEP}${norm(artist)}`;
+// BOTH halves key through `recency.nameKey`, the same fold the artist tier uses
+// (#1611). It used to be a module-local `norm` that folded case and whitespace
+// only, so an album entry stored from a row tagged "Guns N’ Roses" missed the
+// same album tagged "Guns N' Roses" while an artist entry did not — two tiers of
+// one absolute list disagreeing about what one string means. Folding the album
+// tier WIDENS what it catches, which is why it arrived as its own change rather
+// than beside #1603's artist fold.
+//
+// The album HALF folds too, not just the artist half: an album title carries an
+// apostrophe as often as a band name ("Sgt. Pepper’s", "Livin’ La Vida Loca"),
+// and a key folded on one side only is the same disagreement one field over.
+//
+// Never reintroduce a local normaliser here. This tier and the `field: 'album'`
+// rule (`schemas/blocklist.ts` normText) must answer the same way, and the two
+// folds are pinned in step by scripts/blocklist-name-fold.test.ts.
+const albumKey = (album: unknown, artist: unknown) => `${nameKey(album)}${KEY_SEP}${nameKey(artist)}`;
 
 function rebuildIndex() {
   trackIds = new Map();
