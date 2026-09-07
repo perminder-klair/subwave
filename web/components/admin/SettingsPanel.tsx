@@ -32,8 +32,9 @@ import {
 import { AlertTriangle } from 'lucide-react';
 import {
   SectionHeader, SaveBar, SettingsFieldError, ELEVENLABS_VS_DEFAULTS, FISH_TTS_DEFAULTS,
+  headerRows,
   type FormState, type FormUpdater, type SettingsData, type SaveSettings,
-  type LoudnessSource, type LlmForm, type LlmFallbackForm, type TransitionEffect,
+  type LoudnessSource, type TransitionEffect,
 } from './settings/shared';
 import {
   SECTIONS, SECTION_GROUPS, RESTART_PATHS, sectionById, type SectionId,
@@ -500,13 +501,14 @@ export default function SettingsPanel() {
         // Stored providerBaseUrls win; otherwise the legacy single baseUrl seeds
         // the current provider's slot so no URL is lost.
         providerBaseUrls: (() => {
-          const llmAny = v.llm as (Partial<LlmForm> & { baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
+          const llmAny = v.llm as ({ provider?: string; baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
           const stored = llmAny?.providerBaseUrls;
           if (stored && typeof stored === 'object') return { ...stored };
           const legacy = llmAny?.baseUrl ?? '';
           const prov = llmAny?.provider ?? 'ollama';
           return legacy ? { [prov]: legacy } : {};
         })(),
+        headers: headerRows(v.llm?.headers),
         reasoning: !!v.llm?.reasoning,
         toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
@@ -533,13 +535,14 @@ export default function SettingsPanel() {
           repeatPenalty: typeof v.llm?.fallback?.repeatPenalty === 'number' ? v.llm.fallback.repeatPenalty : 1.15,
           discoverySteps: typeof v.llm?.fallback?.discoverySteps === 'number' ? v.llm.fallback.discoverySteps : 0,
           providerBaseUrls: (() => {
-            const fbAny = v.llm?.fallback as (LlmFallbackForm & { baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
+            const fbAny = v.llm?.fallback as ({ provider?: string; baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
             const stored = fbAny?.providerBaseUrls;
             if (stored && typeof stored === 'object') return { ...stored };
             const legacy = fbAny?.baseUrl ?? '';
             const prov = fbAny?.provider ?? 'ollama';
             return legacy ? { [prov]: legacy } : {};
           })(),
+          headers: headerRows(v.llm?.fallback?.headers),
           reasoning: !!v.llm?.fallback?.reasoning,
         },
       },
