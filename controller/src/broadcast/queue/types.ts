@@ -64,6 +64,25 @@ export interface Track {
 export interface QueueItem {
   track: Track;
   requestedBy?: string | null;
+  // This item was queued by the OPERATOR, not by a listener. It exists because
+  // `requestedBy` cannot answer that question: the studio queue pushes
+  // `requestedBy: 'studio'` precisely so it inherits the four exemptions that
+  // discriminator carries (the #447 length cap, the show-boundary cut, the
+  // bed's request reason, the sub-crossfade warning), and every one of those
+  // is right for an operator push. What is NOT right is `routes/request.ts`
+  // reading the same truthiness as "a listener is waiting" — six manual Queue
+  // presses then filled `requests.maxPending` and shut the listener request
+  // line, with nothing in the refusal naming the cause.
+  //
+  // So the origin gets its own field rather than overloading that one, and the
+  // two questions stay separable. Read ONLY by `pendingListenerRequests()`;
+  // nothing on the air path may branch on it, or the exemptions above quietly
+  // acquire a second discriminator that can disagree with the first.
+  //
+  // ABSENT means "not known to be an operator push", which is what an item
+  // recovered from a `queue.json` written before this field reads as — i.e.
+  // exactly the old behaviour, for the ≤2h such a snapshot survives.
+  operator?: boolean;
   intent?: string | null;
   introScript?: string | null;
   introKind?: string;

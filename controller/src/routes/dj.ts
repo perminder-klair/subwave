@@ -1013,7 +1013,15 @@ router.post('/dj/queue-track', requireAdmin, async (req, res) => {
   try {
     // Explicit operator action — bypass the request/AI dedup guard (#619) so a
     // deliberate manual queue always fires, even for an already-queued track.
-    const queuePosition = await queue.push({ track, requestedBy: 'studio', allowDuplicate: true });
+    //
+    // `requestedBy: 'studio'` earns the four air-path exemptions a request has
+    // (length cap, show-boundary cut, bed reason, sub-crossfade warning);
+    // `operator: true` says it is not a listener waiting in line, so it does
+    // not consume a `requests.maxPending` slot. The two are separate questions
+    // — see queue.pendingListenerRequests().
+    const queuePosition = await queue.push({
+      track, requestedBy: 'studio', operator: true, allowDuplicate: true,
+    });
     if (queuePosition === -2) {
       // The never-play blocklist is absolute — even manual queueing is refused
       // (operator's call). Unblock in admin → Library → Blocked to re-audition.

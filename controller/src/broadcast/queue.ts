@@ -616,9 +616,10 @@ class Queue {
   // the line if the real seam lands too far from it — the forecast is made from
   // the on-air track's remaining play and goes badly wrong when the pick misses
   // that seam and auto.m3u fills the slot.
-  async push({ track, requestedBy = null, intent = null, introScript = null, introKind = 'dj-speak', introPersona = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null }: {
+  async push({ track, requestedBy = null, operator = false, intent = null, introScript = null, introKind = 'dj-speak', introPersona = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null }: {
     track: Track;
     requestedBy?: string | null;
+    operator?: boolean;
     intent?: string | null;
     introScript?: string | null;
     introKind?: string;
@@ -660,7 +661,7 @@ class Queue {
       }
     }
     const item = {
-      track, requestedBy, intent, introScript, introKind, introPersona, aiPicked,
+      track, requestedBy, operator, intent, introScript, introKind, introPersona, aiPicked,
       // Only stamp a back-announce target when there's actually an intro/link to
       // air against it; a bare track carries no claim about what preceded it.
       linkPrev: (introScript && linkPrev)
@@ -3076,6 +3077,33 @@ class Queue {
       if (item.track?.id) ids.add(item.track.id);
     }
     return ids;
+  }
+
+  // How many LISTENER requests are queued and unaired — what
+  // `settings.requests.maxPending` is a bound on.
+  //
+  // `routes/request.ts` used to count `upcoming.filter(i => i.requestedBy)`
+  // inline, and that read every operator push as a listener waiting in line,
+  // because `POST /dj/queue-track` pushes `requestedBy: 'studio'` on purpose:
+  // that string is the discriminator four air-path exemptions key off (the
+  // #447 length cap, the show-boundary cut, the bed's request reason, the
+  // sub-crossfade warning), and an explicit operator action wants all four.
+  // The cost was paid on a surface with no connection to any of them — six
+  // manual Queue presses reached the default `maxPending` of 6 and answered
+  // every listener "The request queue's full" for as long as those tracks took
+  // to air, with nothing in the refusal or the booth log naming the cause.
+  //
+  // The fix is one question asked in one place rather than a second meaning
+  // hung on `requestedBy`: an operator push carries `operator: true` and is not
+  // a request the queue is holding on a listener's behalf. Counting `!sent`
+  // would be the wrong narrowing — a sent-but-unaired request is still a
+  // listener waiting, and the cap is about how deep the line gets, not about
+  // how far down it Liquidsoap has already reached.
+  //
+  // The on-air track is deliberately NOT counted: `maxPending` bounds what is
+  // still waiting, and a request that is playing has been served.
+  pendingListenerRequests(): number {
+    return this.upcoming.filter(i => i.requestedBy && !i.operator).length;
   }
 
   // Honest acknowledgement for a listener request whose resolved track is

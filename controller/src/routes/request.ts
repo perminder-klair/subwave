@@ -835,7 +835,10 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
       retryAfter,
     });
   }
-  const pendingCount = queue.upcoming.filter((i: any) => i.requestedBy).length;
+  // LISTENER requests only — an operator's own studio push carries
+  // `requestedBy: 'studio'` for the air-path exemptions and must not consume a
+  // slot in the listener queue. See queue.pendingListenerRequests().
+  const pendingCount = queue.pendingListenerRequests();
   if (pendingCount >= (Number(cfg.maxPending) || 6)) {
     res.setHeader('Retry-After', String(retryAfter));
     return res.status(429).json({
