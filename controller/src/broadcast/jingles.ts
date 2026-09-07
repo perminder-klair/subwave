@@ -5,15 +5,17 @@
 // <stateDir>/jingles.m3u (one path per line). A sidecar <stateDir>/
 // jingles.json maps filename → { text, createdAt, builtin, source }.
 
-import { readFile, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import crypto from 'node:crypto';
+import { basename as pathBasename } from 'node:path';
 import { speak } from '../audio/tts.js';
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import {
   transcodeAudio, hasFfmpeg, extOf, baseName, isAcceptedAudio,
 } from '../audio/audio-import.js';
+import { JINGLE_NAME_MAX, uniqueFilename } from '../personas/bundle-pure.js';
 
 const DIR = `${STATE_DIR}/jingles`;
 const PLAYLIST = `${STATE_DIR}/jingles.m3u`;
@@ -216,4 +218,49 @@ export async function ensureDefaultIdent() {
 
   await create(DEFAULT_IDENT.text, { builtin: true });
   console.log(`[jingles] generated default station ident → ${filePath}`);
+}
+
+/**
+ * Adopt a jingle that arrived inside a persona bundle (#1620), keeping the
+ * filename it had on the station that exported it.
+ *
+ * Distinct from importAudio, which mints `jingle_<hex>.wav` and transcodes: a
+ * bundled jingle is already a rendered stinger from another copy of this very
+ * folder, so it is stored verbatim (an import must not need ffmpeg) under its
+ * own name — which is what makes re-importing the same bundle legible rather
+ * than filling the folder with anonymous hashes. A name already in use gets a
+ * `-2` suffix and NEVER an overwrite: the sidecar key is the only handle the
+ * playlist, the delete route and the audition route have on a file.
+ *
+ * Still the same single writer of jingles.json + jingles.m3u as every other
+ * path in here.
+ */
+export async function adopt(
+  buffer: Buffer,
+  { filename, text = '' }: { filename: string; text?: string },
+) {
+  if (!buffer?.length) throw new Error('Empty audio file');
+  const wanted = pathBasename(String(filename || ''));
+  if (!wanted || wanted !== String(filename || '') || !isAcceptedAudio(wanted)) {
+    throw new Error(`Unsupported audio type: ${filename}`);
+  }
+  await mkdir(DIR, { recursive: true });
+  const meta = await loadMeta();
+  // The sidecar AND the directory: a file on disk with no sidecar entry is
+  // invisible to list() but is still a file, and "never overwrite" has to mean
+  // never, not "never one we have a record of".
+  const onDisk = await readdir(DIR).catch(() => [] as string[]);
+  const name = uniqueFilename(
+    wanted, [...Object.keys(meta.items), ...onDisk], JINGLE_NAME_MAX,
+  );
+  await writeFile(`${DIR}/${name}`, buffer);
+  meta.items[name] = {
+    text: String(text || '').trim() || baseName(wanted) || 'Imported jingle',
+    createdAt: new Date().toISOString(),
+    builtin: false,
+    source: 'upload',
+  };
+  await saveMeta(meta);
+  await rewritePlaylist(Object.keys(meta.items));
+  return { filename: name, text: meta.items[name].text };
 }

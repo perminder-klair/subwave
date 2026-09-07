@@ -16,7 +16,7 @@ import {
   type UseFormWatch,
 } from 'react-hook-form';
 import { useAdminAuth } from '../../lib/adminAuth';
-import { AdminResponseError, adminJson, useAdminMutation } from '../../lib/admin-query';
+import { AdminResponseError, adminJson, adminResponse, useAdminMutation } from '../../lib/admin-query';
 import { notify, errorMessage } from '../../lib/notify';
 import { useZodForm, applyServerFieldErrors } from '@/lib/form';
 import { personaSchema, djPromptSchema } from '@/lib/schemas.generated';
@@ -92,6 +92,9 @@ export default function PersonasPanel() {
     : (communityQuery.data ?? []);
   const [communityOpen, setCommunityOpen] = useState(false); // catalog modal open?
   const [installing, setInstalling] = useState<string | null>(null); // community slug installing, or null
+  // Persona bundle (#1620): a zip download per persona, and one upload back.
+  const [exportingId, setExportingId] = useState<string | null>(null);
+  const [importingBundle, setImportingBundle] = useState(false);
   // Not array rows — plain state, not RHF (see the schema comment above).
   // Sort is remembered per browser; the filters deliberately are not — see
   // useRosterSort's note on why a filter that survives a reload is worse than
@@ -264,6 +267,67 @@ export default function PersonasPanel() {
     } catch (e) {
       notify.err(`Install failed: ${errorMessage(e)}`);
     } finally { setInstalling(null); }
+  };
+
+  // Download this persona as a zip: the JSON, the reference WAV its engine
+  // clones from, and the operator's own jingles whose text names it. A one-shot
+  // blob download, so it stays imperative — the same shape as the backup export.
+  const exportPersona = async (personaId: string, personaName: string) => {
+    setExportingId(personaId);
+    try {
+      // admin-query-imperative: persona-bundle-export
+      const r = await adminResponse(adminFetch, `/personas/${encodeURIComponent(personaId)}/export`);
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      // The controller names the file in Content-Disposition; mirror its
+      // grammar here rather than parsing the header back out.
+      a.download = `subwave-persona-${
+        personaName.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'dj'
+      }.zip`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      notify.ok('Bundle downloaded — voice sample and jingles included');
+    } catch (e) {
+      notify.err(`Export failed: ${errorMessage(e)}`);
+    } finally { setExportingId(null); }
+  };
+
+  // Upload a bundle. The controller owns the whole create — the roster cap, the
+  // duplicate-name refusal and the id minting are the same code the community
+  // install runs — so this only mirrors the row it hands back into the local
+  // form, exactly as installCommunity does, so unsaved edits elsewhere survive.
+  const importPersonaBundle = async (file: File) => {
+    setImportingBundle(true);
+    try {
+      const j = await personaMutation.mutateAsync({
+        path: '/personas/import',
+        init: { method: 'POST', headers: { 'Content-Type': 'application/zip' }, body: file },
+      }) as { persona?: Partial<Persona> | null; voice?: string | null; jingles?: string[] };
+      const p = j.persona;
+      if (p && typeof p.id === 'string') {
+        const allSkills = (data?.skills?.catalog || []).map(s => s.name);
+        const mapped = personaFromSettings(p, allSkills);
+        // The bundle's own voice, not the mapper's `bf_isabella` default: the
+        // controller may have suffixed it past a name clash, and that stored
+        // name is the only thing tying this persona to its sample.
+        appendPersonaField({ ...mapped, avatar: '', tts: { ...mapped.tts, voice: p.tts?.voice ?? '' } });
+        void form.trigger(); // see the comment on addPersona's own trigger() call
+      }
+      void queryClient.invalidateQueries({ queryKey: settingsKeys.all });
+      const extras = [
+        j.voice ? `voice ${j.voice}` : null,
+        j.jingles?.length ? `${j.jingles.length} jingle${j.jingles.length === 1 ? '' : 's'}` : null,
+      ].filter(Boolean).join(' · ');
+      notify.ok(
+        `Imported “${p?.name || 'persona'}”${extras ? ` — ${extras}` : ''} — off air until you put them on the desk`,
+      );
+    } catch (e) {
+      notify.err(`Import failed: ${errorMessage(e)}`);
+    } finally { setImportingBundle(false); }
   };
 
   const removePersona = (i: number) => {
@@ -632,6 +696,8 @@ export default function PersonasPanel() {
         onSelect={(i) => { setCreatingId(null); setFocusIdx(i); setEditorOpen(true); }}
         communityCount={community?.length ?? null}
         onCommunity={() => setCommunityOpen(true)}
+        importing={importingBundle}
+        onImportBundle={(file) => { void importPersonaBundle(file); }}
       />
 
       <Modal
@@ -745,6 +811,9 @@ export default function PersonasPanel() {
         onClearAvatar={clearAvatar}
         onSetActive={() => setActivePersonaId(focused.id)}
         onRemove={() => setConfirmDeleteIdx(safeIdx)}
+        exporting={exportingId === focused.id}
+        exportStale={focusedDirty}
+        onExportBundle={() => { void exportPersona(focused.id, focused.name); }}
         canSave={canSave}
         focusedOk={focusedOk}
         allPersonasOk={allPersonasOk}

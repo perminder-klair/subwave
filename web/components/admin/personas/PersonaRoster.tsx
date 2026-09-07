@@ -1,7 +1,8 @@
 'use client';
 // One "broadcast slate" card per persona, matching the show cards on /admin/shows.
 // The whole card is the edit target; adding lives in the hero's "+ Add persona".
-import { Users } from 'lucide-react';
+import { useRef } from 'react';
+import { Upload, Users } from 'lucide-react';
 import { API_BASE, PERSONA_MAX } from './constants';
 import { initialsFor } from './helpers';
 import { engineChipLabel, isInheritEngine } from '../tts/engineMeta';
@@ -46,6 +47,9 @@ interface PersonaRosterProps {
   // null = still loading, button disabled.
   communityCount: number | null;
   onCommunity: () => void;
+  // Persona bundle (#1620) — the upload half of the editor's Export bundle.
+  importing: boolean;
+  onImportBundle: (file: File) => void;
 }
 
 export function PersonaRoster({
@@ -53,9 +57,11 @@ export function PersonaRoster({
   tags, selectedTags, onTagsChange, filtered, onClearFilters,
   activePersonaId, onAirPersonaId, avatarTick, isPersonaInvalid,
   onOpenPrompt, onAdd, onSelect, communityCount, onCommunity,
+  importing, onImportBundle,
 }: PersonaRosterProps) {
   // Cards (default) or a dense table. Remembered per surface in localStorage.
   const [view, setView] = useRosterView('personas');
+  const bundleRef = useRef<HTMLInputElement | null>(null);
 
   return (
     <section className="grid gap-4">
@@ -80,6 +86,30 @@ export function PersonaRoster({
             {communityCount !== null && communityCount > 0 && (
               <span className="ml-1 text-vermilion">{communityCount}</span>
             )}
+          </Btn>
+          {/* The other end of Edit → Export bundle. Reset to '' after the pick
+              so choosing the SAME file twice still fires a change event. */}
+          <input
+            ref={bundleRef}
+            type="file"
+            accept=".zip,application/zip"
+            aria-label="Persona bundle zip"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              if (file) onImportBundle(file);
+            }}
+          />
+          <Btn
+            className="min-h-9 sm:min-h-0"
+            onClick={() => bundleRef.current?.click()}
+            disabled={importing || total >= PERSONA_MAX}
+            title={total >= PERSONA_MAX
+              ? 'The roster is full'
+              : 'Import a persona bundle zip — its voice sample and jingles come with it'}
+          >
+            <Upload size={14} /> {importing ? 'Importing…' : 'Import'}
           </Btn>
           <Btn className="min-h-9 sm:min-h-0" onClick={onOpenPrompt}>System prompt</Btn>
           <Btn className="min-h-9 sm:min-h-0" tone="accent" onClick={onAdd} disabled={total >= PERSONA_MAX}>

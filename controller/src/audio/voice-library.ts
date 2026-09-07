@@ -19,6 +19,7 @@ import { readdir, stat, unlink, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
 import { slugify } from '../util/slug.js';
+import { uniqueFilename } from '../personas/bundle-pure.js';
 import {
   transcodeAudio, hasFfmpeg, extOf, baseName, isAcceptedAudio, probeDurationSec,
 } from './audio-import.js';
@@ -230,4 +231,42 @@ export async function removeVoice(file: string): Promise<{ ok: true; file: strin
   if (!entry) throw new Error(`unknown voice: ${file}`);
   await unlink(entry.path);
   return { ok: true, file: entry.file };
+}
+
+/**
+ * Store an already-canonical reference WAV under a name that is FREE.
+ *
+ * The bundle-import counterpart of importVoice (#1620), and it diverges on both
+ * of that function's decisions for the same reason: the bytes came out of
+ * another station's copy of this very folder, so they are already mono 24 kHz
+ * WAV and re-transcoding them would need ffmpeg to import a file that never
+ * needed converting; and a clash cannot be REFUSED here, because the operator
+ * has no way to rename a member inside a zip they were handed. So it suffixes
+ * (`morgan.wav` → `morgan-2.wav`) and returns the name it actually used — which
+ * the caller must then write onto the incoming persona's `tts.voice`, since
+ * that field is the only thing tying a persona to a file in here.
+ *
+ * Never overwrites: the scan it checks against covers the legacy folder too, so
+ * a name that only exists there still counts as taken.
+ */
+export async function adoptVoice(
+  buffer: Buffer,
+  { file }: { file: string },
+): Promise<VoiceEntry> {
+  if (!buffer?.length) throw new Error('Empty audio file');
+  const wanted = path.basename(String(file || ''));
+  if (!wanted || wanted !== String(file || '') || extOf(wanted) !== 'wav') {
+    throw new Error(`not a reference voice filename: ${file}`);
+  }
+  const existing = await scan();
+  const name = uniqueFilename(wanted, existing.map(e => e.file));
+
+  const dir = config.voices.dir;
+  await mkdir(dir, { recursive: true });
+  const outPath = path.join(dir, name);
+  await writeFile(outPath, buffer);
+
+  const durationSec = await probeDurationSec(outPath);
+  const s = await stat(outPath);
+  return { file: name, size: s.size, legacy: false, durationSec, warning: voiceWarning(durationSec) };
 }
