@@ -15,8 +15,9 @@ skills the same way: from the admin UI, or by dropping a folder into
 > a name, a brief, and a cooldown, then **Create skill**. It writes
 > `state/skills/<slug>/SKILL.md` for you (and arrives **disabled** — enable it when
 > you're happy). Custom skills can also be **edited** and **deleted** from the same
-> page. The form is prompt-only; a `tool.mjs` data fetcher is still a disk-drop (see
-> [tool.mjs (optional)](#toolmjs-optional) below).
+> page. The form can also point the skill at an RSS/Atom feed (see
+> [Feeds without code](#feeds-without-code)); anything else it should fetch is a
+> `tool.mjs` disk-drop (see [tool.mjs (optional)](#toolmjs-optional) below).
 
 > **TL;DR — News reads UK/BBC and you want something local?** Open
 > **/admin/skills → News → Edit**, paste your own RSS feed URL and rewrite the
@@ -67,7 +68,9 @@ cohosts: true             # OPTIONAL: host + every active guest each speak in th
 window: any               # "any" (default) | "commute" — only offered during commute hours
 context: time, festival   # OPTIONAL: which "right now" fields this segment may mention (see below)
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; if unset, the skill stays inert
-toolDescription: ...      # OPTIONAL: how the DJ-facing tool is described (only matters with tool.mjs)
+feed: https://…/rss.xml   # OPTIONAL: an RSS/Atom feed this skill reads before it speaks (see below)
+feedMaxItems: 10          # OPTIONAL: how much of that feed to read per fire (1-50, default 10)
+toolDescription: ...      # OPTIONAL: how the DJ-facing tool is described
 ---
 The markdown body is the DJ's brief for this segment. Keep it tight: what to
 say, in what tone, and — importantly — when to stay silent. The agent reads
@@ -98,6 +101,52 @@ Values are read as text whatever their YAML type, so `feedMaxItems: 6` and
 ignored. A block that isn't valid YAML — most often an unquoted colon in a
 value — still loads, read with the old line-by-line parser, and logs a warning
 naming the file.
+
+### `feed:` — feeds without code
+
+<a id="feeds-without-code"></a>
+
+A `feed:` line is a **fetch**, not a note to yourself. Any skill that declares
+one — with or without a `tool.mjs` — gets a `skill_<name>` tool the DJ calls
+before it writes the line, and the items land in the prompt as that segment's
+source data:
+
+```yaml
+---
+name: giveaway
+label: Giveaway watch
+cooldown: 30m
+feed: https://contest.example.com/state.rss
+feedMaxItems: 10
+---
+The feed is the current state of the contest — report on who is already in it
+rather than inventing a new name. Say nothing if it is empty.
+```
+
+The generated tool is the one the built-in News skill used to hand-roll, so
+every feed skill gets the same behaviour:
+
+- **RSS 2.0, Atom and RDF/RSS-1.0** all parse — namespaced tags
+  (`<dc:title>`, `<content:encoded>`) and CDATA included.
+- `feedMaxItems` (1–50, default 10) caps how much of the feed is read per fire.
+- Items are **burned on read**: at most 6 fresh items reach one segment, and the
+  next fire offers the ones after them rather than repeating. That memory is
+  per-skill and lives for as long as the controller runs.
+- A fetch that fails or times out stands the segment down instead of letting the
+  DJ invent one — the same grounding rule every data-backed skill follows. Set
+  `requiresData: false` if your skill would rather write from its brief.
+
+The knobs show up in the skill's **/admin/skills → Edit** sheet as *Feed URL* and
+*Max items*, so a feed can be added, changed or cleared without touching disk.
+
+> Only an `http:` or `https:` URL creates the tool. Anything else is logged as a
+> warning naming the skill and leaves it prompt-only — a `feed:` line must never
+> quietly do nothing.
+
+A skill that ships its own `tool.mjs` keeps it: the generic feed tool fills the
+gap, it never displaces a fetcher you wrote. If you want feed items *and*
+something else, read `config.feed` yourself via
+`services.fetchHeadlines` (see the table below).
 
 ### `cohosts: true` — one contribution from every host
 
@@ -337,38 +386,14 @@ export const inputs = { query: 'what to search for; null for the default dig' };
 // HERE (rather than in the controller) is what makes a copy of the skill keep
 // its settings: a duplicate copies tool.mjs verbatim, name and all.
 export const configFields = {
-  feed:         { type: 'url',    label: 'News feed · RSS 2.0', placeholder: 'https://…/rss.xml' },
-  feedMaxItems: { type: 'number', label: 'Max items', min: 1, max: 50, integer: true },
+  endpoint: { type: 'url',    label: 'Status API', placeholder: 'https://…/status.json' },
+  maxRows:  { type: 'number', label: 'Rows to read', min: 1, max: 50, integer: true },
 };
 ```
 
-> **Frontmatter does not fetch anything by itself.** Keys such as `feed:` and
-> `feedMaxItems:` are ordinary strings passed to the sibling `tool.mjs` as
-> `config`; they are not fetch declarations. A `SKILL.md` with those keys but no
-> `tool.mjs` remains prompt-only: it gets no `skill_<slug>` tool, performs no
-> automatic request, and receives no injected feed data.
-
-For a custom RSS-backed skill, add a sibling `tool.mjs` that reads those values
-and deliberately calls the shared feed service (frontmatter values arrive as
-strings, so convert numeric values yourself):
-
-```js
-export default async function (_ctx, _state, services, config) {
-  const parsedMax = Number(config.feedMaxItems);
-  const maxItems = Number.isInteger(parsedMax) && parsedMax >= 1 && parsedMax <= 50
-    ? parsedMax
-    : undefined;
-  const headlines = await services.fetchHeadlines({
-    feedUrl: config.feed || undefined,
-    maxItems,
-  });
-  return { headlines };
-}
-```
-
-For production use, copy or adapt the built-in News `tool.mjs`; it also handles
-headline deduplication and the no-fresh-items case. The feed URL only has meaning
-because that tool reads it and calls `services.fetchHeadlines`.
+> **You don't need a `tool.mjs` for a feed.** A `feed:` line in the frontmatter
+> is enough — see [Feeds without code](#feeds-without-code) below. Write a
+> `tool.mjs` when the skill needs something a feed can't give it.
 
 **`configFields` reference.** A flat `{ key: { … } }` map, up to 8 entries per
 skill. Each entry takes:
@@ -406,7 +431,7 @@ identical footing. It's read-mostly (no settings writes, no secrets):
 | `services.recentPlays(hours)` | play-log dedup sets `{ ids, keys }` over the last *hours* |
 | `services.library.getArtist(id)` / `.getAlbum(id)` / `.searchArtists(name, opts?)` | Navidrome/Subsonic reads |
 | `services.onThisDay()` | Wikipedia "on this day" events for today |
-| `services.fetchHeadlines({ feedUrl?, maxItems? })` | fetch + parse an RSS feed |
+| `services.fetchHeadlines({ feedUrl?, maxItems? })` | fetch + parse an RSS/Atom/RDF feed (what `feed:` uses) |
 | `services.recall.seen(key)` / `.remember(key)` | durable, cross-restart dedup ledger |
 | `services.log(msg)` | append a line to the station event log |
 
@@ -453,32 +478,33 @@ How a built-in still differs from a skill you add:
 
 ### News: swapping the feed
 
-The `news` skill's `tool.mjs` declares two knobs (`configFields`, above), so
-**/admin/skills → News → Edit** carries a feed field and a max-items field. They
-are stored as two extra frontmatter keys, editable on disk just as well:
+News is an ordinary feed skill (see [Feeds without code](#feeds-without-code)):
+**/admin/skills → News → Edit** carries a feed field and a max-items field,
+stored as two frontmatter keys and editable on disk just as well.
 
 ```yaml
 ---
 name: news
 label: News headlines
 cooldown: 45m
-feed: https://www.npr.org/rss/rss.php?id=1001   # any RSS 2.0 feed
+feed: https://www.npr.org/rss/rss.php?id=1001
 feedMaxItems: 10
 ---
 Read one fresh headline in a single sentence — keep it conversational, in the
 station's voice. Skip a headline that is dull or stale; silence is fine.
 ```
 
-> **Heads-up.** The parser handles **RSS 2.0** (`<item>`) feeds. **Atom** feeds
-> (`<entry>`) return zero items today — use an RSS URL.
-
 `NEWS_FEED_URL` / `NEWS_MAX_ITEMS` in `.env` only *seed* this file on the very first
 boot. Once `state/skills/news/SKILL.md` exists, **the file wins** — change the feed
 there (or in `/admin/skills`), not in `.env`.
 
-**Running a second news source** is just a copy: export the skill, rename it in
-both the `.md` and the `.zip`, re-import, and point its feed somewhere else. The
-knobs ride in `tool.mjs`, so the copy gets its own feed field under its own name.
+**Running a second news source** is just another skill with another `feed:` line
+— no export/rename dance, and nothing to copy.
+
+> Stations first booted before this was generic still have the old
+> `state/skills/news/tool.mjs` on disk, and keep running it — same behaviour,
+> its own copy of the same fetch. **↺ Reset to default** on the News skill
+> removes it and moves that install onto the shared path.
 
 ## Lifecycle
 

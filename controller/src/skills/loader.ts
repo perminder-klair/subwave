@@ -29,6 +29,14 @@
 //     operator-editable knobs (skills/config-fields.ts). Values live in this
 //     skill's OWN frontmatter and arrive as `config`, so a copied/renamed skill
 //     keeps its settings form — see issue #1300 (bug 11)
+//
+// A skill with NO tool.mjs is not necessarily prompt-only: a `feed:` line in its
+// own frontmatter earns it the generic feed tool (skills/feed.ts), the same
+// `skill_<name>` fetch + dedupe the built-in news skill used to hand-roll. That
+// is the whole of issue #1616 — the field validated, saved and read back
+// everywhere while reaching the model as nothing at all. News ships no tool.mjs
+// any more; it takes this path like every other feed skill.
+//
 // `services` (station-services.ts) is the curated facade onto search, the
 // library, the play log, feeds and durable recall — the one way a tool reaches
 // the world. Every tool runs behind a timeout + try/catch at the call site
@@ -49,6 +57,7 @@ import { STATE_DIR } from '../config.js';
 import { queue, registerSkillKinds } from '../broadcast/queue.js';
 import { buildStationServices } from '../llm/internal/tools/station-services.js';
 import { parseConfigFields, type SkillConfigField } from './config-fields.js';
+import { FEED_CONFIG_FIELDS, makeFeedTool, resolveFeedConfig } from './feed.js';
 import { declaredBool } from './abstain-policy.js';
 import {
   SKILL_SLUG_RE,
@@ -294,6 +303,17 @@ async function loadToolModule(dir: string): Promise<{ fn: any; description?: str
   };
 }
 
+// The agent-facing tool name for a skill. One spelling, shared by the tool.mjs
+// path and the generic feed path.
+function toolNameFor(name: string): string {
+  return `skill_${name.replace(/-/g, '_')}`;
+}
+
+// The generic feed knobs, sanitised once through the same parser a tool.mjs
+// declaration goes through — the built-in path and the operator path must not
+// disagree about what a config field may say.
+const FEED_FIELDS = parseConfigFields(FEED_CONFIG_FIELDS);
+
 // Build a full capability from a skill directory. `seeded` controls the
 // first-party affordances (enabled-by-default, can't-delete, reset) — NOT the
 // trust posture: every loaded tool runs fenced at the call site, seeded or not.
@@ -365,8 +385,9 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     // False, absent and malformed values preserve the historical solo path.
     cohosts: String(data.cohosts).trim().toLowerCase() === 'true',
     // Operator-editable knobs this skill declares for itself (tool.mjs
-    // `configFields`). Drives the admin editor's settings section — see
-    // config-fields.ts. Empty for a prompt-only or undeclared skill.
+    // `configFields`, or the generic feed pair for a skill without a tool.mjs).
+    // Drives the admin editor's settings section — see config-fields.ts. Empty
+    // only for a skill whose tool.mjs declares none.
     configFields: [] as SkillConfigField[],
   };
 
@@ -380,7 +401,7 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
 
   if (toolMod?.fn) {
     cap.toolFn = toolMod.fn;
-    cap.toolName = `skill_${name.replace(/-/g, '_')}`;
+    cap.toolName = toolNameFor(name);
     cap.toolDesc = (toolMod.description || data.toolDescription || '').trim()
       || `Fetch live data for the ${label} segment before speaking. Returns { available: false } when there is nothing fresh worth airing.`;
     // Optional agent-steerable parameters ({ name: description }, strings
@@ -396,6 +417,23 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     // and abstain-policy.ts decides. `cap.config` already carries the operator's
     // own `requiresData:` frontmatter line, which outranks this.
     cap.requiresData = toolMod.requiresData;
+  } else {
+    // No tool.mjs — but a declared `feed:` is a fetch, not a decoration (#1616).
+    // Every knob the generic tool reads is offered to a skill in this branch
+    // whether or not it has set one, because the edit sheet is where an operator
+    // sets the first feed: fields that appear only once a value exists are a
+    // form you cannot use to create the value.
+    cap.configFields = FEED_FIELDS;
+    const { feed, warnings } = resolveFeedConfig(data);
+    for (const warning of warnings) queue.log('warn', `[skills] "${slug}" ${warning}`);
+    if (feed) {
+      cap.toolFn = makeFeedTool(name, feed);
+      cap.toolName = toolNameFor(name);
+      cap.toolDesc = (data.toolDescription || '').trim()
+        || `Fetch the latest items from the ${label} feed before speaking. Returns only items not already used on air.`;
+      // requiresData is left undeclared, so abstain-policy.ts applies its
+      // default: a skill speaking from a feed stands down when the fetch fails.
+    }
   }
 
   return cap;

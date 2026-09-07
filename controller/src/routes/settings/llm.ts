@@ -274,13 +274,40 @@ router.get('/settings/llm/discover', requireAdmin, async (req, res) => {
   }
 });
 
+// Resolve a probe's header map against what is stored: 'set' is getRedacted()'s
+// sentinel and means "the value already on file", exactly as applyLlmLegPatch
+// reads it on the save path. Never throws — a probe reports failures as a
+// message, not a 500.
+function hasRedactedHeader(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  return Object.values(raw as Record<string, unknown>).some((v) => v === 'set');
+}
+
+function resolveProbeHeaders(raw: unknown, stored: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  const onFile = (stored && typeof stored === 'object' ? stored : {}) as Record<string, unknown>;
+  for (const name of Object.keys(raw as Record<string, unknown>)) {
+    const v = (raw as Record<string, unknown>)[name];
+    const resolved = v === 'set' ? onFile[name.trim()] : v;
+    if (typeof resolved === 'string' && resolved.trim()) out[name.trim()] = resolved.trim();
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // POST /settings/llm/probe-compat — live probe for an openai-compatible key.
-// Body: { apiKey: string, baseUrl: string, model: string }
+// Body: { apiKey: string, baseUrl: string, model: string, headers?: {} }
 // Always 200s with { ok, message, latencyMs }. The key is NOT saved.
+//
+// `headers` mirrors settings llm.headers (#1618): a gateway that routes on a
+// header rejects a call without it, so a probe that omitted them would fail
+// against exactly the server the operator is trying to configure — the test
+// button sits beside the header editor and has to ask the same question the
+// live path asks.
 // ---------------------------------------------------------------------------
 router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
-  const { apiKey, baseUrl, model } = req.body || {};
+  const { apiKey, baseUrl, model, headers } = req.body || {};
   if (!baseUrl || typeof baseUrl !== 'string' || !baseUrl.trim()) {
     return res.status(400).json({ ok: false, message: 'baseUrl is required', latencyMs: 0 });
   }
@@ -289,24 +316,36 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
   }
   const t0 = Date.now();
   try {
-    let resolvedApiKey = typeof apiKey === 'string' ? apiKey.trim() : '';
-    if (!resolvedApiKey) {
+    const typedKey = typeof apiKey === 'string' ? apiKey.trim() : '';
+    // The editor sends 'set' for a header already on file, so a probe needs the
+    // stored leg whenever one appears — the same reason a blank key does.
+    const needsStored = !typedKey || hasRedactedHeader(headers);
+    let resolvedApiKey = typedKey;
+    let storedHeaders: unknown;
+    if (needsStored) {
       await settings.load();
       const s = settings.get();
       const fallbackUrl = (s.llm?.fallback?.baseUrl || '').trim().replace(/\/+$/, '');
       const targetUrl = baseUrl.trim().replace(/\/+$/, '');
       // Match the target server to a leg, then read that leg's provider's inline
-      // key from the per-provider map (issue #657). Falls back to the
-      // openai-compatible slot when neither leg's URL matches.
-      const legProvider = (targetUrl && targetUrl === fallbackUrl)
-        ? s.llm?.fallback?.provider
-        : s.llm?.provider;
-      resolvedApiKey = settings.llmKeyFor(legProvider || 'openai-compatible');
+      // key from the per-provider map (issue #657) — and, since #1618, that same
+      // leg's stored headers, so the fallback's editor resolves its own
+      // sentinels rather than the primary's. Falls back to the primary when
+      // neither leg's URL matches.
+      const isFallback = Boolean(targetUrl) && targetUrl === fallbackUrl;
+      const legProvider = isFallback ? s.llm?.fallback?.provider : s.llm?.provider;
+      storedHeaders = isFallback ? s.llm?.fallback?.headers : s.llm?.headers;
+      if (!resolvedApiKey) resolvedApiKey = settings.llmKeyFor(legProvider || 'openai-compatible');
     }
+
+    const probeHeaders = llmProvider.customHeaders({
+      headers: resolveProbeHeaders(headers, storedHeaders),
+    });
 
     const m = createOpenAI({
       apiKey: resolvedApiKey || 'no-key',
       baseURL: baseUrl.trim().replace(/\/+$/, ''),
+      ...(probeHeaders ? { headers: probeHeaders } : {}),
     }).chat(model.trim());
     await generateText({
       model: m,
