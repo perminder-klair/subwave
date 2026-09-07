@@ -119,6 +119,21 @@ export interface QueueTrackResult {
   queuePosition: number;
 }
 
+/** POST /dj/queue-block — a whole album or artist block queued in one action. */
+export interface QueueBlockResult {
+  ok: boolean;
+  kind: 'album' | 'artist';
+  blockId: string;
+  label: string;
+  queued: number;
+  queuePosition: number | null;
+  truncated: number;
+  /** Tracks the never-play blocklist refused — the block is NOT exempt from it. */
+  skipped: { title: string | null; artist: string | null; reason: string; blockedBy: unknown | null }[];
+  /** A warning only; nothing is cut at the boundary. */
+  runsPastShowChange: { at: string; show: string | null; bySec: number } | null;
+}
+
 export interface SfxPlayResult {
   ok: boolean;
   name: string;
@@ -373,6 +388,15 @@ export class SubwaveClient {
       method: "POST",
       admin: true,
       body: track,
+    });
+  }
+
+  /** POST /dj/queue-block — queue a whole album or a block of an artist's tracks. */
+  async queueBlock(body: Record<string, unknown>): Promise<QueueBlockResult> {
+    return this.call<QueueBlockResult>("/dj/queue-block", {
+      method: "POST",
+      admin: true,
+      body,
     });
   }
 

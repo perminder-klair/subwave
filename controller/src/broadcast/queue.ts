@@ -658,10 +658,11 @@ class Queue {
   // the line if the real seam lands too far from it — the forecast is made from
   // the on-air track's remaining play and goes badly wrong when the pick misses
   // that seam and auto.m3u fills the slot.
-  async push({ track, requestedBy = null, operator = false, intent = null, introScript = null, introKind = 'dj-speak', introPersona = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null }: {
+  async push({ track, requestedBy = null, operator = false, block = null, intent = null, introScript = null, introKind = 'dj-speak', introPersona = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null }: {
     track: Track;
     requestedBy?: string | null;
     operator?: boolean;
+    block?: QueueItem['block'] | null;
     intent?: string | null;
     introScript?: string | null;
     introKind?: string;
@@ -704,6 +705,7 @@ class Queue {
     }
     const item = {
       track, requestedBy, operator, intent, introScript, introKind, introPersona, aiPicked,
+      block: block ?? undefined,
       // Only stamp a back-announce target when there's actually an intro/link to
       // air against it; a bare track carries no claim about what preceded it.
       linkPrev: (introScript && linkPrev)
@@ -721,7 +723,14 @@ class Queue {
       confirmedInLiquidsoap: false,
     };
     this.upcoming.push(item);
-    this.log('queued', `${track.title} — ${track.artist}`, { requestedBy, queueDepth: this.upcoming.length });
+    // A block's members are deliberately SILENT here and the route logs one
+    // summary line instead (#1622 FR 4). The booth log is a 200-entry ring the
+    // operator reads back through, and thirty consecutive "queued" lines off a
+    // single press would evict most of the history that press was made against
+    // — while saying nothing the one block line does not say better.
+    if (!block) {
+      this.log('queued', `${track.title} — ${track.artist}`, { requestedBy, queueDepth: this.upcoming.length });
+    }
     this.warnIfSwallowedByCrossfade(item);
     this.persist();
     this.drainToLiquidsoap();  // fire-and-forget
@@ -3048,6 +3057,20 @@ class Queue {
   async removeUpcoming(trackId: string): Promise<{ ok: true } | { ok: false; reason: 'not-queued' | 'already-playing' }> {
     const item = this.upcoming.find(i => i.track?.id === trackId);
     if (!item) return { ok: false, reason: 'not-queued' };
+    return this.removeUpcomingItem(item);
+  }
+
+  // The cancel itself, addressed by ITEM rather than by track id.
+  //
+  // Split out for the block cancel (#1622 FR 4), which holds the exact items it
+  // means to remove and must not re-resolve them by id: a block can legitimately
+  // carry the same track twice (`allowDuplicate` is how an operator press gets
+  // past the #619 guard), and `find(i => i.track.id === …)` would then cancel
+  // the first copy twice and leave the second queued. Every telnet pull-back and
+  // both stem cascades stay here, in one place, for both callers.
+  async removeUpcomingItem(item: QueueItem): Promise<{ ok: true } | { ok: false; reason: 'not-queued' | 'already-playing' }> {
+    if (!this.upcoming.includes(item)) return { ok: false, reason: 'not-queued' };
+    const trackId = item.track?.id || '';
 
     if (item.sent) {
       const { rid, bedRid } = await liquidsoapControl.resolveDjQueueRidWithBed(trackId);
@@ -3120,6 +3143,83 @@ class Queue {
     this.log('scheduler', `operator removed from queue: ${item.track.title} — ${item.track.artist}`);
     this.persist();
     return { ok: true };
+  }
+
+  // Cancel what remains of an operator block (#1622 FR 4) — the inverse of the
+  // one press that queued it.
+  //
+  // PARTIAL BY DESIGN. `removeUpcomingItem` refuses an item Liquidsoap has
+  // already taken out of `dj_queue` ('already-playing'), and on a thirty-track
+  // block the head is very often exactly that. Refusing the whole cancel over
+  // it would leave the operator pulling twenty-nine rows by hand, which is the
+  // failure this exists to prevent; so it removes everything it can and reports
+  // what it could not. The one committed track plays out — there is no cancel
+  // for a track on its way to air, and `/dj/skip` is that tool.
+  //
+  // Walks a SNAPSHOT in queue order: each removal splices `upcoming`, so
+  // iterating the live array would skip every other item.
+  async removeUpcomingBlock(blockId: string): Promise<{ removed: number; kept: number; label: string | null }> {
+    const members = this.upcoming.filter(i => i.block?.id === blockId);
+    if (!members.length) return { removed: 0, kept: 0, label: null };
+    const label = members[0].block?.label ?? null;
+    let removed = 0;
+    let kept = 0;
+    for (const item of members) {
+      const result = await this.removeUpcomingItem(item);
+      if (result.ok) removed++;
+      else kept++;
+    }
+    this.log('scheduler',
+      `operator cancelled the rest of "${label}" — ${removed} track${removed === 1 ? '' : 's'} removed`
+      + (kept ? `, ${kept} already committed to the mixer and will play out` : ''),
+      { blockId, removed, kept });
+    return { removed, kept, label };
+  }
+
+  // When will this queued item reach air? A FORECAST, and named as one.
+  //
+  // Deliberately NOT `remainingUntilItemAirs`, which walks only the SENT chain
+  // ahead of an item. That is right for its own caller — the drain only ever
+  // asks about the first UNSENT item, so nothing unsent is ever ahead of it,
+  // and the skip there is a defensive no-op. It is wrong here: this answers a
+  // listener's "when does my request play", where an unsent album track sitting
+  // in front of them is very much going to play first. Two questions, two
+  // walks, both stated — rather than one walk that means different things to
+  // its two callers.
+  //
+  // Null when unknowable, and that is the whole of its error handling: no
+  // start stamp (boot, recover, an untracked auto play), or any item ahead with
+  // no usable duration. A caller that cannot get an answer says nothing, which
+  // is the pre-existing behaviour on every surface that reads this.
+  //
+  // IT COUNTS THE BED, and any future walk of this queue must too. A bed is
+  // written straight to `next.txt` by `maybePushBed` and is never an `upcoming`
+  // entry, so a clock that walks the queue sails straight past it — the #1574
+  // failure, where an uncounted bed put the show-boundary cut a whole link late.
+  // `bedDelayBeforeItemAirs` is that measurement and is reused rather than
+  // re-walked: it sums this item's OWN bed (which plays immediately ahead of it)
+  // plus the beds of SENT items ahead. An UNSENT item ahead legitimately
+  // contributes zero — its bed is decided at ITS drain and has not been pushed
+  // yet — so the two walks agree by construction.
+  //
+  // Both callers are understated by a miss here, in the direction that matters:
+  // the listener wait notice would say a request is closer than it is, on the
+  // one surface it exists to make honest, and `runsPastShowChange` would
+  // under-report the overrun, which reads as "this fits" when it does not.
+  airForecastSec(item: QueueItem): number | null {
+    const idx = this.upcoming.indexOf(item);
+    if (idx < 0) return null;
+    let remaining = this.remainingSecOnAir();
+    if (remaining == null) return null;
+    for (const ahead of this.upcoming.slice(0, idx)) {
+      let d = Number(ahead.track?.duration) || 0;
+      if (!d && ahead.track?.id) d = Number(library.get(ahead.track.id)?.durationSec) || 0;
+      if (!d) return null;
+      const playable = playableDurationSec(d, ahead.cueOutSec ?? null, ahead.cueInSec ?? null);
+      if (playable == null) return null;
+      remaining += playable;
+    }
+    return remaining + this.bedDelayBeforeItemAirs(item);
   }
 
   // Tracks played in the last `hours` hours — used by the picker to block
@@ -3445,6 +3545,10 @@ class Queue {
       endedAt: i.endedAt,
       queuedAt: i.queuedAt,
       sent: i.sent,
+      // The operator block this row belongs to (#1622 FR 4), or absent. Carries
+      // its own index/size rather than being counted here, so a block half
+      // played still reads "9 of 11" instead of shrinking with the queue.
+      block: i.block || undefined,
       // The track arrives via a pre-rendered stem blend rather than a plain
       // crossfade (#1257 — the admin queue badges the seam type). Stamped at
       // pair drain, cleared if the clip is pulled with a cancel, so it's

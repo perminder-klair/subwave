@@ -69,6 +69,26 @@ export interface UntaggedResponse { rows: Track[]; nextCursor: string | null }
 // snapshots taken at block time, so rendering needs no Navidrome re-lookup.
 export type BlockType = 'track' | 'album' | 'artist';
 
+// What POST /dj/queue-block queues as one action (#1622 FR 4). Distinct from
+// BlockType above, which is the never-play list's granularity — one puts a
+// record ON air, the other keeps it off.
+export type QueueBlockKind = 'album' | 'artist';
+
+// POST /dj/queue-block's answer. Every caveat is a field rather than something
+// the caller re-derives: `skipped` is what the never-play list refused (a block
+// does NOT bypass it), `truncated` what the 30-track cap took, and
+// `runsPastShowChange` a warning only — nothing was cut.
+export interface QueueBlockResult {
+  kind: QueueBlockKind;
+  blockId: string;
+  label: string;
+  queued: number;
+  queuePosition: number | null;
+  truncated: number;
+  skipped: { title: string | null; artist: string | null; reason: string }[];
+  runsPastShowChange: { at: string; show: string | null; bySec: number } | null;
+}
+
 // What blocks a row: an id entry or an attribute rule (#1300 FR 1). `kind` is
 // optional on the entry variant because an older controller omits it — treat
 // absent as 'entry'; `ref.kind === 'rule'` is the discriminant either way.

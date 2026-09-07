@@ -36,6 +36,16 @@ import { join, resolve } from 'node:path';
 import { STATE_DIR } from '../config.js';
 import { skipTrack } from '../broadcast/liquidsoap-control.js';
 import { getFullContext } from '../context.js';
+import { randomUUID } from 'node:crypto';
+import * as silenceTrim from '../music/silence-trim.js';
+import { nextShowBoundaryMs } from '../broadcast/show-boundary.js';
+import { planBlock, blockLabel, blockPlayableSec, type BlockSong } from '../broadcast/block-queue.js';
+import {
+  queueBlockSchema,
+  QUEUE_BLOCK_ARTIST_LIMIT_DEFAULT,
+  QUEUE_BLOCK_MAX_TRACKS,
+  type QueueBlockBody,
+} from '../schemas/dj.js';
 
 export const router = express.Router();
 
@@ -1035,6 +1045,256 @@ router.post('/dj/queue-track', requireAdmin, async (req, res) => {
   } catch (err) {
     queue.log('error', `/dj/queue-track failed: ${err.message}`);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// POST /dj/queue-block — queue a whole album, or a run of tracks by one
+// artist, as ONE explicit operator action (#1622 FR 4, Discord ask in #1568).
+//
+// This is `POST /dj/queue-track` thirty times with the two things doing it by
+// hand cannot get right: the record's own running order, and a report of what
+// the never-play list refused.
+//
+// WHAT IS AND IS NOT BYPASSED
+// ---------------------------
+// Nothing new. Each track goes through `queue.push()` with exactly the two
+// opt-outs the single-track route already carries — `allowDuplicate: true` past
+// the #619 dedup guard, and `requestedBy: 'studio'`, which is the discriminator
+// the #447 length cap, the show-boundary cut (#1574) and the bed's request
+// reason (#1465) all read. `picker.albumHours` and the artist guard are PICK
+// paths and an operator push reaches neither; the block's presence in
+// `upcoming` feeds `queue.recentAlbumKeys`, which is the cooldown doing the
+// right thing (the picker will not add more of this record behind the block).
+//
+// The never-play blocklist is NOT bypassed — absolute, requests included. The
+// plan reads `blocklist.hitOf` so the response can NAME each refusal, but the
+// refusal itself still happens in `push()`, and a `-2` from it is recorded as a
+// skip whether or not the plan predicted it.
+//
+// `operator: true` keeps the block out of the listener request line — see
+// queue.pendingListenerRequests().
+// ---------------------------------------------------------------------------
+
+// A block's tracks, plus what to call it. Throws a `{ status, error }` shape
+// the route turns into a response.
+async function resolveBlockSource(body: QueueBlockBody): Promise<{ songs: BlockSong[]; name: string | null; artist: string | null }> {
+  const fail = (status: number, error: string) => Object.assign(new Error(error), { status });
+
+  // A seed track resolves BOTH kinds, because the admin row UI never sees an
+  // albumId or an artistId — the same reason POST /library/blocklist resolves
+  // from a trackId.
+  let seed: any = null;
+  if (body.trackId) {
+    try { seed = await subsonic.getSong(body.trackId); } catch { /* reported below */ }
+    if (!seed) throw fail(404, 'track not found');
+  }
+
+  if (body.kind === 'album') {
+    const albumId = body.id || seed?.albumId;
+    if (!albumId) throw fail(404, 'album not resolvable for this track');
+
+    const songs: BlockSong[] = await subsonic.getAlbum(albumId);
+    if (!songs.length) throw fail(404, 'that album has no tracks in the library');
+    // Read the title off the RECORD rather than the seed: an `id` caller sent
+    // no seed at all, and a track's own `album` tag can differ from its
+    // siblings' on a badly tagged rip.
+    return { songs, name: songs[0]?.album ?? seed?.album ?? null, artist: songs[0]?.artist ?? seed?.artist ?? null };
+  }
+
+  // getTopSongs is keyed by NAME, so an id has to be resolved to one first.
+  let name = body.artist || seed?.artist || null;
+  if (!name && body.id) {
+    try { name = (await subsonic.getArtist(body.id))?.name ?? null; } catch { /* reported below */ }
+  }
+  // Named for what the caller actually sent: an `id` caller supplied no track,
+  // and "not resolvable for this track" reads as a bug report about a track
+  // that was never in the request.
+  if (!name) throw fail(404, seed ? 'artist not resolvable for this track' : 'artist not found');
+
+  // Always ask for the full cap rather than the caller's `limit`: blocked
+  // tracks are dropped by the plan, and fetching only `limit` would let two
+  // never-play entries silently shorten the block instead of the next two
+  // tracks taking their place.
+  let songs: BlockSong[] = [];
+  try { songs = await subsonic.getTopSongs(name, { count: QUEUE_BLOCK_MAX_TRACKS }); } catch { /* fall through */ }
+  if (!songs.length) {
+    // getTopSongs is Last.fm-ranked and comes back EMPTY for an artist with no
+    // coverage — which is most of a niche catalogue, i.e. exactly the libraries
+    // #618 was measured on. Without this fallback the feature is dead there.
+    try { songs = await subsonic.getRecentSongsByArtist(name, { albums: 5, count: QUEUE_BLOCK_MAX_TRACKS }); } catch { /* reported below */ }
+  }
+  if (!songs.length) throw fail(404, `nothing by "${name}" in the library`);
+  return { songs, name, artist: name };
+}
+
+router.post(
+  '/dj/queue-block',
+  requireAdmin,
+  // verbatim: every message in queueBlockSchema names its own field, so the
+  // default dotted-path prefix would double the location — the same narrow
+  // exception POST /library/blocklist/rules takes.
+  validateBody(queueBlockSchema, { messages: 'verbatim' }),
+  async (req, res) => {
+    const body = req.body as QueueBlockBody;
+    try {
+      await library.load();
+      const { songs, name, artist } = await resolveBlockSource(body);
+
+      const label = blockLabel({ kind: body.kind, name, artist });
+      const plan = planBlock<BlockSong>({
+        kind: body.kind,
+        songs,
+        order: body.order,
+        limit: body.kind === 'artist' ? (body.limit ?? QUEUE_BLOCK_ARTIST_LIMIT_DEFAULT) : null,
+        // Matched against the SOURCE song, not a projection of it: the row
+        // shape drops albumId/artistId, which would demote an album or artist
+        // block to its normalised-name fallback (the same note toAdminRow
+        // carries).
+        hitOf: (song) => blocklist.hitOf(song),
+      });
+
+      if (!plan.tracks.length) {
+        return res.status(409).json({
+          error: plan.skipped.length
+            ? `every track on "${label}" is on the never-play blocklist — unblock it first (Library → Blocked)`
+            : `nothing playable in "${label}"`,
+          skipped: plan.skipped,
+        });
+      }
+
+      const blockId = randomUUID();
+      const skipped = [...plan.skipped];
+      let queued = 0;
+      let queuePosition: number | null = null;
+      for (const track of plan.tracks) {
+        // The blocklist verdict is re-read at the push, not carried from the
+        // plan: a seasonal rule can turn between the two, and push() is the
+        // gate either way.
+        const hit = blocklist.hitOf(track);
+        const pos = await queue.push({
+          track,
+          requestedBy: 'studio',
+          operator: true,
+          allowDuplicate: true,
+          block: { id: blockId, label, index: queued + 1, size: plan.tracks.length },
+        });
+        if (pos === -2) {
+          skipped.push({
+            title: track.title ?? null,
+            artist: track.artist ?? null,
+            reason: 'blocked',
+            blockedBy: hit,
+          });
+          continue;
+        }
+        queued++;
+        if (queuePosition == null) queuePosition = pos;
+      }
+
+      if (!queued) {
+        return res.status(409).json({
+          error: `every track on "${label}" was refused by the never-play blocklist`,
+          skipped,
+        });
+      }
+
+      // A late blocklist turn can make the real block shorter than the plan, so
+      // the badge's denominator is re-stamped from what actually queued — the
+      // indices are already the running count and stay contiguous.
+      if (queued !== plan.tracks.length) {
+        for (const item of queue.upcoming) {
+          if (item.block?.id === blockId) item.block.size = queued;
+        }
+      }
+
+      // Does the block run past the next show change? WARN ONLY (#1622 FR 4):
+      // cutting it would contradict "an explicit operator action always fires",
+      // and airing the incoming host's mic-pass between two tracks of one album
+      // is the worse outcome — so the operator is told and decides. The handover
+      // is what this warning is really about: runPickCycle (which airs the
+      // mic-pass) only fires when `upcoming` is EMPTY, so a block spanning a
+      // boundary holds a pending handoff until it drains, and a long enough one
+      // outlives HANDOFF_MAX_AGE_MS.
+      //
+      // Measured AFTER the pushes, from the first block item's own air forecast
+      // rather than from `now` or from the on-air track alone: the block queues
+      // behind whatever was already in `upcoming`, and starting the clock too
+      // early is the direction that reads as "this fits" when it does not. The
+      // span is the PLAYABLE one (music/silence-trim.ts), never the tagged
+      // duration — the same two rules resolveBoundaryCut follows.
+      let runsPastShowChange: { at: string; show: string | null; bySec: number } | null = null;
+      const head = queue.upcoming.find(i => i.block?.id === blockId);
+      const totalSec = blockPlayableSec(plan.tracks, (song) => silenceTrim.playableSpanSec(song));
+      const startsInSec = head ? queue.airForecastSec(head) : null;
+      if (totalSec != null && startsInSec != null) {
+        const startMs = Date.now() + Math.max(0, startsInSec) * 1000;
+        const boundaryMs = nextShowBoundaryMs(startMs, totalSec);
+        if (boundaryMs != null) {
+          runsPastShowChange = {
+            at: new Date(boundaryMs).toISOString(),
+            show: settings.resolveActiveShow(new Date(boundaryMs))?.name ?? null,
+            bySec: Math.round((startMs + totalSec * 1000 - boundaryMs) / 1000),
+          };
+        }
+      }
+
+      // ONE booth-log line for the whole press — push() stays silent for block
+      // members precisely so this is what the operator reads back.
+      queue.log('queued',
+        `${body.kind === 'album' ? 'album' : 'artist block'}: ${label} — ${queued} track${queued === 1 ? '' : 's'}`
+        + (skipped.length ? `, ${skipped.length} skipped (never-play)` : '')
+        + (plan.truncated ? `, ${plan.truncated} over the ${QUEUE_BLOCK_MAX_TRACKS}-track limit` : '')
+        + (runsPastShowChange ? `, running ${Math.round(runsPastShowChange.bySec / 60)}min past the next show change` : ''),
+        { blockId, kind: body.kind, queued, skipped: skipped.length, truncated: plan.truncated });
+
+      res.json({
+        ok: true,
+        kind: body.kind,
+        blockId,
+        label,
+        queued,
+        queuePosition,
+        truncated: plan.truncated,
+        skipped,
+        runsPastShowChange,
+      });
+    } catch (err: any) {
+      if (err?.status) return res.status(err.status).json({ error: err.message });
+      queue.log('error', `/dj/queue-block failed: ${err.message}`);
+      res.status(500).json({ error: err.message });
+    }
+  },
+);
+
+// ---------------------------------------------------------------------------
+// DELETE /dj/queue/block/:blockId — cancel what remains of a queued block.
+//
+// The inverse of the one press that queued it: an operator who can put thirty
+// tracks on air with one action must be able to take them off with one, and
+// pulling twenty-nine rows by hand is the failure this prevents.
+//
+// PARTIAL SUCCESS IS THE NORMAL ANSWER, not an error — a track Liquidsoap has
+// already taken out of dj_queue cannot be cancelled and plays out (that is what
+// /dj/skip is for), and on a long block the head very often is exactly that. A
+// 200 reporting `removed` and `kept` is honest; a 409 over one committed track
+// would leave the operator doing it by hand anyway.
+//
+// Registration order is not load-bearing here, unlike the blocklist rule
+// routes: DELETE /dj/queue/:trackId is ONE path segment and cannot match this
+// two-segment path, so a block id can never be read as a track id. Kept beside
+// the route that creates a block rather than beside the one it resembles.
+// ---------------------------------------------------------------------------
+router.delete('/dj/queue/block/:blockId', requireAdmin, async (req, res) => {
+  try {
+    const result = await queue.removeUpcomingBlock(req.params.blockId);
+    if (!result.removed && !result.kept) {
+      return res.status(404).json({ error: 'no queued tracks from that block' });
+    }
+    res.json({ removed: result.removed, kept: result.kept, label: result.label });
+  } catch (err) {
+    queue.log('error', `/dj/queue block cancel failed: ${err.message}`);
+    res.status(502).json({ error: err.message });
   }
 });
 

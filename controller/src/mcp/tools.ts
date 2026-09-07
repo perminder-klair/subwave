@@ -402,6 +402,79 @@ export function registerSubwaveTools(
   );
 
   // -------------------------------------------------------------------------
+  // subwave_queue_block — queue a whole album / artist block (admin)
+  // -------------------------------------------------------------------------
+  server.registerTool(
+    "subwave_queue_block",
+    {
+      title: "Queue an album or artist block",
+      description:
+        "Queue a whole album, or a run of tracks by one artist, in ONE action — the " +
+        "operator gesture behind an album show. ADMIN endpoint. Name the block with a " +
+        "trackId from any subwave_search_library result (the server resolves the " +
+        "album/artist off it), a pre-resolved album/artist id, or an artist name. " +
+        "An album is queued in its own disc/track order and can be neither shuffled " +
+        "nor limited — that ordering is the whole point of a block. Capped at 30 " +
+        "tracks; a longer record is truncated and says so. The never-play blocklist " +
+        "is NOT bypassed: blocked tracks are skipped and named in `skipped`, and the " +
+        "rest queue. `runsPastShowChange` warns when the block outlasts the current " +
+        "show — nothing is cut, it is the operator's call.",
+      inputSchema: {
+        kind: z.enum(["album", "artist"]).describe("What the block is a block of."),
+        trackId: z.string().optional().describe("Any track from the album, or by the artist."),
+        id: z.string().optional().describe("A pre-resolved album or artist id."),
+        artist: z.string().optional().describe("Artist by name. Artist blocks only."),
+        limit: z.number().int().optional().describe("Artist blocks only; default 10, max 30."),
+        order: z.enum(["natural", "shuffle"]).optional().describe("Albums are refused 'shuffle'."),
+      },
+      outputSchema: {
+        ok: z.boolean(),
+        kind: z.enum(["album", "artist"]),
+        blockId: z.string(),
+        label: z.string(),
+        queued: z.number(),
+        queuePosition: z.number().nullable(),
+        truncated: z.number(),
+        skipped: z.array(
+          z.object({
+            title: z.string().nullable(),
+            artist: z.string().nullable(),
+            reason: z.string(),
+            blockedBy: z.unknown().nullable(),
+          }),
+        ),
+        runsPastShowChange: z
+          .object({ at: z.string(), show: z.string().nullable(), bySec: z.number() })
+          .nullable(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    (body) =>
+      run(async () => {
+        const result = await client.queueBlock(body as Record<string, unknown>);
+        // Every caveat is stated in the text, not only in the structured
+        // payload: a model that queues an album and is not told two tracks were
+        // never-played will report a complete record on air.
+        const notes = [
+          result.skipped.length ? `${result.skipped.length} skipped (never-play blocklist)` : null,
+          result.truncated ? `${result.truncated} over the 30-track limit` : null,
+          result.runsPastShowChange
+            ? `runs ~${Math.round(result.runsPastShowChange.bySec / 60)}min past the next show change`
+            : null,
+        ].filter(Boolean);
+        return {
+          content: [
+            text(
+              `Queued ${result.queued} track${result.queued === 1 ? "" : "s"} from "${result.label}"` +
+                (notes.length ? ` — ${notes.join("; ")}.` : "."),
+            ),
+          ],
+          structuredContent: { ...result },
+        };
+      }),
+  );
+
+  // -------------------------------------------------------------------------
   // subwave_skip_track — force-end the current track (admin)
   // -------------------------------------------------------------------------
   server.registerTool(

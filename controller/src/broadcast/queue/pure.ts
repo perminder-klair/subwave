@@ -456,3 +456,57 @@ export function exchangeSegment(
     legacy: false,
   };
 }
+
+// Below this, "coming up" is already an honest acknowledgement and the clause
+// is noise. Five minutes is roughly one track: a request landing behind the
+// on-air song and nothing else does not need a number.
+export const REQUEST_WAIT_NOTICE_SEC = 5 * 60;
+
+// How long a wait reads as, for a listener.
+//
+// Minutes to the nearest minute up to an hour and a half, then hours and
+// minutes — because "about 95 minutes" is arithmetic rather than an answer,
+// while "about 40 minutes" is exactly what somebody wants to know. Rounded, and
+// hedged with "about", because it IS a forecast (queue.airForecastSec), but
+// never rounded into vagueness: the whole point is that a listener sitting
+// behind a queued album is told so in a number they can act on.
+export function formatWait(sec: number): string {
+  const mins = Math.max(1, Math.round(sec / 60));
+  if (mins < 90) return `${mins} minute${mins === 1 ? '' : 's'}`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `${h} hour${h === 1 ? '' : 's'} ${m} minute${m === 1 ? '' : 's'}` : `${h} hour${h === 1 ? '' : 's'}`;
+}
+
+// The sentence appended to a queued request's acknowledgement when it is a long
+// way down the queue (#1622 FR 4).
+//
+// An operator block is the reason this exists: before it, a request joined a
+// queue one or two picks deep and "coming up" was true within a track or two.
+// One press can now put a whole album in front of it, and FIFO is not
+// negotiable — `drain-policy.ts` states in as many words that a request IS the
+// successor arriving and that FIFO is never inverted, so letting a request jump
+// the block would both break that invariant and split the record, which is the
+// one thing the block feature exists to prevent. The listener is told instead.
+//
+// Two ways this stays honest. It NAMES the block when one is ahead, because
+// "there's an album playing first" is the difference between a wait that makes
+// sense and a station that looks broken. And it returns '' rather than a hedge
+// whenever the forecast is unknown or short — a caller with no answer says
+// nothing, which is exactly the pre-block behaviour.
+//
+// Pure and separate from the LLM's own `ack` copy: this is a fact appended to
+// whatever the DJ said, never something the model is asked to phrase.
+export function requestWaitClause(input: {
+  waitSec: number | null;
+  /** The label of the operator block ahead of this request, if any. */
+  blockLabel?: string | null;
+}): string {
+  const { waitSec, blockLabel } = input;
+  if (waitSec == null || !Number.isFinite(waitSec) || waitSec < REQUEST_WAIT_NOTICE_SEC) return '';
+  const wait = formatWait(waitSec);
+  const label = (blockLabel || '').trim();
+  return label
+    ? ` We're playing ${label} right through first, so yours is about ${wait} away.`
+    : ` There's a fair bit queued ahead of it — about ${wait} away.`;
+}

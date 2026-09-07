@@ -6,10 +6,10 @@
 // composes one from the air-time snapshot before rendering these.
 
 import { useRef, useState } from 'react';
-import { Ban, Heart } from 'lucide-react';
+import { Ban, Heart, ListPlus } from 'lucide-react';
 import { Btn } from '../ui';
 import { cn } from '../../../lib/cn';
-import type { BlockType, LikeIndex, Track } from './types';
+import type { BlockType, LikeIndex, QueueBlockKind, Track } from './types';
 import { useDismissOnOutside } from './bits';
 
 // Capped for the Browse grid, where the actions column is a FIXED track (.lib-row
@@ -99,6 +99,63 @@ export function BlockMenu({ track, busy, disabled, onBlock, className }: {
             <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => pick('artist')}>
               Never play this artist
               <span className="block text-[10px] text-muted">also blocks tracks they're only featured on — acts joined by & or , stay separate</span>
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Queue on air, or queue the whole record / a run of the artist (#1622 FR 4).
+//
+// Deliberately the same shape as BlockMenu above — one button, a menu, the
+// server resolving the album/artist off the track id, because the row never
+// sees either id. The single-track action is the first item rather than the
+// button itself: two clicks for it matches how blocking a track already works,
+// and the actions column is a fixed grid track with no room for a fifth button.
+export function QueueMenu({ track, busy, disabled, onQueue, onQueueBlock, className }: {
+  track: Track;
+  busy: boolean;
+  disabled: boolean;
+  onQueue: (t: Track) => void;
+  onQueueBlock: (t: Track, kind: QueueBlockKind) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  useDismissOnOutside(open, () => setOpen(false), rootRef, triggerRef);
+  const run = (fn: () => void) => { setOpen(false); fn(); };
+
+  return (
+    <div ref={rootRef} className={cn('relative', className)}>
+      <Btn
+        ref={triggerRef}
+        sm
+        onClick={() => setOpen(o => !o)}
+        disabled={disabled}
+        title="Queue on air"
+        aria-expanded={open}
+        aria-haspopup="true"
+      >
+        {busy ? '…' : <ListPlus size={12} />}
+      </Btn>
+      {open && (
+        <div className="absolute top-full right-0 z-50 mt-1 max-w-[calc(100vw-2rem)] min-w-[220px] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+          <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => run(() => onQueue(track))}>
+            Queue this track
+          </button>
+          {track.album && (
+            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => run(() => onQueueBlock(track, 'album'))}>
+              Queue the whole album
+              <span className="block text-[10px] text-muted">plays in its own running order, never shuffled</span>
+            </button>
+          )}
+          {track.artist && (
+            <button type="button" className="block w-full rounded px-2.5 py-1.5 text-left text-[12px] hover:bg-[var(--ink-soft)] hover:text-ink" onClick={() => run(() => onQueueBlock(track, 'artist'))}>
+              Queue a set by this artist
+              <span className="block text-[10px] text-muted">their best-known tracks, back to back</span>
             </button>
           )}
         </div>
