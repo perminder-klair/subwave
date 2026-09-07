@@ -95,9 +95,18 @@ function scheduleFlush() {
   flushTimer.unref?.();
 }
 
+// Persist now, surfacing a write failure. The debounced flush() below
+// deliberately swallows one and retries on the next tick, which is right for a
+// like arriving and wrong for a caller that is about to destroy the only record
+// of what still needs writing — music/id-rotation.ts consumes the rotation
+// manifest the moment its remap returns.
+async function flushStrict(): Promise<void> {
+  await writeFileAtomic(STORE_FILE, JSON.stringify({ secret, likes: records }, null, 2));
+}
+
 async function flush(): Promise<void> {
   try {
-    await writeFileAtomic(STORE_FILE, JSON.stringify({ secret, likes: records }, null, 2));
+    await flushStrict();
   } catch {
     scheduleFlush(); // retry on the next tick
   }
@@ -128,6 +137,45 @@ export async function load(): Promise<void> {
     loaded = true;
   })();
   return loadPromise;
+}
+
+// Rewrite record ids after a Navidrome ID rotation (music/id-rotation.ts),
+// via the adoption-confirmed old→new map only. The airingKey keeps its
+// `${songId}|${startedAt}` shape (split at the FIRST `|` — startedAt is an ISO
+// timestamp and never contains one before the offset marker — which also keeps
+// the operator heart's synthetic `${songId}|operator` key intact). Flushes
+// through flushStrict: the caller deletes the rotation manifest right after, so
+// the rewrite must be on disk first — not sitting in the debounce window, and
+// not reported as written when the write actually failed.
+export async function remapTrackIds(trackMap: ReadonlyMap<string, string>): Promise<number> {
+  await load();
+  // Counts RECORDS moved, not fields written — songId and the snapshot id are
+  // normally the same value, so counting both would report twice the likes.
+  let changed = 0;
+  for (const r of records) {
+    let touched = false;
+    const bySong = trackMap.get(r.songId);
+    if (bySong) {
+      const rest = r.airingKey.startsWith(`${r.songId}|`)
+        ? r.airingKey.slice(r.songId.length + 1)
+        : null;
+      r.songId = bySong;
+      if (rest !== null) r.airingKey = `${bySong}|${rest}`;
+      touched = true;
+    }
+    const byTrack = trackMap.get(r.track.id);
+    if (byTrack && byTrack !== r.track.id) {
+      // Marks the store dirty in its own right: the snapshot id normally equals
+      // songId, but if it ever didn't, mutating it without setting the flag
+      // would leave the rewrite in memory only — and the caller deletes the
+      // manifest the moment this returns.
+      r.track.id = byTrack;
+      touched = true;
+    }
+    if (touched) changed++;
+  }
+  if (changed) await flushStrict();
+  return changed;
 }
 
 function countForSong(songId: string): number {

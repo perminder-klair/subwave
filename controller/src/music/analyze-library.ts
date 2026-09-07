@@ -33,6 +33,7 @@ import { config } from '../config.js';
 import { loadSecretsIntoEnv } from '../setup/secrets.js';
 import { loadSetupConfig } from '../setup/config.js';
 import { runAnalysisPass } from './analyze.js';
+import { adoptAndPrune } from './id-rotation.js';
 import * as analyzer from './analyzer.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
 import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
@@ -149,11 +150,21 @@ async function main() {
     }
     logEvent('info', `Scanned ${walked.toLocaleString('en-GB')} tracks`);
 
-    // Reconcile: drop rows for tracks no longer in Navidrome so the analysis
-    // scope reflects the live catalogue, not orphans from past full rescans.
-    // Guarded on a non-empty walk (a complete, authoritative pass).
+    // Reconcile: adopt rows whose id was rotated by Navidrome's canonical-id
+    // migration (music/id-rotation.ts — analysis carries over instead of being
+    // recomputed), then drop rows for tracks genuinely no longer in Navidrome
+    // so the analysis scope reflects the live catalogue, not orphans from past
+    // full rescans. Guarded on a non-empty walk (a complete, authoritative pass).
+    //
+    // Note this is NOT a recovery path an operator can reach from the admin UI:
+    // `shouldWalk` is false on a populated catalogue and startAnalyzer passes no
+    // --walk, so after a rotation (where the catalogue is full of stale rows)
+    // only a host-side `--walk` run gets here. The two real recovery paths are
+    // the tagger run and Library → Reconcile with Navidrome. Adoption is wired
+    // here anyway so the CLI can't be the one path that prunes what the others
+    // adopt.
     if (walked > 0) {
-      const pruned = db.pruneMissingTracks(liveIds);
+      const { pruned } = await adoptAndPrune(liveIds);
       if (pruned > 0) {
         console.log(`[analyze] pruned ${pruned} orphaned tracks no longer in Navidrome`);
       }

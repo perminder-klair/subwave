@@ -124,6 +124,38 @@ export function recordSync(playlistId: string, added: number): void {
   persist(store);
 }
 
+// Rewrite ids after a Navidrome ID rotation (music/id-rotation.ts). Runs
+// through this module (not a raw file rewrite) so the forever-cache and the
+// file stay consistent. Playlist keys go through the caller's playlist mapper;
+// seed track ids move via the adoption-confirmed map only — an unmapped seed
+// stays put, the pool builder already tolerates dead seeds.
+export function remapIds(
+  trackMap: ReadonlyMap<string, string>,
+  mapPlaylistId: (id: string) => string,
+): number {
+  const store = read();
+  let changed = 0;
+  for (const entry of store.recipes) {
+    const nextId = mapPlaylistId(entry.playlistId);
+    if (nextId !== entry.playlistId) {
+      entry.playlistId = nextId;
+      changed++;
+    }
+    const seeds = entry.recipe?.seedTrackIds;
+    if (Array.isArray(seeds)) {
+      for (let i = 0; i < seeds.length; i++) {
+        const next = trackMap.get(seeds[i]);
+        if (next && next !== seeds[i]) {
+          seeds[i] = next;
+          changed++;
+        }
+      }
+    }
+  }
+  if (changed) persist(store);
+  return changed;
+}
+
 export function remove(playlistId: string): void {
   const store = read();
   const next = store.recipes.filter((r) => r.playlistId !== playlistId);
