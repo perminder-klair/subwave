@@ -22,6 +22,7 @@ import * as silenceTrim from '../music/silence-trim.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
+import { jingleRotateOwner, rotateJingleDue } from './jingle-rotate.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type VocalMode } from '../music/show-filter.js';
 import { freshnessBiasedOrder } from '../music/airing.js';
 import { recencyWindowsForLibrary } from '../music/recency.js';
@@ -967,6 +968,24 @@ function talkEligible(kind: TalkKind, now: Date, rolled: SessionRoll | null): bo
   }
   if (kind === 'banter') return banterEligible(now);
   if (kind === 'segment') return segmentEligible();
+  // The automatic jingle rotate (#1619). Deliberately none of the gates above:
+  // a stinger costs no tokens and no TTS, so the daily budget has nothing to
+  // say about it, and neither the mixer's rotate nor an operator press has ever
+  // been listener-gated or muted by `tts.enabled` (voice-policy.ts names
+  // `jingleRatio: 0` as the way to silence jingles, precisely because the voice
+  // switch does not). Keeping those gates off is what makes the move from
+  // radio.liq a move rather than a redesign. Whether there is a clip to draw is
+  // NOT asked here — that is a readdir+stat sweep and this resolver is
+  // synchronous; a rotate that comes due and finds nothing spends the offer
+  // and skips, exactly as the mixer's own `source.available` gate did.
+  if (kind === 'jingle') {
+    const s = settings.get();
+    return rotateJingleDue({
+      owner: jingleRotateOwner(s),
+      ratio: Number(s?.jingleRatio) || 0,
+      tracksSinceJingle: queue.rotateJingleTracksSince(),
+    });
+  }
   // Programme beats carry no frequency/listener/budget gate of their own — a
   // planned episode's beats are the show. `dueBeat` (the row's external slot)
   // has already said one is due.
@@ -1000,7 +1019,13 @@ async function runTalkSlot(plan: Extract<TalkPlan, { act: 'fire' }>) {
   // model within a tick of every unload and quietly switch the feature off.
   // Fire-and-forget and total, exactly like the idle-pause call — a warm that
   // fails costs the render a model load, which is the un-warmed behaviour.
-  void warmHeavy();
+  //
+  // The jingle rotate (#1619) is the one row this must skip. It is the table's
+  // only row that is not speech — the clip is already rendered on disk and no
+  // engine is reached at all — so warming for it would reload a model nothing
+  // is about to use, which is the same "quietly switch the unload off" failure
+  // the fire-not-window rule above exists to avoid.
+  if (plan.kind !== 'jingle') void warmHeavy();
   return withTalkAir(plan.air, () => runTalkSlotInner(plan));
 }
 
@@ -1024,6 +1049,11 @@ async function runTalkSlotInner(plan: Extract<TalkPlan, { act: 'fire' }>) {
       case 'segment':
         await runSegmentTick();
         return;
+      case 'jingle':
+        // The planner has already decided the seam is this row's; the queue
+        // owns the draw and the handoff (#1619).
+        await queue.playRotateJingle();
+        return;
       case 'programme': {
         const ctx = await getFullContext();
         if (plan.slot === 'feature') await programme.featureTick(queue, ctx);
@@ -1043,6 +1073,7 @@ const TALK_FAILURE_LABEL: Record<TalkKind, (slot: string) => string> = {
   'station-id': () => 'Station ID',
   banter: () => 'Banter',
   segment: () => 'Segment tick',
+  jingle: () => 'Jingle rotate',
   programme: slot => `Programme ${slot} tick`,
 };
 

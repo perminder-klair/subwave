@@ -99,7 +99,9 @@ import {
   STREAM_MAX_LISTENERS_BOUNDS,
   maxTrackSecondsValueSchema,
   type ScheduledBackupSettings,
+  type JingleRotateOwner,
 } from './schemas/settings.js';
+import { jingleRotateOwner } from './broadcast/jingle-rotate.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
@@ -402,6 +404,10 @@ export async function load() {
 
   const loaded: any = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
+    // Repaired, never trusted: a hand-edited settings.json is load()'s input
+    // and an unrecognised owner here would decide whether TWO rotates run.
+    // Anything but the explicit opt-in reads as the mixer (#1619).
+    jingleRotate: jingleRotateOwner(stored),
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
     // Bounded here as well as at the save path: a hand-edited settings.json is
     // load()'s input, so it repairs rather than throws — and an out-of-range `p`
@@ -1208,6 +1214,19 @@ export async function update(patch) {
     const v = parseSettingsPatchKey<number>('jingleRatio', patch.jingleRatio);
     if (v !== cur.jingleRatio) {
       next.jingleRatio = v;
+      restart = true;
+    }
+  }
+  // Who counts the tracks (#1619). Same restart flag as the ratio itself and
+  // for the same reason: this key's whole effect on the mixer is the value
+  // written into liquidsoap_jingle_ratio.txt, which is read once at startup.
+  // Until that restart the mixer is still rotating on its old ratio, so an
+  // operator who flips this and walks away hears both — which is what the
+  // control's "needs restart" wording is for.
+  if ('jingleRotate' in patch) {
+    const v = parseSettingsPatchKey<JingleRotateOwner>('jingleRotate', patch.jingleRotate);
+    if (v !== cur.jingleRotate) {
+      next.jingleRotate = v;
       restart = true;
     }
   }

@@ -32,6 +32,7 @@ import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import * as sfx from './sfx.js';
 import * as jingles from './jingles.js';
+import { pickRotateJingle } from './jingle-rotate.js';
 import * as beds from './beds.js';
 import * as bedPolicy from './bed-policy.js';
 import * as session from './session.js';
@@ -214,6 +215,8 @@ class Queue {
   _lastSessionId: string | null = null;  // last session id onSessionRolled saw — the clock the handover wait is aged on
   _introRenders = new IntroRenderTracker<QueueItem>(); // timed-out pre-renders stay reusable by airIntro
   _pendingJingles = new Map<string, number>(); // manual jingle presses handed over but not yet heard — see playJingle
+  _tracksSinceJingle = 0;       // track boundaries since the last controller-drawn jingle — the count radio.liq's rotate used to keep (#1619)
+  _lastRotateJingle: string | null = null; // last jingle the controller drew — anti-repeat for jingle-rotate.pickRotateJingle
 
   // Snapshot upcoming/current/history to disk. The queue is otherwise purely
   // in-memory, so a controller restart (every `--build controller` rebuild)
@@ -2355,6 +2358,56 @@ class Queue {
     return { ok: true as const };
   }
 
+  // How many track boundaries have passed since the controller last drew a
+  // jingle — the rotate's due-ness, read by the talk tick's `jingle` row
+  // (broadcast/jingle-rotate.ts owns the decision itself).
+  rotateJingleTracksSince(): number {
+    return this._tracksSinceJingle;
+  }
+
+  // Draw the AUTOMATIC jingle — the rotate radio.liq used to run on its own
+  // (#1619). Everything about the airing is the manual path's: the same single
+  // writer, the same de-duplication, the same priority queue, the same booth
+  // log and session turn, so a jingle is one kind of event on air however it
+  // was decided. What differs is only WHO decided, and that decision has
+  // already been made by the talk-slot planner before this is called — the row
+  // stood down for the ident, the quiet gap and the pending clip up there, not
+  // here, so this stays free of a second copy of any of it.
+  //
+  // The counter resets on the HANDOFF, not on air: the jingle reaches
+  // jingle-now.txt now and Liquidsoap places it at the next safe boundary, so
+  // counting from here is what keeps "1 every N tracks" a count of tracks
+  // rather than a count of tracks plus however long the mixer held the press.
+  //
+  // It resets whether or not a clip was actually drawn, and that is the
+  // mixer's behaviour rather than a shortcut: radio.liq's rotate is gated by
+  // `source.available`, so a jingle that came due at a boundary where the gate
+  // was shut was SKIPPED, not banked — "skipping a jingle is the cheaper miss",
+  // in that file's own words, and the station runs slightly under the
+  // configured ratio. Banking it here instead would leave the row due on every
+  // subsequent minute, holding the seam against the segment director until an
+  // empty library was filled or a pending press aged out (up to half an hour).
+  // So the offer is spent, the reason is logged, and the next one is N tracks
+  // away.
+  async playRotateJingle(): Promise<boolean> {
+    this._tracksSinceJingle = 0;
+    const filename = pickRotateJingle(
+      (await jingles.list()).map(j => j.filename),
+      this._lastRotateJingle,
+    );
+    if (!filename) {
+      this.log('scheduler', '[jingle] rotate skipped — the jingle library is empty');
+      return false;
+    }
+    const res = await this.playJingle(filename);
+    if (!res.ok) {
+      this.log('scheduler', `[jingle] rotate skipped — "${filename}" ${res.reason}`);
+      return false;
+    }
+    this._lastRotateJingle = filename;
+    return true;
+  }
+
   // Retire presses that have been heard, or that are old enough that they never
   // will be. A mixer restart empties jingle_now_queue and loses the request
   // silently, so every entry has to expire on its own — the button must never
@@ -2394,6 +2447,12 @@ class Queue {
     // so anything this boundary airs is measured against the boundary it aired
     // AT, not the one before it.
     this._trackStarts++;
+    // The rotate's own clock (#1619). Only real MUSIC boundaries reach here —
+    // a bed branches before now-playing.json's title gate and a jingle is
+    // captured outside music_meta entirely — so this counts the same thing
+    // radio.liq's `rotate(weights=[1, jingle_ratio()])` counted, and the
+    // controller can draw the stinger the mixer used to draw itself.
+    this._tracksSinceJingle++;
 
     // A fresh track boundary — air any boundary-deferred segment (station
     // ident) now, unless this boundary already carries the incoming track's own

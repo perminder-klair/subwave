@@ -114,7 +114,13 @@ function makeReplay(opts: {
         ? opts.pendingTalk(now)
         : opts.pendingTalk) ?? null,
       betweenTracksOnly: opts.betweenTracksOnly ?? false,
-      eligible: kind => (opts.eligible ? opts.eligible(kind, now) : true),
+      // Default: every row is eligible EXCEPT the jingle rotate, which mirrors
+      // the station a test without an `eligible` of its own is describing.
+      // `jingle` (#1619) is the one row gated on an opt-in setting — a station
+      // that has not set `jingleRotate: 'controller'` never offers it a minute,
+      // and radio.liq is still drawing the stinger itself. Tests that want the
+      // row pass their own resolver.
+      eligible: kind => (opts.eligible ? opts.eligible(kind, now) : kind !== 'jingle'),
       externalSlot: kind => (opts.externalSlot ? opts.externalSlot(kind, now) : null),
       fired,
       logged,
@@ -159,6 +165,7 @@ test('a quiet hour is unchanged — every row still fires on the minute its cron
         feedback: true,
         eligible: (kind, now) => {
           if (kind === 'programme') return false;  // covered on its own below
+          if (kind === 'jingle') return false;     // opt-in (#1619) — covered on its own below
           return shouldFire(kind === 'station-id' ? 'stationId' : kind, now);
         },
       });
@@ -179,7 +186,11 @@ test('two rows never open a new chance on the same minute — #310 as a table pr
   // chance meeting another row's tail, which is what arbitration resolves.
   const opens = new Map<number, TalkKind>();
   for (const row of TALK_SLOTS) {
-    if (row.opens === 'external') continue;
+    // A row with no scheduled minutes has nothing to collide: 'external' places
+    // itself on someone else's clock, and 'any' (both fill rows) opens a fresh
+    // chance on every tick it is sampled on, which is what makes it a fill row
+    // rather than an owner of minutes. #310 is a rule about SCHEDULED minutes.
+    if (row.opens === 'external' || row.opens === 'any') continue;
     for (const m of row.opens) {
       assert.equal(opens.get(m), undefined, `:${m} opens both ${opens.get(m)} and ${row.kind}`);
       opens.set(m, row.kind);
@@ -413,7 +424,9 @@ test("a contested minute never reaches the filler's own gates", () => {
   // :10 and :40 are the only stride ticks no slot row's WINDOW can reach at
   // all, so they are free whatever else has happened this hour.
   r.tick(at(10));
-  assert.deepEqual(asked, ['segment']);
+  // Both fill rows, in table order: the segment director and the jingle rotate
+  // (#1619). A free minute is offered to every filler; a contested one to none.
+  assert.deepEqual(asked, ['segment', 'jingle']);
 });
 
 test('the filler yields to a firing row, and takes the minutes nothing else wants', () => {
@@ -621,8 +634,12 @@ test('two simulated hours: a pending clip never eats a whole window, whatever el
           pendingHolds++;
           // `minGapMs: 0` has opted out of the question entirely.
           assert.notEqual(row.minGapMs, 0, `seed ${seed} :${now.getMinutes()} — ${plan.kind} has no gap yet held on pending`);
-          // THE HOLD NEVER TAKES THE ROW'S LAST CHANCE. #1539 in one line.
-          assert.ok(row.opens === 'external' || canRetry(row, plan.slot, now.getMinutes()),
+          // THE HOLD NEVER TAKES THE ROW'S LAST CHANCE. #1539 in one line — for
+          // a row that HAS a last chance. An `opens: 'any'` row cannot lose one
+          // by waiting (the next tick is another), so its hold is unbounded on
+          // purpose and the bound would read as "never held at all".
+          assert.ok(row.opens === 'external' || row.opens === 'any'
+            || canRetry(row, plan.slot, now.getMinutes()),
             `seed ${seed} :${now.getMinutes()} — ${plan.kind} held on pending at its window's last minute (slot :${plan.slot})`);
         }
         if (row.opens !== 'external' && row.windowMinutes > 1) {
@@ -878,9 +895,13 @@ test('policy is asked only for a row that is open and unfired', () => {
   // :12 falls in no window at all — the hourly's closed at :09 and the ident's
   // opens at :15.
   r.tick(at(12));
-  assert.deepEqual(asked, [], 'a closed window must not reach a policy module');
+  // The jingle rotate is the one row with no window to be outside of — every
+  // minute is its own chance (#1619) — so it is the only row a minute in no
+  // slot window may reach. The segment director's stride skips :12.
+  assert.deepEqual(asked, ['jingle'], 'a closed window must not reach a policy module');
   // :15 opens the ident row, and a slot row wanting the minute stops the
   // filler's gates being asked at all (see the fill-row tests).
+  asked.length = 0;
   r.tick(at(15));
   assert.deepEqual(asked, ['station-id']);
   // Second tick on the same minute: the ident's slot is claimed, so its gates

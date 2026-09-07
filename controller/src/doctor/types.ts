@@ -84,6 +84,7 @@ export interface StationSettings {
   archive?: { enabled?: boolean };
   crossfadeDuration?: number;
   jingleRatio?: number;
+  jingleRotate?: 'mixer' | 'controller';
   maxTrackSeconds?: number;
   loudness?: { targetLufs?: number };
 }

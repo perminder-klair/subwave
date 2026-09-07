@@ -51,7 +51,14 @@ import type { PendingTalk } from './queue/kinds.js';
 // THE SLOT TABLE
 // ---------------------------------------------------------------------------
 
-export type TalkKind = 'hourly' | 'programme' | 'banter' | 'station-id' | 'segment';
+export type TalkKind = 'hourly' | 'programme' | 'banter' | 'station-id' | 'segment' | 'jingle';
+
+// `jingle` is the one row that is not SPEECH. It is here because the table is
+// where every claim on the listener's ear is arbitrated, and a stinger takes
+// the seam exactly the way an ident does — which is the whole of #1619: while
+// Liquidsoap drew the rotate itself, the planner could only find out
+// afterwards, through the `jingle-playing.json` hold, and a link written for
+// the next boundary landed right behind it.
 
 // Which clock a row's placement is a fact ABOUT. Two clocks coexist on purpose
 // and a unified table must not collapse them: slot minutes run on PROCESS time
@@ -265,6 +272,60 @@ export const TALK_SLOTS: readonly TalkSlot[] = [
     clock: 'process',
     stride: 5,
     oneFirePerSlot: true,
+  },
+  // The automatic jingle rotate (#1619) — the row that is not speech.
+  //
+  // ROLE. It is the table's SECOND fill row, and the choice is the same
+  // argument the segment director's is, not a weaker version of it. A fill row
+  // is one with "no scheduled chance to lose", and that is exactly what a
+  // rotate is: its due-ness is a COUNT of track boundaries
+  // (queue.rotateJingleTracksSince()), which keeps counting while the row
+  // waits, so a minute given away costs nothing but a minute. Making it a slot
+  // row would be wrong twice — it would suppress the director on every minute
+  // the jingle is merely waiting, and every hold would log `missed` about a
+  // chance that was never lost, since an `opens: 'any'` row's window is one
+  // minute wide and `canRetry` is therefore false on all of them.
+  //
+  // What the issue asked for — "the segment director stands down for it the way
+  // it does for an ident" — is what one talker per minute already does between
+  // two fill rows: the higher-priority plan takes the minute and the other one
+  // waits. It does not need to be a slot to get that.
+  //
+  // PRIORITY. Last, by the table's own principle: among rows that can retry,
+  // fewer remaining chances outranks more. The director is offered twelve
+  // minutes an hour; this row is offered sixty. So on a contested minute the
+  // director speaks and the jingle takes one of its other fifty-nine.
+  //
+  // GAP. Three minutes, the short segments' figure, and it is the half of the
+  // #310 collision this row can actually answer: a stinger must not land on the
+  // back of a break that has just finished. The other half — talk landing on
+  // the back of the STINGER — is not this row's to enforce and stays where it
+  // already lives, in the `jingle-playing.json` hold (#997, #1258, #1468) and
+  // radio.liq's own `voice_until` gate on the priority queue, which is why that
+  // guard survives this change untouched. Note the gap is one-directional for a
+  // second reason too: a jingle is not talk, so it never appears in
+  // queue.getLastTalkBreakAt().
+  //
+  // AIR. 'immediate' describes the HANDOFF, which is all the controller does
+  // here — the write to jingle-now.txt happens now and Liquidsoap's
+  // jingle_now_queue, a track-sensitive fallback gated on voice and beds,
+  // places the clip at the next safe boundary. Claiming 'next-track' would say
+  // the controller is deferring something it is not.
+  {
+    kind: 'jingle',
+    opens: 'any',
+    windowMinutes: 1,
+    minGapMs: 3 * 60_000,
+    air: 'immediate',
+    role: 'fill',
+    priority: 6,
+    clock: 'process',
+    stride: 1,
+    // The counter is the guard: it is zeroed when the jingle is handed over, so
+    // the row cannot fire twice for one rotate. An in-memory slot claim would
+    // only duplicate that, and keyed by minute (an `opens: 'any'` row's slot IS
+    // its minute) it would expire a tick later anyway.
+    oneFirePerSlot: false,
   },
 ];
 
@@ -504,8 +565,18 @@ function pendingHolds(
   row: TalkSlot, slot: string, minute: number, pending: PendingTalk, p: TalkTickInput,
 ): boolean {
   if (p.betweenTracksOnly) return pendingVoiceValidForMs(pending.queuedAt, p.now.getTime()) > 0;
-  return row.minGapMs > 0
-    && canRetry(row, slot, minute)
+  if (row.minGapMs === 0) return false;
+  // A row with no scheduled minutes ('any') cannot lose a chance by waiting —
+  // the next tick it is sampled on is another one. The #1539 bound exists
+  // ONLY to stop a hold turning a postpone into a cancel on a row with a
+  // finite window, and there is nothing here to cancel, so the hold is
+  // unbounded and the row simply waits for the clip to reach air. The bounded
+  // form would be strictly wrong for such a row: every minute is its own
+  // one-minute window, so `canRetry` is false on all of them and the row would
+  // never be held at all — which for the jingle rotate (#1619) is exactly the
+  // collision the table was asked to arbitrate.
+  if (row.opens === 'any') return pendingVoiceValidForMs(pending.queuedAt, p.now.getTime()) > 0;
+  return canRetry(row, slot, minute)
     && pendingOutlivesWindow(row, slot, pending, p.now.getTime());
 }
 

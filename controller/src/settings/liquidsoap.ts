@@ -7,6 +7,8 @@
 import { writeFile } from 'node:fs/promises';
 import { STATE_DIR } from '../config.js';
 import { DEFAULTS } from './defaults.js';
+// Pure policy module — no settings import of its own, so this stays acyclic.
+import { mixerJingleRatioFile } from '../broadcast/jingle-rotate.js';
 
 export const LIQ_JINGLE_RATIO_PATH = `${STATE_DIR}/liquidsoap_jingle_ratio.txt`;
 export const LIQ_CROSSFADE_PATH = `${STATE_DIR}/liquidsoap_crossfade.txt`;
@@ -43,7 +45,12 @@ const LIQ_STATION_NAME_PATH = `${STATE_DIR}/liquidsoap_station_name.txt`;
 export const ICECAST_LISTENER_AUTH_PATH = `${STATE_DIR}/icecast_listener_auth.txt`;
 
 export async function writeLiquidsoapSettings(s) {
-  await writeFile(LIQ_JINGLE_RATIO_PATH, String(s.jingleRatio));
+  // Not `s.jingleRatio` directly: with `jingleRotate: 'controller'` the mixer's
+  // own rotate is switched off here (0 — #997's documented "jingles off"
+  // value, so radio.liq needs no change) and the controller counts the tracks
+  // instead. One resolver for both sides, so "the mixer is rotating" and "the
+  // controller is rotating" cannot disagree. See broadcast/jingle-rotate.ts.
+  await writeFile(LIQ_JINGLE_RATIO_PATH, mixerJingleRatioFile(s));
   await writeFile(LIQ_CROSSFADE_PATH, String(s.crossfadeDuration));
   // Defaulted the way `station` is: every caller hands over a load()d object
   // that composes the block, but a handoff file is what the mixer reads and a

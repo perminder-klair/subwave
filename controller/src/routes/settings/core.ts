@@ -98,6 +98,9 @@ router.get('/settings', requireAdmin, async (req, res) => {
       serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       values: {
         jingleRatio: s.jingleRatio,
+        // Who counts the tracks between jingles (#1619) — the admin control that
+        // hands the rotate to the controller and writes the mixer's ratio 0.
+        jingleRotate: s.jingleRotate,
         crossfadeDuration: s.crossfadeDuration,
         ducking: s.ducking,
         // Repaired on the way out, not served raw: a station-profile switch and

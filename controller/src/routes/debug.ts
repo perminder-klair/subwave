@@ -27,6 +27,7 @@ import { budgetStatus } from '../broadcast/dj-budget.js';
 import { voiceStatus } from '../broadcast/voice-policy.js';
 import { clockStatus } from '../broadcast/clock-policy.js';
 import { talkAirStatus } from '../broadcast/talk-air.js';
+import { jingleRotateStatus } from '../broadcast/jingle-rotate.js';
 import { handoverStatus } from '../broadcast/handover-policy.js';
 import * as requestLog from '../broadcast/request-log.js';
 import { getStationTimezone } from '../time.js';
@@ -240,6 +241,17 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     // next track boundary, so a segment that looks late is waiting rather than
     // missing — the third question in the same family as `voice` and `clock`.
     talkAir: (() => { try { return talkAirStatus(); } catch (err: any) { return { error: err.message }; } })(),
+    // Who draws the automatic jingle (settings.jingleRotate, #1619). `owner`
+    // answers both halves of "why are there no stingers" and "why are there
+    // two of them": `mixerRatio` is what radio.liq was handed, and while the
+    // controller owns the rotate `tracksSinceJingle` says how close the next
+    // one is. A mixer that has not restarted since the switch is still
+    // rotating on its OLD ratio — that is the one state this row cannot see,
+    // and the reason the control says "needs restart".
+    jingleRotate: (() => {
+      try { return jingleRotateStatus(settings.get(), queue.rotateJingleTracksSince()); }
+      catch (err: any) { return { error: err.message }; }
+    })(),
     // Show handover timing + ordering (settings.handover, #1576). `offsetMinutes`
     // is how far before a show boundary the sign-off airs and `closingTrack` is
     // the fixed rule that keeps the incoming host one track behind it — but the

@@ -350,6 +350,9 @@ export interface JingleEntry {
 export interface SettingsData {
   values?: {
     jingleRatio?: number;
+    /** Who counts the tracks between jingles (#1619). Absent on an older
+     *  controller, which is the same thing as 'mixer'. */
+    jingleRotate?: 'mixer' | 'controller';
     crossfadeDuration?: number;
     ducking?: { voice?: number; intro?: number };
     maxTrackSeconds?: number;
