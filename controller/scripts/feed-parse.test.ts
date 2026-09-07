@@ -1,14 +1,15 @@
-// Pins for the news feed parser (src/skills/news.ts). The feed URL is operator
-// input — anything typed into the news skill's `feed:` field — and a feed that
-// doesn't parse fails SILENTLY (no headlines, the news beat just never airs),
-// so the dialects below are the contract.
+// Pins for the feed parser (src/skills/feed.ts). The feed URL is operator
+// input — anything typed into ANY skill's `feed:` field — and a feed that
+// doesn't parse fails SILENTLY (no items, the beat just never airs), so the
+// dialects below are the contract. The generated tool that consumes them is
+// pinned separately, in scripts/skill-feed-tool.test.ts.
 //
-// Written against node:test, so `npm test -- news-feed` reports per-assertion
+// Written against node:test, so `npm test -- feed-parse` reports per-assertion
 // rather than as one pass/fail for the whole file.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFeed, hashHeadline } from '../src/skills/news.js';
+import { parseFeed, hashHeadline } from '../src/skills/feed.js';
 
 const RSS2 = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>

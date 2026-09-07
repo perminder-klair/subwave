@@ -18,7 +18,7 @@
 import { queue } from '../../../broadcast/queue.js';
 import { searchWeb, searchReady } from '../../../skills/web-search.js';
 import { fetchOnThisDay, curiositySeen, recordCuriosity } from '../../../skills/curiosity.js';
-import { fetchHeadlines, hashHeadline } from '../../../skills/news.js';
+import { fetchHeadlines, hashHeadline } from '../../../skills/feed.js';
 import { getArtist, getAlbum, searchArtists } from '../../../music/subsonic.js';
 
 export interface StationServices {
