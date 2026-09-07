@@ -568,7 +568,9 @@ export const DEFAULTS = {
     // Keep the Demucs stems the analysis pass already computes (head + tail
     // windows) as FLAC under state/stems/<id>/, so a transition render is a fast
     // mix instead of a fresh separation. Needs the demucs stack like
-    // vocalActivity; ~13-25 MB per track (#1257), LRU-swept to stemCacheGb.
+    // vocalActivity; ~13-25 MB per track (#1257), swept to stemCacheGb by the
+    // music/stem-priority.ts ranking (lowest value out first, mtime to break
+    // ties) — the same order the backfill scans in.
     stemCache: false,
     stemCacheGb: 15,
     // Pause the analysis pass while anyone is listening, resuming once the stream

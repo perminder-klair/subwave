@@ -1155,9 +1155,10 @@ async function cleanup() {
   } catch (err) {
     queue.log('error', `Archive retention failed: ${err.message}`);
   }
-  // Stem cache LRU — keep the per-track Demucs stem windows inside the
-  // operator's byte budget (feature: stem-blend transitions). The analysis
-  // pass sweeps after itself too; this catches lazily-added dirs.
+  // Stem cache sweep — keep the per-track Demucs stem windows inside the
+  // operator's byte budget (feature: stem-blend transitions), evicting by the
+  // music/stem-priority.ts ranking rather than by age. The analysis pass
+  // sweeps after itself too; this catches lazily-added dirs.
   try {
     const { removed, freedBytes, failedDirs, overBudgetBytes } = await stemCacheStore.sweep();
     if (removed) {

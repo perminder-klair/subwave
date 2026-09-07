@@ -411,7 +411,13 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
       );
     } else {
       const seen = new Set(ids);
-      const needing = db.needsStemsIds().filter(id => !seen.has(id));
+      // Priority-ordered (#1622 FR 14): the budget always binds on a real
+      // library, so this slice IS which tracks ever get stems. The ranking and
+      // the never-starve reasoning live in music/stem-priority.ts; the like
+      // signals it reads are resolved here because library-db must not import
+      // the likes store.
+      const needing = db.needsStemsIds(undefined, stemCacheStore.likeSignals())
+        .filter(id => !seen.has(id));
       // Under --limit, only the slots the bpm/CLAP/vocal scopes haven't already
       // spent are available — sizing off the raw cap would log stem tracks a
       // final slice then silently drops, the exact "reads as finished"
@@ -766,8 +772,9 @@ export async function runAnalysisPass(opts: AnalyzeOptions = {}): Promise<Analyz
   await rm(`${config.stateRoot}/analyze-tmp`, { recursive: true, force: true }).catch(() => {});
 
   // Keep the stem cache inside the operator's byte budget after a pass that
-  // may have written hundreds of new stem dirs (LRU by dir mtime; the hourly
-  // cleanup cron sweeps too, this just settles the bill promptly).
+  // may have written hundreds of new stem dirs (lowest stem-priority first —
+  // NOT oldest first, or this pass's best writes would be the first evicted;
+  // the hourly cleanup cron sweeps too, this just settles the bill promptly).
   if (stemCache) {
     const swept = await stemCacheStore.sweep().catch(() => null);
     if (swept && swept.removed > 0) {

@@ -274,24 +274,11 @@ export function needsVocalIds(limit?: number, includeTailMissing = false): strin
   return rows.map(r => r.id);
 }
 
-// Ids that have never had a stem-caching pass (feature: stem backfill), so
-// turning the stem cache on for an already-analysed library fills it in
-// without the destructive, non-resumable --re-analyze that was the only path
-// before. Independent of the bpm/key scope like the two above, ordered for
-// stable resumption across nights.
-//
-// stems_at stamps the ATTEMPT, not disk presence — see the migration-17 note.
-// That is what makes this converge: the LRU sweep evicts stem dirs whenever
-// the cache outgrows its budget, and a presence-based scope would drag every
-// evicted track back in on the next pass, forever, on any library bigger than
-// the budget.
-export function needsStemsIds(limit?: number): string[] {
-  const q =
-    `SELECT id FROM tracks WHERE stems_at IS NULL AND ${analysisFailureExclusion()} ORDER BY id` +
-    (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
-  const rows = requireDb().prepare(q).all() as Array<{ id: string }>;
-  return rows.map(r => r.id);
-}
+// The stem-cache backfill scope moved to ./stem-scan.ts when its `ORDER BY id`
+// became a ranking (#1622 FR 14) — needsStemsIds now joins the play history and
+// projects music/stem-priority.ts, which is a page of query rather than a
+// sibling of the two backfill scopes above. Still re-exported from the same
+// library-db barrel.
 
 // Coverage meter companion to vocalAnalyzedCount — how many tracks have had a
 // stem pass. Surfaced next to the analysis counts so the operator can see the

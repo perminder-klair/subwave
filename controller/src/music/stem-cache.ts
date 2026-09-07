@@ -4,13 +4,18 @@
 // when the operator relocated it — see resolveStemsRoot), so a render is a
 // fast mix of cached stems instead of a fresh separation inside the drain
 // deadline. The controller owns the LIFECYCLE (this module: paths, presence
-// checks, byte-budget LRU sweep); the analyzer owns the WRITES
+// checks, byte-budget sweep — evicting by music/stem-priority.ts, the same
+// ranking the backfill scans by); the analyzer owns the WRITES
 // (analyze_worker.py write_stems — the same shared volume).
 
 import { readdir, stat, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../config.js';
 import * as settings from '../settings.js';
+import * as db from './library-db.js';
+import * as likes from '../broadcast/likes.js';
+import { stemEvictionOrder, UNKNOWN_TRACK_PRIORITY } from './stem-priority.js';
+import type { StemScanOpts } from './library-db.js';
 
 export const STEM_NAMES = ['drums', 'bass', 'other', 'vocals'] as const;
 export type StemWindow = 'head' | 'tail';
@@ -219,11 +224,63 @@ export async function headroomTracks(budget = budgetBytes()): Promise<number> {
   return free <= 0 ? 0 : Math.floor(free / u.estTrackBytes);
 }
 
-// Byte-budget LRU sweep: newest track-dirs (by max file mtime — a re-analysis
-// refreshes a dir's slot) are kept, oldest evicted until the cache fits the
-// operator's budget (settings.audio.stemCacheGb). No existing LRU utility in
-// the repo — byte accounting follows archives.pruneOlderThan, the sweep shape
-// follows piper.cleanupOldVoices.
+// The like signals the ranking reads, resolved once per caller.
+//
+// Read SYNCHRONOUSLY off whatever broadcast/likes.ts has already loaded, and
+// deliberately without an `await likes.load()`: in the controller the store is
+// loaded at boot (server.ts), and in the standalone tagger CLI it never is —
+// where a load() would mint and persist a fresh dedup secret from a second
+// process. An empty answer just drops the curation term from the score, which
+// is the fail-open direction. `music/picker.ts` reads likes the same way.
+export function likeSignals(): StemScanOpts {
+  try {
+    const operatorLikedIds: string[] = [];
+    const listenerLikedIds: string[] = [];
+    for (const s of likes.likedSongs()) {
+      (s.operator ? operatorLikedIds : listenerLikedIds).push(s.songId);
+    }
+    return { operatorLikedIds, listenerLikedIds };
+  } catch {
+    return {};
+  }
+}
+
+// Priority per cached dir, for the eviction order. Fails OPEN in one step: any
+// throw (the library DB is not open in this process, the query fails) hands
+// back a null priority for EVERY dir, and stemEvictionOrder then degrades to
+// the plain mtime LRU this sweep used before #1622. A dir whose track is not
+// in the catalogue at all — pruned from Navidrome — resolves to
+// UNKNOWN_TRACK_PRIORITY and goes first, which is right: nothing can ever
+// blend it.
+function withPriorities(
+  dirs: Array<{ dir: string; bytes: number; mtimeMs: number }>,
+): Array<{ dir: string; bytes: number; mtimeMs: number; priority: number | null }> {
+  let index: Map<string, number> | null = null;
+  try {
+    index = db.stemPriorityIndex(dirs.map(d => path.basename(d.dir)), likeSignals());
+  } catch {
+    index = null;
+  }
+  return dirs.map(d => ({
+    ...d,
+    priority: index ? index.get(path.basename(d.dir)) ?? UNKNOWN_TRACK_PRIORITY : null,
+  }));
+}
+
+// Byte-budget sweep: track-dirs are evicted lowest-PRIORITY first (the same
+// music/stem-priority.ts ranking the backfill scans by, so the cache keeps the
+// tracks a rendered seam can actually use), oldest-mtime first inside every
+// tie, until the cache fits the operator's budget (settings.audio.stemCacheGb).
+// No existing LRU utility in the repo — byte accounting follows
+// archives.pruneOlderThan, the sweep shape follows piper.cleanupOldVoices.
+//
+// Priority-first is not a refinement of the old plain mtime LRU, it is the
+// correction the scan order forces. The backfill now writes the BEST tracks
+// first, so they carry the OLDEST mtimes; keeping oldest-out would delete
+// exactly what the ranking earned, and `stems_at` stamps the attempt, so those
+// tracks would never be separated again. mtime survives as the tiebreak, which
+// keeps "a re-analysis refreshes a dir's slot" true inside each tie — and is
+// the whole sort when priorities cannot be resolved.
 //
 // Failures must ride the RESULT, not vanish (#1257): a per-dir rm error is
 // swallowed here by design (retry next sweep), but when EVERY delete fails —
@@ -243,11 +300,11 @@ export async function sweep(budget = budgetBytes()): Promise<{
   let total = dirs.reduce((n, d) => n + d.bytes, 0);
   if (total <= budget) return { removed: 0, freedBytes: 0, failedDirs: 0, overBudgetBytes: 0 };
 
-  dirs.sort((a, b) => a.mtimeMs - b.mtimeMs); // oldest first
+  const ordered = stemEvictionOrder(withPriorities(dirs));
   let removed = 0;
   let freedBytes = 0;
   let failedDirs = 0;
-  for (const d of dirs) {
+  for (const d of ordered) {
     if (total <= budget) break;
     try {
       await rm(d.dir, { recursive: true, force: true });
