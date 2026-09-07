@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { cn } from '@/lib/cn';
 import { fmtClockMinute, normalizeStationLocale, zonedDayHour } from '@/lib/format';
 import type {
@@ -253,6 +253,163 @@ function StationHeader({
   );
 }
 
+/**
+ * Whether a clamped block is actually cut off.
+ *
+ * The affordance only earns its place when the text overflows, so this
+ * measures rather than guesses: a two-word topic must not grow a "more"
+ * button. Measurement happens only while COLLAPSED — expanding removes the
+ * clamp, so `scrollHeight === clientHeight` there and a live measurement
+ * would immediately report "fits" and pull the control out from under the
+ * finger that just used it. The last collapsed reading therefore stands for
+ * the whole expanded pass. Re-measures on resize (the drawer is a sheet that
+ * changes width) and whenever the text itself changes.
+ */
+function useClampOverflow(text: string, expanded: boolean) {
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const [overflows, setOverflows] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || expanded) return;
+    // Sub-pixel line boxes make an exact compare flap; 1px of slack is below
+    // one line of any of these type sizes.
+    const measure = () => setOverflows(el.scrollHeight - el.clientHeight > 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [text, expanded]);
+  return { ref, overflows };
+}
+
+/**
+ * A show topic, clamped until tapped.
+ *
+ * The whole paragraph is the control (that is the gesture #1621 asks for), so
+ * it is a real `<button>` with `aria-expanded` — keyboard reachable, and
+ * announced as a collapsed/expanded disclosure rather than as decorative
+ * text. When the text fits it renders as a plain block with no control at
+ * all. Clamping is visual only: the full topic is in the DOM either way, so a
+ * screen reader never loses the tail.
+ */
+function ExpandableText({
+  text,
+  clampClass,
+  className,
+}: {
+  text: string;
+  /** Tailwind `line-clamp-N` applied while collapsed. */
+  clampClass: string;
+  className?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const { ref, overflows } = useClampOverflow(text, expanded);
+  const body = (
+    <span ref={ref} className={cn('block', !expanded && clampClass)}>
+      {text}
+    </span>
+  );
+  if (!overflows && !expanded) {
+    return <div className={className}>{body}</div>;
+  }
+  return (
+    <button
+      type="button"
+      aria-expanded={expanded}
+      onClick={() => setExpanded(v => !v)}
+      className={cn('v3-focus block w-full text-left', className)}
+    >
+      {body}
+      <span className="mt-0.5 block text-[10px] tracking-[0.2em] text-vermilion uppercase">
+        {expanded ? 'Less' : 'More'}
+      </span>
+    </button>
+  );
+}
+
+/** What the public roster read gives us to show about a DJ. `soul` is present
+ *  only when the operator opted into `privacy.publishPersonaSouls`; absent is
+ *  not the same as empty, so it is never invented here. */
+function personaBlurbs(persona: SchedulePersona | null | undefined): string[] {
+  if (!persona) return [];
+  return [persona.tagline, persona.soul].map(v => (v || '').trim()).filter(Boolean);
+}
+
+/**
+ * A persona name that opens that DJ's roster entry underneath it.
+ *
+ * Nothing here reads a field `/schedule` does not already publish — the
+ * disclosure is the payload's own persona index (`tagline`, plus `soul` only
+ * when the station published souls), never a second fetch and never a wider
+ * public shape. A persona with nothing to say stays plain text: no control
+ * that opens an empty panel.
+ */
+function PersonaName({
+  persona,
+  fallbackName,
+  className,
+  panelClassName,
+  trailing,
+}: {
+  persona: SchedulePersona | null;
+  /** Used when the slot has a show but no matching roster entry. */
+  fallbackName: string;
+  className?: string;
+  panelClassName?: string;
+  /** Rendered beside the name, outside the control (guest credits). */
+  trailing?: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  const name = persona?.name || fallbackName;
+  const blurbs = personaBlurbs(persona);
+  if (blurbs.length === 0) {
+    return (
+      <div className={className}>
+        {name}
+        {trailing}
+      </div>
+    );
+  }
+  return (
+    <div>
+      <div className={className}>
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={panelId}
+          onClick={() => setOpen(v => !v)}
+          className="v3-focus text-left underline decoration-dotted underline-offset-4"
+        >
+          {name}
+        </button>
+        {trailing}
+      </div>
+      {open && (
+        <div
+          id={panelId}
+          className={cn(
+            'mt-1.5 grid gap-1.5 border-l border-separator-strong pl-2.5 text-xs leading-relaxed text-muted',
+            panelClassName,
+          )}
+        >
+          {blurbs.map((b, i) => (
+            // A published soul is a system prompt, so it can run long; the
+            // same overflow-only affordance keeps it from burying the row.
+            <ExpandableText
+              key={i}
+              text={b}
+              clampClass="line-clamp-4"
+              className="[overflow-wrap:anywhere]"
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <div className="pb-[10px] text-[9px] tracking-[0.3em] text-muted uppercase">
@@ -338,19 +495,25 @@ function OnNowCard(props: {
       <div className="flex gap-4 border border-separator-strong p-4">
         <AvatarThumb avatar={avatar} name={personaName} tier="lg" />
         <div className="min-w-0 flex-1">
-          <div className="text-[10px] tracking-[0.3em] text-vermilion uppercase">
-            {personaName}
-            {guestNames.length > 0 && (
-              <span className="text-muted"> · with {guestNames.join(' & ')}</span>
-            )}
-          </div>
+          <PersonaName
+            persona={onNow.persona}
+            fallbackName={personaName}
+            className="text-[10px] tracking-[0.3em] text-vermilion uppercase"
+            trailing={
+              guestNames.length > 0 ? (
+                <span className="text-muted"> · with {guestNames.join(' & ')}</span>
+              ) : null
+            }
+          />
           <div className="mt-0.5 text-lg leading-tight font-semibold">
             {onNow.show.name}
           </div>
           {onNow.show.topic && (
-            <div className="mt-1.5 line-clamp-3 text-xs leading-relaxed text-muted">
-              {onNow.show.topic}
-            </div>
+            <ExpandableText
+              text={onNow.show.topic}
+              clampClass="line-clamp-3"
+              className="mt-1.5 text-xs leading-relaxed text-muted"
+            />
           )}
         </div>
       </div>
@@ -366,11 +529,11 @@ function ScheduleRow({ slot, isNow, locale }: { slot: Slot; isNow: boolean; loca
   return (
     <li
       className={cn(
-        'flex items-center gap-3 border-b border-separator-soft py-[11px]',
+        'flex items-start gap-3 border-b border-separator-soft py-[11px]',
         isNow && 'bg-[var(--ink-softer)]',
       )}
     >
-      <span className="v3-tab-num w-[88px] shrink-0 text-[11px] tracking-[0.2em] text-muted uppercase">
+      <span className="v3-tab-num w-[88px] shrink-0 pt-[3px] text-[11px] tracking-[0.2em] text-muted uppercase">
         {time}
       </span>
       {slot.show ? (
@@ -381,7 +544,19 @@ function ScheduleRow({ slot, isNow, locale }: { slot: Slot; isNow: boolean; loca
               {slot.show.name}
             </div>
             {personaName && (
-              <div className="truncate text-[11px] text-muted">{personaName}</div>
+              <PersonaName
+                persona={slot.persona}
+                fallbackName={personaName}
+                className="text-[11px] text-muted"
+                panelClassName="text-[11px]"
+              />
+            )}
+            {slot.show.topic && (
+              <ExpandableText
+                text={slot.show.topic}
+                clampClass="line-clamp-2"
+                className="mt-1 text-[11px] leading-relaxed text-muted"
+              />
             )}
           </div>
         </>
