@@ -35,6 +35,7 @@ import * as jingles from './jingles.js';
 import { pickRotateJingle, onJingleRotateOwnerChange } from './jingle-rotate.js';
 import * as beds from './beds.js';
 import * as bedPolicy from './bed-policy.js';
+import { vocalRunwayMs, segmentFitsRunway } from './vocal-runway.js';
 import * as session from './session.js';
 import type { TurnMeta } from './session.js';
 import type { PromptMemoryEntry } from './prompt-memory.js';
@@ -928,23 +929,17 @@ class Queue {
     try {
       const voiceMs = speechDurationMs(item.introWav, item.introScript);
       // The ramp budget is a property of the INCOMING track: how long may the
-      // DJ talk before trampling its vocal? Analysis rides the track object when
-      // present, else the library row (queued items hold only id/title/artist).
-      const rec = item.track?.id ? library.get(item.track.id) : null;
-      // The onset is measured from byte zero, and the drain may be about to cut
-      // a leading blank off this very track — so shift it onto the trimmed
-      // timeline before asking whether the link outlasts it. This is the same
-      // correction intro-budget's firstVocalMsFor applies to the SAME
-      // measurement; leaving it out here made the two disagree about one track,
-      // with the prompt told the runway is 2s while the bed decision still
-      // thought it was 8s and declined a bed the link needed. null (unknown)
-      // and Infinity (instrumental) carry their meanings through untouched.
-      const rawBudgetMs = bedPolicy.rampBudgetMs({
-        vocalRanges: item.track?.vocalRanges ?? rec?.vocalRanges ?? null,
-      });
-      const budgetMs = rawBudgetMs != null && Number.isFinite(rawBudgetMs)
-        ? silenceTrim.shiftOnsetMs(item.track, rawBudgetMs)
-        : rawBudgetMs;
+      // DJ talk before trampling its vocal? Resolved through vocal-runway,
+      // which owns both halves of the answer — the three-state read of
+      // vocalRanges (track object first, else the library row: queued items
+      // hold only id/title/artist) and the shift onto the TRIMMED timeline,
+      // since the drain may be about to cut a leading blank off this very
+      // track. Leaving that shift out here made the bed and the link's own
+      // budget disagree about one track, with the prompt told the runway is 2s
+      // while the bed decision still thought it was 8s and declined a bed the
+      // link needed. Both readers go through the one module now (#1622), and
+      // null (unknown) / Infinity (instrumental) come back untouched.
+      const budgetMs = vocalRunwayMs(item.track);
       // `reason` outranks the budget entirely for a request (bed-policy), so
       // the trim correction above only ever decides a LINK's bed.
       if (!bedPolicy.bedWanted(voiceMs, budgetMs, cfg, reason)) return;
@@ -2156,6 +2151,35 @@ class Queue {
     })) {
       this.log('scheduler',
         `Holding ${p.kind} — the track's own ${KIND_LABEL[incoming!.introKind || 'dj-speak'] || 'intro'} takes this boundary`);
+      return;
+    }
+    // Vocal-aware timing (#1622 FR 5a). This clip lands on the HEAD of the
+    // track that just started, on the light-duck intro channel — the same
+    // runway a pick's link is trimmed against by enforceIntroBudget, and until
+    // now the one placement that was never asked about it. A clip that would
+    // still be talking when the singer comes in keeps its slot and takes the
+    // NEXT boundary, exactly as the busy-boundary hold above does: nothing is
+    // regenerated, nothing is dropped here, and the existing staleness check at
+    // the top of this method is what bounds the wait. Why the lever is timing
+    // rather than a trim, and why a long segment is deliberately unaffected,
+    // are in broadcast/vocal-runway.ts.
+    //
+    // `incoming` carries the queued item when this boundary is one of ours; an
+    // auto.m3u track never enters `upcoming`, so fall back to the id `np`
+    // reports — the measurement is a library read either way, and an
+    // unidentifiable track resolves to "unknown", which airs.
+    const runwayTrack = incoming?.track ?? (np?.subsonic_id ? { id: np.subsonic_id } : null);
+    const runwayMs = vocalRunwayMs(runwayTrack);
+    // The whole segment, not the first clip: an exchange is deferred as ONE
+    // segment and airs back-to-back, so what has to fit the runway is the sum.
+    // speechDurationMs (clip + lead-in + duck tail) is the same figure the bed
+    // decision budgets a link at, so the two agree about one clip.
+    const clipMs = p.clips.reduce((sum, c) => sum + speechDurationMs(c.wavPath, c.text), 0);
+    if (!segmentFitsRunway(clipMs, runwayMs)) {
+      this.log('scheduler',
+        // runwayMs is necessarily finite here — null (unknown) and Infinity
+        // (instrumental) both fit, so only a measured onset can refuse.
+        `Holding ${p.kind} — vocals enter "${np?.title || 'the incoming track'}" at ${Math.round(Number(runwayMs) / 1000)}s, inside this ${Math.round(clipMs / 1000)}s segment`);
       return;
     }
     this._pendingVoice = null;
