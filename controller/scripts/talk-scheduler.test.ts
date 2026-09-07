@@ -638,7 +638,14 @@ test('two simulated hours: a pending clip never eats a whole window, whatever el
           // a row that HAS a last chance. An `opens: 'any'` row cannot lose one
           // by waiting (the next tick is another), so its hold is unbounded on
           // purpose and the bound would read as "never held at all".
-          assert.ok(row.opens === 'external' || row.opens === 'any'
+          //
+          // `minGapMs > 0` narrows the exemption to the row it was written for.
+          // The segment director is `opens: 'any'` too and predates #1619, so
+          // the bare `opens === 'any'` test quietly stopped pinning anything for
+          // it — inertly today (its `minGapMs: 0` makes pendingHolds return
+          // before the branch), but this assertion is the guard, not the
+          // implementation, and it must not be the half that goes slack first.
+          assert.ok(row.opens === 'external' || (row.opens === 'any' && row.minGapMs > 0)
             || canRetry(row, plan.slot, now.getMinutes()),
             `seed ${seed} :${now.getMinutes()} — ${plan.kind} held on pending at its window's last minute (slot :${plan.slot})`);
         }
@@ -898,7 +905,8 @@ test('policy is asked only for a row that is open and unfired', () => {
   // The jingle rotate is the one row with no window to be outside of — every
   // minute is its own chance (#1619) — so it is the only row a minute in no
   // slot window may reach. The segment director's stride skips :12.
-  assert.deepEqual(asked, ['jingle'], 'a closed window must not reach a policy module');
+  assert.deepEqual(asked, ['jingle'],
+    'the only row a minute inside no slot window may reach is the one with no window');
   // :15 opens the ident row, and a slot row wanting the minute stops the
   // filler's gates being asked at all (see the fill-row tests).
   asked.length = 0;

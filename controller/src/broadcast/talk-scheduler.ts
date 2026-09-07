@@ -561,6 +561,15 @@ function pendingOutlivesWindow(row: TalkSlot, slot: string, pending: PendingTalk
 // honest report, and the boundary the clip is waiting for is usually a track
 // away. Gating the SECOND segment here rather than queueing it in the queue is
 // also gate-before-generation: a postponed row writes no script at all.
+//
+// One row is covered by that ON rule for a reason that does not apply to it:
+// the jingle rotate (#1619) never writes `_pendingVoice` — it hands a clip that
+// is already on disk to `jingle-now.txt` — so firing it could not delete a
+// rendered segment. For that row the hold is COURTESY, not resource protection:
+// don't stack a stinger in front of a segment that is about to air. Keeping it
+// costs nothing (the count keeps counting, the next minute is another chance)
+// and dropping the row out of the rule would be the collision the table was
+// asked to arbitrate, so the rule stays uniform and this note stays here.
 function pendingHolds(
   row: TalkSlot, slot: string, minute: number, pending: PendingTalk, p: TalkTickInput,
 ): boolean {

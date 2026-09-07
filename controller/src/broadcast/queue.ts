@@ -32,7 +32,7 @@ import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import * as sfx from './sfx.js';
 import * as jingles from './jingles.js';
-import { pickRotateJingle } from './jingle-rotate.js';
+import { pickRotateJingle, onJingleRotateOwnerChange } from './jingle-rotate.js';
 import * as beds from './beds.js';
 import * as bedPolicy from './bed-policy.js';
 import * as session from './session.js';
@@ -178,6 +178,23 @@ function positiveCues(values: (number | null | undefined)[]): number[] {
 // a runaway loop across different filenames, not a policy on how many
 // announcements an operator may line up.
 const PENDING_JINGLE_MAX = 3;
+// The automatic rotate's own budget, counted SEPARATELY (#1619). The two must
+// not share, because the shared form is how the operator's button gets wedged
+// shut by something the operator did not do: a mixer restart empties
+// jingle_now_queue with no signal, so three rotates inside the TTL below would
+// hold every slot and the next press would answer `queue-full` — the exact
+// failure PENDING_JINGLE_TTL_MS exists to prevent, reintroduced from the other
+// side. Reserving a slot instead would still shrink the operator's headroom
+// from 3 to 2 for a caller that is not a runaway risk at all.
+//
+// ONE, not three, and that is the honest number rather than a smaller share of
+// the same budget: the rotate is one-at-a-time by construction — the counter is
+// zeroed at handoff, so it cannot come due again until N more boundaries have
+// passed — which means a SECOND pending rotate can only mean the first never
+// aired. Queuing another on top of it is precisely the stinger-stacking the
+// FIFO has no remove path to undo. A rotate refused here spends its offer and
+// skips, which is the cheaper miss radio.liq's own `source.available` gate took.
+const PENDING_ROTATE_JINGLE_MAX = 1;
 // How long a press stays pending before it is assumed lost. A mixer restart
 // empties jingle_now_queue and drops the request with no signal, so this is what
 // stops that from wedging the button shut. Generously past any single track, so
@@ -214,7 +231,12 @@ class Queue {
   _handover: { atTrackStarts: number; heldOpportunities: number; rolledOnce: boolean } | null = null; // stamped when a sign-off airs, read by closingTrackHolds() — see broadcast/handover-policy.ts
   _lastSessionId: string | null = null;  // last session id onSessionRolled saw — the clock the handover wait is aged on
   _introRenders = new IntroRenderTracker<QueueItem>(); // timed-out pre-renders stay reusable by airIntro
-  _pendingJingles = new Map<string, number>(); // manual jingle presses handed over but not yet heard — see playJingle
+  // Jingle handoffs made but not yet heard — see playJingle. ONE map for both
+  // callers on purpose: the de-duplication question ("is this clip already
+  // waiting?") has to be answered across the operator's presses and the
+  // automatic rotate together, so a second map would be a second source of
+  // truth for it. Only the CAP is per-caller, which is what `rotate` records.
+  _pendingJingles = new Map<string, { at: number; rotate: boolean }>();
   _tracksSinceJingle = 0;       // track boundaries since the last controller-drawn jingle — the count radio.liq's rotate used to keep (#1619)
   _lastRotateJingle: string | null = null; // last jingle the controller drew — anti-repeat for jingle-rotate.pickRotateJingle
 
@@ -232,6 +254,16 @@ class Queue {
           upcoming: this.upcoming,
           current: this.current,
           history: this.history,
+          // The rotate's boundary count (#1619). Snapshotted for the same
+          // reason the queue itself is — a controller restart is routine, every
+          // `--build controller` is one — and unlike `_trackStarts`, which is
+          // only ever read as a DIFFERENCE against a stamp taken in the same
+          // process, this one is absolute: losing it costs up to a full
+          // `jingleRatio` of tracks before the next stinger, which at the
+          // default 30 is roughly two hours of silence from the rotate after
+          // every upgrade.
+          tracksSinceJingle: this._tracksSinceJingle,
+          lastRotateJingle: this._lastRotateJingle,
           savedAt: new Date().toISOString(),
         }, null, 2));
       } catch (err) {
@@ -274,6 +306,13 @@ class Queue {
         .filter((i: QueueItem) => i?.track?.title && new Date(i.queuedAt || 0).getTime() > cutoff);
       this.current = stored.current || null;
       this.history = Array.isArray(stored.history) ? stored.history : [];
+      // Restore the rotate's count (#1619). Repaired, not trusted: this file is
+      // on the operator's disk, and a junk value here decides how long the
+      // station goes without a stinger. A snapshot written before this field
+      // existed reads as 0, which is the pre-#1619 behaviour.
+      const since = Number(stored.tracksSinceJingle);
+      this._tracksSinceJingle = Number.isFinite(since) && since >= 0 ? Math.floor(since) : 0;
+      this._lastRotateJingle = typeof stored.lastRotateJingle === 'string' ? stored.lastRotateJingle : null;
       if (this.current?.track) {
         const t = this.current.track;
         this.lastSeenKey = `${t.id || ''}|${t.title}|${t.artist || ''}`;
@@ -2339,15 +2378,28 @@ class Queue {
   // the SAME jingle while it is still pending is that accident and is refused;
   // two DIFFERENT announcements queue normally, because an explicit operator
   // action always fires. PENDING_JINGLE_MAX bounds a runaway loop across files.
-  async playJingle(filename: string) {
+  //
+  // `rotate` marks a handoff made by the AUTOMATIC rotate rather than by an
+  // operator (#1619). It changes exactly one thing — which budget the press is
+  // counted against — so the write, the de-duplication, the booth log and the
+  // session turn stay identical and a jingle is one kind of event on air
+  // however it was decided. See PENDING_ROTATE_JINGLE_MAX for why the budgets
+  // are separate rather than shared or reserved.
+  async playJingle(filename: string, { rotate = false }: { rotate?: boolean } = {}) {
     if (!filename) throw new Error('Jingle filename is required');
     const path = await jingles.getPath(filename);
     if (!path) throw new Error(`Unknown jingle: ${filename}`);
     this.retirePendingJingles();
+    // Asked across BOTH callers: a rotate must not stack on a clip an operator
+    // just pressed, and an operator pressing the clip the rotate is holding is
+    // the same double-announcement accident either way.
     if (this._pendingJingles.has(filename)) return { ok: false as const, reason: 'already-queued' as const };
-    if (this._pendingJingles.size >= PENDING_JINGLE_MAX) return { ok: false as const, reason: 'queue-full' as const };
+    const inFlight = [...this._pendingJingles.values()].filter(p => p.rotate === rotate).length;
+    if (inFlight >= (rotate ? PENDING_ROTATE_JINGLE_MAX : PENDING_JINGLE_MAX)) {
+      return { ok: false as const, reason: 'queue-full' as const };
+    }
     await writeHandoff(config.liquidsoap.jingleFile, jingles.jingleUri(path), { maxWaitMs: 5000 });
-    this._pendingJingles.set(filename, Date.now());
+    this._pendingJingles.set(filename, { at: Date.now(), rotate });
     // The sidecar's own script, not the hashed filename: every other segment
     // turn in the booth log and the DJ's chat history carries prose, and
     // `jingle_a1b2c3d4.wav` reads as noise next to them (playSfx logs its
@@ -2363,6 +2415,18 @@ class Queue {
   // (broadcast/jingle-rotate.ts owns the decision itself).
   rotateJingleTracksSince(): number {
     return this._tracksSinceJingle;
+  }
+
+  // Start the count again from zero. Called when the rotate CHANGES HANDS to
+  // the controller (#1619, via broadcast/jingle-rotate.ts's owner subscriber):
+  // the counter runs on every boundary regardless of owner — onTrackStarted has
+  // no business branching on a setting — so a station that has been up for
+  // hours on the default 'mixer' is already holding a count far past the ratio,
+  // and without this the very next talk tick after the toggle fires a stinger,
+  // on top of the mixer's own rotate, which has not restarted yet. Flipping the
+  // switch should start a clean N-track cycle.
+  resetRotateJingleCount() {
+    this._tracksSinceJingle = 0;
   }
 
   // Draw the AUTOMATIC jingle — the rotate radio.liq used to run on its own
@@ -2399,7 +2463,7 @@ class Queue {
       this.log('scheduler', '[jingle] rotate skipped — the jingle library is empty');
       return false;
     }
-    const res = await this.playJingle(filename);
+    const res = await this.playJingle(filename, { rotate: true });
     if (!res.ok) {
       this.log('scheduler', `[jingle] rotate skipped — "${filename}" ${res.reason}`);
       return false;
@@ -2414,8 +2478,8 @@ class Queue {
   // wedge shut on bookkeeping.
   retirePendingJingles() {
     const now = Date.now();
-    for (const [name, at] of this._pendingJingles) {
-      if (now - at > PENDING_JINGLE_TTL_MS || jingleAiredAtMs(name) >= at) {
+    for (const [name, p] of this._pendingJingles) {
+      if (now - p.at > PENDING_JINGLE_TTL_MS || jingleAiredAtMs(name) >= p.at) {
         this._pendingJingles.delete(name);
       }
     }
@@ -3406,3 +3470,14 @@ class Queue {
 export type QueueApi = InstanceType<typeof Queue>;
 
 export const queue = new Queue();
+
+// Handing the rotate to the controller starts a clean N-track cycle (#1619).
+// Registered here rather than called from settings.update() because settings.ts
+// already imports broadcast/jingle-rotate.ts and this module imports settings —
+// a direct call would close the cycle. It also catches every writer, not just
+// the admin route: a backup restore reaches update() directly. Only the switch
+// TOWARD the controller matters; going back to the mixer leaves a count nothing
+// is reading, and zeroing it would be a change the operator did not ask for.
+onJingleRotateOwnerChange(owner => {
+  if (owner === 'controller') queue.resetRotateJingleCount();
+});

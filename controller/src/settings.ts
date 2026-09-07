@@ -102,7 +102,7 @@ import {
   type ScheduledBackupSettings,
   type JingleRotateOwner,
 } from './schemas/settings.js';
-import { jingleRotateOwner } from './broadcast/jingle-rotate.js';
+import { jingleRotateOwner, setJingleRotateOwner } from './broadcast/jingle-rotate.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
@@ -1205,6 +1205,10 @@ export async function load() {
     console.warn(`[settings] ignoring invalid timezone "${stored.timezone.trim()}" — using Auto (container TZ)`);
   }
   setStationTimezone(loaded.timezone);
+  // Same shape, same reason (#1619): the queue subscribes to a real ownership
+  // change so it can restart the rotate's boundary count, and it cannot be
+  // called from here directly without closing a settings ↔ queue cycle.
+  setJingleRotateOwner(loaded.jingleRotate);
   return loaded;
 }
 
@@ -2372,6 +2376,10 @@ export async function update(patch) {
   // Applied-on-save, same pattern as the liquidsoap_*.txt files below —
   // minus the restart: the next zonedParts() call picks it up.
   setStationTimezone(next.timezone);
+  // Applied-on-save too, and unlike the zone this one DOES also need the mixer
+  // restart the flag above raises — the counter reset is only the controller's
+  // half (#1619).
+  setJingleRotateOwner(next.jingleRotate);
   // shows + schedule are persisted to their own file (schedule.json); strip
   // them from the settings.json payload so legacy installs migrate forward
   // on the first write. The in-memory `cache` keeps the full shape so

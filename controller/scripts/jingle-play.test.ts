@@ -18,6 +18,7 @@ const { config } = await import('../src/config.js');
 const { jingleUri } = await import('../src/broadcast/jingles.js');
 const { bedUri } = await import('../src/broadcast/beds.js');
 const { queue } = await import('../src/broadcast/queue.js');
+const { setJingleRotateOwner } = await import('../src/broadcast/jingle-rotate.js');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const RADIO_LIQ = join(here, '..', '..', 'liquidsoap', 'radio.liq');
@@ -165,6 +166,165 @@ assert.ok(branchBody.includes('durationSec = jingle_duration(fname)'),
   'the marker carries a measured duration, not just a filename');
 assert.ok(liq.includes('null.get(default=0., request.duration(fname))'),
   'jingle_duration measures via request.duration and degrades to 0 (unmeasured)');
+
+// ---------------------------------------------------------------------------
+// THE AUTOMATIC ROTATE, CONTROLLER-OWNED (#1619)
+//
+// broadcast/jingle-rotate.ts's own test covers the pure decisions — who owns
+// the rotate, when it is due, which clip to draw, how the row arbitrates. What
+// only reachable here is the QUEUE half: the handoff itself, the boundary count
+// that makes it due, and the rule the whole design turns on — a rotate that
+// fires and cannot draw SPENDS the offer rather than banking it.
+// ---------------------------------------------------------------------------
+
+// A track boundary normally hands a "track started" event to the session DJ
+// agent, which reaches a real model over the network. That is not what these
+// tests are about, and leaving it on makes them slow and dependent on whatever
+// LLM the developer's settings happen to point at — so switch the auto-DJ off
+// for the rest of the file, the same knob an idle-paused station uses.
+queue.autoPick = false;
+queue.autoLink = false;
+
+// Seed the queue's in-memory state through the snapshot it actually restores
+// from, rather than by poking privates: this is also the NB-3 half of the
+// contract (the count is absolute, so it has to survive a controller rebuild).
+function recoverWith(snapshot: Record<string, unknown>) {
+  writeFileSync(config.queue.file, JSON.stringify({
+    upcoming: [], current: null, history: [], ...snapshot,
+  }));
+  queue.recover();
+}
+
+test('the boundary count survives a controller restart, and repairs junk', () => {
+  recoverWith({ tracksSinceJingle: 12, lastRotateJingle: other });
+  assert.equal(queue.rotateJingleTracksSince(), 12,
+    'a rebuilt controller must not restart the count — that costs a whole ratio of tracks');
+
+  // The snapshot is on the operator's disk; a junk value here decides how long
+  // the station goes without a stinger.
+  for (const junk of [-4, 'twelve', null, undefined, NaN]) {
+    recoverWith({ tracksSinceJingle: junk });
+    assert.equal(queue.rotateJingleTracksSince(), 0, `junk count ${String(junk)} repairs to 0`);
+  }
+  // A snapshot written before #1619 has no such field at all — pre-existing
+  // behaviour, which is a fresh count.
+  recoverWith({});
+  assert.equal(queue.rotateJingleTracksSince(), 0);
+});
+
+test('a track boundary is what makes the rotate due', () => {
+  recoverWith({ tracksSinceJingle: 0 });
+  queue.onTrackStarted({ title: 'One', artist: 'A', subsonic_id: 'id-1' } as any);
+  queue.onTrackStarted({ title: 'Two', artist: 'B', subsonic_id: 'id-2' } as any);
+  assert.equal(queue.rotateJingleTracksSince(), 2, 'each music boundary counts once');
+
+  // The same metadata firing again is the watcher re-reading one boundary, not
+  // a second track — it must not advance the rotate towards due.
+  queue.onTrackStarted({ title: 'Two', artist: 'B', subsonic_id: 'id-2' } as any);
+  assert.equal(queue.rotateJingleTracksSince(), 2, 'a repeated marker is one boundary');
+
+  // A titleless marker is not a song (it is how a bed reaches this watcher).
+  queue.onTrackStarted({ title: '', artist: '' } as any);
+  queue.onTrackStarted(null);
+  assert.equal(queue.rotateJingleTracksSince(), 2, 'only real music boundaries count');
+});
+
+test('a drawn rotate hands over through the same single writer, and restarts the count', async () => {
+  recoverWith({ tracksSinceJingle: 30, lastRotateJingle: null });
+  rmSync(join(STATE, 'jingle-now.txt'), { force: true });
+
+  assert.equal(await queue.playRotateJingle(), true);
+  const handed = readFileSync(join(STATE, 'jingle-now.txt'), 'utf8');
+  assert.ok(handed.startsWith('annotate:subwave_kind="jingle":'),
+    'the rotate writes nothing of its own — playJingle is still the only writer');
+  assert.equal(queue.rotateJingleTracksSince(), 0,
+    'the count restarts at the HANDOFF, so "1 every N" stays a count of tracks');
+
+  await markAired(handed.split(':').pop()!.split('/').pop()!);
+});
+
+// The rule the design argues hardest for, and the one with no other home:
+// radio.liq's rotate was gated by `source.available`, so a jingle that came due
+// at a boundary where the gate was shut was SKIPPED, not banked. Banking it
+// would leave the row due on every subsequent minute, holding the seam against
+// the segment director until the library was filled.
+test('a rotate that cannot draw a clip SPENDS the offer rather than banking it', async () => {
+  const meta = readFileSync(join(STATE, 'jingles.json'), 'utf8');
+  recoverWith({ tracksSinceJingle: 30 });
+  rmSync(join(STATE, 'jingle-now.txt'), { force: true });
+  writeFileSync(join(STATE, 'jingles.json'), JSON.stringify({ items: {} }));
+  try {
+    assert.equal(await queue.playRotateJingle(), false, 'an empty library draws nothing');
+    assert.ok(!existsSync(join(STATE, 'jingle-now.txt')), 'and hands nothing over');
+    assert.equal(queue.rotateJingleTracksSince(), 0,
+      'the offer is spent — the next rotate is N tracks away, not this minute again');
+  } finally {
+    writeFileSync(join(STATE, 'jingles.json'), meta);
+  }
+});
+
+// NB-4. The operator's button must never be wedged shut by bookkeeping the
+// operator did not cause — controller/CLAUDE.md states that about a mixer
+// restart, and a shared budget reintroduces it from the other side.
+test('the rotate does not spend the operator press budget', async () => {
+  recoverWith({ tracksSinceJingle: 30, lastRotateJingle: null });
+  rmSync(join(STATE, 'jingle-now.txt'), { force: true });
+
+  assert.equal(await queue.playRotateJingle(), true);
+  // Liquidsoap drains the handoff within a poll; standing in for it here keeps
+  // the next write off writeHandoff's 5s wait-for-drain.
+  const rotated = readFileSync(join(STATE, 'jingle-now.txt'), 'utf8').split('/').pop()!;
+  rmSync(join(STATE, 'jingle-now.txt'));
+
+  // A second rotate is refused on its OWN cap of one — a second pending rotate
+  // can only mean the first never aired, and the FIFO has no remove path.
+  recoverWith({ tracksSinceJingle: 30, lastRotateJingle: null });
+  assert.equal(await queue.playRotateJingle(), false, 'one rotate in flight at a time');
+  assert.ok(!existsSync(join(STATE, 'jingle-now.txt')), 'and hands nothing over');
+
+  // ...and the operator still has their own slots, unspent. A DIFFERENT clip
+  // from the one the rotate is holding, so this is the budget answering and not
+  // the shared de-duplication.
+  const pressable = [filename, other].filter(f => f !== rotated);
+  assert.ok(pressable.length >= 1, 'at least one clip the rotate is not holding');
+  for (const f of pressable) {
+    assert.deepEqual(await queue.playJingle(f), { ok: true },
+      'a pending rotate must not answer queue-full to an operator');
+    rmSync(join(STATE, 'jingle-now.txt'), { force: true });
+  }
+
+  for (const f of [rotated, ...pressable]) await markAired(f);
+});
+
+// NB-5. The counter runs on every boundary regardless of owner — onTrackStarted
+// has no business branching on a setting — so without this a station that has
+// been up for hours fires a stinger on the very first tick after the toggle,
+// on top of a mixer that has not restarted yet.
+test('handing the rotate to the controller starts a clean N-track cycle', () => {
+  recoverWith({ tracksSinceJingle: 47 });
+  assert.equal(queue.rotateJingleTracksSince(), 47);
+
+  setJingleRotateOwner('controller');
+  assert.equal(queue.rotateJingleTracksSince(), 0, 'the switch restarts the count');
+
+  // Going back is not a symmetric event: the count nothing is reading is not
+  // the operator's to lose, and zeroing it would be a change they did not ask
+  // for. Nor does re-asserting the same owner reset anything.
+  recoverWith({ tracksSinceJingle: 9 });
+  setJingleRotateOwner('mixer');
+  assert.equal(queue.rotateJingleTracksSince(), 9, 'switching back leaves the count alone');
+  setJingleRotateOwner('mixer');
+  assert.equal(queue.rotateJingleTracksSince(), 9, 'a no-op save fires nothing');
+});
+
+test('the count reaches the snapshot, so the next boot can restore it', async () => {
+  recoverWith({ tracksSinceJingle: 0 });
+  queue.onTrackStarted({ title: 'Three', artist: 'C', subsonic_id: 'id-3' } as any);
+  queue.persist();
+  await new Promise(resolve => setTimeout(resolve, 700));  // persist() is debounced
+  const snap = JSON.parse(readFileSync(config.queue.file, 'utf8'));
+  assert.equal(snap.tracksSinceJingle, 1, 'the absolute count is written, not only derived');
+});
 
 test.after(() => {
   if (existsSync(STATE)) rmSync(STATE, { recursive: true, force: true });

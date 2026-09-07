@@ -165,13 +165,47 @@ test('the draw is random but never the same stinger twice running', () => {
   assert.equal(pickRotateJingle(lib, null, () => 0.999999), 'c.wav');
 });
 
-test('the debug row reports the mixer ratio it actually wrote', () => {
-  assert.deepEqual(jingleRotateStatus({ jingleRatio: 30, jingleRotate: 'mixer' }, 7), {
-    owner: 'mixer', ratio: 30, mixerRatioFile: '30', tracksSinceJingle: null,
+test('the debug row reports the mixer ratio it intended AND the one on disk', () => {
+  assert.deepEqual(jingleRotateStatus({ jingleRatio: 30, jingleRotate: 'mixer' }, 7, '30'), {
+    owner: 'mixer',
+    ratio: 30,
+    mixerRatioIntended: '30',
+    mixerRatioOnDisk: '30',
+    mixerRatioMatches: true,
+    tracksSinceJingle: null,
   });
-  assert.deepEqual(jingleRotateStatus({ jingleRatio: 30, jingleRotate: 'controller' }, 7), {
-    owner: 'controller', ratio: 30, mixerRatioFile: '0', tracksSinceJingle: 7,
+  assert.deepEqual(jingleRotateStatus({ jingleRatio: 30, jingleRotate: 'controller' }, 7, '0'), {
+    owner: 'controller',
+    ratio: 30,
+    mixerRatioIntended: '0',
+    mixerRatioOnDisk: '0',
+    mixerRatioMatches: true,
+    tracksSinceJingle: 7,
   });
+});
+
+// The state the single-figure row could not see, and the reason it is two
+// figures now: ensureLiquidsoapSettingsFile() only writes a handoff file that is
+// MISSING, so hand-editing `jingleRotate: 'controller'` into settings.json and
+// restarting the controller leaves the mixer booting on the old ratio. Both
+// sides then count, and a row that computed its own answer from settings would
+// report the 0 it wished for.
+test('a handoff file that never got the 0 is visible, not asserted away', () => {
+  const row = jingleRotateStatus({ jingleRatio: 30, jingleRotate: 'controller' }, 7, '30');
+  assert.equal(row.mixerRatioIntended, '0');
+  assert.equal(row.mixerRatioOnDisk, '30', 'the verbatim bytes, not a recomputation');
+  assert.equal(row.mixerRatioMatches, false, 'this is the "why am I hearing two" answer');
+});
+
+test('an unreadable handoff file reports null, never a guess', () => {
+  const row = jingleRotateStatus({ jingleRatio: 30, jingleRotate: 'controller' }, 7, null);
+  assert.equal(row.mixerRatioOnDisk, null);
+  // null rather than false: "we could not check" and "we checked and it
+  // disagrees" are different operator instructions, and the file is legitimately
+  // absent on a station that has never saved settings.
+  assert.equal(row.mixerRatioMatches, null);
+  // Omitting the argument entirely is the same claim.
+  assert.equal(jingleRotateStatus({ jingleRatio: 30 }, 0).mixerRatioMatches, null);
 });
 
 // ---------------------------------------------------------------------------

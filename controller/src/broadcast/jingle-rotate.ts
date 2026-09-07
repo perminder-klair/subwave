@@ -16,8 +16,13 @@
 // talk table (`talk-scheduler.ts`), which is where every other claim on the
 // listener's ear is arbitrated.
 //
-// Pure and I/O-free: the settings object, a counter and a random source in,
-// decisions out. Both the mixer handoff writer (`settings/liquidsoap.ts`) and
+// I/O-free, and every decision function is pure: the settings object, a counter
+// and a random source in, decisions out — the /debug reading of the handoff
+// file is done by its caller and passed in. The one piece of module state is
+// the owner-change subscriber list at the bottom, which exists for the same
+// reason (and in the same shape as) time.ts's timezone listeners: it lets the
+// queue learn about a switch without settings.ts importing the queue.
+// Both the mixer handoff writer (`settings/liquidsoap.ts`) and
 // the talk tick (`scheduler.talkTick`) resolve through the same functions, so
 // "the mixer is rotating" and "the controller is rotating" can never disagree —
 // they are two readings of one value.
@@ -35,7 +40,17 @@
 //   - Pinning the file to 0 for everyone means the mixer keeps rotating on the
 //     operator's old ratio until its next start, which on a `up -d --build`
 //     races the controller's own boot write. Every station that lost that race
-//     would hear its jingles twice, by default, on the release.
+//     would hear jingles MORE OFTEN THAN CONFIGURED, by default, on the
+//     release, with both sides counting until the mixer next restarted.
+//
+//     "More often" rather than "twice": the magnitude is still unmeasured over
+//     a long run. An on-air check of that state saw 2 jingles against 2
+//     controller fires across three tracks — 1:1, not 2:1 — which radio.liq
+//     explains, since its own rotate carries `not jingle_now_on_air()` and
+//     `time() > voice_until()` and so stands down while a controller-handed
+//     stinger feeds. Three tracks settles nothing, and nothing here depends on
+//     the number: the objection to the only-mode shape is that its skew is
+//     INVOLUNTARY and lands on an upgrade, not that it is exactly double.
 //   - Pinning it in `radio.liq` instead (ignore the file, never build the
 //     rotate) loses every jingle on a station whose CONTROLLER is still the old
 //     image — the other skew direction, and the one the root CLAUDE.md's
@@ -132,19 +147,84 @@ export function pickRotateJingle(
 // Snapshot for the admin /debug surface, beside voice/clock/talkAir. `owner`
 // answers "why is the mixer not rotating" and "why is the controller not"; the
 // counter pair answers "is it about to".
+//
+// TWO ratio figures, not one, and the difference between them is the whole
+// point. `mixerRatioIntended` is what settings SAY the handoff file should
+// hold; `onDisk` is what `liquidsoap_jingle_ratio.txt` actually holds, read by
+// the caller and passed in (this module stays I/O-free). Reporting only the
+// first would be a diagnostic that computes its own answer: it agrees with
+// settings by construction and can never disagree with the mixer, which is the
+// one thing an operator asking "why am I hearing two stingers" needs to see.
+//
+// They can genuinely differ, because `ensureLiquidsoapSettingsFile()` only
+// writes when a file is MISSING. Hand-edit `jingleRotate: 'controller'` into
+// settings.json and restart the controller and nothing rewrites the file: the
+// mixer boots on the operator's old ratio, both sides count, and the station
+// hears double jingles indefinitely. `mixerRatioMatches: false` is that state,
+// visible. Pass `onDisk: null` when the file could not be read at all — absent
+// is not the same claim as disagreeing, and neither is an error.
+//
+// Still NOT visible here: a mixer that has not restarted since a correct write
+// and is therefore running on the previous contents. Nothing distinguishes it
+// from a restarted one, which is why the control says "needs restart".
 export function jingleRotateStatus(
   s: { jingleRatio?: unknown; jingleRotate?: unknown } | null | undefined,
   tracksSinceJingle: number,
+  mixerRatioOnDisk: string | null = null,
 ) {
   const owner = jingleRotateOwner(s);
   const ratio = Number(s?.jingleRatio) || 0;
+  const intended = mixerJingleRatioFile(s);
   return {
     owner,
     ratio,
-    // What the mixer was handed, verbatim — the one state this cannot see is a
-    // mixer that has not restarted since, and is still rotating on its OLD
-    // ratio.
-    mixerRatioFile: mixerJingleRatioFile(s),
+    mixerRatioIntended: intended,
+    mixerRatioOnDisk,
+    // null rather than false when the file is unreadable: "we could not check"
+    // and "we checked and it disagrees" are different operator instructions.
+    mixerRatioMatches: mixerRatioOnDisk === null ? null : mixerRatioOnDisk === intended,
     tracksSinceJingle: owner === 'controller' ? tracksSinceJingle : null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// OWNERSHIP CHANGES
+//
+// The counter is a count of track boundaries since the controller last drew,
+// and it runs whether or not the controller owns the rotate — `onTrackStarted`
+// has no business branching on a setting. So a station that has been up for
+// hours on the default 'mixer' is holding a large count, and the moment an
+// operator flips to 'controller' the row is due on the very next tick: a
+// stinger fires immediately, on top of the mixer's own rotate, which has not
+// restarted yet. Zeroing on the transition is what makes the switch start a
+// clean N-track cycle instead.
+//
+// A SUBSCRIBER rather than a call in POST /settings, for exactly the reason
+// time.ts's setStationTimezone gives: `update()` is not the only writer — a
+// backup restore reaches it directly — so the rule belongs at the ONE place the
+// owner actually changes rather than being remembered at each new writer. And
+// it has to be a subscriber rather than a direct call INTO the queue, because
+// settings.ts already imports this module while broadcast/queue.ts imports
+// settings.ts; this module imports nothing, so subscribers registering
+// themselves is what keeps that acyclic.
+//
+// Everything above this line stays pure; this is the module's only state.
+type OwnerListener = (owner: JingleRotateOwner) => void;
+const ownerListeners = new Set<OwnerListener>();
+let currentOwner: JingleRotateOwner = 'mixer';  // the default, so a boot into 'mixer' fires nothing
+
+export function onJingleRotateOwnerChange(fn: OwnerListener): void {
+  ownerListeners.add(fn);
+}
+
+// Fires on a real change only. load() and every successful update() push the
+// owner in whether or not it moved, and zeroing the counter on every unrelated
+// settings save would quietly hold the rotate off on a chatty admin session.
+export function setJingleRotateOwner(owner: JingleRotateOwner): void {
+  if (owner === currentOwner) return;
+  currentOwner = owner;
+  for (const fn of ownerListeners) {
+    // One bad subscriber must not leave the change half-applied for the others.
+    try { fn(owner); } catch { /* subscriber's problem */ }
+  }
 }
