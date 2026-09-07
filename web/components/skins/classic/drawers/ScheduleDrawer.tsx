@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { cn } from '@/lib/cn';
 import { fmtClockMinute, normalizeStationLocale, zonedDayHour } from '@/lib/format';
 import type {
@@ -264,23 +264,52 @@ function StationHeader({
  * finger that just used it. The last collapsed reading therefore stands for
  * the whole expanded pass. Re-measures on resize (the drawer is a sheet that
  * changes width) and whenever the text itself changes.
+ *
+ * The handle is a CALLBACK ref held in state, not a `useRef`, and that is
+ * load-bearing: finding overflow swaps `ExpandableText`'s root from a `<div>`
+ * to a `<button>`, so React unmounts the measured span and mounts a fresh
+ * one. With an object ref the effect's deps would not have changed, so it
+ * would never re-run — leaving the ResizeObserver attached to a node that had
+ * left the DOM, and every later width change unmeasured. The node itself is
+ * therefore a dependency, and the observer follows the live span.
  */
 function useClampOverflow(text: string, expanded: boolean) {
-  const ref = useRef<HTMLSpanElement | null>(null);
+  const [node, setNode] = useState<HTMLSpanElement | null>(null);
   const [overflows, setOverflows] = useState(false);
   useEffect(() => {
-    const el = ref.current;
-    if (!el || expanded) return;
+    if (!node || expanded) return;
     // Sub-pixel line boxes make an exact compare flap; 1px of slack is below
     // one line of any of these type sizes.
-    const measure = () => setOverflows(el.scrollHeight - el.clientHeight > 1);
+    const measure = () => setOverflows(node.scrollHeight - node.clientHeight > 1);
     measure();
-    if (typeof ResizeObserver === 'undefined') return;
+    let cancelled = false;
+    // A web font landing late re-flows the text without resizing the box, so
+    // the observer below cannot see it: at `line-clamp-3` the height is
+    // already pinned to three lines, and a 3→4 line growth changes nothing it
+    // watches. That is exactly the case where the affordance is needed and
+    // would silently never appear, so measure once more when the faces are in.
+    const fonts: FontFaceSet | undefined = document.fonts;
+    if (fonts) {
+      fonts.ready.then(
+        () => {
+          if (!cancelled) measure();
+        },
+        () => {},
+      );
+    }
+    if (typeof ResizeObserver === 'undefined') {
+      return () => {
+        cancelled = true;
+      };
+    }
     const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [text, expanded]);
-  return { ref, overflows };
+    ro.observe(node);
+    return () => {
+      cancelled = true;
+      ro.disconnect();
+    };
+  }, [text, expanded, node]);
+  return { ref: setNode, overflows };
 }
 
 /**
@@ -305,6 +334,15 @@ function ExpandableText({
 }) {
   const [expanded, setExpanded] = useState(false);
   const { ref, overflows } = useClampOverflow(text, expanded);
+  // The ARGUMENT ORDER here is load-bearing, and silently so. Tailwind emits
+  // `.block{display:block}` AFTER `.line-clamp-N{display:-webkit-box;…}`, so
+  // on raw cascade `block` would win and there would be no clamp at all — no
+  // overflow, no control, the whole feature inert. It works because twMerge
+  // resolves the pair, and it resolves it ONE-DIRECTIONALLY: `line-clamp`
+  // declares `display` as a conflicting group, so 'block' first is dropped,
+  // while 'line-clamp-N' first keeps both and hands the win back to `block`.
+  // Swapping these two arguments therefore disables the feature with no lint
+  // error, no type error and nothing to see in review.
   const body = (
     <span ref={ref} className={cn('block', !expanded && clampClass)}>
       {text}
@@ -318,7 +356,7 @@ function ExpandableText({
       type="button"
       aria-expanded={expanded}
       onClick={() => setExpanded(v => !v)}
-      className={cn('v3-focus block w-full text-left', className)}
+      className={cn('v3-focus block w-full cursor-pointer text-left', className)}
     >
       {body}
       <span className="mt-0.5 block text-[10px] tracking-[0.2em] text-vermilion uppercase">
@@ -351,6 +389,7 @@ function PersonaName({
   className,
   panelClassName,
   trailing,
+  truncateName = false,
 }: {
   persona: SchedulePersona | null;
   /** Used when the slot has a show but no matching roster entry. */
@@ -359,6 +398,12 @@ function PersonaName({
   panelClassName?: string;
   /** Rendered beside the name, outside the control (guest credits). */
   trailing?: React.ReactNode;
+  /** Ellipsise a long name onto one line (the schedule rows do; the on-now
+   *  card has the width to wrap). It rides the NAME rather than the line that
+   *  wraps it, because `truncate`'s `overflow: hidden` on an ancestor would
+   *  clip the button's own `v3-focus` ring — which sits 2px outside its box —
+   *  and take the keyboard focus indicator with it. */
+  truncateName?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const panelId = useId();
@@ -367,7 +412,11 @@ function PersonaName({
   if (blurbs.length === 0) {
     return (
       <div className={className}>
-        {name}
+        {truncateName ? (
+          <span className="inline-block max-w-full truncate align-bottom">{name}</span>
+        ) : (
+          name
+        )}
         {trailing}
       </div>
     );
@@ -378,9 +427,14 @@ function PersonaName({
         <button
           type="button"
           aria-expanded={open}
-          aria-controls={panelId}
+          // Never name an id that is not in the DOM — the panel is rendered
+          // only while open, so the reference has to come and go with it.
+          aria-controls={open ? panelId : undefined}
           onClick={() => setOpen(v => !v)}
-          className="v3-focus text-left underline decoration-dotted underline-offset-4"
+          className={cn(
+            'v3-focus max-w-full cursor-pointer text-left underline decoration-dotted underline-offset-4',
+            truncateName && 'truncate align-bottom',
+          )}
         >
           {name}
         </button>
@@ -397,11 +451,14 @@ function PersonaName({
           {blurbs.map((b, i) => (
             // A published soul is a system prompt, so it can run long; the
             // same overflow-only affordance keeps it from burying the row.
+            // `whitespace-pre-line` is inherited by the clamped span inside:
+            // operators write souls as several short paragraphs, and the
+            // default collapse would run the whole thing together.
             <ExpandableText
               key={i}
               text={b}
               clampClass="line-clamp-4"
-              className="[overflow-wrap:anywhere]"
+              className="[overflow-wrap:anywhere] whitespace-pre-line"
             />
           ))}
         </div>
@@ -495,7 +552,12 @@ function OnNowCard(props: {
       <div className="flex gap-4 border border-separator-strong p-4">
         <AvatarThumb avatar={avatar} name={personaName} tier="lg" />
         <div className="min-w-0 flex-1">
+          {/* Keyed on the show so the hour rolling over resets both
+              disclosures. Without it the card keeps its identity across the
+              change and the incoming show arrives with its topic already
+              expanded, under the outgoing DJ's opened panel. */}
           <PersonaName
+            key={`persona-${onNow.show.id}`}
             persona={onNow.persona}
             fallbackName={personaName}
             className="text-[10px] tracking-[0.3em] text-vermilion uppercase"
@@ -510,6 +572,7 @@ function OnNowCard(props: {
           </div>
           {onNow.show.topic && (
             <ExpandableText
+              key={`topic-${onNow.show.id}`}
               text={onNow.show.topic}
               clampClass="line-clamp-3"
               className="mt-1.5 text-xs leading-relaxed text-muted"
@@ -549,6 +612,7 @@ function ScheduleRow({ slot, isNow, locale }: { slot: Slot; isNow: boolean; loca
                 fallbackName={personaName}
                 className="text-[11px] text-muted"
                 panelClassName="text-[11px]"
+                truncateName
               />
             )}
             {slot.show.topic && (
