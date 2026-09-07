@@ -13,6 +13,7 @@
 //     apiKey:    string,   // empty → read the provider's env var
 //     ollamaUrl: string,   // empty → config.ollama.url default (Ollama only)
 //     baseUrl:   string,   // server URL (openai-compatible; locca → host default)
+//     headers:   {},       // extra request headers (openai-compatible/locca)
 //     reasoning: boolean } // false → suppress <think> chain-of-thought
 //
 // `ollama` is the default and needs no key. The cloud providers are opt-in.
@@ -244,13 +245,56 @@ function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: stri
   // as sent (post-injection). forceNoThink builds the picker's no-think variant
   // (see languageModel) — thinking suppressed even with operator reasoning on.
   const fetchImpl = openAICompatibleFetch(cfg, debugFetch, forceNoThink);
+  const headers = customHeaders(cfg);
   const provider = createOpenAI({
     baseURL,
     apiKey: cfg.apiKey || 'unused',
     name,
     fetch: fetchImpl,
+    // Omitted entirely when nothing is configured, so an untouched station
+    // builds the client with exactly the fields it did before (#1618).
+    ...(headers ? { headers } : {}),
   });
   return provider.chat(id);
+}
+
+// The operator's extra request headers for this leg (settings llm.headers /
+// llm.fallback.headers), or undefined when there are none.
+//
+// This is where a gateway that routes on a header rather than the bearer token
+// alone is satisfied — OpenCode Zen Go's `x-opencode-session` is the case
+// #1618 was filed for, but nothing here knows that name: the map is opaque and
+// any gateway needing an auth or routing header is covered by the same field.
+// It rides the AI SDK's own `headers` option, the same channel OpenRouter's app
+// attribution already uses.
+//
+// Only the openai-compatible transport (openai-compatible + locca) reads it —
+// that is the provider whose endpoint the operator chose, so it is the only one
+// whose gateway they can be standing in front of. Every hosted provider has a
+// fixed endpoint we own the wiring for. Values are stored verbatim; the shape
+// rules (name grammar, printable-ASCII values, caps) are enforced at the save
+// path in settings/vocab.ts, so this never has to repair one.
+export function customHeaders(cfg: any): Record<string, string> | undefined {
+  const raw = cfg?.headers;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const name of Object.keys(raw)) {
+    const v = raw[name];
+    if (typeof v === 'string' && v) out[name] = v;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+// Cache-signature form of the header map: stable regardless of key order, and
+// '' when there are none, so a station that has never set one keys exactly as
+// it did before the field existed. Headers are captured at CONSTRUCTION like
+// repeat_penalty and num_ctx, so leaving them out of the signature would leave
+// an operator's edit — or a failover to a leg with a different header set —
+// hitting the client built with the old headers until the controller restarts.
+export function headersSig(cfg: any): string {
+  const h = customHeaders(cfg);
+  if (!h) return '';
+  return Object.keys(h).sort().map((k) => `${k}=${h[k]}`).join(',');
 }
 
 // Resolve the concrete model id. Ollama falls back to the env-configured
@@ -287,7 +331,7 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
   // operator editing Settings → Repeat penalty keeps hitting the instance built
   // with the old value and the change reads as "ignored" until the controller
   // restarts. Settings otherwise apply live on this path (#1327).
-  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}`;
+  const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}`;
 
   const cached = clientCache.get(sig);
   if (cached) return cached;

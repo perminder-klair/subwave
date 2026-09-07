@@ -55,6 +55,10 @@ import {
   clampTtsSpeed as clampTtsSpeedFn,
 } from '../schemas/persona.js';
 import {
+  LLM_HEADER_NAME_RE,
+  LLM_HEADER_VALUE_MAX,
+  LLM_HEADER_VALUE_RE,
+  LLM_HEADERS_MAX,
   SETTINGS_AAC_BITRATES,
   SETTINGS_LOUDNESS_SOURCES,
   SETTINGS_MP3_BITRATES,
@@ -485,6 +489,56 @@ export function applyLlmLegPatch(target: Record<string, unknown>, patch: unknown
       target.providerBaseUrls = urls;
     }
   }
+  // Extra request headers for the openai-compatible transport (#1618). A
+  // gateway can require one to route a call at all — OpenCode Zen Go's
+  // `x-opencode-session` is the case this was filed for — and without a
+  // passthrough every call 400s while the station keeps playing, blind.
+  //
+  // Whole-map REPLACE, like tts.corrections and festivals: the admin editor is
+  // a row list and always sends the full edited set, so a merge would make a
+  // deleted row un-deletable. `'set'` is the getRedacted() sentinel and
+  // resolves against the PRE-patch value, which is what lets the redacted map
+  // round-trip through a save without blanking every header.
+  //
+  // Deliberately NOT keyed by provider the way baseUrl is: headers belong to
+  // one server, and there is only ever one openai-compatible slot per leg, so
+  // per-provider keying would buy nothing and leave `headers.anthropic` as a
+  // shape that can never be sent. They follow the leg's inline API key instead
+  // — switching that leg's base URL carries them, exactly as the key does.
+  if (l.headers !== undefined) {
+    if (!l.headers || typeof l.headers !== 'object' || Array.isArray(l.headers)) {
+      throw new Error(`${label}.headers must be an object map of header name -> value`);
+    }
+    const incoming = l.headers as Record<string, unknown>;
+    const existing = (target.headers as Record<string, string> | undefined) ?? {};
+    const next: Record<string, string> = {};
+    for (const rawName of Object.keys(incoming)) {
+      const name = rawName.trim();
+      if (!LLM_HEADER_NAME_RE.test(name)) {
+        throw new Error(`${label}.headers has an invalid header name "${rawName}"`);
+      }
+      const raw = incoming[rawName];
+      if (raw === 'set') {
+        // Redacted on the way out, so the operator's real value is the stored
+        // one — a row they did not retype must survive their save.
+        if (existing[name]) next[name] = existing[name];
+        continue;
+      }
+      const v = String(raw ?? '').trim();
+      if (!v) continue; // an emptied value drops the header, like providerBaseUrls
+      if (v.length > LLM_HEADER_VALUE_MAX) {
+        throw new Error(`${label}.headers.${name} must be 0-${LLM_HEADER_VALUE_MAX} chars`);
+      }
+      if (!LLM_HEADER_VALUE_RE.test(v)) {
+        throw new Error(`${label}.headers.${name} must be printable ASCII on a single line`);
+      }
+      next[name] = v;
+    }
+    if (Object.keys(next).length > LLM_HEADERS_MAX) {
+      throw new Error(`${label}.headers must have at most ${LLM_HEADERS_MAX} entries`);
+    }
+    target.headers = next;
+  }
   if (l.reasoning !== undefined) {
     target.reasoning = !!l.reasoning;
   }
@@ -529,6 +583,26 @@ export function applyInlineKey(llmHost: { keys?: Record<string, string> }, provi
   if (!llmHost.keys || typeof llmHost.keys !== 'object') llmHost.keys = {};
   if (v) llmHost.keys[provider] = v;
   else delete llmHost.keys[provider];
+}
+
+// Lenient load-path reading of a leg's stored `headers` map (#1618). Repairs
+// or drops; never throws, because settings.load() failing means the controller
+// does not boot at all. Same rules as the strict save path above — both import
+// the grammar and the caps from schemas/settings.ts rather than restating them,
+// so a header the admin form accepted cannot be silently dropped on the next
+// cold load. Order is preserved so the editor renders rows as they were saved.
+export function normalizeLlmHeaders(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return out;
+  for (const rawName of Object.keys(raw as Record<string, unknown>)) {
+    if (Object.keys(out).length >= LLM_HEADERS_MAX) break;
+    const name = rawName.trim();
+    if (!LLM_HEADER_NAME_RE.test(name)) continue;
+    const v = String((raw as Record<string, unknown>)[rawName] ?? '').trim();
+    if (!v || v.length > LLM_HEADER_VALUE_MAX || !LLM_HEADER_VALUE_RE.test(v)) continue;
+    out[name] = v;
+  }
+  return out;
 }
 
 // Build the per-provider inline-key map from a stored settings.llm blob.

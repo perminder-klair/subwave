@@ -291,6 +291,29 @@ export function settingsRawStringLike(max: number, message: string) {
  */
 export const STREAM_COUNTRY_HEADER_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
 
+/**
+ * `llm.headers` / `llm.fallback.headers` — extra request headers the
+ * openai-compatible transport sends on every call (#1618).
+ *
+ * The NAME grammar is `STREAM_COUNTRY_HEADER_RE`, not a second copy of it:
+ * both fields are naming an HTTP header and the rule is the same RFC 7230
+ * token, so this is an alias for the same reason `settings/vocab.ts`'s `ID_RE`
+ * aliases `SHOW_ID_RE`. The VALUE grammar is printable ASCII on one line — a
+ * header value is latin-1 on the wire, and a CR/LF in one is header injection
+ * rather than a typo, so it is REFUSED rather than repaired.
+ *
+ * They live here for the same reason the country header's rule does: the admin
+ * form runs the mirrored copy so a bad header name is caught before the save,
+ * and the save path (`applyLlmLegPatch`) and the lenient load path
+ * (`normalizeLlmHeaders`) import them rather than each restating the rule.
+ */
+export const LLM_HEADER_NAME_RE = STREAM_COUNTRY_HEADER_RE;
+export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
+
+/** At most this many custom headers per leg, and this long a value. */
+export const LLM_HEADERS_MAX = 10;
+export const LLM_HEADER_VALUE_MAX = 500;
+
 /** Path length cap for `stream.geoipDbPath` — a generous PATH_MAX. */
 export const STREAM_GEOIP_DB_PATH_MAX = 512;
 
