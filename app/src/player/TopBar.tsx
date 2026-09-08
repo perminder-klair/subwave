@@ -1,7 +1,6 @@
-// Masthead: a single marks row — spinning disc, wordmark/station name, caret, and
-// the on-air show + host all inline (tap to switch station) — with the theme
-// palette on the right and the context tagline beneath. Adapted from the web
-// TopBar for a phone-width single column.
+// Masthead: one marks row (spinning disc, station name, caret, on-air show and
+// host, tap to switch station) with the back-panel button on the right and the
+// context tagline beneath.
 
 import { router } from 'expo-router';
 import { SlidersHorizontal } from 'lucide-react-native';
@@ -21,8 +20,8 @@ export interface TopBarProps {
   activeShow: ActiveShow | null;
   /** Open the back-panel sheet (outputs, sleep timer, theme). */
   onOpenPanel: () => void;
-  /** Something's live behind the panel (sleep armed / casting) — show the
-   *  accent dot so state never hides inside the sheet. */
+  /** Something is live behind the panel (sleep armed, casting): shows the
+   *  accent dot so that state never hides inside the sheet. */
   panelActive: boolean;
 }
 
@@ -37,8 +36,8 @@ export default function TopBar({
 }: TopBarProps) {
   const insets = useSafeAreaInsets();
   const { colors } = useTheme();
-  // context is reference-stable between polls (useStationFeed), so this only
-  // recomputes when the tagline inputs actually change.
+  // `context` is reference-stable between polls, so this recomputes only when
+  // the tagline inputs change.
   const tagline = useMemo(() => buildTagline(context), [context]);
   const showName = activeShow?.name || null;
   const onAirName = activeShow?.persona?.name || djName;

@@ -1,7 +1,6 @@
-// The now-playing card: cover art (tap → timeline), track meta, elapsed /
-// duration, and the DJ thinking ticker. Ported from web CenterStage for a
-// phone column. The cover glitches + shows corner ticks during a ~3s `burst`
-// opened by a track change or a new DJ turn (the web's `.v3-cover-live`).
+// The now-playing card: cover art (tap for timeline), track meta, elapsed /
+// duration, and the DJ thinking ticker. The cover glitches and shows corner
+// ticks during a ~3s burst opened by a track change or a new DJ turn.
 
 import * as Haptics from 'expo-haptics';
 import { Coins, Heart } from 'lucide-react-native';
@@ -15,9 +14,8 @@ import { isDjTurn } from '@/lib/sessionFeed';
 import type { NowPlayingTrack, SessionTurn } from '@/lib/types';
 import { useTheme } from '@/theme/ThemeContext';
 
-/** The quiet "music nerd" tokens shown under artist/album: genre · BPM · key.
- *  Each token is omitted when its field is absent, so an untagged track yields
- *  an empty array and the strip doesn't render. Mirrors web CenterStage. */
+/** Tokens under artist/album: genre · BPM · key. Each is omitted when absent,
+ *  so an untagged track yields an empty array and the strip doesn't render. */
 function buildMetaTokens(t: NowPlayingTrack | null): string[] {
   if (!t) return [];
   const tokens: string[] = [];
@@ -27,8 +25,8 @@ function buildMetaTokens(t: NowPlayingTrack | null): string[] {
   return tokens;
 }
 
-/** The mood/energy phrase, e.g. "MELLOW · LOW ENERGY". Up to two moods plus the
- *  energy level; empty string when the track carries neither. */
+/** Mood/energy phrase: up to two moods plus the energy level, '' when the
+ *  track carries neither. */
 function buildMoodPhrase(t: NowPlayingTrack | null): string {
   if (!t) return '';
   const parts: string[] = [];
@@ -41,11 +39,9 @@ export interface CenterStageProps {
   nowPlaying: NowPlayingTrack | null;
   coverSrc: string | null;
   elapsed: number;
-  /** Cumulative since-boot LLM token total — the quiet "cost of the DJ" ticker
-   *  by the now-playing time (web #449). null hides it. */
+  /** Cumulative since-boot LLM token total (#449); null hides the ticker. */
   llmTokens: number | null;
-  /** Listener like state for the on-air track (#991) — the heart lives in the
-   *  same caption row as on the web classic skin, and hides itself when likes
+  /** Like state for the on-air track (#991). The heart hides itself when likes
    *  are off or nothing likeable is on air. */
   trackLike: TrackLike;
   feed: SessionTurn[];
@@ -75,10 +71,9 @@ export default function CenterStage({
   const moodPhrase = buildMoodPhrase(nowPlaying);
   const hasMeta = metaTokens.length > 0 || moodPhrase.length > 0;
 
-  // Glitch bursts for ~3s on two signals: every track change (subsonic_id flip)
-  // and every new DJ turn (voice/dj) landing in the feed — the native analog of
-  // web CenterStage's trackBurst/djBurst. SessionTurn.t is only used for change
-  // detection, so any stable identifier works (falls back to the feed index).
+  // ~3s glitch burst on a track change (subsonic_id flip) or a new DJ turn.
+  // SessionTurn.t is only a change-detection key, so any stable identifier
+  // works and it falls back to the feed index.
   const latestDjTurnT = useMemo<string | number | null>(() => {
     if (!feed?.length) return null;
     for (let i = feed.length - 1; i >= 0; i--) {

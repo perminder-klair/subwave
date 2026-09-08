@@ -1,7 +1,6 @@
 // `subwave self-update` — re-execs the install script rather than duplicating
-// it, keeping download / arch-detect / sudo-fallback in one place. The installer
-// swaps the binary atomically, so this process runs on to completion and only
-// the next invocation is the new code.
+// download / arch-detect / sudo-fallback. The swap is atomic, so this process
+// runs to completion and only the next invocation is the new code.
 
 import { spawn } from 'node:child_process';
 import { dirname } from 'node:path';
@@ -15,8 +14,8 @@ const INSTALLER_URL = process.env.SUBWAVE_INSTALLER_URL ?? 'https://cli.getsubwa
 export async function runSelfUpdateCommand(args: { version?: string } = {}): Promise<void> {
   banner('self-update');
 
-  // For a bun-compiled standalone, execPath IS the subwave binary. Under tsx
-  // it's the node interpreter, which means a contributor who wants `git pull`.
+  // For a bun-compiled standalone, execPath IS the subwave binary; under tsx
+  // it's the node interpreter, meaning a contributor who wants `git pull`.
   const exe = process.execPath;
   if (exe.endsWith('/node') || exe.endsWith('/bun') || exe.endsWith('/tsx')) {
     err('Refusing to self-update a non-standalone CLI.');
@@ -59,8 +58,8 @@ export async function runSelfUpdateCommand(args: { version?: string } = {}): Pro
   await pauseForEnter();
 }
 
-// Safe against arbitrary content: every character either passes verbatim inside
-// the single quotes or comes through as a quoted escape.
+// Safe for arbitrary content: every character passes verbatim inside the single
+// quotes or comes through as a quoted escape.
 function shellEscape(s: string): string {
   return `'${s.replace(/'/g, `'\\''`)}'`;
 }

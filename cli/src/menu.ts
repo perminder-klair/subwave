@@ -1,6 +1,5 @@
-// Main menu loop, following locca's pattern. Status-aware: the actions adapt to
-// what's running, and MENU_BACK thrown from any submenu is caught here as
-// "re-render".
+// Main menu loop. Actions adapt to what's running; MENU_BACK thrown from any
+// submenu is caught here as "re-render".
 
 import { detectCompose } from './compose.ts';
 import { setMenuMode, MENU_BACK, banner, header, ok, warn, muted, exitIfCancelled, p, pc } from './ui.ts';
@@ -30,13 +29,11 @@ export async function runMenu(): Promise<void> {
   } else {
     let running = Object.values(compose.services).filter((s) => s === 'running').length;
     let total = Object.keys(compose.services).length;
-    // The dev web server isn't a compose service; fold it into the tally so the
-    // banner reflects the whole rig.
+    // The dev web server isn't a compose service; fold it into the tally.
     if (compose.env === 'dev') {
       const holder = whoHolds7700();
       total += 1;
-      // isWebDevCommand, not a bare 'node' check — Linux reports `next-server`
-      // and the banner would undercount there.
+      // isWebDevCommand, not a bare 'node' check: Linux reports `next-server`.
       if (holder && isWebDevCommand(holder.command)) running += 1;
     }
     ok(`stack up · env=${pc.bold(compose.env)} · ${running}/${total} running`);
@@ -106,7 +103,7 @@ async function dispatch(choice: string): Promise<void> {
     case 'sync':    return runSyncCommand();
     case 'setup': {
       // The setup wizard owns its own Clack lifecycle, so menu-mode Esc
-      // handling has to stand down for the duration.
+      // handling stands down for the duration.
       setMenuMode(false);
       try { await runSetupCommand(); }
       finally { setMenuMode(true); }
@@ -119,8 +116,8 @@ async function dispatch(choice: string): Promise<void> {
   }
 }
 
-// A few readFileSync, no docker or HTTP — this runs on every menu render, and
-// any error yields no hint rather than blocking it.
+// Runs on every menu render: readFileSync only, and any error yields no hint
+// rather than blocking the render.
 function composeFilesDrifted(): boolean {
   try {
     const home = getSubwaveHome();

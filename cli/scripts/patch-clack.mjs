@@ -1,25 +1,11 @@
-// Patch @clack/prompts so its high-level wrappers forward an explicit
-// `input` option through to @clack/core's prompt classes.
+// Patch @clack/prompts' dist so its text/password/confirm/select wrappers
+// forward an explicit `input` option to @clack/core's prompt classes. On macOS
+// Bun's process.stdin delivers no bytes when the parent's stdin is piped
+// (oven-sh/bun#13374), so cli/src/ui.ts hands prompts a /dev/tty stream instead.
 //
-// Why — on macOS, Bun's `process.stdin` doesn't deliver bytes when the
-// binary was launched from a parent process whose own stdin is piped
-// (oven-sh/bun#13374). The workaround is to open /dev/tty ourselves as a
-// fresh tty.ReadStream and hand THAT to the prompt as its `input`.
-// @clack/core supports it (the `input?: Readable` option on PromptOptions),
-// but @clack/prompts' shipped wrappers don't forward it — they only thread
-// validate/placeholder/initialValue/etc. This script tweaks the dist file in
-// place so the four wrappers we use (text/password/confirm/select) forward
-// `input` too, after which cli/src/ui.ts can pass a /dev/tty stream into
-// every prompt call.
-//
-// The mapping from friendly export name → minified class name is RESOLVED
-// DYNAMICALLY rather than hardcoded, so a @clack/prompts patch-bump that
-// reshuffles the minifier's letters doesn't silently inject `input` into the
-// wrong wrapper (which would leave the real `text` prompt unpatched and the
-// installer hanging). We read the export aliases (`<var> as text`), follow
-// each to its wrapper definition (`<var>=<param>=>… new <Class>({`), and
-// inject `input:<param>.input,` right after that class's `({`. Run
-// idempotently — bails out if a class is already patched.
+// Friendly export name → minified class name is resolved dynamically, not
+// hardcoded, so a patch-bump that reshuffles the minifier's letters can't inject
+// `input` into the wrong wrapper. Idempotent: bails if a class is already patched.
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -30,8 +16,7 @@ const distPath = resolve(here, '..', 'node_modules', '@clack', 'prompts', 'dist'
 
 const src = readFileSync(distPath, 'utf8');
 
-// The four high-level wrappers whose prompts read keyboard input. (multiselect,
-// groupMultiselect, autocomplete, etc. exist too but the CLI doesn't use them.)
+// The high-level wrappers the CLI uses that read keyboard input.
 const WRAPPERS = ['text', 'password', 'confirm', 'select'];
 
 const ident = '[A-Za-z_$][\\w$]*';
@@ -53,8 +38,8 @@ function resolveWrapper(friendly) {
   }
   const wrapperVar = alias[1];
 
-  // `<var>=PARAM=>`  where PARAM is `ident` or `(…)`. Single options object in
-  // practice, so the param is a plain identifier we can read `.input` off.
+  // `<var>=PARAM=>` where PARAM is `ident` or `(…)`; in practice a single
+  // options object, so `.input` can be read off it.
   const def = src.match(
     new RegExp(`\\b${escapeRe(wrapperVar)}=(?:\\((${ident})\\)|(${ident}))=>`),
   );

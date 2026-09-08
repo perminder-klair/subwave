@@ -1,20 +1,13 @@
 #!/usr/bin/env node
 // Import pre-computed analysis from an AudioMuse-AI instance into SUB/WAVE's
-// library.db, so a user who already tagged their library in AudioMuse can skip
-// SUB/WAVE's slow LLM tagging + BPM/key pass.
+// library.db, skipping the slow LLM tagging + BPM/key pass. Standalone: talks
+// only to AudioMuse (GET /api/sync) and state/library.db. AudioMuse keys by the
+// media-server track id, which IS tracks.id, so the join needs no Navidrome auth.
 //
-// Standalone — imports nothing from the controller. It talks only to AudioMuse
-// over HTTP (GET /api/sync) and to state/library.db over SQLite. Because
-// AudioMuse keys everything by the media-server track id, and SUB/WAVE's
-// tracks.id IS the Navidrome/Subsonic song id, the join is exact and needs no
-// Navidrome auth. See README.md.
-//
-// What it imports:  tempo -> bpm, key+scale -> Camelot musical_key,
-//                   energy -> low/medium/high, mood_vector/other_features ->
-//                   SUB/WAVE moods (static map), top genre tag -> genre.
-// What it does NOT: CLAP/MusiCNN embeddings (different vector space), and it
-//                   deliberately leaves analysis_version NULL so a later
-//                   `npm run analyze` still adds outro/structure/embeddings.
+// Imports:  tempo -> bpm, key+scale -> Camelot musical_key, energy ->
+//           low/medium/high, mood_vector/other_features -> moods, top genre tag.
+// Skips:    CLAP/MusiCNN embeddings, and leaves analysis_version NULL so a later
+//           `npm run analyze` still adds outro/structure/embeddings.
 
 import Database from 'better-sqlite3';
 import { fileURLToPath } from 'node:url';
@@ -25,16 +18,13 @@ import { mapTrack } from './map.mjs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Column-set version this tool writes against; matches TAGGER_VERSION in
-// controller/src/music/library-db.ts (imported moods count as current tags so
-// `npm run tag` won't redo them). MIN_USER_VERSION is the earliest schema that
-// has every column we write: moods/energy/source/tagger_version/tagged_at land
-// in v1, bpm/musical_key in v2 — so v2 is the floor. (We intentionally do NOT
-// touch v11 audio_moods or v12 outro_json.) Below the floor we refuse and tell
-// the user to boot the controller once to migrate.
+// controller/src/music/library-db.ts, so imported moods count as current tags.
+// MIN_USER_VERSION is the earliest schema carrying every column written here
+// (bpm/musical_key land in v2, hence the floor); below it, refuse and tell the
+// user to boot the controller once to migrate.
 const TAGGER_VERSION = 3;
 const MIN_USER_VERSION = 2;
 
-// --- args -------------------------------------------------------------------
 function parseArgs(argv) {
   const args = { concurrency: 8, moodCutoff: 0.4 };
   for (let i = 0; i < argv.length; i++) {
@@ -45,9 +35,8 @@ function parseArgs(argv) {
     else if (a === '--concurrency') args.concurrency = Math.max(1, Number(next()) || 8);
     else if (a === '--limit') args.limit = Number(next()) || undefined;
     else if (a === '--mood-cutoff') {
-      // Guard NaN/out-of-range the way --concurrency/--limit already do — an
-      // unparseable value must not silently disable mood filtering (score < NaN
-      // is always false, so every tag would pass). #934 review.
+      // Guard NaN/out-of-range: an unparseable value would silently disable
+      // mood filtering, since `score < NaN` is always false (#934).
       const mc = Number(next());
       args.moodCutoff = Number.isFinite(mc) ? Math.min(1, Math.max(0, mc)) : 0.4;
     }
@@ -80,7 +69,6 @@ Options:
   -h, --help              This help.
 `;
 
-// --- AudioMuse /api/sync paging --------------------------------------------
 async function* iterateAudioMuseTracks(baseUrl, { limit } = {}) {
   const root = baseUrl.replace(/\/+$/, '');
   let page = 1;
@@ -92,9 +80,9 @@ async function* iterateAudioMuseTracks(baseUrl, { limit } = {}) {
     if (!res.ok) {
       throw new Error(`GET ${url} -> ${res.status} ${res.statusText}`);
     }
-    // A proxy/login page can answer 200 with HTML, and a wrong-endpoint 200 can
-    // return JSON with no `tracks` array — parse defensively so either is a clear
-    // message, not a raw SyntaxError or a silent zero-track "success". #934 review.
+    // A proxy/login page can answer 200 with HTML, and a wrong endpoint can
+    // return JSON with no `tracks` array; parse defensively so either gives a
+    // clear message rather than a SyntaxError or a silent zero-track success.
     let body;
     try {
       body = await res.json();
@@ -134,7 +122,6 @@ async function* iterateAudioMuseTracks(baseUrl, { limit } = {}) {
   }
 }
 
-// --- library.db writes ------------------------------------------------------
 function makeWriter(db) {
   const selectStmt = db.prepare(
     `SELECT bpm, musical_key, moods FROM tracks WHERE id = ?`,
@@ -190,9 +177,9 @@ function makeWriter(db) {
       params.moods = moodsJson;
       params.taggerVersion = TAGGER_VERSION;
       params.now = now;
-      // Energy rides with the mood write, but only when AudioMuse actually gave
-      // one — the existence SELECT doesn't read energy, so writing a null mapped
-      // energy here would clobber an energy SUB/WAVE already computed. #934 review.
+      // Energy rides with the mood write, but only when AudioMuse gave one: the
+      // existence SELECT doesn't read energy, so a null here would clobber an
+      // energy SUB/WAVE already computed (#934).
       if (mapped.energy != null) {
         sets.push('energy = @energy');
         params.energy = mapped.energy;
@@ -210,7 +197,6 @@ function makeWriter(db) {
   };
 }
 
-// --- main -------------------------------------------------------------------
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || args.badArg) {

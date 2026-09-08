@@ -1,9 +1,7 @@
-// Pull representative colours out of the current cover art so the player can
-// wash a soft, art-derived tint behind itself.
-//
-// The web does this with a canvas (web/web/hooks/useCoverColors.ts); RN has no
-// canvas, so we use react-native-image-colors (UIImageColors on iOS, Palette on
-// Android). Any failure resolves to nulls and the caller simply skips the tint.
+// Representative colours from the cover art, for the player's soft background
+// tint. RN has no canvas, so this uses react-native-image-colors (UIImageColors
+// on iOS, Palette on Android). Any failure resolves to nulls and the caller
+// skips the tint.
 
 import { useEffect, useState } from 'react';
 import { getColors } from 'react-native-image-colors';

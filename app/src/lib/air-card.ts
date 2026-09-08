@@ -1,12 +1,8 @@
-// What the now-playing strip says, for surfaces OUTSIDE the app's own UI.
-//
-// The lock screen / CarPlay / Android Auto (useNowPlayingInfo) and the Live
-// Activity (useLiveActivity) must show the same thing — a listener glancing at
-// a watch and then at a car dash should not see two different answers. The one
-// non-obvious rule they share: while the DJ is talking the ARTIST slot and the
-// artwork swap to the persona, but the TITLE keeps the track. The song has not
-// changed, and blanking its name mid-link is how you lose the track someone was
-// about to look up.
+// What the now-playing strip says on surfaces outside the app's own UI. The
+// lock screen (useNowPlayingInfo) and the Live Activity (useLiveActivity) must
+// agree, so both resolve here. The one non-obvious rule: while the DJ is
+// talking the ARTIST slot and the artwork swap to the persona, but the TITLE
+// keeps the track, since the song has not changed.
 
 import type { StationApi } from './api';
 import type { ActiveShow, NowPlayingTrack } from './types';
@@ -17,8 +13,8 @@ export interface AirCard {
   album: string;
   /** Absolute URL of the cover, or of the persona avatar while talking. */
   artworkUrl: string | undefined;
-  /** Stable cache key for that artwork — the subsonic id, or the avatar path.
-   *  Only surfaces that cache artwork to disk (the Live Activity) need it. */
+  /** Cache key for that artwork: the subsonic id, or the avatar path. Only
+   *  surfaces that cache artwork to disk need it. */
   artworkKey: string | null;
   /** Scheduled show name, when one is on. */
   show: string | null;

@@ -1,6 +1,5 @@
-// The DJ's latest "thinking" — the most recent voice (spoken on-air) or dj
-// (pick/request reasoning) turn. Tap to open the full booth transcript.
-// Ported from web DjThinkingLine (without the per-character typing animation).
+// The DJ's latest "thinking": the most recent voice or dj turn. Tap to open
+// the full booth transcript.
 
 import { useMemo } from 'react';
 import { Pressable, Text, useWindowDimensions } from 'react-native';
@@ -13,24 +12,19 @@ const MARKER: Record<string, string> = { voice: '♪', dj: '◇' };
 export interface DjThinkingLineProps {
   feed: SessionTurn[] | undefined;
   enabled: boolean;
-  // Subsonic id of the track on air. A `dj`/pick turn's `meta.trackId` is the
-  // *picked* (next) song, so we skip pick reasoning that isn't about the
-  // current track — otherwise the line shows the upcoming pick (#546).
+  // Subsonic id of the on-air track. A pick turn's `meta.trackId` is the NEXT
+  // song, so pick reasoning for another track is skipped (#546).
   currentTrackId?: string | null;
   onOpenBooth: () => void;
 }
 
 export default function DjThinkingLine({ feed, enabled, currentTrackId = null, onOpenBooth }: DjThinkingLineProps) {
   const { colors } = useTheme();
-  // Clamp the inline teaser so long "extended" scripts can't grow the column and
-  // spill down over the waveform (web issue #576 — there it's line-clamp-2 →
-  // line-clamp-6 on tall viewports). RN has no overflow clip in this column, so an
-  // unclamped script overflows CenterStage's centred flex-1 onto the Waveform
-  // below. Mirror the web breakpoint: 6 lines on tall screens, 3 on short ones.
-  // The full text stays one tap away in the Booth.
+  // Clamp the teaser (#576): this column has no overflow clip, so a long
+  // script spills over the waveform below. 6 lines on tall screens, 3 on
+  // short; the full text is one tap away in the Booth.
   const { height } = useWindowDimensions();
   const maxLines = height >= 760 ? 6 : 3;
-  // The DJ turn relevant to what's ON AIR now — see selectThinkingTurn (#546).
   const latest = useMemo<SessionTurn | null>(
     () => selectThinkingTurn(feed, currentTrackId),
     [feed, currentTrackId],

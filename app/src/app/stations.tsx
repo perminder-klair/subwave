@@ -1,11 +1,8 @@
-// Station switcher, styled after the web mock: the tuned-in station as an accent
-// card, recents as live-dot rows, and a dashed "Add a station". Switching goes
-// through selectStation (which tears down playback before re-pointing the app);
-// navigation returns to the EXISTING root player via dismissTo — replace() here
-// would stack a second player screen on top of the modal (overlapping screens,
-// duplicate polling). Saved stations carry a trash button (long-press works
-// too); both confirm before forgetting. The featured station is config-seeded
-// and would silently reappear, so it never offers removal.
+// Station switcher. Switching goes through selectStation, which tears down
+// playback before re-pointing the app, then returns to the existing root
+// player via dismissTo: replace() would stack a second player screen on top of
+// the modal. The featured station is config-seeded and would reappear anyway,
+// so it never offers removal.
 
 import { router } from 'expo-router';
 import { ChevronRight, Trash2, X } from 'lucide-react-native';
@@ -79,14 +76,14 @@ export default function Stations() {
     ]);
   };
 
-  // Tapping a directory station deep-links into onboarding's health-check so a
-  // dead/asleep station fails gracefully before we tune in (see onboarding.tsx).
+  // Deep-link into onboarding's health check so a dead station fails
+  // gracefully before we tune in.
   const discover = (st: DirectoryStation) =>
     router.push({ pathname: '/onboarding', params: { url: st.url, name: st.name } });
 
   const currentUrl = base;
-  // `name` comes from the recents lookup; if the active station was forgotten
-  // (long-press) fall back to its host, not the featured station's name.
+  // `name` comes from the recents lookup; a forgotten active station falls
+  // back to its host, not the featured station's name.
   const currentName =
     name || (currentUrl === featured.url ? featured.name : stripProto(currentUrl ?? ''));
   const others: StationRef[] = [featured, ...recents].filter(
@@ -101,8 +98,7 @@ export default function Stations() {
     return true;
   });
 
-  // Discover = the community directory minus anything already shown above
-  // (tuned-in, featured, or a recent) and minus directory dupes.
+  // Discover = the directory minus anything already shown above, minus dupes.
   if (currentUrl) seen.add(normalizeBase(currentUrl));
   const discoverRows = directory.filter((st) => {
     const k = normalizeBase(st.url);

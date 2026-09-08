@@ -1,5 +1,5 @@
-// Live booth transcript with All / DJ / Tracks filters. Ported from web
-// BoothDrawer. System turns are operator-facing and never shown.
+// Live booth transcript with All / DJ / Tracks filters. System turns are
+// operator-facing and never shown.
 
 import { useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
@@ -23,8 +23,8 @@ const FILTERS: { id: FilterId; label: string }[] = [
 
 export interface BoothDrawerProps {
   items: SessionTurn[];
-  /** Station IANA timezone — timestamps render in it so they match what the DJ
-   *  speaks on-air (issue #418). Falls back to the device zone when absent. */
+  /** Station IANA timezone, so stamps match what the DJ speaks (#418). Falls
+   *  back to the device zone. */
   timezone?: string | null;
   /** Station display locale — 24h (en-GB) vs AM/PM (en-US) timestamps (#475). */
   locale?: StationLocale | null;

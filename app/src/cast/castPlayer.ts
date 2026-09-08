@@ -1,23 +1,17 @@
-// Google Cast media loading — the remote-playback analog of audio/player.ts.
+// Google Cast media loading. Cast is not audio routing: the Cast device
+// fetches the stream URL itself and local RNTP playback is torn down while a
+// session is active. The Default Media Receiver plays the live MP3 mount, so
+// no receiver registration is needed.
 //
-// Cast is NOT audio routing (that's AirPlay): the Cast device fetches the
-// stream URL itself and the phone becomes a remote control — local RNTP
-// playback is torn down while a session is active (see hooks/useCast.ts).
-// The Default Media Receiver (CC1AD845, the plugin default) plays the live
-// MP3 mount directly, so no receiver registration is needed.
-//
-// Metadata is set ONCE at load: per-track updates on the Default Receiver
-// would mean reloading media (an audible gap on a live stream), so the
-// TV/speaker shows static station branding. A custom web receiver that polls
-// /api/now-playing is the planned phase-3 upgrade.
+// Metadata is set once at load: per-track updates on the Default Receiver mean
+// reloading media, which is an audible gap on a live stream.
 
 import { MediaStreamType, type RemoteMediaClient } from 'react-native-google-cast';
 
 export interface CastStreamMeta {
-  /** Credential-free live MP3 mount (api.streamUrl()). Deliberately NOT
-   *  cache-busted: Icecast always serves the live edge to a new client, and a
-   *  stable URL lets useCast recognise (and adopt) an already-running session
-   *  after an app restart. */
+  /** Credential-free live MP3 mount. Deliberately NOT cache-busted: a stable
+   *  URL lets useCast adopt an already-running session after an app restart,
+   *  and Icecast serves the live edge to a new client anyway. */
   url: string;
   stationName?: string;
   djName?: string;

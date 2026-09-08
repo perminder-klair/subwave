@@ -1,6 +1,6 @@
-// Operator CLI preferences, in ~/.config/subwave/cli.json. Deliberately tiny —
-// station state belongs in the root .env and state/, not here. Loading merges
-// over defaults(), so a new key needs no migration for old configs.
+// Operator CLI preferences, in ~/.config/subwave/cli.json. Station state belongs
+// in the root .env and state/, not here. Loading merges over defaults(), so a
+// new key needs no migration.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';

@@ -1,5 +1,5 @@
-// Weekly schedule: day tabs (default today) + collapsed show blocks with
-// persona avatars. Ported from web ScheduleDrawer — same slot-collapsing logic.
+// Weekly schedule: day tabs (default today) plus collapsed show blocks with
+// persona avatars.
 
 import { Image } from 'expo-image';
 import { useEffect, useState } from 'react';
@@ -22,9 +22,8 @@ function pad2(n: number): string {
   return n < 10 ? `0${n}` : String(n);
 }
 
-// Hour label in the station's locale (#475). The web writes "11:00 PM"; the
-// phone column's 92px time gutter can't fit a full AM/PM range, so en-US
-// compacts to "11pm" — same clock convention, phone-sized.
+// Hour label in the station's locale (#475). en-US compacts to "11pm" because
+// the 92px time gutter can't fit a full AM/PM range.
 function fmtHour(hour: number, locale: StationLocale): string {
   if (locale === 'en-US') {
     const h = hour % 24;
@@ -39,10 +38,9 @@ function fmtHourRange(start: number, end: number, locale: StationLocale): string
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-// Day-of-week (0=Sun) and hour (0–23) in the station's IANA timezone, so the
-// "now" highlight matches the station clock shown in the header rather than the
-// viewer's local time. Falls back to the device's local time when no tz is set
-// or Hermes' Intl lacks timeZone support (same guard as the time formatter).
+// Day-of-week (0=Sun) and hour (0-23) in the station's IANA timezone, so the
+// "now" highlight matches the station clock. Falls back to device-local when
+// no tz is set or Hermes' Intl lacks timeZone support.
 function tzNow(now: Date, tz?: string | null): { day: number; hour: number } {
   if (tz) {
     try {
@@ -102,8 +100,8 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
   const appActive = useAppActive();
   const [data, setData] = useState<SchedulePayload | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  // null until the user taps a day tab; before that the view follows the
-  // station's "today" (see todayTz below), so it's correct across timezones.
+  // null until a day tab is tapped; until then the view follows the station's
+  // own "today".
   const [pickedDay, setPickedDay] = useState<number | null>(null);
   const [now, setNow] = useState(() => new Date());
   const location = context?.weather?.location ?? null;
@@ -131,14 +129,12 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
     return <Text className="font-body text-muted" style={{ fontSize: 13 }}>Loading schedule…</Text>;
   }
 
-  // "Today" and the current hour in the station's timezone — what drives the
-  // NOW highlight and the today marker, matching the station-time clock above.
   const { day: todayTz, hour: currentHour } = tzNow(now, data.timezone);
   const day = pickedDay ?? todayTz;
   const locale = normalizeStationLocale(data.locale);
 
-  // Host plus any guest co-hosts in the studio this hour (#866) — guests are
-  // only known for the LIVE show; upcoming slots stay host-only.
+  // Host plus guest co-hosts this hour (#866). Guests are only known for the
+  // LIVE show; upcoming slots stay host-only.
   const onNowNames = [
     activeShow?.persona?.name,
     ...(activeShow?.guests || []).map((g) => g?.name),
@@ -146,9 +142,8 @@ export default function ScheduleDrawer({ api, activeShow, context }: ScheduleDra
 
   const slots = collapseSlots(data.schedule?.[day] ?? [], data.shows || [], data.personas || []);
 
-  // Format the station clock with the operator's TZ when present, falling back
-  // to the viewer's local time. Wrapped because Hermes' Intl timeZone support
-  // is narrower than the browser's.
+  // Wrapped because Hermes' Intl timeZone support is narrower than a browser's;
+  // falls back to the viewer's local time.
   let time: string;
   try {
     time = new Intl.DateTimeFormat(locale, {

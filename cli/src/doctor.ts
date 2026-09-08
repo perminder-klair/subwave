@@ -1,8 +1,6 @@
-// Diagnostic engine. Pure data — no rendering, no prompts, so callers own the
-// presentation. Scope is deliberately the "first hour" of operator concerns:
-// Docker alive, stack up, controller answering, Icecast serving, state dirs
-// writable. Deeper checks (Subsonic auth, Ollama responsiveness, library
-// coverage) need controller endpoints that don't exist yet.
+// Diagnostic engine. Returns data only — no rendering, no prompts. Scope is the
+// "first hour": Docker alive, stack up, controller answering, Icecast serving,
+// state dirs writable.
 
 import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -83,8 +81,8 @@ function checkHost(): Finding[] {
 function checkCompose(compose: ComposeStatus): Finding[] {
   const out: Finding[] = [];
 
-  // Runs whether or not the stack is up — the files are on disk either way, and
-  // a standalone install can drift behind the binary's embedded copies (#1043).
+  // Runs whether or not the stack is up: a standalone install can drift behind
+  // the binary's embedded copies (#1043).
   const freshness = composeFreshnessFinding();
   if (freshness) out.push(freshness);
 
@@ -125,9 +123,8 @@ function checkCompose(compose: ComposeStatus): Finding[] {
   return out;
 }
 
-// Only `subwave sync` re-materialises these, so an install scaffolded before a
-// service was added stays behind until the operator syncs (#1043). Skipped for
-// clone/dev installs, where git owns the compose files.
+// Only `subwave sync` re-materialises these (#1043). Skipped for clone/dev
+// installs, where git owns the compose files.
 function composeFreshnessFinding(): Finding | null {
   const home = getSubwaveHome();
   if (isCloneMode(home)) return null;
@@ -199,10 +196,8 @@ async function checkController(compose: ComposeStatus): Promise<Finding[]> {
       });
     }
 
-    // `init` → `start` reaches a running stack with no Navidrome or LLM, which
-    // starves the picker and cascades into unrelated-looking warnings (empty
-    // auto.m3u, /stream.mp3 404, stream offline). Name the root cause so the
-    // summary points at setup rather than at the symptoms.
+    // An unconfigured stack starves the picker and cascades into unrelated-
+    // looking warnings, so name the root cause explicitly.
     const needsSetup = await checkNeedsSetup(compose.env);
     if (needsSetup === true) {
       out.push({
@@ -219,8 +214,7 @@ async function checkController(compose: ComposeStatus): Promise<Finding[]> {
   }
 
   // Required in prod (the controller exits without them), optional in dev. The
-  // legacy controller/.env is checked too, so an upgrader running on old config
-  // isn't told they're "missing" while their stack is plainly up.
+  // legacy controller/.env counts too, so an upgrader isn't told they're missing.
   const rootEnv = parseEnvFile(getRootEnv());
   const legacyEnv = parseEnvFile(getLegacyControllerEnv());
   const credSource =
@@ -251,8 +245,7 @@ async function checkIcecast(compose: ComposeStatus): Promise<Finding[]> {
   }
   const url = streamUrlFor(compose.env);
   try {
-    // Icecast streams forever, so HEAD tells us little and the body never ends:
-    // GET, read the headers, hang up.
+    // Icecast streams forever and HEAD tells little: GET, read headers, hang up.
     const res = await fetch(url, {
       method: 'GET',
       signal: AbortSignal.timeout(3000),
@@ -268,9 +261,8 @@ async function checkIcecast(compose: ComposeStatus): Promise<Finding[]> {
       detail: `${res.status} · ${ct || 'no content-type'}`,
     }];
   } catch (e) {
-    // An abort is ambiguous here: fetch reports it with no response, so we
-    // can't tell "hung up on the endless body" (fine) from a real stall. Warn
-    // rather than fail — a connection did open.
+    // An abort is ambiguous: hanging up on the endless body looks like a stall.
+    // Warn rather than fail, since a connection did open.
     const reason = fetchErrorReason(e);
     if (reason === 'TimeoutError' || reason === 'AbortError') {
       return [{
@@ -291,8 +283,8 @@ async function checkIcecast(compose: ComposeStatus): Promise<Finding[]> {
 async function checkWebDev(): Promise<Finding[]> {
   const out: Finding[] = [];
 
-  // ControlCenter on :7700 is the macOS AirPlay Receiver — by far the most
-  // common false collision, so name it rather than let operators guess.
+  // ControlCenter on :7700 is the macOS AirPlay Receiver, the most common false
+  // collision, so name it.
   const holder = whoHolds7700();
   if (!holder) {
     out.push({
@@ -322,8 +314,8 @@ async function checkWebDev(): Promise<Finding[]> {
     return out;
   }
 
-  // A mismatch means an outside-spawned `next dev` — fine, but worth saying,
-  // because `subwave stop` will have no pid to consult.
+  // A mismatch means an outside-spawned `next dev`, so `subwave stop` has no
+  // pid to consult.
   const trackedPid = readWebDevPid();
   out.push({
     label: ':7700',
@@ -435,8 +427,8 @@ function checkContent(): Finding[] {
     if (lines.length === 0) {
       out.push({ label: 'jingles.m3u', status: 'warn', detail: 'empty — no station idents' });
     } else {
-      // The M3U holds container paths (/var/sub-wave/jingles/…) — map them back
-      // to the host's state/jingles to check the files exist.
+      // The M3U holds container paths (/var/sub-wave/jingles/…); map back to the
+      // host's state/jingles to check the files exist.
       const missing: string[] = [];
       for (const line of lines) {
         const file = line.replace(/^\/var\/sub-wave\/jingles\//, '');

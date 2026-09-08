@@ -1,28 +1,21 @@
 #!/usr/bin/env bash
-# Transition-FX render harness — offline validation of the DJ sweep/washout
-# against the real Liquidsoap image (the one the broadcast container runs).
-#
-# Why this exists: `liquidsoap --check` lies about runtime behaviour — the
-# native `echo` operator type-checks but is a verified NO-OP in this build,
-# and the "Early computation of source content-type" crash only appears at
-# runtime. Envelope tuning is by-ear work that will recur, so the renders are
-# repeatable and the WAVs are the deliverable.
+# Transition-FX render harness: offline validation of the DJ sweep/washout
+# against the real Liquidsoap image. `liquidsoap --check` does not catch runtime
+# behaviour (native `echo` type-checks but is a no-op in this build), so the
+# renders are the evidence and the WAVs are the deliverable.
 #
 # Usage:
 #   scripts/fx-render-test.sh probe
-#       Phase 0 — can filter.rc + comb be instantiated INSIDE a cross
-#       transition callback on a request.queue-backed source? (The historical
-#       crash was with iir_filter/HPF; these two operators were unproven
-#       either way.) Renders dry vs fx and compares md5 so a silent no-op
-#       (like `echo`) can't pass. Decides per-branch (A) vs global-bus (B).
+#       Phase 0 — can filter.rc + comb be instantiated inside a cross transition
+#       callback on a request.queue-backed source? Renders dry vs fx and compares
+#       md5 so a silent no-op can't pass. Decides per-branch (A) vs global-bus (B).
 #   scripts/fx-render-test.sh render <a-audio> <b-audio> [dry|sweep|washout|both|blend|dissolve|chop|loop]
-#       Phase 1 — render the a→b transition with the production envelope
-#       logic (mirrored from radio.liq) and print an RMS-over-time table.
-#       Default renders every variant.
+#       Phase 1 — render the a→b transition with the production envelope logic
+#       (mirrored from radio.liq) and print an RMS-over-time table. Default
+#       renders every variant.
 #   scripts/fx-render-test.sh loopcheck
-#       Regression check — render deterministic pink noise through the plain
-#       crossfade and Loop paths, then fail if Loop's capture-pass level differs
-#       from the plain transition by more than 1 dB.
+#       Regression check — fail if Loop's capture-pass level differs from the
+#       plain transition by more than 1 dB on deterministic pink noise.
 #
 # Output lands in .fx-render/ next to this script (gitignored).
 
@@ -48,12 +41,11 @@ gen_tones() {
 probe() {
   gen_tones
   cat > "$WORK/probe.liq" <<'LIQ'
-# Phase-0 probe: instantiate filter.rc (x2) + comb on the OUTGOING branch
-# inside a cross transition callback, over a request.queue-backed source —
-# the exact topology radio.liq's per-branch effects need. FX=on closes the
-# filter and raises the comb feedback statically so a dry-vs-fx md5 compare
-# proves the operators actually touch the audio (native `echo` taught us
-# type-checking is not enough).
+# Phase-0 probe: instantiate filter.rc (x2) + comb on the outgoing branch inside
+# a cross transition callback over a request.queue-backed source, the exact
+# topology radio.liq's per-branch effects need. FX=on closes the filter and
+# raises comb feedback statically so a dry-vs-fx md5 compare proves the operators
+# touch the audio at all.
 settings.log.stdout := true
 settings.log.level := 3
 
@@ -142,11 +134,10 @@ render() {
   ffmpeg -v error -y -i "$b_in" -ar 44100 -ac 2 -t 40 "$WORK/rb.wav"
 
   cat > "$WORK/render.liq" <<'LIQ'
-# Phase-1 render: the a→b transition with the PRODUCTION envelope logic —
-# keep the closures in lockstep with liquidsoap/radio.liq's dj_transition.
-# Envelopes are pure functions of source.elapsed() on the transition branch
-# (audio time), so they render correctly under sync="none" — wall-clock
-# thread envelopes do NOT (found while building this harness).
+# Phase-1 render: the a→b transition with the production envelope logic. Keep the
+# closures in lockstep with liquidsoap/radio.liq's dj_transition. Envelopes must
+# be pure functions of source.elapsed() (audio time) so they render correctly
+# under sync="none"; wall-clock thread envelopes do not.
 settings.log.stdout := true
 settings.log.level := 3
 
@@ -198,10 +189,8 @@ def t(a, b) =
         t_close = 0.45 * d
         t_hold  = 0.55 * d
         t_back  = 0.85 * d
-        # Dive to the floor, touch it briefly, then PARTIALLY re-open as the
-        # incoming takes over: a sustained floor reads as "the track went
-        # quiet"; a brief bottom with the outgoing re-emerging under the new
-        # track reads as the gesture (second on-air 'goes quiet' report).
+        # Dive to the floor, touch it briefly, then partially re-open as the
+        # incoming takes over: a sustained floor reads as "the track went quiet".
         depth =
           if e < t_close then
             x = e / t_close
@@ -229,12 +218,10 @@ def t(a, b) =
           1.0 + (3.0 * x * x - 2.0 * x * x * x) * (g_max - 1.0)
         end
       end
-      # PARALLEL DRY BLEED — the "never goes quiet" guarantee. Wetness on
-      # cascaded stages multiplies the dry path (0.35 × 0.35 ≈ 12% ≈ −18 dB),
-      # which is why every wetness-cap attempt still cratered the mid-band.
-      # An explicit dry branch around a full-wet chain gives a HARD floor:
-      # 30% of the untouched track always reaches the mix (≈ −10 dB, ≈ −8 dB
-      # after makeup), no matter how deep the cutoff dives.
+      # Parallel dry bleed, the "never goes quiet" guarantee. Wetness on cascaded
+      # stages multiplies the dry path, so a wetness cap can't hold a floor; an
+      # explicit dry branch around a full-wet chain keeps 30% of the untouched
+      # track in the mix however deep the cutoff dives.
       swept = filter.rc(frequency=sweep_cut, mode="low", wetness=1.,
                 filter.rc(frequency=sweep_cut, mode="low", wetness=1., a_src))
       amplify(sweep_gain, add(normalize=false,
@@ -295,9 +282,8 @@ def t(a, b) =
     else a_src end
   # DISSOLVE — keep in lockstep with radio.liq's dissolve block: 4 parallel
   # combs at mutually prime delays, shared swell/hold/release feedback, ONE
-  # -4x dry subtraction for the whole cluster (#1565 — algebraically identical
-  # to the old per-tap pure_tail, and 1.87x cheaper on the streaming thread),
-  # cascaded darkening lowpass, late makeup.
+  # -4x dry subtraction for the whole cluster (#1565), cascaded darkening
+  # lowpass, late makeup.
   a_src =
     if dissolve_on then
       diss_src = a_src
@@ -426,13 +412,12 @@ def t(a, b) =
       end
       amplify(chop_gain, a_src)
     else a_src end
-  # LOOP — keep in lockstep with radio.liq's loop block: comb here is a
-  # ONE-SHOT feed-forward echo (measured), so the loop is a cascade of
-  # doubling delays (taps at every bar multiple), a hard dry gate after the
-  # capture pass, ride-out darkening lowpass, and a complementary output ride
-  # that leaves headroom for the incoming fade. feedback=0.0 makes each delayed
-  # copy unity; the non-overlapping bar slots need no global makeup.
-  # Fixed bar=2.0 here (no BPM stamp).
+  # LOOP — keep in lockstep with radio.liq's loop block: comb is a one-shot
+  # feed-forward echo, so the loop is a cascade of doubling delays (taps at every
+  # bar multiple), a hard dry gate after the capture pass, ride-out darkening
+  # lowpass, and a complementary output ride leaving headroom for the incoming
+  # fade. feedback=0.0 makes each delayed copy unity; the non-overlapping bar
+  # slots need no global makeup. Fixed bar=2.0 here (no BPM stamp).
   a_src =
     if loop_on then
       bar = 2.0
@@ -581,11 +566,10 @@ loopcheck() {
 
 xdur() {
   # Which track's liq_cross_duration governs a transition? Stamp 12s on the
-  # OUTGOING track against a cross default of 4s: if the callback logs d=12
-  # for a→b and the output is 78s (50 − 12 + 40 — a 12s buffer at a's end),
-  # a track's stamp governs its OWN end. This is the assumption the washout
-  # canvas stands on, and the proof of the feature-1 off-by-one (the queue
-  # computes prev→item compatibility but the stamp rules item→next).
+  # outgoing track against a cross default of 4s: a callback logging d=12 for a→b
+  # with a 78s output proves a track's stamp governs its OWN end. The washout
+  # canvas stands on this (the queue computes prev→item compatibility, but the
+  # stamp rules item→next).
   gen_tones
   ffmpeg -v error -y -i "$WORK/a.wav" -t 50 -af apad=whole_dur=50 "$WORK/ra.wav"
   ffmpeg -v error -y -i "$WORK/b.wav" -t 40 -af apad=whole_dur=40 "$WORK/rb.wav"

@@ -1,7 +1,6 @@
-// Controller HTTP client — resolves the base URL for the live compose env and
+// Controller HTTP client: resolves the base URL for the live compose env and
 // attaches admin Basic auth when the root .env has creds. Missing creds are
-// survivable in dev, where the controller skips its auth gate outside
-// NODE_ENV=production.
+// survivable in dev, where the controller skips its auth gate.
 
 import { apiBaseFor, type ComposeEnv } from './compose.ts';
 import { getLegacyControllerEnv, getRootEnv, parseEnvFile, fetchErrorReason } from './util.ts';
@@ -12,8 +11,7 @@ export interface AdminCreds {
 }
 
 export function readAdminCreds(): AdminCreds | null {
-  // The legacy controller/.env fallback keeps admin calls authenticated for an
-  // upgrader who hasn't re-run setup yet.
+  // Legacy controller/.env fallback for an upgrader who hasn't re-run setup.
   for (const path of [getRootEnv(), getLegacyControllerEnv()]) {
     const env = parseEnvFile(path);
     if (env.ADMIN_USER && env.ADMIN_PASS) {
@@ -91,8 +89,7 @@ export function makeClient(env: ComposeEnv): ApiClient {
   };
 }
 
-// null means "don't know" — callers stay quiet rather than nag when the
-// controller can't answer cleanly. The endpoint is unauthenticated.
+// null means "don't know", so callers stay quiet. Unauthenticated endpoint.
 export async function checkNeedsSetup(env: ComposeEnv): Promise<boolean | null> {
   const client = makeClient(env);
   const r = await client.get<{ needsSetup?: boolean }>('/onboarding/status', { timeoutMs: 2000 });
@@ -100,8 +97,8 @@ export async function checkNeedsSetup(env: ComposeEnv): Promise<boolean | null> 
   return r.body.needsSetup;
 }
 
-// Polls until the controller reports on-air, so `subwave start` can hand back a
-// confident signal rather than just "compose exited 0".
+// Polls until the controller reports on-air, so `subwave start` reports more
+// than "compose exited 0".
 export async function waitForHealth(
   env: ComposeEnv,
   timeoutMs = 30_000,
@@ -118,8 +115,7 @@ export async function waitForHealth(
   return false;
 }
 
-// Field names were taken from a live response, not from the docs — keep them in
-// step with what controller/src/routes/public.js emits.
+// Keep field names in step with what controller/src/routes/public.js emits.
 export interface NowPlayingPayload {
   nowPlaying?: {
     title?: string;

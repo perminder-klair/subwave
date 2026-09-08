@@ -1,9 +1,5 @@
-// Shared types for the controller HTTP surface (`/now-playing`, `/state`,
-// `/session`) and the live DJ session.
-//
-// SOURCE OF TRUTH: web/web/lib/types.ts in the SUB/WAVE repo. Keep this copy in
-// sync — it's duplicated (not shared via a package) because the web hooks that
-// also use it are DOM-coupled and can't be imported here. Pure interfaces only.
+// Types for the controller HTTP surface. Source of truth is
+// web/web/lib/types.ts; keep this copy in sync. Pure interfaces only.
 
 import type { StationLocale } from './format';
 
@@ -18,9 +14,7 @@ export interface NowPlayingTrack {
   year?: number;
   duration?: number;
   subsonic_id?: string;
-  // Analysis/tag data merged in by the controller's /now-playing handler from
-  // the library DB. All optional — a not-yet-tagged track omits them and the
-  // player's metadata strip renders nothing.
+  // Tag data merged in from the library DB; an untagged track omits all of it.
   genre?: string | null;
   bpm?: number | null;
   musicalKey?: string | null;
@@ -46,11 +40,10 @@ export interface TimeContext {
 
 export interface ActiveShow {
   name?: string;
-  /** `avatar` is the full public path (e.g. `/api/persona-avatar/p_default0`) —
-   *  the controller serves a transparent 1×1 placeholder when none is set. */
+  /** `avatar` is the full public path; the controller serves a transparent
+   *  1×1 placeholder when none is set. */
   persona?: { id?: string; name?: string; avatar?: string };
-  /** Guest co-hosts on the current show (same shape as persona). Empty or
-   *  absent = solo show. */
+  /** Guest co-hosts. Empty or absent = solo show. */
   guests?: { id?: string; name?: string; avatar?: string }[];
 }
 
@@ -70,25 +63,23 @@ export interface DjPublic {
 export interface SchedulePersona {
   id: string;
   name: string;
-  /** Public one-liner; '' when the operator hasn't set one. Optional only
-   *  because an older controller may omit the field entirely. */
+  /** Public one-liner; '' when unset, absent on an older controller. */
   tagline?: string;
   avatar: string;
-  /** The persona's soul blurb — only when the station opted into publishing
-   *  souls (settings.privacy.publishPersonaSouls). Absent otherwise. */
+  /** Present only when settings.privacy.publishPersonaSouls is on. */
   soul?: string;
 }
 export interface ScheduleShow {
   id: string;
   name: string;
   topic: string;
-  /** Lead mood — derived from moods[0] server-side (back-compat). */
+  /** Lead mood, derived server-side from moods[0] for back-compat. */
   mood: string;
   /** Full multi-value mood list (#929). */
   moods?: string[];
   personaId: string;
-  /** Guest co-hosts, as ids into the payload's `personas` index (already
-   *  filtered to personas that still exist). Empty/absent = solo show. */
+  /** Ids into the payload's `personas` index, pre-filtered to ones that still
+   *  exist. Empty or absent = solo show. */
   guestPersonaIds?: string[];
 }
 /** 7 entries (Sun=0..Sat=6), each a 24-slot array of showId|null. */
@@ -124,10 +115,8 @@ export interface ListenerCount {
   [key: string]: unknown;
 }
 
-/** Structured description of the live broadcast mounts (`stream` on
- *  `/now-playing`). mount/format/bitrate describe the always-served MP3 floor;
- *  the *Enabled flags advertise which optional mounts (`/stream.opus`,
- *  `/stream.flac`, `/stream.aac`) are also live. */
+/** `stream` on `/now-playing`. mount/format/bitrate describe the always-served
+ *  MP3 floor; the *Enabled flags say which optional mounts are also live. */
 export interface StreamInfo {
   mount?: string;
   format?: string;
@@ -137,10 +126,9 @@ export interface StreamInfo {
   opusEnabled?: boolean;
   flacEnabled?: boolean;
   aacEnabled?: boolean;
-  /** Seconds of already-broadcast audio Icecast bursts on connect, so this is
-   *  how far behind the live edge the listener sits for the whole connection.
-   *  Every timestamp the controller publishes is live-edge; subtract this to
-   *  render listener-time (issue #1114). */
+  /** Seconds Icecast bursts on connect, so how far behind the live edge the
+   *  listener sits for the whole connection. Every controller timestamp is
+   *  live-edge; shift by this to render listener-time (#1114). */
   bufferSeconds?: number | null;
 }
 
@@ -154,14 +142,14 @@ export interface NowPlayingResponse {
   streamOnline?: boolean;
   /** kbps of the first attached broadcast mount; null when offline. */
   streamBitrate?: number | null;
-  /** Broadcast mount descriptor — drives the listener stream-format picker. */
+  /** Drives the listener stream-format picker. */
   stream?: StreamInfo;
-  /** Cumulative since-boot LLM token total — the player's token ticker. */
+  /** Cumulative since-boot LLM token total. */
   llmTokens?: number | null;
-  /** Station IANA timezone — render on-air timestamps in it so they match what
-   *  the DJ speaks, regardless of the device's own timezone (issue #418). */
+  /** Station IANA timezone. Render on-air timestamps in it, not the device's,
+   *  so they match what the DJ speaks (#418). */
   timezone?: string;
-  /** Station display locale — UK keeps 24-hour time; US uses AM/PM. */
+  /** UK keeps 24-hour time; US uses AM/PM. */
   locale?: StationLocale;
 }
 
@@ -186,7 +174,7 @@ export interface RequestTrack {
   subsonic_id?: string;
 }
 
-/** Result of a listener request — drives the RequestDrawer card. */
+/** Result of a listener request. */
 export interface RequestResult {
   success: boolean;
   pending?: boolean;
@@ -210,8 +198,8 @@ export interface LikeResult {
   error?: string;
 }
 
-/** `GET /like` — liked-state for the current airing, from this listener's
- *  point of view (server-side dedup key, no account needed). */
+/** `GET /like` — liked-state for the current airing, per listener (server-side
+ *  dedup key, no account needed). */
 export interface LikeStatus {
   enabled: boolean;
   songId?: string | null;
@@ -225,15 +213,14 @@ export interface DjLogEntry {
   [key: string]: unknown;
 }
 
-/** `/state` response — upcoming queue + recent history + DJ log. */
+/** `/state` response. */
 export interface StationState {
   upcoming: QueueEntry[];
   history: QueueEntry[];
   djLog: DjLogEntry[];
-  /** The track the controller has on air right now, stamped at the LIVE EDGE.
-   *  The authoritative start time, as opposed to "when this client first saw
-   *  the track" — a backgrounded app or a missed poll makes the latter drift
-   *  minutes. Shifted into listener-time before display (issue #1114). */
+  /** The on-air track, stamped at the LIVE EDGE. The authoritative start time,
+   *  as opposed to when this client first saw the track. Shifted into
+   *  listener-time before display (#1114). */
   current?: { title?: string; artist?: string; startedAt?: string } | null;
   timezone?: string;
   locale?: StationLocale;

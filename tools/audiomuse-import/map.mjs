@@ -1,11 +1,9 @@
 // Pure mapping from AudioMuse-AI's analysis vocabulary into SUB/WAVE's
-// library.db columns. No I/O here — every function is a pure transform so it
-// can be unit-tested (see map.test.mjs). Coupling note: the target shapes
-// (Camelot musical_key, energy low/medium/high, the 17-mood vocab, the JSON
-// moods array) mirror controller/src/music/library-db.ts + settings.ts — if
-// those change, update this file to match.
+// library.db columns. No I/O; every function is a pure transform (map.test.mjs).
+// The target shapes (Camelot musical_key, energy low/medium/high, the 17-mood
+// vocab, the JSON moods array) mirror controller/src/music/library-db.ts +
+// settings.ts and must be updated alongside them.
 
-// --- tag-score strings ------------------------------------------------------
 // AudioMuse stores mood_vector / other_features as "label:score,label:score"
 // with 3-decimal scores (database.py). Labels never contain a colon, so a
 // single split on ":" is safe even for "easy listening" / "Hip-Hop" / "00s".
@@ -22,7 +20,6 @@ export function parseTagScores(str) {
   return out;
 }
 
-// --- musical key -> Camelot -------------------------------------------------
 // AudioMuse gives key (e.g. "C", "F#", "Db") + scale ("major"/"minor").
 // SUB/WAVE's musical_key is a Camelot code (e.g. "8A" = A minor, "8B" = C major).
 const PITCH_CLASS = {
@@ -44,7 +41,6 @@ export function keyToCamelot(key, scale) {
   return null;
 }
 
-// --- energy -> low/medium/high ---------------------------------------------
 // AudioMuse energy is a raw RMS-ish REAL; it normalises against ENERGY_MIN/MAX
 // (config.py) before use. We reproduce that range, then bucket into the three
 // values SUB/WAVE's energy CHECK constraint allows.
@@ -59,13 +55,10 @@ export function energyToBucket(energy) {
   return 'high';
 }
 
-// --- mood translation -------------------------------------------------------
-// Static map from AudioMuse's tags (the 50 MusiCNN mood_vector labels + the 6
-// CLAP other_features labels) to SUB/WAVE's 17 editorial moods (SHOW_MOODS in
-// settings.ts). Keys are lower-cased for case-insensitive lookup. Only tags
-// with a genuine mood signal are mapped; pure genre/decade/instrument tags
-// (rock, pop, 80s, guitar…) intentionally map to nothing — SUB/WAVE's own
-// audio-mood pass and the contextual moods (rainy/night/workout…) fill those.
+// Static map from AudioMuse's tags (50 MusiCNN mood_vector + 6 CLAP
+// other_features labels) to SUB/WAVE's 17 editorial moods (SHOW_MOODS in
+// settings.ts). Keys are lower-cased. Pure genre/decade/instrument tags map to
+// nothing on purpose; the audio-mood pass and contextual moods cover those.
 export const AUDIOMUSE_MOOD_MAP = {
   // energetic
   aggressive: 'energetic', 'hard rock': 'energetic', 'heavy metal': 'energetic',
@@ -94,11 +87,9 @@ const GENRE_TAGS = new Set([
   'indie pop', 'alternative rock', 'progressive rock', 'electro', 'experimental',
 ]);
 
-// Highest-scoring genre-like tag from a parsed mood_vector, or null. Returns the
-// original-cased label as AudioMuse spelled it. `cutoff` gates confidence the
-// same way moods are gated, so a near-zero tag ("metal:0.02") can't become a
-// track's genre off noise (#934 review); default 0 keeps standalone callers
-// unfiltered.
+// Highest-scoring genre-like tag from a parsed mood_vector, or null, in
+// AudioMuse's original casing. `cutoff` gates confidence like moods, so a
+// near-zero tag can't become a genre off noise (#934); default 0 = unfiltered.
 export function topGenre(moodScores, cutoff = 0) {
   let best = null;
   let bestScore = -Infinity;

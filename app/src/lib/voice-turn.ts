@@ -1,12 +1,7 @@
-// "Is the DJ talking right now?" — one decision, three surfaces.
-//
-// The booth feed is a chat log, not an air log: a spoken turn is recognised by
-// its kind/role, and it has no end stamp, so "talking" is a window that opens
-// when a voice turn lands and closes TALKING_LINGER_MS later. The lock screen
-// (useNowPlayingInfo), the Live Activity (useLiveActivity) and anything else
-// that swaps the strip to the persona must agree on that window exactly —
-// extracted here rather than copied because two copies of a timing rule drift
-// (see the root CLAUDE.md on policy modules).
+// "Is the DJ talking right now?", for every surface that swaps the strip to
+// the persona. The booth feed is a chat log with no end stamp, so "talking" is
+// a window that opens when a voice turn lands and closes TALKING_LINGER_MS
+// later. Lives here so the lock screen and Live Activity can't disagree.
 
 import type { SessionTurn } from './types';
 

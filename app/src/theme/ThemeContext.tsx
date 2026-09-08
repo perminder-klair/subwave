@@ -1,15 +1,9 @@
-// Station theme application for native.
-//
-// The web sets CSS variables on <html>. Here we use NativeWind's `vars()` to
-// override the same 7 token names (--bg/--ink/--muted/--accent/--overlay/
-// --soft-border/--field) on a root <View>, so all `className="bg-bg text-ink"`
-// usages resolve to the live station palette. We also expose a resolved
-// `colors` object for places that need raw values (Skia canvas, gradients,
-// icon `color` props) where class names don't apply.
+// Station theme application. NativeWind's `vars()` overrides the same 7 token
+// names on a root <View> so `className="bg-bg text-ink"` resolves to the live
+// palette; `colors` exposes raw values for Skia, gradients and icon props.
 //
 // Token source order: per-listener override (AsyncStorage) → station active
-// theme (/themes) → seeded defaults. The override lets a listener pick a
-// palette without affecting other listeners (mirrors web lib/theme.ts).
+// theme (/themes) → seeded defaults.
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { vars } from 'nativewind';
@@ -47,11 +41,10 @@ const DARK_DEFAULTS: ResolvedColors = {
   field: '#1b1815',
 };
 
-// Light-mode counterpart. A light theme can ship a parseable dark `--ink`
-// alongside an `--bg`/`--field` expressed as oklch()/color-mix() (which RN
-// can't parse). Falling those back to the DARK defaults yields dark text on a
-// dark field — invisible. Mode-aware fallbacks keep an unparseable light field
-// light. Values track the seeded `classic-light` palette.
+// Light-mode fallbacks. A light theme can ship a parseable dark `--ink` next
+// to an oklch()/color-mix() `--bg`/`--field` RN can't parse; falling those back
+// to the dark defaults gives dark text on a dark field. Values track the seeded
+// `classic-light` palette.
 const LIGHT_DEFAULTS: ResolvedColors = {
   bg: '#f3efe6',
   ink: '#161412',
@@ -62,11 +55,9 @@ const LIGHT_DEFAULTS: ResolvedColors = {
   field: '#e1ddd4',
 };
 
-// RN's style engine + Skia only parse hex / rgb(a) / hsl(a) / named colors —
-// NOT the CSS oklch() and color-mix() that the controller's /themes registry
-// uses (browsers handle those natively, RN doesn't). Anything unparseable
-// falls back to the token's dark default, which is visually equivalent for the
-// seeded palettes (e.g. oklch(0.62 0.22 25) ≈ #d94b2a).
+// RN and Skia parse only hex / rgb(a) / hsl(a) / named colors, not the oklch()
+// and color-mix() the /themes registry uses. Anything unparseable falls back
+// to the token's default for the mode.
 const RN_COLOR_RE = /^(#([0-9a-f]{3,8})|rgba?\(|hsla?\(|transparent$)/i;
 function safeColor(value: string | undefined, fallback: string): string {
   if (value && RN_COLOR_RE.test(value.trim())) return value;
@@ -155,9 +146,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const mode: ThemeMode = activeTheme?.mode ?? 'dark';
   const colors = useMemo(() => colorsFromTokens(tokens, mode), [tokens, mode]);
 
-  // NativeWind className colors resolve to these CSS vars, so they must be
-  // RN-parseable too — feed vars() the sanitized colors, not the raw tokens
-  // (which may carry oklch()/color-mix()).
+  // vars() gets the sanitized colors, not the raw tokens, since className
+  // colors resolve through these and must be RN-parseable.
   const safeTokens = useMemo(
     () => ({
       '--bg': colors.bg,

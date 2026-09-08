@@ -1,8 +1,5 @@
-// Reachability probes for the setup wizard. One uniform { ok, reason? } shape
-// so the wizard renders every service the same way, and deliberately non-fatal:
-// a real install often has Navidrome not up yet, cloud keys still to come, or an
-// Ollama the wizard's host can't see, so the operator decides whether to retry,
-// continue or abort.
+// Reachability probes for the setup wizard. One uniform { ok, reason? } shape,
+// and non-fatal throughout: the operator decides whether to retry or continue.
 
 import crypto from 'node:crypto';
 import { fetchErrorReason } from './util.ts';
@@ -57,8 +54,8 @@ export async function probeSubsonic(args: {
   }
 }
 
-// Also checks `model` is installed, so the wizard can flag it early. The fix is
-// `ollama pull <name>`, which we don't run — it's a multi-GB download.
+// Also checks `model` is installed. The fix is `ollama pull <name>`, which this
+// doesn't run (multi-GB download).
 export async function probeOllama(args: {
   url: string;
   model?: string;
@@ -139,8 +136,7 @@ export async function probeAnthropic(args: {
   }
 }
 
-// This endpoint answers with or without a key — the key only narrows the list
-// to what the account has enabled, so a bad key won't fail the probe.
+// This endpoint answers with or without a key, so a bad key won't fail the probe.
 export async function probeOpenRouter(args: {
   apiKey: string;
   timeoutMs?: number;

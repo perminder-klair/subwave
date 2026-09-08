@@ -7,16 +7,15 @@ import { homedir } from 'node:os';
 import { requireSubwaveHome } from './home.ts';
 
 // Resolved lazily so `subwave init` (no home yet) and `subwave --version` can
-// short-circuit before the resolver runs. cli.ts has already folded any
-// `--home` flag into process.env.SUBWAVE_HOME, so there's one source of truth.
+// short-circuit. cli.ts has already folded `--home` into process.env.SUBWAVE_HOME.
 let _subwaveHome: string | null = null;
 export function getSubwaveHome(): string {
   if (_subwaveHome === null) _subwaveHome = requireSubwaveHome().home;
   return _subwaveHome;
 }
 
-// Call these rather than caching their results at module load — that would
-// force home resolution at import time and break `subwave init`.
+// Call these rather than caching at module load; that would force home
+// resolution at import time and break `subwave init`.
 export function getScriptsDir(): string { return resolve(getSubwaveHome(), 'scripts'); }
 export function getRootEnv(): string { return resolve(getSubwaveHome(), '.env'); }
 export function getRootEnvExample(): string { return resolve(getSubwaveHome(), '.env.example'); }
@@ -71,11 +70,9 @@ export function parseEnvFile(path: string): Record<string, string> {
 }
 
 // Quote a .env value so docker compose reads it literally. Compose interpolates
-// `$VAR` in BOTH unquoted and double-quoted values — only single quotes are
-// taken as-is, so a password like `pre$word` written raw silently mangles into
-// a reference to a nonexistent `$word` (#156). There is no escape for `'` inside
-// `'...'` and double quotes can't escape `$` either, so an embedded single quote
-// throws and lets the caller surface a validation error up front.
+// `$VAR` in both unquoted and double-quoted values, so only single quotes are
+// safe (#156). There is no escape for `'` inside `'...'`, so a value containing
+// one throws and the caller surfaces a validation error.
 function envEscape(value: string): string {
   // Conservative safe set: nothing here triggers interpolation.
   if (/^[A-Za-z0-9_./:@,+\-]*$/.test(value)) return value;
@@ -90,8 +87,7 @@ function envEscape(value: string): string {
 }
 
 // Rewrites values in place against the existing file (or the .env.example
-// template when there isn't one), so the operator's `.env` keeps its comments
-// and key order across repeated wizard runs. Keys absent from the template are
+// template), keeping comments and key order. Keys absent from the template are
 // appended; keys absent from `values` are left alone.
 export function writeEnvFile(
   path: string,
@@ -153,9 +149,8 @@ export function writeSetupConfig(patch: Partial<SetupConfig>): SetupConfig {
   return next;
 }
 
-// A state file the browser wizard (or any container) touched first is uid 0
-// mode 0644 — readable from the host but not writable. Recover by chowning the
-// tree back through a one-shot Docker container, then retry once.
+// A state file a container touched first is uid 0 mode 0644: host-readable but
+// not writable. Chown the tree back via a one-shot container, then retry once.
 function writeFileWithRecover(path: string, contents: string): void {
   try {
     writeFileSync(path, contents);

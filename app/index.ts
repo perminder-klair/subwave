@@ -1,10 +1,6 @@
-// App entry. Two responsibilities, in order:
-//   1. Register the react-native-track-player playback service so OS media
-//      controls (lock screen / CarPlay / Android Auto / headphones) route to
-//      our remote handlers even when the JS UI isn't mounted.
-//   2. Hand off to expo-router's file-based entry.
-//
-// The service MUST be registered before the router entry runs.
+// App entry: register the RNTP playback service so OS media controls reach our
+// remote handlers even when the JS UI isn't mounted, then hand off to
+// expo-router. The service MUST be registered before the router entry runs.
 import TrackPlayer from 'react-native-track-player';
 import { PlaybackService } from './service';
 

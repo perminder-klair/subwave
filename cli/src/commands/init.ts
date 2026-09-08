@@ -1,7 +1,6 @@
-// `subwave init` — scaffold a fresh install directory. The standalone-CLI entry
-// point, and the only command that runs before a home exists: it materialises
-// the embedded compose files + a 3-var .env, then records the home in
-// ~/.config/subwave/config.json so every later command can resolve it.
+// `subwave init` — scaffold a fresh install directory. The only command that
+// runs before a home exists: writes the embedded compose files + a 3-var .env,
+// then records the home in ~/.config/subwave/config.json for later commands.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -30,16 +29,14 @@ interface InitAnswers {
 }
 
 // Without TZ the container runs in UTC and the DJ's time announcements drift by
-// the host's offset (#205). The fallback is the compose default rather than UTC
-// so a host with no resolvable zone keeps the historical behaviour.
+// the host's offset (#205). Fallback is the compose default, not UTC.
 function detectTimezone(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/London';
 }
 
-// `--yes` exists for the curl|sh installer, which must NOT drive an interactive
-// Clack prompt through the pipe: on macOS Bun doesn't deliver stdin bytes when
-// launched from a piped parent (oven-sh/bun#13374), so the first prompt would
-// hang un-killably. Skipping every prompt is what makes it immune.
+// `--yes` is for the curl|sh installer: it must skip every prompt, because on
+// macOS Bun delivers no stdin from a piped parent (oven-sh/bun#13374) and the
+// first Clack prompt would hang un-killably.
 export interface InitOptions {
   yes?: boolean;
   mode?: Mode;
@@ -71,8 +68,7 @@ export async function runInitCommand(opts: InitOptions = {}): Promise<void> {
     return;
   }
 
-  // scaffold() just persisted preferredEnv, so runStartCommand() resolves the
-  // env silently rather than asking a second question.
+  // scaffold() just persisted preferredEnv, so runStartCommand() won't re-ask.
   console.log();
   const startNow = exitIfCancelled(await p.confirm({
     message: 'Bring the stack up now?',
@@ -85,8 +81,8 @@ export async function runInitCommand(opts: InitOptions = {}): Promise<void> {
   await pauseForEnter();
 }
 
-// Mirrors collectAnswers()'s defaults, minus the prompts. Refuses to clobber an
-// existing install — destroying compose files non-interactively is never right.
+// Mirrors collectAnswers()'s defaults, minus the prompts. Never clobbers an
+// existing install.
 function defaultAnswers(opts: InitOptions): InitAnswers {
   const envHome = process.env.SUBWAVE_HOME?.trim();
   const homeRaw = envHome || DEFAULT_SUBWAVE_HOME;
@@ -163,31 +159,29 @@ async function collectAnswers(): Promise<InitAnswers> {
     message: 'Admin password (leave blank to generate a random one)',
   }), { backOnCancel: false }) || crypto.randomBytes(16).toString('hex');
 
-  // Cosmetic — drives OG cards, canonical URLs, sitemap, manifest. Blank falls
-  // back to a localhost origin, so only social previews suffer.
+  // Cosmetic: OG cards, canonical URLs, sitemap, manifest. Blank falls back to
+  // a localhost origin.
   const siteUrl = exitIfCancelled(await p.text({
     message: 'Public site URL (https://radio.example.com — blank to defer)',
     initialValue: '',
     placeholder: 'https://radio.example.com',
   }), { backOnCancel: false });
 
-  // TZ is detected rather than prompted — `subwave setup` owns the editable
-  // timezone prompt, and every prompt skipped is one less pipe hazard on macOS.
+  // TZ is detected, not prompted; `subwave setup` owns the editable prompt.
   return { home: homeAbs, mode, adminUser, adminPass, siteUrl, tz: detectTimezone() };
 }
 
 async function scaffold(a: InitAnswers): Promise<void> {
   header('Scaffolding install');
 
-  // state/ is created with the operator's UID so the containers that mount it
-  // don't need a chown dance on first boot.
+  // state/ gets the operator's UID so the containers mounting it need no chown.
   mkdirSync(a.home, { recursive: true });
   mkdirSync(resolve(a.home, 'state'), { recursive: true });
   mkdirSync(resolve(a.home, 'state', 'logs'), { recursive: true });
   ok(`created ${a.home}/ (state/, state/logs/)`);
 
-  // Both modes also get the BYO variant and the GPU overlays (docs/gpu-tts.md,
-  // #1099) so switching later needs neither a re-init nor a trip to the repo.
+  // Both modes get the BYO variant and the GPU overlays (#1099) so switching
+  // later needs no re-init.
   const composeMainSrc = a.mode === 'prod-byo' ? COMPOSE_BYO_YML : COMPOSE_YML;
   writeFileSync(resolve(a.home, 'docker-compose.yml'), composeMainSrc);
   writeFileSync(resolve(a.home, 'docker-compose.byo.yml'), COMPOSE_BYO_YML);
@@ -199,9 +193,8 @@ async function scaffold(a: InitAnswers): Promise<void> {
     ok('wrote docker-compose.yml (bundled Caddy) + docker-compose.byo.yml + GPU overlays');
   }
 
-  // writeEnvFile() reads its template off disk, so .env.example has to land
-  // first; going through it (rather than writing .env directly) is what keeps
-  // the shipped comments and key order in the operator's file.
+  // writeEnvFile() reads its template off disk, so .env.example must land first;
+  // going through it keeps the shipped comments and key order.
   const envExamplePath = resolve(a.home, '.env.example');
   writeFileSync(envExamplePath, ENV_EXAMPLE);
   const envValues: Record<string, string> = {
@@ -214,9 +207,8 @@ async function scaffold(a: InitAnswers): Promise<void> {
   writeEnvFile(envPath, envValues, { templateFallback: envExamplePath });
   ok(`wrote .env (ADMIN_USER, ADMIN_PASS, TZ=${a.tz}${a.siteUrl ? ', SITE_URL' : ''})`);
 
-  // Unpinned, every image ref floats on :latest and can drift ahead of the
-  // frozen compose files this binary carries. A dev build has no published tag
-  // to pin to, so it stays on :latest.
+  // Unpinned, image refs float on :latest and can drift ahead of the compose
+  // files this binary carries. A dev build has no tag to pin to.
   const pinTag = cliImageTag();
   if (pinTag) {
     applyVersionPin(envPath, pinTag);
@@ -241,10 +233,9 @@ async function scaffold(a: InitAnswers): Promise<void> {
   }
 }
 
-// Written by hand rather than through writeEnvFile(), which can't carry a
-// comment for an appended key. Preference order: rewrite an active pin, else
-// replace the template's commented `# SUBWAVE_VERSION=` line in place (so the
-// pin lands where operators look for it), else append a fresh block.
+// Hand-written because writeEnvFile() can't carry a comment for an appended
+// key. Order: rewrite an active pin, else replace the template's commented
+// `# SUBWAVE_VERSION=` line in place, else append a fresh block.
 function applyVersionPin(envPath: string, tag: string): void {
   const lines = readFileSync(envPath, 'utf8').split('\n');
   const block = [
