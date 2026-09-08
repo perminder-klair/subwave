@@ -79,22 +79,60 @@ function extractCount(sub, songs) {
   return 0;
 }
 
-async function call(endpoint, params = {}) {
-  const started = Date.now();
-  try {
-    const url = buildUrl(endpoint, params);
-    // Bounded fetch: a hung Navidrome must not pin the admin routes behind it (#786).
-    let res;
+// A pooled keep-alive socket Navidrome has already closed fails the next request
+// on it instantly, before a byte is written, and undici reports the bare
+// `fetch failed`. ping() and pingWith() each already worked around it; this is
+// the same rule at the one chokepoint every call goes through, so a walk of
+// thousands of albums no longer dies on the first idle socket. Bounded to a FAST
+// failure, which is what says the request never landed — a slow one may have been
+// served, and mutations ride this path too.
+const STALE_SOCKET_RETRY_MS = 2_000;
+const STALE_SOCKET_BACKOFF_MS = 250;
+
+// undici collapses every connect/socket error into `TypeError: fetch failed`, so
+// name the endpoint, the origin and the underlying code. Never the URL — it
+// carries the auth token.
+function describeTransportError(endpoint: string, err: any): Error {
+  const cause = err?.cause;
+  const code = cause?.code || cause?.errno || null;
+  const detail = cause?.message && cause.message !== err?.message ? cause.message : null;
+  let origin = config.navidrome.url;
+  try { origin = new URL(config.navidrome.url).origin; } catch { /* keep as configured */ }
+  return new Error(
+    `Subsonic ${endpoint} could not reach ${origin}: ${err?.message || 'fetch failed'}`
+    + `${code ? ` (${code})` : ''}${detail ? ` — ${detail}` : ''}`,
+  );
+}
+
+// Bounded fetch: a hung Navidrome must not pin the admin routes behind it (#786).
+async function boundedFetch(endpoint: string, url: string) {
+  for (let attempt = 0; ; attempt++) {
+    const started = Date.now();
     try {
-      res = await fetch(url, { signal: AbortSignal.timeout(config.navidrome.timeoutMs) });
-    } catch (err) {
+      return await fetch(url, { signal: AbortSignal.timeout(config.navidrome.timeoutMs) });
+    } catch (err: any) {
       if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
         throw new Error(
           `Subsonic ${endpoint} timed out after ${config.navidrome.timeoutMs}ms — is Navidrome responding?`,
         );
       }
-      throw err;
+      if (attempt === 0 && Date.now() - started < STALE_SOCKET_RETRY_MS) {
+        console.warn(
+          `[subsonic] ${endpoint}: ${err?.message || err} — retrying once (stale pooled socket)`,
+        );
+        await new Promise(resolve => setTimeout(resolve, STALE_SOCKET_BACKOFF_MS));
+        continue;
+      }
+      throw describeTransportError(endpoint, err);
     }
+  }
+}
+
+async function call(endpoint, params = {}) {
+  const started = Date.now();
+  try {
+    const url = buildUrl(endpoint, params);
+    const res = await boundedFetch(endpoint, url);
     if (!res.ok) {
       // First 200 chars of the body, so triage sees the real server message.
       let body = '';
@@ -123,8 +161,9 @@ async function call(endpoint, params = {}) {
 }
 
 // Connectivity + auth check against config.navidrome. Never throws.
-// A failure that lands instantly gets ONE retry (stale pooled fetch socket);
-// a slow failure does not, since a second wait can't change the answer.
+// call() already retries a stale pooled socket; this outer retry covers the rest
+// of a fast failure (an instant HTTP error), and a slow one is not retried since
+// a second wait can't change the answer.
 const PING_RETRY_IF_FASTER_THAN_MS = 2_000;
 
 export async function ping(): Promise<{ ok: boolean; reason?: string }> {
