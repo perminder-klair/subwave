@@ -1,34 +1,12 @@
-// Station-wide scrobbling — Last.fm + ListenBrainz + Navidrome.
+// Station-wide scrobbling — Last.fm + ListenBrainz + Navidrome, driven from
+// Queue.onTrackStarted. Each backend is independent (own enable flag,
+// credentials, failure mode); every call is fire-and-forget with a 5s timeout and
+// no retry queue.
 //
-// Triggered from Queue.onTrackStarted on every real music transition:
-//   - the OUTGOING track (the one that just ended) is submitted as a scrobble
-//     if it passed Last.fm's standard eligibility rule (>30s long, played >50%
-//     OR >240s) AND at least one listener is currently tuned in
-//   - the INCOMING track gets a `track.updateNowPlaying` / `playing_now` ping
-//     so the operator's profile shows "currently playing X" — same listener
-//     gate, no eligibility check
-//   - Navidrome takes both halves through the Subsonic `scrobble` endpoint
-//     (`submission=false` for the ping, `submission=true` for the play) so
-//     playCount and lastPlayed move in the operator's own library
-//
-// Each backend (Last.fm, ListenBrainz, Navidrome) is independent: own enable
-// flag, own credentials, own failure mode. Every network call is
-// fire-and-forget with a 5s timeout — matching broadcast/webhooks.ts. Failures
-// log to stderr; there is no retry queue. If you want guaranteed delivery,
-// point at a relay.
-//
-// Listener gating fails CLOSED (unknown listener count → skip), unlike
-// djCallsAllowed() which fails OPEN. Silencing the DJ during a stats outage
-// is worse than over-talking, but polluting a real Last.fm profile with
-// scrobbles during a monitoring blip is worse than missing a few entries.
-//
-// Navidrome (#1298) is the exception and runs BEFORE that gate: it is the
-// operator's own library, not a public profile, and the point of stamping
-// playCount/lastPlayed is that `.nsp` smart playlists rotate — a play nobody
-// heard still has to stop the picker reaching for the same track an hour
-// later. `planNavidrome` in scrobble-pure.ts owns that reasoning; the ordering
-// here is what makes it reachable. With the setting off (the default) nothing
-// about the pre-existing path changes.
+// Listener gating fails CLOSED (unknown count → skip): polluting a real profile
+// during a monitoring blip is worse than missing entries. Navidrome (#1298) runs
+// BEFORE that gate — it is the operator's own library, and its playCount/lastPlayed
+// stamps are what rotate `.nsp` smart playlists whether or not anyone heard it.
 
 import { createHash } from 'node:crypto';
 import * as settings from '../settings.js';
@@ -51,10 +29,8 @@ import {
 
 const TIMEOUT_MS = 5000;
 
-// Shared base for submit + validate-token. Env LISTENBRAINZ_API_URL wins, then
-// settings baseUrl (for self-hosted LB-compatible scrobblers), else LB.org. Both
-// inputs may be either the API root (…/1) or the submit endpoint
-// (…/1/submit-listens) — normalize to a base.
+// Env LISTENBRAINZ_API_URL wins, then settings baseUrl, else LB.org. Either input
+// may be the API root or the submit endpoint; normalized to a base here.
 export function listenbrainzApiBase(): string {
   const raw =
     process.env.LISTENBRAINZ_API_URL?.trim() ||
@@ -64,13 +40,10 @@ export function listenbrainzApiBase(): string {
   return base || 'https://api.listenbrainz.org/1';
 }
 
-// The submit endpoint is always the base + /submit-listens.
 function listenbrainzSubmitUrl(): string {
   return `${listenbrainzApiBase()}/submit-listens`;
 }
 
-// The eligibility rule and the Navidrome plan are pure and live in
-// scrobble-pure.ts — one copy, driven from a test table.
 export type ScrobbleTrack = ScrobbleTrackLike;
 
 interface TrackEventArgs {
@@ -78,8 +51,6 @@ interface TrackEventArgs {
   outgoingStartedAt: string | null;      // ISO timestamp the outgoing track started at
   incoming: ScrobbleTrack | null;        // the track that just started
 }
-
-// ── credential helpers ──────────────────────────────────────────────────────
 
 interface LastfmCreds {
   apiKey: string;
@@ -104,21 +75,16 @@ function listenbrainzToken(): string | null {
   return token || null;
 }
 
-// ── Last.fm client ──────────────────────────────────────────────────────────
-
-// Last.fm signs write calls with md5 of every parameter (except `format` and
-// `callback`) sorted alphabetically and concatenated as key+value, then the
-// shared secret appended. See https://www.last.fm/api/authspec.
+// md5 over every parameter except `format`/`callback`, sorted alphabetically and
+// concatenated key+value, with the shared secret appended.
+// See https://www.last.fm/api/authspec.
 function signLastfm(params: Record<string, string>, secret: string): string {
   const keys = Object.keys(params).filter(k => k !== 'format' && k !== 'callback').sort();
   const sigStr = keys.map(k => k + params[k]).join('') + secret;
   return createHash('md5').update(sigStr, 'utf8').digest('hex');
 }
 
-// Outcome of a single Last.fm/ListenBrainz call. `ok:false` carries a one-line
-// reason. The fire-and-forget callers (onTrackEvent) ignore this; only the
-// admin Test button inspects it — for years it couldn't, because this swallowed
-// every failure and always read as success.
+// Only the admin Test button inspects this; onTrackEvent's calls ignore it.
 interface CallResult {
   ok: boolean;
   message?: string;
@@ -201,16 +167,12 @@ async function lastfmScrobble(
   );
 }
 
-// ── Last.fm web-auth flow (admin "Connect to Last.fm") ───────────────────────
-//
-// Replaces the CLI `npm run lastfm-session` dance with a two-step handshake the
-// admin UI drives: getAuthToken → operator authorizes in the browser →
-// completeAuth trades the token for a long-lived session key. Uses the SAME
-// env-wins api-key/secret resolution as scrobble time, so the session key it
-// mints is bound to the exact api key scrobbling will use (no mismatch).
+// Last.fm web-auth flow (admin "Connect to Last.fm"): getAuthToken → operator
+// authorizes in the browser → completeAuth trades the token for a session key.
+// Uses the same env-wins key/secret resolution as scrobble time, so the minted
+// session key is bound to the api key scrobbling will use.
 
-// Just the api key + secret — no session key yet, no `enabled` gate (the whole
-// point of the flow is to obtain the missing session key).
+// No session key yet and no `enabled` gate: this flow exists to obtain one.
 function lastfmApiCreds(): { apiKey: string; apiSecret: string } | null {
   const apiKey = resolveLastfmApiKey();
   const apiSecret = resolveLastfmApiSecret();
@@ -218,8 +180,7 @@ function lastfmApiCreds(): { apiKey: string; apiSecret: string } | null {
   return { apiKey, apiSecret };
 }
 
-// Signed GET to a Last.fm auth method. Unlike the write calls these are reads
-// whose body we need, so this THROWS on any failure for the route to surface.
+// Unlike the write calls, this THROWS on failure so the route can surface it.
 async function callLastfmAuth(
   method: string,
   extra: Record<string, string>,
@@ -251,8 +212,7 @@ export async function lastfmGetAuthToken(): Promise<{ token: string; authUrl: st
   return { token, authUrl };
 }
 
-// Step 2: after the operator authorizes, trade the token for a session key
-// (long-lived, never expires) and the username it belongs to.
+// Step 2: trade the authorized token for a long-lived session key.
 export async function lastfmCompleteAuth(token: string): Promise<{ sessionKey: string; username: string }> {
   const creds = lastfmApiCreds();
   if (!creds) throw new Error('Save your Last.fm API key and secret first');
@@ -263,8 +223,6 @@ export async function lastfmCompleteAuth(token: string): Promise<{ sessionKey: s
   if (!sessionKey) throw new Error('Last.fm returned no session key — was access granted?');
   return { sessionKey, username };
 }
-
-// ── ListenBrainz client ─────────────────────────────────────────────────────
 
 async function postListenbrainz(payload: Record<string, unknown>, token: string, label: string): Promise<CallResult> {
   try {
@@ -338,13 +296,9 @@ async function listenbrainzSubmit(track: ScrobbleTrack, startedAt: string, token
   );
 }
 
-// ── Navidrome client ────────────────────────────────────────────────────────
-//
-// Reuses the Subsonic client every other library call goes through
-// (music/subsonic.ts), so it inherits the salt+token auth, the bounded fetch
-// and the /debug call log. Credentials come from `config.navidrome` — the same
-// ones the picker streams with — never from settings, so there is nothing to
-// paste and nothing to redact.
+// Navidrome goes through music/subsonic.ts, inheriting its salt+token auth,
+// bounded fetch and /debug call log. Credentials come from `config.navidrome`,
+// never from settings, so there is nothing to paste or redact.
 
 function navidromeConfigured(): boolean {
   const n = config.navidrome;
@@ -355,9 +309,7 @@ function navidromeEnabled(): boolean {
   return !!settings.get()?.scrobble?.navidrome?.enabled;
 }
 
-// Fire-and-forget, like every other backend here. A Navidrome outage costs one
-// missing play stamp and must never surface anywhere near the broadcast, so the
-// only thing a failure does is log — no retry, no queue, no throw.
+// Fire-and-forget: a failure only logs, never throws near the broadcast.
 function sendNavidrome(
   id: string,
   opts: { submission: boolean; timeMs?: number | null },
@@ -370,14 +322,10 @@ function sendNavidrome(
     });
 }
 
-// ── public surface ──────────────────────────────────────────────────────────
-
-// Called from Queue.onTrackStarted on every real music transition. Pure
-// side-effects — never throws, never blocks the caller. Fires every enabled
-// backend in parallel (fire-and-forget).
+// Called from Queue.onTrackStarted. Never throws, never blocks the caller.
 export function onTrackEvent({ outgoing, outgoingStartedAt, incoming }: TrackEventArgs): void {
-  // Navidrome first — deliberately AHEAD of the listener gate below, which
-  // returns early on an unknown count. See the header note and planNavidrome.
+  // Navidrome runs ahead of the listener gate below, which returns early on an
+  // unknown count. See the header note and planNavidrome.
   const navPlan = planNavidrome({
     enabled: navidromeEnabled(),
     configured: navidromeConfigured(),
@@ -413,14 +361,12 @@ export function onTrackEvent({ outgoing, outgoingStartedAt, incoming }: TrackEve
 
   const backends = [lf && 'last.fm', lb && 'listenbrainz'].filter(Boolean).join('+');
 
-  // Incoming → now-playing ping.
   if (incoming?.title && incoming?.artist) {
     console.log(`[scrobble] now-playing → ${backends}: "${incoming.title}" — ${incoming.artist}`);
     if (lf) lastfmUpdateNowPlaying(incoming, lf).catch(() => {});
     if (lb) listenbrainzPlayingNow(incoming, lb).catch(() => {});
   }
 
-  // Outgoing → scrobble if eligible.
   if (outgoing && outgoingStartedAt) {
     const elapsed = elapsedSeconds(outgoingStartedAt);
     if (isEligibleScrobble(outgoing, elapsed)) {
@@ -435,12 +381,8 @@ export function onTrackEvent({ outgoing, outgoingStartedAt, incoming }: TrackEve
   }
 }
 
-// Admin "Test" button — fires a now-playing ping for the supplied track on
-// the named backend. Returns { ok, status, message } so the UI can surface
-// the actual API response. Bypasses the listener gate (operator wants to
-// verify their credentials regardless of who's tuned in) but still respects
-// the per-backend enabled flag, since "disabled but configured" should not
-// surprise-emit.
+// Admin "Test" button. Bypasses the listener gate but still respects the
+// per-backend enabled flag, so "disabled but configured" cannot surprise-emit.
 export type ScrobbleProvider = 'lastfm' | 'listenbrainz' | 'navidrome';
 
 export interface TestResult {
@@ -480,8 +422,7 @@ export async function testNowPlaying(
     if (!id) {
       return { ok: false, message: 'the on-air track carries no Navidrome id — wait for a library track' };
     }
-    // The one call here that is NOT fire-and-forget: the operator asked, so the
-    // error text is the answer.
+    // Not fire-and-forget: the operator asked, so the error text is the answer.
     try {
       await subsonic.scrobble(id, { submission: false });
       return { ok: true, message: `sent now-playing to navidrome for "${track.title}"` };

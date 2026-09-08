@@ -1,19 +1,9 @@
-// Chatterbox TTS client — two modes:
-//
-// 1. Sidecar mode (when config.ttsHeavy.url is set). speak() POSTs to the
-//    subwave-tts-heavy container (docker/Dockerfile.tts-heavy +
-//    docker/tts-heavy/server.py). isAvailable() reads the cached result of
-//    a periodic /health probe. This is the default deployment story for
-//    operators on the pre-built ghcr.io images (issue #103).
-//
-// 2. Local-spawn mode (the original). chatterbox_worker.py loads the
-//    Chatterbox Turbo model once (5-15s) and stays resident, reading one
-//    JSON request per line over stdin and emitting one JSON response per
-//    line on stdout. This is the legacy --build-arg WITH_CHATTERBOX=1 path
-//    in docker/Dockerfile.controller; kept working for backwards compat.
-//
-// The dispatcher in tts.ts treats both modes identically — speak() returns a
-// WAV path, isAvailable() returns a boolean, that's the whole contract.
+// Chatterbox TTS client, two modes. Sidecar (config.ttsHeavy.url set): speak()
+// POSTs to the subwave-tts-heavy container and isAvailable() reads a cached
+// /health probe. Local spawn (--build-arg WITH_CHATTERBOX=1):
+// chatterbox_worker.py stays resident, one JSON request per line over stdio.
+// The dispatcher treats both identically: speak() returns a WAV path,
+// isAvailable() a boolean.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -28,9 +18,8 @@ import {
 import { resolveTtsOutPath } from './tts-out.js';
 
 const READY_TIMEOUT_MS = 120_000;        // first call may include model + weights load
-// Chatterbox is heavier than Kokoro — 350M params vs ~80M — and on CPU a single
-// sentence can take 1-3s. On GPU it's ~75ms. The 180s ceiling matches Kokoro's
-// for symmetry; CHATTERBOX_REQUEST_TIMEOUT_MS overrides for tighter ops.
+// 350M params: a sentence takes 1-3s on CPU, ~75ms on GPU. The 180s ceiling
+// matches Kokoro's; CHATTERBOX_REQUEST_TIMEOUT_MS overrides it.
 const REQUEST_TIMEOUT_MS = parseInt(process.env.CHATTERBOX_REQUEST_TIMEOUT_MS || '180000', 10);
 
 type PendingRequest = {
@@ -74,21 +63,16 @@ class ChatterboxWorker {
       this.failReady(new Error('chatterbox worker ready timeout'));
     }, READY_TIMEOUT_MS);
 
-    // A spawn that never starts emits 'error', not 'exit'. Node throws an
-    // unhandled 'error' event out of the event loop, which takes the WHOLE
-    // controller down — every engine here is opt-in or build-time-installed
-    // (chatterbox's interpreter is absent whenever its venv/model install did
-    // not happen), and POST /settings/tts/preview deliberately bypasses
-    // isAvailable() so the operator can test an engine the dispatcher would
-    // skip. That combination turns an admin "Play sample" press into total
-    // dead air. Route it into failReady() like every other boot failure: the
-    // caller's promise rejects, the dispatcher falls back, the station keeps
-    // making sound. piper has always done this (audio/piper.ts).
+    // A spawn that never starts emits 'error', not 'exit', and an unhandled
+    // 'error' event takes the whole controller down. This engine's interpreter
+    // is absent whenever its venv install did not happen, and
+    // POST /settings/tts/preview bypasses isAvailable() on purpose. Route it
+    // into failReady() like every other boot failure: the caller's promise
+    // rejects, the dispatcher falls back, the station keeps making sound.
     this.proc.on('error', (err: Error) => {
       console.error(`[chatterbox] worker spawn failed: ${err.message}`);
       this.fatalError = err;
-      // No pending requests can exist yet: speak() awaits readyPromise before
-      // it enqueues anything, so rejecting that promise is the whole failure.
+      // No pending requests can exist yet: speak() awaits readyPromise first.
       this.failReady(err);
     });
 
@@ -181,26 +165,20 @@ async function ensureWorker(): Promise<ChatterboxWorker> {
   }
 }
 
-// Reap the resident worker on shutdown. Docker tears down the container's whole
-// process group, so this only matters on the bare-process path (npm start / dev)
-// where the spawned Python child would otherwise be orphaned. In sidecar mode no
-// local worker is ever spawned, so this is a no-op. Best-effort: SIGTERM the
-// proc if we hold one and drop the handle.
+// Reap the resident worker on shutdown. Only matters on the bare-process path
+// (npm start / dev); Docker tears down the whole process group, and sidecar mode
+// spawns nothing. Best-effort SIGTERM.
 export function stop(): void {
   const w = worker;
   worker = null;
   w?.proc?.kill('SIGTERM');
 }
 
-// `voice` here is the reference-WAV filename (not a voice id like Kokoro's
-// `bf_isabella`). The dispatcher passes the persona's `voice` field directly;
-// resolve it against the configured voice directory so the worker gets an
-// absolute path (or empty string → built-in voice).
-//
-// Shared with PocketTTS via `config.voices` (issue #213). The new canonical
-// path is `state/voices/`; the legacy `state/chatterbox-voices/` is still
-// probed so pre-existing installs don't break — `voices/` wins on filename
-// clash.
+// `voice` is a reference-WAV filename, not a voice id. Resolved against the
+// configured voice directory so the worker gets an absolute path (or '' for the
+// built-in voice). The folder is shared with PocketTTS (#213): canonical
+// `state/voices/` wins on a filename clash with legacy
+// `state/chatterbox-voices/`, which is still probed for older installs.
 export function resolveReferenceWav(voice?: string): string {
   if (!voice) return '';
   if (path.isAbsolute(voice)) return voice;
@@ -208,8 +186,8 @@ export function resolveReferenceWav(voice?: string): string {
   if (existsSync(primary)) return primary;
   const legacy = path.join(config.voices.legacyDir, voice);
   if (existsSync(legacy)) return legacy;
-  // Neither exists yet — return the canonical path; the worker will surface a
-  // clear error rather than silently use a stale legacy file.
+  // Neither exists: return the canonical path so the worker surfaces a clear
+  // error rather than silently using a stale legacy file.
   return primary;
 }
 
@@ -237,11 +215,10 @@ export async function speak(
   return msg.path;
 }
 
-// In sidecar mode this is the cached result of the /health probe loop; the
-// dispatcher reads it synchronously so we can't await per-call. In local
-// mode it's existsSync on the venv interpreter and worker script — true in
-// a --build-arg WITH_CHATTERBOX=1 image, false in the default image — which
-// is what lets the dispatcher fall back to Piper.
+// Sidecar mode: the cached /health probe result (the dispatcher reads this
+// synchronously, so it can't await). Local mode: existsSync on the venv
+// interpreter and worker script, false in the default image, which is what lets
+// the dispatcher fall back to Piper.
 let remoteAvailable = false;
 if (isRemoteEnabled()) {
   startProbeLoop('chatterbox', (avail) => {
@@ -254,21 +231,13 @@ export function isAvailable() {
   return existsSync(config.chatterbox.python) && existsSync(config.chatterbox.workerScript);
 }
 
-// List the reference-WAV filenames the operator has in the shared voice
-// directory. The admin UI uses these to populate the per-persona voice dropdown
-// for BOTH Chatterbox and PocketTTS (issue #213). Returns [] (not an error) if
-// the directories don't exist yet — that's the pre-install state and the UI
-// handles it gracefully.
-//
-// The scan itself lives in audio/voice-library.ts, which is the single owner of
-// those directories (the admin import/delete routes use the same scan). The
-// legacy `state/chatterbox-voices/` folder is still covered, deduped with the
-// canonical `state/voices/` copy winning — matching resolveReferenceWav.
-//
-// This stays the documented listing path and keeps its shape — a plain
-// string[] — because GET /settings publishes it on every admin poll.
-// Deliberately calls scan() and NOT list(): list() probes durations with
-// ffprobe, which would mean a subprocess per voice per poll.
+// Reference-WAV filenames in the shared voice directory, for the per-persona
+// dropdown of both Chatterbox and PocketTTS (#213). [] (not an error) when the
+// directories don't exist yet. The scan lives in audio/voice-library.ts, the
+// single owner of those directories; legacy chatterbox-voices/ is deduped with
+// canonical voices/ winning, matching resolveReferenceWav.
+// Calls scan() and NOT list(): GET /settings publishes this on every 3s admin
+// poll, and list() probes durations with an ffprobe subprocess per voice.
 let legacyWarned = false;
 export async function listReferenceVoices(): Promise<string[]> {
   const files = await scanVoices();

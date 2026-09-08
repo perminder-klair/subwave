@@ -1,33 +1,21 @@
-// Push-resolution probe policy — the pure decisions behind "the pick we just
-// handed Liquidsoap never became a playable request" (#1405).
+// Push-resolution probe policy (#1405): a pick handed to Liquidsoap that never
+// became a playable request. `sent` only means the URI reached next.txt, and a
+// silently unresolved push leaves the station on the unfiltered auto playlist
+// until the reconcile sweep notices (~3 auto tracks).
 //
-// Background: drainToLiquidsoap writes one annotated URI to next.txt and marks
-// the item `sent`. That is the ONLY confirmation the controller had: a push
-// that Liquidsoap accepts but cannot RESOLVE (the origin answered with a
-// Subsonic error body, the file is missing, the fetch timed out) drops the
-// request silently. The station falls through to the unfiltered auto playlist,
-// and because `upcoming.length !== 0` gates the auto-DJ, nothing re-picks until
-// reconcileWithDjQueue clears the stale item — and that only runs when an
-// UNTRACKED track starts, needing EMPTY_DJ_QUEUE_CLEAR_THRESHOLD of them. Three
-// auto tracks is 10-25 minutes of unfiltered radio for one bad URL.
-//
-// Queue membership cannot answer that question: dj_queue contains idle and
-// resolving requests, and a healthy request disappears from queue() while
-// boundary prefetch is still downloading it. proto_subhttp therefore records
-// an explicit per-handoff outcome and the controller consumes that over telnet.
-// Pure and I/O-free so scripts/resolve-probe.test.ts can pin the state machine.
+// Queue membership cannot answer this — dj_queue holds idle/resolving requests
+// and omits a healthy one during boundary prefetch — so proto_subhttp records
+// an explicit per-handoff outcome consumed over telnet. Pure and I/O-free.
 
-// Poll long enough to cover a slow whole-file fetch. If no explicit outcome
-// arrives (old broadcast image, local-file URI, mixer restart), the loop simply
-// expires fail-open and the existing reconcile sweep remains the backstop.
+// Poll long enough for a slow whole-file fetch. With no explicit outcome (old
+// broadcast image, local URI, mixer restart) the loop expires fail-OPEN and the
+// reconcile sweep stays the backstop.
 export const PUSH_PROBE_INTERVAL_MS = 1_000;
 export const PUSH_PROBE_MAX_READS = 60;
 
 // Consecutive resolution failures that may each trigger an immediate re-pick.
-// Past it the station coasts on auto.m3u until the next natural pick: when a
-// whole music origin is down, every re-pick fails the same way, and a re-pick
-// storm burns LLM budget to queue tracks that cannot air. Music never stops
-// either way — that is what the auto playlist is for.
+// Past it the station coasts on auto.m3u: with a whole origin down every
+// re-pick fails the same way and burns LLM budget.
 export const MAX_CONSECUTIVE_RESOLVE_FAILURES = 3;
 
 // 'resolved' — proto_subhttp returned a checked audio file.
@@ -44,9 +32,8 @@ export function parseResolveProbeOutcome(raw: string | null | undefined): Resolv
 }
 
 export function probeVerdict(p: {
-  // The item is still in `upcoming` and still flagged sent — i.e. it has not
-  // aired (onTrackStarted splices it), was not cancelled, and was not already
-  // cleared by a reconcile.
+  // Still in `upcoming` and still flagged sent: not aired, not cancelled, not
+  // already cleared by a reconcile.
   stillQueuedLocally: boolean;
   // Explicit outcome reported by proto_subhttp for this handoff attempt.
   outcome: ResolveProbeOutcome;

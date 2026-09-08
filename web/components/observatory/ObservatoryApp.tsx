@@ -1,6 +1,5 @@
-/* Library Observatory — app shell. Full-bleed top bar plus a 3-column grid
-   (filter rail, constellation, stats/dossier), wired to the real library via
-   useObservatory()/useTrackDetail(). */
+/* Library Observatory app shell: top bar plus filter rail, constellation and
+   stats/dossier, wired to useObservatory()/useTrackDetail(). */
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -71,13 +70,10 @@ function Toggle({ on, onClick, children }: { on: boolean; onClick: () => void; c
   );
 }
 
-// Node-cap ladder for MAP SIZE, clamped to the server's hardMax. Measured at
-// 60 fps up to 500k, with a one-time geometry stall on load (~2s at 200k,
-// ~6s at 500k).
+// Node-cap ladder for MAP SIZE, clamped to the server's hardMax.
 const MAX_LADDER = [2000, 4000, 8000, 10000, 16000, 25000, 50000, 100000, 200000, 500000];
-// Display fallback before the first load resolves. The real default lives on
-// the server (OBSERVATORY_MAX): with nothing stored we fetch without ?max= and
-// adopt the cap the response reports, so an env override reaches the UI.
+// Display fallback only; the real default is the server's OBSERVATORY_MAX,
+// adopted from the response when nothing is stored (we then omit ?max=).
 const DEFAULT_MAX = 25000;
 const MAX_STORAGE_KEY = 'subwave_obs_max';
 
@@ -110,8 +106,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
   const { detail, loadingId, fetchDetail } = useTrackDetail(adminFetch);
 
   const [q, setQ] = useState('');
-  // `matched` scans every node, so at large caps filtering per keystroke lags.
-  // 150ms is under perception but coalesces a burst of keys into one scan.
+  // `matched` scans every node, so debounce a burst of keys into one scan.
   const [qDebounced, setQDebounced] = useState('');
   useEffect(() => {
     if (q === '') {
@@ -121,8 +116,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     const id = setTimeout(() => setQDebounced(q), 150);
     return () => clearTimeout(id);
   }, [q]);
-  // Deep-linkable (?color=). The page only mounts after admin auth hydrates,
-  // so reading the URL in the initializer never runs on SSR.
+  // Deep-linkable (?color=). Mounts only after admin auth hydrates, so the
+  // initializer never runs on SSR.
   const [colorBy, setColorBy] = useState<ColorBy>(() => {
     if (typeof window === 'undefined') return 'energy';
     const c = new URLSearchParams(window.location.search).get('color') as ColorBy | null;
@@ -208,8 +203,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     setSelected((cur) => (cur ? (byId.get(cur.id) ?? null) : cur));
   }, [byId]);
 
-  // Title matches first, then any other field. Single pass with an early exit,
-  // so a keystroke never pays more than one O(n) scan even at the 500k cap.
+  // Title matches first, then any other field; one O(n) pass with an early exit.
   const searchHits = useMemo(() => {
     const qq = qDebounced.trim().toLowerCase();
     if (!qq) return [];
@@ -247,9 +241,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     setAnalysedOnly(false);
   };
 
-  // ?track=<id>, captured ONCE at mount: the URL-sync effect below rewrites the
-  // query string from the initially empty selection before the library loads,
-  // so by the time tracks exist the live URL no longer carries the param.
+  // ?track=<id>, captured once at mount: the URL-sync effect below strips it
+  // from the live URL before the library has loaded.
   const initialTrack = useRef<string | null>(
     typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get('track'),
   );
@@ -289,8 +282,8 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     return () => window.removeEventListener('keydown', onKey);
   }, [selected, q]);
 
-  // Adopt the status that rode the bulk load, then poll the lightweight status
-  // endpoint while a run is live; on finish, reload the map for the new coords.
+  // Adopt the status from the bulk load, poll the light endpoint while a run is
+  // live, and reload the map on finish for the new coords.
   const [proj, setProj] = useState<MapProjectionStatus | null>(null);
   const [projBusy, setProjBusy] = useState(false);
   useEffect(() => {
@@ -354,8 +347,7 @@ export default function ObservatoryApp({ adminFetch }: { adminFetch: AdminFetch 
     [adminFetch],
   );
 
-  // Stable identities, or the galaxy's attribute-refresh effects re-run on the
-  // parent re-render a hover triggers.
+  // Stable identities, or the galaxy's attribute-refresh effects re-run on hover.
   const onHover = useCallback((t: ObsTrack | null, e?: React.MouseEvent) => {
     if (!t || !e) {
       setTip(null);

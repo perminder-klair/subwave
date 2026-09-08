@@ -1,36 +1,19 @@
-// Composes the fixed announce-mode link line in CODE rather than asking the
-// model to produce it: a model cannot reliably hold to an exact fixed string,
-// and it cannot alternate with a line it is never shown — the agent path
-// writes the link before the pick after it airs, and the scripted path never
-// carries the previous link forward at all. Per the station's own posture (fix
-// shape in code, don't just instruct the model harder), both call sites
-// compose the line here and only ask the model whether to speak.
+// Composes the fixed announce-mode link line in code; the model is only asked
+// whether to speak. Both picker paths compose here so the listener hears one
+// continuous alternation.
 //
-// PURE — the alternation is derived from the line that last AIRED, handed in
-// by the caller (queue.getLastLinkText(), written by onSpoken once the clip
-// reached the stream). It used to be a module-level counter advanced at
-// composition time, which is not the same thing: three routine paths consume a
-// composed link without airing it — a model writing a `say` when the event
-// ordered silence, trimLinkToIntro dropping the line on a track whose vocals
-// enter under 2.5s, and enqueuePick refusing the pick (dedup / never-play) —
-// and each one left the NEXT aired line repeating the form the listener had
-// just heard ("This is A." … "This is C."). Anchoring on air truth cannot
-// drift, and one shared sequence covers the whole air chain: the agent picker
-// and the stateless pool picker are two code paths for the same on-air slot,
-// and a listener hears one continuous sequence of links regardless of which
-// produced each one.
+// PURE — the alternation is derived from the line that last AIRED (handed in by
+// the caller), never from a composition-time counter: several paths compose a
+// link without airing it, and a counter left the next aired line repeating the
+// form the listener just heard.
 
-// The composed frame is English, and only the model can write it in anything
-// else — languageDirective (settings/persona.ts) binds the persona to speak
-// exclusively in its own language, and code has no translation of "This is".
-// Same field read as languageDirective's: unset means English.
+// The composed frame is English; a persona bound to another language has to go
+// through the model. Unset means English.
 const ENGLISH_LANGUAGE = /^english$/i;
 
-// spokenProperNounDirective (settings/persona.ts) requires ZERO CJK characters
-// in any spoken field and tells the model to romanize (ウルフルズ → Ulfuls,
-// 周杰倫 → Jay Chou). A composed line interpolates the artist tag verbatim, so
-// a name in one of these scripts has to go through the model or an English
-// voice reads nothing at all. Hangul rides along for the same reason.
+// A composed line interpolates the artist tag verbatim, so a name in one of
+// these scripts has to go through the model (which romanizes) or an English
+// voice reads nothing at all.
 const NON_LATIN_NAME = new RegExp(
   '[\\u3000-\\u303f'   // CJK punctuation
   + '\\u3040-\\u30ff'  // hiragana + katakana

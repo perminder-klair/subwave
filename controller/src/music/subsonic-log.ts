@@ -1,7 +1,5 @@
-// Ring buffer + aggregate tracker for Subsonic/Navidrome API calls — feeds the
-// admin /debug surface so every request to the music server is inspectable.
-// Mirrors llm/log.js. Lives in its own module so subsonic.js can record
-// without an import cycle.
+// Ring buffer + aggregate tracker for Subsonic/Navidrome API calls, feeding the
+// admin /debug surface. Its own module so subsonic.js can record without a cycle.
 
 import { appendFile } from 'node:fs/promises';
 import { statSync, renameSync } from 'node:fs';
@@ -13,26 +11,17 @@ export const recentCalls: any[] = [];
 
 // endpoint -> { calls, errors, totalMs, songResults }
 const endpointStats = new Map<string, any>();
-// songId -> { id, title, artist, count } — how often each song has come back,
-// the evidence for "is the picker drawing from the whole library or a pool?"
+// songId -> { id, title, artist, count }: how often each song has come back.
 const songCoverage = new Map<string, any>();
 
-// Durable append-only log. The in-memory structures above are lost on restart;
-// this tab-separated file in the shared state volume survives, so pool
-// patterns stay reviewable over days. Best-effort — a write failure must never
-// break a request.
+// Durable append-only log; the maps above are lost on restart. Best-effort — a
+// write failure must never break a request.
 const CALLS_LOG = `${STATE_DIR}/logs/subsonic.log`;
-// A busy station writes ~40 MB/month to this log. Rotate when it hits this
-// cap; one .old backup is kept (older content is overwritten). Tuned tight
-// because the in-memory ring + logEvent stream cover real observability —
-// this file just provides a few days of audit history.
+// One .old backup is kept; older content is overwritten.
 const CALLS_LOG_MAX_BYTES = 10 * 1024 * 1024;
 
-// Rotate on module load (catches the cap across redeploys) AND every ~1000
-// writes (catches it during long uptimes — a controller running a month would
-// otherwise blow past the cap with only the startup check). Sync calls are
-// fine: the startup check runs once, and the periodic check runs ~once an hour
-// at typical pick rates. Missing file or missing logs/ dir is fine.
+// Rotate on module load and every ~1000 writes, so a long-uptime controller does
+// not blow past the cap. Missing file or logs/ dir is fine.
 function maybeRotateLog() {
   try {
     if (statSync(CALLS_LOG).size > CALLS_LOG_MAX_BYTES) {
@@ -76,9 +65,8 @@ export function record(entry: any) {
   }
   appendFile(CALLS_LOG, line).catch(() => {});
 
-  // Durable, trace-correlated event — logEvent stamps the active traceId, so
-  // this Navidrome call is linked to the DJ decision that caused it. Carries
-  // the request params that the tab-separated CALLS_LOG above drops.
+  // logEvent stamps the active traceId, linking this call to the DJ decision that
+  // caused it, and carries the params CALLS_LOG drops.
   logEvent('navidrome', {
     endpoint: entry.endpoint,
     params: entry.params || null,

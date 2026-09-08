@@ -33,11 +33,9 @@ import {
   SETTINGS_FESTIVAL_WINDOW_DAYS_MAX,
 } from '@/lib/schemas.generated';
 
-// festivalsSchema is a factory, and a hand-validated
-// `z.unknown().superRefine().transform()` rather than a structural array, so
-// `z.input<>` collapses to `unknown` and no nested path type-checks as a
-// FieldPath. `ReturnType`/`z.output` pull the real output shape at the type
-// level only; the per-render schema below is what validates at runtime.
+// festivalsSchema is a factory over `z.unknown().superRefine().transform()`,
+// so `z.input<>` collapses to `unknown` and no nested path type-checks as a
+// FieldPath. These aliases recover the real shape at the type level only.
 type FestivalsArray = z.output<ReturnType<typeof festivalsSchema>>;
 type FestivalsFormValues = { festivals: FestivalsArray };
 type Festival = FestivalsArray[number];
@@ -84,14 +82,9 @@ function festivalTiming(f: Festival, now: Date) {
 }
 
 // The modal's fields, bound into the `festivals` field array at `idx`. Its own
-// component rather than inline JSX so its hook calls are unconditional from its
-// own perspective; the parent mounts it only while a row is open.
-//
-// Name, description and mood bind through the shared TextField/SelectField, and
-// their ids embed the literal RHF path (dots included — legal in a DOM id).
-// Month, day and windowDays stay hand-rolled on useController + fieldAria:
-// month's onChange also clamps day and windowDays clamps itself, neither of
-// which the bound components' plain field.onChange can express.
+// component so its hooks are unconditional; the parent mounts it only while a
+// row is open. Month, day and windowDays stay on useController + fieldAria
+// because their onChange clamps, which the bound components can't express.
 function FestivalModalFields({
   idx,
   control,
@@ -130,9 +123,8 @@ function FestivalModalFields({
           <Select
             value={String(month)}
             onValueChange={v => {
-              // Clamp the day so Oct 31 → February can't leave an
-              // impossible date in the form. The schema owns the actual
-              // month/day validity rule — this is display convenience only.
+              // Display-only clamp so Oct 31 → February can't leave an
+              // impossible date; the schema owns the real validity rule.
               const nextMonth = Number(v);
               monthField.field.onChange(nextMonth);
               const maxDay = DAYS_IN_MONTH(nextMonth);
@@ -229,10 +221,9 @@ export default function FestivalsSection() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   // Which-row-is-open UI state, kept out of the form. `editIdx` is the
-  // festivals[] index open in the modal for BOTH add and edit — an "add"
-  // appends a blank row immediately so its fields bind through the same field
-  // array. `editing` distinguishes the two on Cancel: remove the fresh append,
-  // or revert the edit to the snapshot taken on open.
+  // festivals[] index open for both add and edit (add appends a blank row so
+  // it binds through the same field array); `editing` tells Cancel whether to
+  // remove the fresh append or revert to the snapshot taken on open.
   const [editing, setEditing] = useState(false);
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<number | null>(null);
@@ -241,19 +232,16 @@ export default function FestivalsSection() {
   const pendingSettingsRef = useRef<{ revision: number; data: FestivalSettingsData } | null>(null);
   const fieldId = useId();
 
-  // moodNames is nullable on the shared context, where null means "this caller
-  // cannot check that rule". The browser has the live list, so pass it — that's
-  // what makes the editor refuse a dead mood exactly when the controller would.
-  // Memoised because a factory schema rebuilds the resolver on every render.
+  // null moodNames means "this caller cannot check that rule"; the browser has
+  // the live list, so pass it and the editor refuses a dead mood exactly when
+  // the controller would. Memoised: a factory schema rebuilds the resolver.
   const schema = useMemo(
     () => z.object({ festivals: festivalsSchema({ moodNames: moods }) }),
     [moods],
   );
   const form = useZodForm(schema, { festivals: [] });
-  // Widens the control's declared `{ festivals: unknown }` (see the schema
-  // comment at the top of this file) to the schema's OUTPUT type — the type
-  // every row really holds, since the form is seeded only from server data or
-  // EMPTY_FESTIVAL. Type-level only; same object at runtime.
+  // Widens the control's declared `{ festivals: unknown }` to the schema's
+  // output type. Type-level only; same object at runtime.
   const arrayControl = form.control as unknown as Control<FestivalsFormValues>;
   const { fields, append, update, remove: removeField } = useFieldArray({
     control: arrayControl,
@@ -295,9 +283,8 @@ export default function FestivalsSection() {
 
   const load = useCallback(async () => { await settingsQuery.refetch(); }, [settingsQuery]);
 
-  // `moods` (and so the schema's vocabulary) arrives asynchronously. Once the
-  // real list lands, re-validate rather than remounting the form, which would
-  // drop an edit already in progress.
+  // `moods` arrives asynchronously; re-validate rather than remounting the
+  // form, which would drop an edit in progress.
   useEffect(() => {
     void form.trigger();
   }, [moods, form]);
@@ -330,8 +317,8 @@ export default function FestivalsSection() {
     // the index the new row lands at.
     setEditIdx(fields.length);
     setEditing(true);
-    // errors populate lazily, so without this the modal opens on a disabled
-    // Save with no message under the blank Name field explaining why.
+    // Errors populate lazily; without this the modal opens on a disabled Save
+    // with no message under the blank Name field.
     void form.trigger('festivals');
   };
 

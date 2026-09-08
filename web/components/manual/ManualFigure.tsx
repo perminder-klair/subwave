@@ -18,9 +18,8 @@ interface ManualFigureProps {
 }
 
 // A screenshot inside a manual page: thin ink frame, broadsheet caption. Server
-// component on purpose — the manual pages are static, so a figure shouldn't
-// drag a client chunk in with it (that's what components/what/Figure.tsx, the
-// animated marketing variant, is for).
+// component on purpose, so a static manual page pulls in no client chunk; the
+// animated marketing variant is components/what/Figure.tsx.
 export default function ManualFigure({
   src,
   alt,

@@ -2,15 +2,10 @@
 // The engine picker and every engine's voice selector live in the shared
 // tts/EngineVoiceFields, which the station-wide TTS fallback slot uses too.
 //
-// `tts` is bound as ONE `useController` over the whole {engine, cloudProvider,
-// voice, gainDb, speed} object rather than a SelectField per subfield, for two
-// independent reasons. (1) EngineVoiceFields does real cross-field work on
-// change — switching engine resets `voice` to one the new engine accepts —
-// which needs a callback over the whole slot, not SelectField's hardcoded
-// `onValueChange={field.onChange}`. (2) The controller's fieldErrors here are
-// block-level too: `ttsVoiceSlotSchema` is one `.transform()` over the slot and
-// its issues carry no explicit path, so a bad engine/voice combination comes
-// back keyed at `personas.<i>.tts` and never at `.tts.voice`.
+// `tts` is bound as ONE useController over the whole slot, not a SelectField
+// per subfield: switching engine resets `voice` (cross-field work SelectField
+// can't express), and the controller's fieldErrors are block-level too — a bad
+// engine/voice combination comes back keyed at `personas.<i>.tts`.
 import { useId } from 'react';
 import { useController, type Control } from 'react-hook-form';
 import type { Persona, PersonasFormValues, SettingsResponse } from './types';
@@ -48,11 +43,9 @@ export function PersonaVoiceCard({
     : `${gain > 0 ? '+' : '−'}${Math.abs(gain).toFixed(1)} dB`;
 
   const speed = tts.speed ?? 1;
-  // Only Piper/Kokoro/cloud honour speed; the other workers ignore it, so the
-  // control is shown but disabled with a hint. Asked of the RESOLVED engine: a
-  // persona on the station default has no engine of its own, and reading the
-  // raw slot offered a live speed dial that whatever the station is set to may
-  // quietly ignore.
+  // Only Piper/Kokoro/cloud honour speed, so the control is shown but disabled
+  // elsewhere. Asked of the RESOLVED engine: a persona on the station default
+  // has no engine of its own.
   const resolved = effectiveTts({ tts }, data);
   const resolvedEngine = resolved?.engine;
   const speedSupported =

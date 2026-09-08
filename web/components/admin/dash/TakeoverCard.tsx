@@ -1,9 +1,9 @@
 'use client';
 
-// Show takeover (#930/#1507) — pin a show or Default programming over the
-// weekly grid for a bounded window.
-// Unlike the other dash cards this one fetches for itself: GET /schedule and the two
-// /schedule/override mutations are the only calls on this screen no other card wants.
+// Show takeover (#930/#1507) -- pin a show or Default programming over the
+// weekly grid for a bounded window. Unlike the other dash cards this one fetches
+// for itself: GET /schedule and the two /schedule/override mutations are the
+// only calls on this screen no other card wants.
 
 import { useEffect, useState } from 'react';
 import { Controller } from 'react-hook-form';
@@ -20,10 +20,8 @@ import { TextField } from '@/lib/form-fields';
 import { Card, Btn, Pill, Seg } from '../ui';
 import { ColorChip, SlotMenu } from '../schedule/bits';
 import { SHOW_COLORS } from '../schedule/lib';
-// The pin's shape and its minute bounds come from the shared schema
-// (controller/src/schemas/schedule.ts) — POST /schedule/override runs the same
-// rule at the route, so the form's validation and the server's answer agree by
-// construction.
+// The pin's shape and its minute bounds come from the shared schema, and POST
+// /schedule/override runs the same rule at the route.
 import {
   isDefaultTakeover,
   scheduleOverrideRequestSchema,
@@ -47,20 +45,17 @@ const PRESETS = [
   { minutes: 180, label: '3h' },
 ];
 
-// The Seg's id for "until the schedule changes" (#1601) — not a duration, so it
+// The Seg's id for "until the schedule changes" (#1601). Not a duration, so it
 // cannot be a minute count like the three presets beside it.
 const SCHEDULE_SEG = 'schedule';
 
 // The submitted body IS the schema's output, spelled that way rather than
-// re-typed, so a field added to the request cannot be dropped silently on its
-// way to POST /schedule/override.
+// re-typed, so a field added to the request cannot be dropped silently.
 type PinVars = z.output<typeof scheduleOverrideRequestSchema>;
 
 // One line saying WHY the resolved end is where it is, keyed by the source the
-// controller reports. This is the whole reason the option is not a black box:
-// an operator who asked for "until the schedule changes" and got twelve hours
-// deserves to be told the grid has no change in reach. There is no 'minimum' —
-// a near boundary resolves to that boundary, so 'schedule' covers it.
+// controller reports. There is no 'minimum': a near boundary resolves to that
+// boundary, so 'schedule' covers it.
 const WINDOW_REASON: Record<TakeoverWindow['source'], string> = {
   schedule: 'when the schedule moves on',
   maximum: 'no schedule change in reach',
@@ -75,11 +70,11 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   // deliberate Default programming selection. The shared schema preserves that
   // distinction all the way to POST /schedule/override.
   const form = useZodForm(scheduleOverrideRequestSchema, { showId: '', minutes: 60, until: 'fixed' });
-  // The 30s tick refreshes `shows` and `override`, never the form — a poll must
-  // not clobber a half-typed window. This is why there is no `values` prop here.
+  // The 30s tick refreshes `shows` and `override`, never the form -- a poll must
+  // not clobber a half-typed window, which is why there is no `values` prop.
 
-  // GET /schedule carries the roster and the pin in force (expired or dangling
-  // ones already report as null). Query success also advances the "min left" clock.
+  // GET /schedule carries the roster and the pin in force. Query success also
+  // advances the "min left" clock.
   const takeoverQuery = useAdminQuery<TakeoverData>({
     key: dashKeys.takeover(),
     adminFetch,
@@ -92,8 +87,8 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   const override = takeoverQuery.data?.override ?? null;
 
   // The resolved end time for "until the schedule changes", fetched only while
-  // that option is the selected one — the controller's scan walks a minute at a
-  // time across twelve hours, and an idle dashboard has no use for the answer.
+  // that option is selected: the controller's scan walks a minute at a time
+  // across twelve hours.
   const minutes = form.watch('minutes');
   const untilSchedule = form.watch('until') === 'schedule-change';
   const windowQuery = useAdminQuery<TakeoverWindow>({
@@ -105,12 +100,10 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
     request: fetchTakeoverWindow,
   });
   // When this selection began. React Query keeps `data` both while a query is
-  // DISABLED and after a refetch FAILS, so `windowQuery.data` alone answers
-  // "the last thing the controller ever said", not "what it says now" — and an
-  // `expiresAt` is an absolute instant, so a cached one from an earlier visit
-  // to this option paints a concrete end time that may already be in the past.
-  // Requiring the data to be newer than the selection is what makes re-entry
-  // show "reading the schedule…" for one round trip instead of a stale answer.
+  // DISABLED and after a refetch FAILS, and an `expiresAt` is an absolute
+  // instant, so a cached one from an earlier visit paints an end time that may
+  // already be past. Requiring the data to be newer than the selection is what
+  // shows "reading the schedule..." for one round trip instead.
   const [selectedAt, setSelectedAt] = useState(0);
   useEffect(() => { setSelectedAt(untilSchedule ? Date.now() : 0); }, [untilSchedule]);
   const windowIsCurrent = untilSchedule
@@ -121,9 +114,8 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   useEffect(() => {
     if (takeoverQuery.dataUpdatedAt) setNow(Date.now());
   }, [takeoverQuery.dataUpdatedAt]);
-  // Query polling stops in hidden tabs and a failed poll has no dataUpdatedAt.
-  // Advance the local display clock independently so minutes-left and expiry
-  // cannot freeze on the last successful schedule response.
+  // Query polling stops in hidden tabs and a failed poll has no dataUpdatedAt,
+  // so advance the local display clock independently.
   useEffect(() => {
     const id = window.setInterval(() => setNow(Date.now()), 30_000);
     return () => window.clearInterval(id);
@@ -208,8 +200,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
     try {
       await cancelMutation.mutateAsync();
       // Back to a clean picker rather than re-showing the just-cancelled pick:
-      // one form stands behind both branches of the ternary, so a stale value
-      // would otherwise survive the remount.
+      // one form stands behind both branches of the ternary.
       form.reset({ showId: '', minutes: 60, until: 'fixed' });
       notify.ok('Takeover cancelled — back to the weekly schedule.');
     } catch (e) {
@@ -222,10 +213,10 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
   return (
     <Card
       title="Takeover"
-      // No sub while one is live — a third line of the same news wraps the header.
+      // No sub while one is live -- a third line of the same news wraps the header.
       sub={onAir ? undefined : 'jump a show to the front'}
-      // Box-shadow, not a border: `.admin-root .card` owns the border at a higher
-      // specificity than any utility class can beat.
+      // Box-shadow, not a border: `.admin-root .card` owns the border at a
+      // higher specificity than any utility class.
       className={cn(onAir && 'shadow-[0_0_0_2px_color-mix(in_oklab,var(--accent)_28%,transparent)]')}
       right={
         <span className="flex items-center gap-2">
@@ -282,14 +273,14 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
             render={({ field }) => {
               // The selected menu key IS the takeover target this form will
               // submit, so it is read through the same two predicates rather
-              // than a third spelling of `=== null` (#1507 review).
+              // than a third spelling of `=== null` (#1507).
               const chosen = { showId: field.value };
               const chosenId = takeoverShowId(chosen);
               return (
                 <SlotMenu
                   ariaLabel="Choose takeover programming"
-                  // justify-self, not self-start: the grid otherwise stretches the slot to
-                  // full width, where it reads as a text field rather than a value you pick.
+                  // justify-self, not self-start: the grid otherwise stretches
+                  // the slot to full width, where it reads as a text field.
                   className="min-h-9 justify-self-start text-[12px] sm:min-h-0"
                   label={isDefaultTakeover(chosen)
                     ? 'Default programming'
@@ -309,11 +300,8 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
           <div className="flex flex-wrap items-center gap-2.5">
             {/* One control over two form fields: the three presets set a fixed
                 window, the fourth switches to the boundary the controller
-                resolves. Picking it CLEARS `minutes` rather than leaving the
-                old value under the hidden input — a half-typed 5 would
-                otherwise keep the form invalid with nothing on screen to say
-                why. Every route back to a fixed window goes through a preset,
-                which writes the field again. */}
+                resolves. Picking it CLEARS `minutes` rather than leaving the old
+                value under the hidden input. */}
             <Controller
               control={form.control}
               name="until"
@@ -337,7 +325,7 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
               )}
             />
             {/* Hidden rather than disabled under the schedule option: a minute
-                box beside a window the server resolves reads as the thing being
+                box beside a server-resolved window reads as the thing being
                 submitted, and it is not. */}
             {!untilSchedule && (
               <TextField
@@ -351,11 +339,9 @@ export function TakeoverCard({ tz, locale }: { tz?: string; locale?: StationLoca
               />
             )}
           </div>
-          {/* The failure states are checked FIRST inside this line. Reading
-              `data` first was a bug: it survives an error and a disable, so
-              once one fetch had landed the outage copy could never be reached
-              and the card answered a dead controller with the last time it
-              happened to know. */}
+          {/* The failure states are checked FIRST inside this line: `data`
+              survives an error and a disable, so reading it first meant the
+              outage copy could never be reached once one fetch had landed. */}
           {untilSchedule && (
             <div className="mono-num text-[10px] text-muted">
               {windowQuery.isError

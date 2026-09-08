@@ -1,10 +1,6 @@
-// Unit tests for the pure LLM helpers — the regression-critical bits of the
-// llm/ rewrite. Run: `npm run test:llm` (tsx scripts/llm-pure.test.ts).
-//
-// These functions are side-effect-free and unit-pinned here so a wiring slip
-// (a provider routed to the wrong path, a thinking knob flipped, the failover
-// gate widened) fails an assert BEFORE it ever reaches a model. Matches the
-// node:assert-via-tsx style of scripts/picker-recency-regression.test.ts.
+// Unit tests for the pure LLM helpers. Run: `npm run test:llm`.
+// Side-effect-free, so a wiring slip (wrong provider path, a flipped thinking
+// knob, a widened failover gate) fails an assert before it reaches a model.
 
 import assert from 'node:assert/strict';
 import { z } from 'zod';
@@ -34,7 +30,6 @@ function test(name: string, fn: () => void | Promise<void>) {
 }
 
 async function main() {
-  // ---- failover gate: isUnreachable ⊂ isTransient, but EXCLUDES 5xx/429 ----
   console.log('isUnreachable vs isTransient (the failover gate):');
   await test('500 is transient but NOT unreachable', () => {
     assert.equal(isTransient({ statusCode: 500 }), true);
@@ -66,7 +61,6 @@ async function main() {
     assert.equal(isUnreachable(thrown), false);
   });
 
-  // ---- quota/auth gate: failover-eligible, pulled OUT of same-leg retry (#438) ----
   console.log('isQuotaOrAuthError (quota/usage-limit/auth → fail over, not retry):');
   await test('Ollama Cloud weekly usage-limit 429 → quota/auth, NOT transient', () => {
     // The exact shape from issue #438: status 429 + a usage-limit message.
@@ -93,9 +87,7 @@ async function main() {
   await test('OpenRouter out-of-credit 402 classifies by message when status is flattened', () => {
     // Canonical 402 — caught by the existing insufficient-credit branch.
     assert.equal(isQuotaOrAuthError(new Error('Your account or API key has insufficient credits. Add more credits and retry the request.')), true);
-    // Per-request affordability 402 — no "insufficient"/"quota" token, so before
-    // this it classified ONLY while the 402 status survived (Discord: run died as
-    // "unreachable" once the SDK flattened the status into the message).
+    // Per-request affordability 402 — no "insufficient"/"quota" token, so it used
     const afford: any = new Error('This request requires more credits, or fewer max_tokens. You requested up to 4096 tokens, but can only afford 118.');
     assert.equal(isQuotaOrAuthError(afford), true);
     assert.equal(isTransient(afford), false);    // fail over, not same-leg retry
@@ -106,10 +98,6 @@ async function main() {
     assert.equal(isQuotaOrAuthError({ code: 'ECONNRESET' }), false);
   });
 
-  // ---- DJ Brain monthly cap: a 429 that does not clear until the month rolls ----
-  // Measured against the hosted brain: the station retried each capped call
-  // three times, on every pick / link / ident, for the rest of the month. The
-  // wall is the calendar, so same-leg retry can only add latency.
   await test('DJ Brain monthly token cap 429 → quota/auth, NOT transient', () => {
     const e: any = { statusCode: 429, message: 'Monthly token budget reached (783/500).' };
     assert.equal(isQuotaOrAuthError(e), true);
@@ -151,7 +139,6 @@ async function main() {
     assert.equal(isTransient(wrapped), false);
   });
 
-  // ---- upstream-overload gate: STAYS transient (retry first), THEN fails over (#671) ----
   console.log('isUpstreamOverloaded (reachable gateway relays a saturated upstream → retry, then fail over):');
   await test('OpenRouter "Upstream error from <provider>: ResourceExhausted" → upstream-overload', () => {
     // The exact shape from issue #671: OpenRouter relaying a saturated Nvidia upstream.
@@ -180,7 +167,6 @@ async function main() {
     assert.equal(isUpstreamOverloaded(null), false);
   });
 
-  // ---- rate-limit gate: STAYS transient (retry first), THEN fails over (#738) ----
   console.log('isRateLimited (rate-limit 429 → retry, then fail over to keep a free tier on air):');
   await test('a 429 with a plain "rate limit" message → rate-limited, stays transient, not quota/auth', () => {
     const e: any = { statusCode: 429, message: 'rate limit exceeded, slow down' };
@@ -199,16 +185,14 @@ async function main() {
     assert.equal(isRateLimited({ statusCode: 429, responseHeaders: { 'retry-after-ms': '500' } }), true);
   });
   await test('a bare 429 with NO wording and NO header (self-hosted concurrency spike) does NOT fail over', () => {
-    // llama.cpp/vLLM/LiteLLM answering 429 on a momentary slot conflict must
-    // stay a same-leg transient retry — never silently switch the station onto
-    // a possibly-paid cloud fallback (PR #751 review).
+    // llama.cpp/vLLM/LiteLLM answering 429 on a momentary slot conflict stays a
+    // same-leg transient retry, never a silent switch to a paid cloud fallback.
     assert.equal(isRateLimited({ statusCode: 429 }), false);
     assert.equal(isTransient({ statusCode: 429 }), true);
   });
   await test('an AI_RetryError wrapper (SDK maxRetries spent) is unwrapped to the real 429', () => {
-    // What djText/djObject/djAgent actually receive: the SDK retried
-    // internally, then threw a wrapper with NO statusCode of its own — the
-    // real APICallError lives in errors[]/lastError (PR #751 review).
+    // What djText/djObject/djAgent receive: the SDK retried internally, then threw
+    // a wrapper with no statusCode of its own; the real error is in errors[]/lastError.
     const inner: any = { statusCode: 429, message: 'Rate limit reached for gpt-4o', responseHeaders: { 'retry-after': '20' } };
     const wrapper: any = new Error('Failed after 3 attempts. Last error: Rate limit reached for gpt-4o');
     wrapper.reason = 'maxRetriesExceeded';
@@ -235,7 +219,6 @@ async function main() {
     assert.equal(isRateLimited(null), false);
   });
 
-  // ---- retryAfterMs: parses a provider's Retry-After header (#738) ----
   console.log('retryAfterMs (Retry-After header sets the same-leg retry delay; raw, uncapped):');
   await test('a numeric Retry-After (seconds) converts to ms', () => {
     assert.equal(retryAfterMs({ responseHeaders: { 'retry-after': '1' } }), 1000);
@@ -265,7 +248,6 @@ async function main() {
     assert.equal(retryAfterMs(null), null);
   });
 
-  // ---- withTransientRetry: wires retryAfterMs into the actual retry loop ----
   console.log('withTransientRetry (waits out a short Retry-After; gives up the leg on a long one):');
   await test('a 429 with Retry-After: 1 waits ~1000ms instead of the default 500ms', async () => {
     let calls = 0;
@@ -324,11 +306,8 @@ async function main() {
     assert.equal(calls, 2);
   });
 
-  // ---- real AI SDK error shapes: generateText + mock transport (PR #751 review) ----
-  // The synthetic literals above pin the classifier logic; this pins the SHAPE.
-  // A real generateText call retries internally (default maxRetries: 2) and
-  // throws AI_RetryError — a wrapper with no statusCode/responseHeaders of its
-  // own. The classifiers must see through it or none of this fires in prod.
+  // A real generateText call retries internally and throws AI_RetryError, a
+  // wrapper with no status of its own — the classifiers must see through it.
   console.log('real AI SDK shapes (generateText throws AI_RetryError wrapping APICallError):');
   await test('a real 429 APICallError from generateText classifies through the RetryError wrapper', async () => {
     const rateLimit429 = new APICallError({
@@ -366,12 +345,9 @@ async function main() {
     assert.equal(isTransient(thrown), false);
   });
 
-  // ---- errReason: turn undici's opaque "fetch failed" into an actionable log ----
   console.log('errReason (log-friendly cause; digs the errno out of err.cause):');
   await test('undici "fetch failed" surfaces the errno from err.cause.code, not "unknown"', () => {
-    // The Discord shape: the request never reached OpenRouter, so there is no
-    // HTTP status — the real reason (ECONNRESET / ENOTFOUND / ETIMEDOUT) is on
-    // the cause. The old retry log only read err.code and printed "unknown".
+    // No HTTP status: the real reason (ECONNRESET/ENOTFOUND/ETIMEDOUT) is on the cause.
     const e: any = new TypeError('fetch failed');
     e.cause = { code: 'ECONNRESET' };
     assert.equal(errReason(e), 'fetch failed (ECONNRESET)');
@@ -386,7 +362,6 @@ async function main() {
     assert.equal(errReason(null), 'unknown');
   });
 
-  // ---- per-provider thinking knob (the single most regression-prone mapping) ----
   // reasoningFor emits the AI SDK top-level `reasoning` level; the provider maps
   // it to its native knob. undefined = param omitted (provider/model default).
   console.log('reasoningFor(cfg, {forceNoThink}):');
@@ -463,10 +438,8 @@ async function main() {
     // native Output.object (explored=false on gemma-4-12b / qwen3.5-9b) — same as ollama.
     assert.equal(needsToolCallObject({ provider: 'locca' }), true);
     assert.equal(needsToolCallObject({ provider: 'openai-compatible' }), true);
-    // ai-sdk-ollama v4 dropped the per-call providerOptions.ollama channel, so
-    // the sampling record must not claim repeat_penalty applied (restoration is
-    // a tracked follow-up); body-injection providers record via
-    // appliedRepeatPenalty() below instead.
+    // ai-sdk-ollama v4 dropped the per-call providerOptions.ollama channel, so the
+    // sampling record must not claim repeat_penalty applied.
     assert.equal(repeatPenaltyApplies({ provider: 'ollama' }), false);
     assert.equal(repeatPenaltyApplies({ provider: 'deepseek' }), false);
     assert.equal(repeatPenaltyApplies({ provider: 'locca' }), false);
@@ -543,13 +516,10 @@ async function main() {
     assert.equal(forcedToolChoice(undefined), 'required');
   });
 
-  // ---- embedding base URL (the relative-/embeddings crash, #405 follow-up) ----
   console.log('embeddingBaseUrl(cfg):');
   await test('locca blank → dedicated EMBED default, never chat or a relative URL', () => {
-    // Blank locca baseUrl must resolve to the dedicated embed server (8090), NOT
-    // the chat default (8080) and NOT '' (which would make the SDK fetch
-    // "/embeddings" → "Failed to parse URL"). This is what makes locca a
-    // first-class embedding provider with no hand-typed URL.
+    // Blank locca baseUrl resolves to the dedicated embed server (8090), not the
+    // chat default (8080) and not '' (which makes the SDK fetch a relative URL).
     assert.equal(embeddingBaseUrl({ provider: 'locca', baseUrl: '' }), DEFAULT_LOCCA_EMBED_BASE_URL);
     assert.match(DEFAULT_LOCCA_EMBED_BASE_URL, /:8090\/v1$/);
     assert.equal(embeddingBaseUrl({ provider: 'locca', baseUrl: 'http://x:9000/v1' }), 'http://x:9000/v1');
@@ -558,16 +528,14 @@ async function main() {
     assert.equal(embeddingBaseUrl({ provider: 'openai-compatible', baseUrl: 'http://y:8090/v1' }), 'http://y:8090/v1');
   });
 
-  // ---- agent plan routing ----
   console.log('agentPlan(cfg, schema, toolCount):');
   await test('routes each provider/shape to the right plan', () => {
     assert.equal(agentPlan({ provider: 'ollama' }, {}, 0), 'object-via-tool');
     assert.equal(agentPlan({ provider: 'ollama' }, {}, 3), 'done-tool');
     assert.equal(agentPlan({ provider: 'openai' }, {}, 0), 'native-no-tools');
     assert.equal(agentPlan({ provider: 'openai' }, {}, 3), 'native-then-done');
-    // locca + openai-compatible serve local GGUF models (same class as Ollama), so
-    // they take the forced tool-object / done-tool path, NOT the native path — local
-    // llama.cpp models emit the object without exploring tools under native Output.object.
+    // locca + openai-compatible serve local GGUF models, so they take the forced
+    // tool-object / done-tool path, not the native path.
     assert.equal(agentPlan({ provider: 'locca' }, {}, 0), 'object-via-tool');
     assert.equal(agentPlan({ provider: 'locca' }, {}, 3), 'done-tool');
     assert.equal(agentPlan({ provider: 'openai-compatible' }, {}, 0), 'object-via-tool');
@@ -576,12 +544,6 @@ async function main() {
     assert.equal(agentPlan({ provider: 'ollama' }, null, 0), 'free-text');
   });
 
-  // ---- per-provider discovery budget (the tool-loop's shape) ----
-  // The commit point used to be a global COMMIT_AFTER_STEPS = 1, set by the
-  // weakest provider and applied to every model. It is a capability now. These
-  // assertions are the guard on that split: the forced-tool providers must keep
-  // the single cornered call byte-for-byte, and the derived cap must always
-  // leave EXACTLY ONE forced-`done` step whatever the budget.
   console.log('discoveryStepsFor / gatedMaxStepsFor (loop shape):');
   await test('forced-tool providers keep the historical single discovery call', () => {
     // These three ignore toolChoice with several tools visible and emit
@@ -625,32 +587,18 @@ async function main() {
     }
   });
   await test('the per-provider budget reaches only agents that opt in', () => {
-    // The widening was designed and tested for the pick/request agents; a
-    // caller's pinned step cap can be load-bearing (the segment director's
-    // maxSteps: 2 in skills/_agent.ts was measured burning the full
-    // agentTimeoutMs when its loop silently grew). An agent that doesn't opt
-    // in must resolve the historical single step on EVERY provider — including
-    // the wide native ones and even over an operator override.
+    // The widening is for the pick/request agents only: a caller's pinned step cap
+    // can be load-bearing, so an agent that doesn't opt in keeps the single step on
+    // every provider, even over an operator override.
     for (const cfg of [{ provider: 'anthropic' }, { provider: 'openai' }, { provider: 'ollama' }, { provider: 'anthropic', discoverySteps: 5 }]) {
       assert.equal(runDiscoverySteps(cfg, false), DISCOVERY_STEPS_MIN, JSON.stringify(cfg));
       assert.equal(runDiscoverySteps(cfg, true), discoveryStepsFor(cfg), JSON.stringify(cfg));
     }
   });
 
-  // ---- Forced-tool transport instruction (issue #1536) ----
-  // The forced-tool branch states its OWN answer channel, in the system channel,
-  // and no caller states one. Callers cannot: needsToolCallObject picks the
-  // branch per LEG at call time, so a caller's output-channel wording is right
-  // on one branch and wrong on the other two. The tagger's "Return ONLY a JSON
-  // object" met toolChoice:'required' and gemma-4-12b on llama.cpp spent whole
-  // generations deciding which of the two to obey, tagging zero tracks.
-  //
-  // Asserted against a MOCK MODEL rather than a string, because the property
-  // that matters is that the instruction reaches the wire — a constant that
-  // exists but is no longer composed into `instructions` is the regression.
-  // The mock answers with text and never calls `emit`, which is the #1536
-  // failure itself: objectViaToolCall throws, and what we pin is what the model
-  // had been told before it did.
+  // The forced-tool branch states its OWN answer channel (#1536); a caller cannot,
+  // since needsToolCallObject picks the branch per LEG at call time. Asserted
+  // against a mock model, so what is pinned is that it reaches the wire.
   console.log('objectViaToolCall (the forced-tool branch carries its own answer channel):');
   async function forcedToolCall(system?: string) {
     let seen: any;
@@ -693,10 +641,7 @@ async function main() {
   });
   await test("the NATIVE branch's rule stays a FORMAT rule, never a channel rule", () => {
     // Its job is to carry the shape for `openrouter`/`gateway` legs whose
-    // downstream model ignores response_format. It must NOT tell the model where
     // to put the answer: @ai-sdk/anthropic implements responseFormat:'json' by
-    // forcing a synthesized `json` tool, so "reply with JSON, don't call a tool"
-    // here would recreate #1536 on Anthropic — the same collision, other branch.
     assert.match(NATIVE_JSON_INSTRUCTION, /single JSON object/i, 'still carries the shape');
     for (const channelWord of ['tool', 'reply', 'respond', 'instead']) {
       assert.ok(
@@ -706,13 +651,8 @@ async function main() {
     }
   });
 
-  // ---- Terminal single-turn collapse (issue #1157) ----
-  // The last leg of djAgent's cascade flattens the agent's chat window + the
-  // discovery trail into ONE user prompt, so a backend that answers the terminal
-  // `done` step in prose (llama.cpp / LM Studio + Hermes, GLM after a refusal)
-  // gets asked in the single-turn shape it DOES answer with a forced tool call.
-  // These pin the two properties the collapse actually rides on: the real
-  // candidate ids survive into the prompt, and the multi-turn tool plumbing does not.
+  // djAgent's last leg flattens the chat window + discovery trail into ONE user
+  // prompt (#1157). Pinned: the candidate ids survive, the tool plumbing does not.
   console.log('renderTerminalPrompt / messageText:');
   await test('messageText reads both the string and the parts-array content shapes', () => {
     assert.equal(messageText({ role: 'user', content: '  pick a track  ' }), 'pick a track');
@@ -783,7 +723,6 @@ async function main() {
     assert.ok(/Your task:\nPick the track to play next\./.test(prompt), 'the task is still the last user turn');
   });
 
-  // ---- JSON / thinking salvage ----
   console.log('stripThinking / extractJson / usageOf:');
   await test('stripThinking removes complete and dangling <think> blocks', () => {
     assert.equal(stripThinking('<think>reasoning</think>hello'), 'hello');
@@ -791,8 +730,7 @@ async function main() {
     assert.equal(stripThinking('plain text'), 'plain text');
   });
   await test('stripThinking collapses a </think>-separated repetition loop to the first answer', () => {
-    // Live incident 2026-07-07: glm-5.2:cloud looped the sign-off, emitting
-    // </think> between each repeat until the token cap truncated the tail.
+    // glm-5.2:cloud looped the sign-off, emitting </think> between each repeat.
     const runaway =
       'Alright, I\'m out — good hands, see you tomorrow.</think>' +
       'Alright, I\'m clocking out — good hands, see you tomorrow.</think>' +
@@ -805,15 +743,13 @@ async function main() {
     assert.equal(stripThinking('same line here</think>same line here'), 'same line here');
   });
   await test('stripThinking drops an unterminated <think> block (token-cap truncation)', () => {
-    // Issue #947: a reasoning model looped inside its <think> block until the
-    // output-token cap cut it off, so the closing </think> never arrived. The
-    // whole body is trapped reasoning — drop it rather than speak it aloud.
+    // #947: a reasoning model looped inside <think> until the output cap cut it off,
+    // so no closing tag arrived. The whole body is trapped reasoning — drop it.
     assert.equal(
       stripThinking('<think>We need to output spoken words only. Must not use articles. Also no his. Also no her. Also'),
       '',
     );
-    // Anything before the opener is real answer text — keep it (mirrors the
-    // harmony no-final-channel rule below).
+    // Anything before the opener is real answer text — keep it.
     assert.equal(stripThinking('Here we go. <think>wait, should I mention the'), 'Here we go.');
   });
   await test('stripThinking strips Gemma/harmony channel reasoning, keeps the final message', () => {
@@ -846,9 +782,8 @@ async function main() {
     assert.equal(err.text, 'We need to output spoken words only…');
     assert.equal(err.finishReason, 'length');
     assert.deepEqual(err.usage, { outputTokens: 4000 });
-    // The error must not look like a network status to any classifier — it
-    // should propagate straight to the caller's skip-segment path, never
-    // burning same-leg retries or silently failing over to the backup model.
+    // The error must not look like a network status to any classifier: it goes
+    // straight to the caller's skip-segment path, no retry and no failover.
     assert.equal(isTransient(err), false);
     assert.equal(isUnreachable(err), false);
     assert.equal(isQuotaOrAuthError(err), false);
@@ -899,7 +834,6 @@ async function main() {
     assert.equal(warningsOf({}), undefined);
   });
 
-  // ---- daily token budget mode ----
   console.log('budgetMode (daily LLM token cap → normal/soft/hard):');
   await test('cap <= 0 (or non-finite) is always normal — the disabled default', () => {
     assert.equal(budgetMode({ used: 9_999_999, cap: 0, softPct: 80 }), 'normal');
@@ -923,7 +857,6 @@ async function main() {
     assert.equal(budgetMode({ used: 1000, cap: 1000, softPct: 0 }), 'hard');
   });
 
-  // ---- talk-within-the-intro budget ----
   console.log('introBudgetPhrase / enforceIntroBudget:');
   await test('introBudgetPhrase is empty outside the usable runway window', () => {
     assert.equal(introBudgetPhrase(null), '');
@@ -994,7 +927,6 @@ async function main() {
     assert.match(introBudgetPhrase(4000, 4000), /4s/);
   });
 
-  // ---- persona tone dials (humour / local colour / warmth) ----
   console.log('personaToneDirectives / normalizeDial:');
   await test('normalizeDial clamps to 0-10 int, neutral on garbage', () => {
     assert.equal(normalizeDial(7), 7);
@@ -1019,9 +951,8 @@ async function main() {
     assert.ok(both.startsWith('\n\nTone:\n- '));
     assert.equal(both.split('\n- ').length, 3); // header + 2 bullets
   });
-  // The save path (validatePersonasStrict) rebuilds each persona from a field
-  // whitelist; if the dials aren't in it they are silently dropped on every
-  // save and the feature is dead end-to-end. Pin that they round-trip.
+  // validatePersonasStrict rebuilds each persona from a field whitelist; dials
+  // missing from it are dropped on every save. Pin that they round-trip.
   await test('validatePersonasStrict carries the dials through the save path', () => {
     const base = { name: 'Nova', soul: 'late-night', frequency: 'moderate',
       tts: { engine: 'piper', cloudProvider: 'openai', voice: '' } };
@@ -1035,10 +966,7 @@ async function main() {
     assert.equal(bare.warmth, DIAL_NEUTRAL);
   });
 
-  // ---- the 5-rung frequency ladder + 4-rung script-length ladder ----
-  // Every consumer (dj-gate slots, segment floors, link spacing, run
-  // probability, LENGTH_PHRASES) branches on these values; pin the ladder
-  // mechanics and the save path so a rung can't silently vanish.
+  // Every consumer branches on these values; pin the ladder and the save path.
   console.log('effectiveFrequency / lengthMode (behaviour ladders):');
   await test('djMode bumps exactly one rung, capped at aggressive', () => {
     const p = (frequency: string, djMode = true) => ({ frequency, djMode });
@@ -1081,9 +1009,7 @@ async function main() {
     }
   });
 
-  // ---- clampTtsSpeed: per-engine / per-persona speech-rate multiplier ----
-  // Defaults to 1.0 (NOT 0 like gain) so a stock station — and any older save
-  // with no tts.speed — composes to unity and is byte-for-byte unchanged.
+  // Defaults to 1.0 (not 0 like gain), so a stock station composes to unity.
   console.log('clampTtsSpeed (speech-rate multiplier, default 1.0):');
   await test('non-finite / missing → 1.0 (unity)', () => {
     assert.equal(clampTtsSpeed(undefined), TTS_SPEED_DEFAULT);
@@ -1117,11 +1043,7 @@ async function main() {
     assert.equal(bare.tts.speed, TTS_SPEED_DEFAULT); // absent → unity
   });
 
-  // ---- showMusicLean: soft lean vs strict genre lock (shared by both pick paths) ----
-  // ---- speedDirective: where the computed cloud-TTS speed is applied ----
-  // At most one of body/atempo is ever non-null — the cloud engine either sends
-  // `speed` upstream OR stretches locally, never both. Guards the issue #942
-  // fix (compat servers stretch locally) AND its sendSpeed escape hatch.
+  // At most one of body/atempo is non-null: send `speed` upstream or stretch locally.
   console.log('speedDirective (send `speed` upstream vs. local ffmpeg atempo):');
   await test('openai-compatible + sendSpeed off → stretch locally, body omitted', () => {
     assert.deepEqual(speedDirective('openai-compatible', false, 1.4), { body: null, atempo: 1.4 });
@@ -1195,7 +1117,6 @@ async function main() {
     assert.match(out, /prefer tracks from up to 2009/);  // "nothing after the 2000s"
   });
 
-  // ---- clampMaxOutputTokens / resolveMaxOutputTokens (per-call cap, #712) ----
   console.log('clampMaxOutputTokens / resolveMaxOutputTokens (per-call output cap):');
   await test('0 and negatives mean "off" — pass through as 0, not the floor', () => {
     assert.equal(clampMaxOutputTokens(0, 4000), 0);
@@ -1225,7 +1146,6 @@ async function main() {
     assert.equal(resolveMaxOutputTokens(8000), 8000);
   });
 
-  // ---- nearestId: near-miss id repair for the picker agents ----
   console.log('nearestId (unknown-id near-miss repair):');
   await test('repairs the observed live case: final character dropped from a nanoid', () => {
     // glm-5.1 returned "BFjCKvSeWFKFpKTRvroPC" for the real "BFjCKvSeWFKFpKTRvroPCp".
@@ -1240,9 +1160,7 @@ async function main() {
     const seen = ['2igTN1Xw3uJBY9CjdKzZGl', 'H8G6Y1gPsSsMNJwflWbstW'];
     assert.equal(nearestId('3bKpTnYlqR8vD4sXe2aJ0m', seen), null);
   });
-  // The #939 echo-test corruptions, verbatim: small local models corrupt 2-3
-  // chars of a 22-char nanoid (confusable swaps, injected spaces, adjacent
-  // transpositions) — each must resolve back to the id the model meant.
+  // The #939 echo-test corruptions, verbatim: 2-3 corrupted chars of a 22-char nanoid.
   await test('repairs a char swap + injected space (#939, distance 2)', () => {
     const seen = ['923tdZ9Hd7Zw7XNgGGL1DR', 'H8G6Y1gPsSsMNJwflWbstW', '2igTN1Xw3uJBY9CjdKzZGl'];
     assert.equal(nearestId('923tdZ9HdT7Zw7XNgGG L1DR', seen), '923tdZ9Hd7Zw7XNgGGL1DR');
@@ -1270,10 +1188,7 @@ async function main() {
     assert.equal(nearestId('abcdef123456789012345', []), null);
   });
 
-  // ---- resolveCloudModel: cloud TTS model resolution for the v3 tag hint ----
-  // Pins the "mirror of speak() + resolveEngine()" claim (issue #696): the
-  // model djSystem gates the ElevenLabs v3 hint on must be the one the persona
-  // is actually voiced by at speak() time.
+  // #696: the model djSystem gates the v3 hint on must be the one speak() uses.
   console.log('resolveCloudModel (ElevenLabs v3 hint gating, issue #696):');
   const cloudCfg = { defaultEngine: 'piper', provider: 'elevenlabs', model: 'eleven_v3' };
   await test('explicit cloud persona with no provider override → global model', () => {
@@ -1442,10 +1357,8 @@ async function main() {
     assert.equal(snapV3Stability(undefined as any), 0.5);
   });
 
-  // Miniature twins of the real agent schemas (PICK_SCHEMA / segmentSchema)
-  // — same field shapes, same wrapper placement — so these tests pin the
-  // mechanism the live schemas rely on without importing modules that carry
-  // side effects (dj-agent.ts pulls in settings/queue).
+  // Miniature twins of the real agent schemas, so these pin the mechanism without
+  // importing modules that carry side effects.
   const pickLike = () => modelTolerant(z.object({
     id: z.string().describe('the exact id'),
     reason: z.string(),

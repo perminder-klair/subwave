@@ -1,9 +1,8 @@
 'use client';
 
 // Skills editor. A skill only fires autonomously when it is enabled here AND
-// assigned to the persona on air (/admin/personas). "Run now" is an operator
-// override: it bypasses the enable toggle, the persona assignment, the
-// frequency gate and the cooldown.
+// assigned to the persona on air. "Run now" is an operator override: it bypasses
+// the enable toggle, the persona assignment, the frequency gate and the cooldown.
 import type { ReactNode } from 'react';
 import { useMemo, useRef, useState } from 'react';
 import { cn } from '../../lib/cn';
@@ -56,8 +55,8 @@ interface SkillToggleResponse {
 
 interface SkillRunResponse {
   spoken?: string | null;
-  // false when the skill ran but had nothing usable to speak from — a normal
-  // outcome, not a failure, so it arrives as a 200 with a reason attached.
+  // false when the skill ran but had nothing usable to speak from: a normal
+  // outcome, so it arrives as a 200 with a reason attached.
   aired?: boolean;
   reason?: string | null;
   error?: string;
@@ -70,8 +69,7 @@ interface SkillDescriptionProps {
   keyUrl?: string;
 }
 
-// Turns the "<Provider> API key" phrase into a link to skill.keyUrl; plain text
-// when there is no keyUrl.
+// Turns the "<Provider> API key" phrase into a link to skill.keyUrl.
 function SkillDescription({ text, keyUrl }: SkillDescriptionProps): ReactNode {
   const desc = text || 'No description.';
   const m = keyUrl ? desc.match(/[A-Z][\w-]* API key/) : null;
@@ -108,8 +106,8 @@ export default function SkillsPanel() {
     };
   }>({ adminFetch, enabled: queryEnabled });
   const skills = skillsQuery.data ?? null;
-  // Catalog failures have always degraded to an empty optional browser while
-  // the installed roster stays usable.
+  // Catalog failures degrade to an empty optional browser while the installed
+  // roster stays usable.
   const community = communityQuery.data ?? (communityQuery.isError ? [] : null);
 
   // Best-effort organisation metadata shares the one redacted /settings owner.
@@ -211,8 +209,7 @@ export default function SkillsPanel() {
       });
       const j = (await r.json().catch(() => ({}))) as SkillRunResponse;
       // A stand-down is reported as-is rather than as a success: the operator
-      // pressed Run now and nothing went to air, and the reason is the whole
-      // point of the answer (issue #1412).
+      // pressed Run now and nothing went to air (#1412).
       if (j.aired === false) {
         notify.info(`${name} stayed silent — ${j.reason || 'nothing usable to speak from'}`);
       } else {
@@ -224,7 +221,7 @@ export default function SkillsPanel() {
   };
 
   // An imported bundle arrives disabled, and one carrying a tool.mjs runs code
-  // once enabled — the toast says so.
+  // once enabled.
   const importZip = async (file: File) => {
     try {
       const fd = new FormData();
@@ -241,7 +238,7 @@ export default function SkillsPanel() {
   };
 
   // Installs into state/skills, disabled. The route returns the refreshed
-  // roster; the catalog is then invalidated so its installed bit is authoritative.
+  // roster; the catalog is then invalidated.
   const install = async (slug: string) => {
     try {
       await installMutation.mutateAsync({ slug });
@@ -364,8 +361,8 @@ export default function SkillsPanel() {
             Read this in the manual ↗
           </a>
         </div>
-        {/* Full-width row of its own on phones: an `ml-auto` cluster beside the
-            counts pushed COMMUNITY / NEW SKILL off the right edge at 390px. */}
+        {/* Full-width row of its own on phones: an `ml-auto` cluster pushed
+            COMMUNITY / NEW SKILL off the right edge at 390px. */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-3 bg-[var(--ink-softer)] p-3.5">
           <span className="caption">
             {filtered ? `${visible.length} of ${skills.length}` : skills.length} skill{skills.length === 1 ? '' : 's'}
@@ -400,8 +397,6 @@ export default function SkillsPanel() {
 
       <section className="card p-3.5">
         <div className="flex flex-wrap items-center gap-2">
-          {/* Phones get the search on its own row and the selects full-width /
-              paired; `sm:` restores the single desktop row of fixed widths. */}
           <div className="relative w-full flex-none sm:min-w-[200px] sm:flex-1">
             <Search size={14} className="pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2 text-muted" />
             <Input
@@ -436,9 +431,8 @@ export default function SkillsPanel() {
               </SelectContent>
             </Select>
           )}
-          {/* Status + sort own one phone row between them. The wrapper is
-              `display:contents` from sm: up, so on desktop both selects are
-              direct children of the bar again and the row is unchanged. */}
+          {/* Status + sort own one phone row. The wrapper is `display:contents`
+              from sm: up, so on desktop both selects are direct children. */}
           <div className="flex w-full gap-2 sm:contents">
             <Select value={status} onValueChange={v => setStatus(v as StatusFilter)}>
               <SelectTrigger className="min-w-0 flex-1 sm:w-[130px] sm:flex-none" aria-label="Filter by status">
@@ -469,7 +463,6 @@ export default function SkillsPanel() {
               <X size={14} /> Clear
             </Btn>
           )}
-          {/* Filters and sort drive both views. */}
           <div className="ml-auto">
             <RosterViewToggle view={view} onChange={setView} />
           </div>

@@ -18,12 +18,9 @@ export const ENGINES: EngineMeta[] = [
   { id: 'remote',     label: 'Remote',     blurb: 'Self-hosted HTTP endpoint' },
 ];
 
-// The persona-only "follow the station" card, offered FIRST so the default
-// reads as a choice rather than a fallback. Kept out of ENGINES because that
-// list is also the fallback slot's and the settings default-engine picker's,
-// neither of which can inherit (see PERSONA_TTS_INHERIT in the controller's
-// schemas/persona.ts). engineStatus()'s default branch already gives it no
-// badge and never mutes it.
+// The persona-only "follow the station" card, offered first. Kept out of
+// ENGINES because that list also serves the fallback slot and the default-engine
+// picker, neither of which can inherit.
 export const INHERIT_ENGINE: EngineMeta = {
   id: 'inherit',
   label: 'Station default',
@@ -32,13 +29,9 @@ export const INHERIT_ENGINE: EngineMeta = {
 
 export const PERSONA_ENGINES: EngineMeta[] = [INHERIT_ENGINE, ...ENGINES];
 
-/**
- * The engine id as a roster/table chip. Real engine ids read fine as-is; the
- * sentinel does not — a chip saying "inherit" tells the operator nothing about
- * what will speak, and it is the shipped default for the whole seed roster.
- * Surfaces with the station block to hand should prefer personas/helpers.ts's
- * engineLabel(), which resolves it to the engine actually on air.
- */
+/** The engine id as a roster/table chip. Callers that have the station block to
+ *  hand should prefer personas/helpers.ts's engineLabel(), which resolves the
+ *  inherit sentinel to the engine actually on air. */
 export function engineChipLabel(engine: string): string {
   return isInheritEngine(engine) ? 'station default' : engine;
 }
@@ -53,9 +46,8 @@ export const ENGINE_META: Record<string, EngineMeta> = Object.fromEntries(
 );
 
 export type EngineStatusTone = 'ok' | 'warn';
-// Machine-readable readiness; `label` is display copy and free to change.
-// 'off' = not usable now (EngineSelector mutes the card); 'starting' = transient,
-// badge only, no muting.
+// Machine-readable readiness; `label` is display copy. 'off' = not usable now
+// (EngineSelector mutes the card); 'starting' = transient, badge only.
 export type EngineStatusState = 'ready' | 'starting' | 'off';
 
 // Shown by EngineSelector as a persistent note when the *selected* engine isn't ready.
@@ -77,23 +69,22 @@ export interface EngineStatus {
 // list (TTS_HEAVY_ENGINES), null when it's unreachable or not in use.
 export interface EngineAvailability {
   heavyEnabled?: string[] | null;
-  // Sidecar engines the idle unload has released (#1579). Still usable — the
-  // next line just pays a model load first — so this NEVER affects `state`.
+  // Sidecar engines the idle unload has released (#1579). Still usable (the
+  // next line pays a model load), so this never affects `state`.
   heavyCold?: string[] | null;
   cloudByProvider?: Record<string, boolean>;
   [engine: string]: boolean | string[] | null | Record<string, boolean> | undefined;
 }
 
 export interface EngineStatusOpts {
-  // What to do about an unconfigured Cloud engine. The default points at the
-  // Settings voice tab, which is wrong copy when you are already standing on
-  // it — that page passes its own.
+  // What to do about an unconfigured Cloud engine. Defaults to pointing at the
+  // Settings voice tab; that page passes its own.
   cloudKeyAction?: string;
 }
 
-// Badge + machine state + enable hint in one branch tree, so the three can never
-// disagree. A missing flag means "not yet known / assumed up", so only a hard
-// `=== false` is flagged. `warn` is the recoverable-problem tone.
+// Badge + machine state + enable hint in one branch tree so the three can't
+// disagree. A missing flag means "not yet known", so only `=== false` is
+// flagged. `warn` is the recoverable-problem tone.
 export function engineStatus(
   id: string,
   available: EngineAvailability | undefined,
@@ -114,18 +105,14 @@ export function engineStatus(
     case 'pocket-tts': {
       if (a[id] !== false) {
         // Released by the sidecar's idle unload (#1579). state stays 'ready'
-        // and the tone stays 'ok' on purpose: nothing is wrong and nothing is
-        // unavailable — the engine is one on-demand load from speaking, and
-        // muting the card would tell the operator to go and fix a station that
-        // is working. The badge exists so the reclaim is visible here instead
-        // of only in `docker stats`.
+        // and tone 'ok': the engine is one on-demand load from speaking.
         const cold = Array.isArray(a.heavyCold) ? a.heavyCold : null;
         return cold?.includes(id)
           ? { label: 'idle · loads on demand', tone: 'ok', state: 'ready' }
           : { label: 'ready', tone: 'ok', state: 'ready' };
       }
-      // The sidecar's configured engine list says WHY: deliberately disabled vs
-      // still loading vs the whole sidecar down.
+      // The sidecar's configured engine list says why: disabled vs loading vs
+      // sidecar down.
       const name = ENGINE_META[id]?.label || id;
       const enabled = Array.isArray(a.heavyEnabled) ? a.heavyEnabled : null;
       if (enabled) {

@@ -1,16 +1,8 @@
-// The magical playlist builder engine.
-//
-// Two stages, both fed by machinery that already exists:
-//   1. buildCandidatePool — merge candidates from vector (searchBySound /
-//      searchByLyrics), mood/genre, seed-similarity, recently-added and starred
-//      sources into one normalised, filtered, capped pool.
-//   2. curatePlaylist — ONE djObject call selects + orders the final set,
-//      honouring the energy arc / artist spacing / instrumental ask. Falls back
-//      to the deterministic arranger (playlist-gen-pure) when the model call
-//      fails, so a non-empty pool never yields an empty playlist.
-//
-// This is an explicit operator action (like the manual /dj/segment runners), so
-// it is deliberately NOT daily-token-budget gated.
+// Playlist builder: buildCandidatePool merges the vector/mood/genre/seed/
+// recently-added/starred sources into one filtered pool, curatePlaylist makes
+// one djObject call to select and order it, falling back to the deterministic
+// arranger in playlist-gen-pure. An explicit operator action, so not
+// token-budget gated.
 
 import { z } from 'zod';
 import * as subsonic from './subsonic.js';
@@ -94,8 +86,8 @@ function clampCount(n: number): number {
   return Math.min(MAX_COUNT, Math.max(MIN_COUNT, Math.round(n)));
 }
 
-// Normalise any source row (Subsonic Child, library slim-track, or FilteredRow)
-// into a PoolTrack. Reads whichever fields the source happens to carry.
+// Normalise any source row (Subsonic Child, library slim-track, FilteredRow)
+// into a PoolTrack, reading whichever fields it happens to carry.
 function norm(r: any, source: string, baseScore: number): PoolTrack {
   const instrumental =
     typeof r.instrumental === 'boolean' ? r.instrumental
@@ -125,8 +117,8 @@ function normMany(rows: any[] | null | undefined, source: string, baseScore: num
   return (Array.isArray(rows) ? rows : []).filter((r) => r && r.id).map((r) => norm(r, source, baseScore));
 }
 
-// Expand recently-added albums into their tracks (Subsonic returns albums, not
-// songs for the "newest" list). Bounded so a huge library doesn't fan out.
+// Subsonic's "newest" list returns albums, not songs. Bounded so a huge library
+// doesn't fan out.
 async function recentlyAddedTracks(): Promise<any[]> {
   const albums = await subsonic.getRecentlyAddedAlbums({ size: 20 }).catch(() => []);
   const out: any[] = [];
@@ -138,8 +130,6 @@ async function recentlyAddedTracks(): Promise<any[]> {
   }
   return out;
 }
-
-// ── Stage 1: candidate pool ──────────────────────────────────────────────────
 
 export async function buildCandidatePool(
   input: GenerateInput,
@@ -157,7 +147,6 @@ export async function buildCandidatePool(
 
   // Prompt → semantic sources.
   if (prompt) {
-    // Theme / lyric embeddings.
     if (hasTextIndex && embeddings.isAvailable()) {
       try {
         const vec = await embeddings.embedQueryText(prompt, library.embeddingIndexTextMode());
@@ -169,7 +158,6 @@ export async function buildCandidatePool(
     } else {
       reasons.push('theme (lyric) search unavailable — no text-embedding index/provider');
     }
-    // CLAP timbre (sound) search.
     if (hasAudioIndex && analyzer.textEmbeddingAvailable() !== false) {
       try {
         const vecs = await analyzer.embedTexts([prompt], { timeoutMs: 20_000 });
@@ -214,9 +202,8 @@ export async function buildCandidatePool(
     } catch { /* ignore */ }
   }
 
-  // Knob artists → their catalogue (top songs + a name search) so an
-  // artists-only recipe has something to choose from; the allow-list filter
-  // below trims the search noise back to actual credits.
+  // Top songs + a name search, so an artists-only recipe has something to choose
+  // from; the allow-list filter below trims search noise back to real credits.
   for (const artist of (knobs.artists || []).slice(0, 6)) {
     try {
       pools.push(normMany(await subsonic.getTopSongs(artist, { count: 40 }), `artist:${artist}`, 0.65));
@@ -226,8 +213,7 @@ export async function buildCandidatePool(
     } catch { /* ignore */ }
   }
 
-  // Local library filter — the strongest source for instrumental + energy/era,
-  // and it carries the instrumental flag the semantic rows don't.
+  // Local library filter: the only source carrying the instrumental flag.
   {
     const era = eraSpan(knobs.eras);
     const filtered = library.filter({
@@ -242,13 +228,12 @@ export async function buildCandidatePool(
     pools.push(normMany(filtered.rows, 'library', 0.5));
   }
 
-  // Recently-added source (Kate #2a). When toggled, weight it high so a
-  // prompt-less build is dominated by new arrivals.
+  // Weighted high so a prompt-less build is dominated by new arrivals.
   if (sources.recentlyAdded) {
     pools.push(normMany(await recentlyAddedTracks(), 'recently-added', 0.72));
   }
 
-  // Fillers when the pool is thin — keeps a small/under-tagged library usable.
+  // Fillers when the pool is thin, so a small library stays usable.
   let pool = mergePools(pools);
   if (pool.length < 30) {
     pools.push(normMany(await subsonic.getStarred().catch(() => []), 'starred', 0.4));
@@ -265,9 +250,8 @@ export async function buildCandidatePool(
     pool = mergePools(pools);
   }
 
-  // Fill gaps from the library store: Subsonic rows never carry bpm (and can
-  // miss duration/tags) — the analyzer/tagger data lives in library.db, and
-  // the soft filters below are only as good as the fields they can see.
+  // Subsonic rows carry no bpm and can miss duration/tags; the soft filters below
+  // are only as good as the fields they see, so fill from library.db.
   for (const t of pool) {
     if (t.bpm == null || t.durationSec == null || t.energy == null || !t.moods?.length) {
       const tag = library.get(t.id);
@@ -279,17 +263,15 @@ export async function buildCandidatePool(
     }
   }
 
-  // ── Hard/soft filters ──
   const excluded = new Set([...(input.excludeTrackIds || []), ...(knobs.excludeRecentlyPlayed ? (input.recentPlayIds || []) : [])]);
   if (excluded.size) pool = pool.filter((t) => !excluded.has(t.id));
 
-  // Artist allow-list (pure helper, unit-pinned). Soft — reverts with a
-  // reason if the library barely knows these artists.
+  // Artist allow-list. Soft: reverts if the library barely knows these artists.
   if (knobs.artists?.length) {
     pool = revertIfStarved(filterByArtists(pool, knobs.artists), pool, knobs, reasons, 'artist');
   }
 
-  // Instrumental-only (Kate #3): drop known-vocal; keep instrumental + unknown.
+  // Instrumental-only: drop known-vocal, keep instrumental and unknown.
   if (knobs.instrumentalOnly) {
     const before = pool.length;
     pool = pool.filter((t) => t.instrumental !== false);
@@ -322,17 +304,14 @@ export async function buildCandidatePool(
     pool = revertIfStarved(filteredEnergy, pool, knobs, reasons, 'energy');
   }
 
-  // Track-length band: drop tracks whose KNOWN duration falls outside the
-  // min/max anchors; keep unknown-duration rows (can't tell) so a partly
-  // un-analysed library still fills. Soft — relaxes rather than starving.
+  // Track-length band (soft): known out-of-band drops, unknown duration stays.
   const minLen = knobs.minTrackSeconds && knobs.minTrackSeconds > 0 ? knobs.minTrackSeconds : 0;
   const maxLen = knobs.maxTrackSeconds && knobs.maxTrackSeconds > 0 ? knobs.maxTrackSeconds : 0;
   if (minLen || maxLen) {
     pool = revertIfStarved(filterByDurationBand(pool, minLen, maxLen), pool, knobs, reasons, 'track-length');
   }
 
-  // BPM band (analyzer tempo): same soft semantics — known out-of-band drops,
-  // un-analysed stays. Flag when coverage is too thin for the band to bite.
+  // BPM band (soft, same semantics). Flag when coverage is too thin to bite.
   const minBpm = knobs.minBpm && knobs.minBpm > 0 ? knobs.minBpm : 0;
   const maxBpm = knobs.maxBpm && knobs.maxBpm > 0 ? knobs.maxBpm : 0;
   if (minBpm || maxBpm) {
@@ -343,23 +322,20 @@ export async function buildCandidatePool(
     pool = revertIfStarved(filterByBpmBand(pool, minBpm, maxBpm), pool, knobs, reasons, 'bpm');
   }
 
-  // Artist-diversity cap: keep the candidate list varied so one prolific artist
-  // / a freshly-imported album can't dominate what the model (and the fallback)
-  // sees. Skipped when the operator INTENTIONALLY narrows to an artist or seed
-  // tracks — that focus is the point.
+  // Artist-diversity cap, so one prolific artist can't dominate the candidates.
+  // Skipped when the operator narrowed to an artist or seed tracks on purpose.
   const artistSeeded = Boolean(input.seedArtist?.trim() || input.seedTrackIds?.length || knobs.artists?.length);
   if (!artistSeeded) {
     const target = clampCount(knobs.targetCount ?? DEFAULT_COUNT);
-    // Allow a few per artist but never let one artist exceed ~a third of a
-    // target-sized set.
+    // Never let one artist exceed ~a third of a target-sized set.
     pool = capPerArtist(pool, Math.max(4, Math.ceil(target / 3)));
   }
 
   return { pool: capPool(pool, POOL_CAP), reasons };
 }
 
-// If a soft filter would leave fewer than the floor, keep the unfiltered pool
-// and note the relaxation instead of returning a starved result.
+// A soft filter landing under the floor reverts to the unfiltered pool and notes
+// the relaxation, rather than returning a starved result.
 function revertIfStarved(
   filtered: PoolTrack[],
   original: PoolTrack[],
@@ -382,8 +358,6 @@ function eraSpan(eras?: EraWindow[] | null): { fromYear: number | null; toYear: 
   }
   return { fromYear, toYear };
 }
-
-// ── Stage 2: curation ─────────────────────────────────────────────────────────
 
 const CURATE_SCHEMA = z.object({
   name: z.string().max(80).optional().describe('a short, evocative playlist name'),
@@ -415,7 +389,7 @@ function curatorSystem(input: GenerateInput, targetCount: number): string {
   return lines.join('\n');
 }
 
-// Compact candidate projection — dense JSON keeps the token bill down.
+// Compact projection; dense JSON keeps the token bill down.
 function projectForLlm(pool: PoolTrack[]): any[] {
   return capPool(pool, LLM_CANDIDATE_CAP).map((t) => ({
     id: t.id,
@@ -454,9 +428,7 @@ export async function curatePlaylist(
       temperature: 0.6,
       kind: 'playlistCurate',
     });
-    // djObject (via withFailover) returns the validated object DIRECTLY — NOT
-    // wrapped in `{ value }`. (An earlier `out?.value` read undefined here, so
-    // every curate silently fell back to the deterministic arranger.)
+    // djObject returns the validated object directly, not wrapped in `{ value }`.
     const value = out;
     const chosen = orderByIds(Array.isArray(value?.ids) ? value.ids : [], pool);
     if (chosen.length < 2) return { ...fallback(), name: value?.name, description: value?.description };
@@ -466,8 +438,6 @@ export async function curatePlaylist(
     return fallback();
   }
 }
-
-// ── Orchestrator ──────────────────────────────────────────────────────────────
 
 function toDraft(t: PoolTrack): DraftTrack {
   return {
@@ -484,7 +454,7 @@ function toDraft(t: PoolTrack): DraftTrack {
   };
 }
 
-// Trim a track list to a target minutes budget (keeps leading order).
+// Trim to a target minutes budget, keeping leading order.
 function trimToMinutes(tracks: PoolTrack[], minutes: number): PoolTrack[] {
   const budget = minutes * 60;
   const out: PoolTrack[] = [];

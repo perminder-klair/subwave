@@ -15,11 +15,10 @@ import JsonLd from '@/components/JsonLd';
 import { Toaster } from '@/components/ui/toaster';
 
 // gtag.js only loads when a Measurement ID is configured (lib/ga, resolved from
-// the runtime env so it works without a rebuild), so dev and un-instrumented
-// deploys stay analytics-free.
+// the runtime env), so dev and un-instrumented deploys stay analytics-free.
 
-// Fraunces is the display serif; its opsz axis self-tunes contrast to the
-// rendered size. Plus Jakarta Sans carries body/UI, JetBrains Mono is data.
+// Fraunces is the display serif (its opsz axis self-tunes contrast). Plus
+// Jakarta Sans carries body/UI, JetBrains Mono is data.
 const fraunces = Fraunces({
   subsets: ['latin'],
   axes: ['opsz'],
@@ -28,9 +27,7 @@ const fraunces = Fraunces({
 });
 
 // Curated display faces a theme can select via the --display-font token (see
-// lib/theme FONT_STACKS). Loaded globally so the operator-picked headline face
-// applies across every skin + the admin console; kept small to bound bundle
-// weight.
+// lib/theme FONT_STACKS). Loaded globally; kept small to bound bundle weight.
 const doto = Doto({
   subsets: ['latin'],
   weight: 'variable',
@@ -79,8 +76,7 @@ const plusJakarta = Plus_Jakarta_Sans({
 });
 
 // The default data face. Its next/font variable is --font-jetbrains, NOT
-// --font-mono: the `font-mono` utility follows the themeable --mono-font token
-// (globals.css @theme), which defaults to JetBrains.
+// --font-mono: the `font-mono` utility follows the themeable --mono-font token.
 const jetbrainsMono = JetBrains_Mono({
   subsets: ['latin', 'latin-ext'],
   weight: ['300', '400', '500', '700', '800'],
@@ -128,8 +124,7 @@ const DESCRIPTION =
 const SOCIAL_TITLE = 'SUB/WAVE — A real internet radio station';
 const OG_IMAGE_ALT = 'SUB/WAVE — a real internet radio station';
 
-// WebSite + Organization give search engines the canonical name/logo for rich
-// results across every page.
+// WebSite + Organization give search engines the canonical name/logo.
 const SITE_JSONLD = [
   {
     '@context': 'https://schema.org',
@@ -149,10 +144,8 @@ const SITE_JSONLD = [
 
 // The share-card image tags (og:image, twitter:image) are emitted by hand in
 // <head> below, NOT via the Metadata API: Next routes every Metadata API URL
-// through `metadataBase` and drops metadataBase on the force-dynamic homepage,
-// pinning those URLs to a localhost origin. Hand-written <meta> tags are emitted
-// verbatim so the absolute SITE_URL survives. The Metadata API still owns
-// everything that isn't a fixed URL.
+// through `metadataBase`, which it drops on the force-dynamic homepage, pinning
+// those URLs to localhost. Hand-written <meta> tags are emitted verbatim.
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: { default: 'SUB/WAVE', template: '%s · SUB/WAVE' },
@@ -197,26 +190,22 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       suppressHydrationWarning
     >
       <head>
-        {/* Apply stored theme before paint to avoid flash of wrong palette.
-            Script body is a static constant from lib/theme — no untrusted input. */}
+        {/* Apply stored theme before paint to avoid a flash of the wrong
+            palette. Static constant from lib/theme, no untrusted input. */}
         <script dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
 
-        {/* Resolve low-power "lite" mode (?lite=… or stored pref) before paint
-            so a pinned kiosk never flashes the heavy, blur-heavy build. Static
-            constant from lib/lite — no untrusted input. */}
+        {/* Resolve low-power "lite" mode before paint so a pinned kiosk never
+            flashes the heavy build. Static constant from lib/lite. */}
         <script dangerouslySetInnerHTML={{ __html: LITE_INIT_SCRIPT }} />
 
         {/* Hide the player shell before paint when this browser resolves to a
-            non-default skin, so a reload never flashes the wrong face. Static
-            constant from lib/skin — no untrusted input. */}
+            non-default skin. Static constant from lib/skin. */}
         <script dangerouslySetInnerHTML={{ __html: SKIN_INIT_SCRIPT }} />
 
         <JsonLd data={SITE_JSONLD} />
 
-        {/* Absolute share-card image tags — see the metadata comment above for
-            why these bypass the Metadata API. SITE_URL is resolved from the
-            runtime container env and the public pages render per-request (see
-            lib/site.ts), so these always carry the operator's domain. */}
+        {/* Absolute share-card image tags -- see the metadata comment above for
+            why these bypass the Metadata API. */}
         <meta property="og:image" content={`${SITE_URL}/og`} />
         <meta property="og:image:type" content="image/png" />
         <meta property="og:image:width" content="1200" />
@@ -231,8 +220,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <ServiceWorkerRegister />
             {children}
             {/* Mounted once at the root so every route has somewhere for
-                `notify()` (lib/notify → Sonner) to appear. Do not add per-shell
-                mounts — they produce a duplicate toaster. */}
+                `notify()` to appear. Per-shell mounts duplicate the toaster. */}
             <Toaster />
           </ThemeProvider>
         </MotionProvider>

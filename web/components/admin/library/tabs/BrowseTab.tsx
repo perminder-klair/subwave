@@ -15,9 +15,8 @@ import type { BrowseResponse, Energy, Sort, Vocal } from '../types';
 import { PAGE_SIZE } from '../types';
 
 export interface BrowseTabProps {
-  // The filters live in useLibraryUrlState because they are mirrored to the
-  // query string, which the panel owns. `page` is NOT mirrored, so it lives
-  // here with the fetch that consumes it.
+  // Filters live in useLibraryUrlState because they are mirrored to the query
+  // string; `page` is not mirrored, so it lives here with its fetch.
   moods: string[]; setMoods: Dispatch<SetStateAction<string[]>>;
   energy: Energy; setEnergy: (e: Energy) => void;
   vocal: Vocal; setVocal: (v: Vocal) => void;
@@ -38,17 +37,16 @@ export default function BrowseTab({
 
   const [page, setPage] = useState(0);
 
-  // Debounce the free-text box only. Mood chips, sort and the year fields all
-  // change one step at a time, so delaying the whole request just feels laggy.
+  // Debounce the free-text box only; the other controls change one step at a
+  // time and delaying them feels laggy.
   const [debouncedQ] = useDebounceValue(q, 250);
 
   const filters: BrowseKeyFilters = {
     moods, energy, vocal, genre, yearFrom, yearTo, q: debouncedQ.trim(), sort, page,
   };
 
-  // No AbortController any more, and not because the race was handled: the
-  // response is keyed to the filters that asked for it, so a slow earlier
-  // request cannot overwrite a faster later one. The race is structurally gone.
+  // No AbortController needed: the response is keyed to the filters that asked
+  // for it, so a slow earlier request cannot overwrite a faster later one.
   const browseQuery = useAdminQuery<BrowseResponse>({
     key: libraryKeys.browse(filters),
     path: () => {
@@ -80,8 +78,8 @@ export default function BrowseTab({
 
   useEffect(() => { setPage(0); }, [moods, energy, vocal, genre, yearFrom, yearTo, debouncedQ, sort]);
 
-  // The vocab only rides along on the browse response, so other tabs fetch a
-  // one-row browse rather than hardcoding SHOW_MOODS into the bundle.
+  // The vocab only rides the browse response, so other tabs fetch a one-row
+  // browse rather than hardcoding SHOW_MOODS.
   useEffect(() => {
     if (browse?.moodVocab?.length) seedVocab(browse.moodVocab);
   }, [browse, seedVocab]);

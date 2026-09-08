@@ -1,31 +1,20 @@
-// Show → Navidrome playlist anchor resolver.
-//
-// A show can pin one or more Navidrome playlists (settings show.playlistIds);
-// the union of their tracks becomes the show's candidate pool. This module
-// turns that id list into an identity-deduped track pool, shared by all three consumers:
-// the pool picker (music/picker.ts), the session DJ agent's tools
-// (broadcast/dj-agent.ts), and the LLM-free fallback (broadcast/scheduler.ts).
-//
-// subsonic.getPlaylist already rejects station-archive entries, so there's no
-// extra archive filtering here — the merge is purely union + dedupe by id and
-// normalised title|artist identity.
+// Show -> Navidrome playlist anchor resolver. A show's pinned playlists
+// (show.playlistIds) union, identity-deduped, is its candidate pool, shared by the
+// pool picker, the DJ agent's tools and the LLM-free fallback. getPlaylist already
+// drops station-archive entries, so this is only union + dedupe.
 
 import * as subsonic from './subsonic.js';
 import { trackKey } from './recency.js';
 
 export type PlaylistPool = {
-  ids: Set<string>; // every SURVIVING track id — the strict lock set. Not every
-                    // id in the union: an alternate rip collapsed by the
-                    // identity dedupe below is absent, so a strict show cannot
-                    // pick it. resolveShowPlaylistPool warns when that happens.
+  ids: Set<string>; // SURVIVING ids only, so a rip collapsed by the identity
+                    // dedupe is absent from the strict lock set (warned below).
   tracks: any[];     // deduped Subsonic song objects
   names: string[];   // resolved playlist names, for logging / debug
 };
 
-// Pure: flatten a list of playlist track-lists into one deduped array, keeping
-// the first occurrence of each id or normalised title|artist identity and
-// dropping entries without an id. The unit-test seam
-// (scripts/show-playlist.test.ts) — no Subsonic, no I/O.
+// Keeps the first occurrence of each id or normalised title|artist identity;
+// entries without an id are dropped. Pure, the unit-test seam.
 export function mergePlaylistTracks(lists: any[][]): any[] {
   const seenIds = new Set<string>();
   const seenKeys = new Set<string>();
@@ -44,9 +33,7 @@ export function mergePlaylistTracks(lists: any[][]): any[] {
   return out;
 }
 
-// TTL cache so a pick / refresh doesn't re-walk every playlist. Same 30-min
-// horizon the pool picker uses for its other Subsonic sources; a playlist edited
-// in Navidrome shows up within a refresh cycle.
+// Same 30-min horizon the pool picker uses for its other Subsonic sources.
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const cache = new Map<string, { val: any[]; at: number }>();
 
@@ -58,17 +45,13 @@ async function memoFetch(key: string, fn: () => Promise<any[]>): Promise<any[]> 
   return val;
 }
 
-// Resolve a show's anchored playlists into a deduped track pool. Returns null
-// when the show pins no playlists (the common case → callers behave as today).
-// A missing / deleted / empty playlist id contributes nothing rather than
-// throwing, so a stale anchor degrades to the show's other steering (or the
-// full library) instead of stranding the stream.
+// null when the show pins none. A missing/deleted/empty id contributes nothing
+// rather than throwing, so a stale anchor degrades instead of stranding the stream.
 export async function resolveShowPlaylistPool(show: any): Promise<PlaylistPool | null> {
   const ids = Array.isArray(show?.playlistIds) ? show.playlistIds.filter(Boolean) : [];
   if (!ids.length) return null;
 
-  // One index fetch (memoised) to map ids → names for the log line; failures
-  // here just drop the names, never the tracks.
+  // ids -> names for the log line; a failure drops the names, never the tracks.
   let index: any[] = [];
   try {
     index = await memoFetch('playlists-index', () => subsonic.getPlaylists());
@@ -83,23 +66,17 @@ export async function resolveShowPlaylistPool(show: any): Promise<PlaylistPool |
       const meta = index.find((p: any) => p.id === id);
       if (meta?.name) names.push(meta.name);
     } catch (err) {
-      // Still degrade (never strand the stream on one bad anchor), but say so:
-      // a stale id (playlist deleted/recreated in Navidrome) failing silently
-      // here is what turned a "playlist only (strict)" show into an unanchored
-      // one with no trace. The pick paths log the operator-facing warning when
-      // the whole pool comes back null.
+      // Degrade but say so: a silent stale id turns a strict playlist show into
+      // an unanchored one.
       console.warn(`[show-playlist] anchor playlist ${id} failed to resolve: ${(err as Error)?.message}`);
     }
   }
 
   const tracks = mergePlaylistTracks(lists);
   if (!tracks.length) return null;
-  // The identity dedupe drops playlist entries the operator can still SEE in
-  // Navidrome, and it shrinks the strict lock set with them. Say so: a strict
-  // show quietly short of the songs its own playlist lists is undiagnosable
-  // from the operator's side — the same reason the pick paths shout when a
-  // pinned anchor resolves to nothing. Only the identity collapses are counted;
-  // a plain id repeated across two pinned playlists is an ordinary union.
+  // The identity dedupe shrinks the strict lock set below what the operator sees
+  // in Navidrome, so say so. An id repeated across two pinned playlists is a
+  // union, not a collapse.
   const distinctIds = new Set<string>();
   for (const list of lists) {
     for (const t of list || []) if (t?.id) distinctIds.add(t.id);
@@ -112,19 +89,10 @@ export async function resolveShowPlaylistPool(show: any): Promise<PlaylistPool |
   return { ids: new Set<string>(tracks.map((t: any) => t.id)), tracks, names };
 }
 
-// Resolve a show's excluded playlists (blocklist) into a set of track ids to
-// suppress. Any track whose id is in this set is dropped from the candidate
-// pool before the LLM sees it. Returns null when the show has no excluded
-// playlists (the common case → callers treat it as a no-op). Shares the same
-// `playlist:${id}` memo key as resolveShowPlaylistPool — it's the identical
-// getPlaylist fetch, so a playlist used as both anchor and blocklist is fetched
-// once, not twice.
-// Resolve a list of playlist ids into per-playlist member-id sets — the
-// blocklist's `playlist` rules read these (music/blocklist.ts keeps them in
-// module state so matchOf stays synchronous). Shares the `playlist:${id}` memo
-// with the anchor/excluded resolvers above, so a playlist used as anchor and
-// rule is fetched once. A failed id is simply absent from the map (stale ids
-// inert), warned once per fetch attempt.
+// Per-playlist member-id sets for the blocklist's `playlist` rules, which hold
+// them in module state so matchOf stays synchronous. Shares the `playlist:${id}`
+// memo, so an id used as both anchor and rule is fetched once; a failed id is
+// absent from the map rather than fatal.
 export async function resolvePlaylistMemberSets(ids: string[]): Promise<Map<string, Set<string>>> {
   const out = new Map<string, Set<string>>();
   for (const id of [...new Set(ids.filter(Boolean))]) {
@@ -138,6 +106,7 @@ export async function resolvePlaylistMemberSets(ids: string[]): Promise<Map<stri
   return out;
 }
 
+// Track ids to suppress before the LLM sees the pool; null when none are excluded.
 export async function resolveExcludedPlaylistIds(show: any): Promise<Set<string> | null> {
   const ids = Array.isArray(show?.excludedPlaylistIds) ? show.excludedPlaylistIds.filter(Boolean) : [];
   if (!ids.length) return null;

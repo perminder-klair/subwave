@@ -1,14 +1,6 @@
-// Shows moved onto a shared zod schema (controller/src/schemas/show.ts),
-// mirrored into web/lib/schemas.generated.ts. These tests pin the PUBLIC
-// contract of the three callers that now run it — validateShowsStrict (the
-// update() chokepoint), normalizeShows (the lenient load path) and the POST
-// /shows route middleware — plus the two places the strict and lenient paths
-// are deliberately allowed to differ.
-//
-// Message WORDING is not asserted. Accept-vs-reject and the returned shape are
-// the contract.
-//
-// Run: npx tsx scripts/show-schema.test.ts (auto-discovered by npm test).
+// The show schema's three callers: validateShowsStrict (the update()
+// chokepoint), normalizeShows (lenient load) and the POST /shows middleware.
+// Accept-vs-reject and the returned shape are the contract; wording is not.
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -42,8 +34,6 @@ const strict = (over: Record<string, unknown> = {}) =>
   validateShowsStrict([show(over)], personas, themes, moodNames)[0];
 
 const ctx = { personaIds, moodNames, themeIds: [...themes], minTrackSeconds: 40 };
-
-// --- the shape both paths produce -------------------------------------------
 
 test('a minimal show validates and every optional field defaults', () => {
   const s = strict();
@@ -103,8 +93,8 @@ test('era windows: open ends allowed, empty dropped, backwards rejected', () => 
 });
 
 test('an unknown themeId is dropped to "", a known one preserved', () => {
-  // The #917 tolerance: throwing here bricked every shows/schedule save for any
-  // install still carrying one retired palette id.
+  // #917: throwing here bricked every save on an install carrying a retired
+  // palette id.
   assert.equal(strict({ themeId: 'vinyl' }).themeId, 'vinyl');
   assert.equal(strict({ themeId: 'sunset' }).themeId, '');
 });
@@ -119,18 +109,15 @@ test('maxTrackSeconds honours the crossfade-derived floor, and 0 always passes',
 });
 
 test('minTrackLengthSeconds is the cap\'s twin, not the cap', () => {
-  // The FLOOR (#1573). Same three-state shape as the cap above — null =
-  // inherit the station default, 0 = no floor, >0 = this show's own — and the
-  // SAME crossfade-derived lower bound, which is the whole reason the key is
-  // named apart from settings.minTrackSeconds() rather than overloading it.
+  // The FLOOR (#1573): null = inherit, 0 = no floor, >0 = this show's own,
+  // sharing the cap's crossfade-derived lower bound.
   assert.equal(strict().minTrackLengthSeconds, null, 'absent = inherit = today');
   assert.equal(strict({ minTrackLengthSeconds: 0 }).minTrackLengthSeconds, 0);
   assert.equal(strict({ minTrackLengthSeconds: 120 }).minTrackLengthSeconds, 120);
   assert.equal(strict({ minTrackLengthSeconds: '' }).minTrackLengthSeconds, null);
   assert.equal(strict({ minTrackLengthSeconds: null }).minTrackLengthSeconds, null);
   assert.throws(() => strict({ minTrackLengthSeconds: 5 }), /minTrackLengthSeconds/);
-  // Its ceiling is deliberately far below the cap's: a ten-hour cap is a
-  // harmless "no cap", a ten-hour floor is a show that can never pick anything.
+  // Ceiling far below the cap's: a ten-hour floor picks nothing.
   assert.throws(() => strict({ minTrackLengthSeconds: 36000 }), /minTrackLengthSeconds/);
   assert.throws(() => strict({ minTrackLengthSeconds: 90.5 }), /minTrackLengthSeconds/);
 });
@@ -142,8 +129,7 @@ test('a show may set a floor and a cap independently', () => {
 });
 
 test('booleans read as `=== true`, matching both paths before the schema', () => {
-  // Deliberately NOT z.boolean(): load and save have always agreed to treat a
-  // non-boolean as off, and tightening only one of them would split them.
+  // Deliberately not z.boolean(): load and save both treat a non-boolean as off.
   assert.equal(strict({ banter: true }).banter, true);
   assert.equal(strict({ banter: 'yes' }).banter, false);
   assert.equal(strict({ programme: 1 }).programme, false);
@@ -155,11 +141,11 @@ test('the array cap is enforced', () => {
 });
 
 test('a malformed id is re-minted, not rejected', () => {
-  // Unlike webhooks. A show id is what the weekly schedule grid points at, so
-  // refusing one would turn a single bad id in a backup into a failed restore.
+  // Unlike webhooks: refusing would turn one bad id in a backup into a failed
+  // restore.
   const s = strict({ id: 'NOT VALID' });
   assert.match(s.id, /^s_[a-z0-9]+$/);
-  // A well-formed id survives untouched — grid slots keep pointing at it.
+  // A well-formed id survives untouched, so grid slots keep pointing at it.
   assert.equal(strict({ id: 's_abc123' }).id, 's_abc123');
 });
 
@@ -171,13 +157,9 @@ test('duplicate ids across rows are re-minted', () => {
   assert.notEqual(out[1].id, 's_dupe01');
 });
 
-// --- legacy singular fields: migrated by EVERY path --------------------------
-
 test('the strict path MIGRATES a legacy singular field, as it always did', () => {
-  // A pre-#929 backup restores through settings.update() — the pre-schema
-  // validator accepted and migrated these ("a legacy singular mood from an
-  // older client still validates" was its own comment), so refusing them here
-  // would turn a working restore into a hard failure.
+  // A pre-#929 backup restores through settings.update(), so refusing the
+  // legacy singular fields would fail the restore.
   const s = strict({
     mood: 'chill', genre: 'funk, soul', energy: 'low',
     fromYear: 1990, toYear: 1999, maxTrackMinutes: 10,
@@ -190,19 +172,14 @@ test('the strict path MIGRATES a legacy singular field, as it always did', () =>
 });
 
 test('a migrated legacy value is judged by the same rules as a native one', () => {
-  // Migration is not a free pass: a legacy energy outside the vocabulary fails
-  // exactly as energies: ['bogus'] would.
+  // Migration is not a free pass: a legacy value is judged by the plural rules.
   assert.throws(() => strict({ energy: 'bogus' }), /energies/);
   assert.throws(() => strict({ mood: 'not-a-mood' }), /moods/);
 });
 
 test('the migration lives in the SCHEMA, so POST /shows migrates too', () => {
-  // Regression: when the legacy handling lived only in validateShowsStrict,
-  // POST /shows — whose middleware parses showPostSchema directly — never ran
-  // it. z.object had already stripped the unknown `mood` key, so the route
-  // accepted the show, dropped the mood and answered 200. Silent loss on the
-  // exact path an operator uses by hand. The in-schema preprocess folds the
-  // legacy key into the plural list BEFORE the object can strip it.
+  // The in-schema preprocess folds the legacy key into the plural list before
+  // z.object strips it, so the route migrates too.
   const r = showSchema(ctx).safeParse(show({ mood: 'chill' }));
   assert.equal(r.success, true);
   assert.deepEqual(r.data!.moods, ['chill']);
@@ -215,7 +192,7 @@ test('the lenient path MIGRATES the same fields', () => {
     fromYear: 1990, toYear: 1999, maxTrackMinutes: 10,
   }], personaIds);
   assert.deepEqual(s.moods, ['chill']);
-  // The comma-crammed legacy genre field splits into individually-resolvable tags.
+  // The comma-crammed legacy genre field splits into resolvable tags.
   assert.deepEqual(s.genres, ['funk', 'soul']);
   assert.deepEqual(s.energies, ['low']);
   assert.deepEqual(s.eras, [{ fromYear: 1990, toYear: 1999 }]);
@@ -227,8 +204,6 @@ test('migrateLegacyShowFields leaves an already-plural show alone', () => {
   assert.deepEqual(out.moods, ['chill']);
   assert.equal('mood' in out, false);
 });
-
-// --- the lenient path's own leniency ----------------------------------------
 
 test('load never throws, whatever settings.json holds', () => {
   for (const raw of [null, 'nope', 42, {}, [null], ['x'], [{}], [{ name: 7 }]]) {
@@ -261,10 +236,9 @@ test('load repairs what a working show can survive; strict rejects the same inpu
 });
 
 test('load keeps an unknown mood; the strict path rejects it', () => {
-  // Deliberate divergence, expressed as CONTEXT (moodNames: null) rather than a
-  // second implementation: load runs before the mood cache exists and moods are
-  // operator-editable, so filtering against the seed defaults would strip the
-  // operator's own. A stale mood just matches nothing on air.
+  // Divergence expressed as CONTEXT (moodNames: null), not a second
+  // implementation: load runs before the mood cache exists, so filtering
+  // against seed defaults would strip the operator's own moods.
   const [s] = normalizeShows([show({ moods: ['operator-custom'] })], personaIds);
   assert.deepEqual(s.moods, ['operator-custom']);
   assert.throws(() => strict({ moods: ['operator-custom'] }), /moods/);
@@ -282,15 +256,12 @@ test('load caps the list at SHOWS_LIMIT', () => {
 });
 
 test('load and save agree on which ids are valid', () => {
-  // The id is what the weekly schedule grid points at, so a stored id the load
-  // path keeps must be one the next save also keeps — otherwise the show
-  // silently changes identity and empties its slots.
+  // An id load keeps must be one save keeps, or the show changes identity and
+  // empties its schedule slots.
   const [kept] = normalizeShows([show({ id: 's_abc123' })], personaIds);
   assert.equal(kept.id, 's_abc123');
   assert.equal(strict({ id: 's_abc123' }).id, 's_abc123');
 });
-
-// --- the context nulls -------------------------------------------------------
 
 test('a null context field means "unchecked", not "reject everything"', () => {
   const unchecked = showSchema({
@@ -317,8 +288,6 @@ test('the same over-cap input fails on both paths, one by throwing and one by ca
   assert.equal(s.genres.length, SHOW_FILTER_VALUES_MAX);
 });
 
-// --- the error payload the route middleware emits ---------------------------
-
 test('a field error is keyed by the schema field name', () => {
   const r = showSchema(ctx).safeParse(show({ personaId: 'p_nope' }));
   assert.equal(r.success, false);
@@ -328,19 +297,13 @@ test('a field error is keyed by the schema field name', () => {
 test('a nested field error keeps its full path', () => {
   const r = showSchema(ctx).safeParse(show({ eras: [{ fromYear: 1234567, toYear: null }] }));
   assert.equal(r.success, false);
-  // 'eras.0.fromYear' is what flattenIssues emits and what react-hook-form's
-  // setError expects.
+  // flattenIssues emits 'eras.0.fromYear', which react-hook-form's setError wants.
   assert.deepEqual(r.error!.issues[0].path.slice(0, 2), ['eras', 0]);
 });
 
-// --- explicit null on optional fields ----------------------------------------
-
 test('explicit null reads as absent on every optional field', () => {
-  // The pre-schema validator accepted null everywhere it accepted an omission
-  // (String(x ?? ''), `!= null` guards), and serializers that write null for
-  // empty fields relied on it. Regression: zod's .default() fires only on
-  // undefined, so these all 400'd — and because update() re-validates the whole
-  // array, one null field on one show failed the entire shows/schedule save.
+  // zod's .default() fires only on undefined, and update() re-validates the
+  // whole array, so one null field would fail the entire shows/schedule save.
   const s = strict({
     topic: null, segmentSkill: null, themeId: null, vocals: null,
     moods: null, genres: null, energies: null, eras: null,
@@ -357,14 +320,9 @@ test('explicit null reads as absent on every optional field', () => {
   assert.deepEqual(s.playlistIds, []);
 });
 
-// --- one bad entry must not cost the whole show on load -----------------------
-
 test('load survives one malformed entry in any list field', () => {
-  // Regression: the pre-repair only .slice()d moods/playlistIds/
-  // excludedPlaylistIds with no typeof filter, so a single non-string entry —
-  // a hand-edit, an older writer, a partial write, exactly what the lenient
-  // path exists to tolerate — failed the schema and `continue` deleted the
-  // whole show on boot; the next save persisted the loss.
+  // One non-string entry must not fail the schema and delete the whole show
+  // on boot.
   const cases: Array<[Record<string, unknown>, (s: Record<string, any>) => void]> = [
     [{ moods: [null, 'chill'] }, (s) => assert.deepEqual(s.moods, ['chill'])],
     [{ playlistIds: [42, 'pl-ok'] }, (s) => assert.deepEqual(s.playlistIds, ['pl-ok'])],
@@ -379,30 +337,24 @@ test('load survives one malformed entry in any list field', () => {
 });
 
 test('load survives an over-cap energies list full of duplicates', () => {
-  // Regression: energies was filtered but never capped pre-parse, and the
-  // schema's .max() runs BEFORE its dedup transform — so 16 duplicate 'low'
-  // entries dropped the show.
+  // The schema's .max() runs BEFORE its dedup transform, so the lenient path
+  // must cap pre-parse or duplicates drop the show.
   const energies = Array.from({ length: SHOW_FILTER_VALUES_MAX + 1 }, () => 'low');
   const rows = normalizeShows([show({ energies })], personaIds);
   assert.equal(rows.length, 1);
   assert.deepEqual(rows[0].energies, ['low']);
 });
 
-// --- tags: organisation only, and the one list that REFUSES a bad entry -------
-
 test('tags lowercase, trim, de-duplicate and keep first-seen order', () => {
-  // The comma-string arm is not decoration: it is the wire shape every other
-  // tag surface in the codebase (skills, the community catalogs) already
-  // sends, so a client that has one must not 400 here.
+  // The comma-string arm is the wire shape other tag surfaces send.
   assert.deepEqual(strict({ tags: ['  Late-Night ', 'FACTUAL', 'late-night'] }).tags,
     ['late-night', 'factual']);
   assert.deepEqual(strict({ tags: 'weekend, Archive' }).tags, ['weekend', 'archive']);
 });
 
 test('a malformed tag is REFUSED on save, unlike every other list on a show', () => {
-  // Deliberately unlike moods/genres/skills, which drop a bad entry: a tag is
-  // typed by hand in the editor, and one that silently vanishes on save is the
-  // operator watching their own input disappear on the next reload.
+  // Unlike moods/genres/skills, which drop a bad entry: a tag is typed by hand
+  // and silently vanishing on save is the operator losing their own input.
   assert.throws(() => strict({ tags: ['-nope'] }), /tag/);
   assert.throws(() => strict({ tags: ['Has Space'] }), /tag/);
   assert.throws(() => strict({ tags: ['x'.repeat(SHOW_TAG_MAX + 1)] }), /tag/);
@@ -421,8 +373,7 @@ test('load DROPS a bad tag where save refuses it, and the cap survives junk', ()
   }], personaIds);
   assert.deepEqual(s.tags, ['late-night', 'factual'], 'the show keeps its real tags');
 
-  // The cap is applied AFTER the validity filter, so junk cannot spend the
-  // budget the operator's own tags need.
+  // The cap applies AFTER the validity filter, so junk cannot spend the budget.
   const junk = Array.from({ length: TAGS_PER_SHOW_LIMIT }, () => 'NOT A TAG');
   const [t] = normalizeShows([{
     name: 'Breakfast', personaId: 'p_host', tags: [...junk, 'kept'],
@@ -431,9 +382,7 @@ test('load DROPS a bad tag where save refuses it, and the cap survives junk', ()
 });
 
 test('a show with no tags round-trips byte-identically apart from the empty list', () => {
-  // The upgrade rule: absent must coerce to the pre-existing behaviour. Both
-  // paths must agree, or a station that has never tagged anything would see
-  // its shows rewritten differently by load and by save.
+  // Absent must coerce to the pre-existing behaviour on both paths.
   const [loaded] = normalizeShows([{ name: 'Breakfast', personaId: 'p_host' }], personaIds);
   assert.deepEqual(loaded.tags, []);
   assert.deepEqual(strict().tags, loaded.tags);

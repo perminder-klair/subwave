@@ -1,7 +1,6 @@
 // Shared SUB/WAVE disc mark for the favicons and PWA install icons. Kept in
 // lockstep with app/assets/icon.png and the .bs-wordmark-disc-face hover state
-// in globals.css (repeating-conic-gradient, 9deg ink / 9deg gap). Inline SVG so
-// next/og (Satori) reproduces it crisply at any size.
+// in globals.css. Inline SVG so next/og (Satori) reproduces it at any size.
 
 const BG = '#100e0c'; // dark plate (--bg)
 const DISC = '#ece6dc'; // cream face (--ink, dark theme)
@@ -25,14 +24,10 @@ function spokePaths(r) {
   return paths;
 }
 
-// `fill` (0-1) is how much of the canvas the disc occupies. Standard icons use
-// ~0.8; maskable icons shrink so the disc stays inside the Android launcher
-// safe zone once the adaptive mask applies.
-//
-// `opaque` fills the canvas behind the disc with the dark plate. Off by default
-// so favicon / apple-touch icons read as a round disc on transparent corners.
-// Maskable icons MUST set it: Android's adaptive mask needs a full-bleed opaque
-// background or it drops the icon onto a system backdrop and clips it.
+// `fill` (0-1) is how much of the canvas the disc occupies; maskable icons
+// shrink so the disc stays inside the Android launcher safe zone.
+// `opaque` fills the canvas behind the disc. Maskable icons MUST set it or
+// Android's adaptive mask drops the icon onto a system backdrop and clips it.
 export function DiscMark({ size, fill = 0.8, opaque = false }) {
   const r = 50 * fill;
   const hub = r * 0.31;

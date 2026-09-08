@@ -7,11 +7,9 @@ const MIN_TRACK_RECENCY_HOURS = 1;
 const MIN_ARTIST_RECENCY_HOURS = 0.25;
 
 // Count-based hard no-repeat guard tuning (effectiveNoRepeatWindow below).
-// Never hard-block more than this fraction of the tagged library, so even a
-// configured window larger than the catalogue can support still leaves a fresh
-// pool to pick from. And below MIN_EFFECTIVE distinct tracks the guard is both
-// too weak to matter and too likely to starve a tiny library — so it switches
-// off entirely and the relaxable time-window guard carries on alone.
+// Never hard-block more than this fraction of the tagged library; below
+// MIN_EFFECTIVE distinct tracks the guard switches off entirely and the
+// relaxable time-window guard carries on alone.
 const NO_REPEAT_MAX_LIBRARY_FRACTION = 0.375;
 const NO_REPEAT_MIN_EFFECTIVE = 15;
 
@@ -24,15 +22,13 @@ export interface CandidateLike {
   id?: string | null;
   title?: string | null;
   artist?: string | null;
-  // Track length. Subsonic songs carry `duration`; library-db rows carry
-  // `durationSec`. Both optional — unknown length is never grounds to drop.
+  // Subsonic songs carry `duration`, library-db rows `durationSec`. Both
+  // optional — unknown length is never grounds to drop.
   duration?: number | null;
   durationSec?: number | null;
-  // Album surface for the album cooldown (albumKey below). Every field is
-  // optional because each source carries a different subset: a library row
-  // carries all four, a Subsonic child carries `album` alone, and a recent-play
-  // sidecar row written before #1485 carries none. Absent always reads as
-  // "no evidence", never as a repeat — see albumKey.
+  // Album surface for the cooldown (albumKey below). All optional: each source
+  // carries a different subset, and absent reads as "no evidence", never as a
+  // repeat.
   album?: string | null;
   albumArtist?: string | null;
   isCompilation?: boolean | null;
@@ -43,29 +39,20 @@ interface CandidateFilterState {
   recentIds?: Set<string>;
   recentKeys?: Set<string>;
   recentArtists?: Set<string>;
-  // Album cooldown (#1485 FR 3) — albumKey()s heard inside settings
-  // picker.albumHours, from queue.recentAlbumKeys(). Relaxable, and the FIRST
-  // guard the cascade drops: it is the longest-memory preference here (an
-  // album window is only worth setting above the artist window, which already
-  // covers everything below it), so on a starved pool it is the one whose loss
-  // costs the least. Empty = off, which is the shipped default — and an empty
-  // set removes its cascade stage entirely, so the pool walks byte-identical
-  // modes to the ones it walked before this existed.
+  // Album cooldown (#1485 FR 3) — albumKey()s heard inside picker.albumHours,
+  // from queue.recentAlbumKeys(). Relaxable, and the FIRST guard the cascade
+  // drops (longest memory, so its loss costs least on a starved pool). Empty =
+  // off (the default), and an empty set removes its cascade stage entirely.
   recentAlbums?: Set<string>;
   // How a candidate's album key is resolved. Defaults to the pure `albumKey`,
-  // which is right for a candidate that already carries its compilation flags
-  // and for every unit test. Real pick paths inject
-  // `music/album-facts.albumKeyFor`, which fills those flags in from the
-  // library — without it the exemption is dead on a raw Subsonic candidate,
-  // which is most of the pool. Injected rather than imported because this
-  // module is pure and is the one every path sits on.
+  // right for a candidate already carrying its compilation flags. Real pick
+  // paths inject `music/album-facts.albumKeyFor`, which fills those flags in
+  // from the library — without it the exemption is dead on a raw Subsonic
+  // candidate. Injected rather than imported so this module stays pure.
   albumKeyOf?: (song: CandidateLike) => string;
-  // Count-based hard no-repeat guard (live-repeats fix). Checked OUTSIDE the
-  // relaxation cascade's mode loop — like maxDurationSec, a track in here is
-  // never an acceptable pick, so it survives every starvation stage. This is
-  // what guarantees the last N distinct plays can't re-air even when the
-  // relaxable recentIds/recentKeys guard below is dropped to keep the pool from
-  // emptying. Populated from queue.recentlyPlayedByCount(N); empty = guard off.
+  // Count-based hard no-repeat guard, from queue.recentlyPlayedByCount(N).
+  // Checked OUTSIDE the relaxation cascade, so the last N distinct plays can't
+  // re-air even once the relaxable track guard is dropped. Empty = off.
   hardRecentIds?: Set<string>;
   hardRecentKeys?: Set<string>;
   seenIds?: Set<string>;
@@ -74,38 +61,21 @@ interface CandidateFilterState {
   cap?: number;
   // Whether a starved result may relax the recent-ARTIST guard. Default true
   // preserves the pool picker's "never return empty" behaviour. Only the pool
-  // picker (music/picker.ts) passes recentArtists today, so this flag only bites
-  // there; the agent's per-tool collect() no longer filters by artist at all
-  // (#618 — an artist strip gutted the similarity tools to ~1 survivor on niche
-  // catalogues), which is why it defaults true and is inert on that path.
-  // Back-to-back artist variety on the AGENT path is instead enforced at the
-  // point of choice: dj-agent.pickViaAgent re-picks from other-artist
-  // candidates when a pick would repeat the on-air artist (#1124), escalating
-  // to a blockedArtists pool call when its own run surfaced none (#1187).
+  // picker passes recentArtists, so it is inert on the agent path, whose
+  // artist variety is enforced at the point of choice instead (#618, #1124).
   allowArtistRelaxation?: boolean;
-  // Artists that may NEVER be returned, whatever the starvation cascade does —
-  // checked outside the mode loop like hardRecentIds. Distinct from
-  // recentArtists, which is a preference the cascade drops rather than return
-  // nothing. #1187: the agent path's artist guard asks the pool for a pick that
-  // ISN'T the on-air artist; a pool that never-starves back to that same artist
-  // would answer the question it was called to avoid. Empty on every pick that
-  // doesn't go through that rescue, so the ordinary pool is untouched. Keys are
-  // artistRootKey()-normalised (lowercased, trimmed, collapsed onto the lead
-  // artist) and are matched against a candidate's raw AND lead key, so blocking
-  // an artist also blocks the collaborations they front.
+  // Artists that may NEVER be returned, checked outside the mode loop like
+  // hardRecentIds — unlike recentArtists, which the cascade may drop (#1187).
+  // Empty on every pick but the agent's artist-guard rescue. Keys are
+  // artistRootKey()-normalised and matched against a candidate's raw AND lead
+  // key, so blocking an artist also blocks the collaborations they front.
   blockedArtists?: Set<string>;
 }
 
 // Track length in seconds from whichever field the source carries, or null when
-// unknown. Zero/negative/non-finite all read as unknown — we only ever act on a
-// positive, trustworthy duration (the hour-long album mixes #447 targets report
-// one reliably).
-//
-// Delegates to music/track-floor.ts rather than restating the rule: the track
-// length CAP reads this and the FLOOR reads that, and two copies answering
-// "how long is this track?" differently is exactly the drift #1573 warns about.
-// track-floor.ts is itself pure and import-free, so this module stays free of
-// every library / settings / mixer concern.
+// unknown (zero/negative/non-finite all read as unknown). Delegates to
+// music/track-floor.ts so the length CAP and the length FLOOR can't disagree
+// about how long a track is (#1573).
 export function durationSeconds(song: CandidateLike): number | null {
   return trackLengthSeconds(song);
 }
@@ -114,31 +84,25 @@ export function artistKey(song: CandidateLike): string {
   return (song.artist || '').toLowerCase().trim();
 }
 
-// A "featuring" marker — always a credit on someone else's track, never part of
-// an artist's own name. `(feat.` / `[ft` shapes included: Subsonic servers hand
-// the credit back inside the artist string as often as bare.
+// A "featuring" marker — always a credit on someone else's track, never part
+// of an artist's own name. `(feat.` / `[ft` shapes included.
 const FEATURE_SPLIT = /\s*[([]?\s*\b(?:feat|ft|featuring)\b\.?\s+/i;
 // A join between two credited acts. Deliberately NOT "with" or "x" — "Sleeping
-// with Sirens" and "Chase x Status"-style names would lose their tail.
+// with Sirens" and "Chase x Status" would lose their tail.
 const JOIN_SPLIT = /\s+(?:&|\+|and)\s+/i;
 
-// Typographic noise that carries no identity: curly quotes against straight
-// ones ("Guns N’ Roses" vs "Guns N' Roses" — the same act, tagged either way
-// depending on which ripper wrote the file), and runs of whitespace. Folded
+// Curly-vs-straight apostrophes carry no identity ("Guns N’ Roses"). Folded
 // BEFORE the splits above so a curly apostrophe can't hide a join marker.
 const APOSTROPHES = /[‘’ʼ´`]/g;
 
-// A leading article is decoration, not identity — "The Clash" and "Clash" are
-// one act, and a station tagged from two sources routinely carries both. Only
-// stripped when something survives it, so "The The" keys as "the".
+// "The Clash" and "Clash" are one act. Only stripped when something survives
+// it, so "The The" keys as "the".
 const LEADING_ARTICLE = /^the\s+/;
 
-// Exact full-name aliases for acts whose catalogue tags genuinely alternate
-// between a named lead and their ensemble credit. This must never become a
-// generic suffix strip: "The Beta Band", "Manchester Orchestra" and "Kronos
-// Quartet" are complete act names, and collapsing them onto Beta/Manchester/
-// Kronos feeds a false equivalence into `blockedArtists`, whose pool-rescue
-// filter is HARD rather than a preference. Add only a verified full-act alias.
+// Exact full-name aliases for acts whose tags alternate between a named lead
+// and their ensemble credit. Never make this a generic suffix strip: "The Beta
+// Band" and "Kronos Quartet" are complete act names, and a false equivalence
+// here reaches `blockedArtists`, which is a HARD filter. Verified aliases only.
 const ARTIST_ROOT_ALIASES = new Map<string, string>([
   ['jimi hendrix experience', 'jimi hendrix'],
   ['glenn miller orchestra', 'glenn miller'],
@@ -146,61 +110,36 @@ const ARTIST_ROOT_ALIASES = new Map<string, string>([
   ['bill evans trio', 'bill evans'],
 ]);
 
-// The fold under every free-text NAME comparison — an artist credit, an album
-// title, anything an operator typed against something a ripper tagged: case,
-// curly-vs-straight apostrophes ("Guns N’ Roses" and "Guns N' Roses" are one
-// act, tagged either way depending on which ripper wrote the file) and runs of
-// whitespace. Nothing here changes which thing a string names, which is what
-// makes it safe in front of an ABSOLUTE list.
-//
-// Exported because the blocklist keys BOTH sides of every name match with it —
-// a stored entry name and an incoming row — across its artist tier (#1603) and
-// its album tier (#1611). A normaliser copied into the consumer is how a stored
-// value stops matching the value that stored it, so there is one of these.
-//
-// Deliberately NOT the rest of artistRootKey's folding (article strip, root
-// aliases, join split): that widens a MATCHING key, which is right for a
-// preference the repeat guard reads as "pick someone else" and wrong for a hard
-// drop with no never-starve behind it.
-//
-// `schemas/blocklist.ts` normText RESTATES this fold rather than importing it —
-// a mirrored schema module may import only zod — so the two are pinned in step
-// by scripts/blocklist-name-fold.test.ts. Change one, change both.
+// The one fold under every free-text NAME comparison (artist credit, album
+// title, operator-typed text): case, apostrophes, whitespace. Nothing here
+// changes which thing a string names, which is what makes it safe in front of
+// the ABSOLUTE blocklist, whose artist (#1603) and album (#1611) tiers key both
+// sides through it. Deliberately NOT artistRootKey's further folding, which
+// widens a MATCHING key — wrong for a hard drop with no never-starve behind it.
+// `schemas/blocklist.ts` normText RESTATES this fold (a mirrored schema module
+// may import only zod); scripts/blocklist-name-fold.test.ts pins them in step.
 export function nameKey(raw: unknown): string {
   return String(raw ?? '').toLowerCase().replace(APOSTROPHES, "'").replace(/\s+/g, ' ').trim();
 }
 
-// The artist-facing name for the same fold, kept because every artist call site
-// and every comment about them says `artistNameKey`. One function, two names:
-// an album title is not an artist, and a site keying one through a helper named
-// for the other is what invites a well-meaning local copy back in.
+// Artist-facing alias for the same fold — one function, two names, so neither
+// call site is tempted into a local copy.
 export const artistNameKey = nameKey;
 
 // The LEAD artist of a credit — `artistKey` collapsed onto its primary act, so
 // a collaboration shares a key with the artist who leads it (#1251):
 //
 //   "Marvin Gaye & Tammi Terrell"  → "marvin gaye"
-//   "Kanye West (feat. Jay-Z)"     → "kanye west"
 //   "The Jimi Hendrix Experience"  → "jimi hendrix"
-//   "The Clash"                    → "clash"
 //   "Sly & the Family Stone"       → "sly & the family stone"   (unchanged)
 //
-// …and past verified name variants one act picks up across a catalogue tagged
-// from more than one source (#1406): a leading article, exact full-name aliases,
-// and curly-vs-straight apostrophes. The aliases are exact because an ensemble
-// suffix alone is not evidence that the preceding words name a lead artist.
-//
-// The `the …` exception on the join keeps band names whole: "X & the Y" is one
-// act, not two credits, and stripping it would key half the Motown and soul
-// bench onto a first name. Everything else after a join is a second credited act
-// — imperfect on "Hall & Oates"-shaped duos (keyed "hall"), but a wrong key here
-// can only over-match, and every caller reads an over-match as "pick someone
-// else", never as a hard drop.
-//
-// Only the LEAD is normalised, so "Tammi Terrell" and "Marvin Gaye & Tammi
-// Terrell" still key apart. Matching every credited act would need the same
-// name-vs-credit judgement on the tail that the exception exists to dodge, and
-// the guard's job is the artist a listener just heard fronting a track.
+// Also folds the variants one act picks up across multi-source tagging (#1406):
+// leading article, exact full-name aliases, apostrophes. The `the …` exception
+// on the join keeps band names whole ("X & the Y" is one act); everything else
+// after a join is a second credited act — imperfect on "Hall & Oates"-shaped
+// duos, but a wrong key here can only over-match, which every caller reads as
+// "pick someone else". Only the LEAD is normalised, so "Tammi Terrell" and
+// "Marvin Gaye & Tammi Terrell" still key apart.
 //
 // NOT a replacement for `artistKey`, which is an IDENTITY key feeding
 // `trackKey` and must stay byte-identical to the `title|artist` keys
@@ -220,10 +159,8 @@ export function artistRootKey(song: CandidateLike | string): string {
     if (tail && !/^the\b/.test(tail)) root = root.slice(0, join.index).trim();
   }
 
-  // Article and exact alias lookup come AFTER the splits, so the join's `the …`
-  // exception still sees the tail it was written to protect ("Sly & the Family
-  // Stone" is whole before either of these runs) and the alias is judged against
-  // the LEAD act's name rather than a collaborator's.
+  // Article and alias come AFTER the splits, so the join's `the …` exception
+  // still sees the tail it protects and the alias is judged against the LEAD.
   const unarticled = root.replace(LEADING_ARTICLE, '').trim();
   if (unarticled) root = unarticled;
   root = ARTIST_ROOT_ALIASES.get(root) ?? root;
@@ -235,49 +172,25 @@ export function artistRootKey(song: CandidateLike | string): string {
 // artistRootKey, which asks who LEADS the credit:
 //
 //   "Kanye West (feat. Jay-Z)"  → ["kanye west", "jay-z"]
-//   "Drake ft. Rihanna"         → ["drake", "rihanna"]
 //   "Simon & Garfunkel"         → ["simon & garfunkel"]
-//   "Earth, Wind & Fire"        → ["earth, wind & fire"]
 //
-// Written for the blocklist (#1603): blocking an artist has to reach the tracks
-// they only GUEST on, and the id tiers can't — a Subsonic song carries one
-// `artistId`, the track's lead, and `tracks.artist_id` stores that same single
-// id. There is no participant list anywhere in the library to consult, so the
-// display credit is the only source there is.
+// Written for the blocklist (#1603): a block has to reach tracks the artist
+// only GUESTS on, and the id tiers can't — a Subsonic song carries one
+// `artistId` (the lead), and there is no participant list in the library.
 //
-// FEATURE_SPLIT is the whole of what gets split, and that is a deliberate stop
-// rather than a first cut. `&`, `+`, `,` and `x` all sit INSIDE act names far
-// more often than they join two credits — Simon & Garfunkel, Hall & Oates,
-// Florence + the Machine, Earth, Wind & Fire, Tyler, the Creator, Chase & Status
-// — and the caller is the blocklist, which is ABSOLUTE: no never-starve
-// anywhere, listener requests included. A wrong key there silently removes music
-// the operator never blocked, with no starvation fallback to make the loss
-// visible. `feat.`/`ft.`/`featuring` carry no such ambiguity (see FEATURE_SPLIT:
-// always a credit on someone else's track, never part of a name), so they are
-// the only marker that can be split without guessing.
-//
-// The cost is honest under-matching: "Y feat. A & B" keys as ["y", "a & b"], so
-// a block on A alone does not fire. Splitting that tail needs exactly the
-// name-vs-credit judgement the join is refused for, and the tail is where the
-// ambiguous punctuation actually lives.
-//
-// A marker at index 0 is not a marker: `\bft\b\.?\s+` matches the front of
-// "Ft. Lauderdale …", and dropping that head would leave a key naming nobody.
-// Same guard artistRootKey applies, for the same reason. The lead segment is
-// also the one segment the bracket cleanup must not touch: "Sunn O)))" is an
-// act, not a credit with an orphaned closer.
-//
-// Deliberately NOT artistRootKey's normalisation beyond the shared name fold —
-// no article strip, no root aliases, no join split. Those widen a MATCHING key,
-// which is right for a preference (the repeat guard reads an over-match as "pick
-// someone else") and wrong for a hard drop.
-// The split eats the OPENING bracket of a "(feat. …)" credit, so its closing
-// half is left orphaned on the tail. Drops ONE such closer, and only when the
-// segment has more closers than openers — a greedy run, applied to every
-// segment, ate real names instead: "Sunn O))) feat. Someone" keyed its lead
-// "sunn o" and silently missed a block the operator did make, and a balanced
-// suffix ("Y (Live)") lost the bracket it came with. Nested brackets are not
-// balanced properly here; nothing downstream needs them to be.
+// FEATURE_SPLIT is the WHOLE of what gets split, deliberately. `&`, `+`, `,`
+// and `x` sit inside act names far more often than they join two credits, and
+// the caller is absolute — no never-starve, requests included — so a wrong key
+// silently removes music the operator never blocked. The cost is honest
+// under-matching: "Y feat. A & B" keys as ["y", "a & b"]. A marker at index 0
+// is not a marker ("Ft. Lauderdale"), same guard as artistRootKey, whose
+// further folding is also deliberately not applied here.
+
+// The split eats the OPENING bracket of a "(feat. …)" credit, orphaning its
+// closer on the tail. Drops ONE closer, and only when the segment has more
+// closers than openers — a greedy run ate real names ("Sunn O)))"). The lead
+// segment is never touched. Nested brackets are not balanced here; nothing
+// downstream needs them to be.
 function dropOrphanCloser(part: string): string {
   const closes = (part.match(/[)\]]/g) || []).length;
   if (!closes || closes <= (part.match(/[([]/g) || []).length) return part;
@@ -303,12 +216,9 @@ export function trackKey(song: CandidateLike): string {
   return `${(song.title || '').toLowerCase().trim()}|${artistKey(song)}`;
 }
 
-// The names a tagger writes on a multi-artist release. Lives HERE, beside
-// artistRootKey, because it is a fact about artist NAMES and two consumers now
-// need it — music/era-suspect.ts's `various-artists` era marker and the album
-// cooldown below. era-suspect imports it rather than keeping its own copy; the
-// dependency runs that way round because recency owns no era policy and must
-// not acquire one.
+// The names a tagger writes on a multi-artist release. Lives here beside
+// artistRootKey because it is a fact about artist NAMES; era-suspect.ts imports
+// it that way round so recency acquires no era policy.
 const VARIOUS_ARTIST_NAMES = new Set([
   'variousartists', 'various', 'va', 'verschiedene', 'diversos', 'divers',
 ]);
@@ -318,45 +228,28 @@ export function isVariousArtistsName(raw: unknown): boolean {
 }
 
 // Is a cooldown on this track's ALBUM the wrong question? (#1485 FR 3)
-//
-// On a compilation it always is: "Now 47" and a Stax anthology are containers,
-// not records an artist made, so two tracks off one in an evening is ordinary
-// radio rather than the album-mode repetition the cooldown exists to stop.
-// The signals are the ones the era pipeline already composes — no second
+// On a compilation it always is — a sampler is a container, not a record an
+// artist made. Reuses the era pipeline's composed signals, never a second
 // heuristic (#1418): `yearUntrusted` is the OR of Navidrome's `isCompilation`
-// and the walk's derived `era_untrusted`, so it also covers the various-artist
-// and anthology shapes that carry no COMPILATION tag. It reads WIDER than
-// "compilation" — a single-artist "Best of" is in it too — and that costs
-// nothing here, because the artist window already spaces those.
-//
-// `isCompilation` is read beside it rather than folded away: a Subsonic-sourced
-// candidate can carry the raw flag with no walked row behind it.
+// and the walk's derived `era_untrusted`, so it also catches anthologies with
+// no COMPILATION tag. `isCompilation` is read beside it because a
+// Subsonic-sourced candidate can carry the raw flag with no walked row behind
+// it.
 export function albumCooldownExempt(song: CandidateLike): boolean {
   if (song?.isCompilation === true || song?.yearUntrusted === true) return true;
   return isVariousArtistsName(song?.albumArtist);
 }
 
-// The album cooldown's key: the record, and who made it.
+// The album cooldown's key: the record, and who made it. Name-folded through
+// the same normalisers as artistRootKey, and paired with the LEAD of the ALBUM
+// artist when the source carries one, the track's own artist otherwise. The
+// ARTIST half stops an untagged compilation blocking a whole evening — without
+// a lead in the key, twelve artists on one sampler would share it.
 //
-// Normalised exactly as artistRootKey normalises a name (lowercase, curly
-// apostrophes folded, whitespace collapsed) so the two keys can't disagree
-// about the same catalogue, and paired with the LEAD of the ALBUM artist when
-// the source carries one, the track's own artist otherwise — which is what
-// keeps "Marvin Gaye & Tammi Terrell" on `United` keyed with the Marvin Gaye
-// tracks around it.
-//
-// The ARTIST half is not decoration. It is what stops an untagged compilation
-// (one whose flags never reached us) from blocking a whole evening: without a
-// lead in the key, twelve different artists on one sampler would all share it.
-//
-// '' means NO KEY — never a match. Returned for an exempt album, an untitled
-// one, and an untagged artist, all for the same reason the artist guard never
-// drops an untagged candidate: absence of a name is not evidence of a repeat.
-//
-// Deliberately NOT an edition-stripping key: "Kid A" and "Kid A (Remastered)"
-// stay apart. Collapsing them means guessing which parenthetical is an edition
-// and which is the record's name, and the failure direction is a cooldown
-// nobody asked for.
+// '' means NO KEY, never a match — an exempt album, an untitled one, an
+// untagged artist. Absence of a name is not evidence of a repeat. Deliberately
+// NOT edition-stripping: "Kid A" and "Kid A (Remastered)" stay apart rather
+// than guessing which parenthetical is an edition.
 export function albumKey(song: CandidateLike): string {
   if (!song || albumCooldownExempt(song)) return '';
   const album = nameKey(song.album);
@@ -366,15 +259,11 @@ export function albumKey(song: CandidateLike): string {
   return `${album}|${artist}`;
 }
 
-// Large-library boost on the relaxable windows. The 12h/2h defaults were tuned
-// for small-to-mid libraries; at radio pace (~300-400 plays/day) 12h blocks
-// ~150-200 tracks, which on a 10k-50k catalogue is under 2% — far too little
-// memory to push selection anywhere new. Keys on TRACK COUNT, never distinct
-// artists (a 500-track library easily clears any artist threshold, and
-// doubling its window would over-block it): stepped, so the window only grows
-// where the catalogue can absorb it — even the largest step blocks under ~5%
-// of the library at that pace. The count guard (noRepeatWindow) is the
-// non-relaxable long-memory companion; this stays the relaxable short one.
+// Large-library boost on the relaxable windows: the 12h/2h defaults are tuned
+// for small-to-mid libraries and block under 2% of a 10k-50k catalogue. Keys on
+// TRACK COUNT, never distinct artists (a 500-track library clears any artist
+// threshold and would be over-blocked), and steps so even the largest blocks
+// under ~5% of the library at radio pace.
 function librarySizeBoost(totalTracks: number): number {
   if (totalTracks >= 20000) return 3;   // 36h track / 6h artist
   if (totalTracks >= 8000) return 2;    // 24h / 4h
@@ -410,10 +299,9 @@ export function recencyWindowsForLibrary(
 }
 
 // Clamp a configured count-based no-repeat window to what the tagged library
-// can safely support. Pure + unit-pinned (picker-recency-regression.test.ts).
-//   - configuredN <= 0, or an unknown/empty library  → 0 (guard self-disables)
-//   - never block more than NO_REPEAT_MAX_LIBRARY_FRACTION of the library
-//   - if the result would be below NO_REPEAT_MIN_EFFECTIVE              → 0
+// can support. 0 = guard off (configuredN <= 0, unknown/empty library, or a
+// result below NO_REPEAT_MIN_EFFECTIVE); otherwise capped at
+// NO_REPEAT_MAX_LIBRARY_FRACTION of the library.
 // Examples: (100,1000)→100, (100,40)→15, (100,20)→0, (0,*)→0, (100,null)→0.
 export function effectiveNoRepeatWindow(
   configuredN: number | null | undefined,
@@ -427,30 +315,18 @@ export function effectiveNoRepeatWindow(
   return eff < NO_REPEAT_MIN_EFFECTIVE ? 0 : eff;
 }
 
-// Headroom the EXHAUSTIVE window leaves under the rotation it governs, and both
-// slots it reserves are load-bearing:
-//   * queue.recentlyPlayedByCount(n) blocks the ON-AIR track on top of the n
-//     ended plays it counts — `current` is appended to the recent-plays sidecar
-//     when it ENDS, so a window of n withholds n+1 identities, not n;
-//   * one identity has to survive it. The count-based guard is checked OUTSIDE
-//     the starvation cascade, so a window that withholds the whole rotation is
-//     an empty pool, and an empty pool is the LLM pick skipped.
-// A rotation of S identities therefore takes S-2: S-1 withheld, exactly one
-// left — the one that has waited longest — and the repeat lands on pick S+1.
+// Headroom the EXHAUSTIVE window leaves under the rotation it governs; both
+// slots are load-bearing. queue.recentlyPlayedByCount(n) also blocks the ON-AIR
+// track, so a window of n withholds n+1 identities; and one identity must
+// survive, since the guard sits outside the starvation cascade and an empty
+// pool is a skipped pick. A rotation of S therefore takes S-2.
 const EXHAUSTIVE_WINDOW_HEADROOM = 2;
 
-// The window that makes a rotation exhaust ITSELF: every identity in the
-// universe airs once before any of them airs again (#1612).
-//
-// Deliberately free of effectiveNoRepeatWindow's library-fraction ceiling and
-// minimum-effective floor. Both of those exist to stop a number the operator
-// TYPED from swallowing a catalogue it was never measured against; this number
-// is derived from the universe it governs, so clamping it to 37.5% of that same
-// universe would only ever mean "don't do the thing you were asked to do".
-//
-// A universe too small to leave the headroom returns 0 — the guard switches off
-// and the relaxable recency cascade carries the rotation, exactly as today.
-// That IS the never-starve: a rotation is not worth dead air.
+// The window that makes a rotation exhaust ITSELF: every identity airs once
+// before any airs again (#1612). Deliberately free of effectiveNoRepeatWindow's
+// ceiling and floor — those bound a number the operator TYPED, while this one
+// is derived from the universe it governs. A universe too small for the
+// headroom returns 0, and the relaxable cascade carries the rotation instead.
 export function exhaustiveNoRepeatWindow(universeSize: number | null | undefined): number {
   const total = Math.floor(Number(universeSize) || 0);
   return Math.max(0, total - EXHAUSTIVE_WINDOW_HEADROOM);
@@ -474,28 +350,19 @@ export function filterPickerCandidates<T extends CandidateLike>(
     blockedArtists = new Set<string>(),
   }: CandidateFilterState = {},
 ): T[] {
-  // The track-length CAP is NOT a selection criterion: max-track-length (issue
-  // #447) is enforced as an on-air cue_out cut, so an over-length track stays
-  // eligible and simply crossfades out at the cap. Filtering it here would only
-  // starve the pool — e.g. a 60s cap leaving nothing but short skits/interludes.
-  //
-  // The FLOOR is the opposite case and is enforced (#1573), but NOT here: a
-  // short track cannot be lengthened, so it has to leave the pool — and the
-  // posture differs per pick path (hard in the agent's tools, never-starve in
-  // the pool picker and the coast), which is a decision this filter has no way
-  // to make. It lives in music/track-floor.ts and is applied by each call site
-  // just before this one. Don't fold it in here.
+  // Neither track-length bound is applied here. The CAP (#447) is an on-air
+  // cue_out cut, so an over-length track stays eligible; filtering it here
+  // would only starve the pool. The FLOOR (#1573) does remove candidates, but
+  // its posture differs per pick path, so it lives in music/track-floor.ts and
+  // each call site applies it just before this one.
   const pool = list || [];
 
   // Relaxation cascade: each mode drops a guard so a starved pool still yields
-  // something rather than nothing. When artist relaxation is disabled the artist
-  // guard stays ON in every mode — only the track guard may drop, and only for
-  // fresh artists — so the agent is never handed an artist it just played.
+  // something. With artist relaxation disabled the artist guard stays ON in
+  // every mode, so the agent is never handed an artist it just played.
   //
-  // The album stage is PREPENDED rather than folded into the first mode, and
-  // only when there is an album set to enforce: with the cooldown off (the
-  // default) the list is the exact list it always was, so an upgrade changes
-  // neither the result nor the number of passes.
+  // The album stage is PREPENDED, and only when there is an album set to
+  // enforce, so with the cooldown off the mode list is exactly what it was.
   const base = allowArtistRelaxation
     ? [
         { recentTracks: true, recentArtists: true, recentAlbums: false },
@@ -517,31 +384,26 @@ export function filterPickerCandidates<T extends CandidateLike>(
 
     for (const song of pool) {
       if (!song?.id || nextSeen.has(song.id)) continue;
-      // Hard no-repeat guard — NO mode gate, so it holds through every
-      // relaxation stage. A track in the last-N-distinct set never airs, even
-      // when the cascade has dropped the relaxable track guard below to avoid an
-      // empty pool. (effectiveNoRepeatWindow keeps this set well under the
-      // library size so this can't starve the pool to nothing.)
+      // Hard no-repeat guard — no mode gate, so it holds through every
+      // relaxation stage. effectiveNoRepeatWindow keeps the set well under the
+      // library size, so it can't starve the pool to nothing.
       if (hardRecentIds.has(song.id)) continue;
       if (hardRecentKeys.has(trackKey(song))) continue;
       if (mode.recentTracks && recentIds.has(song.id)) continue;
       if (mode.recentTracks && recentKeys.has(trackKey(song))) continue;
 
-      // Album cooldown. Keyed on album + lead artist, and an exempt or
-      // untitled album keys as '' — which matches nothing, so a compilation
-      // never blocks and never gets blocked (albumKey).
+      // Album cooldown. An exempt or untitled album keys as '', which matches
+      // nothing, so a compilation never blocks and never gets blocked.
       if (mode.recentAlbums) {
         const ak = albumKeyOf(song);
         if (ak && recentAlbums.has(ak)) continue;
       }
 
       const key = artistKey(song);
-      // Hard artist block — no mode gate, so it survives every relaxation stage
-      // (#1187). An empty set (every caller but the artist-guard rescue) makes
-      // this a no-op. Matched on BOTH the raw key and the lead-artist key
-      // (#1251): the rescue is called to avoid the artist on air, and
-      // "Marvin Gaye & Tammi Terrell" answering a block on "Marvin Gaye" is the
-      // repeat it was called to prevent.
+      // Hard artist block — no mode gate, so it survives every relaxation
+      // stage (#1187); an empty set makes it a no-op. Matched on BOTH the raw
+      // and the lead-artist key (#1251), or "Marvin Gaye & Tammi Terrell" would
+      // answer a block on "Marvin Gaye".
       if (key && (blockedArtists.has(key) || blockedArtists.has(artistRootKey(song)))) continue;
       if (mode.recentArtists && key && recentArtists.has(key)) continue;
       if (key) {

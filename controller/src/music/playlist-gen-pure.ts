@@ -1,19 +1,14 @@
-// Pure, side-effect-free helpers for the magical playlist builder
-// (music/playlist-gen.ts). Kept import-free so it's the unit-test seam
-// (scripts/playlist-gen-pure.test.ts) AND the deterministic fallback the engine
-// drops to when embeddings are absent or the LLM curation call fails — the same
-// pure/impure split the LLM strategy layer uses (core/pure.ts).
-//
-// Nothing here touches Subsonic, the DB, or the network. Everything operates on
-// already-materialised PoolTrack rows.
+// Pure helpers for the playlist builder (music/playlist-gen.ts), deliberately
+// import-free: the unit-test seam (scripts/playlist-gen-pure.test.ts) and the
+// deterministic fallback the engine drops to when embeddings are absent or the
+// LLM curation call fails. Operates only on materialised PoolTrack rows.
 
 export type ArcShape = 'flat' | 'build' | 'peak-then-cool' | 'wind-down';
 
 export const ARC_SHAPES: ArcShape[] = ['flat', 'build', 'peak-then-cool', 'wind-down'];
 
 // A candidate track inside the generation pool. Superset of what any single
-// source returns — buildCandidatePool normalises Subsonic songs and library
-// slim-tracks into this one shape before curation.
+// source returns; buildCandidatePool normalises everything into this shape.
 export interface PoolTrack {
   id: string;
   title?: string | null;
@@ -27,15 +22,13 @@ export interface PoolTrack {
   energy?: string | null;            // 'low' | 'medium' | 'high' | null
   bpm?: number | null;               // analyzer tempo; null = un-analysed
   instrumental?: boolean | null;     // true = no vocals, false = vocals, null = un-analysed
-  // Relevance/similarity in [0..1]-ish; higher is better. Deterministic ranking
-  // and cap keep the highest-scoring rows.
+  // Relevance/similarity in [0..1]-ish; higher is better.
   score?: number;
-  // Which sources contributed this row — also drives sync's "vibe-matched" gate
-  // (a candidate counts as vibe-matched only if it came from theme/sound/seed).
+  // Which sources contributed this row; also drives sync's "vibe-matched" gate.
   sources?: string[];
-  // ISO date the track entered the library (library `taggedAt`), or null when
-  // unknown (Subsonic-only rows). Populated by the sync engine, not by normal
-  // generation. Drives the "new since last sync" gate.
+  // ISO date the track entered the library (library `taggedAt`); null when
+  // unknown (Subsonic-only rows). Set by the sync engine only, and drives the
+  // "new since last sync" gate.
   addedAt?: string | null;
 }
 
@@ -53,17 +46,16 @@ export interface DraftTrack {
   instrumental: boolean | null;
 }
 
-// low → 0, medium → 1, high → 2. Unknown energy sorts as medium so an
-// un-analysed track doesn't get shoved to an arc extreme it may not belong at.
+// low 0, medium 1, high 2. Unknown sorts as medium so an un-analysed track
+// isn't shoved to an arc extreme.
 export function energyRank(energy: string | null | undefined): number {
   if (energy === 'low') return 0;
   if (energy === 'high') return 2;
   return 1;
 }
 
-// Merge duplicate ids across sources: keep the max score, union the source tags,
-// and prefer the first-seen non-empty metadata for each field (later sources
-// like random filler often carry thinner rows). Stable in first-seen order.
+// Merge duplicate ids across sources: max score, union of source tags,
+// first-seen non-empty metadata per field. Stable in first-seen order.
 export function dedupeById(tracks: PoolTrack[]): PoolTrack[] {
   const byId = new Map<string, PoolTrack>();
   for (const t of tracks) {
@@ -91,8 +83,8 @@ export function mergePools(pools: PoolTrack[][]): PoolTrack[] {
   return dedupeById(pools.flat());
 }
 
-// Highest-scoring `cap` rows. Stable for equal scores (preserves input order),
-// so source order acts as the tiebreak.
+// Highest-scoring `cap` rows; stable for equal scores, so source order breaks
+// the tie.
 export function capPool(tracks: PoolTrack[], cap: number): PoolTrack[] {
   if (cap <= 0 || tracks.length <= cap) return [...tracks];
   return tracks
@@ -104,14 +96,11 @@ export function capPool(tracks: PoolTrack[], cap: number): PoolTrack[] {
 
 const artistKey = (t: PoolTrack) => (t.artist || '').trim().toLowerCase();
 
-// Keep at most `maxPerArtist` of any one artist (highest-scoring first), so a
-// single prolific artist / a freshly-imported album can't flood the pool and
-// starve the candidate list handed to the model (and the fallback). Blank
-// artists are never capped. Preserves input order for kept rows.
+// Keep at most `maxPerArtist` of any one artist (highest-scoring first), so one
+// prolific artist can't flood the candidate list. Blank artists are never
+// capped. Preserves input order for kept rows.
 export function capPerArtist(tracks: PoolTrack[], maxPerArtist: number): PoolTrack[] {
   if (maxPerArtist <= 0) return [...tracks];
-  // Rank each track within its artist by score (desc, stable by index); keep the
-  // top `maxPerArtist`.
   const order = tracks
     .map((t, i) => ({ t, i }))
     .sort((a, b) => (b.t.score ?? 0) - (a.t.score ?? 0) || a.i - b.i);
@@ -126,13 +115,10 @@ export function capPerArtist(tracks: PoolTrack[], maxPerArtist: number): PoolTra
   return tracks.filter((_, i) => keep.has(i));
 }
 
-// Select `targetCount` tracks from a scored pool, favouring score but keeping
-// the same artist at least `minGap` apart DURING selection (not just reordering
-// after). Walks the score-sorted pool; at each slot takes the highest-scoring
-// remaining track whose artist is outside the recent window, relaxing only when
-// every remaining candidate clashes. This is what stops the deterministic
-// fallback from returning a single-artist run when one artist owns the top
-// scores.
+// Select `targetCount` tracks favouring score, but keeping the same artist
+// `minGap` apart DURING selection rather than reordering after — that is what
+// stops a single-artist run when one artist owns the top scores. Relaxes only
+// when every remaining candidate clashes.
 export function selectByScoreWithSpacing(
   pool: PoolTrack[],
   targetCount: number,
@@ -155,9 +141,8 @@ export function selectByScoreWithSpacing(
   return picked;
 }
 
-// Order a set to trace an energy arc. `flat` keeps the incoming (relevance)
-// order untouched; the others sort by energy. peak-then-cool builds a mountain:
-// lowest energy at both ends, highest in the middle.
+// Order a set to trace an energy arc. `flat` keeps the incoming relevance
+// order; peak-then-cool puts lowest energy at both ends, highest in the middle.
 export function arrangeArc(tracks: PoolTrack[], arc: ArcShape): PoolTrack[] {
   if (arc === 'flat' || tracks.length < 3) return [...tracks];
   const asc = [...tracks]
@@ -167,7 +152,7 @@ export function arrangeArc(tracks: PoolTrack[], arc: ArcShape): PoolTrack[] {
   if (arc === 'build') return asc;
   if (arc === 'wind-down') return asc.reverse();
   // peak-then-cool: place ascending-energy tracks alternately at the outside
-  // edges working inward, so the highest-energy tracks land in the middle.
+  // edges, working inward.
   const n = asc.length;
   const res: PoolTrack[] = new Array(n);
   let lo = 0;
@@ -179,10 +164,8 @@ export function arrangeArc(tracks: PoolTrack[], arc: ArcShape): PoolTrack[] {
   return res;
 }
 
-// Reorder so the same artist is at least `minGap` tracks apart, disturbing the
-// input order as little as possible: at each slot take the earliest track whose
-// artist hasn't appeared in the last `minGap` outputs, else relax and take the
-// next one. Greedy and deterministic.
+// Reorder so the same artist is at least `minGap` apart, disturbing the input
+// order as little as possible. Greedy and deterministic.
 export function spaceArtists(tracks: PoolTrack[], minGap: number): PoolTrack[] {
   if (minGap <= 0 || tracks.length < 2) return [...tracks];
   const pending = [...tracks];
@@ -196,16 +179,14 @@ export function spaceArtists(tracks: PoolTrack[], minGap: number): PoolTrack[] {
   return result;
 }
 
-// The no-LLM fallback: take the top-scoring `targetCount`, arrange the arc, then
-// space artists. Never returns empty when the pool is non-empty. This is exactly
-// the path the engine uses when the djObject curation call fails or times out.
+// The no-LLM fallback, used when the djObject curation call fails or times out.
+// Never returns empty when the pool is non-empty. Order matters: select with
+// artist diversity FIRST, then arrange the arc, then a final spacing pass to
+// clean up adjacency the arc re-introduced.
 export function pickDeterministic(
   pool: PoolTrack[],
   opts: { targetCount: number; energyArc: ArcShape; artistSpacing: number },
 ): PoolTrack[] {
-  // Select with artist-diversity awareness FIRST (so one score-dominant artist
-  // can't fill the whole set), THEN arrange the arc, THEN a final spacing pass
-  // to clean up any adjacency the arc re-introduced.
   const chosen = selectByScoreWithSpacing(pool, Math.max(1, opts.targetCount), opts.artistSpacing);
   const arced = arrangeArc(chosen, opts.energyArc);
   return spaceArtists(arced, opts.artistSpacing);
@@ -227,9 +208,8 @@ export function orderByIds(ids: string[], pool: PoolTrack[]): PoolTrack[] {
   return out;
 }
 
-// Trim/pad a curated selection to honour a target length. If the model returned
-// fewer than the target, top up from the remaining pool (highest score first);
-// if more, keep the model's leading choices.
+// Trim/pad a curated selection to the target length: top up from the remaining
+// pool (highest score first), or keep the model's leading choices.
 export function fitToCount(
   selected: PoolTrack[],
   pool: PoolTrack[],
@@ -242,20 +222,15 @@ export function fitToCount(
   return [...selected, ...filler];
 }
 
-// ── Recipe band/allow-list filters ───────────────────────────────────────────
-// Shared soft-filter semantics: a KNOWN value outside the band drops the row;
-// an unknown value (null/undefined/<=0) keeps it — a partly-un-analysed library
-// must still fill. Callers wrap these in revertIfStarved for the relax path.
-
-// NOT the station's minimum-track-length floor (#1573, music/track-floor.ts).
-// This is the Playlist Builder's own recipe BAND — an operator tool with its
-// own knobs, no show scope and a revertIfStarved wrapper, applied to a
-// generated playlist rather than to a pick. The two agree on the rule that
-// matters (an unknown length always passes) and must keep agreeing; they are
-// kept apart because a band does not decompose into a floor without restating
-// the ceiling half, and because this module is deliberately import-free. If a
-// THIRD copy of "is this track too short?" is ever needed, fold it into
-// track-floor.ts instead of adding one here.
+// Recipe band filters, soft: a KNOWN value outside the band drops the row, an
+// unknown one (null/<=0) keeps it, since a partly-un-analysed library must still
+// fill. Callers wrap these in revertIfStarved for the relax path.
+//
+// This is NOT the station's minimum-track-length floor (#1573,
+// music/track-floor.ts): it is the Playlist Builder's own recipe band, applied
+// to a generated playlist rather than a pick. Both must keep agreeing that an
+// unknown length passes. A third copy of "is this track too short?" belongs in
+// track-floor.ts, not here.
 export function filterByDurationBand(pool: PoolTrack[], minSec: number, maxSec: number): PoolTrack[] {
   if (!minSec && !maxSec) return [...pool];
   return pool.filter((t) => {
@@ -274,9 +249,9 @@ export function filterByBpmBand(pool: PoolTrack[], minBpm: number, maxBpm: numbe
   });
 }
 
-// Artist allow-list: keep tracks whose artist credit mentions ANY chosen name,
-// case-insensitively — "A & B" and "A feat. C" both count for A. Tracks with a
-// blank credit drop (an allow-list can't vouch for them). Empty list = identity.
+// Artist allow-list: keep tracks whose credit mentions ANY chosen name,
+// case-insensitively, so "A & B" and "A feat. C" both count for A. A blank
+// credit drops. Empty list = identity.
 export function filterByArtists(pool: PoolTrack[], artists: string[]): PoolTrack[] {
   const wanted = artists.map((a) => a.trim().toLowerCase()).filter(Boolean);
   if (!wanted.length) return [...pool];
@@ -286,23 +261,18 @@ export function filterByArtists(pool: PoolTrack[], artists: string[]): PoolTrack
   });
 }
 
-// Running total in seconds — drives the builder's live "tape counter".
+// Running total in seconds, for the builder's live tape counter.
 export function totalDurationSec(tracks: Array<{ durationSec?: number | null }>): number {
   return tracks.reduce((sum, t) => sum + (t.durationSec ?? 0), 0);
 }
 
 const VIBE_SOURCES = new Set(['theme', 'sound', 'seed', 'seed-similar']);
 
-// Append-only sync selection: from a freshly-built recipe pool, pick the tracks
-// to ADD to a synced playlist. A candidate qualifies iff it is:
-//   • not already a member (excludeIds),
-//   • NEW to the library since the cutoff — its addedAt is a valid date strictly
-//     after `sinceIso`; unknown/absent addedAt never qualifies (we only append
-//     tracks we can confirm are new),
-//   • vibe-matched when the recipe has a prompt (requireVibe) — it came from a
-//     vibe source (theme/sound/seed); with no prompt this gate is skipped and
-//     the knob filters already applied upstream are enough.
-// Returns the highest-scoring `cap` qualifiers.
+// Append-only sync selection: which tracks to ADD to a synced playlist. A
+// candidate qualifies iff it is not already a member, has a valid addedAt
+// strictly after `sinceIso` (an unknown add-date never qualifies), and — when
+// the recipe has a prompt — came from a vibe source. Returns the highest-scoring
+// `cap` qualifiers.
 export function selectAppendable(
   pool: PoolTrack[],
   opts: { sinceIso: string | null; requireVibe: boolean; cap: number; excludeIds?: Set<string> },

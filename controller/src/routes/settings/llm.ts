@@ -1,8 +1,5 @@
-// Provider probing and model discovery: does this key work, does this server
-// speak the OpenAI-compatible dialect we need, and what models can it offer.
-// All read-only against the provider - nothing here writes settings.
-//
-// Part of the settings/ route split - see ../settings.ts.
+// Provider probing and model discovery. All read-only against the provider:
+// nothing here writes settings. Part of the settings/ route split.
 
 import express from 'express';
 import { config } from '../../config.js';
@@ -24,11 +21,6 @@ import { probeFishKey } from '../../llm/speech.js';
 // Mounted onto the parent settings router in ../settings.ts.
 export const router = express.Router();
 
-// ---------------------------------------------------------------------------
-// probeKey — non-mutating live probe for a single secret key.
-// Builds a one-off provider client using the supplied value; never writes to
-// process.env or secrets.env. Always resolves (never rejects).
-// ---------------------------------------------------------------------------
 // Distill a raw provider/SDK error into a one-line actionable message.
 function briefLlmError(err: unknown): string {
   const e = err as { message?: string; toString(): string } | null | undefined;
@@ -48,22 +40,17 @@ function briefLlmError(err: unknown): string {
   if (msg.includes('timeout') || msg.includes('timed out') || msg.includes('aborted')) {
     return 'Timed out — provider may be slow or unreachable';
   }
-  // Fallback: first sentence or first 80 chars of the original message
   const raw: string = (e?.message || '').trim();
   const sentence = raw.split(/[.\n]/)[0].trim();
   return sentence.slice(0, 80) || 'Request failed';
 }
 
-// `hint` disambiguates keys shared by several providers — SEARCH_API_KEY holds
-// a Tavily OR a Brave key depending on the selected search provider, and the
-// admin UI tests the key before saving, so the saved setting can't be trusted
-// mid-edit. The UI passes the provider it's editing; absent a hint we fall
-// back to the saved provider, then Tavily (the original sole owner of the key).
-//
-// Probe budget: OpenAI's Responses API (the default path for
-// createOpenAI()(model)) rejects max_output_tokens below 16 — a smaller test
-// budget fails key validation with "integer below minimum value" and blocks
-// saving the key entirely. 32 clears the floor on every provider.
+// Non-mutating probe of one secret; builds a one-off client and never writes
+// process.env or secrets.env. `hint` disambiguates a key shared by several
+// providers (SEARCH_API_KEY is Tavily or Brave) because the UI tests before
+// saving, so the stored provider can't be trusted mid-edit; it falls back to
+// the saved provider, then Tavily. maxOutputTokens stays at 32: OpenAI's
+// Responses API rejects anything below 16.
 async function probeKey(
   key: (typeof SECRET_ENV_KEYS)[number],
   value: string,
@@ -149,8 +136,8 @@ async function probeKey(
           signal: AbortSignal.timeout(10000),
         });
         if (!r.ok) {
-          // Brave signals a bad token as 422 SUBSCRIPTION_TOKEN_INVALID
-          // (verified live), not 401/403 — check the error code too.
+          // Brave signals a bad token as 422 SUBSCRIPTION_TOKEN_INVALID, not
+          // 401/403, so the error code has to be checked too.
           const j = await r.json().catch(() => ({})) as { error?: { code?: string } };
           const rejected = r.status === 401 || r.status === 403
             || j?.error?.code === 'SUBSCRIPTION_TOKEN_INVALID';
@@ -210,12 +197,8 @@ async function probeKey(
   }
 }
 
-// ---------------------------------------------------------------------------
-// POST /settings/secrets/test — probe a key against its provider WITHOUT
-// saving. Body: { key: string, value: string, provider?: string } — provider
-// disambiguates shared keys (SEARCH_API_KEY → tavily | brave). Always 200s with
-// { ok, message, latencyMs } — a bad key is a normal, actionable answer.
-// ---------------------------------------------------------------------------
+// Probe a key against its provider WITHOUT saving. Always 200s with
+// { ok, message, latencyMs }: a bad key is a normal, actionable answer.
 router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
   const { key, value, provider } = req.body || {};
   if (!key || typeof key !== 'string') {
@@ -226,7 +209,7 @@ router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
   }
   let targetValue = typeof value === 'string' ? value.trim() : '';
   if (!targetValue) {
-    // If no value provided, check if key is already set in the environment
+    // No value supplied: fall back to the key already in the environment.
     const envValue = (process.env[key] || '').trim();
     if (!envValue) {
       return res.status(400).json({ ok: false, message: 'value is required when key is not set in environment', latencyMs: 0 });
@@ -247,14 +230,9 @@ router.post('/settings/secrets/test', requireAdmin, async (req, res) => {
 });
 
 
-// ---------------------------------------------------------------------------
-// GET /settings/llm/discover — probe a locca / openai-compatible server for
-// liveness + its loaded model list, so the onboarding wizard and admin
-// Settings UI can auto-fill the model field with no hand-typing. Non-mutating.
-// `?baseUrl=` overrides; default is the locca host URL (host.docker.internal:8080).
-// Always 200s with { reachable, models, baseUrl } — an unreachable server is a
-// normal answer, not an error.
-// ---------------------------------------------------------------------------
+// Liveness + loaded model list for a locca / openai-compatible server, so the
+// wizard can auto-fill the model field. `?baseUrl=` overrides the locca
+// default. Always 200s with { reachable, models, baseUrl }.
 router.get('/settings/llm/discover', requireAdmin, async (req, res) => {
   const baseUrl =
     String(req.query.baseUrl || '').trim().replace(/\/+$/, '') ||
@@ -274,10 +252,8 @@ router.get('/settings/llm/discover', requireAdmin, async (req, res) => {
   }
 });
 
-// Resolve a probe's header map against what is stored: 'set' is getRedacted()'s
-// sentinel and means "the value already on file", exactly as applyLlmLegPatch
-// reads it on the save path. Never throws — a probe reports failures as a
-// message, not a 500.
+// 'set' is getRedacted()'s sentinel and means "the value already on file", read
+// here exactly as applyLlmLegPatch reads it on the save path. Never throws.
 function hasRedactedHeader(raw: unknown): boolean {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
   return Object.values(raw as Record<string, unknown>).some((v) => v === 'set');
@@ -295,17 +271,10 @@ function resolveProbeHeaders(raw: unknown, stored: unknown): Record<string, stri
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// POST /settings/llm/probe-compat — live probe for an openai-compatible key.
-// Body: { apiKey: string, baseUrl: string, model: string, headers?: {} }
-// Always 200s with { ok, message, latencyMs }. The key is NOT saved.
-//
-// `headers` mirrors settings llm.headers (#1618): a gateway that routes on a
-// header rejects a call without it, so a probe that omitted them would fail
-// against exactly the server the operator is trying to configure — the test
-// button sits beside the header editor and has to ask the same question the
-// live path asks.
-// ---------------------------------------------------------------------------
+// Live probe for an openai-compatible key; always 200s and never saves the key.
+// `headers` mirrors settings llm.headers (#1618) so the probe asks the same
+// question the live path does: a gateway routing on a header rejects a call
+// without it.
 router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
   const { apiKey, baseUrl, model, headers } = req.body || {};
   if (!baseUrl || typeof baseUrl !== 'string' || !baseUrl.trim()) {
@@ -317,8 +286,7 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
   const t0 = Date.now();
   try {
     const typedKey = typeof apiKey === 'string' ? apiKey.trim() : '';
-    // The editor sends 'set' for a header already on file, so a probe needs the
-    // stored leg whenever one appears — the same reason a blank key does.
+    // A 'set' header, like a blank key, means the stored leg must be read.
     const needsStored = !typedKey || hasRedactedHeader(headers);
     let resolvedApiKey = typedKey;
     let storedHeaders: unknown;
@@ -327,11 +295,9 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
       const s = settings.get();
       const fallbackUrl = (s.llm?.fallback?.baseUrl || '').trim().replace(/\/+$/, '');
       const targetUrl = baseUrl.trim().replace(/\/+$/, '');
-      // Match the target server to a leg, then read that leg's provider's inline
-      // key from the per-provider map (issue #657) — and, since #1618, that same
-      // leg's stored headers, so the fallback's editor resolves its own
-      // sentinels rather than the primary's. Falls back to the primary when
-      // neither leg's URL matches.
+      // Match the target server to a leg, then read that leg's inline key
+      // (#657) and stored headers (#1618), so the fallback editor resolves its
+      // own sentinels. Defaults to the primary when no URL matches.
       const isFallback = Boolean(targetUrl) && targetUrl === fallbackUrl;
       const legProvider = isFallback ? s.llm?.fallback?.provider : s.llm?.provider;
       storedHeaders = isFallback ? s.llm?.fallback?.headers : s.llm?.headers;
@@ -359,28 +325,20 @@ router.post('/settings/llm/probe-compat', requireAdmin, async (req, res) => {
   }
 });
 
-// Providers whose model API returns one mixed list (chat + embedding) with no
-// type flag. For scope=embedding we can't tell them apart at the API level like
-// openai/google/openrouter/gateway do, so we trim by model-name heuristic below
-// — otherwise the embedding picker offers chat models that just fail to embed.
+// Providers whose model API returns one mixed chat+embedding list with no type
+// flag, so scope=embedding has to trim them by the name heuristic below.
 const MIXED_MODEL_LIST_PROVIDERS = new Set(['ollama', 'openai-compatible', 'locca', 'requesty']);
 
-// Heuristic: does this model id look like a text-embedding model? Embedding
-// model naming is conventional — almost all carry "embed", the rest come from a
-// short list of known families (bge / gte / e5 / minilm / instructor). Anything
-// unmatched can still be typed by hand (the field falls back to a free-text
-// input when discovery returns nothing).
+// Name heuristic: almost all embedding models carry "embed", the rest come from
+// a short list of families. An unmatched model can still be typed by hand.
 function looksLikeEmbeddingModel(id: string): boolean {
   const s = id.toLowerCase();
   if (s.includes('embed')) return true; // nomic-embed-text, mxbai-embed-large, text-embedding-3-*, *-arctic-embed
   return /(^|[/:_-])(bge|gte|e5|all-minilm|minilm|instructor)([/:_-]|$)/.test(s);
 }
 
-// ---------------------------------------------------------------------------
-// GET /settings/llm/models — discover available models for any LLM provider.
-// Query: provider (required), baseUrl (optional), ollamaUrl (optional).
-// Always 200s with { ok, models, provider, error? }.
-// ---------------------------------------------------------------------------
+// Discover available models for any provider. Query: provider (required),
+// baseUrl, ollamaUrl, scope. Always 200s with { ok, models, provider, error? }.
 router.get('/settings/llm/models', requireAdmin, async (req, res) => {
   const provider = String(req.query.provider || '').trim();
   if (!provider) {
@@ -415,9 +373,8 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
           || (provider === 'locca' ? llmProvider.DEFAULT_LOCCA_BASE_URL : '');
         if (!url) throw new Error('baseUrl is required for openai-compatible');
         await settings.load();
-        // Inline key for this provider from the per-provider map (issue #657).
-        // Primary and fallback inline legs of the same provider share one entry,
-        // so the key resolves by provider id without a baseUrl match.
+        // Inline key from the per-provider map (#657): both legs of a provider
+        // share one entry, so it resolves by provider id, not by baseUrl.
         const apiKey = settings.llmKeyFor(provider);
         const headers: Record<string, string> = {};
         if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
@@ -534,10 +491,9 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
       }
 
       case 'gateway': {
-        // Vercel AI Gateway. Use the SDK's getAvailableModels() rather than a
-        // hand-rolled URL — the gateway lives at ai-gateway.vercel.sh/v3/ai (not
-        // Cloudflare) and the SDK resolves the key / OIDC exactly as the registry's
-        // createGateway does. No apiKey → fall through to env / OIDC credentials.
+        // Use the SDK's getAvailableModels() rather than a hand-rolled URL, so
+        // the key/OIDC resolves exactly as the registry's createGateway does.
+        // No apiKey falls through to env / OIDC credentials.
         const apiKey = resolveKey('AI_GATEWAY_API_KEY');
         const gw = createGateway({
           ...(apiKey ? { apiKey } : {}),
@@ -560,10 +516,7 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
         return res.json({ ok: false, models: [], provider, error: `unknown provider: ${provider}` });
     }
 
-    // These providers hand back a mixed chat+embedding list; keep only the
-    // embedding-looking models so the tagger's embedding picker isn't cluttered
-    // with chat models that can't embed. Other providers already filtered by
-    // their API above.
+    // Mixed-list providers only; the rest were already filtered by their API.
     if (scope === 'embedding' && MIXED_MODEL_LIST_PROVIDERS.has(provider)) {
       models = models.filter(looksLikeEmbeddingModel);
     }
@@ -576,18 +529,11 @@ router.get('/settings/llm/models', requireAdmin, async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// POST /settings/embedding/probe — test whether the configured (or supplied)
-// embedding endpoint can actually produce embeddings, surfacing the result
-// in the admin UI BEFORE a long tagging run instead of failing mid-job.
-// Optional body overrides (provider/model/baseUrl/ollamaUrl/apiKey) test the
-// unsaved form values; omitted fields fall back to saved settings.embedding →
-// llm. POST body rather than query params so the bearer token never rides a
-// URL that reverse-proxy access logs capture — same shape as
-// /settings/llm/probe-compat.
-// Always 200s with { ok, dim, code, message } — a chat-model / unreachable
-// server is a normal, actionable answer, not an error.
-// ---------------------------------------------------------------------------
+// Test whether the configured (or supplied) embedding endpoint can actually
+// embed, before a long tagging run. Body overrides test unsaved form values;
+// omitted fields fall back to settings.embedding then llm. POST rather than
+// query params so the bearer token never rides a URL access logs capture.
+// Always 200s with { ok, dim, code, message }.
 router.post('/settings/embedding/probe', requireAdmin, async (req, res) => {
   const overrides: Record<string, string> = {};
   for (const k of ['provider', 'model', 'baseUrl', 'ollamaUrl', 'apiKey']) {
@@ -597,10 +543,9 @@ router.post('/settings/embedding/probe', requireAdmin, async (req, res) => {
   try {
     const r = await probeEmbeddingConfig(overrides);
     let message = r.message;
-    // Test-only reassurance: a not-yet-pulled Ollama model isn't a real failure —
-    // the tagger auto-pulls it on the next run (ensureReady → tryOllamaPull). We
-    // add this only here, NOT in the shared actionableMessage, because the tagger
-    // reuses that same message only AFTER an auto-pull has already failed.
+    // Test-only: a not-yet-pulled Ollama model is auto-pulled on the next run.
+    // Kept out of the shared actionableMessage, which the tagger reuses only
+    // AFTER an auto-pull has already failed.
     if (r.code === 'not_found' && r.provider === 'ollama') {
       message += '\n  You can ignore this — the tagger pulls this model automatically when you start a run.';
     }

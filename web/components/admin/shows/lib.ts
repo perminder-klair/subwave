@@ -1,9 +1,7 @@
 // Pure show helpers: hydration and the payload / table-row projections.
-//
-// Validation lives in ShowsPanel/ShowEditor, which run the shared show schema
-// through zodResolver. What stays local is only what that schema deliberately
-// does not express: the editor's tolerance for a half-finished show
-// (hydrateShow), and showPayload's "only means something with" conditionals.
+// Validation lives in ShowsPanel/ShowEditor via the shared schema; what stays
+// here is what the schema does not express — tolerance for a half-finished show
+// and showPayload's "only means something with" conditionals.
 
 import type { ShowFacet, ShowRow } from './ShowsTable';
 import { SHOW_COLORS } from '../schedule/lib';
@@ -20,14 +18,9 @@ export function clientMintId() {
   return 's_' + [...b].map(x => x.toString(16).padStart(2, '0')).join('');
 }
 
-// Fill in a show the editor can hold.
-//
-// Deliberately NOT a schema parse: the editor must be able to carry a
-// half-finished show (a fresh one has no name and no host yet), and a parse
-// would reject exactly that. What it does take from the schema is the legacy
-// singular → plural coercion (#929) — migrateLegacyShowFields — so the browser
-// and the controller's load path can't disagree about what an old `mood` or a
-// comma-crammed `genre` becomes.
+// Fill in a show the editor can hold. Not a schema parse: a fresh show has no
+// name or host and would be rejected. The legacy singular → plural coercion
+// (#929) still comes from the schema so browser and controller agree.
 export function hydrateShow(s: Partial<Show>): Show {
   const m = migrateLegacyShowFields(s) as Partial<Show>;
   return {
@@ -42,9 +35,7 @@ export function hydrateShow(s: Partial<Show>): Show {
     genres: Array.isArray(m.genres) ? m.genres.map(g => String(g).trim()).filter(Boolean) : [],
     eras: Array.isArray(m.eras) ? m.eras : [],
     energies: Array.isArray(m.energies) ? m.energies : [],
-    // Anything unrecognised reads as no constraint, matching the schema's own
-    // vocals field — a steering filter that silently stops applying is a far
-    // smaller failure than a show that stops playing music.
+    // Unrecognised reads as no constraint, matching the schema's vocals field.
     vocals: m.vocals === 'instrumental' || m.vocals === 'vocal' ? m.vocals : '',
     filtersStrict: m.filtersStrict ?? false,
     maxTrackSeconds: m.maxTrackSeconds ?? null,
@@ -74,11 +65,8 @@ export function abbrev(name: string): string {
 }
 
 /**
- * The show schema's context, from what the panel already has loaded.
- *
- * Every field is a real check here — unlike the controller's LOAD path, the
- * panel holds the live roster, the live mood vocabulary and the live theme
- * list, so it can answer all four questions the server will ask.
+ * The show schema's context. Unlike the controller's load path the panel holds
+ * the live roster, moods and themes, so every field is a real check.
  */
 export function showContext(opts: {
   personas: Persona[];
@@ -94,8 +82,7 @@ export function showContext(opts: {
   };
 }
 
-// At least one music filter set — the Strict filter toggle only means
-// something when there's a filter for it to harden.
+// The Strict toggle only means something with a filter for it to harden.
 export function hasAnyMusicFilter(s: Show): boolean {
   return !!(s.moods.length || s.genres.length || s.energies.length || s.eras.length || s.vocals);
 }
@@ -108,8 +95,8 @@ export function showPayload(s: Show) {
     name: s.name.trim(),
     topic: s.topic.trim(),
     personaId: s.personaId,
-    // The host can be switched after guests were picked; the server rejects a
-    // guest that duplicates the host, so filter it here too.
+    // Host can be switched after guests were picked; the server rejects a
+    // guest duplicating the host, so filter it here too.
     guestPersonaIds: (s.guestPersonaIds || []).filter(id => id !== s.personaId),
     // Banter only means something with guests in the studio.
     banter: (s.guestPersonaIds?.length ?? 0) > 0 && s.banter,
@@ -123,34 +110,28 @@ export function showPayload(s: Show) {
     filtersStrict: hasAnyMusicFilter(s) && s.filtersStrict,
     maxTrackSeconds: s.maxTrackSeconds,
     minTrackLengthSeconds: s.minTrackLengthSeconds,
-    // null rides through as null: it is "inherit", not "off", and coercing it
-    // here would opt every saved show out of a station default.
+    // null rides through as null: "inherit", not "off".
     fadeAtShowEnd: typeof s.fadeAtShowEnd === 'boolean' ? s.fadeAtShowEnd : null,
     playlistIds: s.playlistIds || [],
     // Strict only means something with at least one playlist pinned.
     playlistStrict: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict,
-    // And full rotation only means something behind strict: a soft anchor may
-    // leave the playlist, so "every track once" has no set to be true of.
+    // Full rotation only means something behind strict: a soft anchor may leave
+    // the playlist, so "every track once" has no set to be true of.
     playlistExhaust: (s.playlistIds?.length ?? 0) > 0 && s.playlistStrict && s.playlistExhaust,
     excludedPlaylistIds: s.excludedPlaylistIds || [],
     programme: s.programme ?? false,
     // A skill pin only means something in programme mode.
     segmentSkill: s.programme ? (s.segmentSkill || '') : '',
-    // No "only means something with" conditional: a tag is the operator's own
-    // filing, so it survives every other field being cleared.
+    // No conditional: a tag is filing, so it survives every other field clearing.
     tags: s.tags || [],
   };
 }
 
 
-// The visual counterpart to the text showFilterSummary(). Shared by the slate card
-// and the table row so the two views can't drift.
+// Visual counterpart to showFilterSummary(). Shared by the slate card and table row.
 export function showFacets(s: Show): ShowFacet[] {
   const facets: ShowFacet[] = [];
-  // Tags lead. Every other facet describes what the show PLAYS; a tag is how
-  // the operator files it, and the whole reason it exists is to be findable at
-  // a glance in a list too long to read — which it isn't behind eight mood and
-  // genre chips.
+  // Tags lead: they are the operator's filing and must be findable at a glance.
   (s.tags || []).forEach(t => facets.push({ key: `tag-${t}`, label: `#${t}`, accent: true }));
   if (s.moods.length) s.moods.forEach(m => facets.push({ key: `mood-${m}`, label: m }));
   else facets.push({ key: 'mood-any', label: 'any mood' });
@@ -166,9 +147,7 @@ export function showFacets(s: Show): ShowFacet[] {
   if (s.maxTrackSeconds != null) {
     facets.push({ key: 'length', label: s.maxTrackSeconds === 0 ? 'any length' : `≤${s.maxTrackSeconds}s` });
   }
-  // The floor gets its own facet rather than being folded into the one above:
-  // the two are independent overrides and a show may set either alone, so one
-  // combined "60–600s" chip would have to invent a bound the operator did not.
+  // Its own facet: cap and floor are independent overrides a show may set alone.
   if (s.minTrackLengthSeconds) {
     facets.push({ key: 'min-length', label: `≥${s.minTrackLengthSeconds}s` });
   }
@@ -184,8 +163,8 @@ export function joinNames(names: string[]): string {
   return `${names.slice(0, -1).join(', ')} & ${names[names.length - 1]}`;
 }
 
-// `index` is carried on the row because the panel keys colour and editing off the
-// show's position in the array.
+// `index` is carried on the row: the panel keys colour and editing off the
+// show's position in the form array.
 function faceOf(p: Persona, apiBase: string) {
   return {
     key: p.id,
@@ -195,9 +174,7 @@ function faceOf(p: Persona, apiBase: string) {
 }
 
 // Everything the row needs is derived here, so ShowsTable never sees `Show`.
-// `ok` is supplied by the caller (ShowsPanel), sourced from the RHF form's own
-// `formState.errors.shows` — the schema's answer, not a local reimplementation
-// of it. Same convention PersonaRoster/PersonaTable already established.
+// `ok` comes from the caller's RHF `formState.errors.shows`, never a local check.
 export function showRow(
   s: Show,
   index: number,

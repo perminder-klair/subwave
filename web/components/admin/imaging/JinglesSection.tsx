@@ -51,9 +51,8 @@ function JingleCreateModal({
   onClose: () => void;
 }) {
   const form = useZodForm(jingleCreateSchema, { text: '' });
-  // text is a plain z.string() (no preprocess wrapper), so its z.input is a
-  // real string and form.control needs no cast here — unlike every other
-  // field in this file, which goes through imagingName/imagingDescription.
+  // text is a plain z.string(), so its z.input is a real string and
+  // form.control needs no cast -- unlike every other field in this file.
   const textValue = useWatch({ control: form.control, name: 'text' }) || '';
 
   const onSubmit = form.handleSubmit(async (values) => {
@@ -97,11 +96,9 @@ function JingleCreateModal({
   );
 }
 
-// `label` is jingleImportSchema's one field (z.preprocess-wrapped — unknown
-// z.input, cast once). `files` (a multi-file picker) is not part of that
-// schema at all — a jingle import's shape only ever describes the label a
-// single-file import may carry — so it's a plain Controller field read via
-// useWatch, the same raw-Controller case as every file picker in this task.
+// `label` is jingleImportSchema's one field (z.preprocess-wrapped, so unknown
+// z.input, cast once). `files` (a multi-file picker) is not part of that schema
+// at all, so it's a plain Controller field read via useWatch.
 interface JingleImportFormValues {
   label?: string;
   files: File[];
@@ -120,9 +117,8 @@ function JingleImportModal({
 }) {
   const form = useZodForm(jingleImportSchema, { label: '' });
   const control = form.control as unknown as Control<JingleImportFormValues>;
-  // `files` has no place in jingleImportSchema's own type (see the interface
-  // comment above), so clearing it after a batch needs the same widened cast
-  // `control` uses rather than the schema-typed `form.setValue`.
+  // `files` has no place in jingleImportSchema's own type, so clearing it after
+  // a batch needs the same widened cast `control` uses.
   const setFormValue = form.setValue as unknown as <K extends keyof JingleImportFormValues>(
     name: K, value: JingleImportFormValues[K],
   ) => void;
@@ -330,12 +326,8 @@ export function JinglesSection({
             onClick={() => {
               // Pre-flight against the controller's own schema, so an
               // out-of-range ratio reads the same message here and on the wire.
-              // The raw string goes in on purpose — the schema parses it the way
-              // update() does, including the string forms `type="number"` still
-              // hands back. This inline control is deliberately NOT react-hook-
-              // form — see ImagingPanel.tsx's saveSettings comment: it posts its
-              // own one-key /settings patch and needs restart handling the shared
-              // create/import forms don't.
+              // Deliberately NOT react-hook-form: it posts its own one-key
+              // /settings patch and needs restart handling.
               const parsed = jingleRatioSchema.safeParse(jingleRatio);
               if (!parsed.success) {
                 notify.err(parsed.error.issues[0]?.message || 'invalid value');
@@ -359,8 +351,8 @@ export function JinglesSection({
             {jingles.map(j => (
               <div
                 key={j.filename}
-                /* Mobile drops the play/delete cluster below the text: the two icon
-                   buttons eat 90px of the ~310px a panel has at 390px. */
+                /* Mobile drops the play/delete cluster below the text: the two
+                   icon buttons eat 90px of the ~310px at 390px. */
                 className="grid grid-cols-1 items-center gap-3 px-[18px] py-[15px] sm:grid-cols-[1fr_auto] sm:gap-[18px]"
               >
                 <div className="min-w-0">

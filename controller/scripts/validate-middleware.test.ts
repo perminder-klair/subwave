@@ -36,19 +36,17 @@ test('firstMessage returns a flat human-readable string', () => {
 test('firstMessage prefixes the path when the message alone is ambiguous', () => {
   const r = schema.safeParse({ webhooks: 'notanarray' });
   assert.equal(r.success, false);
-  // Path-prefixed, because "expected array, received string" alone tells the
-  // operator nothing about WHICH field is wrong.
+  // Path-prefixed: the bare zod message names no field.
   assert.match(firstMessage(r.error), /^webhooks: /);
 });
 
-// --- The path is prefixed for EVERY issue code, not just invalid_type. The
-// earlier `code !== 'invalid_type'` heuristic silently stopped applying the
-// moment a schema used .regex()/.max() without a custom message, which is
-// exactly what the shared webhook schema does. ---
+// The path is prefixed for EVERY issue code, not just invalid_type: a
+// code-based heuristic stops applying the moment a schema uses .regex()/.max()
+// without a custom message.
 
 test('firstMessage names the row, so two rows failing the same rule differ', () => {
-  // The regression this contract exists to prevent: both messages used to be
-  // the bare rule text, identical, with nothing saying which row to fix.
+  // Without the prefix both messages are the bare rule text, identical, with
+  // nothing saying which row to fix.
   const first = schema.safeParse({ webhooks: [{ url: 'nope' }, { url: 'https://ok.com' }] });
   const second = schema.safeParse({ webhooks: [{ url: 'https://ok.com' }, { url: 'nope' }] });
   assert.equal(first.success, false);
@@ -59,9 +57,8 @@ test('firstMessage names the row, so two rows failing the same rule differ', () 
 });
 
 test('firstMessage prefixes codes whose built-in message names no field', () => {
-  // Neither zod message below carries a field name: 'invalid_format' reports
-  // the pattern, 'too_big' reports the limit. Both are produced by the real
-  // webhook schema (id's regex, authHeader's max).
+  // Neither zod message carries a field name: 'invalid_format' reports the
+  // pattern, 'too_big' the limit.
   const codes = z.object({
     slug: z.string().regex(/^[a-z]+$/),
     token: z.string().max(3),
@@ -76,9 +73,8 @@ test('firstMessage prefixes codes whose built-in message names no field', () => 
 });
 
 test('firstMessage splices `root` in FRONT of the path, not as a bare prefix', () => {
-  // validateWebhooksStrict parses the BARE array, so its paths start at the
-  // index. The root has to become part of the dotted path ('webhooks.0.url'),
-  // not a separate label ('webhooks: 0.url').
+  // The bare array's paths start at the index, so the root joins the dotted
+  // path ('webhooks.0.url'), not a separate label ('webhooks: 0.url').
   const bare = z.array(z.object({ url: z.string().regex(/^https?:\/\//, 'bad scheme') }));
   const r = bare.safeParse([{ url: 'https://ok.com' }, { url: 'nope' }]);
   assert.equal(r.success, false);
@@ -109,10 +105,9 @@ test('flattenIssues keeps only the first error per field', () => {
   assert.equal(flattenIssues(r.error)['url'], 'too short');
 });
 
-// --- The accumulator is Object.create(null), and these are the two holes that
-// closes. Field names come from user data, so a plain {} literal is a sink:
-// 'toString' in {} is true (inherited), and out['__proto__'] = msg on a literal
-// is a prototype SET that creates no own property at all. ---
+// The accumulator is Object.create(null): field names come from user data, and
+// on a {} literal 'toString' is inherited-true and '__proto__' assignment sets
+// the prototype rather than creating an own property.
 
 test('flattenIssues surfaces an error on a field named like an Object.prototype member', () => {
   const proto = z.object({
@@ -129,9 +124,8 @@ test('flattenIssues surfaces an error on a field named like an Object.prototype 
 });
 
 test('flattenIssues surfaces an error on a field literally named __proto__', () => {
-  // An object LITERAL can't carry a real own '__proto__' key (the literal form
-  // sets the prototype instead), so both the schema shape and the input are
-  // built the same null-prototype way the accumulator itself is.
+  // An object literal can't carry a real own '__proto__' key, so both the
+  // schema shape and the input are built null-prototype.
   const shape: Record<string, z.ZodTypeAny> = Object.create(null);
   shape['__proto__'] = z.string({ error: 'proto must be a string' });
   const input: Record<string, unknown> = Object.create(null);
@@ -140,14 +134,14 @@ test('flattenIssues surfaces an error on a field literally named __proto__', () 
   assert.equal(r.success, false);
   const out = flattenIssues(r.error);
   assert.equal(out['__proto__'], 'proto must be a string');
-  // And the accumulator itself must not have been mutated into a prototype set.
+  // And the accumulator must not have been mutated into a prototype set.
   assert.equal(Object.getPrototypeOf(out), null);
   assert.deepEqual(Object.keys(out), ['__proto__']);
 });
 
 test('a null-prototype accumulator still serialises and enumerates normally', () => {
-  // res.json() → JSON.stringify, and the browser does Object.entries() on the
-  // parsed payload. Both must behave exactly as with a plain object.
+  // res.json() is JSON.stringify and the browser does Object.entries(), so
+  // both must behave as with a plain object.
   const r = schema.safeParse({ webhooks: [{ url: 'nope' }] });
   assert.equal(r.success, false);
   const out = flattenIssues(r.error);

@@ -1,32 +1,18 @@
-// Shared show schema — the single source of truth for a show's shape, executed
-// on BOTH sides. The controller runs it in settings.validate.validateShowsStrict
-// (the update() chokepoint), in settings.normalize.normalizeShows (the lenient
-// load path) and in the POST /shows route middleware; the browser runs the
-// mirrored copy (web/lib/schemas.generated.ts).
+// Shared show schema — run by validateShowsStrict (the update() chokepoint),
+// normalizeShows (the lenient load path), the POST /shows route middleware and
+// the mirrored browser copy.
 //
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle, so a project import or a node builtin here breaks the mirror.
-// That includes OTHER schema modules — the mirror is one flat concatenation, so
-// gen-schemas.ts rejects every specifier but 'zod' and each module has to stand
-// alone. SHOW_ID_RE is therefore declared here and re-exported by
-// settings/vocab.ts as ID_RE rather than living in a shared module.
+// A FACTORY because a show cannot be validated against itself: personaId must
+// name a real persona, moods a live mood, themeId an installed theme, and the
+// two track-length fields clear a crossfade-derived floor. Those four travel as
+// ONE ShowSchemaContext, never unpacked into separate arguments.
 //
-// WHY A FACTORY. Unlike webhooks and stations, a show cannot be validated
-// against itself: `personaId` must name a real persona, `moods` a live mood,
-// `themeId` an installed theme, and the two track-length fields clear a
-// crossfade-derived floor. Those four travel as ONE ShowSchemaContext value rather than separate
-// arguments — the same "one scope value, never unpacked" rule PickerScope
-// follows. Both sides can build it; the admin panel already fetches personas,
-// moods, themes and the station settings.
-//
-// Rules that are NOT pure functions of the submitted value — id minting and
-// cross-row de-duplication — live in show-server.ts, which is NOT mirrored.
+// Impure rules (id minting, cross-row dedupe) live in show-server.ts, which is
+// not mirrored.
 import { z } from 'zod';
 
-// Entity id: shows, personas and skills all share this pattern. Homed here
-// because show is the first of the three to convert and a mirrored module
-// cannot import a shared one (see the header). settings/vocab.ts re-exports it
-// as ID_RE; whoever converts personas should decide its permanent home.
+// Entity id: shows, personas and skills share this pattern, re-declared per
+// module (zod-only imports). settings/vocab.ts re-exports it as ID_RE.
 export const SHOW_ID_RE = /^[a-z0-9_]{3,32}$/;
 
 export const SHOWS_LIMIT = 64;
@@ -41,29 +27,21 @@ export const SHOW_GENRE_MAX = 64;
 export const SHOW_SEGMENT_SKILL_MAX = 64;
 export const SHOW_THEME_ID_MAX = 64;
 
-// Freeform organisation tags (`tags: ["late-night", "weekend"]`) — operator
-// vocabulary for filtering and grouping the admin show list, the twin of
-// skill.ts's SKILL_TAG_RE. Declared here rather than imported because the
-// mirror is one flat concatenation and a schema module may import only zod
-// (see the header) — the same reason SHOW_ID_RE and PERSONA_ID_RE are three
-// copies of one pattern.
+// Freeform organisation tags, the twin of skill.ts's SKILL_TAG_RE (re-declared
+// for the same zod-only reason).
 export const SHOW_TAG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
 export const SHOW_TAG_MAX = 24;
 export const TAGS_PER_SHOW_LIMIT = 8;
 export const SHOW_YEAR_MIN = 1900;
 export const SHOW_YEAR_MAX = 2100;
-// Also the STATION-wide cap's ceiling — settings/defaults.ts BOUNDS reads it
-// from here, because the strict show validator has always bounds-checked a
-// show's override against the station figure and two copies would drift.
+// Also the STATION-wide cap's ceiling; settings/defaults.ts BOUNDS reads it
+// from here so the two cannot drift.
 export const SHOW_MAX_TRACK_SECONDS = 36000;
-// Ceiling on the per-show minimum-track-length FLOOR (#1573). Deliberately far
-// below SHOW_MAX_TRACK_SECONDS: a cap of ten hours is a harmless "no cap", but a
-// FLOOR of ten hours is a show that can never pick anything, and the pick paths
-// would spend every pool build discovering that. An hour is already past every
-// real answer (the field exists to skip 40-second skits and interludes).
-// Twinned with schemas/settings.ts's PICKER_MIN_TRACK_LENGTH_BOUNDS.max, which
-// bounds the STATION-wide default — a mirrored module may import only zod, so
-// the two are separate declarations of one number and must move together.
+// Ceiling on the per-show minimum-track-length FLOOR (#1573). Far below
+// SHOW_MAX_TRACK_SECONDS on purpose: a ten-hour cap is a harmless "no cap", a
+// ten-hour floor is a show that can never pick anything. Twinned with
+// schemas/settings.ts's PICKER_MIN_TRACK_LENGTH_BOUNDS.max — separate
+// declarations of one number, so they must move together.
 export const SHOW_MIN_TRACK_LENGTH_MAX = 3600;
 
 export const SHOW_ENERGY = ['low', 'medium', 'high'] as const;
@@ -72,26 +50,17 @@ export const SHOW_VOCALS = ['instrumental', 'vocal'] as const;
 export type EraWindow = { fromYear: number | null; toYear: number | null };
 
 /**
- * Everything a show can only be judged against from outside itself.
+ * Everything a show can only be judged against from outside itself. Three fields
+ * are NULLABLE and null always means "this caller cannot check that rule", which
+ * is how the lenient load path and the strict save path share one schema:
  *
- * Three fields are NULLABLE, and null always means the same thing: **this
- * caller cannot check that rule**, so leave the value alone. That is how the
- * lenient load path and the strict save path share one schema without either
- * restating a rule — the difference between them becomes CONTEXT rather than a
- * second implementation:
+ *   - `moodNames: null` — load runs before the mood cache exists.
+ *   - `themeIds: null` — load has no theme registry; a stale id is harmless.
+ *   - `minTrackSeconds: null` — the crossfade-derived floor under BOTH
+ *     maxTrackSeconds and minTrackLengthSeconds; load clamps to hard bounds.
  *
- *   - `moodNames: null` — load runs before the mood cache is built, and moods
- *     are operator-editable, so filtering against the seed defaults there would
- *     strip an operator's own moods. A stale mood just matches nothing on air.
- *   - `themeIds: null` — load has no theme registry to consult. A stale id is
- *     harmless: GET /themes falls back to the station default at serve time.
- *   - `minTrackSeconds: null` — the crossfade-derived floor, the lower bound on
- *     BOTH `maxTrackSeconds` and `minTrackLengthSeconds`. Load clamps to the
- *     hard bounds instead of enforcing it.
- *
- * `personaIds` is NOT nullable: a show whose host does not exist has no owner
- * on either path. Strict throws, lenient drops the row — same rule, different
- * consequence, which is exactly the split that is allowed.
+ * `personaIds` is NOT nullable: a show whose host does not exist has no owner on
+ * either path (strict throws, lenient drops the row).
  */
 export interface ShowSchemaContext {
   personaIds: string[];
@@ -100,21 +69,13 @@ export interface ShowSchemaContext {
   minTrackSeconds: number | null;
 }
 
-// Booleans are compared to `true` rather than typed as z.boolean(), which is
-// deliberate and load-bearing: BOTH the strict and the lenient path have always
-// read these as `item.banter === true`, so they already agree, and tightening
-// only the schema would make load and save disagree about a value neither
-// considers worth failing a show over. A string 'yes' reads as off, as it
-// always has.
+// `=== true` rather than z.boolean(): both paths read these that way, so
+// tightening only the schema would make load and save disagree.
 const showBool = () => z.unknown().optional().transform((v) => v === true);
 
-// Explicit null reads as "absent" on every OPTIONAL field. The pre-schema
-// validator accepted null everywhere it accepted an omission (`String(x ?? '')`,
-// `!= null` guards), and clients or serializers that write null for empty
-// fields relied on that. zod's `.default()` fires only on undefined, so without
-// this preprocess a `{topic: null}` that has always saved cleanly would 400 —
-// and because update() re-validates the whole array, one null field on one show
-// would fail the entire shows/schedule save.
+// Explicit null reads as "absent" on every OPTIONAL field. zod's `.default()`
+// fires only on undefined, and update() re-validates the whole array, so one
+// null field on one show would otherwise fail the entire shows/schedule save.
 const nullToUndefined = (v: unknown) => (v == null ? undefined : v);
 
 // Trimmed, non-empty, capped, de-duplicated, in first-seen order — the shape
@@ -156,17 +117,11 @@ function showStringList(opts: {
   );
 }
 
-// One era-window year bound, shared by the schema's own showYear pipeline and
-// the load path's repairEraWindow (below) so the two can never disagree about
-// what a valid year is. null / '' means "open end". A numeric string is
-// accepted because that is what an <input type="number"> posts.
-//
-// `validEraYear` is EXPORTED so it rides the mirror into the admin show
-// editor's add-a-range control (#1599), which has to refuse a year the save
-// would then reject. It owns only the integer-and-range test; the editor keeps
-// its own trim, because eraYearOf deliberately does not trim (' ' reaching the
-// wire is a malformed post, not an open end) and a draft box legitimately holds
-// whitespace mid-keystroke.
+// One era-window year bound, shared by showYear and the load path's
+// repairEraWindow. null / '' means "open end"; a numeric string is accepted
+// (<input type=number>). `validEraYear` is exported for the admin editor (#1599)
+// and owns only the integer-and-range test — eraYearOf deliberately does not
+// trim, so the editor keeps its own.
 const eraYearOf = (v: unknown): number | null => (v == null || v === '' ? null : Number(v));
 export const validEraYear = (n: number | null): boolean =>
   n == null || (Number.isInteger(n) && n >= SHOW_YEAR_MIN && n <= SHOW_YEAR_MAX);
@@ -185,17 +140,10 @@ const showEra = z
   );
 
 /**
- * The legacy singular fields #929 replaced with plural lists.
- *
- * BOTH paths migrate them. The pre-schema strict validator always accepted a
- * legacy `mood` from an older client or a pre-#929 backup and folded it into
- * the plural list ("a legacy singular mood from an older client still
- * validates" was its own comment), so a refusal here would turn a working
- * backup restore through settings.update() into a hard failure. Migration runs
- * INSIDE the schema (the preprocess in showSchema below) rather than at any
- * call site, because z.object strips unknown keys: a route that parses the
- * object directly would otherwise silently drop a legacy `mood` and report
- * success — the exact silent loss #929's migration exists to prevent.
+ * The legacy singular fields #929 replaced with plural lists. BOTH paths migrate
+ * them, and the migration runs INSIDE the schema (the preprocess in showSchema)
+ * because z.object strips unknown keys: parsing the object directly would drop a
+ * legacy `mood` and report success.
  */
 export const LEGACY_SHOW_FIELDS = [
   'mood',
@@ -206,13 +154,8 @@ export const LEGACY_SHOW_FIELDS = [
   'maxTrackMinutes',
 ] as const;
 
-/**
- * Fill the plural fields from any legacy singular ones.
- *
- * `genre` splits on commas because operators crammed multiple genres into the
- * one free-text field ("funk, soul, jazz-funk"), which never resolved against
- * the library as a single tag.
- */
+/** Fill the plural fields from any legacy singular ones. `genre` splits on
+ *  commas — operators crammed several into the one free-text field. */
 export function migrateLegacyShowFields(raw: unknown): Record<string, unknown> {
   const rec = { ...(raw as Record<string, unknown>) };
   if (!Array.isArray(rec.moods) && rec.mood != null && rec.mood !== '') rec.moods = [rec.mood];
@@ -233,9 +176,8 @@ export function migrateLegacyShowFields(raw: unknown): Record<string, unknown> {
   return rec;
 }
 
-// Accepts the array the editor sends AND a comma string, the two wire shapes
-// every other tag surface in the codebase has always taken. Tokens are
-// trimmed + lowercased, empties dropped, de-duplicated in first-seen order.
+// Array or comma string — the two wire shapes every tag surface takes. Trimmed,
+// lowercased, empties dropped, deduped in first-seen order.
 function showTagList(raw: unknown): string[] {
   const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
   return list.map((s) => String(s ?? '').trim().toLowerCase()).filter(Boolean);
@@ -266,13 +208,8 @@ const showTags = z
   .transform((toks) => [...new Set(toks)]);
 
 export function showSchema(ctx: ShowSchemaContext) {
-  // Migration must run BEFORE the object parse — z.object strips unknown keys,
-  // so by the time any .check() or field schema sees the value the legacy keys
-  // are already gone. Running it here rather than at call sites is what makes
-  // every caller — update(), POST /shows, the lenient load, the browser — give
-  // the same answer for the same payload. A migrated value is then validated by
-  // the same field schemas as a native one, so a legacy `energy: 'bogus'` still
-  // fails exactly like `energies: ['bogus']` would.
+  // Migration must run BEFORE the object parse: z.object strips unknown keys, so
+  // by the time a field schema sees the value the legacy keys are gone.
   return z.preprocess(
     (raw) => (raw && typeof raw === 'object' ? migrateLegacyShowFields(raw) : raw),
     showObjectSchema(ctx),
@@ -282,15 +219,9 @@ export function showSchema(ctx: ShowSchemaContext) {
 function showObjectSchema(ctx: ShowSchemaContext) {
   return z
     .object({
-      // Optional because a brand-new show has no id yet — the server mints one.
-      //
-      // A MALFORMED id is re-minted rather than rejected (.catch → undefined,
-      // then show-server.resolveShowIds mints), which is what both paths have
-      // always done and is deliberately unlike the webhook schema. A webhook id
-      // only resolves that row's stored secret, so rejecting a bad one costs
-      // nothing; a SHOW id is what every slot in the weekly schedule grid points
-      // at, so the same tightening would turn one malformed id in a restored
-      // backup into a refusal to restore the station at all.
+      // Optional (a new show has no id yet) and a MALFORMED one is re-minted
+      // rather than rejected, unlike a webhook id: a show id is what every
+      // weekly-grid slot points at, so rejecting one would refuse the restore.
       id: z
         .string()
         .regex(SHOW_ID_RE, 'id must be 3-32 characters: lowercase letters, digits or underscores')
@@ -312,8 +243,7 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       personaId: z
         .string({ error: 'Pick a host persona' })
         .refine((v) => ctx.personaIds.includes(v), 'must reference an existing persona'),
-      // Host exclusion and de-duplication happen in the object transform below,
-      // where the host id is in scope.
+      // Host exclusion and dedupe happen in the object transform below.
       guestPersonaIds: z.preprocess(
         nullToUndefined,
         z
@@ -327,8 +257,7 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       ),
       banter: showBool(),
       programme: showBool(),
-      // Free text, resolved against the live skill catalog at air time — a
-      // stale kind degrades to the producer's choice rather than blocking a save.
+      // Free text, resolved against the live skill catalog at air time.
       segmentSkill: z.preprocess(
         nullToUndefined,
         z
@@ -337,19 +266,15 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           .max(SHOW_SEGMENT_SKILL_MAX, `must be ${SHOW_SEGMENT_SKILL_MAX} characters or fewer`)
           .default(''),
       ),
-      // Empty means "Any": the show pins no mood and the autonomous
-      // dominantMood chain (festival > weather > time) applies on air.
+      // Empty means "Any": the autonomous dominantMood chain applies on air.
       moods: showStringList({
         max: SHOW_FILTER_VALUES_MAX,
         values: ctx.moodNames ?? undefined,
         overflowError: `must have at most ${SHOW_FILTER_VALUES_MAX} entries`,
       }),
-      // A stale id is DROPPED to '' rather than rejected — the tolerance #917's
-      // theme.active twin established. Throwing here bricked EVERY shows and
-      // schedule save, and every full restore, for any install still carrying
-      // one retired palette id on one show, because update() re-validates the
-      // whole array. Self-heals on the next save. The caller reports the drop
-      // (this module stays side-effect free, so no console.warn here).
+      // A stale id is DROPPED to '' rather than rejected (#917): update()
+      // re-validates the whole array, so throwing would brick every shows and
+      // schedule save. The caller reports the drop; this module stays pure.
       themeId: z.preprocess(
         nullToUndefined,
         z
@@ -359,8 +284,8 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           .default('')
           .transform((v) => (!v || !ctx.themeIds || ctx.themeIds.includes(v) ? v : '')),
       ),
-      // Free text resolved fuzzily against the live library at pick time, so
-      // never checked against Subsonic here. Dedup is case-insensitive.
+      // Resolved fuzzily against the live library at pick time. Case-insensitive
+      // dedupe.
       genres: showStringList({
         max: SHOW_FILTER_VALUES_MAX,
         itemMax: SHOW_GENRE_MAX,
@@ -373,8 +298,7 @@ function showObjectSchema(ctx: ShowSchemaContext) {
         values: SHOW_ENERGY,
         overflowError: `must have at most ${SHOW_FILTER_VALUES_MAX} entries`,
       }),
-      // Windows with no bound at all are dropped; the rest de-duplicate on the
-      // pair.
+      // Windows with no bound are dropped; the rest dedupe on the pair.
       eras: z.preprocess(
         nullToUndefined,
         z
@@ -394,17 +318,15 @@ function showObjectSchema(ctx: ShowSchemaContext) {
             return out;
           }),
       ),
-      // One value, not a list — instrumental and vocal are mutually exclusive
-      // and wanting both is wanting neither. '' is no constraint, so a show
-      // predating the field round-trips unchanged.
+      // One value, not a list: wanting both is wanting neither. '' is no
+      // constraint, so a show predating the field round-trips unchanged.
       vocals: z
         .union([z.null(), z.literal(''), z.enum(SHOW_VOCALS)])
         .optional()
         .transform((v) => v ?? ''),
       // Opt-in hard filter across every set music constraint. The legacy
-      // genre-only `genreStrict` is deliberately NOT carried over: the toggle
-      // now spans mood/genre/era/energy, so migrating it would harden filters
-      // an old show never opted into.
+      // genre-only `genreStrict` is NOT migrated: this toggle now spans
+      // mood/genre/era/energy and would harden filters a show never opted into.
       filtersStrict: showBool(),
       // null = inherit the station default, 0 = unlimited, >0 = this show's cap.
       maxTrackSeconds: z
@@ -417,25 +339,16 @@ function showObjectSchema(ctx: ShowSchemaContext) {
             (Number.isInteger(n) && n >= 0 && n <= SHOW_MAX_TRACK_SECONDS),
           `must be an integer between 0 and ${SHOW_MAX_TRACK_SECONDS}`,
         )
-        // Shows have no crossfade of their own, so the floor is the station's.
-        // 0 (inherit/unlimited) always stays allowed.
+        // Shows have no crossfade of their own, so the floor is the station's;
+        // 0 (inherit/unlimited) stays allowed.
         .refine(
           (n) => n == null || n === 0 || ctx.minTrackSeconds == null || n >= ctx.minTrackSeconds,
           `must be 0 (inherit/unlimited) or at least the station's minimum track length`,
         ),
-      // Minimum track length (#1573) — the FLOOR, the twin of the cap above.
-      // null = inherit the station default (picker.minTrackLengthSeconds),
-      // 0 = no floor, >0 = this show's own floor in seconds.
-      //
-      // Unlike the cap, this one is a SELECTION filter: a 40-second interlude
-      // cannot be lengthened on air the way an over-long mix can be cut, so it
-      // has to be kept out of the pool rather than trimmed at the seam.
-      //
-      // It carries the SAME crossfade-derived lower bound as the cap, and for
-      // the same reason: a track shorter than 2x the crossfade has no solo
-      // airtime at all, so the smallest floor worth expressing is the one the
-      // mixer already imposes. 0 (inherit/off) always stays allowed, so a
-      // station that never touches the field is byte-identical to today.
+      // Minimum track length (#1573): null = inherit picker.minTrackLengthSeconds,
+      // 0 = no floor, >0 = this show's floor. Unlike the cap this is a SELECTION
+      // filter — a short interlude cannot be lengthened on air — and it carries
+      // the same crossfade-derived lower bound. 0 always stays allowed.
       minTrackLengthSeconds: z
         .union([z.null(), z.literal(''), z.number(), z.string()])
         .optional()
@@ -450,58 +363,37 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           (n) => n == null || n === 0 || ctx.minTrackSeconds == null || n >= ctx.minTrackSeconds,
           `must be 0 (inherit/no floor) or at least the station's minimum track length`,
         ),
-      // Show-boundary fade (#1574). TRI-STATE, exactly like maxTrackSeconds
-      // above: null = inherit the station default, true/false = this show's own
-      // answer. A plain showBool() would read an untouched show as an explicit
-      // `false` and silently opt every existing show OUT of a station default
-      // the operator had just turned on.
+      // Show-boundary fade (#1574). TRI-STATE like maxTrackSeconds: null =
+      // inherit. A plain showBool() would read an untouched show as an explicit
+      // false and opt it out of a station default just turned on.
       fadeAtShowEnd: z
         .union([z.null(), z.literal(''), z.boolean()])
         .optional()
         .transform((v) => (v == null || v === '' ? null : v)),
-      // Shape-checked only: ids resolve against the live Navidrome at pick
-      // time, so a stale one contributes nothing rather than failing a save.
+      // Shape-checked only: ids resolve against live Navidrome at pick time.
       playlistIds: showStringList({
         max: PLAYLISTS_PER_SHOW,
         overflowError: `must have at most ${PLAYLISTS_PER_SHOW} entries`,
       }),
       playlistStrict: showBool(),
-      // Full rotation (#1612): while this show is on, every track in its anchor
-      // playlist airs once before any of them repeats. The no-repeat window
-      // stops being the station-wide count and becomes the resolved playlist's
-      // own size — recomputed per pick, so a playlist that grows in Navidrome
-      // widens the rotation rather than silently stopping being right.
-      //
-      // DECIDED: it is a NO-OP without `playlistStrict`, not a validation
-      // error. A soft anchor may leave the playlist, so its universe is the
-      // library again and "every track once" has no set to be true of; refusing
-      // the combination would instead mean a show that cannot be saved while
-      // the operator is halfway through configuring it. The editor only offers
-      // the switch behind the strict one, so the dependency is visible there
-      // and merely inert here — which is also what a hand-edited settings.json
-      // needs, since it reaches this schema without ever seeing the editor.
-      //
-      // The window is counted AFTER the show's strict locks and its excluded
-      // playlists, in music/show-recency.ts — sizing it against the raw
-      // playlist would withhold tracks the show was never going to play.
+      // Full rotation (#1612): every track in the anchor playlist airs once
+      // before any repeats, the no-repeat window becoming the resolved
+      // playlist's size (recomputed per pick). A NO-OP without `playlistStrict`
+      // rather than a validation error, so a half-configured show still saves.
+      // The window is counted AFTER strict locks and excluded playlists, in
+      // music/show-recency.ts.
       playlistExhaust: showBool(),
       excludedPlaylistIds: showStringList({
         max: EXCLUDED_PLAYLISTS_PER_SHOW,
         overflowError: `must have at most ${EXCLUDED_PLAYLISTS_PER_SHOW} entries`,
       }),
-      // Organisation only — tags steer nothing on air. Declared LAST so the
-      // persisted key order of every pre-existing field is unchanged, and
-      // defaulted to [] so a show written before the field round-trips byte
-      // identically apart from the new empty list.
-      //
-      // Unlike every other list here a bad entry is REFUSED rather than
-      // dropped: a tag is typed by hand in the editor, and a tag that silently
-      // vanishes on save is the failure the skill conversion called out. The
-      // lenient load twin (repairShowTags) drops instead, because a hand-edited
-      // settings.json should cost the show a filter chip, not the show.
+      // Organisation only, declared LAST so persisted key order is unchanged.
+      // Unlike every other list here a bad entry is REFUSED rather than dropped:
+      // a tag is typed by hand and must not vanish on save. The load twin
+      // (repairShowTags) drops instead.
       tags: showTags,
     })
-    // Needs two fields at once, so it cannot live on guestPersonaIds itself.
+    // Needs two fields at once, so it cannot live on guestPersonaIds.
     .check((c) => {
       if (c.value.guestPersonaIds.includes(c.value.personaId)) {
         c.issues.push({
@@ -522,10 +414,8 @@ export type ShowParsed = z.output<ReturnType<typeof showSchema>>;
 export type Show = ShowParsed & { id: string };
 
 export function showsSchema(ctx: ShowSchemaContext) {
-  // The array-level error is explicit so a non-array never reaches an operator
-  // as zod's own 'Invalid input: expected array, received number'. Phrased
-  // WITHOUT the key, like every other message here, because both callers root
-  // this schema at 'shows'.
+  // Explicit array-level error, phrased WITHOUT the key because both callers
+  // root this schema at 'shows'.
   return z
     .array(showSchema(ctx), { error: 'must be an array' })
     .max(SHOWS_LIMIT, `must be at most ${SHOWS_LIMIT} entries`);
@@ -536,21 +426,13 @@ export function showPostSchema(ctx: ShowSchemaContext) {
   return z.object({ show: showSchema(ctx) });
 }
 
-// ── Lenient per-field repairs (the LOAD path) ────────────────────────────────
-//
-// settings/normalize.ts's normalizeShows repairs a stored show field-by-field
-// BEFORE running the schema, so a stale mood or a mistyped list entry costs the
-// show that one value, not the show. The repairs live HERE, beside the rules
-// they repair against, because a repair restated at the call site is a repair
-// that can drift from the schema — and the failure mode of that drift is the
-// worst one available: the lenient parse fails, `continue` drops the row, and a
-// working show silently vanishes on the next boot.
+// Lenient per-field repairs (the LOAD path). normalizeShows repairs a stored
+// show field-by-field BEFORE running the schema, so a stale value costs the show
+// that value, not the show. They live here, beside the rules they repair
+// against: a repair that drifts from the schema drops the row at boot.
 
-/**
- * One era window, repaired: numeric-string years accepted (same eraYearOf the
- * schema's own showYear runs), out-of-range or backwards windows dropped as
- * null rather than failing the show.
- */
+/** One era window, repaired: numeric-string years accepted, out-of-range or
+ *  backwards windows dropped as null rather than failing the show. */
 export function repairEraWindow(raw: unknown): EraWindow | null {
   if (!raw || typeof raw !== 'object') return null;
   const rec = raw as { fromYear?: unknown; toYear?: unknown };
@@ -562,9 +444,8 @@ export function repairEraWindow(raw: unknown): EraWindow | null {
   return { fromYear, toYear };
 }
 
-// Trimmed strings only, deduped in first-seen order, capped — the lenient twin
-// of showStringList: where the schema REJECTS (a non-string entry, an
-// over-cap list), this drops or truncates instead.
+// The lenient twin of showStringList: where the schema REJECTS a non-string or
+// over-cap entry, this drops or truncates.
 export function repairShowStringList(
   raw: unknown,
   opts: { max: number; itemMax?: number; values?: readonly string[]; key?: (v: string) => string },
@@ -586,13 +467,8 @@ export function repairShowStringList(
   return out;
 }
 
-/**
- * Tags, repaired: lowercased, invalid entries dropped, de-duplicated, capped.
- *
- * The cap is applied AFTER the validity filter, not before, so a stored list
- * padded with junk still yields the operator's real tags rather than spending
- * the budget on entries that were never going to survive.
- */
+/** Tags, repaired. The cap applies AFTER the validity filter so a list padded
+ *  with junk still yields the operator's real tags. */
 export function repairShowTags(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out: string[] = [];
@@ -607,21 +483,13 @@ export function repairShowTags(raw: unknown): string[] | undefined {
 }
 
 /**
- * Every per-field repair the load path applies before parsing, in one place.
+ * Every per-field repair the load path applies before parsing. `undefined` lets
+ * the schema's own default apply; each repair lands on a value the strict path
+ * accepts, and the schema is still run on the result.
  *
- * `undefined` lets the schema's own default apply. Each repair lands on a value
- * the strict path would have accepted, so load and save still agree about what
- * a valid show is — the schema itself is still run on the result.
- *
- * `personaIds: null` mirrors the ShowSchemaContext convention: this caller
- * cannot check roster membership, so guest entries are kept. The load path
- * passes the real roster and dangling guests (and the host itself) are dropped
- * so the show survives with whatever roster is still real.
- *
- * maxTrackSeconds is deliberately NOT repaired here: its clamp bounds are owned
- * by settings/defaults.ts (coerceMaxTrackSeconds), which already reads its
- * ceiling from this module's SHOW_MAX_TRACK_SECONDS. minTrackLengthSeconds
- * follows it for the same reason (coerceMinTrackLengthSeconds).
+ * `personaIds: null` means this caller cannot check roster membership, so guests
+ * are kept. maxTrackSeconds and minTrackLengthSeconds are deliberately NOT
+ * repaired here — settings/defaults.ts owns their clamps.
  */
 export function repairShowForLoad(
   raw: Record<string, unknown>,
@@ -639,15 +507,13 @@ export function repairShowForLoad(
     themeId: typeof raw.themeId === 'string'
       ? raw.themeId.trim().slice(0, SHOW_THEME_ID_MAX)
       : undefined,
-    // Anything unrecognised reads as no constraint — a steering field that
-    // silently stops applying is a far smaller failure than a show that stops
-    // playing music.
+    // Anything unrecognised reads as no constraint: a steering field that stops
+    // applying beats a show that stops playing music.
     vocals: typeof raw.vocals === 'string' && (SHOW_VOCALS as readonly string[]).includes(raw.vocals)
       ? raw.vocals
       : undefined,
-    // A stale mood costs the show that one filter, not the show. Moods are NOT
-    // filtered against a vocabulary here for the same reason the load context
-    // carries moodNames: null — the mood cache doesn't exist yet.
+    // Not filtered against a vocabulary here, for the same reason the load
+    // context carries moodNames: null — the mood cache does not exist yet.
     moods: repairShowStringList(raw.moods, { max: SHOW_FILTER_VALUES_MAX }),
     genres: repairShowStringList(raw.genres, {
       max: SHOW_FILTER_VALUES_MAX,
@@ -670,10 +536,8 @@ export function repairShowForLoad(
             typeof g === 'string' && g !== host && (personaIds == null || personaIds.includes(g)))
           .slice(0, GUESTS_PER_SHOW)
       : undefined,
-    // Lenient twin of the strict `tags` field: an invalid tag is DROPPED here
-    // rather than failing the show, the same posture skill.ts's
-    // normalizeSkillTags takes against a hand-edited SKILL.md. Non-array reads
-    // as absent so the schema's [] default applies.
+    // Lenient twin of the strict `tags` field: an invalid tag is DROPPED rather
+    // than failing the show. Non-array reads as absent (schema's [] default).
     tags: repairShowTags(raw.tags),
     playlistIds: repairShowStringList(raw.playlistIds, { max: PLAYLISTS_PER_SHOW }),
     excludedPlaylistIds: repairShowStringList(raw.excludedPlaylistIds, {

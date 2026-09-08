@@ -1,13 +1,7 @@
-// Final script boundary for booth-bound English speech.
-//
-// The DJ prompt asks the model to turn CJK artist/title names into their
-// established Latin form. Models can still occasionally echo one native
-// character or a full native spelling. English espeak then reads those
-// codepoints as literal character classes ("Japanese letter"), so the TTS
-// boundary must fail safe even when generation did not. This is deliberately
-// a scrub, not a transliterator: the model owns the good, canonical name;
-// this last line of defence only prevents leaked codepoints reaching a voice
-// that cannot pronounce them. Explicitly non-English personas are untouched.
+// Final script boundary for booth-bound English speech. English espeak reads
+// leaked CJK codepoints as literal character classes ("Japanese letter"), so
+// this fails safe when generation did not. A scrub, not a transliterator: the
+// model owns the canonical Latin name. Non-English personas are untouched.
 
 const CJK_RE = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu;
 const ENGLISH_RE = /^english(?:\b|\s|[-_(])/i;

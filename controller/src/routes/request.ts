@@ -1,7 +1,6 @@
-// POST /request — listener track requests. The HTTP call returns immediately
-// with a request id; the slow work (LLM matching, the pick cascade, intro
-// generation, enqueue) runs in the background. GET /request/:id reports the
-// outcome so the UI can poll for it.
+// Listener track requests. POST returns a request id immediately; matching, the
+// pick cascade, intro generation and enqueue run in the background, and
+// GET /request/:id reports the outcome.
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import * as subsonic from '../music/subsonic.js';
@@ -27,43 +26,31 @@ import { shuffle } from '../util/shuffle.js';
 
 export const router = express.Router();
 
-// Neutralize prompt-injection markup in listener-supplied request text before
-// it's stored, logged, displayed, or fed to the LLM. A song request is short
-// natural language ("play Diljit latest", "rainy day vibes") — it never legibly
-// contains instruction-shaped markup, so stripping it can't hurt a real request
-// but defangs attempts to smuggle directives to the DJ agent (the raw text is
-// posted verbatim as a session turn and aired as free-text patter). This is a
-// belt — the prompt framing still treats the text as data — not the only layer.
+// Strip prompt-injection markup from listener text before it is stored, logged,
+// displayed or fed to the LLM. A belt over the prompt framing, not the only layer.
 function sanitizeRequestText(raw: string): string {
   return String(raw ?? '')
-    // chat/template role + instruction tokens (Llama/Mistral/ChatML style)
+    // chat/template role + instruction tokens
     .replace(/\[\/?INST\]|<<\/?SYS>>|<\|[^|>]*\|>/gi, ' ')
-    // any HTML/XML-ish tag, e.g. <project_instructions> … </project_instructions>
+    // any HTML/XML-ish tag
     .replace(/<\/?[a-z][^>]*>/gi, ' ')
-    // leading role markers that fake a new turn ("system:", "assistant:")
+    // leading role markers that fake a new turn
     .replace(/^[ \t]*(system|assistant|developer)\s*:/gim, ' ')
-    // the unambiguous "ignore/disregard the previous instructions" family
+    // the "ignore the previous instructions" family
     .replace(/\b(ignore|disregard|forget|override)\b[^.!?\n]*\b(previous|prior|above|earlier|all)\b[^.!?\n]*\binstructions?\b/gi, ' ')
-    // double quotes would let the text break out of the "${text}" framing
+    // double quotes would break out of the "${text}" framing
     .replace(/"/g, "'")
-    // collapse the multi-line "instruction block" shape into one line
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-// ---------------------------------------------------------------------------
-// In-memory request ledger. Each POST /request mints an entry; the background
-// resolver mutates it; GET /request/:id reads it. Ephemeral by design — a
-// controller restart drops in-flight requests, which is fine: the track is
-// already queued or it isn't, and the listener can just ask again.
-// ---------------------------------------------------------------------------
+// In-memory request ledger, ephemeral by design: a restart drops in-flight
+// requests, and the track is either already queued or it isn't.
 const requests = new Map();
 const REQUEST_TTL_MS = 10 * 60 * 1000;
 
-// One request in flight per IP (settings.requests.onePendingPerIp): an IP's
-// previous request must resolve AND leave the upcoming queue (i.e. air) before
-// the next one is accepted. Entries are ledger entries; pruneRequests() below
-// is the shared janitor.
+// settings.requests.onePendingPerIp: an IP's previous request must resolve AND
+// leave the upcoming queue before the next is accepted. pruneRequests() janitors.
 const lastByIp = new Map<string, any>();
 
 function pruneRequests() {
@@ -76,12 +63,10 @@ function pruneRequests() {
   }
 }
 
-// Resolve "latest album by Diljit" style requests: find the artist, sort their
-// albums by year, pick a song from the right album. Returns a Subsonic song or null.
+// "latest album by X" style requests: resolve artist, sort albums, pick a song.
 async function pickByArtistAndSort({ artistName, sort, scope: _scope, recentIds }: { artistName: string; sort: string | null; scope: string; recentIds: Set<string> }) {
   try {
-    // Fuzzy-resolve so a transliteration variance or typo ("Sikandar" vs the
-    // library's "Sikander") still lands on the right artist instead of failing.
+    // Fuzzy so a transliteration variance or typo still lands on the artist.
     const matchedArtist = await subsonic.resolveArtist(artistName);
     if (!matchedArtist) return null;
     const artist = await subsonic.getArtist(matchedArtist.id);
@@ -93,21 +78,17 @@ async function pickByArtistAndSort({ artistName, sort, scope: _scope, recentIds 
     } else if (sort === 'oldest') {
       albums = [...albums].sort((a, b) => (a.year || 9999) - (b.year || 9999));
     } else if (!sort) {
-      // No explicit sort (a bare "play <artist>") → shuffle so the pick
-      // spreads across the whole catalogue instead of always hitting the
-      // first album Subsonic returns.
+      // Bare "play <artist>": shuffle so picks spread across the catalogue
+      // instead of always hitting the first album Subsonic returns.
       albums = shuffle(albums);
     }
-    // sort=popular → leave order as Subsonic returned
-
-    // Try the top-ranked album first; if its tracks are all recently played,
-    // walk down the list before giving up.
+    // sort=popular leaves Subsonic's order. Walk down the list when the
+    // top album's tracks are all recently played.
     for (const album of albums.slice(0, 5)) {
       const songs = await subsonic.getAlbum(album.id);
       if (songs.length === 0) continue;
       const fresh = songs.filter(s => !recentIds.has(s.id));
       const pool = fresh.length > 0 ? fresh : songs;
-      // scope=album → random track from the album; scope=song → same thing here
       return pool[Math.floor(Math.random() * pool.length)];
     }
   } catch (err) {
@@ -116,18 +97,14 @@ async function pickByArtistAndSort({ artistName, sort, scope: _scope, recentIds 
   return null;
 }
 
-// Fallback for "more like this" when the currently-playing artist has nothing
-// else in the library (e.g. a one-off collab credit) — find a track that
-// actually RESEMBLES the current one. "more like this" means more like the
-// TRACK, not strictly more by the artist, so this honours the request instead
-// of dead-ending. Prefers the audio-similarity extension ("sounds like this"),
-// then the Last.fm similarity graph. Returns a fresh Subsonic song (same shape
-// as pickByArtistAndSort) or null. Excludes the seed track and recent plays.
+// "more like this" fallback when the playing artist has nothing else in the
+// library: prefer the audio-similarity extension, then the Last.fm graph.
+// Excludes the seed track and recent plays.
 async function pickSimilarToTrack(reference, recentIds: Set<string>) {
   const id = reference?.track?.id;
   if (!id) return null;
   const exclude = new Set(recentIds);
-  exclude.add(id); // never return the song that's playing right now
+  exclude.add(id);
   const pickFresh = (songs) => {
     const list = (songs || []).filter((s) => s?.id && !exclude.has(s.id));
     if (list.length === 0) return null;
@@ -146,10 +123,8 @@ async function pickSimilarToTrack(reference, recentIds: Set<string>) {
   return null;
 }
 
-// Resolve a listener's free-text genre ("hip hop", "punjabi") to a genre value
-// that actually exists in the library. search3 is a title/artist/album text
-// match and can't query the genre tag, so genre requests must go through
-// getSongsByGenre with an exact genre name. Returns the matched name or null.
+// search3 can't query the genre tag, so genre requests need an exact genre name
+// for getSongsByGenre. Returns the matched name or null.
 async function resolveGenre(name) {
   try {
     return await subsonic.resolveGenreName(name);
@@ -159,17 +134,9 @@ async function resolveGenre(name) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Background resolver — everything the listener used to wait on. Mutates the
-// ledger entry to `resolved` (track queued) or `failed` (no match / error).
-// `ctx` from getFullContext() is fetched once here and threaded through every
-// path, instead of the four separate fetches the inline handler used to do.
-// ---------------------------------------------------------------------------
-// Append the durable debug record once, at a request's terminal state, from the
-// trace fields the resolution paths stash on `entry` as they go. Best-effort —
-// a logging hiccup must never affect the listener's outcome. Called from both
-// resolveRequest's terminal closures and the crash catch below, so a request
-// that throws mid-resolution still lands in the log.
+// Append the durable debug record once, at a request's terminal state. Best
+// effort: a logging hiccup must never affect the listener's outcome. Called from
+// resolveRequest's terminal closures and the crash catch below.
 function recordOutcome(entry) {
   try {
     requestLog.record({
@@ -205,9 +172,7 @@ function recordOutcome(entry) {
   }
 }
 
-// Record a guard verdict on the entry without clobbering an earlier one — a
-// single request can trip the ack guard and then the intro guard, and the
-// durable log should show both rather than whichever ran last.
+// Accumulate guard verdicts: one request can trip both the ack and intro guards.
 function flagGuard(entry, verdict: string | null | undefined) {
   if (!verdict) return;
   entry.guard = entry.guard ? `${entry.guard}+${verdict}` : verdict;
@@ -238,18 +203,15 @@ async function resolveRequest(entry) {
     ctx = {};
   }
 
-  // Roll the session if a show/mood boundary has passed since the last track
-  // change, then post the request as a single `event` turn. Doing it here —
-  // before any resolution path — means the agent, the "more like this"
-  // shortcut and the stateless cascade all share one event turn, so the
-  // session never carries an orphan event with no DJ reply.
+  // Roll, then post ONE event turn before any resolution path, so the agent, the
+  // more-like-this shortcut and the cascade share it and no orphan event is left.
   try {
     await session.maybeRoll(ctx);
     const cur = queue.current?.track || null;
     session.appendTurn({
       role: 'event', kind: 'request',
-      // The pick agent reads this window for hours, so an unsigned request must
-      // not leave the string 'anon' sitting in it as if it were a name (#1347).
+      // The pick agent reads this window for hours; an unsigned request must
+      // not leave 'anon' in it as if it were a name (#1347).
       text: `${isNamedRequester(requester) ? `Listener "${requester}" requests` : 'An unnamed listener requests'}: "${text}"`
         + (cur ? ` (currently playing "${cur.title}" by ${cur.artist}${cur.id ? ` [id: ${cur.id}]` : ''})` : ''),
     });
@@ -257,9 +219,8 @@ async function resolveRequest(entry) {
     queue.log('error', `Session update for request failed: ${err.message}`);
   }
 
-  // 0. "more like this" — never let it through the generic search path, it's a
-  // meta-instruction about the current track, not a query. Pick another song
-  // by the current/last artist and skip the LLM match.
+  // 0. "more like this" is a meta-instruction about the current track, not a
+  // query, so it never goes through the generic search path.
   const isMoreLikeThis = /^more\s+like\s+this[.!?]?$/i.test(text);
   if (isMoreLikeThis) {
     entry.path = 'more-like-this';
@@ -269,13 +230,12 @@ async function resolveRequest(entry) {
     if (!refArtist) {
       return failed(`Nothing's playing yet — tell me what you're after instead.`);
     }
-    // Requests stay near-unfiltered — 2h is enough to skip the song still
-    // ringing in their ears without blocking a re-request from earlier today.
+    // Requests stay near-unfiltered: 2h skips the song still ringing in their
+    // ears without blocking a re-request from earlier today.
     const recentIds = queue.recentlyPlayedIds(2);
     for (const id of queue.queuedIds()) recentIds.add(id);
-    // Try another track by the same artist first (the cheap, on-the-nose read),
-    // then fall back to real track similarity so a one-off collab credit playing
-    // now doesn't dead-end the request ("Couldn't find more from X in the crates").
+    // Same artist first, then real track similarity so a one-off collab credit
+    // playing now doesn't dead-end the request.
     let pick = await pickByArtistAndSort({
       artistName: refArtist, sort: null, scope: 'song', recentIds,
     });
@@ -286,13 +246,11 @@ async function resolveRequest(entry) {
     if (!pick) {
       return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
     }
-    // The fallback can land on a different artist, so phrase the ack from the
-    // actual pick, not the seed.
+    // The fallback can land on a different artist; phrase the ack from the pick.
     const sameArtist = !!pick.artist && pick.artist === refArtist;
     const ackLine = sameArtist ? `More from ${refArtist}, coming up.` : `More like that, coming up.`;
-    // Station voice off (settings.tts.enabled) → the request is still honoured
-    // and the listener still gets their text ack; there's just no spoken intro,
-    // and no model call to write one.
+    // Station voice off: request still honoured and acked, no spoken intro and
+    // no model call to write one.
     let introScript = autoVoiceAllowed()
       ? await dj.generateIntro({
         track: pick,
@@ -304,8 +262,8 @@ async function resolveRequest(entry) {
         recentOpeners: queue.getRecentOpeners(),
       })
       : null;
-    // Echo guard (A2): a script that reads the request back is regenerated with
-    // the request text withheld — it can't echo what it never saw.
+    // Echo guard: a script that reads the request back is regenerated with the
+    // request text withheld.
     const guardedMlt = await guardIntro(introScript, text, () => dj.generateIntro({
       track: pick,
       context: ctx,
@@ -322,25 +280,23 @@ async function resolveRequest(entry) {
     const pos = await queue.push({
       track: pick, requestedBy: requester, intent: 'more_like_this', introScript,
       introKind: 'dj-speak',
-      // Voice it as whoever wrote it — render and air both happen later and
-      // would otherwise re-resolve the speaker off the wall clock.
+      // Voice it as whoever wrote it: render and air happen later and would
+      // otherwise re-resolve the speaker off the wall clock.
       introPersona: session.onAirPersona(),
     });
     entry.pick = pick;
     if (pos === -2) {
-      // Never-play blocklist refused the pick (library-db-sourced candidates
-      // can slip past the subsonic filter). Decline with the standard
-      // not-found copy — no leak that the track exists but is blocked.
+      // Blocklist refused the pick; decline with the standard not-found copy so
+      // the block doesn't leak.
       entry.pickSource = `${entry.pickSource}:blocked`;
       return failed(`Couldn't find anything close to "${reference?.track?.title || refArtist}" in the crates.`);
     }
     if (pos === -1) {
-      // A concurrent request already queued this exact track — acknowledge
-      // honestly instead of airing a second intro over a phantom replay (#619).
+      // A concurrent request already queued this track (#619).
       const dupAck = queue.dedupAck(pick.id);
       entry.pickSource = `${entry.pickSource}:already-queued`;
-      // Nothing was queued for THIS listener — don't let the one-pending hold
-      // key on a track they didn't get (stillInFlight).
+      // Nothing queued for THIS listener, so the one-pending hold must not key
+      // on a track they didn't get (stillInFlight).
       entry.refused = true;
       session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
       return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
@@ -358,34 +314,25 @@ async function resolveRequest(entry) {
     });
   }
 
-  // Conversational DJ agent — when enabled it searches the library itself with
-  // the discovery tools and writes the intro, posting the request into the
-  // live session. On any failure, fall through to the stateless matcher
-  // cascade below so a request is never dropped.
+  // Conversational DJ agent. On any failure fall through to the stateless
+  // cascade below, so a request is never dropped.
   try {
     const agentRes = await djAgent.runRequest(queue, ctx, { requester, text });
     if (agentRes) {
-      // Agent path's echo guard (dj-agent.ts) already logged the ephemeral
-      // djLog entry when it fired; thread the same verdict into the durable
-      // request log so `guard` isn't silently unset for every agent-path
-      // request (the cascade/more-like-this paths set it inline above).
+      // Thread the agent's own echo-guard verdict into the durable log; the
+      // other paths set it inline.
       if (agentRes.guard) flagGuard(entry, agentRes.guard);
       if (!agentRes.track) {
-        // Chat escape (C1): the agent answered in persona — nothing to queue.
-        // Only reachable on an EXPLICIT kind:"chat" now (dj-agent.ts); an
-        // omitted id no longer lands here, it falls through to the cascade.
+        // Chat escape: the agent answered in persona, nothing to queue. Only an
+        // EXPLICIT kind:"chat" lands here; an omitted id falls to the cascade.
         queue.log('request', `agent chat-answered (no track)`);
         entry.path = 'chat';
         entry.pickSource = 'agent-chat';
         return resolved({ ack: agentRes.ack, track: null, queuePosition: null });
       }
       if (agentRes.refused) {
-        // The agent declined to queue (repeat cooldown, or push() deduped it)
-        // and returned the track only so the ack and the log can name it.
-        // Reporting `queue.upcoming.length` here put "Queued · Position #N" on
-        // the listener's screen over an ack saying the opposite, and recorded a
-        // clean `agent` resolution in the operator log for a play that never
-        // happened. Keep the marker, no position, no one-pending hold.
+        // The agent declined to queue and returned the track only so the ack and
+        // log can name it: no queue position, no one-pending hold.
         queue.log('request', `agent refused (${agentRes.refused}): ${agentRes.track.title} — ${agentRes.track.artist}`);
         entry.path = 'agent';
         entry.pickSource = `agent:${agentRes.refused}`;
@@ -408,9 +355,8 @@ async function resolveRequest(entry) {
     queue.log('error', `DJ agent request failed: ${err.message} — falling back`);
   }
 
-  // 1. LLM matches intent — pass current track so vibe queries can be
-  // interpreted against what's actually on-air ("match this energy",
-  // "something slower than this", etc.).
+  // 1. LLM matches intent; the current track lets vibe queries be read against
+  // what is on air.
   const currentTrack = queue.current?.track || null;
   const matched = await dj.matchRequest(text, {
     listenerName: requester,
@@ -425,7 +371,7 @@ async function resolveRequest(entry) {
     searchTerms: matched.search_terms,
   });
 
-  // Conversational message → conversational answer; nothing queued (C1).
+  // Conversational message: conversational answer, nothing queued.
   if ((matched as any).kind === 'chat') {
     queue.log('request', `cascade chat-answered (no track)`);
     entry.path = 'chat';
@@ -439,8 +385,7 @@ async function resolveRequest(entry) {
     return resolved({ ack: screened.ack, track: null, queuePosition: null });
   }
 
-  // Stash the matcher breakdown for the debug record — this path is the
-  // stateless cascade (agent + more-like-this never reach here).
+  // Matcher breakdown for the debug record; only the stateless cascade gets here.
   entry.path = 'cascade';
   entry.intent = matched.intent || null;
   entry.mood = matched.mood || null;
@@ -451,12 +396,11 @@ async function resolveRequest(entry) {
   entry.language = matched.language || null;
   entry.searchTerms = matched.search_terms || null;
 
-  // Requests stay near-unfiltered — see /more-like-this comment above.
+  // Requests stay near-unfiltered; see the more-like-this path above.
   const recentIds = queue.recentlyPlayedIds(2);
   for (const id of queue.queuedIds()) recentIds.add(id);
   await library.load();
 
-  // Helper: pick a fresh random item from a pool, preferring non-recents.
   const randomFresh = (pool: any[]) => {
     if (!pool || pool.length === 0) return null;
     const fresh = pool.filter((s: any) => s?.id && !recentIds.has(s.id));
@@ -467,17 +411,14 @@ async function resolveRequest(entry) {
   let pick: any = null;
   let pickSource: string | null = null;
 
-  // A specific song title was named if any search term differs from the
-  // artist name. Without one, an artist request is a bare "play <artist>".
+  // A search term differing from the artist name means a song title was named.
   const artistLc = (matched.artist || '').toLowerCase().trim();
   const namedSongTitle = (matched.search_terms || []).some((t: string) =>
     t && typeof t === 'string' && t.toLowerCase().trim() && t.toLowerCase().trim() !== artistLc
   );
 
-  // 2a. Artist path — resolve the artist's albums and pick a track. Used for
-  // "latest/oldest album by X", album requests, AND bare "play <artist>"
-  // requests with no song title: walking artist → albums → songs reaches the
-  // whole catalogue, where a flat search3 only sees the top ~25 hits.
+  // 2a. Artist path. Also takes bare "play <artist>": walking artist → albums →
+  // songs reaches the whole catalogue, where flat search3 sees only ~25 hits.
   if (!pick && matched.artist && (matched.sort || matched.scope === 'album' || !namedSongTitle)) {
     pick = await pickByArtistAndSort({
       artistName: matched.artist,
@@ -488,8 +429,7 @@ async function resolveRequest(entry) {
     if (pick) pickSource = 'artist-sort';
   }
 
-  // 2b. Genre path — match the listener's genre against the library's real
-  // genre tags. search3 can't query genre, so route through getSongsByGenre.
+  // 2b. Genre path via getSongsByGenre (search3 can't query genre).
   if (!pick && matched.genre) {
     const genre = await resolveGenre(matched.genre);
     if (genre) {
@@ -503,11 +443,8 @@ async function resolveRequest(entry) {
     }
   }
 
-  // 2b-bis. Language path — "play something Turkish" (issue #349). Language
-  // isn't a Subsonic field, so try it as a genre tag first (highest
-  // precision: "turkish" → "Turkish Pop"), then as a plain search term in
-  // case the word shows up in artist/album/title. Misses fall through to the
-  // remaining pick sources like every other step.
+  // 2b-bis. Language path (#349). Not a Subsonic field, so try it as a genre tag
+  // first, then as a plain search term; misses fall through like every step.
   if (!pick && matched.language) {
     const genre = await resolveGenre(matched.language);
     if (genre) {
@@ -522,9 +459,8 @@ async function resolveRequest(entry) {
     if (!pick) {
       try {
         const r = await subsonic.search(matched.language, { songCount: 25 });
-        // Strict-fresh (C2): with a tiny text-match pool (often 1 track), falling
-        // back to recently-played candidates just dedup-dies downstream — treat
-        // an all-stale pool as a miss and let the cascade continue instead.
+        // Strict-fresh: with a tiny text-match pool, falling back to recently
+        // played candidates just dedup-dies downstream, so treat it as a miss.
         const fresh = (r || []).filter((s: any) => s?.id && !recentIds.has(s.id));
         pick = fresh.length ? fresh[Math.floor(Math.random() * fresh.length)] : null;
         if (pick) pickSource = `language-search:${matched.language}`;
@@ -534,10 +470,8 @@ async function resolveRequest(entry) {
     }
   }
 
-  // 2c. Search by terms — artist names / song titles only (the system prompt
-  // routes genres and vibes elsewhere; defensively drop a term that equals
-  // the mood, genre, or language string). A random page offset means repeated
-  // requests for the same artist don't always cycle the same top-25 search3 hits.
+  // 2c. Search by terms: artist names / song titles only. A random page offset
+  // keeps repeat requests off the same top-25 search3 hits.
   if (!pick) {
     const terms = (matched.search_terms || []).filter((t: string) => {
       if (!t || typeof t !== 'string') return false;
@@ -551,8 +485,7 @@ async function resolveRequest(entry) {
       for (const term of terms) {
         const songOffset = Math.floor(Math.random() * 3) * 25;
         let r = await subsonic.search(term, { songCount: 25, songOffset });
-        // A deep offset can land past the end of the result set — fall back
-        // to the first page so a valid query never comes back empty.
+        // A deep offset can land past the end; fall back to the first page.
         if (r.length === 0 && songOffset > 0) {
           r = await subsonic.search(term, { songCount: 25 });
         }
@@ -569,18 +502,15 @@ async function resolveRequest(entry) {
     }
   }
 
-  // 2d. Mood-tagged library — the right vocabulary for vibe queries. The
-  // tagger writes moods like "calm", "rainy", "night" to state/moods.json;
-  // matchRequest's "mood" field uses the same vocabulary.
+  // 2d. Mood-tagged library; matchRequest's "mood" shares the tagger vocabulary.
   if (!pick && matched.mood) {
     const moodPool = library.songsByMood(matched.mood);
     pick = randomFresh(moodPool);
     if (pick) pickSource = `library-mood:${matched.mood}`;
   }
 
-  // 2e. Similar-songs from the current track — when the listener's intent is
-  // vibe-adjacent and we have something playing, Subsonic can surface
-  // adjacency that wasn't captured in our local mood tags.
+  // 2e. Similar songs to the current track: Subsonic can surface adjacency the
+  // local mood tags missed.
   if (!pick && currentTrack?.id && (matched.mood || /similar|like|match/i.test(text))) {
     try {
       const similar = await subsonic.getSimilarSongs(currentTrack.id, { count: 20 });
@@ -589,16 +519,14 @@ async function resolveRequest(entry) {
     } catch {}
   }
 
-  // 2f. Dominant-mood fallback — if the listener gave us nothing actionable
-  // but the station has a mood for the current moment (weather/time/festival),
-  // play something that fits the room rather than refusing.
+  // 2f. Dominant-mood fallback: fit the room rather than refuse.
   if (!pick && ctx.dominantMood) {
     const moodPool = library.songsByMood(ctx.dominantMood);
     pick = randomFresh(moodPool);
     if (pick) pickSource = `library-mood:${ctx.dominantMood}(context)`;
   }
 
-  // 2g. Starred — operator's hand-picked favourites are always a safe pick.
+  // 2g. Starred: the operator's favourites are always a safe pick.
   if (!pick) {
     try {
       const starred = await subsonic.getStarred();
@@ -612,11 +540,8 @@ async function resolveRequest(entry) {
     return failed(sorryNoMatch(requester));
   }
 
-  // Near-miss flag: the listener named an artist but the track we're airing
-  // isn't by them — the cascade couldn't find that artist (even fuzzily) and
-  // fell through to mood/genre/starred filler. We still queue the filler (the
-  // station never refuses), but recording it makes this silent degrade visible
-  // in the request log instead of looking like a clean resolve.
+  // Near-miss flag: artist named but the airing track isn't by them. The filler
+  // is still queued; recording it keeps the degrade visible in the request log.
   if (matched.artist) {
     const want = matched.artist.toLowerCase().trim();
     const got = String(pick.artist || '').toLowerCase();
@@ -628,15 +553,13 @@ async function resolveRequest(entry) {
     }
   }
 
-  // Repeat cooldown (B6): a track that just aired can't be re-queued by
-  // request. Checked before intro generation so a cooldown hit never spends a
-  // model call — the listener still gets a friendly, honest ack (`resolved`,
-  // not `failed`).
+  // Repeat cooldown. Checked before intro generation so a hit spends no model
+  // call; the listener gets an honest ack (`resolved`, not `failed`).
   const cdMin = Number((settings.get() as any)?.requests?.repeatCooldownMin ?? 120);
   if (cdMin > 0 && queue.recentlyPlayedIds(cdMin / 60).has(pick.id)) {
     entry.pick = pick;
     entry.pickSource = `${pickSource}:cooldown`;
-    // Refused, not queued — see the more-like-this dedup branch above.
+    // Refused, not queued; see the more-like-this dedup branch above.
     entry.refused = true;
     const cdAck = queue.cooldownAck(pick.id, pick.title);
     session.appendTurn({ role: 'dj', kind: 'request', text: cdAck, meta: { trackId: pick.id, requester } });
@@ -645,9 +568,8 @@ async function resolveRequest(entry) {
 
   queue.log('request', `resolved via ${pickSource}: ${pick.title} — ${pick.artist}`);
 
-  // On an artist miss the up-front `ack` (written by matchRequest before the
-  // cascade knew it would miss) is a lie — "Got some Katy Perry coming up!"
-  // over a Daft Punk track. Replace it with an honest stand-in line.
+  // On an artist miss the up-front ack (written before the cascade knew it would
+  // miss) is a lie; replace it with an honest stand-in line.
   let ack: string;
   if (entry.artistMiss) {
     ack = `No ${entry.artistMiss} in the crates — here's something that fits the moment instead.`;
@@ -660,11 +582,9 @@ async function resolveRequest(entry) {
     ack = screened.ack;
   }
 
-  // 3. Generate DJ intro that mentions the request. On a miss, pass the
-  // requested-but-absent artist so the spoken intro owns the substitution
-  // instead of pretending the track is by them.
-  // Station voice off → no spoken intro and no model call to write one (see the
-  // more_like_this path above). The `ack` below still reaches the listener.
+  // 3. DJ intro. On a miss, pass the absent artist so the intro owns the
+  // substitution. Station voice off means no intro and no model call; the ack
+  // still reaches the listener.
   let introScript = autoVoiceAllowed()
     ? await dj.generateIntro({
       track: pick,
@@ -677,8 +597,7 @@ async function resolveRequest(entry) {
       recentOpeners: queue.getRecentOpeners(),
     })
     : null;
-  // Echo guard (A2): a script that reads the request back is regenerated with
-  // the request text withheld — it can't echo what it never saw.
+  // Echo guard, as in the more-like-this path.
   const guarded = await guardIntro(introScript, text, () => dj.generateIntro({
     track: pick,
     context: ctx,
@@ -694,29 +613,24 @@ async function resolveRequest(entry) {
   }
   introScript = guarded.script;
 
-  // 4. Add to queue (will trigger Liquidsoap via the queue manager). A
-  // concurrent request that already queued this exact track makes push() dedup
-  // it (#619) — acknowledge honestly rather than pretending it's freshly queued.
+  // 4. Enqueue. push() dedups a track a concurrent request already queued (#619).
   const pos = await queue.push({
     track: pick,
     requestedBy: requester,
     intent: matched.intent,
     introScript,
     introKind: 'dj-speak',
-    // Voice it as whoever wrote it (see the more_like_this push above).
     introPersona: session.onAirPersona(),
   });
   entry.pick = pick;
   if (pos === -2) {
-    // Never-play blocklist refused the pick — decline with the standard
-    // not-found copy so the block doesn't leak to the listener.
+    // Blocklist refused the pick; standard not-found copy so it doesn't leak.
     entry.pickSource = `${pickSource}:blocked`;
     return failed(sorryNoMatch(requester));
   }
   if (pos === -1) {
     const dupAck = queue.dedupAck(pick.id);
     entry.pickSource = `${pickSource}:already-queued`;
-    // Refused, not queued — see the more-like-this dedup branch above.
     entry.refused = true;
     session.appendTurn({ role: 'dj', kind: 'request', text: dupAck, meta: { trackId: pick.id, requester } });
     return resolved({ ack: dupAck, track: { title: pick.title, artist: pick.artist }, queuePosition: null });
@@ -736,29 +650,19 @@ async function resolveRequest(entry) {
   });
 }
 
-// ---------------------------------------------------------------------------
-// POST /request — listener submits a request. Validates + rate-limits
-// synchronously, then returns a request id immediately and resolves in the
-// background. The listener never waits on the LLM.
-//
-// The shared schema (schemas/request.ts, also run pre-flight by the player's
-// request boxes) owns the SHAPE: text present and under the cap, name under its
-// cap. Over-cap text REFUSES rather than being sliced — a silent slice could cut
-// a request mid-thought and have the DJ answer half of it — and the box tells
-// the listener before the network is touched. The guard pipeline below
-// (sanitize → strip → screen) stays route-owned: it repairs rather than refuses,
-// and needs server state the schema can't see.
-// ---------------------------------------------------------------------------
-// validatePublicBody, not validateBody: this is the one LISTENER-facing form,
-// so the 400 carries an unprefixed message plus the success/message keys the
-// shipped native app reads. See the middleware for why.
+// Validates + rate-limits synchronously, then resolves in the background.
+// The shared schema owns the SHAPE and REFUSES over-cap text rather than slicing
+// it; the guard pipeline below (sanitize → strip → screen) repairs instead, and
+// needs server state the schema can't see.
+// validatePublicBody, not validateBody: the one LISTENER-facing form, so the 400
+// carries an unprefixed message plus the success/message keys the native app reads.
 router.post('/request', validatePublicBody(listenerRequestSchema), async (req, res) => {
   const cfg = (settings.get() as any)?.requests || {};
   if (REQUESTS_DISABLED || cfg.enabled === false) {
     return res.status(503).json({ success: false, message: 'Requests are temporarily closed.' });
   }
 
-  // Zero-listener pause (unchanged — see original comment).
+  // Zero-listener pause.
   await listeners.refresh();
   if (!listeners.djCallsAllowed()) {
     return res.status(503).json({
@@ -767,21 +671,15 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
     });
   }
 
-  // validateBody already replaced req.body with the parsed shape: text is a
-  // trimmed non-empty string within the cap, name a trimmed string ('' when
-  // absent). Sanitize (markup-shaped injection), then neutralize the "read
-  // this on air" directive family — the cleaned text is all the
-  // session/prompts/air see; the raw text is preserved on the entry for the
-  // operator request log. Sanitize never grows its input, so no re-slice.
+  // req.body is already the parsed shape. Only the cleaned text reaches the
+  // session/prompts/air; the raw text is kept on the entry for the operator log.
+  // Sanitize never grows its input, so no re-slice is needed.
   const { text: rawText, name: rawName } = req.body as { text: string; name: string };
   const stripped = stripScriptedOpener(sanitizeRequestText(rawText));
   const text = stripped.text;
   if (!text) {
-    // Distinguish "you typed nothing" from "everything you typed was staging
-    // directions for the DJ, so there is no request left to resolve" — the
-    // second is reachable by an ordinary listener via a false-positive match,
-    // and "Empty request" over a message they can see they wrote reads as a
-    // bug. Never echo the text back in the error.
+    // Distinguish "typed nothing" from "it was all staging directions", which an
+    // ordinary listener can hit via a false positive. Never echo the text back.
     return res.status(400).json({
       error: stripped.injection
         ? "Couldn't read a song request in that — try just the artist, title, or a vibe."
@@ -797,11 +695,8 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
   const requester = cleanRequesterName(rawName, reservedNames);
 
   const ip = clientIp(req);
-  // Run the janitor BEFORE the gates, not after. The one-pending hold below
-  // returns 429 without ever reaching the rest of the handler, so pruning
-  // later meant a request whose resolution never settled held its IP well past
-  // the 10-minute TTL — freed only when some OTHER IP's request got far enough
-  // to prune, which on a single-listener station is "never, until restart".
+  // Janitor runs BEFORE the gates: the one-pending hold returns 429 without
+  // reaching the rest of the handler, so pruning later held an IP past the TTL.
   pruneRequests();
   const gate = checkRateLimit(ip);
   if (!gate.ok) {
@@ -821,11 +716,8 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
       retryAfter: globalGate.retryAfter,
     });
   }
-  // Both queue-state refusals below carry the COOLDOWN as Retry-After, which is
-  // a truthful floor rather than a guess: checkRateLimit above already stamped
-  // this IP's cooldown, so the caller genuinely cannot succeed before it
-  // expires, whatever the queue does in the meantime. A client that honours it
-  // stops hammering; one that doesn't just meets the cooldown 429.
+  // Both queue-state refusals carry the COOLDOWN as Retry-After: checkRateLimit
+  // already stamped it, so the caller genuinely cannot succeed before it expires.
   const retryAfter = Number(cfg.cooldownSec) > 0 ? Number(cfg.cooldownSec) : 60;
   if (cfg.onePendingPerIp !== false && stillInFlight(lastByIp.get(ip), queue.queuedIds())) {
     res.setHeader('Retry-After', String(retryAfter));
@@ -845,13 +737,9 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
     });
   }
 
-  // Every gate passed — the request is being accepted, so now spend the hourly
-  // budgets. Deliberately AFTER the two queue-state gates above: those reject
-  // without queueing anything, and charging an accept-budget for them let a
-  // full queue burn the station-wide cap down to zero on rejections alone (see
-  // middleware/ratelimit.ts). The per-IP cooldown was already spent by
-  // checkRateLimit, which is what keeps those rejections from being free to
-  // hammer.
+  // Spend the hourly budgets only after the queue-state gates: those reject
+  // without queueing, and charging them burned the station-wide cap to zero on
+  // rejections alone. The per-IP cooldown was already spent by checkRateLimit.
   commitRateLimit(ip);
   commitGlobalRateLimit();
 
@@ -868,8 +756,7 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
   queue.log('request', `${requester}: "${text}" (id ${id.slice(0, 8)})${stripped.injection ? ` [${stripped.injection} stripped]` : ''}`);
   webhooks.notify('request.received', { requestedBy: requester, text });
 
-  // Hand the listener a receipt and let go of the connection. The booth does
-  // the rest; GET /request/:id reports the outcome.
+  // Hand back a receipt and let go of the connection.
   res.status(202).json({ success: true, requestId: id, status: 'pending' });
 
   resolveRequest(entry).catch(err => {
@@ -880,14 +767,11 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
   });
 });
 
-// ---------------------------------------------------------------------------
-// GET /request/:id — poll for the outcome of a submitted request.
-// ---------------------------------------------------------------------------
+// Poll for the outcome of a submitted request.
 router.get('/request/:id', (req, res) => {
   const entry = requests.get(req.params.id);
   if (!entry) {
-    // Unknown id: either never existed, or pruned / lost to a restart. The
-    // UI treats this as "stop polling" rather than an error.
+    // Never existed, or pruned / lost to a restart; the UI stops polling.
     return res.status(404).json({ status: 'unknown' });
   }
   res.json({

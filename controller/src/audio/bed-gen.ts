@@ -1,9 +1,7 @@
-// ElevenLabs Music client. A bed is an instrumental the DJ talks over BETWEEN
-// songs, so — unlike an sfx stinger (sound-generation, ≤22s) — it needs ≥30s of
-// musical audio. That's a different ElevenLabs endpoint: the Music API
-// (/v1/music), where `force_instrumental` guarantees no vocals and
-// `music_length_ms` sets the length. Same credential as the sfx generator and
-// cloud TTS (audio/elevenlabs.ts).
+// ElevenLabs Music client. A bed is an instrumental the DJ talks over between
+// songs, so it needs >=30s and a different endpoint from an sfx stinger
+// (sound-generation, <=22s): /v1/music, where `force_instrumental` guarantees no
+// vocals. Same credential as the sfx generator and cloud TTS.
 
 import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -12,12 +10,10 @@ import { elevenLabsKey } from './elevenlabs.js';
 // mp3 to match the rest of the library; 44.1kHz is the broadcast source rate.
 const ENDPOINT = 'https://api.elevenlabs.io/v1/music?output_format=mp3_44100_128';
 
-// Ceiling on a generated bed. A bed is trimmed per-link (liq_cue_out), so a clip
-// longer than the DJ's longest script is never heard in full — past ~2 min it
-// only burns Music credits. The floor lives in broadcast/beds.ts
-// (MIN_DURATION_SEC); the caller clamps to [floor, this] before calling. The
-// figure itself lives in the shared imaging schema (re-exported here) so the
-// admin form and this module can't disagree.
+// Ceiling on a generated bed: a bed is trimmed per-link (liq_cue_out), so past
+// ~2 min a clip only burns Music credits. Floor is broadcast/beds.ts
+// MIN_DURATION_SEC; the caller clamps to [floor, this]. The figure lives in the
+// shared imaging schema so the admin form and this module can't disagree.
 export { BED_GEN_MAX_SEC } from '../schemas/imaging.js';
 
 // The Music API's own absolute bounds, in ms — a defensive clamp so a bad caller

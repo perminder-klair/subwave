@@ -1,18 +1,7 @@
-// Acoustic-analysis client — resolves bpm / key / intro for a track id by
-// running librosa, which deliberately does NOT live in the controller image.
-//
-// Two backends, in priority order:
-//   1. analysis sidecar — POST {url} to its /analyze endpoint (production).
-//      The base URL is config.analyzer.urls: the default-on `subwave-analyzer`
-//      image (ANALYZE_URL; `subwave-analyzer-heavy` for CLAP/Demucs). tts-heavy
-//      is TTS-only now and no longer carries the analyzer.
-//   2. local Python venv — spawn scripts/analyze_worker.py over stdio, the
-//      same persistent-worker pattern as audio/kokoro.ts (offline / dev; set
-//      ANALYZE_PYTHON to a venv that has librosa).
-//
-// When neither is available, isAvailable() returns false and the analysis
-// phase (music/analyze.ts) skips cleanly — the station is unaffected, every
-// analysis column stays NULL, and consumers behave exactly as today.
+// Acoustic-analysis client. Two backends in priority order: the analysis
+// sidecar (POST /analyze, base URL from config.analyzer.urls), then a local
+// Python venv running scripts/analyze_worker.py over stdio. Neither available
+// → isAvailable() is false and every analysis column stays NULL.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, mkdirSync, createWriteStream, readFileSync } from 'node:fs';
@@ -23,23 +12,22 @@ import * as subsonic from './subsonic.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { envInt } from '../util/env.js';
 
-// A structural span over the track, in milliseconds (span shape). Spans
-// are contiguous and cover the analysed window; the first is the intro/leading
-// section. `kind` is reserved for a future labelled segmenter.
+// A structural span over the track, in ms. Contiguous over the analysed
+// window; the first is the intro/leading section.
 export interface Section {
   startMs: number;
   endMs: number;
   kind?: string;
 }
 
-// A pace sample: a 0..1 perceptual-energy value over a span.
+// A 0..1 perceptual-energy value over a span.
 export interface PaceSpan {
   startMs: number;
   endMs: number;
   value: number;
 }
 
-// A key over a time range: tonic note (sharps) + mode, as a span value.
+// Tonic note (spelled with sharps) + mode over a time range.
 export interface KeyRange {
   startMs: number;
   endMs: number;
@@ -47,97 +35,75 @@ export interface KeyRange {
   mode: 'major' | 'minor';
 }
 
+// A null optional field means the backend did not compute it; every consumer
+// must read null as "no signal, behave as today", which is what keeps a lean
+// backend byte-identical.
 export interface AnalysisResult {
   bpm: number | null;
   musicalKey: string | null;
   introMs: number | null;
   confidence: number | null;
-  // Structural sections over the analysed window (intro/leading sections are
-  // the reliable part — the outro is beyond the decode window). null when the
-  // backend computed none; consumers treat null as "no structure".
+  // Structural sections over the analysed window (the outro is beyond it).
   sections: Section[] | null;
-  // Vocal-presence ranges (Demucs) over the analysed window. An empty array is
-  // a meaningful value — "analysed, instrumental"; null means not computed (no
-  // ANALYZE_VOCAL_ACTIVITY / no demucs). Consumers treat null as "no signal".
+  // Demucs vocal-presence ranges. [] means "analysed, instrumental" and is NOT
+  // the same as null (not computed).
   vocalRanges: Section[] | null;
-  // Perceptual energy/momentum curve (decoupled from BPM), 0..1 per span. null
-  // when the backend computed none; consumers treat null as "no signal".
+  // Perceptual energy/momentum curve (decoupled from BPM), 0..1 per span.
   paceCurve: PaceSpan[] | null;
-  // Beat and downbeat (bar) timestamps in ms. null when the backend computed
-  // none; consumers treat null as "no grid" (today's blind crossfade).
+  // Beat and downbeat (bar) timestamps in ms.
   beats: number[] | null;
   bars: number[] | null;
-  // Per-region key (tonic + mode) over time. null when none computed; the
-  // scalar musicalKey stays the back-compat dominant key.
+  // Per-region key; the scalar musicalKey stays the back-compat dominant key.
   keyRanges: KeyRange[] | null;
-  // Integrated loudness (LUFS, BS.1770) + peak (dBFS) over the analysis window,
-  // when the backend has pyloudnorm. null otherwise — consumers treat null as
-  // "no loudness, play at unity gain", so a backend without pyloudnorm behaves
-  // exactly as today. loudnessLufs feeds per-track gain normalisation.
+  // Integrated loudness (LUFS, BS.1770) + peak (dBFS); needs pyloudnorm. null
+  // reads as "play at unity gain".
   loudnessLufs: number | null;
   peakDb: number | null;
-  // CLAP audio embedding (512 floats) when the backend has the model loaded
-  // (ANALYZE_AUDIO_EMBEDDING=1 + CLAP weights). null otherwise — every consumer
-  // treats null as "no audio vector this pass", so a backend without CLAP is
-  // byte-for-byte today's behaviour.
+  // CLAP audio embedding (512 floats); needs the model loaded.
   audioEmbedding: number[] | null;
-  // Outro (tail) features — measured off the END of a COMPLETE file. null when
-  // not computed (truncated download, short track, decode failure); consumers
-  // treat null as "no outro signal, behave as today".
+  // Tail features, measured off the END of a COMPLETE file only.
   outro: OutroInfo | null;
-  // Stem-cache outcome — true when the head stems were written to the
-  // requested stems_dir (tail rides along when the outro was computable).
-  // null = no stems_dir requested / backend predates the feature.
+  // true when head stems were written to the requested stems_dir. null = none
+  // requested / backend predates the feature.
   stemsCached: boolean | null;
   // Dead-air gaps at the file's edges (ms), measured against an ABSOLUTE dBFS
-  // floor — not the relative gates behind introMs / outro.startMs, which ask
-  // where the MUSIC starts and stops and would read a quiet intro or a long
-  // ring-out as silence. null = not measured (backend predates the feature,
-  // the edge window was entirely silent so the gap outlasts it, or — for the
-  // tail — the analysed file was not proven complete). Consumers treat null as
-  // "no silence signal, trim nothing".
+  // floor — never the relative gates behind introMs / outro.startMs, which ask
+  // where the MUSIC starts and would read a quiet intro as silence. The tail is
+  // null unless the file was proven complete.
   leadSilenceMs: number | null;
   tailSilenceMs: number | null;
-  // Where the trailing gap OPENS, absolute ms from byte zero. Same measurement
-  // as tailSilenceMs, expressed as the cue point itself so the controller never
-  // reconstructs it as (tagged duration - gap) — the tag and the decoded file
+  // Where the trailing gap opens, absolute ms from byte zero, so the controller
+  // never reconstructs it as (tagged duration - gap); tag and decoded file
   // disagree often enough to move the cut. null whenever tailSilenceMs is.
   tailStartMs: number | null;
 }
 
-// The outgoing track's measured ending — what actually decides whether a
-// transition lands. Timestamps are absolute ms into the track.
+// The outgoing track's measured ending. Timestamps are absolute ms.
 export interface OutroInfo {
   startMs: number;             // where the wind-down starts
   ending: 'fade' | 'cold';     // fades to silence vs ends at level
   lufs: number | null;         // integrated loudness of the tail (BS.1770)
   bpm: number | null;          // tail tempo (outros drift/ritard vs the lead)
-  beats: number[] | null;      // tail beat grid, absolute ms
-  bars: number[] | null;       // tail downbeat (bar) grid, absolute ms
-  // Tail vocal-activity spans (Demucs over the outro window), absolute ms.
-  // [] = analysed instrumental tail (meaningful); ABSENT = not computed —
-  // the key must be omitted (not null) when detection didn't run, because
-  // outro_json is the JSON.stringify of this object and the vocal backfill
-  // probes the raw text for '"vocalRanges"' to find tail-missing tracks.
+  beats: number[] | null;
+  bars: number[] | null;
+  // Tail vocal spans. [] = analysed instrumental tail; the key must be OMITTED
+  // (not null) when detection didn't run — outro_json is the JSON.stringify of
+  // this object and the vocal backfill probes the raw text for '"vocalRanges"'.
   vocalRanges?: Section[];
 }
 
-// Coerce a worker numeric field to a finite number or null. The worker omits
-// loudness/peak entirely when pyloudnorm is absent or measurement failed.
 function parseFinite(v: unknown): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
-// Coerce an edge-silence field to a non-negative whole-ms count or null. A
-// negative or non-finite value is a broken measurement, not a zero-length gap:
-// null keeps the "no signal, trim nothing" path rather than stamping a cue
-// point derived from nonsense.
+// Non-negative whole ms, or null. A negative/non-finite value is a broken
+// measurement, not a zero-length gap, so it reads as "trim nothing".
 function parseSilenceMs(v: unknown): number | null {
   if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return null;
   return Math.round(v);
 }
 
-// Coerce a list of spans to clean Section[]. Drops malformed/zero-length spans.
+// Drops malformed/zero-length spans.
 function coerceSpans(v: unknown): Section[] {
   if (!Array.isArray(v)) return [];
   const out: Section[] = [];
@@ -151,22 +117,20 @@ function coerceSpans(v: unknown): Section[] {
   return out;
 }
 
-// Sections: the worker omits the field when segmentation produced nothing, so
-// empty collapses to null ("no structure").
+// Empty collapses to null ("no structure").
 function parseSections(v: unknown): Section[] | null {
   if (!Array.isArray(v)) return null;
   const out = coerceSpans(v);
   return out.length ? out : null;
 }
 
-// Vocal ranges: an empty array is a MEANINGFUL value (analysed instrumental),
-// distinct from null (not computed). Preserve [] when the field is present.
+// Preserves an empty array: [] (analysed instrumental) is distinct from null.
 function parseVocalRanges(v: unknown): Section[] | null {
   if (!Array.isArray(v)) return null;
   return coerceSpans(v);
 }
 
-// Key ranges: spans carrying tonic + mode. Drops malformed spans; empty → null.
+// Drops malformed spans, empty → null.
 function parseKeyRanges(v: unknown): KeyRange[] | null {
   if (!Array.isArray(v)) return null;
   const out: KeyRange[] = [];
@@ -182,7 +146,7 @@ function parseKeyRanges(v: unknown): KeyRange[] | null {
   return out.length ? out : null;
 }
 
-// A list of ms timestamps → sorted finite number[] or null (empty → null).
+// ms timestamps → finite number[], empty → null.
 function parseMsList(v: unknown): number[] | null {
   if (!Array.isArray(v)) return null;
   const out: number[] = [];
@@ -190,8 +154,7 @@ function parseMsList(v: unknown): number[] | null {
   return out.length ? out : null;
 }
 
-// Pace curve: spans carrying a 0..1 value. Drops malformed/zero-length spans;
-// empty collapses to null ("no pace").
+// Drops malformed spans, empty → null.
 function parsePaceCurve(v: unknown): PaceSpan[] | null {
   if (!Array.isArray(v)) return null;
   const out: PaceSpan[] = [];
@@ -205,18 +168,14 @@ function parsePaceCurve(v: unknown): PaceSpan[] | null {
   return out.length ? out : null;
 }
 
-// Coerce the worker's outro object to a clean OutroInfo or null. The worker
-// omits it entirely when not computed; startMs + a valid ending are the
-// required core, everything else is optional garnish.
+// startMs + a valid ending are required; everything else is optional.
 function parseOutro(v: unknown): OutroInfo | null {
   const o = v as Record<string, unknown>;
   const startMs = parseFinite(o?.startMs);
   const ending = o?.ending;
   if (startMs == null || startMs < 0 || (ending !== 'fade' && ending !== 'cold')) return null;
-  // Same []-vs-absent distinction as the head ranges: preserve a present-but-
-  // empty array (analysed instrumental tail); OMIT the key when the worker
-  // didn't compute it, so the stringified outro_json never carries a bare
-  // "vocalRanges" key for the backfill probe to misread.
+  // Omit the key when not computed, so outro_json never carries a bare
+  // "vocalRanges" for the backfill probe.
   const vocalRanges = parseVocalRanges(o?.vocalRanges);
   return {
     startMs: Math.round(startMs),
@@ -229,9 +188,8 @@ function parseOutro(v: unknown): OutroInfo | null {
   };
 }
 
-// Coerce the worker's audio_embedding field to a clean number[] or null. The
-// worker omits it entirely when CLAP isn't loaded; defend against a malformed
-// or wrong-length array rather than letting it reach upsertTrackAudioVector.
+// Clean number[] or null — a malformed array must not reach
+// upsertTrackAudioVector.
 function parseAudioEmbedding(v: unknown): number[] | null {
   if (!Array.isArray(v) || v.length === 0) return null;
   const out: number[] = [];
@@ -242,50 +200,36 @@ function parseAudioEmbedding(v: unknown): number[] | null {
   return out;
 }
 
-// Cap the download so we don't pull whole albums of bytes for a short
-// analysis window — mirrors ANALYZE_MAX_BYTES in the Python worker so both
-// fetch paths read the same envelope. Read through `envInt` (warn and fall
-// back) rather than parseInt: a non-numeric value used to yield NaN, and both
-// comparisons against NaN are false — the cap silently stopped applying AND
-// every download was flagged incomplete, which turns outro analysis off
-// library-wide with nothing logged (#1549).
+// Mirrors ANALYZE_MAX_BYTES in the Python worker so both fetch paths read the
+// same envelope. Via envInt, never parseInt: a NaN disables the cap and flags
+// every download incomplete (#1549).
 const ANALYZE_MAX_BYTES = envInt('ANALYZE_MAX_BYTES', 12 * 1024 * 1024, { min: 1 });
-// Where the controller stages pre-fetched audio. Lives under the shared
-// state dir (mounted at the same /var/sub-wave path in both the controller and
-// the tts-heavy sidecar), so the path string the controller writes resolves to
-// the same file inside the sidecar — that's what makes the path handoff work.
+// Staging dir for pre-fetched audio, under the shared state dir so the path the
+// controller writes resolves to the same file inside the sidecar.
 const ANALYZE_TMP_DIR = `${config.stateRoot}/analyze-tmp`;
-
-// ---------------------------------------------------------------------------
-// Local Python worker (persistent over stdio)
-// ---------------------------------------------------------------------------
 
 function localConfigured(): boolean {
   const { python, workerScript } = config.analyzer;
   return !!python && existsSync(python) && existsSync(workerScript);
 }
 
-// A line of JSON from the stdio worker (or the equivalent sidecar /analyze
-// response body — same analyze payload). Protocol fields (ready/fatal/id) are
-// worker-only; the analyze fields are shared. Everything the parse* helpers
-// consume is `unknown` so they own the coercion; the couple of directly-read
-// scalars are pre-typed. Loose because the payload evolves with the worker.
+// A line of JSON from the stdio worker, or the sidecar's /analyze body — same
+// payload; ready/fatal/id are worker-only.
 interface WorkerMessage {
   id?: string;
   ok?: boolean;
   ready?: boolean;
   fatal?: boolean;
   error?: string;
-  // Capability flags the worker reports on its ready line (find_spec probes —
-  // no model load). The sidecar surfaces the same fields via /health.
+  // Ready-line capability flags (find_spec probes, no model load); the sidecar
+  // surfaces the same fields via /health.
   audio_embedding_capable?: boolean;
   vocal_activity_capable?: boolean;
   tail_vocal_capable?: boolean;
   text_embedding_capable?: boolean;
-  // Capabilities the worker advertised at ready but LOST once the model was
-  // actually asked to load — {audio_embedding?: why, vocal_activity?: why}.
-  // Rides on EVERY message (analyze_worker.emit), because the failure mode it
-  // exists for answers ok=true with the field merely absent.
+  // Capabilities advertised at ready but lost when the model was asked to load.
+  // Rides on EVERY message: the failure it exists for answers ok=true with the
+  // field absent.
   capability_loss?: Record<string, string>;
   bpm?: number | null;
   key?: string | null;
@@ -323,11 +267,8 @@ let reqSeq = 0;
 const pending = new Map<string, Pending>();
 
 // Local-backend capability flags, mirroring the sidecar's /health fields. Set
-// from the worker's ready line when it boots (authoritative — includes hard
-// load failures), or by the one-shot find_spec probe below when the doctor asks
-// before any analysis has run. null = not yet known. Without this the AIO image
-// (local backend) could never answer "can you do CLAP?" and the doctor guessed
-// — issue #966's false "you're on the lean image" warning on subwave-aio-heavy.
+// from the worker's ready line (authoritative) or the one-shot find_spec probe
+// below. null = not yet known.
 let _localAudioCapable: boolean | null = null;
 let _localVocalCapable: boolean | null = null;
 let _localTailVocalCapable: boolean | null = null;
@@ -336,11 +277,8 @@ let _localTextCapable: boolean | null = null;
 let _localAudioError: string | null = null;
 let _localVocalError: string | null = null;
 
-// Apply a worker-reported capability loss to the local flags. The reported
-// failure BEATS the ready line, which is a find_spec probe run before any model
-// was asked to load: on the heavy image "torch is importable" is true and stays
-// true no matter how the weight download goes. Downward only — a worker never
-// gains a capability by failing at one.
+// A reported failure beats the ready line's find_spec probe, and is applied
+// downward only.
 function noteLocalCapabilityLoss(msg: WorkerMessage): void {
   const lost = msg.capability_loss;
   if (!lost || typeof lost !== 'object') return;
@@ -385,21 +323,16 @@ function startWorker(): Promise<void> {
         try { msg = JSON.parse(line); } catch { continue; }
         if (msg.ready) {
           ready = true;
-          // The ready line knows about a pre-warm load failure the find_spec
-          // probe can't see, so it overwrites — EXCEPT where we've already
-          // watched the model fail to load. A worker that died and respawned
-          // announces itself with a clean find_spec probe (its own
-          // _embed_failed went with the process), and letting that raise the
-          // flag back to true is the local twin of the sidecar's recycle bug:
-          // the backfill re-widens to the same doomed track set every pass.
+          // The ready line overwrites, except where a model was already seen
+          // failing to load: a respawned worker announces a clean find_spec
+          // probe, and raising the flag back to true re-widens the backfill to
+          // the same doomed track set every pass.
           if (typeof msg.audio_embedding_capable === 'boolean' && _localAudioError === null) _localAudioCapable = msg.audio_embedding_capable;
           if (typeof msg.vocal_activity_capable === 'boolean' && _localVocalError === null) _localVocalCapable = msg.vocal_activity_capable;
           if (typeof msg.tail_vocal_capable === 'boolean' && _localVocalError === null) _localTailVocalCapable = msg.tail_vocal_capable;
           if (typeof msg.text_embedding_capable === 'boolean' && _localAudioError === null) _localTextCapable = msg.text_embedding_capable;
         }
-        // On EVERY message, the ready line included (a pre-warm failure is
-        // reported there): a capability the worker has lost since it announced
-        // itself. Applied after the ready assignments so the loss always wins.
+        // After the ready assignments, so a reported loss always wins.
         noteLocalCapabilityLoss(msg);
         if (msg.ready) {
           clearTimeout(readyTimer);
@@ -429,30 +362,25 @@ function startWorker(): Promise<void> {
   return booting;
 }
 
-// Per-request analysis options. `embed: true` asks the backend to (lazy-load
-// and) run CLAP for this track even when the backend's own env doesn't enable
-// it — the admin-toggle path. Omitted → the backend's env-driven default.
+// Per-request analysis options. Snake-cased keys are wire-named: both backends
+// spread opts verbatim into the worker request.
 export interface AnalyzeRequestOpts {
+  // Force a lazy CLAP load even when the backend's env doesn't enable it.
+  // Omitted → the backend's env-driven default.
   embed?: boolean;
-  // Force a (lazy) Demucs load for vocal-activity ranges even when the backend's
-  // ANALYZE_VOCAL_ACTIVITY env is off — the admin/backfill path, mirroring embed.
+  // Same, for a lazy Demucs load for vocal-activity ranges.
   vocal?: boolean;
-  // Whether the handed-over `path` holds the COMPLETE file (downloadCapped
-  // knows). false vetoes outro analysis — a truncated file's "tail" is
-  // mid-song audio. Omitted on the url path: the backend's own fetch decides.
+  // Whether the handed-over `path` holds the COMPLETE file; false vetoes outro
+  // analysis. Omitted on the url path: the backend's own fetch decides.
   complete?: boolean;
-  // Stem-cache target dir (feature: stem-blend transitions) — wire-named:
-  // both backends spread opts verbatim into the worker request. When set the
-  // worker persists its Demucs stems (head + tail) as FLAC into this dir on
-  // the shared volume; implies the separation even without `vocal`.
+  // Stem-cache target dir on the shared volume; implies the Demucs separation
+  // even without `vocal`.
   stems_dir?: string;
-  // The track's baseline analysis is already current; compute only its CLAP
-  // vector. Wire-named because both backends receive the options verbatim.
+  // Baseline analysis is already current; compute only the CLAP vector.
   embedding_only?: boolean;
 }
 
-// Write a request to the local stdio worker and resolve its response. The
-// request carries either `url` (worker downloads) or `path` (already-local).
+// Carries either `url` (worker downloads) or `path` (already-local).
 function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequestOpts): Promise<AnalysisResult> {
   const id = `a${++reqSeq}`;
   return new Promise<AnalysisResult>((resolve, reject) => {
@@ -489,13 +417,10 @@ function localRequest(req: ({ url: string } | { path: string }) & AnalyzeRequest
   });
 }
 
-// One-shot capability probe for the local backend — the same find_spec checks
-// the worker runs before its ready line (keep the module lists in sync with
-// analyze_worker.py), in a throwaway `python -c` so the doctor can get a
-// definitive answer without booting the persistent worker (which imports
-// librosa and stays resident). Fills only still-null flags: a booted worker's
-// ready line is authoritative and must not be overwritten by a fresh process
-// that can't know about hard load failures.
+// The same find_spec checks the worker runs before its ready line (keep the
+// module lists in sync with analyze_worker.py), in a throwaway `python -c` so
+// the doctor can answer without booting the resident worker. Fills only
+// still-null flags: a booted worker's ready line is authoritative.
 const LOCAL_CAPABILITY_PROBE = [
   'import importlib.util as u, json',
   'h = lambda *m: all(u.find_spec(x) is not None for x in m)',
@@ -508,8 +433,6 @@ function probeLocalCapabilities(): Promise<void> {
   if (_localProbe) return _localProbe;
   _localProbe = new Promise<void>((resolve) => {
     let out = '';
-    // Only reached when localConfigured() saw the python binary, so a spawn
-    // failure surfaces as the 'error' event, not a sync throw.
     const p = spawn(config.analyzer.python, ['-c', LOCAL_CAPABILITY_PROBE], { stdio: ['ignore', 'pipe', 'ignore'] });
     const timer = setTimeout(() => p.kill(), 15_000);
     p.stdout.on('data', (c: Buffer) => { out += c.toString('utf8'); });
@@ -520,8 +443,8 @@ function probeLocalCapabilities(): Promise<void> {
         const caps = JSON.parse(out.trim()) as { audio?: boolean; vocal?: boolean; text?: boolean };
         if (_localAudioCapable === null && typeof caps.audio === 'boolean') _localAudioCapable = caps.audio;
         if (_localVocalCapable === null && typeof caps.vocal === 'boolean') _localVocalCapable = caps.vocal;
-        // The local worker script ships with the controller (same repo/image),
-        // so tail-vocal support is version-matched: capable iff vocal is.
+        // The worker ships with the controller, so tail-vocal is version-matched
+        // to vocal.
         if (_localTailVocalCapable === null && typeof caps.vocal === 'boolean') _localTailVocalCapable = caps.vocal;
         if (_localTextCapable === null && typeof caps.text === 'boolean') _localTextCapable = caps.text;
       } catch {
@@ -543,39 +466,25 @@ async function analyzeViaLocalPath(path: string, opts: AnalyzeRequestOpts = {}):
   return localRequest({ path, ...opts });
 }
 
-// ---------------------------------------------------------------------------
-// Sidecar backend
-// ---------------------------------------------------------------------------
-
-// Last sidecar /health read of the CLAP capability. null = unknown (not yet
-// probed, or the field is absent on an old sidecar); true/false once known.
+// Last sidecar /health read of each capability. null = unknown (not yet probed,
+// or the field is absent on an old sidecar).
 let _sidecarAudioCapable: boolean | null = null;
-// Same, for vocal-activity (Demucs) support — null until probed/absent field.
 let _sidecarVocalCapable: boolean | null = null;
-// Same, for tail vocal ranges (outro.vocalRanges) — doubles as a worker-version
-// signal: sidecars predating the feature never emit the field, so this stays
-// null there and the backfill widening (which requires === true) can't churn.
+// Tail vocal ranges. Doubles as a worker-version signal: sidecars predating the
+// feature never emit the field, so this stays null and the backfill widening
+// (which requires === true) can't churn.
 let _sidecarTailVocalCapable: boolean | null = null;
-// Same, for the CLAP TEXT tower (embed-text) — null until probed/absent field.
+// The CLAP TEXT tower (embed-text).
 let _sidecarTextCapable: boolean | null = null;
-// WHY a capability is false, when the reason is a failed model LOAD rather than
-// a lean build. Null for every other case, a lean image included — a lean image
-// is a build choice, not a fault, and the two need opposite advice.
-//
-// Sourced from /health ONLY, unlike the local backend which reads it off the
-// worker's own responses: the sidecar already remembers the failure across its
-// idle worker respawn (server.py capability_errors), so /health is the single
-// place that fact lives and a second write path here could only disagree with
-// it. Cost is one probe cycle of latency — a failure that lands mid-pass is
-// acted on by the NEXT pass, which is also when it could first matter.
+// Why a capability is false, when the cause is a failed model load rather than
+// a lean build. Sourced from /health only: the sidecar remembers the failure
+// across its idle worker respawn, so a second write path could only disagree.
 let _sidecarAudioError: string | null = null;
 let _sidecarVocalError: string | null = null;
-// The candidate base URL that last reported the 'analyze' engine — the one
-// sidecarRequest POSTs to. Set by sidecarReachable; '' until a probe succeeds.
+// Base URL that last reported the 'analyze' engine — what sidecarRequest POSTs
+// to. Set by sidecarReachable; '' until a probe succeeds.
 let _sidecarBase = '';
 
-// Probe one candidate /health for the 'analyze' engine. Records the capability
-// flags + the winning base URL on success.
 async function probeSidecar(url: string): Promise<boolean> {
   try {
     const res = await fetchWithTimeout(`${url}/health`, { timeoutMs: 5000 });
@@ -606,8 +515,7 @@ async function probeSidecar(url: string): Promise<boolean> {
   }
 }
 
-// Try each configured candidate (dedicated analyzer first, then the tts-heavy
-// sidecar) and stop at the first that advertises the 'analyze' engine.
+// Stop at the first configured candidate advertising the 'analyze' engine.
 async function sidecarReachable(): Promise<boolean> {
   for (const url of config.analyzer.urls) {
     if (await probeSidecar(url)) return true;
@@ -615,8 +523,6 @@ async function sidecarReachable(): Promise<boolean> {
   return false;
 }
 
-// POST the sidecar a request body of either {url} (it downloads) or {path}
-// (a file on the shared volume the controller pre-fetched).
 class AnalyzerPathUnavailableError extends Error {
   constructor(message: string) {
     super(message);
@@ -689,32 +595,14 @@ function analyzeViaSidecarPath(path: string, opts: AnalyzeRequestOpts = {}): Pro
   return sidecarRequest({ path, ...opts });
 }
 
-// ---------------------------------------------------------------------------
-// Public surface
-// ---------------------------------------------------------------------------
-
 let _backend: 'sidecar' | 'local' | null = null;
-// When the last MISS was resolved, or 0 for "never asked". A miss is cached for
-// config.analyzer.missProbeIntervalMs and a hit forever — the asymmetry is the
-// point.
+// When the last MISS was resolved, or 0 for "never asked".
 let _missAt = 0;
 
-// Resolve once which backend to use. Sidecar wins when it advertises the
-// 'analyze' capability; otherwise a configured local venv; otherwise none.
-//
-// A HIT is cached for the process lifetime. A MISS is cached too, but only for
-// config.analyzer.missProbeIntervalMs — and that expiry is what makes the
-// caching safe rather than the reason to skip it. Caching nothing meant every
-// caller re-ran the probe: a configured ANALYZE_URL pointing at a host that
-// silently DROPS packets (a firewall, a box that went away with its DNS record
-// intact) answers neither way, so each call paid probeSidecar's full 5s timeout
-// per candidate. That is the slow twin of the fast DNS-miss path this looks
-// like on a station with no analyzer at all, and on a bulk tagging pass it is
-// 5s of dead time per track. Caching the miss FOREVER would be the other bug:
-// the analyzer is a separate container that legitimately comes up after the
-// controller, and a station that probed once during its own boot would never
-// see it. So: bounded, and `refreshCapabilities` is unchanged — it re-reads
-// /health on a resolved sidecar, which is a different question.
+// Sidecar advertising 'analyze', else a configured local venv, else none. A HIT
+// is cached for the process lifetime, a MISS only for
+// config.analyzer.missProbeIntervalMs: an unreachable host costs a 5s probe per
+// candidate per call, but the analyzer container may come up after the controller.
 export async function resolveBackend(): Promise<'sidecar' | 'local' | null> {
   if (_backend) return _backend;
   if (_missAt && Date.now() - _missAt < config.analyzer.missProbeIntervalMs) return null;
@@ -725,8 +613,7 @@ export async function resolveBackend(): Promise<'sidecar' | 'local' | null> {
 }
 
 // Forget a cached miss so the next resolveBackend() probes again. For tests and
-// for any operator action that could plausibly have just started a backend —
-// never on a read path, which is what the interval above is for.
+// operator actions that could have just started a backend — never a read path.
 export function _resetBackendCacheForTests(): void {
   _backend = null;
   _missAt = 0;
@@ -740,32 +627,23 @@ export function backendLabel(): string {
   return _backend || 'none';
 }
 
-// Whether the active backend can emit CLAP "sounds-like" audio embeddings right
-// now. null = unknown (backend not yet reached/probed); false = the backend is
-// definitively built without the CLAP stack (sidecar WITH_CLAP=0, or a lean
-// local/AIO venv) — the signal the admin UI turns into a "switch to the heavy
-// image" warning. Sidecar answers come from /health; local answers from the
-// worker's ready line or the find_spec probe (refreshCapabilities).
+// null = unknown (not yet probed); false = built without the CLAP stack, which
+// the admin UI turns into a "switch to the heavy image" warning.
 export function audioEmbeddingAvailable(): boolean | null {
   if (_backend === 'sidecar') return _sidecarAudioCapable;
   if (_backend === 'local') return _localAudioCapable;
   return null;
 }
 
-// Whether the active backend can emit Demucs vocal-activity ranges right now.
-// Same semantics as audioEmbeddingAvailable: null = unknown; false = built
-// without the demucs stack (sidecar WITH_DEMUCS=0, or a lean local/AIO venv).
+// Demucs vocal-activity ranges. Same semantics as audioEmbeddingAvailable.
 export function vocalActivityAvailable(): boolean | null {
   if (_backend === 'sidecar') return _sidecarVocalCapable;
   if (_backend === 'local') return _localVocalCapable;
   return null;
 }
 
-// WHY the CLAP capability is false, when the cause is a model that failed to
-// LOAD rather than an image built without it. null in every other case — a lean
-// build is a choice, not a fault. This is the difference between "switch to the
-// heavy image" and "this host can't reach huggingface.co", which a bare
-// `capable: false` cannot express and which #1300 bug 3 shows people acting on.
+// Why the CLAP capability is false, when the cause is a model that failed to
+// load rather than an image built without it (null in every other case).
 export function audioEmbeddingError(): string | null {
   if (_backend === 'sidecar') return _sidecarAudioError;
   if (_backend === 'local') return _localAudioError;
@@ -779,40 +657,31 @@ export function vocalActivityError(): string | null {
   return null;
 }
 
-// Whether the active backend computes TAIL vocal ranges (outro.vocalRanges).
-// Doubles as a worker-version signal: backends predating the feature never
-// report it, so consumers must treat only `=== true` as capable — the vocal
-// backfill widening keys off exactly that, keeping stale sidecars churn-free.
+// Backends predating the feature never report it, so consumers must treat only
+// `=== true` as capable.
 export function tailVocalAvailable(): boolean | null {
   if (_backend === 'sidecar') return _sidecarTailVocalCapable;
   if (_backend === 'local') return _localTailVocalCapable;
   return null;
 }
 
-// Refresh capability so it reflects the backend actually running under a
-// long-lived controller. Sidecar: re-read /health (the sidecar can be rebuilt
-// with WITH_CLAP=1 while the controller stays up). Local: run the one-shot
-// find_spec probe unless the persistent worker already reported its ready line
-// (an image/venv swap restarts the whole AIO process, so probe-once is enough).
-// Cheap; driven on the coverage staleness cadence + the doctor checks.
+// Re-read capability under a long-lived controller: the sidecar can be rebuilt
+// with WITH_CLAP=1 while the controller stays up.
 export async function refreshCapabilities(): Promise<void> {
   const backend = await resolveBackend();
   if (backend === 'sidecar') { await sidecarReachable(); return; }
   if (backend === 'local' && !ready) await probeLocalCapabilities();
 }
 
-// Whether the active backend can embed TEXT through the CLAP text tower (same
-// semantics as audioEmbeddingAvailable: null = unknown, false = definitively
-// can't — lean build or pre-text-tower image).
+// The CLAP text tower. Same semantics as audioEmbeddingAvailable.
 export function textEmbeddingAvailable(): boolean | null {
   if (_backend === 'sidecar') return _sidecarTextCapable;
   if (_backend === 'local') return _localTextCapable;
   return null;
 }
 
-// Coerce a worker text_embeddings payload to clean number[][] or null: one
-// finite-valued vector per input text, all the same length. Anything less is
-// treated as "no text embedding this pass" — callers degrade, never throw.
+// One finite-valued vector per input text, all the same length. Anything less
+// is "no text embedding this pass" — callers degrade, never throw.
 function parseVectors(v: unknown, expected: number): number[][] | null {
   if (!Array.isArray(v) || v.length !== expected) return null;
   const out: number[][] = [];
@@ -824,7 +693,6 @@ function parseVectors(v: unknown, expected: number): number[][] | null {
   return out;
 }
 
-// Write a {texts} request to the local stdio worker and resolve its vectors.
 function localEmbedTexts(texts: string[], timeoutMs: number): Promise<number[][] | null> {
   const id = `a${++reqSeq}`;
   return new Promise<number[][] | null>((resolve, reject) => {
@@ -842,31 +710,19 @@ function localEmbedTexts(texts: string[], timeoutMs: number): Promise<number[][]
 }
 
 // A deadline that expired mid-request, as opposed to a refused connection or a
-// capability 404/500 (which fail fast and mean "not available", not "still
-// working"). fetchWithTimeout aborts with a DOMException named 'AbortError';
-// the local stdio path rejects with a "timed out" Error.
+// capability 404/500.
 function isTimeoutError(err: unknown): boolean {
   const name = (err as { name?: unknown } | null)?.name;
   const message = (err as { message?: unknown } | null)?.message;
   return name === 'AbortError' || (typeof message === 'string' && message.includes('timed out'));
 }
 
-// Embed a batch of texts through the CLAP TEXT tower — 512-d L2-normalised
-// vectors in the SAME space as the stored track audio vectors, so cosine
-// against them is meaningful (CLAP is contrastive audio–text). Used for
-// natural-language "sounds like ..." search and zero-shot mood scoring.
-// Returns null whenever the capability is absent (no backend, lean build, old
-// sidecar without /embed-text, worker without torch) — callers degrade to
-// their non-text behaviour, never throw. `timeoutMs` lets interactive callers
-// (a picker tool mid-pick) use a shorter deadline than a bulk pass.
-//
-// One retry on TIMEOUT only: with the idle model release (#1204) an interactive
-// call can land on a cold worker whose CLAP reload eats the whole deadline. The
-// backend keeps loading after we stop waiting — the request is already queued
-// behind its single-flight lock — so a second wait usually lands on a warm
-// model. Non-timeout failures (refused, 404, 500) stay single-shot: fast,
-// definitive "not available" signals. Bulk callers pass `coldRetry: false` —
-// a 10-minute timeout means real trouble, not a cold model.
+// Embed texts through the CLAP text tower — 512-d L2-normalised vectors in the
+// same space as stored track audio vectors, so cosine against them is
+// meaningful. Returns null whenever the capability is absent; callers degrade,
+// never throw. One retry on TIMEOUT only, since with the idle model release
+// (#1204) a call can land on a cold worker whose CLAP reload eats the deadline;
+// bulk callers pass `coldRetry: false`.
 export async function embedTexts(
   texts: string[],
   opts: { timeoutMs?: number; coldRetry?: boolean } = {},
@@ -885,8 +741,8 @@ export async function embedTexts(
         timeoutMs,
         bodyDeadline: true,
       });
-      // 404 = pre-text-tower sidecar, 500 = lean build (no torch) — both mean
-      // "no text embeddings", not an error worth surfacing per call.
+      // 404 = pre-text-tower sidecar, 500 = lean build; both mean "no text
+      // embeddings", not an error worth surfacing per call.
       if (!res.ok) return null;
       const body = (await res.json()) as { ok?: boolean; embeddings?: unknown };
       return body?.ok ? parseVectors(body.embeddings, texts.length) : null;
@@ -906,14 +762,11 @@ export async function embedTexts(
   }
 }
 
-// --- Transition render (feature: stem-blend transitions) --------------------
-
-// What the render op needs to align and mix — straight from library.db, the
-// worker never re-detects. Wire-shaped (snake keys pass through verbatim).
-// `gain_db` is the dB the station itself would apply to that side (the same
-// figure the drain stamps as liq_amplify — music/loudness.ts) and is what the
-// worker mixes with. `lufs` is the pre-#1240 input, kept on the wire so an
-// older analyzer image still renders from its own maths.
+// What the stem-blend render op needs to align and mix — straight from
+// library.db, the worker never re-detects. Wire-shaped (snake keys pass through
+// verbatim). `gain_db` is the dB the station itself would apply to that side
+// (music/loudness.ts) and is what the worker mixes with; `lufs` is the
+// pre-#1240 input, kept so an older analyzer image still renders.
 export interface RenderTransitionPayload {
   out: {
     stems_dir: string;
@@ -940,12 +793,10 @@ export interface RenderTransitionResult {
   clipSec: number;
 }
 
-// Mix a pre-rendered transition WAV from two tracks' cached stems. Returns
-// null on ANY miss or failure (stems absent, degenerate grids, old sidecar
-// without the endpoint, timeout) — the caller falls back to a plain
-// pair-aware crossfade; the worker's own log carries the reason. Note the
-// render itself needs only numpy+soundfile, so it works on the LEAN image
-// too as long as the stems were cached by a heavy backend earlier.
+// Mix a pre-rendered transition WAV from two tracks' cached stems. Returns null
+// on ANY miss or failure — the caller falls back to a plain pair-aware
+// crossfade. Needs only numpy+soundfile, so it works on the lean image as long
+// as a heavy backend cached the stems earlier.
 export async function renderTransition(
   payload: RenderTransitionPayload,
   opts: { timeoutMs?: number } = {},
@@ -1002,10 +853,8 @@ function localRenderTransition(payload: RenderTransitionPayload, timeoutMs: numb
   });
 }
 
-// Analyse one track by id. Throws on failure — the caller (analyze pass) logs
-// and moves on, leaving the row NULL so it's retried on the next run. This is
-// the URL path: the backend fetches the audio itself. Kept as the fallback
-// for the prefetch pipeline (see analyzePath / downloadCapped below).
+// Analyse one track by id over the URL path (the backend fetches the audio).
+// Throws on failure — the caller leaves the row NULL and retries next run.
 export async function analyze(songId: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
@@ -1013,12 +862,9 @@ export async function analyze(songId: string, opts: AnalyzeRequestOpts = {}): Pr
   return backend === 'sidecar' ? analyzeViaSidecar(url, opts) : analyzeViaLocal(url, opts);
 }
 
-// A stream response that wasn't audio — Navidrome answers a request for a file
-// that's missing on disk (a stale library entry still in its DB) with an HTTP
-// 200 Subsonic error envelope, not audio bytes. Typed so the analysis loop can
-// tell this APART from a transient network failure: there's no point retrying
-// it via the url path (the file is simply gone), so the caller records it as a
-// clean failure instead of masking it behind the url-fallback's decode error.
+// Navidrome answers a request for a file missing on disk with an HTTP 200
+// Subsonic error envelope, not audio. Typed so the analysis loop can tell it
+// apart from a transient network failure and skip the url retry.
 export class NonAudioResponseError extends Error {
   constructor(message: string) {
     super(message);
@@ -1026,9 +872,8 @@ export class NonAudioResponseError extends Error {
   }
 }
 
-// Pull the human-readable message out of a Subsonic error envelope (JSON or the
-// XML attribute form), falling back to a trimmed snippet when it isn't a
-// recognisable envelope.
+// The human-readable message out of a Subsonic error envelope (JSON or the XML
+// attribute form), else a trimmed snippet.
 function subsonicErrorMessage(body: string): string {
   if (!body) return 'empty response';
   try {
@@ -1040,14 +885,10 @@ function subsonicErrorMessage(body: string): string {
   return m ? m[1] : body.slice(0, 200).replace(/\s+/g, ' ').trim();
 }
 
-// Download a track's audio to a capped temp file on the shared state volume
-// and return {path, complete}. The controller does this AHEAD of the
-// backend's compute so network fetch (controller) overlaps DSP (backend) —
-// the path is valid in both containers because the shared dir mounts at the
-// same location. Caps bytes + applies the analyzer request timeout; `complete`
-// is false when the cap truncated the file (vetoes outro analysis — the
-// file's "tail" would be mid-song audio). Throws on any error; the caller
-// falls back to the url path for that one track.
+// Download a track's audio to a capped temp file on the shared state volume,
+// ahead of the backend's compute so the fetch overlaps its DSP. `complete` is
+// false when the cap truncated the file, which vetoes outro analysis. Throws on
+// any error; the caller falls back to the url path for that one track.
 export async function downloadCapped(
   songId: string,
 ): Promise<{ path: string; complete: boolean }> {
@@ -1064,11 +905,8 @@ export async function downloadCapped(
     if (!res.ok || !res.body) {
       throw new Error(`download ${res.status}: ${await res.text().catch(() => '')}`);
     }
-    // Navidrome returns Subsonic API errors (e.g. a file that's gone from disk
-    // but still indexed — a stale library entry) as HTTP 200 with a JSON/XML
-    // body, NOT audio. Without this guard we'd stream that envelope to disk as
-    // `.audio` and the decoder would fail opaquely ("analyze failed"). Catch it
-    // on the content type and surface the real reason.
+    // Catch the HTTP 200 Subsonic error envelope on content type; streamed to
+    // disk as `.audio` it fails opaquely in the decoder instead.
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
     if (contentType.includes('json') || contentType.includes('xml') || contentType.startsWith('text/')) {
       const body = await res.text().catch(() => '');
@@ -1076,13 +914,9 @@ export async function downloadCapped(
         `navidrome returned ${contentType || 'a non-audio response'}, not audio: ${subsonicErrorMessage(body)}`,
       );
     }
-    // Stream the body to disk, stopping once we've pulled the byte cap — a few
-    // MB covers the analysis window for any common codec. A capped async
-    // generator feeds pipeline (which handles backpressure and tears the source
-    // down when we return early). The previous approach — a `data` listener
-    // that called src.destroy() alongside pipeline — deadlocked: attaching the
-    // listener flips the web-backed Readable into flowing mode and races the
-    // pipe, so pipeline() never resolves and every download hangs.
+    // Must stay a capped async generator feeding pipeline: a `data` listener
+    // alongside pipeline flips the web-backed Readable into flowing mode and
+    // deadlocks every download.
     let read = 0;
     async function* capped() {
       for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
@@ -1093,10 +927,8 @@ export async function downloadCapped(
     }
     await pipeline(capped(), createWriteStream(dest));
     if (read === 0) throw new Error('downloaded empty audio');
-    // Backstop for the content-type guard: an error envelope that slipped past
-    // the headers is tiny and starts with '{' (JSON) or '<' (XML); real audio
-    // never does (m4a 'ftyp' box, mp3 ID3 / 0xFF frame sync). Only re-read
-    // suspiciously small files so we never touch real audio.
+    // Backstop for the content-type guard: an envelope that slipped past the
+    // headers is tiny and starts with '{' or '<'; real audio never does.
     if (read < 1024) {
       const head = readFileSync(dest);
       if (head[0] === 0x7b /* { */ || head[0] === 0x3c /* < */) {
@@ -1105,27 +937,15 @@ export async function downloadCapped(
         );
       }
     }
-    // A read that hit the cap stopped early — the tail is missing. (A file of
-    // exactly cap bytes is flagged incomplete too; erring that way only skips
-    // outro analysis, never mis-measures it.)
+    // A read that hit the cap stopped early, so the tail is missing. Exactly
+    // cap bytes counts as incomplete too: that only skips outro analysis,
+    // never mis-measures it.
     return { path: dest, complete: read < ANALYZE_MAX_BYTES };
   } catch (err) {
-    // Drop the staging file on EVERY failure. `createWriteStream` truncates
-    // `dest` into existence the moment the pipeline starts, so three of the
-    // throws below it leave a file the caller never learns about: a pipeline
-    // rejection, the `read === 0` guard, and the small-file non-audio backstop.
-    // Only the SUCCESS path hands a path back, and the caller only ever cleans
-    // up paths it was handed — runAnalysisPass's one-ahead prefetch reduces a
-    // rejection to `{err}` and drops the filename on the floor — so nothing
-    // else can reach these.
-    //
-    // Blanket rather than per-throw on purpose: the two guards ABOVE the
-    // pipeline (`!res.ok`, the content-type check) create no file, `force`
-    // makes removing a path that was never created a no-op, and enumerating
-    // which throws happen to be past the `createWriteStream` line is exactly
-    // the distinction a later edit would get wrong. Best-effort — a cleanup
-    // that itself fails must not replace the real error. The cap path is NOT
-    // a failure: `capped()` returns normally, so this never runs on it.
+    // Drop the staging file on every failure: createWriteStream truncates
+    // `dest` into existence, and only the success path hands a path back for
+    // the caller to clean up. Best-effort, so a failed cleanup cannot replace
+    // the real error.
     await rm(dest, { force: true }).catch(() => {});
     throw err;
   } finally {
@@ -1133,9 +953,8 @@ export async function downloadCapped(
   }
 }
 
-// Analyse a track from an already-local file on the shared volume (produced
-// by downloadCapped). Same backend resolution as analyze(), but hands the
-// path over instead of a url so the backend skips its own fetch.
+// Analyse from an already-local file on the shared volume (downloadCapped), so
+// the backend skips its own fetch.
 export async function analyzePath(localPath: string, opts: AnalyzeRequestOpts = {}): Promise<AnalysisResult> {
   const backend = await resolveBackend();
   if (!backend) throw new Error('no analysis backend available');
@@ -1144,13 +963,11 @@ export async function analyzePath(localPath: string, opts: AnalyzeRequestOpts = 
 
 let pathFallbackWarned = false;
 
-// Prefer the one-ahead shared-path handoff, but degrade a sidecar that cannot
-// see the controller's state mount to its existing URL input. Only the
-// sidecar's machine-readable path-unavailable response earns the retry: a
-// decode/model failure is real analysis work failing and must not be doubled.
-// `complete` describes the controller's staged file, while `stems_dir` is a
-// controller-local output path; neither is valid when the sidecar downloads
-// its own temporary copy.
+// Prefer the shared-path handoff, degrading a sidecar that cannot see the
+// controller's state mount to the URL input. Only the machine-readable
+// path-unavailable response earns the retry; a decode/model failure must not be
+// doubled. `complete` and `stems_dir` are dropped: neither is valid when the
+// sidecar downloads its own copy.
 export async function analyzePathWithUrlFallback(
   songId: string,
   localPath: string,

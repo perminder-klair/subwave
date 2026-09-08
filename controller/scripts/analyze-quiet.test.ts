@@ -1,14 +1,7 @@
-// Unit tests for the pure quiet-times gate helper in
-// music/analyze-quiet-pure.ts (#1099). Run: `tsx scripts/analyze-quiet.test.ts`
-// (auto-discovered by `npm test`).
-//
-// quietGateDecision decides whether the analysis pass may compute the next
-// track: zero listeners for the configured window → proceed; any listener →
-// pause immediately. The branching is regression-critical in both directions:
-// too eager and a bulk pass churns the CPU while the station is live; too
-// strict (e.g. failing closed on an unknown count) and a stats outage stalls
-// a library scan forever. node:assert-via-tsx style, matching
-// stream-idle.test.ts.
+// The pure quiet-times gate (music/analyze-quiet-pure.ts, #1099): zero
+// listeners for the configured window proceeds, any listener pauses at once.
+// Wrong in either direction is bad — too eager churns CPU on a live station,
+// too strict stalls a library scan through a stats outage.
 
 import assert from 'node:assert/strict';
 import { quietGateDecision, type QuietState } from '../src/music/analyze-quiet-pure.js';
@@ -77,16 +70,15 @@ async function main() {
   });
 
   await test('unknown count fails OPEN — proceeds despite no quiet history', () => {
-    // The opposite direction from djCallsAllowed(): a stats outage must never
-    // stall a library scan forever.
+    // The opposite direction from djCallsAllowed().
     const r = quietGateDecision(FRESH, { enabled: true, count: null, now: T0, quietAfterMs: WINDOW });
     assert.equal(r.proceed, true);
     assert.equal(r.state.quietSince, T0); // outage accrues quiet time
   });
 
   await test('outage time counts toward the window on recovery at zero', () => {
-    // Icecast down for a full window, then recovers with an empty room: the
-    // pass must keep running, not pause in an empty room to re-earn quiet.
+    // Icecast down for a full window, then an empty room: the pass keeps
+    // running rather than re-earning quiet.
     const during = quietGateDecision(FRESH, { enabled: true, count: null, now: T0, quietAfterMs: WINDOW });
     const after = quietGateDecision(during.state, { enabled: true, count: 0, now: T0 + WINDOW, quietAfterMs: WINDOW });
     assert.equal(after.proceed, true);
@@ -99,21 +91,16 @@ async function main() {
     assert.equal(after.state.quietSince, null);
   });
 
-  // ── #1256: the count reaching this gate is gated, not raw ─────────────────
-  // The branches above are all correct; what mattered was the INPUT. This gate
-  // is the third fail-open-on-unknown reader in the codebase, and its fail-open
-  // runs the OPPOSITE way from the other two: unknown means PROCEED, so a
-  // single timed-out poll started a heavy DSP pass over a listener's head.
-  // probeListenerCount() now returns gatedCount(...) off the tagger child's own
-  // module state, so these two must be tested together the way stream-idle.test
-  // pairs gatedCount with nextIdleState.
+  // #1256: the INPUT is gated, not raw. Here unknown means PROCEED — the
+  // opposite fail-open direction from the other readers — so a single timed-out
+  // poll would start a heavy DSP pass over a listener's head.
   console.log('\nquietGateDecision fed through listeners.gatedCount (#1256):');
 
   const LIMIT = 4;   // STALE_STATUS_LIMIT
 
   await test('a blip while someone is listening no longer starts the pass', () => {
-    // The child polled 3 listeners, then one poll times out. On the raw count
-    // this was null → proceed:true → Demucs on a live station.
+    // Three listeners, then one poll times out: on the raw count that is
+    // null, proceed:true, Demucs on a live station.
     const count = gatedCount(null, 3, 1, LIMIT);
     const r = quietGateDecision(FRESH, { enabled: true, count, now: T0, quietAfterMs: WINDOW });
     assert.equal(r.proceed, false);
@@ -137,8 +124,7 @@ async function main() {
   });
 
   await test('the child\'s very first probe still reads unknown', () => {
-    // lastGoodCount is null until the child's first successful poll — boot
-    // behaviour is deliberately unchanged.
+    // lastGoodCount is null until the child's first successful poll.
     assert.equal(gatedCount(null, null, 1, LIMIT), null);
   });
 

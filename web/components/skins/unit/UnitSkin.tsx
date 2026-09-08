@@ -1,9 +1,9 @@
 'use client';
 
 // Everything that moves is a co-located keyframe (Unit.module.css); the one
-// exception is the display's level meter, which follows the real stream
-// spectrum and writes each bar's scaleY straight to the DOM (see Bars). Either
-// way playback churn never re-renders React.
+// exception is the display's level meter, which follows the real stream spectrum
+// and writes each bar's scaleY straight to the DOM. Playback churn never
+// re-renders React.
 
 import {
   useEffect,
@@ -46,7 +46,7 @@ import { BoothWindow, RequestWindow, TimelineWindow, type UnitModal } from './Un
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
 // Must match the scaleY the `unit-bar` keyframe idles at, so the audio-driven
-// meter and the CSS fallback share a floor and the swap is invisible.
+// meter and the CSS fallback share a floor.
 const BAR_REST = 0.28;
 
 // Swept logarithmically, equal width per octave. A linear bin split would hand
@@ -54,23 +54,20 @@ const BAR_REST = 0.28;
 const BAR_FREQ_LO = 50;
 const BAR_FREQ_HI = 16000;
 
-// Minimum ms between style writes. rAF fires at display refresh (120 Hz+ on
-// ProMotion); the analyser's own smoothing makes ~33 ms frames visually
-// identical at a third of the cost.
+// Minimum ms between style writes. rAF fires at display refresh; the analyser's
+// own smoothing makes ~33 ms frames visually identical.
 const BAR_FRAME_MS = 30;
 
 // How long every bin may read zero before handing the bars back to the CSS
 // keyframes. Desktop Safari wires the graph up then returns silence on a live
-// MP3 mount (issues #298/#302) in ways the hook's one-shot probe can miss. Long
-// enough that a quiet passage can't trip it.
+// MP3 mount (#298/#302) in ways the hook's one-shot probe can miss.
 const BAR_DEAD_MS = 2000;
 
-// Asymmetric follower: snap up on a transient, fall back slowly. A symmetric
-// lerp reads as mush on a seven-segment meter.
+// Asymmetric follower: snap up on a transient, fall back slowly.
 const BAR_ATTACK = 0.55;
 const BAR_RELEASE = 0.16;
 
-/** Per-bar [start, end) analyser-bin spans. With only 6–7 bars every span is
+/** Per-bar [start, end) analyser-bin spans. With only 6-7 bars every span is
  *  many bins wide, so no fractional interpolation is needed. */
 function barBinRanges(count: number, binCount: number, sampleRate: number): Array<[number, number]> {
   const nyquist = sampleRate / 2;
@@ -86,13 +83,12 @@ function barBinRanges(count: number, binCount: number, sampleRate: number): Arra
   return ranges;
 }
 
-/** Level bars driven by the shared Web Audio analyser (graph cached per
- *  <audio> element), written straight to each bar's `scaleY` so playback churn
- *  never re-renders React. Where the analyser can't deliver — iOS, CORS, no Web
- *  Audio, or a graph that goes silent mid-stream — the bars fall back to the
- *  `unit-bar` keyframes; both paths idle at BAR_REST so the handover doesn't
- *  show. html.lite and prefers-reduced-motion can't reach a rAF loop, so both
- *  are checked here as well as in the CSS. */
+/** Level bars driven by the shared Web Audio analyser, written straight to each
+ *  bar's `scaleY`. Where the analyser can't deliver (iOS, CORS, no Web Audio, or
+ *  a graph that goes silent mid-stream) the bars fall back to the `unit-bar`
+ *  keyframes; both paths idle at BAR_REST so the handover doesn't show.
+ *  html.lite and prefers-reduced-motion can't reach a rAF loop, so both are
+ *  checked here as well as in the CSS. */
 function Bars({
   count,
   playing,
@@ -110,8 +106,8 @@ function Bars({
   const rootRef = useRef<HTMLSpanElement | null>(null);
   const { lite } = useLiteMode();
 
-  // Read here rather than left to CSS: the rAF loop below sails through both
-  // the media query and lite's `animation: none`.
+  // Read here rather than left to CSS: the rAF loop sails through both the
+  // media query and lite's `animation: none`.
   const [reduced, setReduced] = useState(false);
   useEffect(() => {
     const mq = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -125,8 +121,7 @@ function Bars({
   const canDrive = !!audioRef && playing && !calm;
   const { ready, read, sampleRate } = useAnalyser(audioRef ?? null, canDrive);
 
-  // Only flips when the analyser arrives or dies; per-frame heights never
-  // touch React.
+  // Only flips when the analyser arrives or dies.
   const [driven, setDriven] = useState(false);
   const drivenRef = useRef(false);
 
@@ -196,8 +191,8 @@ function Bars({
         // Half mean, half peak: a pure mean over a band this wide barely
         // twitches, a pure peak jitters on narrowband content.
         const raw = (sum / (b1 - b0) / 255) * 0.5 + (peak / 255) * 0.5;
-        // Lift toward the top of the sweep — recorded music sheds energy with
-        // frequency, so without it the last two bars sit near the floor.
+        // Lift toward the top of the sweep: recorded music sheds energy with
+        // frequency.
         const target = clamp01(Math.pow(clamp01(raw * (1 + 0.45 * (i / Math.max(1, count - 1)))), 0.62));
         const cur = levels[i] ?? 0;
         const next = cur + (target - cur) * (target > cur ? BAR_ATTACK : BAR_RELEASE);
@@ -313,7 +308,7 @@ function Knob({
 }
 
 /** The on-air cover rides the root's --u-cover var and paints through the
- *  perforation as a halftone; falls back to the plain metal grid without it. */
+ *  perforation as a halftone. */
 function Grille({ hasArt, className }: { hasArt: boolean; className?: string }) {
   return (
     <div className={cn(styles.grille, 'relative overflow-hidden', className)} aria-hidden="true">
@@ -328,8 +323,8 @@ function Grille({ hasArt, className }: { hasArt: boolean; className?: string }) 
   );
 }
 
-/** Decorative only: the core owns mount selection (the probe in usePlayer), so
- *  the cap is parked on the MP3 floor every listener gets. */
+/** Decorative only: the core owns mount selection, so the cap is parked on the
+ *  MP3 floor every listener gets. */
 function Fader({ slotClass, capClass }: { slotClass: string; capClass: string }) {
   return (
     <div className="relative flex h-[34px] w-full items-center" aria-hidden="true">
@@ -437,8 +432,8 @@ export default function UnitSkin(_props: SkinProps) {
     !offline && nowPlaying?.subsonic_id ? client.coverUrl(nowPlaying.subsonic_id) : null;
   const coverColors = useCoverColors(coverUrl);
 
-  // Progress fill, both knob pointers and the grille artwork ride root CSS
-  // vars, never inline styles.
+  // Progress fill, both knob pointers and the grille artwork ride root CSS vars,
+  // never inline styles.
   const rootRef = useRef<HTMLDivElement | null>(null);
   useDynamicStyle(rootRef, {
     '--pf': ratio ?? 0,

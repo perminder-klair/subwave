@@ -1,21 +1,7 @@
-// Scene (genre-tag) vocabulary: what the mirror holds, and the in-place merge
-// that consolidates it (issue #1577).
-//
-// The listing is a json_each walk over `tracks.genres` — the same shape
-// stats() computes for byGenre, but uncached and unfiltered by tagging state:
-// the operator is curating the tag set, and an untagged track's genre is as
-// noisy as a tagged one's.
-//
-// The merge is ONE transaction over the rows that actually carry a retired
-// value. Row-at-a-time in JS rather than a `json_replace` expression because
-// the dedupe (a track tagged both spellings must end up with one tag, not two
-// identical ones) and the order-preserving rewrite are the same rules
-// `subsonic.songGenres` applies at ingest — stated once, in JS, in
-// music/scene-vocab.ts, rather than twice in two languages.
-//
-// Sources match on the EXACT stored value the caller passed: the listing hands
-// the operator real distinct values to tick, so there is nothing to fold here
-// and no way for a fold to reach a row the operator could not see.
+// Scene (genre-tag) vocabulary and the in-place merge that consolidates it (#1577).
+// The listing is uncached and NOT scoped to tagged rows. The merge rewrites
+// row-at-a-time in JS so it shares scene-vocab's dedupe with the ingest half, and
+// sources match the EXACT stored value the caller passed.
 
 import { requireDb } from './handle.js';
 import { invalidateStats } from './stats.js';
@@ -56,18 +42,14 @@ export function sceneVocabulary(): SceneCount[] {
 
 /**
  * Rewrite every `sources` tag to `target` across the mirror, in one transaction.
- *
- * The scalar `genre` column is GENERATED over genres[0], so it follows without
- * a second write. A rewritten row's text vector is marked dirty (the embed text
- * carries the genre line), the same way an era change does — it stays in the
- * KNN index until the next embed pass replaces it, rather than leaving a hole.
+ * The scalar `genre` column is GENERATED over genres[0] and follows without a
+ * second write. A rewritten row's text vector is marked dirty (the embed text
+ * carries the genre line) and stays in the KNN index until the next embed pass.
  */
 export function mergeScenes(sources: readonly string[], target: string): SceneMergeResult {
   const to = String(target ?? '').trim();
-  // A source is dropped only when it is the target VERBATIM — the same test
-  // planAliases applies, so the two halves of a merge agree on what has work to
-  // do. A case-insensitive test here dropped "rock" ticked onto "Rock", so a
-  // pure case merge rewrote nothing while reporting success.
+  // Dropped only when it is the target VERBATIM (the test planAliases applies) —
+  // a case-insensitive test would make a pure case merge a no-op.
   const from = [...new Set(sources.map((s) => String(s ?? '')).filter((s) => s.trim() !== ''))]
     .filter((s) => s !== to);
   if (!to || from.length === 0) return { sources: [], tracksChanged: 0, vectorsDirtied: 0 };
@@ -99,9 +81,7 @@ export function mergeScenes(sources: readonly string[], target: string): SceneMe
         hit.add(raw);
         return to;
       });
-      // The trim-and-dedupe is scene-vocab's, shared with the ingest half via
-      // applyAliases — a track carrying both spellings must collapse to one tag
-      // the same way whichever half of the merge reaches it first.
+      // Shared with the ingest half via applyAliases.
       const after = dedupeScenes(substituted);
       const next = JSON.stringify(after);
       if (next === JSON.stringify(before)) continue;
@@ -112,7 +92,6 @@ export function mergeScenes(sources: readonly string[], target: string): SceneMe
   });
   tx();
 
-  // The tallies the panel and the picker's tool descriptions read are memoised.
   if (result.tracksChanged > 0) invalidateStats();
   result.sources = from.filter((s) => hit.has(s));
   return result;

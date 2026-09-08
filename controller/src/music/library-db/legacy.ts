@@ -6,13 +6,8 @@ import { readFile, rename } from 'node:fs/promises';
 import { LEGACY_MOODS_JSON, requireDb } from './handle.js';
 import { normaliseYear } from './rows.js';
 
-// ---------------------------------------------------------------------------
-// Legacy moods.json → SQLite (one-shot, idempotent)
-// ---------------------------------------------------------------------------
-
-// A single track entry as the legacy state/moods.json carried it. Every field
-// is optional and loosely typed — it's a hand-migrated file — and only the ones
-// the insert below reads are declared.
+// A track entry as the legacy state/moods.json carried it: hand-migrated, so
+// every field is optional, and only what the insert reads is declared.
 interface LegacyMoodsTrack {
   title?: string;
   artist?: string;

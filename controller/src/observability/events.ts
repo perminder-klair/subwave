@@ -1,19 +1,12 @@
-// Unified event log — a durable, append-only JSONL timeline of everything the
-// DJ does: LLM calls, agent tool calls, and Navidrome/Subsonic API calls.
+// Durable append-only JSONL timeline of LLM calls, agent tool calls and
+// Navidrome calls, at ${STATE_DIR}/logs/events-YYYY-MM-DD.jsonl. The in-memory
+// ring buffers feeding /debug are lost on restart and can't be correlated.
 //
-// The in-memory ring buffers (llm/log.js, music/subsonic-log.js) feed the live
-// /debug surface but are lost on restart and can't be correlated. This module
-// writes one JSON line per event to ${STATE_DIR}/logs/events-YYYY-MM-DD.jsonl
-// so the whole thing survives restarts and is analysable with `jq`.
+// `withTrace` wraps one logical DJ decision in an AsyncLocalStorage scope
+// carrying a traceId, so every call made inside it — however deep the await
+// chain — reads back as one trace.
 //
-// Correlation: `withTrace` wraps each logical DJ decision (a track pick, a
-// request, a scheduled segment) in an AsyncLocalStorage scope carrying a
-// traceId. Every LLM/tool/Navidrome call made anywhere inside that scope —
-// however deep the await chain — is stamped with the same traceId, so a
-// decision and the calls it triggered can be read back as one trace.
-//
-// Best-effort everywhere: a write failure or a logging bug must never break a
-// broadcast. logEvent swallows its own errors and never throws into callers.
+// Best-effort everywhere: logEvent swallows its own errors and never throws.
 
 import { appendFile, mkdir, readdir, unlink } from 'node:fs/promises';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -23,38 +16,35 @@ import { STATE_DIR } from '../config.js';
 type TraceStore = { traceId: string; kind: string; seq: number };
 const als = new AsyncLocalStorage<TraceStore>();
 
-// Ensure the logs dir exists once — on a fresh checkout state/logs/ may not
-// exist yet, and a best-effort appendFile would silently drop every line.
+// Once: on a fresh checkout state/logs/ may not exist and a best-effort
+// appendFile would silently drop every line.
 const LOGS_DIR = `${STATE_DIR}/logs`;
 const dirReady = mkdir(LOGS_DIR, { recursive: true }).catch(() => {});
 
-// Sequence counter for events fired outside any trace — keeps the file totally
-// ordered even when two ISO timestamps collide at millisecond resolution.
+// For events outside any trace: keeps the file ordered when two ISO timestamps
+// collide at millisecond resolution.
 let globalSeq = 0;
 
-// Today's log file. Computed per write (UTC) so the file rotates daily with no
-// daemon — old days are simply never reopened.
+// Computed per write (UTC), so the file rotates daily with no daemon.
 function eventsPath() {
   const day = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
   return `${STATE_DIR}/logs/events-${day}.jsonl`;
 }
 
-// Truncate long strings for the durable file (the in-memory /debug buffer keeps
-// them full). Marks where content was dropped so analysis isn't misled.
+// Truncate long strings for the durable file (/debug keeps them full), marking
+// where content was dropped.
 export function cap(str: any, n = 4000) {
   if (typeof str !== 'string') return str;
   if (str.length <= n) return str;
   return str.slice(0, n) + `…[+${str.length - n} chars]`;
 }
 
-// The active trace store, or null when running outside any withTrace scope
-// (e.g. boot-time library warm-up). Callers read `.traceId`.
+// The active trace store, or null outside any withTrace scope.
 export function currentTrace() {
   return als.getStore() || null;
 }
 
-// Append one event line. `data` is spread onto the record after the standard
-// envelope fields. Never throws.
+// Append one event line; `data` is spread after the envelope fields. Never throws.
 export function logEvent(type: string, data: any = {}) {
   try {
     const trace = currentTrace();
@@ -72,13 +62,10 @@ export function logEvent(type: string, data: any = {}) {
   }
 }
 
-// Delete event day-files older than `maxAgeDays`. Daily rotation means old
-// days are never reopened, but nothing ever removed them either — on a busy
-// station the JSONL files were the biggest unbounded state-dir growth vector.
-// The horizon is generous: recent-plays backfill (queue.ts) needs 2 days and
-// the budget seed (telemetry/budget.ts) needs today only. Called from the
-// hourly scheduler cleanup; best-effort per file so one unlink failure can't
-// stop the sweep.
+// Delete event day-files older than `maxAgeDays`; without it the JSONL files are
+// the biggest unbounded state-dir growth vector. The horizon is generous — the
+// recent-plays backfill needs 2 days, the budget seed today only. Driven by the
+// hourly scheduler cleanup; best-effort per file.
 export const EVENTS_MAX_AGE_DAYS = 14;
 
 export async function pruneOldEvents(maxAgeDays = EVENTS_MAX_AGE_DAYS): Promise<number> {
@@ -102,9 +89,8 @@ export async function pruneOldEvents(maxAgeDays = EVENTS_MAX_AGE_DAYS): Promise<
   return removed;
 }
 
-// Run `fn` inside a fresh trace scope. Emits a `trace.start` event up front and
-// a `trace.end` ({ ok, ms }) once `fn` settles. Errors are re-thrown unchanged
-// so existing fallback logic (dj-agent's pool fallback, etc.) still triggers.
+// Run `fn` inside a fresh trace scope, emitting `trace.start`/`trace.end`.
+// Errors are re-thrown unchanged so caller fallback logic still triggers.
 export async function withTrace<T>(meta: any = {}, fn: () => Promise<T>): Promise<T> {
   const store: TraceStore = { traceId: randomUUID(), kind: meta.kind || 'trace', seq: 0 };
   return als.run(store, async () => {

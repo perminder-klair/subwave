@@ -1,15 +1,7 @@
 'use client';
 
-// Search across every setting, so "crossfade" or "api key" reaches the control
-// without the operator remembering which of twelve sections owns it.
-//
-// Built on the vendored cmdk primitives rather than the design's hand-rolled
-// scorer: the fuzzy ranking, the arrow-key navigation and the focus trap are
-// already there and already match the rest of the admin's palettes.
-//
-// The chord is `/`, NOT ⌘K — AdminShell already owns ⌘K for the admin-wide
-// panel jump list, and shadowing it inside one panel would make the same
-// keystroke mean two things depending on where you were.
+// Search across every setting, on the vendored cmdk primitives. The chord is
+// `/`, not ⌘K: AdminShell owns ⌘K for the admin-wide panel jump list.
 
 import { useEffect, useState } from 'react';
 import { Search } from 'lucide-react';
@@ -45,15 +37,11 @@ function isTyping(): boolean {
 }
 
 /**
- * Is a modal layer already holding the keyboard?
- *
- * `isTyping` is not enough: inside a Radix alert dialog ("Restart mixer") focus
- * sits on a plain <button>, and inside an open Radix select `/` is that widget's
- * OWN typeahead key. Either way this palette portals outside their focus trap,
- * so it would paint over a dialog that keeps every keystroke — visible, and
- * unusable. Matches Radix's own open-state markers — every one of these four
- * content elements carries `role` and `data-state` on the SAME node — so a new
- * dialog or menu is covered the day it is added, with nothing to register here.
+ * Is a modal layer already holding the keyboard? `isTyping` is not enough:
+ * focus can sit on a plain button inside an alert dialog, and `/` is a Radix
+ * select's own typeahead key. This palette portals outside their focus traps,
+ * so it would paint over a layer that keeps every keystroke. Keys off Radix's
+ * own open-state markers, so new dialogs are covered without registration.
  */
 function isOverlayOpen(): boolean {
   return !!document.querySelector([
@@ -124,12 +112,9 @@ export function SettingsSearch({ onJump }: SettingsSearchProps) {
             return (
               <CommandItem
                 key={index}
-                // Labels repeat across cards ("Bitrate" three times in the
-                // danger zone, "Provider" in four sections) and cmdk keys on
-                // `value`, so the index disambiguates. Everything else that
-                // should MATCH rides `keywords`, which cmdk scores below the
-                // value — a hit on the field's own name outranks a hit on its
-                // synonyms, which is the ordering the operator expects.
+                // Labels repeat across cards and cmdk keys on `value`, so the
+                // index disambiguates. Synonyms ride `keywords`, which cmdk
+                // scores below the value.
                 value={`${entry.label} ${entry.card} #${index}`}
                 keywords={[section?.label ?? '', entry.keywords ?? ''].filter(Boolean)}
                 onSelect={() => pick(index)}

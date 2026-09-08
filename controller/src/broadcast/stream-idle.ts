@@ -1,33 +1,18 @@
 // Stream idle monitor — pause the programme while the room is empty.
 //
-// When settings.stream.idleWhenEmpty is on and Icecast has counted zero
-// listeners for idleAfterMinutes, flip radio.liq's idle gate (telnet
-// idle_on): the Icecast mounts stay up serving silence, but the music chain
-// stops being pulled — no track decode, no Navidrome downloads — frozen
-// mid-track. Because the mounts never disappear, any client (VLC, Sonos, the
-// web player) connects normally while idle; this monitor polls the listener
-// count every tick during the pause and resumes the programme (idle_off)
-// within seconds of the first connection, exactly where it froze.
+// With settings.stream.idleWhenEmpty on and zero listeners for
+// idleAfterMinutes, flip radio.liq's idle gate (telnet idle_on): the mounts
+// stay up serving silence but the music chain stops being pulled, frozen
+// mid-track. Any client still connects while idle, and the first connection
+// resumes (idle_off) exactly where it froze. Contrast POST /stream-stop
+// (stream_off), which tears the mounts down — the operator's hard off-air.
 //
-// Contrast POST /stream-stop (stream_off), which tears the mounts down and
-// 404s new listeners — that's the operator's hard off-air switch; this is
-// the automatic power-save.
-//
-// Fail-open like djCallsAllowed: an unknown count (Icecast unreachable) can
-// never hold the station silent — an unobservable room resumes. "Unknown"
-// means sustained failure, not one timed-out poll — the count comes from
-// listeners.gatedListenerCount(), which holds the last real reading through a
-// blip (#1256). Telnet
-// failures keep the current state and retry next tick. Idle state is not
-// persisted; a mixer restart always comes back live, and the monitor
-// re-asserts idle_on (idempotent) on its next tick while the room stays
-// empty. On controller boot the gate's state is adopted from Liquidsoap
-// (idle_status) so a controller restart mid-pause doesn't strand the flag.
-//
-// The transition logic lives in the pure nextIdleState()
-// (stream-idle-pure.ts) so the regression-critical branching (fail-open,
-// re-assert, the empty-clock reset) is unit-pinned in
-// scripts/stream-idle.test.ts.
+// Fail-OPEN: an unknown count (sustained failure, not one timed-out poll —
+// #1256) never holds the station silent. Telnet failures keep the current state
+// and retry next tick. State is not persisted; a mixer restart comes back live
+// and the monitor re-asserts idle_on, and on controller boot the gate's state
+// is adopted from Liquidsoap (idle_status). Transitions live in the pure
+// nextIdleState().
 
 import * as settings from '../settings.js';
 import { warmHeavy } from '../audio/ttsHeavyClient.js';
@@ -36,19 +21,15 @@ import { idleOn, idleOff, idleStatus } from './liquidsoap-control.js';
 import { queue } from './queue.js';
 import { nextIdleState, type IdleState } from './stream-idle-pure.js';
 
-// One tick every 5s: while live it just reads the 15s monitor's cached count
-// (entering idle is not latency-sensitive); while idle it forces a fresh
-// Icecast poll, so a new listener waits ~5s of silence before the music
-// resumes — worst case one tick plus one status deadline (~8s), because the
-// forced poll is single-flighted and can join a monitor poll that started just
-// before the listener connected. Bounding that tighter would mean letting the
-// two pollers race again, which is what manufactured the #1256 failures.
+// One tick every 5s. Live: read the 15s monitor's cached count. Idle: force a
+// fresh poll, so a new listener waits ~5s (worst case ~8s, since the forced
+// poll is single-flighted). Tightening that would re-race the two pollers
+// (#1256).
 const TICK_MS = 5000;
 
 let state: IdleState = { idle: false, zeroSince: null };
 
-// True while the programme is idle-paused. Read by GET /state so the player
-// UI can tell "silence because nobody's here" from "stream is broken".
+// Read by GET /state so the player can tell "nobody's here" from "broken".
 export function isIdle() {
   return state.idle;
 }
@@ -57,13 +38,9 @@ async function tick() {
   const st = settings.get()?.stream;
   const enabled = !!st?.idleWhenEmpty;
   const idleAfterMin = Number(st?.idleAfterMinutes) >= 1 ? Number(st?.idleAfterMinutes) : 10;
-  // While idle, force a fresh Icecast poll — the 15s monitor cadence would
-  // add up to 15s to the wake-up. While live, the cached count is plenty.
-  //
-  // Read the count through gatedListenerCount() either way, NOT refresh()'s raw
-  // return: forcing a poll every 5s is ~120 polls per 10-minute pause, and on
-  // the raw count a single one of them timing out released the pause (#1256).
-  // A sustained outage still reads null here and still resumes.
+  // Idle forces a fresh poll (the 15s cadence would add 15s to the wake-up).
+  // Always read through gatedListenerCount(), never refresh()'s raw return: one
+  // timed-out poll out of ~120 per pause released it (#1256).
   if (state.idle && enabled) await refresh();
   const count = gatedListenerCount();
   const { state: next, action } = nextIdleState(state, {
@@ -81,14 +58,10 @@ async function tick() {
       );
     } else if (action === 'resume') {
       await idleOff();
-      // The tts-heavy sidecar unloads an idle engine on its own clock (#1579)
-      // and reloads it on demand, which on a cold Chatterbox is 30-60s — long
-      // enough to be heard if it lands on the first link after the room fills
-      // up. Start that load HERE instead, where we already know the pause is
-      // releasing and the first spoken line is still minutes away. Deliberately
-      // not awaited and never throws: the render path reloads on its own if
-      // this does nothing, so it must not be able to delay idleOff()'s state
-      // update or trip the catch below into holding the pause.
+      // Warm the tts-heavy sidecar (#1579): a cold Chatterbox reload is
+      // 30-60s, audible if it lands on the first link after the room fills.
+      // Not awaited and never throws — the render path reloads on its own, so
+      // this must not delay idleOff() or trip the catch into holding the pause.
       void warmHeavy();
       queue.log(
         'scheduler',
@@ -108,8 +81,8 @@ async function tick() {
 
 export function startStreamIdleMonitor() {
   void (async () => {
-    // Adopt the gate's actual state: a controller restart mid-pause must not
-    // leave Liquidsoap silent while we believe the programme is live.
+    // Adopt the gate's actual state: a restart mid-pause must not leave
+    // Liquidsoap silent while we believe the programme is live.
     try {
       if (await idleStatus()) {
         state = { idle: true, zeroSince: null };

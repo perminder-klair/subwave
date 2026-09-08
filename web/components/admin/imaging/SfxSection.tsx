@@ -39,10 +39,9 @@ interface SfxSectionProps {
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
-// The RHF-bound shape of the create form. name/description/durationSec are
-// all z.preprocess-wrapped in the shared schema (imagingName/imagingDescription/
-// imagingDuration), so their z.input is `unknown` — cast once here rather than
-// fighting that at every TextField call site (see lib/form.ts's header note).
+// The RHF-bound shape of the create form. name/description/durationSec are all
+// z.preprocess-wrapped in the shared schema, so their z.input is `unknown` --
+// cast once here rather than at every TextField call site.
 interface SfxCreateFormValues {
   name: string;
   description: string;
@@ -124,13 +123,10 @@ function SfxCreateModal({
 }
 
 // The RHF-bound shape of the import form: name/description mirror
-// imagingImportSchema (also preprocess-wrapped — same cast as above). `file`
-// rides alongside them so the DropZone reads through the same `control`, but
-// it is NOT part of the zod schema (a File object isn't something the
-// controller's shared, zod-only schema module can describe), so it never
-// appears in `form.handleSubmit`'s validated `values` — read separately via
-// useWatch. The file picker is exactly the "real work the wrappers don't
-// expose" case lib/form-fields.tsx's header calls out for a raw Controller.
+// imagingImportSchema (also preprocess-wrapped). `file` rides alongside so the
+// DropZone reads through the same `control`, but it is NOT part of the zod
+// schema (a File object isn't describable there), so it never appears in
+// handleSubmit's validated `values` -- read separately via useWatch.
 interface SfxImportFormValues {
   name: string;
   description: string;

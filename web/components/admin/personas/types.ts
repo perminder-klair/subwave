@@ -20,12 +20,10 @@ export interface Persona {
   tagline: string;
   frequency: string;
   scriptLength: string;
-  // Back-announces AND teases what's next, and runs callbacks across the session.
-  // Off = the tasteful-narrator behaviour.
+  // Back-announces, teases what's next and runs callbacks across the session.
   djMode: boolean;
-  // 'natural' (default) writes the ordinary between-track link. 'announce' is
-  // a matter-of-fact station: the link is exactly "This is <artist>." or
-  // "Next up, <artist>." — nothing else.
+  // 'announce' limits the link to exactly "This is <artist>." / "Next up,
+  // <artist>."; 'natural' (default) writes the ordinary between-track link.
   linkStyle: 'natural' | 'announce';
   // Tone dials, 0–10, default 5 (neutral). Map to prompt bands server-side.
   humour: number;
@@ -35,13 +33,13 @@ export interface Persona {
   // Free-text on-air language ("Turkish", "Türkçe"). Empty = English (no
   // directive injected server-side).
   language: string;
-  // Basename like `p_abc123.png`, empty when none. The image itself is served from
+  // Basename like `p_abc123.png`, empty when none. The image is served from
   // /api/persona-avatar/<id>; the basename is held only so a save round-trips it.
   avatar: string;
   tts: PersonaTts;
   skills: string[];
-  /** Operator organisation tags. They filter and group the roster and nothing
-   *  else — no prompt, no public route, no on-air behaviour reads them. */
+  /** Operator organisation tags: they filter and group the roster and nothing
+   *  else. */
   tags: string[];
 }
 
@@ -58,9 +56,8 @@ export interface FormState {
   // '' selects the built-in default template.
   djPrompts: DjPromptPreset[];
   activeDjPromptId: string;
-  // Station house rules — appended to EVERY spoken-output prompt, including
-  // the agent and multi-voice cast paths the template never reaches
-  // (issues #1182, #1420). '' = off.
+  // Appended to every spoken-output prompt, including the agent and cast paths
+  // the template never reaches (#1182, #1420). '' = off.
   djHouseRules: string;
 }
 

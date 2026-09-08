@@ -1,6 +1,5 @@
 // Public, unauthenticated endpoints: liveness, now-playing, station/DJ info,
-// queue state, the cover-art proxy, the persona-avatar proxy, and the
-// listener-facing weekly schedule.
+// queue state, the cover-art and avatar proxies, and the weekly schedule.
 import express from 'express';
 import { existsSync } from 'node:fs';
 import { stat, readFile } from 'node:fs/promises';
@@ -43,32 +42,20 @@ import { activeStationId } from '../stations/resolve.js';
 
 export const router = express.Router();
 
-// Boot-frozen on purpose: /state must report the station this process is
-// ACTUALLY running, not the pointer file's current value. During a switch the
-// pointer flips first — the admin UI polls /state and treats "station.id ===
-// target" as "the new controller is up", which only works if this snapshot
-// is taken once at boot.
+// Boot-frozen: /state must report the station this process is running, not the
+// pointer file's current value (the pointer flips first during a switch, and the
+// admin UI reads "station.id === target" as "the new controller is up").
 const BOOT_STATION_ID = activeStationId(STATE_ROOT);
 const BOOT_MULTI_STATION = existsSync(join(STATE_ROOT, 'stations'));
 
-// 1×1 transparent PNG — served when a persona has no avatar so the listener
-// UI can render an <img> tag without a broken-image icon. Cheap, no shipped
-// asset required.
+// 1x1 transparent PNG for personas with no avatar, so the UI can render an <img>.
 const TRANSPARENT_PNG = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=',
   'base64',
 );
 
-// Public handlers must not reflect their internal error text: these endpoints
-// answer unauthenticated callers, and err.message here can carry state-dir
-// paths (a failed settings.load()) or upstream registry URLs (the community
-// proxies) — low-value recon, but free to withhold.
-//
-// The logging half is the load-bearing part. Most of these handlers had no
-// server-side log at all, so the response WAS the only record; genericising
-// without this would have made 500s silent. Routes behind requireAdmin keep
-// reflecting err.message — the recipient there is already trusted and the
-// detail is the point.
+// Public handlers must not reflect internal error text (state-dir paths, upstream
+// URLs); detail goes to the booth log. Admin routes still reflect err.message.
 function publicError(res: express.Response, route: string, err: unknown): void {
   const detail = err instanceof Error ? err.message : String(err);
   queue.log('error', `${route} failed: ${detail}`);
@@ -81,26 +68,14 @@ function mimeForAvatar(filename: string): string {
   return 'image/jpeg';
 }
 
-// Relative path (no `/api` prefix) the listener UI uses for a persona's
-// avatar. The web app prepends its NEXT_PUBLIC_API_URL (`/api` in prod via
-// Caddy, an absolute origin in dev), mirroring how `/cover/:id` is consumed.
-// Always returns a string — the endpoint serves a 1×1 placeholder when no
-// avatar is set, so callers don't need to check for "is it set".
+// Relative path (no `/api` prefix); the web app prepends NEXT_PUBLIC_API_URL.
+// Always a string: the endpoint serves a placeholder when no avatar is set.
 function avatarUrlFor(personaId?: string | null): string {
   return personaId ? `/persona-avatar/${encodeURIComponent(personaId)}` : '';
 }
 
-// The listener-safe persona shape + the souls disclosure rule live in
-// util/public-persona.ts so GET /schedule and GET /personas can't drift apart
-// on what they publish, and so the rule is unit-pinnable. Read per-request
-// (never cached) — flipping the toggle applies live.
-
-// Resolve the public origin to build tune-in URLs from. SITE_URL (set by the
-// operator) wins — it's the trusted, canonical address and is immune to a
-// spoofed Host header on a misconfigured reverse proxy. When it's unset we fall
-// back to how the listener actually reached us (X-Forwarded-Proto/Host from the
-// proxy, else the request's own protocol/host) so LAN, Tailscale, and ad-hoc
-// custom-domain deployments still emit a URL that resolves for the listener.
+// Origin for tune-in URLs. SITE_URL wins (canonical, immune to a spoofed Host);
+// unset, fall back to how the listener reached us so LAN deployments resolve.
 export function publicOrigin(req: express.Request): string {
   const fromEnv = (process.env.SITE_URL || '').trim().replace(/\/+$/, '');
   if (fromEnv) return fromEnv;
@@ -110,22 +85,15 @@ export function publicOrigin(req: express.Request): string {
   return host ? `${proto}://${host}` : `http://localhost`;
 }
 
-// ---------------------------------------------------------------------------
-// GET /cover/:id — proxy Subsonic cover art so listener browsers can use it
-// as MediaSession artwork (lock screen / CarPlay / Bluetooth display) without
-// the Subsonic credentials leaking into the page. Cached aggressively at the
-// edge — cover art for a given song id never changes meaningfully — and in a
-// small in-process LRU, because the bundled Caddy doesn't cache: without it,
-// every listener's first view of each track is a separate round trip to
-// Navidrome (possibly Cloudflare-fronted and slow).
-// ---------------------------------------------------------------------------
+// Proxy Subsonic cover art so browsers get MediaSession artwork without the
+// Subsonic credentials. Cached at the edge and in a small in-process LRU.
 const COVER_CACHE_MAX = 20;
 const coverCache = new Map<string, { buf: Buffer; contentType: string }>();
 
 router.get('/cover/:id', async (req, res) => {
   const { id } = req.params;
-  // Subsonic ids are short alphanumerics (Navidrome uses base32 hashes).
-  // Reject anything else to keep this from being a generic SSRF surface.
+  // Subsonic ids are short alphanumerics; anything else would make this an SSRF
+  // surface.
   if (!/^[\w-]{1,64}$/.test(id)) return res.status(400).end();
 
   const sendCover = (entry: { buf: Buffer; contentType: string }) => {
@@ -136,8 +104,7 @@ router.get('/cover/:id', async (req, res) => {
 
   const hit = coverCache.get(id);
   if (hit) {
-    // Refresh recency — Map iteration order is insertion order, so
-    // delete+set keeps the oldest entry first for eviction.
+    // Map order is insertion order, so delete+set keeps the oldest first.
     coverCache.delete(id);
     coverCache.set(id, hit);
     return sendCover(hit);
@@ -160,32 +127,23 @@ router.get('/cover/:id', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// GET /persona-avatar/:id — operator-uploaded DJ persona portrait. Returns a
-// 1×1 transparent PNG (cached briefly) when no avatar is set, so listener UIs
-// can use this URL directly without first checking whether one exists.
-// ---------------------------------------------------------------------------
+// Persona portrait; serves the transparent placeholder when no avatar is set.
 router.get('/persona-avatar/:id', async (req, res) => {
   const { id } = req.params;
-  // Persona ids reuse settings.ID_RE — keep this regex local so a hand-edited
-  // URL can never escape the persona-avatars directory.
+  // Mirrors settings.ID_RE; local so a hand-edited URL can't escape the dir.
   if (!/^[a-z0-9_]{3,32}$/.test(id)) return res.status(400).end();
   try {
     await settings.load();
     const persona = settings.get().personas?.find((p: any) => p.id === id);
     const filename: string = persona?.avatar || '';
     if (!filename) {
-      // No avatar set yet (or unknown persona). Serve the transparent
-      // placeholder with a short cache so the UI swaps once one's uploaded.
       res.setHeader('Content-Type', 'image/png');
       res.setHeader('Cache-Control', 'public, max-age=60');
       return res.send(TRANSPARENT_PNG);
     }
     const path = `${settings.PERSONA_AVATAR_DIR}/${filename}`;
     const st = await stat(path);
-    // ETag derived from filename + mtime so re-uploads invalidate cached
-    // copies immediately (the filename can stay the same when the operator
-    // replaces a PNG with another PNG).
+    // ETag over filename + mtime: a replacement upload keeps the same name.
     const etag = `"${createHash('sha1').update(`${filename}:${st.mtimeMs}`).digest('hex').slice(0, 16)}"`;
     res.setHeader('ETag', etag);
     if (req.headers['if-none-match'] === etag) return res.status(304).end();
@@ -194,68 +152,44 @@ router.get('/persona-avatar/:id', async (req, res) => {
     const buf = await readFile(path);
     res.send(buf);
   } catch {
-    // File missing or stat failed — fall back to the placeholder rather than
-    // letting the listener UI see a broken-image icon.
+    // Missing file or failed stat falls back to the placeholder, never a 404.
     res.setHeader('Content-Type', 'image/png');
     res.setHeader('Cache-Control', 'public, max-age=60');
     res.send(TRANSPARENT_PNG);
   }
 });
 
-// ---------------------------------------------------------------------------
-// GET /now-playing — current track + context snapshot
-// ---------------------------------------------------------------------------
+// Current track + context snapshot.
 router.get('/now-playing', async (req, res) => {
   try {
     const [nowPlaying, ctx] = await Promise.all([
       queue.getNowPlaying(),
       getFullContext(),
     ]);
-    // Enrich the live track with the analysis/tag data the player surfaces in
-    // its minimal metadata strip (genre · BPM · key · mood). All of it lives
-    // in the library DB keyed by subsonic_id; getNowPlaying() stays a pure
-    // reader of now-playing.json. A not-yet-tagged track (or unloaded DB)
-    // yields null here and the fields are simply omitted.
+    // Enrich with library tag/analysis data; getNowPlaying() stays a pure reader
+    // of now-playing.json. An untagged track yields null and fields are omitted.
     if (nowPlaying?.subsonic_id) {
-      // Lean read: only the scalar fields the metadata strip renders, so this
-      // per-listener 5s poll never parses the heavy acoustic *_json blobs (#723).
+      // Scalars only: this 5s per-listener poll must not parse the heavy
+      // acoustic *_json blobs (#723).
       const rec = library.getPlaybackMeta(nowPlaying.subsonic_id);
       if (rec) {
-        // Full tag set for consumers that want it, plus the comma-joined
-        // string in the legacy `genre` field the metadata strip renders —
-        // same shape the annotate metadata now carries ("Hip-Hop, Rap").
         nowPlaying.genres = rec.genres ?? [];
         nowPlaying.genre = rec.genres?.length ? rec.genres.join(', ') : rec.genre ?? null;
         nowPlaying.bpm = rec.bpm ?? null;
         nowPlaying.musicalKey = rec.musicalKey ?? null;
         nowPlaying.moods = Array.isArray(rec.moods) ? rec.moods : [];
         nowPlaying.energy = rec.energy ?? null;
-        // Era year, never the raw `year` (issue #1418). now-playing.json
-        // carries no year of its own — radio.liq writes title/artist/album/id
-        // only — so this line IS the year every skin renders in its metadata
-        // strip, and a reissue anthology showed listeners the reissue's date.
-        // #842 precedence; unknown leaves the field null and the skins, which
-        // all render it conditionally, simply omit it.
+        // Era year, never the raw `year` (#1418). now-playing.json carries none,
+        // so this is the year every skin renders.
         const eraYear = resolveEraYear(rec.year, rec.originalYear, rec.yearUntrusted);
         if (nowPlaying.year == null && eraYear != null) nowPlaying.year = eraYear;
       }
-      // Duration isn't in the annotate metadata Liquidsoap reports, so the
-      // player's track clock / up-next tease would never fire without help.
-      // The queue's record of the airing track carries the full Subsonic song
-      // (requests + DJ picks); auto-playlist plays fall back to the library
-      // DB's duration_sec. Tracks known to neither just omit it — the player
-      // degrades to an elapsed-only readout, same as the metadata strip.
-      //
-      // What's published is the PLAYABLE span, not the tagged length: with the
-      // dead-air trim on, Liquidsoap starts at liq_cue_in and stops at
-      // liq_cue_out, so a tagged duration runs the listener's progress bar past
-      // the end of the song by exactly the silence that was cut. Both airing
-      // paths resolve it, and they resolve it differently on purpose — a
-      // queue-tracked play carries the cue points the drain actually stamped
-      // (which fold in the #447 cap and a stem seam too), while an untracked
-      // auto-playlist play has no queue item and can only re-ask the policy
-      // module. `rec` is the LEAN read (#723) and the trim inputs are plain
-      // integer columns on it, so this stays free of the acoustic blob parse.
+      // Duration is absent from the annotate metadata, so the player's clock
+      // needs it here: the queue's record for a tracked play, else the library
+      // DB. Publish the PLAYABLE span, not the tagged length — with the dead-air
+      // trim on, a tagged duration runs the progress bar past the end. A tracked
+      // play carries the cue points the drain stamped; an untracked auto-playlist
+      // play has no queue item and can only re-ask the policy module.
       if (nowPlaying.duration == null) {
         const cur = queue.current;
         const tracked = cur?.track?.id === nowPlaying.subsonic_id ? cur : null;
@@ -267,20 +201,15 @@ router.get('/now-playing', async (req, res) => {
                 const trim = resolveSilenceTrim(rec);
                 return playableDurationSec(duration, trim.cueOutSec, trim.cueInSec);
               })();
-          // playableDurationSec only returns null on an unusable duration,
-          // which the guard above already excluded; keep the tagged value as a
-          // belt-and-braces fallback rather than dropping the clock entirely.
           nowPlaying.duration = playable != null && playable > 0 ? playable : duration;
         }
       }
     }
-    // Served from the 15s listener-monitor cache — no per-request Icecast hit.
+    // From the 15s listener-monitor cache; no per-request Icecast hit.
     const stream = getStreamStatus();
     const stationSettings = settings.get();
     const persona = settings.getEffectivePersona();
-    // activeShow is { name, persona:{ id, name, avatar } } | null — the
-    // persona block is reshaped here to include the public avatar URL so the
-    // player UI doesn't need to know about the basename convention.
+    // Reshaped to carry the public avatar URL, so the UI needs no basename rule.
     const activeShow = ctx.activeShow
       ? {
           name: ctx.activeShow.name,
@@ -291,8 +220,6 @@ router.get('/now-playing', async (req, res) => {
                 avatar: avatarUrlFor(ctx.activeShow.persona.id),
               }
             : null,
-          // Guest co-hosts on the current show, same shape as persona. Empty
-          // for a solo show, so existing clients see a harmless extra [].
           guests: (ctx.activeShow.guests || []).map((g: any) => ({
             id: g.id,
             name: g.name,
@@ -301,15 +228,9 @@ router.get('/now-playing', async (req, res) => {
         }
       : null;
     const s = session.getSession();
-    // The listener payload carries the context object nearly whole — it is the
-    // station's picture of the moment and the skins render most of it. What it
-    // must NOT carry is controller plumbing: `clock.spokenTimeOptions` is the
-    // hourly check's phrasing band (#1602), raw material for the picker rather
-    // than a fact about the moment, and a public read never widens to carry a
-    // behaviour internal. `spokenTime` stays — it is a reading, and skins have
-    // always seen it. Stripped here, at the one public boundary, rather than
-    // kept off the context type, so every in-process prompt caller still gets
-    // the band from the same getFullContext they already hold.
+    // Context ships nearly whole; `clock.spokenTimeOptions` is a behaviour
+    // internal (#1602) stripped here at the public boundary so in-process prompt
+    // callers still get it from the same getFullContext. `spokenTime` stays.
     const publicClock: any = { ...(ctx.clock as any) };
     delete publicClock.spokenTimeOptions;
     res.json({
@@ -326,48 +247,28 @@ router.get('/now-playing', async (req, res) => {
       listeners: stream.listeners,
       streamOnline: stream.online,
       streamBitrate: stream.bitrate,
-      // Structured description of the live broadcast for hardware players and
-      // tune-in helpers (the /listen.pls + /listen.m3u routes mirror this). The
-      // flat streamOnline/streamBitrate above stay for the existing web player;
-      // this `stream` object is additive. mount/format describe the always-
-      // served MP3 floor; the *Enabled flags tell clients which optional mounts
-      // (/stream.opus, /stream.flac, /stream.aac) are also live so they can
-      // discover them without scraping the tune-in files.
+      // Mirrored by /listen.pls + /listen.m3u, additive to streamOnline/Bitrate.
+      // mount/format are the always-served MP3 floor; the *Enabled flags let
+      // clients discover the optional mounts.
       stream: {
         mount: '/stream.mp3',
         format: 'mp3',
         bitrate: stream.bitrate,
         sampleRate: stream.sampleRate,
         channels: stream.channels,
-        // How far behind the live edge a listener is: Icecast bursts this many
-        // seconds of already-broadcast audio on connect and the client plays it
-        // out at 1x, so the offset holds for the whole connection.
-        //
-        // Every timestamp on this payload (startedAt included) is stamped at the
-        // LIVE EDGE by radio.liq's pre-cross on_metadata hook, so players
-        // subtract this to render listener-time; without it the title and
-        // elapsed clock run this far ahead of the audio (#1114).
-        //
-        // This ADVERTISED depth is the whole offset — do NOT prefer a
-        // client-side measurement. `buffered.end - currentTime` reports only the
-        // window the browser has DEMUXED, not the distance from the live edge
-        // (Chrome holds the connect burst in a cache `buffered` never exposes):
-        // measured 22.5s true vs 2.25s buffered against a 22s advertised depth,
-        // so preferring it flipped every title ~20s early. Operator surfaces
-        // (admin dash, MCP) intentionally keep live edge.
+        // Seconds a listener sits behind the live edge; every timestamp here is
+        // live-edge, so players subtract this for listener-time (#1114). Never
+        // measure it as `buffered.end - currentTime` (that is the demux window).
+        // Operator surfaces (admin, MCP) intentionally keep live edge.
         bufferSeconds: stationSettings.stream?.bufferSeconds ?? 22,
         opusEnabled: stationSettings.stream?.opusEnabled === true,
         flacEnabled: stationSettings.stream?.flacEnabled === true,
         aacEnabled: stationSettings.stream?.aacEnabled === true,
       },
-      // Cumulative since-boot LLM token total — drives the listener-facing
-      // token ticker next to the now-playing time. Aggregate integer only; no
-      // model/cost breakdown (that stays on the admin-gated /stats surface).
+      // Aggregate only; the model/cost breakdown stays on admin-gated /stats.
       llmTokens: lifetimeTokenCount(),
-      // The station's IANA zone. The DJ speaks the time in this zone (time.ts),
-      // so on-air log timestamps in the UI must be rendered in it too — else an
-      // operator/listener viewing from another zone sees stamps that disagree
-      // with what the DJ just said (issue #418).
+      // The DJ speaks the time in this zone, so UI timestamps must render in it
+      // too or they disagree with what was said (#418).
       timezone: getStationTimezone(),
       locale: stationSettings.locale,
     });
@@ -376,17 +277,8 @@ router.get('/now-playing', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// GET /listen.pls and GET /listen.m3u — one-paste tune-in files for hardware
-// and software players (Sonos, VLC, moOde, car receivers). A listener adds the
-// station by pasting one URL instead of hunting for the raw /stream.mp3 mount.
-//
-// The always-served MP3 floor comes first (the universal entry every player can
-// decode); optional Opus / FLAC / AAC mounts are appended only when enabled.
-// Origin comes from publicOrigin() (SITE_URL when set, else the request host) so
-// the link works however the listener reached the site. Unauthenticated by
-// design — nothing here isn't already public.
-// ---------------------------------------------------------------------------
+// One-paste tune-in files. The always-served MP3 floor comes first; optional
+// Opus / FLAC / AAC mounts are appended only when enabled.
 function listenMounts(req: express.Request) {
   const origin = publicOrigin(req);
   const s = settings.get();
@@ -404,9 +296,8 @@ function listenMounts(req: express.Request) {
   return { station, entries };
 }
 
-// When listener auth is on, the tune-in files would hand out credential-less
-// URLs that Icecast rejects — refuse instead; operators share credentialed
-// URLs (user:pass@ or ?auth=) by hand.
+// With listener auth on, these would hand out credential-less URLs Icecast
+// rejects, so refuse; operators share credentialed URLs by hand.
 function tuneInFilesBlocked(res: express.Response): boolean {
   if (settings.get()?.privacy?.listenerAuth !== true) return false;
   res.status(403).send('This station is private.\n');
@@ -437,10 +328,7 @@ router.get('/listen.m3u', (req, res) => {
   res.send(lines.join('\n') + '\n');
 });
 
-// ---------------------------------------------------------------------------
-// GET /dj — public-safe DJ + station info for the landing page.
-// Exposes only fields the DJ already says on-air; no secrets.
-// ---------------------------------------------------------------------------
+// Public-safe DJ + station info: only fields the DJ already says on air.
 router.get('/dj', async (req, res) => {
   try {
     await settings.load();
@@ -455,13 +343,11 @@ router.get('/dj', async (req, res) => {
       linkStyle: persona?.linkStyle === 'announce' ? 'announce' : 'natural',
       avatar: avatarUrlFor(persona?.id),
       station: s.station,
-      // Station-level share-card blurb. Persona-independent by design, so a
-      // shared link reads the same whoever is on air (issue #1086). '' = unset;
-      // the web app falls back to the persona tagline.
+      // Persona-independent so a shared link reads the same whoever is on air
+      // (#1086). '' = unset; the web app falls back to the persona tagline.
       stationDescription: s.stationDescription || '',
-      // Unauthenticated: publish the broad on-air location, never the precise
-      // weather label. Pairing a station name with an exact town here is the
-      // doxxing vector this field exists to close.
+      // Broad on-air location only, never the precise weather label: this is
+      // unauthenticated and an exact town is the doxxing vector.
       location: settings.resolveOnAirLocation(s),
       locale: s.locale,
     });
@@ -470,13 +356,9 @@ router.get('/dj', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// GET /schedule — listener-facing week view. Returns the show definitions,
-// the 7×24 grid, and a persona index (id/name/tagline/avatar, plus `soul` when
-// privacy.publishPersonaSouls is on) so a client can paint the whole roster —
-// hosts AND guest co-hosts — from this one request. No TTS config, no
-// behaviour dials, no admin-only fields.
-// ---------------------------------------------------------------------------
+// Listener-facing week view: shows, the 7x24 grid and a persona index (plus
+// `soul` when privacy.publishPersonaSouls is on). No TTS config, no behaviour
+// dials, no admin-only fields.
 router.get('/schedule', async (req, res) => {
   try {
     await settings.load();
@@ -488,33 +370,25 @@ router.get('/schedule', async (req, res) => {
       id: show.id,
       name: show.name,
       topic: show.topic,
-      // Multi-value moods (#929). `mood` stays as the lead entry for older
-      // clients (the native app reads this endpoint) — derived, never stored.
+      // `mood` is the lead entry for older clients, derived and never stored (#929).
       moods: Array.isArray(show.moods) ? show.moods : [],
       mood: Array.isArray(show.moods) && show.moods.length ? show.moods[0] : '',
       personaId: show.personaId,
-      // Guest co-hosts as ids into the `personas` index above — resolved
-      // against the live roster, so a persona deleted after the show was saved
-      // simply vanishes. Empty array for a solo show, so existing clients see
-      // a harmless extra [].
+      // Resolved against the live roster, so a persona deleted after the show
+      // was saved vanishes.
       guestPersonaIds: publicGuestIds(show.guestPersonaIds, roster),
     }));
     res.json({
       personas,
       shows,
       schedule: s.schedule,
-      // Same discriminator /personas carries: lets a schedule-only client tell
-      // "no souls published" from "souls on but blank" without inferring it
-      // from key presence (ambiguous on an empty roster).
+      // Tells "no souls published" from "souls on but blank", which key presence
+      // cannot on an empty roster.
       soulsPublished: withSouls,
-      // Timed takeover (#930): the pin currently in force, or null. Expired /
-      // dangling overrides report as null even before the janitor sweeps them.
+      // Timed takeover (#930); expired/dangling overrides report null even before
+      // the janitor sweeps them.
       override: settings.getScheduleOverride(),
-      // The grid is interpreted in the station's timezone (settings.timezone,
-      // falling back to the container TZ) — the browser's local DOW/hour may
-      // not match, so pass back the zone the schedule is painted in. The UI
-      // can show a small "Times shown in station local time" hint where
-      // needed.
+      // The grid is in the STATION's timezone, not the browser's, so it rides along.
       timezone: getStationTimezone(),
       locale: s.locale,
     });
@@ -523,14 +397,8 @@ router.get('/schedule', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// GET /personas — the station's full DJ roster as one listener-safe index
-// (id/name/tagline/avatar, plus `soul` when privacy.publishPersonaSouls is on).
-// The same shape /schedule embeds, for clients that want the roster without
-// the week grid — a "meet the DJs" page. `activePersonaId` marks the operator's
-// selected persona; note a scheduled show can put a different one on air, so
-// use /dj (or /now-playing's activeShow) for "who is speaking right now".
-// ---------------------------------------------------------------------------
+// The DJ roster, same shape /schedule embeds. `activePersonaId` is the selected
+// persona; who is actually on air comes from /dj or /now-playing's activeShow.
 router.get('/personas', async (req, res) => {
   try {
     await settings.load();
@@ -541,9 +409,8 @@ router.get('/personas', async (req, res) => {
         publicPersonaShape(p, withSouls, avatarUrlFor(p.id)),
       ),
       activePersonaId: s.activePersonaId || '',
-      // Lets a client tell "this station publishes no souls" from "every soul
-      // happens to be blank", so it can hide the bio column instead of
-      // rendering a wall of empty cards.
+      // "Publishes no souls" vs "every soul is blank", so a client can hide the
+      // bio column.
       soulsPublished: withSouls,
     });
   } catch (err) {
@@ -551,15 +418,11 @@ router.get('/personas', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// GET /state — queue + history + DJ log
-// ---------------------------------------------------------------------------
+// Queue + history + DJ log.
 router.get('/state', (req, res) => {
   const snap = queue.snapshot();
-  // `theme.active` rides along with /state — gives polling clients a cheap
-  // heads-up that the effective theme has changed without re-fetching the
-  // full token map from /themes. Per-show theme overrides win over the
-  // station-wide default while a show is on air.
+  // `theme.active` rides along so pollers learn the effective theme changed
+  // without refetching tokens; an on-air show's override wins over the default.
   const s = settings.get();
   const activeShow = settings.resolveActiveShow();
   const activeThemeId =
@@ -568,28 +431,23 @@ router.get('/state', (req, res) => {
   res.json({
     ...snap,
     needsSetup: getSetupStatusSync().needsSetup,
-    // True while the idle gate has the programme paused (zero listeners) —
-    // lets clients tell "silence because the room is empty" from "broken".
+    // Programme paused by the idle gate (zero listeners), not broken.
     streamIdle: isIdle(),
-    // True while the mixer reports its music chain starved (#1300 bug 7):
-    // nothing to play, so the emergency loop is on air. Distinct from
-    // streamIdle, which is a deliberate pause for an empty room.
+    // Music chain starved (#1300), emergency loop on air. Not streamIdle, which
+    // is a deliberate pause.
     musicStarved: starve.starved,
     musicStarvedSince: starve.since,
     theme: { active: activeThemeId },
-    // Listener-player UI settings ride along with /state like the theme does,
-    // so the player can flip them live on the next poll. Defaults off if
-    // unset; `skin` defaults to the classic face.
+    // Ride along like the theme so the player flips them on the next poll.
     ui: {
       boothBuddy: s?.ui?.boothBuddy ?? false,
       skin: s?.ui?.skin || 'classic',
       tuneInOverlay: s?.ui?.tuneInOverlay ?? true,
     },
-    // Station zone for rendering djLog timestamps in station-local time (#418).
+    // For rendering djLog timestamps in station-local time (#418).
     timezone: getStationTimezone(),
     locale: s.locale,
-    // Private-station flags (#478) — booleans only, never the password. The
-    // player uses these to render the private screen / stream-auth prompt.
+    // Private-station flags (#478): booleans only, never the password.
     privacy: {
       privatePlayer: s?.privacy?.privatePlayer === true,
       listenerAuth: s?.privacy?.listenerAuth === true,
@@ -602,26 +460,11 @@ router.get('/state', (req, res) => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// POST /listener-auth — Icecast URL-auth callback (#478). Icecast (the
-// broadcast container) POSTs a form body here on every listener connect when
-// privacy.listenerAuth is on; `icecast-auth-user: 1` + 200 admits the
-// listener, 401 rejects. Deliberately NOT rate-limited per IP: the caller is
-// always Icecast, so per-IP limiting would throttle every listener through
-// one bucket. The password never gets logged.
-//
-// That "the caller is always Icecast" premise holds only because the edge
-// refuses this path: the bundled Caddyfiles 404 /api/listener-auth, and Icecast
-// reaches the controller over the internal network. Before that, handle_path
-// /api/* forwarded everything, so the internet could POST here and brute-force
-// the shared privacy.password at full speed, bypassing the 20-per-15-min cap
-// /station-auth puts on the SAME password. byo-proxy operators own their own
-// route table, so failures are also damped in-handler below (successes are never
-// delayed — see listenerAuthFailureDelayMs).
-//
-// This endpoint fails OPEN when listenerAuth is off — see listenerAuthDecision.
-// The web UI must NOT use it for that reason; it has /station-auth below.
-// ---------------------------------------------------------------------------
+// Icecast URL-auth callback (#478): `icecast-auth-user: 1` + 200 admits, 401
+// rejects. Fails OPEN when listenerAuth is off, so the web UI must use
+// /station-auth instead. Not rate-limited per IP because the caller is always
+// Icecast and one bucket would throttle every listener; failures are damped
+// in-handler below instead (successes are never delayed).
 router.post(
   '/listener-auth',
   express.urlencoded({ extended: false, limit: '10kb' }),
@@ -639,10 +482,7 @@ router.post(
       res.setHeader('icecast-auth-user', '1');
       res.status(200).send('ok\n');
     } else {
-      // Reaching here means the lock is on and the credential was wrong
-      // (listenerAuthDecision returns true for both listener_remove and the
-      // auth-disabled fail-open path), so slowing this costs a real listener
-      // nothing — the response was going to be 401 either way.
+      // Only reached with the lock on and the credential wrong.
       const delayMs = listenerAuthFailureDelayMs();
       if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
       res.setHeader('icecast-auth-message', 'invalid listener credentials');
@@ -651,14 +491,9 @@ router.post(
   },
 );
 
-// ---------------------------------------------------------------------------
-// POST /station-auth — the web player's gate (#478). Same shared password as
-// /listener-auth, opposite failure mode: this one fails CLOSED whenever either
-// privacy lock is on, so a private player can't be opened with a wrong
-// password just because stream auth happens to be off. Body: {password}.
-// 200 = unlock, 401 = wrong. Rate-limited (unlike the Icecast callback, the
-// caller here really is an arbitrary browser). The password is never logged.
-// ---------------------------------------------------------------------------
+// The web player's gate (#478). Same password as /listener-auth, opposite
+// failure mode: fails CLOSED whenever either privacy lock is on. Rate-limited,
+// since the caller is an arbitrary browser. The password is never logged.
 router.post(
   '/station-auth',
   express.json({ limit: '10kb' }),
@@ -681,45 +516,24 @@ router.post(
   },
 );
 
-// The one seed resolution both /similar-tracks paths share: a library row by
-// id, echoed back as `seed` — or null when there is no such track OR it is on
-// the never-play list. library.slimById carries albumId/artistId, so
-// blocklist.matchOf reaches its exact id tiers instead of falling back to
-// (album name, artist), which a compilation defeats. The blocklist is the
-// existing hitOf()/isBlocked() chokepoint, not a second rule filter.
+// Seed resolution shared by both /similar-tracks paths. slimById carries
+// albumId/artistId so isBlocked reaches its exact id tiers rather than the
+// (album name, artist) fallback a compilation defeats.
 function seedRowFor(id: string): { id: string; title: string | null; artist: string | null } | null {
   const row = library.slimById(id);
   if (!row || blocklist.isBlocked(row)) return null;
   return { id, title: row.title ?? null, artist: row.artist ?? null };
 }
 
-// ---------------------------------------------------------------------------
-// GET /similar-tracks?id=<trackId>|q=<terms>&limit=N — the CLAP "sounds like
-// this" lookup, outside the admin library panel (#1575). An operator building
-// a call-in agent against the HTTP API wants the same neighbours the Library
-// tab shows, without handing that agent the admin password.
-//
-// So the gate is the STATION password, not requireAdmin: open on a public
-// station, closed on a private one (requireStationAuth, which fails CLOSED —
-// see middleware/station-auth.ts). And the row shape is the public subset in
-// util/similar-tracks.ts, never the admin row: no tagger provenance, no
-// era-trust internals, no blocklist annotation.
-//
-// It always answers 200 with a `reason`. A lean analyzer, a library still
-// being analysed and a seed nobody has heard of are three different empty
-// results, and a 503 (what /library/search-sound answers, correctly, for an
-// operator watching a capability flag) tells an API consumer none of them
-// apart. util/similar-tracks.ts owns which is which.
-//
-// Blocklist: the neighbours are filtered once, inside
-// library.tracksLikeThisAudio's existing rejectBlocked chokepoint — never add
-// a second filter over THOSE. The seed echo is the separate case: it is
-// resolved by id / free text, and both library.get() and library.filter() are
-// blocklist-blind, so without the isBlocked() call in seedRowFor below a
-// never-play track's id, title and artist come back in `seed` — and on a
-// public station `q` makes that an unauthenticated way to look one up by name.
-// The blocklist is absolute, so a blocked seed reads as `seed-not-found`.
-// ---------------------------------------------------------------------------
+// The CLAP "sounds like this" lookup outside the admin panel (#1575). Gated on
+// the STATION password (requireStationAuth, fails CLOSED); rows are the public
+// subset in util/similar-tracks.ts.
+// Always 200 with a `reason`: a lean analyzer, an unanalysed library and an
+// unknown seed are three different empty results a 503 cannot separate.
+// Neighbours are filtered once inside tracksLikeThisAudio's rejectBlocked
+// chokepoint; never add a second filter. The seed echo is separate because
+// library.get()/filter() are blocklist-blind, and `q` would otherwise make a
+// blocked track's title and artist an unauthenticated lookup by name.
 router.get('/similar-tracks', requireStationAuth, async (req, res) => {
   const id = (typeof req.query?.id === 'string' ? req.query.id : '').trim();
   const q = (typeof req.query?.q === 'string' ? req.query.q : '').trim();
@@ -730,12 +544,8 @@ router.get('/similar-tracks', requireStationAuth, async (req, res) => {
     await library.load();
     const stats = library.stats();
 
-    // Resolve the seed HERE rather than leaning on tracksLikeThisAudio's own
-    // title fallback, because the caller has to be told WHICH track answered
-    // — "no results for the thing you meant" and "no results for something
-    // else entirely" are the two failures an agent has to be able to separate.
-    // Same resolution order the KNN uses internally: the id first, then the
-    // first text match that actually carries an audio vector.
+    // Resolved here, not via the title fallback, so the caller is told WHICH
+    // track answered. Same order the KNN uses: id, then first analysed text match.
     let seedId = '';
     let seedRow: { id: string; title: string | null; artist: string | null } | null = null;
     let seedFound = false;
@@ -753,8 +563,8 @@ router.get('/similar-tracks', requireStationAuth, async (req, res) => {
         const row = seedRowFor(cand.id);
         if (!row) continue;
         seedFound = true;
-        // Report the best text match even when none of them is analysed —
-        // that is what makes 'seed-not-analysed' actionable.
+        // Report the best text match even when none is analysed; that is what
+        // makes 'seed-not-analysed' actionable.
         if (!seedRow) seedRow = row;
         if (library.hasAudioVector(cand.id)) {
           seedId = cand.id;
@@ -766,8 +576,7 @@ router.get('/similar-tracks', requireStationAuth, async (req, res) => {
 
     const hits = seedId ? library.tracksLikeThisAudio(seedId, soundKnnWidth(limit)) : [];
     const results = hits
-      // The station's own hourly archive mixdowns are not music (issue #273);
-      // a co-located Navidrome that scans state/archive puts them in the index.
+      // The station's own archive mixdowns are not music (#273).
       .filter((t) => !subsonic.isStationArchive(t))
       .filter((t) => t.id !== seedId)
       .slice(0, limit)
@@ -775,9 +584,8 @@ router.get('/similar-tracks', requireStationAuth, async (req, res) => {
 
     const outcome = similarTracksOutcome({
       audioIndexSize: stats.withAudioEmbedding ?? 0,
-      // mirrorTotal, not total: the analyzer writes CLAP vectors independently
-      // of the tagger, so `total` (tagged only) can be the SMALLER number and
-      // the coverage sentence turns into nonsense.
+      // mirrorTotal, not total: the analyzer writes CLAP vectors independently of
+      // the tagger, so `total` (tagged only) can be the smaller number.
       libraryTotal: stats.mirrorTotal ?? 0,
       seedFound,
       seedHasVector: Boolean(seedId),
@@ -790,41 +598,14 @@ router.get('/similar-tracks', requireStationAuth, async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// GET /themes — public theme registry. Returns the active theme id plus the
-// full list of built-in and user themes (token maps included). Listener web
-// shells fetch this once on mount and again whenever /state reports a new
-// active id; the result is cached in browser localStorage for pre-paint apply
-// on the next visit.
-//
-// `active` reflects the *effective* theme: the on-air show's themeId override
-// if it's set and still resolves to a known theme, otherwise the station
-// default. ThemeBootstrap doesn't have to know about shows — it just applies
-// whatever id comes back.
-//
-// `activeSource` / `stationDefault` / `activeShow` carry WHY that id won, for
-// the admin UI. A client that only wants a palette can keep reading `active`.
-// The precedence rule + the published shape live in util/theme-provenance.ts
-// (never inline here), pinned by scripts/theme-provenance.test.ts.
-//
-// POST /themes/refresh — admin-gated. Clears the user-themes cache so files
-// freshly dropped into ${STATE_DIR}/themes/ appear in the next /themes read
-// without bouncing the controller.
-// ---------------------------------------------------------------------------
+// Public theme registry. `active` is the EFFECTIVE theme (the on-air show's
+// themeId when it resolves, else the station default).
 router.get('/themes', async (req, res) => {
   try {
     const s = settings.get();
     const themes = await listThemesAnnotated();
-    // Provenance, not just the answer (#1300 bug 12). Saving a station theme in
-    // admin and watching the whole UI flip back one poll later is the reported
-    // symptom, and it isn't a failed save: an on-air show pins its own theme and
-    // outranks the station default for as long as it's on air. Reporting only
-    // the resolved id made that indistinguishable from the setting not sticking,
-    // and left the admin UI unable to explain it even if it wanted to.
-    //
-    // The third level — the listener's own localStorage override — never reaches
-    // the server and is resolved client-side in ThemeProvider, which is where the
-    // UI reads it from.
+    // activeSource/stationDefault/activeShow carry WHY that id won (#1300). The
+    // precedence rule lives in util/theme-provenance.ts, never inline here.
     const provenance = resolveThemeProvenance({
       stationDefault: s?.theme?.active || DEFAULT_THEME_ID,
       activeShow: settings.resolveActiveShow(),
@@ -836,15 +617,9 @@ router.get('/themes', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// GET /session — the live DJ session's chat history, for the player Booth feed.
-// Returns the session header plus a bounded tail of its `messages` turns
-// ({ t, role, kind, text, meta }). Public-safe: the turns only carry what the
-// DJ already says or does on-air. Returns nulls when no session is live.
-// `sfx` turns are dropped here — a sound-effect clip is an internal DJ-agent
-// action, not something said on-air, so it shouldn't surface in the listener
-// Booth feed. It stays in the session history for the agent's own context.
-// ---------------------------------------------------------------------------
+// Live session header plus a bounded tail of its turns for the Booth feed.
+// `sfx` turns are dropped here (internal agent action, not something said on
+// air) but stay in the session history for the agent's own context.
 router.get('/session', (req, res) => {
   const s = session.getSession();
   if (!s) return res.json({ session: null, messages: [] });
@@ -860,16 +635,8 @@ router.get('/session', (req, res) => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// GET /skills/community — the shipped community skill catalog (prompt-only DJ
-// segments contributed via the community-submission flow, COPYd into the
-// image). Browse-only public reference: the same catalog the admin Skills →
-// Community modal installs from, minus the per-station `installed`/`reserved`
-// annotations (those are meaningful only inside a specific station's admin).
-// Powers the public /skills showcase page. Never throws — an empty catalog
-// (no community/ dir shipped) returns []. No admin gate: it's static shipped
-// data, identical across every install of the same version.
-// ---------------------------------------------------------------------------
+// The shipped community skill catalog, browse-only. Never throws; an empty
+// catalog returns []. No admin gate: static shipped data.
 router.get('/skills/community', async (req, res) => {
   try {
     const community = await listCommunitySkills();
@@ -879,15 +646,7 @@ router.get('/skills/community', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// GET /personas/community — the shipped community persona catalog (DJ personas
-// contributed via the community-submission flow, COPYd into the image). Same
-// posture as /skills/community: browse-only public reference powering the
-// public /personas showcase AND the admin Personas → Community modal (which
-// computes per-station "installed" client-side from the roster it already
-// holds). Never throws — an empty catalog returns []. No admin gate: static
-// shipped data, identical across every install of the same version.
-// ---------------------------------------------------------------------------
+// Shipped community persona catalog; same posture as /skills/community.
 router.get('/personas/community', async (req, res) => {
   try {
     const community = await listCommunityPersonas();
@@ -897,14 +656,7 @@ router.get('/personas/community', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// GET /shows/community — the community SHOW catalog (produced-show templates
-// contributed via the community submission flow, fetched live). Same
-// posture as /skills/community + /personas/community: browse-only public
-// reference powering the public /shows showcase AND the admin Shows → Community
-// modal. Never throws — an empty/unreachable catalog returns []. No admin gate:
-// public reference data, install requires admin (routes/shows.ts).
-// ---------------------------------------------------------------------------
+// Community show-template catalog; installing requires admin (routes/shows.ts).
 router.get('/shows/community', async (req, res) => {
   try {
     const community = await listCommunityShows();
@@ -914,15 +666,9 @@ router.get('/shows/community', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// GET /geocode?q= — place-name lookup for the admin/onboarding location picker.
-// Thin proxy over Open-Meteo's free, keyless geocoding API (the web layer never
-// calls external hosts directly — the controller owns all external IO). Returns
-// { results: [...] } with coordinates + IANA timezone so the picker can fill
-// lat/lng/name and set the station clock in one tap. Unauthenticated: onboarding
-// runs pre-auth and this is harmless public reference data. On upstream failure
-// returns 502 so the client can fall back to manual coordinate entry.
-// ---------------------------------------------------------------------------
+// Place-name lookup proxied over Open-Meteo's keyless geocoding API (the
+// controller owns all external IO). Unauthenticated because onboarding runs
+// pre-auth. 502 on upstream failure so the client can fall back to manual entry.
 router.get('/geocode', async (req, res) => {
   const q = typeof req.query.q === 'string' ? req.query.q : '';
   try {
@@ -933,7 +679,4 @@ router.get('/geocode', async (req, res) => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// GET /health
-// ---------------------------------------------------------------------------
 router.get('/health', (req, res) => res.json({ status: 'on-air' }));

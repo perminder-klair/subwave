@@ -1,32 +1,18 @@
-// Segment-director agent.
+// Segment-director agent. agenticTick() (the 5-minute scheduler.skillsTick)
+// hands a tool-loop agent a snapshot of the moment plus real-world data tools
+// (llm/segment-tools.js) and asks whether anything is worth saying between
+// tracks; it writes ONE spoken line or stays silent. It is deliberately NOT
+// given the track-pick session history, which derails small models into
+// reasoning about music; its anti-repeat context is queue.getDjRecap().
 //
-// The 5-minute cron (scheduler.skillsTick) calls agenticTick(), which hands a
-// tool-loop agent a snapshot of the moment (what's on air, what the DJ said
-// recently) plus real-world data tools (llm/segment-tools.js) and asks one
-// question: is there anything worth saying between tracks right now? The agent
-// may check the weather, headlines or artist news, then writes ONE spoken line
-// or stays silent.
-//
-// It is deliberately NOT given the track-pick session history: that is mostly
-// "pick the next song" chatter, which small models latch onto and start
-// reasoning about music instead of the segment decision. The anti-repeat context
-// it needs is queue.getDjRecap() — what actually aired.
-//
-// `runCapability()` is the /dj/skill manual override: the same tool-loop forced
-// to one capability with cooldowns bypassed. The capability registry is loaded
-// by skills/loader.js from state/skills/<slug>/ (built-ins seeded on first boot
-// from src/skills/builtins/); this module consumes it via allCapabilities and
-// backs the admin catalogue via skillCatalog(). The skill modules left in this
-// directory are pure fetch helpers behind station-services.
+// `runCapability()` is the /dj/skill manual override: the same loop forced to
+// one capability with every automatic gate bypassed. The capability registry
+// comes from skills/loader.js.
 //
 // Guard rails the autonomous tick cannot talk its way past (the operator
-// override bypasses all of them — when the operator asks, they get a segment):
-//   - per-kind hard cooldown (from each skill's SKILL.md)
-//   - a frequency-derived floor on the gap between ANY two segments
-//   - capabilities the operator disabled, or the on-air persona doesn't own,
-//     are never offered
-//   - commute-only skills (via `window: commute`) air only during commute hours;
-//     search-backed skills (web-search, now-playing-dig) only with a provider
+// override bypasses all of them): per-kind cooldown from SKILL.md, a
+// frequency-derived floor on the gap between ANY two segments, disabled or
+// persona-unowned capabilities, and window/provider gating.
 
 import { z } from 'zod';
 import { queue } from '../broadcast/queue.js';
@@ -42,39 +28,24 @@ import { requiresGrounding, standDownReason } from './abstain-policy.js';
 import { runCohostedCapability } from './cohosted.js';
 import * as sfx from '../broadcast/sfx.js';
 
-// dataBlock moved to llm/segment-tools.js so the co-hosted pool path can share
-// it without closing an import cycle back into this module; re-exported here so
-// llm-bench (scripts/llm-bench/kinds/segment.ts) keeps the path it had.
+// dataBlock lives in llm/segment-tools.js so the co-hosted pool path can share
+// it without an import cycle; re-exported here for llm-bench's existing path.
 export { dataBlock };
 
-// The capability registry now lives entirely in skills/loader.js, which loads
-// every skill — shipped and operator-added — from a directory (SKILL.md +
-// optional tool.mjs). Each cap carries: kind/skill (the queue.announce kind +
-// enable-toggle slug), label, cooldownMs, desc (the agent brief), contextFields
-// (the "right now" fields it may mention; unset → default profile, no weather),
-// window, requiresKey, ready() (from the tool module or the env key), seeded
-// (shipped built-in vs operator skill), and the wrapped data tool
-// (toolFn/toolName/toolDesc/config). Every skill lives under state/skills/<slug>/.
-
-// The full capability set the segment director operates over: every skill loaded
-// from state/skills — seeded built-ins and operator-dropped custom skills alike,
-// on one footing. Everything downstream — the autonomous tick, runCapability,
-// skillCatalog, the admin toggles — iterates THIS, so a dropped skill lights up
-// the whole chain. Non-seeded (operator) caps are gated more conservatively
-// (disabled until enabled). Read live so a rescan takes effect at once.
+// Every skill loaded from state/skills, built-in and operator-dropped alike, on
+// one footing. The autonomous tick, runCapability, skillCatalog and the admin
+// toggles all iterate THIS. Read live so a rescan takes effect at once.
 function allCapabilities() {
   return loadedCapabilities();
 }
 
-// The default per-skill context profile: every "right now" field EXCEPT
-// weather. A capability sees weather only when it (or its SKILL.md `context:`
-// override) explicitly asks for it — see issue #471.
+// Default per-skill context profile: every "right now" field EXCEPT weather.
+// A capability sees weather only when it explicitly asks (#471).
 const DEFAULT_SEGMENT_CONTEXT = (CONTEXT_FIELDS as readonly string[]).filter(f => f !== 'weather');
 
-// The context fields a single capability's situation block should carry.
-// cap.contextFields may be an array (built-ins) or a comma-string (custom
-// skills / built-in overrides, straight from SKILL.md frontmatter). Absent or
-// empty → the default profile (no weather).
+// Context fields for one capability's situation block. cap.contextFields may be
+// an array or a comma-string (straight from SKILL.md frontmatter); absent or
+// empty means the default profile.
 export function effectiveContextFields(cap: { contextFields?: unknown } | null | undefined): string[] {
   const raw = cap?.contextFields;
   if (raw == null) return DEFAULT_SEGMENT_CONTEXT;
@@ -84,11 +55,9 @@ export function effectiveContextFields(cap: { contextFields?: unknown } | null |
   return list.length ? list : DEFAULT_SEGMENT_CONTEXT;
 }
 
-// Union of the context fields across the capabilities on offer this tick. The
-// autonomous director makes ONE decision over many capabilities, so it sees a
-// field if ANY offered capability wants it: when the weather skill is
-// off-cooldown weather shows up, but on the (many) ticks it isn't eligible the
-// director never sees weather and can't tempt a news/curiosity line into it.
+// The director makes ONE decision over many capabilities, so it sees a field if
+// ANY offered capability wants it. On ticks where the weather skill isn't
+// eligible the director never sees weather and can't tempt a line into it.
 function unionContextFields(caps): string[] {
   const out = new Set<string>();
   for (const c of caps) for (const f of effectiveContextFields(c)) out.add(f);
@@ -96,50 +65,39 @@ function unionContextFields(caps): string[] {
 }
 
 // Schema factories, resolved per run (defineAgent's function-schema form) so the
-// spoken-line length can follow the on-air persona's scriptLength — a hard-coded
-// description here pinned every persona to one-liners.
+// spoken-line length follows the persona's scriptLength.
 //
 // Field order is deliberate: models generate JSON in property order, so `reason`
-// comes FIRST (decide and justify before writing the line — a free mini
-// chain-of-thought), then the `air` boolean, then the segment. The boolean
-// exists because small models struggled to encode "stay silent" through a
-// nullable nested object alone, emitting bare top-level `null` or prose instead
-// (isBareNullSilent / isSilentFailure below); `air: false` gives them an
-// unambiguous silence token.
+// comes FIRST (justify before writing), then `air`, then the segment. The
+// boolean is the unambiguous silence token — small models encoded silence
+// through a nullable nested object as bare top-level `null` or prose instead
+// (isBareNullSilent / isSilentFailure below).
 function segmentSchema() {
   return modelTolerant(z.object({
     reason: z.string().describe('one short internal sentence on why this segment (or why silent) — never shown to the listener; write this BEFORE deciding the segment'),
     air: z.boolean().describe('true to air one segment now, false to stay silent — silence is a perfectly good answer, often the best one, when the data is dull, stale, unchanged, or there is nothing fresh worth a listener\'s attention'),
     // NOT .nullable(): a nullable nested object loses its `properties` in
-    // llama.cpp's peg-gemma4 tool serializer, so Gemma-4 never sees the shape
-    // and emits it as a string (issue #906). Silence rides entirely on the
-    // `air` boolean above, so a non-null segment on a silent tick is simply
-    // ignored at the consumption site (`object.air ? segment : null`).
+    // llama.cpp's peg-gemma4 tool serializer (#906). Silence rides entirely on
+    // the `air` boolean, so a non-null segment on a silent tick is ignored at
+    // the consumption site.
     segment: z.object({
-      // Kept as a free string (not a fixed enum) so operator-dropped custom
-      // skills get valid kinds too. The agent is told which kinds are on offer in
-      // the system prompt, and agenticTick drops any kind it wasn't offered.
+      // A free string, not an enum, so operator-dropped skills get valid kinds
+      // too. agenticTick drops any kind it wasn't offered.
       kind: z.string()
         .describe('the segment kind — MUST be one of the kinds offered in the system prompt for this tick'),
       text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
       sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
     }).describe('the segment to air when air is true; ignored when air is false (empty strings for kind/text, null sfx when silent)'),
   }), {
-    // GLM separately observed (a) omitting `segment` entirely on an otherwise
-    // coherent `done` call, and (b) double-JSON-encoding it as a STRING —
-    // both would throw under a plain required object, which is
-    // indistinguishable from djAgent's perspective from "the model never
-    // called done" and burns a full recovery cascade on a call that already
-    // succeeded. modelTolerant rescues the double-encoded string back into a
-    // real object (recursing so `sfx` gets its nullable repair too); this
-    // fallback covers whatever still doesn't validate — safe because the
-    // consumption site already treats an empty/malformed segment as silence
-    // regardless of `air` (see the check right after
-    // `const seg = object?.air ? object?.segment : null`).
+    // A missing or double-JSON-encoded `segment` would throw under a plain
+    // required object, which djAgent cannot tell from "the model never called
+    // done" and which burns a full recovery cascade on a call that succeeded.
+    // modelTolerant rescues the double-encoded form; this fallback covers the
+    // rest, safe because the consumption site treats an empty segment as
+    // silence regardless of `air`.
     objectFallbacks: { segment: { kind: '', text: '', sfx: null } },
-    // Content-bearing discards are logged so /debug triage can tell "we threw
-    // a written segment away" apart from "the model chose silence" — an
-    // absent/null segment (the common GLM silence shape) stays quiet.
+    // Log content-bearing discards so /debug can tell "we threw a written
+    // segment away" from "the model chose silence".
     onDiscard: (field, value) => {
       let preview = '';
       try { preview = JSON.stringify(value).slice(0, 200); } catch { preview = String(value).slice(0, 200); }
@@ -148,24 +106,20 @@ function segmentSchema() {
   });
 }
 
-// Operator-override schema: the kind is already known, so the agent only
-// returns the spoken line.
-//
-// `mayAbstain` adds the same reason-then-decide pair the autonomous schemas
-// carry (skills/abstain-policy.ts decides when a run gets it): a skill that
-// speaks from fetched data must be able to say "that data was unusable" rather
-// than invent a line to satisfy a mandatory `text` (issue #1412). The field is
-// ABSENT, not merely false, on a run that can't abstain — offering a silence
-// token to a weather segment the operator explicitly asked for would be a new
-// way for an explicit action to produce nothing.
+// Operator-override schema: the kind is already known, so only the spoken line
+// comes back. `mayAbstain` (decided by skills/abstain-policy.ts) adds the same
+// reason-then-decide pair, so a skill speaking from fetched data can say "that
+// data was unusable" rather than invent a line (#1412). On a run that can't
+// abstain the field is ABSENT, not false: offering a silence token to a segment
+// the operator explicitly asked for is a new way for an explicit action to
+// produce nothing.
 export function forcedSchema({ mayAbstain = false }: { mayAbstain?: boolean } = {}) {
   const line = {
     text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
     sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect'),
   };
   if (!mayAbstain) return modelTolerant(z.object(line));
-  // Same field order as segmentSchema: reason first (decide and justify before
-  // writing), then the air boolean, then the line itself.
+  // Same field order as segmentSchema: reason, air, then the line.
   return modelTolerant(z.object({
     reason: z.string().describe('one short internal sentence on why this segment (or why you are standing down) — never shown to the listener; write this BEFORE the line'),
     air: z.boolean().describe('true to air the line; false ONLY when the source data you were given is empty, or is about something other than what this segment covers — standing down beats inventing'),
@@ -173,9 +127,8 @@ export function forcedSchema({ mayAbstain = false }: { mayAbstain?: boolean } = 
   }));
 }
 
-// The optional sound-effects block appended to the agent's system prompt.
-// Returns '' when the library is empty — the feature stays invisible to the
-// agent and nothing in the schema can be satisfied.
+// Optional sound-effects block for the system prompt. '' when the library is
+// empty, so the feature stays invisible to the agent.
 function sfxBlock(sfxCatalog) {
   if (!sfxCatalog || !sfxCatalog.length) return '';
   const list = sfxCatalog.map((s) => {
@@ -192,10 +145,9 @@ let tickBusy = false;
 const lastFired = new Map<string, number>(); // kind → ms timestamp of last aired segment
 const lastUnavailable = new Map<string, number>(); // kind → ms timestamp of last unusable pool-mode fetch
 
-// An unavailable source should not consume another retrieval + scheduler slot
-// on the very next 5-minute tick, but it also should not inherit a multi-hour
-// on-air cooldown when the next track may change its answer. Cap the retry
-// delay at 15 minutes and respect a shorter operator-authored cooldown.
+// An unavailable source shouldn't retry on the very next 5-minute tick, nor
+// inherit a multi-hour on-air cooldown when the next track may change its
+// answer. Capped at 15 min, and a shorter operator cooldown wins.
 const UNAVAILABLE_RETRY_BACKOFF_MS = 15 * 60 * 1000;
 function unavailableRetryBackoffMs(cap: { cooldownMs?: unknown }): number {
   const cooldownMs = Number(cap.cooldownMs);
@@ -203,13 +155,13 @@ function unavailableRetryBackoffMs(cap: { cooldownMs?: unknown }): number {
   return Math.min(cooldownMs, UNAVAILABLE_RETRY_BACKOFF_MS);
 }
 
-// Dedup memory carried across ticks — passed straight into the segment tools.
-// Curiosity dedup is NOT here anymore: it lives in the durable ledger in
-// skills/curiosity.js (issue #577) so it survives a controller restart.
+// Dedup memory carried across ticks, passed straight into the segment tools.
+// Curiosity dedup is NOT here: it lives in the durable ledger in
+// skills/curiosity.js (#577) so it survives a restart.
 interface SegmentState {
   seenHeadlines: Set<string>;
   // Burn-on-read memory for the generic feed tool (skills/feed.ts), keyed by
-  // skill kind so two feed skills can't suppress each other's items.
+  // kind so two feed skills can't suppress each other's items.
   feedSeen: Map<string, Set<string>>;
   lastWeatherCondition: string | null;
   lastSearchedArtist: string | null;
@@ -224,9 +176,8 @@ const segmentState: SegmentState = {
   lastAnySegment: 0,
 };
 
-// Minimum gap between ANY two segments, by station frequency. The cron fires
-// every 5 min; aggressive stations get no extra floor. Infinity for silent —
-// the auto tick never airs a segment (forced /dj/segment runs bypass this).
+// Minimum gap between ANY two segments, by station frequency. Infinity for
+// silent: the auto tick never airs (forced runs bypass this).
 function frequencyFloorMs(freq: string) {
   if (freq === 'silent') return Infinity;
   if (freq === 'quiet') return 30 * 60 * 1000;
@@ -243,9 +194,9 @@ function availableCapabilities(ctx, now: Date) {
   const { host: persona, guests } = settings.getOnAirRoster(now);
   const out: ReturnType<typeof allCapabilities> = [];
   for (const cap of allCapabilities()) {
-    // Enabled + host-owned + roster-compatible. These rules live in
-    // skills/eligibility.ts because the cron timer owes the same two answers
-    // and reaches runCapability() without passing through here.
+    // Enabled + host-owned + roster-compatible. In skills/eligibility.ts
+    // because the cron timer owes the same answers and reaches runCapability()
+    // without passing through here.
     if (!skillEligible({
       seeded: cap.seeded,
       skill: cap.skill,
@@ -254,15 +205,13 @@ function availableCapabilities(ctx, now: Date) {
       requiresCohosts: !!cap.cohosts,
       hasCohosts: !!persona && guests.length > 0,
     }).allowed) continue;
-    // cronOnly withholds the skill from the autonomous director entirely — it
-    // fires only when its dedicated cron task calls runCapability() directly
-    // (scheduler.ts syncSkillCrons), which bypasses this function altogether.
+    // cronOnly withholds the skill from the director entirely: it fires only
+    // from its dedicated cron, which calls runCapability() directly.
     if (cap.cronOnly) continue;
     if (now.getTime() - (lastFired.get(cap.kind) || 0) < cap.cooldownMs) continue;
     if (now.getTime() - (lastUnavailable.get(cap.kind) || 0) < unavailableRetryBackoffMs(cap)) continue;
-    // Window gating: custom skills opt into commute-hours-only firing via
-    // `window: commute` in their SKILL.md frontmatter. (No built-in is
-    // commute-gated by default since the traffic skill was retired.)
+    // Custom skills opt into commute-hours-only firing via `window: commute`
+    // in their SKILL.md frontmatter.
     if (cap.window === 'commute' && !ctx.clock?.isCommute) continue;
     if (cap.ready && !cap.ready()) continue;
     out.push(cap);
@@ -270,12 +219,10 @@ function availableCapabilities(ctx, now: Date) {
   return out;
 }
 
-// Ultra-minimal — persona + per-tick dynamic context (capability list, station
-// tone, sfx catalog). Everything else (response shape, silent-null option,
-// "call done", length, tool exploration) is conveyed via the AI SDK's
-// channels: the segment-tools.js tool descriptions, the schema field
-// descriptions on segmentSchema above, the done-tool description in sdk.js,
-// and the buildSituation() user message. Same principle as pickSystem.
+// Ultra-minimal: persona plus per-tick context only. Response shape, length and
+// tool exploration are conveyed through the AI SDK's own channels (tool and
+// schema field descriptions, the done tool, the buildSituation() user message),
+// same principle as pickSystem.
 function directorSystem(persona, caps, freq: string, sfxCatalog) {
   const capList = caps.map((c) => `- ${c.kind}: ${c.desc}`).join('\n');
   const tone = stationTone(freq);
@@ -288,8 +235,8 @@ Capabilities available this tick (pick one of these kinds, or stay silent):
 ${capList}${sfxBlock(sfxCatalog)}${settings.agentLanguageReminder(persona, 'the "text" line')}`;
 }
 
-// 'silent' never reaches the auto tick (the frequency floor blocks it), but a
-// forced run treats it like quiet: minimum-presence guidance.
+// 'silent' never reaches the auto tick (the frequency floor blocks it); a
+// forced run treats it like quiet.
 function stationTone(freq: string) {
   return freq === 'quiet' || freq === 'silent'
     ? 'This is a quiet station — silence is your default.'
@@ -300,34 +247,27 @@ function stationTone(freq: string) {
         : 'This is a measured station — speak only when there is something worth saying.';
 }
 
-// Wall-clock ceiling for a single segment-director run, resolved live so it
-// tracks the admin-tunable setting. Same source/default as the picker's
-// agentDeadline (dj-agent.ts) — segments shouldn't hang longer than picks.
+// Wall-clock ceiling for one director run, resolved live. Same source and
+// default as the picker's agentDeadline.
 function segmentDeadline(): number {
   return settings.get().llm?.agentTimeoutMs ?? 45000;
 }
 
-// The autonomous segment director — runs every 5 min, decides to air one
-// segment or stay silent. Schema, prompt, and tool builder bundled here; the
-// caller (agenticTick) only feeds the dynamic per-tick state.
+// The autonomous segment director. Schema, prompt and tool builder bundled
+// here; agenticTick only feeds the dynamic per-tick state.
 export const directorAgent = defineAgent({
   kind: 'djAgentSegment',
   schema: () => segmentSchema(),
-  // Discovery (step 0) + exactly one committed done-tool attempt (step 1),
-  // same reasoning as pickerAgent.maxSteps in dj-agent.ts: a taller budget
-  // just grows an increasingly "I already declined" trail on providers that
-  // don't comply on the first forced attempt (GLM/Zhipu observed), which made
-  // things worse, not better, and was the direct cause of a run burning the
-  // FULL agentTimeoutMs internally (45002ms observed) before recovery ever got
-  // a turn. Left unset before, silently inheriting djAgent's default of 8.
-  // The per-provider discovery widening is opt-in (providerDiscoveryBudget on
-  // the pick/request agents) precisely so it can never override this cap —
-  // the director deliberately does NOT opt in.
+  // Discovery (step 0) + exactly one committed done-tool attempt (step 1), same
+  // reasoning as pickerAgent.maxSteps: a taller budget only grows an "I already
+  // declined" trail on providers that don't comply first time, and burned the
+  // full agentTimeoutMs before recovery got a turn. The per-provider discovery
+  // widening is opt-in precisely so it can't override this; the director does
+  // not opt in.
   maxSteps: 2,
-  // Wall-clock ceiling, mirroring the picker (dj-agent.ts). Without it a
-  // gemma-class model that ignores toolChoice can drive the done-tool recovery
-  // into a multi-step stall (86s observed in issue #555) and hang the tick;
-  // the deadline turns that into a clean throw → handled as silence below.
+  // Wall-clock ceiling. Without it a model that ignores toolChoice can drive the
+  // done-tool recovery into a multi-step stall (#555) and hang the tick; the
+  // deadline turns that into a clean throw, handled as silence below.
   timeoutMs: segmentDeadline,
   buildSystem: ({ persona, caps, freq, sfxCatalog }) =>
     directorSystem(persona, caps, freq, sfxCatalog),
@@ -338,28 +278,25 @@ export const directorAgent = defineAgent({
   }),
 });
 
-// The concrete situation handed to the agent as its single user turn. Built
-// from what is on air and queue.getDjRecap() (what actually aired recently) —
-// NOT the track-pick session history, which derails small models.
+// The situation handed to the agent as its single user turn: what is on air plus
+// queue.getDjRecap(), never the track-pick session history.
 export function buildSituation(ctx, { forced = false, contextFields, recentCuriosity }: { forced?: boolean; contextFields?: string[]; recentCuriosity?: string[] } = {}) {
   const lines = ['The current moment:'];
   const ctxLines = buildContextLines(ctx, { contextFields });
   if (ctxLines.length) lines.push(...ctxLines);
   const cur = queue.current?.track;
   if (cur) lines.push(`On air now: "${cur.title}" by ${cur.artist || 'unknown'}`);
-  // The default 140-char recap truncation fits a concise one-liner segment,
-  // but a longer persona's 3-8-sentence segment gets cut after roughly its
-  // first sentence — a topic repeated mid-segment would be invisible to the
-  // anti-repeat instruction. Scale the cap with the persona's verbosity.
+  // Scale the recap cap with the persona's verbosity: at the default 140 chars
+  // a long persona's segment is cut after its first sentence, hiding a repeated
+  // topic from the anti-repeat instruction.
   const RECAP_CHARS: Record<string, number> = { extended: 360, storyteller: 520 };
   const recap = queue.getDjRecap({ maxChars: RECAP_CHARS[lengthMode()] ?? 140 });
   if (recap) {
     lines.push(`\nWhat you have already said on air recently (do NOT repeat these topics or phrasing):\n${recap}`);
   }
-  // Durable curiosity history (issue #577) — when the Wikipedia pool is
-  // exhausted the agent falls back to free generation, which otherwise has no
-  // memory of what it already aired and repeats the same factoid (sometimes
-  // reworded). Surface the recent aired curiosity lines so it steers clear.
+  // Durable curiosity history (#577): with the Wikipedia pool exhausted the
+  // agent falls back to free generation, which has no memory of what it aired
+  // and repeats the same factoid, sometimes reworded.
   if (recentCuriosity && recentCuriosity.length) {
     const list = recentCuriosity.map(t => `- ${t}`).join('\n');
     lines.push(`\nCuriosity topics already aired in the last few days (openings shown; if you air a curiosity segment, pick a genuinely different subject — do NOT revisit any of these, even reworded):\n${list}`);
@@ -379,28 +316,18 @@ function buildCohostedSituation(ctx, cap, { forced = false, brief = null }: { fo
   return situation;
 }
 
-// ---------------------------------------------------------------------------
-// Simple (non-agentic) director — the pool-mode counterpart of directorAgent.
-//
+// Simple (non-agentic) director, the pool-mode counterpart of directorAgent.
 // `settings.llm.pickerAgent` off is the operator's signal that the model can't
-// be trusted with multi-step tool loops, so the segment path must not be the one
-// place still running one: on small local models the director degrades to
-// silence (isSilentFailure) or done-tool stalls (#555).
-//
-// This path replaces the agent's judgment with code + ONE structured call: code
-// picks the capability (weather-on-change first, then least-recently aired),
-// calls its data tool directly (fetchSegmentData — the same tool.mjs, minus the
-// model-steered inputs), inlines the result, and asks for the same
-// {air, text, sfx} decision, so the model still gets to choose silence when the
-// data is dull. Everything downstream is shared with agenticTick.
-// ---------------------------------------------------------------------------
+// be trusted with tool loops, so the segment path must not be the one place
+// still running one. Code picks the capability, calls its data tool directly,
+// inlines the result and asks for the same {air, text, sfx} decision, so the
+// model still gets to choose silence. Everything downstream is shared with
+// agenticTick.
 
-// Which capability the simple path airs this tick. Weather wins when the
-// condition actually changed (the one segment with a hard freshness signal);
-// an unchanged weather is dropped from the running entirely — the agent could
-// judge that staleness, code has to. Otherwise the least-recently-aired
-// capability, random among ties, so the rotation spreads across the catalogue
-// instead of hammering whatever sorts first.
+// Which capability the simple path airs. Weather wins when the condition
+// actually changed (the one segment with a hard freshness signal) and is dropped
+// entirely when it hasn't; otherwise the least-recently-aired capability, random
+// among ties so the rotation spreads across the catalogue.
 export function chooseCapability(caps, ctx) {
   const condition = ctx.weather?.condition || null;
   const weatherChanged = !!condition && condition !== segmentState.lastWeatherCondition;
@@ -421,8 +348,7 @@ export function chooseCapability(caps, ctx) {
 }
 
 // Same decision surface as segmentSchema minus `kind` (code already chose it)
-// and minus the nested object (nothing here needs the agent path's GLM
-// armour — djObject's own repair layers cover a flat shape fine).
+// and the nested object (djObject's own repair layers cover a flat shape).
 export function simpleSegmentSchema() {
   return modelTolerant(z.object({
     reason: z.string().describe('one short internal sentence on why this segment (or why silent) — never shown to the listener; write this BEFORE deciding'),
@@ -440,14 +366,11 @@ Your job: decide whether to air ONE between-track "${cap.kind}" segment, or stay
 ${cap.desc}${sfxBlock(sfxCatalog)}${settings.agentLanguageReminder(persona, 'the "text" line')}`;
 }
 
-// Wall-clock guard for the simple path's single djObject call. The director
-// AGENT runs under segmentDeadline() via defineAgent's timeoutMs; djObject
-// has no deadline of its own, and a grammar-constrained model can legally
-// ramble inside an unbounded string field all the way to the output-token
-// cap — observed on gemma-4-31b's dull-weather bench cell: ~380s crawling to
-// 8000 tokens on attempt 1 before the prompt-embedded retry rescued it in
-// seconds. The abort turns that into a bounded failure; the tick already
-// treats a throw as silence.
+// Wall-clock guard for the simple path's single djObject call: djObject has no
+// deadline of its own, and a grammar-constrained model can ramble inside an
+// unbounded string field all the way to the output-token cap (~380s observed).
+// The abort turns that into a bounded failure; the tick treats a throw as
+// silence.
 async function deadlinedSegmentObject(args: Record<string, unknown>) {
   const ac = new AbortController();
   const timer = setTimeout(
@@ -461,11 +384,10 @@ async function deadlinedSegmentObject(args: Record<string, unknown>) {
   }
 }
 
-// Runs the simple path for one tick: choose, fetch, and, only when the source is
-// usable (or the skill explicitly permits free generation), one djObject call.
-// Returns { seg, reason } in the same shape agenticTick consumes from the
-// agent — seg is null for silence. Unusable data is silence without a model
-// call: the model can't say anything true about data it never got.
+// One tick of the simple path: choose, fetch, and — only when the source is
+// usable or the skill permits free generation — one djObject call. Returns the
+// same shape agenticTick consumes from the agent, seg null for silence. Unusable
+// data is silence with no model call at all.
 async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
   const cap = chooseCapability(caps, ctx);
   if (!cap) return { seg: null, exchange: null, reason: 'nothing fresh to say' };
@@ -517,24 +439,19 @@ export async function agenticTick(ctx) {
   if (tickBusy) return;
 
   const now = new Date();
-  // Cadence and capability gating stay keyed to the HOST persona (stable per
-  // show); only the VOICE rotates. A guest co-host may speak this tick's
-  // segment, but which segments are on offer and how often the station talks
-  // never depends on who happened to win the mic.
+  // Cadence and capability gating key off the HOST persona (stable per show);
+  // only the VOICE rotates. What is on offer and how often the station talks
+  // never depends on who won the mic.
   const persona = settings.getEffectivePersona(now);
   const speaker = settings.pickOnAirSpeaker(now);
-  // DJ-mode personas read one rung chattier, lowering the floor so more
-  // between-track segments (weather, curiosity, deep cuts) get through.
   const freq = settings.effectiveFrequency(persona);
 
-  // Floor on the gap between any two spoken breaks. lastAnySegment only sees
-  // what THIS agent aired, but the scheduler's station idents and hourly
-  // checks share the same on-air voice (and the ident cron minutes
-  // :15/:30/:45 all land on this 5-minute tick), so without queue's view the
-  // DJ could talk twice in the same minute — the same stacking issue #310
-  // fixed for ident+hourly at :00. Deliberately narrowed to the wall-clock
-  // talkers: track-tied links/intros fire every few tracks and would mute the
-  // director outright under a 15-minute moderate floor.
+  // Floor on the gap between any two spoken breaks. lastAnySegment sees only
+  // what THIS agent aired, but the scheduler's idents and hourly checks share
+  // the voice and land on this tick, so without queue's view the DJ could talk
+  // twice in a minute (#310). Narrowed to the wall-clock talkers on purpose:
+  // track-tied links/intros fire every few tracks and would mute the director
+  // outright under a 15-minute floor.
   const lastSpoke = Math.max(
     segmentState.lastAnySegment,
     queue.getLastVoiceAt(['station-id', 'hourly-check', 'handoff', 'banter']),
@@ -544,8 +461,7 @@ export async function agenticTick(ctx) {
   const caps = availableCapabilities(ctx, now);
   if (caps.length === 0) return;
 
-  // Cheap skip: if weather is the only thing on offer and it hasn't changed,
-  // there is provably nothing to say — don't spend an LLM call to learn that.
+  // Weather alone and unchanged is provably nothing to say; skip the LLM call.
   if (caps.length === 1 && caps[0].kind === 'weather'
       && ctx.weather?.condition && ctx.weather.condition === segmentState.lastWeatherCondition) {
     return;
@@ -561,20 +477,18 @@ export async function agenticTick(ctx) {
     let silentReason: string | undefined;
     let skippedBeforeLlm: string | undefined;
     if (!settings.get().llm?.pickerAgent) {
-      // Pool mode: the operator's model isn't trusted with tool loops, so the
-      // director runs the code-driven single-call path instead of the agent.
       ({ seg, exchange, reason: silentReason, skippedBeforeLlm } = await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }));
     } else {
-      // When curiosity is on offer, brief the agent with what it already aired so
-      // a pool-exhausted fallback doesn't repeat itself (issue #577).
+      // Brief the agent with aired curiosity so a pool-exhausted fallback
+      // doesn't repeat itself (#577).
       const recentCuriosity = caps.some(c => c.kind === 'curiosity') ? recentAiredCuriosity() : undefined;
       const { object } = await directorAgent.run({
         messages: [{ role: 'user', content: buildSituation(ctx, { contextFields: unionContextFields(caps), recentCuriosity }) }],
         persona: speaker, caps, freq, sfxCatalog,
         ctx, segmentState,
       });
-      // `air: false` is the explicit silence signal; a missing/empty segment
-      // despite air=true still degrades to silence rather than erroring.
+      // `air: false` is the explicit silence signal; a missing segment despite
+      // air=true degrades to silence rather than erroring.
       seg = object?.air ? object?.segment : null;
       silentReason = object?.reason;
       const selectedKind = seg?.kind;
@@ -618,7 +532,7 @@ export async function agenticTick(ctx) {
       return;
     }
 
-    // The agent must pick a kind it was actually offered (off-cooldown etc.).
+    // The agent must pick a kind it was actually offered.
     const cap = caps.find(c => c.kind === seg.kind);
     if (!cap) {
       queue.log('error', `Segment agent returned unoffered kind "${seg.kind}" — dropping`);
@@ -631,20 +545,17 @@ export async function agenticTick(ctx) {
       segmentState.lastWeatherCondition = ctx.weather.condition;
     }
 
-    // queue.announce appends the segment turn into the live session. The
-    // speaker's id rides in meta so session.windowMessages names a guest's
+    // The speaker's id rides in meta so session.windowMessages names a guest's
     // turn as theirs rather than the host's own words.
     await queue.announce(seg.text.trim(), seg.kind, {
       persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name },
     });
 
-    // Record what actually aired so the durable ledger can keep both the tool
-    // and the fallback path from repeating it after a restart (issue #577).
+    // Record what aired so the durable ledger keeps both the tool and the
+    // fallback path from repeating it after a restart (#577).
     if (seg.kind === 'curiosity') recordCuriosity(seg.text.trim(), { aired: true });
 
-    // Optional sound effect mixed under the voice. Only honour a name the
-    // agent was actually offered — anything else is dropped, like an
-    // unoffered kind.
+    // Only honour an sfx name the agent was actually offered.
     if (seg.sfx) {
       if (sfxCatalog.some(s => s.name === seg.sfx)) {
         await queue.playSfx(seg.sfx, { underVoice: true });
@@ -653,14 +564,10 @@ export async function agenticTick(ctx) {
       }
     }
   } catch (err) {
-    // Distinguish a model that couldn't produce parseable JSON from a real
-    // outage. The schema explicitly allows {air: false, segment: null} as
-    // "stay silent", and the system prompt actively encourages silence — so a model that
-    // emits unparseable output was most likely TRYING to stay silent but
-    // expressing it wrong. The listener-facing outcome is the same either way
-    // (silence), so report it as silence with a parse note instead of
-    // flooding /debug with errors. Real failures (network, model not loaded,
-    // retries exhausted) still log as errors so operators see them.
+    // A model that couldn't produce parseable JSON was most likely trying to
+    // stay silent and expressing it wrong, and the listener-facing outcome is
+    // the same, so report it as silence with a parse note. Real failures
+    // (network, model not loaded, retries exhausted) still log as errors.
     if (isBareNullSilent(err)) {
       queue.log('scheduler', `Segment agent stayed silent — model emitted bare null (treating as intended silence)`);
     } else if (isSilentFailure(err)) {
@@ -673,19 +580,11 @@ export async function agenticTick(ctx) {
   }
 }
 
-// True for "the model produced no parseable object" errors thrown by the AI
-// SDK — these usually mean the model wanted to stay silent but botched the
-// JSON, not that the network or provider is broken. Used by agenticTick (not
-// by runCapability — the operator override demands real output, so a parse
-// failure there IS a failure).
-//
-// `did not call the done tool` (issue #555) is included for the same reason:
-// gemma-class models on the forced done-tool path occasionally emit prose
-// instead of the `done` call — even through the recovery — and throw. On the
-// autonomous tick the schema allows {air: false} and the prompt encourages
-// silence, so a botched done call is overwhelmingly the model either staying
-// silent in prose or fumbling a segment; either way the listener gets silence.
-// (The operator-forced path doesn't use this classifier, so it still errors.)
+// "No parseable object" errors, which usually mean the model wanted to stay
+// silent but botched the JSON. Used by agenticTick only: the operator override
+// demands real output, so a parse failure there IS a failure. `did not call the
+// done tool` (#555) is included for the same reason — on the autonomous tick a
+// botched done call is the model staying silent in prose.
 function isSilentFailure(err) {
   const msg = String(err?.message || err || '').toLowerCase();
   return msg.includes('no object generated')
@@ -694,12 +593,8 @@ function isSilentFailure(err) {
       || msg.includes('did not call the done tool');
 }
 
-// Detect the specific "model emitted bare `null`" failure pattern (observed on
-// minimax-m2.7:cloud and likely others). The model is trying to say "stay
-// silent" but encoding it at the wrong nesting level — the schema requires
-// {segment: null, reason: "..."} but the model returns top-level null.
-// Treating this as intentional silence is strictly safer than failing the
-// tick: same listener-facing outcome (silence) with cleaner logs.
+// The "model emitted bare `null`" pattern: silence encoded at the wrong nesting
+// level. Treated as intentional silence — same outcome, cleaner logs.
 function isBareNullSilent(err) {
   const text = String(err?.text || '').trim();
   if (text !== 'null') return false;
@@ -708,16 +603,14 @@ function isBareNullSilent(err) {
 }
 
 // Operator-override variant of directorSystem: exactly one capability, and the
-// segment is mandatory — the agent does not get the option to stay silent.
-// Same ultra-minimal treatment as directorSystem — the forcedSchema text
-// description and the segment-tools.js tool descriptions carry the rest.
+// segment is mandatory unless mayAbstain. Same ultra-minimal treatment.
 export function forcedSystem(persona, cap, sfxCatalog, { mayAbstain = false }: { mayAbstain?: boolean } = {}) {
-  // The mandatory phrasing is the historical one and still right for a segment
-  // written from the moment itself. A grounded skill gets the opposite
-  // instruction, because "you must produce a line" is what turned an empty
-  // search into a recycled hallucination (issue #1412) — and it must name the
-  // recycling explicitly: the model's own recent output is in its window, so
-  // "don't invent" alone leaves reaching backwards looking like compliance.
+  // The mandatory phrasing is right for a segment written from the moment
+  // itself. A grounded skill gets the opposite instruction: "you must produce a
+  // line" turned an empty search into a recycled hallucination (#1412), and the
+  // recycling must be named explicitly, since the model's own recent output is
+  // in its window and "don't invent" alone leaves reaching back looking like
+  // compliance.
   const mandate = mayAbstain
     ? 'write it from the source data you were given, and nothing else. If that data is empty, or turns out to be about something other than what this segment covers, set "air" to false and say nothing — standing down is the right answer, and a fabricated line is far worse than no segment. Never fill the gap from memory, from what you said earlier in the show, or from what sounds plausible.'
     : 'you must produce a line, silence is not an option.';
@@ -728,25 +621,19 @@ The operator asked you to air ONE ${cap.kind} segment now — ${mandate} You are
 ${cap.desc}${sfxBlock(sfxCatalog)}${settings.agentLanguageReminder(persona, 'the "text" line')}`;
 }
 
-// The operator-override variant of directorAgent — exactly one capability, and
-// the segment is mandatory unless the skill speaks from data that came back
-// unusable (`mayAbstain`, from skills/abstain-policy.ts).
+// The operator-override variant of directorAgent. Two module-level agents rather
+// than one reading mayAbstain per run: defineAgent resolves `schema` with no run
+// arguments, so the abstention field can only vary by defining the pair.
 //
-// Two module-level agents rather than one agent reading mayAbstain per run:
-// defineAgent resolves `schema` with no run arguments (it is read off the
-// instance too, by llm-bench), so the abstention field can only vary by
-// defining the pair. runCapability picks one; everything else about them is
-// identical.
-//
-// `onData` is how runCapability sees what the skill's tool actually returned:
-// the agent calls the tool itself, so without a recorder the "was there
-// anything to write from" check would exist only in the prompt. Optional —
-// the recorder must not be load-bearing for a run that doesn't pass one.
+// `onData` is how runCapability sees what the skill's tool returned — the agent
+// calls the tool itself, so without a recorder the "was there anything to write
+// from" check would exist only in the prompt. Optional: it must not be
+// load-bearing for a run that doesn't pass one.
 function defineForcedAgent(mayAbstain: boolean) {
   return defineAgent({
     kind: 'djAgentSegment',
     schema: () => forcedSchema({ mayAbstain }),
-    // Same wall-clock ceiling as the autonomous director (issue #555).
+    // Same wall-clock ceiling as the autonomous director (#555).
     timeoutMs: segmentDeadline,
     buildSystem: ({ persona, cap, sfxCatalog }) =>
       forcedSystem(persona, cap, sfxCatalog, { mayAbstain }),
@@ -757,40 +644,33 @@ function defineForcedAgent(mayAbstain: boolean) {
 }
 
 export const forcedDirectorAgent = defineForcedAgent(false);
-// The grounded variant: same run, plus the option to stand down when the
-// skill's own data tool came back with nothing usable (issue #1412).
+// Grounded variant: same run, plus the option to stand down when the skill's own
+// data tool came back with nothing usable (#1412).
 export const groundedDirectorAgent = defineForcedAgent(true);
 
-// The outcome of a forced run. `aired: false` is a normal, reportable result —
-// the skill had nothing usable to speak from — and is NOT an error: the caller
-// decides what that means (the operator hears why, the cron logs it, the
-// programme beat falls to straight talk). Real failures still throw.
+// The outcome of a forced run. `aired: false` is a normal, reportable result,
+// not an error: each caller decides what it means. Real failures still throw.
 export interface CapabilityRun {
   aired: boolean;
   text: string | null;
   reason: string | null;
 }
 
-// Operator override — fire one capability on demand, bypassing cooldowns, the
-// frequency floor, persona ownership and the enable toggle. Backs POST
-// /dj/skill, the per-skill cron (broadcast/scheduler.ts), and the programme
-// feature beat (broadcast/programme.ts), which passes `brief` (the episode
-// plan's feature topic, appended to the situation so the segment is built
-// AROUND it) and `persona` (the rotated on-air speaker — voice, prompt seat,
-// and session attribution move together, same rule as every other rotated
-// segment).
+// Operator override: fire one capability on demand, bypassing cooldowns, the
+// frequency floor, persona ownership and the enable toggle. Backs POST /dj/skill,
+// the per-skill cron and the programme feature beat, which passes `brief` (the
+// episode plan's feature topic, appended so the segment is built around it) and
+// `persona` (the rotated speaker — voice, prompt seat and session attribution
+// move together).
 //
-// Throws on an unknown/unready capability, or on empty output from a skill that
-// had no grounds to stand down. Returns `{ aired: false, reason }` when a
-// grounded skill's data came back unusable (issue #1412) — see
-// skills/abstain-policy.ts for which skills those are and why the decision
-// isn't inlined here.
+// Throws on an unknown/unready capability, or on empty output from a skill with
+// no grounds to stand down. Returns `{ aired: false, reason }` when a grounded
+// skill's data came back unusable (#1412, skills/abstain-policy.ts).
 export async function runCapability(which, ctx, { brief = null, persona = null }: { brief?: string | null; persona?: { id?: string; name?: string; skills?: string[]; tts?: unknown } | null } = {}): Promise<CapabilityRun> {
   const cap = allCapabilities().find(c => c.kind === which || c.skill === which);
   if (!cap) throw new Error(`unknown skill: ${which}`);
   if (cap.ready && !cap.ready()) {
-    // Hint at the missing key when the capability is keyed. web-search is the
-    // only such capability today, and only when a keyed provider is active.
+    // Hint at the missing key when the capability is keyed.
     let hint = '';
     const searchProvider = settings.get().search?.provider;
     if (cap.kind === 'web-search' && (searchProvider === 'tavily' || searchProvider === 'brave')) {
@@ -804,12 +684,9 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
 
   if (cap.cohosts) {
     const { host, guests } = settings.getOnAirRoster();
-    // A solo hour is a normal, transient station state, not a misconfiguration:
-    // reported as `{aired: false, reason}` like every other reason a forced
-    // skill has nothing to say (skills/abstain-policy.ts, #1412), so Run now
-    // answers 200 with the reason instead of a 500 and a red booth-log error.
-    // Contrast cap.ready() above, which throws because a missing API key is a
-    // real misconfiguration the operator has to go and fix.
+    // A solo hour is a normal, transient state, not a misconfiguration, so it
+    // reports `{aired: false, reason}` and Run now answers 200. Contrast
+    // cap.ready() above, which throws because a missing key needs fixing.
     if (!host || !guests.length) {
       const reason = 'requires a co-hosted show';
       queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
@@ -841,13 +718,11 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
   const situation = buildSituation(ctx, { forced: true, contextFields: effectiveContextFields(cap), recentCuriosity })
     + (brief ? `\n\n${brief}` : '');
 
-  // Whether this skill is allowed to stand down at all — a skill that speaks
-  // from fetched data, as opposed to one that writes from the moment and its
-  // brief. Decided once, then applied identically to both paths below.
+  // Whether this skill may stand down at all: decided once, applied identically
+  // to both paths below.
   const mayAbstain = requiresGrounding(cap);
-  // Stood down without airing: logged here rather than at each caller, so the
-  // booth log carries one wording no matter which of the three forced callers
-  // fired the skill.
+  // Logged here rather than at each caller, so the booth log carries one
+  // wording whichever forced caller fired the skill.
   const standDown = (reason: string): CapabilityRun => {
     queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
     return { aired: false, text: null, reason };
@@ -855,13 +730,10 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
 
   let object: { reason?: string; air?: boolean; text?: string; sfx?: string | null } | undefined;
   if (!settings.get().llm?.pickerAgent) {
-    // Pool mode: fetch the capability's data directly and make one structured
-    // call (same swap as the autonomous tick). A skill that writes from the
-    // moment survives a failed fetch — the model writes from the capability
-    // brief and the moment alone, the same "straight talk" degradation the
-    // programme feature uses for a stale kind. A GROUNDED skill doesn't get
-    // that degradation: its whole segment was supposed to be about what the
-    // fetch didn't return, so there is no model call at all.
+    // Pool mode: fetch the data directly, one structured call. A skill that
+    // writes from the moment survives a failed fetch (it writes from the brief
+    // and the moment alone); a GROUNDED skill does not, since its whole segment
+    // was to be about what the fetch didn't return, so there is no model call.
     const data = await fetchSegmentData(cap, ctx, segmentState);
     const blocked = standDownReason(cap, data);
     if (blocked) return standDown(blocked);
@@ -873,16 +745,13 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
       kind: 'generateSegment',
     });
   } else {
-    // Agent mode: the agent calls the skill's tool itself, so the same check
-    // runs on what the tool reported back (onData). Enforced in code and not
-    // only in the prompt — a model that was handed nothing and spoke anyway is
-    // the whole bug, and the prompt is the half of it that already failed.
+    // Agent mode: the agent calls the tool itself, so the check runs on what
+    // the tool reported (onData). Enforced in code, not only in the prompt — a
+    // model handed nothing and speaking anyway is the whole bug.
     //
-    // Judged across ALL of the tool's calls, not just the last: the agent may
-    // search twice (a narrow query, then a broader one), and one empty result
-    // after a good one is not a reason to throw the good one away. So a single
-    // usable result clears the run, and the reason kept is the most recent
-    // failure for the log.
+    // Judged across ALL of the tool's calls: the agent may search twice, and one
+    // empty result after a good one is no reason to discard the good one. A
+    // single usable result clears the run; the reason kept is the last failure.
     let usableSeen = false;
     let blocked: string | null = null;
     ({ object } = await (mayAbstain ? groundedDirectorAgent : forcedDirectorAgent).run({
@@ -897,41 +766,37 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
     if (!usableSeen && blocked) return standDown(blocked);
   }
 
-  // An explicit decline. Only reachable when the schema offered `air` at all,
-  // so a skill that can't abstain can't decline by accident.
+  // An explicit decline, reachable only when the schema offered `air` at all.
   if (mayAbstain && object?.air === false) {
     return standDown(object?.reason?.trim() || 'nothing usable to write the segment from');
   }
 
   const text = object?.text?.trim();
   if (!text) {
-    // A grounded skill that returns nothing has effectively declined — the
-    // listener-facing outcome is the same silence, and reporting it as a
-    // failure would put a red error in the booth log for a model doing the
-    // right thing badly. Anything else is still a real failure.
+    // A grounded skill returning nothing has effectively declined: same silence,
+    // and a red booth-log error would be wrong. Anything else is a real failure.
     if (mayAbstain) return standDown('the DJ wrote no line for this segment');
     throw new Error(`skill "${cap.skill}" produced no text`);
   }
 
-  // Update cooldown/dedup memory so a follow-up autonomous tick doesn't
-  // immediately repeat what the operator just fired.
+  // Update cooldown/dedup memory so the next autonomous tick doesn't repeat
+  // what the operator just fired.
   lastFired.set(cap.kind, Date.now());
   segmentState.lastAnySegment = Date.now();
   if (cap.kind === 'weather' && ctx.weather?.condition) {
     segmentState.lastWeatherCondition = ctx.weather.condition;
   }
 
-  // A rotated speaker rides through announce so the voice and the session
-  // attribution agree (windowMessages names foreign speakers by meta id).
+  // A rotated speaker rides through announce so voice and session attribution
+  // agree (windowMessages names foreign speakers by meta id).
   await queue.announce(text, cap.kind, persona
     ? { persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name } }
     : {});
 
-  // Record an operator-fired curiosity line in the durable ledger too, so a
-  // later autonomous tick doesn't repeat it (issue #577).
+  // Record an operator-fired curiosity line in the ledger too (#577).
   if (cap.kind === 'curiosity') recordCuriosity(text, { aired: true });
 
-  // Optional sound effect under the voice — only a name the agent was offered.
+  // Only honour an sfx name the agent was offered.
   const pick = object?.sfx;
   if (pick) {
     if (sfxCatalog.some(s => s.name === pick)) {
@@ -943,16 +808,14 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
   return { aired: true, text, reason: object?.reason?.trim() || null };
 }
 
-// Skill metadata for the admin command-center UI, derived from CAPABILITIES.
+// Skill metadata for the admin command-center UI.
 export function skillCatalog() {
   const s = settings.get();
   const enabledMap = s.skills?.enabled || {};
   const searchProvider = s.search?.provider || 'duckduckgo';
   return allCapabilities().map(c => {
-    // web-search's key requirement depends on the active search provider:
-    // Tavily/Brave need SEARCH_API_KEY, DuckDuckGo needs nothing. Other
-    // capabilities carry their requiresKey/keyUrl statically in CAPABILITIES
-    // (none today).
+    // web-search's key requirement depends on the active provider:
+    // Tavily/Brave need SEARCH_API_KEY, DuckDuckGo needs nothing.
     let requiresKey = c.requiresKey || null;
     let keyUrl = c.keyUrl || null;
     let hint: string | null = null;
@@ -978,25 +841,21 @@ export function skillCatalog() {
       description: c.desc || '',
       kind: c.kind,
       cooldownMs: c.cooldownMs || 0,
-      // Seeded built-ins default on; operator skills are discovered-but-disabled
-      // and only count as enabled once the operator explicitly flips them on.
+      // Seeded built-ins default on; operator skills stay off until flipped on.
       enabled: c.seeded ? enabledMap[c.skill] !== false : enabledMap[c.skill] === true,
-      // Marks an operator-authored skill vs a shipped built-in, so the admin UI
-      // can badge it and explain the off-by-default behaviour. (`custom` is the
-      // API's name for "not seeded".)
+      // `custom` is the API's name for "not seeded", so the admin UI can badge
+      // an operator-authored skill and explain the off-by-default behaviour.
       custom: !c.seeded,
-      // `ready` is false when the capability needs an env key that isn't set;
-      // `requiresKey` names it and `keyUrl` links the operator to its source.
+      // `ready` is false when a required env key isn't set; `requiresKey` names
+      // it and `keyUrl` links to its source.
       ready: typeof c.ready === 'function' ? !!c.ready() : true,
       requiresKey,
       keyUrl,
       hint,
-      // The "right now" fields this segment's situation may include (issue
-      // #471). Resolved to the default profile (no weather) when unset, so the
-      // admin UI can render the current tick-box selection without guessing.
+      // The "right now" fields this situation may include (#471), resolved to
+      // the default profile when unset so the admin UI needn't guess.
       contextFields: effectiveContextFields(c),
-      // Freeform organisation tags from SKILL.md frontmatter — filter fodder
-      // for the admin skill list.
+      // Freeform tags from SKILL.md frontmatter, for the admin list filter.
       tags: c.tags || [],
       cohosts: !!c.cohosts,
     };

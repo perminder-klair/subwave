@@ -1,6 +1,5 @@
-// Admin-gated Doctor API. GET /doctor runs the health assessment; POST
-// /doctor/review hands a report to the LLM for a plain-English read. Both behind
-// requireAdmin — the diagnostics expose provider/host detail.
+// Doctor API. Admin-gated throughout — the diagnostics expose provider/host
+// detail.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import * as doctor from '../doctor.js';
@@ -15,11 +14,9 @@ router.get('/doctor', requireAdmin, async (_req, res) => {
   }
 });
 
-// Streaming variant — Server-Sent Events, one `section` event per check as it
-// completes, then a final `done` event carrying the assembled report. Lets the
-// panel paint findings progressively instead of waiting on the slowest probe.
-// Consumed via fetch + a ReadableStream reader (EventSource can't carry the
-// admin Basic-auth header).
+// SSE: one `section` event per check, then `done` with the assembled report.
+// Consumed via fetch + a ReadableStream reader — EventSource cannot carry the
+// admin Basic-auth header.
 router.get('/doctor/stream', requireAdmin, async (_req, res) => {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -43,8 +40,6 @@ router.get('/doctor/stream', requireAdmin, async (_req, res) => {
   }
 });
 
-// The last assessment (report + review), cached in the controller. Lets the
-// panel show the previous run immediately on mount instead of a blank slate.
 router.get('/doctor/last', requireAdmin, async (_req, res) => {
   try {
     res.json(await doctor.lastRun());
@@ -53,8 +48,7 @@ router.get('/doctor/last', requireAdmin, async (_req, res) => {
   }
 });
 
-// Compact health headline (counts + overall) for the admin header badge — no
-// section detail, safe to poll.
+// Compact headline for the admin header badge — safe to poll.
 router.get('/doctor/summary', requireAdmin, async (_req, res) => {
   try {
     res.json(await doctor.lastSummary());
@@ -63,10 +57,8 @@ router.get('/doctor/summary', requireAdmin, async (_req, res) => {
   }
 });
 
-// Live-config Navidrome connectivity for the always-on admin banner. Returns
-// { ok, reason?, url } from the same never-throwing ping the Doctor's
-// connectivity finding uses, cached ~20s so polling every admin page doesn't
-// drip Subsonic calls. Cheap and safe to poll.
+// Never-throwing ping, cached ~20s so polling every admin page doesn't drip
+// Subsonic calls.
 router.get('/doctor/navidrome', requireAdmin, async (_req, res) => {
   try {
     res.json(await doctor.navidromeConnectivity());
@@ -75,8 +67,8 @@ router.get('/doctor/navidrome', requireAdmin, async (_req, res) => {
   }
 });
 
-// Body: { report: DoctorReport } — the report the panel already has in hand, so
-// the review reflects exactly what the operator is looking at (no re-run race).
+// Takes the report the panel already holds, so the review matches what the
+// operator is looking at rather than racing a re-run.
 router.post('/doctor/review', requireAdmin, async (req, res) => {
   try {
     const report = req.body?.report;

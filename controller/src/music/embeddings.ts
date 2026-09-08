@@ -1,14 +1,6 @@
-// Text-embedding layer for the library tagger.
-//
-// Wraps the AI SDK embedMany call so the rest of the tagger can stay provider-
-// agnostic. Provider + model are resolved via llm/provider.ts → tracks the
-// existing settings.llm by default (Ollama local) or settings.embedding when
-// the operator wants something different.
-//
-// The track-text formatter lives here too because it's the single canonical
-// string-shape that drives every embedding. Seeds, propagation, future
-// similarity queries — all use formatTrackText so the same input always
-// produces the same vector.
+// Text-embedding layer for the library tagger. formatTrackText is the single
+// canonical embed-text shape — seeds, propagation and similarity queries all
+// go through it.
 
 import { embedMany } from 'ai';
 import {
@@ -37,12 +29,7 @@ export interface SongMeta {
   year?: number | string | null;
   genres?: string[] | null;
   genre?: string | null;
-  // The year the track's ERA is judged by — resolved by the CALLER via
-  // show-filter.resolveEraYear (original year wins; a compilation's plain
-  // year is untrusted), never raw `year`. Word-formed into an `Era: 1990s`
-  // line: the head line's "(2013)" digits embed as near-arbitrary tokens,
-  // while the decade as a WORD gives era-similarity something to grab — and
-  // for reissues it's the true era, where the digits are the reissue's.
+  // Resolved by the caller via show-filter.resolveEraYear, never raw `year`.
   eraYear?: number | null;
 }
 
@@ -51,47 +38,28 @@ export interface TrackEnrichment {
   lyricExcerpt?: string | null;
 }
 
-// Measured acoustics from the analyzer pass (#1246). Deliberately NOT the
-// tagger's own `moods` / `energy`: those are decided AFTER this text is
-// embedded, by voting over the KNN graph built FROM these vectors
-// (tag-library.ts phases 1→3), so feeding them back in is circular and on a
-// fresh library they don't exist yet. Everything here comes off the waveform
-// instead, before any of that.
+// Measured acoustics from the analyzer pass (#1246). Never the tagger's own
+// `moods` / `energy`: those are decided from these vectors, so feeding them
+// back is circular.
 export interface TrackAcoustics {
   bpm?: number | null;
   musicalKey?: string | null;      // Camelot code, e.g. '8A'
-  // Zero-shot CLAP moods (music/audio-moods.ts) — the mood vocabulary scored
-  // against the track's audio vector, so these are how it SOUNDS, never what
-  // its title suggests. Heavy-tier only; absent on a lean analyzer.
+  // Zero-shot CLAP moods (music/audio-moods.ts). Heavy analyzer tier only.
   audioMoods?: string[] | null;
-  // Vocal-presence ranges (tracks.vocal_ranges). [] = measured instrumental,
-  // non-empty = has vocals, null/undefined = not computed. Only the MINORITY
-  // marker is written ('instrumental'); vocal tracks get no word, because a
-  // word carried by ~80% of a library clusters nothing.
+  // tracks.vocal_ranges. [] = measured instrumental, non-empty = has vocals,
+  // null/undefined = not computed.
   vocalRanges?: unknown[] | null;
-  // The pace curve is deliberately NOT an input. An energy word was tried and
-  // backed out: the curve's practical range is ~0.02–0.5 (measured mean 0.09
-  // across a fully-analysed library), so any fixed threshold stamps one word
-  // on ~everything ("calm" on 99.5% of tracks, contradicting CLAP's
-  // "energetic" in the same line), and library-relative thresholds would make
-  // the text non-deterministic. CLAP's mood vocabulary already carries energy
-  // words measured from sound; the raw mean stays LLM-facing (picker payload).
+  // The pace curve is deliberately not an input: its range (~0.02–0.5) makes a
+  // fixed threshold stamp one word on ~everything.
 }
 
-// Bump when the shape of formatTrackText's output changes in a way that moves
-// vectors. Recorded in embedding_meta.text_format so an index built under an
-// older shape is detectable (library-coverage.embeddingFormatStale) instead of
-// silently mixing two text shapes in one KNN space. Legacy rows read as 1.
-//
+// Bump when formatTrackText's output shape moves vectors. Recorded in
+// embedding_meta.text_format; legacy rows read as 1.
 //   1  head line + Last.fm tags + lyric excerpt
-//   2  ... + the Sound: descriptor line (audio moods, tempo band, key mode,
-//      instrumental marker) + the Era: decade line (#1246)
+//   2  ... + the Sound: descriptor line + the Era: decade line (#1246)
 export const EMBED_TEXT_VERSION = 2;
 
-// Tempo as a word, not a number: an embedding model reads "uptempo" as a
-// musical property and "128" as an arbitrary token, so the band is the part
-// that carries meaning. Ranges follow the ordinary DJ vocabulary rather than
-// anything clever — the goal is a coarse axis that isn't the artist's name.
+// Tempo as a word, not a number: "128" embeds as an arbitrary token.
 function tempoWord(bpm: number): string | null {
   if (!Number.isFinite(bpm) || bpm <= 0) return null;   // 0 = unknown, never "very slow"
   if (bpm < 80) return 'slow tempo';
@@ -100,29 +68,19 @@ function tempoWord(bpm: number): string | null {
   return 'fast tempo';
 }
 
-// The analyzer stores a Camelot code ('8A'), which embeds as a meaningless
-// token. The musically-legible half of it is the mode: 'A' = minor, 'B' =
-// major. The number is the tonic (which key), and two tracks sharing a tonic
-// are no more alike in mood than two sharing a BPM digit — so it stays out.
-// The wheel only has positions 1–12; anything else ('0A', '13B') isn't a
-// Camelot code and contributes nothing rather than a fabricated mode.
+// Only the mode of a Camelot code is legible ('A' = minor, 'B' = major); the
+// tonic number stays out. Positions outside 1-12 yield null.
 function keyModeWord(camelot: string): string | null {
   const m = /^\s*(?:[1-9]|1[0-2])\s*([AB])\s*$/i.exec(camelot);
   if (!m) return null;
   return m[1].toUpperCase() === 'A' ? 'minor key' : 'major key';
 }
 
-// The descriptor words for a track's measured sound, in a stable order (the
-// same input must always produce the same vector). Empty when nothing has been
-// analysed — the caller then omits the line entirely rather than embedding a
-// bare "Sound:" label, which would be pure noise repeated across every
-// un-analysed track and would cluster THEM together.
+// Descriptor words for a track's measured sound, in a stable order (the same
+// input must always produce the same vector). Empty when nothing was analysed.
 export function soundDescriptors(acoustics?: TrackAcoustics | null): string[] {
   if (!acoustics) return [];
   const words: string[] = [];
-  // Audio moods first — real vocabulary words, the strongest musical signal
-  // available here, and the one thing in this line that distinguishes two
-  // tracks at the same tempo in the same mode.
   for (const m of acoustics.audioMoods ?? []) {
     const t = String(m || '').trim();
     if (t) words.push(t);
@@ -131,18 +89,15 @@ export function soundDescriptors(acoustics?: TrackAcoustics | null): string[] {
   if (tempo) words.push(tempo);
   const mode = acoustics.musicalKey ? keyModeWord(acoustics.musicalKey) : null;
   if (mode) words.push(mode);
-  // [] is a MEASUREMENT ("no vocals found"), null is its absence — only the
-  // measured-instrumental case speaks (see the interface note).
+  // [] is a measurement ("no vocals found"), null is its absence.
   if (Array.isArray(acoustics.vocalRanges) && acoustics.vocalRanges.length === 0) {
     words.push('instrumental');
   }
   return words;
 }
 
-// The Era line's decade word ('1990s'). Input is the RESOLVED era year
-// (show-filter.resolveEraYear) — callers must never pass raw `year`, which on
-// a compilation is the compilation's own release date. Sub-millennium years
-// are junk tags (TDRC=0007 and friends), not ancient recordings.
+// The Era line's decade word ('1990s'). Input is the resolved era year, never
+// raw `year`. Sub-millennium years are junk tags, not ancient recordings.
 export function decadeWord(eraYear?: number | null): string | null {
   const y = Number(eraYear);
   if (!Number.isFinite(y) || y < 1000) return null;
@@ -166,17 +121,12 @@ export function activeModelLabel(): string {
 export interface EmbeddingPerfAdvisory {
   model: string;
   provider: string;
-  // The embedding work runs on the operator's own hardware (CPU/NAS-bound), so a
-  // heavy model directly slows re-embeds. Cloud providers do the work off-box.
   local: boolean;
   // Large + slow on CPU relative to the light default (nomic-embed-text).
   heavy: boolean;
 }
 
-// Performance profile of the active embedding model — drives the doctor's
-// "embedding model" advisory. A heavy LOCAL model (bge-m3, *-large) is the quiet
-// cause of slow re-embeds + Ollama RAM thrash on a CPU/NAS box; cloud models are
-// never a perf concern (the work runs off-box), so `local` gates the warning.
+// Drives the doctor's "embedding model" advisory; `local` gates the warning.
 // Pure + name-based: never probes, never throws.
 export function embeddingPerfAdvisory(): EmbeddingPerfAdvisory {
   const { provider, model } = embeddingProviderInfo();
@@ -188,39 +138,22 @@ export function embeddingPerfAdvisory(): EmbeddingPerfAdvisory {
   };
 }
 
-// Used by library.ts on first open — we need the schema dim before any
-// embedding call.
+// library.ts needs the schema dim on first open, before any embedding call.
 export function resolveEmbeddingDim(): number {
   return activeEmbeddingDim();
 }
 
-// Canonical text shape. Single function so seed + propagation + future
-// similarity queries all produce the same vector for the same input.
-//
-// Without enrichment:
-//   "Snoop Dogg — Slid Off · Missionary (2024) [Hip-Hop]"
-//
-// With enrichment (the v1 default when both signals exist):
-//   "Snoop Dogg — Slid Off · Missionary (2024) [Hip-Hop]
-//    Last.fm: chill, west-coast, smooth, late-night
-//    Lyrics: I slid off, ain't been the same since the call dropped..."
-//
-// With measured acoustics (v2, #1246 — present as soon as the analyzer has run,
-// which needs no API key and no LLM call), plus the resolved era as a decade
-// word:
-//   "... Sound: smooth, late-night, mid-tempo, minor key
-//        Era: 2020s"
-//
-// Every optional line is omitted when its signal is absent, never emitted
-// empty: a constant "Sound:" label on un-analysed tracks would be noise shared
-// by all of them, which clusters exactly the tracks it says nothing about.
+// Canonical text shape — one function so every consumer produces the same
+// vector for the same input. Head line, then optional `Last.fm:` / `Lyrics:` /
+// `Sound:` / `Era:` lines. An optional line is omitted when its signal is
+// absent, never emitted empty: a constant label clusters exactly the tracks it
+// says nothing about.
 export function formatTrackText(
   song: SongMeta,
   enrich?: TrackEnrichment | null,
   acoustics?: TrackAcoustics | null,
 ): string {
-  // All genre tags, comma-joined — multi-genre tracks embed with their full
-  // tag set so genre-adjacent similarity reflects every tag, not just genres[0].
+  // All genre tags, comma-joined; never just genres[0].
   const genre = song.genres?.length ? song.genres.join(', ') : song.genre;
   const head =
     `${song.artist || 'Unknown Artist'} — ${song.title || 'Unknown Title'} ` +
@@ -233,18 +166,10 @@ export function formatTrackText(
     const trimmed = enrich.lyricExcerpt.slice(0, LYRIC_EXCERPT_CHARS).replace(/\s+/g, ' ').trim();
     if (trimmed) lines.push(`Lyrics: ${trimmed}`);
   }
-  // Measured sound (#1246). Without this — and with Last.fm tags off by default
-  // for keyless installs, and lyrics matching only a small share of a library —
-  // the vector for most tracks IS the head line, so cosine similarity over it
-  // ranks by artist/album TEXT while presenting itself to the picker as mood
-  // similarity: every track by one artist shares an artist string and so
-  // self-clusters, and "Nick Drake" sits next to "Drake". This line is the
-  // cheapest musical signal that exists before the tagger has decided anything.
   const sound = soundDescriptors(acoustics);
   if (sound.length) lines.push(`Sound: ${sound.join(', ')}`);
-  // Era as a word (#1246). Label-derived, not measured — which is why it gets
-  // its own line instead of riding Sound:, and why labelOnlyVectorCount
-  // deliberately does NOT treat it as musical signal.
+  // Era is label-derived, not measured, so it gets its own line and
+  // labelOnlyVectorCount does not count it as musical signal (#1246).
   const decade = decadeWord(song.eraYear);
   if (decade) lines.push(`Era: ${decade}`);
   return lines.join('\n');
@@ -262,15 +187,10 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
   return embeddings as number[][];
 }
 
-// ---------------------------------------------------------------------------
-// Task-prefix handling — some embedding models (nomic-embed-text, the shipped
-// default) are trained with mandatory task prefixes: `search_document:` on
-// indexed texts and `search_query:` on queries. Document prefixes change the
-// stored vectors, so the index records its mode in embedding_meta.text_mode
-// ('plain' = embedded bare, 'prefixed' = embedded with the document prefix)
-// and every query embed must match it. See embeddingTextPrefixes in
-// llm/internal/provider/embedding.ts for the per-model table.
-// ---------------------------------------------------------------------------
+// Task prefixes: some models (nomic-embed-text, the default) need
+// `search_document:` on indexed texts and `search_query:` on queries. Document
+// prefixes change the stored vectors, so the index records its mode in
+// embedding_meta.text_mode and every query embed must match it.
 
 export type IndexTextMode = 'plain' | 'prefixed';
 
@@ -278,17 +198,14 @@ function activePrefixes(): EmbeddingTextPrefixes {
   return embeddingTextPrefixes(embeddingProviderInfo().model);
 }
 
-// The mode a FRESH index should be built in for the active model: 'prefixed'
-// when the model has a document prefix, else 'plain'.
+// The mode a fresh index should be built in for the active model.
 export function preferredTextMode(): IndexTextMode {
   return activePrefixes().document ? 'prefixed' : 'plain';
 }
 
-// Resolve the mode of an EXISTING index. Stored mode always wins (consistency
-// beats preference — a prefixed query against bare documents is worse than
-// bare-vs-bare). A populated index with no recorded mode predates mode
-// tracking and was embedded bare; an empty one is free to adopt the model's
-// preferred mode.
+// Mode of an existing index. Stored mode always wins: a prefixed query against
+// bare documents is worse than bare-vs-bare. A populated index with no recorded
+// mode was embedded bare; an empty one adopts the preferred mode.
 export function resolveIndexTextMode(
   stored: IndexTextMode | null | undefined,
   vectorCount: number,
@@ -298,21 +215,10 @@ export function resolveIndexTextMode(
   return preferredTextMode();
 }
 
-// What text format the index should be RECORDED as, given what's already in it
-// (#1246). The meta row describes the vectors that EXIST, not the recipe this
-// build happens to use — same shape as resolveIndexTextMode above.
-//
-// A forward run embeds only vectorless tracks, so the index becomes a MIX. The
-// stored (older) format therefore wins: recording the current one would erase
-// the only signal that a re-embed is worth running. An empty index has nothing
-// to be inconsistent with and adopts the current format, which is why a fresh
-// install never sees the advisory.
-//
-// A stored format NEWER than this build (a downgraded controller) clamps down
-// for the same reason — this run embeds at ITS shape, so the oldest shape now
-// present is its own, and the newer controller sees the mix once restored.
-//
-// `reseed` is the one case that rewrites every vector, so it always adopts.
+// What text format the index is recorded as (#1246): the oldest shape still
+// present, since a forward run embeds only vectorless tracks and leaves a mix.
+// Recording the current one would erase the signal that a re-embed is worth
+// running. `reseed` rewrites every vector, so it always adopts.
 export function resolveIndexTextFormat(
   stored: number | null | undefined,
   vectorCount: number,
@@ -323,8 +229,7 @@ export function resolveIndexTextFormat(
   return EMBED_TEXT_VERSION;
 }
 
-// Pure prefix application, exported for tests. `prefixes` defaults to the
-// active model's table entry.
+// Pure prefix application, exported for tests.
 export function applyDocPrefix(
   text: string,
   mode: IndexTextMode,
@@ -333,9 +238,9 @@ export function applyDocPrefix(
   return mode === 'prefixed' && prefixes.document ? prefixes.document + text : text;
 }
 
-// A query prefix applies when the index carries document prefixes too
-// ('prefixed'), OR when the model prefixes queries only (mxbai-style — the
-// documents embed bare by design, so the index mode doesn't gate it).
+// A query prefix applies when the index carries document prefixes too, or when
+// the model prefixes queries only (mxbai-style: documents embed bare by design,
+// so the index mode doesn't gate it).
 export function applyQueryPrefix(
   text: string,
   indexMode: IndexTextMode,
@@ -362,11 +267,8 @@ export async function embedQueryText(
   return vec ?? null;
 }
 
-// ---------------------------------------------------------------------------
-// Preflight — classify the common configuration failures BEFORE running a
-// 28,000-track embedding job so the operator gets an actionable message
-// instead of a Node stack trace. Issue #174.
-// ---------------------------------------------------------------------------
+// Preflight: classify the common configuration failures before running a whole
+// embedding job, so the operator gets an actionable message (#174).
 
 type ProbeCode =
   | 'ok'
@@ -382,12 +284,10 @@ type ProbeCode =
 export interface ProbeResult {
   code: ProbeCode;
   message: string;
-  // Vector length measured from a successful probe. Authoritative dim for the
-  // schema — beats guessing from the model name (#319). Only set when code==ok.
+  // Measured vector length, beating the model-name guess (#319). Only set when
+  // code == 'ok'.
   dim?: number;
-  // Resolved embedding provider ("follow LLM" already resolved). Lets callers
-  // tailor messaging — e.g. the Test endpoint's Ollama auto-pull note — without
-  // re-deriving the provider.
+  // Resolved embedding provider ("follow LLM" already resolved).
   provider?: string;
 }
 
@@ -395,9 +295,9 @@ function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
   const raw = err?.message || String(err);
   const status = err?.cause?.status_code ?? err?.statusCode ?? err?.status;
   const txt = raw.toLowerCase();
-  // buildEmbeddingModel throws this for chat-only providers (deepseek / gateway)
-  // that have no embeddings endpoint at all (#493). Check before the
-  // network-shaped codes — it's a config error, not a reachability one.
+  // Chat-only providers (deepseek / gateway) throw this from
+  // buildEmbeddingModel (#493). Must be checked before the network-shaped
+  // codes: it's a config error, not a reachability one.
   if (txt.includes('has no text-embedding support')) {
     return { code: 'no_embeddings', raw };
   }
@@ -407,10 +307,9 @@ function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
   if (status === 401 || status === 403 || txt.includes('unauthorized') || txt.includes('forbidden')) {
     return { code: 'unauthorized', raw };
   }
-  // Server is up and authenticated, but the loaded model can't embed: either it
-  // was started without the embeddings endpoint, or it's a generative/chat model
-  // whose pooling type is 'none' (not OAI-compatible). The classic trap when an
-  // openai-compatible embedding config inherits the *chat* server's baseUrl (#319).
+  // Server is up and authenticated, but the loaded model can't embed: usually an
+  // openai-compatible embedding config inheriting the chat server's baseUrl,
+  // whose pooling type is 'none' (#319).
   if (
     txt.includes('does not support embeddings') ||
     txt.includes('start it with') ||         // llama.cpp: "Start it with `--embeddings`"
@@ -427,8 +326,8 @@ function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
   ) {
     return { code: 'unreachable', raw };
   }
-  // A missing or malformed base URL makes the SDK build a relative request URL
-  // (e.g. just "/embeddings"), which fetch rejects before any network call.
+  // A missing/malformed base URL makes the SDK build a relative request URL,
+  // which fetch rejects before any network call.
   if (
     txt.includes('failed to parse url') ||
     txt.includes('invalid url') ||
@@ -545,8 +444,8 @@ function actionableMessage(
   }
 }
 
-// Attempt to pull a missing Ollama model. Returns true on success. Best-effort:
-// any error from the pull is swallowed and reported via the next probe.
+// Best-effort pull of a missing Ollama model; any error is swallowed and
+// reported via the next probe.
 async function tryOllamaPull(model: string, ollamaUrl: string): Promise<boolean> {
   if (!model || !ollamaUrl) return false;
   console.log(`[tag] auto-pulling Ollama embedding model "${model}" from ${ollamaUrl}...`);
@@ -560,8 +459,7 @@ async function tryOllamaPull(model: string, ollamaUrl: string): Promise<boolean>
       console.error(`[tag] pull failed: HTTP ${res.status}`);
       return false;
     }
-    // Drain the NDJSON progress stream so the pull actually completes; only
-    // print milestone status lines to keep the log readable.
+    // Drain the NDJSON progress stream so the pull actually completes.
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';
@@ -596,11 +494,9 @@ async function tryOllamaPull(model: string, ollamaUrl: string): Promise<boolean>
   }
 }
 
-// Probe an explicit embedding config — builds a one-off model, embeds a short
-// string, and returns the real vector length on success or an actionable
-// message on failure. Shared by probeOnce() (saved config, used by the tagger
-// preflight) and the /settings/embedding/probe endpoint (unsaved form values,
-// passed as overrides) so both classify identically and name the right server.
+// Probe an explicit embedding config: one-off model, embed a short string,
+// return the real vector length or an actionable message. Shared by probeOnce()
+// and /settings/embedding/probe (unsaved form values), so both classify alike.
 export async function probeEmbeddingConfig(
   overrides: Partial<EmbeddingCfg> = {},
 ): Promise<ProbeResult> {
@@ -609,8 +505,7 @@ export async function probeEmbeddingConfig(
   try {
     const model = buildEmbeddingModel(cfg);
     const { embeddings } = await embedMany({ model, values: ['subwave embedding probe'] });
-    // Measure the real vector length from the live server — authoritative dim,
-    // independent of the name→dim guess table (#319).
+    // Real vector length from the live server, not the name→dim guess (#319).
     const dim = Array.isArray(embeddings?.[0]) ? embeddings[0].length : undefined;
     return { code: 'ok', message: 'ok', dim, provider: info.provider };
   } catch (err: any) {
@@ -623,9 +518,8 @@ function probeOnce(): Promise<ProbeResult> {
   return probeEmbeddingConfig();
 }
 
-// One-shot readiness check used by the tagger before phase-1. Auto-pulls a
-// missing Ollama model once and re-probes; on any other failure code, returns
-// the friendly message so the caller can print + exit.
+// Readiness check used by the tagger before phase-1. Auto-pulls a missing
+// Ollama model once and re-probes; otherwise returns the actionable message.
 export async function ensureReady(): Promise<ProbeResult> {
   if (!embeddingEnabled()) {
     return { code: 'disabled', message: 'embeddings are disabled (settings.embedding.enabled=false)' };
@@ -641,26 +535,12 @@ export async function ensureReady(): Promise<ProbeResult> {
   return first;
 }
 
-// The tagging-provenance stamp: `prompt_hash` on every LLM-tagged row, and the
-// value `staleTaggedIds` compares against on --upgrade / admin Re-decide moods.
-//
-// It hashes TWO things and deliberately not a third:
-//
-//   - the tagger CONTRACT version (music/tagger-core.TAGGER_CONTRACT_VERSION),
-//     bumped by hand when the prompt's meaning changes;
-//   - the live mood vocabulary, so an operator editing settings.moods
-//     auto-invalidates tags decided against the old list;
-//   - NOT the prompt string itself (#1548). It used to take the rendered
-//     `taggerBatchSystem()` text, which made every cosmetic reword — #1541's
-//     transport-wording fix, a typo, a reflowed line — re-tag the entire
-//     library on the next Re-decide: ~1600 batch calls on a 40k library
-//     against a homelab Ollama box, for a contract that did not change.
-//
-// The trade is stated in docs/internals/music.md: the version has to be bumped
-// by hand, so a semantic prompt edit that forgets it never re-decides.
-//
-// `vocab` is injectable so scripts/tagger-contract-hash.test.ts can pin the
-// inputs without loading settings (same shape as audio-moods.moodVocabHash).
+// The tagging-provenance stamp: `prompt_hash` on every LLM-tagged row, and what
+// `staleTaggedIds` compares against on --upgrade / admin Re-decide moods.
+// Hashes the hand-bumped TAGGER_CONTRACT_VERSION plus the live mood vocabulary,
+// deliberately NOT the prompt text (#1548) — a cosmetic reword must not re-tag
+// the library, at the cost of a semantic edit that forgets the bump. `vocab` is
+// injectable so scripts/tagger-contract-hash.test.ts can pin the inputs.
 export function promptVocabHash(
   contractVersion: number,
   vocab: readonly string[] = moodVocab(),

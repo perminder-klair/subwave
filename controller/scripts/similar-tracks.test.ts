@@ -1,23 +1,7 @@
-// Pins GET /similar-tracks — the listener-facing CLAP "sounds like this"
-// lookup (#1575) — and the two things about it that are easy to break without
-// noticing on a running station:
-//
-//  - THE GATE FAILS CLOSED. It is the STATION password, not the admin one, so
-//    the endpoint is open on a public station (that is the point — an
-//    operator's call-in agent shouldn't need the admin credential) and shut on
-//    a private one. Reusing listenerAuthDecision here would fail OPEN with
-//    listenerAuth off, which is the exact mistake stationAuthDecision exists to
-//    prevent, so the route's stack is asserted too — a middleware quietly
-//    dropped from the route is a private library published to the internet.
-//  - AN EMPTY RESULT CARRIES A REASON. A lean analyzer, a library mid-analysis
-//    and an unknown seed all return zero tracks; collapsing them into a bare []
-//    leaves an API consumer unable to tell "try again later" from "your id is
-//    wrong".
-//
-// The public row shape is pinned by its EXACT key set, not by spot checks: the
-// issue's constraint is "never widen it", and a widening is an added key.
-//
-// STATE_DIR is redirected before the first import, like talk-air.test.ts.
+// GET /similar-tracks (#1575). Two properties: the gate fails CLOSED on the
+// STATION password (not listenerAuthDecision, which fails open), and an empty
+// result carries a reason. The public row shape is pinned by its exact key
+// set, since a widening is an added key.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -39,17 +23,14 @@ const { stationAuthCandidate, stationAuthDecision } = await import('../src/util/
 
 const PW = 'hunter2-correct-horse';
 
-// --- the empty-with-a-reason contract -------------------------------------
-
 test('every empty result names its own cause, widest first', () => {
   const base = { audioIndexSize: 500, libraryTotal: 900, seedFound: true, seedHasVector: true, neighbourCount: 8 };
 
   assert.equal(similarTracksOutcome(base).reason, 'ok');
   assert.equal(similarTracksOutcome(base).message, null, 'a good answer says nothing extra');
 
-  // A station on the lean analyzer is told THAT, not "your seed isn't
-  // analysed" — which would be true of every track it owns and points the
-  // operator at the wrong fix.
+  // A lean-analyzer station is told THAT, not "seed not analysed", which would
+  // be true of every track it owns.
   const lean = similarTracksOutcome({ ...base, audioIndexSize: 0, seedFound: false, seedHasVector: false, neighbourCount: 0 });
   assert.equal(lean.reason, 'no-audio-index');
   assert.match(String(lean.message), /heavy analyzer/);
@@ -61,13 +42,10 @@ test('every empty result names its own cause, widest first', () => {
   assert.equal(unanalysed.reason, 'seed-not-analysed');
   assert.match(String(unanalysed.message), /500 of 900/, 'coverage is quoted so the caller can judge "try later"');
 
-  // The seed IS analysed and the KNN ran — everything it found was blocked or
-  // filtered. Distinct from "not analysed": retrying later will not help.
+  // The KNN ran and everything was blocked or filtered; retrying will not help.
   const blocked = similarTracksOutcome({ ...base, neighbourCount: 0 });
   assert.equal(blocked.reason, 'no-neighbours');
 });
-
-// --- limit handling -------------------------------------------------------
 
 test('limit clamps rather than trusting the caller', () => {
   assert.equal(parseSimilarLimit(undefined), SIMILAR_LIMIT_DEFAULT);
@@ -78,13 +56,10 @@ test('limit clamps rather than trusting the caller', () => {
   assert.equal(parseSimilarLimit(-5), 1);
   assert.equal(parseSimilarLimit(9999), SIMILAR_LIMIT_MAX);
 
-  // The KNN is deliberately WIDER than the page: the archive filter and the
-  // blocklist cut rows after the search, so a narrow pull returns short pages.
+  // The KNN is wider than the page: filters cut rows after the search.
   assert.equal(soundKnnWidth(12), 60);
   assert.equal(soundKnnWidth(50), 100);
 });
-
-// --- the public row shape -------------------------------------------------
 
 const SEED_ROW = {
   id: 'trk-1',
@@ -125,18 +100,14 @@ test('the published row is a fixed, non-widening subset', () => {
 });
 
 test('the CLAP-derived audioMoods stay an admin surface', () => {
-  // The seed row carries audioMoods and /library/browse publishes them behind
-  // requireAdmin. This route is reachable with NO credential on a public
-  // station, so it is not the place they first go public — the issue's
-  // constraint is "never widen it", and the widest reading of that is the one
-  // that can't leak.
+  // /library/browse publishes audioMoods behind requireAdmin; this route is
+  // reachable with no credential on a public station.
   assert.equal('audioMoods' in publicSimilarTrack(SEED_ROW as never), false);
 });
 
 test('the year is the ERA year, never the raw release year', () => {
-  // #1418: a reissue's own date is untrusted, and this is a listener-facing
-  // surface, so it resolves through show-filter.resolveEraYear like every
-  // other one.
+  // #1418: resolves through show-filter.resolveEraYear like every other
+  // listener-facing year.
   assert.equal(publicSimilarTrack(SEED_ROW as never).year, 2013, 'originalYear wins');
   assert.equal(
     publicSimilarTrack({ ...SEED_ROW, originalYear: null, yearUntrusted: true } as never).year,
@@ -171,8 +142,6 @@ test('a missing similarity is null, never 0 — 0 is a real cosine', () => {
   assert.equal(publicSimilarTrack({ ...SEED_ROW, _similarity: 0 } as never).similarity, 0);
 });
 
-// --- where the station password rides on a GET ----------------------------
-
 test('the credential is read from the header, a Bearer token, or ?auth=', () => {
   assert.equal(stationAuthCandidate({ headerToken: PW }), PW);
   assert.equal(stationAuthCandidate({ authorization: `Bearer ${PW}` }), PW);
@@ -182,18 +151,15 @@ test('the credential is read from the header, a Bearer token, or ?auth=', () => 
   assert.equal(stationAuthCandidate({ headerToken: PW, query: 'wrong' }), PW, 'the explicit header wins');
   assert.equal(stationAuthCandidate({ authorization: `Bearer ${PW}`, query: 'wrong' }), PW);
 
-  // ADMIN credentials must never be mistaken for the station password: they are
-  // a different secret, and accepting them here would quietly widen the gate.
+  // Admin credentials are a different secret and must not open this gate.
   assert.equal(stationAuthCandidate({ authorization: 'Basic dXNlcjpwYXNz' }), '', 'Basic is not a station token');
 
-  // A repeated query param arrives as an array. Guessing which one the caller
-  // meant is how a wrong password gets accepted.
+  // A repeated query param arrives as an array; guessing which one was meant
+  // is how a wrong password gets accepted.
   assert.equal(stationAuthCandidate({ query: [PW, 'wrong'] }), '');
   assert.equal(stationAuthCandidate({}), '');
   assert.equal(stationAuthCandidate({ headerToken: '   ' }), '', 'whitespace is not a credential');
 });
-
-// --- the gate, driven through the real middleware -------------------------
 
 const settings = await import('../src/settings.js');
 const { requireStationAuth } = await import('../src/middleware/station-auth.js');
@@ -219,8 +185,8 @@ function fakeRes(): FakeRes {
   return res;
 }
 
-// Every call gets its own source address so the failure counter (shared with
-// POST /station-auth, 20 per 15 min) can't leak between assertions.
+// Every call gets its own source address so the failure counter can't leak
+// between assertions.
 let ipSeq = 0;
 async function callGate(req: Record<string, unknown> = {}): Promise<{ passed: boolean; res: FakeRes }> {
   ipSeq += 1;
@@ -267,15 +233,14 @@ test('a private station fails CLOSED, and opens for the real password only', asy
 });
 
 test('privatePlayer OFF with listenerAuth ON still closes the gate', async () => {
-  // The ASYMMETRY that makes this middleware not-listenerAuthDecision: that one
-  // reads `enabled: false` and waves everything through, which here would
-  // publish a private library.
+  // listenerAuthDecision reads `enabled: false` and waves everything through,
+  // which here would publish a private library.
   await settings.update({ privacy: { password: PW, privatePlayer: false, listenerAuth: true } } as never);
   assert.equal((await callGate()).passed, false);
   assert.equal((await callGate({ headers: { 'x-station-auth': PW } })).passed, true);
 
-  // And the pure decision agrees, so the middleware can't be "simplified" into
-  // the Icecast one without this failing.
+  // The pure decision agrees, so the middleware can't be collapsed into the
+  // Icecast one without this failing.
   assert.equal(
     stationAuthDecision({ privatePlayer: false, listenerAuth: true, password: PW, candidate: 'x' }),
     false,
@@ -283,23 +248,17 @@ test('privatePlayer OFF with listenerAuth ON still closes the gate', async () =>
 });
 
 test('a lock with no password on file is closed, not open', async () => {
-  // settings.update refuses to persist this state, so it is built by hand —
-  // a hand-edited settings.json can still produce it, and the gate must not
-  // read "no password" as "no lock".
+  // update() refuses to persist this, but a hand-edited settings.json can
+  // produce it; "no password" must not read as "no lock".
   assert.equal(
     stationAuthDecision({ privatePlayer: true, listenerAuth: false, password: '', candidate: '' }),
     false,
   );
 });
 
-// --- the failure counter is this route's own ------------------------------
-
 test('a failing API read cannot spend the player password box\'s attempts', async () => {
-  // Both surfaces use checkAuthRateLimit with the same 20-per-15-min ceiling,
-  // but on separate counters. An operator's call-in agent left polling with a
-  // stale password must not burn the twenty attempts a HUMAN on that address
-  // needs to unlock the player — a misconfigured integration locking a
-  // listener out of the station is a worse failure than the one the cap is for.
+  // Same 20-per-15-min ceiling, separate counters: a stale-password API poller
+  // must not burn the attempts a human needs to unlock the player.
   const { checkAuthRateLimit } = await import('../src/middleware/ratelimit.js');
   const ip = '198.51.100.7';
 
@@ -313,12 +272,10 @@ test('a failing API read cannot spend the player password box\'s attempts', asyn
   // Same IP, same instant, other surface: untouched.
   assert.equal(checkAuthRateLimit(ip, 'station-auth').ok, true, 'the password box is unaffected');
 
-  // And the default argument is the password box, so the existing call in
-  // POST /station-auth keeps its historical counter.
+  // The default argument is the password box, so POST /station-auth keeps its
+  // historical counter.
   assert.equal(checkAuthRateLimit('203.0.113.250').ok, true);
 });
-
-// --- the route is actually behind the gate --------------------------------
 
 test('GET /similar-tracks is mounted with requireStationAuth in front of it', async () => {
   const { router } = await import('../src/routes/public.js');

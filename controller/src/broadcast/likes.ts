@@ -1,22 +1,12 @@
-// Listener likes — the durable store behind the player's heart button (#991).
+// Listener likes (#991) — records in state/likes.json, each with a slim track
+// snapshot so the picker can feed favourites back without a Subsonic round-trip.
+// Dedup is one like per apparent listener per AIRING, keyed by HMAC(secret, ip):
+// the raw IP is never stored and the secret is persisted so dedup survives
+// restarts. Listeners behind one NAT share a key — dedup, not identity.
 //
-// One file, two jobs:
-//   - persistence: every accepted like is a small record in state/likes.json,
-//     carrying a slim track snapshot so the picker can feed favourites back
-//     into the candidate pool without a Subsonic round-trip.
-//   - accountless dedup: one like per apparent listener per AIRING. The
-//     listener key is HMAC(secret, ip) — the raw IP is never stored, and the
-//     secret is generated once and persisted alongside the records so dedup
-//     survives restarts (unlike audience.ts, whose process-random salt only
-//     needs same-day stability). Multiple listeners behind one NAT share a
-//     key; this is lightweight dedup, not identity.
-//
-// Navidrome star write-back is NOT here — the route fires subsonic.star()
-// itself; this module owns only the controller-side record.
-//
-// Operator likes (#1253) ride the same records under a reserved listener key.
-// They are curation rather than a taste snapshot, which is why they are exempt
-// from both the topLiked() window and the MAX_RECORDS trim — see OPERATOR_KEY.
+// Navidrome star write-back is the route's job, not this module's.
+// Operator likes (#1253) ride the same records under a reserved listener key and
+// are exempt from both the topLiked() window and the MAX_RECORDS trim.
 
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -26,15 +16,13 @@ import { config } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 
 const STORE_FILE = join(config.stateDir, 'likes.json');
-// Hard cap on stored records — oldest trimmed first. At a homelab station's
-// scale this is years of likes; the cap just bounds the file.
+// Hard cap on stored records, oldest trimmed first.
 const MAX_RECORDS = 5000;
 const FLUSH_DELAY_MS = 1500;
 
-// The operator's own heart, from the admin library. A reserved listener key,
-// not an HMAC — it cannot collide, because a real key is always 24 hex chars.
-// Pairing it with a synthetic airing key makes an operator like idempotent per
-// song (one forever) through the exact same dedup a listener like uses.
+// Reserved listener key, not an HMAC: it cannot collide, since a real key is
+// always 24 hex chars. Paired with a synthetic airing key so an operator like is
+// idempotent per song through the same dedup a listener like uses.
 export const OPERATOR_KEY = 'operator';
 const operatorAiringKey = (songId: string) => `${songId}|operator`;
 const isOperator = (r: LikeRecord) => r.via === 'operator';
@@ -52,13 +40,11 @@ interface LikedTrack {
 interface LikeRecord {
   songId: string;
   track: LikedTrack;
-  // `${songId}|${startedAt}` — one airing of one song. The same song aired
-  // again later is likeable again (a fresh airingKey).
+  // `${songId}|${startedAt}` — one airing. A later airing is likeable again.
   airingKey: string;
-  listenerKey: string; // HMAC of the client IP — see header
+  listenerKey: string; // HMAC of the client IP
   likedAt: string;     // ISO timestamp
-  // Absent on a listener like (every record written before #1253), so nothing
-  // needs backfilling — missing means listener, which is already correct.
+  // Absent on a listener like, so pre-#1253 records need no backfill.
   via?: 'operator';
 }
 
@@ -136,14 +122,12 @@ function countForSong(songId: string): number {
   return n;
 }
 
-// Bound the store, evicting oldest LISTENER records first. An operator like is
-// curation the operator set by hand; letting listener volume evict it would
-// silently undo that. Exported for the unit test, which can't reach 5000 rows.
+// Evicts oldest LISTENER records first: listener volume must not evict curation.
+// Exported for the unit test, which can't reach 5000 rows.
 export function trimTo(max: number): void {
   if (records.length <= max) return;
   const operators = records.filter(isOperator);
-  // More curation than the cap can hold means the store is far outside its
-  // design envelope — fall back to plain oldest-first so the cap still holds.
+  // More curation than the cap can hold: fall back to oldest-first.
   if (operators.length >= max) {
     records = records.slice(-max);
     return;
@@ -152,8 +136,8 @@ export function trimTo(max: number): void {
   const room = max - operators.length;
   const listeners = records.filter((r) => !isOperator(r));
   for (const r of listeners.slice(-room)) keep.add(r);
-  // Filter rather than concat, so surviving records stay in insertion order
-  // (recent() reads off the tail and would otherwise report a bogus ordering).
+  // Filter rather than concat, so survivors keep insertion order (recent() reads
+  // off the tail).
   records = records.filter((r) => keep.has(r));
 }
 
@@ -169,8 +153,8 @@ export interface RecordLikeResult {
   count: number; // total likes for this song, all airings
 }
 
-// Record one like. Duplicate (same listener key, same airing) is a no-op that
-// still reports the current count, so the UI can settle into the liked state.
+// A duplicate (same listener key, same airing) is a no-op that still reports the
+// count, so the UI settles into the liked state.
 export async function recordLike({ track, startedAt, ip }: RecordLikeInput): Promise<RecordLikeResult> {
   await load();
   const songId = String(track?.id || '');
@@ -192,11 +176,7 @@ export async function recordLike({ track, startedAt, ip }: RecordLikeInput): Pro
   return { ok: true, duplicate: false, count: countForSong(songId) };
 }
 
-// --- operator likes (#1253) -------------------------------------------------
-
-// The operator hearting a track from the admin library. Idempotent per song:
-// a second call is a no-op that still reports the count, so a double-tap can
-// never write two records.
+// Idempotent per song: a double-tap can never write two records.
 export async function operatorLike(track: any): Promise<{ ok: boolean; added: boolean; count: number }> {
   await load();
   const songId = String(track?.id || '');
@@ -217,9 +197,8 @@ export async function operatorLike(track: any): Promise<{ ok: boolean; added: bo
   return { ok: true, added: true, count: countForSong(songId) };
 }
 
-// Un-heart. Removes ONLY the operator's own record — every listener like for
-// the song survives, which is what makes this a toggle rather than a purge.
-// `remaining` lets the route decide whether unstarring Navidrome is safe.
+// Removes ONLY the operator's own record; listener likes survive. The count lets
+// the route decide whether unstarring Navidrome is safe.
 export async function operatorUnlike(songId: string): Promise<{ removed: boolean; count: number }> {
   await load();
   const before = records.length;
@@ -233,9 +212,7 @@ export function operatorLiked(songId: string): boolean {
   return records.some((r) => r.songId === songId && isOperator(r));
 }
 
-// Compact {songId: {count, operator}} map — what decorates the heart on every
-// admin library row, whatever source the row came from (library.db, Navidrome
-// search, CLAP KNN). Bounded by distinct liked songs, so <= MAX_RECORDS.
+// Decorates the heart on every admin library row, whatever its source.
 export function index(): Record<string, { count: number; operator: boolean }> {
   const out: Record<string, { count: number; operator: boolean }> = Object.create(null);
   for (const r of records) {
@@ -258,9 +235,8 @@ export interface LikedSong {
   lastLikedAt: string;
 }
 
-// Every liked song, one entry each, newest snapshot wins. Unsorted — the route
-// owns ordering. All time, unlike topLiked(): this is the operator's library
-// view, not the picker's recency-weighted taste signal.
+// One entry per liked song, newest snapshot wins. Unsorted (the route orders) and
+// all-time, unlike topLiked().
 export function likedSongs(): LikedSong[] {
   const bySong = new Map<string, LikedSong>();
   for (const r of records) {
@@ -302,16 +278,14 @@ export interface TopLikedEntry {
   lastLikedAt: string;
 }
 
-// Most-liked songs inside the window. Sync on purpose: favouritesClause (a
-// sync prompt builder) and the pool picker both read this after load() has run
-// at boot; before that it just returns [].
+// Sync on purpose: favouritesClause and the pool picker read it after load() has
+// run at boot; before that it returns [].
 export function topLiked({ windowDays = 30, limit = 10 }: { windowDays?: number; limit?: number } = {}): TopLikedEntry[] {
   const cutoff = windowDays > 0 ? Date.now() - windowDays * 86_400_000 : 0;
   const bySong = new Map<string, TopLikedEntry>();
   for (const r of records) {
-    // Operator likes never age out. A listener like falling past the window is
-    // the point — it's a snapshot of recent taste. An operator like falling out
-    // would read as the DJ quietly forgetting a favourite the operator set.
+    // Operator likes never age out: a listener like ageing is a taste snapshot
+    // expiring, an operator like ageing is curation being forgotten.
     if (cutoff && !isOperator(r) && Date.parse(r.likedAt) < cutoff) continue;
     const cur = bySong.get(r.songId);
     if (cur) {
@@ -326,13 +300,10 @@ export function topLiked({ windowDays = 30, limit = 10 }: { windowDays?: number;
     .slice(0, Math.max(1, limit));
 }
 
-// The listener-favourites clause for the pick EVENT turn (#991). Lives here —
-// next to the store it reads — so dj-agent renders it and the placement test
-// can pin it without importing the agent. Deliberately NOT part of pickSystem:
-// the list changes as likes land, and re-rendering it inside the system prompt
-// breaks the byte-stable prefix automatic prompt caching keys on. Returns ''
-// when the operator hasn't opted in or nothing is liked, so the event turn is
-// byte-identical to a likes-free station.
+// The listener-favourites clause for the pick EVENT turn (#991). Deliberately NOT
+// part of pickSystem: the list changes as likes land, and re-rendering it there
+// would break the byte-stable prefix prompt caching keys on. Returns '' when not
+// opted in or nothing is liked, so the event turn stays byte-identical.
 export function favouritesClause(cfg: { enabled?: boolean; influenceDj?: boolean; windowDays?: number; maxTracks?: number } | null | undefined): string {
   if (!cfg?.enabled || !cfg?.influenceDj) return '';
   const favs = topLiked({ windowDays: cfg.windowDays, limit: cfg.maxTracks });
@@ -342,8 +313,8 @@ export function favouritesClause(cfg: { enabled?: boolean; influenceDj?: boolean
     .join('; ')}. Treat these as a strong preference signal when they fit the moment — but keep variety, never loop the same favourites back-to-back.`;
 }
 
-// Recent likes for the admin card — listener key truncated to a short handle
-// (enough to see "same listener", never reversible to an IP).
+// Listener key truncated to a short handle: enough to spot "same listener",
+// never reversible to an IP.
 export function recent(limit = 30) {
   return records
     .slice(-Math.max(1, limit))

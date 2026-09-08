@@ -1,8 +1,6 @@
-/* Library Observatory — right-rail panels. StatsView aggregates recompute
-   from the filtered set. The Dossier draws its header/strip from the in-hand
-   node (instant) and enrichment/embeddings/mix-next from the lazy detail
-   fetch. Fingerprints use the real learned vectors when the server returns
-   them, else a deterministic seed. */
+/* Library Observatory -- right-rail panels. StatsView aggregates recompute from
+   the filtered set. The Dossier draws its header/strip from the in-hand node and
+   enrichment/embeddings/mix-next from the lazy detail fetch. */
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
@@ -22,7 +20,6 @@ import {
   type TrackDetail,
 } from './data';
 
-// small primitives
 function Bar({ label, value, max, accent }: { label: string; value: number; max: number; accent?: boolean }) {
   const pct = max ? Math.round((value / max) * 100) : 0;
   return (
@@ -61,7 +58,6 @@ export function Card({
   );
 }
 
-// Camelot key wheel
 function KeyWheel({ list }: { list: ObsTrack[] }) {
   const counts = useMemo(() => {
     const m: Record<string, number> = {};
@@ -130,7 +126,6 @@ function KeyWheel({ list }: { list: ObsTrack[] }) {
   );
 }
 
-// BPM histogram (tempo river)
 function TempoRiver({ list }: { list: ObsTrack[] }) {
   const bins = useMemo(() => {
     const edges = [60, 80, 90, 100, 110, 120, 128, 140, 160, 200];
@@ -163,7 +158,6 @@ function TempoRiver({ list }: { list: ObsTrack[] }) {
   );
 }
 
-// Loudness histogram (integrated LUFS)
 function LoudnessRiver({ list }: { list: ObsTrack[] }) {
   const bins = useMemo(() => {
     // Lower edges, in LUFS. Quieter masters on the left, hotter on the right.
@@ -198,9 +192,9 @@ function LoudnessRiver({ list }: { list: ObsTrack[] }) {
   );
 }
 
-// Song shape — one shared time axis (0…duration) across three lanes: pace
-// curve, vocal presence, key bands. Positions are percent-based HTML so they
-// stay crisp at any panel width; only the pace curve is SVG.
+// Song shape -- one shared time axis (0..duration) across three lanes: pace
+// curve, vocal presence, key bands. Percent-based HTML so it stays crisp at any
+// panel width; only the pace curve is SVG.
 function SongShape({ detail, durationSec }: { detail: TrackDetail; durationSec: number | null }) {
   const d = detail.track;
   const pace = d.pace ?? [];
@@ -320,7 +314,6 @@ function SongShape({ detail, durationSec }: { detail: TrackDetail; durationSec: 
   );
 }
 
-// Embedding fingerprint
 function Fingerprint({
   vector,
   seed,
@@ -361,7 +354,6 @@ function Fingerprint({
   );
 }
 
-// Meter
 function Meter({ value, label, cells = 20, display }: { value: number; label: string; cells?: number; display?: string }) {
   const on = Math.round(value * cells);
   return (

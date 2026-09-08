@@ -89,8 +89,8 @@ export function TrackTable(p: TrackTableProps) {
   return (
     // Dim, don't blank, stale rows during a refetch so filter changes read as updating.
     <div className={cn(p.loading && 'opacity-60 transition-opacity')}>
-      {/* Below sm: the 5-column grid leaves the title ~60px, so rows lay out as a plain
-          flex line instead. `!` beats `.admin-root .lib-colhead/.lib-row`. */}
+      {/* Below sm: the 5-column grid leaves the title ~60px, so rows lay out as
+          a plain flex line. `!` beats `.admin-root .lib-colhead/.lib-row`. */}
       <div className="lib-colhead !flex sm:!grid">
         <span>
           <label className={CHECK_HIT}>
@@ -124,18 +124,17 @@ export function TrackTable(p: TrackTableProps) {
               />
             </label>
             <Thumb track={t} />
-            {/* flex-1 drives the phone layout; grid items ignore flex-*, so the sm:+
-                grid column sizing is untouched. */}
+            {/* flex-1 drives the phone layout; grid items ignore flex-*. */}
             <div className="min-w-0 flex-1">
-              {/* Badge sits with the TITLE, not the mood/energy cell: .lib-tags is
-                  display:none below 860px and this marker must survive a phone. */}
+              {/* Badge sits with the TITLE: .lib-tags is display:none below
+                  860px and this marker must survive a phone. */}
               <div className="flex min-w-0 items-center gap-2">
                 <div className="lib-title">{t.title || '—'}</div>
                 {t.blockedBy && (
                   <span className="lib-btag shrink-0" title={`blocked via ${blockedByLabel(t.blockedBy)}`}>
                     <Ban size={10} aria-hidden />
-                    {/* Scope word drops below sm: at 390px the badge and title share
-                        ~210px. The full scope stays in the row menu. */}
+                    {/* Scope word drops below sm:. The full scope stays in the
+                        row menu. */}
                     <span aria-hidden>
                       never play
                       {t.blockedBy.kind === 'rule' ? (
@@ -169,8 +168,8 @@ export function TrackTable(p: TrackTableProps) {
               {t.instrumental === true && <span className="lib-mtag lib-atag" title="no vocals detected">instrumental</span>}
               {t.similarity != null && <span className="lib-mtag lib-atag" title="sound match vs your description">≈ {Math.round(t.similarity * 100)}%</span>}
             </div>
-            {/* Four 36px buttons cost more than the title is worth on a phone, so below
-                sm: they collapse into the single overflow menu and each inline one hides. */}
+            {/* Four 36px buttons cost more than the title is worth on a phone,
+                so below sm: they collapse into the overflow menu. */}
             <div className="flex items-center justify-end gap-1.5">
               <RowActionsMenu
                 track={t}
@@ -210,8 +209,7 @@ export function TrackTable(p: TrackTableProps) {
               >
                 {editing ? <X size={12} /> : <Pencil size={12} />}
               </Btn>
-              {/* Offered on every tab: an untagged search/recent row can be tagged on
-                  the spot (/library/retag takes the row body). */}
+              {/* Offered on every tab: an untagged row can be tagged on the spot. */}
               <Btn
                 sm
                 className="hidden sm:inline-flex"
@@ -224,11 +222,9 @@ export function TrackTable(p: TrackTableProps) {
                   ? <RotateCcw size={11} />
                   : <Sparkles size={11} />}
               </Btn>
-              {/* An entry-blocked row offers the reverse, not another scope to add:
-                  one click lifts the entry that matched, wherever it was made from.
-                  A RULE-blocked row keeps the block menu — the rule may cover
-                  hundreds of rows, so lifting it lives on the Blocked tab, and an
-                  id entry on top is still a legitimate ask. */}
+              {/* An entry-blocked row offers the reverse, not another scope: one
+                  click lifts the entry that matched. A RULE-blocked row keeps the
+                  block menu, since lifting a rule lives on the Blocked tab. */}
               {t.blockedBy && t.blockedBy.kind !== 'rule' ? (
                 <Btn
                   sm
@@ -337,8 +333,8 @@ export function RowActionsMenu({
           )}
           <span className="my-1 block border-t border-dashed border-separator-strong" />
           {track.blockedBy?.kind === 'rule' && (
-            /* Informational, not actionable: the rule may block hundreds of rows,
-               so lifting it happens on the Blocked tab, never as a row one-click. */
+            /* Informational, not actionable: the rule may block hundreds of
+               rows, so lifting it happens on the Blocked tab. */
             <span className={cn(MENU_ITEM, 'cursor-default items-start text-muted')}>
               <Ban size={13} className="mt-px flex-none" />
               <span>

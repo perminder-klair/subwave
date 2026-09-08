@@ -1,16 +1,9 @@
 'use client';
 
-// Export redacts API keys; restore keeps whatever keys are already configured
-// here (discussion #404). Restore has two paths because a large-library tag DB
-// can exceed Cloudflare's 100 MB upload cap and bounce with a 413 — the disk
-// restore skips the upload entirely (#612).
-//
-// The SCHEDULE (#1570) sits here rather than in a settings section because it
-// writes into the same folder the disk-restore list reads: a scheduled zip and
-// a hand-copied one are restored by the identical button below, and an operator
-// setting a cadence wants to see where the files land. It is an ordinary
-// settings key for all that — `{ backups }` through POST /settings, validated
-// by the mirrored schema before it leaves the browser.
+// Export redacts API keys; restore keeps configured keys (#404). Two restore
+// paths: a big tag DB can exceed a proxy's upload cap, so disk restore skips
+// the upload (#612). The schedule (#1570) is an ordinary `{ backups }` settings
+// key, kept here because it writes into the folder disk-restore reads.
 
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -52,9 +45,8 @@ function fmtSize(bytes: number): string {
 
 type BackupCadence = (typeof SETTINGS_BACKUP_CADENCES)[number];
 
-// The schedule card's inputs. `keep` is a STRING because it is bound to a
-// number input the operator can empty mid-edit; it becomes a number only in the
-// schema pre-flight.
+// `keep` is a STRING because the number input can be emptied mid-edit; it
+// becomes a number only in the schema pre-flight.
 interface ScheduleForm {
   cadence: BackupCadence;
   keep: string;
@@ -77,9 +69,8 @@ const CADENCE_LABELS: Record<BackupCadence, string> = {
   monthly: 'Monthly',
 };
 
-// What each cadence means in practice. Elapsed time, not a calendar step, and
-// checked hourly — so a station that is only powered on for part of the day
-// still gets its backup. Kept next to the labels so the two can't drift.
+// Elapsed time, not a calendar step, checked hourly. Kept beside the labels so
+// the two can't drift.
 const CADENCE_HINTS: Record<BackupCadence, string> = {
   off: 'No backups are written and nothing is ever deleted.',
   daily: 'A snapshot roughly every 24 hours.',
@@ -107,38 +98,28 @@ export default function BackupPanel() {
 
   const [restarting, setRestarting] = useState(false);
 
-  // ── the schedule ─────────────────────────────────────────────────────────
-  // Seeded from the stored value and re-seeded only when that value actually
-  // MOVES: the query keeps polling (SettingsPanel shares this key), so
-  // re-seeding on every poll would overwrite whatever the operator is mid-way
-  // through typing, while never re-seeding leaves the card showing a
-  // pre-restore schedule after the Restore button below rewrites settings.json.
+  // Seeded from the stored value, re-seeded only when that value MOVES: the
+  // query keeps polling, so re-seeding per poll would clobber half-typed input.
   const settingsQuery = useSettingsQuery<SettingsData>({ adminFetch, enabled: ready });
   const saveSchedule = useSettingsMutation<SettingsData>({ adminFetch });
   const [schedule, setSchedule] = useState<ScheduleForm | null>(null);
   const [scheduleErr, setScheduleErr] = useState<string | null>(null);
   const [scheduleFieldErrs, setScheduleFieldErrs] = useState<Record<string, string>>({});
   const [scheduleSaved, setScheduleSaved] = useState(false);
-  // What the inputs were last seeded FROM. Comparing against this rather than
-  // against the live query is what lets the effect below tell "the operator
-  // edited the box" apart from "the stored value moved underneath us" — a
-  // hydrate-once effect cannot distinguish the two, so it never notices the
-  // second and shows a pre-restore schedule for as long as the tab is open.
+  // What the inputs were last seeded FROM; comparing against this distinguishes
+  // "operator edited" from "stored value moved underneath us".
   const seededFrom = useRef<ScheduleForm | null>(null);
 
   const storedBackups = settingsQuery.data?.values?.backups;
   const storedForm = storedBackups ? asForm(storedBackups) : null;
-  // The query hands back a fresh object every poll, so the effect keys on the
-  // VALUE. Re-seeding on each poll would overwrite whatever is half-typed.
+  // Fresh object every poll, so the effect keys on the VALUE.
   const storedKey = storedForm ? formKey(storedForm) : null;
 
   useEffect(() => {
     if (!storedForm) return;
     const seeded = seededFrom.current;
     seededFrom.current = storedForm;
-    // First paint, or the operator has no unsaved edits: adopt the stored
-    // value. Unsaved edits are theirs to keep — the dirty marker then shows
-    // that the boxes and the station disagree.
+    // Adopt the stored value on first paint or when there are no unsaved edits.
     if (!seeded || !schedule || formKey(schedule) === formKey(seeded)) {
       setSchedule(storedForm);
     }
@@ -149,23 +130,17 @@ export default function BackupPanel() {
     setScheduleErr(null);
     setScheduleFieldErrs({});
     setScheduleSaved(false);
-    // Pre-flight through the mirrored schema so a bad retention is caught
-    // before a round trip, with the same message the server would send.
-    // `keep` goes in every patch, including a save that only means "stop
-    // backing up". Dropping it there left the stored retention behind whatever
-    // the box showed, and since the dirty check compares both fields the Save
-    // button then stayed lit with no save that could ever clear it. It is
-    // inert while the cadence is off, so sending it costs nothing — but a
-    // blank box must still not turn "stop backing up" into a validation
-    // refusal, so an empty retention falls back to what is stored.
+    // Pre-flight through the mirrored schema for the server's own message.
+    // `keep` rides every patch (the dirty check compares both fields), but a
+    // blank box under cadence 'off' falls back to what is stored so the save
+    // isn't refused.
     const keep = schedule.keep.trim() === '' && schedule.cadence === 'off'
       ? String(storedBackups?.keep ?? BACKUP_KEEP_DEFAULT)
       : schedule.keep;
     const parsed = backupsPatchSchema.safeParse({ cadence: schedule.cadence, keep });
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
-      // The dotted path is what keys fieldErrors, matching what the server
-      // would send back for the same value.
+      // Dotted path is what keys fieldErrors, matching the server's shape.
       const path = ['backups', ...(issue?.path ?? [])].join('.');
       const message = issue?.message ?? 'the backup schedule is not valid';
       setScheduleFieldErrs({ [path]: message });
@@ -174,16 +149,13 @@ export default function BackupPanel() {
     }
     try {
       const receipt = await saveSchedule.mutateAsync({ backups: parsed.data });
-      // Show what was actually stored, not what was typed: the fallback above
-      // and the schema's own coercion can both differ from the raw box.
+      // Show what was stored, not what was typed: the fallback and the schema's
+      // coercion can both differ from the raw box.
       const saved: ScheduleForm = { cadence: schedule.cadence, keep: String(parsed.data.keep) };
       seededFrom.current = saved;
       setSchedule(saved);
       setScheduleSaved(true);
-      // A committed POST whose confirming GET failed. The schedule IS saved —
-      // saying nothing would leave the Save button lit with no explanation,
-      // and saying "saved" alone would hide that the panel is now reading a
-      // stale envelope.
+      // Committed POST whose confirming GET failed: saved, but reading stale.
       if (receipt.refreshError) {
         setScheduleErr(
           `Saved, but the station's settings could not be re-read (${receipt.refreshError}). Refresh to confirm.`,
@@ -204,8 +176,8 @@ export default function BackupPanel() {
   };
 
   const scheduleDirty = !!schedule && !!storedForm && formKey(schedule) !== formKey(storedForm);
-  // useSettingsQuery is configured toastOnError:false, so without this the card
-  // sits on "Loading the schedule…" forever when /settings is unreachable.
+  // useSettingsQuery is toastOnError:false, so surface the load failure here or
+  // the card sits on "Loading the schedule…" forever.
   const scheduleLoadErr = settingsQuery.error
     ? (settingsQuery.error instanceof Error ? settingsQuery.error.message : String(settingsQuery.error))
     : null;
@@ -240,10 +212,8 @@ export default function BackupPanel() {
     }
   };
 
-  // Download a zip that is already in the station folder, byte for byte. Same
-  // blob-and-anchor shape as the export above, but against the stored file:
-  // GET /backup/export would hand back a NEW archive taken now, which is not
-  // the snapshot the operator clicked on.
+  // Download a stored zip byte for byte. GET /backup/export would instead build
+  // a NEW archive, which is not the snapshot the operator clicked.
   const downloadDiskBackup = async (name: string) => {
     setDownloading(name);
     setDiskDownloadErr(null);
@@ -302,16 +272,13 @@ export default function BackupPanel() {
             });
       const j = (await r.json().catch(() => ({}))) as ImportResult;
       if (j.ok) {
-        // Restore replaces settings, tags, themes, skills, and operator media
-        // in one shot. This is the one write boundary broad enough to
-        // invalidate every admin family: active observers refetch now;
-        // inactive ones stay stale until their next mount.
+        // Restore replaces settings, tags, themes, skills and media in one
+        // shot — the one write broad enough to invalidate every admin family.
         await queryClient.invalidateQueries({ refetchType: 'active' });
       }
       setResult(j);
     } catch (e) {
-      // 413 means a proxy (e.g. Cloudflare, 100 MB cap) rejected the upload
-      // before it reached the station — point the operator at the disk path.
+      // 413 = a proxy rejected the upload; point at the disk path instead.
       if (p.kind === 'upload' && e instanceof AdminResponseError && e.status === 413) {
         setImportErr(
           'Backup too large to upload — a proxy in front of the station (Cloudflare caps uploads at 100 MB) rejected it. ' +
@@ -369,9 +336,8 @@ export default function BackupPanel() {
         title="Schedule"
         sub="Write a snapshot into the station folder on a cadence, keeping the last few."
         right={
-          // The STORED cadence, not the form's: this badge says what the
-          // station is doing, and reading unsaved local state made it flip to
-          // "on" before anything had been saved.
+          // STORED cadence, not the form's: this badge says what the station is
+          // doing, not what is typed.
           storedForm && storedForm.cadence !== 'off'
             ? <Pill tone="accent">on</Pill>
             : <Pill tone="ink">off</Pill>
@@ -552,9 +518,7 @@ export default function BackupPanel() {
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <div className="truncate text-[12px] font-bold">{f.name}</div>
-                    {/* Which files retention owns — the same grammar the sweep
-                        uses, so an operator can see at a glance that the zip
-                        they copied in is not on the schedule's list. */}
+                    {/* Which files retention owns — same grammar as the sweep. */}
                     {f.auto && <Pill tone="ink">scheduled</Pill>}
                   </div>
                   <div className="text-[11px] text-muted">
@@ -562,11 +526,7 @@ export default function BackupPanel() {
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
-                  {/* Download the file AS IT IS. Export above builds a fresh
-                      archive, which is the wrong thing for a scheduled backup:
-                      a rotation that only ever writes to the disk it protects
-                      is half a backup story, and this is how a snapshot gets
-                      off the box. */}
+                  {/* Download the file AS IT IS; Export builds a fresh archive. */}
                   <Btn
                     sm
                     onClick={() => { void downloadDiskBackup(f.name); }}

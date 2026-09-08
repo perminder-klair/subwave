@@ -1,21 +1,11 @@
-// Outbound webhooks — fan-out from station events (track.play, dj.say,
-// dj.link, request.received) to operator-configured HTTP endpoints.
-//
-// Fire-and-forget. The webhook delivery path must never block playback or
-// the DJ pipeline, so every send runs in the background with a hard 5-second
-// timeout. Failures log to stderr; there is no retry queue and no durable
-// outbox. If you want guaranteed delivery, point the webhook at a relay
-// (Cloudflare Worker, Pipedream, n8n) that owns its own retry policy — this
-// module's job is to get the event to that relay quickly, not to be one.
-//
-// The shape of the payload is documented in routes/webhooks.ts. Each event
-// is a stable JSON object with `event`, `t`, and event-specific fields.
-// `track.play` can be listener-gated at the call site in queue.ts when
-// webhooksPolicy.trackPlayListenerGated is on; notify() does not gate events.
+// Outbound webhooks: station events fanned out to operator-configured HTTP
+// endpoints. Fire-and-forget with a hard timeout, no retry and no durable
+// outbox; delivery must never block playback. Payload shape is documented in
+// routes/webhooks.ts. notify() does not gate events — `track.play` is
+// listener-gated at its call site in queue.ts.
 
 import * as settings from '../settings.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
-// One definition, shared with the web form — see controller/src/schemas/webhook.ts.
 import { WEBHOOK_EVENTS, type Webhook, type WebhookEvent } from '../schemas/webhook.js';
 export { WEBHOOK_EVENTS, type WebhookEvent };
 
@@ -42,7 +32,7 @@ async function postOne(hook: Webhook, body: string) {
   }
 }
 
-// Fire an event to every enabled, subscribed hook. Non-blocking.
+// Non-blocking.
 export function notify(event: WebhookEvent, payload: Record<string, unknown>) {
   let hooks: Webhook[] = [];
   try {
@@ -63,9 +53,8 @@ export function notify(event: WebhookEvent, payload: Record<string, unknown>) {
   }
 }
 
-// Test fire — used by the admin UI's "Test" button. Bypasses the event
-// subscription list so the operator can sanity-check a fresh hook without
-// also flipping the events toggle on first.
+// Admin "Test" button. Bypasses the event subscription list so a fresh hook can
+// be checked before its events are switched on.
 export async function fireTest(hook: Webhook) {
   await postOne(hook, JSON.stringify({
     event: 'test',

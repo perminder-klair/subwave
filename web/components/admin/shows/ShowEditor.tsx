@@ -1,10 +1,9 @@
 'use client';
 
-// The inline show editor. Real fields bind straight to react-hook-form via
-// `control`+`index` (`shows.${index}.<field>`); nothing is saved here — Save
-// show (ShowsPanel.saveShow) persists just this one row. Keyed by show id at
-// the call site, so switching shows remounts this component (which resets the
-// AiFill box and the local genreDraft buffer — neither is form data).
+// Inline show editor. Fields bind to react-hook-form via `control`+`index`
+// (`shows.${index}.<field>`); ShowsPanel.saveShow persists the single row.
+// Keyed by show id at the call site, so switching shows remounts and clears
+// the AiFill box and genreDraft buffer (neither is form data).
 
 import type { ChangeEvent, ReactNode, RefObject } from 'react';
 import { useId, useMemo, useState } from 'react';
@@ -56,8 +55,7 @@ import { ChipRow } from './ChipRow';
 import { displayedMatchingTracks, type CandidateDiagnostic } from './candidate-diagnostic';
 import { fetchShowCandidates, useShowBlocklistQuery } from './queries';
 
-// The footer names the field the schema objected to; the schema's own keys are
-// developer-facing, so the common ones get an operator-facing label.
+// Operator-facing labels for the developer-facing schema keys.
 const FIELD_LABELS: Record<string, string> = {
   name: 'name',
   personaId: 'host',
@@ -70,10 +68,8 @@ const FIELD_LABELS: Record<string, string> = {
   excludedPlaylistIds: 'excluded playlists',
 };
 
-// react-hook-form's per-row error object nests by field name, and a couple of
-// this show's rules root on an ARRAY field (`eras.0.fromYear`) rather than a
-// scalar — walk down to the first real message rather than assuming every key
-// is a leaf `{message}`.
+// Some rules root on an ARRAY field (`eras.0.fromYear`), so walk down to the
+// first real message rather than assuming every key is a leaf `{message}`.
 function firstFieldError(errs: FieldErrors<Show> | undefined): { key: string; message: string } | null {
   if (!errs) return null;
   for (const key of Object.keys(errs)) {
@@ -90,13 +86,10 @@ interface ShowEditorProps {
   show: Show;
   index: number;
   control: Control<ShowsFormValues>;
-  // Only needed by personaId's/guestPersonaIds' onChange, to force the OTHER
-  // side of the host/guest cross-field `.check()` to re-surface — see the
-  // comment on the personaId Controller below for why a plain field.onChange
-  // isn't enough here.
+  // Forces the OTHER side of the host/guest cross-field `.check()` to
+  // re-surface; see personaIdCtl below.
   trigger: UseFormTrigger<ShowsFormValues>;
-  // This row's own slice of formState.errors.shows — sourced from ShowsPanel
-  // so this component never re-derives validity of its own.
+  // This row's slice of formState.errors.shows, sourced from ShowsPanel.
   errors: FieldErrors<Show> | undefined;
   editorRef: RefObject<HTMLDivElement | null>;
   personas: Persona[];
@@ -105,25 +98,22 @@ interface ShowEditorProps {
   skills: SkillOption[];
   activeThemeId: string;
   genres: string[];
-  // Tags already used by the OTHER shows, offered as one-click adds so the
-  // vocabulary converges instead of accumulating near-duplicates.
+  // Tags used by the OTHER shows, offered as one-click adds.
   tagSuggestions: string[];
   playlists: { id: string; name: string; songCount: number | null }[];
-  // Only 'ready' means /dj/playlists actually answered, so an id absent from
+  // Only 'ready' means /dj/playlists answered, so an id absent from
   // `playlists` can't be called missing while the index is merely unknown.
   playlistsStatus: PlaylistIndexStatus;
   apiBase: string;
   adminFetch: (path: string, init?: RequestInit) => Promise<Response>;
   minTrackSeconds?: number;
-  // The station-wide minimum track length a blank field inherits, so the hint
-  // can say what "inherit" actually means today instead of leaving the operator
-  // to open the Settings page to find out.
+  // Station-wide minimum a blank field inherits, so the hint can say what
+  // "inherit" means today.
   stationMinTrackLengthSeconds?: number;
   busy: boolean;
   isNew: boolean;       // show the AI-draft field only while creating
   valid: boolean;
-  // Only used by the AI-draft "apply", which hands back several fields at once;
-  // every keystroke field binds straight to `control` instead.
+  // Used only by the AI-draft apply, which sets several fields at once.
   onApplyDraft: (patch: Partial<Show>) => void;
   onSave: () => void;   // Save show — persists just this show (POST /shows)
   onClose: () => void;
@@ -139,15 +129,12 @@ export function ShowEditor({
   const uid = useId();
   const [tagDraftBlocked, setTagDraftBlocked] = useState(false);
   const editorValid = valid && !tagDraftBlocked;
-  // `index` is a runtime number, not a literal, so a plain template-literal
-  // expression widens to `string` — cast to the template-literal type
-  // FieldPath<ShowsFormValues> actually needs so every call site below
-  // typechecks against the real field name it names.
+  // `index` is a runtime number, so cast to the template-literal type
+  // FieldPath<ShowsFormValues> needs.
   const path = <K extends string>(field: K) => `shows.${index}.${field}` as `shows.${number}.${K}`;
 
-  // What the schema actually objected to. A hard-coded "needs a name and a
-  // persona" is a dead end for every other reason the gate can fail — a retired
-  // mood, a track cap under a raised crossfade floor, a backwards era window.
+  // What the schema actually objected to; the gate fails for many reasons
+  // beyond a missing name or persona.
   const gateIssue = (() => {
     if (valid) return null;
     const first = firstFieldError(errors);
@@ -157,18 +144,11 @@ export function ShowEditor({
     return label ? `${label}: ${first.message}` : first.message;
   })();
 
-  // TextField/SwitchField cover the plain-value fields; anything with real
-  // cross-field or array work (a Radix empty-value sentinel, a clamping
-  // onChange, a chip input, a manual re-trigger) stays on a raw useController,
-  // per lib/form-fields.tsx's own header rule.
-  //
-  // personaId (host) is a raw Controller for a subtler reason. RHF populates
-  // formState.errors per PATH: picking a host who is already a guest flips
-  // `isValid` false immediately, but `errors.shows[i].guestPersonaIds` stays
-  // `{}` — the cross-field issue is rooted at the SIBLING field, which nothing
-  // re-validates until it is touched directly. So Save would read as enabled
-  // off a stale errors tree. A plain field.onChange can't fire that re-trigger;
-  // this Controller trigger()s the sibling explicitly.
+  // TextField/SwitchField cover plain-value fields; anything with cross-field
+  // or array work stays on a raw useController (see lib/form-fields.tsx).
+  // personaId is raw because RHF populates errors per PATH: picking a host who
+  // is already a guest roots the issue at `guestPersonaIds`, which nothing
+  // re-validates until touched. This Controller trigger()s the sibling.
   const personaIdCtl = useController({ control, name: path('personaId') });
   const personaIdAria = fieldAria(`${uid}-${path('personaId')}`, personaIdCtl.fieldState.error, { hasDescription: true });
   const guestsCtl = useController({ control, name: path('guestPersonaIds') });
@@ -197,8 +177,7 @@ export function ShowEditor({
     finally { setCandidateBusy(false); }
   };
 
-  // The editor is remounted per show (keyed by id at the call site), so this
-  // resets on switch — it's a text buffer, not form data.
+  // Text buffer, not form data; resets on the per-show remount.
   const [genreDraft, setGenreDraft] = useState('');
   const addGenre = (g: string, { keepDraft = false } = {}) => {
     const v = g.trim().slice(0, 64);
@@ -211,24 +190,16 @@ export function ShowEditor({
     genresCtl.field.onChange([...current, v]);
     if (!keepDraft) setGenreDraft('');
   };
-  // A suggestion chip narrows the list it came from, so clearing the draft on
-  // click would throw the user back to "popular genres" after every pick —
-  // retyping "trance" once per trance sub-genre. Committing the typed
-  // text (Enter/Add) still clears: there the draft *is* the thing consumed.
+  // A suggestion chip narrows the list it came from, so keep the draft on
+  // click. Committing typed text (Enter/Add) still clears it.
   const addGenreFromSuggestion = (g: string) => addGenre(g, { keepDraft: true });
 
-  // The custom era range's own text buffers (#1599) — same deal as genreDraft:
-  // remounted per show, not form data. The error is only raised on Add, so
-  // half-typed "20" doesn't scold anyone mid-keystroke.
+  // Custom era range text buffers (#1599). Error raised only on Add.
   const [eraFrom, setEraFrom] = useState('');
   const [eraTo, setEraTo] = useState('');
   const [eraDraftError, setEraDraftError] = useState('');
-  // EVERY write to `eras` goes through here, because every write can falsify
-  // the draft error. That message is a verdict on one Add press against the
-  // array as it stood: untoggle the decade chip a range collided with and
-  // "That range is already selected." is still standing — inside a live
-  // region, over a range that would now add cleanly. Clearing it inside each
-  // handler instead only holds until someone adds a third.
+  // EVERY write to `eras` goes through here: any write can falsify the draft
+  // error, which is a verdict on one Add press against the array as it stood.
   const setEras = (next: EraWindow[]) => {
     erasCtl.field.onChange(next);
     setEraDraftError('');
@@ -238,44 +209,35 @@ export function ShowEditor({
     if (current.length >= FILTER_VALUES_MAX) return;
     const r = resolveEraDraft(eraFrom, eraTo, current);
     if ('error' in r) { setEraDraftError(r.error); return; }
-    // A range spelling out a decade lands in the same array the chips write to,
-    // so it lights that chip rather than appearing twice.
+    // A range spelling out a decade lights that chip rather than appearing twice.
     setEras([...current, r.window]);
     setEraFrom(''); setEraTo('');
   };
   // Genres no track carries. The controller resolves free text onto the nearest
-  // library tag, silently broadening the show ("Pop Punk" → "Pop") or dropping the
-  // filter — invisible on air unless said here. Mirrors show-filter.normGenre so UI
-  // and station agree on "the same tag". An empty library list means not fetched or
-  // the endpoint failed — never warn on a fetch failure.
+  // library tag, silently broadening or dropping the filter. Mirrors
+  // show-filter.normGenre. An empty library list means not fetched or failed --
+  // never warn on a fetch failure.
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
   const knownGenres = useMemo(() => new Set(genres.map(norm)), [genres]);
   const showGenres: string[] = genresCtl.field.value ?? [];
   const unknownGenres = genres.length
     ? showGenres.filter(g => !knownGenres.has(norm(g)))
     : [];
-  // Discoverability hint only: blocklist rules scoped to this show are edited
-  // on Library → Blocked, not here — but a filter that silently loses to a rule
-  // there would be baffling without a pointer. Best-effort, 0 hides the line.
+  // Hint only: show-scoped blocklist rules are edited on Library -> Blocked.
+  // Best-effort, 0 hides the line.
   const blocklistQuery = useShowBlocklistQuery(adminFetch, true);
   const scopedRuleCount = (blocklistQuery.data || [])
     .filter(rule => rule.showIds?.includes(show.id)).length;
 
   const guestIds: string[] = guestsCtl.field.value ?? [];
   const eras: EraWindow[] = erasCtl.field.value ?? [];
-  // Windows matching no decade preset. They get their own removable chips, and
-  // they are the slice of the schema's cap the decade row cannot see — that row
-  // caps on what IT has selected, and 8 chips against a FILTER_VALUES_MAX of 15
-  // never reach it on their own. Handing it the REMAINING budget is required BY
-  // this feature rather than tidying alongside it: before the add-a-range
-  // control, filling `eras` took 15 API-set windows, and now the operator can
-  // fill it right here — at which point an uncapped chip row offers a 16th, the
-  // schema refuses the save, and nothing on screen says why.
+  // Windows matching no decade preset. The decade row caps on what IT has
+  // selected, so hand it the REMAINING budget or the schema refuses a save the
+  // UI still offered.
   const customEras = eras.filter(e => !DECADES.some(d => sameEra(e, d)));
 
-  // Guests group — a chip/card multi-select has no single labelable element,
-  // so it names itself via aria-labelledby/groupProps, same convention as
-  // BlockRulesCard's chip/checkbox fields.
+  // A chip multi-select has no single labelable element, so it names itself
+  // via aria-labelledby/groupProps.
   const guestsAria = fieldAria(`${uid}-${path('guestPersonaIds')}`, guestsCtl.fieldState.error, { hasDescription: true });
   const themeAria = fieldAria(`${uid}-${path('themeId')}`, themeCtl.fieldState.error, { hasDescription: true });
   const segmentSkillAria = fieldAria(`${uid}-${path('segmentSkill')}`, segmentSkillCtl.fieldState.error, { hasDescription: true });
@@ -347,10 +309,8 @@ export function ShowEditor({
           <TextField control={control} name={path('name')} label="show name" placeholder="e.g. The Late Shift" maxLength={NAME_MAX} />
           <span className="field-hint -mt-2">{show.name.trim().length}/{NAME_MAX}</span>
 
-          {/* Sits in Identity, not Music: a tag files the show for the operator
-              and reaches nothing on air — not the picker, not the DJ agent, not
-              any public route. Grouping it with the music filters would read as
-              one more thing that steers what plays. */}
+          {/* Sits in Identity, not Music: a tag files the show and reaches
+              nothing on air. */}
           <Field data-invalid={tagsAria.invalid || undefined}>
             <FieldTitle {...tagsAria.labelledByProps}>tags</FieldTitle>
             <div {...tagsAria.groupProps}>
@@ -373,10 +333,8 @@ export function ShowEditor({
             <FieldError {...tagsAria.errorProps} errors={tagsCtl.fieldState.error ? [tagsCtl.fieldState.error] : undefined} />
           </Field>
 
-          {/* Raw Controller, not SelectField — see the comment on personaIdCtl
-              above: switching the host has to re-trigger `guestPersonaIds`'
-              own error entry, a side effect SelectField's plain
-              field.onChange passthrough can't express. */}
+          {/* Raw Controller: switching the host must re-trigger
+              `guestPersonaIds`' error entry. */}
           <div className="field">
             <Label {...personaIdAria.labelProps}>persona owner</Label>
             <Select
@@ -473,11 +431,8 @@ export function ShowEditor({
             )}
           </Field>
 
-          {/* Raw Controller, not SelectField: ThemePicker renders real colour
-              swatches per theme (a card grid, not a text dropdown) — chrome
-              SelectField's plain <select> can't express, the same reasoning
-              Task 9 kept the custom TTS engine/voice card for. No Radix
-              sentinel issue here either way; ThemePicker is plain buttons. */}
+          {/* Raw Controller: ThemePicker renders colour swatches, not a
+              text dropdown. */}
           <Field data-invalid={themeAria.invalid || undefined}>
             <FieldTitle {...themeAria.labelledByProps}>theme override (applied while this show is on air)</FieldTitle>
             <div {...themeAria.groupProps}>
@@ -534,9 +489,8 @@ export function ShowEditor({
                   );
                 }}
               />
-              {/* Custom windows — the ones below matching no decade preset —
-                  stay visible and removable so they can't silently constrain
-                  picks. Set here or via the API; the display is the same. */}
+              {/* Custom windows stay visible and removable so they can't
+                  silently constrain picks. */}
               {customEras.length > 0 && (
                 <div className="flex flex-wrap gap-1">
                   {customEras.map((e, i) => (
@@ -552,11 +506,9 @@ export function ShowEditor({
                   ))}
                 </div>
               )}
-              {/* Add a range the decade chips can't spell — a single year
-                  ("2026 only"), a span across two decades, or an open end
-                  ("2026 and later"). Both inputs are plain one-offs inside the
-                  group: they carry their own aria-label because the group title
-                  names the whole field, not either box. */}
+              {/* Add a range the decade chips can't spell. Both inputs carry
+                  their own aria-label because the group title names the whole
+                  field, not either box. */}
               <div className="flex min-w-0 flex-wrap items-center gap-2">
                 <Input
                   id={`${uid}-show-era-from`}
@@ -614,13 +566,9 @@ export function ShowEditor({
 
           <Field data-invalid={vocalsAria.invalid || undefined}>
             <FieldTitle {...vocalsAria.labelledByProps}>vocals</FieldTitle>
-            {/* Single-valued, unlike the filters around it: instrumental and
-                vocal are mutually exclusive, and wanting both is wanting
-                neither. Picking one REPLACES the other rather than capping at
-                one selection; clicking the selected chip clears back to any —
-                exactly the behaviour ToggleGroupField's single-select branch
-                deliberately BLOCKS (it never lets onValueChange clear to ''),
-                so this stays a raw ChipRow/Controller rather than that wrapper. */}
+            {/* Single-valued: picking one REPLACES the other and clicking the
+                selected chip clears back to any -- which ToggleGroupField's
+                single-select branch blocks, so this stays a raw Controller. */}
             <div {...vocalsAria.groupProps}>
               <ChipRow
                 options={VOCAL_OPTIONS}
@@ -747,10 +695,8 @@ export function ShowEditor({
           )}
 
           {/* Offered only behind the strict toggle: without it the show can
-              leave the playlist, so its universe is the library again and
-              "every track once" has no set to be true of. The controller
-              treats the combination as inert rather than invalid — see the
-              playlistExhaust comment in schemas/show.ts. */}
+              leave the playlist, so "every track once" has no set to be true
+              of. The controller treats the combination as inert. */}
           {show.playlistIds.length > 0 && show.playlistStrict && (
             <SwitchField
               control={control}
@@ -834,9 +780,8 @@ export function ShowEditor({
           />
           <span className="field-hint -mt-2">{show.topic.trim().length}/{TOPIC_MAX}</span>
 
-          {/* Raw Controller: a clamping onChange (floors at 0, coerces a bad
-              parseInt to 0) is real work TextField's plain field.onChange
-              passthrough doesn't expose. */}
+          {/* Raw Controller: the clamping onChange (floors at 0) is work
+              TextField's plain passthrough doesn't expose. */}
           <div className="field">
             <Label {...maxTrackSecondsAria.labelProps}>max track length (seconds)</Label>
             <Input
@@ -862,10 +807,8 @@ export function ShowEditor({
             <FieldError {...maxTrackSecondsAria.errorProps} errors={maxTrackSecondsCtl.fieldState.error ? [maxTrackSecondsCtl.fieldState.error] : undefined} />
           </div>
 
-          {/* The cap's twin, and the same Raw Controller reason. Separate field
-              rather than a range input: each side is independently inheritable
-              (blank), and a range control cannot express "floor set, cap
-              inherited". */}
+          {/* Same raw-Controller reason as the cap. Separate fields because
+              each side is independently inheritable (blank). */}
           <div className="field">
             <Label {...minTrackLengthSecondsAria.labelProps}>minimum track length (seconds)</Label>
             <Input
@@ -895,9 +838,7 @@ export function ShowEditor({
             </FieldDescription>
             <FieldError {...minTrackLengthSecondsAria.errorProps} errors={minTrackLengthSecondsCtl.fieldState.error ? [minTrackLengthSecondsCtl.fieldState.error] : undefined} />
           </div>
-          {/* Tri-state, so a Switch would be wrong: "inherit" is a real answer
-              and the commonest one, and a two-state control would turn every
-              untouched show into an explicit no. */}
+          {/* Tri-state: "inherit" is a real answer, so a Switch would be wrong. */}
           <div className="field">
             <Label {...fadeAtShowEndAria.labelProps}>fade out at the show change</Label>
             <Select
@@ -933,10 +874,8 @@ export function ShowEditor({
   );
 }
 
-// Shared shape for the two playlist checkbox groups (anchor + exclusions) —
-// same PlaylistPicker, different field path and cap, each with its own group
-// ARIA. A tiny local component rather than repeating the useController +
-// fieldAria boilerplate twice inline.
+// Shared shape for the two playlist checkbox groups (anchor + exclusions):
+// same picker, different field path, cap and group ARIA.
 function PlaylistIdsField({
   control, name, playlists, status, max, label, children,
 }: {

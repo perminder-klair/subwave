@@ -1,12 +1,6 @@
-// The public request boxes moved onto a shared zod schema (controller/src/
-// schemas/request.ts), mirrored into web/lib/schemas.generated.ts and run on
-// both sides: validateBody on POST /request, and a pre-flight in PlayerCore's
-// submitRequest action that every skin's box submits through. These tests pin
-// the schema's contract — including the two deliberate tightenings over the
-// old hand-rolled readers — and the guard's name cap staying an alias of the
-// schema's, so the refusal boundary and the repair belt can't drift apart.
-//
-// Run: npx tsx scripts/request-schema.test.ts (auto-discovered by npm test).
+// schemas/request.ts runs on both sides: validateBody on POST /request and a
+// pre-flight in PlayerCore's submitRequest. Pins the schema contract and the
+// guard's name cap staying an alias of the schema's.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
@@ -18,8 +12,6 @@ import {
 } from '../src/schemas/request.js';
 import { cleanRequesterName } from '../src/util/request-guard.js';
 import { firstMessage } from '../src/util/zod-error.js';
-
-// --- the happy path ---------------------------------------------------------
 
 test('accepts a bare text and defaults name to empty', () => {
   const r = listenerRequestSchema.parse({ text: 'play something for late-night driving' });
@@ -42,22 +34,17 @@ test('caps apply to the trimmed value, not the raw one', () => {
   assert.equal(listenerRequestSchema.safeParse({ text: padded }).success, true);
 });
 
-// --- refusals ---------------------------------------------------------------
-
 test('refuses a missing, empty, whitespace-only or non-string text', () => {
   for (const body of [{}, { text: '' }, { text: '   ' }, { text: 42 }, { text: null }]) {
     const r = listenerRequestSchema.safeParse(body);
     assert.equal(r.success, false, JSON.stringify(body));
-    // 'Empty request' is the historical wire message API callers already
-    // handle; the custom `error` keeps it for the missing/non-string cases
-    // zod would otherwise describe as a type mismatch.
+    // 'Empty request' is the historical wire message API callers handle.
     assert.match(firstMessage(r.error!), /Empty request/);
   }
 });
 
 test('refuses over-cap text (the old path silently sliced to 280)', () => {
-  // Deliberate tightening: truncation could cut a request mid-thought and
-  // have the DJ answer half of it. The box now says so before submitting.
+  // Deliberate tightening: truncation cut a request mid-thought.
   assert.equal(
     listenerRequestSchema.safeParse({ text: 'x'.repeat(REQUEST_TEXT_MAX) }).success,
     true,
@@ -81,12 +68,9 @@ test('refuses an over-cap or non-string name (the old path sliced / coerced)', (
   assert.equal(listenerRequestSchema.safeParse({ text: 'ok text', name: 7 }).success, false);
 });
 
-// --- messages are listener-facing -------------------------------------------
-
 test('every refusal message stands alone without a field prefix', () => {
-  // The player surfaces issues[0].message verbatim in the box, so a message
-  // like zod's default "Too big: expected string to have <=280 characters"
-  // must never ship. Each custom message reads as a sentence.
+  // The player surfaces issues[0].message verbatim, so zod's default wording
+  // must never ship.
   const cases = [
     { text: 'x'.repeat(REQUEST_TEXT_MAX + 1) },
     { text: 'ok text', name: 'x'.repeat(REQUEST_NAME_MAX + 1) },
@@ -99,11 +83,8 @@ test('every refusal message stands alone without a field prefix', () => {
   }
 });
 
-// --- the route boundary ------------------------------------------------------
-// Drive the real middleware, not just the schema (the shows-conversion
-// lesson): confirm the 400 payload carries the flat `error` string existing
-// clients read AND fieldErrors keyed by the field, and that a passing body
-// reaches the handler as the PARSED value.
+// Driven through the real middleware: the 400 payload must carry both the flat
+// `error` string existing clients read and fieldErrors keyed by field.
 
 interface FakeRes {
   code: number;
@@ -119,8 +100,7 @@ function runValidate(body: unknown) {
   const res: FakeRes = { code: 0, body: {} };
   const req = { body } as { body: unknown };
   let nexted = false;
-  // validatePublicBody is what POST /request actually mounts — see below for
-  // why the LISTENER-facing middleware differs from the operator one.
+  // validatePublicBody is what POST /request mounts.
   validatePublicBody(listenerRequestSchema)(
     req as never,
     {
@@ -148,24 +128,20 @@ test('route: over-cap text 400s with fieldErrors keyed "text"', () => {
 });
 
 test('route: the listener-facing message carries NO dotted-path prefix', () => {
-  // This is the whole reason POST /request does not use the ordinary
-  // validateBody: firstMessage prefixes the path unconditionally, so the wire
-  // said "text: Keep it under 280 characters." while the browser (reading
-  // issues[0].message) said "Keep it under 280 characters." — one schema, two
-  // different strings, which is the drift these conversions exist to remove.
+  // Why POST /request does not use the ordinary validateBody: firstMessage
+  // prefixes the path unconditionally, so the wire and the browser would show
+  // two different strings from one schema.
   const { res } = runValidate({ text: 'x'.repeat(REQUEST_TEXT_MAX + 1) });
   assert.doesNotMatch(String(res.body.error), /^text: /);
   assert.equal(res.body.error, `Keep it under ${REQUEST_TEXT_MAX} characters.`);
-  // And it must equal what the schema itself would hand the player's pre-flight.
+  // And it must equal what the schema hands the player's pre-flight.
   const issue = listenerRequestSchema.safeParse({ text: 'x'.repeat(REQUEST_TEXT_MAX + 1) });
   assert.equal(res.body.error, issue.error!.issues[0]!.message);
 });
 
 test('route: the 400 also carries success/message for already-shipped clients', () => {
-  // The native app posts /request directly (no pre-flight) and renders
-  // `data.message` when `!data.success`. It ships through the app stores, so a
-  // build installed today meets tomorrow's refusal — without these keys the
-  // request drawer shows an empty failure card.
+  // The native app posts /request directly and renders `data.message` when
+  // `!data.success`; it ships through the app stores, so old builds persist.
   const { res } = runValidate({ text: 'x'.repeat(REQUEST_TEXT_MAX + 1) });
   assert.equal(res.body.success, false);
   assert.equal(res.body.message, res.body.error);
@@ -179,17 +155,13 @@ test('route: an empty request keeps its historical bare wire message', () => {
 test('route: a valid body calls next() with the PARSED value on req.body', () => {
   const { nexted, req } = runValidate({ text: '  rainy day vibes  ' });
   assert.equal(nexted, true);
-  // Trimmed and name-defaulted — the handler's guard pipeline must see the
-  // schema's output, not the raw body.
+  // The handler's guard pipeline must see the schema's output, not the raw body.
   assert.deepEqual(req.body, { text: 'rainy day vibes', name: '' });
 });
 
-// --- the guard belt stays aligned -------------------------------------------
-
 test('cleanRequesterName still bounds at the schema cap (alias, not a copy)', () => {
-  // The guard repairs rather than refuses ('anon', not a 400) for callers
-  // that never crossed the route boundary — but its bound must be the same
-  // figure the schema refuses over, or the two drift like SKILL_SLUG_RE did.
+  // The guard repairs rather than refuses, but its bound must be the same
+  // figure the schema refuses over.
   const cleaned = cleanRequesterName('x'.repeat(REQUEST_NAME_MAX + 25));
   assert.equal(cleaned.length, REQUEST_NAME_MAX);
 });

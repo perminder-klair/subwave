@@ -2,10 +2,7 @@
 
 // The Rundown — /admin/shows/schedule. Renders the controller's 7×24 `schedule`
 // grid from GET /settings; every edit is local until PUT /schedule saves the week.
-//
-// Takeovers (#930) live on the dash, not here. This screen only READS the pin in
-// force: it outranks the grid in the controller's resolveActiveShow, so the On air
-// cell would otherwise name a show that is not on the air.
+// Takeovers (#930) are read-only here; they outrank the grid in resolveActiveShow.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -67,8 +64,7 @@ interface SettingsResponse {
   serverTimezone?: string;
 }
 
-// Legacy singular fields still hydrate as one-element lists (same coercion as
-// ShowsPanel).
+// Legacy singular fields hydrate as one-element lists (same coercion as ShowsPanel).
 function hydrateShow(raw: Record<string, unknown>): ScheduleShow | null {
   const id = typeof raw.id === 'string' ? raw.id : '';
   if (!id) return null;
@@ -107,17 +103,15 @@ export default function SchedulePanel() {
 
   // Board columns collapsed to rails, keyed by storage day (0=Sun..6=Sat).
   const [folded, setFolded] = useState<Record<number, boolean>>({});
-  // The line editor sits above the fold, so a pick from deep in the board has to
-  // scroll it into view.
+  // The line editor sits above the fold, so a pick has to scroll it into view.
   const bandRef = useRef<HTMLDivElement>(null);
 
   const [line, setLine] = useState<EditorLine>({ day: 6, start: 16, end: 18 });
   const [lineShowId, setLineShowId] = useState<string | null>(null);
   const [lineDays, setLineDays] = useState<number[]>([6]);
 
-  // The armed show — the shelf chip acting as a brush (#1204). Its own state, not
-  // `lineShowId`: that is set by every card click, so hanging the day/hour bulk
-  // fills off it would let a stray day-header click rewrite 24 hours.
+  // The armed show — the shelf chip acting as a brush (#1204). Deliberately not
+  // `lineShowId`, which every card click sets: bulk fills must not ride on that.
   const [armedShowId, setArmedShowId] = useState<string | null>(null);
   const [density, setDensity] = useBoardDensity();
 
@@ -125,7 +119,7 @@ export default function SchedulePanel() {
   const [reviewOpen, setReviewOpen] = useState(false);
   const [pendingHref, setPendingHref] = useState<string | null>(null);
 
-  // The live takeover (#930), read-only here — pinning and cancelling live on the dash.
+  // The live takeover (#930), read-only here; pin/cancel live on the dash.
   const override = overrideQuery.data?.override ?? null;
 
   useEffect(() => {
@@ -162,8 +156,7 @@ export default function SchedulePanel() {
     if (result.data && !result.error && !schedule) applySettings(result.data);
   };
 
-  // A query refresh may update roster metadata, but it cannot overwrite this
-  // mount's unsaved week. Navigation remounts from the newest cache entry.
+  // A query refresh may update roster metadata but never this mount's unsaved week.
   const settingsAppliedRef = useRef(false);
   useEffect(() => {
     if (
@@ -209,21 +202,15 @@ export default function SchedulePanel() {
   const pinnedShowId = takeoverShowId(liveOverride);
   const pinnedShow = pinnedShowId ? showById(pinnedShowId) : null;
   const defaultTakeover = isDefaultTakeover(liveOverride);
-  // A takeover only OWNS this header when it resolves to something really on
-  // air — a named show still in the roster, or Default programming. A target
-  // that names neither voids the takeover (the same rule the controller's
-  // getScheduleOverride applies), and the weekly grid is what is playing, so
-  // claiming "On air · takeover" over the grid show's name would be the false
-  // claim #1507's Rundown criterion forbids.
+  // A takeover owns this header only when it resolves to a roster show or Default
+  // programming; anything else voids it, matching getScheduleOverride (#1507).
   const airingTakeover = liveOverride && (pinnedShow || defaultTakeover) ? liveOverride : null;
 
-  // Resolve through the roster rather than trusting the id: a show deleted in
-  // another tab would leave a dangling brush that writes an unrenderable id.
+  // Resolve through the roster: a show deleted in another tab leaves a dangling brush.
   const armedShow = armedShowId ? showById(armedShowId) : null;
   const armedId = armedShow?.id ?? null;
 
-  /** The sentence editor follows the brush, so the two editing paths never
-   *  disagree about which show is in hand. */
+  /** The sentence editor follows the brush so the two editing paths agree. */
   const armShow = (id: string) => {
     setArmedShowId(cur => (cur === id ? null : id));
     setLineShowId(id);
@@ -232,9 +219,8 @@ export default function SchedulePanel() {
   useEffect(() => {
     if (!armedId) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      // A Radix layer that consumed this Escape preventDefaults it from a
-      // document-capture listener before this bubble listener runs — closing an
-      // overlay must not also drop the brush.
+      // Radix consumes Escape in a capture listener; closing an overlay must
+      // not also drop the brush.
       if (e.key === 'Escape' && !e.defaultPrevented) setArmedShowId(null);
     };
     window.addEventListener('keydown', onKeyDown);
@@ -278,12 +264,7 @@ export default function SchedulePanel() {
     setSchedule(setRange(schedule, days, line.start, line.end, value));
   };
 
-  // Booking was the one write on this board that confirmed nothing. Filling a
-  // day, filling an hour, resizing and removing all toast; the single most
-  // common action did not, so the brush — the only booking path a finger or a
-  // keyboard has — landed silently. Sonner's toast is also the live region, so
-  // that silence was a screen reader hearing nothing at all for the write it is
-  // most likely to make. Same sentence shape as its siblings, deliberately.
+  // Toasts here are the live region, so every booking must confirm like its siblings.
   const dropShow = (b: Block, showId: string) => {
     if (!schedule || !showById(showId)) return;
     setSchedule(setRange(schedule, [b.day], b.start, b.start + b.span, showId));
@@ -295,8 +276,7 @@ export default function SchedulePanel() {
     );
   };
 
-  // Vacated hours fall silent; gained ones overwrite whatever was there, so a run
-  // grown into its neighbour takes those hours rather than stopping short.
+  // Vacated hours fall silent; gained ones overwrite, so a run grows into its neighbour.
   const resizeRun = (b: Block, start: number, end: number) => {
     if (!schedule || !b.showId) return;
     setSchedule(resizeBlock(schedule, b, start, end));
@@ -308,8 +288,7 @@ export default function SchedulePanel() {
     );
   };
 
-  // The removed line lands in the order desk with the show preselected, so a
-  // mis-click is one "Add to schedule" away from restored.
+  // The removed line lands in the order desk preselected, so a mis-click is one undo away.
   const removeRun = (b: Block) => {
     if (!schedule || !b.showId) return;
     setSchedule(setRange(schedule, [b.day], b.start, b.start + b.span, null));
@@ -374,8 +353,7 @@ export default function SchedulePanel() {
     if (serverSchedule) setSchedule(cloneWeek(serverSchedule));
   };
 
-  // ⌘S / Ctrl+S saves. Held in a ref so the listener registers once yet always
-  // sees the current week.
+  // ⌘S / Ctrl+S saves. Ref-held so the listener registers once but sees the current week.
   const chordSaveRef = useRef<() => boolean>(() => false);
   chordSaveRef.current = () => {
     if (dirty === 0 || busy) return false;
@@ -589,8 +567,8 @@ export default function SchedulePanel() {
             name={showById(nextBlock.showId)?.name ?? 'Nobody in the chair'}
             color={nextBlock.showId ? colorOf(nextBlock.showId) : null}
             meta={metaOf(nextBlock.showId)}
-            // With "After that" hidden this is a phone's last cell, so its own
-            // rule would double up against the band's bottom edge.
+            // Last cell on a phone when "After that" is hidden; its own rule would
+            // double up against the band's bottom edge.
             className="max-sm:border-b-0"
           />
           <NowCell
@@ -600,8 +578,7 @@ export default function SchedulePanel() {
             color={laterBlock.showId ? colorOf(laterBlock.showId) : null}
             meta={metaOf(laterBlock.showId)}
             last
-            // Three stacked cells cost ~190px of a phone screen before any of the
-            // week is visible, and this hour is already in the board below.
+            // Hidden on phones: three stacked cells cost ~190px before any of the week shows.
             className="hidden sm:block"
           />
         </div>
@@ -627,9 +604,8 @@ export default function SchedulePanel() {
                 ? (d === line.day ? cur : cur.filter(x => x !== d))
                 : [...cur, d],
             )}
-            // A preset replaces the set outright, so the sentence's own day has to
-            // move into it — otherwise `applyLine` re-adds the old one and
-            // "Weekdays" quietly writes Saturday too.
+            // A preset replaces the set outright, so the sentence's day must move into
+            // it or `applyLine` re-adds the old one.
             onSetLineDays={days => {
               setLineDays(days);
               if (!days.includes(line.day)) setLine(cur => ({ ...cur, day: days[0] ?? cur.day }));
@@ -809,8 +785,7 @@ function NowCell({
     <div
       className={cn(
         'min-w-0 px-5 py-2 sm:px-[22px]',
-        // Stacked at grid-cols-1, so the divider runs along the bottom; the column
-        // rule comes back with the 3-up grid at sm.
+        // Stacked at grid-cols-1 the divider runs along the bottom; column rule returns at sm.
         !last && 'border-b border-separator-strong sm:border-r sm:border-b-0',
         className,
       )}

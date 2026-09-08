@@ -1,9 +1,6 @@
-// Jingles — pre-recorded TTS stingers that rotate into the broadcast at
-// 1-per-30-track intervals (see liquidsoap/radio.liq).
-//
-// Files live at <stateDir>/jingles/<hash>.wav and are referenced from
-// <stateDir>/jingles.m3u (one path per line). A sidecar <stateDir>/
-// jingles.json maps filename → { text, createdAt, builtin, source }.
+// Jingle store: WAVs under <stateDir>/jingles/, absolute paths listed one per
+// line in <stateDir>/jingles.m3u, metadata in the <stateDir>/jingles.json
+// sidecar (filename → { text, createdAt, builtin, source }).
 
 import { readFile, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -25,10 +22,8 @@ const DEFAULT_IDENT = {
   builtin: true,
 };
 
-// Repo-bundled, sound-designed version of the default ident (voice over a
-// radio-tuning/static bed). Shipped in <repo>/sounds and installed verbatim at
-// boot so every install gets the same signature stinger regardless of the
-// operator's TTS engine. Falls back to a plain TTS render if it's ever absent.
+// Repo-bundled default ident, installed verbatim at boot so every install gets
+// the same stinger whatever its TTS engine. Falls back to a TTS render if absent.
 const PREBAKED_IDENT = `${SOUNDS_DIR}/station_ident_default.wav`;
 
 async function loadMeta(): Promise<any> {
@@ -43,8 +38,8 @@ async function saveMeta(meta: any) {
   await writeFileAtomic(META, JSON.stringify(meta, null, 2));
 }
 
-// Atomic replace: Liquidsoap watches jingles.m3u (reload_mode="watch"), so an
-// in-place rewrite can reload a truncated playlist mid-write.
+// Atomic: Liquidsoap watches jingles.m3u (reload_mode="watch"), so an in-place
+// rewrite can reload a truncated playlist mid-write.
 async function rewritePlaylist(filenames: string[]) {
   const lines = filenames.map((f: string) => `${DIR}/${f}`);
   await writeFileAtomic(PLAYLIST, lines.join('\n') + (lines.length ? '\n' : ''));
@@ -54,7 +49,6 @@ async function statOrNull(p: string) {
   try { return await stat(p); } catch { return null; }
 }
 
-// Returns the listed jingles with file existence verified
 export async function list() {
   const meta = await loadMeta();
   const out: any[] = [];
@@ -71,7 +65,6 @@ export async function list() {
       size: s.size,
     });
   }
-  // Newest first, but builtin always last so user-created appear on top
   out.sort((a: any, b: any) => {
     if (a.builtin !== b.builtin) return a.builtin ? 1 : -1;
     return (b.createdAt || '').localeCompare(a.createdAt || '');
@@ -79,10 +72,8 @@ export async function list() {
   return out;
 }
 
-// Absolute path to a jingle's audio file, or null if the filename isn't in
-// the sidecar or the file is missing on disk. Looking it up via the sidecar
-// (instead of joining DIR + the raw param) is what makes path traversal a
-// non-issue — `..` slugs simply won't match a key.
+// Resolving through the sidecar keys rather than joining DIR + the raw param is
+// what makes path traversal a non-issue: `..` slugs match no key.
 export async function getPath(filename: string): Promise<string | null> {
   const meta = await loadMeta();
   if (!meta.items[filename]) return null;
@@ -90,17 +81,10 @@ export async function getPath(filename: string): Promise<string | null> {
   return (await statOrNull(filePath)) ? filePath : null;
 }
 
-// Wrap a jingle's audio path in an `annotate:` URI for a ONE-OFF airing pushed
-// into the priority jingle_now_queue (queue.playJingle) rather than drawn by the
-// automatic rotate.
-//
-// `subwave_kind="jingle"` names the contract in mixer logs and keeps this source
-// distinct from beds. The priority queue owns its marker hook directly and sits
-// outside music_meta, so retained ID3 tags never reach now-playing or ICY.
-//
-// Mirrors beds.bedUri, minus the cue_out/cross overrides: a bed is deliberately
-// cut to the length of the link it carries, whereas an announcement plays in
-// full, at full level, exactly as it was recorded.
+// annotate: URI for a one-off airing via the priority jingle_now_queue
+// (queue.playJingle), not the automatic rotate. That queue sits outside
+// music_meta, so retained ID3 tags never reach now-playing or ICY. No
+// cue_out/cross overrides unlike beds.bedUri: a jingle plays in full.
 export function jingleUri(path: string): string {
   return `annotate:subwave_kind="jingle":${path}`;
 }
@@ -126,10 +110,8 @@ export async function create(text: string, { builtin = false }: { builtin?: bool
   return { filename, text: text.trim(), outPath };
 }
 
-// Import an operator-supplied audio file as a jingle. The upload is transcoded
-// to WAV + loudness-levelled (matching generated jingles) when ffmpeg is
-// available, otherwise stored as-is with its original extension. `label` is the
-// display text; it defaults to the original file name. Returns { filename, text }.
+// Import an operator-supplied audio file. Transcoded to WAV + loudness-levelled
+// when ffmpeg is available, otherwise stored as-is with its original extension.
 export async function importAudio(
   buffer: Buffer,
   { label = '', originalName = '' }: { label?: string; originalName?: string } = {},
@@ -164,7 +146,6 @@ export async function importAudio(
 }
 
 export async function remove(filename: string) {
-  // Prevent deleting the default ident — they can recreate it but not delete
   const meta = await loadMeta();
   if (!meta.items[filename]) throw new Error(`unknown jingle: ${filename}`);
   if (meta.items[filename].builtin) {
@@ -178,23 +159,18 @@ export async function remove(filename: string) {
   return { ok: true };
 }
 
-// Called from server.js startup. Installs the default station ident if it isn't
-// already present. Prefers the repo-bundled sound-designed WAV (PREBAKED_IDENT);
-// if that's missing, falls back to a plain TTS render. Idempotent, and upgrades
-// an older TTS-rendered builtin to the bundled asset exactly once (keyed on
-// `source: 'builtin'`).
+// Called from server.js startup. Idempotent; upgrades an older TTS-rendered
+// builtin to the bundled asset exactly once (keyed on `source: 'builtin'`).
 export async function ensureDefaultIdent() {
   const filePath = `${DIR}/${DEFAULT_IDENT.filename}`;
   const meta = await loadMeta();
   const existing = meta.items[DEFAULT_IDENT.filename];
   const havePrebaked = existsSync(PREBAKED_IDENT);
 
-  // Already the bundled asset — or an existing render with no asset to upgrade to.
+  // Already the bundled asset, or a render with no asset to upgrade to.
   if (existsSync(filePath) && existing && (existing.source === 'builtin' || !havePrebaked)) {
-    // Rewrite the playlist anyway: its entries are ABSOLUTE paths under the
-    // active station dir, and a multi-station conversion (or duplicate) moves
-    // or copies the m3u without touching its contents — re-deriving it at
-    // every boot is what keeps jingles airing after the dir changes identity.
+    // Rewrite the playlist anyway: entries are absolute paths under the active
+    // station dir, and a multi-station move/copy leaves stale ones behind.
     await rewritePlaylist(Object.keys(meta.items));
     return;
   }

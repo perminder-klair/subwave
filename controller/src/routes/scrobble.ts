@@ -1,11 +1,6 @@
-// Admin-gated scrobble endpoints.
-//
-// The scrobble fan-out itself lives in broadcast/scrobble.ts and consumes
-// track events from broadcast/queue.ts. This route exposes the admin surface:
-//   - the "Test" button (now-playing ping at a backend, reports the result)
-//   - the "Connect to Last.fm" flow (auth.getToken → operator authorizes →
-//     auth.getSession), which replaces the CLI `npm run lastfm-session` dance
-//     and persists the minted session key straight into settings.
+// Admin surface for scrobbling: the "Test" button and the Last.fm connect flow
+// (auth.getToken → operator authorizes → auth.getSession), which persists the
+// minted session key into settings. The fan-out itself is broadcast/scrobble.ts.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import { queue } from '../broadcast/queue.js';
@@ -26,9 +21,8 @@ router.post('/scrobble/test', requireAdmin, async (req, res) => {
       .status(400)
       .json({ error: 'provider must be "lastfm", "listenbrainz" or "navidrome"' });
   }
-  // Use the live track if there is one. Otherwise the test reports back
-  // cleanly — operators tend to click this before anything is on-air, and
-  // a 400 with "no current track" reads better than a silent success.
+  // Operators click this before anything is on-air, so say so rather than
+  // reporting a silent success.
   const current: any = queue.current?.track || null;
   if (!current) {
     return res.status(409).json({
@@ -50,8 +44,7 @@ router.post('/scrobble/test', requireAdmin, async (req, res) => {
   }
 });
 
-// Step 1 of "Connect to Last.fm": mint a request token and return the URL the
-// operator opens to grant access. Needs the API key + secret already set.
+// Step 1: mint a request token. Needs the API key + secret already set.
 router.post('/scrobble/lastfm/connect', requireAdmin, async (_req, res) => {
   try {
     const { token, authUrl } = await lastfmGetAuthToken();
@@ -61,8 +54,7 @@ router.post('/scrobble/lastfm/connect', requireAdmin, async (_req, res) => {
   }
 });
 
-// Step 2: after the operator authorizes in the browser, trade the token for a
-// session key, persist it, and switch scrobbling on — no CLI, no copy-paste.
+// Step 2: trade the authorized token for a session key and switch scrobbling on.
 router.post('/scrobble/lastfm/complete', requireAdmin, async (req, res) => {
   const token = typeof req.body?.token === 'string' ? req.body.token : '';
   try {

@@ -1,21 +1,12 @@
-// Loudness gain resolution (feature: LUFS gain) — the single answer to "how
-// many dB does this track get on air".
+// The single answer to "how many dB does this track get on air" (#1240). Two
+// consumers that must agree: the queue drain stamps it as `liq_amplify`, and the
+// stem-blend render bakes the same figure into the clip (which carries no
+// liq_amplify of its own — see subsonic.getClipUri).
 //
-// Two consumers, and they MUST agree (#1240): the queue drain stamps the
-// figure as `liq_amplify` so Liquidsoap applies it per track, and the
-// stem-blend render bakes the same figure into the clip (the clip carries no
-// liq_amplify of its own — see subsonic.getClipUri). When the two diverged,
-// a rendered seam played at a different level than the track it handed off
-// to, which is what "the stem files aren't volume matched to the regular
-// track" was.
-//
-// The resolution order is the operator's `settings.loudness.source`: the
-// embedded ReplayGain tag (whole-file R128, via Navidrome's OpenSubsonic
-// replayGain field) first by default, else the analyzer's measured LUFS
-// (leading window only — which is exactly why the render can't just use the
-// measured value and call it equivalent). Null loudness from every allowed
-// source → null gain → unity, today's behaviour for an untagged, unanalysed
-// library.
+// Order is the operator's `settings.loudness.source`: embedded ReplayGain
+// (whole-file R128) first by default, else the analyzer's measured LUFS (leading
+// window only, so the two are not interchangeable). Null loudness from every
+// allowed source → null gain → unity.
 
 import * as settings from '../settings.js';
 import * as subsonic from './subsonic.js';
@@ -30,13 +21,10 @@ export interface LoudnessTrack {
   [k: string]: unknown;
 }
 
-// Resolves the dB offset this track plays at. Caches the ReplayGain answer
-// onto the track object (`replayGain`), so a second call for the same object
-// — the stem-blend render warming a successor the drain will re-resolve
-// moments later — costs no extra Subsonic round-trip.
-//
-// `onWarn` surfaces an unreachable Navidrome to the caller's log; the lookup
-// itself is best-effort and falls through to the measured value.
+// The dB offset this track plays at. Caches the ReplayGain answer onto the track
+// object so a second call for the same object costs no extra Subsonic round-trip.
+// `onWarn` surfaces an unreachable Navidrome; the lookup is best-effort and falls
+// through to the measured value.
 export async function resolveGainDb(
   track: LoudnessTrack | null | undefined,
   onWarn?: (msg: string) => void,

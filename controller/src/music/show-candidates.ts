@@ -31,20 +31,14 @@ export function candidateCoverage(rows: Candidate[]): CandidateCoverage {
 // are transient discovery constraints, not properties of a show configuration.
 export function buildShowCandidateDiagnostic({ show, libraryRows, playlistRows, excludedIds, locks, minTrackSec = null, warnings = [] }: { show: any; libraryRows: Candidate[]; playlistRows: Candidate[] | null; excludedIds: Set<string> | null; locks: Locks; minTrackSec?: number | null; warnings?: string[] }): ShowCandidateDiagnostic {
   const strict = show?.filtersStrict === true && hasMusicFilter(show);
-  // Minimum track length (#1573) is applied FIRST and to both universes, before
-  // the strict split below, because unlike the music locks it is not gated on
-  // filtersStrict — a too-short track is never picked by any path, so a funnel
-  // that counted it would over-promise on exactly the shows this field exists
-  // for. starve:true: a diagnostic reports what the FILTERS do, and the
-  // never-starve rescue the pick paths apply is a dead-air guard, not a
-  // candidate — the warning below says so, so a zero here never reads as
-  // "the station will go quiet".
+  // Minimum track length (#1573) applies FIRST and to both universes, before the
+  // strict split, because unlike the music locks it is not gated on
+  // filtersStrict. starve:true — a diagnostic reports what the FILTERS do; the
+  // warning below says the station still plays if that leaves nothing.
   //
-  // It does NOT move the funnel's two INPUT figures: `library.indexed` is the
-  // indexed library and `playlist.total` is the playlist (which the show editor
-  // renders as "Playlist anchor: N tracks"). A field labelled with what it
-  // counts has to keep counting it; the floor's effect shows up as the drop to
-  // the steps below, which is what a funnel is for.
+  // It does NOT move the funnel's INPUT figures: `library.indexed` counts the
+  // indexed library and `playlist.total` the playlist. The floor's effect shows
+  // up as the drop to the steps below.
   const libraryPool = applyTrackFloor(libraryRows, minTrackSec, { starve: true });
   const playlistPool = playlistRows ? applyTrackFloor(playlistRows, minTrackSec, { starve: true }) : null;
   const libraryFiltered = filtered(libraryPool, locks);
@@ -80,11 +74,10 @@ export async function diagnoseShowCandidates(show: any): Promise<ShowCandidateDi
   const [playlistPool, excludedIds] = await Promise.all([resolveShowPlaylistPool(show), resolveExcludedPlaylistIds(show)]);
   if (show?.playlistIds?.length && !playlistPool) warnings.push('None of the pinned playlists could be resolved to tracks.');
   if (show?.filtersStrict !== true && hasMusicFilter(show)) warnings.push('Strict filter is off: matching filters is advisory; the show may draw from the wider library.');
-  // The floor the pick paths will actually run under: the show's own when the
-  // draft sets one, else the station default (#1573). Resolved through the same
-  // settings resolver both pickers use, so the count cannot promise tracks a
-  // pick would refuse. Named in a warning because a smaller "indexed" figure
-  // with no explanation reads as a broken library.
+  // The floor the pick paths run under (#1573), resolved through the same
+  // settings resolver both pickers use so the count cannot promise tracks a pick
+  // would refuse. Named in a warning, since an unexplained drop reads as a
+  // broken library.
   const minTrackSec = settings.effectiveMinTrackSec(show);
   if (minTrackSec) warnings.push(`Minimum track length is ${minTrackSec}s, so shorter tracks are excluded from the counts below. If that leaves nothing, the station still plays: the pool picker and the offline fallback both keep going rather than go quiet.`);
   return buildShowCandidateDiagnostic({ show, libraryRows, playlistRows: playlistPool?.tracks ?? null, excludedIds, locks, minTrackSec, warnings });

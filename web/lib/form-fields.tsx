@@ -1,16 +1,11 @@
 'use client';
 
 // Bound field components: the react-hook-form half of lib/form.ts.
-//
 // Each takes `control` + `name`, subscribes with useController, and renders the
-// whole Field composition — label, control, description, error — with the ARIA
-// already wired through fieldAria, so every bound form inherits correct
-// aria-invalid / aria-describedby rather than each getting it right separately.
-//
+// whole Field composition with the ARIA already wired through fieldAria.
 // Deliberately only five, chosen from what the converted forms actually use.
-// Anything else — chip inputs, month/day pickers, sliders, the avatar picker —
-// drops to a raw <Controller>; a bound wrapper for a one-off control is
-// indirection with no payoff.
+// Anything else (chip inputs, month/day pickers, sliders, the avatar picker)
+// drops to a raw <Controller>.
 import { useId } from 'react';
 import type {
   ComponentPropsWithoutRef,
@@ -59,15 +54,15 @@ interface BaseProps<T extends FieldValues> {
   className?: string;
 }
 
-// One hook call shared by all five, so the id derivation and the fieldAria
-// call happen in exactly one place.
+// One hook call shared by all five, so the id derivation and the fieldAria call
+// happen in exactly one place.
 function useBoundField<T extends FieldValues>(
   control: Control<T>,
   name: FieldPath<T>,
   hasDescription: boolean,
 ) {
-  // useId, not the field name: two forms on one page (StationsPanel has a
-  // create and a rename form) would otherwise mint the same element ids.
+  // useId, not the field name: two forms on one page would otherwise mint the
+  // same element ids.
   const uid = useId();
   const baseId = `${uid}-${name}`;
   const { field, fieldState } = useController({ control, name });
@@ -75,10 +70,9 @@ function useBoundField<T extends FieldValues>(
   return { field, fieldState, aria };
 }
 
-// Native attributes a caller may need on the underlying element that this
-// component doesn't otherwise name (autoComplete, maxLength, min/max/step,
-// autoFocus, ...) — everything the component itself already controls is
-// omitted so a stray rest prop can never fight the controlled value/handlers.
+// Native attributes a caller may need on the underlying element (autoComplete,
+// maxLength, min/max/step, autoFocus...). Everything the component controls is
+// omitted so a stray rest prop can't fight the controlled value/handlers.
 type TextFieldRest = Omit<
   InputHTMLAttributes<HTMLInputElement>,
   'value' | 'onChange' | 'onBlur' | 'ref' | 'id' | 'name' | 'className' | 'disabled' | 'placeholder' | 'type'
@@ -106,11 +100,9 @@ export function TextField<T extends FieldValues>({
         type={type ?? (numeric ? 'number' : 'text')}
         placeholder={placeholder}
         disabled={disabled}
-        // A zod z.coerce.number() field has an INPUT type of unknown (measured:
-        // z.input accepts a string, z.output does not), so the value arriving
-        // here is not necessarily a string. Stringify for the DOM and hand back
-        // a number on change when `numeric`, so the resolver's coercion never
-        // has to rescue a value the input mangled.
+        // A zod z.coerce.number() field has an INPUT type of unknown, so the
+        // value arriving here is not necessarily a string. Stringify for the DOM
+        // and hand back a number on change when `numeric`.
         value={field.value == null ? '' : String(field.value)}
         onChange={e => {
           const raw = e.target.value;
@@ -230,13 +222,10 @@ export function SwitchField<T extends FieldValues>({
 }: BaseProps<T> & SwitchFieldRest) {
   const { field, fieldState, aria } = useBoundField(control, name, !!description);
   return (
-    // Switch FIRST, then a FieldContent column holding label + description.
-    // The horizontal variant gives a direct-child label `flex-auto`, so with
-    // label/switch/description all as siblings the switch landed wherever that
-    // label's text happened to end — a different x on every row, description
-    // trailing on the same line (issue #1403). Leading the row with the control
-    // pins every switch to one left-aligned column, which is also the layout
-    // these rows had before the react-hook-form migration.
+    // Switch FIRST, then a FieldContent column holding label + description. The
+    // horizontal variant gives a direct-child label `flex-auto`, so as siblings
+    // the switch landed wherever the label text ended (#1403). Leading with the
+    // control pins every switch to one left-aligned column.
     <Field
       orientation="horizontal"
       data-invalid={aria.invalid || undefined}
@@ -262,29 +251,24 @@ export function SwitchField<T extends FieldValues>({
   );
 }
 
-// ToggleGroup's own props are a `type`-discriminated union (single vs
-// multiple value shapes), and Omit over a union collapses to its SHARED keys
-// only — exactly what's wanted here: the type-specific `value`/`onValueChange`
-// stay owned by this component, and what's left (orientation, dir, loop, ...)
-// is safe to forward.
+// ToggleGroup's own props are a `type`-discriminated union, and Omit over a
+// union collapses to its SHARED keys only -- which is what's wanted: the
+// type-specific `value`/`onValueChange` stay owned here.
 type ToggleGroupFieldRest = Omit<
   ComponentPropsWithoutRef<typeof ToggleGroup>,
   'type' | 'value' | 'defaultValue' | 'onValueChange' | 'disabled' | 'children' | 'className'
 >;
 
-// ToggleGroup's own root is `justify-center`, which centres the row inside a
-// full-width Field child, and its default item variant is transparent-no-border
-// — so a bound group read as centred plain text next to the bordered ChipRow
-// pills it sits beside (issue #1403). Left-align it, let it wrap, and default
-// the items to `outline` so they look like the buttons they are. `variant` is
-// still forwardable per call site; className is owned here.
+// ToggleGroup's root is `justify-center` and its default item variant is
+// transparent-no-border, so a bound group read as centred plain text beside the
+// bordered ChipRow pills (#1403). Left-align it, let it wrap, and default the
+// items to `outline`. `variant` is still forwardable; className is owned here.
 const TOGGLE_GROUP_ROW = 'w-fit flex-wrap justify-start';
 
-// …and the item's own on-state has to READ as on. `outline`'s
-// data-[state=on]:bg-accent is a faint tint in this palette, while the
-// ChipRow chips these groups sit beside invert to bg-ink/text-bg. Match them
-// (square, same border, same 12px) so one filter row can't look selected and
-// the next look empty at the same value.
+// The item's on-state has to READ as on: `outline`'s data-[state=on]:bg-accent
+// is a faint tint in this palette, while the ChipRow chips beside it invert to
+// bg-ink/text-bg. Match them so one filter row can't look selected and the next
+// look empty at the same value.
 const TOGGLE_GROUP_ITEM = 'min-h-9 rounded-none border-ink px-2 text-[12px] hover:bg-[var(--ink-soft)] data-[state=on]:bg-ink data-[state=on]:text-bg';
 
 export function ToggleGroupField<T extends FieldValues>({
@@ -300,19 +284,14 @@ export function ToggleGroupField<T extends FieldValues>({
 }: BaseProps<T> & { options: Option[]; multiple?: boolean } & ToggleGroupFieldRest) {
   const { field, fieldState, aria } = useBoundField(control, name, !!description);
   // `multiple` is opt-in and defaults to the original single-select radio
-  // behaviour (unclickable-to-empty, since that reading is what every other
-  // caller of this component wants — a required field like `frequency`).
-  // Array-valued fields (Show's `energies`, capped multi-choice) need Radix's
-  // own `type="multiple"`, whose value/onValueChange shape is a string[], not
-  // a string — so both branches read/write field.value through the same
-  // `field`, just coerced to the shape Radix expects for that type.
+  // behaviour (unclickable-to-empty). Array-valued fields need Radix's own
+  // `type="multiple"`, whose value/onValueChange shape is a string[]; both
+  // branches read/write the same `field`, coerced to the shape Radix expects.
   return (
     <Field data-invalid={aria.invalid || undefined} className={className}>
       {/* A ToggleGroup is a group of buttons with no single labelable control,
-          so it names itself via aria-labelledby rather than htmlFor. FieldTitle,
-          not FieldLabel: FieldLabel renders a <label>, whose htmlFor would have
-          to point at a <div>, which is invalid. FieldTitle is the primitive for
-          exactly this case — a plain div with the same typography. */}
+          so it names itself via aria-labelledby. FieldTitle, not FieldLabel:
+          FieldLabel renders a <label> whose htmlFor would point at a <div>. */}
       <FieldTitle {...aria.labelledByProps}>{label}</FieldTitle>
       {multiple ? (
         <ToggleGroup

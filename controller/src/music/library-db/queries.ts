@@ -1,18 +1,11 @@
-// Mood- and tag-keyed reads — the drop-in replacements for the old in-memory
-// loops in library.ts — plus the per-genre embedding centroids.
+// Mood- and tag-keyed reads, plus the per-genre embedding centroids.
 
 import { SQL_HAS_MOODS, SQL_NO_MOODS, requireDb } from './handle.js';
 import type { EnergyValue, TrackRecord, TrackRow } from './types.js';
 import { rowToTrack, safeParseArray } from './rows.js';
 
-// ---------------------------------------------------------------------------
-// Blocklist-rule match counting (admin Blocked tab)
-// ---------------------------------------------------------------------------
-
-// Every row, projected down to exactly the fields blocklist-rules.ruleMatches
-// reads. Deliberately NOT rowToTrack (which parses the full analysis surface):
-// GET /library/blocklist runs this over the whole library per request to show
-// per-rule match counts, and the slim projection keeps that a one-shot scan.
+// Projected to exactly the fields blocklist-rules.ruleMatches reads. Not
+// rowToTrack: GET /library/blocklist runs this over the whole library per request.
 export function ruleMatchRows(): Array<{
   id: string;
   title: string | null;
@@ -40,15 +33,8 @@ export function ruleMatchRows(): Array<{
   }));
 }
 
-// ---------------------------------------------------------------------------
-// Mood-keyed reads (drop-in replacements for the old library.ts in-memory loops)
-// ---------------------------------------------------------------------------
-
 export function songsByMood(mood: string): TrackRecord[] {
-  // Match the LLM's editorial moods OR the zero-shot audio moods (scored from
-  // the track's actual sound — music/audio-moods.ts). The blend widens thin
-  // mood buckets and covers tracks the metadata-only tagger couldn't read
-  // (instrumentals, non-English titles); a track matching both appears once.
+  // Editorial moods OR zero-shot audio moods; a track matching both appears once.
   const rows = requireDb()
     .prepare(
       `SELECT * FROM tracks
@@ -77,11 +63,8 @@ export function allTaggedIds(): string[] {
   ).map(r => r.id);
 }
 
-// Directly-decided tags with a vector — the trusted sample for the propagation
-// self-check (music/propagation-eval.ts). Excludes 'propagated' rows (they ARE
-// the propagation output — scoring against them would be circular) and
-// vectorless rows (KNN can't run). Null source = legacy import, decided by an
-// LLM at the time, so it counts.
+// Trusted sample for the propagation self-check: no 'propagated' rows (circular)
+// and no vectorless rows (KNN can't run). Null source = legacy LLM import, counts.
 export function trustedTaggedIds(): string[] {
   return (
     requireDb()
@@ -96,12 +79,9 @@ export function trustedTaggedIds(): string[] {
   ).map(r => r.id);
 }
 
-// Tagged rows whose LLM provenance has gone stale — their prompt_hash or model
-// differs from the current ones (or is NULL, e.g. a legacy-v1 import). Drives
-// the re-scan "Re-decide moods" pass: re-LLM-tag only what a prompt/model change
-// invalidated. NEVER source='manual' — operator-set tags are ground truth and
-// don't go stale. With no prompt/model change this returns [], so re-decide is a
-// clean no-op. `IS NOT ?` is SQLite's null-safe inequality (NULL counts stale).
+// Rows whose prompt_hash or model differs from the current ones (NULL counts
+// stale), for "Re-decide moods". Never source='manual': operator tags are ground
+// truth. `IS NOT ?` is null-safe inequality.
 export function staleTaggedIds(promptHash: string, model: string, limit?: number): string[] {
   const sql =
     `SELECT id FROM tracks
@@ -113,10 +93,8 @@ export function staleTaggedIds(promptHash: string, model: string, limit?: number
   return rows.map(r => r.id);
 }
 
-// Tracks that already carry enrichment (Last.fm tags / lyrics fetched at least
-// once). The re-scan "Re-enrich" scope — redo metadata only for what was done,
-// never the untouched remainder. Distinct from the raw --re-enrich widening,
-// which spans the full live catalogue (issue #531).
+// "Re-enrich" scope: only what was already enriched. Distinct from --re-enrich,
+// which spans the full live catalogue (#531).
 export function enrichedIds(): string[] {
   return (
     requireDb()
@@ -143,9 +121,8 @@ export function unembeddedIds(limit?: number): string[] {
   return rows.map(r => r.id);
 }
 
-// Tracks that currently have a vector. The re-scan "Re-embed" scope — capture
-// this BEFORE dropVectors() (after the drop every track looks unembedded), then
-// rebuild exactly these, never the untouched untagged remainder.
+// "Re-embed" scope. Capture BEFORE dropVectors(), after which every track looks
+// unembedded, then rebuild exactly these.
 export function embeddedIds(): string[] {
   return (
     requireDb()
@@ -154,10 +131,8 @@ export function embeddedIds(): string[] {
   ).map(r => r.id);
 }
 
-// Bucket every untagged track by (genre, decade). Used by seed-selector to
-// stratify so rare-mood corners of the library each get a seed pick. The CASE
-// is the SQL twin of era-year.resolveEraYear: original wins, an unresolved
-// compilation/anthology is unknown, then a trusted file year may fall through.
+// Buckets untagged tracks by (genre, decade) so seed-selector can stratify. The
+// CASE is the SQL twin of era-year.resolveEraYear.
 export function trackIdsByGenreDecade(): Map<string, string[]> {
   const rows = requireDb()
     .prepare(
@@ -181,17 +156,10 @@ export function trackIdsByGenreDecade(): Map<string, string[]> {
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Per-genre embedding centroids — the mean text-embedding vector across every
-// tagged+embedded track in each genre, so semantically similar genres land near
-// each other. Consumed by music/genre-suggest.ts. One streaming SQL join keeps a
-// multi-thousand-track library light on memory — vectors accumulate into
-// per-genre running sums rather than all being held at once.
-// ---------------------------------------------------------------------------
+// Mean text vector per genre, for music/genre-suggest.ts. Streamed with running
+// sums so the library is never held at once.
 export function genreCentroids(): Array<{ genre: string; count: number; centroid: Float32Array }> {
-  // json_each over the multi-genre array: a Hip-Hop + Rap track contributes
-  // its vector to BOTH centroids — each genre's centroid should reflect every
-  // track that carries the tag, not just those where it happens to be primary.
+  // json_each: a track contributes to every genre it carries, not just the primary.
   const stmt = requireDb().prepare(
     `SELECT je.value AS genre, v.embedding AS embedding
        FROM tracks t
@@ -222,9 +190,8 @@ export function genreCentroids(): Array<{ genre: string; count: number; centroid
   }
   return out;
 }
-// Lean, whole-library projection for the explicit Show-editor candidate
-// diagnostic. It avoids the heavyweight analysis JSON that full track reads
-// carry while retaining every field used by the strict show locks.
+// Whole-library projection for the Show-editor candidate diagnostic: the fields
+// the strict show locks use, none of the heavy analysis JSON.
 export function candidateFilterTracks(): Array<{
   id: string;
   title: string | null;
@@ -239,10 +206,8 @@ export function candidateFilterTracks(): Array<{
   audioMoods: string[];
   energy: EnergyValue;
   vocalRanges: unknown[] | null;
-  // Track length, for the minimum-track-length floor (#1573). The diagnostic
-  // has to apply the SAME rule the pick paths do, and music/track-floor.ts
-  // reads a positive duration — a column missing from this projection would
-  // make every row read as unknown length and the funnel would over-count.
+  // For the minimum-track-length floor (#1573); without this column every row
+  // reads as unknown length and the funnel over-counts.
   durationSec: number | null;
 }> {
   type CandidateFilterRow = {
@@ -285,9 +250,8 @@ export function candidateFilterTracks(): Array<{
     moods: row.moods ? safeParseArray(row.moods) : [],
     audioMoods: row.audio_moods ? safeParseArray(row.audio_moods) : [],
     energy: row.energy ?? null,
-    // The show filter only reads this field's tri-state: null = unmeasured,
-    // [] = instrumental, non-empty = vocal. Keep the projection lean by
-    // carrying presence rather than parsing every stored span object.
+    // The show filter reads only the tri-state (null unmeasured / [] instrumental
+    // / non-empty vocal), so carry presence rather than the spans.
     vocalRanges: row.vocal_range_count == null
       ? null
       : row.vocal_range_count === 0 ? [] : [{}],

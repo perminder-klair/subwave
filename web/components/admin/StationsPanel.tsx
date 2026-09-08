@@ -1,11 +1,10 @@
 'use client';
 
-// Stations rack. Installs are capped at MAX_STATIONS=8 server-side (GET
-// /stations `limit`). Activating a station — or creating the SECOND station,
-// which converts a single-station install — restarts the controller, so both
-// flows funnel into one full-screen "re-tuning" state that hard-reloads once
-// /state reports the new station booted (boot-frozen station.id).
-// API: controller/src/routes/stations.ts.
+// Stations rack (API: controller/src/routes/stations.ts). Capped at
+// MAX_STATIONS=8 server-side. Activating a station, or creating the second one
+// (which converts a single-station install), restarts the controller, so both
+// flows enter the full-screen re-tuning state and hard-reload once /state
+// reports the new boot-frozen station.id.
 
 import { useMemo, useRef, useState } from 'react';
 import { useAdminAuth } from '../../lib/adminAuth';
@@ -40,8 +39,8 @@ interface StationCreateReceipt {
   fieldErrors?: Record<string, string>;
 }
 
-// A stable pseudo-frequency on the 88–108 FM band, hashed from the station id
-// so it keeps its spot as the rack changes. Pure presentation.
+// Stable pseudo-frequency on the 88–108 FM band, hashed from the station id.
+// Pure presentation.
 function assignFrequencies(stations: StationRow[]): Map<string, number> {
   const taken = new Set<number>();
   const out = new Map<string, number>();
@@ -115,14 +114,12 @@ export default function StationsPanel() {
   const [confirm, setConfirm] = useState<{ type: 'live' | 'del'; s: StationRow } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [renaming, setRenaming] = useState<StationRow | null>(null);
-  // Both dialogs validate against the SAME schemas the controller enforces, so
-  // an over-long or empty name is refused under the input before a request is
-  // sent — and the messages match the ones a 400 would carry.
+  // Both dialogs validate against the same schemas the controller enforces, so
+  // a bad name is refused before a request is sent, with the same message.
   const createForm = useZodForm(stationCreateSchema, { name: '', mode: 'fresh' });
   const renameForm = useZodForm(stationRenameSchema, { name: '' });
   const createName = createForm.watch('name');
-  // `mode` is optional in z.input because the schema defaults it — the ?? just
-  // restates that default, since every reset() below sets it explicitly.
+  // `mode` is optional in z.input (schema default); the ?? restates it.
   const createMode = createForm.watch('mode') ?? 'fresh';
   const setCreateMode = (mode: StationCreateMode) =>
     createForm.setValue('mode', mode, { shouldValidate: true, shouldDirty: true });
@@ -188,8 +185,8 @@ export default function StationsPanel() {
     try {
       const j = await createMutation.mutateAsync(values);
       if (j.error) {
-        // Converted-but-create-failed wedge: the conversion is durable and the
-        // controller restarts regardless — enter the re-tuning state anyway.
+        // The conversion is durable and the controller restarts regardless, so
+        // enter re-tuning even when the create failed.
         if (j.switching) {
           notify.err(
             `Create failed: ${j.error} — the controller is restarting anyway to finish converting to multi-station.`,
@@ -199,10 +196,9 @@ export default function StationsPanel() {
           setSwitching(CONVERT_SENTINEL);
           return;
         }
-        // "no active station to duplicate from" is a rule only the server can
-        // check — it reads the live pointer off disk — so it comes back keyed
-        // to `mode` and lands under the Fresh/Duplicate picker, where the fix
-        // (choose Fresh) actually is.
+        // Only the server can check "no active station to duplicate from" (it
+        // reads the live pointer off disk), so it comes back keyed to `mode`
+        // and lands under the Fresh/Duplicate picker.
         applyServerFieldErrors(createForm, j.fieldErrors);
         throw new Error(j.error);
       }
@@ -425,9 +421,8 @@ export default function StationsPanel() {
           {stations.map((s, i) => (
             <div
               key={s.id ?? '__install'}
-              /* Phone: preset tile + identity, with the action cluster on its
-                 own row — a 96px tile, two 24px gaps and three buttons leave
-                 the name column barely 100px wide at 390. */
+              /* Phone: preset tile + identity, actions on their own row; a
+                 96px tile plus gaps and three buttons leave ~100px at 390. */
               className="grid grid-cols-[96px_minmax(0,1fr)] items-center gap-x-4 border-t border-separator-strong first:border-t-0 sm:grid-cols-[96px_1fr_auto] sm:gap-6"
             >
               <div

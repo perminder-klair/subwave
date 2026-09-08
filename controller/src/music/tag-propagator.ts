@@ -1,8 +1,5 @@
-// KNN voting logic for propagating moods/energy from a small LLM-tagged seed
-// set to the rest of the library.
-//
-// Pure functions only — the data plumbing (fetch neighbours from library-db,
-// look up their tags) is the caller's job. This file does the math.
+// KNN voting that propagates moods/energy from the LLM-tagged seed set to the
+// rest of the library. Pure math; the caller does the data plumbing.
 
 import type { KnnHit } from './library-db.js';
 
@@ -14,33 +11,27 @@ export interface NeighbourTags {
 }
 
 export interface VoteResult {
-  moods: string[];                        // moods holding ≥ threshold of the voting weight
+  moods: string[];                        // moods holding >= threshold of the voting weight
   energy: EnergyValue;                    // weighted plurality, tie-break by proximity
-  confidence: number;                     // 0..1; combines neighbour proximity + tag coverage
+  confidence: number;                     // 0..1; neighbour proximity x tag coverage
   votingNeighbours: number;               // how many of the K neighbours actually had tags
 }
 
 export interface VoteOpts {
   moodVoteThreshold: number;              // fraction of the total voting WEIGHT a mood must carry
-  k: number;                              // how many neighbours were requested (so confidence can
-                                          // discount for missing tags)
-  // Optional per-neighbour weight multiplier (clamped to 0..1). The caller's
-  // policy hook — tag-library halves same-album neighbours here so an album's
-  // tags need outside corroboration instead of echoing around it. Affects the
-  // vote weights only, never the confidence formula.
+  k: number;                              // neighbours requested, so confidence can discount misses
+  // Per-neighbour weight multiplier (clamped 0..1), the caller's policy hook:
+  // tag-library halves same-album neighbours so an album needs outside
+  // corroboration. Affects vote weights only, never confidence.
   weightOf?: (id: string) => number;
 }
 
-// Fuse text-space and CLAP audio-space KNN lists into one neighbour ranking
-// for the mood vote. The audio cosine is scaled by `blend` (0..1, the
-// operator's settings.embedding.audioFusionWeight) to put it on a comparable
-// footing with text similarity; a track surfaced by BOTH spaces keeps the
-// higher of its two scores (max, not sum — the result must stay a
-// cosine-shaped 0..1 because vote()'s confidence formula reads topSim off it).
-// The fused list is re-capped at k so coverage/confidence semantics don't
-// shift: audio neighbours displace the weak tail of the text list rather than
-// widening the vote. With blend 0 or no audio hits this is exactly the text
-// list — today's behaviour.
+// Fuse text-space and CLAP audio-space KNN lists into one ranking. Audio cosines
+// are scaled by `blend` (settings.embedding.audioFusionWeight, 0..1); a track in
+// both spaces keeps the HIGHER score, not the sum, so the result stays
+// cosine-shaped 0..1 for vote()'s topSim. Re-capped at k so audio neighbours
+// displace the text tail rather than widening the vote; blend 0 or no audio hits
+// is exactly the text list.
 export function fuseNeighbours(
   text: KnnHit[],
   audio: KnnHit[],
@@ -64,29 +55,17 @@ export function fuseNeighbours(
     .slice(0, Math.max(0, k));
 }
 
-// Vote on moods + energy from a KNN result. Caller supplies a lookup function
-// so we don't have to import library-db here (keeps this file unit-testable).
+// Vote on moods + energy from a KNN result. Tags come in through `getTags` so
+// this file never imports library-db.
 //
-// Votes are SIMILARITY-WEIGHTED: each voting neighbour contributes
-// max(0, similarity) rather than a flat 1. Under flat counting a 0.9-similar
-// neighbour was outvoted by two 0.3-similar ones — exactly backwards at the
-// propagation frontier, where the far tail of the K list is barely related to
-// the track being tagged. A mood now passes when it carries
-// ≥ moodVoteThreshold of the total voting weight; energy is the weighted
-// plurality with ties broken by the closest neighbour carrying one.
+// Votes are SIMILARITY-WEIGHTED (max(0, similarity), not a flat 1): a mood passes
+// when it carries >= moodVoteThreshold of the total weight, energy is the weighted
+// plurality with ties going to the closest neighbour.
 //
-// Confidence formula (deliberately unchanged by the weighting — the operator's
-// confidenceThreshold default was tuned against it):
-//   coverage    = votingNeighbours / k          (penalises sparse coverage early in propagation)
-//   topSim      = max(0, neighbours[0].similarity)   (penalises far-away matches)
-//   confidence  = topSim * coverage
-//
-// Because confidence is a PRODUCT of two sub-1 terms, the gate compounds fast: a
-// strong nearest match (topSim 0.75) with 3-of-5 tagged neighbours (coverage 0.6)
-// only scores 0.45. The old 0.6 default therefore rejected most genuinely-similar
-// tracks and dumped them into (expensive) active-learning; the default is now 0.35
-// (settings.ts DEFAULTS.embedding.confidenceThreshold), which still needs a real
-// neighbour but lets KNN propagation carry the bulk of tagging. Operator-tunable.
+// confidence = topSim * coverage, where coverage = votingNeighbours / k. It is a
+// product of two sub-1 terms so it compounds fast (0.75 topSim at 3-of-5 coverage
+// scores 0.45); the operator default (DEFAULTS.embedding.confidenceThreshold, 0.35)
+// is tuned against this exact formula, so weighting changes must leave it alone.
 export function vote(
   neighbours: KnnHit[],
   getTags: (id: string) => NeighbourTags | null,
@@ -103,13 +82,10 @@ export function vote(
 
   const totalWeight = voting.reduce((s, v) => s + v.weight, 0);
   if (voting.length === 0 || totalWeight <= 0) {
-    // No tagged neighbours, or every one is orthogonal-or-worse to the track —
-    // there's no real evidence to propagate from either way.
+    // No tagged neighbours, or all orthogonal-or-worse: nothing to propagate.
     return { moods: [], energy: null, confidence: 0, votingNeighbours: 0 };
   }
 
-  // Mood vote: sum each mood's neighbour weight; it passes when it carries
-  // enough of the total voting weight.
   const moodWeights = new Map<string, number>();
   for (const v of voting) {
     for (const m of v.moods) {
@@ -123,9 +99,8 @@ export function vote(
     .slice(0, 3) // mood vocab arrays cap at 3
     .map(([m]) => m);
 
-  // Energy vote: weighted plurality. `voting` is in KNN order (closest first),
-  // so on an exact tie the energy that appeared on a closer neighbour wins —
-  // strictly-greater comparison keeps the earlier (closer) winner.
+  // Weighted plurality. `voting` is in KNN order, so the strictly-greater test
+  // breaks a tie in favour of the closer neighbour.
   const energyWeights = new Map<string, number>();
   for (const v of voting) {
     if (v.energy) energyWeights.set(v.energy, (energyWeights.get(v.energy) ?? 0) + v.weight);

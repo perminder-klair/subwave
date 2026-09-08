@@ -1,10 +1,9 @@
 'use client';
 
 // Show definitions. A scheduled show puts its persona on air and overrides the
-// autonomous mood (empty moods = Any/auto); an empty hour runs autonomously.
-// The weekly plan lives at /admin/shows/schedule, which owns the board and
-// PUT /schedule — this page loads the schedule read-only for the hours-a-week
-// counts. Putting a show on air right now is a takeover, and lives on the dash.
+// autonomous mood (empty moods = Any/auto). /admin/shows/schedule owns the board
+// and PUT /schedule; this page loads the schedule read-only for the
+// hours-a-week counts. Putting a show on air right now is a takeover (dash).
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { z } from 'zod';
@@ -52,8 +51,7 @@ import type {
 } from './shows/types';
 import { SHOWS_MAX } from './shows/types';
 // Radix Select forbids an empty-string item value, so "all hosts" travels as a
-// sentinel and is mapped back to '' — the same shape ANY_SENTINEL takes in the
-// show editor's own pickers.
+// sentinel and is mapped back to ''.
 const ANY_HOST = '__any_host__';
 import {
   SHOW_SORTS,
@@ -73,11 +71,9 @@ import {
 } from './shows/queries';
 import { useAdminThemesQuery } from './themes-queries';
 
-// `showSchema` is a factory (a show can't be validated against itself — it has
-// to name a real persona, mood and theme), so the resolver is rebuilt whenever
-// `showCtx` changes identity rather than built once at module scope. `schedule`
-// is deliberately not part of the shape: this panel only reads it, for the
-// hours-a-week counts.
+// `showSchema` is a factory (a show has to name a real persona, mood and theme),
+// so the resolver is rebuilt whenever `showCtx` changes identity. `schedule` is
+// not part of the shape: this panel only reads it.
 function showsFormSchema(ctx: ShowSchemaContext) {
   return z.object({ shows: z.array(showSchema(ctx)) });
 }
@@ -96,23 +92,19 @@ export default function ShowsPanel() {
   const [schedule, setSchedule] = useState<Schedule>(emptyWeek());
   const [communityOpen, setCommunityOpen] = useState(false);          // catalog modal open?
   const [view, setView] = useRosterView('shows');
-  // Sort is remembered per browser; the filters deliberately are not — see
-  // useRosterSort's note on why a filter that survives a reload is worse than
-  // one you have to set again.
+  // Sort is remembered per browser; the filters deliberately are not.
   const [sort, setSort] = useRosterSort<ShowSort>('shows', SHOW_SORTS, 'az');
   const [query, setQuery] = useState('');
   const [tagSel, setTagSel] = useState<string[]>([]);
   const [hostSel, setHostSel] = useState('');
 
-  // Shows are edited in place — no modal, no draft copy; edits land straight on
-  // the RHF field array and persist on Save show. null = none open.
+  // Shows are edited in place -- no modal, no draft copy. null = none open.
   const [focusIdx, setFocusIdx] = useState<number | null>(null);
   // The AI-draft field shows only while creating.
   const [creatingId, setCreatingId] = useState<string | null>(null);
   const editorRef = useRef<HTMLDivElement | null>(null);
   const scrollToEditorRef = useRef(false);
-  // Both the list ✕ and the editor's Remove route through this, so deletes
-  // always need confirming.
+  // Both the list x and the editor's Remove route through this.
   const [confirmDeleteIdx, setConfirmDeleteIdx] = useState<number | null>(null);
   const queryEnabled = hydrated && !needsAuth;
   const settingsQuery = useSettingsQuery<SettingsResponse>({ adminFetch, enabled: queryEnabled });
@@ -133,8 +125,7 @@ export default function ShowsPanel() {
     : playlistsQuery.isError
       ? 'error'
       : 'ready';
-  // Best-effort: a failed community catalog is the same empty, usable modal as
-  // before; only the initial request keeps the button disabled.
+  // Best-effort: a failed community catalog is an empty but usable modal.
   const community: CommunityShow[] | null = communityQuery.data
     ?? (communityQuery.isError ? [] : null);
   // Guarded by scrollToEditorRef so unrelated re-renders don't yank the page.
@@ -150,7 +141,7 @@ export default function ShowsPanel() {
   };
 
   // Memoised because `x || []` is a fresh array every render, and showCtx
-  // identity is what decides whether the resolver is rebuilt.
+  // identity decides whether the resolver is rebuilt.
   const personas: Persona[] = useMemo(() => data?.values?.personas || [], [data?.values?.personas]);
   const moods: string[] = useMemo(() => data?.tts?.moods || [], [data?.tts?.moods]);
   // The four inputs the shared show schema needs, built once so the row badges,
@@ -163,15 +154,13 @@ export default function ShowsPanel() {
     }),
     [personas, moods, themes, data?.values?.minTrackSeconds],
   );
-  // showSchema(ctx) builds a fresh schema per call, so keep this memoised on
-  // ctx identity rather than rebuilding it every render.
+  // showSchema(ctx) builds a fresh schema per call, so memoise on ctx identity.
   const formSchema = useMemo(() => showsFormSchema(showCtx), [showCtx]);
 
   const form = useZodForm(formSchema, { shows: [] });
-  // showSchema's output is reached through z.preprocess/z.unknown() pipelines
-  // (the legacy-field migration wraps the whole object), so z.input<> types it
-  // `unknown` and no nested path would type-check as a FieldPath. Type-only
-  // casts onto the shape the resolver actually produces.
+  // showSchema's output is reached through z.preprocess/z.unknown() pipelines,
+  // so z.input<> types it `unknown` and no nested path would type-check as a
+  // FieldPath. Type-only casts.
   const control = form.control as unknown as Control<ShowsFormValues>;
   const setValue = form.setValue as unknown as UseFormSetValue<ShowsFormValues>;
   const getValues = form.getValues as unknown as UseFormGetValues<ShowsFormValues>;
@@ -179,25 +168,23 @@ export default function ShowsPanel() {
   const resetForm = form.reset as unknown as UseFormReset<ShowsFormValues>;
   const trigger = form.trigger as unknown as UseFormTrigger<ShowsFormValues>;
 
-  // `keyName: '_rhfKey'` is load-bearing — shows carry their own `id`, which
-  // RHF's default keyName ('id') would clobber. `fields` goes unused: renders
-  // below read live values via `watch('shows')`, as PersonasPanel does.
+  // `keyName: '_rhfKey'` is load-bearing: shows carry their own `id`, which
+  // RHF's default keyName ('id') would clobber. `fields` goes unused; renders
+  // read live values via `watch('shows')`.
   const { append: appendShowField, remove: removeShowField } =
     useFieldArray({ control, name: 'shows', keyName: '_rhfKey' });
 
-  // `showCtx` changes after mount as personas/moods and themes arrive from
-  // separate queries. Re-validating
-  // from an effect (rather than remounting the form) is enough — RHF rewrites
-  // `control._options` on every render, so by the time this runs `trigger()`
+  // `showCtx` changes after mount as personas/moods and themes arrive. RHF
+  // rewrites `control._options` every render, so an effect-driven `trigger()`
   // reads the current resolver. Without it every valid show reads as
-  // "incomplete" after load; verify-forms.py's shows() covers the regression.
+  // "incomplete" after load; verify-forms.py's shows() covers it.
   useEffect(() => {
     void form.trigger();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showCtx]);
 
-  // Server cache revisions must not reset a half-edited show. A remount starts
-  // from the latest cache entry; this mounted form hydrates exactly once.
+  // Server cache revisions must not reset a half-edited show: this mounted form
+  // hydrates exactly once.
   const formHydratedRef = useRef(false);
   useEffect(() => {
     if (!data?.values || formHydratedRef.current) return;
@@ -210,9 +197,8 @@ export default function ShowsPanel() {
     }
     setSchedule(week);
     resetForm({ shows: (data.values.shows || []).map(hydrateShow) });
-    // Unlike the old imperative loader, the query data and its showCtx land in
-    // the same render. The ctx effect above therefore runs before this reset;
-    // validate the newly-hydrated rows once with that render's current schema.
+    // Query data and its showCtx land in the same render, so the ctx effect runs
+    // before this reset; validate the newly-hydrated rows once.
     void trigger();
   }, [data, resetForm, trigger]);
 
@@ -274,8 +260,7 @@ export default function ShowsPanel() {
 
   const focusShow = (i: number) => { scrollToEditorRef.current = true; setCreatingId(null); setFocusIdx(i); };
 
-  // Only used by the AI-draft "apply", which hands back several fields at once;
-  // every keystroke field binds straight to `control` instead.
+  // Used only by the AI-draft apply, which sets several fields at once.
   const applyShowPatch = (i: number, patch: Partial<Show>) => {
     const current = getValues(`shows.${i}`);
     if (!current) return;
@@ -310,16 +295,16 @@ export default function ShowsPanel() {
     const current = getValues('shows');
     const target = current[i];
     if (!target) return;
-    // Persisted immediately, not deferred to Save schedule. A 404 means a
-    // locally-added show never saved server-side, so the local splice is enough.
+    // Persisted immediately. A 404 means a locally-added show never saved
+    // server-side, so the local splice is enough.
     try {
       await deleteShowMutation.mutateAsync(target.id);
     } catch (e) {
       notify.err(`Delete failed: ${showWriteError(e)}`);
       return;
     }
-    // Splice by id, resolved at call time — the await may have elapsed and
-    // other rows may have shifted. Unsaved edits to other shows are preserved.
+    // Splice by id, resolved at call time: the await may have elapsed and other
+    // rows may have shifted.
     const latest = getValues('shows');
     const idx = latest.findIndex(sh => sh.id === target.id);
     if (idx !== -1) removeShowField(idx);
@@ -336,8 +321,7 @@ export default function ShowsPanel() {
   };
 
   // The controller persists the install (unscheduled, owned by the active
-  // persona); the returned show is appended to the local form as well so
-  // unsaved edits to other shows survive.
+  // persona); the returned show is appended locally so unsaved edits survive.
   const install = async (slug: string) => {
     try {
       const j = await installShowMutation.mutateAsync(slug);
@@ -356,9 +340,9 @@ export default function ShowsPanel() {
   const scheduledHours = Object.values(schedule).flat().filter(Boolean).length;
   const countHours = (id: string): number => Object.values(schedule).flat().filter(c => c === id).length;
 
-  // Persists ONE show, independent of any other half-finished show in the
-  // panel — gated on THIS row's own errors, not form.formState.isValid (which
-  // would require every OTHER open-but-unsaved show to be valid too).
+  // Persists ONE show, gated on THIS row's own errors rather than
+  // form.formState.isValid, which would require every other open show to be
+  // valid too.
   const saveShow = async (index: number): Promise<boolean> => {
     const s = getValues(`shows.${index}`);
     if (!s || form.formState.errors.shows?.[index]) return false;
@@ -371,7 +355,7 @@ export default function ShowsPanel() {
     } catch (e) {
       if (e instanceof AdminResponseError && e.body.fieldErrors) {
         // POST /shows sends ONE show, so refusals come back keyed `show.<field>`
-        // and need remapping onto this row's own field-array path.
+        // and need remapping onto this row's field-array path.
         const remapped: Record<string, string> = {};
         for (const [key, value] of Object.entries(e.body.fieldErrors)) {
           if (typeof value === 'string') {
@@ -405,23 +389,21 @@ export default function ShowsPanel() {
   }
 
   const shows = watch('shows');
-  // focusIdx can briefly point past the end after a removal, so an out-of-range
-  // index coerces to "nothing open".
+  // focusIdx can briefly point past the end after a removal.
   const focused = focusIdx != null ? (shows[focusIdx] ?? null) : null;
   // Same type-only cast as `control`/`setValue` above.
   const focusedErrors = (focusIdx != null ? form.formState.errors.shows?.[focusIdx] : undefined) as
     FieldErrors<Show> | undefined;
 
-  // Display order only — every entry carries its form-array `index`, which is
-  // what focusShow, Save show and delete key off. See shows/roster-order.ts.
+  // Display order only -- every entry carries its form-array `index`, which is
+  // what focusShow, Save show and delete key off (shows/roster-order.ts).
   const filter = { query, tags: tagSel, personaId: hostSel };
   const filterOn = showFilterActive(filter);
   const allTags = showTagVocabulary(shows);
   const entries = orderShowRoster(shows, { sort, filter, personas, hoursFor: countHours });
   const clearFilters = () => { setQuery(''); setTagSel([]); setHostSel(''); };
-  // Suggestions come from the WHOLE list, not the filtered view: the point of
-  // offering them is to converge on one vocabulary, and a filtered list would
-  // hide exactly the tags the operator should be reusing.
+  // Suggestions come from the WHOLE list, not the filtered view: a filtered list
+  // hides exactly the tags worth reusing.
   const tagSuggestions = allTags;
 
   return (
@@ -461,8 +443,6 @@ export default function ShowsPanel() {
 
       <div className="mt-1 flex flex-wrap items-center justify-between gap-3">
         <span className="caption">show definitions · {shows.length}/{SHOWS_MAX} shows</span>
-        {/* Own line on a phone: sharing a row with the caption folds the
-            Cards/List toggle into two stacked icons. */}
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:flex-nowrap">
           <Btn
             className="min-h-9 sm:min-h-0"
@@ -486,7 +466,7 @@ export default function ShowsPanel() {
         </div>
       </div>
       {/* Hidden below a handful of shows: a filter bar over four rows is
-          furniture, and the list this exists for is the 40-show one. */}
+          furniture. */}
       {shows.length > 5 && (
         <RosterToolbar<ShowSort>
           query={query}
@@ -519,7 +499,7 @@ export default function ShowsPanel() {
         />
       )}
       {/* The toolbar carries the view toggle once it is on screen; below the
-          threshold the header row above keeps it, so it never disappears. */}
+          threshold the header row keeps it. */}
       {shows.length > 0 && shows.length <= 5 && (
         <div className="flex justify-end">
           <RosterViewToggle view={view} onChange={setView} />
@@ -655,8 +635,8 @@ export default function ShowsPanel() {
         <div className="mt-4 grid gap-3">
           {community && community.length > 0 ? (
             community.map(c => {
-              // Shows can't be installed twice — the controller 409s on a name
-              // clash — so flag ones already in your list instead of a button.
+              // Shows can't be installed twice (the controller 409s on a name
+              // clash), so flag ones already in the list.
               const inShows = shows.some(
                 s => s.name.trim().toLowerCase() === c.name.trim().toLowerCase(),
               );

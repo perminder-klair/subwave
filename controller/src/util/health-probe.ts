@@ -1,43 +1,27 @@
-// A cached /health poll — the periodic "probe an optional backend, cache
-// whether it's up, expose it synchronously" pattern shared by the remote-TTS
-// client (audio/remoteTts.ts) and the tts-heavy sidecar client
-// (audio/ttsHeavyClient.ts). Both hand-rolled the same loop: probe once now,
-// again on an interval, cache the result, and react only when it changes.
-//
-// This factory owns that lifecycle; the caller supplies the probe (which does
-// the actual fetch + interpretation and MUST NOT throw — a failed probe returns
-// the "unavailable" value) and an onChange side effect. The interval is always
-// unref'd so a background poll never keeps the event loop alive on its own — one
-// copy remembered to unref, the other didn't; centralising it fixes the drift.
-//
-// It is deliberately NOT used by the analyzer's backend probe (music/analyzer.ts):
-// that one is a lazy resolve-once over MULTIPLE candidate URLs with capability
-// flags and no periodic interval, so it doesn't share this shape.
+// Cached /health poll: probe an optional backend on an interval, cache whether
+// it's up, expose it synchronously. Shared by audio/remoteTts.ts and
+// audio/ttsHeavyClient.ts. The caller's probe MUST NOT throw (return the
+// "unavailable" value instead), and the interval is always unref'd so a
+// background poll never holds the event loop open.
 
 export interface CachedHealthProbe<R> {
-  // Probe once now, update the cached value, fire onChange if it changed, and
-  // return the fresh value.
+  // Probe once now, update the cache, fire onChange if it changed.
   refresh(): Promise<R>;
-  // Start the periodic loop: one probe immediately, then every intervalMs.
-  // Idempotent — a second call on the same probe is a no-op.
+  // One probe immediately, then every intervalMs. Idempotent.
   start(): void;
-  // The last probed value, read synchronously (what isAvailable() reads).
+  // The last probed value, read synchronously.
   get(): R;
 }
 
 export interface CachedHealthProbeOptions<R> {
-  // Perform one probe. MUST NOT throw — return the "unavailable" value on any
-  // network / timeout / parse failure, exactly as the callers collapse a miss.
+  // One probe. MUST NOT throw: return the "unavailable" value on any failure.
   probe: () => Promise<R>;
   intervalMs: number;
-  // Seed value before the first probe resolves; also the baseline the first
-  // probe's change detection compares against.
+  // Seed value, and the baseline the first probe's change detection compares against.
   initial: R;
-  // Fired only when a probe's result differs from the previous one, newest
-  // first — where the callers' logging / consumer-push side effects live.
+  // Fired only when a probe's result differs from the previous one, newest first.
   onChange?: (next: R, prev: R) => void;
-  // Equality for change detection. Defaults to Object.is (fine for a boolean
-  // probe); the richer { available, meta } probe supplies its own.
+  // Change-detection equality; defaults to Object.is.
   equals?: (a: R, b: R) => boolean;
 }
 

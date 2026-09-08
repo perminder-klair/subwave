@@ -3,7 +3,7 @@
 // Real frequency data via the shared Web Audio analyser (graph cached per
 // <audio> element); a pseudo-random walk when it can't attach (iOS, CORS, no
 // Web Audio); dead flat while un-tuned. Lite mode paints one static frame
-// instead of running the rAF loop — the global CSS animation kill can't reach
+// instead of running the rAF loop -- the global CSS animation kill can't reach
 // a canvas.
 
 import { useEffect, useRef } from 'react';

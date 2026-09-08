@@ -1,77 +1,34 @@
-// Bed policy — the pure decisions behind "should this link ride a bed, and how
-// long should the bed be?". Policy lives here; the mechanism (pushing the bed
-// into dj_queue) lives in broadcast/queue.ts. Same split as broadcast/dj-budget.ts:
-// call sites ask a question, this module answers it, and scripts/bed-policy.test.ts
-// pins the answers.
-//
-// The gesture being modelled: today a link is talked OVER the incoming song
-// (light duck, ~40%), so every second of DJ costs a second of the song it is
-// introducing. A bed decouples the two — Song A → bed (DJ talks) → ramp → Song B.
-//
-// Two reasons a bed fires, and they answer different questions. A LINK beds
-// only when the DJ would outlast the incoming track's intro — the bed is
-// damage control for a long script. A REQUEST intro beds because of what the
-// track IS: somebody asked for this one, so its opening belongs to them and
-// the DJ gets out of the way even for a six-word shout-out. That is a policy
-// difference, not a tuning one, which is why it enters as its own flag rather
-// than as a threshold the caller drops to zero.
-//
-// No I/O, no imports from the queue. Everything here is a function of numbers.
+// Pure decisions behind "should this link ride a bed, and how long?". The
+// mechanism (pushing the bed into dj_queue) lives in broadcast/queue.ts.
+// A link beds only when the DJ would outlast the incoming intro; a request intro
+// always beds, because the track's opening belongs to whoever asked for it.
 
 export interface BedOpts {
   // Used only when the ramp budget is unknown (see rampBudgetMs).
   thresholdSec: number;
   // The bed's own exit crossfade — how long the next song takes to ramp in.
   crossSec: number;
-  // Solo bed between the DJ's last word and the start of that ramp. Optional
-  // because BedOpts is `settings.beds` passed verbatim and a cold-loaded
-  // pre-#1485 file has no such key; bedLengthFor coerces an absent or
-  // unusable value to BED_TAIL_SEC.
+  // Solo bed between the DJ's last word and that ramp. Optional: BedOpts is
+  // `settings.beds` verbatim and a pre-#1485 file has no such key.
   tailSec?: number;
 }
 
-// Why a bed is being considered for this clip. 'link' is the original case:
-// an autonomous between-track link, bedded only when it would outlast the
-// incoming intro. 'request' is a listener request's own intro, which beds on
-// length-independent grounds (see the header).
 export type BedReason = 'link' | 'request';
 
-// Bed alone before the DJ's clip lands, ON TOP of the entry cross (see
-// bedLengthFor's entryCrossSec). This is LATENCY, not a preference: the
-// controller sees the bed start on its 1.5s now-playing tick, writes intro.txt,
-// and Liquidsoap picks it up on a 0.5s poll. 2.5s covers the worst case. If the
-// voice lands later than this anyway, the tail spills into the next song — i.e.
-// it degrades to exactly today's behaviour, which is the point.
+// Bed alone before the DJ's clip lands, on top of the entry cross. LATENCY, not a
+// preference: 1.5s now-playing tick + 0.5s liquidsoap poll, worst case ~2.5s.
 export const BED_HEAD_SEC = 2.5;
 
-// Default for `settings.beds.tailSec` — how long the bed plays ALONE after the
-// DJ's last word, before the next song starts fading in. 3s is the low end of
-// what was asked for and reads as a deliberate beat rather than a gap; the
-// operator can take it to 0 (ramp begins on the last syllable) or out to 15.
-//
-// This is a specified quantity now, not a residual — see bedLengthFor.
+// Default for `settings.beds.tailSec`: bed alone after the DJ's last word, before
+// the next song fades in. Operator range 0..15.
 export const BED_TAIL_SEC = 3.0;
 
-// The ramp budget: how long the DJ may talk over the START of `track` before
-// trampling something the listener wants to hear. Reads the three-state vocal
-// semantics library-db documents on `vocalRanges` — [] is instrumental, null is
-// not-computed, non-empty means the analyzer measured real vocals.
-//
-//   non-empty vocalRanges → the earliest range's startMs IS the vocal onset.
-//   [] (instrumental)     → nothing to trample. Infinity — never bed.
-//   null (not computed)   → unknown. Caller falls back to the threshold.
-//
-// Deliberately NOT introMs, not even as a shortcut when ranges exist. introMs
-// only equals the vocal onset when Demucs ran in the SAME analysis pass; a
-// heavy-then-lean history desyncs the columns (clearAnalysis({keepVocal:true})
-// NULLs intro_ms while COALESCE preserves vocal_ranges_json, and the lean pass
-// rewrites intro_ms from the energy heuristic — ~0 for a full-band opener). The
-// ranges themselves are the measurement, so read the onset off them directly.
-// Without ranges, introMs is a pure energy heuristic ("where the track comes in
-// after a quiet count-in") whose own docstring calls it "a soft budget, never a
-// gate" — and for this question it measures the wrong thing: a track opening
-// full-band with vocals at 0:15 reads introMs ≈ 0, which would fire a bed
-// exactly where the ramp is longest.
+// How long the DJ may talk over the start of `track`. Three-state `vocalRanges`:
+//   non-empty → earliest startMs is the vocal onset
+//   []        → instrumental, nothing to trample: Infinity, never bed
+//   null      → not computed: caller falls back to the threshold
+// Never introMs: it only equals the onset when Demucs ran in the same pass, and
+// otherwise reads ~0 for a full-band opener — firing a bed where the ramp is longest.
 export function rampBudgetMs(
   track: { vocalRanges?: { startMs: number }[] | null } | null,
 ): number | null {
@@ -83,10 +40,8 @@ export function rampBudgetMs(
   return Number.isFinite(onset) && onset >= 0 ? onset : null;
 }
 
-// Should this spoken clip ride a bed? `voiceMs` is the rendered clip's real
-// length plus the lead-in/tail padding (queue.speechDurationMs). `budgetMs` is
-// rampBudgetMs() for the incoming track — null when unknown. `reason` says
-// which of the two questions in the header is being asked.
+// `voiceMs` is the rendered clip plus lead-in/tail padding (queue.speechDurationMs).
+// `budgetMs` is rampBudgetMs() for the incoming track, null when unknown.
 export function bedWanted(
   voiceMs: number,
   budgetMs: number | null,
@@ -94,82 +49,45 @@ export function bedWanted(
   reason: BedReason = 'link',
 ): boolean {
   if (!Number.isFinite(voiceMs) || voiceMs <= 0) return false;
-  // A request's opening belongs to the listener who asked for it, so the
-  // ramp budget never gets a vote — not even an instrumental's Infinity,
-  // which is the whole point of testing this BEFORE the budget. The zero-
-  // length guard above still holds: there is nothing to bed under silence.
+  // Tested BEFORE the budget on purpose: a request beds even for an instrumental,
+  // whose Infinity budget would otherwise veto it.
   if (reason === 'request') return true;
-  // Known budget: bed exactly when the DJ would outlast the intro. Infinity
-  // (instrumental) can never be outlasted, so it falls out here.
+  // Bed exactly when the DJ would outlast the intro; Infinity never is.
   if (budgetMs != null) return voiceMs > budgetMs;
-  // Unknown budget: no data to be clever with, so a plain duration threshold.
   const thresholdMs = Math.max(0, opts.thresholdSec) * 1000;
   return voiceMs > thresholdMs;
 }
 
-// How long the bed plays, and how long its exit cross is.
-//
-//   bedSec = entryCross + head + voice + tail + cross
-//
-// `entryCrossSec` is the PREDECESSOR's exit canvas — the cross the bed fades in
-// under. The bed's clock (cue_out, and the marker the controller keys the link
-// off) starts when the bed enters that cross buffer, not when it is dominant,
-// so the entry cross is dead time the bed must carry on top of the head/voice/
-// tail budget. Without it, the DJ's opening words land over the outgoing song's
-// fade rather than over the solo bed.
-//
-// #1485 (FR 5c) — THE TAIL AND THE CROSS ARE BOTH IN THE SUM, and that is the
-// whole fix. The bed's liq_cross_duration means the next song starts fading in
-// at (bedSec - crossSec), so the quiet the operator actually hears between the
-// last word and the next song is (bedSec - crossSec) - (entryCross + head +
-// voice) — i.e. tail MINUS cross. While the sum omitted the cross, that quiet
-// was a RESIDUAL of two settings that know nothing about each other, and at the
-// shipped defaults it was negative: tail 2s against a 6s bed ramp put the song
-// under the DJ's closing FOUR seconds. A bed exists precisely so the DJ is not
-// talking over the song it is introducing, so the feature was inverting itself
-// on a default station, and no value of `crossSec` could fix it without also
-// changing how the song comes in. Adding the cross to the sum makes the quiet
-// exactly `tailSec` at every crossfade length, which is what makes it a
-// setting an operator can reason about rather than a leftover.
-//
-// Deliberately NOT reachable any more: the old overlap, where a presenter talks
-// up to the vocal over the incoming song. That is a real radio gesture, but it
-// is the gesture beds were built to replace — the un-bedded path already does
-// it, and `bedWanted` returning false is how you ask for it. tailSec 0 is the
-// hard end of this range: the ramp starts on the last syllable.
-//
-// The clamp is now structurally unreachable — crossSec is a term of bedSec, so
-// bedSec - 1 exceeds it by head - 1 (1.5s) plus the voice — and it stays as
-// arithmetic insurance rather than as a case to reason about.
+// bedSec = entryCross + head + voice + tail + cross.
+// `entryCrossSec` is the predecessor's exit canvas: the bed's clock starts when it
+// enters that cross buffer, not when it is dominant, so it is dead time the bed
+// must carry. The cross is a term too (#1485) — the next song fades in at
+// (bedSec - crossSec), so including it makes the audible quiet exactly `tailSec`
+// at any crossfade length instead of a residual that goes negative on defaults.
 export function bedLengthFor(
   voiceMs: number,
   opts: BedOpts,
   entryCrossSec = 0,
 ): { bedSec: number; crossSec: number } {
   const crossReq = Math.max(0, opts.crossSec);
-  // Absent (pre-#1485 settings file) or unusable → the default. Same posture as
-  // the normaliser in settings.ts; bed-policy repeats it because BedOpts is
-  // also built by hand at a couple of call sites and in the tests.
+  // Absent (pre-#1485 settings file) or unusable → the default.
   const tailSec = Number.isFinite(opts.tailSec) ? Math.max(0, opts.tailSec as number) : BED_TAIL_SEC;
   const bedSec = Math.max(0, entryCrossSec) + BED_HEAD_SEC + voiceMs / 1000 + tailSec + crossReq;
   const crossSec = Math.min(crossReq, bedSec - 1);
   return { bedSec: round2(bedSec), crossSec: round2(crossSec) };
 }
 
-// Pick a bed from the pool: long enough to be cut to `bedSec`, and not the one
-// that played last. Beds are only ever trimmed SHORTER (cue_out), never looped,
-// so "long enough" is the only hard requirement — a 60s file covers everything.
-//
-// Deterministic in its inputs via `roll` (0..1), so the test can pin selection
-// without reaching for Math.random.
+// Long enough to be cut to `bedSec`, and not the one that played last. Beds are
+// only trimmed shorter (cue_out), never looped. `roll` is 0..1, injected so
+// selection is deterministic in tests.
 export function pickBed<T extends { name: string; durationSec?: number | null }>(
   beds: T[],
   bedSec: number,
   lastUsed: string | null,
   roll: number,
 ): T | null {
-  // Unknown duration is excluded, not gambled on: a bed that runs out mid-link
-  // drops the DJ into silence, which is worse than today's behaviour.
+  // Unknown duration is excluded, not gambled on: a bed running out mid-link
+  // drops the DJ into silence.
   const fits = beds.filter(b => typeof b.durationSec === 'number' && b.durationSec >= bedSec);
   if (!fits.length) return null;
   // Avoid an immediate repeat, but never at the cost of airing no bed at all.

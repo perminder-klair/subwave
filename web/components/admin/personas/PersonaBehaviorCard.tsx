@@ -1,14 +1,7 @@
 'use client';
 // How this persona talks: talk frequency, script length, DJ mode and the tone
-// dials. Frequency and script length are stepped faders (discrete named stops),
-// deliberately distinct from the continuous rotary tone knobs.
-//
-// Every control here is a custom rotary/fader/toggle whose shape the five
-// shared bound components (TextField/SelectField/…) don't cover, so each is
-// wired through its own `useController` — real RHF state, just not the
-// generic wrapper. SteppedFader/ToneKnob/Toggle already take plain
-// `value`/`onChange(v)` props, which is exactly `field.value`/`field.onChange`,
-// so no adapter is needed at any of the four sites below.
+// dials. Every control is a custom rotary/fader/toggle the five shared bound
+// components don't cover, so each is wired through its own `useController`.
 import { useController, type Control } from 'react-hook-form';
 import type { PersonasFormValues } from './types';
 import { FREQUENCIES, LINK_STYLES, SCRIPT_LENGTHS, TONE_DIALS, toneBandIndex } from './constants';

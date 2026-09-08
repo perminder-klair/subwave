@@ -1,33 +1,8 @@
-// settings.backups — scheduled, rotating config backups (#1570, the Discord
-// ask "Backup DB/Settings on Schedule").
-//
-// Two decisions carry the whole feature and both fail silently in the field, so
-// both are pinned here as pure logic:
-//
-//   1. THE RETENTION CHOICE. This is the only scheduled job in the station that
-//      DELETES operator files, and it runs in a directory that deliberately
-//      accepts hand-copied zips — `GET /backup/restorable` lists every
-//      top-level *.zip in STATE_DIR so an operator can drop a big backup in and
-//      restore it past their proxy's upload cap (#612). A prune that reasoned
-//      over that set, or over any *.zip glob, would eventually eat the restore
-//      point someone copied in ten minutes ago. So the tests below throw every
-//      near-miss name at it that a real state dir contains.
-//
-//   2. THE SCHEDULE DECISION. Off must mean off: a station that upgrades and
-//      changes nothing has no `backups` block, and every path into the decision
-//      — absent, malformed, a cadence from a newer version — has to land on
-//      "write nothing". The opposite direction matters too, and quietly: a
-//      station that is only powered on for part of the day must still get its
-//      daily backup, which is why the cadence is elapsed-time against the
-//      stamps on disk rather than a nightly cron.
-//
-// Plus the settings plumbing every key here owes: the cold-load round trip
-// (a field missing from load()'s composition saves, works for the process, then
-// vanishes on the next restart — controller/CLAUDE.md's THREE edits) and the
-// patch-registry inventory (a key absent from it 400s at the route).
-//
-// No containers, no network, no clock waiting.
-//
+// settings.backups — scheduled, rotating config backups (#1570). Two decisions
+// carry the feature and both fail silently in the field: retention may only
+// delete files matching our own anchored name grammar (the state dir also holds
+// hand-copied restore zips, #612), and off must mean off. Plus the usual
+// settings plumbing: cold-load round trip and patch-registry inventory.
 // Run: `npm test -- backup-schedule`.
 
 import assert from 'node:assert/strict';
@@ -36,8 +11,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-// STATE_DIR is redirected at a throwaway dir BEFORE the first import of
-// anything config-derived (same pattern as scripts/duck-depth.test.ts).
+// STATE_DIR is redirected at a throwaway dir before the first config-derived import.
 const stateRoot = mkdtempSync(path.join(tmpdir(), 'subwave-backup-schedule-'));
 process.env.STATE_DIR = stateRoot;
 
@@ -73,9 +47,6 @@ async function coldLoad(backups: unknown) {
   return settings.get().backups;
 }
 
-// ---------------------------------------------------------------------------
-// 1. The name grammar — the safety property behind the prune
-// ---------------------------------------------------------------------------
 
 test('the writer produces a name the grammar recognises, and it sorts by time', () => {
   const early = scheduledBackupName(new Date('2026-09-06T04:23:17.123Z'));
@@ -83,11 +54,9 @@ test('the writer produces a name the grammar recognises, and it sorts by time', 
   assert.equal(early, 'subwave-auto-backup-2026-09-06-042317.zip');
   assert.ok(isScheduledBackupName(early));
   assert.ok(isScheduledBackupName(later));
-  // Fixed-width UTC, so lexicographic order IS chronological order — which is
-  // what lets backupsToPrune sort by name and never parse a date.
+  // Fixed-width UTC, so lexicographic order is chronological: the prune never parses a date.
   assert.ok(early < later);
-  // …and the listing route can restore it: isSafeBackupName wants a bare
-  // basename ending in .zip.
+  // …and the listing route can restore it: isSafeBackupName wants a bare basename.zip.
   assert.equal(path.basename(early), early);
   assert.ok(early.toLowerCase().endsWith('.zip'));
 });
@@ -98,10 +67,9 @@ test('the stamp round-trips out of the name', () => {
 });
 
 test('a matching name that is not a real instant is still ours, but has no stamp', () => {
-  // The two facts are different and are read by different callers: the prune
+  // Read by different callers: the prune must still count (and delete) this file,
+  // while the due decision must not treat NaN as a time.
   // must still count (and eventually delete) this file, while the due decision
-  // must not treat NaN as a time. Getting this backwards leaves a junk file
-  // living forever, or wedges the cadence.
   const junk = 'subwave-auto-backup-2026-13-45-999999.zip';
   assert.ok(SCHEDULED_BACKUP_RE.test(junk));
   assert.ok(isScheduledBackupName(junk));
@@ -109,10 +77,8 @@ test('a matching name that is not a real instant is still ours, but has no stamp
 });
 
 test('nothing an operator or the manual export puts in the state dir is ours', () => {
-  // Every one of these is a real thing that sits in a live STATE_DIR. The
-  // manual export's own name is the first entry for a reason: it differs from
-  // ours by one word, and it is the file an operator downloads, edits nothing
-  // and copies back to restore.
+  // Every one of these sits in a live STATE_DIR. The manual export's name is first:
+  // it differs from ours by one word and is what an operator copies back to restore.
   for (const name of [
     'subwave-backup-2026-09-06.zip',          // GET /backup/export's filename
     'subwave-backup-2026-09-06-042317.zip',   // …with a time, if that ever changes
@@ -134,9 +100,6 @@ test('nothing an operator or the manual export puts in the state dir is ours', (
   }
 });
 
-// ---------------------------------------------------------------------------
-// 2. The retention choice
-// ---------------------------------------------------------------------------
 
 const AUTO = [
   'subwave-auto-backup-2026-09-01-042300.zip',
@@ -156,9 +119,9 @@ test('keep last N deletes the OLDEST, never the newest', () => {
 });
 
 test('the prune never names a file it could not have written itself', () => {
-  // The bad bug this feature could ship: an operator's hand-copied restore zip
+  // The bad bug this feature could ship: a hand-copied restore zip deleted for
+  // matching a glob. keep:1 is the most aggressive retention and still spares it.
   // deleted because it matched a glob. keep:1 is the most aggressive retention
-  // there is, and it still leaves every foreign file alone.
   const foreign = [
     'subwave-backup-2026-09-06.zip',
     'before-the-big-migration.zip',
@@ -183,16 +146,9 @@ const TEN_AUTO = Array.from({ length: 10 }, (_, i) =>
   `subwave-auto-backup-2026-09-${String(i + 1).padStart(2, '0')}-042300.zip`);
 
 test('an out-of-range keep clamps, but an UNREADABLE one falls to the default', () => {
-  // keep arrives from settings, which the schema bounds and load() repairs —
-  // but this is the function that unlinks, so it re-reads rather than trusting
-  // its caller. The two directions are different on purpose (#1585 review):
-  //
-  //   a number out of range is an answer, so it clamps to the nearest bound;
-  //   a value that is not a number at all is NO answer, so it falls to the
-  //   shipped default — the same answer normalizeBackups() gives.
-  //
-  // Falling to the FLOOR instead would make the one module in the station that
-  // deletes operator files the one that guesses most destructively.
+  // keep arrives from settings, but this is the function that unlinks, so it
+  // re-reads. Out of range clamps to the nearest bound; not-a-number falls to the
+  // shipped default, the same answer normalizeBackups() gives (#1585 review).
   for (const unreadable of [Number.NaN, Number.POSITIVE_INFINITY, undefined, null, '', 'seven', {}]) {
     const pruned = backupsToPrune(TEN_AUTO, unreadable);
     assert.equal(pruned.length, TEN_AUTO.length - DEFAULTS.backups.keep,
@@ -216,22 +172,17 @@ test('an out-of-range keep clamps, but an UNREADABLE one falls to the default', 
 });
 
 test('the prune and the load path agree about an unreadable retention', () => {
-  // The finding this pins: two clamps, one in each module, disagreeing about
-  // the direction to fail in. They are now one function.
   const viaLoad = normalizeBackups({ cadence: 'daily', keep: 'nonsense' }).keep;
   assert.equal(viaLoad, DEFAULTS.backups.keep);
   assert.equal(backupsToPrune(TEN_AUTO, 'nonsense').length, TEN_AUTO.length - viaLoad);
 });
 
 test('a future-dated backup is kept, not ranked away', () => {
-  // The pair of `lastScheduledBackupAt` ignoring a future stamp. There the safe
-  // direction is "take a backup anyway"; here it is "do not DELETE a real
-  // snapshot on the word of a clock that has already been wrong once", so the
-  // name still decides the order and the odd file simply costs a slot.
+  // The pair of `lastScheduledBackupAt` ignoring a future stamp: there the safe
+  // direction is take a backup anyway, here it is never delete a real snapshot.
   const future = 'subwave-auto-backup-2031-01-01-000000.zip';
   const pruned = backupsToPrune([...AUTO, future], 2);
-  // keep:2 leaves the 2031 file and the newest real one — the odd file costs a
-  // slot rather than being deleted or being pruned around.
+  // keep:2 leaves the 2031 file and the newest real one: the odd file costs a slot.
   assert.deepEqual(pruned, [
     'subwave-auto-backup-2026-09-03-042300.zip',
     'subwave-auto-backup-2026-09-02-042300.zip',
@@ -242,9 +193,6 @@ test('a future-dated backup is kept, not ranked away', () => {
   assert.equal(lastScheduledBackupAt([...AUTO, future], NOW), Date.parse('2026-09-04T04:23:00Z'));
 });
 
-// ---------------------------------------------------------------------------
-// 3. The schedule decision
-// ---------------------------------------------------------------------------
 
 const NOW = Date.parse('2026-09-06T04:23:00.000Z');
 
@@ -285,18 +233,9 @@ test('each cadence waits its own interval', () => {
   }
 });
 
-// Everything above is arithmetic on one pair of instants. That is the whole of
-// the daily case — a day is short enough to reason about — but `weekly` and
-// `monthly` were never driven over their own interval, and the two failures
-// that would matter there are both about REPETITION rather than one decision:
-// a schedule that walks the clock until it lands outside the hours a part-time
-// station is up, and one that double-fires because the slack is a larger share
-// of a longer interval than anyone checked.
-//
-// So: run the real hourly tick over 400 simulated days, feeding each run's name
-// back onto disk exactly as `runScheduledBackup` does, and assert the shape of
-// the whole series. No clock waiting — the tick is a loop, and the state it
-// reads is a filename.
+// Runs the real hourly tick over 400 simulated days, feeding each run's name back
+// onto disk as runScheduledBackup does. The failures are about repetition: drift
+// out of the hours a part-time station is up, and a double fire inside one interval.
 function simulate({
   cadence,
   days = 400,
@@ -330,9 +269,7 @@ test('every cadence holds its interval over 400 days of hourly ticks', () => {
       const gap = runs[i] - runs[i - 1];
       assert.ok(gap >= days * DAY - BACKUP_DUE_SLACK_MS,
         `${cadence} fired twice inside one interval (gap ${gap / DAY}d at run ${i})`);
-      // The tick is hourly, so a run can be at most an hour late — and never
-      // more, which is the drift check: an interval that crept by an hour each
-      // time would blow this on the second or third run, not the four-hundredth.
+      // The tick is hourly, so a run is at most an hour late — that is the drift check.
       assert.ok(gap < days * DAY + 3_600_000,
         `${cadence} drifted to a ${gap / DAY}d gap at run ${i}`);
     }
@@ -340,10 +277,8 @@ test('every cadence holds its interval over 400 days of hourly ticks', () => {
 });
 
 test('a station that is only up four hours a day still gets its weekly and monthly backup', () => {
-  // The reason the cadence is elapsed-time against the stamps on disk rather
-  // than a nightly cron. These are the installs most likely to lose a state dir
-  // — a laptop, a box switched off overnight — and a monthly schedule that
-  // needs to be up at 03:00 on the right date would simply never fire.
+  // Why the cadence is elapsed-time against the stamps on disk: a box switched off
+  // overnight would never meet a nightly cron.
   const upHours = [18, 19, 20, 21];
   for (const cadence of ['weekly', 'monthly'] as const) {
     const runs = simulate({ cadence, upHours });
@@ -364,14 +299,11 @@ test('a station that is only up four hours a day still gets its weekly and month
 });
 
 test('the slack keeps a daily backup on the same minute instead of walking the clock', () => {
-  // The tick is hourly. With a strict `>= 24h` a run at 04:23 is not due at
-  // 04:23 the next day (elapsed is 24h to the millisecond only if the tick
-  // fired at the same instant), so it slips to 05:23, then 06:23 — a daily
-  // backup that drifts a full day around the clock every month.
+  // The tick is hourly, so a strict `>= 24h` would slip a 04:23 run to 05:23, then
+  // 06:23 — a daily backup drifting a full day around the clock every month.
   const yesterdayTick = NOW - DAY + 1000; // last night's run, a second late
   assert.equal(backupDue({ cadence: 'daily', lastRunMs: yesterdayTick, nowMs: NOW }), true);
-  // …and the slack is far too small to let two runs land inside one interval:
-  // the shortest cadence is a day and the tick is an hour.
+  // …and the slack cannot fit two runs in one interval: shortest cadence is a day.
   assert.ok(BACKUP_DUE_SLACK_MS < DAY / 2);
   assert.equal(
     backupDue({ cadence: 'daily', lastRunMs: NOW - 60 * 60_000, nowMs: NOW }),
@@ -397,10 +329,8 @@ test('the last run is read off the newest file, ignoring anything else in the di
 });
 
 test('a backup stamped in the future cannot wedge the schedule shut', () => {
-  // A container that booted before NTP, or a state dir restored from another
-  // box, leaves a file dated years ahead. Trusting it computes a negative
-  // elapsed time forever and the station silently stops backing up — so a
-  // future stamp is ignored and the decision falls toward taking a backup.
+  // A file dated years ahead (booted before NTP, restored state dir) is ignored:
+  // trusting it computes a negative elapsed time and backups silently stop.
   const names = ['subwave-auto-backup-2031-01-01-000000.zip'];
   assert.equal(lastScheduledBackupAt(names, NOW), null);
   assert.equal(
@@ -412,9 +342,6 @@ test('a backup stamped in the future cannot wedge the schedule shut', () => {
   assert.equal(lastScheduledBackupAt(withReal, NOW), Date.parse('2026-09-06T00:00:00Z'));
 });
 
-// ---------------------------------------------------------------------------
-// 4. The settings plumbing
-// ---------------------------------------------------------------------------
 
 test('an absent block is the pre-existing station: off', async () => {
   const b = await coldLoad(undefined);
@@ -424,10 +351,8 @@ test('an absent block is the pre-existing station: off', async () => {
 });
 
 test('a configured schedule survives a cold load', async () => {
-  // load() composes each block explicitly rather than spreading DEFAULTS, so a
-  // field missing from that composition saves fine, works for the rest of the
-  // process, and then vanishes on the next restart — after which backups
-  // silently stop. An in-process assertion passes on the broken code.
+  // load() composes each block explicitly, so a field missing from it saves, works
+  // for the process, then vanishes on the next restart. Cold-load or nothing.
   await settings.update({ backups: { cadence: 'weekly', keep: 3 } });
   setCache(null);
   await settings.load();
@@ -474,9 +399,7 @@ test('the save path refuses what the load path repairs', () => {
 });
 
 test('the refusal messages name their own dotted field', () => {
-  // The flat `error` string is the zod message verbatim (see the patch
-  // registry), so it has to name the field itself or the toast reads as a bare
-  // constraint.
+  // The flat `error` string is the zod message verbatim, so it must name the field.
   assert.equal(
     backupsPatchSchema.safeParse({ cadence: 'hourly' }).error!.issues[0].message,
     `backups.cadence must be one of: ${SETTINGS_BACKUP_CADENCES.join(', ')}`,
@@ -514,9 +437,6 @@ test('the key is in the patch inventory, so POST /settings accepts it', async ()
   assert.ok(bad!.fieldErrors?.['backups.keep']);
 });
 
-// ---------------------------------------------------------------------------
-// 5. The runner's own short-circuit
-// ---------------------------------------------------------------------------
 
 test('an off station does no work at all', async () => {
   // Not just "writes nothing" — it must not even walk the state dir once an
@@ -530,16 +450,10 @@ test('an off station does no work at all', async () => {
   assert.deepEqual(r.errors, []);
 });
 
-// ---------------------------------------------------------------------------
-// 6. The writer, against a real state dir
-//
-// The pure halves above can all be right while the run still writes nothing
+// One pass over the real thing: the file lands, it is the same zip
+// GET /backup/export builds, the cadence holds, and the prune spares the
+// operator's own zip.
 // restorable, so one pass over the real thing: the file lands, it is a genuine
-// backup zip (the same one GET /backup/export builds — `POST
-// /backup/import-file` cannot tell the two apart, so it had better be), the
-// cadence holds it off until it is due, and the prune leaves the operator's own
-// zip alone.
-// ---------------------------------------------------------------------------
 
 test('a due run writes a restorable zip, and is not due again an hour later', async () => {
   const { runScheduledBackup } = await import('../src/backup/scheduled.js');
@@ -598,20 +512,12 @@ test('retention keeps the last N of its own and never the operator\'s', async ()
   assert.deepEqual(left.filter(n => n.endsWith('.tmp')), []);
 });
 
-// ---------------------------------------------------------------------------
-// 7. Not making things worse
-//
 // This job writes the largest file the station produces into the directory it
-// exists to protect, and it retries hourly until it succeeds. Both guards below
-// exist so a run that FAILS cannot compound into the disk filling up — which is
-// the one condition where an operator needs the rest of the station working.
-// ---------------------------------------------------------------------------
+// protects, and retries hourly, so a FAILED run must not compound.
 
 test('the temp grammar is as narrow as the finished one', () => {
-  // The sweep DELETES, so the same rule applies as to the prune: only a name
-  // this writer could itself have produced. Every other *.tmp in the state dir
-  // is another writer's in-flight file, and settings.json is written the same
-  // way — eating one of those mid-flight would be far worse than the leak.
+  // The sweep DELETES, so the prune's rule applies: only a name this writer could
+  // have produced. Every other *.tmp is another writer's in-flight file.
   const ours = 'subwave-auto-backup-2026-09-06-042317.zip.a1b2c3d4.tmp';
   assert.ok(isScheduledBackupTempName(ours));
   assert.ok(isScheduledBackupTempName(`${scheduledBackupName(new Date(NOW))}.deadbeef.tmp`));
@@ -634,15 +540,13 @@ test('the temp grammar is as narrow as the finished one', () => {
   for (const junk of [null, undefined, 7, {}, []]) {
     assert.equal(isScheduledBackupTempName(junk), false);
   }
-  // And a temp is invisible to BOTH the finished-name readers, which is exactly
-  // why it needs its own sweep: nothing else would ever look at it again.
+  // A temp is invisible to both finished-name readers, hence its own sweep.
   assert.equal(isScheduledBackupName(ours), false);
 });
 
 test('writeFileAtomic removes its own temp when the write fails', async () => {
-  // The in-process half of the leak. A failed rename used to leave the temp
-  // behind under a random name no later call reuses — a few hundred bytes for
-  // the JSON writers, a partial multi-hundred-MB zip for this one.
+  // The in-process half of the leak: a failed rename left a partial
+  // multi-hundred-MB zip behind under a name no later call reuses.
   const { writeFileAtomic } = await import('../src/util/atomic-file.js');
   const { mkdirSync, readdirSync, rmSync } = await import('node:fs');
 
@@ -661,10 +565,8 @@ test('writeFileAtomic removes its own temp when the write fails', async () => {
 });
 
 test('a run sweeps half-written backups a killed run left, and only those', async () => {
-  // The out-of-process half: an OOM kill or `docker compose restart` mid-write
-  // gets no catch block, so every run tidies up on the way in. Doing it before
-  // the due check matters — a monthly schedule must not sit on the wreckage of
-  // an interrupted run for a month.
+  // The out-of-process half: a kill mid-write gets no catch block, so every run
+  // sweeps on the way in, BEFORE the due check.
   const { runScheduledBackup } = await import('../src/backup/scheduled.js');
   const { readdirSync, unlinkSync } = await import('node:fs');
   await coldLoad({ cadence: 'daily', keep: 3 });
@@ -688,8 +590,7 @@ test('a run sweeps half-written backups a killed run left, and only those', asyn
 });
 
 test('the free-space decision declines only what genuinely will not fit', () => {
-  // Verified live against a container's 64 MB /dev/shm: the run declined, wrote
-  // no file and left no partial temp. This pins the arithmetic behind it.
+  // Verified live against a container's 64 MB /dev/shm; this pins the arithmetic.
   const ARCHIVE = 1_500_000;
   const need = ARCHIVE + FREE_SPACE_HEADROOM_BYTES;
 
@@ -701,9 +602,8 @@ test('the free-space decision declines only what genuinely will not fit', () => 
   assert.equal(freeSpaceShortfall(need - 1, ARCHIVE), 1);
   assert.equal(freeSpaceShortfall(need - 5_000_000, ARCHIVE), 5_000_000);
 
-  // The headroom is the point: an archive that would technically fit, on a
-  // volume with nothing left afterwards, is still refused. STATE_DIR is where
-  // session.json and the tag DB live.
+  // The headroom is the point: an archive that fits with nothing left over is
+  // refused — STATE_DIR also holds session.json and the tag DB.
   assert.ok(freeSpaceShortfall(ARCHIVE + 1, ARCHIVE) !== null,
     'a write that would leave the volume full must be declined');
 
@@ -714,16 +614,13 @@ test('the free-space decision declines only what genuinely will not fit', () => 
       `free=${unmeasurable} must fail open`);
   }
 
-  // Decimal MB, not MiB: the operator reads this figure back out of an error
-  // message rendered by the same divisor, so 64 * 1024 * 1024 would be a
-  // constant saying 64 and a message saying 67. (Caught on a live station.)
+  // Decimal MB, not MiB: the same divisor renders the error message, so MiB would
+  // mean a constant saying 64 and a message saying 67.
   assert.equal(Math.round(FREE_SPACE_HEADROOM_BYTES / 1_000_000), 64);
 });
 
 test('a normal run is not blocked by the free-space pre-flight', async () => {
-  // The pre-flight FAILS OPEN and only declines a write that genuinely will not
-  // fit. On any ordinary disk the backup still lands — the guard must never
-  // become the reason a station stops taking backups.
+  // The pre-flight fails open and declines only a write that genuinely will not fit.
   const { runScheduledBackup } = await import('../src/backup/scheduled.js');
   const { readdirSync, unlinkSync } = await import('node:fs');
   await coldLoad({ cadence: 'daily', keep: 3 });
@@ -737,9 +634,8 @@ test('a normal run is not blocked by the free-space pre-flight', async () => {
 });
 
 test('an undeletable file does not abandon the rest of the prune', async () => {
-  // One unremovable file (ownership on a bind mount) must cost its own line in
-  // `errors`, not the sweep — otherwise a single stuck file freezes retention
-  // and the disk fills anyway.
+  // One unremovable file must cost its own line in `errors`, not the sweep, or a
+  // single stuck file freezes retention and the disk fills anyway.
   const { runScheduledBackup } = await import('../src/backup/scheduled.js');
   const { chmodSync, mkdirSync, readdirSync, rmSync, unlinkSync } = await import('node:fs');
   await coldLoad({ cadence: 'daily', keep: 1 });
@@ -747,8 +643,7 @@ test('an undeletable file does not abandon the rest of the prune', async () => {
     unlinkSync(path.join(stateRoot, n));
   }
 
-  // A DIRECTORY carrying one of our names: unlink() refuses it (EISDIR/EPERM)
-  // the way a file the controller may not remove would.
+  // A DIRECTORY carrying one of our names: unlink() refuses it (EISDIR/EPERM).
   const stuck = 'subwave-auto-backup-2026-09-01-000000.zip';
   const alsoOld = 'subwave-auto-backup-2026-09-02-000000.zip';
   mkdirSync(path.join(stateRoot, stuck), { recursive: true });

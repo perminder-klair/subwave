@@ -1,41 +1,27 @@
-// Pair-aware drain policy — the pure maths behind WHEN a queued track is
-// handed to Liquidsoap (feature: pair-aware transitions, the #749 fix).
-//
-// Background: a track's annotate stamps (liq_cross_duration, liq_cue_out, the
-// B2 stem-blend clip) control the transition at its OWN end — so they can only
-// be pair-sized if its SUCCESSOR is known when the annotation is written.
-// Today's eager drain (send on push) freezes every annotation seconds after
-// the PREDECESSOR starts, one full track before the successor is picked.
-// The fix: hold the tail of `upcoming` unsent until either its successor is
-// queued behind it, or the on-air track is close enough to its end that we
-// must send regardless. Pure and I/O-free so scripts/drain-policy.test.ts can
-// pin the state machine.
+// Pair-aware drain policy (#749): WHEN a queued track is handed to Liquidsoap.
+// A track's annotate stamps control the transition at its own end, so they can
+// only be pair-sized if its SUCCESSOR is known when written — hence the tail of
+// `upcoming` is held unsent until a successor is queued behind it, or the
+// on-air track is close enough to its end that it must send regardless. Pure
+// and I/O-free for scripts/drain-policy.test.ts.
 
-// When the on-air track has less than this remaining, the deadline routine
-// fires: pick the held item's successor now so the held item can drain
-// pair-aware. Comfortably longer than a pick (seconds) + a cache-hit stem
-// render (seconds-to-~1min), while still holding annotations open for most of
-// each track's runtime.
+// Remaining time at which the deadline routine picks the held item's successor
+// so it can drain pair-aware. Longer than a pick + a cache-hit stem render.
 export const DRAIN_DEADLINE_SEC = 120;
 
-// Past this point the held item is sent with track-intrinsic stamps only —
-// the pick/render didn't land in time and Liquidsoap must have the next track
-// resolved well before the crossfade starts (1s queue poll + request resolve
-// + subhttp fetch). Never risk dead air for a prettier seam.
+// Past this the held item is sent with track-intrinsic stamps only: Liquidsoap
+// needs the next track resolved well before the crossfade. Never risk dead air
+// for a prettier seam.
 export const HARD_DEADLINE_SEC = 45;
 
-// Minimum gap between deadline-pick ATTEMPTS. The watcher tick re-enters
-// maybeDeadlinePick every 1.5s for the whole pick window; a pick that fails
-// fast (LLM host down, Navidrome refusing) would otherwise be re-fired ~50
-// times per window — exactly the aggressive-retry pattern the LLM layer is
-// documented to avoid. A successful pick self-limits (the held head gains a
-// successor and the routine stops matching), so this only meters failures:
-// the window still fits a few honest retries.
+// Minimum gap between deadline-pick ATTEMPTS. The watcher re-enters every 1.5s,
+// so without this a fast-failing pick re-fires ~50 times per window. A
+// successful pick self-limits, so this only meters failures.
 export const DEADLINE_PICK_COOLDOWN_SEC = 25;
 
-// Effective on-air span: [cue_in, min(duration, cue_out)]. Both cue values are
-// absolute offsets in the file, while startedAt is stamped when playback begins
-// at cue_in, so the skipped head must not count toward the remaining clock.
+// Effective on-air span: [cue_in, min(duration, cue_out)]. Cue values are
+// absolute file offsets while startedAt is stamped at cue_in, so the skipped
+// head must not count toward the remaining clock.
 export function playableDurationSec(
   durationSec: number | null | undefined,
   cueOutSec?: number | null,
@@ -48,11 +34,10 @@ export function playableDurationSec(
   return Math.max(0, Math.min(dur, cueOut ?? dur) - cueIn);
 }
 
-// Seconds left before the on-air track's EFFECTIVE end — its playable span
-// after both cue points. A length-capped or silence-trimmed track therefore
-// ends when Liquidsoap does, not at its original tagged duration.
-// Null when unknowable (no start stamp / no usable duration) — callers treat
-// null as "cannot schedule", which degrades to today's eager behaviour.
+// Seconds left before the on-air track's EFFECTIVE end (playable span after
+// both cue points), so a capped or trimmed track ends when Liquidsoap does.
+// Null when unknowable; callers treat null as "cannot schedule" and drain
+// eagerly.
 export function remainingSec(
   nowMs: number,
   startedAtMs: number | null | undefined,
@@ -66,35 +51,22 @@ export function remainingSec(
   return (startedAtMs + playable * 1000 - nowMs) / 1000;
 }
 
-// Runway the drain keeps for the commit tail that follows the intro render
-// inside ONE drain pass: the bed's handoff write and the track URI's own
-// (writeHandoff waits up to 5s each for Liquidsoap's 1.0s poll to consume the
-// file), plus the loudness lookup and the annotate. The pre-render is an
-// optimisation and must never eat into it.
+// Runway kept for the commit tail after the intro render in one drain pass:
+// the bed and track handoff writes (up to 5s each), the loudness lookup and the
+// annotate. The pre-render must never eat into it.
 export const DRAIN_COMMIT_RESERVE_SEC = 12;
 
 // Below this there is no honest render window left — starting a TTS call that
 // cannot finish only delays the music commit for a WAV nobody will use.
 export const MIN_PRERENDER_BUDGET_SEC = 5;
 
-// How long the drain may spend pre-rendering a queued item's intro/link WAV
-// before it MUST commit the music instead (#1409). The hard deadline governs
-// the drain VERDICT; everything between that verdict and the `next.txt` write
-// is optional work, and on a slow local TTS engine the render alone can
-// outlast the remaining runway — Liquidsoap then falls through to `auto.m3u`
-// and the pick airs one track late.
-//
-// Returns:
-//   null  — unbounded, today's behaviour. The clock is unknowable (boot,
-//           recover, untracked auto play), so there is no seam to miss and
-//           no basis for a budget.
-//   0     — skip the pre-render entirely; commit the music now. `airIntro`
-//           renders from `introScript` at air time, the path that already
-//           covers a reaped WAV or a voice switch flipped back on.
-//   >0    — seconds the render may take before the drain moves on without it.
-//
-// Skipping is cheap precisely because the render is recoverable at air time;
-// a missed seam is not.
+// How long the drain may pre-render an intro/link WAV before it MUST commit the
+// music (#1409). On a slow TTS engine the render alone can outlast the runway
+// and the pick then airs one track late.
+//   null — unbounded; the clock is unknowable, so there is no seam to miss.
+//   0    — skip the pre-render; airIntro re-renders from introScript at air
+//          time, so skipping is cheap and a missed seam is not.
+//   >0   — seconds the render may take before the drain moves on without it.
 export function introRenderBudgetSec(remaining: number | null): number | null {
   if (remaining == null) return null;
   const budget = remaining - DRAIN_COMMIT_RESERVE_SEC;
@@ -104,11 +76,9 @@ export function introRenderBudgetSec(remaining: number | null): number | null {
 type DrainAction = 'send-pair' | 'send-intrinsic' | 'hold';
 
 // Decide what the drain loop does with the FIRST unsent item:
-//  - 'send-pair'      — its successor is already queued behind it; stamp the
-//                       pair-aware values and send now. This is also how a
-//                       listener request landing behind a held pick releases
-//                       it (the request IS the successor arriving) — FIFO is
-//                       never inverted.
+//  - 'send-pair'      — successor already queued; stamp pair-aware and send.
+//                       A listener request landing behind a held pick releases
+//                       it the same way, so FIFO is never inverted.
 //  - 'hold'           — no successor yet, but there's still time for the
 //                       deadline pick to provide one. The item stays unsent.
 //  - 'send-intrinsic' — send now with track-intrinsic stamps only: the
@@ -127,11 +97,8 @@ export function drainAction(opts: {
   return 'hold';
 }
 
-// Whether the deadline routine should fire the successor pick this tick:
-// inside the deadline window, not yet past the point where picking is
-// pointless (the hard fallback owns the endgame; a pick landing after the
-// intrinsic send would just sit in the queue an extra cycle — harmless, so
-// the window extends to the hard deadline itself).
+// Whether the deadline routine fires the successor pick this tick: inside the
+// deadline window and not past the hard deadline, which owns the endgame.
 export function shouldDeadlinePick(remaining: number | null): boolean {
   return remaining != null && remaining < DRAIN_DEADLINE_SEC && remaining >= HARD_DEADLINE_SEC;
 }

@@ -1,18 +1,9 @@
-// SQLite-backed library store.
+// SQLite-backed library store: per-track metadata, mood/energy tags, Last.fm +
+// lyric enrichment, embedding vectors. One DB file, so tags and vectors stay
+// transactionally consistent. Singleton per controller process, WAL mode.
 //
-// Replaces the JSON file (state/moods.json) the controller used to load into
-// memory. Single source of truth for: per-track metadata, mood/energy tags,
-// Last.fm + lyric enrichment cache, embedding vectors. Tags and vectors stay
-// transactionally consistent because they live in one DB file.
-//
-// Loaded once per controller process (singleton). The tagger and the picker
-// both go through this; reads are fast (page cache), writes commit per
-// statement under WAL.
-//
-// This module is the public barrel. Every consumer imports it as a namespace
-// (`import * as db from './library-db.js'`) and reaches the whole surface
-// through it — import from here, never from ./library-db/* directly, so the
-// public surface stays one file. The parts, in dependency order:
+// Public barrel: import this as a namespace, never ./library-db/* directly.
+// The parts, in dependency order:
 //
 //   handle.ts       the open handle + shared constants (the no-cycle seam)
 //   types.ts        record shapes; TrackRow is the raw SQLite row

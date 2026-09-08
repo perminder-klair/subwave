@@ -1,32 +1,10 @@
-// Calibration for the zero-shot audio moods (music/audio-moods.ts).
-//
-// CLAP scores a track's audio vector against each mood's text prompt, and the
-// raw cosine is what lands in tracks.audio_mood_scores_json. Those cosines are
-// NOT comparable across moods: every prompt sits at its own baseline in the
-// shared 512-d space, so a mood whose wording happens to embed near the centre
-// of the music manifold scores higher on EVERY track than one whose wording
-// sits out at the edge. Picking "the top-scoring moods for this track" over raw
-// cosines therefore ranks prompts, not tracks — on a real 11k library that came
-// out as `energetic` firing on 61.7% of tracks and `rainy` on 43.5%, against
-// `calm` on 0.9% and `spiritual` on 0.2% (issue #1362). That is a property of
-// the vocabulary, not of the music.
-//
-// The fix is to judge each mood against ITS OWN library-wide distribution:
-// z = (score - mean) / sd, computed per mood across every scored track. A
-// track is then "calm" when it is calm *for this library*, which is the
-// question the label was always meant to answer. Selection stays relative and
-// top-K (the shape topAudioMoods always had) — only the axis changes.
-//
-// Everything here is pure and unit-pinned by scripts/audio-calibration.test.ts.
+// CLAP cosines are not comparable across moods, so labels are picked on a
+// per-mood z axis (#1362). Pure.
 
-// Bumped whenever the derivation below changes in a way that makes stored
-// labels stale. It rides the mood-state hash (composeMoodStateHash) BESIDE the
-// vocabulary hash rather than inside it, which is what lets a calibration
-// change re-derive labels from the cosines already on disk instead of forcing a
-// full CLAP re-score — the analyzer's text tower need not even be reachable.
+// Bump when the derivation makes stored labels stale; rides the mood-state hash
+// beside the vocabulary hash, so a change relabels instead of re-scoring.
 export const CALIBRATION_VERSION = 2;
 
-// A mood's library-wide score distribution.
 export interface MoodBaseline {
   mean: number;
   sd: number;
@@ -35,28 +13,15 @@ export interface MoodBaseline {
 
 export type MoodBaselines = Record<string, MoodBaseline>;
 
-// Below this many scored tracks a "library-wide distribution" is noise, and
-// centering on it would be worse than not centering at all. Passes under the
-// floor fall back to raw selection (see selectAudioMoods).
+// Below this many scored tracks the distribution is noise; callers fall back
+// to raw selection.
 export const MIN_BASELINE_TRACKS = 200;
 
-// Guards the z divide. A mood whose scores are near-identical on every track
-// carries no information; without a floor its z would explode on float noise
-// and that mood would win every track — the exact failure being fixed.
+// Guards the z divide; a near-degenerate mood would otherwise win every track.
 const MIN_SD = 1e-3;
 
-// ---------------------------------------------------------------------------
-// Baselines
-// ---------------------------------------------------------------------------
-
-// Per-mood mean/sd over a stream of stored score maps. Streaming (rather than
-// taking an array) because the caller reads these straight off SQLite for the
-// whole library — a 200k-row array of objects is a memory spike for a figure
-// that only needs running sums.
-//
-// Uses a two-pass-free running variance (sum / sumSq). Cosines are small and
-// bounded by [-1, 1], so the classic catastrophic-cancellation objection to
-// sum-of-squares does not bite at library scale here.
+// Per-mood mean/sd over a stream of stored score maps; running sums only, since
+// the caller streams the whole library off SQLite.
 export function computeBaselines(rows: Iterable<Record<string, number>>): MoodBaselines {
   const sum: Record<string, number> = Object.create(null);
   const sumSq: Record<string, number> = Object.create(null);
@@ -76,26 +41,15 @@ export function computeBaselines(rows: Iterable<Record<string, number>>): MoodBa
   for (const mood of Object.keys(count)) {
     const n = count[mood];
     const mean = sum[mood] / n;
-    // Population variance, clamped at 0 — float error can drive an
-    // all-identical mood a hair below zero.
+    // Population variance, clamped at 0 (float error can go a hair below).
     const variance = Math.max(0, sumSq[mood] / n - mean * mean);
     out[mood] = { mean, sd: Math.sqrt(variance), n };
   }
   return out;
 }
 
-// Drop moods whose OWN sample count falls short of the floor, returning null
-// when nothing survives (the caller then falls back to raw selection).
-//
-// Per-mood n can lag the library's: a mood added to the vocabulary since the
-// last full re-score is only scored on tracks analysed after it, so an
-// established mood can sit at n=5000 beside a new one at n=12. A mood with a
-// handful of samples has a near-degenerate sd that MIN_SD barely restrains, so
-// its z explodes and it wins every track — the exact failure calibration exists
-// to fix, one mood at a time. Gating on the MAXIMUM n let that straight
-// through. Pruning per mood is the targeted answer: the library stays
-// calibrated on its established moods, and the thin one is simply absent from
-// the baselines, which centeredScores already drops rather than passing raw.
+// Drop moods under the floor; null when nothing survives. The floor is per
+// mood, never over the maximum n: a thin mood in the baselines wins every track.
 export function prunedBaselines(baselines: MoodBaselines | null): MoodBaselines | null {
   if (!baselines) return null;
   const out: MoodBaselines = {};
@@ -105,17 +59,12 @@ export function prunedBaselines(baselines: MoodBaselines | null): MoodBaselines 
   return Object.keys(out).length > 0 ? out : null;
 }
 
-// Is this baseline set usable? A set built from too few tracks, or one that
-// somehow carries no moods, is refused so callers fall back to raw selection
-// rather than centering on noise.
 export function baselinesUsable(baselines: MoodBaselines | null): boolean {
   return prunedBaselines(baselines) !== null;
 }
 
-// A track's scores expressed as per-mood z-scores. Moods with no baseline (a
-// vocabulary entry added since the baselines were built) are dropped rather
-// than passed through raw — a raw cosine and a z-score are different units and
-// mixing them in one ranking is how the original bug worked.
+// Per-mood z-scores. A mood with no baseline is dropped, never passed through
+// raw: mixing units in one ranking ranks nothing.
 export function centeredScores(
   scores: Record<string, number>,
   baselines: MoodBaselines,
@@ -130,21 +79,10 @@ export function centeredScores(
   return out;
 }
 
-// ---------------------------------------------------------------------------
-// Label selection
-// ---------------------------------------------------------------------------
-
-// Selection margin in STANDARD DEVIATIONS, the unit centered scores live in.
-// The pre-calibration default was 0.05 raw cosine, which has no meaning on this
-// axis. 0.5 sd keeps labels-per-track in a similar range: a mood joins the
-// winner when it is within half a standard deviation of it.
-//
-// This figure is a defensible starting point, not a measured optimum — it wants
-// a pass against a real library's label-distribution spread.
+// Margin in standard deviations, the unit centered scores live in.
 export const DEFAULT_MARGIN_SD = 0.5;
 
-// The pre-calibration raw-cosine margin, kept for the uncentered fallback so a
-// library below the baseline floor behaves exactly as it did before.
+// Raw-cosine margin, for the uncentered fallback.
 export const DEFAULT_MARGIN_RAW = 0.05;
 
 export interface SelectOpts {
@@ -152,13 +90,8 @@ export interface SelectOpts {
   margin?: number;
 }
 
-// Pick the top moods from a raw {mood: cosine} map, centering per mood when
-// usable baselines are supplied. Relative top-K, best first, capped — the same
-// shape as before; the axis is what changed.
-//
-// `baselines` null/thin → raw selection on the original margin, byte-for-byte
-// the pre-calibration behaviour. That is the honest degradation: a library
-// with too few scored tracks has no distribution to center against.
+// Top moods from a raw {mood: cosine} map, centered when baselines are usable.
+// Null/thin baselines fall back to raw selection on the raw margin.
 export function selectAudioMoods(
   scores: Record<string, number>,
   baselines: MoodBaselines | null,
@@ -178,16 +111,9 @@ export function selectAudioMoods(
     .map(([m]) => m);
 }
 
-// ---------------------------------------------------------------------------
-// Audio-derived energy
-// ---------------------------------------------------------------------------
-
-// The mood vocabulary split into the two ends of an arousal axis. These are
-// NAMES, which couples this to the shipped vocabulary (settings/vocab.ts
-// MOOD_DEFAULTS) — and moods are operator-editable, so a renamed or deleted
-// mood must not break the derivation. Hence the degradation in audioEnergy:
-// whichever names are actually present are used, and a split too thin on
-// either side yields null rather than a guess from one lopsided end.
+// Two ends of an arousal axis, named from the shipped vocabulary
+// (settings/vocab.ts). Moods are operator-editable, so only names actually
+// present are used.
 export const HIGH_ENERGY_MOODS = [
   'energetic', 'workout', 'driving', 'celebratory', 'festival',
 ] as const;
@@ -195,23 +121,15 @@ export const LOW_ENERGY_MOODS = [
   'calm', 'reflective', 'spiritual', 'focus', 'night',
 ] as const;
 
-// Minimum moods that must be present on EACH side for the axis to mean
-// anything. Two of five is thin but still an average rather than a single
-// prompt's idiosyncrasy.
 const MIN_SIDE_MOODS = 2;
 
-// How far the arousal diff must clear zero, in standard deviations, before the
-// audio is allowed to overrule a propagated energy guess. Deliberately
-// symmetric and deliberately NOT a three-way bucketing: see audioEnergy.
+// How far the arousal diff must clear zero (in sd) to overrule a propagated
+// energy guess. Symmetric by design.
 export const ENERGY_HIGH_Z = 0.35;
 export const ENERGY_LOW_Z = -0.35;
 
-// The raw arousal diff for a track: mean centered score of the high-energy
-// moods minus mean centered score of the low-energy ones. Null when either
-// side is too thin, or when the baselines can't support centering.
-//
-// Exported for the tuning/diagnostic surface — the bucketing below is what
-// callers act on.
+// Mean centered high-energy score minus low-energy; null when either side is
+// too thin. Exported for diagnostics; callers use audioEnergy.
 export function arousalDiff(
   scores: Record<string, number>,
   baselines: MoodBaselines | null,
@@ -229,15 +147,8 @@ export function arousalDiff(
   return hi - lo;
 }
 
-// Audio-derived energy for a track, or null for "the audio does not say".
-//
-// Deliberately TWO-SIDED, not a three-way bucketing into low/medium/high. The
-// caller (music/tag-library.ts) uses this to overrule an energy value that was
-// itself propagated from neighbours — a guess. Bucketing the ambiguous middle
-// into 'medium' would replace one guess with another guess and call the result
-// evidence; returning null there leaves the existing value alone. So this only
-// ever speaks when the audio is decisive, which also means a slightly
-// mis-tuned threshold costs coverage rather than correctness.
+// Audio-derived energy, or null for "the audio does not say". Two-sided by
+// design: the ambiguous middle must leave the caller's existing guess alone.
 export function audioEnergy(
   scores: Record<string, number>,
   baselines: MoodBaselines | null,
@@ -249,40 +160,19 @@ export function audioEnergy(
   return null;
 }
 
-// ---------------------------------------------------------------------------
-// Mood-state hash (vocabulary + calibration)
-// ---------------------------------------------------------------------------
-
-// audio_embedding_meta.mood_vocab_hash records what the stored labels were
-// derived with. It now carries TWO independent things, joined by ':' —
-// the vocabulary/prompt hash and the calibration version — because they
-// invalidate different amounts of work:
-//
-//   vocabulary changed  → the cosines themselves are wrong  → full CLAP re-score
-//   calibration changed → only the LABELS are stale         → re-derive from disk
-//
-// Folding the calibration version into the vocabulary hash instead would make
-// every calibration change demand a working analyzer text tower, which most
-// installs do not run (ANALYZER_HEAVY is opt-in). Composite string rather than
-// a new column so this needs no schema migration.
+// audio_embedding_meta.mood_vocab_hash is `<vocabHash>:<calibrationVersion>`.
+// The halves invalidate different work: vocabulary → full CLAP re-score,
+// calibration → relabel from the cosines on disk.
 export function composeMoodStateHash(vocabHash: string, version = CALIBRATION_VERSION): string {
   return `${vocabHash}:${version}`;
 }
 
-// The version a pass stamps when it could NOT calibrate — the library was under
-// MIN_BASELINE_TRACKS and its labels came from the raw-cosine fallback.
-//
-// Deliberately 0, the same value a legacy bare hash parses as, because it means
-// the same thing: these labels were picked on raw cosines and are due a
-// re-derivation. Stamping the real CALIBRATION_VERSION here would tell the next
-// pass the labels are current, so a station that started under the floor and
-// then grew past it would keep its original tracks on raw selection forever —
-// only tracks scored after the crossing would ever be calibrated.
+// Stamped by a pass that could not calibrate. 0 is what a legacy bare hash
+// parses as, and means the same thing: re-derivation is still owed.
 export const UNCALIBRATED_VERSION = 0;
 
-// The state hash to stamp for a pass, given whether it actually calibrated.
-// The ONE place that decision is encoded — never call composeMoodStateHash
-// directly from a pass, or the uncalibrated case silently stamps as done.
+// The one place the stamp decision lives; a pass calling composeMoodStateHash
+// directly would stamp the uncalibrated case as done.
 export function moodStateHashFor(vocabHash: string, calibrated: boolean): string {
   return composeMoodStateHash(
     vocabHash,
@@ -295,9 +185,7 @@ export interface MoodState {
   version: number;
 }
 
-// Parse a stored mood-state hash. A legacy value (bare vocabulary hash, no
-// ':') reads as version 0 — pre-calibration — which is exactly right: those
-// labels were picked on raw cosines and are due a re-derivation.
+// A legacy value (bare vocabulary hash, no ':') reads as version 0.
 export function parseMoodStateHash(stored: string | null): MoodState | null {
   if (!stored) return null;
   const idx = stored.lastIndexOf(':');
@@ -309,13 +197,8 @@ export function parseMoodStateHash(stored: string | null): MoodState | null {
 
 export type MoodPassAction = 'none' | 'relabel' | 'rescore';
 
-// What a pass must do, given what is on disk and what the code now wants.
-// Pure so the decision is testable without a database or an analyzer.
-//
-//   no stored state            → rescore (nothing has ever run)
-//   vocabulary differs         → rescore (cosines are stale)
-//   only the version differs   → relabel (cosines fine, labels stale)
-//   both match                 → none (incremental scoring still runs above)
+// What a pass must do given what is on disk: no state or a changed vocabulary
+// → rescore; only the version changed → relabel; otherwise none.
 export function moodPassAction(stored: string | null, wantVocabHash: string): MoodPassAction {
   const prev = parseMoodStateHash(stored);
   if (!prev) return 'rescore';

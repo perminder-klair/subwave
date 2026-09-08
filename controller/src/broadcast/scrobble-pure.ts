@@ -1,11 +1,6 @@
-// Pure decisions behind broadcast/scrobble.ts — no I/O, no settings reads, no
-// clock of its own (every entry point takes `nowMs`). Split out so the
-// eligibility rule and the Navidrome plan can be driven from a test table
-// instead of a live station.
-//
-// The eligibility rule is shared by all three backends; the plan is
-// Navidrome-only because Navidrome is the one backend whose gate differs (see
-// `planNavidrome`).
+// Pure decisions behind broadcast/scrobble.ts: no I/O, no settings, no clock of
+// its own (every entry point takes `nowMs`). The eligibility rule is shared by
+// all three backends; only Navidrome's gate differs, hence `planNavidrome`.
 
 export interface ScrobbleTrackLike {
   id?: string | null;
@@ -15,11 +10,7 @@ export interface ScrobbleTrackLike {
   duration?: number | null; // seconds, optional
 }
 
-// Last.fm's documented rule for a "valid scrobble":
-//   - the track must be longer than 30 seconds
-//   - and either >50% of the track has been played, or >4 minutes (whichever
-//     comes first)
-// When duration is unknown we can only enforce the 4-minute floor.
+// Last.fm's rule: track >30s, and either >50% played or >4 minutes.
 export const MIN_DURATION_SEC = 30;
 export const MIN_ELAPSED_FLOOR_SEC = 240;
 
@@ -44,10 +35,8 @@ export function isEligibleScrobble(
     return elapsed >= d / 2 || elapsed >= MIN_ELAPSED_FLOOR_SEC;
   }
   // Duration unknown (auto-playlist tracks don't carry it through the annotation
-  // chain). SUB/WAVE has no skip endpoint — Liquidsoap controls pacing and a
-  // new track replacing the old one means the old one played to natural
-  // completion. Treat elapsed as the effective duration and apply only the
-  // >30s floor (Last.fm's "ignore short clips" rule).
+  // chain). There is no skip endpoint, so a replaced track played to completion:
+  // treat elapsed as the duration and apply only the >30s floor.
   return elapsed >= MIN_DURATION_SEC;
 }
 
@@ -74,26 +63,17 @@ export interface NavidromePlan {
 }
 
 /**
- * What to send Navidrome for one track transition.
+ * What to send Navidrome for one track transition. Two deliberate differences
+ * from the Last.fm / ListenBrainz plan:
  *
- * Two things make this different from the Last.fm / ListenBrainz plan, and
- * both are deliberate:
+ * 1. No listener gate. Navidrome is the operator's own library and the point is
+ *    rotation (#1298) — every aired track must be stamped so `lastPlayed` smart
+ *    playlists work, whether or not anyone heard it. Never unify this onto
+ *    `presentListeners()`.
+ * 2. The song id is required, not artist/title: Subsonic `scrobble` addresses a
+ *    row by id, so a play with no `subsonic_id` is skipped rather than guessed.
  *
- * 1. **No listener gate.** The public scrobblers fail CLOSED on an unknown
- *    listener count because a monitoring blip that pollutes a real Last.fm
- *    profile is worse than a missed entry. Navidrome is the operator's OWN
- *    library and the thing #1298 asks for is rotation: a `.nsp` smart playlist
- *    filtering on `lastPlayed` only works if every track the station actually
- *    aired is stamped. A play that nobody heard still has to stop the picker
- *    reaching for the same track an hour later, so an empty room is not a
- *    reason to skip. Never "unify" this onto `presentListeners()`.
- * 2. **The song id is required, not the artist/title pair.** Subsonic
- *    `scrobble` addresses a library row by id; an untracked auto-playlist play
- *    that reached the mixer without a `subsonic_id` has nothing to stamp and is
- *    silently skipped rather than guessed at.
- *
- * The submission still honours the shared eligibility rule, so a track cut
- * short doesn't count as a play.
+ * The submission still honours the shared eligibility rule.
  */
 export function planNavidrome(input: NavidromePlanInput): NavidromePlan {
   const empty: NavidromePlan = {

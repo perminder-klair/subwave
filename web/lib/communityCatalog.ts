@@ -1,13 +1,8 @@
-// Loader for the community catalog index (catalog.json). The public station
-// directory sources its data from here, so the list refreshes without a web
-// redeploy.
-//
-// Server-side only. 30-min ISR revalidate (matches the controller's catalog TTL)
-// and memoised per render. Degrades to an EMPTY catalog on any failure, so the
-// build/page never breaks on a network blip.
-//
-// COMMUNITY_CATALOG_URL overrides the source; the default is raw GitHub
-// (Fastly-fronted, ~5-min cache).
+// Loader for the community catalog index (catalog.json), so the public station
+// directory refreshes without a web redeploy. Server-side only. 30-min ISR
+// revalidate (matches the controller's catalog TTL), memoised per render, and
+// degrades to an EMPTY catalog on any failure. COMMUNITY_CATALOG_URL overrides
+// the source; the default is raw GitHub.
 const CATALOG_URL =
   process.env.COMMUNITY_CATALOG_URL ||
   'https://raw.githubusercontent.com/getsubwave/community/main/catalog.json';
@@ -39,8 +34,7 @@ export async function fetchCommunityCatalog(): Promise<CommunityCatalog> {
       shows: arr(data.shows),
       stations: arr(data.stations),
       // `apps` postdates the other four; arr() maps a missing key to [], so an
-      // older catalog is an empty directory rather than a crash, which lets the
-      // web and community repos ship in either order.
+      // older catalog is an empty directory rather than a crash.
       apps: arr(data.apps),
     };
   } catch {

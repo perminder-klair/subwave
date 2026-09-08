@@ -1,7 +1,6 @@
-// Station-profile management: list/create/duplicate/rename/delete/activate and
-// the one-time legacy-root conversion. All functions take the state ROOT
-// explicitly — no config.js import (cycle-free, tmp-root testable). Routes
-// pass config.stateRoot. Spec §5/§6.
+// Station-profile management: list/create/duplicate/rename/delete/activate plus
+// the one-time legacy-root conversion. Every function takes the state ROOT
+// explicitly rather than importing config.js — cycle-free and tmp-root testable.
 
 import {
   existsSync, mkdirSync, readdirSync, readFileSync, renameSync,
@@ -16,25 +15,16 @@ import { stationCreateSchema, stationRenameSchema } from '../schemas/station.js'
 import { stationCapMessage, uniqueStationId } from '../schemas/station-server.js';
 import { firstMessage } from '../util/zod-error.js';
 
-// Thrown by createStation() when the failure happens AFTER the legacy-root
-// conversion already completed. Conversion is durable the moment it returns
-// (the pointer + stations/main are on disk) — a caller that only sees a 400
-// and never restarts would keep writing to the now-stale root forever, and a
-// retry would see converted:false and never trigger the restart either. The
-// route checks `.converted` to schedule the switch-exit regardless of the
-// create failure.
+// Thrown by createStation(). `converted` says the legacy-root conversion already
+// completed and is durable, so the route must schedule the restart even though
+// the create failed — otherwise the process keeps writing to the stale root and
+// a retry sees converted:false.
 export class StationCreateError extends Error {
   readonly converted: boolean;
   /**
-   * Dotted path of the request field at fault, when there is one — the route
-   * turns it into the `fieldErrors` payload that lands the message on that
-   * input instead of in a toast. Carried as a property rather than recovered
-   * by matching the message text downstream, which is the sort of coupling
-   * that survives exactly until someone rewords the string.
-   *
-   * Only set for a failure a FIELD caused. A full rack isn't one: nothing the
-   * operator can type in the create dialog fixes it, so it stays a flat error
-   * beside the rack-full banner the panel already shows.
+   * Dotted path of the request field at fault, so the route can land the message
+   * on that input. Only set for a failure a FIELD caused — a full rack is not
+   * one, since nothing typed in the dialog fixes it.
    */
   readonly field?: string;
   constructor(message: string, converted: boolean, field?: string) {
@@ -55,7 +45,7 @@ export interface StationInfo {
 
 const stationsDir = (root: string) => join(root, 'stations');
 
-// Slug-validate AND containment-check — both, always (defence in depth).
+// Slug-validate AND containment-check, both, always.
 function stationPath(root: string, id: string): string {
   if (!STATION_ID_RE.test(id)) throw new Error(`invalid station id: ${id}`);
   const dir = pathResolve(stationsDir(root), id);
@@ -85,14 +75,11 @@ function readCard(dir: string): { name?: string; createdAt?: string } {
   }
 }
 
-// Keep the ON-AIR name (settings.station — what the player and /state show) in
-// step with the identity card. Without this, a fresh station boots as the
-// default "SUB/WAVE" and a duplicate carries the source's name — the rack says
-// one thing, the player another. settings.load() merges over DEFAULTS, so a
-// seeded minimal {station} file is a valid settings.json. For the ACTIVE
-// station this fs write alone isn't enough (the live process has settings
-// cached in memory) — the rename route also pushes it through
-// settings.update(), which rewrites this same file from memory afterwards.
+// Keep the ON-AIR name (settings.station) in step with the identity card, else a
+// fresh station boots as "SUB/WAVE" and a duplicate carries the source's name.
+// settings.load() merges over DEFAULTS, so a minimal {station} file is valid.
+// For the ACTIVE station this fs write is not enough — the live process has
+// settings cached, so the rename route also pushes it through settings.update().
 function patchSettingsStation(dir: string, name: string): void {
   const p = join(dir, 'settings.json');
   let s: Record<string, unknown> = {};
@@ -105,11 +92,9 @@ function patchSettingsStation(dir: string, name: string): void {
   writeFileSync(p, JSON.stringify(s, null, 2));
 }
 
-// envConfigured: env-supplied Navidrome creds apply to EVERY station (env wins
-// at each boot regardless of the active dir), and env-driven installs never
-// write setup-config.json — without this flag they'd all read "needs setup".
-// Threaded in from the route (setup/firstRun.envHasNavidrome) so this module
-// stays fs-only and cycle-free.
+// envConfigured: env-supplied Navidrome creds apply to EVERY station and such
+// installs never write setup-config.json, so without the flag they all read
+// "needs setup". Threaded in from the route so this module stays fs-only.
 export function listStations(
   root: string,
   fallbackName: string,
@@ -165,8 +150,8 @@ export function convertToMultiStation(
   const id = 'main';
   const dest = stationPath(root, id);
   mkdirSync(dest, { recursive: true });
-  // fs.rename per entry — same filesystem, so this is fast and never copies.
-  // The just-created stations/ dir classifies as 'keep' and skips itself.
+  // fs.rename per entry: same filesystem, so never a copy. The just-created
+  // stations/ dir classifies as 'keep' and skips itself.
   const moved: string[] = [];
   try {
     for (const entry of readdirSync(root)) {
@@ -175,16 +160,14 @@ export function convertToMultiStation(
       moved.push(entry);
     }
   } catch (err) {
-    // Best-effort move-back: restore whatever already relocated before the
-    // failure. Track whether any move-back itself fails; if so, leave dest in
-    // place (entries stay recoverable under stations/main) — spec §6.
+    // Best-effort move-back. If any move-back itself fails, leave dest in place
+    // so the entries stay recoverable under stations/main.
     let moveBackFailed = false;
     for (const entry of moved) {
       try {
         renameFn(join(dest, entry), join(root, entry));
       } catch {
-        // swallow — an individual move-back failure shouldn't block the rest,
-        // but it marks the whole rollback as incomplete
+        // one failure must not block the rest, but marks the rollback incomplete
         moveBackFailed = true;
       }
     }
@@ -214,12 +197,9 @@ export async function createStation(root: string, opts: {
   currentName: string;
   backupLibraryDb?: (dest: string) => Promise<void>;
 }): Promise<{ id: string; converted: boolean }> {
-  // The same schema the route boundary and the admin form run. This is the
-  // chokepoint — POST /stations is not the only way in (tests call it
-  // directly, and a future import/restore path would too) — so it validates
-  // here rather than trusting whatever the caller assembled. Rethrown as a
-  // plain Error: a raw ZodError's .message is a multi-line JSON blob and the
-  // route answers `{ error: err.message }`.
+  // The chokepoint, not the route: this runs the same schema the route and the
+  // admin form do. Rethrown as a plain Error because a raw ZodError's .message is
+  // a multi-line JSON blob and the route answers `{ error: err.message }`.
   const parsed = stationCreateSchema.safeParse({ name: opts.name, mode: opts.mode });
   if (!parsed.success) throw new Error(firstMessage(parsed.error));
   const { name, mode } = parsed.data;
@@ -229,34 +209,26 @@ export async function createStation(root: string, opts: {
     convertToMultiStation(root, opts.currentName);
     converted = true;
   }
-  // Cap check counts real station dirs, post-conversion (a fresh conversion
-  // yields exactly one, so `converted` can never coincide with a full rack —
-  // the flag is carried anyway so the route's restart guarantee holds).
+  // Counts real station dirs, post-conversion.
   const entries = readdirSync(stationsDir(root), { withFileTypes: true });
   const count = entries.filter(e => e.isDirectory() && STATION_ID_RE.test(e.name)).length;
   const capped = stationCapMessage(count);
   if (capped) throw new StationCreateError(capped, converted);
 
   const sourceId = activeIdOnDisk(root);
-  // A duplicate with nothing to duplicate FROM (multi-station dir present but
-  // the pointer corrupt/missing) must refuse loudly, not silently degrade to
-  // a fresh station. Attributed to `mode`: it's the mode choice that can't be
-  // honoured, and the operator's way out is to pick Fresh instead.
+  // A duplicate with nothing to duplicate FROM must refuse loudly, not degrade
+  // to a fresh station. Attributed to `mode`: the way out is to pick Fresh.
   if (mode === 'duplicate' && !sourceId) {
     throw new StationCreateError('no active station to duplicate from', converted, 'mode');
   }
   const id = uniqueStationId(entries.map(e => e.name), name);
   const dest = stationPath(root, id);
-  // Everything from here is wrapped: if it throws, the new-station dir is
-  // best-effort removed, but a completed conversion above must never be
-  // silently lost — it's re-attached on the error so the route still fires
-  // the restart even though this create() failed (spec: Important 1).
+  // Wrapped: on a throw the new-station dir is best-effort removed, and a
+  // completed conversion is re-attached to the error so the route still restarts.
   let destCreated = false;
   try {
-    // stations/ is guaranteed to exist by now (either pre-existing or just
-    // created by convertToMultiStation above) — a plain mkdirSync (no
-    // recursive) means a create race on the same id throws EEXIST instead of
-    // silently merging into an existing directory.
+    // Non-recursive on purpose: a create race on the same id throws EEXIST rather
+    // than silently merging into an existing directory.
     mkdirSync(dest);
     destCreated = true;
     writeCard(dest, name);
@@ -265,9 +237,8 @@ export async function createStation(root: string, opts: {
       for (const entry of readdirSync(src)) {
         const action = duplicateAction(entry);
         if (action === 'copy') {
-          // Async cp — voices/ and jingles/ can run to hundreds of MB, and a
-          // sync copy would block the event loop (and /now-playing) for the
-          // whole duplicate.
+          // Async: voices/ and jingles/ can run to hundreds of MB, and a sync
+          // copy would block the event loop for the whole duplicate.
           await cp(join(src, entry), join(dest, entry), { recursive: true });
         } else if (action === 'backup') {
           if (opts.backupLibraryDb) {
@@ -278,8 +249,8 @@ export async function createStation(root: string, opts: {
         }
       }
     }
-    // Fresh: seeds a minimal settings.json so first boot doesn't default to
-    // "SUB/WAVE". Duplicate: overwrites the name copied from the source.
+    // Fresh: seeds settings.json so first boot isn't "SUB/WAVE". Duplicate:
+    // overwrites the name copied from the source.
     patchSettingsStation(dest, name);
     return { id, converted };
   } catch (err) {
@@ -287,8 +258,7 @@ export async function createStation(root: string, opts: {
       try {
         rmSync(dest, { recursive: true, force: true });
       } catch {
-        // best-effort — a stuck partial dir is recoverable by hand, and
-        // masking the real error behind a cleanup failure helps no one
+        // best-effort — never mask the real error behind a cleanup failure
       }
     }
     throw new StationCreateError((err as Error).message, converted);
@@ -300,10 +270,8 @@ export async function createStation(root: string, opts: {
 export function renameStation(root: string, id: string, name: string): string {
   const dir = stationPath(root, id);
   if (!existsSync(dir)) throw new Error('no such station');
-  // Same chokepoint reasoning as createStation. This REPLACES a fallback that
-  // silently renamed the station to its own slug on an empty name and truncated
-  // an over-long one — both now refuse, so the operator sees what happened
-  // instead of finding a station called "night-shift" later.
+  // Same chokepoint reasoning as createStation: an empty or over-long name
+  // refuses rather than being silently slugged or truncated.
   const check = stationRenameSchema.safeParse({ name });
   if (!check.success) throw new Error(firstMessage(check.error));
   const resolved = check.data.name;
@@ -323,13 +291,10 @@ export function deleteStation(root: string, id: string): void {
   rmSync(dir, { recursive: true, force: true });
 }
 
-// Stale file-based IPC in the TARGET station dir — left over from whenever
-// this station was last live (or never cleaned up) — must not be replayed
-// the moment Liquidsoap starts polling it again after the switch. The
-// *-playing snapshots come along too: a days-old now-playing.json would be
-// served as the current track until the first on_meta fires after the
-// switch. Each is swallowed independently: a missing file is the common
-// case, not an error.
+// Stale file-based IPC in the TARGET dir must not be replayed the moment
+// Liquidsoap starts polling it after the switch. The *-playing snapshots come
+// too: a days-old now-playing.json would be served as the current track until
+// the first on_meta fires.
 const STALE_IPC_FILES = [
   'next.txt', 'jingle-now.txt', 'say.txt', 'intro.txt', 'sfx.txt',
   'now-playing.json', 'jingle-playing.json', 'bed-playing.json',
@@ -341,8 +306,7 @@ function drainStaleIpc(dir: string): void {
     try {
       unlinkSync(join(dir, file));
     } catch {
-      // best-effort — absent is the normal case, and a locked/permission
-      // failure here shouldn't block the switch itself
+      // absent is the normal case, and a failure must not block the switch
     }
   }
 }

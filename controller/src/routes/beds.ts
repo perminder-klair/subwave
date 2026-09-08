@@ -1,10 +1,6 @@
-// Admin-gated bed library management — the instrumental beds the DJ talks over
-// between songs (see broadcast/beds.ts + broadcast/bed-policy.ts).
-//
-// Three ways a bed gets in: the bundled default (a protected built-in), an
-// upload, or generation via the ElevenLabs Music API (POST /beds). Generation
-// uses /v1/music rather than the sfx sound-generation endpoint because a bed
-// needs ≥30s of instrumental music (see beds.create / audio/bed-gen.ts).
+// Admin-gated bed library — the instrumental beds the DJ talks over between
+// songs. A bed arrives as the bundled default, an upload, or a generation via
+// the ElevenLabs Music API (/v1/music, not the sfx endpoint — a bed needs ≥30s).
 import express from 'express';
 import * as beds from '../broadcast/beds.js';
 import { BED_GEN_MAX_SEC } from '../audio/bed-gen.js';
@@ -31,8 +27,7 @@ router.get('/beds', requireAdmin, async (req, res) => {
   }
 });
 
-// Generate a bed from a text prompt via the ElevenLabs Music API. Mirrors
-// POST /sfx; validation → 400, generation failure → 500.
+// Validation → 400, generation failure → 500.
 router.post('/beds', requireAdmin, validateBody(bedCreateSchema), async (req, res) => {
   const { name, description, prompt, durationSec } = req.body as {
     name: string; description: string; prompt: string; durationSec?: number;
@@ -46,11 +41,9 @@ router.post('/beds', requireAdmin, validateBody(bedCreateSchema), async (req, re
   }
 });
 
-// Import an operator-supplied audio file as a bed (multipart `file`, `name`,
-// optional `description`). The length gate lives in beds.importAudio — a bed
-// that can't outlast a script is rejected there with a real reason.
-// validateBody AFTER audioUpload — multer parses the multipart body, the
-// middleware replaces req.body only, req.file rides through untouched.
+// The length gate lives in beds.importAudio. validateBody must run AFTER
+// audioUpload — multer parses the multipart body and the middleware replaces
+// req.body only.
 router.post('/beds/upload', requireAdmin, audioUpload('file'), validateBody(imagingImportSchema), async (req, res) => {
   const file = req.file;
   const { name, description } = req.body as { name: string; description: string };
@@ -76,9 +69,6 @@ router.delete('/beds/:name', requireAdmin, async (req, res) => {
   }
 });
 
-// Admin preview — streams the bed so the operator can audition what the DJ
-// would be talking over. The whole risk of this feature is taste, so hearing it
-// before enabling it matters more than usual.
 router.get('/beds/:name/audio', requireAdmin, async (req, res) => {
   try {
     const filePath = await beds.getPath(req.params.name);

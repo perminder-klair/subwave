@@ -1,9 +1,5 @@
-// The record shapes library-db reads and writes. TrackRow is the raw SQLite
-// row; every other type here is the consumer-facing shape rows.ts maps it to.
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+// Record shapes library-db reads and writes. TrackRow is the raw SQLite row;
+// the rest are the consumer-facing shapes rows.ts maps it to.
 
 export type EnergyValue = 'low' | 'medium' | 'high' | null;
 export type TagSource = 'llm' | 'propagated' | 'uncertain-llm' | 'legacy-v1' | 'manual';
@@ -13,34 +9,24 @@ export interface TrackRecord {
   title: string | null;
   artist: string | null;
   album: string | null;
-  // Subsonic album/artist ids — what lets the never-play blocklist match an
-  // ALBUM or ARTIST entry EXACTLY on a library-sourced candidate, instead of
-  // through the normalised-name fallback that a compilation or a "feat."
-  // credit defeats. null = not walked since the migration that added them.
+  // Subsonic ids, so the blocklist matches an album/artist entry exactly instead
+  // of by normalised name. null = not walked since migration 23.
   albumId: string | null;
   artistId: string | null;
   year: number | null;
-  // Original-release-year surface (issue #842): the track's TRUE first-release
-  // year when it differs from the file's `year` tag (reissues, compilation
-  // albums). null = unresolved; era filtering falls back to `year` (except on
-  // compilations, whose plain year is the compilation's own date — untrusted).
+  // True first-release year when it differs from the file tag (#842). null =
+  // unresolved; era filtering then falls back to `year`.
   originalYear: number | null;
   originalYearSource: string | null;      // 'album-tag' | 'musicbrainz' | 'manual'
   originalYearCheckedAt: string | null;   // last lookup attempt, hit or miss
   isCompilation: boolean | null;          // Navidrome album FLAG; null = unknown
-  // Derived era suspicion (issue #1418, music/era-suspect.ts): "this album's
-  // year is the reissue's, not the recordings'". Kept SEPARATE from
-  // isCompilation, which stays the raw Navidrome fact — the flag is false on
-  // exactly the reissue anthologies this exists for, so one column cannot be
-  // both. null = not yet walked since the migration.
+  // Derived era suspicion (#1418). Separate from isCompilation, which is false on
+  // exactly the reissue anthologies this exists for.
   eraUntrusted: boolean | null;
-  // What era resolution actually consults: the flag OR the derived judgement.
-  // Composed HERE, once, so no call site re-decides it — resolveEraYear takes
-  // this, never `isCompilation`.
+  // Flag OR derived judgement, composed once. resolveEraYear takes this, never
+  // `isCompilation`.
   yearUntrusted: boolean | null;
-  // Every genre tag on the file (OpenSubsonic multi-value genres). The single
-  // source of truth — `genre` below is a generated column over genres[0]
-  // (the "primary" tag), kept for the scalar consumers and indexes.
+  // Source of truth; the scalar `genre` column is GENERATED from genres[0].
   genres: string[];
   genre: string | null;
   durationSec: number | null;
@@ -55,9 +41,8 @@ export interface TrackRecord {
   promptHash: string | null;
   model: string | null;
   taggedAt: string | null;
-  // Acoustic analysis (music/analyze-library.ts). All nullable — a track that
-  // hasn't been analysed reads null and every consumer treats that as "no
-  // signal, behave as today".
+  // Acoustic analysis; null means no signal and consumers fall back to their
+  // unanalysed behaviour.
   bpm: number | null;
   musicalKey: string | null;   // Camelot code, e.g. '8A'
   introMs: number | null;
@@ -71,34 +56,24 @@ export interface TrackRecord {
   beats: number[] | null;           // per-beat timestamps (ms)
   bars: number[] | null;            // downbeat (bar) timestamps (ms)
   keyRanges: TrackKeyRange[] | null; // per-region key (tonic + mode) over time
-  // Zero-shot audio moods — top mood labels from scoring the vocabulary against
-  // the track's CLAP audio vector (music/audio-moods.ts). [] until scored;
-  // sound-derived, so they complement (never replace) the LLM `moods`.
+  // Zero-shot audio moods; [] until scored. Complement the LLM `moods`.
   audioMoods: string[];
-  // Outro (tail) features — the track's measured ending (fade vs cold, tail
-  // loudness/tempo/bar grid). null → no outro signal, today's transitions.
+  // null = no outro signal.
   outro: TrackOutro | null;
-  // Edge dead air (ms) — near-silent runs at the file's very start / very end,
-  // measured against an ABSOLUTE dBFS floor. Distinct from introMs and
-  // outro.startMs, which are relative gates over MUSICAL content. null → not
-  // measured; music/silence-trim.ts treats null as "trim nothing".
+  // Edge dead air (ms) against an ABSOLUTE dBFS floor, unlike introMs and
+  // outro.startMs which are relative. null = not measured, so trim nothing.
   leadSilenceMs: number | null;
   tailSilenceMs: number | null;
-  // Where the trailing gap OPENS, absolute ms from byte zero — the cue_out
-  // itself, rather than a length that has to be subtracted from a duration the
-  // analyzer never saw. null on rows analysed before this column existed;
-  // silence-trim.ts then falls back to (duration - tailSilenceMs).
+  // Where the trailing gap opens, absolute ms from byte zero (the cue_out). null
+  // on pre-column rows; silence-trim.ts falls back to duration - tailSilenceMs.
   tailStartMs: number | null;
-  // Sound-map coordinates — a 2D UMAP projection of the CLAP audio vector,
-  // normalised to [0,1] per axis (music/map-projection.ts). The Observatory
-  // places nodes by these when present, so tracks that SOUND alike sit close.
-  // null → not projected (no audio vector, or the projection hasn't run).
+  // 2D UMAP of the CLAP audio vector, normalised to [0,1] per axis. null = not
+  // projected.
   mapX: number | null;
   mapY: number | null;
 }
 
-// The measured ending of a track — what the crossfade seam actually lands on.
-// Timestamps are absolute ms into the track.
+// The measured ending the crossfade seam lands on. Timestamps are absolute ms.
 export interface TrackOutro {
   startMs: number;           // where the wind-down starts
   ending: 'fade' | 'cold';   // fades to silence vs ends at level
@@ -106,16 +81,14 @@ export interface TrackOutro {
   bpm: number | null;        // tail tempo (outros drift/ritard vs the lead)
   beats: number[] | null;    // tail beat grid (ms)
   bars: number[] | null;     // tail downbeat grid (ms)
-  // Tail vocal-activity spans (Demucs over the outro window), absolute ms.
-  // [] = analysed instrumental tail (meaningful, distinct from null/absent =
-  // not computed) — the same tri-state as the head vocal_ranges_json column.
-  // Optional so the analyzer's write shape (which OMITS the key when not
-  // computed — the backfill probes outro_json's raw text for it) assigns
-  // cleanly; parseOutroJson always materialises it (null) on the read side.
+  // Tail vocal-activity spans, absolute ms. [] = analysed instrumental tail,
+  // null/absent = not computed. Optional because the analyzer OMITS the key when
+  // not computed (the backfill probes the raw JSON for it); parseOutroJson
+  // materialises it as null on read.
   vocalRanges?: Array<{ startMs: number; endMs: number }> | null;
 }
 
-// A key over a time range: tonic note (sharps) + mode.
+// Tonic note (sharps) + mode over a time range.
 export interface TrackKeyRange {
   startMs: number;
   endMs: number;
@@ -123,35 +96,29 @@ export interface TrackKeyRange {
   mode: 'major' | 'minor';
 }
 
-// A structural span over a track, in milliseconds (span shape). Kept as
-// a local shape so library-db stays free of higher-layer imports.
+// Local shape, so library-db imports no higher layer.
 export interface TrackSection {
   startMs: number;
   endMs: number;
   kind?: string;
 }
 
-// A pace span: a 0..1 perceptual-energy value over a time range.
+// A 0..1 perceptual-energy value over a time range.
 export interface TrackPaceSpan {
   startMs: number;
   endMs: number;
   value: number;
 }
 
-// The raw `tracks` table row as SQLite hands it back — snake_case columns with
-// the acoustic blobs still JSON strings. rowToTrack / rowToObservatory map it
-// into the camelCase record types above. Reflects the table schema; the write
+// The raw `tracks` row: snake_case, acoustic blobs still JSON strings. The write
 // path validates energy/source into their unions, so those read back typed. A
-// partial SELECT (getTrackLite, the observatory columns) yields a subset of
-// this shape and the mapper only touches columns it actually selected.
+// partial SELECT yields a subset and the mappers only touch selected columns.
 export interface TrackRow {
   id: string;
   title: string | null;
   artist: string | null;
   album: string | null;
-  // Subsonic ids for the track's album and artist. NULL on any row not walked
-  // since the migration that added them — every consumer treats that as
-  // "unknown" and falls back to the name it already had.
+  // NULL on any row not walked since migration 23; consumers fall back to names.
   album_id: string | null;
   artist_id: string | null;
   year: number | null;
@@ -201,21 +168,16 @@ export interface TrackMeta {
   title?: string | null;
   artist?: string | null;
   album?: string | null;
-  /** Subsonic album/artist ids. Omitted by the non-walk writers (manual tag
-   *  edits, the analyzer's metadata top-up), which have no id to offer —
-   *  upsertTrackMeta COALESCEs, so an omitted id never clears a stored one. */
+  /** Omitted by the non-walk writers, which have no id to offer. upsertTrackMeta
+   *  COALESCEs, so an omitted id never clears a stored one. */
   albumId?: string | null;
   artistId?: string | null;
   year?: number | string | null;
   genres?: string[] | null;
   duration?: number | null;
-  // Walk-time original-year surface (issue #842/#1418). `originalYear` here is
-  // the ALBUM's originalReleaseDate.year (source 'album-tag'), and the walk
-  // passes it only when it is INFORMATIVE — not on an era-suspect album, and
-  // not when it merely echoes the release year, which tells us nothing and
-  // would hide the track from the lookup that can actually answer. Never
-  // overwrites a per-track 'musicbrainz' or 'manual' value — see
-  // upsertTrackMeta.
+  // The album's originalReleaseDate.year, source 'album-tag' (#842/#1418). Passed
+  // only when informative: not on an era-suspect album, and not when it echoes the
+  // release year. Never overwrites a 'musicbrainz' or 'manual' value.
   originalYear?: number | null;
   isCompilation?: boolean | null;
   /** music/era-suspect.albumEraSuspect's verdict for this track's album. */
@@ -240,10 +202,8 @@ export interface FilterOpts {
   moods?: string[];
   energy?: string | null;
   genre?: string | null;
-  // Acoustic-analysis facet: 'instrumental' = analysed with an empty vocal-ranges
-  // array, 'vocal' = analysed with at least one range. A NULL vocal_ranges_json
-  // (not computed) matches neither, so the facet only ever narrows to tracks the
-  // analyze pass has actually touched.
+  // 'instrumental' = empty vocal-ranges array, 'vocal' = at least one range. NULL
+  // matches neither, so the facet only covers analysed tracks.
   vocal?: 'instrumental' | 'vocal' | null;
   yearFrom?: number | null;
   yearTo?: number | null;
@@ -254,10 +214,9 @@ export interface FilterOpts {
 }
 
 export interface LibraryStats {
-  // TAGGED tracks (moods present) — the tagging-coverage figure.
+  // TAGGED tracks (moods present), the tagging-coverage figure.
   total: number;
-  // Every row in the library mirror, tagged or not — the "how big is this
-  // library" figure. See computeStats for why the two must not be conflated.
+  // Every row in the mirror, tagged or not; not to be conflated with `total`.
   mirrorTotal: number;
   distinctArtists: number;
   byMood: Record<string, number>;

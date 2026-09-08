@@ -1,13 +1,10 @@
 'use client';
 
 // The on-air + health card at the top of /admin/dash: a now-playing title row
-// over a status strip of four instruments (listeners, DJ latency, TTS fallback,
-// on air). All colour comes from theme tokens so it tracks light + dark.
-//
-// The meters animate via a single critically-damped (zeta≈1) rAF loop that
-// writes straight to the DOM — no per-frame re-render. Structure + state styling
-// live in globals.css under `.admin-root .hs-*`. Collapses under
-// prefers-reduced-motion.
+// over a status strip of four instruments. All colour comes from theme tokens.
+// The meters animate via a single critically-damped (zeta~1) rAF loop that
+// writes straight to the DOM. Structure + state styling live in globals.css
+// under `.admin-root .hs-*`. Collapses under prefers-reduced-motion.
 import { useEffect, useRef } from 'react';
 import type { NowPlayingTrack } from '../../lib/types';
 import { Btn } from './ui';
@@ -19,10 +16,8 @@ export interface HealthMetrics {
   listenersPeak: number;
   /** DJ think→speak p95 latency in ms, or null when unknown (stats not loaded) */
   latencyMs: number | null;
-  /**
-   * The live DJ-agent deadline in ms, and the redline anchor. Null until /stats
-   * loads, in which case the gauge uses its built-in default scale.
-   */
+  /** The live DJ-agent deadline in ms, and the redline anchor. Null until
+   *  /stats loads, in which case the gauge uses its default scale. */
   latencyDeadlineMs: number | null;
   /** TTS fallback rate as a percentage, or null when unknown */
   ttsFallbackPct: number | null;
@@ -39,9 +34,8 @@ const SCALE = {
 } as const;
 
 // The redline anchors to the live DJ-agent deadline, so a redlined needle means
-// "hitting fallbacks" rather than an arbitrary ceiling. The band stays at a
-// fixed fraction of the sweep, so only the numbers track the model in use,
-// never the gauge geometry. Falls back to 3 s until /stats reports a deadline.
+// "hitting fallbacks" rather than an arbitrary ceiling. The band stays at a fixed
+// fraction of the sweep, so only the numbers track the model in use.
 const DEFAULT_LATENCY_REDLINE_MS = 3000;
 const LATENCY_REDLINE_FRACTION = 0.6; // redline begins at 60% of the dial
 function latencyScale(deadlineMs: number | null): { redline: number; max: number } {
@@ -89,8 +83,8 @@ function el<K extends keyof SVGElementTagNameMap>(
   return n;
 }
 
-// Draw the static face of a gauge (arc, ticks, optional redline + peak tick),
-// append a needle <g>, and return imperative handles the rAF loop drives.
+// Draw the static face of a gauge, append a needle <g>, and return imperative
+// handles the rAF loop drives.
 function buildGauge(
   svg: SVGSVGElement,
   opts: { redlineFrom?: number | null; withPeak?: boolean } = {},
@@ -294,10 +288,9 @@ export default function StationHeader({
         </div>
       </div>
 
-      {/* Four instruments at 140–196px can't sit in one 390px row, so on a phone
+      {/* Four instruments at 140-196px can't sit in one 390px row, so on a phone
           the flex rail becomes a 2-up grid. The `!` utilities are required
-          because the `.hs-*` rules in globals.css are unlayered and would
-          otherwise outrank Tailwind's utility layer regardless of specificity. */}
+          because the `.hs-*` rules in globals.css are unlayered. */}
       <div className="hs-strip !grid !grid-cols-2 sm:!flex">
         <div className="hs-cell !min-w-0 sm:!min-w-[140px]">
           <div className="hs-head">
@@ -307,7 +300,7 @@ export default function StationHeader({
           </div>
           <svg ref={listenersSvg} className="hs-gauge" />
           {/* Readouts wrap on a phone so the trailing peak/redline figure drops
-              to its own line instead of being clipped by the cell. */}
+              to its own line instead of being clipped. */}
           <div className="hs-read flex-wrap sm:flex-nowrap">
             <span className="hs-v" ref={listenersV}>
               0
@@ -325,7 +318,7 @@ export default function StationHeader({
               <span className="idx">02</span>DJ&nbsp;Latency
             </div>
             {/* The head's sub-label is nowrap and would squeeze the instrument
-                name to an ellipsis in a half-width cell — hidden on mobile. */}
+                name to an ellipsis in a half-width cell. */}
             <div className="hs-sub hidden sm:block" ref={zone}>
               nominal
             </div>

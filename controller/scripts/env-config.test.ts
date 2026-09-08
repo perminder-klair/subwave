@@ -1,13 +1,6 @@
-// Pins for the typed env readers (src/util/env.ts).
-//
-// The behaviour that matters is the FALLBACK: config.ts used to read every
-// numeric var through parseInt, which yields NaN for anything non-numeric and
-// then lets the NaN travel (an uncapped headline fetch, a random listen port,
-// `atempo=NaN` reaching ffmpeg). These readers turn that into a warning plus the
-// documented default. They must never throw — a station that refuses to boot
-// over one malformed convenience var is worse than one that boots on defaults.
-//
-// Run: `npm test -- env-config`.
+// The typed env readers (src/util/env.ts). What matters is the FALLBACK: a
+// malformed var warns and yields the documented default rather than letting a
+// NaN travel, and these readers must never throw.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

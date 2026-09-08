@@ -1,19 +1,13 @@
 import { timingSafeEqual } from 'node:crypto';
 import { clientIp } from './ratelimit.js';
 
-// Admin basic auth. In production (NODE_ENV=production) ADMIN_USER and
-// ADMIN_PASS are MANDATORY — the controller refuses to start without them,
-// because /debug, /settings, and the jingle/tagger endpoints expose enough
-// internals (queue, recent LLM calls, library stats, hostnames) that a
-// public deploy without auth is effectively an open admin console. In dev
-// the gate stays opt-in so local iteration is frictionless.
+// Admin basic auth. In production ADMIN_USER/ADMIN_PASS are MANDATORY and the
+// controller refuses to start without them; in dev the gate is opt-in.
 const ADMIN_USER = process.env.ADMIN_USER || '';
 const ADMIN_PASS = process.env.ADMIN_PASS || '';
 export const ADMIN_AUTH_REQUIRED = Boolean(ADMIN_USER && ADMIN_PASS);
 const IS_PROD = process.env.NODE_ENV === 'production';
-// 10 strikes before a temporary lockout: brute-forcing a real password in 10
-// tries is implausible, while an operator (or a household behind one NAT IP)
-// fat-fingering the password a few times shouldn't get locked out for 15 min.
+// 10 strikes before a 15-min lockout; a shared NAT address must survive a few typos.
 const MAX_AUTH_FAILURES = 10;
 const AUTH_LOCKOUT_MS = 15 * 60 * 1000;
 const authAttempts = new Map<string, { failures: number; lockedUntil: number }>();
@@ -28,8 +22,7 @@ function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
-// Called once at startup. Exits the process if a production deploy is missing
-// admin credentials, then logs the resolved gate state.
+// Called once at startup; exits if a production deploy has no admin credentials.
 export function assertAdminConfigured() {
   if (IS_PROD && !ADMIN_AUTH_REQUIRED) {
     console.error(
@@ -45,23 +38,14 @@ export function assertAdminConfigured() {
 export function requireAdmin(req, res, next) {
   if (!ADMIN_AUTH_REQUIRED) return next();
 
-  // Lockout keys on clientIp() (see middleware/ratelimit.ts for how that
-  // address is resolved and which headers are trusted). Behind the bundled
-  // Caddy that address is the real peer for any untrusted connection, but a
-  // misconfigured edge — or an origin reachable around it — can still let a
-  // client choose its own key and rotate it per request to dodge this counter.
-  // So this is defense-in-depth that slows casual brute-forcing from a single
-  // source, not a hard guarantee. For durable enforcement put a real rate limit
-  // at the edge (Caddy/Cloudflare), where the connecting IP is known before it
-  // gets flattened into a header.
+  // Keys on clientIp(), which a client can choose behind a misconfigured edge —
+  // defence in depth, not a guarantee. Durable enforcement belongs at the edge.
   const ip = clientIp(req);
   const now = Date.now();
   const rec = authAttempts.get(ip);
 
-  // Once a lockout window has elapsed, clear the counter so the operator gets a
-  // fresh set of MAX_AUTH_FAILURES attempts. Without this, failures stays >=
-  // MAX_AUTH_FAILURES after the first lockout, so the very next wrong attempt
-  // immediately re-locks for another window — effectively one try every 15 min.
+  // Clear the counter once a lockout elapses, or the next wrong attempt re-locks
+  // immediately and the operator gets one try every 15 minutes.
   if (rec && rec.lockedUntil > 0 && rec.lockedUntil <= now) {
     rec.failures = 0;
     rec.lockedUntil = 0;
@@ -76,9 +60,7 @@ export function requireAdmin(req, res, next) {
   const header = req.headers.authorization || '';
   if (header.startsWith('Basic ')) {
     try {
-      // Split on the FIRST colon only: per RFC 7617 the userid can't contain a
-      // colon but the password can, so split(':') would truncate any password
-      // with a ':' in it and reject otherwise-correct credentials.
+      // First colon only: per RFC 7617 the password may contain colons.
       const decoded = Buffer.from(header.slice(6), 'base64').toString('utf8');
       const sep = decoded.indexOf(':');
       const u = sep === -1 ? decoded : decoded.slice(0, sep);

@@ -1,22 +1,11 @@
-// PocketTTS client — two modes:
+// PocketTTS client, two modes. Sidecar (config.ttsHeavy.url set): speak() POSTs
+// to the subwave-tts-heavy container and isAvailable() reads a cached /health
+// probe. Local spawn (--build-arg WITH_POCKETTTS=1): pocket_tts_worker.py stays
+// resident, one JSON request per line over stdio.
 //
-// 1. Sidecar mode (when config.ttsHeavy.url is set). speak() POSTs to the
-//    subwave-tts-heavy container (docker/Dockerfile.tts-heavy +
-//    docker/tts-heavy/server.py). isAvailable() reads the cached result of
-//    a periodic /health probe. This is the default deployment story for
-//    operators on the pre-built ghcr.io images (issue #103).
-//
-// 2. Local-spawn mode (the original). pocket_tts_worker.py loads the
-//    kyutai-labs PocketTTS model once and stays resident, reading one JSON
-//    request per line over stdin and emitting one JSON response per line
-//    on stdout. This is the legacy --build-arg WITH_POCKETTTS=1 path in
-//    docker/Dockerfile.controller; kept working for backwards compat.
-//
-// Voice selection: a built-in voice id (alba, anna, charles, …) plays the
-// curated voice; a `.wav` filename triggers zero-shot cloning against the
-// shared voice folder (config.voices.dir, with a fallback read of legacy
-// chatterbox-voices/). Issue #213 wired up cloning — earlier versions exposed
-// the built-in ids only.
+// Voice selection: a built-in id (alba, anna, …) plays the curated voice; a
+// `.wav` filename triggers zero-shot cloning against config.voices.dir, with a
+// fallback read of the legacy chatterbox-voices/ (#213).
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -29,12 +18,10 @@ import {
 } from './ttsHeavyClient.js';
 import { resolveTtsOutPath } from './tts-out.js';
 
-// PocketTTS' 100M-param model is smaller than Chatterbox Turbo but the first
-// call still needs to import torch and warm the Hugging Face cache.
+// The first call still imports torch and warms the Hugging Face cache.
 const READY_TIMEOUT_MS = 60_000;
-// ~6x real-time on a modern CPU per the upstream README (~200ms TTFB), so a
-// typical DJ line should finish in well under 10s. 120s ceiling is the
-// pessimistic "first-call-after-cold-boot, slow disk" budget.
+// ~6x real-time on a modern CPU, so a DJ line finishes well under 10s. The 120s
+// ceiling is the first-call-after-cold-boot, slow-disk budget.
 const REQUEST_TIMEOUT_MS = parseInt(process.env.POCKET_TTS_REQUEST_TIMEOUT_MS || '120000', 10);
 
 type PendingRequest = {
@@ -45,10 +32,8 @@ type PendingRequest = {
 
 let worker: PocketTtsWorker | null = null;
 let bootingPromise: Promise<PocketTtsWorker> | null = null;
-// Whether the local-spawn worker can do voice cloning (gated kyutai/pocket-tts
-// weights present). null until the worker has booted and reported it via its
-// ready message; cloningAvailable() returns it for the local path. The sidecar
-// path uses `remoteCloning` instead (set by the /health probe loop). See #238.
+// Local-spawn cloning capability (gated weights present); null until the worker
+// reports it in its ready message. The sidecar path uses `remoteCloning`. #238.
 let localCloning: boolean | null = null;
 
 class PocketTtsWorker {
@@ -82,21 +67,16 @@ class PocketTtsWorker {
       this.failReady(new Error('pocket-tts worker ready timeout'));
     }, READY_TIMEOUT_MS);
 
-    // A spawn that never starts emits 'error', not 'exit'. Node throws an
-    // unhandled 'error' event out of the event loop, which takes the WHOLE
-    // controller down — every engine here is opt-in or build-time-installed
-    // (pocket-tts's interpreter is absent whenever its venv/model install did
-    // not happen), and POST /settings/tts/preview deliberately bypasses
-    // isAvailable() so the operator can test an engine the dispatcher would
-    // skip. That combination turns an admin "Play sample" press into total
-    // dead air. Route it into failReady() like every other boot failure: the
-    // caller's promise rejects, the dispatcher falls back, the station keeps
-    // making sound. piper has always done this (audio/piper.ts).
+    // A spawn that never starts emits 'error', not 'exit', and an unhandled
+    // 'error' event takes the whole controller down. This engine's interpreter
+    // is absent whenever its venv install did not happen, and
+    // POST /settings/tts/preview bypasses isAvailable() on purpose. Route it
+    // into failReady() like every other boot failure: the caller's promise
+    // rejects, the dispatcher falls back, the station keeps making sound.
     this.proc.on('error', (err: Error) => {
       console.error(`[pocket-tts] worker spawn failed: ${err.message}`);
       this.fatalError = err;
-      // No pending requests can exist yet: speak() awaits readyPromise before
-      // it enqueues anything, so rejecting that promise is the whole failure.
+      // No pending requests can exist yet: speak() awaits readyPromise first.
       this.failReady(err);
     });
 
@@ -198,11 +178,9 @@ async function ensureWorker(): Promise<PocketTtsWorker> {
   }
 }
 
-// Reap the resident worker on shutdown. Docker tears down the container's whole
-// process group, so this only matters on the bare-process path (npm start / dev)
-// where the spawned Python child would otherwise be orphaned. In sidecar mode no
-// local worker is ever spawned, so this is a no-op. Best-effort: SIGTERM the
-// proc if we hold one and drop the handle.
+// Reap the resident worker on shutdown. Only matters on the bare-process path
+// (npm start / dev); Docker tears down the whole process group, and sidecar mode
+// spawns nothing. Best-effort SIGTERM.
 export function stop(): void {
   const w = worker;
   worker = null;
@@ -211,11 +189,10 @@ export function stop(): void {
 
 const WAV_RE = /^[A-Za-z0-9_.-]{1,80}\.wav$/i;
 
-// Split a persona's `tts.voice` into the two fields the worker needs.
-// - `.wav` filename or absolute path → reference cloning. The base voice falls
-//   back to the configured default so the model still has a speaker prior to
-//   anchor against if the reference load fails.
-// - Anything else → built-in voice id, no reference path.
+// Split a persona's `tts.voice` into the two fields the worker needs: a `.wav`
+// filename or absolute path is reference cloning (base voice falls back to the
+// configured default so a failed reference load still has a speaker prior),
+// anything else is a built-in voice id.
 function resolveVoice(value?: string): { voice: string; referenceWav: string } {
   const v = (value || '').trim();
   if (!v) return { voice: config.pocketTts.defaultVoice, referenceWav: '' };
@@ -229,10 +206,9 @@ function resolveVoice(value?: string): { voice: string; referenceWav: string } {
     if (existsSync(legacy)) {
       return { voice: config.pocketTts.defaultVoice, referenceWav: legacy };
     }
-    // File missing — let the worker surface the failure and fall back to the
-    // default voice, mirroring chatterbox's behaviour when a reference is
-    // unreadable. The canonical path goes on the wire so the error message
-    // points at the right place.
+    // File missing: let the worker surface the failure and fall back to the
+    // default voice, like chatterbox does. The canonical path goes on the wire
+    // so the error message points at the right place.
     return { voice: config.pocketTts.defaultVoice, referenceWav: primary };
   }
   return { voice: v, referenceWav: '' };
@@ -263,8 +239,7 @@ export async function speak(
     reference_wav: referenceWav,
     out: outPath,
   });
-  // Make a silent voice substitution visible (issue #238) — mirrors the
-  // logging speakRemote() does on the sidecar path.
+  // Make a silent voice substitution visible (#238), like speakRemote() does.
   if (msg.fell_back) {
     console.warn(
       `[pocket-tts] requested voice "${referenceWav || resolvedVoice}" not honoured`
@@ -274,11 +249,10 @@ export async function speak(
   return msg.path;
 }
 
-// In sidecar mode this is the cached result of the /health probe loop; the
-// dispatcher reads it synchronously so we can't await per-call. In local
-// mode it's existsSync on the venv interpreter and worker script — true in
-// a --build-arg WITH_POCKETTTS=1 image, false in the default image — which
-// is what lets the dispatcher fall back to Piper.
+// Sidecar mode: the cached /health probe result (the dispatcher reads this
+// synchronously, so it can't await). Local mode: existsSync on the venv
+// interpreter and worker script, false in the default image, which is what lets
+// the dispatcher fall back to Piper.
 let remoteAvailable = false;
 let remoteCloning: boolean | null = null;
 if (isRemoteEnabled()) {
@@ -293,12 +267,9 @@ export function isAvailable() {
   return existsSync(config.pocketTts.python) && existsSync(config.pocketTts.workerScript);
 }
 
-// Whether PocketTTS can do zero-shot voice cloning (the gated kyutai/pocket-tts
-// weights loaded). Returns null when not yet known — the sidecar is still
-// booting, or (local mode) the worker hasn't been spawned yet, since it only
-// reports the capability in its ready message. Surfaced via tts.availableEngines()
-// / describeRouting() so the admin UI can warn that cloned voices won't take
-// effect (issue #238) rather than letting them silently revert.
+// Whether zero-shot cloning is possible (gated weights loaded); null when not
+// yet known (sidecar booting, or no worker spawned yet). Surfaced so the admin
+// UI can warn instead of letting a cloned voice silently revert (#238).
 export function cloningAvailable(): boolean | null {
   if (isRemoteEnabled()) return remoteCloning;
   return localCloning;

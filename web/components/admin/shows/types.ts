@@ -1,7 +1,5 @@
-// Shapes the shows panel and its editor share.
-//
-// Every cap below re-exports the shared show schema's own constant under a
-// local name, so nothing here can drift from the controller.
+// Shapes the shows panel and its editor share. Every cap re-exports the shared
+// show schema's own constant, so nothing here can drift from the controller.
 
 import {
   EXCLUDED_PLAYLISTS_PER_SHOW,
@@ -26,27 +24,19 @@ export const TOPIC_MAX = SHOW_TOPIC_MAX;
 export const SHOWS_MAX = SHOWS_LIMIT;
 export const GUESTS_MAX = GUESTS_PER_SHOW;
 export const PLAYLISTS_MAX = PLAYLISTS_PER_SHOW;
-// Deliberately separate from PLAYLISTS_MAX: the same figure today, but one name
-// covering both is how they would silently stop being.
+// Deliberately separate from PLAYLISTS_MAX: same figure today, different rule.
 export const EXCLUDED_PLAYLISTS_MAX = EXCLUDED_PLAYLISTS_PER_SHOW;
 export const TAGS_MAX = TAGS_PER_SHOW_LIMIT;
 export const TAG_MAX = SHOW_TAG_MAX;
 export const TAG_RE = SHOW_TAG_RE;
-// The era-window year bounds the schema's own showYear enforces. Re-exported
-// for the <input min/max> and the error copy only — the TEST itself is the
-// schema's own `validEraYear`, imported rather than re-derived from these two,
-// so the Add button can never accept a year the save then refuses.
+// Year bounds for the <input min/max> and the error copy only. The TEST is the
+// schema's own `validEraYear`, imported rather than re-derived from these.
 export const YEAR_MIN = SHOW_YEAR_MIN;
 export const YEAR_MAX = SHOW_YEAR_MAX;
 
-/** How much the panel knows about the live Navidrome playlist index.
- *
- * Three states, not a loaded/not-loaded boolean: an empty `playlists` array
- * means something different in each, and only `ready` licenses the editor to
- * call a show's pinned id missing. A boolean collapses `loading` and `error`
- * into one bucket, and whichever way that bucket renders is wrong for the other
- * half of it — a spinner that never resolves, or a "no playlists" line shown
- * while the fetch is still in flight. */
+/** Three states, not a loaded/not-loaded boolean: an empty `playlists` array
+ *  means something different in each, and only `ready` licenses the editor to
+ *  call a show's pinned id missing. */
 export type PlaylistIndexStatus = 'loading' | 'ready' | 'error';
 
 export interface Show {
@@ -58,69 +48,56 @@ export interface Show {
   guestPersonaIds: string[];
   /** Multi-voice exchanges, up to twice an hour. Only meaningful with guests set. */
   banter: boolean;
-  /** [] = Any — the show pins no mood; the autonomous mood (festival >
-   *  weather > time of day) applies while it's on air. Multi-value (#929):
-   *  any selected mood satisfies the filter, all weighted equally. */
+  /** [] = Any: the autonomous mood applies while the show is on air.
+   *  Multi-value (#929), all selected moods weighted equally. */
   moods: string[];
-  /** Empty = fall back to the station default. Validated against the live theme
-   *  registry by the controller; a stale id silently falls back too. */
+  /** Empty = station default. A stale id silently falls back too. */
   themeId: string;
   /** Soft leans applied at pick time, each multi-value (#929): OR within the
-   *  attribute, AND across attributes. Empty = no constraint. Genres are free text
-   *  resolved fuzzily against the library. */
+   *  attribute, AND across attributes. Genres are free text resolved fuzzily. */
   genres: string[];
   eras: EraWindow[];
   energies: string[];
-  /** Single-valued, unlike the lists above: the two states are mutually
-   *  exclusive. '' = no constraint, and is what every show predating the field
-   *  carries. Backed by vocal-activity analysis, so it only steers tracks that
-   *  have had a vocal pass. */
+  /** Single-valued: the two states are mutually exclusive. '' = no constraint.
+   *  Only steers tracks that have had a vocal-activity pass. */
   vocals: '' | 'instrumental' | 'vocal';
-  /** With ≥1 music filter set, EVERY set filter becomes HARD instead of a soft
-   *  lean; off-filter tracks only play as a last resort. The controller does NOT
-   *  auto-migrate legacy `genreStrict` shows — they load soft. */
+  /** With >=1 music filter set, EVERY set filter becomes HARD instead of a soft
+   *  lean. Legacy `genreStrict` shows are NOT auto-migrated; they load soft. */
   filtersStrict: boolean;
-  /** Per-show track-length cap (seconds). null = inherit the station default;
-   *  0 = unlimited (opt this show out of the cap so it can air long mixes);
-   *  >0 = this show's own cap. */
+  /** Per-show track-length cap (seconds). null = inherit station default,
+   *  0 = unlimited, >0 = this show's cap. */
   maxTrackSeconds: number | null;
-  /** Per-show minimum track length (seconds) — the floor that keeps 40-second
-   *  skits, interludes and album intros out of the pick pool (#1573). null =
-   *  inherit the station default; 0 = no floor; >0 = this show's own floor.
-   *  Unlike the cap this is a SELECTION filter: a short track cannot be
-   *  lengthened on air the way a long one is cut. */
+  /** Per-show minimum track length (seconds) (#1573). null = inherit, 0 = no
+   *  floor. A SELECTION filter, unlike the cap: a short track can't be grown. */
   minTrackLengthSeconds: number | null;
-  /** Fade this show's last track out at the show change instead of letting it
-   *  spill into the next show (#1574). TRI-STATE: null = inherit the station
-   *  default, true/false = this show's own answer. */
+  /** Fade the last track out at the show change (#1574). TRI-STATE: null =
+   *  inherit the station default. */
   fadeAtShowEnd: boolean | null;
   /** The union of these playlists becomes the show's candidate pool. Empty = no anchor. */
   playlistIds: string[];
   /** With ≥1 playlist pinned, the playlist is the show's ENTIRE universe;
    *  off-playlist tracks only play as a never-starve fallback. */
   playlistStrict: boolean;
-  /** Every track in the anchor plays once before any of them repeats (#1612).
-   *  Inert without playlistStrict — a soft anchor's universe is the library. */
+  /** Every track in the anchor plays once before any repeats (#1612). Inert
+   *  without playlistStrict. */
   playlistExhaust: boolean;
   /** Excluded from the candidate pool regardless of the other filters. */
   excludedPlaylistIds: string[];
-  /** The show airs as a produced episode: intro, a planned feature segment
-   *  mid-hour, a sign-off, all driven by the topic brief. */
+  /** The show airs as a produced episode: intro, feature segment, sign-off. */
   programme: boolean;
-  /** Pin the feature segment to one skill. Empty = the producer picks per episode.
+  /** Pin the feature segment to one skill. Empty = producer picks per episode.
    *  Only used with programme on. */
   segmentSkill: string;
   /** Operator organisation tags. They filter and group this list and nothing
-   *  else — the picker, the DJ agent and every public route are blind to them. */
+   *  else -- picker, DJ agent and public routes are blind to them. */
   tags: string[];
 }
 
 /** Mirrors the controller's EraWindow. Multiple windows let a show span
- *  non-adjacent decades ("90s + 2010s"). */
+ *  non-adjacent decades. */
 export interface EraWindow { fromYear: number | null; toYear: number | null }
 
-// One entry of GET /shows/community: persona-agnostic, no owner and no schedule.
-// Install drops it in as a fresh unscheduled show owned by the active persona.
+// One entry of GET /shows/community: persona-agnostic, no owner, no schedule.
 export interface CommunityShow {
   slug: string;
   name: string;
@@ -152,17 +129,14 @@ export const DECADES: { key: string; label: string; from: number; to: number }[]
   { key: '1950', label: '50s', from: 1950, to: 1959 },
 ];
 export const ENERGY_OPTIONS: readonly string[] = SHOW_ENERGY;
-// '' is the absent third state and deliberately has no chip — clearing the
-// selection is how you get back to it. Labels are UI copy ("vocals" reads
-// better as a chip than the schema's "vocal"), so only the KEYS come from the
-// schema; a value added there without a label here shows its raw key rather
-// than vanishing.
+// '' is the absent third state and has no chip; clearing the selection gets
+// back to it. Only the KEYS come from the schema, so a value added there
+// without a label here shows its raw key rather than vanishing.
 const VOCAL_LABELS: Record<string, string> = { instrumental: 'instrumental', vocal: 'vocals' };
 export const VOCAL_OPTIONS = SHOW_VOCALS.map((key) => ({ key, label: VOCAL_LABELS[key] ?? key }));
 export const ANY_SENTINEL = '__any__';
-// Radix Select refuses an empty string value, and `null` is not a value at
-// all — the tri-state "inherit" needs its own token, exactly as ANY_SENTINEL
-// stands in for ''.
+// Radix Select refuses an empty string value and `null` is not a value at all,
+// so the tri-state "inherit" needs its own token.
 export const INHERIT_SENTINEL = '__inherit__';
 export const FILTER_VALUES_MAX = SHOW_FILTER_VALUES_MAX;
 
@@ -172,17 +146,10 @@ export function sameEra(a: EraWindow, b: { from: number | null; to: number | nul
   return a.fromYear === bf && a.toYear === bt;
 }
 /** Resolve the add-a-range inputs into a window to push onto `eras` (#1599).
- *
- * Returns a reason rather than throwing: the two inputs sit inside the eras
- * group, so a bad draft is reported next to the Add button and nothing reaches
- * the form array. Either bound may be blank — an open-ended "2026+" is a legal
- * window — but a window with NO bound is the absent state the schema drops,
- * not a filter. Duplicates are refused rather than appended so that a range
- * spelling out a decade lights that chip instead of stacking beside it.
- *
- * The year test is the schema's own `validEraYear` off the mirror, never a
- * local re-derivation of it around YEAR_MIN/YEAR_MAX: half the rule restated
- * is half the rule free to drift. */
+ *  Returns a reason rather than throwing. Either bound may be blank (an open
+ *  "2026+" is legal) but a window with NO bound is the absent state. Duplicates
+ *  are refused so a range spelling out a decade lights that chip. The year test
+ *  is the schema's own `validEraYear`, never re-derived from YEAR_MIN/MAX. */
 export function resolveEraDraft(
   from: string,
   to: string,
@@ -190,8 +157,7 @@ export function resolveEraDraft(
 ): { window: EraWindow } | { error: string } {
   const parse = (raw: string): number | null | undefined => {
     // The trim is the editor's, not the schema's: a draft box legitimately
-    // holds whitespace mid-keystroke, while `eraYearOf` on the wire reads a
-    // blank-but-not-empty string as malformed rather than as an open end.
+    // holds whitespace mid-keystroke.
     const v = raw.trim();
     if (!v) return null;
     const n = Number(v);
@@ -254,14 +220,11 @@ export interface FormState {
   schedule: Schedule;
 }
 
-// The react-hook-form shape. `schedule` is not form data — the panel reads it
+// The react-hook-form shape. `schedule` is not form data -- the panel reads it
 // for the hours-a-week counts and the Rundown page owns PUT /schedule.
-//
 // Hand-written rather than derived from z.input<typeof showSchema>: that input
-// type is `unknown` all the way down (the legacy-field migration wraps the
-// object in a z.preprocess, and most fields are pipelines of their own), so no
-// nested path would type-check as a FieldPath. `Show` is what the schema's
-// parse actually produces.
+// type is `unknown` all the way down, so no nested path would type-check as a
+// FieldPath. `Show` is what the schema's parse actually produces.
 export interface ShowsFormValues {
   shows: Show[];
 }
@@ -271,7 +234,7 @@ export interface SettingsResponse {
     shows?: Array<Partial<Show>>;
     schedule?: Schedule;
     personas?: Persona[];
-    /** Crossfade-relative floor for a non-zero per-show cap OR minimum track
+    /** Crossfade-relative floor for a non-zero per-show cap or minimum track
      *  length (server-computed). */
     minTrackSeconds?: number;
     /** Station-wide picking windows; `minTrackLengthSeconds` is the default a

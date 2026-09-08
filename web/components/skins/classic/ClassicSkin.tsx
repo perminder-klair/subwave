@@ -94,9 +94,8 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
     }),
     [upcomingCount],
   );
-  // Queue head for CenterStage's "up next" tease. Reduced to the two fields it
-  // renders and memoized on them, so the fresh array every /state poll doesn't
-  // re-render the memoized stage.
+  // Queue head for CenterStage's "up next" tease, reduced to the two fields it
+  // renders so the fresh array each /state poll doesn't re-render the stage.
   const nextTitle = state.upcoming?.[0]?.title;
   const nextArtist = state.upcoming?.[0]?.artist;
   const upNext = useMemo<QueueEntry | null>(
@@ -128,9 +127,8 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
     } catch {}
   }, []);
 
-  // Increments only on keyboard-driven adjusts; the TransportBar pulses its
-  // cells off it. Knob drags must NOT tick it — the cells track the finger
-  // pixel-for-pixel during a drag and a pulse would fight that.
+  // Increments only on keyboard-driven adjusts (TransportBar pulses off it).
+  // Knob drags must NOT tick it: the cells track the finger during a drag.
   const [volumePulse, setVolumePulse] = useState(0);
   const adjustVolume = (delta: number) => {
     setVolume(v => Math.min(1, Math.max(0, Math.round((v + delta) * 100) / 100)));
@@ -157,8 +155,8 @@ export default function ClassicSkin({ portalNode }: SkinProps) {
     { disabled: paletteOpen || shortcutsOpen },
   );
 
-  // The controller accepts in ~50ms and returns a request id; the matching
-  // runs in the booth, and the drawer polls pollRequest() for the outcome.
+  // The controller returns a request id immediately; matching runs in the booth
+  // and the drawer polls pollRequest() for the outcome.
   const submitRequest = async (): Promise<RequestResult | null> => {
     if (!requestText.trim() || isSubmitting) return null;
     setIsSubmitting(true);

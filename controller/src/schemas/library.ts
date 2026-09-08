@@ -1,23 +1,10 @@
-// Shared library-maintenance schemas — the operator-facing bodies under
-// /library that carry typed input rather than a bare id: `POST
-// /library/manual-tag` (tag this track, or its whole album, by hand — no LLM
-// involved) and `POST /library/original-year` (the operator's own answer to
-// "what year was this actually recorded", behind the same row editor), and
-// `POST /library/scenes/merge` (consolidate near-duplicate genre tags), plus
-// the one RESPONSE shape that crosses the same boundary — the referenced-by
-// warning a scene merge carries (#1593), which the browser renders before the
-// operator confirms.
+// Shared library-maintenance schemas — POST /library/manual-tag,
+// /library/original-year and /library/scenes/merge, plus the referenced-by
+// warning a merge response carries (#1593).
 //
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle, so a project import or a node builtin here breaks the mirror.
-//
-// WHY A FACTORY
-// -------------
-// Moods are operator-editable (settings.moodVocab()), so a manual tag can only
-// be judged against the LIVE vocabulary — the same reason showSchema takes a
-// context. `moodNames: null` means "this caller cannot check that rule", which
-// is what lets the browser pre-flight the shape of a body whose vocabulary it
-// may not have fetched yet while the route still enforces membership.
+// A FACTORY because moods are operator-editable: `moodNames: null` means "this
+// caller cannot check that rule", so the browser can pre-flight the shape while
+// the route enforces membership.
 import { z } from 'zod';
 
 /** At most three moods per track — the tagger's own ceiling. */
@@ -34,8 +21,7 @@ export const MANUAL_TAG_SHAPE_ONLY: ManualTagContext = { moodNames: null };
 
 export function manualTagSchema(ctx: ManualTagContext) {
   return z.object({
-    // `!id || typeof id !== 'string'` — so a blank string is refused too, and
-    // with the same message, which is what the route has always answered.
+    // A blank string is refused too, with the same message.
     id: z.unknown().optional().transform((raw, c) => {
       if (typeof raw !== 'string' || !raw) {
         c.addIssue({ code: 'custom', message: 'id is required' });
@@ -43,10 +29,8 @@ export function manualTagSchema(ctx: ManualTagContext) {
       }
       return raw;
     }),
-    // An EMPTY array is meaningful: it clears the track's tags entirely and
-    // returns it to the untagged pool. So this is required-but-may-be-empty,
-    // never defaulted — a missing key and an explicit [] must not be the same
-    // request.
+    // An EMPTY array clears the track's tags, so this is required-but-may-be-
+    // empty, never defaulted: a missing key and an explicit [] differ.
     moods: z
       .array(z.unknown(), { error: 'moods must be an array of strings' })
       .transform((items, c) => {
@@ -71,8 +55,7 @@ export function manualTagSchema(ctx: ManualTagContext) {
         }
         return values;
       }),
-    // null is the explicit "no energy", distinct from an omission only in that
-    // both land on null — matching `req.body?.energy ?? null`.
+    // null is the explicit "no energy"; an omission lands on null too.
     energy: z.preprocess(
       (v) => (v === undefined ? null : v),
       z
@@ -81,30 +64,24 @@ export function manualTagSchema(ctx: ManualTagContext) {
         })
         .nullable(),
     ),
-    // `=== true`, so anything else reads as off — unchanged.
+    // `=== true`, so anything else reads as off.
     applyToAlbum: z.unknown().optional().transform((v) => v === true),
   });
 }
 
-// ── POST /library/original-year ──────────────────────────────────────────────
-// The operator's manual era override (issue #1418). The automatic pipeline
-// resolves an original year from the album tag or MusicBrainz, and on a reissue
-// anthology both are wrong by construction — the tag carries the reissue's date
-// and MB is never asked, because the lookup is gated on a compilation flag
-// those albums do not set. This is the escape hatch: someone holding the sleeve
-// types the real year.
+// POST /library/original-year — the operator's manual era override (#1418), the
+// escape hatch for reissue anthologies the automatic pipeline gets wrong.
 
-/** Floor for a plausible recording year — mirrors musicbrainz.ts MIN_YEAR.
- *  Duplicated rather than imported: this file may import only 'zod'. */
+/** Floor for a plausible recording year. Mirrors musicbrainz.ts MIN_YEAR. */
 export const ORIGINAL_YEAR_MIN = 1900;
 
 export function originalYearSchema() {
-  // Evaluated per request, not at module load: a schema frozen at boot would
-  // start refusing next January.
+  // Per request, not at module load: a schema frozen at boot starts refusing
+  // next January.
   const max = new Date().getUTCFullYear() + 1;
   return z.object({
-    // Same wording and same blank-string refusal as manualTagSchema — one
-    // editor posts to both routes and must not get two dialects of "no id".
+    // Same wording and blank-string refusal as manualTagSchema: one editor
+    // posts to both routes.
     id: z.unknown().optional().transform((raw, c) => {
       if (typeof raw !== 'string' || !raw) {
         c.addIssue({ code: 'custom', message: 'id is required' });
@@ -112,12 +89,9 @@ export function originalYearSchema() {
       }
       return raw;
     }),
-    // null CLEARS the override and hands the track back to the automatic
-    // pipeline, so it is a real value here rather than an omission: a missing
-    // key is a malformed request, not "clear it". Numeric strings are accepted
-    // because the field is typed into an <input>, but a non-integer or an
-    // out-of-window year is refused rather than rounded — a silently repaired
-    // year is indistinguishable on air from a correct one.
+    // null CLEARS the override; a missing key is a malformed request, not
+    // "clear it". Numeric strings accepted (<input>), but a non-integer or
+    // out-of-window year is refused rather than rounded.
     originalYear: z.unknown().transform((raw, c) => {
       if (raw === null) return null;
       const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
@@ -134,32 +108,26 @@ export function originalYearSchema() {
       }
       return n;
     }),
-    // `=== true`, matching manualTagSchema. An anthology is wrong a whole album
-    // at a time, so this is the common case here rather than the exception.
+    // `=== true`, matching manualTagSchema.
     applyToAlbum: z.unknown().optional().transform((v) => v === true),
   });
 }
 
-// ── POST /library/scenes/merge ───────────────────────────────────────────────
-// Scene-vocabulary consolidation (issue #1577). "Scene" is the operator-facing
-// word for a genre tag; the body names the values to retire and the one that
-// survives. Both halves are typed here because a wrong `to` is not recoverable
-// from the UI: the rows are rewritten in place, so the retired spellings are
-// gone until the next Navidrome walk.
+// POST /library/scenes/merge — scene-vocabulary consolidation (#1577). "Scene"
+// is the operator word for a genre tag. A wrong `to` is not recoverable from the
+// UI: rows are rewritten in place and the retired spellings are gone until the
+// next Navidrome walk.
 
-/** How many values one merge may retire at once. Ticking a whole noisy tail is
- *  the point, so this is generous; it exists to bound the SQL parameter list. */
+/** How many values one merge may retire at once; bounds the SQL parameter list. */
 export const SCENE_MERGE_SOURCES_MAX = 100;
 
-/** Longest scene value accepted as a merge target. Navidrome genre tags are
- *  short; a longer string is a paste accident, not a genre. */
+/** Longest scene value accepted as a merge target. */
 export const SCENE_VALUE_MAX = 120;
 
 export function sceneMergeSchema() {
   return z.object({
-    // Every entry is matched against the EXACT stored value, which is what the
-    // listing hands the operator — so blanks and non-strings are refused
-    // rather than trimmed into something that matches a different row.
+    // Matched against the EXACT stored value, so blanks and non-strings are
+    // refused rather than trimmed into something matching a different row.
     from: z
       .array(z.unknown(), { error: 'from must be an array of scene values' })
       .transform((items, c) => {
@@ -181,9 +149,8 @@ export function sceneMergeSchema() {
         }
         return values;
       }),
-    // Trimmed, because this one is TYPED (the target may be a new spelling that
-    // is in no list yet) and a trailing space would file a second scene beside
-    // the one the operator meant.
+    // Trimmed: the target is TYPED (it may be a new spelling), and a trailing
+    // space would file a second scene beside the one meant.
     to: z.unknown().transform((raw, c) => {
       const value = typeof raw === 'string' ? raw.trim() : '';
       if (!value) {
@@ -199,24 +166,14 @@ export function sceneMergeSchema() {
   });
 }
 
-// ── The referenced-by warning on a scene merge (#1593) ───────────────────────
-// A merge retires a source value. Case and punctuation variants keep matching
-// through show-filter's normGenre ("rock" → "Rock", "Hip-Hop" → "Hip Hop"), so
-// those merges orphan nothing; a SEMANTIC rename ("trip-hop" → "downtempo")
-// leaves every show, blocklist rule and playlist filter still naming the
-// retired value selecting nothing on that value, with no error and no visible
-// cause.
-//
-// The scan behind this shape lives in music/scene-references.ts — it needs
-// show-filter's matcher, which this file may not import. Only the SHAPE is
-// here, because it crosses to the browser: the Scene vocabulary section shows
-// the warning before the operator confirms, and again on the merge response.
-//
-// Naming the affected shows is the whole value of the warning. A generic "this
-// may affect filters" is the non-advice the operator already assumed.
+// The referenced-by warning on a scene merge (#1593). A semantic rename
+// ("trip-hop" → "downtempo") leaves every show, rule and playlist filter naming
+// the retired value selecting nothing, with no error. The scan lives in
+// music/scene-references.ts (it needs show-filter's matcher); only the SHAPE is
+// here, because it crosses to the browser.
 
 /** Where a retired scene can still be named. A bare union: nothing validates
- *  against these at a boundary, so there is no runtime list to keep. */
+ *  against it at a boundary, so there is no runtime list. */
 export type SceneReferenceKind = 'show' | 'rule' | 'playlist';
 
 /** One filter that names a value this merge retires and would stop catching it. */
@@ -226,12 +183,10 @@ export interface SceneReference {
   id: string;
   /** What the operator calls it: show name, rule label, playlist name. */
   name: string;
-  /** Its values that NAME a scene this merge retires — the value IS that
-   *  scene, not something broader that also caught it — and that do not catch
-   *  the survivor. */
+  /** Its values that NAME a retired scene (not something broader that also
+   *  caught it) and do not catch the survivor. */
   orphaned: string[];
-  /** The REST of this filter's own list, and nothing more. Empty means the
-   *  orphaned values were all it had; it is NOT a claim that the filter now
-   *  matches no tracks, which would need the whole tag set walked. */
+  /** The REST of this filter's own list. Empty means the orphaned values were
+   *  all it had — NOT a claim that the filter now matches no tracks. */
   remaining: string[];
 }

@@ -1,22 +1,9 @@
-// The referenced-by warning on a scene merge (#1593), split out of #1591 where
-// it was raised against #1580.
-//
-// A merge retires a source value. The library ends up correct either way — the
-// operator asked for it — but a show, blocklist rule or playlist filter still
-// naming the retired spelling then matches nothing, with no error and no
-// visible cause: the schedule quietly stops working. The warning names which.
-//
-// The boundary this file exists to hold is which merges are HARMLESS. Show
-// filters resolve through show-filter's normGenre + genreMatches, which fold
-// case AND punctuation and let a track's tag refine the filter — so "rock" →
-// "Rock" and "Hip-Hop" → "Hip Hop" orphan nothing, and warning about them is
-// how the operator learns to click past the warning that matters.
-//
-// The same cuts the other way, which is the subtler half: a "Punk" show CATCHES
-// "Punk Rock" by refinement, so retiring "Punk Rock" narrows that show without
-// orphaning anything — every track tagged plain "Punk" still matches. Both
-// directions are pinned below, because only one of them is obvious.
-//
+// The referenced-by warning on a scene merge (#1593). A merge retires a source
+// value, and a show, blocklist rule or playlist filter still naming it then
+// matches nothing, silently. The boundary held here is which merges are HARMLESS:
+// show filters fold case AND punctuation and let a track's tag refine the filter,
+// so "rock" → "Rock" and "Hip-Hop" → "Hip Hop" orphan nothing — and, the subtler
+// half, a "Punk" show catches "Punk Rock", so retiring it narrows without orphaning.
 // Run: npm test -- scene-references
 
 import assert from 'node:assert/strict';
@@ -30,9 +17,7 @@ import test from 'node:test';
 const STATE = mkdtempSync(join(tmpdir(), 'subwave-scene-refs-'));
 process.env.STATE_DIR = STATE;
 
-// The three stores are read from disk, so they are written BEFORE the modules
-// that read them are imported — that is the shape a real controller boots in,
-// and the whole point of the integration half below.
+// The three stores are read from disk, so they are written before their importers.
 writeFileSync(
   join(STATE, 'schedule.json'),
   JSON.stringify({
@@ -102,9 +87,6 @@ const show = (id: string, name: string, values: string[]): SceneFilter =>
 const tagRule = (id: string, name: string, values: string[]): SceneFilter =>
   ({ kind: 'rule', mode: 'tag', id, name, values });
 
-// ---------------------------------------------------------------------------
-// The boundary: which merges orphan a filter and which do not
-// ---------------------------------------------------------------------------
 
 test('a semantic rename orphans the filter that names the retired value', () => {
   const out = refs.orphanedFilters([show('sh1', 'Night Bus', ['Trip Hop'])], ['trip-hop'], 'Downtempo');
@@ -115,10 +97,8 @@ test('a semantic rename orphans the filter that names the retired value', () => 
 });
 
 test('a case-only merge orphans nothing', () => {
-  // "rock" → "Rock" is a real merge — two distinct stored rows, and the rule
-  // is what stops the next walk writing the retired spelling back — but the
-  // filter never noticed the difference, because normGenre folds case. A
-  // warning here is a warning on the most common merge in the section.
+  // "rock" → "Rock" is a real merge (two stored rows), but normGenre folds case,
+  // so no filter noticed the difference.
   assert.deepEqual(refs.orphanedFilters([show('sh1', 'Loud Hour', ['rock'])], ['rock'], 'Rock'), []);
   assert.deepEqual(refs.orphanedFilters([show('sh1', 'Loud Hour', ['Rock'])], ['rock'], 'Rock'), []);
   assert.deepEqual(refs.orphanedFilters([show('sh1', 'Loud Hour', ['ROCK'])], ['Rock'], 'rock'), []);
@@ -152,13 +132,9 @@ test('a filter the survivor still refines is not orphaned', () => {
 });
 
 test('a filter that only CATCHES the retired value has narrowed, not broken', () => {
-  // The bug this criterion exists to fix. A "Punk" show catches "Punk Rock" by
-  // refinement, so a one-way test called it orphaned the moment punk rock went
-  // anywhere else — and then, with no other value on the show, the panel said
-  // it would match no tracks at all. Every track tagged plain "Punk" still
-  // matches it. Narrowing is real, but it happens on nearly every merge that
-  // touches an overlapping genre, and a list mixing it with real breakage is
-  // the generic non-advice this feature replaces.
+  // A "Punk" show catches "Punk Rock" by refinement, so a one-way test called it
+  // orphaned. Narrowing happens on nearly every overlapping merge and drowns the
+  // warnings that are real breakage.
   assert.deepEqual(
     refs.orphanedFilters([show('sh1', 'Basement', ['Punk'])], ['Punk Rock'], 'Downtempo'),
     [],
@@ -206,9 +182,7 @@ test('remaining is the rest of that filter\'s own list', () => {
   );
   assert.equal(out.length, 1);
   assert.deepEqual(out[0].orphaned, ['Trip-Hop']);
-  // The other value on the SAME show, and nothing more — deliberately not a
-  // claim that Ambient still matches anything, which would need the whole tag
-  // set walked.
+  // The other value on the SAME show only, not a claim that Ambient still matches.
   assert.deepEqual(out[0].remaining, ['Ambient']);
 });
 
@@ -225,9 +199,6 @@ test('a filter value that normalises to nothing is never reported', () => {
   assert.deepEqual(refs.orphanedFilters([show('sh1', 'Odd', ['—'])], ['trip-hop'], 'Downtempo'), []);
 });
 
-// ---------------------------------------------------------------------------
-// Projections — where a genre filter lives
-// ---------------------------------------------------------------------------
 
 test('shows project on genres, and a show with none is not a filter', () => {
   assert.deepEqual(
@@ -275,9 +246,6 @@ test('playlist recipes project on knobs.genres', () => {
   ]);
 });
 
-// ---------------------------------------------------------------------------
-// The gatherer — against the three real stores
-// ---------------------------------------------------------------------------
 
 test('the scan reads shows, blocklist rules and playlist recipes', async () => {
   await settings.load();
@@ -285,8 +253,6 @@ test('the scan reads shows, blocklist rules and playlist recipes', async () => {
 
   const found = refs.collectSceneFilters();
   const byId = new Map(found.map(f => [f.id, f]));
-  // A pure test would pass on all of this while reading the wrong store, or
-  // the wrong field of the right one.
   assert.equal(byId.get('sh_night')?.kind, 'show');
   assert.deepEqual(byId.get('sh_night')?.values, ['Trip Hop']);
   assert.equal(byId.get('r_trip')?.kind, 'rule');
@@ -305,9 +271,7 @@ test('the scan reads shows, blocklist rules and playlist recipes', async () => {
 test('a semantic rename names every kind that still references it', async () => {
   const out = await refs.sceneReferences(['Trip-Hop', 'trip-hop', 'Trip Hop'], 'Downtempo');
   const names = out.map(r => `${r.kind}:${r.id}`).sort();
-  // The tag rule is in because this merge retires "trip-hop" VERBATIM, which
-  // is its value; the route test below shows the same rule staying out when
-  // only the spaced spelling is retired.
+  // The tag rule is in because this merge retires "trip-hop" verbatim.
   assert.deepEqual(
     names,
     ['playlist:pl_1', 'rule:r_tag', 'rule:r_trip', 'show:sh_mixed', 'show:sh_night'],
@@ -326,13 +290,9 @@ test('the harmless merge produces no warning against the real stores', async () 
 });
 
 test('a punctuation merge is harmless to genre filters and NOT to a tag rule', async () => {
-  // "Trip-Hop" → "trip hop" is a pure punctuation fold, so every genre filter
-  // rides it out — normGenre never saw the hyphen. The tag rule spelled
-  // "trip-hop" does not: its predicate folds case and whitespace only, so the
-  // genre it used to catch is now spelled a way it cannot match. This is the
-  // whole reason tag rules are scanned with their own predicate rather than
-  // waved off as "not scenes" — a scan that ran one fold over both stores
-  // would report this merge as harmless, and it is not.
+  // "Trip-Hop" → "trip hop" is a pure punctuation fold, so genre filters ride it
+  // out. The tag rule does not: its predicate folds case and whitespace only, which
+  // is why tag rules are scanned with their own predicate rather than waved off.
   const out = await refs.sceneReferences(['Trip-Hop'], 'trip hop');
   assert.deepEqual(out.map(r => r.id), ['r_tag']);
   assert.deepEqual(out[0]!.orphaned, ['trip-hop']);
@@ -340,18 +300,14 @@ test('a punctuation merge is harmless to genre filters and NOT to a tag rule', a
 });
 
 test('the target is resolved through the rule set before the scan', async () => {
-  // The operator types a target that is itself already retired. recordMerge
-  // resolves it through to the survivor, so the warning has to as well —
-  // otherwise the preview names a show the merge will not actually break.
+  // The typed target is itself already retired; recordMerge resolves it through to
+  // the survivor, so the warning has to as well.
   await sceneVocab.recordMerge(['Downtempo'], 'Ambient Techno');
   try {
-    // Slow Motion filters on "Ambient", which is the retired spelling. What
-    // actually survives is "Ambient Techno" — which "Ambient" still catches by
-    // refinement — so the show loses nothing.
+    // Slow Motion filters on "Ambient", the retired spelling; "Ambient Techno"
+    // survives and "Ambient" still catches it by refinement.
     const out = await refs.sceneReferences(['ambient'], 'Downtempo');
     assert.equal(out.some(r => r.id === 'sh_mixed'), false);
-    // Judged against the TYPED target it would have been reported as breaking,
-    // so this is the resolution doing the work and not an unreachable filter.
     const typed = refs.orphanedFilters(refs.collectSceneFilters(), ['ambient'], 'Downtempo');
     assert.deepEqual(typed.find(r => r.id === 'sh_mixed')?.orphaned, ['Ambient']);
   } finally {
@@ -359,15 +315,6 @@ test('the target is resolved through the rule set before the scan', async () => 
   }
 });
 
-// ---------------------------------------------------------------------------
-// The routes — the surface the admin panel actually calls
-//
-// requireAdmin is a no-op with ADMIN_USER/ADMIN_PASS unset (middleware/auth.ts),
-// so the router mounts bare. The point of this half is that the PREVIEW and the
-// MERGE answer the same question: the panel warns before the confirm and shows
-// the result afterwards, and the two disagreeing is the failure that would make
-// the warning worse than none.
-// ---------------------------------------------------------------------------
 
 delete process.env.ADMIN_USER;
 delete process.env.ADMIN_PASS;
@@ -404,11 +351,9 @@ test('POST /library/scenes/references names what a rename would orphan', async (
   const res = await post('/library/scenes/references', { from: ['Trip Hop'], to: 'Downtempo' });
   assert.equal(res.status, 200);
   const found = res.body.references as SceneReferenceRow[];
-  // Every spelling that folds onto "Trip Hop" through normGenre is named, not
-  // just the one the operator ticked: Slow Motion's "trip-hop" is the same
-  // filter as far as the picker is concerned. The TAG rule spelled "trip-hop"
-  // is not, because its own predicate does not fold the hyphen — the two
-  // stores disagree here on purpose, and the scan has to disagree with them.
+  // Every spelling that folds onto "Trip Hop" through normGenre is named, not just
+  // the one the operator ticked. The TAG rule spelled "trip-hop" is not: its own
+  // predicate does not fold the hyphen, and the scan has to disagree with it.
   assert.deepEqual(
     found.map(r => `${r.kind}:${r.id}`).sort(),
     ['playlist:pl_1', 'rule:r_trip', 'show:sh_mixed', 'show:sh_night'],
@@ -428,8 +373,7 @@ test('the preview and the merge response give the same answer', async () => {
   const merged = await post('/library/scenes/merge', { from: ['Trip Hop'], to: 'Downtempo' });
   assert.equal(merged.status, 200);
   assert.equal(merged.body.tracksChanged, 1);
-  // Warning only: the merge ran, in full, with the shows left exactly as they
-  // were. Blocking it or repointing the filter are both bigger decisions.
+  // Warning only: the merge ran in full with the shows left exactly as they were.
   assert.deepEqual(db.getTrack('t1')!.genres, ['Downtempo']);
   assert.deepEqual(merged.body.references, preview.body.references);
   assert.equal((merged.body.references as SceneReferenceRow[]).length, 4);

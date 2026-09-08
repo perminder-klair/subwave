@@ -6,14 +6,11 @@ import Tooltip, { type TipState } from './Tooltip';
 import { StatsView, Dossier } from './panels';
 import { buildMockLibrary, buildMockDetail, nearest, type ObsTrack } from './data';
 
-// The Library Observatory embedded on the public landing page. Runs entirely
-// on the seeded mock library + mock dossier — no admin auth, no controller, no
-// real catalogue — so a first-time visitor sees it without a backing install.
+// The Library Observatory embedded on the public landing page. Runs on the
+// seeded mock library + mock dossier only: no admin auth, no controller.
 //
-// Two columns mirror /observatory minus the filter rail: constellation left,
-// right rail showing the pre-selected track's Dossier, falling back to
-// StatsView when closed. colour-by is pinned to ENERGY. Mounted via
-// next/dynamic({ ssr: false }) by the embed wrapper, so the map's client-only
+// Two columns mirror /observatory minus the filter rail, with colour-by pinned
+// to ENERGY. Mounted via next/dynamic({ ssr: false }), so the map's client-only
 // APIs never run during SSR.
 
 export default function ObservatoryShowcase() {
@@ -42,8 +39,8 @@ export default function ObservatoryShowcase() {
   // Synthesised detail for the open node, deterministic off its seed.
   const detail = useMemo(() => (selected ? buildMockDetail(selected) : null), [selected]);
 
-  // Stable identities, or the galaxy's attribute-refresh effects re-run on the
-  // re-render a hover triggers.
+  // Stable identities, or the galaxy's attribute-refresh effects re-run on
+  // every hover re-render.
   const onHover = useCallback((t: ObsTrack | null, e?: React.MouseEvent) => {
     if (!t || !e) {
       setTip(null);

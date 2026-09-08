@@ -1,16 +1,9 @@
-// Genre suggestions for the show editor's "genre lean" field.
+// Genre suggestions for the show editor's "genre lean" field, behind
+// GET /library/genres/related. Adjacency is genre→genre cosine similarity over
+// each genre's mean text-embedding (library-db.genreCentroids).
 //
-// The embedding data's real value at a single-value field is *adjacency*: given
-// a genre, what else sounds like it. We compute that as genre→genre cosine
-// similarity over each genre's mean text-embedding (the centroid; see
-// library-db.genreCentroids) and return the nearest neighbours per genre.
-// Backs GET /library/genres/related → the related-genre chips
-// (web/components/admin/GenreSuggest.tsx).
-//
-// Also returns the full genre list (by track count) so the picker can offer
-// popular quick-picks when the field is empty and substring matches while the
-// operator types — both useful even with no embeddings, where `related` is
-// simply empty and `hasEmbeddings` is false.
+// Also returns the full genre list by track count, which works with no
+// embeddings at all — `related` is then empty and `hasEmbeddings` false.
 
 import * as db from './library-db.js';
 import * as library from './library.js';
@@ -27,11 +20,8 @@ export interface GenreSuggest {
   computedAt: string;
 }
 
-// Nearest neighbours kept per genre. Eight is enough to surface the obvious
-// cousins without turning into a wall of chips.
 const NEIGHBOURS = 8;
-// Cosine below this isn't a meaningful neighbour — drop it rather than pad the
-// list with unrelated genres.
+// Cosine below this isn't a meaningful neighbour.
 const MIN_SIM = 0.2;
 const MIN_FOR_EMBEDDINGS = 3;
 
@@ -47,8 +37,7 @@ export function buildGenreSuggest(): GenreSuggest {
   const centroidCount = new Map(centroids.map((c) => [c.genre, c.count]));
   const countOf = (g: string) => byGenre[g] ?? centroidCount.get(g) ?? 0;
 
-  // Full genre list — union of the tagged-index genres and any genre that has a
-  // centroid — sorted by how much music sits under it.
+  // Union of the tagged-index genres and any genre with a centroid.
   const names = new Set<string>([...Object.keys(byGenre), ...centroids.map((c) => c.genre)]);
   const genres: GenreItem[] = [...names]
     .map((value) => ({ value, songCount: countOf(value) }))

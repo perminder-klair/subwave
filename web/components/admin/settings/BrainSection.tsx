@@ -17,22 +17,16 @@ interface BrainSectionProps extends SectionProps {
   refresh: () => void;
 }
 
-// One-field setup for the hosted "DJ Brain" — a single OpenAI-compatible proxy
-// that fronts BOTH the chat LLM and the cloud TTS voice. The operator pastes one
-// base URL + one access token here and Save wires both settings blocks at once:
-// settings.llm as provider 'openai-compatible', and settings.tts.cloud as an
-// enabled 'openai-compatible' voice with sendSpeed on (the DJ Brain voice
-// honours the native `speed` field, so we skip the local atempo stretch). A
-// convenience wrapper over the LLM provider + TTS voice sections — either can
-// still be tuned individually there.
+// One-field setup for the hosted "DJ Brain": one OpenAI-compatible base URL +
+// token, wired into BOTH settings.llm (provider 'openai-compatible') and
+// settings.tts.cloud in one Save. A convenience wrapper over the LLM provider
+// and TTS voice sections.
 export function BrainSection({ data, form, saveSettings, adminFetch, refresh, busy }: BrainSectionProps) {
-  // Prefill from whatever the two blocks already hold, but only when they're
-  // actually pointed at an openai-compatible endpoint — otherwise the fields
-  // would show an unrelated OpenAI / ElevenLabs model id.
+  // Prefill only when both blocks already point at an openai-compatible
+  // endpoint, else the fields show an unrelated model id.
   const llmCompat = form.llm.provider === 'openai-compatible';
   const ttsCompat = form.tts.cloud.provider === 'openai-compatible';
-  // The LLM form keeps one base URL per provider (providerBaseUrls), so the
-  // compat entry is the one this section shares with the voice.
+  // One base URL per provider; the compat entry is the one shared with the voice.
   const llmCompatBaseUrl = form.llm.providerBaseUrls?.['openai-compatible'] ?? '';
   const [baseUrl, setBaseUrl] = useState(
     llmCompat ? llmCompatBaseUrl : (ttsCompat ? form.tts.cloud.baseUrl : ''),
@@ -45,14 +39,9 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
   const [test, setTest] = useState<{ ok: boolean; message: string; latencyMs: number } | null>(null);
   const [testing, setTesting] = useState(false);
 
-  // This section's fields are plain local state, not FormState, so the panel's
-  // form-vs-baseline diff can never see an edit here. SettingsPanel only mounts
-  // the save slot while SOMETHING is dirty, so without reporting it ourselves
-  // SaveBar portals into nothing and the section renders no Save button at all
-  // — the same reason LlmSection/TtsSection/LibrarySection pass `dirty` for
-  // their own local key inputs. Compare against the values we mounted with
-  // rather than against `form`, so a save (which refreshes `form`) settles
-  // back to clean instead of latching dirty forever.
+  // These fields are local state, not FormState, so the panel's form-vs-baseline
+  // diff cannot see them; report `dirty` ourselves or SaveBar renders no button.
+  // Compare against the mounted values so a save settles back to clean.
   const initial = useRef({ baseUrl, chatModel, voiceModel, voiceName });
   const dirty =
     !!token.trim() ||
@@ -61,12 +50,9 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
     voiceModel !== initial.current.voiceModel ||
     voiceName !== initial.current.voiceName;
 
-  // Wiring the brain sets the station's default engine to cloud, but a persona
-  // that PINS a local engine beats that default and keeps speaking through it —
-  // which is how a paying Brain + Cloud Voice customer used to hear Piper and
-  // nothing in the logs. List them so the operator can see it before it happens.
-  // The helper is mirrored from controller/src/schemas/persona.ts so the browser
-  // and the server answer "would this persona follow?" the same way.
+  // A persona that PINS an engine beats the station default, so list the ones
+  // that will not follow. The helper mirrors controller/src/schemas/persona.ts
+  // so browser and server answer "would this persona follow?" alike.
   const personas = (((data.values ?? {}) as { personas?: unknown }).personas) as
     | Array<{
         id?: unknown;
@@ -74,23 +60,14 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
         tts?: { engine?: unknown; cloudProvider?: unknown } | null;
       }>
     | undefined;
-  // 'openai-compatible' and not just 'cloud': the four cloud providers share one
-  // dispatcher but are independent targets, so a persona pinned to cloud/openai
-  // is no more able to reach the DJ Brain voice than one pinned to piper. Naming
-  // the provider is what stops the warning reporting "nothing outstanding" about
-  // a roster that still cannot speak through the voice being paid for.
+  // 'openai-compatible', not just 'cloud': the four cloud providers share a
+  // dispatcher but are independent targets, so cloud/openai cannot reach this
+  // voice either.
   const pinned = personasPinningOtherEngine(personas, 'cloud', 'openai-compatible');
 
-  // The station's current TTS engine, and whether Save may take it.
-  //
-  // JUDGEMENT CALL, resolved to the SAFER side: Save used to set
-  // tts.defaultEngine: 'cloud' unconditionally, so an operator who had
-  // deliberately put the station on Kokoro and came back only to rotate the
-  // token or fix a model id silently lost that choice, with nothing to undo it
-  // by. An engine already on 'piper' is the shipped default nobody chose, so
-  // taking that one is what "wire the brain and its voice" means; anything else
-  // is a decision the operator made and Save now leaves it alone and says so,
-  // with a button to change it deliberately.
+  // The station's current TTS engine, and whether Save may take it. Only 'piper'
+  // (the shipped default nobody chose) is taken automatically; any other engine
+  // is an operator decision, left alone with a button to change it deliberately.
   const stationEngine = String(
     (((data.values ?? {}) as { tts?: { defaultEngine?: unknown } }).tts ?? {})
       .defaultEngine ?? 'piper',
@@ -103,9 +80,7 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
     refresh();
   };
 
-  // One click: point exactly those personas at the station default and leave
-  // every other field alone. update() replaces the whole personas array, so the
-  // untouched rows ride along verbatim.
+  // update() replaces the whole personas array, so untouched rows ride along.
   const useStationDefault = async () => {
     if (!Array.isArray(personas)) return;
     const ids = new Set(pinned.map((p) => p.id));
@@ -119,19 +94,14 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
     refresh();
   };
 
-  // Redaction sentinel from getRedacted(): 'set' means a token is already on
-  // file for that block. Both blocks share the same DJ Brain token in practice.
+  // Redaction sentinel from getRedacted(): 'set' = a token is already on file.
   const values = (data.values ?? {}) as Record<string, unknown>;
   const llmKeys = ((values.llm as { keys?: Record<string, unknown> } | undefined)?.keys) || {};
   const llmKeyOnFile = llmKeys['openai-compatible'] === 'set';
   const ttsCloud = (values.tts as { cloud?: { apiKey?: unknown } } | undefined)?.cloud;
   const ttsKeyOnFile = ttsCloud?.apiKey === 'set';
   const keysOnFile = llmKeyOnFile && ttsKeyOnFile;
-  // Three states, not two. A section that says a flat red "token not set" while
-  // the brain half is genuinely configured reads as broken — which is exactly
-  // what an operator sees straight after the onboarding wizard, since that
-  // wires settings.llm and leaves the voice for this section. Name the half
-  // that is missing, and keep red for "neither".
+  // Three states, not two: name the half that is missing, keep red for neither.
   const keyState: 'both' | 'partial' | 'none' =
     keysOnFile ? 'both' : (llmKeyOnFile || ttsKeyOnFile) ? 'partial' : 'none';
   const missingHalf = llmKeyOnFile ? 'voice (Cloud TTS)' : 'brain (LLM)';
@@ -151,8 +121,7 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
     none: 'No token saved yet for the brain or the voice. Paste it above and Save.',
   }[keyState];
 
-  // Reuse the LLM openai-compatible probe (POST /settings/llm/probe-compat) to
-  // verify the base URL + token + chat model before saving.
+  // Reuse POST /settings/llm/probe-compat to verify URL + token + model.
   const testConnection = async () => {
     if (!baseUrl.trim()) { setTest({ ok: false, message: 'Enter a Base URL first', latencyMs: 0 }); return; }
     if (!chatModel.trim()) { setTest({ ok: false, message: 'Enter a Chat model first', latencyMs: 0 }); return; }
@@ -174,9 +143,8 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
 
   const save = async () => {
     const url = baseUrl.trim();
-    // The hosted DJ Brain exposes `dj-brain` / `dj-brain-voice` — fall back to
-    // those when the operator leaves a model blank so a bare one-field setup
-    // still saves (the compat blocks reject an empty model id).
+    // Fall back to the hosted model ids on a blank field: the compat blocks
+    // reject an empty model id.
     const chat = chatModel.trim() || 'dj-brain';
     const voiceM = voiceModel.trim() || 'dj-brain-voice';
     const voiceV = voiceName.trim();
@@ -186,17 +154,12 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
         provider: 'openai-compatible',
         baseUrl: url,
         model: chat,
-        // Only send the key when one was typed — an absent apiKey leaves the
-        // stored token untouched (settings.update routes it via applyInlineKey,
-        // and the redaction sentinel is a no-op there too).
+        // Only send the key when typed; an absent apiKey leaves the stored one.
         ...(typedToken ? { apiKey: typedToken } : {}),
       },
       tts: {
-        // The voice half of "wire the brain and its voice": without it the cloud
-        // block is configured and never reached, because tts.defaultEngine stays
-        // piper and every persona on 'inherit' follows it. Withheld when the
-        // operator has deliberately chosen some other engine — see
-        // engineIsDeliberate above; the notice offers it as an explicit click.
+        // Without this the cloud block is configured but never reached, since
+        // defaultEngine stays piper. Withheld on a deliberate engine choice.
         ...(engineIsDeliberate ? {} : { defaultEngine: 'cloud' }),
         cloud: {
           enabled: true,
@@ -204,8 +167,7 @@ export function BrainSection({ data, form, saveSettings, adminFetch, refresh, bu
           baseUrl: url,
           model: voiceM,
           voice: voiceV,
-          // DJ Brain voice honours native `speed`, so skip the local atempo
-          // stretch (issue #942 escape hatch).
+          // Voice honours native `speed`, so skip the local atempo stretch (#942).
           sendSpeed: true,
           ...(typedToken ? { apiKey: typedToken } : {}),
         },

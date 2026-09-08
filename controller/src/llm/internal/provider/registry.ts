@@ -1,22 +1,6 @@
-// Provider registry — the one place SUB/WAVE decides which LLM to talk to.
-//
-// Every model call in the controller resolves its model through here, so the
-// operator can switch providers (homelab Ollama ↔ Anthropic ↔ OpenAI ↔ Google
-// Gemini ↔ DeepSeek ↔ OpenRouter ↔ the Vercel AI Gateway) from the admin Settings UI
-// without a redeploy and without touching a single call site.
-//
-// The active provider/model lives in `settings.llm` (see settings.js):
-//   { provider:  'ollama' | 'openai-compatible' | 'locca' | 'anthropic' |
-//                'openai' | 'google' | 'deepseek' | 'openrouter' | 'requesty' |
-//                'gateway',
-//     model:     string,   // empty → provider default
-//     apiKey:    string,   // empty → read the provider's env var
-//     ollamaUrl: string,   // empty → config.ollama.url default (Ollama only)
-//     baseUrl:   string,   // server URL (openai-compatible; locca → host default)
-//     headers:   {},       // extra request headers (openai-compatible/locca)
-//     reasoning: boolean } // false → suppress <think> chain-of-thought
-//
-// `ollama` is the default and needs no key. The cloud providers are opt-in.
+// Provider registry: resolves and caches the LanguageModel for `settings.llm`.
+// Every model call goes through here; call sites never name a provider.
+// `ollama` is the default and needs no key; cloud providers are opt-in.
 
 import { createGateway } from 'ai';
 import { createOllama } from 'ai-sdk-ollama';
@@ -30,29 +14,22 @@ import * as settings from '../../../settings.js';
 import { recordRawRequest, rawDebugEnabled } from '../telemetry/raw-debug.js';
 import { capabilitiesFor, appliedRepeatPenalty, appliedNumCtx } from './capabilities.js';
 
-// Memoise built clients so we don't reconstruct a provider on every call.
-// Keyed by a signature that changes whenever provider/model/key changes, so a
-// settings edit is picked up on the next call with no explicit invalidation.
+// Built clients, keyed by a signature covering every field captured at
+// construction, so a settings edit is picked up with no explicit invalidation.
 const clientCache = new Map();
 
 export function llmCfg() {
   const llm = settings.get().llm
     || { provider: 'ollama', model: '', apiKey: '', ollamaUrl: '', baseUrl: '', reasoning: false };
   // The stored `apiKey` slot is legacy (always '' after settings.load()); the
-  // active key is resolved per-provider from settings.llm.keys (issue #657).
-  // Empty → every provider case below falls through to its env var, as before.
-  // Embedding inheritance reads llm.apiKey from here too, so it stays correct.
+  // active key is resolved per-provider from settings.llm.keys (#657). Empty →
+  // the provider cases below fall through to their env var.
   return { ...llm, apiKey: settings.llmKeyFor(llm.provider) };
 }
 
-// When raw-request debug capture is enabled (LLM_DEBUG_RAW env flag or the
-// settings.llm.debugRawRequests admin toggle), record the exact outbound body —
-// verbatim, the JSON string as actually sent — before delegating to the real
-// fetch. This is the single capture point: it's wired into EVERY provider's
-// `fetch` option in languageModel() below, so capture is provider-agnostic.
-// Gated at call time, so when disabled it's one boolean check then a plain
-// passthrough — zero behavioural change, no file writes. Only method + URL +
-// body are recorded; Authorization and other headers are never touched.
+// Single raw-request capture point, wired into every provider's `fetch` option
+// in languageModel(). Gated at call time; records method + URL + body only,
+// never headers.
 export function debugFetch(url: any, init: any) {
   if (rawDebugEnabled()) {
     try {
@@ -67,14 +44,10 @@ export function debugFetch(url: any, init: any) {
   return fetch(url, init);
 }
 
-// When reasoning is disabled, llama.cpp / vLLM / LM Studio honour
-// chat_template_kwargs.enable_thinking=false — the Qwen3 (and similar)
-// chat template then omits the <think> priming entirely, so the model
-// never starts a chain-of-thought. Injected via a fetch wrapper because
-// the AI SDK's openai provider has no first-class field for it. `baseFetch`
-// is the transport to delegate to once the body is rewritten — debugFetch in
-// languageModel() (so the captured body is the post-injection one as sent),
-// global fetch for callers that don't compose it (e.g. onboarding probes).
+// llama.cpp / vLLM / LM Studio honour chat_template_kwargs.enable_thinking=false;
+// the AI SDK's openai provider has no field for it, so it is injected into the
+// body. `baseFetch` is the transport to delegate to once rewritten — debugFetch
+// in languageModel() (so the capture is post-injection), global fetch elsewhere.
 export function noThinkFetch(url: any, init: any, baseFetch: any = fetch) {
   if (init?.body && typeof init.body === 'string') {
     try {
@@ -90,57 +63,26 @@ export function noThinkFetch(url: any, init: any, baseFetch: any = fetch) {
 }
 
 // Fetch wrapper for the openai-compatible / locca (llama.cpp / vLLM / LM Studio)
-// path. The AI SDK's openai provider has no first-class field for these knobs,
-// and it validates providerOptions against its own schema — so anything not in
-// that schema is dropped. We inject them straight into the JSON request body
-// instead (servers ignore keys they don't recognise, same bet the existing
-// chat_template_kwargs injection already makes):
-//   • repeat_penalty — llama.cpp defaults to 1.0 (OFF), so without this the
-//     operator's configured floor is never applied and the tool-loop agent can
-//     run away repeating a token block. This is the ONLY path that carries it to
-//     the agent/object calls. llama.cpp's param name; vLLM's is
-//     `repetition_penalty`. Set llm.repeatPenalty to 1.0 to opt out. The
-//     never-clobber guard is inert in practice and is NOT how a configured
-//     penalty goes missing — @ai-sdk/openai has no such field and drops it from
-//     providerOptions, so the key is only ever on the body if we put it there.
-//     #1327 looked like this guard and was settings.load() dropping the field;
-//     check `settings.get().llm.repeatPenalty` before touching it.
-//   • reasoning off → enable_thinking:false PLUS reasoning_format PLUS an
-//     OpenRouter-style `reasoning:{enabled:false}` block (reasoningMandatoryModel
-//     below carries the effort:'minimal' exception). All three are needed
-//     because each covers a different server:
-//       - chat_template_kwargs is a llama.cpp dialect and does nothing on a
-//         CLOUD aggregator behind this provider — measured 57/96 with 16 leaked
-//         cells for qwen3.5-9b via openrouter.ai, vs 86/96 through the native
-//         openrouter provider, which sends the `reasoning` block.
-//       - Gemma-4's chat template pre-seeds an empty <|channel|>thought block
-//         even with enable_thinking:false, and with reasoning_format unset
-//         llama.cpp routes that thought to `content`, where it leaks into the
-//         script and reaches TTS. reasoning_format:"deepseek" routes it to
-//         reasoning_content, which the SDK surfaces as a reasoning part.
-//       - GLM-family models (Zhipu/Z.ai) ignore enable_thinking entirely and
-//         read a top-level `thinking.type` instead, so their hidden
-//         chain-of-thought burned through the output/step budget before a forced
-//         tool call could land — multi-minute calls, or "agent did not call the
-//         done tool before stopping".
-//   • parallel_tool_calls:false on tool-bearing requests — absent, llama.cpp
-//     takes the chat template's capability default, true for Gemma-4 templates;
-//     the model then emits several tool calls in one turn and the peg-gemma4
-//     parser 500s on call #2, failing the whole attempt (#940). The agent design
-//     is one call per step anyway. Only sent when tools are present — strict
-//     servers reject the field on tool-less requests.
+// path. @ai-sdk/openai drops anything outside its own providerOptions schema, so
+// these knobs are injected into the JSON body (servers ignore keys they don't know):
+//   • repeat_penalty — llama.cpp defaults to 1.0 (off); this is the only path
+//     that carries the operator's floor to the agent/object calls. vLLM spells
+//     it `repetition_penalty`. If a configured penalty goes missing, check
+//     `settings.get().llm.repeatPenalty` first — #1327 was settings.load()
+//     dropping the field, not the never-clobber guard here.
+//   • reasoning off → enable_thinking:false + reasoning_format + an
+//     OpenRouter-style `reasoning` block; each covers a different server
+//     (llama.cpp dialect, Gemma-4 leaking thought into `content`, GLM reading
+//     top-level `thinking.type`). reasoningMandatoryModel carries the
+//     effort:'minimal' exception.
+//   • parallel_tool_calls:false, only when tools are present (strict servers
+//     reject the field otherwise) — the agent is one call per step, and the
+//     peg-gemma4 parser 500s on a second call in one turn (#940).
 //
-// `forceNoThink` suppresses thinking on THIS instance even with reasoning left
-// on: the forced-tool structured-output legs run no-think so a reasoning model
-// doesn't burn its output budget thinking and then truncate mid-<think>
-// (NoObjectGeneratedError on every pick) or fail to emit the forced tool.
-//
-// Body injection is the ONLY no-think lever these self-hosted servers have —
-// unlike Anthropic/DeepSeek (per-call providerOptions) and OpenRouter
-// (construction-time) — so forceNoThink must be honoured here, via a distinct
-// no-think model instance for the picker legs (languageModel's bodyNoThink).
-// Without it a reasoning-on locca/openai-compatible model failed schema
-// validation on picks and looped </think> at handoffs (#914).
+// `forceNoThink` suppresses thinking on THIS instance even with reasoning on:
+// body injection is bound at construction, so the picker's forced-tool legs need
+// their own no-think model (languageModel's bodyNoThink) or they truncate
+// mid-<think> (#914).
 export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoThink = false) {
   const penalty = appliedRepeatPenalty(cfg);
   const noThink = forceNoThink || cfg?.reasoning !== true;
@@ -175,75 +117,54 @@ export function openAICompatibleFetch(cfg: any, baseFetch: any = fetch, forceNoT
   };
 }
 
-// Reasoning-MANDATORY model families 400 on a hard reasoning disable
-// (`reasoning:{enabled:false}`): OpenAI's gpt-5/o-series ("Reasoning is
-// mandatory for this endpoint") and reasoning-only DeepSeek R1 variants. Every
-// model accepts `effort:'minimal'`, which satisfies the mandate while dropping
-// thinking low enough that forced tool calls still land. Shared by the
-// openrouter construction wiring and the openai-compatible body injection —
-// kept broad at openai/* (harmlessly dropped on non-reasoning openai models;
-// gpt-4o-mini benched clean with it).
+// Model families that 400 on `reasoning:{enabled:false}` (OpenAI gpt-5/o-series,
+// DeepSeek R1 variants) and must be minimised with `effort:'minimal'` instead.
+// Deliberately broad at openai/* — harmless on non-reasoning openai models.
 export function reasoningMandatoryModel(id: string): boolean {
   return /^openai\//i.test(id) || /(^|\/)deepseek-r1/i.test(id);
 }
 
-// Ollama server URL — from settings (admin UI), falling back to the config
-// default when the settings field is left blank.
+// Ollama server URL: settings field, else the config default.
 export function ollamaBaseUrl(cfg: any): string {
   return cfg.ollamaUrl || config.ollama.url;
 }
 
-// Default base URL for the `locca` provider — a locca-served llama.cpp on the
-// host, reachable from the controller container via host.docker.internal. The
-// operator can still override it (settings `llm.baseUrl`) for a non-default
-// port / remote host; an explicit value always wins.
+// Chat default for the `locca` provider (llama.cpp on the host). settings
+// `llm.baseUrl` overrides.
 export const DEFAULT_LOCCA_BASE_URL = 'http://host.docker.internal:8080/v1';
 
-// Effective base URL for the `locca` provider: the settings field if set, else
-// the host default. Used by the builder and the cache signature so a blank
-// field and the resolved default key to the same client.
+// Used by the builder and the cache signature, so a blank field and the
+// resolved default key to the same client.
 export function loccaBaseUrl(cfg: any): string {
   return cfg.baseUrl || DEFAULT_LOCCA_BASE_URL;
 }
 
-// locca runs embeddings on a SEPARATE server (`locca embed`) on its own port —
-// a chat llama.cpp server can't also serve embeddings. locca's default embed
-// port is 8090, so embeddings get their own host default, distinct from the
-// chat default above. Operator still overrides via settings.embedding.baseUrl.
+// locca runs embeddings on a separate server (`locca embed`, port 8090) — a
+// chat llama.cpp server can't also serve embeddings, so this default is
+// distinct from the chat one. settings.embedding.baseUrl overrides.
 export const DEFAULT_LOCCA_EMBED_BASE_URL = 'http://host.docker.internal:8090/v1';
 
-// Effective base URL for a locca EMBEDDING server: the (embedding) settings
-// field if set, else the host embed default. Mirrors loccaBaseUrl but points at
-// the dedicated embed port so a blank field resolves to `locca embed`, not chat.
 export function loccaEmbedBaseUrl(cfg: any): string {
   return cfg.baseUrl || DEFAULT_LOCCA_EMBED_BASE_URL;
 }
 
-// Requesty is an OpenAI-compatible LLM gateway (provider/model naming, e.g.
-// openai/gpt-4o-mini). Like openrouter it's a fixed-endpoint aggregator — one
-// key, any vendor — so the base URL isn't operator-configurable; the chat path
-// goes through createOpenAI with this base, keyed by REQUESTY_API_KEY.
+// Requesty is a fixed-endpoint OpenAI-compatible aggregator, so the base URL is
+// not operator-configurable. Keyed by REQUESTY_API_KEY.
 export const DEFAULT_REQUESTY_BASE_URL = 'https://router.requesty.ai/v1';
 
-// OpenRouter app attribution (openrouter.ai/docs/app-attribution): HTTP-Referer
-// is the app's identity in OpenRouter's rankings (required for an app page),
-// X-Title its display name. Sent on every OpenRouter request — chat, embeddings,
-// and the key-validation probes — so usage shows up as SUB/WAVE, not anonymous.
+// OpenRouter app attribution (openrouter.ai/docs/app-attribution). Sent on every
+// OpenRouter request — chat, embeddings and the key-validation probes.
 export const OPENROUTER_APP_HEADERS = {
   'HTTP-Referer': 'https://getsubwave.com',
   'X-Title': 'SUB/WAVE',
 } as const;
 
-// Build a LanguageModel for any self-hosted OpenAI-compatible server (llama.cpp,
-// vLLM, LM Studio, locca). `.chat()` pins /v1/chat/completions — these servers
-// don't implement the Responses API the default `provider(id)` would target.
-// Most accept any non-empty key, so fall back to a placeholder. The fetch
-// wrapper injects the body-only knobs (repeat_penalty, and — reasoning off —
-// enable_thinking:false + reasoning_format); see openAICompatibleFetch.
+// LanguageModel for any self-hosted OpenAI-compatible server (llama.cpp, vLLM,
+// LM Studio, locca). `.chat()` pins /v1/chat/completions — these servers don't
+// implement the Responses API the default `provider(id)` would target. Most
+// accept any non-empty key, so fall back to a placeholder.
 function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: string, forceNoThink = false) {
-  // debugFetch is the inner transport, so what's recorded is the body exactly
-  // as sent (post-injection). forceNoThink builds the picker's no-think variant
-  // (see languageModel) — thinking suppressed even with operator reasoning on.
+  // debugFetch is the inner transport, so the capture is the body as sent.
   const fetchImpl = openAICompatibleFetch(cfg, debugFetch, forceNoThink);
   const headers = customHeaders(cfg);
   const provider = createOpenAI({
@@ -251,29 +172,19 @@ function openAICompatibleModel(cfg: any, id: string, baseURL: string, name: stri
     apiKey: cfg.apiKey || 'unused',
     name,
     fetch: fetchImpl,
-    // Omitted entirely when nothing is configured, so an untouched station
-    // builds the client with exactly the fields it did before (#1618).
+    // Omitted entirely when unconfigured, so an untouched station is
+    // byte-identical (#1618).
     ...(headers ? { headers } : {}),
   });
   return provider.chat(id);
 }
 
 // The operator's extra request headers for this leg (settings llm.headers /
-// llm.fallback.headers), or undefined when there are none.
-//
-// This is where a gateway that routes on a header rather than the bearer token
-// alone is satisfied — OpenCode Zen Go's `x-opencode-session` is the case
-// #1618 was filed for, but nothing here knows that name: the map is opaque and
-// any gateway needing an auth or routing header is covered by the same field.
-// It rides the AI SDK's own `headers` option, the same channel OpenRouter's app
-// attribution already uses.
-//
-// Only the openai-compatible transport (openai-compatible + locca) reads it —
-// that is the provider whose endpoint the operator chose, so it is the only one
-// whose gateway they can be standing in front of. Every hosted provider has a
-// fixed endpoint we own the wiring for. Values are stored verbatim; the shape
-// rules (name grammar, printable-ASCII values, caps) are enforced at the save
-// path in settings/vocab.ts, so this never has to repair one.
+// llm.fallback.headers), or undefined when there are none (#1618). The map is
+// opaque — nothing here names a specific header. Only the openai-compatible
+// transport (openai-compatible + locca) reads it; every hosted provider has a
+// fixed endpoint. Shape rules are enforced at the save path in settings/vocab.ts,
+// so this never repairs a value.
 export function customHeaders(cfg: any): Record<string, string> | undefined {
   const raw = cfg?.headers;
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
@@ -285,21 +196,18 @@ export function customHeaders(cfg: any): Record<string, string> | undefined {
   return Object.keys(out).length ? out : undefined;
 }
 
-// Cache-signature form of the header map: stable regardless of key order, and
-// '' when there are none, so a station that has never set one keys exactly as
-// it did before the field existed. Headers are captured at CONSTRUCTION like
-// repeat_penalty and num_ctx, so leaving them out of the signature would leave
-// an operator's edit — or a failover to a leg with a different header set —
-// hitting the client built with the old headers until the controller restarts.
+// Cache-signature form of the header map: key-order stable, '' when empty.
+// Headers are captured at CONSTRUCTION (like repeat_penalty and num_ctx), so
+// they must key the cache or an edit — or a failover to a leg with different
+// headers — keeps hitting the old client until restart.
 export function headersSig(cfg: any): string {
   const h = customHeaders(cfg);
   if (!h) return '';
   return Object.keys(h).sort().map((k) => `${k}=${h[k]}`).join(',');
 }
 
-// Resolve the concrete model id. Ollama falls back to the env-configured
-// model; cloud providers must name a model explicitly — guessing a model id
-// that may not exist fails worse than a clear error.
+// Ollama falls back to the env-configured model; cloud providers must name a
+// model explicitly rather than have one guessed.
 export function resolveModelId(cfg: any): string {
   if (cfg.model) return cfg.model;
   if (cfg.provider === 'ollama') return config.ollama.model;
@@ -309,28 +217,20 @@ export function resolveModelId(cfg: any): string {
   );
 }
 
-// Returns an AI SDK LanguageModel for the given config (the active primary leg
-// by default). Passing an explicit cfg — the fallback leg — reuses the same
-// client cache, since the signature below already keys on every field.
+// AI SDK LanguageModel for the given config (the active primary leg by default).
+// An explicit cfg (the fallback leg) shares the same cache.
 export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolean } = {}) {
   const id = resolveModelId(cfg);
   const baseUrlSig = cfg.provider === 'locca' ? loccaBaseUrl(cfg) : (cfg.baseUrl || '');
-  // Construction-time no-think: two provider families can't suppress thinking
-  // per-call, so a forced-tool leg needs its own reasoning-disabled INSTANCE.
-  //   - OpenRouter (reasoningConstructionOnly): reasoning is fixed at model build.
-  //   - openai-compatible / locca (samplingViaBody): no-think rides the request
-  //     BODY via openAICompatibleFetch, bound at construction — so the picker's
-  //     no-think variant must be a separate instance whose wrapper forces it.
-  // Everyone else suppresses per-call via providerOptions, so the same cached
-  // model serves both. Keyed into the sig so the variants don't collide.
+  // Two provider families can't suppress thinking per-call, so a forced-tool leg
+  // needs its own instance: OpenRouter fixes reasoning at model build, and
+  // openai-compatible/locca bind the body wrapper at construction. Everyone else
+  // suppresses per-call. Keyed into the sig so the variants don't collide.
   const caps = capabilitiesFor(cfg.provider);
   const constructionNoThink = opts.forceNoThink === true && caps.reasoningConstructionOnly === true;
   const bodyNoThink = opts.forceNoThink === true && caps.samplingViaBody === true;
-  // repeat_penalty is captured ONCE when openAICompatibleFetch builds the
-  // wrapper, so — like num_ctx — it has to key the cache: without it, an
-  // operator editing Settings → Repeat penalty keeps hitting the instance built
-  // with the old value and the change reads as "ignored" until the controller
-  // restarts. Settings otherwise apply live on this path (#1327).
+  // repeat_penalty and num_ctx are captured at construction, so both key the
+  // cache or an edit reads as ignored until the controller restarts (#1327).
   const sig = `${cfg.provider}|${id}|${cfg.apiKey || ''}|${ollamaBaseUrl(cfg)}|${baseUrlSig}|${cfg.reasoning ? 'r1' : 'r0'}|${(constructionNoThink || bodyNoThink) ? 'nt1' : 'nt0'}|ctx${appliedNumCtx(cfg) ?? ''}|rp${appliedRepeatPenalty(cfg) ?? ''}|hd${headersSig(cfg)}`;
 
   const cached = clientCache.get(sig);
@@ -353,9 +253,7 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       break;
     }
     case 'locca': {
-      // First-class locca: an openai-compatible llama.cpp server with a sane
-      // default base URL (host.docker.internal:8080) so the operator doesn't
-      // hand-type a URL. Same transport as openai-compatible, incl. no-think.
+      // Same transport as openai-compatible, with a default base URL.
       model = openAICompatibleModel(cfg, id, loccaBaseUrl(cfg), 'locca', bodyNoThink);
       break;
     }
@@ -372,48 +270,24 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
     case 'openrouter': {
       const provider = createOpenRouter({ fetch: debugFetch, headers: OPENROUTER_APP_HEADERS, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       // OpenRouter reads `reasoning` from construction settings, not per-call
-      // providerOptions — so the toggle must be wired HERE or it's dead (we used
-      // to pass nothing → models reasoned by default). We MINIMISE rather than
-      // disable reasoning when suppressing: some OpenRouter models mandate it —
-      // OpenAI gpt-5/o-series 400 with "Reasoning is mandatory for this endpoint"
-      // on `enabled:false` — but every model accepts `effort:'minimal'`, which
-      // both satisfies the mandate AND drops thinking low enough that
-      // reasoning-rejects-tools models (mimo) can still emit forced tool calls.
-      // Suppress on forced-tool legs (constructionNoThink) and when the operator
-      // turns reasoning off; otherwise leave the model's default reasoning. This
-      // lets the DJ's free-text keep full reasoning while the picker runs minimal,
-      // so a reasoning model Just Works with no operator knowledge. The cache sig
-      // includes both the reasoning flag and the no-think flag, so each variant is
-      // built once.
+      // providerOptions, so the toggle has to be wired here. Suppressed on
+      // forced-tool legs and when the operator turns reasoning off; otherwise
+      // the model's default reasoning stands, so free text keeps thinking while
+      // the picker runs minimal.
       const suppressReasoning = cfg.reasoning !== true || constructionNoThink;
-      // `enabled:false` is the DEFAULT off-switch. effort:'minimal' — the old
-      // default — is not an off-switch at all for most families, and for two
-      // of them it's actively wrong, both caught by llm-bench's thinking-leak
-      // forensics:
-      //   - enable_thinking families (Qwen, GLM): effort is a no-op, the
-      //     model thinks to the output cap (qwen3.5-9b: empty replies at
-      //     4000 billed tokens, 31-101s).
-      //   - Anthropic: OpenRouter maps ANY effort onto a thinking BUDGET, so
-      //     'minimal' turned thinking ON for claude-haiku-4.5 (81 leaked
-      //     cells) — the suppression knob was the thing enabling it.
-      // effort:'minimal' survives ONLY for the reasoning-MANDATORY families,
-      // which 400 on enabled:false ("Reasoning is mandatory") — see
-      // reasoningMandatoryModel above (shared with the openai-compatible
-      // body injection).
+      // `enabled:false` is the off-switch. effort:'minimal' is NOT one for most
+      // families (a no-op for Qwen/GLM; OpenRouter maps any effort onto an
+      // Anthropic thinking BUDGET, so it turns thinking on) and survives only
+      // for the reasoning-mandatory families — see reasoningMandatoryModel.
       model = suppressReasoning
         ? provider(id, { extraBody: { reasoning: reasoningMandatoryModel(id) ? { effort: 'minimal' } : { enabled: false } } })
         : provider(id);
       break;
     }
     case 'requesty': {
-      // Requesty is an OpenAI-compatible gateway, so it reuses the same
-      // createOpenAI transport as openai-compatible — just a fixed base URL
-      // (router.requesty.ai/v1) instead of an operator-supplied one. Models use
-      // provider/model naming (e.g. openai/gpt-4o-mini). Like openrouter it's a
-      // hosted aggregator with no first-class thinking knob, so we pass through
-      // verbatim (debugFetch only — no enable_thinking injection, which only
-      // makes sense for self-hosted llama.cpp/vLLM). A real key is required; it
-      // comes from settings or REQUESTY_API_KEY.
+      // Same createOpenAI transport as openai-compatible on a fixed base URL.
+      // Hosted aggregator with no thinking knob, so no body injection — that
+      // only makes sense for self-hosted llama.cpp/vLLM. A real key is required.
       const provider = createOpenAI({
         baseURL: DEFAULT_REQUESTY_BASE_URL,
         apiKey: cfg.apiKey || process.env.REQUESTY_API_KEY || 'unused',
@@ -424,35 +298,22 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
       break;
     }
     case 'gateway': {
-      // Always go through createGateway so debugFetch can be wired in; with no
-      // apiKey it resolves the same env / OIDC credentials the bare `gateway`
-      // default instance would.
+      // Always constructed so debugFetch can be wired in; with no apiKey it
+      // resolves the same env / OIDC credentials the default instance would.
       const provider = createGateway({ fetch: debugFetch, ...(cfg.apiKey ? { apiKey: cfg.apiKey } : {}) });
       model = provider(id);
       break;
     }
     case 'ollama':
     default: {
-      // `ai-sdk-ollama` is built on the official Ollama JS client and uses
-      // its chat-completions path natively. The default factory `provider(id)`
-      // returns a LanguageModelV3 that translates tools / toolChoice / activeTools
-      // correctly — no `.chat(id)` override required. `baseURL` is the bare
-      // Ollama host (no `/api` suffix); the package appends the path itself.
+      // `baseURL` is the bare Ollama host (no `/api` suffix); the package
+      // appends the path. The default factory already translates tools /
+      // toolChoice / activeTools, so no `.chat(id)` override.
       const provider = createOllama({ baseURL: ollamaBaseUrl(cfg), fetch: debugFetch });
-      // Thinking suppression rides the AI SDK top-level `reasoning` call option
-      // now (capabilities reasoningFor): ai-sdk-ollama v4 maps 'none' →
-      // think:false per call, WITH precedence over any construction-time
-      // `think` setting — so nothing is wired here for it. ('none' is safe on
-      // non-thinking models: Ollama 0.30 accepts think:false as a no-op; with
-      // reasoning on the param is omitted and the model's default holds, since
-      // an explicit think:true 400s on non-thinking models.)
-      //   - num_ctx still rides construction settings.options — v4's per-call
-      //     providerOptions schema accepts only headers/structuredOutputs, so
-      //     construction is its only channel (the sig includes it so an admin
-      //     numCtx change rebuilds the instance).
-      // Per-call repeat_penalty has no v4 channel and is currently inert on
-      // this route — tracked as a follow-up; it needs per-call instances or
-      // an upstream option, not a construction setting.
+      // Thinking suppression rides the per-call `reasoning` option (capabilities
+      // reasoningFor), which outranks any construction-time `think`. num_ctx has
+      // no per-call channel in v4, so it goes through construction and keys the
+      // sig. Per-call repeat_penalty has no v4 channel and is inert here.
       const numCtx = appliedNumCtx(cfg);
       model = numCtx != null ? provider(id, { options: { num_ctx: numCtx } }) : provider(id);
       break;
@@ -463,8 +324,7 @@ export function languageModel(cfg: any = llmCfg(), opts: { forceNoThink?: boolea
   return model;
 }
 
-// A short, log-friendly label for the active model — used by record() and the
-// /debug surface so a call's provenance is visible.
+// Log-friendly label for the active model, used by record() and /debug.
 export function activeModelLabel(): string {
   const cfg = llmCfg();
   try {
@@ -474,14 +334,12 @@ export function activeModelLabel(): string {
   }
 }
 
-// The active provider id, used to gate provider-specific sampling
-// (repeat_penalty is Ollama-only) and by /stats and /debug for telemetry.
+// Active provider id, for telemetry surfaces (/stats, /debug).
 export function providerName(): string {
   return llmCfg().provider;
 }
 
-// The effective Ollama server URL — settings field, or the config default.
-// Used by /debug to report what the registry will actually talk to.
+// Effective Ollama server URL, reported by /debug.
 export function activeOllamaUrl(): string {
   return ollamaBaseUrl(llmCfg());
 }

@@ -1,23 +1,12 @@
-// The 'inherit' sentinel at the seams that read a persona's engine but do NOT
-// go through djPersonaTts().
+// The 'inherit' sentinel at the three seams that read a persona's engine
+// without going through djPersonaTts(): djSystem()'s chatterbox tag hint, the
+// *ForPersona entry points in cloud-speech.ts, and tts.describeRouting().
+// Each asks `engine === '<something>'`, and a raw sentinel answers no to all
+// of them, so a missed resolve reads as "pinned elsewhere".
 //
-// resolvePersonaVoiceSlot() is pinned as a pure function in
-// persona-engine.test.ts. What that cannot catch is a CALL SITE that forgot to
-// resolve: every such site asks `engine === '<something>'`, and a raw sentinel
-// answers "no" to all of them, so the miss is silent and reads as "this persona
-// is pinned elsewhere". Three sites outside the dispatcher have to resolve:
-//
-//   - llm/internal/prompts/system.ts  djSystem()'s chatterbox tag hint
-//   - llm/internal/speech/cloud-speech.ts  the three *ForPersona entry points
-//   - audio/tts.ts  describeRouting(), which reproduces the dispatcher's own
-//     per-engine comparisons for /debug and the nightly doctor
-//
-// All are exercised here against real settings rather than a stub, because the
-// bug is precisely that the raw slot and the resolved one differ only once the
-// STATION is configured a particular way.
-//
-// STATE_DIR is redirected at a throwaway dir BEFORE the first import so
-// settings.load()/update() touch nothing real — hence the dynamic imports.
+// Driven against real settings, since the raw and resolved slots differ only
+// once the STATION is configured a particular way. STATE_DIR is redirected
+// before the first import, hence the dynamic imports.
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -42,8 +31,7 @@ const INHERIT_PERSONA = {
   tts: { engine: 'inherit', cloudProvider: 'openai', voice: 'bm_george', gainDb: 0, speed: 1 },
 };
 
-// The tag block djSystem appends only for chatterbox. Matched on a fragment so a
-// reword of the hint doesn't fail this test for the wrong reason.
+// Matched on a fragment so a reword of the hint doesn't fail this test.
 const CHATTERBOX_MARKER = '[laugh]';
 
 test.after(() => rmSync(root, { recursive: true, force: true }));
@@ -58,8 +46,7 @@ test('djSystem gives an inherit persona the chatterbox hint when the STATION is 
 });
 
 test('djSystem withholds the chatterbox hint when the station is on something else', async () => {
-  // Every other engine speaks "[laugh]" aloud as the word, which is why the
-  // hint is gated at all.
+  // Every other engine speaks "[laugh]" aloud as the word.
   await settings.update({ tts: { defaultEngine: 'piper' } });
   assert.ok(!djSystem(INHERIT_PERSONA).includes(CHATTERBOX_MARKER));
 
@@ -88,9 +75,8 @@ test('the cloud *ForPersona entry points resolve inherit against the station', a
     },
   });
 
-  // Keyed off engine === 'cloud': a raw inherit slot reads as "pinned
-  // elsewhere" and reports nothing, which silently drops the expression-cue
-  // hints on a station whose default IS cloud.
+  // Keyed off engine === 'cloud', so a raw inherit slot drops the
+  // expression-cue hints on a station whose default IS cloud.
   assert.equal(resolveCloudProviderForPersona(INHERIT_PERSONA), 'openai-compatible');
   assert.equal(resolveCloudModelForPersona(INHERIT_PERSONA), 'dj-brain-voice');
 });
@@ -101,15 +87,11 @@ test('an inherit persona reports NO cloud voice when the station is local', asyn
   assert.equal(resolveCloudModelForPersona(INHERIT_PERSONA), '');
 });
 
-// ---- describeRouting: the operator-facing snapshot ---------------------------
 
 test('describeRouting reports the RESOLVED engine and voice, and no phantom fallback', async () => {
-  // piper is the universal floor and always usable, so an inherit persona
-  // resolving to it falls back from nothing. Against the raw slot this reported
-  // requested 'inherit' → engine 'piper' and called it a fallback, which is a
-  // standing warn in /debug and in the doctor's "active routing" check for the
-  // shipped default roster — noise in the one place a real silent fallback
-  // would show.
+  // piper is always usable, so an inherit persona resolving to it falls back
+  // from nothing. Against the raw slot this read as a standing fallback warn
+  // in /debug and the doctor for the shipped default roster.
   await settings.update({
     tts: { defaultEngine: 'piper' },
     personas: settings.get().personas.map((p: any, i: number) =>
@@ -124,14 +106,12 @@ test('describeRouting reports the RESOLVED engine and voice, and no phantom fall
   assert.equal(spoken.requested, 'piper', 'the sentinel is not an engine an operator can act on');
   assert.equal(spoken.engine, 'piper');
   assert.equal(spoken.fellBack, false, 'nothing fell back — piper is what the station asked for');
-  // The persona's own voice, not the engine's global default: piper is one of
-  // the two engines an inherited voice id carries to.
+  // piper is one of the two engines an inherited voice id carries to.
   assert.equal(spoken.voice, 'bm_george');
 });
 
 test('describeRouting on an inherit persona matches the equivalent PINNED one', async () => {
-  // The two configurations are the same station, described two ways. Any
-  // difference in this snapshot is a reporting bug by construction.
+  // The same station described two ways: any difference is a reporting bug.
   const base = settings.get().personas;
   const withEngine = (engine: string) =>
     base.map((p: any, i: number) =>

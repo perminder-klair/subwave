@@ -1,13 +1,5 @@
-// Library facade — thin wrapper over library-db.ts.
-//
-// Public surface preserved for back-compat with the picker, scheduler, llm
-// tools, request route, debug route, etc. Only the backing store moves from
-// the in-memory JSON map to SQLite + sqlite-vec (state/library.db). Auto-
-// migrates any existing state/moods.json on first open.
-//
-// The mood-widening logic (MOOD_NEIGHBOURS) lives here, on top of the raw
-// library-db.songsByMood query — the DB layer is intentionally vocabulary-
-// agnostic.
+// Library facade over library-db.ts (SQLite + sqlite-vec, state/library.db).
+// The mood-widening vocabulary lives here; the DB layer stays vocabulary-free.
 
 import * as db from './library-db.js';
 import * as blocklist from './blocklist.js';
@@ -22,20 +14,15 @@ let loaded = false;
 
 export async function load() {
   if (loaded) return;
-  // adoptStoredDim:true makes the live controller honour whatever dim the tagger
-  // actually probed and recorded, instead of trusting the name→dim guess. A
-  // model whose name resolves to a different default than its real vector width
-  // (e.g. a custom embedding model named like an OpenAI one) no longer makes the
-  // controller wipe a populated index on boot (#319). resolveEmbeddingDim() is
-  // only the fallback used when the DB has never been tagged. A deliberate model
-  // swap is reconciled by the tagger's --reseed path, not here.
+  // adoptStoredDim honours the dim the tagger probed, so a model whose name
+  // resolves to a different default than its real vector width can't wipe a
+  // populated index on boot (#319). resolveEmbeddingDim() is only the fallback
+  // for a never-tagged DB; a deliberate model swap goes via --reseed.
   await db.open({ embeddingDim: resolveEmbeddingDim(), adoptStoredDim: true });
   loaded = true;
 }
 
-// Close and re-open the backing DB. Called after a backup restore swaps the
-// library.db file underneath us, so the live picker/tools see the restored
-// tags without a controller restart.
+// Re-open after a backup restore swaps library.db underneath us.
 export async function reload() {
   if (db.isOpen()) db.close();
   loaded = false;
@@ -43,10 +30,7 @@ export async function reload() {
   await load();
 }
 
-// Wipe the whole library (tags, embeddings, acoustic analysis, enrichment) and
-// reopen an empty DB, so the picker/tools immediately see a clean slate without
-// a controller restart. Backs the admin library "Reset" action. Unlike
-// reload(), this deletes the file first (db.reset()) for a true fresh start.
+// Admin "Reset": unlike reload(), this deletes the file first.
 export async function reset() {
   loaded = false;
   invalidateAiredIndex();
@@ -54,15 +38,13 @@ export async function reset() {
   await load();
 }
 
-// SQLite WAL writes are durable per statement — no batched save needed. Kept
-// as a no-op so existing callers that call save() at intervals still work.
+// WAL writes are durable per statement; kept as a no-op for existing callers.
 export async function save() {
   // no-op
 }
 
-// Fold the WAL sidecar back into library.db (best-effort TRUNCATE checkpoint).
-// Safe to call whether or not the DB is open. Wired to the scheduler's hourly
-// cleanup and the server's shutdown path (#786).
+// Fold the WAL sidecar back into library.db (best-effort TRUNCATE checkpoint),
+// from the scheduler's hourly cleanup and the shutdown path (#786).
 export function checkpoint(): void {
   if (!db.isOpen()) return;
   const r = db.checkpointWal();
@@ -71,18 +53,15 @@ export function checkpoint(): void {
   }
 }
 
-// Close the backing DB (checkpointing the WAL on the way out). The graceful-
-// shutdown counterpart to load(); a later load() reopens.
 export function shutdown(): void {
   if (db.isOpen()) db.close();
   loaded = false;
   invalidateAiredIndex();
 }
 
-// Record one aired track into the durable play-history table. Called fire-and-
-// forget from the queue's now-playing watcher, so it must never throw and must
-// tolerate the DB not being open yet (first plays can beat the picker's lazy
-// load() on a fresh boot).
+// Record one aired track into the play-history table. Called fire-and-forget
+// from the queue's now-playing watcher: must never throw, and must tolerate a
+// DB not open yet (a first play can beat the lazy load()).
 export async function recordPlay(p: db.PlayWrite): Promise<void> {
   try {
     await load();
@@ -101,10 +80,8 @@ export function get(songId: string): any {
     artist: t.artist,
     album: t.album,
     year: t.year,
-    // Era-year surface (issues #842, #1418) — show-filter.resolveEraYear
-    // precedence: originalYear wins; otherwise the plain year counts only when
-    // the album's year is TRUSTED. `yearUntrusted` is the composed flag
-    // resolution reads; `isCompilation` rides along as the raw Navidrome fact.
+    // Era-year surface (#842, #1418): resolveEraYear reads the composed
+    // `yearUntrusted`; `isCompilation` rides along as the raw Navidrome fact.
     originalYear: t.originalYear,
     originalYearSource: t.originalYearSource,
     isCompilation: t.isCompilation,
@@ -114,9 +91,8 @@ export function get(songId: string): any {
     genre: t.genre,
     moods: t.moods,
     audioMoods: t.audioMoods,
-    // Last.fm enrichment tags — show-filter.trackAllTags' any-namespace union
-    // (blocklist `tag` rules) resolves them through this projection for
-    // Subsonic-sourced rows; before this line the field was silently dropped.
+    // show-filter.trackAllTags (blocklist `tag` rules) resolves these through
+    // this projection for Subsonic-sourced rows.
     lastfmTags: t.lastfmTags,
     energy: t.energy,
     source: t.source,
@@ -128,54 +104,39 @@ export function get(songId: string): any {
     bpm: t.bpm,
     musicalKey: t.musicalKey,
     introMs: t.introMs,
-    // Loudness surface for queue.applyLoudnessGain's library-lookup fallback —
-    // Subsonic-sourced picks (requests, similar-songs) resolve their measured
-    // LUFS/peak through here. Without these the fallback always saw null and
-    // those tracks played at unity gain.
+    // queue.applyLoudnessGain's library-lookup fallback; absent = unity gain.
     loudnessLufs: t.loudnessLufs,
     peakDb: t.peakDb,
-    // Phase 2/4 acoustic surface for the agent picker's Subsonic-fallback path
-    // (slim() in llm/tools.ts). Library-sourced candidates already carry these
-    // via slimTrack; this keeps Subsonic-sourced candidates symmetric.
+    // Acoustic surface for the agent picker's Subsonic-fallback path, kept
+    // symmetric with what slimTrack gives library-sourced candidates.
     durationSec: t.durationSec,
     structure: t.structure,
     vocalRanges: t.vocalRanges, // [] = instrumental, null = not computed
     paceMean: paceMeanOf(t.pace),
-    // Boundary keys (key ranges) — bpmKeyFor and queue.mixAnalysisFor read
-    // rec?.keyRanges through this projection; before this line the field was
-    // silently dropped, so library-lookup consumers never resolved a track's
-    // opening/ending key.
+    // Boundary keys for bpmKeyFor / queue.mixAnalysisFor.
     keyRanges: t.keyRanges,
-    // Measured ending (fade vs cold, tail loudness/tempo/grid) — feeds the
-    // queue's ending-aware exit canvas + effect gating. null = no signal.
+    // Measured ending (fade vs cold, tail loudness/tempo/grid) for the queue's
+    // exit canvas + effect gating. null = no signal.
     outro: t.outro,
-    // Edge dead air — music/silence-trim.ts resolves EVERY real caller through
-    // this projection, because no pick path (Subsonic songs, slimTrack
-    // candidates, the auto.m3u pool) carries these fields on the track object.
-    // Omitting them here doesn't degrade the trim, it disables it outright:
-    // resolveSilenceTrim reads undefined, treats it as "not measured", and
-    // stamps nothing however the operator sets the dial. null = no signal.
+    // Edge dead air: music/silence-trim.ts resolves EVERY caller through this
+    // projection, so dropping one disables the trim silently. null = no signal.
     leadSilenceMs: t.leadSilenceMs,
     tailSilenceMs: t.tailSilenceMs,
     tailStartMs: t.tailStartMs,
   };
 }
 
-// A usable tempo measurement, or null. Navidrome emits an ID3-derived `bpm: 0`
-// on files with no tempo tag, so a non-positive bpm means "unknown", never a
-// measurement (#862).
+// A usable tempo, or null. Navidrome emits `bpm: 0` on files with no tempo
+// tag, so a non-positive bpm means "unknown" (#862).
 export function realBpm(v: any): number | null {
   return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : null;
 }
 
-// Resolve {bpm, key} for a track: the analyzer's numbers from the library DB
-// first, then whatever the track object itself carries (a Subsonic candidate's
-// bpm is the file's ID3 tag). Single source of truth for the pick/transition
-// paths — per-caller "carries analysis?" guards let Navidrome's bpm 0 skip the
-// DB lookup and mask the analyzed value (#862). Also carries the boundary keys
-// (feature: key ranges) — opening/ending key resolved from the measured
-// per-region ranges, falling back to the dominant key — so the picker re-rank
-// can compare the pair a transition actually meets.
+// {bpm, key} for a track: the analyzer's DB numbers first, then whatever the
+// track object carries. Single source of truth for the pick/transition paths —
+// a per-caller "carries analysis?" guard lets Navidrome's bpm 0 skip the DB
+// lookup and mask the analysed value (#862). Boundary keys fall back to the
+// dominant key.
 export function bpmKeyFor(track: any): { bpm: number | null; key: string | null; keyStart: string | null; keyEnd: string | null } {
   const rec = track?.id ? get(track.id) : null;
   const key = rec?.musicalKey ?? track?.musicalKey ?? null;
@@ -189,9 +150,7 @@ export function bpmKeyFor(track: any): { bpm: number | null; key: string | null;
   };
 }
 
-// Back-compat shim. Old callers pass {title, artist, album, year, genre,
-// moods, energy} in one shot. The DB has split write surfaces (metadata +
-// tags + enrichment) but for a single-track legacy write we collapse them.
+// Back-compat shim collapsing the DB's split write surfaces (metadata + tags).
 export function set(songId: string, data: any) {
   db.upsertTrackMeta(songId, {
     title: data.title,
@@ -221,63 +180,49 @@ export function has(songId: string): boolean {
   return loaded ? db.hasTags(songId) : false;
 }
 
-// COUNT(*) of tagged tracks — for callers that only need the tally (e.g. the
-// coverage meter), not the id list. Avoids materialising a ~30k-element array
-// just to read its length (#723).
+// COUNT(*) of tagged tracks — avoids materialising a ~30k array for a
+// length (#723).
 export function countTagged(): number {
   return loaded ? db.countTagged() : 0;
 }
 
-// Lean whole-library projection for the explicitly requested Show-editor candidate diagnostic.
 export function candidateFilterTracks() {
   return loaded ? db.candidateFilterTracks() : [];
 }
 
-// One library row in the SAME slim shape every pool source hands back — the
-// shape blocklist.matchOf reads, so it carries albumId/artistId and can reach
-// the exact id tiers rather than falling back to (album name, artist). Exists
-// because a caller that resolves a track BY ID still has to run it through the
-// blocklist chokepoint, and get()'s projection carries no ids (and parses the
-// heavy acoustic blobs on the way). null when the track has no library row.
+// One library row in the same slim shape every pool source hands back, so
+// blocklist.matchOf reaches its exact id tiers (get()'s projection carries no
+// ids and parses the heavy acoustic blobs). null when there is no row.
 export function slimById(songId: string): any {
   if (!loaded || !songId) return null;
   const t = db.getTrack(songId);
   return t ? slimTrack(t) : null;
 }
 
-// The album-cooldown exemption facts (#1485 FR 3) — is_compilation +
-// era_untrusted, composed. Two columns off the primary key: this is resolved
-// per candidate and per recent play on every pick (music/album-facts.ts), so
-// it deliberately does NOT go through the heavier lean read below. null when
-// the track has no library row (Subsonic-only), which reads as "no evidence".
+// Album-cooldown exemption facts (#1485 FR 3): two columns off the primary
+// key, resolved per candidate on every pick, so it skips the heavier lean read
+// below. null (a Subsonic-only track) reads as "no evidence".
 export function getAlbumFacts(songId: string) {
   return loaded ? db.getAlbumFacts(songId) : null;
 }
 
-// Lean metadata for the /now-playing hot path — only the fields the player's
-// metadata strip renders (genre · BPM · key · mood · energy · year). Backed by
-// db.getTrackLite so a per-listener poll never SELECTs or JSON.parses the heavy
-// acoustic *_json blobs the way the full get()/getTrack() path does (#723).
+// Lean metadata for the /now-playing hot path, so a per-listener poll never
+// parses the heavy acoustic *_json blobs (#723).
 export function getPlaybackMeta(songId: string): db.TrackLite | null {
   return loaded ? db.getTrackLite(songId) : null;
 }
 
-// When a track entered the library (its `taggedAt` ISO string), or null if it's
-// not in the tagged index. The playlist sync engine keys "new since last sync"
-// off this — a Subsonic-only track (not in the DB) reads null and is never
-// blind-appended.
+// When a track entered the library, null if not in the tagged index. Playlist
+// sync keys "new since last sync" off this, so a Subsonic-only track reads
+// null and is never blind-appended.
 export function taggedAtOf(songId: string): string | null {
   if (!loaded) return null;
   return db.getTrack(songId)?.taggedAt ?? null;
 }
 
-// Musically-adjacent moods. The LLM tagger is told to tag by how a track
-// FEELS, so it rarely assigns time-of-day moods — `morning` ends up with 0
-// tracks, `evening` with 1 — which leaves the picker's mood source dark for
-// the ~7 morning hours a day that `dominantMood` is `morning`. When a
-// requested mood is sparsely tagged, songsByMood() widens the match to these
-// neighbours. The picker still hands the full candidate set to the LLM,
-// which curates against the real context; widening only deepens the pool.
+// Musically-adjacent moods. The tagger tags by how a track FEELS, so
+// time-of-day moods end up near-empty; songsByMood() widens to these
+// neighbours when a requested mood is sparsely tagged.
 const MOOD_NEIGHBOURS: Record<string, string[]> = {
   morning:     ['calm', 'focus', 'sunny'],
   evening:     ['calm', 'reflective', 'romantic'],
@@ -314,9 +259,8 @@ export function songsByMood(mood: string | null | undefined): any[] {
       genre: r.genre,
       moods: r.moods,
       energy: r.energy,
-      // Length (seconds) for the max-track-length cap (issue #447) — without it
-      // a locally mood-tagged long mix would read as "unknown length" and slip
-      // past the cap.
+      // Seconds, for the max-track-length cap (#447) — without it a long mix
+      // reads as "unknown length" and slips past.
       durationSec: r.durationSec,
     })));
 
@@ -335,67 +279,55 @@ export function songsByMood(mood: string | null | undefined): any[] {
   return widened;
 }
 
-// Slim shape the picker + LLM tools expect — title/artist/album/year/genre
-// Mean of the pace curve (0..1), or null when un-analysed. Shared by slimTrack
-// and get() so the agent picker (Subsonic-fallback path) and the pool picker
-// see the same scalar instead of one path computing it and the other missing it.
+// Mean of the pace curve (0..1), null when un-analysed. Shared by slimTrack
+// and get() so both pick paths see the same scalar.
 export function paceMeanOf(pace: Array<{ value: number }> | null | undefined): number | null {
   return pace && pace.length
     ? Math.round((pace.reduce((s, p) => s + p.value, 0) / pace.length) * 1000) / 1000
     : null;
 }
 
-// Structural-part count over the opening (arrangement complexity), or null
-// when un-analysed. Shared by both pick payloads (pool + agent) so `sections`
-// means the same thing on either path.
+// Structural-part count over the opening, null when un-analysed. Shared by
+// both pick payloads so `sections` means one thing.
 export function sectionCount(t: { structure?: any[] | null } | null | undefined): number | null {
   return Array.isArray(t?.structure) && t.structure.length ? t.structure.length : null;
 }
 
-// plus the two tagger axes. Matches what songsByMood returns above; pulled
-// out so the new embedding-similar helpers can share the same projection.
 function slimTrack(r: db.TrackRecord) {
   return {
     id: r.id,
     title: r.title,
     artist: r.artist,
     album: r.album,
-    // Subsonic album/artist ids. Carried so blocklist.matchOf can reach
-    // its EXACT id tiers on library-sourced candidates — every rejectBlocked()
-    // below filters these rows, and without the ids an album entry falls back
-    // to (album name, that track's artist), which a compilation defeats. Not
-    // part of the LLM candidate surface: llm/.../picker/slim.ts whitelists its
-    // own fields, so this stays out of the model's context.
+    // Subsonic ids, so blocklist.matchOf reaches its EXACT id tiers; without
+    // them an album entry falls back to (album name, track artist), which a
+    // compilation defeats. Not part of the LLM candidate surface —
+    // picker/slim.ts whitelists its own fields.
     albumId: r.albumId,
     artistId: r.artistId,
     year: r.year,
-    // Era-year surface (issues #842, #1418) — carried inline so show-filter's
-    // era checks on library-sourced pools never need a per-track DB lookup.
+    // Era-year surface (#842, #1418), inline so show-filter's era checks need
+    // no per-track DB lookup.
     originalYear: r.originalYear,
     isCompilation: r.isCompilation,
     yearUntrusted: r.yearUntrusted,
     genres: r.genres,
     genre: r.genre,
     moods: r.moods,
-    // Zero-shot audio moods (sound-derived; music/audio-moods.ts). [] until
-    // scored. Kept separate from the editorial `moods` so consumers can tell
-    // "the LLM read the metadata" from "the audio actually sounds like this".
+    // Sound-derived moods (music/audio-moods.ts), [] until scored. Kept
+    // separate from the editorial `moods`.
     audioMoods: r.audioMoods,
     energy: r.energy,
-    // Track length (seconds) so the max-track-length cap (issue #447) can act on
-    // library-sourced candidates too — keeps them symmetric with Subsonic's
-    // `duration`. null on rows without it; the cap treats null as "unknown".
+    // Seconds, for the max-track-length cap (#447). null = unknown.
     durationSec: r.durationSec,
-    // Acoustic analysis — null on un-analysed tracks. Consumers (picker
-    // re-rank, LLM candidate surface) treat null as "no signal".
+    // Acoustic analysis — null on un-analysed tracks, read as "no signal".
     bpm: r.bpm,
     musicalKey: r.musicalKey,
     introMs: r.introMs,
     loudnessLufs: r.loudnessLufs,
     structure: r.structure,
     vocalRanges: r.vocalRanges,
-    // Scalar mean pace (0..1) for the picker/LLM — the full curve stays in the
-    // record for UI/future use. null when un-analysed.
+    // Scalar mean pace (0..1); the full curve stays in the record.
     paceMean: paceMeanOf(r.pace),
   };
 }
@@ -406,21 +338,13 @@ export function songsByEnergy(energy: string | null | undefined): any[] {
   return blocklist.rejectBlocked(db.songsByEnergy(energy).map(slimTrack));
 }
 
-// KNN over the embedding space — finds tracks whose metadata + lyrics +
-// (optional) Last.fm tags embed close to the seed track's. Used by the picker's
-// embedding-similar pool source and the agent's tracksLikeThis tool.
-//
-// `seed` is normally a real track id, but the picker agent often passes a track
-// *title* instead (e.g. "Be Mine"). When the id lookup finds no embedding, we
-// resolve the string as a title via db.filter (LIKE over title/artist/album,
-// scoped to tagged tracks — the same set that carries embeddings) and KNN from
-// the first candidate that has one. Tracks with no embedding and no title match
-// return []; callers fall back to other sources.
+// KNN over the text embedding space. `seed` is normally a track id, but the
+// picker agent often passes a title — an id miss retries the string as a
+// title. No embedding and no title match gives [], and callers fall back.
 export function tracksLikeThis(seed: string, k: number, opts: db.KnnOpts = {}): any[] {
   if (!loaded || !seed) return [];
   let hits = db.knnById(seed, k, opts);
   if (hits.length === 0) {
-    // Treat `seed` as a title — find the best embedded match and KNN from it.
     for (const row of db.filter({ q: seed, limit: 8 }).rows) {
       if (row.id === seed) continue;            // already tried as an id above
       hits = db.knnById(row.id, k, opts);
@@ -435,19 +359,12 @@ export function tracksLikeThis(seed: string, k: number, opts: db.KnnOpts = {}): 
   return blocklist.rejectBlocked(out);
 }
 
-// Audio KNN — finds tracks whose CLAP audio embedding (timbre / instrumentation
-// / production / energy, derived from the waveform itself) is closest to the
-// seed's. The sonic counterpart to tracksLikeThis: text catches "same scene /
-// era / lyrical theme", audio catches "same sound". Same title-fallback shape
-// (the agent often passes a title rather than an id). Returns [] when the seed
-// has no audio vector — un-analysed library, or analysis backend without CLAP —
-// so callers fall through to the other sources exactly like the text path.
+// Audio KNN over the CLAP vectors — the sonic counterpart to tracksLikeThis,
+// same title-fallback shape. [] when the seed has no audio vector.
 export function tracksLikeThisAudio(seed: string, k: number, opts: db.KnnOpts = {}): any[] {
   if (!loaded || !seed) return [];
   let hits = db.knnAudioById(seed, k, opts);
   if (hits.length === 0) {
-    // Treat `seed` as a title — find the best matching track that HAS an audio
-    // vector and KNN from it.
     for (const row of db.filter({ q: seed, limit: 8 }).rows) {
       if (row.id === seed) continue;            // already tried as an id above
       hits = db.knnAudioById(row.id, k, opts);
@@ -470,17 +387,12 @@ export function embeddingIndexTextMode(): 'plain' | 'prefixed' {
   return db.getEmbeddingMeta()?.textMode ?? 'plain';
 }
 
-// KNN against an externally-computed query vector. The lyric-search tool
-// embeds a free-text query and calls this to find tracks semantically close
-// to the query — including ones whose lyrics don't literally contain those
-// words.
+// KNN against an externally-computed query vector (lyric-search free text).
 export function tracksByVector(vec: number[] | Float32Array, k: number, opts: db.KnnOpts = {}): any[] {
   if (!loaded) return [];
-  // Guard against an embedding model/provider drift: if the live query vector's
-  // length no longer matches the dim the index was built at, knnByVector would
-  // throw a raw "Dimension mismatch" from sqlite-vec (surfaced to the DJ agent
-  // as a tool error). Degrade to an empty semantic result instead — the picker
-  // falls through to its lexical/other sources — and log an actionable hint.
+  // On embedding model drift the query vector stops matching the index dim and
+  // knnByVector throws sqlite-vec's raw error at the DJ agent. Degrade to an
+  // empty result instead.
   const meta = db.getEmbeddingMeta();
   const got = (vec as { length?: number }).length;
   if (meta?.dim && got && meta.dim !== got) {
@@ -500,10 +412,8 @@ export function tracksByVector(vec: number[] | Float32Array, k: number, opts: db
   return blocklist.rejectBlocked(out);
 }
 
-// Audio KNN against an externally-computed query vector — the sonic-journey
-// counterpart to tracksByVector. Used by the picker when a journey waypoint is
-// the audio anchor instead of the current track. Returns [] on an empty audio
-// index, so the picker falls through to its other sources.
+// Audio KNN against an externally-computed query vector, for when a sonic
+// journey waypoint is the anchor instead of the current track.
 export function tracksByAudioVector(vec: number[] | Float32Array, k: number, opts: db.KnnOpts = {}): any[] {
   if (!loaded) return [];
   const hits = db.knnByAudioVector(vec, k, opts);
@@ -515,33 +425,25 @@ export function tracksByAudioVector(vec: number[] | Float32Array, k: number, opt
   return blocklist.rejectBlocked(out);
 }
 
-// Whether the CLAP index covers this track. Cheap indexed existence check (no
-// blob decode) for callers that need to SAMPLE ids the audio index actually
-// holds — the journey destination in broadcast/dj-agent/runs.ts, where a blind
-// sample of a partially-analysed bucket yields a centroid of one or two tracks.
+// Whether the CLAP index covers this track — a cheap existence check (no blob
+// decode), so a blind sample of a partially-analysed bucket can't yield a
+// centroid of two tracks.
 export function hasAudioVector(id: string): boolean {
   if (!loaded || !id) return false;
   try { return db.hasAudioVector(id); } catch { return false; }
 }
 
-// Last-aired index over the plays table, memoised briefly — every pick path
-// consults it (pool re-rank, agent collect ordering, the deepCuts tool), and a
-// GROUP BY over the whole play history per tool call would be wasteful. 5 min
-// staleness is harmless: the short horizon is guarded by the recency sets;
+// Last-aired index over the plays table, memoised — every pick path consults
+// it and a GROUP BY over the whole history per tool call is wasteful. 5 min
+// staleness is harmless: the short horizon is guarded by the recency sets, and
 // this signal only separates "days ago" from "never".
 const AIRED_INDEX_TTL_MS = 5 * 60 * 1000;
 let airedIndexCache: { at: number; val: AiredIndex } | null = null;
 let airedIndexWarnedAt = 0;
 const AIRED_WARN_THROTTLE_MS = 10 * 60 * 1000;
 
-// Drop the memoised airing index. Called wherever the backing DB is swapped or
-// wiped — reload() after a backup restore, reset() after the admin Library
-// Reset, which deletes the whole plays table. Without this the picker keeps
-// re-ranking against airings from a database that no longer exists for up to
-// AIRED_INDEX_TTL_MS: freshnessBiasedOrder de-prioritises tracks with no play
-// history at all, and slim()/pickViaPool withhold `unaired` from tracks the
-// station has provably never aired. Exactly why db.invalidateStats() is wired
-// into library-db/lifecycle.ts.
+// Must be called wherever the backing DB is swapped or wiped, or the picker
+// re-ranks against a gone database for up to AIRED_INDEX_TTL_MS.
 function invalidateAiredIndex(): void {
   airedIndexCache = null;
   invalidateArtistPlayStats();
@@ -557,9 +459,7 @@ export function trackPlayStatsFor(song: CandidateLike): db.TrackPlayStats | null
 }
 
 // Same staleness/failure posture as lastAiredInfo, over the artist-grouped
-// query — see library-db/plays.ts's artistPlayIndex. A separate cache (not
-// folded into airedIndexCache) because the two are read independently: most
-// tool calls want per-track airing, only slim()'s artist fields want this.
+// query. A separate cache because the two are read independently.
 const ARTIST_PLAY_TTL_MS = 5 * 60 * 1000;
 let artistPlayCache: { at: number; val: Map<string, db.ArtistPlayStats> } | null = null;
 let artistPlayWarnedAt = 0;
@@ -587,8 +487,7 @@ export function artistPlayStats(): Map<string, db.ArtistPlayStats> {
   }
 }
 
-// Lookup for one artist name, case/whitespace-insensitive — what slim() calls
-// per candidate rather than round-tripping the whole Map at each call site.
+// Lookup for one artist name, case/whitespace-insensitive.
 export function artistPlayStatsFor(artist: string | null | undefined): db.ArtistPlayStats | null {
   if (!artist) return null;
   return artistPlayStats().get(artist.toLowerCase().trim()) ?? null;
@@ -604,10 +503,9 @@ export function lastAiredInfo(): AiredIndex {
     airedIndexCache = { at: Date.now(), val };
     return val;
   } catch (err) {
-    // Degrading to an empty index is right — airing memory is a soft ranking
-    // signal and must never block a pick — but doing it SILENTLY meant a
-    // persistently unreadable plays table looked exactly like a station with no
-    // history. Throttled so a wedged handle can't flood the log on every pick.
+    // Fail open: airing memory is a soft ranking signal and must never block a
+    // pick. Warn anyway (throttled), or an unreadable plays table looks
+    // exactly like a station with no history.
     const now = Date.now();
     if (now - airedIndexWarnedAt > AIRED_WARN_THROTTLE_MS) {
       airedIndexWarnedAt = now;
@@ -617,8 +515,7 @@ export function lastAiredInfo(): AiredIndex {
   }
 }
 
-// Random sample of the library's unexplored shelf: tracks never aired, or
-// unaired for `days`. Backs the agent's deepCuts discovery tool.
+// Random sample of tracks never aired, or unaired for `days`.
 export function deepCuts(days: number = DEEP_CUT_DAYS, k = 60): any[] {
   if (!loaded) return [];
   const cutoffIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
@@ -636,9 +533,8 @@ export function stats() {
   const s = db.stats();
   return {
     total: s.total,
-    // Library-mirror size (every row, tagged or not) — NOT `total`, which
-    // counts only tracks the tagger has reached. Anything sizing itself to the
-    // library rather than to tagging coverage reads this one.
+    // Every row, tagged or not — NOT `total`, which counts only what the
+    // tagger reached. Anything sizing itself to the library reads this one.
     mirrorTotal: s.mirrorTotal,
     distinctArtists: s.distinctArtists,
     byMood: s.byMood,
@@ -648,26 +544,18 @@ export function stats() {
     withEmbedding: s.withEmbedding,
     withAudioEmbedding: s.withAudioEmbedding,
     updatedAt: s.updatedAt,
-    // Provenance of the text-embedding index ({model, dim} or null) so the admin
-    // UI can warn before a chat-provider switch silently changes the embedding
-    // model out from under an existing index.
+    // Provenance of the text-embedding index ({model, dim} or null), so the
+    // admin UI can warn before a provider switch changes the model under it.
     embeddingMeta: db.getEmbeddingMeta(),
   };
 }
 
-// ---------------------------------------------------------------------------
-// Scene vocabulary (#1577)
-// ---------------------------------------------------------------------------
-// The genre tag set as the operator sees it, and the consolidation that merges
-// near-duplicates. Two halves that must happen together and are owned by two
-// modules: the durable RULE (scene-vocab.ts, so the next Navidrome walk lands
-// on the same name) and the in-place REWRITE of the rows already stored
-// (library-db, one transaction). This is where they are paired, so a route
-// cannot do one and forget the other.
+// Scene vocabulary (#1577). A merge is two halves owned by two modules — the
+// durable RULE (scene-vocab.ts) and the in-place REWRITE (library-db) — paired
+// here so a route cannot do one and forget the other.
 
-// Not a bare re-export: routes reach the library through this module, and the
-// `loaded` guard is the same one every other read here carries — an unopened
-// DB answers "no vocabulary yet", never throws at the route boundary.
+// Not a bare re-export: the `loaded` guard makes an unopened DB answer "no
+// vocabulary yet" rather than throw.
 export function scenes(): db.SceneCount[] {
   if (!loaded) return [];
   return db.sceneVocabulary();
@@ -683,21 +571,18 @@ export async function consolidateScenes(
   sources: readonly string[],
   target: string,
 ): Promise<SceneConsolidation> {
-  // The rule is recorded FIRST. If the rewrite then fails half way, the
-  // transaction rolls the rows back and the next walk still consolidates them
-  // — the reverse order can leave rewritten rows with no rule, which the next
-  // walk silently undoes.
+  // Rule FIRST: if the rewrite fails the transaction rolls back and the next
+  // walk still consolidates. The reverse order leaves rewritten rows with no
+  // rule, which the next walk silently undoes.
   const { target: resolved, recorded } = await sceneVocab.recordMerge(sources, target);
   const merged = db.mergeScenes(sources, resolved);
   return { ...merged, target: resolved, recorded };
 }
 
-// Share of text vectors that embed nothing but the artist/title/album label —
-// no Last.fm tags, no lyric excerpt, no measured acoustics — as 0..1, or null
-// when the index is empty/unloaded. On such an index cosine "similarity" ranks
-// by artist/album TEXT while presenting itself as mood similarity (#1246).
-// The coverage UI has surfaced this for a while (similarityThin ≥50%); the
-// picker tools read it here so the RUNTIME can react too.
+// Share (0..1) of text vectors that embed nothing but the artist/title/album
+// label, null when the index is empty/unloaded. On such an index cosine
+// similarity ranks by label TEXT while presenting itself as mood similarity
+// (#1246), so the picker tools read this and react.
 export function labelOnlyShare(): number | null {
   if (!loaded) return null;
   try {
@@ -709,19 +594,15 @@ export function labelOnlyShare(): number | null {
   }
 }
 
-// How many tracks have had a vocal pass at all (vocal_ranges_json NOT NULL,
-// where a stored "[]" — analysed instrumental — counts as done). Deliberately
-// NOT folded into stats(): it's an extra COUNT that only the vocal show filter
-// needs, and only when a show actually pins one, so the callers that ask for it
-// pay for it. Zero here means the whole dimension has no coverage.
+// How many tracks have had a vocal pass at all (a stored "[]", an analysed
+// instrumental, counts as done). Deliberately NOT folded into stats() — only
+// the vocal show filter needs it, so only its callers pay for the COUNT.
 export function vocalAnalyzedCount(): number {
   if (!loaded) return 0;
   try { return db.vocalAnalyzedCount(); } catch { return 0; }
 }
 
-// Re-export the filter contract — admin Library browse panel calls this.
-// Implementation is in library-db.ts as a SQL query (replaces the old ~50-line
-// in-memory loop).
+// Filter contract for the admin Library browse panel; the SQL is in library-db.
 export interface FilterOpts {
   moods?: string[];
   energy?: string | null;
@@ -741,11 +622,9 @@ export interface FilteredRow {
   artist?: string | null;
   album?: string | null;
   year?: number | string | null;
-  // Era surface (#842/#1418) — the admin row editor shows the operator what
-  // era filtering, the DJ line and the picker will actually read, and whether
-  // the current answer came from the album tag, MusicBrainz or their own hand.
-  // Without `originalYearSource` the override UI cannot tell "resolved" from
-  // "the album tag echoed the release year", which is the whole confusion.
+  // Era surface (#842/#1418) — what era filtering, the DJ line and the picker
+  // will read. `originalYearSource` lets the override UI tell "resolved" from
+  // "the album tag echoed the release year".
   originalYear?: number | null;
   originalYearSource?: string | null;
   isCompilation?: boolean | null;
@@ -757,9 +636,9 @@ export interface FilteredRow {
   energy: string | null;
   source?: string | null;
   taggedAt?: string | null;
-  // Acoustic-analysis surface (null when the analyze pass hasn't touched the
-  // track). `instrumental` is derived: null = not computed, true = analysed with
-  // no vocal ranges, false = analysed with vocals.
+  // Acoustic analysis, null when the analyze pass hasn't touched the track.
+  // `instrumental` is derived: null = not computed, true = analysed with no
+  // vocal ranges, false = analysed with vocals.
   bpm?: number | null;
   musicalKey?: string | null;
   loudnessLufs?: number | null;

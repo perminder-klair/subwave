@@ -101,11 +101,9 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
   const [filter, setFilter] = useState('all');
   const [exporting, setExporting] = useState<'json' | 'ndjson' | null>(null);
 
-  // A one-shot download, not server state — same shape as the backup and skill
-  // exports: adminFetch + a blob, because a plain <a href> can't carry the
-  // Basic-auth header. Deliberately exports the WHOLE ring rather than the
-  // `shown` filter: the filter is a reading aid, and a file that silently holds
-  // a subset is the wrong thing to attach to a bug report.
+  // One-shot download, not server state: adminFetch + a blob, because a plain
+  // <a href> can't carry the Basic-auth header. Exports the WHOLE ring, not the
+  // `shown` filter, so an attached file is never a silent subset.
   const exportCalls = async (format: 'json' | 'ndjson') => {
     setExporting(format);
     try {

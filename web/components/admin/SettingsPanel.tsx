@@ -56,8 +56,7 @@ import {
   useSettingsQuery,
 } from './settings/queries';
 
-// Operator copy for the shared transition vocabulary. The drift test keeps
-// these labels in the schema's order and ensures every gesture has a hint.
+// Operator copy for the shared transition vocabulary; a drift test pins the labels to the schema's order.
 const TRANSITION_EFFECT_FIELDS = [
   {
     id: 'sweep',
@@ -91,11 +90,7 @@ const TRANSITION_EFFECT_FIELDS = [
   },
 ] as const satisfies readonly { id: TransitionEffect; label: string; hint: string }[];
 
-/**
- * Read one dotted path out of the form. Returns undefined for a missing branch
- * rather than throwing, so a path that names a key a given settings.json has
- * never carried compares equal on both sides and reads as clean.
- */
+/** Read one dotted path out of the form. Undefined for a missing branch. */
 function atPath(form: FormState | null, path: string): unknown {
   let node: unknown = form;
   for (const key of path.split('.')) {
@@ -108,19 +103,12 @@ function atPath(form: FormState | null, path: string): unknown {
 const samePath = (a: FormState | null, b: FormState | null, path: string) =>
   JSON.stringify(atPath(a, path) ?? null) === JSON.stringify(atPath(b, path) ?? null);
 
-/**
- * How many individual controls differ between two form branches.
- *
- * Counting LEAVES, not top-level keys: `requests` is one key holding seven
- * fields, and "1 unsaved change" under a card where the operator just edited
- * three of them reads as a bug in the counter.
- */
+/** How many individual controls differ between two form branches. Counts LEAVES. */
 function countLeafDiffs(a: unknown, b: unknown): number {
   if (JSON.stringify(a ?? null) === JSON.stringify(b ?? null)) return 0;
   const plain = (v: unknown): v is Record<string, unknown> =>
     !!v && typeof v === 'object' && !Array.isArray(v);
-  // An array is one control (the TTS corrections list, the compat params
-  // table), not one control per row.
+  // An array is one control (TTS corrections, compat params), not one per row.
   if (!plain(a) || !plain(b)) return 1;
   let n = 0;
   for (const key of new Set([...Object.keys(a), ...Object.keys(b)])) {
@@ -130,11 +118,8 @@ function countLeafDiffs(a: unknown, b: unknown): number {
 }
 
 /**
- * The paths a section owns that differ from the last saved baseline.
- *
- * Diffing against the BASELINE rather than the server's current values is what
- * makes the count survive the 3s refetch: the baseline only moves when a save
- * succeeds, so an operator mid-edit keeps seeing their own change count.
+ * The paths a section owns that differ from the last saved baseline. Diffing the
+ * BASELINE (which only moves on a successful save) is what keeps the count real.
  */
 function dirtyPaths(
   form: FormState | null,
@@ -145,23 +130,16 @@ function dirtyPaths(
   return paths.filter(path => !samePath(form, baseline, path));
 }
 
-// The three encoder vocabularies, from the mirror rather than re-typed. radio.liq
-// has a literal `%mp3(bitrate=…)` branch per value, so each set is genuinely
-// fixed — but "fixed" is why a hand-copied list is dangerous rather than safe:
-// it drifts silently the one time a value IS added, offering the operator a
-// bitrate the schema then refuses (or hiding one it would have accepted).
+// The three encoder vocabularies, taken from the mirror rather than re-typed so a
+// value added to the schema can't be missing (or offered and then refused) here.
 const MP3_BITRATES = SETTINGS_MP3_BITRATES;
 const OPUS_BITRATES = SETTINGS_OPUS_BITRATES;
 const AAC_BITRATES = SETTINGS_AAC_BITRATES;
 
 /**
  * Settings keys a save posts under a name the FormState does NOT use.
- *
- * `rebaselineSavedPatch` already re-homes the VALUES (audio.stemCache* is edited
- * as `transitions.*`); anything that scopes by FormState key has to follow the
- * same map or it misses the alias. Discard is the case that bites: rolling back
- * `transitions` while leaving the `audio.stemCacheGb` message on screen parks an
- * error under a value that no longer produced it.
+ * `rebaselineSavedPatch` re-homes the VALUES (audio.stemCache* is edited as
+ * `transitions.*`); anything scoping by FormState key has to follow the same map.
  */
 const FORM_KEY_ALIASES: Record<string, readonly string[]> = {
   transitions: ['audio'],
@@ -174,13 +152,9 @@ function ownsErrorPath(formKeys: readonly string[], path: string): boolean {
 }
 
 /**
- * Replace exactly the errors belonging to the keys this patch carried.
- *
- * Scoped by TOP-LEVEL key, because that is the unit a save button posts and the
- * unit the controller reports against: a `{beds: …}` save owns every
- * `beds.*` error and nothing else. Merging blindly would let a fixed field keep
- * showing its old message; clearing everything would wipe an unrelated
- * section's unresolved error the moment any other control saved.
+ * Replace exactly the errors belonging to the keys this patch carried, scoped by
+ * TOP-LEVEL key: a `{beds: …}` save owns every `beds.*` error and nothing else.
+ * Merging keeps stale messages; clearing wipes another section's live error.
  */
 function mergePatchErrors(
   prev: Record<string, string>,
@@ -198,27 +172,14 @@ function mergePatchErrors(
   return out;
 }
 
-/**
- * How long a search jump waits for its target card to mount, in animation
- * frames (~1s at 60Hz). Generous on purpose: the cost of waiting is invisible
- * — the scroll simply happens on the frame the card appears — while the cost of
- * giving up early is a jump that silently does nothing.
- */
+/** How long a search jump waits for its target card to mount, in frames. */
 const JUMP_MAX_FRAMES = 60;
 
 /**
- * Collector for the number boxes in a whole-block save.
- *
- * Archives and the danger zone post EVERY field on every click, so a box the
- * operator cleared and has not refilled rides along with whatever they actually
- * edited — and neither JS coercion fails safely there. `Number('')` is 0, which
- * is a VALID listener buffer and a valid retention window, so saving an AAC
- * toggle would quietly set the buffer to 0s and flag a mixer restart.
- * `parseInt('')` is NaN, which JSON.stringify posts as `null` and fails the
- * whole block with a message pointing at a field nobody touched.
- *
- * So a blank box refuses the save and names itself instead. An explicitly typed
- * `0` still parses, which is what keeps "0 = no limit" on max track length.
+ * Collector for the number boxes in a whole-block save. Archives and the danger
+ * zone post EVERY field, and neither coercion fails safely: `Number('')` is a
+ * valid 0 (a 0s listener buffer), `parseInt('')` posts as null and fails the whole
+ * block. So a blank box refuses the save and names itself; an explicit 0 parses.
  */
 function numberFields() {
   const bad: Record<string, string> = {};
@@ -310,13 +271,11 @@ export default function SettingsPanel() {
   const [confirmStop, setConfirmStop] = useState(false);
   const [activeSection, setActiveSection] = useState<SectionId>('station');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
-  // Portal target for the one sticky save bar. Null while nothing is unsaved,
-  // which is what makes every section's SaveBar render nothing when clean.
+  // Portal target for the one sticky save bar. Null while nothing is unsaved.
   const [saveSlot, setSaveSlot] = useState<HTMLElement | null>(null);
   // Dirtiness reported by a section whose state does not ride FormState.
   const [localDirty, setLocalDirty] = useState<Record<string, boolean>>({});
-  // Advanced disclosure, per section — remembered while the panel is open so
-  // flipping away to check another section and back does not re-collapse it.
+  // Advanced disclosure, per section — remembered while the panel is open.
   const [advOpen, setAdvOpen] = useState<Record<string, boolean>>({});
   const router = useRouter();
 
@@ -329,11 +288,8 @@ export default function SettingsPanel() {
   const saveMutation = useSettingsMutation<SettingsData>({ adminFetch });
   const busy = commandBusy || saveMutation.isPending;
 
-  // Jingles / SFX / Beds now live on /admin/imaging; their old ?section
-  // deep-links are forwarded so existing bookmarks survive. Read through
-  // useSearchParams, not a one-shot window.location, so client-side navigations
-  // land too — NavidromeBanner links here from /admin/settings itself, where
-  // only the query changes.
+  // Jingles / SFX / Beds live on /admin/imaging; their old ?section deep-links are
+  // forwarded. Read through useSearchParams so client-side navigations land too.
   const searchParams = useSearchParams();
   useEffect(() => {
     const s = searchParams.get('section');
@@ -362,9 +318,7 @@ export default function SettingsPanel() {
       transitions: {
         pairDrain: v.transitions?.pairDrain ?? true,
         stemBlends: v.transitions?.stemBlends ?? false,
-        // Absent reads as ON, matching the controller's resolver
-        // (settings/transition-effects.ts) — a station that has never saved
-        // this block has the whole kit.
+        // Absent reads as ON, matching settings/transition-effects.ts.
         effects: Object.fromEntries(
           TRANSITION_EFFECTS.map(k => [k, v.transitions?.effects?.[k] !== false]),
         ) as Record<TransitionEffect, boolean>,
@@ -417,11 +371,9 @@ export default function SettingsPanel() {
         onePendingPerIp: v.requests?.onePendingPerIp !== false,
       },
       kokoroLang: v.tts?.kokoro?.lang ?? '',
-      // Absent (a settings.json predating the key) reads as OFF, matching the
-      // controller's own coercion in settings.load().
+      // Absent (a settings.json predating the key) reads as OFF, like settings.load().
       djTalkOnlyBetweenTracks: v.djTalkOnlyBetweenTracks === true,
-      // Absent (a settings.json predating the key) reads as the 5-minute
-      // default — where the sign-off has always aired.
+      // Absent (a settings.json predating the key) reads as the 5-minute default.
       handoverOffsetMinutes: String(v.handover?.offsetMinutes ?? 5),
       weather: {
         lat: String(v.weather?.lat ?? ''),
@@ -431,8 +383,7 @@ export default function SettingsPanel() {
         units: v.weather?.units === 'imperial' ? 'imperial' : 'metric',
       },
       tts: {
-        // Absent (a settings.json predating the key) reads as ON, matching the
-        // controller's own coercion in settings.load().
+        // Absent (a settings.json predating the key) reads as ON, like settings.load().
         enabled: v.tts?.enabled !== false,
         defaultEngine: v.tts?.defaultEngine ?? 'piper',
         // Absent block = off, matching the controller's normalizeTtsFallback().
@@ -462,9 +413,7 @@ export default function SettingsPanel() {
             : v.tts?.cloud?.latency === 'balanced'
               ? 'balanced'
               : FISH_TTS_DEFAULTS.latency,
-          // Extra openai-compatible body fields (issue #1317). Rows are text
-          // pairs on the wire too — the controller coerces them to JSON types
-          // at send time, so the form never has to guess a value's shape.
+          // Extra openai-compatible body fields (#1317). Text pairs on the wire.
           compatParams: Array.isArray(v.tts?.cloud?.compatParams)
             ? v.tts.cloud.compatParams.map(p => ({ key: String(p?.key ?? ''), value: String(p?.value ?? '') }))
             : [],
@@ -498,8 +447,7 @@ export default function SettingsPanel() {
         ollamaUrl: v.llm?.ollamaUrl ?? '',
         numCtx: typeof v.llm?.numCtx === 'number' ? v.llm.numCtx : 16384,
         repeatPenalty: typeof v.llm?.repeatPenalty === 'number' ? v.llm.repeatPenalty : 1.15,
-        // Stored providerBaseUrls win; otherwise the legacy single baseUrl seeds
-        // the current provider's slot so no URL is lost.
+        // Stored providerBaseUrls win; otherwise the legacy single baseUrl seeds.
         providerBaseUrls: (() => {
           const llmAny = v.llm as ({ provider?: string; baseUrl?: string; providerBaseUrls?: Record<string, string> }) | undefined;
           const stored = llmAny?.providerBaseUrls;
@@ -512,10 +460,7 @@ export default function SettingsPanel() {
         reasoning: !!v.llm?.reasoning,
         toolChoice: v.llm?.toolChoice === 'auto' ? 'auto' : 'required',
         pickerAgent: !!v.llm?.pickerAgent,
-        // Fallback must track the controller's default (config.ts, 250): a
-        // settings.json written before the field existed omits the key, and
-        // seeding the OLD default here means opening Settings and saving any
-        // LLM field silently persists it over the new one.
+        // Fallback must track the controller's default (config.ts, 250).
         noRepeatWindow: String(typeof v.llm?.noRepeatWindow === 'number' ? v.llm.noRepeatWindow : 250),
         artistVarietyWindow: String(typeof v.llm?.artistVarietyWindow === 'number' ? v.llm.artistVarietyWindow : 5),
         requestWebResolve: !!v.llm?.requestWebResolve,
@@ -548,8 +493,7 @@ export default function SettingsPanel() {
       },
       search: {
         provider: v.search?.provider ?? 'duckduckgo',
-        // GET /settings returns the apiKey redacted to 'set' | '' — that
-        // round-trips through POST harmlessly (settings.update ignores 'set').
+        // GET /settings returns apiKey redacted to 'set' | ''.
         apiKey: v.search?.apiKey ?? '',
         baseUrl: v.search?.baseUrl ?? '',
         searxngEngines: v.search?.searxngEngines ?? '',
@@ -561,8 +505,7 @@ export default function SettingsPanel() {
         providerBaseUrls: (() => {
           const stored = (v.embedding as { providerBaseUrls?: Record<string, string> })?.providerBaseUrls;
           if (stored && typeof stored === 'object') return { ...stored };
-          // Legacy migration keys by the EFFECTIVE provider (own, else the chat
-          // provider), the same key LibrarySection reads and writes.
+          // Legacy migration keys by the EFFECTIVE provider (own, else the chat provider).
           const legacy = v.embedding?.baseUrl ?? '';
           const prov = v.embedding?.provider || v.llm?.provider || '';
           return legacy && prov ? { [prov]: legacy } : {};
@@ -600,11 +543,9 @@ export default function SettingsPanel() {
         },
       },
       picker: {
-        // 0 = off, and that IS the shipped default — an absent key must read as
-        // off rather than inventing a cooldown the operator never asked for.
+        // 0 = off, and that IS the shipped default; an absent key must read as off.
         albumHours: String(typeof v.picker?.albumHours === 'number' ? v.picker.albumHours : 0),
-        // Same rule: absent reads as 0 = no floor, which is the shipped
-        // default and today's behaviour.
+        // Same rule: absent reads as 0 = no floor.
         minTrackLengthSeconds: String(
           typeof v.picker?.minTrackLengthSeconds === 'number' ? v.picker.minTrackLengthSeconds : 0,
         ),
@@ -635,9 +576,7 @@ export default function SettingsPanel() {
   const saveSettings: SaveSettings = async (patch) => {
     try {
       const j = await saveMutation.mutateAsync(patch);
-      // The refetch may resolve while this local form is still dirty against
-      // its old baseline. Mark only submitted fields clean: an edit in another
-      // settings section must continue to hold the queued revision back.
+      // The refetch may resolve while this form is still dirty.
       if (form) {
         const baseline = formBaselineRef.current;
         formBaselineRef.current = baseline
@@ -698,10 +637,7 @@ export default function SettingsPanel() {
     } finally { setBusy(false); }
   };
 
-  /**
-   * Post a whole-block patch — unless a number box in it was left blank, in
-   * which case name the box and save nothing. See `numberFields`.
-   */
+  /** Post a whole-block patch, unless a number box in it was left blank. */
   const saveBlock = (n: ReturnType<typeof numberFields>, patch: Record<string, unknown>) => {
     const blanks = Object.keys(n.bad);
     if (blanks.length > 0) {
@@ -714,17 +650,7 @@ export default function SettingsPanel() {
     saveSettings(patch);
   };
 
-  /**
-   * Archives and the danger zone used to carry a Save button per card — one for
-   * the bitrate, one for the retention window, one for each stream mount. Each
-   * now folds into the section's one save.
-   *
-   * Posting the whole block is safe rather than noisy: `settings.update()`
-   * change-gates every field in these two blocks against the CURRENT value
-   * before deciding it changed, so an untouched field posted alongside an
-   * edited one neither writes nor flags a restart. What it is NOT safe against
-   * is a blank number box, which is why both go through `saveBlock`.
-   */
+  /** Archives and the danger zone fold their per-card saves into one block post. */
   const saveArchives = () => {
     if (!form) return;
     const n = numberFields();
@@ -792,13 +718,10 @@ export default function SettingsPanel() {
     0,
   );
   // A section can be dirty in either currency: form paths the panel diffs, or a
-  // section-local edit it cannot see (Navidrome creds, which live in
-  // setup-config.json rather than settings.json).
+  // section-local edit it cannot see (Navidrome creds, in setup-config.json).
   const hasLocalDirty = Object.values(localDirty).some(Boolean);
   const sectionDirty = changedCount > 0 || hasLocalDirty;
-  // Warn BEFORE the save, from the mirrored path list. The controller stays the
-  // authority afterwards — its `requiresRestart` is what raises the persistent
-  // banner above.
+  // Warn BEFORE the save, from the mirrored path list.
   const restartWarn = RESTART_PATHS.some(path =>
     (activeSpec?.formKeys ?? []).some(key => path === key || path.startsWith(`${key}.`))
     && !samePath(form, baseline, path));
@@ -816,8 +739,7 @@ export default function SettingsPanel() {
       if (key in from) next[key] = JSON.parse(JSON.stringify(from[key] ?? null));
     }
     setForm(next as unknown as FormState);
-    // The errors belonged to values that no longer exist — same ownership rule
-    // the save path uses, so an unrelated section's message survives.
+  // Same ownership rule as the save path.
     setFieldErrors(prev => {
       const out: Record<string, string> = {};
       for (const [path, message] of Object.entries(prev)) {
@@ -831,11 +753,7 @@ export default function SettingsPanel() {
   const jumpTo = useCallback(({ section, anchor, advanced }: SettingsJump) => {
     setActiveSection(section);
     if (advanced) setAdvOpen(prev => ({ ...prev, [section]: true }));
-    // The section swap and the disclosure both have to commit before the target
-    // card exists to scroll to. A fixed delay is a bet against render time that
-    // a 1200-control section can lose, and a lost jump looks exactly like a
-    // broken search result — no scroll, no flash, no error. So watch for the
-    // card across frames instead, and give up only after JUMP_MAX_FRAMES.
+    // The section swap and the disclosure both have to commit first.
     let frames = 0;
     const settle = () => {
       const el = document.querySelector(`[data-card="${anchor}"]`);
@@ -867,10 +785,7 @@ export default function SettingsPanel() {
             {SECTIONS.filter(s => s.group === group).map(s => {
               const isActive = activeSection === s.id;
               const Icon = s.icon;
-              // A section not on screen can only be dirty in form paths — its
-              // own component is unmounted, so a section-local edit (music)
-              // shows a dot on the active section alone. That is accurate
-              // rather than approximate: leaving those sections discards them.
+              // A section not on screen can only be dirty in form paths.
               const dirty = dirtyPaths(form, baseline, s.formKeys).length > 0
                 || (isActive && hasLocalDirty);
               return (
@@ -932,15 +847,8 @@ export default function SettingsPanel() {
         )}
         {!data && !err && <SkeletonForm fields={5} />}
 
-        {/* One save bar per section, sticky, and only while something is
-            unsaved. Each section's own SaveBar portals its note + button into
-            the slot below, so the wording, the patch and the error scoping
-            still belong to the section that knows them.
-
-            top-[3.25rem] clears AdminShell's own sticky header (top-0, ~49px
-            tall) rather than tucking under it like the section rail does — this
-            is the one strip that has to stay readable while the operator
-            scrolls a long section looking for what they changed. */}
+        {/* One save bar per section, sticky, and only while something is unsaved.
+            top-[3.25rem] clears AdminShell's own sticky header (top-0, ~49px). */}
         {sectionDirty && (
           <div className="sticky top-[3.25rem] z-30 grid gap-2.5 border border-vermilion bg-bg p-3 shadow-drawer">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -1027,8 +935,7 @@ export default function SettingsPanel() {
           </>
           );
         })()}
-        {/* Self-contained panels — each re-calls useAdminAuth and owns its
-            own data fetch, so they render outside the data && form guard. */}
+        {/* Self-contained panels — each re-calls useAdminAuth and owns its own fetch. */}
         {activeSection === 'archives' && (
           <>
             <ArchivesPanel />
@@ -1174,8 +1081,7 @@ export default function SettingsPanel() {
               <Card title="Idle pause" sub="silence the programme when nobody is listening">
                 <div className="field">
                   <Label>Pause when the room is empty</Label>
-                  {/* Seg + "after" + minutes + "min" + Save is wider than a
-                      phone card, so the row wraps below 640px. */}
+                  {/* The row wraps below 640px. */}
                   <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap">
                     <Seg
                       options={[
@@ -1386,8 +1292,7 @@ export default function SettingsPanel() {
                       />
                       <span className="text-sm opacity-70">
                         GB &middot; holds ~
-                        {/* /25 mirrors the controller's stem-cache APPROX_TRACK_BYTES
-                            ceiling, /13 the field-measured average (#1257). */}
+                        {/* /25 mirrors the controller's stem-cache APPROX_TRACK_BYTES ceiling (#1257). */}
                         {Math.floor(
                           ((Number(form.transitions.stemCacheGb) || 15) * 1024) / 25,
                         ).toLocaleString('en-GB')}
@@ -1537,8 +1442,7 @@ export default function SettingsPanel() {
                     restart needed.
                   </div>
                   {(() => {
-                    // The minimum play time plus overrun tolerance prevents boundary
-                    // cuts at this cap. Shows can override the station cap.
+                    // Minimum play time plus overrun tolerance. Shows can override the station cap.
                     const floor = data?.values?.boundaryFadeMinTrackSeconds ?? 150;
                     const cap = Number(form.maxTrackSeconds);
                     if (!form.fadeAtShowEnd || !Number.isFinite(cap) || cap <= 0 || cap > floor) return null;

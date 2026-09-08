@@ -1,27 +1,11 @@
-// Issue #1570: the admin Library page polls GET /library/coverage, and
-// `coverage.total` costs one Navidrome getAlbum call PER ALBUM — a few thousand
-// sequential requests on a real library. The bug was a 6h staleness check
-// inside get() that fired that walk from the page's own mount poll, so opening
-// the Library page hammered Navidrome with a scan nobody asked for.
+// #1570: `coverage.total` is one Navidrome getAlbum call per album, so three
+// things must hold — get() NEVER scans, the count PERSISTS (nothing recounts
+// unattended, so an in-memory cache would blank it every restart), and a
+// failed count is recorded rather than only logged.
 //
-// The fix has three load-bearing halves, and each is easy to undo by accident:
-//
-//   1. get() NEVER scans. One re-added `if (isStale()) refresh()` restores the
-//      original bug, and nothing else in the suite would notice.
-//   2. The count PERSISTS. Once nothing recounts unattended, an in-memory-only
-//      cache blanks the total — and every percentage derived from it — on each
-//      controller restart, and `scannedAt` can never read older than process
-//      uptime, which is the staleness that stamp exists to expose.
-//   3. A FAILED count is recorded, not just logged. The scan is fire-and-forget
-//      behind an operator button whose only other feedback is the number
-//      appearing, so a silent failure reads as nothing having happened.
-//
-// Both a behavioural pin (doScan sets `scanning` before its first await, so a
-// get() that kicked a scan would be observable on the very next read) and a
-// source pin (the read path names no walker) — the behavioural one can't tell a
-// scan that was never started from one that failed instantly on a stub server.
-//
-// Run: npm test -- library-coverage
+// Pinned both behaviourally (doScan sets `scanning` before its first await)
+// and from source, since the behavioural half cannot tell a scan that never
+// started from one that failed instantly against a stub server.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -39,27 +23,21 @@ const ROUTES = new URL('../src/routes/library.ts', import.meta.url);
 
 const coverage = await import('../src/music/library-coverage.js');
 
-// These files explain the invariant in prose directly above the code that keeps
-// it ("Deliberately NO coverage.refresh() here…"), so every source assertion
-// below reads CODE only — otherwise the comment documenting the fix trips the
-// test guarding it.
+// The source files name refresh() in their own comments, so strip comments
+// before asserting on code.
 const codeOnly = (s: string) => s.replace(/^\s*\/\/.*$/gm, '');
 
 test.after(() => rmSync(STATE, { recursive: true, force: true }));
 
-// --- 1. the read path ------------------------------------------------------
-
 test('get() never starts a scan', async () => {
-  // doScan() sets cache.scanning = true synchronously, before its first await —
-  // so if get() kicked a walk, the very snapshot it returns would say so.
+  // doScan() sets cache.scanning synchronously, before its first await.
   const snap = await coverage.get();
   assert.equal(snap.scanning, false, 'get() started a scan');
   assert.equal(snap.total, null, 'an uncounted library must report a null total, not 0');
   assert.equal(snap.percent, null, 'percent is null while the total is unknown');
   assert.equal(snap.scannedAt, null);
 
-  // Twice, because the original bug was a staleness check: a second read after
-  // the first is exactly where a TTL would fire.
+  // Twice: a second read is where a TTL staleness check would fire.
   const again = await coverage.get();
   assert.equal(again.scanning, false, 'a repeat get() started a scan');
   assert.equal(again.total, null);
@@ -97,14 +75,9 @@ test('a library reset does not recount Navidrome', async () => {
 });
 
 test('every percentage is capped at 100, not just floored', async () => {
-  // The numerator of each ratio is a live library.db count; the denominator is
-  // the last Navidrome walk. Since nothing recounts unattended they drift by
-  // design — tracks pulled from the music server linger in library.db until a
-  // reconcile, and the total only moves when someone asks. Found live: a real
-  // controller with a 1413-track library.db against a 48-song server rendered
-  // "2943% tagged", which reads as a broken meter rather than a stale count.
-  // The progress BARS already clamped their aria-valuenow; only the printed
-  // figure was exposed, so the clamp belongs at the source both read from.
+  // The numerator is a live library.db count, the denominator the last
+  // Navidrome walk, and they drift by design — a 1413-track db against a
+  // 48-song server rendered "2943% tagged".
   const src = codeOnly(await readFile(SRC, 'utf8'));
   const body = src.slice(src.indexOf('const pctOf'), src.indexOf('const embeddedMeta'));
   assert.match(body, /Math\.min\(\s*100/, 'the percentage helper must cap at 100');
@@ -116,8 +89,6 @@ test('every percentage is capped at 100, not just floored', async () => {
     );
   }
 });
-
-// --- 2. persistence --------------------------------------------------------
 
 test('a stored count is restored on boot, with its original age', async () => {
   // Stand in for "a previous process counted this library three days ago".
@@ -175,8 +146,6 @@ test('an atomic write is used, so a torn file cannot replace a good count', asyn
   );
 });
 
-// --- 3. failure is recorded ------------------------------------------------
-
 test('the payload carries scanError, and a clean read reports none', async () => {
   rmSync(COUNT_FILE, { force: true });
   const fresh = await import(`../src/music/library-coverage.js?err=${Math.random()}`);
@@ -196,9 +165,8 @@ test('refresh() records why a scan failed instead of only logging it', async () 
 });
 
 test('a scan that fails leaves the previous count and its age in place', async () => {
-  // doScan only writes total/scannedAt on success, and persistCount is called
-  // from the same success arm — so a failed re-count can never blank a good
-  // number over a transient Navidrome blip.
+  // total/scannedAt are written only on success, so a failed re-count cannot
+  // blank a good number over a transient Navidrome blip.
   const src = codeOnly(await readFile(SRC, 'utf8'));
   const scan = src.slice(src.indexOf('async function doScan()'));
   const body = scan.slice(0, scan.indexOf('\n}'));
@@ -210,8 +178,6 @@ test('a scan that fails leaves the previous count and its age in place', async (
     'the finally block must not write the count — that would land on the failure path too',
   );
 });
-
-// --- 4. the count file lands where the docs say ----------------------------
 
 test('the count persists to state/library-count.json', async () => {
   const scannedAt = new Date().toISOString();

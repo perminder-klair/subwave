@@ -1,9 +1,7 @@
-// Kokoro TTS client — supervises a persistent Python worker over stdio.
-//
-// kokoro_worker.py loads the ONNX model once (2-5s) and stays resident,
-// reading one JSON request per line and emitting one JSON response per line.
-// We manage the lifecycle here: lazy spawn on first speak(), auto-restart
-// on crash, and a small request map keyed by monotonic id.
+// Kokoro TTS client: supervises a persistent Python worker over stdio.
+// kokoro_worker.py loads the ONNX model once (2-5s) and stays resident, one
+// JSON request per line. Lifecycle here: lazy spawn on first speak(),
+// auto-restart on crash, request map keyed by monotonic id.
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -11,10 +9,8 @@ import { config } from '../config.js';
 import { resolveTtsOutPath } from './tts-out.js';
 
 const READY_TIMEOUT_MS = 60_000;        // first call may include model load
-// Generous because Kokoro on Apple Silicon runs under Rosetta (linux/amd64 image
-// on arm64 host) and ONNX inference can easily take 30-120s for a typical DJ
-// line. On a native Linux x86 host it completes in 1-2s — this ceiling is never
-// hit there. Override via KOKORO_REQUEST_TIMEOUT_MS if you want to clamp tighter.
+// Generous because Kokoro under Rosetta (amd64 image on an arm64 host) can take
+// 30-120s per line; native x86 is 1-2s. KOKORO_REQUEST_TIMEOUT_MS clamps it.
 const REQUEST_TIMEOUT_MS = parseInt(process.env.KOKORO_REQUEST_TIMEOUT_MS || '180000', 10);
 
 type PendingRequest = {
@@ -60,21 +56,16 @@ class KokoroWorker {
       this.failReady(new Error('kokoro worker ready timeout'));
     }, READY_TIMEOUT_MS);
 
-    // A spawn that never starts emits 'error', not 'exit'. Node throws an
-    // unhandled 'error' event out of the event loop, which takes the WHOLE
-    // controller down — every engine here is opt-in or build-time-installed
-    // (kokoro's interpreter is absent whenever its venv/model install did
-    // not happen), and POST /settings/tts/preview deliberately bypasses
-    // isAvailable() so the operator can test an engine the dispatcher would
-    // skip. That combination turns an admin "Play sample" press into total
-    // dead air. Route it into failReady() like every other boot failure: the
-    // caller's promise rejects, the dispatcher falls back, the station keeps
-    // making sound. piper has always done this (audio/piper.ts).
+    // A spawn that never starts emits 'error', not 'exit', and an unhandled
+    // 'error' event takes the whole controller down. This engine's interpreter
+    // is absent whenever its venv install did not happen, and
+    // POST /settings/tts/preview bypasses isAvailable() on purpose. Route it
+    // into failReady() like every other boot failure: the caller's promise
+    // rejects, the dispatcher falls back, the station keeps making sound.
     this.proc.on('error', (err: Error) => {
       console.error(`[kokoro] worker spawn failed: ${err.message}`);
       this.fatalError = err;
-      // No pending requests can exist yet: speak() awaits readyPromise before
-      // it enqueues anything, so rejecting that promise is the whole failure.
+      // No pending requests can exist yet: speak() awaits readyPromise first.
       this.failReady(err);
     });
 
@@ -120,9 +111,8 @@ class KokoroWorker {
     else pending.reject(new Error(msg.error || 'kokoro request failed'));
   }
 
-  // SIGTERM the child and drop the handle. Idempotent, and safe to call on a
-  // process that has already exited (kill() on a reaped child is a no-op, but
-  // guard anyway so a race can't throw out of an exit handler).
+  // SIGTERM the child and drop the handle. Idempotent and safe on an already
+  // exited process; guarded so a race can't throw out of an exit handler.
   reap() {
     const p = this.proc;
     this.proc = null;
@@ -138,17 +128,12 @@ class KokoroWorker {
     if (this.ready) return;
     if (this.readyTimer) clearTimeout(this.readyTimer);
     this.readyReject?.(err);
-    // Giving up on the boot has to kill the child too. Without this the ready
-    // timeout only rejected the promise: the Python process stayed alive,
-    // blocked forever on `for line in sys.stdin` (kokoro_worker.py) with the
-    // ONNX model resident, and since Node holds its stdin pipe open it never
-    // exited on its own. A later speak() would then replace `worker` and
-    // orphan it, leaking a few hundred MB per cycle.
-    //
-    // Model load is 2-5s (60s ceiling), so a worker that misses it is stuck,
-    // not merely slow — REQUEST_TIMEOUT_MS is the knob for slow *inference* on
-    // Rosetta, not this one. tts.ts falls back to Piper either way, so killing
-    // costs a caller nothing that the rejection above hadn't already cost.
+    // Giving up on the boot must kill the child too: rejecting alone leaves the
+    // Python process blocked on stdin with the ONNX model resident, and a later
+    // speak() replaces `worker` and orphans it, leaking a few hundred MB per
+    // cycle. Model load is 2-5s against a 60s ceiling, so a worker that misses
+    // it is stuck rather than slow (REQUEST_TIMEOUT_MS is the knob for slow
+    // inference). tts.ts falls back to Piper either way.
     this.reap();
   }
 
@@ -179,10 +164,9 @@ class KokoroWorker {
 async function ensureWorker(): Promise<KokoroWorker> {
   if (worker && worker.ready) return worker;
   if (bootingPromise) return bootingPromise;
-  // Belt-and-braces for the orphan above: bootingPromise is nulled in the
-  // finally below as soon as the first boot settles, so a failed boot leaves a
-  // non-ready `worker` that the next call would otherwise overwrite silently.
-  // Reap before replacing so at most one Python child is ever resident.
+  // bootingPromise is nulled as soon as the first boot settles, so a failed boot
+  // leaves a non-ready `worker` the next call would otherwise overwrite
+  // silently. Reap before replacing: at most one Python child is ever resident.
   if (worker && !worker.ready) {
     worker.reap();
     worker = null;
@@ -201,10 +185,8 @@ async function ensureWorker(): Promise<KokoroWorker> {
   }
 }
 
-// Reap the resident worker on shutdown. Docker tears down the container's whole
-// process group, so this only matters on the bare-process path (npm start / dev)
-// where the spawned Python child would otherwise be orphaned. Best-effort:
-// SIGTERM the proc if we hold one and drop the handle.
+// Reap the resident worker on shutdown. Only matters on the bare-process path
+// (npm start / dev); Docker tears down the whole process group. Best-effort.
 export function stop(): void {
   const w = worker;
   worker = null;
@@ -229,13 +211,10 @@ export async function speak(
   return msg.path;
 }
 
-// Mirrors chatterbox/pocket-tts: existsSync the actual on-disk assets rather
-// than trusting the config paths (which always have env defaults). Kokoro's
-// model + voices files are downloaded at image build — if that wget failed
-// (transient GitHub 429/5xx) the worker would spawn and then die on load, so a
-// path-only check would report `kokoro: true` on the Debug page while every
-// segment silently falls back to Piper. Checking the files keeps availableEngines()
-// honest and lets the dispatcher skip the doomed spawn.
+// existsSync the on-disk assets, not the config paths (which always have env
+// defaults). The model + voices files are downloaded at image build, and a
+// failed download would otherwise report `kokoro: true` while every segment
+// silently fell back to Piper.
 export function isAvailable() {
   return existsSync(config.kokoro.python)
     && existsSync(config.kokoro.workerScript)

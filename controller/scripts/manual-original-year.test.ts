@@ -1,18 +1,6 @@
 // Integration pins for the operator's manual era override (#1418) — the
 // precedence rules that decide whose answer survives.
 //
-// The automatic pipeline has two writers: the library WALK (album tag →
-// 'album-tag') and the MusicBrainz phase (→ 'musicbrainz'). The override adds a
-// third, 'manual', which must outrank both. That is not a preference, it is a
-// correctness requirement: every walk re-visits every track, so an override the
-// walk can clobber would be silently undone by the next rescan — the operator
-// would fix a record, and the station would forget by morning.
-//
-// Real better-sqlite3 against a temp STATE_DIR, because all three writers are
-// SQL CASE expressions. A pure test over the intent would pass on every
-// possible bug here.
-//
-// Run: npm test -- manual-original-year
 
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
@@ -39,9 +27,6 @@ after(() => {
 // 2012 comp that Navidrome does NOT flag as a compilation, so the walk copies
 // the album's originalReleaseDate (2012) straight in as the "original" year.
 // Post-#1418: the walk no longer records an uninformative album-tag year, and
-// stamps the derived era verdict instead. `eraUntrusted: true` is what
-// era-suspect.albumEraSuspect returns for this album (Various Artists, 8
-// credited artists, a 1964-65 range in the title).
 function seedAnthologyTrack(id: string) {
   db.upsertTrackMeta(id, {
     title: 'After Laughter (Comes Tears)',
@@ -72,7 +57,6 @@ test('the reported defect, as it behaved before the fix', () => {
   assert.equal(t.originalYear, 2012);
   assert.equal(t.originalYearSource, 'album-tag');
   // The reissue year read as resolved, so era filtering put a 1964 recording
-  // in the 2010s...
   assert.equal(resolveEraYear(t.year, t.originalYear, t.yearUntrusted), 2012);
   // ...and the lookup that could have fixed it skipped the track twice over:
   // the album is not flagged, and the year already looks answered.
@@ -98,8 +82,6 @@ test('a later suspect walk clears a stale album-tag year and queues a lookup', (
   // The trust verdict is album-wide and can change as a walk sees more tracks.
   // This row was first visited while the album still looked ordinary, so it
   // already holds a plausible-looking album tag that differs from the file
-  // year. Once the completed album is suspect, that stale answer must not keep
-  // the track out of the MusicBrainz backfill.
   db.upsertTrackMeta('late-suspect', {
     title: 'Old Recording', artist: 'Singer A', album: 'Greatest Hits',
     year: 2015, originalYear: 1990, isCompilation: false, eraUntrusted: false,
@@ -121,7 +103,6 @@ test('a later suspect walk clears a stale album-tag year and queues a lookup', (
 test('an ordinary album is untouched by any of this', () => {
   // The regression that matters: the widened gate must not sweep in normal
   // records, which would cost a MusicBrainz request each and drop them out of
-  // era shows if the lookup missed.
   db.upsertTrackMeta('ord', {
     title: 'Nude', artist: 'Radiohead', album: 'In Rainbows',
     year: 2007, originalYear: null, isCompilation: false, eraUntrusted: false,
@@ -154,7 +135,6 @@ test('the override writes the operator answer and stamps the source', () => {
 
   // Search/recent rows are shaped from library.get(), not the browse record.
   // If this projection drops either field, the shared editor claims the file
-  // year is authoritative and offers no way to clear a persisted override.
   const admin = library.get('t1');
   assert.equal(admin.originalYearSource, 'manual');
   assert.equal(admin.eraUntrusted, true);
@@ -163,7 +143,6 @@ test('the override writes the operator answer and stamps the source', () => {
 test('a later library walk does NOT clobber the override', () => {
   // The load-bearing case. Every walk re-upserts every track with the album
   // tag's year; without the IN ('musicbrainz','manual') guard this write puts
-  // 2012 back and the operator's correction lasts until the next rescan.
   seedAnthologyTrack('t1');
   const t = db.getTrack('t1')!;
   assert.equal(t.originalYear, 1964);
@@ -195,7 +174,6 @@ test('clearing REMOVES the override rather than pinning "unknown"', () => {
 test('after clearing, the automatic pipeline owns the track again', () => {
   // The point of clearing being a REMOVE: "I was wrong about this one" has to
   // be recoverable without a library reset. The track goes back to unresolved
-  // and era-suspect, i.e. queued for a lookup — not back to the wrong 2012.
   seedAnthologyTrack('t1');
   const t = db.getTrack('t1')!;
   assert.equal(t.originalYear, null);
@@ -209,7 +187,6 @@ test('clearing only removes an actual override — a resolved sibling is untouch
   // The album-wide clear (applyToAlbum) runs setManualOriginalYear(null) over
   // EVERY album track. A sibling holding a 'musicbrainz' or informative
   // 'album-tag' year was RESOLVED, not overridden — nulling it would read as
-  // unknown-year everywhere until a manual enrichment pass.
   db.upsertTrackMeta('sib-mb', {
     title: 'Sibling A', artist: 'Wendy Rene', album: 'After Laughter Comes Tears',
     year: 2012, originalYear: null, isCompilation: true,
@@ -286,9 +263,6 @@ test('a checked-but-missed row is still reachable by the override', () => {
 // ── migration 21's data change ───────────────────────────────────────────────
 // The one statement in #1418 that deletes something an operator already has.
 // What it SPARES matters as much as what it clears, so both directions are
-// pinned. Called directly rather than by re-running the migration: the test DB
-// is already at the current version, and the helper exists precisely so this
-// SQL is reachable.
 
 test('the migration clears an album-tag year that only echoes the release year', () => {
   db.upsertTrackMeta('m1', { title: 'Echo', artist: 'A', album: 'Ordinary', year: 2007, originalYear: 2007 });
@@ -337,8 +311,6 @@ test('an era change keeps the old vector usable but schedules a text-vector refr
 
   // A later walk discovers that the release year is not a trustworthy
   // recording year. The old vector must remain searchable until the embed pass
-  // replaces it, but that pass must no longer mistake "has a vector" for
-  // "this vector reflects the current era".
   db.upsertTrackMeta('dirty-era', {
     title: 'Old Recording', artist: 'Someone', album: 'Later Anthology',
     year: 2012, isCompilation: false, eraUntrusted: true,
@@ -366,7 +338,6 @@ test('an embed built before an era change cannot clear the newer refresh marker'
 
   // Completion of the stale request may replace the vector, but it must leave
   // the marker set so the next pass repairs it. Unconditionally clearing here
-  // loses the only durable record that the vector still describes 2012.
   db.upsertTrackVector('embed-race', new Array(768).fill(0.02), staleEraYear);
   assert.ok(db.textVectorDirtyIds().includes('embed-race'));
 });
@@ -387,10 +358,6 @@ test('migration 22 backfills the refresh marker ONLY where the era text changed'
   // originalYear, isCompilation) since before #1418, and original_year wins
   // before any flag is consulted — so the only vectors #1418 made stale are
   // UNRESOLVED rows the new era_untrusted verdict flipped to unknown-era.
-  // Marking a resolved row schedules a re-embed of byte-identical text; on a
-  // real library that was every originalYear/compilation row at once.
-  // Embedded while trusted, then a walk stamps the era verdict — the #1418
-  // sequence that happened on v21 DBs before the marker column existed.
   db.upsertTrackMeta('pre-v22-stale', {
     title: 'Unresolved Anthology Cut', artist: 'Someone', album: 'Singles 1968-1974',
     year: 2015, originalYear: null, isCompilation: false, eraUntrusted: false,

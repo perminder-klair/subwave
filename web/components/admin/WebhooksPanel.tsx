@@ -33,9 +33,8 @@ import {
 const formSchema = z.object({ webhooks: webhooksSchema });
 type FormValues = z.input<typeof formSchema>;
 type SavedWebhooks = z.output<typeof formSchema>['webhooks'];
-// A row as the FORM sees it. This is z.input, so `enabled` and `authHeader`
-// are optional here — the schema .default()s them — even though blank() and
-// every server response populate both.
+// A row as the FORM sees it: z.input, so `enabled` and `authHeader` are optional
+// here (the schema defaults them) though blank() and the server always set both.
 type WebhookRow = FormValues['webhooks'][number];
 
 function clientMintId() {
@@ -284,8 +283,7 @@ export default function WebhooksPanel() {
   const [busy, setBusy] = useState(false);
 
   const form = useZodForm(formSchema, { webhooks: [] });
-  // keyName defaults to 'id' — which would CLOBBER our webhook's own `id`
-  // field. Renaming RHF's internal key is mandatory here, not cosmetic.
+  // keyName defaults to 'id', which would clobber the webhook's own `id`.
   const { fields, append, remove } = useFieldArray({
     control: form.control,
     name: 'webhooks',
@@ -341,9 +339,8 @@ export default function WebhooksPanel() {
     }
   });
 
-  // The gate persists the moment it's flipped: it must not ride the hooks Save
-  // button, which an invalid draft row would disable. Doesn't touch `hooks`, so
-  // unsaved row edits survive a toggle.
+  // The gate persists on flip rather than riding the Save button, which an
+  // invalid draft row would disable. Leaves `hooks` alone, so edits survive.
   const saveGate = async (next: boolean) => {
     setBusy(true);
     try {
@@ -447,13 +444,11 @@ export default function WebhooksPanel() {
       {fields.map((f, i) => {
         const row = form.watch(`webhooks.${i}`);
         const rowErrors = form.formState.errors.webhooks?.[i];
-        // `enabled` is optional in z.input because the schema defaults it to
-        // true; blank() and the server response always set it, so the ?? here
-        // just re-states that default rather than papering over a real gap.
+        // `enabled` is optional in z.input (schema defaults it true); blank()
+        // and the server always set it, so the ?? restates that default.
         const enabled = row.enabled ?? true;
-        // Keyed off _rhfKey, not the array index: reordering or removing a row
-        // must not hand a different row the ids a screen reader is already
-        // pointing at.
+        // Keyed off _rhfKey, not the array index, so removing a row cannot hand
+        // its ids to another row.
         const urlAria = fieldAria(`wh-url-${f._rhfKey}`, rowErrors?.url);
         const authAria = fieldAria(`wh-auth-${f._rhfKey}`, rowErrors?.authHeader, {
           hasDescription: true,
@@ -470,8 +465,7 @@ export default function WebhooksPanel() {
         return (
           <Card
             key={f._rhfKey}
-            /* A webhook URL is one long unbreakable token and `.card-head` is a
-               flex row that doesn't wrap, so break inside the title instead. */
+            /* `.card-head` is a non-wrapping flex row, so break inside the title. */
             title={
               row.url
                 ? <span className="break-all">{row.url}</span>
@@ -530,11 +524,9 @@ export default function WebhooksPanel() {
                       placeholder={field.value === 'set' ? '(stored, leave blank to keep)' : 'Bearer …'}
                       aria-label="Authorization header"
                       spellCheck={false}
-                      // Opaque secret, so `off` — the convention every other
-                      // credential box in admin/ follows. Left at the browser
-                      // default, a password manager reads this as the site's
-                      // own login: it offers to fill it, and offers to UPDATE
-                      // the saved password when the form submits.
+                      // Opaque secret, so `off` like every other credential box:
+                      // at the browser default a password manager treats it as
+                      // the site's own login and offers to overwrite it.
                       autoComplete="off"
                     />
                   )}
@@ -565,8 +557,7 @@ export default function WebhooksPanel() {
                         dot={on}
                         onClick={() => toggleEvent(ev)}
                         pressed={on}
-                        // These pills are the event picker, so they need a
-                        // thumb-sized target on a phone.
+                        // Event picker: needs a thumb-sized target on a phone.
                         className="min-h-9 cursor-pointer sm:min-h-0"
                       >
                         {ev}

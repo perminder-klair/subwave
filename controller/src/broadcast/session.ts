@@ -1,19 +1,6 @@
-// Stream session — the DJ's current run, captured as a chat history.
-//
-// A session is a runtime instance of either a scheduled show or an autonomous
-// block. It holds a `messages` array of turns: events the system posts ("track
-// ended, pick the next one"), the DJ agent's replies, track plays, and spoken
-// segments — each timestamped. The DJ agent (broadcast/dj-agent.js) reads a
-// bounded window of this history so the DJ has real memory within a run.
-//
-// Lifecycle:
-//   - `sessionKeyFor(ctx)` derives an identity from the active show, or from
-//     the time period + dominant mood for an autonomous block.
-//   - `maybeRoll(ctx)` ends the current session and starts a new one whenever
-//     that key changes (a show begins/ends, the mood flips) or the session
-//     ages past MAX_SESSION_MS. A short plain-text handoff carries forward.
-//   - The live session is persisted to state/session.json; archived sessions
-//     land in state/sessions/<id>.json on roll.
+// Stream session: the DJ's current run as a chat history of timestamped turns,
+// which broadcast/dj-agent.js reads a bounded window of. Persisted to
+// state/session.json; archived to state/sessions/<id>.json on roll.
 
 import { readFile, mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -25,11 +12,9 @@ import { logEvent } from '../observability/events.js';
 import type { getFullContext } from '../context.js';
 import { promptMemoryEntries, type PromptMemoryEntry } from './prompt-memory.js';
 
-// The station context object the DJ/session layer keys off — the exact return
-// shape of getFullContext (type-only import, erased at runtime, so no cycle).
+// Type-only import, erased at runtime, so no cycle with context.ts.
 export type SessionContext = Awaited<ReturnType<typeof getFullContext>>;
 
-// The scenario snapshot stored on a session (the moment it opened in).
 interface Scenario {
   period: string | null;
   vibe: string | null;
@@ -38,8 +23,7 @@ interface Scenario {
   festival: string | null;
 }
 
-// Per-turn metadata bag. A few keys are read by the window builder; everything
-// else callers stash rides through untouched.
+// A few keys are read by the window builder; anything else rides through.
 export interface TurnMeta {
   personaId?: string;
   personaName?: string;
@@ -47,7 +31,6 @@ export interface TurnMeta {
   [k: string]: unknown;
 }
 
-// One entry in a session's chat history.
 interface Turn {
   t: string;
   role: string;
@@ -56,7 +39,6 @@ interface Turn {
   meta: TurnMeta;
 }
 
-// The producer plan for a programme episode (see broadcast/programme.ts).
 interface ProgrammePlan {
   angle?: string | null;
   features?: Array<{ topic?: string; kind?: string | null }>;
@@ -65,7 +47,6 @@ interface ProgrammePlan {
   [k: string]: unknown;
 }
 
-// Programme episode state carried on the session (plan + which beats aired).
 export interface ProgrammeState {
   status: 'pending' | 'ok' | 'fallback';
   plan: ProgrammePlan | null;
@@ -73,31 +54,26 @@ export interface ProgrammeState {
   introAiredAt: string | null;
 }
 
-// Outgoing-persona metadata stamped on a hard roll so a caller can air the
-// two-voice mic-pass.
+// Stamped on a hard roll so a caller can air the two-voice mic-pass.
 export interface RolledFrom {
   personaId: string;
   personaName: string | null;
   showName: string | null;
-  // When the roll happened (epoch ms), so a mic-pass that never found a track
-  // boundary can expire instead of airing hours late. Optional: sessions
-  // persisted before this field existed read as fresh (see handoffIsStale).
-  // Distinct from the context's `at` — this is when the roll fired, not what
-  // moment the context described.
+  // When the roll fired (epoch ms), so a mic-pass that never found a boundary
+  // expires instead of airing hours late. Absent reads as fresh. Not the
+  // context's `at`.
   at?: number;
 }
 
-// The live DJ session (also the on-disk shape of session.json).
+// Also the on-disk shape of session.json.
 interface Session {
   id: string;
   kind: 'show' | 'auto';
   key: string;
   startedAt: string;
-  // The moment the key/persona were resolved FOR (the context's `at`): a
-  // look-ahead roll leads the wall clock by up to a track length, so this can
-  // sit ahead of startedAt. maybeRoll refuses to roll to an older moment
-  // (rollIsBackward); absent — a session persisted before this field existed —
-  // the guard never blocks.
+  // The moment the key/persona were resolved FOR (context's `at`); a look-ahead
+  // roll puts it ahead of startedAt. maybeRoll refuses an older moment
+  // (rollIsBackward); absent, the guard never blocks.
   ctxAt?: string;
   endedAt: string | null;
   show: { id?: string; name?: string; topic?: string } | null;
@@ -112,12 +88,9 @@ interface Session {
 
 const MAX_SESSION_MS = 4 * 60 * 60 * 1000;  // safety cap — roll even if key is stable
 const WINDOW_TURNS = 40;                    // turns fed to the agent
-// Hard bound on the messages array. A normal 4h session generates a few
-// hundred turns, so this never trims in practice — it exists because persist()
-// rewrites the whole array on every turn (1s debounce), and an unbounded array
-// makes that O(n²) over the session (and lets a pathological session grow
-// session.json without limit). Far above WINDOW_TURNS and the prompt-memory
-// windows, so trimming is invisible to the agent.
+// Hard bound on the messages array: persist() rewrites the whole array per turn,
+// so unbounded growth is O(n^2). Far above WINDOW_TURNS, so the agent never sees
+// the trim.
 const MAX_TURNS = 500;
 const RATIONALE_WINDOW = 3;                 // most-recent dj/pick reasons kept in the window (anti-thread-momentum)
 const PERSIST_DEBOUNCE_MS = 1000;
@@ -129,18 +102,14 @@ function mintId() {
   return 'sess_' + randomBytes(4).toString('hex');
 }
 
-// Identity of the run. Consecutive hours of the same show share one session;
-// an autonomous block changes key when its period or mood changes, but
-// maybeRoll() treats that key change as a soft shift rather than a hard roll.
+// Identity of the run. An autonomous block's key changes on period/mood, but
+// maybeRoll() treats that as a soft shift, not a hard roll.
 export function sessionKeyFor(ctx: SessionContext) {
   if (ctx?.activeShow?.id) return `show:${ctx.activeShow.id}`;
   return `auto:${ctx?.time?.period || 'unknown'}:${ctx?.dominantMood || 'none'}`;
 }
 
-// The moment a context describes. `at` is stamped by getFullContext (context.ts);
-// a context from anywhere else, or one persisted before `at` existed, reads as
-// "now" — the pre-look-ahead behaviour. Pure: unit-pinned by
-// scripts/handoff-boundary.test.ts.
+// The moment a context describes. A missing/invalid `at` reads as now.
 export function contextDate(ctx: { at?: unknown } | null | undefined): Date {
   const raw = ctx?.at;
   if (typeof raw !== 'string') return new Date();
@@ -148,24 +117,16 @@ export function contextDate(ctx: { at?: unknown } | null | undefined): Date {
   return Number.isNaN(d.getTime()) ? new Date() : d;
 }
 
-// Whether a pending mic-pass has waited too long to still be worth airing.
-// A sign-off/greeting pair bakes in a time reference and names the show that
-// just ended, so a late one is worse than none — the same call airPendingVoice
-// makes for a stale ident (PENDING_VOICE_MAX_AGE_MS) and shouldDropStaleLink
-// makes for a stale back-announce.
-//
-// A session rolled before `at` existed has no stamp; treat it as fresh so an
-// in-flight handoff across a deploy still airs. Pure.
+// Whether a pending mic-pass has waited too long to be worth airing. A missing
+// stamp reads as fresh, so an in-flight handoff across a deploy still airs.
 export function handoffIsStale(at: unknown, now: number, maxAgeMs: number): boolean {
   if (typeof at !== 'number' || !Number.isFinite(at)) return false;
   return now - at > maxAgeMs;
 }
 
-// Whether a candidate context describes an OLDER moment than the one the live
-// session was resolved for — accepting it would roll the session backward
-// across a boundary the look-ahead already crossed. Missing or garbage stamps
-// (a pre-upgrade session.json, a context without `at`) → false: never block a
-// roll on bad data. Pure: unit-pinned by scripts/handoff-boundary.test.ts.
+// Whether a candidate context is OLDER than the moment the live session was
+// resolved for: accepting it would roll back across a boundary the look-ahead
+// already crossed. Missing/garbage stamps yield false — never block on bad data.
 export function rollIsBackward(ctxDate: Date, sessionCtxAt: unknown): boolean {
   const at = typeof sessionCtxAt === 'string' ? Date.parse(sessionCtxAt) : NaN;
   if (!Number.isFinite(at)) return false;
@@ -198,17 +159,9 @@ function scenarioText(s: Session) {
   return `Autonomous block begins — ${bits.join(', ')}.`;
 }
 
-// Compact continuity summary of a finished session, carried into the next one
-// (only on a HARD roll now — a show boundary or the 4h cap; daypart turnovers
-// keep the live session instead, see maybeRoll). Enriched with the prior
-// persona + mood so a new program still opens with a sense of where the station
-// just was. Identity-only by design: raw prior speech is the semantic bridge
-// issue #1479 closes, while the separate on-air mic pass still sounds natural.
-//
-// STILL intentionally omits the "recently aired" track list — leaking the
-// previous session's titles into the new picker's prompt window biases it
-// toward re-picking those same tracks (observed cause of 6-8× daily repeats).
-// The picker has its own recents window for blocking repeats. Do not add titles.
+// Continuity summary carried into the next session on a HARD roll. Identity only
+// (#1479): never carry raw prior speech, and never add the recently-aired track
+// list — titles in the new picker's prompt window bias it toward repeats.
 function buildHandoff(prev: Session | null): string | null {
   if (!prev) return null;
   const parts = [
@@ -224,8 +177,7 @@ function buildHandoff(prev: Session | null): string | null {
 async function persist() {
   if (!_session) return;
   try {
-    // Atomic replace — /debug and boot recovery read this file, and a crash
-    // mid-write should leave the previous snapshot, not a truncated one.
+    // Atomic: a crash mid-write must leave the previous snapshot, not a stub.
     await writeFileAtomic(config.session.currentFile, JSON.stringify(_session, null, 2));
   } catch {}
 }
@@ -243,17 +195,10 @@ async function archive(s: Session | null) {
   } catch {}
 }
 
-// The persona currently ON AIR — the one the live session is running as.
-//
-// Prefer this over settings.getEffectivePersona() for anything that writes or
-// voices a line for the current session. getEffectivePersona() reads the weekly
-// grid at the wall clock, but queue.onTrackStarted rolls the session on a
-// look-ahead (so the mic-pass lands in front of the changeover track rather
-// than over the middle of a song), which means the session legitimately leads
-// the grid by up to PICK_SHOW_LOOKAHEAD_SEC. Inside that window the two
-// disagree and the session is the one that's right: the handoff has aired, the
-// incoming DJ is on. Falls back to the grid with no session, or if the
-// session's persona has since been deleted.
+// The persona currently ON AIR. Prefer this over settings.getEffectivePersona()
+// for anything voicing a line: the session leads the weekly grid by up to
+// PICK_SHOW_LOOKAHEAD_SEC after a look-ahead roll, and inside that window the
+// session is right. Falls back to the grid.
 export function onAirPersona() {
   const id = _session?.persona?.id;
   return (id && settings.resolvePersonaById(id)) || settings.getEffectivePersona();
@@ -263,30 +208,22 @@ export function getSession() {
   return _session;
 }
 
-// Aired speech belonging to the current editorial session, newest first.
-// Queue.getDjRecap()/getRecentOpeners() format this for prompts; keeping the
-// raw selection here makes a show hard-roll the boundary by construction while
-// leaving Queue.djLog global for the booth UI and stats.
+// Aired speech of the current editorial session, newest first. A hard roll is
+// the prompt-memory boundary by construction; Queue.djLog stays station-wide.
 export function promptMemory(): PromptMemoryEntry[] {
   return promptMemoryEntries(_session?.messages || [], _session?.persona?.id ?? null);
 }
 
-// The same view of the session a hard roll just archived. The mic-pass runs
-// AFTER maybeRoll (it is driven off pendingHandoff on the fresh session), so by
-// the time the outgoing DJ signs off, the only session in memory is the one
-// that just started — its own show's hour is already behind the boundary. The
-// sign-off is the one segment that belongs to the OUTGOING session, so it reads
-// this. In-memory only and never persisted: a controller restart between the
-// roll and the mic-pass simply falls back to no recap, which is the floor the
-// handoff already tolerates. Deliberately NOT offered to the incoming greeting
-// — a fresh session opening with clean memory is the point of #1479.
+// The view of the session a hard roll just archived. Read only by the outgoing
+// sign-off, which runs after maybeRoll has replaced the live session. In-memory
+// only. Never offered to the incoming greeting (#1479).
 let _priorPromptMemory: PromptMemoryEntry[] = [];
 
 export function priorPromptMemory(): PromptMemoryEntry[] {
   return _priorPromptMemory;
 }
 
-// Append a turn. `role` ∈ event|dj|track|segment; `kind` names the turn type
+// `role` in event|dj|track|segment; `kind` is the turn type
 // (scenario|pick|request|play|link|station-id|hourly|weather|...).
 export function appendTurn({ role, kind, text, meta = {} }: { role: string; kind: string; text?: string; meta?: TurnMeta }) {
   if (!_session) return null;
@@ -302,12 +239,9 @@ export function appendTurn({ role, kind, text, meta = {} }: { role: string; kind
 // Start a fresh session for the current context.
 export function start(ctx: SessionContext, handoff: string | null = null): Session {
   // Resolve the persona for the moment the CONTEXT describes, not the wall
-  // clock. A boundary roll runs on a look-ahead context (queue.onTrackStarted
-  // rolls for the show that owns the next track), so `show` below comes from
-  // ctx.activeShow at that future moment — the persona has to agree, or
-  // stampRolledFrom compares the outgoing persona against itself, finds no
-  // change, and suppresses the mic-pass entirely. Missing `at` (a context from
-  // some other path) → wall clock, i.e. the previous behaviour.
+  // clock: `show` below comes from ctx.activeShow at that (possibly future)
+  // moment, and a persona resolved at a different one makes stampRolledFrom
+  // compare the outgoing persona against itself and suppress the mic-pass.
   const at = contextDate(ctx);
   const persona = settings.getEffectivePersona(at);
   _session = {
@@ -323,21 +257,14 @@ export function start(ctx: SessionContext, handoff: string | null = null): Sessi
     persona: persona ? { id: persona.id, name: persona.name } : null,
     scenario: scenarioOf(ctx),
     handoff: handoff || null,
-    // Programme episode state (plan + which beats aired) — attached lazily by
-    // broadcast/programme.ts when the session belongs to a programme show.
-    // Lives on the persisted session so a restart mid-episode can't re-plan or
-    // double-air a beat, and dies with the session at the show boundary.
+    // Attached lazily by broadcast/programme.ts; persisted so a restart
+    // mid-episode can't re-plan or double-air a beat.
     programme: null,
     messages: [],
   };
-  // appendTurn above already scheduled a debounced persist. No immediate
-  // write here: maybeRoll's hard-roll path stamps rolledFrom right after
-  // start() returns and awaits its own persist() — an unawaited write started
-  // now could land AFTER that stamped write and leave a stale (handoff-less)
-  // session.json on disk until the next debounce.
+  // Debounced persist only. An immediate unawaited write here could land after
+  // maybeRoll's awaited post-stampRolledFrom persist() and leave a stale file.
   appendTurn({ role: 'event', kind: 'scenario', text: scenarioText(_session) });
-  // Milestone on the unified timeline — marks where one DJ run ends and the
-  // next begins, so traces can be grouped by the session they belong to.
   logEvent('session.start', {
     sessionId: _session.id, kind: _session.kind, key: _session.key,
     handoff: handoff || null,
@@ -353,15 +280,9 @@ async function end() {
   logEvent('session.end', { sessionId: _session.id, key: _session.key });
 }
 
-// Decide whether to keep the live session or roll to a fresh one.
-//
-// A daypart/mood turnover *within* an autonomous run is NOT a program change —
-// it's the same DJ on the same shift, so the session (and its chat history)
-// continues across it via a soft shift. That's what lets the DJ run a thread or
-// call back to a track from earlier in the hour. Only two things hard-roll to a
-// clean slate (with a handoff line): a genuine show boundary (a scheduled
-// program begins, ends, or changes — `show:<id>` in the old or new key) and the
-// 4h MAX_SESSION_MS safety cap.
+// Keep the live session or roll to a fresh one. Only a genuine show boundary or
+// the 4h cap hard-rolls; an autonomous daypart/mood turnover is a soft shift
+// that keeps the chat history.
 export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   if (!_session) return start(ctx);
   const nextKey = sessionKeyFor(ctx);
@@ -369,21 +290,16 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
   if (_session.key === nextKey && !aged) return _session;
 
   // A key change that only exists because the CALLER's clock is behind the
-  // session is not a boundary — it's the boundary already crossed, seen from
-  // the wrong side. queue.onTrackStarted rolls on a look-ahead context
-  // (showAt), and inside that window a live-clock caller (routes/request.ts)
-  // still resolves the OUTGOING show: rolling here would archive the
-  // just-started session, stamp a mirrored rolledFrom (a reverse mic-pass
-  // armed for the next boundary), and hand onAirPersona() back to the DJ who
-  // just signed off. Skip it — the live clock catches up within the margin.
+  // look-ahead roll is not a boundary. Rolling here would archive the
+  // just-started session and hand onAirPersona() back to the outgoing DJ.
   if (!aged && rollIsBackward(contextDate(ctx), _session.ctxAt)) return _session;
 
   const bothAuto = _session.key.startsWith('auto:') && nextKey.startsWith('auto:');
   if (bothAuto && !aged) return softShift(ctx, nextKey);
 
   const prev = _session;
-  // Snapshot before end()/start() replace the live session — the outgoing DJ's
-  // sign-off is generated after this returns (see priorPromptMemory above).
+  // Snapshot before end()/start() replace the live session; the sign-off is
+  // generated after this returns.
   _priorPromptMemory = promptMemoryEntries(prev.messages, prev.persona?.id ?? null);
   await end();
   const next = start(ctx, buildHandoff(prev));
@@ -393,15 +309,9 @@ export async function maybeRoll(ctx: SessionContext): Promise<Session> {
 }
 
 // After a hard roll, record whether the on-air PERSONA changed so a caller can
-// air a two-voice mic-pass (broadcast/dj-agent.runPersonaHandoff): the outgoing
-// DJ signs off in their own voice, the incoming DJ acknowledges in theirs. Same
-// persona across a show boundary (e.g. a host's show ends but they stay on as
-// the active persona) → no on-air handoff; the existing text handoff already
-// covers continuity. The flag lives on the PERSISTED session, so a controller
-// restart between roll and airing can't double-fire, and either maybeRoll call
-// site (hourly cron at :00 or the first track-start after the boundary) can
-// trigger it. Session.ts stays free of queue/TTS imports (no cycle): callers
-// read pendingHandoff() and drive the runner.
+// air the two-voice mic-pass. Unchanged persona means no on-air handoff. The
+// flag is PERSISTED so a restart between roll and airing can't double-fire.
+// Callers drive the runner off pendingHandoff(); no queue/TTS import here.
 function stampRolledFrom(next: Session, prev: Session) {
   const prevId = prev?.persona?.id ?? null;
   const nextId = next?.persona?.id ?? null;
@@ -410,31 +320,28 @@ function stampRolledFrom(next: Session, prev: Session) {
     ? {
         personaId: prevId,
         personaName: prev?.persona?.name ?? null,
-        showName: prev?.show?.name ?? null,   // show that just ended, or null for an auto block
+        showName: prev?.show?.name ?? null,   // null for an auto block
         at: Date.now(),
       }
     : null;
 }
 
-// The pending on-air handoff for the live session (outgoing persona metadata),
-// or null when there's nothing to air (no persona change, or already aired).
+// Outgoing persona metadata, or null when there is nothing to air.
 export function pendingHandoff(): RolledFrom | null {
   if (!_session?.rolledFrom || _session.handoffAired) return null;
   return _session.rolledFrom;
 }
 
-// Mark the handoff aired so it fires at most once. Called up front by the runner
-// (before generating/airing) so a mid-way failure can't retry into the middle
-// of the new show — the existing text handoff is the floor.
+// Called up front by the runner so a mid-way failure can't retry into the middle
+// of the new show.
 export function markHandoffAired() {
   if (!_session) return;
   _session.handoffAired = true;
   schedulePersist();
 }
 
-// --- Programme episode state (broadcast/programme.ts) -----------------------
-// Same persistence contract as handoffAired: state rides the session file so a
-// controller restart mid-episode resumes the plan and never double-airs a beat.
+// Programme episode state (broadcast/programme.ts). Same persistence contract as
+// handoffAired: rides the session file so a restart never double-airs a beat.
 
 export function getProgramme(): ProgrammeState | null {
   return _session?.programme || null;
@@ -446,8 +353,8 @@ export function attachProgramme(programme: ProgrammeState) {
   schedulePersist();
 }
 
-// Flip one beat flag (e.g. 'intro', 'outro', 'feature:0'). Called BEFORE the
-// beat generates/airs — the markHandoffAired idempotency pattern.
+// Flip one beat flag ('intro', 'outro', 'feature:0'). Called BEFORE the beat
+// airs, like markHandoffAired.
 export function markProgrammeBeat(beat: string) {
   if (!_session?.programme) return;
   _session.programme.beats = _session.programme.beats || {};
@@ -455,14 +362,10 @@ export function markProgrammeBeat(beat: string) {
   schedulePersist();
 }
 
-// Soft continuation across an autonomous daypart/mood turnover: same session id,
-// same messages, refreshed identity + scenario. The shift is marked on the
-// timeline as a `scenario` turn (filtered out of the agent window like other
-// scenario turns, so it adds no prompt noise). No archive, no handoff — the
-// running history simply carries forward and the existing WINDOW_TURNS window
-// now spans the boundary.
+// Soft continuation across an autonomous daypart/mood turnover: same session id
+// and messages, refreshed identity + scenario. No archive, no handoff.
 function softShift(ctx: SessionContext, nextKey: string): Session {
-  const s = _session!;  // caller (maybeRoll) only reaches here with a live session
+  const s = _session!;  // maybeRoll only reaches here with a live session
   s.key = nextKey;
   s.scenario = scenarioOf(ctx);
   const sc = s.scenario;
@@ -476,37 +379,16 @@ function softShift(ctx: SessionContext, nextKey: string): Session {
   return s;
 }
 
-// The bounded chat window fed to the DJ agent — handoff + the last N turns,
-// mapped to AI SDK message roles. The full log stays on disk for the UI.
-// Consecutive same-role turns are coalesced because some providers (Anthropic)
-// require strictly alternating user/assistant messages.
+// The bounded chat window fed to the DJ agent: handoff + the last N turns, mapped
+// to AI SDK roles. Consecutive same-role turns are coalesced because some
+// providers (Anthropic) require strictly alternating user/assistant messages.
 //
-// Four turn kinds are filtered out because they derail the picker in long
-// sessions:
-//
-// - `scenario` events (restart notes, session boundaries) — infra noise. Every
-//   restart leaves "Controller restarted", eventually appearing 3-4 times in one
-//   coalesced user message.
-//
-// - `kind: 'play'` turns ("▶ Title — Artist") — redundant. Every pick event
-//   already names the current AND previous track, and recently-played tracks are
-//   filtered at the tool layer (recentIds/recentKeys) regardless.
-//
-// - `kind: 'sfx'` cue turns — an audio-production cue, not conversation. Left
-//   in, a bare effect name like "whoosh" coalesces into the assistant block and
-//   reads as a word the DJ spoke.
-//
-// - OLD `kind: 'pick'` events: only the LATEST is kept. Previous ones were
-//   already answered and just add ambiguity ("which of these 11 'pick next'
-//   requests am I responding to?"). Without this filter gemini drops from 5/5
-//   short to 2-3/5 long, with "No output generated" failures.
-//
-// The DJ's own reasons (role='dj' kind='pick') stay, but only the most recent
-// RATIONALE_WINDOW of them. Each is the agent's 12-word scratchpad; left
-// unbounded, ~15-20 accumulate and the agent reads its own running commentary as
-// a mandate to keep the thread going (one artist re-airing every ~1.2h). Keeping
-// a few preserves short-term memory without the momentum, and track-recency is
-// enforced at the tool layer either way.
+// Filtered out because they derail the picker in long sessions: `scenario`
+// events (infra noise), `play` turns (the pick event already names the tracks),
+// `sfx` cues (they read as words the DJ spoke), and all but the LATEST `pick`
+// event (older asks are already answered and add ambiguity). The DJ's own
+// `dj`/`pick` rationales are kept to the most recent RATIONALE_WINDOW — left
+// unbounded, the agent reads its own commentary as a mandate to keep the thread.
 export function windowMessages() {
   if (!_session) return [];
   const raw: { role: 'user' | 'assistant'; content: string }[] = [];
@@ -514,14 +396,11 @@ export function windowMessages() {
     raw.push({ role: 'user', content: `[Continuing on air from ${_session.handoff}]` });
   }
   const recent = _session.messages.slice(-WINDOW_TURNS);
-  // Find the index of the most-recent pick-event user message — older ones
-  // are filtered, this one is the current ask we want the agent to respond to.
+  // The current ask the agent should respond to; older pick events are filtered.
   let lastPickEventIdx = -1;
   for (let i = recent.length - 1; i >= 0; i--) {
     if (recent[i].role === 'event' && recent[i].kind === 'pick') { lastPickEventIdx = i; break; }
   }
-  // Keep only the most-recent RATIONALE_WINDOW dj/pick rationales — older ones
-  // are the thread-momentum noise we want gone.
   const keepRationaleIdx = new Set<number>();
   for (let i = recent.length - 1, kept = 0; i >= 0 && kept < RATIONALE_WINDOW; i--) {
     if (recent[i].role === 'dj' && recent[i].kind === 'pick') { keepRationaleIdx.add(i); kept++; }
@@ -535,26 +414,17 @@ export function windowMessages() {
     if (m.role === 'event' && m.kind === 'pick' && i !== lastPickEventIdx) continue;  // old pick asks
     if (m.role === 'dj' && m.kind === 'pick' && !keepRationaleIdx.has(i)) continue;   // stale pick rationales
     const role = (m.role === 'dj' || m.role === 'segment') ? 'assistant' : 'user';
-    // A dj/pick turn's text is the agent's private pick rationale (object.reason),
-    // not words it spoke on air. Coalescing (below) would otherwise glue it into
-    // the same assistant block as real spoken segments, leaving the picker unable
-    // to tell its own scratchpad from its broadcast voice. Mark it so the role of
-    // each line stays unambiguous even after coalescing.
-    //
-    // Same identity guard for a turn VOICED BY A DIFFERENT PERSONA: the handoff
-    // sign-off is spoken by the outgoing DJ but stored in the new session
-    // (dj-agent.runPersonaHandoff tags it with the speaker's id + name), and a
-    // guest co-host's segments land the same way (the speaker rotation stamps
-    // every rotated announce with the speaker's id). Untagged they would read
-    // as the session persona's own words — name the real speaker instead.
+    // Coalescing below would glue a private pick rationale, or a line voiced by
+    // another persona (a sign-off stored in the new session, a guest co-host's
+    // segment), into the same assistant block as the session persona's own
+    // speech. Tag both so the speaker stays unambiguous after coalescing.
     const foreignSpeaker = (m.role === 'segment'
       && m.meta?.personaId
       && m.meta.personaId !== _session.persona?.id)
       ? (m.meta.personaName || 'another host')
       : null;
-    // Model-only coaching clauses ride in meta.promptSuffix so the UI-facing
-    // turn text stays a clean factual line (the /admin/dash booth log renders
-    // turns verbatim). Re-joined here — the model sees the full message.
+    // Model-only coaching clauses ride in meta.promptSuffix so the booth log's
+    // verbatim turn text stays clean. Re-joined here for the model.
     const text = m.meta?.promptSuffix ? `${m.text}${m.meta.promptSuffix}` : m.text;
     const content = (m.role === 'dj' && m.kind === 'pick')
       ? `(pick note to self — not aired) ${text}`
@@ -573,8 +443,8 @@ export function windowMessages() {
   return out;
 }
 
-// Boot recovery — resume the persisted session if its key still matches the
-// current context, otherwise archive it and start fresh.
+// Boot recovery: resume the persisted session if its key still matches, else
+// archive it and start fresh.
 export async function recover(ctx: SessionContext): Promise<Session> {
   if (existsSync(config.session.currentFile)) {
     try {

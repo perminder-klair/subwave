@@ -10,27 +10,12 @@ import { z } from 'zod';
 
 // ─── from controller/src/schemas/blocklist.ts ────────────────────────────
 
-// Shared never-play blocklist schema (#1300 FR 1) — the shape of a RULE entry
+// Shared never-play blocklist schema (#1300 FR 1): the rule-entry shape
 // (attribute predicate + optional seasonal allow-window + optional show scope)
-// and of the id-entry create body, executed on BOTH sides. The controller runs
-// it in music/blocklist-rules.ts's validateRulePatch (the store's chokepoint,
-// reached by POST and PUT alike) and at the route boundary; the browser runs
-// the mirrored copy so BlockRulesCard can pre-flight a save.
-//
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle, so a project import or a node builtin here breaks the mirror.
-// music/blocklist-rules.ts itself cannot be a schema module — it imports
-// show-filter's genre/tag normalisers for the MATCHING half — which is exactly
-// why the validation half moved here and is re-exported from there.
-//
-// WHAT DELIBERATELY DID NOT MOVE
-// ------------------------------
-// Rule ids and `addedAt` are minted by the store, not submitted, so they are
-// absent from the schema entirely (rather than optional): a client that sends
-// one is not describing a rule, and z.object strips it before the store sees it
-// — the same posture as a show's server-minted id, one step stricter because
-// nothing downstream points at a rule id the way a schedule slot points at a
-// show id.
+// and the id-entry create body. Run by music/blocklist-rules.ts's
+// validateRulePatch, at the route boundary, and by the mirrored browser copy.
+// Rule ids and `addedAt` are minted by the store, so they are absent from the
+// schema entirely and z.object strips a submitted one.
 
 export const RULE_FIELDS = [
   'genre',
@@ -56,38 +41,15 @@ export interface SeasonWindow {
   to: { month: number; day: number };
 }
 
-/**
- * Trim, lowercase, collapse whitespace, fold curly apostrophes onto straight
- * ones — the normalisation the `tag`, `mood`, `album` and `title` rule fields
- * compare with. Used here only for DEDUPE; the stored value keeps its original
- * casing.
- *
- * This is `recency.nameKey` (a.k.a. `artistNameKey`, which the `artist` field
- * compiles with since #1603), RESTATED rather than imported: a mirrored schema
- * module may import only zod, so the fold cannot cross into this file. The two
- * must stay identical and are pinned in step by
- * `scripts/blocklist-name-fold.test.ts` — change one, change both.
- *
- * The apostrophe fold arrived here with #1611, which folded the id list's ALBUM
- * tier onto the same normaliser as its artist tier. Rules and id entries answer
- * the same question about the same row, so a fold on one side only would have
- * moved the disagreement rather than fixed it: an `album` RULE spelled with a
- * curly apostrophe would still miss the straight-apostrophe row that an album
- * ENTRY now catches. It WIDENS an absolute list — folding two spellings of one
- * name into one key blocks rows the previous spelling missed. Nothing about
- * which thing a string names changes, which is what makes that safe.
- *
- * Punctuation beyond the apostrophe is deliberately NOT folded: a hyphen
- * distinguishes real tag vocabulary (`trip-hop` is not `trip hop` here), and
- * `music/scene-references.ts` runs this exact predicate to decide whether a
- * genre merge silences a `tag` rule.
- */
+// The name fold used for DEDUPE only; the stored value keeps its casing.
+// Must stay identical to `recency.nameKey` (restated, not imported — zod-only
+// module); pinned by scripts/blocklist-name-fold.test.ts. Punctuation beyond
+// the apostrophe is deliberately not folded (`trip-hop` != `trip hop`).
 export const normText = (s: unknown) =>
   String(s ?? '').toLowerCase().replace(/[‘’ʼ´`]/g, "'").replace(/\s+/g, ' ').trim();
 
-// A month/day pair. Both halves are `Number(x)` + an integer/range test, not
-// z.number().int(), because the admin card posts them from <input type=number>
-// and a numeric STRING has always been accepted.
+// Number(x) + range test rather than z.number().int(): a numeric STRING from
+// <input type=number> has always been accepted.
 function blocklistMonthDay(where: string) {
   return z.unknown().optional().transform((raw, ctx) => {
     const o = (raw ?? {}) as Record<string, unknown>;
@@ -105,26 +67,16 @@ function blocklistMonthDay(where: string) {
   });
 }
 
-/**
- * A seasonal ALLOW-window: inclusive month/day bounds, `from > to` wrapping the
- * year end (Dec 1 → Jan 6). While in season the rule does NOT block.
- *
- * Deliberately NOT range-checked beyond each half: a wrapping window is the
- * feature, so "from after to" is meaningful rather than backwards — unlike a
- * show's era window, where the same shape IS an error.
- */
+// Seasonal ALLOW-window: inclusive month/day bounds, `from > to` wraps the year
+// end (Dec 1 → Jan 6); while in season the rule does NOT block. Deliberately not
+// range-checked across the pair — a wrapping window is the feature.
 export const blockSeasonSchema = z.object({
   from: blocklistMonthDay('rule.season.from'),
   to: blocklistMonthDay('rule.season.to'),
 });
 
-/**
- * The add/update payload for one rule, in the persisted shape minus the
- * store-owned id/addedAt.
- *
- * Every message names `rule.<field>` because the route surfaces it verbatim,
- * the same convention validateShowsStrict follows.
- */
+// One rule's add/update payload. Every message names `rule.<field>` because the
+// route surfaces it verbatim.
 export const blockRuleSchema = z.object({
   label: z
     .unknown()
@@ -150,10 +102,8 @@ export const blockRuleSchema = z.object({
   values: z
     .array(z.unknown(), { error: 'rule.values must be an array' })
     .transform((items, ctx) => {
-      // A blank entry is dropped and a duplicate is silently collapsed (same
-      // value twice is one value), but a NON-STRING entry and an over-long one
-      // are both refused — the operator typed something that isn't a value, and
-      // silently discarding it would block less than the card shows.
+      // Blanks dropped and duplicates collapsed, but a non-string or over-long
+      // entry is refused: dropping it would block less than the card shows.
       const out: string[] = [];
       const seen = new Set<string>();
       for (const v of items) {
@@ -190,9 +140,8 @@ export const blockRuleSchema = z.object({
     }),
   // Absent or null = no season, i.e. the rule always blocks.
   season: z.preprocess((v) => (v == null ? undefined : v), blockSeasonSchema.nullable().default(null)),
-  // Empty = station-wide. Stale ids are inert by design (resolved against the
-  // live roster at evaluation time), so a non-string entry is DROPPED rather
-  // than refused — the same call persona.skills makes for the same reason.
+  // Empty = station-wide. Stale ids are inert (resolved at evaluation time), so
+  // a non-string entry is DROPPED rather than refused.
   showIds: z.preprocess(
     (v) => (v == null ? undefined : v),
     z
@@ -208,16 +157,9 @@ export const blockRuleSchema = z.object({
 
 export type BlockRulePatch = z.output<typeof blockRuleSchema>;
 
-/**
- * `POST /library/blocklist` — the id-entry create body.
- *
- * TWO accepted forms, which is why nothing but `type` is required: the UI flow
- * posts `{type, trackId}` and the server resolves the album/artist ids and
- * display snapshots from the track row, while a direct entry posts a
- * pre-resolved `{type, id, …}`. Which of the two arrived is decided by the
- * route (it needs Subsonic to resolve one of them), so the schema's job is only
- * to pin the shape both share.
- */
+// `POST /library/blocklist` — the id-entry create body. Two accepted forms, so
+// only `type` is required: `{type, trackId}` (server resolves the rest) or a
+// pre-resolved `{type, id, …}`. The route decides which arrived.
 export const blockEntrySchema = z.object({
   type: z.enum(BLOCK_TYPES, { error: "type must be 'track', 'album' or 'artist'" }),
   trackId: z.preprocess(
@@ -228,8 +170,7 @@ export const blockEntrySchema = z.object({
     (v) => (v == null || v === '' ? undefined : v),
     z.string({ error: 'id must be a string' }).optional(),
   ),
-  // Display snapshots — free text captured at block time so the Blocked tab can
-  // name a row whose source has since vanished. Null is meaningful ("unknown"),
+  // Display snapshots captured at block time. Null is meaningful ("unknown"),
   // so it is preserved rather than folded to undefined.
   name: z.string().nullable().optional(),
   artist: z.string().nullable().optional(),
@@ -238,47 +179,29 @@ export const blockEntrySchema = z.object({
 
 // ─── from controller/src/schemas/imaging.ts ──────────────────────────────
 
-// Shared imaging schemas — the station's produced audio assets. Sound effects,
-// beds, jingles and clone voices are four tabs and four routes, but ONE
-// contract wearing four hats: a name, a description, a prompt (or jingle
-// text), a duration. It was written out four times in the routes and four more
-// in the panels; defining it once here is what makes them provably the same
-// rule. Executed on BOTH sides: the controller runs these at the route
-// boundary (middleware/validate.ts), the browser reads the caps and duration
-// bands out of the mirror (web/lib/schemas.generated.ts) so an input can no
-// longer invite a request the route rejects.
-//
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle. Enforced by controller/eslint.config.mjs and gen-schemas.ts.
-//
-// Only the duration BANDS genuinely differ between kinds, so those stay named
-// per kind — broadcast/sfx.ts, broadcast/beds.ts and audio/bed-gen.ts
-// re-export them rather than declaring their own. The old drift was exactly
-// here: the sfx duration input carried min 0.5 / max 22 (the ElevenLabs
-// generator's own range) while the route capped at 10.
+// Shared imaging schemas — sfx, beds, jingles and clone voices, one contract in
+// four hats (name, description, prompt or jingle text, duration). Run at the
+// route boundary and by the mirrored browser copy. Only the duration BANDS
+// differ per kind; broadcast/sfx.ts, broadcast/beds.ts and audio/bed-gen.ts
+// re-export them rather than declaring their own.
 
-// The caps 60 and 200 existed only as maxLength attributes on the admin
-// inputs; the controller had NO rule at all, so an API caller could store a
-// name the library list then had to render. Lifting them into the schema is a
-// real tightening.
 export const IMAGING_NAME_MAX = 60;
 export const IMAGING_DESCRIPTION_MAX = 200;
 export const IMAGING_PROMPT_MAX = 500;
 export const JINGLE_TEXT_MAX = 500;
 
-// Sound effects sit under a spoken line, so they cap well below the
-// generator's own 22s ceiling; the 0.5 floor is the ElevenLabs sound-gen
-// minimum. broadcast/sfx.ts re-exports the max as MAX_DURATION_SEC.
+// Sfx sit under a spoken line, so they cap below the generator's 22s ceiling;
+// 0.5 is the ElevenLabs sound-gen minimum. sfx.ts re-exports the max as
+// MAX_DURATION_SEC.
 export const SFX_MIN_SEC = 0.5;
 export const SFX_MAX_SEC = 10;
-// A bed must outlast the script read over it; generation via the ElevenLabs
-// Music API caps at 2 minutes. broadcast/beds.ts re-exports the min as
-// MIN_DURATION_SEC, audio/bed-gen.ts the max as BED_GEN_MAX_SEC.
+// A bed must outlast the script read over it; the ElevenLabs Music API caps at
+// 2 minutes. beds.ts re-exports the min as MIN_DURATION_SEC, bed-gen.ts the max
+// as BED_GEN_MAX_SEC.
 export const BED_MIN_SEC = 30;
 export const BED_GEN_MAX_SEC = 120;
 
-// Explicit null reads as absent, as the `(req.body?.x || '')` readers these
-// replace always did. (Named per-module: the mirror is one flat file.)
+// Explicit null reads as absent. (Named per-module: the mirror is one flat file.)
 const imagingNullToUndefined = (v: unknown) => (v == null ? undefined : v);
 
 const imagingName = z.preprocess(
@@ -290,9 +213,8 @@ const imagingName = z.preprocess(
     .max(IMAGING_NAME_MAX, `name must be 1-${IMAGING_NAME_MAX} chars`),
 );
 
-// NOTE: `.optional()` with a `.max()` and no `.catch()` — a catch cannot tell
-// a wrong type from a too-long value, so it would silently blank a description
-// the operator wrote 300 characters into. Refusing is the point.
+// No `.catch()`: it cannot tell a wrong type from a too-long value, so it would
+// silently blank an over-long description. Refusing is the point.
 const imagingDescription = z.preprocess(
   imagingNullToUndefined,
   z
@@ -356,12 +278,9 @@ export const jingleCreateSchema = z.object({
     .max(JINGLE_TEXT_MAX, `text too long (max ${JINGLE_TEXT_MAX})`),
 });
 
-// The multipart import bodies. These sit AFTER audioUpload in the route chain:
-// multer is what parses a multipart body into req.body in the first place, and
-// validateBody replaces req.body ONLY — req.file, which no schema describes,
-// rides through untouched. (The mirror image of the skills open-tail rule:
-// there the extra data was IN the body and a schema would have eaten it; here
-// it is beside the body and the schema cannot reach it.)
+// The multipart import bodies. Must sit AFTER audioUpload in the route chain:
+// multer parses the multipart body into req.body, and validateBody replaces
+// req.body only — req.file rides through untouched.
 export const imagingImportSchema = z.object({
   name: imagingName,
   description: imagingDescription,
@@ -381,35 +300,21 @@ export const jingleImportSchema = z.object({
   ),
 });
 
-// A clone-voice import has no description: the folder deliberately keeps no
-// JSON sidecar (it stays operator-writable by hand), so there is nowhere for
-// one to live.
+// A clone-voice import has no description: the folder keeps no JSON sidecar (it
+// stays operator-writable by hand), so there is nowhere for one to live.
 export const voiceImportSchema = z.object({
   name: imagingName,
 });
 
 // ─── from controller/src/schemas/library.ts ──────────────────────────────
 
-// Shared library-maintenance schemas — the operator-facing bodies under
-// /library that carry typed input rather than a bare id: `POST
-// /library/manual-tag` (tag this track, or its whole album, by hand — no LLM
-// involved) and `POST /library/original-year` (the operator's own answer to
-// "what year was this actually recorded", behind the same row editor), and
-// `POST /library/scenes/merge` (consolidate near-duplicate genre tags), plus
-// the one RESPONSE shape that crosses the same boundary — the referenced-by
-// warning a scene merge carries (#1593), which the browser renders before the
-// operator confirms.
+// Shared library-maintenance schemas — POST /library/manual-tag,
+// /library/original-year and /library/scenes/merge, plus the referenced-by
+// warning a merge response carries (#1593).
 //
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle, so a project import or a node builtin here breaks the mirror.
-//
-// WHY A FACTORY
-// -------------
-// Moods are operator-editable (settings.moodVocab()), so a manual tag can only
-// be judged against the LIVE vocabulary — the same reason showSchema takes a
-// context. `moodNames: null` means "this caller cannot check that rule", which
-// is what lets the browser pre-flight the shape of a body whose vocabulary it
-// may not have fetched yet while the route still enforces membership.
+// A FACTORY because moods are operator-editable: `moodNames: null` means "this
+// caller cannot check that rule", so the browser can pre-flight the shape while
+// the route enforces membership.
 
 /** At most three moods per track — the tagger's own ceiling. */
 export const MANUAL_TAG_MOODS_MAX = 3;
@@ -425,8 +330,7 @@ export const MANUAL_TAG_SHAPE_ONLY: ManualTagContext = { moodNames: null };
 
 export function manualTagSchema(ctx: ManualTagContext) {
   return z.object({
-    // `!id || typeof id !== 'string'` — so a blank string is refused too, and
-    // with the same message, which is what the route has always answered.
+    // A blank string is refused too, with the same message.
     id: z.unknown().optional().transform((raw, c) => {
       if (typeof raw !== 'string' || !raw) {
         c.addIssue({ code: 'custom', message: 'id is required' });
@@ -434,10 +338,8 @@ export function manualTagSchema(ctx: ManualTagContext) {
       }
       return raw;
     }),
-    // An EMPTY array is meaningful: it clears the track's tags entirely and
-    // returns it to the untagged pool. So this is required-but-may-be-empty,
-    // never defaulted — a missing key and an explicit [] must not be the same
-    // request.
+    // An EMPTY array clears the track's tags, so this is required-but-may-be-
+    // empty, never defaulted: a missing key and an explicit [] differ.
     moods: z
       .array(z.unknown(), { error: 'moods must be an array of strings' })
       .transform((items, c) => {
@@ -462,8 +364,7 @@ export function manualTagSchema(ctx: ManualTagContext) {
         }
         return values;
       }),
-    // null is the explicit "no energy", distinct from an omission only in that
-    // both land on null — matching `req.body?.energy ?? null`.
+    // null is the explicit "no energy"; an omission lands on null too.
     energy: z.preprocess(
       (v) => (v === undefined ? null : v),
       z
@@ -472,30 +373,24 @@ export function manualTagSchema(ctx: ManualTagContext) {
         })
         .nullable(),
     ),
-    // `=== true`, so anything else reads as off — unchanged.
+    // `=== true`, so anything else reads as off.
     applyToAlbum: z.unknown().optional().transform((v) => v === true),
   });
 }
 
-// ── POST /library/original-year ──────────────────────────────────────────────
-// The operator's manual era override (issue #1418). The automatic pipeline
-// resolves an original year from the album tag or MusicBrainz, and on a reissue
-// anthology both are wrong by construction — the tag carries the reissue's date
-// and MB is never asked, because the lookup is gated on a compilation flag
-// those albums do not set. This is the escape hatch: someone holding the sleeve
-// types the real year.
+// POST /library/original-year — the operator's manual era override (#1418), the
+// escape hatch for reissue anthologies the automatic pipeline gets wrong.
 
-/** Floor for a plausible recording year — mirrors musicbrainz.ts MIN_YEAR.
- *  Duplicated rather than imported: this file may import only 'zod'. */
+/** Floor for a plausible recording year. Mirrors musicbrainz.ts MIN_YEAR. */
 export const ORIGINAL_YEAR_MIN = 1900;
 
 export function originalYearSchema() {
-  // Evaluated per request, not at module load: a schema frozen at boot would
-  // start refusing next January.
+  // Per request, not at module load: a schema frozen at boot starts refusing
+  // next January.
   const max = new Date().getUTCFullYear() + 1;
   return z.object({
-    // Same wording and same blank-string refusal as manualTagSchema — one
-    // editor posts to both routes and must not get two dialects of "no id".
+    // Same wording and blank-string refusal as manualTagSchema: one editor
+    // posts to both routes.
     id: z.unknown().optional().transform((raw, c) => {
       if (typeof raw !== 'string' || !raw) {
         c.addIssue({ code: 'custom', message: 'id is required' });
@@ -503,12 +398,9 @@ export function originalYearSchema() {
       }
       return raw;
     }),
-    // null CLEARS the override and hands the track back to the automatic
-    // pipeline, so it is a real value here rather than an omission: a missing
-    // key is a malformed request, not "clear it". Numeric strings are accepted
-    // because the field is typed into an <input>, but a non-integer or an
-    // out-of-window year is refused rather than rounded — a silently repaired
-    // year is indistinguishable on air from a correct one.
+    // null CLEARS the override; a missing key is a malformed request, not
+    // "clear it". Numeric strings accepted (<input>), but a non-integer or
+    // out-of-window year is refused rather than rounded.
     originalYear: z.unknown().transform((raw, c) => {
       if (raw === null) return null;
       const n = typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : raw;
@@ -525,32 +417,26 @@ export function originalYearSchema() {
       }
       return n;
     }),
-    // `=== true`, matching manualTagSchema. An anthology is wrong a whole album
-    // at a time, so this is the common case here rather than the exception.
+    // `=== true`, matching manualTagSchema.
     applyToAlbum: z.unknown().optional().transform((v) => v === true),
   });
 }
 
-// ── POST /library/scenes/merge ───────────────────────────────────────────────
-// Scene-vocabulary consolidation (issue #1577). "Scene" is the operator-facing
-// word for a genre tag; the body names the values to retire and the one that
-// survives. Both halves are typed here because a wrong `to` is not recoverable
-// from the UI: the rows are rewritten in place, so the retired spellings are
-// gone until the next Navidrome walk.
+// POST /library/scenes/merge — scene-vocabulary consolidation (#1577). "Scene"
+// is the operator word for a genre tag. A wrong `to` is not recoverable from the
+// UI: rows are rewritten in place and the retired spellings are gone until the
+// next Navidrome walk.
 
-/** How many values one merge may retire at once. Ticking a whole noisy tail is
- *  the point, so this is generous; it exists to bound the SQL parameter list. */
+/** How many values one merge may retire at once; bounds the SQL parameter list. */
 export const SCENE_MERGE_SOURCES_MAX = 100;
 
-/** Longest scene value accepted as a merge target. Navidrome genre tags are
- *  short; a longer string is a paste accident, not a genre. */
+/** Longest scene value accepted as a merge target. */
 export const SCENE_VALUE_MAX = 120;
 
 export function sceneMergeSchema() {
   return z.object({
-    // Every entry is matched against the EXACT stored value, which is what the
-    // listing hands the operator — so blanks and non-strings are refused
-    // rather than trimmed into something that matches a different row.
+    // Matched against the EXACT stored value, so blanks and non-strings are
+    // refused rather than trimmed into something matching a different row.
     from: z
       .array(z.unknown(), { error: 'from must be an array of scene values' })
       .transform((items, c) => {
@@ -572,9 +458,8 @@ export function sceneMergeSchema() {
         }
         return values;
       }),
-    // Trimmed, because this one is TYPED (the target may be a new spelling that
-    // is in no list yet) and a trailing space would file a second scene beside
-    // the one the operator meant.
+    // Trimmed: the target is TYPED (it may be a new spelling), and a trailing
+    // space would file a second scene beside the one meant.
     to: z.unknown().transform((raw, c) => {
       const value = typeof raw === 'string' ? raw.trim() : '';
       if (!value) {
@@ -590,24 +475,14 @@ export function sceneMergeSchema() {
   });
 }
 
-// ── The referenced-by warning on a scene merge (#1593) ───────────────────────
-// A merge retires a source value. Case and punctuation variants keep matching
-// through show-filter's normGenre ("rock" → "Rock", "Hip-Hop" → "Hip Hop"), so
-// those merges orphan nothing; a SEMANTIC rename ("trip-hop" → "downtempo")
-// leaves every show, blocklist rule and playlist filter still naming the
-// retired value selecting nothing on that value, with no error and no visible
-// cause.
-//
-// The scan behind this shape lives in music/scene-references.ts — it needs
-// show-filter's matcher, which this file may not import. Only the SHAPE is
-// here, because it crosses to the browser: the Scene vocabulary section shows
-// the warning before the operator confirms, and again on the merge response.
-//
-// Naming the affected shows is the whole value of the warning. A generic "this
-// may affect filters" is the non-advice the operator already assumed.
+// The referenced-by warning on a scene merge (#1593). A semantic rename
+// ("trip-hop" → "downtempo") leaves every show, rule and playlist filter naming
+// the retired value selecting nothing, with no error. The scan lives in
+// music/scene-references.ts (it needs show-filter's matcher); only the SHAPE is
+// here, because it crosses to the browser.
 
 /** Where a retired scene can still be named. A bare union: nothing validates
- *  against these at a boundary, so there is no runtime list to keep. */
+ *  against it at a boundary, so there is no runtime list. */
 export type SceneReferenceKind = 'show' | 'rule' | 'playlist';
 
 /** One filter that names a value this merge retires and would stop catching it. */
@@ -617,43 +492,29 @@ export interface SceneReference {
   id: string;
   /** What the operator calls it: show name, rule label, playlist name. */
   name: string;
-  /** Its values that NAME a scene this merge retires — the value IS that
-   *  scene, not something broader that also caught it — and that do not catch
-   *  the survivor. */
+  /** Its values that NAME a retired scene (not something broader that also
+   *  caught it) and do not catch the survivor. */
   orphaned: string[];
-  /** The REST of this filter's own list, and nothing more. Empty means the
-   *  orphaned values were all it had; it is NOT a claim that the filter now
-   *  matches no tracks, which would need the whole tag set walked. */
+  /** The REST of this filter's own list. Empty means the orphaned values were
+   *  all it had — NOT a claim that the filter now matches no tracks. */
   remaining: string[];
 }
 
 // ─── from controller/src/schemas/onboarding.ts ───────────────────────────
 
-// Shared onboarding schemas — the two PROBE bodies and the handful of rules
-// the save handler had to hand-roll BECAUSE settings.update() does not own
-// them. Executed on BOTH sides: the controller runs them at the route boundary
-// and inside /onboarding/save; the browser (web/components/onboarding) runs the
-// mirrored copy so a rule can hold a button shut instead of only answering a
-// pressed one.
+// Shared onboarding schemas — the two PROBE bodies and the rules the save
+// handler hand-rolls because settings.update() does not own them. Run at the
+// route boundary, inside /onboarding/save, and by web/components/onboarding.
 //
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle. Enforced by controller/eslint.config.mjs and gen-schemas.ts.
-//
-// What is deliberately NOT here: the settings pass-through. Most of
-// POST /onboarding/save forwards partial llm / tts / personas / weather
-// patches to settings.update(), and a schema in front of that is the /settings
-// mega-endpoint problem in miniature — worse than nothing, because z.object
-// would strip whatever the wizard learns to send next. Converted is only what
-// the ROUTE owns.
+// Deliberately NOT here: the settings pass-through. Most of /onboarding/save
+// forwards partial patches to settings.update(), and z.object would strip
+// whatever the wizard learns to send next.
 
 /**
- * One normalisation for Navidrome credentials, everywhere they travel: trim,
- * and strip trailing slashes off the url — `${url}/rest/ping` against a stored
- * `…:4533/` double-slashes and some proxies 404 it. The PROBE requires all
- * three fields; save must NOT (skipping Navidrome is a supported way through
- * the wizard, and the shell posts the block with empty strings) — so the
- * strict schema below and this lenient helper share the normalisation rather
- * than each stating their own.
+ * One normalisation for Navidrome credentials: trim, and strip trailing slashes
+ * off the url (`${url}/rest/ping` against a stored `…:4533/` double-slashes and
+ * some proxies 404 it). The PROBE requires all three fields; save must not —
+ * skipping Navidrome is a supported way through the wizard.
  */
 export function normalizeNavidromeCredentials(raw: unknown): {
   url: string;
@@ -677,9 +538,8 @@ export const navidromeProbeSchema = z
     'url, user, and pass are required',
   );
 
-// POST /onboarding/test-llm. The openai-compatible rule used to be a `throw`
-// inside the probe's provider switch, so the only way to discover it was to
-// press Test and wait — in the schema it also holds the wizard's button shut.
+// POST /onboarding/test-llm. The openai-compatible rule lives here rather than
+// in the probe so it also holds the wizard's button shut.
 export const llmProbeSchema = z
   .unknown()
   .transform((raw) => {
@@ -700,14 +560,9 @@ export const llmProbeSchema = z
 export type LlmProbeInput = z.output<typeof llmProbeSchema>;
 
 /**
- * Fish Audio's provider-specific save rule: a message, or null when fine.
- *
- * Deliberately NOT a schema over the tts patch — a schema that has to strip
- * nothing is the wrong tool when the object belongs to settings.update(); this
- * helper inspects one nested block without claiming ownership of the object
- * around it. It is the ONE copy: the route ran `1-100` while the wizard ran
- * `1–100` — same logic, drifted message, which is what the drift looks like
- * *before* it becomes a bug.
+ * Fish Audio's provider-specific save rule: a message, or null when fine. Not a
+ * schema, because the tts patch belongs to settings.update() — this inspects one
+ * nested block without owning the object around it. Keep it the ONE copy.
  */
 export function fishAudioIssue(cloud: unknown): string | null {
   const c = (cloud && typeof cloud === 'object' ? cloud : {}) as Record<string, unknown>;
@@ -723,44 +578,17 @@ export function fishAudioIssue(cloud: unknown): string | null {
 
 // ─── from controller/src/schemas/persona.ts ──────────────────────────────
 
-// Shared persona + prompt-library schema — the single source of truth for a
-// DJ persona's shape and for the `{engine, voice, cloudProvider}` voice slot,
-// executed on BOTH sides. The controller runs it in
-// settings.validate.validatePersonasStrict (the update() chokepoint) and in
-// settings.normalize.normalizePersona (the lenient load path); the browser runs
-// the mirrored copy (web/lib/schemas.generated.ts) so the Personas editor can
-// pre-flight a save against the exact rules the controller enforces.
+// Shared persona + prompt-library schema — a DJ persona's shape and the
+// `{engine, voice, cloudProvider}` voice slot. Run by validatePersonasStrict
+// (the update() chokepoint), normalizePersona (the lenient load path) and the
+// mirrored browser copy.
 //
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle, so a project import or a node builtin here breaks the mirror.
-// That includes OTHER schema modules — the mirror is one flat concatenation, so
-// gen-schemas.ts rejects every specifier but 'zod', enforces unique top-level
-// names across every module, and each module has to stand alone.
-//
-// WHICH IS WHY TWO REGEXES ARE DECLARED HERE RATHER THAN IMPORTED
-// ---------------------------------------------------------------
-// `PERSONA_ID_RE` is the same pattern as schemas/show.ts's SHOW_ID_RE, and
-// `PERSONA_SKILL_SLUG_RE` the same as schemas/skill.ts's SKILL_SLUG_RE. Neither
-// can be imported (see above), and neither can reuse the other's NAME because
-// the flat mirror would then carry two declarations of it. Re-declaring is
-// structural, not sloppiness; the drift it invites is pinned by
-// scripts/persona-schema.test.ts, which asserts `.source` equality against both.
-//
-// WHY THERE IS NO FACTORY
-// -----------------------
-// Unlike a show, a persona CAN be validated against itself: every rule is a pure
-// function of the submitted value. `skills` names skill slugs, but an unresolved
-// slug is dropped rather than refused, so the live catalogue is not an input.
-// Impure rules — id minting, cross-row de-duplication — live in
-// persona-server.ts, which is NOT mirrored.
-//
-// SETTINGS/VOCAB.TS RE-EXPORTS EVERY CONSTANT BELOW
-// -------------------------------------------------
-// "First feature converted owns the constant", so no call site moved: vocab.ts
-// aliases these under the names the controller already used. The web side must
-// read them from the mirror rather than hand-copying.
-
-// ── Persona vocabulary ───────────────────────────────────────────────────────
+// PERSONA_ID_RE and PERSONA_SKILL_SLUG_RE are re-declarations of show.ts's
+// SHOW_ID_RE and skill.ts's SKILL_SLUG_RE: a mirrored module may import only
+// zod, and the flat mirror forbids reusing the names. Pinned in step by
+// scripts/persona-schema.test.ts. Impure rules (id minting, cross-row dedupe)
+// live in persona-server.ts, which is not mirrored. settings/vocab.ts
+// re-exports every constant below.
 
 /** Entity id. Same pattern as SHOW_ID_RE — see the header. */
 export const PERSONA_ID_RE = /^[a-z0-9_]{3,32}$/;
@@ -768,24 +596,20 @@ export const PERSONA_ID_RE = /^[a-z0-9_]{3,32}$/;
 /** Same pattern as schemas/skill.ts's SKILL_SLUG_RE — see the header. */
 export const PERSONA_SKILL_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,48}$/;
 
-// An avatar is stored as a BARE BASENAME, never a path: the id half reuses
-// PERSONA_ID_RE's character class so the field can never reference a file
-// outside the avatar dir.
+// A BARE BASENAME, never a path: the id half reuses PERSONA_ID_RE's character
+// class so the field cannot reference a file outside the avatar dir.
 export const PERSONA_AVATAR_FILENAME_RE = /^[a-z0-9_]{3,32}\.(png|jpe?g|webp)$/;
 
 export const PERSONA_LIMIT = 48;
 export const PERSONA_NAME_MAX = 40;
 export const PERSONA_TAGLINE_MAX = 80;
 export const PERSONA_LANGUAGE_MAX = 60;
-// Every persona's soul rides in the system prompt on every call, so this is a
-// recurring per-call token cost rather than a structural limit.
+// A soul rides in the system prompt on every call: a per-call token cost.
 export const PERSONA_SOUL_MAX = 2000;
 export const PERSONA_SKILLS_LIMIT = 64;
 
-// Freeform organisation tags — operator vocabulary for filtering and grouping
-// the admin roster. Third copy of one pattern (skill.ts, show.ts) on purpose:
-// a mirrored schema module may import only zod, so the alternative to three
-// declarations is no mirror. See the header.
+// Freeform organisation tags. Third copy of one pattern (skill.ts, show.ts) —
+// see the header.
 export const PERSONA_TAG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
 export const PERSONA_TAG_MAX = 24;
 export const TAGS_PER_PERSONA_LIMIT = 8;
@@ -805,11 +629,8 @@ export const PERSONA_SCRIPT_LENGTHS = [
   'storyteller',
 ] as const;
 
-// 'natural' (default) writes the ordinary between-track link — set the track
-// up, name the artist or capture its feel, vary the opener. 'announce' is a
-// matter-of-fact station: the link is exactly "This is <artist>." or "Next
-// up, <artist>." — nothing else. Absent/invalid → 'natural', same posture as
-// djMode's absent → false, so an upgraded station keeps its old links.
+// 'natural' (default) is the ordinary between-track link; 'announce' is exactly
+// "This is <artist>." Absent/invalid → 'natural', so an upgrade is unchanged.
 export const PERSONA_LINK_STYLES = [
   'natural',
   'announce',
@@ -820,13 +641,8 @@ export const PERSONA_DIAL_MIN = 0;
 export const PERSONA_DIAL_MAX = 10;
 export const PERSONA_DIAL_NEUTRAL = 5;
 
-/**
- * Clamp any input to an integer dial, defaulting to neutral when unparseable.
- *
- * Never throws, on EITHER path — the strict validator has always run the same
- * coercion the lenient one does, so a garbage dial has never been able to fail
- * a persona save. Reproduced verbatim rather than tightened.
- */
+/** Clamp to an integer dial, neutral when unparseable. Never throws, on either
+ *  path: a garbage dial cannot fail a persona save. */
 export function clampPersonaDial(v: unknown): number {
   const n = Math.round(Number(v));
   return Number.isFinite(n)
@@ -834,13 +650,9 @@ export function clampPersonaDial(v: unknown): number {
     : PERSONA_DIAL_NEUTRAL;
 }
 
-// ── TTS voice slot ───────────────────────────────────────────────────────────
-//
-// The `{engine, voice, cloudProvider, gainDb, speed}` block. Shared by every
-// persona's `tts` AND by the station-wide rescue slot (`settings.tts.fallback`)
-// — the two carry the same shape by design, because a fallback slot is handed
-// to speakWith() as a synthetic persona. One implementation is what stops the
-// per-engine voice rules drifting between them.
+// The `{engine, voice, cloudProvider, gainDb, speed}` block, shared by every
+// persona's `tts` and by the station rescue slot (`settings.tts.fallback`) — a
+// fallback slot is handed to speakWith() as a synthetic persona.
 
 export const TTS_ENGINES = [
   'piper',
@@ -852,15 +664,10 @@ export const TTS_ENGINES = [
 ] as const;
 
 /**
- * "Use whatever the station is set to" — a PERSONA-only engine value.
- *
- * Deliberately NOT a member of TTS_ENGINES. That list is also the vocabulary
- * for `tts.defaultEngine` (which would then be able to inherit from itself),
- * for the `tts.gainDb` / `tts.speed` per-engine maps (which need a real engine
- * per key), and for the station rescue slot `tts.fallback` (where "inherit"
- * names the rung BELOW it in the chain and so means nothing). It is admitted
- * only where a slot genuinely sits under a station default — see
- * ttsVoiceSlotSchema's `allowInherit`.
+ * "Use whatever the station is set to" — a PERSONA-only engine value, and
+ * deliberately NOT a member of TTS_ENGINES: that list is also the vocabulary for
+ * `tts.defaultEngine`, the per-engine gainDb/speed maps and the rescue slot,
+ * none of which can inherit. Admitted only behind `allowInherit`.
  */
 export const PERSONA_TTS_INHERIT = 'inherit';
 
@@ -868,22 +675,10 @@ export const PERSONA_TTS_INHERIT = 'inherit';
 export const PERSONA_TTS_ENGINES = [PERSONA_TTS_INHERIT, ...TTS_ENGINES] as const;
 
 /**
- * The engines that share ONE voice id-space, and so the only ones a voice on an
- * INHERIT slot may carry to.
- *
- * Piper and Kokoro alone: the strict schema deliberately accepts a Kokoro-shaped
- * id under piper (the seed roster carries one per persona so switching to Kokoro
- * yields distinct voices with no editing, #454), and `piper.resolvePiperVoice()`
- * falls back gracefully for one it cannot find. Every other engine reads the
- * field as something else entirely — chatterbox and pocket-tts as a reference
- * `.wav` filename or a built-in id, `cloud` and `remote` as provider-specific
- * names — so a voice chosen WITHOUT knowing the engine cannot be trusted to
- * them. They take their voice from the station block, or from their own
- * default when the station names none.
- *
- * Getting this wrong is not cosmetic: "bm_george" under chatterbox resolves to
- * a reference WAV that does not exist and fails the synth on every line, and
- * under a cloud provider it is a 400 or a silent substitution.
+ * The engines sharing ONE voice id-space, so the only ones a voice on an INHERIT
+ * slot may carry to (#454). Every other engine reads the field as something else
+ * — a reference .wav, a built-in id, a provider-specific name — so a voice
+ * chosen without knowing the engine fails the synth or 400s there.
  */
 export const TTS_INHERITABLE_VOICE_ENGINES = ['piper', 'kokoro'] as const;
 
@@ -911,10 +706,7 @@ export const TTS_SPEED_MIN = 0.5;
 export const TTS_SPEED_MAX = 2.0;
 export const TTS_SPEED_DEFAULT = 1.0;
 
-/**
- * Coerce any value to a clean gain: finite, clamped to ±TTS_GAIN_CLAMP_DB,
- * rounded to 0.1 dB. Garbage / non-finite → 0 (unity).
- */
+/** Finite, clamped to ±TTS_GAIN_CLAMP_DB, rounded to 0.1 dB; non-finite → 0. */
 export function clampTtsGain(v: unknown): number {
   const n = Number(v);
   if (!Number.isFinite(n)) return 0;
@@ -922,12 +714,8 @@ export function clampTtsGain(v: unknown): number {
   return Math.round(c * 10) / 10;
 }
 
-/**
- * Coerce any value to a clean speech-rate multiplier.
- *
- * Unset (null/undefined/'') is unity, NOT 0 — unlike gain, 0 is not this dial's
- * default and would clamp to the 0.5 floor instead of no-change.
- */
+/** Speech-rate multiplier. Unset is unity, NOT 0 — 0 would clamp to the 0.5
+ *  floor instead of meaning no change. */
 export function clampTtsSpeed(v: unknown): number {
   if (v === null || v === undefined || v === '') return TTS_SPEED_DEFAULT;
   const n = Number(v);
@@ -945,30 +733,22 @@ export interface TtsVoiceSlot {
 }
 
 /**
- * The strict voice slot, as a factory over the settings path prefix.
+ * The strict voice slot, as a factory over the settings path prefix. `where` is
+ * a parameter because the messages embed the location in their text and both
+ * call sites read them as a flat toast string.
  *
- * `where` is a FACTORY PARAMETER rather than a path zod derives, because these
- * messages have always embedded the location in the text ("tts.fallback.voice
- * must …") and both call sites read them as a flat toast string. The persona
- * array passes `personas[].tts` and the station slot passes `tts.fallback`, so
- * an operator reading a 400 still learns which of the two failed.
- *
- * Implemented as one transform rather than a z.object because the rules are
- * SEQUENTIAL and cross-field: engine decides which voice rule applies, so
- * reporting a voice issue before an engine issue would name a rule the operator
- * never opted into. A transform reports exactly the first failure the
- * hand-rolled validator reported, in the same order.
+ * One transform rather than a z.object because the rules are SEQUENTIAL: engine
+ * decides which voice rule applies, so a voice issue must not be reported before
+ * an engine issue.
  */
 export function ttsVoiceSlotSchema(where: string, opts?: { allowInherit?: boolean }) {
   const allowInherit = opts?.allowInherit === true;
   const engines: readonly string[] = allowInherit ? PERSONA_TTS_ENGINES : TTS_ENGINES;
   // `.optional()` so an ABSENT block reaches the transform and is refused by the
-  // engine rule below ("tts.engine must be one of: …") rather than by zod's
-  // generic 'expected nonoptional' — the hand-rolled validator's `raw || {}`
-  // gave the operator the useful message, and that is the one worth keeping.
+  // engine rule below rather than by zod's generic 'expected nonoptional'.
   return z.unknown().optional().transform((raw, ctx): TtsVoiceSlot => {
-    // `raw || {}` — an absent or non-object block reads as "all defaults", which
-    // is how a persona written before this block existed still validates.
+    // An absent or non-object block reads as "all defaults", so a persona
+    // written before this block existed still validates.
     const t = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
 
     const engine = t.engine as string;
@@ -988,8 +768,8 @@ export function ttsVoiceSlotSchema(where: string, opts?: { allowInherit?: boolea
       return z.NEVER;
     }
 
-    // String(x ?? '') and not z.string(): a numeric voice id posted by an older
-    // admin build has always coerced, and refusing it now would be a tightening.
+    // String(x ?? '') and not z.string(): a numeric voice id from an older admin
+    // build has always coerced.
     let voice = String(t.voice ?? '').trim();
     const fail = (message: string) => {
       ctx.addIssue({ code: 'custom', message });
@@ -1028,19 +808,15 @@ export function ttsVoiceSlotSchema(where: string, opts?: { allowInherit?: boolea
         return fail(`${where}.voice must be 1-${TTS_VOICE_MAX} chars`);
       }
     } else if (engine === 'remote' || engine === PERSONA_TTS_INHERIT) {
-      // remote: server-specific ids the sidecar interprets. inherit: no engine
-      // is known at validation time, so no per-engine rule CAN apply —
-      // resolvePersonaVoiceSlot() decides at speak time whether the id survives
-      // the resolved engine. Both leave only the shared length cap, and empty
-      // is valid for both.
+      // remote: sidecar-interpreted ids. inherit: no engine is known yet, so no
+      // per-engine rule can apply (resolvePersonaVoiceSlot decides at speak
+      // time). Both leave only the length cap, and empty is valid.
       if (voice.length > TTS_VOICE_MAX) {
         return fail(`${where}.voice must be 0-${TTS_VOICE_MAX} chars`);
       }
     } else {
-      // piper: empty = the baked-in default. A Kokoro-shaped id is also
-      // accepted — the seed roster carries one per persona under piper so
-      // switching to Kokoro yields distinct voices with no extra editing, and
-      // resolvePiperVoice() falls back gracefully for it (#454).
+      // piper: empty = the baked-in default; a Kokoro-shaped id is also accepted
+      // (the seed roster carries one per persona, #454).
       if (
         voice &&
         !TTS_PIPER_VOICE_RE.test(voice) &&
@@ -1062,20 +838,13 @@ export function ttsVoiceSlotSchema(where: string, opts?: { allowInherit?: boolea
   });
 }
 
-/**
- * The lenient twin of ttsVoiceSlotSchema — the LOAD path.
- *
- * Where the schema refuses, this resets to a value the schema accepts. The
- * output is therefore always schema-valid, which is what lets the load path run
- * the real schema after repairing rather than maintaining a second set of rules.
- */
+/** The lenient LOAD-path twin of ttsVoiceSlotSchema: where the schema refuses,
+ *  this resets to a value it accepts, so the output is always schema-valid. */
 export function repairTtsVoiceSlot(raw: unknown, opts?: { allowInherit?: boolean }): TtsVoiceSlot {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   const engines: readonly string[] = opts?.allowInherit === true ? PERSONA_TTS_ENGINES : TTS_ENGINES;
-  // 'piper' and not PERSONA_TTS_INHERIT: an unreadable engine on a persona
-  // written before this value existed must land on the behaviour it had, and
-  // that behaviour was the piper floor — never a value that re-points the
-  // persona at whatever the station is set to today.
+  // 'piper' and not PERSONA_TTS_INHERIT: an unreadable engine must land on the
+  // piper floor, never on a value that re-points the persona at the station.
   const engine = engines.includes(r.engine as string)
     ? (r.engine as string)
     : 'piper';
@@ -1090,8 +859,7 @@ export function repairTtsVoiceSlot(raw: unknown, opts?: { allowInherit?: boolean
       : '';
 
   if (engine === 'kokoro' && !TTS_KOKORO_VOICE_RE.test(voice)) voice = 'bf_isabella';
-  // Invalid chatterbox filenames reset to empty rather than being rewritten to
-  // a Kokoro id.
+  // Invalid chatterbox filenames reset to empty, not to a Kokoro id.
   if (engine === 'chatterbox' && voice && !TTS_CHATTERBOX_VOICE_RE.test(voice)) voice = '';
   if (
     engine === 'pocket-tts' &&
@@ -1112,11 +880,7 @@ export function repairTtsVoiceSlot(raw: unknown, opts?: { allowInherit?: boolean
   if (!voice && engine === 'cloud' && cloudProvider !== 'openai-compatible') voice = 'alloy';
   // The kokoro floor. PERSONA_TTS_INHERIT is excluded alongside the engines that
   // read empty as "your own default": an inherit slot has no engine yet, so
-  // there is no id-space to pick a floor FROM, and stamping a Kokoro id here
-  // would hand "bf_isabella" to whatever the station is set to — the same
-  // wrong-id-space failure resolvePersonaVoiceSlot() exists to prevent, and it
-  // would silently overwrite the empty voice every community install is created
-  // with (routes/personas.ts).
+  // there is no id-space to pick a floor from.
   if (
     !voice &&
     engine !== 'cloud' &&
@@ -1136,30 +900,17 @@ export function repairTtsVoiceSlot(raw: unknown, opts?: { allowInherit?: boolean
   };
 }
 
-// ── Persona ──────────────────────────────────────────────────────────────────
-
-// Explicit null reads as "absent" on every OPTIONAL field. The pre-schema
-// validator accepted null everywhere it accepted an omission (`String(x ?? '')`,
-// `!== undefined && !== null` guards), and clients that write null for an empty
-// field relied on it. zod's `.default()` fires only on undefined.
+// Explicit null reads as "absent" on every OPTIONAL field; zod's `.default()`
+// fires only on undefined.
 const personaNullToUndefined = (v: unknown) => (v == null ? undefined : v);
 
-/**
- * `String(x ?? '').trim()` then a length check — the exact coercion the
- * hand-rolled validator applied to name/soul/tagline.
- *
- * Deliberately NOT `z.string()`: a numeric or boolean value stringifies today
- * (a persona named `123` saves), and refusing it would be a tightening. The
- * message names its own field because it is also the flat `error` a 400 carries.
- */
-// The `.optional()` is load-bearing on every z.unknown() field in this module,
-// and is NOT the same statement as "this field may be omitted". zod 4 treats a
-// bare z.unknown() inside z.object as a REQUIRED key and refuses an absent one
-// with 'expected nonoptional' before the transform ever runs — so without it a
-// persona that simply omits `tagline` (or a dial) fails, where the hand-rolled
-// validator read the omission as '' and 5 respectively. Optionality here restores
-// that: the transform still runs, and `String(undefined ?? '')` is what decides
-// the outcome — '' passes a min of 0 and fails a min of 1, exactly as before.
+// `String(x ?? '').trim()` + a length check, NOT z.string(): a numeric or
+// boolean value stringifies (a persona named `123` saves). The message names its
+// own field because it is also the flat `error` a 400 carries.
+//
+// The `.optional()` is load-bearing on every z.unknown() field here: zod 4 reads
+// a bare z.unknown() inside z.object as a REQUIRED key and refuses an absent one
+// before the transform runs, so an omitted tagline or dial would fail.
 function personaCoercedText(field: string, min: number, max: number) {
   return z.unknown().optional().transform((raw, ctx) => {
     const v = String(raw ?? '').trim();
@@ -1190,20 +941,6 @@ export interface PersonaParsed {
   tags: string[];
 }
 
-/**
- * One persona.
- *
- * `id` is OPTIONAL and a malformed one is DROPPED rather than refused — the
- * same call the shows conversion made, and for a stronger reason: a persona id
- * is what every show's `personaId`, every guest list and `activePersonaId` point
- * at, so refusing one bad id in a backup would refuse the whole roster.
- * persona-server.ts's resolvePersonaIds mints the replacement.
- *
- * Field ORDER matters — zod reports issues in declaration order, and the
- * hand-rolled validator checked name → soul → tagline → language → frequency →
- * scriptLength → djMode → tts → skills → avatar. An operator with two bad
- * fields must still be told about the same one first.
- */
 // Array or comma string, trimmed + lowercased, empties dropped — the same two
 // wire shapes the skill and show tag fields accept.
 function personaTagList(raw: unknown): string[] {
@@ -1212,14 +949,10 @@ function personaTagList(raw: unknown): string[] {
 }
 
 /**
- * Organisation only — tags steer nothing on air and are not published by the
- * public roster route.
- *
- * A bad tag is REFUSED, unlike the sibling `skills` list, and the difference is
- * deliberate: `skills` is a subscription resolved against a live catalogue
- * where a dead entry is inert, while a tag is typed by hand in the editor and
- * silently losing one is the operator watching their own input disappear on
- * reload. repairPersonaTags below is the lenient load-path twin.
+ * Organisation only — tags steer nothing on air and are not published publicly.
+ * A bad tag is REFUSED, unlike the sibling `skills` list: a tag is typed by hand
+ * in the editor, so losing one silently is the operator's input vanishing.
+ * repairPersonaTags below is the lenient load-path twin.
  */
 const personaTags = z
   .union([z.null(), z.array(z.unknown()), z.string()])
@@ -1245,14 +978,17 @@ const personaTags = z
   })
   .transform((toks) => [...new Set(toks)]);
 
+// `id` is optional and a malformed one is DROPPED, not refused: it is what every
+// show's personaId, guest list and activePersonaId point at, so refusing one bad
+// id in a backup would refuse the whole roster. resolvePersonaIds mints a
+// replacement. Field ORDER matters — zod reports issues in declaration order.
 export const personaSchema = z
   .object({
     name: personaCoercedText('name', 1, PERSONA_NAME_MAX),
     soul: personaCoercedText('soul', 1, PERSONA_SOUL_MAX),
     tagline: personaCoercedText('tagline', 0, PERSONA_TAGLINE_MAX),
-    // language — optional free text ("Turkish", "Türkçe", …). Absent/empty → ''
-    // (English, no directive injected). Unlike name/soul this one REFUSES a
-    // non-string instead of coercing, which is what the validator did.
+    // Optional free text. Absent/empty → '' (English, no directive injected).
+    // Unlike name/soul this REFUSES a non-string instead of coercing.
     language: z.preprocess(
       personaNullToUndefined,
       z
@@ -1264,7 +1000,6 @@ export const personaSchema = z
     frequency: z.enum(PERSONA_FREQUENCIES, {
       error: `frequency must be one of: ${PERSONA_FREQUENCIES.join(', ')}`,
     }),
-    // Absent → 'concise' (the default and the historical behaviour).
     scriptLength: z.preprocess(
       personaNullToUndefined,
       z
@@ -1273,14 +1008,12 @@ export const personaSchema = z
         })
         .default('concise'),
     ),
-    // Absent → false (a plain narrator persona). Present must be a real boolean:
-    // unlike the `=== true` booleans on a show, BOTH paths never agreed here —
-    // the strict validator refused a non-boolean — so the refusal is preserved.
+    // Absent → false. Present must be a real boolean (unlike a show's `=== true`
+    // booleans): the strict path has always refused a non-boolean here.
     djMode: z.preprocess(
       personaNullToUndefined,
       z.boolean({ error: 'djMode must be a boolean' }).default(false),
     ),
-    // Absent → 'natural' (the historical link behaviour). See PERSONA_LINK_STYLES.
     linkStyle: z.preprocess(
       personaNullToUndefined,
       z
@@ -1289,13 +1022,11 @@ export const personaSchema = z
         })
         .default('natural'),
     ),
-    // An absent dial reads as neutral, which is what clampPersonaDial returns
-    // for undefined — see the note on personaCoercedText for the .optional().
+    // An absent dial reads as neutral (clampPersonaDial of undefined).
     humour: z.unknown().optional().transform(clampPersonaDial),
     localColour: z.unknown().optional().transform(clampPersonaDial),
     warmth: z.unknown().optional().transform(clampPersonaDial),
-    // A bare basename, never a path. The dedicated upload route is the only
-    // writer that creates the file; this just checks the persisted string.
+    // A bare basename, never a path; the upload route is the only file writer.
     avatar: z.preprocess(
       (v) => (v == null || v === '' ? undefined : v),
       z
@@ -1315,20 +1046,16 @@ export const personaSchema = z
         .transform((v) => v ?? ''),
     ),
     tts: ttsVoiceSlotSchema('tts', { allowInherit: true }),
-    // skills — absent → null ("all skills", the legacy default). Present → an
-    // explicit slug array.
+    // Absent → null ("all skills", the legacy default).
     skills: z.preprocess(
       personaNullToUndefined,
       z
         .array(z.unknown(), { error: 'skills must be an array of skill names' })
         .max(PERSONA_SKILLS_LIMIT, `skills must be at most ${PERSONA_SKILLS_LIMIT} entries`)
         .transform((items) => {
-          // A malformed entry is DROPPED, not refused. persona.skills is a
-          // subscription list resolved against the live skill catalogue at fire
-          // time, so an entry that can't name a skill can never fire — and the
-          // OLD shape check accepted forms the slug rule refuses (a leading
-          // hyphen), so a backup can legitimately carry one. Failing the whole
-          // roster over inert junk is the themeId lesson (#917) again.
+          // A malformed entry is DROPPED, not refused: skills is a subscription
+          // resolved against the live catalogue, so a bad entry is inert, and a
+          // backup can legitimately carry one (#917).
           const seen = new Set<string>();
           const out: string[] = [];
           for (const s of items) {
@@ -1343,9 +1070,8 @@ export const personaSchema = z
         .nullable()
         .default(null),
     ),
-    // Declared AFTER skills and emitted last in the transform below, so both
-    // the issue order an operator is told about and the persisted key order of
-    // every pre-existing field are unchanged.
+    // Declared after skills and emitted last below, so issue order and persisted
+    // key order are unchanged.
     tags: personaTags,
     id: z.preprocess(
       // A malformed id reads as absent so resolvePersonaIds mints one.
@@ -1353,7 +1079,7 @@ export const personaSchema = z
       z.string().optional(),
     ),
   })
-  // The persisted key order, which several fixtures and the backup diff rely on.
+  // The persisted key order, which fixtures and the backup diff rely on.
   .transform(
     (p): PersonaParsed => ({
       id: p.id,
@@ -1375,28 +1101,20 @@ export const personaSchema = z
     }),
   );
 
-/**
- * The whole roster.
- *
- * A station with NO persona has no one to speak, which is why the floor is 1
- * rather than 0 — settings.load() falls back to the seeded roster instead.
- */
+/** The whole roster. The floor is 1, not 0 — a station with no persona has no
+ *  one to speak, and settings.load() falls back to the seeded roster. */
 export const personasSchema = z
   .array(personaSchema, { error: `personas must be an array of 1-${PERSONA_LIMIT} entries` })
   .min(1, `personas must be an array of 1-${PERSONA_LIMIT} entries`)
   .max(PERSONA_LIMIT, `personas must be an array of 1-${PERSONA_LIMIT} entries`);
 
 /**
- * Every per-field repair the LOAD path applies before parsing.
+ * Every per-field repair the LOAD path applies before parsing. `undefined` lets
+ * the schema's own default apply; each repair lands on a value the strict path
+ * accepts, and the schema is still run on the result. A row that cannot be
+ * repaired (no name, no soul) fails the parse and the caller drops it.
  *
- * `undefined` lets the schema's own default apply. Each repair lands on a value
- * the strict path accepts, so load and save still agree about what a valid
- * persona is — the schema itself is still run on the result. A row that cannot
- * be repaired into validity (no name, no soul) fails the parse and the caller
- * drops it, exactly as normalizePersona returned null.
- *
- * `skillRenames` travels as plain DATA rather than being imported, because this
- * module may import nothing but zod. The browser passes `{}`.
+ * `skillRenames` travels as plain data (zod-only module); the browser passes {}.
  */
 export function repairPersonaForLoad(
   raw: Record<string, unknown>,
@@ -1430,10 +1148,9 @@ export function repairPersonaForLoad(
         ? raw.avatar.trim()
         : undefined,
     tts: repairTtsVoiceSlot(raw.tts, { allowInherit: true }),
-    // Non-array → undefined → the schema's null default ("all skills"), which is
-    // what normalizeSkills returned. Renames are applied HERE and not in the
-    // schema: a rename is a migration of stored data, not a rule a submitted
-    // value has to satisfy, and the strict path has never applied them.
+    // Non-array → undefined → the schema's null default ("all skills"). Renames
+    // are applied here, not in the schema: a rename migrates stored data rather
+    // than stating a rule a submitted value must satisfy.
     skills: Array.isArray(raw.skills)
       ? raw.skills
           .filter((s): s is string => typeof s === 'string')
@@ -1445,12 +1162,8 @@ export function repairPersonaForLoad(
   };
 }
 
-/**
- * Tags, repaired: lowercased, invalid entries dropped, de-duplicated, capped.
- * The cap applies AFTER the validity filter so junk in a hand-edited file does
- * not spend the budget the operator's real tags need. Non-array reads as absent
- * so the schema's [] default applies.
- */
+/** Tags, repaired: lowercased, invalid dropped, deduped, capped. The cap applies
+ *  AFTER the validity filter so junk does not spend the real tags' budget. */
 export function repairPersonaTags(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out: string[] = [];
@@ -1463,8 +1176,6 @@ export function repairPersonaTags(raw: unknown): string[] | undefined {
   }
   return out;
 }
-
-// ── DJ prompt library ────────────────────────────────────────────────────────
 
 export const DJ_PROMPT_LIMIT = 20;
 export const DJ_PROMPT_NAME_MAX = 60;
@@ -1514,12 +1225,9 @@ export const djPromptsSchema = z
   .max(DJ_PROMPT_LIMIT, `djPrompts must be an array of 0-${DJ_PROMPT_LIMIT} entries`);
 
 /**
- * The LOAD path's per-field repair for one prompt entry.
- *
- * Only `name` is repairable — the text IS the entry, so a text that can't render
- * drops the row rather than being invented. `fallbackName` is supplied by the
- * caller because the historical fallback ("Prompt 3") numbers by SURVIVING row,
- * which this module cannot know.
+ * The LOAD path's repair for one prompt entry. Only `name` is repairable — the
+ * text IS the entry, so an unrenderable one drops the row. `fallbackName` comes
+ * from the caller: it numbers by SURVIVING row, which this module cannot know.
  */
 export function repairDjPromptForLoad(
   raw: Record<string, unknown>,
@@ -1536,20 +1244,13 @@ export function repairDjPromptForLoad(
 }
 
 /**
- * Personas that will NOT speak through the station voice described by
- * `{engine, provider}` — the list the admin DJ Brain section warns about before
- * it wires the cloud voice, and the list its one-click fix patches to 'inherit'.
+ * Personas that will NOT speak through the station voice `{engine, provider}` —
+ * what the admin DJ Brain section warns about and its one-click fix patches to
+ * 'inherit'. A persona already on `inherit` is never listed.
  *
- * A persona already on `inherit` is never listed: it follows the station by
- * definition, which is exactly what the fix would set it to.
- *
- * `provider` matters because "pins cloud" is not the same as "pins THIS cloud".
- * The four cloud providers share one dispatcher but are independent targets: a
- * persona pinned to cloud/openai speaks through OpenAI, not through the
- * openai-compatible DJ Brain the operator just wired, and reporting it as
- * already-following was how the warning could say "nothing outstanding" about a
- * roster that still could not reach the voice being paid for. Omit `provider`
- * to compare on engine alone.
+ * `provider` matters: the four cloud providers share one dispatcher but are
+ * independent targets, so cloud/openai does not follow an openai-compatible
+ * station voice. Omit it to compare on engine alone.
  */
 export function personasPinningOtherEngine(
   personas:
@@ -1569,8 +1270,8 @@ export function personasPinningOtherEngine(
       const e = p?.tts?.engine;
       if (typeof e !== 'string' || e === PERSONA_TTS_INHERIT) return false;
       if (e !== engine) return true;
-      // Same engine — only a cloud slot can still miss, and only when the
-      // caller named the provider it means.
+      // Same engine: only a cloud slot can still miss, and only when the caller
+      // named the provider it means.
       if (e !== 'cloud' || !provider) return false;
       return p?.tts?.cloudProvider !== provider;
     })
@@ -1580,8 +1281,7 @@ export function personasPinningOtherEngine(
       return {
         id: String(p.id ?? ''),
         name: String(p.name ?? p.id ?? ''),
-        // A cloud pin is only meaningful with its provider — "cloud" alone
-        // reads as "already on the cloud voice", which is the confusion.
+        // A cloud pin is only meaningful with its provider.
         engine: e === 'cloud' && typeof cp === 'string' && cp ? `${e} / ${cp}` : e,
       };
     });
@@ -1597,13 +1297,9 @@ export interface StationVoiceDefaults {
 
 const CARRIES_VOICE: readonly string[] = TTS_INHERITABLE_VOICE_ENGINES;
 
-/**
- * Resolve a persona voice slot against the station defaults.
- *
- * Returns the slot unchanged unless its engine is the inherit sentinel. Null in
- * (the global-voice kinds, which deliberately carry no persona) is null out, so
- * callers can hand this whatever djPersonaTts() gave them.
- */
+/** Resolve a persona voice slot against the station defaults. Unchanged unless
+ *  the engine is the inherit sentinel; null in is null out, so callers can pass
+ *  whatever djPersonaTts() gave them. */
 export function resolvePersonaVoiceSlot(
   slot: Partial<TtsVoiceSlot> | null | undefined,
   station: StationVoiceDefaults | null | undefined,
@@ -1611,16 +1307,14 @@ export function resolvePersonaVoiceSlot(
   if (!slot) return slot as null | undefined;
   if (slot.engine !== PERSONA_TTS_INHERIT) return slot as TtsVoiceSlot;
 
-  // The station default is the whole point of the sentinel; 'piper' is the same
-  // floor settings.load() coerces an unreadable defaultEngine to, so a broken
-  // settings file resolves to the universal engine rather than to nothing.
+  // 'piper' is the same floor settings.load() coerces an unreadable
+  // defaultEngine to, so a broken settings file still resolves to an engine.
   const engine =
     typeof station?.defaultEngine === 'string' && station.defaultEngine
       ? station.defaultEngine
       : 'piper';
 
-  // gainDb and speed are per-persona dials, not per-engine ones — they survive
-  // the resolution untouched whatever speaks.
+  // Per-persona dials, not per-engine: they survive resolution untouched.
   const gainDb = typeof slot.gainDb === 'number' ? slot.gainDb : 0;
   const speed = typeof slot.speed === 'number' ? slot.speed : 1;
 
@@ -1628,9 +1322,8 @@ export function resolvePersonaVoiceSlot(
     const cloud = station?.cloud || {};
     return {
       engine,
-      // The station's provider AND the station's voice: an inherit slot has
-      // never named a cloud provider, and its voice belongs to another
-      // id-space. Both come from the block the operator configured together.
+      // The station's provider AND voice: an inherit slot never named a cloud
+      // provider, and its own voice belongs to another id-space.
       cloudProvider: typeof cloud.provider === 'string' && cloud.provider ? cloud.provider : 'openai',
       voice: typeof cloud.voice === 'string' ? cloud.voice : '',
       gainDb,
@@ -1640,13 +1333,12 @@ export function resolvePersonaVoiceSlot(
 
   return {
     engine,
-    // Carried through so a later reroute onto `cloud` (the rescue chain's
-    // configured rung) still has a provider to check keys against; it is read
-    // only while the engine IS cloud, which this branch is not.
+    // Carried through so a later reroute onto `cloud` still has a provider to
+    // check keys against; only read while the engine IS cloud.
     cloudProvider:
       typeof slot.cloudProvider === 'string' && slot.cloudProvider ? slot.cloudProvider : 'openai',
-    // Only piper/kokoro share the seed roster's id-space, so only they keep the
-    // persona voice. Everywhere else '' is the engine's own default.
+    // Only piper/kokoro share the seed roster's id-space; elsewhere '' is the
+    // engine's own default.
     voice: CARRIES_VOICE.includes(engine) && typeof slot.voice === 'string' ? slot.voice : '',
     gainDb,
     speed,
@@ -1910,60 +1602,31 @@ export function normalizeRecipeRow(raw: unknown): {
 
 // ─── from controller/src/schemas/request.ts ──────────────────────────────
 
-// Shared listener-request schema — the public request box's POST /request body
-// ({ text, name }). One box per skin, six boxes total, all posting the same two
-// fields; the caps used to live server-side only (a slice, not a rule), so the
-// boxes invited text the booth then silently cut. Executed on BOTH sides: the
-// controller runs it at the route boundary (middleware/validate.ts), and the
-// web player runs it once in PlayerCore's submitRequest action — the one
-// chokepoint every skin's box already goes through — so a refusal reads as a
-// plain message before the network is ever touched.
-//
-// What this schema deliberately does NOT own: the on-air safety pipeline.
-// Injection stripping, scripted-opener cuts, reserved-name screening and the
-// 'anon' fallback are guard POLICY over accepted input (util/request-guard.ts,
-// pinned by scripts/request-guard.test.ts) — they need server state (the
-// persona roster) and they repair rather than refuse by design. The schema
-// answers only "is this a well-formed request", the guard answers "what may
-// reach the air".
-//
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle. Enforced by controller/eslint.config.mjs and gen-schemas.ts.
+// Shared listener-request schema — POST /request's `{ text, name }`. Run at the
+// route boundary and once in PlayerCore's submitRequest, the chokepoint every
+// skin's box goes through. The on-air safety pipeline (injection stripping,
+// opener cuts, reserved-name screening, 'anon' fallback) is NOT here: that is
+// util/request-guard.ts, which repairs rather than refuses.
 
-// Homed here so the route, the guard and the browser share one figure.
-// middleware/ratelimit.ts used to own the text cap (as a slice — over-long
-// text was silently truncated, which could cut a request mid-thought and have
-// the DJ answer half of it); util/request-guard.ts keeps applying the name cap
-// as its belt (its NAME_MAX is an alias of this).
+// One figure for the route, the guard and the browser; request-guard's NAME_MAX
+// is an alias of this.
 export const REQUEST_TEXT_MAX = 280;
 export const REQUEST_NAME_MAX = 40;
 
-// Explicit null reads as absent, as the `typeof x === 'string' ? x : ''`
-// readers this replaces always did. (Named per-module: the mirror is one flat
-// file.)
+// Explicit null reads as absent. (Named per-module: the mirror is one flat file.)
 const requestNullToUndefined = (v: unknown) => (v == null ? undefined : v);
 
-// Messages are listener-facing: the pre-flight gate in the player surfaces
-// them verbatim, so each one has to stand alone without a field prefix.
-// 'Empty request' keeps the historical wire message for API callers.
-//
-// The SERVER half of that promise is middleware/validate.ts's
-// validatePublicBody, not the ordinary validateBody — firstMessage prefixes the
-// dotted path unconditionally, so routing this schema through the operator
-// middleware would put "text: " in front of every one of these strings on the
-// wire while the browser (which reads issues[0].message) saw them bare. Two
-// sides, one schema, two different messages, is exactly what these conversions
-// exist to prevent.
+// Messages are listener-facing and stand alone without a field prefix, so this
+// schema MUST be mounted through middleware/validate.ts's validatePublicBody —
+// the ordinary validateBody prefixes the dotted path onto every one of them.
 export const listenerRequestSchema = z.object({
   text: z
     .string({ error: 'Empty request' })
     .trim()
     .min(1, 'Empty request')
     .max(REQUEST_TEXT_MAX, `Keep it under ${REQUEST_TEXT_MAX} characters.`),
-  // Optional decoration, but a refusal beats the old silent slice-to-40 — and
-  // no `.catch()`, which could not tell a wrong type from a too-long value
-  // (the imaging description lesson). Reserved names and junk scripts are the
-  // guard's business, downstream of acceptance.
+  // Optional, but refused rather than sliced; no `.catch()` (it cannot tell a
+  // wrong type from a too-long value). Reserved names are the guard's business.
   name: z.preprocess(
     requestNullToUndefined,
     z
@@ -1976,48 +1639,31 @@ export const listenerRequestSchema = z.object({
 
 // ─── from controller/src/schemas/schedule.ts ─────────────────────────────
 
-// Shared schedule schema — the weekly grid (#shows) and the timed takeover
-// (#930), executed on BOTH sides. The controller runs it in
-// settings.validate.validateScheduleStrict / validateScheduleOverrideStrict
-// (the update() chokepoint), in settings.normalize.normalizeSchedule /
-// normalizeScheduleOverride (the lenient load path) and in the PUT /schedule +
-// POST /schedule/override route middleware; the browser runs the mirrored copy
-// (web/lib/schemas.generated.ts) for the takeover dialog's minute bounds.
+// Shared schedule schema — the weekly grid and the timed takeover (#930). Run
+// by validateScheduleStrict / validateScheduleOverrideStrict, the lenient load
+// path, the PUT /schedule + POST /schedule/override middleware, and the
+// mirrored browser copy.
 //
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle, so a project import or a node builtin here breaks the mirror.
-// That includes OTHER schema modules — the mirror is one flat concatenation, so
-// gen-schemas.ts rejects every specifier but 'zod' and each module has to stand
-// alone.
+// A FACTORY, like shows: a slot either names a real show or names nothing, and
+// `showIds: null` means "this caller cannot check that rule". Three postures:
 //
-// WHY A FACTORY, like shows. A schedule slot cannot be validated against
-// itself: it either names a real show or it names nothing. That single input
-// travels as a ScheduleSchemaContext whose `showIds` is NULLABLE, and null
-// means the same thing it means for a show — **this caller cannot check that
-// rule**. It is what lets three postures share one schema:
+//   strict  (update())      showIds = live roster → unknown id THROWS
+//   lenient (load)          showIds = live roster → repaired away before parsing
+//   route   (PUT /schedule) showIds = null        → shape only; ids resolved
+//                                                   afterwards by
+//                                                   resolveScheduleSlots, which
+//                                                   DROPS and COUNTS
 //
-//   strict  (update())      showIds = the live roster  → unknown id THROWS
-//   lenient (load)          showIds = the live roster  → unknown id is REPAIRED
-//                                                        away before parsing
-//   route   (PUT /schedule) showIds = null             → shape only; the ids are
-//                                                        resolved afterwards by
-//                                                        resolveScheduleSlots,
-//                                                        which DROPS and COUNTS
-//
-// That third posture is not a schema rule and must not become one: the panel
-// can hold a locally-added show the operator has not saved yet, so PUT
-// /schedule deliberately answers 200 with a `dropped` count rather than 400.
+// The third posture must not become a schema rule: the panel can hold a
+// locally-added show the operator has not saved yet, so the route answers 200
+// with a `dropped` count.
 
 // 0 (Sunday) .. 6 (Saturday), matching JS Date.getDay(); 24 hours per day.
-// Previously written as bare 7 / 24 literals in six files across both packages.
 export const SCHEDULE_DAYS = 7;
 export const SCHEDULE_HOURS = 24;
 
-// Bounds for POST /schedule/override's `minutes` — long enough for an all-day
-// takeover, short enough that a forgotten pin can't shadow the grid for days.
-// Homed here because web/components/admin/dash/TakeoverCard.tsx carried a
-// hand-copied pair under a "Mirror the controller's OVERRIDE_MIN/MAX_MINUTES"
-// comment, which is exactly the drift these conversions exist to delete.
+// Bounds for POST /schedule/override's `minutes`: long enough for an all-day
+// takeover, short enough that a forgotten pin cannot shadow the grid for days.
 export const OVERRIDE_MIN_MINUTES = 15;
 export const OVERRIDE_MAX_MINUTES = 720;
 
@@ -2031,35 +1677,26 @@ export function emptyWeek(): ScheduleWeek {
 export type ScheduleWeek = Record<number, Array<string | null>>;
 
 export interface ScheduleSchemaContext {
-  /**
-   * The show ids a slot may name, or null when this caller cannot check.
-   *
-   * Non-null and a slot names something else → an issue. Null → the shape is
-   * checked and every id is taken on trust, for a caller that resolves ids
-   * itself (the route) or has no roster yet.
-   */
+  /** The show ids a slot may name, or null when this caller cannot check (the
+   *  shape is still checked and ids are taken on trust). */
   showIds: string[] | null;
 }
 
-// A stored slot: a show id, or any of the three ways "nothing" has been written
-// to settings.json over the years (null, undefined, empty string).
+// A show id, or any of the three ways "nothing" has been written to
+// settings.json (null, undefined, empty string).
 const scheduleSlotSchema = z
   .union([z.string(), z.null()], { error: 'must be a show id or null' })
   .optional();
 
-// Exactly 24 entries when the day is present at all — the rule the strict
-// validator has always enforced. An absent or null day is a blank day, not an
-// error, so a partial grid still loads.
+// Exactly 24 entries when the day is present at all. An absent or null day is a
+// blank day, not an error, so a partial grid still loads.
 const scheduleDaySchema = z
   .array(scheduleSlotSchema)
   .length(SCHEDULE_HOURS, `must be an array of exactly ${SCHEDULE_HOURS} entries`)
   .nullish();
 
-// The grid has always been persisted as an object keyed "0".."6". An ARRAY of
-// seven days is accepted here only because the hand-rolled validator it
-// replaces read `raw[d]` and therefore took one without noticing; z.object
-// rejects arrays outright, so without this a shape that used to load would
-// start failing at boot.
+// The grid is persisted as an object keyed "0".."6". An ARRAY of seven days is
+// still accepted because it always loaded; z.object rejects arrays outright.
 function toScheduleWeekRecord(raw: unknown): unknown {
   if (!Array.isArray(raw)) return raw;
   const out: Record<string, unknown> = {};
@@ -2103,8 +1740,7 @@ export function scheduleSchema(ctx: ScheduleSchemaContext) {
       ),
     )
     // Cross-slot rather than per-slot so the issue path is the real coordinate
-    // (`schedule.3.14`), which is what firstMessage prints and what an operator
-    // needs in order to find the cell.
+    // (`schedule.3.14`) an operator needs to find the cell.
     .check((c) => {
       if (!ctx.showIds) return;
       const ids = new Set(ctx.showIds);
@@ -2129,18 +1765,10 @@ export function scheduleSchema(ctx: ScheduleSchemaContext) {
 }
 
 /**
- * PUT /schedule's body — the bare grid, or one wrapped in `{ schedule }`.
- *
- * Both spellings were accepted by `req.body?.schedule ?? req.body` and both
- * still are. Ids are NOT checked here (see the header): the route resolves them
- * against the live roster with resolveScheduleSlots and reports a count.
- *
- * This DOES newly reject a day that is present but not exactly 24 entries long,
- * where the route silently padded it with nulls. Same call the stations
- * conversion made three times: a grid quietly reshaped server-side is a grid
- * the operator cannot tell was reshaped, and the strict validator behind
- * update() has always refused it — so accepting it at the route only meant the
- * two disagreed about the same data.
+ * PUT /schedule's body — the bare grid, or one wrapped in `{ schedule }`; both
+ * spellings are accepted. Ids are NOT checked here (see the header): the route
+ * resolves them with resolveScheduleSlots and reports a count. A day present but
+ * not exactly 24 entries is rejected rather than padded.
  */
 export const scheduleSaveSchema = z.preprocess((raw) => {
   if (raw && typeof raw === 'object' && !Array.isArray(raw) && 'schedule' in raw) {
@@ -2151,11 +1779,8 @@ export const scheduleSaveSchema = z.preprocess((raw) => {
 
 /**
  * Resolve a shape-valid grid against the live roster, dropping and COUNTING
- * slots that name a show which isn't persisted.
- *
- * Pure, and deliberately not a schema rule — PUT /schedule answers 200 with
- * `dropped` because the editor can hold a locally-added show the operator
- * hasn't saved yet, and rejecting the save would strand it.
+ * slots naming a show that is not persisted. Deliberately not a schema rule:
+ * the editor can hold a locally-added show, so PUT /schedule answers 200.
  */
 export function resolveScheduleSlots(
   week: ScheduleWeek,
@@ -2175,14 +1800,9 @@ export function resolveScheduleSlots(
   return { schedule, dropped };
 }
 
-/**
- * The load path's repair: everything unrecognised becomes an empty slot.
- *
- * Lives beside the rule it repairs against, like repairShowForLoad — a repair
- * in normalize.ts restating ~5 schema rules inline is how the shows load path
- * ended up able to delete a whole show. Each repair lands on a value the strict
- * path would accept, and the schema is still run on the result.
- */
+/** The load path's repair: everything unrecognised becomes an empty slot. Lives
+ *  beside the rule it repairs against, and lands on a value the strict path
+ *  accepts (the schema is still run on the result). */
 export function repairScheduleForLoad(raw: unknown, showIds: string[]): ScheduleWeek {
   const week = emptyWeek();
   const src = toScheduleWeekRecord(raw);
@@ -2200,8 +1820,6 @@ export function repairScheduleForLoad(raw: unknown, showIds: string[]): Schedule
   return week;
 }
 
-// ── Timed takeover (#930) ────────────────────────────────────────────────────
-
 /**
  * A bounded takeover target. `showId: null` means Default programming; an
  * outer `scheduleOverride: null` means there is no takeover at all.
@@ -2213,21 +1831,13 @@ export interface ScheduleOverride {
 }
 
 /**
- * The takeover target, read in ONE place.
+ * The takeover target, read in ONE place — never inline a `showId` test. It is
+ * three-way: a show, explicit `null` for Default programming (#1507), or
+ * neither, and a target naming nothing real VOIDS the takeover. Both obvious
+ * inline spellings get that third case wrong.
  *
- * A takeover's `showId` is three-way, not two-way — it names a show, it is
- * explicitly `null` for Default programming (#1507), or it is neither — and the
- * two obvious spellings of the question DISAGREE about that third case:
- * `showId === null` calls a malformed target a show pin, `typeof showId ===
- * 'string'` calls it Default programming. Both are wrong: before #1507 a target
- * that named nothing real simply VOIDED the takeover (the roster lookup missed
- * and the grid resumed), and that is the behaviour these two keep. The resolver,
- * the roster sweep, the janitor, the programme span, the route and both admin
- * screens all ask through them, so the answer cannot drift between call sites.
- *
- * Deliberately loose in their parameter: the route asks about a request body
- * and the admin forms about their own submitted values, neither of which is a
- * stored `ScheduleOverride` yet.
+ * Deliberately loose in their parameter, so a request body and an admin form's
+ * submitted values can ask the same way a stored override does.
  */
 export function takeoverShowId(ov: { showId?: unknown } | null | undefined): string | null {
   const id = ov?.showId;
@@ -2242,14 +1852,9 @@ export function isDefaultTakeover(ov: { showId?: unknown } | null | undefined): 
 export interface ScheduleOverrideContext {
   /** Show ids a string target may name, or null when this caller cannot check. */
   showIds: string[] | null;
-  /**
-   * Epoch-ms "now", or null to not judge expiry at all.
-   *
-   * Only the LOAD path passes a clock: an override that has already run out is
-   * transient state worth dropping at boot, whereas update() persisting one
-   * with a past `expiresAt` is not an input error — the operator's own window
-   * simply ended, and throwing there would fail an unrelated settings save.
-   */
+  /** Epoch-ms "now", or null to not judge expiry. Only the LOAD path passes a
+   *  clock: a window that merely ran out is not update()'s input being wrong,
+   *  and throwing there would fail an unrelated settings save. */
   now: number | null;
 }
 
@@ -2257,17 +1862,14 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
   return z
     .object(
       {
-        // `.nullable()` rather than a two-branch union: null is the Default
-        // programming target, and the string's own message is the one an
-        // operator can act on — a union answers with its own wording instead.
+        // `.nullable()` rather than a union: null is the Default programming
+        // target, and the string's own message is the actionable one.
         showId: z.string({ error: 'must be a show id' }).min(1, 'must be a show id').nullable(),
         startedAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
         expiresAt: z.number({ error: 'must be an epoch-ms number' }).finite('must be an epoch-ms number'),
       },
-      // Explicit, so a non-object never reaches an operator as zod's own
-      // 'Invalid input: expected object, received number'. Phrased WITHOUT the
-      // key, like the field messages above, because every caller roots this
-      // schema at 'scheduleOverride' — self-naming here would double it.
+      // Explicit, and phrased WITHOUT the key: every caller roots this schema at
+      // 'scheduleOverride', so self-naming would double it.
       { error: 'must be an object' },
     )
     .check((c) => {
@@ -2308,50 +1910,27 @@ export function scheduleOverrideSchema(ctx: ScheduleOverrideContext) {
 }
 
 /**
- * How a takeover's end is chosen (#1601).
- *
- * `'fixed'` is `minutes` from now — the only shape before this, and the
- * DEFAULT, so a client that posts `{ showId, minutes }` is byte-identical.
- * `'schedule-change'` asks the server to resolve the next weekly-grid boundary
- * and end the pin there instead ("hold this until the grid would have moved on
- * anyway").
- *
- * It rides on the REQUEST and never on `ScheduleOverride`: `expiresAt` has
- * always been an absolute instant rather than a duration, so once the boundary
- * is resolved the pin is an ordinary window that the resolver, the janitor
- * sweep, the programme span and the roster sweep all keep reading unchanged.
- * A stored discriminator would be a second thing those five could read
- * differently.
+ * How a takeover's end is chosen (#1601). `'fixed'` is `minutes` from now and is
+ * the DEFAULT; `'schedule-change'` asks the server to end the pin at the next
+ * weekly-grid boundary. It rides on the REQUEST and never on `ScheduleOverride`
+ * — `expiresAt` stays an absolute instant, so the resolved pin is an ordinary
+ * window every reader already understands.
  */
 export const TAKEOVER_UNTIL = ['fixed', 'schedule-change'] as const;
 export type TakeoverUntil = (typeof TAKEOVER_UNTIL)[number];
 
-// One string, four constraints — the bounds message names both ends whichever
-// one a value missed, because "must be an integer" alone leaves an operator
-// guessing at the range.
+// One string for four constraints, naming both ends whichever one a value missed.
 const OVERRIDE_MINUTES_MESSAGE =
   `must be an integer between ${OVERRIDE_MIN_MINUTES} and ${OVERRIDE_MAX_MINUTES}`;
 
 /**
- * POST /schedule/override's body.
- *
- * `showId: null` requests Default programming; an outer missing field is still
- * malformed. `minutes` is coerced because the hand-rolled route ran
- * `Number(req.body?.minutes)` and therefore accepted the string "60". An EMPTY
- * showId now 400s
- * where it used to reach the roster lookup and 404 as `no such show: ` — a
- * missing field is a malformed request, not a missing show. A real id that
- * isn't in the roster still 404s from the handler, which is the answer that
- * needs server state.
+ * POST /schedule/override's body. `showId: null` requests Default programming;
+ * an empty showId 400s rather than 404ing from the roster lookup. `minutes` is
+ * coerced, so the string "60" is accepted.
  *
  * `minutes` is REQUIRED under `until: 'fixed'` and REFUSED under
- * `until: 'schedule-change'`, where the server resolves the window itself.
- * Both halves are the same rule: the two fields must not be able to disagree
- * about what the caller asked for. Demanding a duration that is then ignored is
- * one way to let them; silently discarding one the caller did send is the
- * other, and it is the worse of the two, since the caller has no way to learn
- * its number went nowhere. A fixed window with no minutes still fails with the
- * bounds message it always did.
+ * `'schedule-change'`: the two fields must not be able to disagree about what
+ * the caller asked for.
  */
 export const scheduleOverrideRequestSchema = z
   .object({
@@ -2388,89 +1967,42 @@ export const scheduleOverrideRequestSchema = z
 
 // ─── from controller/src/schemas/settings.ts ─────────────────────────────
 
-// Shared schemas for individual `POST /settings` patch keys — the first slice
-// of the mega-endpoint conversion (#1348, split out of #1337).
+// Schemas for individual `POST /settings` patch keys (#1348). One schema per
+// top-level key, never one over the whole settings object: the body is a
+// partial patch and `z.object` would strip whatever a form learns to send next.
 //
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle, so a project import or a node builtin here breaks the mirror.
-// Enforced by controller/eslint.config.mjs and by gen-schemas.ts.
+// Each helper reproduces its hand-rolled branch's coercion exactly. Tightening
+// one is a behaviour change and belongs in its own PR.
 //
-// WHY A KEY AT A TIME, AND NOT ONE SCHEMA FOR THE SETTINGS OBJECT
-// ---------------------------------------------------------------
-// The `/settings` body is a partial PATCH: every admin panel posts only the keys
-// it owns. `z.object` strips unknown keys, so a schema over the whole settings
-// object would silently delete whatever a form learns to send next. Instead each
-// top-level key owns its own schema here and patch-registry.ts runs only the
-// keys a patch actually carries, keeping the stripping scoped to blocks whose
-// shape is fully known.
-//
-// FIDELITY IS THE POINT
-// ---------------------
-// No conversion may introduce a silent repair where the operator previously got
-// a refusal, or vice versa (#1337's rule). The hand-rolled branches these
-// replace carry a lot of ACCIDENTAL leniency, and reproducing it is most of the
-// work:
-//
-//   * `parseInt`/`parseFloat` stringify first, so '5' and even '5abc' parse, and
-//     a float on an int key TRUNCATES rather than failing (jingleRatio: 5.7
-//     saves as 5). `z.number().int()` refuses all three — hence
-//     settingsIntLike / settingsFloatLike.
-//   * `!!value` accepts anything, so `enabled: 1` is `true`. See settingsBoolLike.
-//   * `patch.beds || {}` makes a non-object block a silent no-op, not an error.
-//     See settingsBlockOf.
-//
-// Tightening any of these is defensible — webhooks did exactly that — but it is
-// a behaviour change and belongs in a PR that says so, so the frame itself can't
-// be what hides a regression.
-//
-// The bounds live HERE rather than in defaults.ts's BOUNDS because a mirrored
-// module may not import a non-mirrored one and the browser needs the same
-// numbers to pre-flight the form; BOUNDS re-exports them. The web side must read
-// from the mirror rather than hand-copying — which is what BedsSection did with
-// a bare `60` and `15`.
+// Bounds live here, not in defaults.ts's BOUNDS, so the browser pre-flight
+// reads the same numbers; BOUNDS re-exports them.
 
-// Every top-level name in schemas/*.ts shares ONE scope in the flat mirror
-// (module-private ones included), hence the SETTINGS_/settings prefixes.
+// Every top-level name in schemas/*.ts shares ONE scope in the flat mirror,
+// hence the SETTINGS_/settings prefixes.
 export interface SettingsNumericBound {
   min: number;
   max: number;
 }
 
-// 0 = jingles off entirely — radio.liq skips the jingle rotate when the ratio
-// file reads 0 (issue #997).
+// 0 = jingles off entirely; radio.liq skips the rotate on a 0 ratio file (#997).
 export const JINGLE_RATIO_BOUNDS: SettingsNumericBound = { min: 0, max: 1000 };
 
-// 0 = bed every link whose incoming vocal onset is unknown. The ceiling is
-// deliberately low: past ~60s the DJ has outlasted any script the generators
-// produce, so a higher value is indistinguishable from beds being off.
+// 0 = bed every link whose incoming vocal onset is unknown.
 export const BEDS_THRESHOLD_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 60 };
 
-// The bed's ramp into the next song. bed-policy clamps this against the bed's
-// own length too, so a long ramp on a short link can't invert the arithmetic.
+// The bed's ramp into the next song; bed-policy clamps it against the bed length too.
 export const BEDS_CROSS_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
 export const BEDS_TAIL_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
 
-// Dead-air trim: the smallest edge gap worth cutting. The FLOOR is what keeps
-// the feature from eating deliberate silence — a segued album leaves a beat
-// between tracks on purpose, and a mastering blank worth a cue point is
-// measured in seconds, not frames. The ceiling bounds the same mistake from
-// the other side: past 30s an operator is describing a different problem
-// (a corrupt rip) than the one a cue point solves.
+// Dead-air trim: smallest edge gap worth cutting. The floor keeps the feature
+// off deliberate silence (a segued album leaves a beat between tracks).
 export const SILENCE_TRIM_MIN_GAP_MS_BOUNDS: SettingsNumericBound = { min: 250, max: 30000 };
 
 /**
- * `parseInt(raw, 10)` + a bounds check, exactly as the hand-rolled branch did.
- *
- * The parse is deliberately NOT `z.coerce.number().int()`. parseInt stringifies
- * its argument and reads a LEADING integer, so it accepts the string forms an
- * older admin build still posts and truncates a float instead of refusing it.
- * Swapping in a strict numeric schema turns three silent repairs into refusals
- * at once, which is the failure #1337 rules out.
- *
- * `message` names its own field because it is also the flat `error` string the
- * operator's toast shows, and those strings are unchanged from the branches
- * this replaces. patch-registry.ts is what supplies the dotted path for
- * `fieldErrors`, so the location is never lost.
+ * `parseInt(raw, 10)` + bounds: accepts string forms and TRUNCATES a float
+ * rather than refusing it. Not `z.coerce.number().int()`, which refuses both.
+ * `message` is the flat `error` string the operator sees, so it names its own
+ * field; patch-registry.ts supplies the dotted path for `fieldErrors`.
  */
 export function settingsIntLike(bounds: SettingsNumericBound, message: string) {
   return z
@@ -2484,7 +2016,7 @@ export function settingsIntLike(bounds: SettingsNumericBound, message: string) {
     .transform((raw) => parseInt(raw as string, 10));
 }
 
-/** `parseFloat(raw)` + a bounds check. Same rationale as settingsIntLike. */
+/** `parseFloat(raw)` + bounds. Same posture as settingsIntLike. */
 export function settingsFloatLike(bounds: SettingsNumericBound, message: string) {
   return z
     .unknown()
@@ -2498,28 +2030,19 @@ export function settingsFloatLike(bounds: SettingsNumericBound, message: string)
 }
 
 /**
- * `!!value` — accepts anything, like the branches this replaces.
- *
- * Not `z.boolean()`. These keys are reached by backup restore, which posts a
- * whole (possibly hand-edited) settings.json straight to update(); a truthy
- * non-boolean that saves today would begin failing the entire restore.
+ * `!!value` — accepts anything. Not `z.boolean()`: backup restore posts a whole
+ * settings.json through update(), and a truthy non-boolean that saves today
+ * would start failing the entire restore.
  */
 export function settingsBoolLike() {
   return z.unknown().transform((v) => !!v);
 }
 
 /**
- * A settings BLOCK — `{ enabled?, … }` — with the branches' own leniency:
- *
- *  - a non-object (or null) block is an empty patch, not an error, because
- *    `patch.beds || {}` followed by `bd.x !== undefined` no-ops on anything
- *    that isn't an object;
- *  - an explicitly-undefined field is absent, matching `!== undefined`;
- *  - unknown fields inside the block are dropped rather than refused. Only the
- *    TOP-level key inventory rejects unknowns (see patch-registry.ts), and for
- *    the same reason it is a route-only posture: a backup written by a newer
- *    version carries block fields this one has never heard of, and restore must
- *    not die on them.
+ * A settings BLOCK — `{ enabled?, … }` — with the branches' leniency: a
+ * non-object block is an empty patch rather than an error, an explicitly
+ * undefined field is absent, and unknown fields inside are DROPPED (only the
+ * top-level key inventory rejects unknowns, so a newer backup still restores).
  */
 export function settingsBlockOf<T extends z.ZodRawShape>(shape: T) {
   return z.preprocess((raw) => {
@@ -2533,14 +2056,9 @@ export function settingsBlockOf<T extends z.ZodRawShape>(shape: T) {
 }
 
 /**
- * `Number(raw)` + a bounds check, with NO rounding.
- *
- * A THIRD numeric family, and the distinction is load-bearing. `Number('10abc')`
- * is NaN where `parseInt('10abc')` is 10, and `Number('')`/`Number(null)`/
- * `Number([])` are 0 where parseInt gives NaN. Branches using `Number()` refuse
- * junk strings and accept empty-ish values as zero — the exact opposite of the
- * parseInt family on both counts. Reusing settingsIntLike here would silently
- * start accepting '10abc' and start refusing null.
+ * `Number(raw)` + bounds, no rounding. Opposite of the parseInt family on both
+ * counts: '10abc' is NaN (refused) while ''/null/[] are 0 (accepted). Not
+ * interchangeable with settingsIntLike.
  */
 export function settingsNumberLike(bounds: SettingsNumericBound, message: string) {
   return z
@@ -2568,13 +2086,9 @@ export function settingsNumberFloorLike(bounds: SettingsNumericBound, message: s
 }
 
 /**
- * `Math.round(Number(raw))` + bounds, checked on the ROUNDED value.
- *
- * The rounding happens BEFORE the bounds test, so it can carry a value across
- * a bound in both directions: with [1, 25], `0.6` rounds to 1 and is accepted
- * while `0.4` rounds to 0 and is refused; `25.4` is accepted and `25.5` is
- * refused. A `z.number().int().min(1).max(25)` refuses all four. Preserved
- * deliberately — this is likes.maxTracks / likes.windowDays.
+ * `Math.round(Number(raw))` + bounds, checked on the ROUNDED value, so a value
+ * can cross a bound in either direction: with [1, 25], 0.6 is accepted and 0.4
+ * refused; 25.4 accepted, 25.5 refused. likes.maxTracks / likes.windowDays.
  */
 export function settingsNumberRoundLike(bounds: SettingsNumericBound, message: string) {
   return z
@@ -2589,11 +2103,8 @@ export function settingsNumberRoundLike(bounds: SettingsNumericBound, message: s
 }
 
 /**
- * `Number(raw)` bounds-checked BEFORE rounding, then rounded.
- *
- * stream.bufferSeconds only, and the order is the whole point: `59.6` passes
- * the `<= 60` test and stores as 60, while `60.4` fails it. Checking after the
- * round would accept 60.4; checking without rounding would store the fraction.
+ * `Number(raw)` bounds-checked BEFORE rounding, then rounded. stream.bufferSeconds
+ * only: 59.6 passes `<= 60` and stores as 60, while 60.4 is refused.
  */
 export function settingsNumberPreRoundLike(bounds: SettingsNumericBound, message: string) {
   return z
@@ -2622,10 +2133,7 @@ export function settingsIntOneOf(allowed: readonly number[], message: string) {
 
 /**
  * Membership tested on the RAW value — no String(), no trim, no case folding.
- *
- * Deliberately not `z.enum`: zod's built-in message names the constraint in its
- * own words ('Invalid option: expected one of …'), and the registry carries the
- * message verbatim to the operator. These strings must not change.
+ * Not `z.enum`: the registry carries these messages verbatim to the operator.
  */
 export function settingsStrictOneOf<T>(allowed: readonly T[], message: string) {
   return z
@@ -2637,11 +2145,8 @@ export function settingsStrictOneOf<T>(allowed: readonly T[], message: string) {
 }
 
 /**
- * `String(raw ?? '').trim()` + a maximum length, measured AFTER the trim.
- *
- * Note `?? ''`: null becomes the empty string (clearing the field), NOT the
- * literal 'null'. Which of those a branch does varies by key and both are
- * reproduced — see settingsRawStringLike for the other posture.
+ * `String(raw ?? '').trim()` + max length measured after the trim. The `?? ''`
+ * makes null CLEAR the field; settingsRawStringLike is the other posture.
  */
 export function settingsTrimmedString(max: number, message: string) {
   return z
@@ -2653,11 +2158,8 @@ export function settingsTrimmedString(max: number, message: string) {
 }
 
 /**
- * `String(raw)` with NO trim and NO nullish default — search.apiKey's posture.
- *
- * `null` becomes the four-character string 'null' and is STORED. That is not a
- * good design, but it is the shipping one, and a secret field is the last place
- * to change storage behaviour by accident.
+ * `String(raw)` with NO trim and NO nullish default — search.apiKey's posture,
+ * so `null` is stored as the literal string 'null'. Shipping behaviour.
  */
 export function settingsRawStringLike(max: number, message: string) {
   return z
@@ -2668,34 +2170,15 @@ export function settingsRawStringLike(max: number, message: string) {
     .transform((raw) => String(raw));
 }
 
-/**
- * The header-name grammar `stream.countryHeader` accepts.
- *
- * RFC 7230 token characters minus the separators nobody puts in a proxy header,
- * capped at 64. It lives HERE rather than beside the resolver because a
- * mirrored module may import only `zod`, so the schema cannot import the
- * constant — the resolver (`broadcast/listener-country.ts`) imports it from
- * this file instead, keeping one declaration for the save path, the browser
- * pre-flight and the read path alike.
- */
+// The header-name grammar `stream.countryHeader` accepts: RFC 7230 token chars,
+// capped at 64. `broadcast/listener-country.ts` imports it, so the save path,
+// the browser pre-flight and the read path share one declaration.
 export const STREAM_COUNTRY_HEADER_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
 
-/**
- * `llm.headers` / `llm.fallback.headers` — extra request headers the
- * openai-compatible transport sends on every call (#1618).
- *
- * The NAME grammar is `STREAM_COUNTRY_HEADER_RE`, not a second copy of it:
- * both fields are naming an HTTP header and the rule is the same RFC 7230
- * token, so this is an alias for the same reason `settings/vocab.ts`'s `ID_RE`
- * aliases `SHOW_ID_RE`. The VALUE grammar is printable ASCII on one line — a
- * header value is latin-1 on the wire, and a CR/LF in one is header injection
- * rather than a typo, so it is REFUSED rather than repaired.
- *
- * They live here for the same reason the country header's rule does: the admin
- * form runs the mirrored copy so a bad header name is caught before the save,
- * and the save path (`applyLlmLegPatch`) and the lenient load path
- * (`normalizeLlmHeaders`) import them rather than each restating the rule.
- */
+// `llm.headers` / `llm.fallback.headers` (#1618). Name is the same RFC 7230
+// token, so it's an alias rather than a second copy. Values are printable ASCII
+// on one line: a CR/LF is header injection, so it is REFUSED, never repaired.
+// `applyLlmLegPatch` and `normalizeLlmHeaders` both import these.
 export const LLM_HEADER_NAME_RE = STREAM_COUNTRY_HEADER_RE;
 export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
 
@@ -2707,11 +2190,9 @@ export const LLM_HEADER_VALUE_MAX = 500;
 export const STREAM_GEOIP_DB_PATH_MAX = 512;
 
 /**
- * `String(raw ?? '').trim()` + the header-name grammar, empty allowed.
- *
- * Empty is the default and means "don't read a second header", so it must stay
- * accepted; anything else either matches the grammar or is REFUSED, because a
- * repaired header name would silently read a header the operator never named.
+ * `String(raw ?? '').trim()` + the header-name grammar. Empty means "don't read
+ * a second header" and is accepted; anything else is matched or REFUSED, never
+ * repaired into a header the operator did not name.
  */
 export function settingsHeaderNameLike(message: string) {
   return z
@@ -2725,10 +2206,8 @@ export function settingsHeaderNameLike(message: string) {
 
 /**
  * A URL field: trim, length, then an http(s) scheme test on a non-empty value.
- *
- * `stripTrailingSlashes` is per-field and must be set from the branch being
- * replaced — embedding's URLs strip them, search.baseUrl and
- * scrobble.listenbrainz.baseUrl keep theirs (that consumer appends a path).
+ * `stripTrailingSlashes` is per-field: embedding's URLs strip, search.baseUrl
+ * and scrobble.listenbrainz.baseUrl keep theirs (those consumers append a path).
  */
 export function settingsUrlLike(opts: {
   max: number;
@@ -2754,17 +2233,14 @@ export function settingsUrlLike(opts: {
     });
 }
 
-// --- vocabularies the converted keys need ----------------------------------
-// Re-exported by settings/vocab.ts and settings/defaults.ts rather than
-// duplicated: a mirrored module may not import a non-mirrored one, so whichever
-// feature converts first owns the constant.
+// Vocabularies for the converted keys, re-exported by settings/vocab.ts and
+// settings/defaults.ts rather than duplicated.
 
-// Allowed MP3 bitrates — shared by the hourly archive and the live /stream.mp3
-// mount. Matches the literal branches in radio.liq — %mp3(bitrate=…) needs a
-// parse-time int, so the encoder is pre-baked for this small set. Add a branch
-// in radio.liq if you add a value here.
+// Allowed MP3 bitrates, shared by the hourly archive and the live /stream.mp3
+// mount. %mp3(bitrate=…) needs a parse-time int, so radio.liq pre-bakes one
+// encoder branch per value: adding a value here needs a branch there.
 export const SETTINGS_MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
-// Opus + AAC encoders share the same parse-time-literal constraint as %mp3.
+// Opus + AAC encoders share the same parse-time-literal constraint.
 export const SETTINGS_OPUS_BITRATES = [96, 128, 192, 256, 320] as const;
 export const SETTINGS_AAC_BITRATES = [128, 192, 256] as const;
 
@@ -2777,93 +2253,52 @@ export const SETTINGS_LOUDNESS_SOURCES = [
 
 export const SETTINGS_SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'brave', 'searxng'] as const;
 
-/**
- * Cap for the optional SearXNG `engines=` pin. Generous on purpose — the value
- * is a comma-separated list of SearXNG `name:` fields, so a dozen engines with
- * multi-word names still fits well inside it.
- */
+// Cap for the optional SearXNG `engines=` pin (a comma-separated name list).
 export const SETTINGS_SEARXNG_ENGINES_MAX = 500;
 
 export const CROSSFADE_DURATION_BOUNDS: SettingsNumericBound = { min: 0, max: 30 };
 
-// `smooth_add`'s `p` — the fraction of the music the mixer LEAVES UP while a
-// voice channel has signal, so it reads backwards from a dB cut: SMALLER is a
-// deeper duck. 1 is no duck at all (the DJ competes with the song) and 0 is a
-// full mute under the voice, which is a legitimate operator taste and is NOT
-// the music-paused interlude — the music keeps rolling underneath, silenced.
-// Shared by both layers because they are the same knob at two depths.
+// `smooth_add`'s `p`: the fraction of the music LEFT UP under a voice channel,
+// so SMALLER is a deeper duck. 1 is no duck, 0 is a full mute under the voice.
+// Shared by both ducking layers — the same knob at two depths.
 export const DUCK_DEPTH_BOUNDS: SettingsNumericBound = { min: 0, max: 1 };
 
-// How long BEFORE a show boundary the outgoing host signs off — the programme
-// outro beat's placement, in station-clock minutes (`handover.offsetMinutes`).
-//
-// The step is not decoration. The outro is a window on the STATION clock that
-// the talk table's programme row samples on a fixed PROCESS stride (see
-// HANDOVER_OFFSET_STEP_MINUTES); the row gets exactly one sample inside a
-// window only while that window is as wide as the stride and opens on a
-// multiple of it. An offset the stride cannot land on is an outro that never
-// airs at all, so the constraint is enforced at the save path rather than left
-// to be discovered on air.
-//
-// The maximum keeps the moved window clear of the feature beat at :35–:39: at
-// 20 the outro opens at :40, and anything larger would have the show sign off
-// on top of its own feature.
+// Station-clock minutes before a show boundary at which the outgoing host signs
+// off (`handover.offsetMinutes`). Must be a multiple of
+// HANDOVER_OFFSET_STEP_MINUTES or the programme row never samples the window
+// and the outro silently never airs. Max 20 keeps it clear of the :35-:39
+// feature beat.
 export const HANDOVER_OFFSET_BOUNDS: SettingsNumericBound = { min: 5, max: 20 };
 
 // The process-minute stride the talk table's programme row samples the station
-// clock on, and therefore the width and alignment every station-clock beat
-// window must have. Lives here — with the bound it constrains — rather than as
-// a literal in the table, so the row and the operator's offset cannot drift
-// apart: broadcast/talk-scheduler.ts imports it as the row's `stride`.
-//
-// 5 works for every real IANA zone because every offset is a multiple of 15
-// minutes, so process and station minutes always agree modulo 5.
+// clock on, so also the width and alignment of every station-clock beat window.
+// broadcast/talk-scheduler.ts imports it as the row's `stride`; it lives beside
+// the bound it constrains so the two cannot drift. 5 works for every IANA zone
+// (offsets are multiples of 15, so process and station minutes agree mod 5).
 export const HANDOVER_OFFSET_STEP_MINUTES = 5;
 // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
-// 0 disables boosting entirely (cut-only levelling); 12 dB is plenty.
+// 0 disables boosting entirely (cut-only levelling).
 export const LOUDNESS_MAX_BOOST_DB_BOUNDS: SettingsNumericBound = { min: 0, max: 12 };
-// 0 disables burst-on-connect; past 60 a listener is a full minute behind the
-// live edge and <queue-size> (which must exceed the burst) gets unreasonable.
-// Named rather than inline because settings.load() bounds the stored value
-// against the SAME figures — a hand-copied pair there is how the save path and
-// the load path drift.
+// 0 disables burst-on-connect. settings.load() bounds the stored value against
+// these same figures, so keep it reading from here rather than hand-copying.
 export const STREAM_BUFFER_SECONDS_BOUNDS: SettingsNumericBound = { min: 0, max: 60 };
 
-// Icecast's <limits><clients> ceiling. 1 is the floor because 0 would render a
-// station nobody can tune into; 10000 is far past what one homelab box serves
-// and exists only to keep a typo out of the config. Licensing bodies in some
-// countries calculate fees on simultaneous listener capacity, which is why this
-// is a first-class setting rather than a convenience (#1300 FR 15).
+// Icecast's <limits><clients> ceiling. Floor is 1: 0 renders a station nobody
+// can tune into. First-class setting because some licensing bodies charge on
+// simultaneous listener capacity (#1300 FR 15).
 export const STREAM_MAX_LISTENERS_BOUNDS: SettingsNumericBound = { min: 1, max: 10000 };
 
-// Falling back to the product default is what an emptied station name does —
-// see stationSchema.
-// Album cooldown, in HOURS: how long after a track from a record airs before
-// another track from that same record may be picked (#1485 FR 3). 0 = off, and
-// off is the shipped default — the artist window already spaces everything an
-// album window below it would catch, so a non-zero default would be a
-// behaviour change on upgrade rather than a setting.
-//
-// Fractional hours are allowed (0.5 is a real answer on a small library) and
-// the ceiling is 72: past three days this stops being a cooldown and becomes a
-// second no-repeat window, which is what llm.noRepeatWindow is for, and on any
-// catalogue small enough to notice the difference it would just walk the
-// starvation cascade every pick.
+// Album cooldown in HOURS (#1485 FR 3). 0 = off and is the shipped default, so
+// an upgrade picks byte-identically. Fractional hours are allowed; past 72 this
+// is a second no-repeat window rather than a cooldown.
 export const PICKER_ALBUM_HOURS_BOUNDS: SettingsNumericBound = { min: 0, max: 72 };
 
-// Station-wide minimum track length, in SECONDS: a track shorter than this is
-// never PICKED (#1573). 0 = off, and off is the shipped default so an upgrade
-// picks byte-identically.
-//
-// This is NOT settings.minTrackSeconds(), which is the crossfade-derived floor
-// on the max-track-length CAP. That figure is this key's own lower bound (a
-// positive value below it is refused in update(), where the crossfade is
-// known), which is why the two must not share a name.
-//
-// The ceiling twins schemas/show.ts's SHOW_MIN_TRACK_LENGTH_MAX, which bounds
-// the per-show override — a mirrored module may import only zod, so the two are
-// separate declarations of one number and must move together.
+// Station-wide minimum track length in SECONDS: shorter tracks are never PICKED
+// (#1573). 0 = off, the shipped default. NOT settings.minTrackSeconds(), which
+// is the crossfade-derived floor on the max-length CAP and is this key's own
+// lower bound (enforced in update(), where the crossfade is known). The ceiling
+// twins schemas/show.ts's SHOW_MIN_TRACK_LENGTH_MAX; move them together.
 export const PICKER_MIN_TRACK_LENGTH_BOUNDS: SettingsNumericBound = { min: 0, max: 3600 };
 
 export const SETTINGS_STATION_DEFAULT_NAME = 'SUB/WAVE';
@@ -2871,16 +2306,12 @@ export const SETTINGS_STATION_NAME_MAX = 80;
 export const SETTINGS_STATION_DESCRIPTION_MAX = 200;
 export const SETTINGS_DJ_HOUSE_RULES_MAX = 2000;
 
-// The player skin is stored as a slug and never checked against a registry:
-// the WEB side resolves it and falls back on unknowns, so an unrecognised value
-// is DROPPED here rather than refused.
+// The skin slug is never checked against a registry: the web side resolves it
+// and falls back, so an unrecognised value is DROPPED here rather than refused.
 export const SETTINGS_SKIN_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
-// --- the converted keys ----------------------------------------------------
-
-// How many tracks play between jingles. Needs a mixer restart, which update()
-// still decides — a schema says what a value may BE, never what applying it
-// costs.
+// Tracks between jingles. Needs a mixer restart, which update() decides — a
+// schema says what a value may BE, never what applying it costs.
 export const jingleRatioSchema = settingsIntLike(
   JINGLE_RATIO_BOUNDS,
   `jingleRatio must be int in [${JINGLE_RATIO_BOUNDS.min}, ${JINGLE_RATIO_BOUNDS.max}]`,
@@ -2920,10 +2351,9 @@ export const crossfadeDurationSchema = settingsFloatLike(
   `crossfadeDuration must be number in [${CROSSFADE_DURATION_BOUNDS.min}, ${CROSSFADE_DURATION_BOUNDS.max}]`,
 );
 
-// Both depths ride ONE block so the pair is edited and posted together — they
-// are read once at mixer startup out of two liquidsoap_duck_*.txt files, and a
-// half-applied pair would leave the light layer louder than the heavy one until
-// the next save.
+// Both depths ride ONE block so the pair is posted together: they are read once
+// at mixer startup from two liquidsoap_duck_*.txt files, and a half-applied
+// pair leaves the light layer louder than the heavy one until the next save.
 export const duckingPatchSchema = settingsBlockOf({
   voice: settingsFloatLike(
     DUCK_DEPTH_BOUNDS,
@@ -2935,9 +2365,8 @@ export const duckingPatchSchema = settingsBlockOf({
   ),
 });
 
-// Show handover timing (#1576). One field today, a block because the ordering
-// half of the handover is a placement rule with no dial — a second timing knob
-// belongs beside this one rather than as another flat top-level key.
+// Show handover timing (#1576). A block rather than a flat key so a second
+// timing knob lands beside this one.
 export const handoverOffsetMinutesSchema = settingsIntLike(
   HANDOVER_OFFSET_BOUNDS,
   `handover.offsetMinutes must be int in [${HANDOVER_OFFSET_BOUNDS.min}, ${HANDOVER_OFFSET_BOUNDS.max}]`,
@@ -2950,14 +2379,9 @@ export const handoverPatchSchema = settingsBlockOf({
   offsetMinutes: handoverOffsetMinutesSchema,
 });
 
-// Per-effect kill switches for the DJ transition kit (#1565). A nested block
-// rather than six flat keys beside pairDrain/stemBlends: those two are drain
-// SCHEDULING, these are which gestures may air, and one operator turning off
-// the dissolve should not read as a sibling of the pair-drain kill switch.
-//
-// Every field is absent-means-on, so a station that has never written this
-// block keeps the whole kit — the resolver is settings/transition-effects.ts
-// and it is the only place that rule is stated.
+// Per-effect kill switches for the DJ transition kit (#1565). Nested rather
+// than flat beside pairDrain/stemBlends, which are drain SCHEDULING. Every
+// field is absent-means-on; settings/transition-effects.ts is the one resolver.
 export const TRANSITION_EFFECTS = ['sweep', 'washout', 'blend', 'dissolve', 'chop', 'loop'] as const;
 export type TransitionEffect = (typeof TRANSITION_EFFECTS)[number];
 
@@ -2971,9 +2395,8 @@ const transitionEffectsPatchSchema = settingsBlockOf({
 });
 
 export const transitionsPatchSchema = settingsBlockOf({
-  // stemBlends is documented as needing pairDrain, but that dependency is
-  // resolved at drain time in broadcast/drain-policy.ts and has never been a
-  // save-time refusal. Do not add one here.
+  // stemBlends needs pairDrain, but that is resolved at drain time in
+  // broadcast/drain-policy.ts and has never been a save-time refusal.
   pairDrain: settingsBoolLike(),
   stemBlends: settingsBoolLike(),
   effects: transitionEffectsPatchSchema,
@@ -2986,10 +2409,9 @@ export const webhooksPolicyPatchSchema = settingsBlockOf({
 export const uiPatchSchema = settingsBlockOf({
   boothBuddy: settingsBoolLike(),
   tuneInOverlay: settingsBoolLike(),
-  // Silently DROPPED when it doesn't match, never refused — and note there is
-  // no `?? ''`, so String(null) is 'null' and String(7) is '7', both of which
-  // match the slug pattern and are stored today. Returning undefined is how a
-  // field opts out; the applier skips undefined.
+  // Silently DROPPED when it doesn't match, never refused. No `?? ''`, so
+  // String(null) is 'null' and String(7) is '7', both of which match the slug
+  // pattern and are stored today. undefined is how a field opts out.
   skin: z.unknown().transform((raw) => {
     const slug = String(raw).trim().toLowerCase();
     return SETTINGS_SKIN_RE.test(slug) ? slug : undefined;
@@ -3017,28 +2439,21 @@ export const archivePatchSchema = settingsBlockOf({
     SETTINGS_MP3_BITRATES,
     `archive.bitrate must be one of: ${SETTINGS_MP3_BITRATES.join(', ')}`,
   ),
-  // The dash below is an EN DASH (U+2013), carried over verbatim from the
-  // branch this replaces. Retyping it as a hyphen changes the operator's toast.
+  // The dash in the message is an EN DASH (U+2013). Retyping it as a hyphen
+  // changes the operator's toast.
   retentionDays: settingsIntLike(
     { min: 0, max: 3650 },
     'archive.retentionDays must be 0 (keep forever) or 1–3650 days',
   ),
 });
 
-// Scheduled, rotating backups (#1570). `off` is the default and MUST be first:
-// a station that upgrades and changes nothing has no `backups` block at all,
-// reads as `off`, and writes nothing — the absent-coerces-to-prior-behaviour
-// rule, which for a feature that DELETES files is the whole safety story.
-//
-// Cadences are elapsed-time, not calendar (`monthly` is 30 days); the tick that
-// applies them is hourly, so a station that is only up for part of the day
-// still gets its backup. See backup/pure.ts.
+// Scheduled, rotating backups (#1570). `off` MUST stay first: an upgraded
+// station has no `backups` block, reads as `off` and writes nothing. Cadences
+// are elapsed-time, not calendar (`monthly` is 30 days); an hourly tick applies
+// them, so a station up part of the day still gets its backup. See backup/pure.ts.
 export const SETTINGS_BACKUP_CADENCES = ['off', 'daily', 'weekly', 'monthly'] as const;
 
-// The vocabulary and the block shape, named once. Every path that handles a
-// schedule — the normaliser, `update()`, the runner, the admin card's labels —
-// spells the same two names instead of restating `{ cadence: string; keep:
-// number }`, so a cadence added here is a compile error everywhere it is not
+// Named once so a cadence added here is a compile error everywhere it is not
 // handled rather than a silent `?? id` fallback (#1585 review).
 export type BackupCadence = (typeof SETTINGS_BACKUP_CADENCES)[number];
 export interface ScheduledBackupSettings {
@@ -3046,35 +2461,23 @@ export interface ScheduledBackupSettings {
   keep: number;
 }
 
-// Keep-last-N. The floor is 1, not 0: a retention that could delete the backup
-// the run just wrote is a schedule that runs forever and leaves nothing behind.
-// The ceiling is disk sympathy — a tag DB for a 30k-track library is >100 MB,
-// so 100 kept dailies is already a hundred gigabytes.
+// Keep-last-N. Floor is 1, not 0: a retention that could delete the backup the
+// run just wrote leaves nothing behind. Ceiling is disk sympathy.
 export const BACKUP_KEEP_BOUNDS: SettingsNumericBound = { min: 1, max: 100 };
 
-// The shipped retention, named rather than spelled `7` in three files. It is
-// also the answer every lenient path gives for a `keep` it cannot read — see
-// clampBackupKeep.
+// Shipped retention, and the answer every lenient path gives for an unreadable
+// `keep` — see clampBackupKeep.
 export const BACKUP_KEEP_DEFAULT = 7;
 
 /**
- * The one lenient reading of `keep`, shared by every path that repairs rather
- * than refuses: `settings.load()`'s normaliser and the retention sweep itself.
- *
- * An unreadable value falls to BACKUP_KEEP_DEFAULT, never to the floor. The
- * floor is 1 — "keep only the newest" — which is the most destructive answer
- * available, and this is the only scheduled job in the station that deletes
- * operator files. Two copies of this clamp disagreeing about that direction is
- * exactly the drift the module boundary exists to stop, so there is one copy
- * and it lives beside the bound it enforces.
- *
- * The strict path (`backupsPatchSchema`) still REFUSES what this repairs — the
- * usual normalize-vs-validate split, neither restating the other's rule.
+ * The one lenient reading of `keep`, shared by settings.load()'s normaliser and
+ * the retention sweep. An unreadable value falls to BACKUP_KEEP_DEFAULT, never
+ * to the floor of 1, which is the most destructive answer available. The strict
+ * path (`backupsPatchSchema`) refuses what this repairs.
  */
 export function clampBackupKeep(raw: unknown): number {
-  // Absent and empty are NO answer, not zero. `Number(null)` and `Number('')`
-  // are both 0, which would clamp to the floor of 1 — the most destructive
-  // reading available — for a settings block that simply has no `keep` in it.
+  // Absent and empty are NO answer, not zero: Number(null)/Number('') are both
+  // 0 and would clamp to the floor.
   if (raw === null || raw === undefined || raw === '') return BACKUP_KEEP_DEFAULT;
   const n = Number(raw);
   if (!Number.isFinite(n)) return BACKUP_KEEP_DEFAULT;
@@ -3086,9 +2489,8 @@ export const backupsPatchSchema = settingsBlockOf({
     SETTINGS_BACKUP_CADENCES,
     `backups.cadence must be one of: ${SETTINGS_BACKUP_CADENCES.join(', ')}`,
   ),
-  // parseInt-family, like archive.retentionDays next door: the admin number
-  // input posts a string on some paths and a float here is a typo worth
-  // truncating rather than a body worth refusing.
+  // parseInt family, like archive.retentionDays: the admin number input posts a
+  // string on some paths, and a float is truncated rather than refused.
   keep: settingsIntLike(
     BACKUP_KEEP_BOUNDS,
     `backups.keep must be int in [${BACKUP_KEEP_BOUNDS.min}, ${BACKUP_KEEP_BOUNDS.max}]`,
@@ -3113,8 +2515,8 @@ export const streamPatchSchema = settingsBlockOf({
     SETTINGS_MP3_BITRATES,
     `stream.bitrate must be one of: ${SETTINGS_MP3_BITRATES.join(', ')}`,
   ),
-  // Number(), not parseInt — so '' / null / [] are 0 (a legal "no burst") and
-  // '5abc' is refused. Bounds tested before the round; see the helper.
+  // Number(), not parseInt: ''/null/[] are 0 (a legal "no burst") and '5abc' is
+  // refused. Bounds tested before the round.
   bufferSeconds: settingsNumberPreRoundLike(
     STREAM_BUFFER_SECONDS_BOUNDS,
     `stream.bufferSeconds must be a number between ${STREAM_BUFFER_SECONDS_BOUNDS.min} and ${STREAM_BUFFER_SECONDS_BOUNDS.max}`,
@@ -3127,17 +2529,13 @@ export const streamPatchSchema = settingsBlockOf({
     STREAM_MAX_LISTENERS_BOUNDS,
     `stream.maxListeners must be an integer between ${STREAM_MAX_LISTENERS_BOUNDS.min} and ${STREAM_MAX_LISTENERS_BOUNDS.max}`,
   ),
-  // A header NAME, not a country. Refused rather than dropped when malformed:
-  // this is typed by hand into a field whose only feedback is the Stats page
-  // staying blank a day later, so a silent drop is the operator watching their
-  // own input disappear — the same reasoning as the roster tag fields.
+  // A header NAME, not a country. Malformed is REFUSED, not dropped: the only
+  // other feedback is the Stats page staying blank a day later.
   countryHeader: settingsHeaderNameLike(
     'stream.countryHeader must be a header name (letters, digits and - _ . ~ ! # $ % & \' * + ^ ` |), or empty',
   ),
-  // Absolute path to an operator-supplied MaxMind-format (.mmdb) database. Not
-  // existence-checked here: a settings save must not depend on a bind mount the
-  // broadcast container has and this process may not, and the reader already
-  // fails open with a log line naming the path it could not read.
+  // Absolute path to an operator-supplied .mmdb. Not existence-checked: the
+  // bind mount may belong to another container, and the reader fails open.
   geoipDbPath: settingsTrimmedString(
     STREAM_GEOIP_DB_PATH_MAX,
     `stream.geoipDbPath must be ${STREAM_GEOIP_DB_PATH_MAX} characters or fewer`,
@@ -3147,8 +2545,8 @@ export const streamPatchSchema = settingsBlockOf({
 export const weatherPatchSchema = settingsBlockOf({
   lat: settingsFloatLike({ min: -90, max: 90 }, 'weather.lat out of range'),
   lng: settingsFloatLike({ min: -180, max: 180 }, 'weather.lng out of range'),
-  // Non-string or blank is IGNORED, not refused — the weather label can never
-  // be blanked, and over-80 truncates rather than failing.
+  // Non-string or blank is IGNORED, not refused, so the weather label can never
+  // be blanked; over-80 truncates rather than failing.
   locationName: z.unknown().transform((raw) => {
     if (typeof raw !== 'string' || !raw.trim()) return undefined;
     return raw.trim().slice(0, 80);
@@ -3164,8 +2562,7 @@ export const weatherPatchSchema = settingsBlockOf({
   ),
 });
 
-// Refuses over-length where load() truncates — the established strict/lenient
-// split, not an oversight.
+// Refuses over-length where load() truncates: the strict/lenient split.
 export const stationSchema = settingsTrimmedString(
   SETTINGS_STATION_NAME_MAX,
   `station name must be ${SETTINGS_STATION_NAME_MAX} chars or fewer`,
@@ -3181,45 +2578,25 @@ export const djHouseRulesSchema = settingsTrimmedString(
   `djHouseRules must be at most ${SETTINGS_DJ_HOUSE_RULES_MAX} chars`,
 );
 
-/**
- * Deliberately NOT settingsBoolLike(): this key's branch has always been the
- * strict `typeof !== 'boolean'` refusal, the same posture `requests`' booleans
- * take, and loosening it to `!!value` here would be a behaviour change smuggled
- * in with a conversion. A hand-edited settings.json is unaffected either way —
- * load() coerces a non-boolean to the default, so only a PATCH is refused.
- */
+// The three switches below are strict `z.boolean()`, NOT settingsBoolLike():
+// only a PATCH is refused, since load() coerces a hand-edited settings.json to
+// the default. A show's own `fadeAtShowEnd` (schemas/show.ts) is the tri-state
+// that overrides the station default here.
 export const djSpeakClockSchema = z.boolean({
   error: 'djSpeakClock must be a boolean',
 });
 
-/**
- * Talk placement switch (FR 5b of #1485). Same strict posture as
- * `djSpeakClockSchema` above and for the same reason: this key has never had a
- * hand-rolled branch to inherit leniency from, so it starts strict rather than
- * acquiring a coercion nobody asked for. load() still coerces a hand-edited
- * settings.json to the default, so only a PATCH is refused.
- */
 export const djTalkOnlyBetweenTracksSchema = z.boolean({
   error: 'djTalkOnlyBetweenTracks must be a boolean',
 });
 
-/**
- * Station default for the show-boundary fade (#1574). Strict boolean, the same
- * posture as the two switches above and for the same reason — the key is new,
- * so there is no hand-rolled branch whose accidental leniency has to be
- * preserved. A show's own `fadeAtShowEnd` (schemas/show.ts) is the tri-state
- * that overrides it; this one is only ever true or false.
- */
 export const fadeAtShowEndSchema = z.boolean({
   error: 'fadeAtShowEnd must be a boolean',
 });
 
 /**
- * Trim FIRST, then a strict pair — ' en-GB ' saves, 'en-gb' does not.
- *
- * Not settingsStrictOneOf: that tests the raw value, which is right for
- * weather.units / loudness.source / search.provider (all raw `includes` today)
- * and wrong here, where the branch coerces and trims before comparing.
+ * Trim FIRST, then a strict pair: ' en-GB ' saves, 'en-gb' does not. Not
+ * settingsStrictOneOf, which tests the raw value.
  */
 export const localeSchema = z
   .unknown()
@@ -3236,8 +2613,8 @@ export const audioPatchSchema = settingsBlockOf({
   vocalActivity: settingsBoolLike(),
   stemCache: settingsBoolLike(),
   analyzeQuietOnly: settingsBoolLike(),
-  // Number() with NO floor — a fractional GB budget is stored as a float today,
-  // and load() doesn't floor it either.
+  // Number() with NO floor: a fractional GB budget stores as a float, and
+  // load() doesn't floor it either.
   stemCacheGb: settingsNumberLike(
     { min: 1, max: 1000 },
     'audio.stemCacheGb must be between 1 and 1000',
@@ -3248,18 +2625,15 @@ export const audioPatchSchema = settingsBlockOf({
   ),
 });
 
-// Track-selection windows that are neither LLM config nor stream config, and
-// that BOTH pick paths read. A new key, so there is no hand-rolled branch to
-// reproduce: `settingsNumberLike` is chosen on merit (Number() refuses '6abc'
-// and keeps the fraction) rather than to preserve an accident.
+// Track-selection windows both pick paths read. New key, so settingsNumberLike
+// is chosen on merit (refuses '6abc', keeps the fraction).
 export const pickerPatchSchema = settingsBlockOf({
   albumHours: settingsNumberLike(
     PICKER_ALBUM_HOURS_BOUNDS,
     `picker.albumHours must be between ${PICKER_ALBUM_HOURS_BOUNDS.min} and ${PICKER_ALBUM_HOURS_BOUNDS.max} (0 = off)`,
   ),
-  // Bounds only. The crossfade-derived lower bound on a POSITIVE value is a
-  // function of settings.crossfadeDuration, which a stateless schema does not
-  // have — update() enforces it, exactly as it does for maxTrackSeconds.
+  // Bounds only. The crossfade-derived lower bound on a positive value is a
+  // function of settings.crossfadeDuration, so update() enforces it.
   minTrackLengthSeconds: settingsNumberLike(
     PICKER_MIN_TRACK_LENGTH_BOUNDS,
     `picker.minTrackLengthSeconds must be between ${PICKER_MIN_TRACK_LENGTH_BOUNDS.min} and ${PICKER_MIN_TRACK_LENGTH_BOUNDS.max} (0 = off)`,
@@ -3282,9 +2656,8 @@ export const searchPatchSchema = settingsBlockOf({
     SETTINGS_SEARCH_PROVIDERS,
     `search.provider must be one of: ${SETTINGS_SEARCH_PROVIDERS.join(', ')}`,
   ),
-  // The one field here that TYPE-CHECKS instead of coercing. A number or null
-  // is refused, where scrobble.listenbrainz.baseUrl (same shape, same message
-  // tail) stringifies it. Do not unify them.
+  // The one field here that TYPE-CHECKS instead of coercing: a number or null
+  // is refused, where scrobble.listenbrainz.baseUrl stringifies it. Not unified.
   baseUrl: z
     .unknown()
     .superRefine((raw, ctx) => {
@@ -3307,9 +2680,7 @@ export const searchPatchSchema = settingsBlockOf({
     .transform((raw) => String(raw).trim()),
   apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars'),
   // Optional comma-separated SearXNG engine pin (#1353), appended as the
-  // `engines=` query param when non-empty. New field, so it takes the trimmed
-  // posture rather than search.apiKey's raw one — there is no stored behaviour
-  // to preserve here, and a stray space around a name is a typo, not a value.
+  // `engines=` query param when non-empty. Trimmed posture, unlike search.apiKey.
   searxngEngines: settingsTrimmedString(
     SETTINGS_SEARXNG_ENGINES_MAX,
     `search.searxngEngines must be 0-${SETTINGS_SEARXNG_ENGINES_MAX} chars`,
@@ -3336,9 +2707,8 @@ const scrobbleListenbrainzSchema = settingsBlockOf({
   }),
 });
 
-// Navidrome (#1298) carries an enable flag and nothing else: the credentials
-// are already the station's own `config.navidrome` (env / setup-config), so
-// there is no key to paste here and no secret to redact.
+// Navidrome (#1298) carries an enable flag only: the credentials are already
+// the station's own `config.navidrome`.
 const scrobbleNavidromeSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
 });
@@ -3350,13 +2720,10 @@ export const scrobblePatchSchema = settingsBlockOf({
 });
 
 /**
- * `''` = Auto (container TZ). Anything else must be a zone ICU knows.
- *
- * A try/catch probe rather than `Intl.supportedValuesOf`, so ALIASES validate
- * too (Europe/Kiev, US/Pacific, and numeric offsets like +05:30). It is also
- * case-insensitive, and the accepted string is stored verbatim rather than
- * canonicalised. `Intl` exists in the browser, so this mirrors cleanly;
- * time.ts re-exports it rather than keeping a second copy.
+ * `''` = Auto (container TZ). A try/catch probe rather than
+ * `Intl.supportedValuesOf` so aliases validate too (Europe/Kiev, US/Pacific,
+ * +05:30). Case-insensitive, and the accepted string is stored verbatim.
+ * time.ts re-exports this rather than keeping a second copy.
  */
 export function settingsIsValidTimezone(tz: string): boolean {
   try {
@@ -3374,7 +2741,7 @@ export const timezoneSchema = z
     if (v !== '' && !settingsIsValidTimezone(v)) {
       ctx.addIssue({
         code: 'custom',
-        // The dash is an EM DASH (U+2014), carried over verbatim.
+        // The dash is an EM DASH (U+2014).
         message: `invalid timezone "${v}" — use an IANA name like Europe/Athens`,
       });
     }
@@ -3382,14 +2749,9 @@ export const timezoneSchema = z
   .transform((raw) => String(raw ?? '').trim());
 
 /**
- * The privacy block's FIELD rules. The lock-needs-a-password invariant is NOT
- * here and cannot be: it reads the MERGED state (a lock may be turned on by
- * this patch while the password comes from what is already stored), so it is a
- * property of the result rather than of the submitted value. It stays in
- * update(), which is also where the listenerAuth restart decision lives.
- *
- * `publishPersonaSouls` is deliberately outside that invariant — it is a
- * disclosure toggle, not a lock.
+ * The privacy block's FIELD rules only. The lock-needs-a-password invariant
+ * reads the MERGED state, so it stays in update() alongside the listenerAuth
+ * restart decision. `publishPersonaSouls` is outside that invariant.
  */
 export const privacyPatchSchema = settingsBlockOf({
   privatePlayer: settingsBoolLike(),
@@ -3403,9 +2765,8 @@ export const privacyPatchSchema = settingsBlockOf({
         ctx.addIssue({ code: 'custom', message: 'privacy.password must be 0-128 chars' });
         return;
       }
-      // The password travels in basic-auth userinfo and ?auth= query strings;
-      // whitespace/control chars only cause client-side grief there. trim()
-      // has already stripped the ends, so this only fires on INTERIOR space.
+      // The password travels in basic-auth userinfo and ?auth= query strings.
+      // trim() has stripped the ends, so this only fires on interior space.
       if (/[\s]/.test(v)) {
         ctx.addIssue({
           code: 'custom',
@@ -3418,20 +2779,13 @@ export const privacyPatchSchema = settingsBlockOf({
 
 /**
  * `requests` — every field falls back to the CURRENT stored value, so the
- * schema's job is to decide "usable or absent" and let update() spread the
- * result over what is stored.
+ * schema only decides "usable or absent" and update() supplies the fallback.
+ * Usable is narrow on purpose: only a number, bigint or NON-BLANK string.
+ * null/''/false/[] all coerce to 0 under Number(), and an emptied admin input
+ * arrives as JSON null, so without the guard it clamps to the field's floor.
  *
- * The usability rule is `intIn`'s and it is deliberately narrow: only a number,
- * a bigint or a NON-BLANK string counts. `null`, `''`, `false` and `[]` all
- * coerce to 0 under `Number()`, and without this guard an emptied admin input
- * (which arrives as JSON null) clamped to the field's FLOOR and silently
- * committed it — clearing the station hourly cap set it to 5/hour and closed
- * the request line. Anything unusable is dropped here, which update() reads as
- * "leave it alone".
- *
- * Note the booleans are `typeof === 'boolean'`, NOT `!!` — a truthy non-boolean
- * is IGNORED rather than coerced, the opposite posture to ui/privacy. Both are
- * shipping behaviour and neither may be unified onto the other.
+ * The booleans are `typeof === 'boolean'`, NOT `!!` — a truthy non-boolean is
+ * IGNORED, the opposite posture to ui/privacy. Neither may be unified.
  */
 function settingsRequestsInt(bounds: SettingsNumericBound) {
   return z.unknown().transform((raw) => {
@@ -3460,8 +2814,6 @@ export const requestsPatchSchema = settingsBlockOf({
   perIpHourlyCap: settingsRequestsInt({ min: 1, max: 100 }),
 });
 
-// --- the mood family -------------------------------------------------------
-
 export const SETTINGS_MOODS_LIMIT = 40;
 export const SETTINGS_MOOD_NAME_MAX = 40;
 export const SETTINGS_MOOD_PROMPT_MAX = 200;
@@ -3487,14 +2839,10 @@ export function settingsNormalizeMoodName(raw: unknown): string {
 }
 
 /**
- * The context the three mood MAPS validate against.
- *
- * `moodNames` is nullable and null means "this caller cannot check that rule" —
- * the same convention ShowSchemaContext and ScheduleSchemaContext use. The
- * route passes null: the effective vocabulary depends on whether `moods` is in
- * the same patch and on what validating it produced, which is update()'s
- * ordering to know, not the middleware's. So the route checks SHAPE and
- * update() checks membership, one schema, two postures.
+ * Context the three mood maps validate against. `moodNames: null` means "this
+ * caller cannot check that rule" (the ShowSchemaContext convention): the route
+ * passes null and checks SHAPE only, because the effective vocabulary depends
+ * on whether `moods` rides in the same patch, which is update()'s to know.
  */
 export interface SettingsMoodContext {
   moodNames: string[] | null;
@@ -3533,7 +2881,7 @@ export const moodsSchema = z
         });
         return;
       }
-      // Duplicate detection runs on the NORMALISED name, so 'Chill' + 'chill'
+      // Duplicates are detected on the NORMALISED name, so 'Chill' + 'chill'
       // is a refusal rather than two rows.
       if (seen.has(name)) {
         ctx.addIssue({
@@ -3557,13 +2905,10 @@ export const moodsSchema = z
   );
 
 /**
- * A fixed-key mood map. Both maps are rebuilt over their own key set.
- *
- * `allowEmpty` is the one difference between the two and it is NOT cosmetic:
- * moodSchedule requires every one of its 8 periods (an omitted period coerces
- * to '' and refuses), while weatherMoods treats '' as "no mood steer" — so a
- * weatherMoods patch naming one condition silently BLANKS the other five and
- * answers 200. Both behaviours are preserved exactly as they are.
+ * A fixed-key mood map, rebuilt over its own key set. `allowEmpty` is the one
+ * difference and it is not cosmetic: moodSchedule requires all 8 periods (an
+ * omitted one coerces to '' and refuses), while weatherMoods reads '' as "no
+ * mood steer", so a patch naming one condition BLANKS the other five and 200s.
  */
 function settingsMoodMap(
   keys: readonly string[],
@@ -3611,15 +2956,11 @@ export function weatherMoodsSchema(ctx: SettingsMoodContext) {
   return settingsMoodMap(SETTINGS_WEATHER_CONDITIONS, 'weatherMoods', true, ctx);
 }
 
-// Festival field bounds. Named rather than left as literals inside the schema
-// because the admin editor needs the same numbers for its maxLength / min / max
-// attributes, and it was hard-coding them — the drift that had already bitten
-// the persona editor.
+// Festival field bounds. Named because the admin editor reads the same numbers
+// for its maxLength / min / max attributes.
 export const SETTINGS_FESTIVAL_NAME_MAX = 80;
 export const SETTINGS_FESTIVAL_DESCRIPTION_MAX = 200;
-// Days either side of the date on which the festival's mood applies. The
-// ceiling is deliberately low: past a fortnight a "festival window" is just a
-// season, which is what moodSchedule is for.
+// Days either side of the date on which the festival's mood applies.
 export const SETTINGS_FESTIVAL_WINDOW_DAYS_MAX = 14;
 
 export function festivalsSchema(ctx: SettingsMoodContext) {
@@ -3661,12 +3002,11 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
           add(`festivals[${i}].month must be an integer 1-12`, 'month');
           return;
         }
-        // Feb allows 29 — in a common year a leap-day festival fires Mar 1
-        // (Date.UTC rolls the date over in getFestivalContext). The day bound
-        // is indexed off the month, so it must stay downstream of a valid one.
-        // The `?? 31` is unreachable (month is already 1-12) but the WEB build
-        // typechecks the mirror under noUncheckedIndexedAccess, where a bare
-        // index is `number | undefined`.
+        // Feb allows 29; in a common year a leap-day festival fires Mar 1
+        // (Date.UTC rolls over in getFestivalContext). Indexed off the month,
+        // so it must stay downstream of the month check. `?? 31` is
+        // unreachable but the web build typechecks the mirror under
+        // noUncheckedIndexedAccess.
         const daysInMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 31;
         const day = Number(f.day);
         if (!Number.isInteger(day) || day < 1 || day > daysInMonth) {
@@ -3676,9 +3016,8 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
           );
           return;
         }
+        // '' is not allowed: it simply fails set membership.
         const mood = String(f.mood ?? '').trim();
-        // '' is NOT allowed — every festival must name a mood, so the empty
-        // string simply fails the set membership.
         if (names && !names.has(mood)) {
           add(`festivals[${i}].mood must be one of: ${list}`, 'mood');
           return;
@@ -3712,22 +3051,12 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
 }
 
 
-// ── theme ────────────────────────────────────────────────────────────────────
-
 /**
- * `theme` — only `active` is a settings value; everything else in the block is
- * derived at serve time.
- *
- * A NON-OBJECT block is a silent no-op (`patch.theme || {}`), so it is coerced
- * rather than refused — the settingsBlockOf posture. And `active` is optional
- * BECAUSE the branch acts only `if (t.active !== undefined)`: a patch of
- * `{theme: {}}` has always been a legal no-op.
- *
- * What stays in update(): the "is this a theme id that actually exists" check.
- * It is async (the registry reads the themes dir) and it FALLS BACK to the
- * built-in default rather than refusing (#917 — throwing there aborted the whole
- * restore for any install whose active theme id had since been retired), which
- * is a repair only the server can make.
+ * `theme` — only `active` is a settings value; the rest is derived at serve
+ * time. A non-object block is a no-op, and `{theme: {}}` is a legal no-op.
+ * The "does this theme id exist" check stays in update(): it is async and it
+ * FALLS BACK to the built-in default rather than refusing (#917), so a restore
+ * naming a retired theme still lands.
  */
 export const themePatchSchema = z.preprocess(
   (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {}),
@@ -3747,24 +3076,10 @@ export const themePatchSchema = z.preprocess(
   }),
 );
 
-// ── maxTrackSeconds ──────────────────────────────────────────────────────────
-
 /**
- * The station-wide track-length cap. 0 = unlimited.
- *
- * BOUNDS ONLY. The crossfade-derived FLOOR ("a non-zero cap must leave solo
- * airtime") stays in update(), for the reason ShowSchemaContext's
- * `minTrackSeconds: null` documents: the floor is a function of the crossfade,
- * which the SAME patch may be changing, so only update() — which applies the
- * crossfade first — can judge it.
- *
- * The legacy `maxTrackMinutes` alias is deliberately NOT registered beside this.
- * One branch serves both keys through `rawMaxTrackSec`, whose precedence rule is
- * "seconds wins whenever it is present and non-empty" — so when both ride along,
- * an unusable minutes value is IGNORED today, and a schema on that key would
- * refuse a body that currently saves. An empty/absent seconds value passes here
- * for the same reason: precedence hands off to minutes, and update() is still
- * the authoritative chokepoint for whatever it resolves.
+ * The station-wide track-length cap. 0 = unlimited. BOUNDS ONLY: the
+ * crossfade-derived floor ("a non-zero cap must leave solo airtime") is a
+ * function of a crossfade the same patch may be changing, so update() judges it.
  */
 export function maxTrackSecondsValueSchema(bounds: SettingsNumericBound) {
   return settingsIntLike(
@@ -3774,17 +3089,12 @@ export function maxTrackSecondsValueSchema(bounds: SettingsNumericBound) {
 }
 
 /**
- * The REGISTRY entry — the same rule, one posture looser.
- *
- * `rawMaxTrackSec`'s precedence is "seconds wins whenever it is present and
- * non-empty", so an absent or empty `maxTrackSeconds` beside a `maxTrackMinutes`
- * is a legal body that hands off rather than a failure. update() validates the
- * RESOLVED value with maxTrackSecondsValueSchema above, which is why the bound
- * itself is written once.
- *
- * The legacy `maxTrackMinutes` alias is deliberately NOT registered: when both
- * ride along, an unusable minutes value is IGNORED today, and a schema on that
- * key would refuse a body that currently saves.
+ * The registry entry: same rule, one posture looser. `rawMaxTrackSec`'s
+ * precedence is "seconds wins when present and non-empty", so an absent/empty
+ * value beside a legacy `maxTrackMinutes` hands off rather than failing;
+ * update() then validates the RESOLVED value with the schema above. The
+ * `maxTrackMinutes` alias is deliberately not registered — an unusable minutes
+ * value is ignored today, and a schema on it would refuse a body that saves.
  */
 export function maxTrackSecondsSchema(bounds: SettingsNumericBound) {
   const value = maxTrackSecondsValueSchema(bounds);
@@ -3797,16 +3107,10 @@ export function maxTrackSecondsSchema(bounds: SettingsNumericBound) {
   });
 }
 
-// ── the DJ prompt selection ──────────────────────────────────────────────────
-
 /**
- * `activeDjPromptId` — '' selects the built-in default, otherwise the id of a
- * djPrompts entry.
- *
- * Coercion ONLY: `String(x ?? '').trim()` is the whole of what the branch does
- * to this value. Whether the id resolves is a cross-key question answered after
- * `djPrompts` has been applied, and it stays in update() — the same patch may be
- * replacing the library the id has to name.
+ * `activeDjPromptId` — '' selects the built-in default, otherwise a djPrompts
+ * id. Coercion only: whether the id resolves is answered after `djPrompts` has
+ * been applied, so it stays in update().
  */
 export const activeDjPromptIdSchema = z
   .unknown()
@@ -3814,12 +3118,9 @@ export const activeDjPromptIdSchema = z
   .transform((raw) => String(raw ?? '').trim());
 
 /**
- * `djPrompt` — the legacy single-field prompt (onboarding, older clients).
- *
- * Its two rules are pure and convert; what stays in update() is the MAPPING onto
- * the library — '' selects the default, and custom text reuses the entry with
- * identical text or appends a new "Custom prompt" — which reads and writes
- * `next.djPrompts` and can hit the library cap.
+ * `djPrompt` — the legacy single-field prompt (onboarding, older clients). The
+ * MAPPING onto the library stays in update(): '' selects the default, custom
+ * text reuses an identical entry or appends a new one, and can hit the cap.
  */
 export function djPromptTextSchema(bounds: { min: number; max: number }) {
   return z
@@ -3845,34 +3146,20 @@ export function djPromptTextSchema(bounds: { min: number; max: number }) {
 
 // ─── from controller/src/schemas/show.ts ─────────────────────────────────
 
-// Shared show schema — the single source of truth for a show's shape, executed
-// on BOTH sides. The controller runs it in settings.validate.validateShowsStrict
-// (the update() chokepoint), in settings.normalize.normalizeShows (the lenient
-// load path) and in the POST /shows route middleware; the browser runs the
-// mirrored copy (web/lib/schemas.generated.ts).
+// Shared show schema — run by validateShowsStrict (the update() chokepoint),
+// normalizeShows (the lenient load path), the POST /shows route middleware and
+// the mirrored browser copy.
 //
-// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
-// the web bundle, so a project import or a node builtin here breaks the mirror.
-// That includes OTHER schema modules — the mirror is one flat concatenation, so
-// gen-schemas.ts rejects every specifier but 'zod' and each module has to stand
-// alone. SHOW_ID_RE is therefore declared here and re-exported by
-// settings/vocab.ts as ID_RE rather than living in a shared module.
+// A FACTORY because a show cannot be validated against itself: personaId must
+// name a real persona, moods a live mood, themeId an installed theme, and the
+// two track-length fields clear a crossfade-derived floor. Those four travel as
+// ONE ShowSchemaContext, never unpacked into separate arguments.
 //
-// WHY A FACTORY. Unlike webhooks and stations, a show cannot be validated
-// against itself: `personaId` must name a real persona, `moods` a live mood,
-// `themeId` an installed theme, and the two track-length fields clear a
-// crossfade-derived floor. Those four travel as ONE ShowSchemaContext value rather than separate
-// arguments — the same "one scope value, never unpacked" rule PickerScope
-// follows. Both sides can build it; the admin panel already fetches personas,
-// moods, themes and the station settings.
-//
-// Rules that are NOT pure functions of the submitted value — id minting and
-// cross-row de-duplication — live in show-server.ts, which is NOT mirrored.
+// Impure rules (id minting, cross-row dedupe) live in show-server.ts, which is
+// not mirrored.
 
-// Entity id: shows, personas and skills all share this pattern. Homed here
-// because show is the first of the three to convert and a mirrored module
-// cannot import a shared one (see the header). settings/vocab.ts re-exports it
-// as ID_RE; whoever converts personas should decide its permanent home.
+// Entity id: shows, personas and skills share this pattern, re-declared per
+// module (zod-only imports). settings/vocab.ts re-exports it as ID_RE.
 export const SHOW_ID_RE = /^[a-z0-9_]{3,32}$/;
 
 export const SHOWS_LIMIT = 64;
@@ -3887,29 +3174,21 @@ export const SHOW_GENRE_MAX = 64;
 export const SHOW_SEGMENT_SKILL_MAX = 64;
 export const SHOW_THEME_ID_MAX = 64;
 
-// Freeform organisation tags (`tags: ["late-night", "weekend"]`) — operator
-// vocabulary for filtering and grouping the admin show list, the twin of
-// skill.ts's SKILL_TAG_RE. Declared here rather than imported because the
-// mirror is one flat concatenation and a schema module may import only zod
-// (see the header) — the same reason SHOW_ID_RE and PERSONA_ID_RE are three
-// copies of one pattern.
+// Freeform organisation tags, the twin of skill.ts's SKILL_TAG_RE (re-declared
+// for the same zod-only reason).
 export const SHOW_TAG_RE = /^[a-z0-9][a-z0-9-]{0,23}$/;
 export const SHOW_TAG_MAX = 24;
 export const TAGS_PER_SHOW_LIMIT = 8;
 export const SHOW_YEAR_MIN = 1900;
 export const SHOW_YEAR_MAX = 2100;
-// Also the STATION-wide cap's ceiling — settings/defaults.ts BOUNDS reads it
-// from here, because the strict show validator has always bounds-checked a
-// show's override against the station figure and two copies would drift.
+// Also the STATION-wide cap's ceiling; settings/defaults.ts BOUNDS reads it
+// from here so the two cannot drift.
 export const SHOW_MAX_TRACK_SECONDS = 36000;
-// Ceiling on the per-show minimum-track-length FLOOR (#1573). Deliberately far
-// below SHOW_MAX_TRACK_SECONDS: a cap of ten hours is a harmless "no cap", but a
-// FLOOR of ten hours is a show that can never pick anything, and the pick paths
-// would spend every pool build discovering that. An hour is already past every
-// real answer (the field exists to skip 40-second skits and interludes).
-// Twinned with schemas/settings.ts's PICKER_MIN_TRACK_LENGTH_BOUNDS.max, which
-// bounds the STATION-wide default — a mirrored module may import only zod, so
-// the two are separate declarations of one number and must move together.
+// Ceiling on the per-show minimum-track-length FLOOR (#1573). Far below
+// SHOW_MAX_TRACK_SECONDS on purpose: a ten-hour cap is a harmless "no cap", a
+// ten-hour floor is a show that can never pick anything. Twinned with
+// schemas/settings.ts's PICKER_MIN_TRACK_LENGTH_BOUNDS.max — separate
+// declarations of one number, so they must move together.
 export const SHOW_MIN_TRACK_LENGTH_MAX = 3600;
 
 export const SHOW_ENERGY = ['low', 'medium', 'high'] as const;
@@ -3918,26 +3197,17 @@ export const SHOW_VOCALS = ['instrumental', 'vocal'] as const;
 export type EraWindow = { fromYear: number | null; toYear: number | null };
 
 /**
- * Everything a show can only be judged against from outside itself.
+ * Everything a show can only be judged against from outside itself. Three fields
+ * are NULLABLE and null always means "this caller cannot check that rule", which
+ * is how the lenient load path and the strict save path share one schema:
  *
- * Three fields are NULLABLE, and null always means the same thing: **this
- * caller cannot check that rule**, so leave the value alone. That is how the
- * lenient load path and the strict save path share one schema without either
- * restating a rule — the difference between them becomes CONTEXT rather than a
- * second implementation:
+ *   - `moodNames: null` — load runs before the mood cache exists.
+ *   - `themeIds: null` — load has no theme registry; a stale id is harmless.
+ *   - `minTrackSeconds: null` — the crossfade-derived floor under BOTH
+ *     maxTrackSeconds and minTrackLengthSeconds; load clamps to hard bounds.
  *
- *   - `moodNames: null` — load runs before the mood cache is built, and moods
- *     are operator-editable, so filtering against the seed defaults there would
- *     strip an operator's own moods. A stale mood just matches nothing on air.
- *   - `themeIds: null` — load has no theme registry to consult. A stale id is
- *     harmless: GET /themes falls back to the station default at serve time.
- *   - `minTrackSeconds: null` — the crossfade-derived floor, the lower bound on
- *     BOTH `maxTrackSeconds` and `minTrackLengthSeconds`. Load clamps to the
- *     hard bounds instead of enforcing it.
- *
- * `personaIds` is NOT nullable: a show whose host does not exist has no owner
- * on either path. Strict throws, lenient drops the row — same rule, different
- * consequence, which is exactly the split that is allowed.
+ * `personaIds` is NOT nullable: a show whose host does not exist has no owner on
+ * either path (strict throws, lenient drops the row).
  */
 export interface ShowSchemaContext {
   personaIds: string[];
@@ -3946,21 +3216,13 @@ export interface ShowSchemaContext {
   minTrackSeconds: number | null;
 }
 
-// Booleans are compared to `true` rather than typed as z.boolean(), which is
-// deliberate and load-bearing: BOTH the strict and the lenient path have always
-// read these as `item.banter === true`, so they already agree, and tightening
-// only the schema would make load and save disagree about a value neither
-// considers worth failing a show over. A string 'yes' reads as off, as it
-// always has.
+// `=== true` rather than z.boolean(): both paths read these that way, so
+// tightening only the schema would make load and save disagree.
 const showBool = () => z.unknown().optional().transform((v) => v === true);
 
-// Explicit null reads as "absent" on every OPTIONAL field. The pre-schema
-// validator accepted null everywhere it accepted an omission (`String(x ?? '')`,
-// `!= null` guards), and clients or serializers that write null for empty
-// fields relied on that. zod's `.default()` fires only on undefined, so without
-// this preprocess a `{topic: null}` that has always saved cleanly would 400 —
-// and because update() re-validates the whole array, one null field on one show
-// would fail the entire shows/schedule save.
+// Explicit null reads as "absent" on every OPTIONAL field. zod's `.default()`
+// fires only on undefined, and update() re-validates the whole array, so one
+// null field on one show would otherwise fail the entire shows/schedule save.
 const nullToUndefined = (v: unknown) => (v == null ? undefined : v);
 
 // Trimmed, non-empty, capped, de-duplicated, in first-seen order — the shape
@@ -4002,17 +3264,11 @@ function showStringList(opts: {
   );
 }
 
-// One era-window year bound, shared by the schema's own showYear pipeline and
-// the load path's repairEraWindow (below) so the two can never disagree about
-// what a valid year is. null / '' means "open end". A numeric string is
-// accepted because that is what an <input type="number"> posts.
-//
-// `validEraYear` is EXPORTED so it rides the mirror into the admin show
-// editor's add-a-range control (#1599), which has to refuse a year the save
-// would then reject. It owns only the integer-and-range test; the editor keeps
-// its own trim, because eraYearOf deliberately does not trim (' ' reaching the
-// wire is a malformed post, not an open end) and a draft box legitimately holds
-// whitespace mid-keystroke.
+// One era-window year bound, shared by showYear and the load path's
+// repairEraWindow. null / '' means "open end"; a numeric string is accepted
+// (<input type=number>). `validEraYear` is exported for the admin editor (#1599)
+// and owns only the integer-and-range test — eraYearOf deliberately does not
+// trim, so the editor keeps its own.
 const eraYearOf = (v: unknown): number | null => (v == null || v === '' ? null : Number(v));
 export const validEraYear = (n: number | null): boolean =>
   n == null || (Number.isInteger(n) && n >= SHOW_YEAR_MIN && n <= SHOW_YEAR_MAX);
@@ -4031,17 +3287,10 @@ const showEra = z
   );
 
 /**
- * The legacy singular fields #929 replaced with plural lists.
- *
- * BOTH paths migrate them. The pre-schema strict validator always accepted a
- * legacy `mood` from an older client or a pre-#929 backup and folded it into
- * the plural list ("a legacy singular mood from an older client still
- * validates" was its own comment), so a refusal here would turn a working
- * backup restore through settings.update() into a hard failure. Migration runs
- * INSIDE the schema (the preprocess in showSchema below) rather than at any
- * call site, because z.object strips unknown keys: a route that parses the
- * object directly would otherwise silently drop a legacy `mood` and report
- * success — the exact silent loss #929's migration exists to prevent.
+ * The legacy singular fields #929 replaced with plural lists. BOTH paths migrate
+ * them, and the migration runs INSIDE the schema (the preprocess in showSchema)
+ * because z.object strips unknown keys: parsing the object directly would drop a
+ * legacy `mood` and report success.
  */
 export const LEGACY_SHOW_FIELDS = [
   'mood',
@@ -4052,13 +3301,8 @@ export const LEGACY_SHOW_FIELDS = [
   'maxTrackMinutes',
 ] as const;
 
-/**
- * Fill the plural fields from any legacy singular ones.
- *
- * `genre` splits on commas because operators crammed multiple genres into the
- * one free-text field ("funk, soul, jazz-funk"), which never resolved against
- * the library as a single tag.
- */
+/** Fill the plural fields from any legacy singular ones. `genre` splits on
+ *  commas — operators crammed several into the one free-text field. */
 export function migrateLegacyShowFields(raw: unknown): Record<string, unknown> {
   const rec = { ...(raw as Record<string, unknown>) };
   if (!Array.isArray(rec.moods) && rec.mood != null && rec.mood !== '') rec.moods = [rec.mood];
@@ -4079,9 +3323,8 @@ export function migrateLegacyShowFields(raw: unknown): Record<string, unknown> {
   return rec;
 }
 
-// Accepts the array the editor sends AND a comma string, the two wire shapes
-// every other tag surface in the codebase has always taken. Tokens are
-// trimmed + lowercased, empties dropped, de-duplicated in first-seen order.
+// Array or comma string — the two wire shapes every tag surface takes. Trimmed,
+// lowercased, empties dropped, deduped in first-seen order.
 function showTagList(raw: unknown): string[] {
   const list = Array.isArray(raw) ? raw : String(raw ?? '').split(',');
   return list.map((s) => String(s ?? '').trim().toLowerCase()).filter(Boolean);
@@ -4112,13 +3355,8 @@ const showTags = z
   .transform((toks) => [...new Set(toks)]);
 
 export function showSchema(ctx: ShowSchemaContext) {
-  // Migration must run BEFORE the object parse — z.object strips unknown keys,
-  // so by the time any .check() or field schema sees the value the legacy keys
-  // are already gone. Running it here rather than at call sites is what makes
-  // every caller — update(), POST /shows, the lenient load, the browser — give
-  // the same answer for the same payload. A migrated value is then validated by
-  // the same field schemas as a native one, so a legacy `energy: 'bogus'` still
-  // fails exactly like `energies: ['bogus']` would.
+  // Migration must run BEFORE the object parse: z.object strips unknown keys, so
+  // by the time a field schema sees the value the legacy keys are gone.
   return z.preprocess(
     (raw) => (raw && typeof raw === 'object' ? migrateLegacyShowFields(raw) : raw),
     showObjectSchema(ctx),
@@ -4128,15 +3366,9 @@ export function showSchema(ctx: ShowSchemaContext) {
 function showObjectSchema(ctx: ShowSchemaContext) {
   return z
     .object({
-      // Optional because a brand-new show has no id yet — the server mints one.
-      //
-      // A MALFORMED id is re-minted rather than rejected (.catch → undefined,
-      // then show-server.resolveShowIds mints), which is what both paths have
-      // always done and is deliberately unlike the webhook schema. A webhook id
-      // only resolves that row's stored secret, so rejecting a bad one costs
-      // nothing; a SHOW id is what every slot in the weekly schedule grid points
-      // at, so the same tightening would turn one malformed id in a restored
-      // backup into a refusal to restore the station at all.
+      // Optional (a new show has no id yet) and a MALFORMED one is re-minted
+      // rather than rejected, unlike a webhook id: a show id is what every
+      // weekly-grid slot points at, so rejecting one would refuse the restore.
       id: z
         .string()
         .regex(SHOW_ID_RE, 'id must be 3-32 characters: lowercase letters, digits or underscores')
@@ -4158,8 +3390,7 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       personaId: z
         .string({ error: 'Pick a host persona' })
         .refine((v) => ctx.personaIds.includes(v), 'must reference an existing persona'),
-      // Host exclusion and de-duplication happen in the object transform below,
-      // where the host id is in scope.
+      // Host exclusion and dedupe happen in the object transform below.
       guestPersonaIds: z.preprocess(
         nullToUndefined,
         z
@@ -4173,8 +3404,7 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       ),
       banter: showBool(),
       programme: showBool(),
-      // Free text, resolved against the live skill catalog at air time — a
-      // stale kind degrades to the producer's choice rather than blocking a save.
+      // Free text, resolved against the live skill catalog at air time.
       segmentSkill: z.preprocess(
         nullToUndefined,
         z
@@ -4183,19 +3413,15 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           .max(SHOW_SEGMENT_SKILL_MAX, `must be ${SHOW_SEGMENT_SKILL_MAX} characters or fewer`)
           .default(''),
       ),
-      // Empty means "Any": the show pins no mood and the autonomous
-      // dominantMood chain (festival > weather > time) applies on air.
+      // Empty means "Any": the autonomous dominantMood chain applies on air.
       moods: showStringList({
         max: SHOW_FILTER_VALUES_MAX,
         values: ctx.moodNames ?? undefined,
         overflowError: `must have at most ${SHOW_FILTER_VALUES_MAX} entries`,
       }),
-      // A stale id is DROPPED to '' rather than rejected — the tolerance #917's
-      // theme.active twin established. Throwing here bricked EVERY shows and
-      // schedule save, and every full restore, for any install still carrying
-      // one retired palette id on one show, because update() re-validates the
-      // whole array. Self-heals on the next save. The caller reports the drop
-      // (this module stays side-effect free, so no console.warn here).
+      // A stale id is DROPPED to '' rather than rejected (#917): update()
+      // re-validates the whole array, so throwing would brick every shows and
+      // schedule save. The caller reports the drop; this module stays pure.
       themeId: z.preprocess(
         nullToUndefined,
         z
@@ -4205,8 +3431,8 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           .default('')
           .transform((v) => (!v || !ctx.themeIds || ctx.themeIds.includes(v) ? v : '')),
       ),
-      // Free text resolved fuzzily against the live library at pick time, so
-      // never checked against Subsonic here. Dedup is case-insensitive.
+      // Resolved fuzzily against the live library at pick time. Case-insensitive
+      // dedupe.
       genres: showStringList({
         max: SHOW_FILTER_VALUES_MAX,
         itemMax: SHOW_GENRE_MAX,
@@ -4219,8 +3445,7 @@ function showObjectSchema(ctx: ShowSchemaContext) {
         values: SHOW_ENERGY,
         overflowError: `must have at most ${SHOW_FILTER_VALUES_MAX} entries`,
       }),
-      // Windows with no bound at all are dropped; the rest de-duplicate on the
-      // pair.
+      // Windows with no bound are dropped; the rest dedupe on the pair.
       eras: z.preprocess(
         nullToUndefined,
         z
@@ -4240,17 +3465,15 @@ function showObjectSchema(ctx: ShowSchemaContext) {
             return out;
           }),
       ),
-      // One value, not a list — instrumental and vocal are mutually exclusive
-      // and wanting both is wanting neither. '' is no constraint, so a show
-      // predating the field round-trips unchanged.
+      // One value, not a list: wanting both is wanting neither. '' is no
+      // constraint, so a show predating the field round-trips unchanged.
       vocals: z
         .union([z.null(), z.literal(''), z.enum(SHOW_VOCALS)])
         .optional()
         .transform((v) => v ?? ''),
       // Opt-in hard filter across every set music constraint. The legacy
-      // genre-only `genreStrict` is deliberately NOT carried over: the toggle
-      // now spans mood/genre/era/energy, so migrating it would harden filters
-      // an old show never opted into.
+      // genre-only `genreStrict` is NOT migrated: this toggle now spans
+      // mood/genre/era/energy and would harden filters a show never opted into.
       filtersStrict: showBool(),
       // null = inherit the station default, 0 = unlimited, >0 = this show's cap.
       maxTrackSeconds: z
@@ -4263,25 +3486,16 @@ function showObjectSchema(ctx: ShowSchemaContext) {
             (Number.isInteger(n) && n >= 0 && n <= SHOW_MAX_TRACK_SECONDS),
           `must be an integer between 0 and ${SHOW_MAX_TRACK_SECONDS}`,
         )
-        // Shows have no crossfade of their own, so the floor is the station's.
-        // 0 (inherit/unlimited) always stays allowed.
+        // Shows have no crossfade of their own, so the floor is the station's;
+        // 0 (inherit/unlimited) stays allowed.
         .refine(
           (n) => n == null || n === 0 || ctx.minTrackSeconds == null || n >= ctx.minTrackSeconds,
           `must be 0 (inherit/unlimited) or at least the station's minimum track length`,
         ),
-      // Minimum track length (#1573) — the FLOOR, the twin of the cap above.
-      // null = inherit the station default (picker.minTrackLengthSeconds),
-      // 0 = no floor, >0 = this show's own floor in seconds.
-      //
-      // Unlike the cap, this one is a SELECTION filter: a 40-second interlude
-      // cannot be lengthened on air the way an over-long mix can be cut, so it
-      // has to be kept out of the pool rather than trimmed at the seam.
-      //
-      // It carries the SAME crossfade-derived lower bound as the cap, and for
-      // the same reason: a track shorter than 2x the crossfade has no solo
-      // airtime at all, so the smallest floor worth expressing is the one the
-      // mixer already imposes. 0 (inherit/off) always stays allowed, so a
-      // station that never touches the field is byte-identical to today.
+      // Minimum track length (#1573): null = inherit picker.minTrackLengthSeconds,
+      // 0 = no floor, >0 = this show's floor. Unlike the cap this is a SELECTION
+      // filter — a short interlude cannot be lengthened on air — and it carries
+      // the same crossfade-derived lower bound. 0 always stays allowed.
       minTrackLengthSeconds: z
         .union([z.null(), z.literal(''), z.number(), z.string()])
         .optional()
@@ -4296,58 +3510,37 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           (n) => n == null || n === 0 || ctx.minTrackSeconds == null || n >= ctx.minTrackSeconds,
           `must be 0 (inherit/no floor) or at least the station's minimum track length`,
         ),
-      // Show-boundary fade (#1574). TRI-STATE, exactly like maxTrackSeconds
-      // above: null = inherit the station default, true/false = this show's own
-      // answer. A plain showBool() would read an untouched show as an explicit
-      // `false` and silently opt every existing show OUT of a station default
-      // the operator had just turned on.
+      // Show-boundary fade (#1574). TRI-STATE like maxTrackSeconds: null =
+      // inherit. A plain showBool() would read an untouched show as an explicit
+      // false and opt it out of a station default just turned on.
       fadeAtShowEnd: z
         .union([z.null(), z.literal(''), z.boolean()])
         .optional()
         .transform((v) => (v == null || v === '' ? null : v)),
-      // Shape-checked only: ids resolve against the live Navidrome at pick
-      // time, so a stale one contributes nothing rather than failing a save.
+      // Shape-checked only: ids resolve against live Navidrome at pick time.
       playlistIds: showStringList({
         max: PLAYLISTS_PER_SHOW,
         overflowError: `must have at most ${PLAYLISTS_PER_SHOW} entries`,
       }),
       playlistStrict: showBool(),
-      // Full rotation (#1612): while this show is on, every track in its anchor
-      // playlist airs once before any of them repeats. The no-repeat window
-      // stops being the station-wide count and becomes the resolved playlist's
-      // own size — recomputed per pick, so a playlist that grows in Navidrome
-      // widens the rotation rather than silently stopping being right.
-      //
-      // DECIDED: it is a NO-OP without `playlistStrict`, not a validation
-      // error. A soft anchor may leave the playlist, so its universe is the
-      // library again and "every track once" has no set to be true of; refusing
-      // the combination would instead mean a show that cannot be saved while
-      // the operator is halfway through configuring it. The editor only offers
-      // the switch behind the strict one, so the dependency is visible there
-      // and merely inert here — which is also what a hand-edited settings.json
-      // needs, since it reaches this schema without ever seeing the editor.
-      //
-      // The window is counted AFTER the show's strict locks and its excluded
-      // playlists, in music/show-recency.ts — sizing it against the raw
-      // playlist would withhold tracks the show was never going to play.
+      // Full rotation (#1612): every track in the anchor playlist airs once
+      // before any repeats, the no-repeat window becoming the resolved
+      // playlist's size (recomputed per pick). A NO-OP without `playlistStrict`
+      // rather than a validation error, so a half-configured show still saves.
+      // The window is counted AFTER strict locks and excluded playlists, in
+      // music/show-recency.ts.
       playlistExhaust: showBool(),
       excludedPlaylistIds: showStringList({
         max: EXCLUDED_PLAYLISTS_PER_SHOW,
         overflowError: `must have at most ${EXCLUDED_PLAYLISTS_PER_SHOW} entries`,
       }),
-      // Organisation only — tags steer nothing on air. Declared LAST so the
-      // persisted key order of every pre-existing field is unchanged, and
-      // defaulted to [] so a show written before the field round-trips byte
-      // identically apart from the new empty list.
-      //
-      // Unlike every other list here a bad entry is REFUSED rather than
-      // dropped: a tag is typed by hand in the editor, and a tag that silently
-      // vanishes on save is the failure the skill conversion called out. The
-      // lenient load twin (repairShowTags) drops instead, because a hand-edited
-      // settings.json should cost the show a filter chip, not the show.
+      // Organisation only, declared LAST so persisted key order is unchanged.
+      // Unlike every other list here a bad entry is REFUSED rather than dropped:
+      // a tag is typed by hand and must not vanish on save. The load twin
+      // (repairShowTags) drops instead.
       tags: showTags,
     })
-    // Needs two fields at once, so it cannot live on guestPersonaIds itself.
+    // Needs two fields at once, so it cannot live on guestPersonaIds.
     .check((c) => {
       if (c.value.guestPersonaIds.includes(c.value.personaId)) {
         c.issues.push({
@@ -4368,10 +3561,8 @@ export type ShowParsed = z.output<ReturnType<typeof showSchema>>;
 export type Show = ShowParsed & { id: string };
 
 export function showsSchema(ctx: ShowSchemaContext) {
-  // The array-level error is explicit so a non-array never reaches an operator
-  // as zod's own 'Invalid input: expected array, received number'. Phrased
-  // WITHOUT the key, like every other message here, because both callers root
-  // this schema at 'shows'.
+  // Explicit array-level error, phrased WITHOUT the key because both callers
+  // root this schema at 'shows'.
   return z
     .array(showSchema(ctx), { error: 'must be an array' })
     .max(SHOWS_LIMIT, `must be at most ${SHOWS_LIMIT} entries`);
@@ -4382,21 +3573,13 @@ export function showPostSchema(ctx: ShowSchemaContext) {
   return z.object({ show: showSchema(ctx) });
 }
 
-// ── Lenient per-field repairs (the LOAD path) ────────────────────────────────
-//
-// settings/normalize.ts's normalizeShows repairs a stored show field-by-field
-// BEFORE running the schema, so a stale mood or a mistyped list entry costs the
-// show that one value, not the show. The repairs live HERE, beside the rules
-// they repair against, because a repair restated at the call site is a repair
-// that can drift from the schema — and the failure mode of that drift is the
-// worst one available: the lenient parse fails, `continue` drops the row, and a
-// working show silently vanishes on the next boot.
+// Lenient per-field repairs (the LOAD path). normalizeShows repairs a stored
+// show field-by-field BEFORE running the schema, so a stale value costs the show
+// that value, not the show. They live here, beside the rules they repair
+// against: a repair that drifts from the schema drops the row at boot.
 
-/**
- * One era window, repaired: numeric-string years accepted (same eraYearOf the
- * schema's own showYear runs), out-of-range or backwards windows dropped as
- * null rather than failing the show.
- */
+/** One era window, repaired: numeric-string years accepted, out-of-range or
+ *  backwards windows dropped as null rather than failing the show. */
 export function repairEraWindow(raw: unknown): EraWindow | null {
   if (!raw || typeof raw !== 'object') return null;
   const rec = raw as { fromYear?: unknown; toYear?: unknown };
@@ -4408,9 +3591,8 @@ export function repairEraWindow(raw: unknown): EraWindow | null {
   return { fromYear, toYear };
 }
 
-// Trimmed strings only, deduped in first-seen order, capped — the lenient twin
-// of showStringList: where the schema REJECTS (a non-string entry, an
-// over-cap list), this drops or truncates instead.
+// The lenient twin of showStringList: where the schema REJECTS a non-string or
+// over-cap entry, this drops or truncates.
 export function repairShowStringList(
   raw: unknown,
   opts: { max: number; itemMax?: number; values?: readonly string[]; key?: (v: string) => string },
@@ -4432,13 +3614,8 @@ export function repairShowStringList(
   return out;
 }
 
-/**
- * Tags, repaired: lowercased, invalid entries dropped, de-duplicated, capped.
- *
- * The cap is applied AFTER the validity filter, not before, so a stored list
- * padded with junk still yields the operator's real tags rather than spending
- * the budget on entries that were never going to survive.
- */
+/** Tags, repaired. The cap applies AFTER the validity filter so a list padded
+ *  with junk still yields the operator's real tags. */
 export function repairShowTags(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out: string[] = [];
@@ -4453,21 +3630,13 @@ export function repairShowTags(raw: unknown): string[] | undefined {
 }
 
 /**
- * Every per-field repair the load path applies before parsing, in one place.
+ * Every per-field repair the load path applies before parsing. `undefined` lets
+ * the schema's own default apply; each repair lands on a value the strict path
+ * accepts, and the schema is still run on the result.
  *
- * `undefined` lets the schema's own default apply. Each repair lands on a value
- * the strict path would have accepted, so load and save still agree about what
- * a valid show is — the schema itself is still run on the result.
- *
- * `personaIds: null` mirrors the ShowSchemaContext convention: this caller
- * cannot check roster membership, so guest entries are kept. The load path
- * passes the real roster and dangling guests (and the host itself) are dropped
- * so the show survives with whatever roster is still real.
- *
- * maxTrackSeconds is deliberately NOT repaired here: its clamp bounds are owned
- * by settings/defaults.ts (coerceMaxTrackSeconds), which already reads its
- * ceiling from this module's SHOW_MAX_TRACK_SECONDS. minTrackLengthSeconds
- * follows it for the same reason (coerceMinTrackLengthSeconds).
+ * `personaIds: null` means this caller cannot check roster membership, so guests
+ * are kept. maxTrackSeconds and minTrackLengthSeconds are deliberately NOT
+ * repaired here — settings/defaults.ts owns their clamps.
  */
 export function repairShowForLoad(
   raw: Record<string, unknown>,
@@ -4485,15 +3654,13 @@ export function repairShowForLoad(
     themeId: typeof raw.themeId === 'string'
       ? raw.themeId.trim().slice(0, SHOW_THEME_ID_MAX)
       : undefined,
-    // Anything unrecognised reads as no constraint — a steering field that
-    // silently stops applying is a far smaller failure than a show that stops
-    // playing music.
+    // Anything unrecognised reads as no constraint: a steering field that stops
+    // applying beats a show that stops playing music.
     vocals: typeof raw.vocals === 'string' && (SHOW_VOCALS as readonly string[]).includes(raw.vocals)
       ? raw.vocals
       : undefined,
-    // A stale mood costs the show that one filter, not the show. Moods are NOT
-    // filtered against a vocabulary here for the same reason the load context
-    // carries moodNames: null — the mood cache doesn't exist yet.
+    // Not filtered against a vocabulary here, for the same reason the load
+    // context carries moodNames: null — the mood cache does not exist yet.
     moods: repairShowStringList(raw.moods, { max: SHOW_FILTER_VALUES_MAX }),
     genres: repairShowStringList(raw.genres, {
       max: SHOW_FILTER_VALUES_MAX,
@@ -4516,10 +3683,8 @@ export function repairShowForLoad(
             typeof g === 'string' && g !== host && (personaIds == null || personaIds.includes(g)))
           .slice(0, GUESTS_PER_SHOW)
       : undefined,
-    // Lenient twin of the strict `tags` field: an invalid tag is DROPPED here
-    // rather than failing the show, the same posture skill.ts's
-    // normalizeSkillTags takes against a hand-edited SKILL.md. Non-array reads
-    // as absent so the schema's [] default applies.
+    // Lenient twin of the strict `tags` field: an invalid tag is DROPPED rather
+    // than failing the show. Non-array reads as absent (schema's [] default).
     tags: repairShowTags(raw.tags),
     playlistIds: repairShowStringList(raw.playlistIds, { max: PLAYLISTS_PER_SHOW }),
     excludedPlaylistIds: repairShowStringList(raw.excludedPlaylistIds, {

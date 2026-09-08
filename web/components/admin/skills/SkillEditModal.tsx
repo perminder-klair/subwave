@@ -1,16 +1,10 @@
 'use client';
 
-// Skill Edit Card — the segment-sheet editor, shown as a modal over /admin/skills.
-//
-// One component serves three jobs:
-//   • create a custom (prompt-only) skill  → POST /dj/skills
-//   • edit an existing custom skill        → PUT  /dj/skills/:slug/file
-//   • edit a built-in skill (incl. News)   → PUT  /dj/skills/:kind/file
-// The controller is the validation gate; this form does light client checks.
-//
-// The on/off toggle and Run now are LIVE operator actions (/dj/skill-toggle,
-// /dj/skill) — they don't participate in the Save/dirty flow, which only writes
-// the SKILL.md file fields.
+// Skill Edit Card -- the segment-sheet editor, shown as a modal over
+// /admin/skills. Creates a custom skill (POST /dj/skills) or edits a custom or
+// built-in one (PUT /dj/skills/:id/file). The controller is the validation gate.
+// The on/off toggle and Run now are LIVE operator actions and take no part in
+// the Save/dirty flow, which only writes the SKILL.md file fields.
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
@@ -53,12 +47,10 @@ import {
   type SkillsResponse,
 } from './queries';
 
-// Only what this modal needs from GET /dj/skills; the full list type lives in
-// SkillsPanel.
+// Only what this modal needs from GET /dj/skills.
 export type { SkillLike } from './queries';
 
-// `skills: null` is the "all skills" sentinel (controller
-// settings.ts:validatePersonasStrict).
+// `skills: null` is the "all skills" sentinel.
 export interface PersonaLite {
   id: string;
   name: string;
@@ -75,10 +67,9 @@ interface SkillEditModalProps {
 
 const COOLDOWN_PRESETS = ['15m', '25m', '45m', '1h', '6h'];
 
-// The RHF-bound shape of the SKILL.md fields. `name` is create-only and rides
-// along unused in edit mode. `config` (the skill's own declared knobs) stays
-// out: it's runtime data from the skill's tool.mjs, validated separately by
-// the controller's skills/config-fields.ts, so it keeps its own useState.
+// The RHF-bound shape of the SKILL.md fields. `name` is create-only. `config`
+// (the skill's own declared knobs) stays out: runtime data from the skill's
+// tool.mjs, validated by the controller, so it keeps its own useState.
 interface SkillFormValues {
   name?: string;
   label: string;
@@ -93,19 +84,16 @@ interface SkillFormValues {
   requiresKey: string;
 }
 
-// The skill's current knob values as form strings (the controller sends numbers
-// as numbers).
+// The skill's current knob values as form strings.
 function configValues(j: SkillFileResponse): Record<string, string> {
   return Object.fromEntries(
     Object.entries(j.config || {}).map(([k, v]) => [k, v == null ? '' : String(v)]),
   );
 }
 
-// Comparison key for `config` alone — the one file field that stays outside
-// the RHF form (see SkillFormValues above) and therefore needs its own
-// dirty tracking. A knob the controller reports as unset is ABSENT, so
-// typing into an empty field and clearing it again must not read as an
-// unsaved change.
+// Comparison key for `config`, the one file field outside the RHF form. An
+// unset knob is ABSENT, so typing into an empty field and clearing it again
+// must not read as an unsaved change.
 function configKey(config: Record<string, string>): string {
   return JSON.stringify(
     Object.fromEntries(
@@ -117,8 +105,8 @@ function configKey(config: Record<string, string>): string {
   );
 }
 
-// GET /dj/skills/:kind/file → the RHF defaultValues shape. Shared by the load
-// effect and Reset to default so the two can't map the response differently.
+// GET /dj/skills/:kind/file -> the RHF defaultValues shape. Shared by the load
+// effect and Reset to default.
 function fileToFormValues(j: SkillFileResponse) {
   return {
     label: j.label || '',
@@ -142,8 +130,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const { adminFetch } = useAdminAuth();
 
   const isEdit = mode === 'edit';
-  // File id for GET/PUT — the kind (built-in) or slug (custom). For toggle/run/
-  // delete the controller keys off the skill name.
+  // File id for GET/PUT: kind (built-in) or slug (custom). Toggle/run/delete
+  // key off the skill name instead.
   const fileId = skill ? (skill.kind || skill.name) : '';
   const fileQuery = useSkillFileQuery(adminFetch, fileId, isEdit);
 
@@ -155,17 +143,14 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const [cronInvalid, setCronInvalid] = useState(false);
   const [knownContext, setKnownContext] = useState<string[]>(CONTEXT_FIELDS_FALLBACK);
 
-  // The skill's own declared knobs (a tool.mjs `configFields` export, or the
-  // generic feed/feedMaxItems pair every tool-less skill is offered) — runtime
-  // data resolved by the controller's loader, not part of the shared schema, so
-  // it keeps its own state + dirty snapshot outside the RHF form (see
-  // SkillFormValues above).
+  // The skill's own declared knobs, resolved by the controller's loader. Not
+  // part of the shared schema, so it keeps its own state + dirty snapshot.
   const [config, setConfig] = useState<Record<string, string>>({});
   const [configSnapshot, setConfigSnapshot] = useState<string>(() => configKey({}));
   const [tagDraft, setTagDraft] = useState('');   // the tag input's in-progress text
 
-  // Seeded from the roster at mount (a `skills: null` persona runs everything);
-  // saved via PUT /dj/skills/:slug/personas after the file save.
+  // Seeded from the roster at mount; saved via PUT /dj/skills/:slug/personas
+  // after the file save.
   const roster = personas || [];
   const initialAssigned = () => (skill
     ? roster.filter(p => p.skills === null || p.skills.includes(skill.name)).map(p => p.id)
@@ -185,10 +170,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   }, [busy, onClose]);
 
   // The same schema the controller runs, so a bad cooldown is caught at the
-  // input rather than coming back as a 400. Declared as the widened ZodType
-  // rather than the create/edit union: several fields are z.preprocess-wrapped,
-  // whose z.input is `unknown`, so the union's input type collapses — handled
-  // with one cast on `control` below instead of at every call site.
+  // input. Declared as the widened ZodType rather than the create/edit union:
+  // several fields are z.preprocess-wrapped, so the union's input collapses.
   const schema: z.ZodType<FieldValues, FieldValues> =
     mode === 'create' ? skillCreateSchema : skillFileSchema(custom);
 
@@ -236,10 +219,9 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     requestClose();
   }, [fileQuery.error, isEdit, requestClose]);
 
-  // `custom` can flip after mount (the file GET below corrects the list row's
-  // guess), swapping `schema`. RHF picks up the new resolver on the next render
-  // but won't re-run it against already-computed error state — same as
-  // MoodsPanel's schedule/weather schema.
+  // `custom` can flip after mount (the file GET corrects the list row's guess),
+  // swapping `schema`. RHF picks up the new resolver on the next render but
+  // won't re-run it against already-computed error state.
   useEffect(() => {
     void form.trigger();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -266,19 +248,17 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     window.setTimeout(() => setFlash(cur => (cur === msg ? null : cur)), 2000);
   };
 
-  // Escape-to-close and scroll-lock come from EditorDialog (Radix). No manual key
-  // listener: that is what lets the nested delete confirm get Escape first.
+  // Escape-to-close and scroll-lock come from EditorDialog (Radix). No manual
+  // key listener, so the nested delete confirm gets Escape first.
 
   const assignDirty = isEdit && JSON.stringify([...assigned].sort()) !== assignSnapshot;
   const configDirty = configKey(config) !== configSnapshot;
   const dirty = loaded && (form.formState.isDirty || configDirty || assignDirty);
 
   const canSave = loaded && form.formState.isValid && !busy;
-  // Every field has its own inline error slot, so listing them here too would
-  // render each message twice. `requiresKey` is the exception: it's a hidden
-  // passthrough with no rendered control, so a disk-authored value that isn't
-  // UPPER_SNAKE_CASE has nowhere else to surface, and a gated Save would
-  // otherwise never say why.
+  // Every field has its own inline error slot. `requiresKey` is the exception:
+  // a hidden passthrough with no rendered control, so a bad disk-authored value
+  // has nowhere else to surface.
   const FIELDS_WITH_INLINE_ERRORS = ['name', 'label', 'cooldown', 'cron', 'cronOnly', 'cohosts', 'context', 'tags', 'window', 'brief'];
   const blockingIssue = (() => {
     const entry = Object.entries(form.formState.errors).find(
@@ -316,9 +296,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         await client.invalidateQueries({
           queryKey: skillKeys.file(vars.fileId), exact: true, refetchType: 'active',
         });
-        // The modal hydrates the file exactly once. If the authoritative read
-        // failed, do not leave its older successful payload for a quick reopen
-        // to consume before the next background attempt settles.
+        // The modal hydrates the file once. If the authoritative read failed,
+        // don't leave its older payload for a quick reopen to consume.
         if (client.getQueryState(skillKeys.file(vars.fileId))?.status === 'error') {
           client.removeQueries({ queryKey: skillKeys.file(vars.fileId), exact: true });
         }
@@ -337,8 +316,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         body: JSON.stringify({ personaIds }),
       },
     ),
-    // The assignment endpoint returns only a roster receipt. Never put that
-    // partial response (or a raw /settings POST) in the redacted settings cache.
+    // The assignment endpoint returns only a roster receipt; never put that
+    // partial response in the redacted settings cache.
     onDone: async (_response, _vars, client) => {
       await client.invalidateQueries({ queryKey: skillKeys.roster(), exact: true });
     },
@@ -380,14 +359,12 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const onSubmit = form.handleSubmit(async (values) => {
     setBusy(true);
     try {
-      // `requiresKey` (and, for a custom skill, `window`) ride along in `values`
-      // only when the schema in force declares them — a built-in edit's schema
-      // doesn't, so zod has already stripped them from the parsed output.
+      // `requiresKey` (and `window` for a custom skill) ride along in `values`
+      // only when the schema in force declares them.
       const body: Record<string, unknown> = { ...values };
       // Always sent when the skill declares knobs, so clearing a field clears
-      // the frontmatter line; omitted for a skill with none, which the
-      // controller reads as "leave whatever is on disk". Read off the raw body
-      // server-side, so it travels outside `values` here too.
+      // the frontmatter line; omitted for a skill with none, which the controller
+      // reads as "leave whatever is on disk".
       if (configFields.length) {
         body.config = Object.fromEntries(
           configFields.map(f => [f.key, (config[f.key] || '').trim()]),
@@ -407,8 +384,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
       } else {
         form.reset(values as DefaultValues<z.input<typeof schema>>);   // edits are now the saved baseline
         setConfigSnapshot(configKey(config));
-        // A separate resource (personas[].skills): the file save above already
-        // stood, so a failure here reports on its own.
+        // A separate resource (personas[].skills): the file save already stood,
+        // so a failure here reports on its own.
         if (assignDirty && skill) {
           try {
             await rosterMutation.mutateAsync({ slug: skill.name, personaIds: assigned });
@@ -452,9 +429,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
       const j = (await r.json().catch(() => ({}))) as {
         spoken?: string | null; aired?: boolean; reason?: string | null; error?: string;
       };
-      // The skill can run and decide it has nothing usable to speak from — a
-      // 200 with `aired: false` (issue #1412). Flashing "QUEUED TO BOOTH" at
-      // that would tell the operator something aired when nothing did.
+      // The skill can run and decide it has nothing usable to speak from: a 200
+      // with `aired: false` (#1412).
       if (j.aired === false) {
         flashFor('STOOD DOWN');
         notify.info(`${skill.name} stayed silent — ${j.reason || 'nothing usable to speak from'}`);
@@ -482,8 +458,7 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     }
   };
 
-  // The download goes through adminFetch + a blob because a plain <a href> can't
-  // carry the Basic-auth header.
+  // adminFetch + blob because a plain <a href> can't carry the Basic-auth header.
   const exportZip = async () => {
     try {
       // admin-query-imperative: skill-export
@@ -502,9 +477,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     }
   };
 
-  // Opens the prefilled add-skill Issue Form on GitHub. Only offered for tool-less
-  // custom skills — built-ins already ship, and executable tool.mjs skills aren't
-  // accepted through this path.
+  // Opens the prefilled add-skill Issue Form on GitHub. Tool-less custom skills
+  // only.
   const shareToCommunity = () => {
     const url = skillSubmitUrl({
       'skill-name': kind,
@@ -518,9 +492,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 
-  // Server-side and immediate: the POST overwrites BOTH the SKILL.md AND the
-  // tool.mjs in state/skills/<kind>/ from the image template, which an in-form
-  // repopulate could not do. The refetch afterwards mirrors the shipped values back.
+  // Server-side and immediate: the POST overwrites BOTH the SKILL.md and the
+  // tool.mjs from the image template, which an in-form repopulate could not do.
   const resetToDefault = async () => {
     if (custom || !isEdit || busy) return;
     setBusy(true);
@@ -571,8 +544,8 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
   const headerSub = (
     <span className="caption truncate">{custom ? 'custom segment' : 'built-in segment'}</span>
   );
-  // Sized down on a phone (52x26): the footer is fixed furniture, and this is the
-  // one control that can't collapse into the overflow menu.
+  // Sized down on a phone (52x26): the one footer control that can't collapse
+  // into the overflow menu.
   const airToggle = isEdit ? (
     <div
       onClick={() => { if (!acting) toggleEnabled(); }}

@@ -1,39 +1,5 @@
 // Trusted reverse proxies (#1613) — the marker the icecast render writes, and
 // the reader that turns it into an admin-visible reason.
-//
-// The mechanism was already right: docker/broadcast-entrypoint.sh resolves a
-// trusted-proxy list (ICECAST_TRUSTED_PROXY_IPS beating DNS for
-// ICECAST_TRUSTED_PROXY_HOSTS, default `caddy`) and renders it into
-// icecast.xml, so admin -> Listeners shows real client addresses. What was
-// wrong was the SILENCE on a miss. docker-compose.byo.yml has no `caddy`
-// service, so the DNS path misses on every boot of every BYO install, every
-// listener row renders the proxy's container address, and the operator's only
-// signal was one line on the broadcast container's stderr — three layers from
-// the table showing the symptom.
-//
-// So the render now records what it decided in state/trusted-proxies.json and
-// the admin connections route reads it. Four properties are load-bearing:
-//
-//   1. A MISS is recorded as a miss, naming the source that was TRIED. "No
-//      proxy resolved from ICECAST_TRUSTED_PROXY_HOSTS" is a different
-//      instruction to the operator than "…from ICECAST_TRUSTED_PROXY_IPS",
-//      and the count alone cannot tell them apart.
-//   2. A malformed entry is DROPPED, named in the log AND recorded. icecast-KH
-//      matches an exact IP: a CIDR is accepted and then silently never
-//      matches, which is the second way an operator sets the var and still
-//      sees the proxy address. Interpolating one would render invalid XML and
-//      turn a cosmetic setting into a station that will not boot.
-//   3. Writing the marker is NEVER fatal, same rule as the state bootstrap: an
-//      unwritable state dir costs a warning and the XML is still rendered.
-//   4. An unknown marker degrades to TODAY's behaviour — the peer address,
-//      unexplained — never to a guess. A controller ahead of its broadcast
-//      image sees no marker at all, and that must show nothing.
-//
-// Both supervisors carry the same render_trusted_proxies(), so they are driven
-// here from ONE table, the way scripts/max-listeners.test.ts and
-// scripts/state-bootstrap.test.ts drive the other things those two files share.
-//
-// Run: `npm test -- trusted-proxies`.
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -51,14 +17,10 @@ import {
 const here = dirname(fileURLToPath(import.meta.url));
 const docker = join(here, '..', '..', 'docker');
 
-// ---------------------------------------------------------------------------
-// 1. The reader
-// ---------------------------------------------------------------------------
 
 test('an absent or unparseable marker is UNKNOWN, not a miss', () => {
   // This is the upgrade path: a controller running ahead of its broadcast
   // image finds no file at all. Reading that as "no proxy trusted" would put a
-  // wrong explanation under a table that may be perfectly correct.
   for (const junk of [null, undefined, 'nope', 42, [], {}]) {
     const s = trustedProxyState(junk);
     assert.equal(s.known, false, `${JSON.stringify(junk)} should be unknown`);
@@ -102,7 +64,6 @@ test('a dropped entry earns a hint even when something else resolved', () => {
 test('a marker that contradicts itself is UNKNOWN', () => {
   // A count that disagrees with the list it summarises comes from a writer
   // this reader does not understand. Believing either half would put a hint on
-  // screen that contradicts the config icecast is actually running.
   const s = trustedProxyState({
     count: 3, source: 'ICECAST_TRUSTED_PROXY_IPS', proxies: ['1.2.3.4'], dropped: [],
   });
@@ -120,9 +81,6 @@ test('marker fields are filtered, not trusted — this is a file on disk', () =>
   assert.equal(trustedProxyState({ count: 0, source: '</x>', proxies: [] }).known, false);
 });
 
-// ---------------------------------------------------------------------------
-// 2. The two supervisors: one table, both copies
-// ---------------------------------------------------------------------------
 
 const SUPERVISORS = [
   { name: 'broadcast-entrypoint.sh', path: join(docker, 'broadcast-entrypoint.sh'), lib: 'SUBWAVE_BROADCAST_LIB' },
@@ -136,7 +94,6 @@ type Render = { status: number; out: string; xml: string; marker: unknown; dir: 
 
 // Drive render_trusted_proxies() against a scratch state dir, under the same
 // `set -eu` the real entrypoint runs with — an unset-variable slip or a
-// non-zero status here aborts the container BEFORE icecast starts.
 function render(
   script: string, lib: string, source: string, candidates: string,
   opts: { stateDir?: string | null } = {},
@@ -147,8 +104,6 @@ function render(
   // STATE_DIR is assigned AFTER the source and as a call prefix, not through
   // the environment: the AIO supervisor sets STATE_DIR at module scope, so an
   // env var would be clobbered by the very act of loading it (the same reason
-  // scripts/max-listeners.test.ts drives resolve_max_clients this way).
-  // Unquoted $5 on purpose: the callers pass a space-separated candidate list.
   const cmd = `set -eu; ${lib}=1 source "$1"; STATE_DIR="$2" render_trusted_proxies "$3" "$4" $5 2>&1`;
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: process.env.PATH ?? '' };
 
@@ -179,9 +134,6 @@ function render(
 // Every address the shape test must accept or refuse. The hex-only words are
 // the ones a character class silently KEPT: `''|*[!0-9a-fA-F.:]*` accepts
 // `cafe`, `beef`, `ace`, `ff` and a bare `a` while correctly dropping `caddy`
-// and `localhost`, so those reached icecast.xml as <x-forwarded-for> entries
-// no peer can ever equal. Harmless on air, and exactly the kind of entry the
-// marker would have counted as a trusted proxy in front of the operator.
 const SHAPES: [addr: string, valid: boolean, why: string][] = [
   ['172.20.0.100', true, 'the documented bundled-Caddy pin'],
   ['127.0.0.1', true, 'the AIO default'],
@@ -231,7 +183,6 @@ for (const s of SUPERVISORS) {
 
   test(`${s.name}: a hex-only hostname is dropped, not written into icecast.xml`, () => {
     // End to end, because the shape test only matters if the render uses it:
-    // before this, `cafe` was rendered AND counted as a trusted proxy.
     const r = render(s.path, s.lib, 'ICECAST_TRUSTED_PROXY_IPS', 'cafe 172.20.0.100');
     assert.equal(r.status, 0, r.out);
     assert.equal(r.xml, '        <x-forwarded-for>172.20.0.100</x-forwarded-for>\n');
@@ -263,7 +214,6 @@ for (const s of SUPERVISORS) {
   test(`${s.name}: a resolved-nothing source is recorded as a miss, by name`, () => {
     // The BYO case: no `caddy` to resolve, so the candidate list is empty. The
     // XML must stay empty (a miss degrades to the peer address, never to a
-    // guess) and the marker must still say which knob was tried.
     const r = render(s.path, s.lib, 'ICECAST_TRUSTED_PROXY_HOSTS', '');
     assert.equal(r.status, 0, r.out);
     assert.equal(r.xml, '', 'a miss must render no <x-forwarded-for> at all');
@@ -291,7 +241,6 @@ for (const s of SUPERVISORS) {
   test(`${s.name}: a hostile entry cannot break the marker it is recorded in`, () => {
     // Dropped entries are operator input on their way into JSON. A quote or a
     // backslash would produce a marker the controller cannot parse — which
-    // would take the hint down along with the config it exists to explain.
     const r = render(s.path, s.lib, 'ICECAST_TRUSTED_PROXY_IPS', '"},{"x 172.20.0.100');
     assert.equal(r.status, 0, r.out);
     assert.equal(r.xml, '        <x-forwarded-for>172.20.0.100</x-forwarded-for>\n');
@@ -305,8 +254,6 @@ for (const s of SUPERVISORS) {
   test(`${s.name}: an unwritable state dir warns and still renders the XML`, () => {
     // Same never-fatal contract as bootstrap_state_dirs. A plain file where the
     // state dir belongs makes the marker path unusable through the same branch
-    // a read-only or NFS mount does. The station must not lose its trusted
-    // proxies — let alone its boot — over a diagnostic file.
     const bad = join(shellTmp, `not-a-dir-${caseNo++}`);
     writeFileSync(bad, 'not a directory');
     const r = render(s.path, s.lib, 'ICECAST_TRUSTED_PROXY_IPS', '172.20.0.100', { stateDir: bad });
@@ -319,7 +266,6 @@ for (const s of SUPERVISORS) {
   test(`${s.name}: no state dir at all is silent, and still renders`, () => {
     // Multi-station resolution runs before the render, so this should not
     // happen — but a marker is a diagnostic, and a missing one must cost
-    // neither the config nor a line of noise on every boot.
     const r = render(s.path, s.lib, 'ICECAST_TRUSTED_PROXY_IPS', '172.20.0.100', { stateDir: null });
     assert.equal(r.status, 0, r.out);
     assert.equal(r.xml, '        <x-forwarded-for>172.20.0.100</x-forwarded-for>\n');
@@ -329,7 +275,6 @@ for (const s of SUPERVISORS) {
   test(`${s.name}: the marker is rewritten on every render`, () => {
     // It describes the config icecast was just started with, so a marker left
     // over from the boot BEFORE the operator removed the var would explain a
-    // table that no longer matches it.
     const dir = join(shellTmp, `case-${caseNo++}`);
     mkdirSync(dir, { recursive: true });
     render(s.path, s.lib, 'ICECAST_TRUSTED_PROXY_IPS', '172.20.0.100', { stateDir: dir });
@@ -345,8 +290,6 @@ for (const s of SUPERVISORS) {
   test(`${s.name}: the marker is world-READABLE, not world-writable`, () => {
     // The controller reads it as another uid, and nothing else writes it. 666
     // would put a second writer's permission on a single-writer file for no
-    // reason; the rest of the state dir is 777 because other containers write
-    // THERE.
     const r = render(s.path, s.lib, 'ICECAST_TRUSTED_PROXY_IPS', '172.20.0.100');
     assert.equal(r.status, 0, r.out);
     const mode = statSync(join(r.dir, 'trusted-proxies.json')).mode & 0o777;

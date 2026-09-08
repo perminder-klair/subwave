@@ -5,59 +5,41 @@ import { dirname, resolve } from 'node:path';
 import { resolveActiveStationDir } from './stations/resolve.js';
 import { envEnum, envFloat, envInt, envStr, envUrl } from './util/env.js';
 
-// The shared state ROOT — the compose files mount <repo>/state → /var/sub-wave
-// and pass STATE_DIR=/var/sub-wave. Native dev (`npm run dev` from controller/)
-// has no such mount, so it falls back to the repo-local state/ dir resolved
-// relative to this file (controller/src/config.js → ../../state).
+// Shared state ROOT. Compose passes STATE_DIR=/var/sub-wave; native dev falls
+// back to the repo-local state/ dir.
 export const STATE_ROOT = process.env.STATE_DIR
   || resolve(dirname(fileURLToPath(import.meta.url)), '../../state');
 
-// The ACTIVE station's state dir — every file-based IPC channel lives under
-// here. Multi-station installs (state/stations/active.json present) resolve to
-// stations/<activeId>/; single-station installs resolve to the root itself, so
-// every existing consumer of STATE_DIR keeps working unchanged. Resolution is
-// once-per-boot by design: switching stations restarts this process.
+// The ACTIVE station's state dir — every file-based IPC channel lives here.
+// Single-station installs resolve to the root. Resolved once per boot: switching
+// stations restarts this process.
 export const STATE_DIR = resolveActiveStationDir(STATE_ROOT);
 
-// Relocated stem-cache root, as a CONTAINER path. The operator sets STEMS_DIR
-// (a HOST path) in the root .env; every compose file bind-mounts it at a fixed
-// container path and passes that path down as SUBWAVE_STEMS_DIR. Two names on
-// purpose: the controller reads .env through `env_file:`, so the host value is
-// visible in here and is meaningless to a process inside the container.
-// Empty (the default) means "no relocation" — music/stem-cache.ts then resolves
-// the cache under STATE_DIR exactly as it did before STEMS_DIR existed.
+// Relocated stem-cache root, as a CONTAINER path (the operator's STEMS_DIR is a
+// HOST path and means nothing in here). Empty = no relocation; music/stem-cache.ts
+// then resolves the cache under STATE_DIR.
 export const STEMS_DIR = envStr('SUBWAVE_STEMS_DIR', '');
 
-// Repo-bundled static audio (studio bed, emergency clip, default sound
-// effects). In Docker the compose files mount <repo>/sounds → /sounds and
-// pass SOUNDS_DIR=/sounds. Native dev falls back to the repo-local sounds/
-// dir resolved relative to this file (controller/src/config.js → ../../sounds).
+// Repo-bundled static audio (studio bed, emergency clip, default SFX). Compose
+// passes SOUNDS_DIR=/sounds; native dev falls back to the repo-local sounds/ dir.
 export const SOUNDS_DIR = process.env.SOUNDS_DIR
   || resolve(dirname(fileURLToPath(import.meta.url)), '../../sounds');
 
-// TTS speech-rate multiplier: 1.0 = normal pace, lower = slower, higher =
-// faster. TTS_SPEED is the cross-engine default; each engine can be tuned
-// independently with its own var (PIPER_SPEED / KOKORO_SPEED / CLOUD_TTS_SPEED).
-// The multiplier semantics are consistent everywhere — piper.js inverts it
-// internally because Piper expresses rate as length_scale (higher = slower).
+// TTS speech-rate multiplier: 1.0 = normal, lower = slower. Cross-engine default;
+// each engine has its own var. piper.js inverts it (Piper uses length_scale).
 const TTS_SPEED = envFloat('TTS_SPEED', 1.0, { min: 0.1 });
 
-// Shared directory for operator-uploaded reference WAVs. Both Chatterbox and
-// PocketTTS read from here for zero-shot voice cloning. `TTS_VOICE_DIR` is the
-// canonical override; `CHATTERBOX_VOICE_DIR` is honoured for back-compat with
-// operators who pinned the old chatterbox-only path. The legacy folder
-// (state/chatterbox-voices/) is still read at list/resolve time so pre-existing
-// installs keep working without a manual file move.
+// Operator-uploaded reference WAVs, shared by Chatterbox + PocketTTS.
+// CHATTERBOX_VOICE_DIR is honoured for back-compat; the legacy folder is still
+// read at list/resolve time.
 const VOICES_DIR = envStr('TTS_VOICE_DIR', envStr('CHATTERBOX_VOICE_DIR', `${STATE_DIR}/voices`));
 const LEGACY_VOICES_DIR = `${STATE_DIR}/chatterbox-voices`;
 
 export const config = {
-  // Absolute path to the ACTIVE station's state dir — modules build their own
-  // file paths from this rather than hardcoding /var/sub-wave.
   stateDir: STATE_DIR,
-  // The install-level state root (stations/, icecast-secrets.env live here).
+  // Install-level state root (stations/, icecast-secrets.env live here).
   stateRoot: STATE_ROOT,
-  // Container path of a relocated stem cache; '' = under stateDir as before.
+  // Container path of a relocated stem cache; '' = under stateDir.
   stemsDir: STEMS_DIR,
   soundsDir: SOUNDS_DIR,
   navidrome: {
@@ -66,15 +48,13 @@ export const config = {
     password: process.env.NAVIDROME_PASS || '',
     apiVersion: '1.16.1',
     clientName: 'sub-wave',
-    // Per-request cap on Subsonic API calls. Without one, a slow or hung
-    // Navidrome leaves fetches pending forever and admin routes stack up
-    // behind them (#786's "recent failed (500)").
+    // Per-request cap on Subsonic calls; without one a hung Navidrome stacks up
+    // admin routes behind pending fetches (#786).
     timeoutMs: envInt('NAVIDROME_TIMEOUT_MS', 30_000),
   },
   ollama: {
-    // Default-when-blank server URL + model. The admin Settings UI
-    // (`llm.ollamaUrl` / `llm.model`) overrides both — there are no
-    // OLLAMA_URL / OLLAMA_MODEL env vars; the UI fields are the only source.
+    // Default-when-blank. The admin Settings UI (`llm.ollamaUrl` / `llm.model`)
+    // is the only override — there are no OLLAMA_URL/OLLAMA_MODEL env vars.
     url: 'http://localhost:11434',
     model: 'nemotron-3-super:cloud',
   },
@@ -85,45 +65,27 @@ export const config = {
     outDir: envStr('PIPER_OUT', `${STATE_DIR}/voice`),
     speed: envFloat('PIPER_SPEED', TTS_SPEED, { min: 0.1 }),
   },
-  // Acoustic analysis (bpm/key/intro) — runs librosa, which deliberately does
-  // NOT live in the controller image. Two backends, resolved in music/
-  // analyzer.ts: an analysis sidecar (production) or a local Python venv
-  // (offline/dev — set ANALYZE_PYTHON to a venv with librosa installed). When
-  // neither is reachable the analysis phase skips cleanly.
+  // Acoustic analysis (bpm/key/intro). Two backends resolved in music/analyzer.ts:
+  // the analysis sidecar, or a local Python venv (ANALYZE_PYTHON). Neither
+  // reachable → the analysis phase skips cleanly.
   analyzer: {
-    // Base URL for the analysis sidecar — the default-on `subwave-analyzer`
-    // image (`subwave-analyzer-heavy` for CLAP/Demucs, via ANALYZER_HEAVY=1).
-    // analyzer.ts probes /health and uses it when it reports the 'analyze'
-    // engine. tts-heavy no longer carries the analyzer (it's TTS-only), so there
-    // is no TTS_HEAVY_URL fallback here anymore.
+    // Sidecar base URL; analyzer.ts probes /health for the 'analyze' engine.
     urls: [envUrl('ANALYZE_URL', '')].filter((u): u is string => !!u),
     python: envStr('ANALYZE_PYTHON', ''),   // empty → no local backend
     workerScript: envStr('ANALYZE_WORKER', '/app/scripts/analyze_worker.py'),
-    // 40s is enough for stable BPM (beat_track) / key (chroma); intro
-    // detection only needs the first ~20-30s. Env-overridable; Demucs cost
-    // scales linearly with the window. Keep in sync with analyze_worker.py
-    // and docker/analyzer/server.py.
+    // Analysis window, seconds. Demucs cost scales linearly with it. Keep in
+    // sync with analyze_worker.py and docker/analyzer/server.py.
     seconds: envFloat('ANALYZE_SECONDS', 40, { min: 1 }),
-    // Maximum controller-side in-flight analysis jobs for a sidecar backend.
-    // Local stdio analysis remains single-flight (music/analyze.ts), because one
-    // line-protocol worker cannot safely execute requests concurrently.
+    // In-flight analysis jobs for a sidecar backend. Local stdio analysis stays
+    // single-flight (one line-protocol worker cannot multiplex).
     concurrency: envInt('ANALYZE_CONCURRENCY', 1, { min: 1, max: 8 }),
     requestTimeoutMs: envInt('ANALYZE_REQUEST_TIMEOUT_MS', 120_000),
-    // Transition renders (stem-blend transitions) get their own, shorter
-    // deadline: they run inside the pair-drain window and must lose the race
-    // to the drain's hard fallback — a render past this is abandoned and the
-    // seam falls back to a plain pair-aware crossfade. Also what absorbs a
-    // render queued behind a long bulk-analyze item on the single-flight
-    // worker.
+    // Shorter deadline for transition renders: they run inside the pair-drain
+    // window and must lose the race to the drain's fallback crossfade.
     renderTimeoutMs: envInt('ANALYZE_RENDER_TIMEOUT_MS', 60_000),
-    // How long a resolved "no backend at all" answer is cached before the
-    // probe runs again. Only the MISS is timed — a backend that answered is
-    // remembered for the process lifetime, exactly as before. A configured
-    // ANALYZE_URL whose host silently drops packets costs the probe's full 5s
-    // timeout, and an uncached miss paid that on every analyze call; this
-    // bounds it to once per interval while still finding a sidecar that comes
-    // up after the controller. Same shape and reasoning as
-    // ttsHeavy.probeIntervalMs below.
+    // How long a "no backend at all" answer is cached before re-probing. Only
+    // the MISS is timed; a backend that answered is remembered for the process
+    // lifetime. 0 disables the caching.
     missProbeIntervalMs: envInt('ANALYZE_PROBE_MS', 60_000, { min: 0 }),
   },
   kokoro: {
@@ -135,204 +97,139 @@ export const config = {
     lang: envStr('KOKORO_LANG', ''),
     speed: envFloat('KOKORO_SPEED', TTS_SPEED, { min: 0.1 }),
   },
-  // Chatterbox is opt-in: the default controller image does not bundle the
-  // runtime. Build with `--build-arg WITH_CHATTERBOX=1` (see
-  // docker/Dockerfile.controller) to create the venv + model at these paths.
-  // chatterbox.isAvailable() does an existsSync on `python`, so when the image
-  // was built without the arg the venv is absent and the dispatcher falls back
-  // to Piper. The defaults below are the in-image locations; env vars override
-  // them for non-default layouts (e.g. a host venv during native dev).
+  // Chatterbox is opt-in (`--build-arg WITH_CHATTERBOX=1`). isAvailable() does an
+  // existsSync on `python`, so an image built without it falls back to Piper.
   chatterbox: {
     python: envStr('CHATTERBOX_PYTHON', '/opt/chatterbox/venv/bin/python'),
     workerScript: envStr('CHATTERBOX_WORKER', '/app/scripts/chatterbox_worker.py'),
     // 'cpu' or 'cuda'. CPU works but is slow; CUDA needs a GPU-enabled image.
     device: envEnum('CHATTERBOX_DEVICE', ['cpu', 'cuda'] as const, 'cpu'),
-    // Directory where the operator drops per-persona reference WAVs. Each
-    // persona stores a filename (relative to here) in its `tts.voice` field.
-    // Shared with PocketTTS — see `voices` below.
+    // Per-persona reference WAVs; a persona's `tts.voice` is a filename in here.
     voiceDir: VOICES_DIR,
-    // Global fallback reference WAV used when a persona has no voice set.
-    // Empty → use Chatterbox's built-in default voice.
+    // Fallback reference WAV when a persona has no voice. Empty → built-in voice.
     referenceWav: envStr('CHATTERBOX_REFERENCE_WAV', ''),
   },
-  // PocketTTS is opt-in alongside Chatterbox — build with
-  // `--build-arg WITH_POCKETTTS=1` (see docker/Dockerfile.controller) to
-  // create the venv + warm the model at these paths. pocketTts.isAvailable()
-  // does an existsSync on `python`, so an image built without the arg reports
-  // unavailable and the dispatcher falls back to Piper. The 100M-param model
-  // is small (~CPU-only) but the runtime drag of torch is the reason it's
-  // opt-in rather than baked into the default image.
+  // PocketTTS is opt-in the same way (`--build-arg WITH_POCKETTTS=1`); absent
+  // venv → unavailable, dispatcher falls back to Piper.
   pocketTts: {
     python: envStr('POCKET_TTS_PYTHON', '/opt/pocket-tts/venv/bin/python'),
     workerScript: envStr('POCKET_TTS_WORKER', '/app/scripts/pocket_tts_worker.py'),
-    // Built-in voice id. Settings layer constrains the UI to a curated list
-    // (POCKET_TTS_VOICES); anything else still passes through to the worker,
-    // which falls back to the default when an id isn't recognised.
+    // Built-in voice id; an unrecognised id falls back to the worker's default.
     defaultVoice: envStr('POCKET_TTS_VOICE', 'alba'),
-    // Shared with Chatterbox — see `voices` below. When a persona's voice
-    // value matches a .wav filename in here, the worker switches to
-    // reference-WAV cloning mode; built-in voice ids stay as-is.
+    // Shared with Chatterbox: a persona voice matching a .wav filename in here
+    // switches the worker to reference-WAV cloning.
     voiceDir: VOICES_DIR,
   },
-  // Shared reference-WAV folder for Chatterbox + PocketTTS zero-shot cloning.
-  // Operators drop .wav files into `dir`; both engines read it via
-  // listReferenceVoices(). `legacyDir` is the pre-#213 chatterbox-only path
-  // and is still scanned (with `dir` winning on filename clash) so existing
-  // installs don't need a manual move.
+  // Shared reference-WAV folder for zero-shot cloning. `legacyDir` (pre-#213) is
+  // still scanned, with `dir` winning on a filename clash.
   voices: {
     dir: VOICES_DIR,
     legacyDir: LEGACY_VOICES_DIR,
   },
-  // Optional sidecar that hosts Chatterbox + PocketTTS over HTTP. Set
-  // TTS_HEAVY_URL in the controller's environment and add the `tts-heavy`
-  // profile to compose to enable it. Both audio/chatterbox.ts and
-  // audio/pocketTts.ts prefer the sidecar when the URL is set, falling back
-  // to the in-process WITH_*=1 build path when it isn't. See
-  // docker/Dockerfile.tts-heavy + docker/tts-heavy/server.py for the service.
+  // Optional sidecar hosting Chatterbox + PocketTTS over HTTP (`tts-heavy`
+  // profile). Both engine modules prefer it when the URL is set, else the
+  // in-process WITH_*=1 build path.
   ttsHeavy: {
     url: envUrl('TTS_HEAVY_URL', ''),
-    // isAvailable() in remote mode caches the result of a /health probe and
-    // re-runs it on this interval so a sidecar that comes up after the
-    // controller is reflected without a restart, and one that goes down
-    // flips to unavailable within ~30s (dispatcher then falls back to Piper).
+    // isAvailable() caches a /health probe and re-runs it on this interval, so a
+    // sidecar coming up or going down is picked up without a restart.
     probeIntervalMs: envInt('TTS_HEAVY_PROBE_MS', 30_000),
-    // Per-request HTTP timeout. Inference itself is bounded by the engine
-    // modules' own request timeouts (CHATTERBOX_REQUEST_TIMEOUT_MS,
-    // POCKET_TTS_REQUEST_TIMEOUT_MS); this is the network/connect ceiling.
+    // Network/connect ceiling only — inference is bounded by the engine modules'
+    // own request timeouts.
     requestTimeoutMs: envInt('TTS_HEAVY_TIMEOUT_MS', 180_000),
   },
   icecast: {
     // Public status JSON — listener counts + per-mount metadata. No auth.
-    // Icecast lives inside the merged `broadcast` container; its hostname on
-    // the compose network is the service name.
     statusUrl: envUrl('ICECAST_STATUS_URL', 'http://broadcast:7702/status-json.xsl'),
-    // Admin listclients endpoint — per-connection detail (IP, user-agent,
-    // connected-for). Basic-auth gated; credentials resolved at call time from
-    // ICECAST_ADMIN_PASSWORD or state/icecast-secrets.env (see listeners.ts).
+    // Per-connection detail. Basic-auth gated; credentials resolved at call time
+    // from ICECAST_ADMIN_PASSWORD or state/icecast-secrets.env (listeners.ts).
     adminUrl: envUrl('ICECAST_ADMIN_URL', 'http://broadcast:7702/admin/listclients'),
     adminUser: envStr('ICECAST_ADMIN_USER', 'admin'),
   },
-  // Offline GeoIP database (MaxMind MMDB format) for the listener-country
-  // rollup. Empty = no lookup, which is the default: the DB is a licensed
-  // download nobody can ship, so the header chain stays the primary answer and
-  // this is the last, opt-in link in it. Env wins over settings.stream.geoipDbPath
-  // like every other config value here.
+  // Offline GeoIP DB (MaxMind MMDB) for the listener-country rollup — the last,
+  // opt-in link of the header chain. Empty = no lookup. Env wins over
+  // settings.stream.geoipDbPath.
   geoip: {
     dbPath: envStr('GEOIP_DB_PATH', ''),
   },
   liquidsoap: {
     queueFile: `${STATE_DIR}/next.txt`,
-    // Dedicated priority handoff for an operator-triggered jingle. Keeping it
-    // separate from next.txt lets Liquidsoap choose it before an already-filled
-    // FIFO dj_queue at the next safe boundary.
+    // Priority handoff for an operator-triggered jingle. Separate from next.txt so
+    // Liquidsoap can choose it before an already-filled dj_queue.
     jingleFile: `${STATE_DIR}/jingle-now.txt`,
     sayFile: `${STATE_DIR}/say.txt`,
-    // Separate channel for talk-over voice (auto-links, anything that should
-    // play OVER a track that's already started with light ducking instead of
-    // heavy ducking the music to 25%). Read by a second poll thread in radio.liq.
+    // Talk-over voice channel (auto-links): plays OVER a started track with LIGHT
+    // ducking, unlike sayFile's heavy duck. Read by its own poll in radio.liq.
     introFile: `${STATE_DIR}/intro.txt`,
-    // On-demand sound-effect channel. The controller writes the path of a
-    // pre-rendered SFX clip here; radio.liq's sfx_queue mixes it UNDER the
-    // DJ voice (see broadcast/sfx.js + broadcast/queue.js playSfx).
+    // On-demand SFX channel; radio.liq's sfx_queue mixes it UNDER the DJ voice.
     sfxFile: `${STATE_DIR}/sfx.txt`,
     autoPlaylist: `${STATE_DIR}/auto.m3u`,
     nowPlayingFile: `${STATE_DIR}/now-playing.json`,
-    // Written by radio.liq when a jingle starts feeding (issue #997). Jingles
-    // play outside the controller's voice serialiser, so airVoice reads this to
-    // hold spoken segments until the clip has cleared the air. TWO writers, one
-    // file: the rotate playlist's own on_metadata, and jingle_now_queue's, for a
-    // clip the controller pushed on demand (queue.playJingle). Both are queue/
-    // playlist hooks — NOT a branch of on_meta, which never sees either source.
-    // They stage through separate temp dirs — see radio.liq's jingle_now_tmp_dir.
-    // Both stamp `durationSec` (radio.liq's jingle_duration) so the collision
-    // guard can measure a clip in any container, not just RIFF.
+    // Written by radio.liq when a jingle starts (#997). Jingles play outside the
+    // voice serialiser, so airVoice reads this to hold spoken segments until the
+    // clip clears. TWO writers (rotate playlist + jingle_now_queue), both
+    // playlist/queue hooks rather than branches of on_meta; both stamp
+    // `durationSec` so the collision guard can measure any container.
     jinglePlayingFile: `${STATE_DIR}/jingle-playing.json`,
-    // Written by radio.liq when a track annotated `subwave_kind="bed"` starts
-    // (broadcast/beds.ts). A bed carries no title/artist, so on_meta skips
-    // now-playing.json for it and writes this instead — which is also how the
-    // controller learns to air the link OVER the bed rather than over the next
-    // song. Mirrors jinglePlayingFile; same {filename, startedAt} shape.
+    // Written by radio.liq when a `subwave_kind="bed"` track starts. A bed carries
+    // no title/artist, so on_meta writes this instead of now-playing.json — and it
+    // is how the controller learns to air the link OVER the bed.
     bedPlayingFile: `${STATE_DIR}/bed-playing.json`,
-    // Written by radio.liq the moment voice_queue/intro_queue starts a spoken
-    // clip: {voiceId, channel, filename, startedAt}. `voiceId` is the id the
-    // controller stamped into the clip's `annotate:` URI (airVoice), which is
-    // how a marker is matched back to the segment that produced it — and how
-    // the silent lead-in clip, which carries no id, is skipped. This is the
-    // ONLY signal that says "the words are on the stream now": everything else
-    // the controller knows about a segment is handoff-time (issue #1382).
+    // Written by radio.liq when voice_queue/intro_queue starts a spoken clip:
+    // {voiceId, channel, filename, startedAt}. `voiceId` matches the id airVoice
+    // stamped into the clip's `annotate:` URI (the silent lead-in carries none and
+    // is skipped). The ONLY signal that the words are on the stream (#1382).
     voicePlayingFile: `${STATE_DIR}/voice-playing.json`,
-    // Written by radio.liq's starve guard (#1300 bug 7): {starved, since, at},
-    // unix SECONDS. `at` is a heartbeat refreshed every tick WHILE starved, so
-    // the controller can tell a live outage from a marker left behind by a
-    // mixer that died mid-outage. Read via broadcast/music-starve.ts.
+    // radio.liq's starve guard (#1300 bug 7): {starved, since, at}, unix SECONDS.
+    // `at` is a heartbeat refreshed every tick while starved, so a stale marker is
+    // detectable. Read via broadcast/music-starve.ts.
     musicStarvedFile: `${STATE_DIR}/music-starved.json`,
-    // Written by docker/broadcast-entrypoint.sh and the AIO supervisor's
-    // render_icecast() on every icecast render (#1613), NOT by radio.liq:
-    // {count, source, proxies, dropped, at}. It records which trusted-proxy
-    // source won so the admin Listeners table can say WHY it is showing one
-    // repeated private address instead of real client IPs. Read via
-    // broadcast/trusted-proxies.ts; absent (an older broadcast image) is the
-    // unknown case and surfaces nothing.
+    // Written on every icecast render by docker/broadcast-entrypoint.sh and the AIO
+    // supervisor, NOT by radio.liq (#1613): {count, source, proxies, dropped, at}.
+    // Lets admin → Listeners say why it is showing the edge's address. Absent (an
+    // older broadcast image) is UNKNOWN and surfaces nothing.
     trustedProxiesFile: `${STATE_DIR}/trusted-proxies.json`,
   },
   session: {
-    // The live DJ session — a chat-history JSON the controller rewrites as
-    // tracks play and the DJ talks. Archived sessions land in `dir` on roll.
+    // The live DJ session (chat-history JSON); archived into `dir` on roll.
     currentFile: `${STATE_DIR}/session.json`,
     dir: `${STATE_DIR}/sessions`,
   },
   queue: {
-    // The playback queue (upcoming/current/history) snapshotted to disk so a
-    // controller restart doesn't lose tracks already handed to Liquidsoap.
+    // Playback queue snapshotted to disk so a restart doesn't lose tracks already
+    // handed to Liquidsoap.
     file: `${STATE_DIR}/queue.json`,
-    // Rolling 24h log of (id, artist, endedAt) for each track that aired.
-    // Read by the picker to block tracks/artists played in the last N hours —
-    // queue.history is capped at 50 (~3h) and only lives in-memory, which is
-    // why we keep a separate, longer-lived store.
+    // Rolling log of (id, artist, endedAt) per aired track, read by the picker's
+    // anti-repeat windows. queue.history is in-memory and capped at 50 (~3h),
+    // hence a separate longer-lived store.
     recentPlaysFile: `${STATE_DIR}/recent-plays.json`,
-    // Rolling play log cap. With a 3-min max-track cap the station can burn
-    // ~550 plays/day, so 300 entries barely spanned the 12h anti-repeat window
-    // (issue #874). 2500 keeps FOUR days populated at that churn — sized so the
-    // large-library recency boost (recencyWindowsForLibrary, up to 36h) and a
-    // maxed no-repeat window (clampNoRepeatWindow, up to 1000 distinct) are
-    // both honestly suppliable from the sidecar, with margin. ~300KB of JSON,
-    // rewritten once per play — negligible either way.
+    // Play-log cap. ~550 plays/day at the 3-min cap, so 2500 keeps four days —
+    // enough to honestly supply the 36h recency boost and a maxed no-repeat
+    // window. ~300KB of JSON, rewritten once per play.
     recentPlaysMax: 2500,
-    // Count-based hard no-repeat guard: neither pick path re-airs any of the
-    // last N DISTINCT plays. Unlike the time-window guard this is non-relaxable
-    // — it survives the filterPickerCandidates starvation cascade, closing the
-    // hole where a thin mood cluster let the cascade drop the recent-track guard
-    // and re-serve a just-played song. Clamped to library size at use so a small
-    // catalogue never fully blocks; 0 disables. Seeds the live, admin-tunable
+    // Count-based hard no-repeat guard: neither pick path re-airs any of the last
+    // N DISTINCT plays. Non-relaxable — it survives the filterPickerCandidates
+    // starvation cascade. Clamped to library size at use (37.5% ceiling), so a
+    // small catalogue never fully blocks; 0 disables. Seeds the admin-tunable
     // settings.llm.noRepeatWindow (env wins); listener requests stay exempt.
-    //
-    // 250 rather than 100 because 100 distinct blocked only ~6-8h of air, which
-    // a bubble of ~300 tracks satisfied forever. effectiveNoRepeatWindow's 37.5%
-    // ceiling still scales it DOWN on small libraries, so only catalogues that
-    // can absorb the memory carry it.
     noRepeatWindow: envInt('NO_REPEAT_WINDOW', 250, { min: 0 }),
   },
   curiosity: {
-    // Durable dedup ledger for the `curiosity` segment capability. Holds every
-    // "on this day" item surfaced to the agent and every curiosity line aired,
-    // so a controller restart no longer wipes the in-memory dedup set and
-    // re-airs the same fact (issue #577). Pruned to `maxAgeDays` on load.
+    // Durable dedup ledger for the `curiosity` capability, so a restart doesn't
+    // re-air the same fact (#577). Pruned to `maxAgeDays` on load.
     seenFile: `${STATE_DIR}/seen-curiosity.json`,
     maxAgeDays: 7,
-    // Hard cap on persisted entries — a belt to the 7-day prune.
+    // Hard cap on persisted entries, a belt to the 7-day prune.
     maxEntries: 400,
   },
   weather: {
-    // Punjab (Chandigarh) — your home location
     lat: 30.7333,
     lng: 76.7794,
     locationName: 'Punjab',
-    // Broader place the DJ names on air, mirrored from settings.weather. Blank
-    // falls back to locationName. Settings-layer config, not boot config —
-    // deliberately no env override, like the rest of this block.
+    // Broader place the DJ names on air, mirrored from settings.weather; blank
+    // falls back to locationName. Settings-layer, so no env override here.
     onAirLocation: '',
-    // 'metric' → Celsius, 'imperial' → Fahrenheit. Drives Open-Meteo's
-    // temperature_unit query param and what unit the DJ announces on air.
+    // Drives Open-Meteo's temperature_unit and what the DJ announces.
     units: 'metric' as 'metric' | 'imperial',
   },
   news: {
@@ -343,19 +240,14 @@ export const config = {
     // Tavily API key for the web-search skill. Blank → the skill stays inert.
     apiKey: envStr('SEARCH_API_KEY', ''),
   },
-  // Community catalog (skills / personas / shows / stations) fetched live from
-  // the `community` repo — see community/registry.ts. Default is raw GitHub
-  // (Fastly-fronted, ~5-min cache, no build step — reliable and fresh). Override
-  // with COMMUNITY_CATALOG_URL to point at a fork, a self-hosted mirror, or the
-  // jsDelivr CDN (`https://cdn.jsdelivr.net/gh/getsubwave/community@main/catalog.json`).
+  // Community catalog (skills / personas / shows / stations), fetched live — see
+  // community/registry.ts. Override to point at a fork, mirror or CDN.
   community: {
     catalogUrl: envUrl(
       'COMMUNITY_CATALOG_URL',
       'https://raw.githubusercontent.com/getsubwave/community/main/catalog.json',
     ),
-    // In-memory TTL before a browse triggers a refetch. 30 min mirrors the
-    // weather / web-search memos; a manual refresh (POST /community/refresh)
-    // busts it immediately.
+    // In-memory TTL before a browse refetches; POST /community/refresh busts it.
     ttlMs: envInt('COMMUNITY_CATALOG_TTL_MS', 30 * 60 * 1000),
   },
   server: {
@@ -365,9 +257,7 @@ export const config = {
     autoQueueRefreshMinutes: envInt('AUTO_QUEUE_REFRESH_MINUTES', 60),
   },
   tts: {
-    // Speech-rate multiplier for the cloud engine (OpenAI / ElevenLabs).
-    // 1.0 = normal, lower = slower. speech.js clamps it to each provider's
-    // supported range before the request.
+    // Cloud-engine speech rate; speech.js clamps it to each provider's range.
     cloudSpeed: envFloat('CLOUD_TTS_SPEED', TTS_SPEED, { min: 0.1 }),
   },
 };

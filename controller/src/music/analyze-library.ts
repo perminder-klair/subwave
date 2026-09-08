@@ -1,29 +1,15 @@
-// Standalone acoustic-analysis CLI — `npm run analyze [-- --limit N]`.
+// Standalone acoustic-analysis CLI — `npm run analyze`. Runs the analysis pass
+// (bpm / key / intro) alone; the same pass is the final phase of `npm run tag`.
+// With no analyzer backend the pass is a no-op.
 //
-// Runs ONLY the analysis pass (bpm / key / intro), independent of mood
-// tagging. The same pass also runs as a final phase of `npm run tag`
-// (music/tag-library.ts); this entry point is for re-running analysis without
-// re-tagging, or for an operator who wants to analyse before tagging.
-//
-// Flags:
-//   --limit N      cap tracks analysed this run (default: all that need it)
+//   --limit N      cap tracks analysed this run
 //   --re-analyze   drop existing analysis and redo everything
-//   --walk         force a Navidrome metadata refresh before analysing
-//   --skip-walk    never walk Navidrome, even on an empty catalogue
-//   --audio        also re-target already-analysed tracks that lack a CLAP
-//                  audio vector (backfill embeddings without a full re-analyze).
-//                  Implied when ANALYZE_AUDIO_EMBEDDING is set.
-//   --vocal        also re-target tracks missing Demucs vocal-activity ranges
-//                  (vocal_ranges_json IS NULL). Implied when ANALYZE_VOCAL_ACTIVITY
-//                  / settings.audio.vocalActivity is on.
+//   --walk         force a Navidrome metadata refresh first
+//   --skip-walk    never walk, even on an empty catalogue (wins over --walk)
+//   --audio        backfill CLAP vectors on analysed tracks (implied by ANALYZE_AUDIO_EMBEDDING)
+//   --vocal        backfill Demucs vocal ranges (implied by ANALYZE_VOCAL_ACTIVITY)
 //
-// Walk policy: by default the metadata walk runs ONLY when the catalogue is
-// empty (first-run bootstrap) — the ~11.5 min walk over a populated DB is the
-// dominant cost and almost always redundant. Pass --walk to force a refresh;
-// --skip-walk hard-disables it (and wins over --walk).
-//
-// The heavy DSP lives in music/analyzer.ts's backend (tts-heavy sidecar or a
-// local librosa venv via ANALYZE_PYTHON). With no backend the pass is a no-op.
+// The walk otherwise runs only on an empty catalogue (first-run bootstrap).
 
 import * as subsonic from './subsonic.js';
 import * as db from './library-db.js';
@@ -39,10 +25,8 @@ import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
 
 const logEvent = makeEventLogger('analyze');
 
-// Close (and TRUNCATE-checkpoint) the library DB on every exit path. The
-// analysis pass is the biggest bulk writer in the system — fat *_json blobs
-// per track — and exiting without a close is exactly what left a 730MB WAL
-// sidecar behind in #786. db.close() is synchronous, so an 'exit' hook is safe.
+// TRUNCATE-checkpoint the library DB on every exit path, else this bulk writer
+// leaves a huge WAL sidecar (#786). db.close() is synchronous, so 'exit' is safe.
 process.on('exit', () => {
   try { if (db.isOpen()) db.close(); } catch { /* best-effort */ }
 });
@@ -76,9 +60,8 @@ async function applyWizardOverlay() {
 async function main() {
   const args = process.argv.slice(2);
 
-  // Belt-and-braces single-flight — a controller-spawned run is a no-op here
-  // (MANAGED_ENV set, the controller holds the pidfile); a manual `npm run
-  // analyze` claims the lock and refuses if another live run holds it.
+  // Single-flight: a controller-spawned run already holds the pidfile, so this
+  // is a no-op there; a manual run claims the lock or refuses.
   let ownsLock = false;
   try {
     ownsLock = acquireStandaloneLock('analyze', args);
@@ -100,8 +83,8 @@ async function main() {
   await applyWizardOverlay();
   await settings.load();
   const embeddingDim = embeddings.resolveEmbeddingDim();
-  // adoptStoredDim:true so an embedding model/dim swap doesn't block acoustic
-  // analysis (which doesn't touch vectors) — see music/library.ts (#319).
+  // adoptStoredDim so an embedding dim swap can't block analysis, which never
+  // touches vectors (#319).
   await db.open({ embeddingDim, adoptStoredDim: true });
 
   // Walk only when forced, or when the catalogue is empty (bootstrap).
@@ -131,9 +114,8 @@ async function main() {
         title: song.title,
         artist: song.artist,
         album: song.album,
-        // Same ids the tagger's walk records — this walk writes the
-        // same rows, so it must not leave them NULL on a catalogue that only
-        // ever runs the analyzer's pass.
+        // Same ids the tagger's walk records; must not be NULL on an
+        // analyzer-only catalogue.
         albumId: song.albumId ?? null,
         artistId: song.artistId ?? null,
         year: song.year,
@@ -149,9 +131,7 @@ async function main() {
     }
     logEvent('info', `Scanned ${walked.toLocaleString('en-GB')} tracks`);
 
-    // Reconcile: drop rows for tracks no longer in Navidrome so the analysis
-    // scope reflects the live catalogue, not orphans from past full rescans.
-    // Guarded on a non-empty walk (a complete, authoritative pass).
+    // Only a complete walk is authoritative, hence the non-empty guard.
     if (walked > 0) {
       const pruned = db.pruneMissingTracks(liveIds);
       if (pruned > 0) {

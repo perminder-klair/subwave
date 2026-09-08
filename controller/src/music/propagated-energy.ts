@@ -1,25 +1,7 @@
-// Correct PROPAGATED energy values from the audio the analyzer actually heard.
-//
-// tracks.energy normally comes from the LLM tagger reading a track's TEXT
-// metadata — genre, Last.fm tags, lyrics. When a track's metadata is too thin
-// for a judgement, the tagger instead inherits a value from the track's
-// embedding neighbours and stamps source = 'propagated' (music/tag-library.ts
-// phase 3). On a real 11k library that is 41% of the catalogue, and those rows
-// are guesses built on guesses: issue #1362's example is a big-beat dance track
-// mislabelled genre "Soundtrack", propagated to energy 'low' + moods
-// [calm, night], which then satisfied the strict energy lock on an overnight
-// ambient show and aired there.
-//
-// Meanwhile the analyzer had already scored that same track against the mood
-// vocabulary from its AUDIO — and got it right. That signal was sitting in
-// tracks.audio_mood_scores_json, read by nothing on any playback path.
-//
-// This pass closes that gap for energy specifically, and only where the audio
-// is DECISIVE (see audio-calibration.audioEnergy — it returns null for the
-// ambiguous middle rather than bucketing it). Moods are deliberately NOT
-// corrected the same way: the label list needed its own calibration first, and
-// even calibrated, a mood is an editorial judgement in a way an arousal axis
-// is not.
+// Correct PROPAGATED energy values from the audio the analyzer heard (#1362).
+// A propagated energy is inherited from embedding neighbours, so this overrules
+// it where the audio is DECISIVE (audioEnergy returns null for the ambiguous
+// middle). Moods are not corrected the same way: a mood is editorial.
 
 import * as db from './library-db.js';
 import { audioEnergy, computeBaselines, prunedBaselines } from './audio-calibration.js';
@@ -35,13 +17,8 @@ export interface PropagatedEnergyStats {
   skipped: string | null;
 }
 
-// Re-derive energy for every propagated track the audio can speak to.
-//
-// Only `energy` is written — source stays 'propagated' and the moods stay as
-// propagation left them, so the row keeps reporting honestly that its MOODS are
-// inherited even once its energy is measured. Nothing here touches a row whose
-// source is 'llm' / 'manual' / 'uncertain-llm': those are real per-track
-// judgements about this track and are not this pass's business.
+// Writes `energy` ONLY: source and moods stay as propagation left them, so the row
+// keeps reporting inherited moods. 'llm'/'manual'/'uncertain-llm' are never touched.
 export function runPropagatedEnergyPass(): PropagatedEnergyStats {
   const empty = { scope: 0, corrected: 0, agreed: 0, undecided: 0 };
 
@@ -50,15 +27,9 @@ export function runPropagatedEnergyPass(): PropagatedEnergyStats {
     return { ...empty, skipped: 'no propagated tracks with audio scores' };
   }
 
-  // Baselines come from the WHOLE library, not just the propagated subset —
-  // the question is "is this track high-arousal for this library", and a
-  // distribution built only from the tracks the tagger found hardest to read
-  // would be a biased yardstick.
-  //
-  // Pruned per mood before use: a mood scored on too few tracks carries a
-  // near-degenerate sd, and one of those on either arousal list would swing the
-  // whole axis on float noise. Dropping it costs a term; keeping it costs
-  // correctness.
+  // Baselines come from the WHOLE library, never the propagated subset (that
+  // would be a biased yardstick). Pruned per mood: too few scores gives a
+  // near-degenerate sd that swings the axis on noise.
   const baselines = prunedBaselines(
     computeBaselines(
       (function* () {

@@ -1,14 +1,5 @@
 // Per-show full rotation (#1612) — "play every track in the anchor playlist
 // once before repeating".
-//
-// The policy is one function, music/show-recency.showNoRepeatGuard, because
-// the agent path and the pool picker must not be able to disagree about how
-// wide the hard window is. The tests below therefore cover three things:
-//   * the arithmetic, including the two headroom slots and why they exist;
-//   * that the switch off is byte-identical to the shipped behaviour;
-//   * a ROTATION SIMULATION driving the real queue.recentlyPlayedByCount
-//     semantics, which is the only way to show that "40 distinct before a
-//     repeat" is actually what the number produces on air.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -44,9 +35,6 @@ const guard = (show: Record<string, unknown>, playlistTracks: Track[] | null, ex
     ...extra,
   });
 
-// ---------------------------------------------------------------------------
-// The switch OFF must be byte-identical to today.
-// ---------------------------------------------------------------------------
 
 test('absent and false are the shipped behaviour, unchanged', () => {
   const tracks = makeTracks(400);
@@ -75,7 +63,6 @@ test('the switch is inert without a resolved strict anchor', () => {
   const tracks = makeTracks(400);
   // A SOFT anchor can leave the playlist, so the universe is the library again
   // and there is no set for "every track once" to be true of. Documented as a
-  // no-op rather than a validation error (schemas/show.ts).
   assert.deepEqual(
     guard({ playlistStrict: false, playlistExhaust: true }, tracks),
     { window: CONFIGURED, exhaustive: false },
@@ -90,9 +77,6 @@ test('the switch is inert without a resolved strict anchor', () => {
   );
 });
 
-// ---------------------------------------------------------------------------
-// The arithmetic.
-// ---------------------------------------------------------------------------
 
 test('the window is the rotation size less two, and both slots are load-bearing', () => {
   // queue.recentlyPlayedByCount(n) blocks the ON-AIR track on top of the n
@@ -119,9 +103,6 @@ test('the library-fraction ceiling and the minimum-effective floor do not apply'
   // Both exist to tame a number the operator TYPED against a catalogue it was
   // never measured on. Clamping a window derived from its own universe to
   // 37.5% of that same universe would just refuse the feature.
-  //
-  // Without the bypass a 40-track playlist would clamp to floor(40 * 0.375) =
-  // 15, and a 20-track one would fall under NO_REPEAT_MIN_EFFECTIVE and read 0.
   assert.equal(guard({ playlistStrict: true, playlistExhaust: true }, makeTracks(40)).window, 38);
   assert.equal(guard({ playlistStrict: true, playlistExhaust: true }, makeTracks(20)).window, 18);
   // And a playlist far wider than the configured window is not capped at it:
@@ -132,20 +113,15 @@ test('the library-fraction ceiling and the minimum-effective floor do not apply'
 test('a playlist growing mid-show widens the rotation on the next pick', () => {
   // Nothing is cached: the window is recomputed per pick off the resolved
   // pool, which is what makes "it silently stops being right the moment the
-  // playlist grows" stop being true.
   const show = { playlistStrict: true, playlistExhaust: true };
   assert.equal(guard(show, makeTracks(40)).window, 38);
   assert.equal(guard(show, makeTracks(41)).window, 39, 'one track added in Navidrome, one wider window');
 });
 
-// ---------------------------------------------------------------------------
-// The universe is what can AIR, not what the playlist lists.
-// ---------------------------------------------------------------------------
 
 test('strict music filters narrow the rotation before it is counted', () => {
   // 40 tracks, 25 of them Jazz. A strict Jazz show rotates 25, not 40 — sizing
   // the window against the raw playlist would withhold tracks the show was
-  // never going to play, and the rotation would run out early.
   const tracks = makeTracks(40, { genre: (i) => (i < 25 ? 'Jazz' : 'Rock') });
   assert.deepEqual(
     guard({ playlistStrict: true, playlistExhaust: true, filtersStrict: true, genres: ['Jazz'] }, tracks),
@@ -175,7 +151,6 @@ test('excluded playlists and duplicate rips narrow it too', () => {
   );
   // Two ids, one audible song: it consumes ONE slot in the real rotation, so
   // counting the rows would size the window against a rotation that does not
-  // exist and leave the pool empty for half of it.
   const rips = tracks.slice(0, 20).flatMap((t) => [t, { ...t, id: `${t.id}-alt` }]);
   assert.equal(
     guard({ playlistStrict: true, playlistExhaust: true }, rips).window,
@@ -188,8 +163,6 @@ test('the minimum-track-length floor is subtracted from the rotation', () => {
   // #1573's floor is HARD in the agent's discovery tools, so a playlist's
   // 40-second interludes are not part of the rotation. Counting them would
   // size the window against 40 while only 34 tracks can ever air — which,
-  // under an exhaustive window, is the difference between one eligible track
-  // and none at all.
   const tracks = makeTracks(40, { durationSec: (i) => (i < 6 ? 35 : 240) });
   assert.equal(
     guard({ playlistStrict: true, playlistExhaust: true }, tracks, { minTrackSec: 60 }).window,
@@ -204,9 +177,6 @@ test('the minimum-track-length floor is subtracted from the rotation', () => {
   assert.equal(guard({ playlistStrict: true, playlistExhaust: true }, tracks).window, 38);
 });
 
-// ---------------------------------------------------------------------------
-// Never-starve.
-// ---------------------------------------------------------------------------
 
 test('a playlist too small to rotate switches the guard off rather than risking a gap', () => {
   for (const size of [0, 1, 2]) {
@@ -218,14 +188,12 @@ test('a playlist too small to rotate switches the guard off rather than risking 
   }
   // And it must not silently fall back to the CONFIGURED window either: 100
   // was measured against the library, not against two tracks, and applying it
-  // here would reintroduce the very guard the headroom just refused.
   assert.equal(guard({ playlistStrict: true, playlistExhaust: true }, makeTracks(2)).window, 0);
 });
 
 test('a filter that empties the playlist leaves the relaxable cascade in charge', () => {
   // A strict show whose genre matches nothing in its own anchor. applyStrictLocks
   // never-starves per dimension, so this reaches the count as the whole
-  // playlist; the sharper case is the floor, which is hard.
   const tracks = makeTracks(40, { durationSec: () => 30 });
   assert.deepEqual(
     guard({ playlistStrict: true, playlistExhaust: true }, tracks, { minTrackSec: 600 }),
@@ -234,15 +202,10 @@ test('a filter that empties the playlist leaves the relaxable cascade in charge'
   );
 });
 
-// ---------------------------------------------------------------------------
-// The rotation, driven the way the queue really drives it.
-// ---------------------------------------------------------------------------
 
 // A faithful stand-in for queue.recentlyPlayedByCount(n): the last n DISTINCT
 // ended plays, plus the track currently on air — which is not in the sidecar,
 // because a play is appended when it ENDS. That "plus one" is one of the two
-// headroom slots, so a simulation that skipped it would pass on a window that
-// empties the pool on air.
 function blockedSet(endedNewestFirst: string[], onAir: string | null, n: number): Set<string> {
   const blocked = new Set<string>();
   if (onAir) blocked.add(onAir);
@@ -274,7 +237,6 @@ test('a 40-track anchor plays 40 distinct tracks before any repeat', () => {
     const eligible = tracks.filter((t) => !blocked.has(t.id));
     assert.ok(eligible.length > 0, `pick ${pick + 1}: the rotation must never leave an empty pool`);
     // The oldest eligible track — the pool's freshness ordering picks this one
-    // once the rotation is warm, and once only one survives there is no choice.
     const chosen = eligible[0];
     if (onAir) ended.unshift(onAir);
     onAir = chosen.id;
@@ -288,8 +250,6 @@ test('a 40-track anchor plays 40 distinct tracks before any repeat', () => {
 test('the same show with the switch off repeats inside those 40', () => {
   // The counterfactual: without the switch a 40-track anchor clamps to
   // floor(40 * 0.375) = 15, so track 16 is free to come round again. This is
-  // what the operator was asking to be rid of, and pinning it keeps the two
-  // sides of the switch from quietly converging.
   const tracks = makeTracks(40);
   const show = { playlistStrict: true };
   const ended: string[] = [];
@@ -310,8 +270,6 @@ test('the same show with the switch off repeats inside those 40', () => {
 
 // ---------------------------------------------------------------------------
 // Wiring. The policy only reaches the air if both paths ask it, and the pool
-// picker's show-playlist source has to be able to FIND the one eligible track.
-// ---------------------------------------------------------------------------
 
 test('both pick paths resolve the floor before they size the window', () => {
   // The floor thins the rotation the window is counted against, so a call site
@@ -332,8 +290,6 @@ test('the pool picker prunes hard-blocked tracks before capping its playlist sou
   // CAP_SHOW_PLAYLIST_STRICT is 24. Under an exhaustive window all but one of
   // a 40-track anchor is hard-blocked, so an un-pruned random sample of 24
   // misses the only eligible track ~40% of the time and the strict show falls
-  // out to its never-starve for no reason a log could explain. The agent path
-  // needs nothing — collect() filters before it caps.
   const source = readFileSync(new URL('../src/music/picker.ts', import.meta.url), 'utf8');
   assert.match(source, /function sampleShowSource\([\s\S]{0,400}hardRecent/,
     'sampleShowSource must be able to prune the hard-recent set');
@@ -344,7 +300,6 @@ test('the pool picker prunes hard-blocked tracks before capping its playlist sou
 test('the resolved show shape carries the switch to the pick paths', () => {
   // resolveShowShape is an explicit allowlist and is what every pick path
   // actually reads. A field missing there is a switch that saves, renders and
-  // does nothing — the #779 blocklist no-op.
   const source = readFileSync(new URL('../src/settings/persona.ts', import.meta.url), 'utf8');
   assert.match(source, /playlistExhaust: show\.playlistExhaust === true/,
     'resolveShowShape must carry playlistExhaust');
@@ -353,7 +308,6 @@ test('the resolved show shape carries the switch to the pick paths', () => {
 test('the schema states which way the playlistStrict dependency was decided', () => {
   // The issue asked for the choice to be recorded where the shape is defined,
   // because a hand-edited settings.json reaches the schema without ever seeing
-  // the editor that hides the switch.
   const source = readFileSync(new URL('../src/schemas/show.ts', import.meta.url), 'utf8');
   assert.match(source, /playlistExhaust: showBool\(\)/,
     'playlistExhaust must be a show boolean beside playlistStrict');

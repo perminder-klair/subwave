@@ -4,18 +4,16 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import { useInterval } from 'usehooks-ts';
 import { isIOSDevice } from './platform';
 
-// SSR-safe iOS flag: false on the server and the first client render (so the
-// markup agrees and hydration stays clean), then the real value after mount.
-// Lets components branch UI that can't work on iOS (issue #298) safely.
+// SSR-safe iOS flag: false on the server and first client render, real value
+// after mount. For branching UI that can't work on iOS (issue #298).
 export function useIsIOS(): boolean {
   const [ios, setIos] = useState(false);
   useEffect(() => { setIos(isIOSDevice()); }, []);
   return ios;
 }
 
-// Null until mount, for the same SSR reason as useIsIOS: the server has no
-// clock the client would agree with. The first tick lands on mount, then
-// useInterval owns the cadence (and its own cleanup).
+// Null until mount, same SSR reason as useIsIOS. First tick on mount, then
+// useInterval owns the cadence.
 export function useClock(): Date | null {
   const [t, setT] = useState<Date | null>(null);
   useEffect(() => { setT(new Date()); }, []);
@@ -43,12 +41,9 @@ interface ElementAudioGraph {
 }
 
 // One Web Audio graph per media element, for the lifetime of the page.
-// createMediaElementSource permanently captures the element's output (a second
-// call throws, and tearing the graph down would mute playback), and skins mount
-// and unmount visualisers against the same shared <audio>, so a later hook
-// instance must REUSE the first one's graph. Otherwise every visualiser after a
-// skin switch falls back to the pseudo-random walk, and each remount leaks a
-// fresh AudioContext on the failed re-capture.
+// createMediaElementSource captures the element permanently — a second call
+// throws and a teardown mutes playback — so a later hook instance must reuse
+// the first graph rather than re-capture the shared <audio>.
 const ELEMENT_GRAPHS = new WeakMap<HTMLMediaElement, ElementAudioGraph>();
 
 /** Existing graph for the element, or a freshly built one. Returns null when
@@ -64,12 +59,10 @@ function getOrCreateElementGraph(audioEl: HTMLMediaElement): ElementAudioGraph |
   try {
     const source = ctx.createMediaElementSource(audioEl);
     const analyser = ctx.createAnalyser();
-    // 4096-point FFT (2048 bins). The Waveform's log-frequency sweep needs
-    // low-end resolution: at 1024 the bins were ~47 Hz wide, so the bottom
-    // octave read one bin and moved as a single block.
+    // 4096-point FFT (2048 bins): the log-frequency sweep needs low-end
+    // resolution; at 1024 the bottom octave collapses into one ~47 Hz bin.
     analyser.fftSize = 4096;
-    // Light smoothing only: 0.78 stacked on the spans' 60ms CSS transitions
-    // left bars trailing the beat by ~100ms. This is the only smoothing layer.
+    // Only smoothing layer; higher values trail the beat against the CSS transitions.
     analyser.smoothingTimeConstant = 0.7;
     source.connect(analyser);
     analyser.connect(ctx.destination);
@@ -77,20 +70,16 @@ function getOrCreateElementGraph(audioEl: HTMLMediaElement): ElementAudioGraph |
     ELEMENT_GRAPHS.set(audioEl, graph);
     return graph;
   } catch (err) {
-    // Capture failed (element claimed outside this hook). Don't leave an idle
-    // AudioContext behind on every attempt.
+    // Capture failed (element claimed elsewhere); don't leak an idle AudioContext.
     void ctx.close().catch(() => {});
     throw err;
   }
 }
 
 // Wires an AnalyserNode to the <audio> ref the first time `active` flips true.
-// If CORS or anything else blocks attachment, `ready` stays false and `read()`
-// returns null, and the Waveform falls back to its pseudo-random walk.
-//
-// iOS is opted out entirely: createMediaElementSource on a live MP3 stream only
-// ever yields zeros there, and routing the element through Web Audio
-// jeopardises lock-screen / background playback (issue #298).
+// On failure `ready` stays false and `read()` returns null, so the Waveform
+// falls back to its pseudo-random walk. iOS opts out entirely: the graph only
+// yields zeros and routing through Web Audio breaks background playback (#298).
 export function useAnalyser(
   audioRef: RefObject<HTMLAudioElement | null> | null | undefined,
   active: boolean,
@@ -100,8 +89,7 @@ export function useAnalyser(
   const probedRef = useRef(false);
   const [ready, setReadyState] = useState(false);
   const [sampleRate, setSampleRate] = useState<number | null>(null);
-  // In a ref so `read`'s identity never changes, and the caller's rAF effect
-  // doesn't tear down and restart on every render.
+  // In a ref so `read`'s identity never changes and the caller's rAF effect holds.
   const readyRef = useRef(false);
   const setReady = useCallback((v: boolean) => {
     readyRef.current = v;
@@ -127,9 +115,8 @@ export function useAnalyser(
         if (cancelled) return;
         setReady(true);
 
-        // Some non-iOS WebKit builds (desktop Safari on a live MP3 mount) wire
-        // the graph up but only ever return zeros. Probe once after playback
-        // starts; no samples in ~600ms means fall back.
+        // Some non-iOS WebKit builds wire the graph up but return only zeros.
+        // Probe once after playback starts; no samples in ~600ms means fall back.
         if (probedRef.current) return;
         onPlaying = () => {
           if (probedRef.current || cancelled) return;
@@ -154,9 +141,8 @@ export function useAnalyser(
               if (probeInterval) clearInterval(probeInterval);
               probeInterval = null;
               if (max === 0) {
-                // No usable data. Fall back, but DON'T disconnect: the source
-                // feeds the speakers through this graph, so tearing it down
-                // mutes playback. An idle analyser in the chain is transparent.
+                // Fall back but never disconnect: the source feeds the speakers
+                // through this graph, so tearing it down mutes playback.
                 setReady(false);
               }
             }

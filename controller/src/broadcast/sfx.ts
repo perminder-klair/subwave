@@ -1,13 +1,7 @@
-// Sound-effects library — short pre-rendered stingers the segment-director
-// agent (skills/_agent.js) can play UNDERNEATH its voice via the sfx_queue in
-// liquidsoap/radio.liq.
-//
-// Mirrors broadcast/jingles.js: audio files on disk plus a JSON sidecar, with
-// admin CRUD on top. Files live at <stateDir>/sfx/<name>.mp3; the sidecar
-// <stateDir>/sfx.json maps name → { name, description, prompt, durationSec,
-// file, builtin, createdAt }. Unlike jingles there is no .m3u — Liquidsoap
-// plays an effect on demand (controller writes its path to sfx.txt), it does
-// not rotate them on a playlist.
+// Short stingers the segment-director agent plays under its voice via the
+// sfx_queue. Files at <stateDir>/sfx/<name>.mp3, sidecar at <stateDir>/sfx.json
+// (name → { name, description, prompt, durationSec, file, builtin, createdAt }).
+// No .m3u unlike jingles: effects play on demand via sfx.txt, never rotate.
 
 import { readFile, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
@@ -17,21 +11,17 @@ import { transcodeAudio, hasFfmpeg, extOf, isAcceptedAudio, probeDurationSec } f
 import { writeFileAtomic } from '../util/atomic-file.js';
 import { slugify } from '../util/slug.js';
 
-// Hard ceiling on any effect's length, generated or uploaded. Effects are
-// stingers that ride under a voice line or a crossfade, not beds — Liquidsoap
-// mixes them at 0.7 gain with only a light music duck, so a long clip keeps
-// droning over the programme after the voice has finished. The figure lives in
-// the shared imaging schema so the admin form's duration input and this module
-// can't disagree (they did: the input offered up to 22s).
+// Hard ceiling on any effect, generated or uploaded: Liquidsoap mixes these at
+// 0.7 gain with only a light duck, so a long clip drones on past the voice.
+// Held in the shared imaging schema so the admin form can't disagree with this.
 export const MAX_DURATION_SEC = SFX_MAX_SEC;
 
 const DIR = `${STATE_DIR}/sfx`;
 const META = `${STATE_DIR}/sfx.json`;
-// Repo-bundled default effects, rendered once and committed (sounds/sfx/).
-// ensureDefaults() copies these in so a fresh boot needs no ElevenLabs key.
+// Repo-bundled defaults, copied in by ensureDefaults() so a fresh boot needs
+// no ElevenLabs key.
 const BUNDLE_DIR = `${SOUNDS_DIR}/sfx`;
 
-// Built-in starter set — rendered on first boot when ElevenLabs is configured.
 const DEFAULT_SFX = [
   {
     name: 'record-scratch',
@@ -80,7 +70,7 @@ async function loadMeta(): Promise<any> {
 }
 
 async function saveMeta(meta: any) {
-  // Atomic: playSfx's getPath can read this concurrently with an admin save.
+  // Atomic: getPath can read this concurrently with an admin save.
   await writeFileAtomic(META, JSON.stringify(meta, null, 2));
 }
 
@@ -88,7 +78,6 @@ async function statOrNull(p: string) {
   try { return await stat(p); } catch { return null; }
 }
 
-// Returns the listed effects with file existence verified.
 export async function list() {
   const meta = await loadMeta();
   const out: any[] = [];
@@ -106,7 +95,6 @@ export async function list() {
       size: s.size,
     });
   }
-  // Built-ins last so operator-created effects appear on top.
   out.sort((a: any, b: any) => {
     if (a.builtin !== b.builtin) return a.builtin ? 1 : -1;
     return (a.name || '').localeCompare(b.name || '');
@@ -114,14 +102,12 @@ export async function list() {
   return out;
 }
 
-// The slim view the segment agent reads to decide whether (and which) effect
-// fits a line. Duration rides along so the prompt can show it — a name and
-// description alone hide how long a clip will sit under the voice.
+// The slim view the segment agent reads. Duration rides along so the prompt can
+// show how long a clip will sit under the voice.
 export async function catalog() {
   return (await list()).map((s: any) => ({ name: s.name, description: s.description, durationSec: s.durationSec }));
 }
 
-// Absolute path to an effect's audio file, or null if unknown / missing.
 export async function getPath(name: string) {
   const meta = await loadMeta();
   const info = meta.items[name];
@@ -140,16 +126,14 @@ export async function create({ name, description, prompt, durationSec, builtin =
   }
   await mkdir(DIR, { recursive: true });
 
-  // Same guard as importAudio: regenerating into an existing name would
-  // silently clobber its audio — and flip a built-in to deletable, since
-  // `builtin` defaults false here. Delete first, then create.
+  // Same guard as importAudio: regenerating into an existing name would clobber
+  // its audio and flip a built-in to deletable (`builtin` defaults false here).
   const meta = await loadMeta();
   if (meta.items[slug]) throw new Error(`a sound effect named "${slug}" already exists`);
 
   const file = `${slug}.mp3`;
   await generateSfx(prompt, { durationSec: requestedSec ?? undefined, outPath: `${DIR}/${file}` });
-  // ElevenLabs picks its own length when none was requested — record what it
-  // actually rendered so the agent-facing catalogue shows real numbers.
+  // ElevenLabs picks its own length when none was requested; record the real one.
   const measured = await probeDurationSec(`${DIR}/${file}`);
 
   meta.items[slug] = {
@@ -165,11 +149,9 @@ export async function create({ name, description, prompt, durationSec, builtin =
   return meta.items[slug];
 }
 
-// Import an operator-supplied audio file as a sound effect. Transcoded to MP3
-// (matching generated effects) when ffmpeg is available, otherwise stored as-is
-// with its original extension. No loudnorm — effects are short and a one-pass
-// loudness pass on a transient is unreliable; the broadcast limiter catches
-// peaks. Rejects a name that already exists so a built-in can't be clobbered.
+// Transcoded to MP3 when ffmpeg is available, otherwise stored as-is. No
+// loudnorm: a one-pass loudness pass on a short transient is unreliable and the
+// broadcast limiter catches peaks. Rejects an existing name.
 export async function importAudio(
   buffer: Buffer,
   { name, description = '', originalName = '' }: { name: string; description?: string; originalName?: string },
@@ -194,9 +176,7 @@ export async function importAudio(
     await writeFile(`${DIR}/${file}`, buffer);
   }
 
-  // Length gate — a 3-minute "effect" would drone under the programme long
-  // after the voice line ends. Unknown duration (no ffprobe on a bare-host
-  // dev box) is accepted rather than blocking the feature there.
+  // Length gate. Unknown duration (no ffprobe) is accepted rather than blocking.
   const measured = await probeDurationSec(`${DIR}/${file}`);
   if (measured && measured > MAX_DURATION_SEC) {
     await unlink(`${DIR}/${file}`).catch(() => {});
@@ -229,10 +209,8 @@ export async function remove(name) {
   return { ok: true };
 }
 
-// Install one built-in effect into state/sfx/ + the sidecar. Prefers the
-// repo-bundled audio (sounds/sfx/<name>.mp3) — a plain copy, no API call;
-// falls back to ElevenLabs generation only when no bundled file exists.
-// Returns true if the effect ended up installed.
+// Prefers the repo-bundled audio (a plain copy, no API call), falling back to
+// ElevenLabs generation only when no bundled file exists.
 async function installDefault(def, meta) {
   const file = `${def.name}.mp3`;
   const bundled = `${BUNDLE_DIR}/${file}`;
@@ -259,10 +237,8 @@ async function installDefault(def, meta) {
   return true;
 }
 
-// Called from server.js startup. Installs any missing built-in effects,
-// preferring the repo-bundled audio so a fresh boot needs no ElevenLabs key.
-// When neither a bundled file nor a key is available the library stays empty
-// and the feature is invisible to the agent. Idempotent.
+// Called from server.js startup; idempotent. With neither a bundled file nor a
+// key the library stays empty and the feature is invisible to the agent.
 export async function ensureDefaults() {
   await mkdir(DIR, { recursive: true });
   const meta = await loadMeta();

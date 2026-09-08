@@ -21,12 +21,9 @@ import type {
 import type { SettingsResponse } from './types';
 
 // The tagging/analysis half of the library page: the slow /settings poll and
-// every operator action the Tagging panel fires.
-//
-// The tagger snapshot's fast loop, and the coverage read it paces, live in
-// LibraryContext, since the tagger snapshot sets the coverage cadence and
-// Search reads coverage too. This slow loop never touches tagger state, which
-// is what keeps the two from racing.
+// every operator action the Tagging panel fires. The tagger snapshot's fast
+// loop and the coverage read it paces live in LibraryContext; this loop never
+// touches tagger state, so the two cannot race.
 
 // POST /settings with one nested block, the shape all four toggles share.
 async function postAudioSetting(
@@ -39,8 +36,7 @@ async function postAudioSetting(
   });
 }
 
-// POST a tagger/analysis start. They differ only in path, body and the message
-// their failure carries.
+// POST a tagger/analysis start; runs differ only in path, body and message.
 function startRun(path: string, body: unknown, what: string) {
   return async (fetcher: AdminFetch): Promise<void> => {
     try {
@@ -66,8 +62,7 @@ export function useTaggerControls() {
   const [batch, setBatch] = useState<Batch>('500');
   const [logOpen, setLogOpen] = useState(false);
 
-  // Slow loop: the rarely-changing settings-derived bits. Silent on failure —
-  // a 30s poll that toasts on a blip is noise.
+  // Slow loop for the settings-derived bits; silent on failure.
   const settingsQuery = useAdminQuery<SettingsResponse>({
     key: settingsKeys.detail(),
     path: '/settings',
@@ -95,8 +90,7 @@ export function useTaggerControls() {
   const budgetMode: BudgetMode | null = settings?.budget?.mode ?? null;
 
   // Which provider each tagging cost bills to (#1162). A blank embedding
-  // provider follows the LLM provider; the embedding model shows only when
-  // explicitly set (the default resolution table lives in Settings).
+  // provider follows the LLM provider; the embedding model shows only when set.
   const llm = settings?.values?.llm;
   const emb = settings?.values?.embedding;
   const llmLabel = llm?.provider
@@ -115,17 +109,15 @@ export function useTaggerControls() {
     [qc],
   );
 
-  // Per-track analysis failures (#1300 bug 3c). The disabled query is fetched
-  // only on demand: `coverage.analysisFailed` already says whether there is
-  // anything to look at, and on a healthy station that is zero forever.
+  // Per-track analysis failures (#1300). Disabled query, fetched on demand:
+  // `coverage.analysisFailed` already says whether there is anything to see.
   const loadFailures = useCallback(async () => {
     if (!ready) return;
     await failuresQuery.refetch();
   }, [failuresQuery, ready]);
 
-  // Forget the failure history so the next run retries these tracks — the
-  // operator's move after fixing the cause. Refreshes coverage so the banner
-  // (driven by the count, not the list) goes away.
+  // Forget the failure history so the next run retries these tracks. Coverage
+  // refresh clears the banner, which is driven by the count, not the list.
   const clearFailures = useCallback(async () => {
     if (!ready) return;
     try {
@@ -137,17 +129,9 @@ export function useTaggerControls() {
 
   const remaining = coverage?.total != null ? Math.max(0, coverage.total - coverage.tagged) : null;
 
-  // --- counting the library ------------------------------------------------
-  // The one expensive thing on this page, and now the only one the operator
-  // has to ask for (#1570). `total` comes from walking every album in
-  // Navidrome — thousands of requests on a big library — so the controller
-  // never starts that walk on a read, and this button is what does.
-  //
-  // Its own POST rather than a flag on the coverage GET: this has a side
-  // effect measured in minutes, and a read that can start it is the shape
-  // something eventually polls by accident — which is the bug being fixed.
-  // The response carries the snapshot the scan is starting from, so the meter
-  // flips to "counting…" without waiting for the next poll to say so.
+  // `coverage.total` walks every album in Navidrome, so nothing starts it on a
+  // read (#1570) — operator-triggered POST only, never a flag on the GET. The
+  // response carries the starting snapshot so the meter flips immediately.
   const countLibraryM = useAdminMutation<{ coverage?: Coverage }, void>({
     request: (_v, fetcher) => adminJson<{ coverage?: Coverage }>(
       fetcher, '/library/coverage/refresh', { method: 'POST' },
@@ -159,8 +143,7 @@ export function useTaggerControls() {
     },
   });
 
-  // --- the runs ------------------------------------------------------------
-  // Each opens the log and refreshes the tagger snapshot; failures toast
+  // Each run opens the log and refreshes the tagger snapshot; failures toast
   // through useAdminMutation's shared onError.
 
   const startM = useAdminMutation<void, TagSteps | undefined>({
@@ -182,15 +165,14 @@ export function useTaggerControls() {
   });
 
   // Each opt maps to a tag-library CLI flag (reseed / reEnrich / reAnalyze /
-  // upgrade). Sends no limit — a partial reseed leaves the library in a mixed
-  // state KNN can't use, and `thenTag` continues into a full forward pass.
+  // upgrade). Sends no limit: a partial reseed leaves a mixed state KNN can't use.
   const rescanM = useAdminMutation<void, RescanOpts>({
     request: (opts, fetcher) => startRun('/tag-library', opts, 're-scan failed')(fetcher),
     onDone: () => { notify.ok('re-scan started…'); setLogOpen(true); void reloadTagger(); },
   });
 
-  // Prunes library entries whose tracks no longer exist in Navidrome. No
-  // LLM/embedding cost, and it reuses the tagger's single-flight slot.
+  // Prunes library entries whose tracks are gone from Navidrome. No LLM cost;
+  // reuses the tagger's single-flight slot.
   const reconcileM = useAdminMutation<void, void>({
     request: (_v, fetcher) => startRun('/library/reconcile', {}, 'reconcile failed')(fetcher),
     onDone: () => {
@@ -219,23 +201,20 @@ export function useTaggerControls() {
     request: (_v, fetcher) => startRun('/library/reset', {}, 'reset failed')(fetcher),
     onDone: async (_d, _v, client) => {
       notify.ok('library reset — all tagging data wiped');
-      // Everything under ['library'] — every row list, plus coverage and the
-      // library stats.
+      // Everything under ['library']: every row list, coverage, library stats.
       await client.invalidateQueries({ queryKey: libraryKeys.all });
     },
   });
 
-  // --- the toggles ---------------------------------------------------------
-  // Each writes the flipped value straight into the cached /settings body
-  // before invalidating, so the switch moves at once rather than waiting out
-  // the poll.
+  // Writes the flipped value into the cached /settings body before invalidating,
+  // so the switch moves without waiting out the poll.
   const patchAudioSetting = useCallback((patch: Record<string, unknown>) => {
     patchSettingsAudio(qc, patch);
     void reloadSettings();
   }, [qc, reloadSettings]);
 
-  // Flips settings.audio.embeddings (the CLAP opt-in). Only persists the
-  // setting — vectors appear after an analysis run.
+  // Flips settings.audio.embeddings (the CLAP opt-in); vectors only appear
+  // after an analysis run.
   const toggleAudioM = useAdminMutation<boolean, boolean>({
     request: async (next, fetcher) => {
       await postAudioSetting(fetcher, { embeddings: next });
@@ -264,7 +243,7 @@ export function useTaggerControls() {
     },
     onDone: next => {
       patchAudioSetting({ vocalActivity: next });
-      // Mirrors toggleAudio: enabling on a lean analyzer is "armed", not active.
+      // As with toggleAudio, enabling on a lean analyzer is armed, not active.
       const vocalPending =
         coverage?.analysisAvailable !== false && coverage?.vocalAnalysisAvailable === false;
       notify.ok(
@@ -274,15 +253,14 @@ export function useTaggerControls() {
             : 'vocal-activity analysis enabled'
           : 'vocal-activity analysis disabled',
       );
-      // Nothing polls coverage while the station is idle, so the
-      // coverage-driven bits (vocalStatus, the vocal meter row) need this.
+      // Nothing polls coverage while the station is idle, so refresh it here.
       void reloadCoverage();
     },
   });
 
   // Quiet-times gate (#1099): analysis pauses while listeners are tuned in. The
-  // pass re-reads the toggle from disk on every check, so a flip takes effect
-  // mid-run; env ANALYZE_QUIET_ONLY still wins "on".
+  // pass re-reads the toggle each check, so a flip takes effect mid-run; env
+  // ANALYZE_QUIET_ONLY still wins "on".
   const toggleQuietM = useAdminMutation<boolean, boolean>({
     request: async (next, fetcher) => {
       await postAudioSetting(fetcher, { analyzeQuietOnly: next });
@@ -310,8 +288,7 @@ export function useTaggerControls() {
     },
   });
 
-  // One shared busy flag: the Tagging panel disables every control while any
-  // of them is in flight.
+  // One shared busy flag: the panel disables every control while any is in flight.
   const busy = [
     startM, stopM, rescanM, reconcileM, analyzeM, vocalBackfillM, resetM,
     toggleAudioM, toggleVocalM, toggleQuietM, saveQuietMinutesM,
@@ -329,9 +306,8 @@ export function useTaggerControls() {
     resetLibrary: () => { resetM.mutate(); },
     analyzeAudio: () => { analyzeM.mutate(); },
     vocalBackfill: () => { vocalBackfillM.mutate(); },
-    // The panel's switches send no argument, so the flip is computed here. The
-    // `== null` guard stops a toggle firing before the first /settings poll
-    // lands and writing `!null` = true over a real `true`.
+    // Switches send no argument, so the flip is computed here; the `== null`
+    // guard stops a pre-first-poll toggle writing `!null` over a real `true`.
     toggleAudio: () => { if (audioEnabled != null) toggleAudioM.mutate(!audioEnabled); },
     toggleVocal: () => { if (vocalEnabled != null) toggleVocalM.mutate(!vocalEnabled); },
     toggleQuiet: () => { if (quietEnabled != null) toggleQuietM.mutate(!quietEnabled); },

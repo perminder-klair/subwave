@@ -48,8 +48,7 @@ const SLEEVE_DROP = {
 const SLEEVE_CUT = {
   initial: false,
   animate: { opacity: 1, scale: 1, y: 0 },
-  // Nothing on the way out either — a fade-to-zero on the outgoing
-  // node is still an animation, however brief.
+  // Nothing on the way out either: a fade-to-zero is still an animation.
   exit: {},
   transition: { duration: 0 },
 };
@@ -62,8 +61,7 @@ const LABEL_SETTLE = {
 const LABEL_CUT = {
   initial: false,
   animate: { opacity: 1, y: 0 },
-  // Nothing on the way out either — a fade-to-zero on the outgoing
-  // node is still an animation, however brief.
+  // Nothing on the way out either: a fade-to-zero is still an animation.
   exit: {},
   transition: { duration: 0 },
 };

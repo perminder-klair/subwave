@@ -1,12 +1,6 @@
-// Shared tagging primitives.
-// tagOne — one LLM call per track → { moods, energy }, validated against MOOD_VOCAB.
-// tagBatch — one LLM call per N tracks → TagResult[], same validation, positional.
-// tagOne is used by the inline /library/retag route; tagBatch is used by the
-// bulk tag-library.ts script. Both produce identical shapes per track.
-//
-// TAGGER_CONTRACT_VERSION below is the re-tagging stamp's only prompt-side
-// input (#1548) — change what the prompts ASK FOR and you must bump it by hand,
-// or already-tagged rows are never re-decided. Full reasoning at the constant.
+// Shared tagging primitives. tagOne (one call per track, used by /library/retag)
+// and tagBatch (one call per N tracks, positional, used by tag-library.ts) both
+// yield the same per-track shape, validated against the live mood vocabulary.
 
 import { z } from 'zod';
 import { moodVocab } from '../settings.js';
@@ -22,52 +16,16 @@ export const BatchTagSchema = z.object({
   results: z.array(TagSchema),
 });
 
-// ===========================================================================
-//  BUMP TAGGER_CONTRACT_VERSION WHEN YOU CHANGE WHAT THE PROMPTS BELOW ASK FOR
-// ===========================================================================
-//
-// `promptVocabHash(TAGGER_CONTRACT_VERSION)` (music/embeddings.ts) is the
-// `prompt_hash` stamped on every LLM-tagged row, and `staleTaggedIds`
-// (library-db/queries.ts) re-tags every row whose stamp differs on --upgrade /
-// admin Re-scan → Re-decide moods. Since #1548 that stamp keys off this number
-// plus the live mood vocabulary — NOT off the prompt text — so a cosmetic
-// reword is free and a SEMANTIC change is invisible until you bump this.
-//
-// Bump it when the prompts start asking for something different:
-//   - different mood-selection guidance (the FEELS-not-genre rules, the
-//     worked examples that steer them);
-//   - a different energy scale, or different values on it;
-//   - a different fallback for an untaggable track;
-//   - a different result shape or batch cardinality/order rule.
-//
-// Do NOT bump it for a reword, a typo, a reflow, or transport wording (#1536)
-// — those don't change a single tag, and a bump costs a full library re-tag on
-// the next Re-decide (~1600 batch calls on a 40k library, usually against a
-// slow homelab Ollama box). Editing settings.moods invalidates on its own; the
-// vocabulary is already a hash input and needs no bump.
-//
-//   1  the shipped contract as of #1548 (1-3 moods from the live vocabulary,
-//      low|medium|high energy, {"moods":[],"energy":"medium"} when unreadable,
-//      batch = exactly one entry per input track in input order)
-//
-// scripts/tagger-contract-hash.test.ts pins this number and the hash recipe, so
-// a change to either shows up as a diff line in review.
+// BUMP THIS when you change what the prompts below ASK FOR (mood guidance,
+// energy scale, untaggable fallback, result shape, batch order). The re-tagging
+// stamp keys off this number plus the live vocabulary, never the prompt text
+// (#1548): a semantic change is invisible without a bump, a reword costs a full
+// library re-tag with one.
 export const TAGGER_CONTRACT_VERSION = 1;
 
-// System prompts are FUNCTIONS, not consts: the mood list is operator-editable
-// (settings.moods) and read live, so the prompt reflects the current vocabulary
-// each call. The re-tagging stamp no longer reads the prompt at all — see
-// TAGGER_CONTRACT_VERSION above.
-//
-// Both prompts describe the RESULT and never the output channel. Which channel
-// a tag call actually uses is decided per leg inside djObject (forced `emit`
-// tool for ollama/openai-compatible/locca, native structured output for the
-// cloud providers, free text on the recovery attempt), and each branch states
-// its own rule there. These prompts used to say "Return ONLY a JSON object",
-// which was true on one of those three branches: on the forced-tool branch it
-// contradicted toolChoice:'required' and gemma-4-12b on llama.cpp burned whole
-// generations deciding which to obey, never tagging a single batch (#1536).
-// Keep output-channel wording out of here — it cannot be right from here.
+// Functions, not consts: the mood list is operator-editable and read live.
+// Both prompts describe the RESULT and never the output channel — djObject picks
+// the channel per leg, so channel wording here contradicts it (#1536).
 export function taggerSystem(): string {
   return `You tag music tracks with mood and energy for a personal radio station.
 
@@ -115,8 +73,7 @@ export interface TaggableSong {
   artist?: string;
   album?: string;
   year?: number | string | null;
-  // OpenSubsonic multi-value genres ([{name}] on raw children) alongside the
-  // legacy scalar — genreLine() renders whichever is present.
+  // OpenSubsonic multi-value genres alongside the legacy scalar.
   genres?: Array<string | { name?: string }> | null;
   genre?: string | null;
 }
@@ -149,9 +106,9 @@ function formatSong(song: TaggableSong): string {
   );
 }
 
-// `leg` pins the call to a specific LLM leg ('primary' | 'fallback') with no
-// cross-leg failover — the dual-LLM tagger runs one consumer per leg and manages
-// failover itself (discussion #320). Omitted → normal primary→fallback path.
+// `leg` pins the call to one LLM leg with no cross-leg failover: the dual-LLM
+// tagger runs a consumer per leg and manages failover itself. Omitted = normal
+// primary then fallback.
 export interface TagOpts {
   leg?: 'primary' | 'fallback';
 }

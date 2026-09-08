@@ -1,7 +1,6 @@
 // CLI arg parsing and the pre-flight passes that run before any phase: walking
 // Navidrome, reconciling deleted tracks, and folding the wizard's overlay in.
-//
-// Part of the tag-library/ split - see ../tag-library.ts for main().
+// See ../tag-library.ts for main().
 
 import * as subsonic from '../subsonic.js';
 import * as db from '../library-db.js';
@@ -12,11 +11,6 @@ import { loadSetupConfig } from '../../setup/config.js';
 import { reportProgress } from '../tagger-progress.js';
 import { logEvent } from './log.js';
 import { backfillOriginalYears, pendingOriginalYearIds } from './enrich.js';
-
-
-// ---------------------------------------------------------------------------
-// CLI arg parsing
-// ---------------------------------------------------------------------------
 
 function parseIntFlag(args: string[], name: string): number | null {
   const idx = args.indexOf(name);
@@ -45,23 +39,18 @@ interface CliFlags {
   skipAnalyze: boolean;
   reAnalyze: boolean;
   reconcileOnly: boolean;
-  // Skip embed + mood tagging (phases 1-4). Walk, enrich and analyze still run
-  // per their own flags — the admin "Tag moods" step unchecked.
+  // Skip embed + mood tagging (phases 1-4); walk, enrich and analyze still run
+  // per their own flags.
   skipTag: boolean;
-  // Walk Navidrome but don't prune orphaned rows — the admin "Reconcile with
-  // Navidrome" step unchecked. (A normal run prunes by default.)
+  // Walk Navidrome but don't prune orphaned rows (a normal run prunes).
   noPrune: boolean;
-  // Per-run override of the Demucs vocal-activity backfill in Phase 5. --vocal
-  // forces it on, --no-vocal forces it off; neither falls back to the setting
-  // (settings.audio.vocalActivity / ANALYZE_VOCAL_ACTIVITY). The admin Run tab's
-  // "Vocal activity" sub-checkbox drives these so a run can do bpm/key + CLAP
-  // without the slow Demucs pass (or include it) without touching the setting.
+  // Per-run override of the Phase 5 Demucs vocal-activity backfill. Neither
+  // flag falls back to settings.audio.vocalActivity / ANALYZE_VOCAL_ACTIVITY.
   vocal: boolean;
   noVocal: boolean;
-  // Re-scan mode (admin Re-scan tab). Fire ONLY the selected re-* passes, each
-  // scoped to already-done tracks; the forward seed→propagate→active-learn
-  // discovery is suppressed so the untagged remainder is never processed. Raw CLI
-  // re-* flags (no --rescan) keep their documented per-flag, full-library meaning.
+  // Re-scan mode: fire ONLY the selected re-* passes, each scoped to
+  // already-done tracks, suppressing the forward seed→propagate→active-learn
+  // discovery. Raw re-* flags without --rescan keep their full-library meaning.
   rescan: boolean;
 }
 
@@ -79,16 +68,14 @@ export function parseFlags(): CliFlags {
     reseed: args.includes('--reseed'),
     reEnrich: args.includes('--re-enrich'),
     skipEnrich: args.includes('--skip-enrich'),
-    // Re-decide moods: re-LLM-tag tagged rows whose prompt/model went stale. Row
-    // selection (db.staleTaggedIds) excludes source='manual' — operator-set tags
-    // are ground truth and never go stale with prompt/model changes.
+    // Re-decide moods: re-LLM-tag rows whose prompt/model went stale.
+    // db.staleTaggedIds excludes source='manual' — operator tags are ground
+    // truth and never go stale.
     upgrade: args.includes('--upgrade'),
     skipAnalyze: args.includes('--skip-analyze'),
     reAnalyze: args.includes('--re-analyze'),
-    // Walk Navidrome and prune library rows for tracks it no longer contains,
-    // then exit — no embeddings, no LLM. The admin "Reconcile with Navidrome"
-    // button drives this so orphaned entries can be cleared without paying for
-    // a full tag/analyze pass (works even at 100% coverage).
+    // Walk Navidrome, prune rows for tracks it no longer contains, then exit —
+    // no embeddings, no LLM.
     reconcileOnly: args.includes('--reconcile-only'),
     skipTag: args.includes('--skip-tag'),
     noPrune: args.includes('--no-prune'),
@@ -98,12 +85,7 @@ export function parseFlags(): CliFlags {
   };
 }
 
-// Walk the entire Navidrome catalogue, upserting each song's metadata into the
-// tracks table and collecting the live id set. Shared by the full tagger run
-// (Phase A) and the standalone --reconcile-only path. Cheap: metadata only, no
-// embeddings or LLM calls.
 // The album tag's year, but only when it actually says something (#1418).
-// See the call site for why each half matters.
 function informativeAlbumYear(song: {
   albumEraUntrusted?: boolean | null;
   albumOriginalYear?: number | null;
@@ -115,42 +97,34 @@ function informativeAlbumYear(song: {
   return ord === (song.year ?? null) ? null : ord;
 }
 
+// Walk the whole Navidrome catalogue, upserting each song's metadata and
+// collecting the live id set. Shared by the full tagger run and
+// --reconcile-only. Metadata only: no embeddings, no LLM.
 export async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<string> }> {
   reportProgress({ phase: 'walk', label: 'Scanning Navidrome library', done: 0 });
   let walked = 0;
   const liveIds = new Set<string>();
-  // Blast radius of the widened era gate, reported once at the end. An
-  // operator who sees a third of their library go era-suspect should be able
-  // to see that from the log rather than from a show that stopped picking —
-  // the detector is precision-tuned, and this is the number that says whether
-  // it stayed that way on a real catalogue (#1418).
+  // Blast radius of the era gate, reported once at the end so an operator sees
+  // it in the log rather than as a show that stopped picking (#1418).
   const eraReasons = new Map<string, number>();
   for await (const song of subsonic.iterateAllSongs()) {
     db.upsertTrackMeta(song.id, {
       title: song.title,
       artist: song.artist,
       album: song.album,
-      // Subsonic album/artist ids. The walk is the only writer that has
-      // them, and they are what lets an ALBUM/ARTIST blocklist entry match a
-      // library-sourced candidate exactly rather than by name.
+      // Subsonic ids. The walk is the only writer that has them, and they let
+      // an ALBUM/ARTIST blocklist entry match by id rather than by name.
       albumId: song.albumId ?? null,
       artistId: song.artistId ?? null,
       year: song.year,
-      // Album-level era signals (issues #842, #1418). The album's
-      // originalReleaseDate is a track's original year only when it is
-      // INFORMATIVE, which needs two things to be true:
-      //
-      //  - the album is not era-suspect. On a reissue anthology the album's
-      //    "original" date is the reissue's own (both reported examples read
-      //    originalReleaseDate == releaseDate == year), so recording it states
-      //    the wrong year with full confidence AND hides the track from the
-      //    MusicBrainz pass, which skips anything already resolved.
-      //  - it differs from the file's `year`. When the two are equal the tag
-      //    has told us nothing — that was 18,492 rows of the reported library,
-      //    every one of them looking resolved. Leaving it NULL is
-      //    behaviour-neutral (resolveEraYear falls through to the identical
-      //    `year` for a trusted album) and makes the track eligible for a
-      //    lookup that can actually answer.
+      // Album-level era signals (#842, #1418). The album's originalReleaseDate
+      // is a track's original year only when informative, which needs both:
+      //  - the album is not era-suspect (on a reissue anthology that date is
+      //    the reissue's own, so recording it states the wrong year AND hides
+      //    the track from the MusicBrainz pass, which skips resolved rows);
+      //  - it differs from the file's `year` (equal tells us nothing). NULL is
+      //    behaviour-neutral — resolveEraYear falls through to `year` for a
+      //    trusted album — and keeps the track eligible for a lookup.
       originalYear: informativeAlbumYear(song),
       isCompilation: song.albumIsCompilation ?? null,
       eraUntrusted: song.albumEraUntrusted ?? null,
@@ -185,14 +159,11 @@ export async function walkNavidrome(): Promise<{ walked: number; liveIds: Set<st
 // drop rows (and their vectors) for tracks that are gone. No embedding preflight
 // and no LLM — opens the existing DB at its stored dim so vectors are untouched.
 //
-// The walk it shares with the full run is not read-only: it stamps
-// era_untrusted on suspect albums and clears their stale album-tag years
-// (#1418), which makes those tracks read as unknown-year until something asks
-// MusicBrainz. That something used to be only phase-0 of a full tag pass —
-// which nothing schedules — so a reconcile could open an unbounded window of
-// unknown-year tracks. Hence the backfill below: keyless, checked_at-stamped
-// (incremental — later reconciles skip straight past answered tracks), and
-// throttled at MB's 1 req/s, so only the first pass after an upgrade is slow.
+// The shared walk is not read-only: it stamps era_untrusted on suspect albums
+// and clears their stale album-tag years (#1418), leaving those tracks
+// unknown-year until MusicBrainz is asked. Hence the backfill below — keyless,
+// checked_at-stamped so later reconciles skip answered tracks, and throttled at
+// MB's 1 req/s.
 export async function reconcileOnly() {
   await db.open({ embeddingDim: embeddings.resolveEmbeddingDim(), adoptStoredDim: true });
   console.log('[tag] reconcile-only: walking Navidrome to prune orphaned rows');
@@ -218,10 +189,9 @@ export async function reconcileOnly() {
   process.exit(0);
 }
 
-// Mirrors server.ts boot: cloud API keys from secrets.env, Navidrome creds
-// from setup-config.json. Standalone CLIs skip server.ts, so without this
-// they fall back to the hardcoded `http://navidrome:4533` and ENOTFOUND on
-// any install with a custom Navidrome host.
+// Mirrors server.ts boot: cloud API keys from secrets.env, Navidrome creds from
+// setup-config.json. Standalone CLIs skip server.ts, so without this they fall
+// back to the hardcoded `http://navidrome:4533`.
 export async function applyWizardOverlay() {
   try {
     await loadSecretsIntoEnv();

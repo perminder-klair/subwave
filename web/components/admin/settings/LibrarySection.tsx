@@ -21,9 +21,8 @@ import {
   type SectionProps,
 } from './shared';
 
-// The #1 trip-up is typing an HF/locca repo id like
-// "nomic-ai/nomic-embed-text-v1.5-GGUF" as an Ollama tag, which 404s — Ollama
-// wants the short tag. dim is shown so an already-tagged library can be matched.
+// Ollama wants the short tag, not an HF/locca repo id (those 404). dim is
+// shown so an already-tagged library can be matched.
 const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
   ollama: [
     { id: 'nomic-embed-text', dim: 768 },
@@ -127,18 +126,15 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
   const effectiveProvider = e.provider || llmProvider;
   const embedSuggestions = EMBED_MODEL_SUGGESTIONS[effectiveProvider] ?? [];
 
-  // The embedding-capable subset, NOT the full LLM list: chat-only providers
-  // (deepseek, gateway) have no embeddings endpoint (#493); OpenRouter shipped one
-  // so it is back in (#522); Anthropic has no embedding API at all.
+  // Embedding-capable subset, not the full LLM list: deepseek, gateway and
+  // anthropic have no embeddings endpoint (#493, #522).
   const embedProviders = data.embedding?.providers ||
     ['ollama', 'openai-compatible', 'locca', 'openrouter', 'openai', 'google', 'requesty'];
-  // Keep a stale explicit choice (a chat-only provider saved before this list
-  // shrank) visible so the Select isn't blank and the warning below makes sense.
+  // Keep a stale explicit choice visible so the Select isn't blank.
   const providers = e.provider && !embedProviders.includes(e.provider)
     ? [e.provider, ...embedProviders]
     : embedProviders;
-  // False when "Follow LLM provider" resolves to a chat-only LLM, or a stale config
-  // still names one. Drives the warning below.
+  // False when the effective provider is chat-only; drives the warning below.
   const canEmbed = embedProviders.includes(effectiveProvider);
 
   // Probe the endpoint up front rather than failing mid-run (#405 follow-up).
@@ -153,9 +149,8 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
 
   const embedKeyVar = LLM_ENV_VARS[effectiveProvider];
   const embedKeySet = !!(embedKeyVar && data.env?.[embedKeyVar]);
-  // Embeddings reuse the DJ provider's key, so "present" means that provider's env
-  // var OR the optional override. Keying off EMBEDDING_API_KEY alone would cry
-  // "missing" for a provider whose key is already set for the DJ.
+  // Embeddings reuse the DJ provider's key, so "present" means that provider's
+  // env var OR the optional EMBEDDING_API_KEY override.
   const embedKeyPresent = embedKeySet || !!data.env?.['EMBEDDING_API_KEY'];
 
   // `||` (not `??`) so a field cleared in the form ('' entry) falls through to
@@ -852,9 +847,9 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
         saveLabel="Save library tagger"
         errors={fieldErrors}
         ownedKeys={['embedding', 'audio']}
-        // Both key boxes are component-local — the panel diffs FormState and
-        // cannot see them, so a pasted key alone would leave the section
-        // "clean" and unmount the very button that saves it.
+        // Both key boxes are component-local, so the panel's FormState diff
+        // can't see them; without this a pasted key looks clean and the save
+        // button unmounts.
         dirty={!!(embeddingKeyInput.trim() || compatEmbedKeyInput.trim())}
       />
     </>

@@ -1,23 +1,8 @@
-// Built-in HTTP MCP endpoint. Lets any MCP client (Claude Code, Claude Desktop,
-// …) drive the station over the Model Context Protocol with just a URL — no
-// clone, no local process:
-//
-//   claude mcp add --transport http subwave https://your-station/api/mcp \
-//     --header "Authorization: Basic <base64 user:pass>"
-//
-// Transport: stateless Streamable HTTP. Each POST gets a fresh McpServer +
-// transport (sessionIdGenerator: undefined, enableJsonResponse: true), so there
-// are no sessions to store and no SSE stream — a plain JSON response the Caddy
-// /api/* proxy handles like any other. GET/DELETE are 405 (nothing to resume).
-//
-// Auth mirrors the REST API: the endpoint is open, but each tool call goes
-// through a loopback SubwaveClient — pointed at the controller's own port — that
-// FORWARDS the caller's Authorization header. Public tools work for anyone;
-// admin tools 401 without valid creds, matching the exact surface of the
-// endpoints they wrap. The tools reuse the live routes with no handler refactor,
-// and requireAdmin is untouched. The station-gated read (GET /similar-tracks)
-// forwards its own header the same way — a private station's listener password
-// is a different secret from the admin one, so it cannot ride Authorization.
+// Built-in HTTP MCP endpoint: stateless Streamable HTTP, a fresh McpServer +
+// transport per POST (no sessions, no SSE — plain JSON). GET/DELETE are 405.
+// The endpoint itself is open; each tool call goes through a loopback
+// SubwaveClient that forwards the caller's Authorization header, so admin tools
+// 401 exactly as the REST endpoints they wrap.
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -29,36 +14,29 @@ import { queue } from '../broadcast/queue.js';
 
 export const router = express.Router();
 
-// The tools call back into this controller over HTTP. 127.0.0.1 stays inside
-// the container/host — never routed out — and the port is the controller's own.
+// Loopback back into this controller: 127.0.0.1 never leaves the container/host.
 const LOOPBACK_BASE = `http://127.0.0.1:${config.server.port}`;
 
-// JSON-RPC error body for the transport-level failures the SDK doesn't own
-// (e.g. our handler throwing before handleRequest). id null per JSON-RPC when
-// the request couldn't be parsed/associated.
+// Transport-level failures the SDK doesn't own. id null per JSON-RPC when the
+// request couldn't be parsed/associated.
 function rpcError(res: express.Response, code: number, message: string) {
   if (res.headersSent) return;
   res.status(500).json({ jsonrpc: '2.0', error: { code, message }, id: null });
 }
 
-// subwave_request_song blocks while it polls for the outcome. Over stdio the
-// full 45s budget is fine (one local caller); here every anonymous POST holds
-// an HTTP connection for the duration, so keep it short — the tool hands back
-// the requestId and the agent re-polls with subwave_request_status.
+// subwave_request_song polls for the outcome and holds the HTTP connection while
+// it does, so keep it well under the 45s stdio budget; the agent re-polls with
+// subwave_request_status.
 const HTTP_REQUEST_POLL_BUDGET_MS = 15_000;
 
 router.post('/mcp', async (req, res) => {
   const client = new SubwaveClient({
     baseUrl: LOOPBACK_BASE,
-    // Forward the caller's credentials verbatim so admin tools are gated
-    // exactly as the REST endpoints they wrap.
     forwardAuth: typeof req.headers.authorization === 'string' ? req.headers.authorization : undefined,
-    // Forward the caller's IP so POST /request's per-IP rate limit keys on the
-    // real caller — without this every MCP user shares one loopback bucket.
+    // Without this every MCP user shares one loopback rate-limit bucket.
     forwardIp: clientIp(req),
-    // Same passthrough for the STATION password, which gates the
-    // listener-facing reads. A different secret from the admin one, so it
-    // rides its own header; absent on a public station, where the gate is open.
+    // Station password gates listener-facing reads: a different secret from the
+    // admin one, so it rides its own header. Absent on a public station.
     forwardStationAuth:
       typeof req.headers['x-station-auth'] === 'string' ? req.headers['x-station-auth'] : undefined,
   });
@@ -71,8 +49,6 @@ router.post('/mcp', async (req, res) => {
     enableJsonResponse: true, // return JSON on the POST rather than an SSE stream
   });
 
-  // Tear the per-request server/transport down when the HTTP response closes,
-  // so nothing leaks across the (stateless) requests.
   res.on('close', () => {
     void transport.close();
     void server.close();

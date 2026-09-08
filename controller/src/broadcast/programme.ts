@@ -1,27 +1,11 @@
-// Programme episode runner — turns a `programme: true` show into a produced
-// episode: intro → music → feature → music → outro.
+// Programme episode runner: turns a `programme: true` show into intro → music →
+// feature → music → outro. Structure is time-based, not an operator rundown;
+// the outro's placement is `handover.offsetMinutes` (handover-policy.ts).
 //
-// The structure is canonical and time-based (no operator rundown): the intro
-// airs at the top of the show, one feature beat airs mid-hour (:35, each
-// scheduled hour), the outro airs `handover.offsetMinutes` before the end of
-// the final hour (:55 by default) and the incoming host waits a closing track
-// behind it — both in broadcast/handover-policy.ts. What makes the
-// hour cohere is the EPISODE PLAN — one structured "producer" LLM call at
-// session start (llm/internal/prompts/programme.ts) that turns the show's
-// standing topic brief + the moment into today's angle, per-hour feature
-// topics, and intro/outro notes. Every beat's script references the plan, so
-// the intro teases the feature and the outro calls back. When the plan call
-// fails the beats degrade to brief-only generation — the arc still airs.
+// Episode state (plan + which beats aired) lives ON THE SESSION, and a beat is
+// marked aired BEFORE it generates so a mid-beat failure can't double-air.
 //
-// All episode state (plan + which beats aired) lives ON THE SESSION
-// (session.attachProgramme / markProgrammeBeat): it survives controller
-// restarts, dies with the session at the show boundary, and a beat is marked
-// aired BEFORE it generates (the markHandoffAired idempotency pattern) so a
-// mid-beat failure or restart can never double-air.
-//
-// Like dj-agent.runPersonaHandoff, this module never imports queue — the
-// callers (queue's track-start path, scheduler's crons, the manual /dj/segment
-// runners in scheduler.ts) pass it in, so queue.ts can import this module
+// Never imports queue — callers pass it in, so queue.ts can import this module
 // without an eval-time cycle.
 
 import { readdir, readFile, stat } from 'node:fs/promises';
@@ -42,22 +26,16 @@ import { HANDOVER_OFFSET_STEP_MINUTES } from '../schemas/settings.js';
 import { handoverOffsetMinutes } from './handover-policy.js';
 
 // How long after the intro aired the generic hourly time-check stays
-// suppressed: the intro owns the top of the show's first hour (the same
-// one-talker-per-slot rule as issue #310); by the next hour the check is
-// normal programming again.
+// suppressed: the intro owns the top of the show's first hour (#310).
 const INTRO_SUPPRESSES_HOURLY_MS = 45 * 60 * 1000;
 
-// Pure arc helpers live in programme-pure.ts (dependency-free, so the unit
-// test doesn't drag in the queue/settings graph) — re-exported for callers.
+// Pure arc helpers, re-exported for callers.
 import { showSpan, overrideSpan, planFeature, beatWindow } from './programme-pure.js';
 export { showSpan, overrideSpan, planFeature, beatWindow };
 
 // The episode's position/length at `now`. A live SHOW takeover (#930) IS the
-// episode — its window drives the arc, since the pinned show usually isn't in
-// the grid at these hours and showSpan can't see it. A Default programming
-// takeover is not an episode; programme work already stands down because there
-// is no active show, and this fallback keeps the span defensive. Otherwise the
-// grid run.
+// episode — the pinned show usually isn't in the grid at these hours, so
+// showSpan can't see it. Otherwise the grid run.
 function episodeSpan(now: Date): { index: number; total: number } {
   const ov = settings.getScheduleOverride(now.getTime());
   if (ov && takeoverShowId(ov)) return overrideSpan(ov, now.getTime());
@@ -65,22 +43,15 @@ function episodeSpan(now: Date): { index: number; total: number } {
   return showSpan(settings.get().schedule, dow, hour);
 }
 
-// The beat due at this moment on the STATION clock, for the scheduler's
-// 5-minute programme tick (see beatWindow for why crons can't fire on fixed
-// station minutes directly). The outro's placement is the operator's
-// `handover.offsetMinutes`, resolved through the policy module rather than read
-// from settings here — the same value bounds the talk row's stride.
+// The beat due at this moment on the STATION clock. The outro's placement comes
+// through the policy module, never read from settings here.
 export function dueBeat(now = new Date()): 'feature' | 'outro' | null {
   return beatWindow(zonedParts(now).minute, handoverOffsetMinutes(), HANDOVER_OFFSET_STEP_MINUTES);
 }
 
-// ---------------------------------------------------------------------------
-// Episode state
-// ---------------------------------------------------------------------------
-
-// The active programme show, but only once the session has actually rolled
-// into it — beats must never fire against the PREVIOUS session's state, so
-// everything below keys off session identity, not the wall clock alone.
+// The active programme show, but only once the session has rolled into it —
+// beats must never fire against the previous session's state, so this keys off
+// session identity, not the wall clock alone.
 function activeEpisode(now = new Date()) {
   const show = settings.resolveActiveShow(now);
   if (!show?.programme) return null;
@@ -89,15 +60,14 @@ function activeEpisode(now = new Date()) {
   return { show, sess };
 }
 
-// True while a programme episode is on air — scheduler.skillsTick stands down
-// so the generic segment director doesn't compete with the planned beats.
+// scheduler.skillsTick stands down on this so the generic segment director
+// doesn't compete with the planned beats.
 export function onAir(now = new Date()): boolean {
   return !!activeEpisode(now);
 }
 
-// True when the generic hourly time-check should stay quiet: the programme
-// intro owns the top of the show's first hour (pending → it's about to air in
-// this same tick; aired recently → it just did).
+// The programme intro owns the top of the show's first hour: pending means it
+// is about to air this tick, a recent stamp means it just did.
 export function suppressHourly(now = new Date()): boolean {
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
@@ -107,8 +77,7 @@ export function suppressHourly(now = new Date()): boolean {
 }
 
 // The most recent archived episode's angle for this show, so today's producer
-// takes a different line. Best-effort: scans the newest few session archives;
-// any miss (fresh install, no prior episode) is just null.
+// takes a different line. Best-effort; any miss is null.
 async function previousAngle(showId: string): Promise<string | null> {
   try {
     const files = (await readdir(config.session.dir)).filter(f => f.endsWith('.json'));
@@ -130,10 +99,8 @@ async function previousAngle(showId: string): Promise<string | null> {
 }
 
 // The capability menu the producer may build features from: enabled, ready,
-// owned by the host persona, and — for a co-hosted skill — only when this
-// episode actually has guests to hold the discussion. Exported for the test
-// that pins that last filter: a producer offered a kind the beat cannot run
-// plans an hour around a feature that falls straight back to straight talk.
+// owned by the host persona, and co-hosted skills only when the episode has
+// guests. A kind the beat cannot run plans an hour that falls to straight talk.
 export function featureKindMenu(host: { skills?: string[] } | null | undefined, hasCohosts: boolean): { kind: string; desc: string }[] {
   try {
     return skillCatalog()
@@ -147,17 +114,12 @@ export function featureKindMenu(host: { skills?: string[] } | null | undefined, 
 }
 
 // Attach episode state to a freshly-rolled programme session and generate the
-// plan. Idempotent — safe from every call site, every tick. A budget/silence
-// gate leaves the plan `pending` (a later tick retries once budget frees up);
-// a real generation failure marks it `fallback` for the episode (beats then
-// run brief-only — one failed producer call shouldn't burn a retry per tick).
+// plan. Idempotent. A budget/voice gate leaves the plan `pending` (retried on a
+// later tick); a generation failure marks it `fallback` for the episode.
 //
-// `now` defaults to the moment the CONTEXT describes (contextDate), not the wall
-// clock. queue.onTrackStarted rolls the session on a look-ahead context, and
-// judging the episode with a live `now` inside that window makes activeEpisode
-// compare the incoming session key against the OUTGOING show — a silent null, so
-// the plan never builds and the handoff greeting airs with no angle. A live
-// context carries a live `at`, so live callers are unaffected.
+// `now` defaults to the moment the CONTEXT describes, not the wall clock:
+// onTrackStarted rolls on a look-ahead context, and a live `now` inside that
+// window would compare the incoming session key against the outgoing show.
 export async function ensurePlan(ctx: SessionContext, now = session.contextDate(ctx)): Promise<void> {
   const ep = activeEpisode(now);
   if (!ep) return;
@@ -171,8 +133,7 @@ export async function ensurePlan(ctx: SessionContext, now = session.contextDate(
   if (!optionalSegmentsAllowed()) return;  // over budget — stay pending, retry later
 
   const span = episodeSpan(now);
-  // Span is measured from the show's FIRST hour: if the session rolled late
-  // (controller boot mid-show), the remaining hours are what the plan covers.
+  // Span is measured from the show's FIRST hour; the plan covers what's left.
   const hoursLeft = Math.max(1, span.total - span.index);
   const roster = settings.getOnAirRoster(now);
   const pinned = String(ep.show.segmentSkill || '').trim() || null;
@@ -200,16 +161,10 @@ export async function ensurePlan(ctx: SessionContext, now = session.contextDate(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Beats
-// ---------------------------------------------------------------------------
-
 // Intro — the top of the show. Fires from the same call sites as the persona
-// handoff (hourly roll at :00, first track event past the boundary), AFTER
-// runPersonaHandoff: when the boundary also changed personas, the incoming
-// half of the mic-pass already opened the show (with the episode angle woven
-// in — see dj-agent), so the standalone intro is skipped and just marked.
-// Returns true when it aired a standalone intro now.
+// handoff, AFTER runPersonaHandoff: when the boundary also changed personas the
+// mic-pass already opened the show, so the standalone intro is skipped and just
+// marked. Returns true when a standalone intro aired now.
 export async function maybeRunIntro(
   queue: QueueApi,
   ctx: SessionContext,
@@ -225,35 +180,21 @@ export async function maybeRunIntro(
     markIntroAired();
     return false;
   }
-  // The mic-pass is still PENDING for this boundary (the hourly cron rolls
-  // with airHandoff=false and leaves airing to the next track boundary). The
-  // greeting doubles as the intro there — airing the standalone intro now
-  // would duck mid-song, the exact bug the deferral fixes, and introduce the
-  // episode twice. Stay pending: the boundary tick re-runs this after
-  // runPersonaHandoff, which marks handoffAired on every exit path.
+  // The mic-pass is still pending for this boundary and doubles as the intro;
+  // airing the standalone intro now would duck mid-song and introduce the
+  // episode twice. Stays pending — the boundary tick re-runs this after
+  // runPersonaHandoff.
   if (session.pendingHandoff()) return false;
-  // Station voice off → stays pending and unmarked, like the budget case: flip
-  // the switch back mid-show and the intro can still open the remaining hours.
+  // Voice off / over budget / quiet: stays pending and unmarked, so the intro
+  // can still open the remaining hours if the gate reopens.
   if (!autoVoiceAllowed()) return false;
-  if (!djCallsAllowed() || !optionalSegmentsAllowed()) return false;  // stays pending — may air later this hour
-  // The ordering rule (#1576). A show whose sign-off just aired owes the
-  // listener one closing track, and this is the path that carries the incoming
-  // host's first words when the persona did NOT change — the mic-pass covers
-  // the other one, gated in the queue's own boundary path. Asked after the
-  // pendingHandoff check so exactly one of the two counts the opportunity.
-  //
-  // LAST of the checks, and that is the point: only a cycle that would
-  // otherwise have aired the intro has really passed an opportunity up. Asking
-  // ahead of the gates let a muted station, an exhausted budget or a quiet hour
-  // spend half the spacer on a cycle that could never have spoken.
-  //
-  // `opportunity` says whether THIS call site is a handover moment at all. The
-  // boundary path is; the wall-clock :00 session roll is not — it asks minutes
-  // before any music has moved, and banking its answer would release the
-  // incoming host at the boundary that ends the sign-off's own track.
-  //
-  // Stays pending and unmarked, like the voice-switch case above: the next
-  // boundary opens the episode instead.
+  if (!djCallsAllowed() || !optionalSegmentsAllowed()) return false;
+  // The ordering rule (#1576): a show whose sign-off just aired owes the
+  // listener one closing track. Asked after the pendingHandoff check so exactly
+  // one of the two counts the opportunity, and LAST of the gates so only a
+  // cycle that could otherwise have aired the intro banks a decline.
+  // `opportunity` says whether this call site is a handover moment at all — the
+  // boundary path is, the wall-clock :00 roll is not.
   if (queue.closingTrackHolds()) {
     if (opportunity) queue.noteHandoverOpportunityDeclined();
     return false;
@@ -264,10 +205,9 @@ export async function maybeRunIntro(
   return true;
 }
 
-// Mark the intro beat + stamp its air time (suppressHourly keys off the
-// stamp). One helper so the autonomous path and the manual runner agree —
-// a manual intro must also stand the generic hourly check down (issue seen
-// live: manual intro at :52, generic hourly still aired at the next :00).
+// Mark the intro beat + stamp its air time (suppressHourly keys off the stamp).
+// One helper so the autonomous and manual paths agree — a manual intro must
+// also stand the generic hourly check down.
 export function markIntroAired() {
   const prog = session.getProgramme();
   if (!prog) return;
@@ -326,11 +266,10 @@ export async function featureTick(queue: QueueApi, ctx: SessionContext, now = ne
   }
 }
 
-// Gate-free feature core. Resolution order for what airs: the show's pinned
-// segmentSkill, else the plan's kind for this hour — both through the forced
-// segment director with the feature topic injected as the brief (real data:
-// headlines, weather, search). Any miss (no kind, stale kind, director
-// failure) falls to the straight-talk floor so the beat still airs.
+// Gate-free feature core. Resolution order: the show's pinned segmentSkill,
+// else the plan's kind for this hour, both through the forced segment director
+// with the feature topic as the brief. Any miss falls to the straight-talk
+// floor so the beat still airs.
 export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourIndex = null, now = new Date() }: { hourIndex?: number | null; now?: Date } = {}): Promise<string> {
   const show = settings.resolveActiveShow(now);
   if (!show?.programme) throw new Error('no programme show is on air');
@@ -350,11 +289,8 @@ export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourInd
           persona: speaker,
         });
         if (run.aired && run.text) return run.text;
-        // The skill stood down — its data had nothing usable in it (issue
-        // #1412). The BEAT is still mandatory, so this falls through to the
-        // straight-talk floor below exactly as a director failure does: the
-        // feature airs, written from the topic and the moment, rather than
-        // from facts the skill never actually found.
+        // Skill stood down for want of usable data (#1412). The beat is still
+        // mandatory, so fall through to the straight-talk floor.
         queue.log('scheduler', `Programme feature capability "${kind}" stood down (${run.reason || 'no usable data'}) — airing straight talk instead`);
       } catch (err) {
         queue.log('error', `Programme feature capability "${kind}" failed (${(err as Error).message}) — airing straight talk instead`);
@@ -395,8 +331,7 @@ export async function runOutro(queue: QueueApi, ctx: SessionContext, now = new D
   if (!show?.programme) throw new Error('no programme show is on air');
   const prog = session.getProgramme();
   const plan = prog?.plan || null;
-  // Tease whatever the grid says follows this show (another show's name, or
-  // nothing when the station goes back to autonomous hours).
+  // Tease whatever the grid says follows this show, if anything.
   const next = settings.resolveActiveShow(new Date(now.getTime() + 60 * 60 * 1000));
   const nextShowName = next && next.id !== show.id ? next.name : null;
   return withTrace({ kind: 'programme-outro', show: show.name }, async () => {
@@ -423,17 +358,12 @@ export async function runOutro(queue: QueueApi, ctx: SessionContext, now = new D
   });
 }
 
-// Session-settled hook — the one call both maybeRoll call sites make after
-// runPersonaHandoff: attach + plan the episode, then air the intro if it's
-// still pending. Returns true when a standalone intro aired just now (the
-// hourly cron uses this to skip the generic time check).
-// `now` follows the same contextDate rule as ensurePlan.
+// The one call both maybeRoll call sites make after runPersonaHandoff: attach +
+// plan the episode, then air the intro if still pending. Returns true when a
+// standalone intro aired. `now` follows ensurePlan's contextDate rule.
 //
-// `opportunity` is passed straight through to maybeRunIntro and says whether
-// this call site is a real handover moment (#1576): the queue's boundary path
-// is, the hourly cron's wall-clock roll is not. It has no default here for the
-// same reason it has one there — a new call site must state which it is, while
-// the manual runners that reach maybeRunIntro directly stay non-consuming.
+// `opportunity` passes through to maybeRunIntro (#1576) and has no default
+// here on purpose: a new call site must state whether it is a handover moment.
 export async function onSessionSettled(
   queue: QueueApi,
   ctx: SessionContext,

@@ -1,9 +1,6 @@
-// Multipart single-file upload middleware (in-memory) for operator media
-// imports — jingles, sound effects, and skill .zip bundles. Wraps multer so a
-// too-large file or a parse error comes back as a clean JSON 400 instead of
-// Express's default HTML error page. The global express.json() body parser
-// doesn't touch multipart/form-data, so there's no conflict applying this
-// per-route.
+// In-memory multipart single-file upload for operator media imports. Wraps
+// multer so a too-large file or parse error is a JSON 400, not Express's HTML
+// error page. express.json() ignores multipart/form-data, so this is per-route.
 
 import multer from 'multer';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
@@ -12,8 +9,7 @@ const AUDIO_MAX_BYTES = 25 * 1024 * 1024; // 25 MB — generous for a stinger.
 const ZIP_MAX_BYTES = 5 * 1024 * 1024;    // 5 MB — a skill bundle is tiny (text + one small module).
 const storage = multer.memoryStorage();
 
-// Shared core: a single named multipart field, capped, with multer's errors
-// (notably LIMIT_FILE_SIZE) mapped to a JSON 400. Nothing here is media-specific.
+// One named multipart field, capped, with multer errors mapped to a JSON 400.
 function singleUpload(field: string, maxBytes: number): RequestHandler {
   const mw = multer({ storage, limits: { fileSize: maxBytes } }).single(field);
   return (req: Request, res: Response, next: NextFunction) => {
@@ -34,8 +30,7 @@ export function audioUpload(field: string, maxBytes = AUDIO_MAX_BYTES): RequestH
   return singleUpload(field, maxBytes);
 }
 
-// A skill .zip bundle upload (SKILL.md + optional tool.mjs). Small cap — the
-// import route rejects anything that isn't a lean skill bundle anyway.
+// A skill .zip bundle upload (SKILL.md + optional tool.mjs).
 export function zipUpload(field: string, maxBytes = ZIP_MAX_BYTES): RequestHandler {
   return singleUpload(field, maxBytes);
 }

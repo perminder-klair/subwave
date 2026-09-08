@@ -15,9 +15,7 @@ export const router = express.Router();
 
 router.get('/listeners', requireAdmin, async (req, res) => {
   try {
-    // sinceMinutes caps at one week — past that the JSONL gets too big to
-    // parse in-memory comfortably, and the sparkline isn't useful at that
-    // resolution anyway.
+    // Caps at one week: past that the JSONL is too big to parse in-memory.
     const sinceMinutes = Math.max(
       5,
       Math.min(parseInt(String(req.query.sinceMinutes ?? ''), 10) || 1440, 7 * 1440),
@@ -36,22 +34,16 @@ router.get('/listeners', requireAdmin, async (req, res) => {
   }
 });
 
-// Admin-gated GET /listeners/connections — live per-listener detail (IP,
-// mount, user-agent, connected-for) read from Icecast's admin interface.
-// Feeds the admin connections table. 502 on a real Icecast auth/transport
-// failure so the UI can distinguish "nobody listening" (200, empty) from
-// "couldn't reach Icecast admin".
+// Live per-listener detail from Icecast's admin interface. 502 on an Icecast
+// auth/transport failure, so the UI can tell "nobody listening" (200, empty)
+// from "couldn't reach Icecast admin".
 router.get('/listeners/connections', requireAdmin, async (_req, res) => {
   try {
-    // Group by IP+UA so Safari's duplicate socket is one row + one count, not
-    // two — same dedup the headline listener count uses. Deliberately NOT by
-    // IP: the forwarded address may be untrusted, and one NAT is many
-    // listeners. Nothing below changes that.
+    // Group by IP+UA (same dedup as the headline count), deliberately NOT by IP
+    // alone: the forwarded address may be untrusted and one NAT is many listeners.
     const connections = groupConnections(await getConnections());
-    // What the icecast render trusted (#1613), on the SAME response that
-    // carries the rows: a BYO stack has no `caddy` name to resolve, so every
-    // row is the edge's container address and the operator's only clue used to
-    // be a line in the broadcast container's log. Advisory — it gates nothing.
+    // What the icecast render trusted (#1613), so the UI can explain rows that
+    // are all the edge's address. Advisory — it gates nothing.
     res.json({
       count: connections.length,
       connections,

@@ -1,10 +1,7 @@
 // Server-side station identity lookup for the homepage's generateMetadata()
-// share-card preview (issue #272).
-//
-// Runs in the Next.js server, NOT the browser, so it cannot use
-// NEXT_PUBLIC_API_URL — that resolves to `/api`, a browser-relative path routed
-// through Caddy. Reach the controller over the internal compose network via
-// CONTROLLER_INTERNAL_URL, falling back to http://localhost:7701 for dev.
+// share-card preview (#272). Runs in the Next.js server, so it cannot use
+// NEXT_PUBLIC_API_URL (a browser-relative `/api`); it reaches the controller
+// over the internal compose network.
 const CONTROLLER_BASE = (
   process.env.CONTROLLER_INTERNAL_URL || 'http://localhost:7701'
 ).replace(/\/$/, '');
@@ -48,15 +45,10 @@ export interface StationMeta {
 // Returns null when there's nothing operator-specific to say, so callers keep
 // their generic SUB/WAVE copy.
 //
-// Description precedence (issue #1086): settings.stationDescription, then the
-// active persona's tagline (only when `allowPersonaTagline`), then a generated
-// sentence naming the station.
-//
-// `allowPersonaTagline` is back-compat, not a good default: rung 2 IS the drift
-// #1086 reports, since a link shared at noon and one at midnight describe the
-// station differently. The homepage opts in only because #272 already shipped
-// tagline-personalised previews there. Routes that never had it (/listen) leave
-// it off and stay persona-independent.
+// Description precedence (#1086): settings.stationDescription, then the active
+// persona's tagline (only when `allowPersonaTagline`), then a generated
+// sentence naming the station. `allowPersonaTagline` is back-compat only — it
+// makes the preview vary by time of day — so only the homepage opts in.
 export async function fetchStationMeta(
   { allowPersonaTagline = false }: { allowPersonaTagline?: boolean } = {},
 ): Promise<StationMeta | null> {

@@ -1,16 +1,7 @@
-// Unit tests for the never-play blocklist (music/blocklist.ts): add/remove/
-// dedupe round-trips through blocklist.json, and the isBlocked() matching
-// contract — id-first (track/album/artist), exact normalised-name fallback for
-// album/artist entries (library-db rows carry no Subsonic ids), and NO name
-// matching for track entries (covers/re-recordings share titles).
-//
-// Also pins the admin-facing half: matchOf()'s precedence (the UI names the
-// matched entry and unblocks exactly it, so a doubly-blocked row must always
-// resolve the same way), annotate() keeping blocked rows instead of dropping
-// them, and removeMany()'s single-rewrite bulk unblock.
-// Run: `tsx scripts/blocklist.test.ts`.
-//
-// node:assert-via-tsx style, matching scripts/auto-pool.test.ts.
+// The never-play blocklist (music/blocklist.ts): persistence round-trips and
+// the isBlocked() matching contract — id first, exact normalised-name fallback
+// for album/artist entries (library-db rows carry no Subsonic ids), and NO
+// name matching for track entries, since covers share titles.
 
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
@@ -24,7 +15,7 @@ process.env.STATE_DIR = stateDir;
 const blocklist = await import('../src/music/blocklist.js');
 
 try {
-  await blocklist.load(); // no file yet — starts empty, must not throw
+  await blocklist.load(); // no file yet: starts empty, must not throw
   assert.equal(blocklist.isEmpty(), true);
   assert.deepEqual(blocklist.list(), []);
 
@@ -33,7 +24,7 @@ try {
   const arr = [{ id: 'a' }, { id: 'b' }];
   assert.equal(blocklist.rejectBlocked(arr), arr);
 
-  // ── track entries: id-only, never by name ─────────────────────────────────
+  // Track entries: id only, never by name.
   const t = await blocklist.add({ type: 'track', id: 'trk1', name: 'Song X', artist: 'Y' });
   assert.ok(t);
   assert.equal(blocklist.isBlocked({ id: 'trk1' }), true);
@@ -43,13 +34,13 @@ try {
   assert.equal(await blocklist.add({ type: 'track', id: 'trk1' }), null);
   assert.equal(blocklist.list().length, 1);
 
-  // ── album entries: id, then (name, artist) pair ───────────────────────────
+  // Album entries: id, then the (name, artist) pair.
   await blocklist.add({ type: 'album', id: 'alb1', name: 'Greatest Hits', artist: 'Ambient Guy' });
   assert.equal(blocklist.isBlocked({ id: 's1', albumId: 'alb1' }), true);
   assert.equal(blocklist.isBlocked({ id: 's2', album: 'greatest  hits', artist: 'AMBIENT GUY' }), true, 'album name+artist fallback, normalised');
   assert.equal(blocklist.isBlocked({ id: 's3', album: 'Greatest Hits', artist: 'Someone Else' }), false, 'same album title by another artist stays playable');
 
-  // ── artist entries: id, then normalised name ──────────────────────────────
+  // Artist entries: id, then normalised name.
   await blocklist.add({ type: 'artist', id: 'art1', name: 'Ambient Guy' });
   assert.equal(blocklist.isBlocked({ id: 's4', artistId: 'art1' }), true);
   assert.equal(blocklist.isBlocked({ id: 's5', artist: ' ambient guy ' }), true, 'artist name fallback, normalised');
@@ -59,22 +50,17 @@ try {
   const filtered = blocklist.rejectBlocked([{ id: 'trk1' }, { id: 'ok' }, { id: 's7', artist: 'Ambient Guy' }]);
   assert.deepEqual(filtered.map((s: any) => s.id), ['ok']);
 
-  // ── persistence round-trip ────────────────────────────────────────────────
   const onDisk = JSON.parse(readFileSync(join(stateDir, 'blocklist.json'), 'utf8'));
   assert.equal(onDisk.entries.length, 3);
   assert.ok(onDisk.entries.every((e: any) => e.addedAt));
 
-  // ── remove ────────────────────────────────────────────────────────────────
   assert.equal(await blocklist.remove('artist', 'art1'), true);
   assert.equal(await blocklist.remove('artist', 'art1'), false, 'second remove is a miss');
   assert.equal(blocklist.isBlocked({ id: 's5', artist: 'ambient guy' }), false, 'artist unblocked');
   assert.equal(blocklist.isBlocked({ id: 'trk1' }), true, 'other entries survive a remove');
 
-  // ── matchOf: which entry, not just whether ────────────────────────────────
-  // The admin UI names the matched entry and offers to remove exactly it, so
-  // the precedence is a contract: ids before the name fallback, and the most
-  // specific id first. A row that is blocked twice over must always resolve to
-  // the same entry.
+  // matchOf precedence is a contract, since the UI unblocks exactly the entry
+  // it names: ids before the name fallback, most specific id first.
   await blocklist.add({ type: 'artist', id: 'art1', name: 'Ambient Guy' });
   const doubleBlocked = { id: 'trk1', artistId: 'art1', artist: 'Ambient Guy' };
   assert.equal(blocklist.matchOf(doubleBlocked)?.type, 'track', 'track id wins over an artist block on the same row');
@@ -83,17 +69,17 @@ try {
   assert.equal(blocklist.matchOf({ id: 's10', artist: 'Nobody' }), null);
   assert.equal(blocklist.matchOf(null), null);
 
-  // Album keys join two free-text fields. Without a separator no string can
-  // contain, ("Live In", "Tokyo") and ("Live", "In Tokyo") would collide.
+  // Album keys join two free-text fields, so without an uncontainable
+  // separator ("Live In", "Tokyo") and ("Live", "In Tokyo") collide.
   await blocklist.add({ type: 'album', id: 'alb2', name: 'Live In', artist: 'Tokyo' });
   assert.equal(blocklist.isBlocked({ id: 's11', album: 'Live In', artist: 'Tokyo' }), true);
   assert.equal(blocklist.isBlocked({ id: 's12', album: 'Live', artist: 'In Tokyo' }), false, 'album/artist boundary must not smear');
 
-  // refOf carries only what a row needs to render and unblock. The `kind`
-  // discriminant separates id entries from rule refs on the same wire shape.
+  // refOf carries only what a row needs to render and unblock; `kind`
+  // separates id entries from rule refs on the same wire shape.
   assert.deepEqual(blocklist.refOf(blocklist.matchOf({ id: 'trk1' })!), { kind: 'entry', type: 'track', id: 'trk1', name: 'Song X' });
 
-  // ── annotate: keep every row, stamp the blocking entry ────────────────────
+  // annotate keeps every row and stamps the blocking entry.
   const annotated = blocklist.annotate([
     { id: 'trk1', title: 'Song X' },
     { id: 'clear', title: 'Something Else' },
@@ -105,7 +91,7 @@ try {
   assert.equal(annotated[2].blockedBy?.id, 'art1');
   assert.equal((annotated[0] as any).title, 'Song X', 'annotate preserves the row');
 
-  // ── removeMany: one rewrite, honest about what was already gone ───────────
+  // removeMany: one rewrite, honest about what was already gone.
   const bulk = await blocklist.removeMany([
     { type: 'album', id: 'alb1' },
     { type: 'album', id: 'alb2' },
@@ -127,11 +113,9 @@ try {
   assert.equal(none.removed, 0);
   assert.equal(none.missing.length, 1);
 
-  // ── Rule entries (integration; pure matching pinned by ─────────────────────
-  // scripts/blocklist-rules.test.ts). Non-seasonal, unscoped rules here so the
-  // clock/show context can't flap the assertions.
-
-  // The remaining id entries at this point: track trk1, artist art1.
+  // Rule entries (pure matching lives in blocklist-rules.test.ts). Non-seasonal
+  // and unscoped so the clock/show context can't flap the assertions. Remaining
+  // id entries here: track trk1, artist art1.
   const rule = await blocklist.addRule({ label: 'No ambient tag', field: 'tag', values: ['ambient'] });
   assert.ok(rule.id && rule.addedAt);
   assert.equal(blocklist.isEmpty(), false);
@@ -140,7 +124,7 @@ try {
   assert.equal(blocklist.isBlocked(tagged), true, 'rule blocks by tag');
   assert.equal(blocklist.isBlocked({ id: 'r-t2', genres: ['Rock'], moods: [] }), false);
 
-  // hitOf: entries FIRST (the UI unblocks exactly the entry), rules second.
+  // hitOf: entries first, rules second.
   const ruleHit = blocklist.hitOf(tagged);
   assert.equal(ruleHit?.kind, 'rule');
   assert.equal(ruleHit?.kind === 'rule' && ruleHit.label, 'No ambient tag');
@@ -153,9 +137,7 @@ try {
   const ruleAnnotated = blocklist.annotate([tagged]);
   assert.equal(ruleAnnotated[0].blockedBy?.kind, 'rule');
 
-  // Persistence round-trip: rules ride blocklist.json beside entries, and a
-  // pre-rules file (no `rules` key) loads as zero rules (checked implicitly by
-  // the initial load at the top of this file).
+  // Rules ride blocklist.json beside entries; a pre-rules file loads as zero.
   const withRules = JSON.parse(readFileSync(join(stateDir, 'blocklist.json'), 'utf8'));
   assert.equal(withRules.rules.length, 1);
   assert.equal(withRules.rules[0].field, 'tag');
@@ -170,7 +152,7 @@ try {
   await assert.rejects(() => blocklist.addRule({ label: '', field: 'tag', values: ['x'] }), /label/);
   assert.equal(blocklist.listRules().length, 1);
 
-  // Remove → empty again (id entries still present, so isEmpty stays false).
+  // Remove: id entries still present, so isEmpty stays false.
   assert.equal(await blocklist.removeRule(rule.id), true);
   assert.equal(await blocklist.removeRule(rule.id), false, 'second remove is a miss');
   assert.equal(blocklist.isBlocked(tagged), false, 'rule gone, track pickable again');

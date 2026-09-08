@@ -1,17 +1,10 @@
-// Hybrid seed picker for the embedding-propagated tagger.
-//
-// Waterfall (each layer takes from the pool only what the earlier layers
-// haven't already taken):
-//   1. Already-tagged tracks (legacy v1 + prior runs) — free, count toward budget
-//   2. Operator's explicit signals — starred + mood-named playlists + frequent
-//      (capped at ~30% of seedCount so they don't crowd out coverage)
-//   3. Stratified-by-(genre, decade) — guarantees rare-mood corners of the
-//      library get at least one seed (capped at ~35%)
-//   4. K-means over embedding space — fill the remainder with diverse picks
-//
-// Layers 1-3 are deterministic given the same library state; layer 4's
-// k-means init and shuffle fall back to Math.random, so only the earlier
-// layers are stable across runs. Tests exercise the deterministic layers.
+// Hybrid seed picker for the embedding-propagated tagger. Waterfall, each layer
+// taking only what the earlier ones left:
+//   1. already-tagged tracks (free, outside the budget)
+//   2. operator signals - starred, mood-named playlists, frequent (cap ~30%)
+//   3. stratified by (genre, decade), so rare corners get a seed (cap ~35%)
+//   4. k-means over embedding space for the remainder
+// Layers 1-3 are deterministic; layer 4 uses Math.random.
 
 import * as subsonic from './subsonic.js';
 import * as db from './library-db.js';
@@ -27,18 +20,12 @@ export interface SeedSelection {
 export interface SelectorOpts {
   seedCount: number;
   embeddingForId?: (id: string) => Float32Array | number[] | null;
-  // When omitted we skip the k-means layer (useful in tests with no embeddings).
-  // When set, every candidate id any layer surfaces is rejected if it's not in
-  // this set. Callers pass this to honour `--limit`: layers 2 (operator
-  // signals — starred/playlists/frequent) and 3 (stratified buckets) and 4
-  // (k-means residual) all pull from the full library by default, so without
-  // this gate a `--limit 10` run would still tag up to seedCount (default
-  // 200) tracks from outside the in-scope window.
+  // Every layer pulls from the full library by default, so this set is how
+  // `--limit` is honoured: an id outside it is rejected whichever layer found it.
   untaggedPool?: Set<string>;
 }
 
-// Live vocabulary as a lowercased Set — read per call, not at module load, so
-// operator-added moods (settings.moods) still match mood-named playlists.
+// Read per call, not at module load, so operator-added moods still match.
 function moodWords(): Set<string> {
   return new Set(moodVocab().map(s => s.toLowerCase()));
 }
@@ -54,9 +41,7 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
     kmeans: 0,
   };
 
-  // The target is `seedCount` NEW tracks to LLM-tag; the already-tagged pool
-  // counts as ambient context (they'll show up as neighbours during
-  // propagation), but they don't consume the seed budget.
+  // Budget is seedCount NEW tracks; already-tagged ones don't consume it.
   const chosen = new Set<string>();
   const budget = Math.max(0, opts.seedCount);
 
@@ -70,7 +55,7 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
     return true;
   };
 
-  // --- Layer 2: operator's explicit signals -------------------------------
+  // Layer 2: operator's explicit signals.
   const operatorCap = Math.ceil(budget * 0.3);
 
   if (chosen.size < operatorCap) {
@@ -125,14 +110,13 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
     } catch { /* ignore */ }
   }
 
-  // --- Layer 3: stratified by (genre, decade) ------------------------------
-  // Allocate up to budget*0.35 — give every (genre, decade) bucket at least
-  // one representative so rare-mood corners can't be invisible to seeds.
+  // Layer 3: stratified by (genre, decade), so every bucket gets at least one
+  // representative and rare corners can't be invisible to seeds.
   const stratCap = Math.ceil(budget * 0.35) + chosen.size;
   const buckets = db.trackIdsByGenreDecade
     ? db.trackIdsByGenreDecade()
     : new Map<string, string[]>();
-  // Round-robin: pick one id per bucket per round, repeat until cap or buckets empty
+  // Round-robin: one id per bucket per round, until the cap or buckets empty.
   const bucketKeys = [...buckets.keys()].sort();
   let added = true;
   let round = 0;
@@ -148,14 +132,11 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
     round += 1;
   }
 
-  // --- Layer 4: k-means over embeddings -----------------------------------
-  // Without an embedding lookup, skip k-means and top up randomly from
-  // unembedded ids. This keeps the function useful in early-bootstrap phases
-  // when phase 1 hasn't run yet, AND keeps tests not-needing-real-embeddings.
+  // Layer 4: k-means over embeddings. Without an embedding lookup, top up
+  // randomly instead, so this still works before phase 1 has run.
   if (chosen.size < budget) {
     const remaining = budget - chosen.size;
-    // When untaggedPool is set (i.e. honouring --limit), only iterate that
-    // smaller window — saves building a 6k-id array just to filter it down.
+    // With untaggedPool set, iterate that smaller window rather than the library.
     const basePool = opts.untaggedPool
       ? [...opts.untaggedPool]
       : db.untaggedIds();
@@ -164,17 +145,14 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
     if (opts.embeddingForId) {
       const picks = kmeansSeedPicks(candidatePool, opts.embeddingForId, remaining);
       for (const id of picks) take('kmeans', id);
-      // k-means can return fewer than asked — un-embedded candidates drop out,
-      // and the cluster count is bounded (KMEANS_MAX_K). Top up randomly so
-      // the seed budget is always spent.
+      // k-means can return fewer than asked (un-embedded candidates drop out,
+      // cluster count is capped), so top up randomly to spend the budget.
       if (chosen.size < budget) {
         const rest = shuffle(candidatePool.filter(id => !chosen.has(id)))
           .slice(0, budget - chosen.size);
         for (const id of rest) take('kmeans-topup', id);
       }
     } else {
-      // No embeddings — shuffle and take. Deterministic seed for testability
-      // is left as an implementation-time detail; default is Math.random.
       const shuffled = shuffle(candidatePool).slice(0, remaining);
       for (const id of shuffled) take('kmeans', id);
     }
@@ -187,12 +165,9 @@ export async function selectSeeds(opts: SelectorOpts): Promise<SeedSelection> {
   };
 }
 
-// Lightweight k-means in pure JS. Bounded so the layer stays usable on real
-// library sizes: the pool is sampled down to KMEANS_POOL_CAP and the cluster
-// count capped at KMEANS_MAX_K, which with the incremental init below keeps
-// the whole thing O(POOL_CAP · MAX_K · dim) — seconds for 768-d vectors, a
-// fine price inside a one-shot tagger job. Quality is "good enough for picking
-// diverse seeds," not "optimal"; selectSeeds tops up any shortfall randomly.
+// Lightweight k-means, bounded to stay affordable on real libraries: the pool is
+// sampled to KMEANS_POOL_CAP and k capped at KMEANS_MAX_K, keeping this
+// O(POOL_CAP * MAX_K * dim). Good enough for diverse seeds, not optimal.
 const KMEANS_POOL_CAP = 4000;
 const KMEANS_MAX_K = 150;
 
@@ -214,12 +189,9 @@ function kmeansSeedPicks(
   if (vectors.length === 0) return [];
   if (vectors.length <= kk) return vectors.map(x => x.id);
 
-  // Init centroids with k-means++ — pick first at random, then each next
-  // proportional to squared-distance from the closest existing centroid.
-  // INCREMENTAL: keep each point's distance-to-nearest-centroid and refresh it
-  // against only the newest centroid per round — O(n·k·dim), where the old
-  // from-scratch recompute was O(n·k²·dim), which is what made this layer
-  // unaffordable (and therefore dead) on real libraries.
+  // k-means++ init, incremental: each point keeps its distance to the nearest
+  // centroid, refreshed against only the newest one per round. O(n*k*dim); a
+  // from-scratch recompute is O(n*k^2*dim) and too slow on real libraries.
   const dim = vectors[0].v.length;
   const centroids: number[][] = [vectors[Math.floor(Math.random() * vectors.length)].v.slice()];
   const nearest = vectors.map(x => sqDist(x.v, centroids[0]));
@@ -240,11 +212,10 @@ function kmeansSeedPicks(
     }
   }
 
-  // Lloyd iterations
+  // Lloyd iterations.
   const ITER = 8;
   const assignments = new Array(vectors.length).fill(0);
   for (let it = 0; it < ITER; it++) {
-    // assign
     for (let i = 0; i < vectors.length; i++) {
       let best = 0;
       let bestD = Infinity;
@@ -254,7 +225,6 @@ function kmeansSeedPicks(
       }
       assignments[i] = best;
     }
-    // update
     const sums = Array.from({ length: centroids.length }, () => new Array(dim).fill(0));
     const counts = new Array(centroids.length).fill(0);
     for (let i = 0; i < vectors.length; i++) {

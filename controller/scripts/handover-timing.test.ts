@@ -1,29 +1,12 @@
-// Pins show handover timing and ordering (settings.handover →
-// broadcast/handover-policy.ts, with the outro window in
-// broadcast/programme-pure.ts), #1576.
-//
-// Four things are worth pinning, and the middle two are the ones that fail
-// silently in production:
-//
-//  - THE UPGRADE IS BYTE-IDENTICAL. The offset defaults to 5, which puts the
-//    outro window exactly where the hardcoded :55 put it, and every way of NOT
-//    having the key — a settings.json written before it existed, a hand-edited
-//    value — has to resolve to 5 as well.
-//  - THE OFFSET AND THE TALK ROW'S STRIDE ARE THE SAME NUMBER. The outro is a
-//    station-clock window that the talk table's programme row samples ONCE from
-//    a fixed process minute. A window the stride cannot land inside is a show
-//    that stops signing off, with nothing logged because nothing was due — so
-//    the bound, the step and the row's `stride` are checked against each other
-//    here, and every permitted offset is replayed against every real IANA zone
-//    offset.
-//  - THE ORDERING RULE NEEDS BOTH COUNTERS. A boundary alone releases at the
-//    START of the closing track (eager drains); a declined opportunity alone
-//    can release inside the track the sign-off ducked (pair-aware drains, which
-//    ask ~120s before that track ends). Both drain modes are walked below.
-//  - A SIGN-OFF IS WHAT THE LISTENER HEARD. The trigger is the aired kind, not
-//    a scheduler fire.
-//
+// Pins show handover timing and ordering (#1576): settings.handover →
+// broadcast/handover-policy.ts, with the outro window in broadcast/programme-pure.ts.
+// The offset defaults to 5, so an upgrade is byte-identical; it must be a multiple
+// of the talk row's stride, or the window is never sampled and the show stops
+// signing off; and the release needs BOTH counters (a boundary alone releases at
+// the start of the closing track, a declined opportunity alone releases inside
+// the track the sign-off ducked).
 // STATE_DIR is redirected before the first import, like talk-air.test.ts.
+// broadcast/handover-policy.ts, with the outro window in
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -43,14 +26,9 @@ const { beatWindow } = await import('../src/broadcast/programme-pure.js');
 const { TALK_SLOTS, talkSlot } = await import('../src/broadcast/talk-scheduler.js');
 const { HANDOVER_OFFSET_BOUNDS, HANDOVER_OFFSET_STEP_MINUTES } =
   await import('../src/schemas/settings.js');
-// COLD load, not load(): load() returns the in-process cache untouched, so a
-// field missing from its composition passes an in-process assertion and only
-// vanishes on the next container start.
+// COLD load: load() returns the in-process cache, so a missing field still passes.
 const { setCache } = await import('../src/settings/store.js');
 
-// ---------------------------------------------------------------------------
-// THE DIAL
-// ---------------------------------------------------------------------------
 
 test('the offset defaults to 5, which is where the sign-off has always aired', async () => {
   await settings.load();
@@ -117,9 +95,6 @@ test('a settings.json without the key, or with junk in it, reads as the default'
   }
 });
 
-// ---------------------------------------------------------------------------
-// THE DIAL AND THE TALK ROW ARE ONE NUMBER
-// ---------------------------------------------------------------------------
 
 test('the programme row samples every permitted offset exactly once, in every zone', () => {
   const row = talkSlot('programme', TALK_SLOTS);
@@ -128,9 +103,8 @@ test('the programme row samples every permitted offset exactly once, in every zo
   assert.equal(HANDOVER_OFFSET_BOUNDS.min % HANDOVER_OFFSET_STEP_MINUTES, 0);
   assert.equal(HANDOVER_OFFSET_BOUNDS.max % HANDOVER_OFFSET_STEP_MINUTES, 0);
 
-  // Every offset the save path will accept, against every real IANA zone
-  // offset (all multiples of 15 minutes). One sample inside the window, never
-  // zero — zero is the silent failure this bound exists to prevent.
+  // Every accepted offset against every real IANA zone offset (multiples of 15
+  // minutes). One sample inside the window, never zero.
   for (let off = HANDOVER_OFFSET_BOUNDS.min; off <= HANDOVER_OFFSET_BOUNDS.max; off += HANDOVER_OFFSET_STEP_MINUTES) {
     for (let zone = 0; zone < 60; zone += 15) {
       let hits = 0;
@@ -150,25 +124,16 @@ test('the largest offset still leaves the feature beat alone', () => {
   }
 });
 
-// ---------------------------------------------------------------------------
-// THE ORDERING RULE
-// ---------------------------------------------------------------------------
 
 test('no sign-off, no wait', () => {
   assert.equal(holdsForClosingTrack(null), false,
     'the common boundary — a mic-pass with no sign-off behind it — costs nothing');
 });
 
-// A tiny stand-in for the queue's two counters, so the rule can be walked
-// without a station. `ask()` is one handover OPPORTUNITY — a drain/boundary
-// cycle that could itself have carried the incoming host's first words: the
-// mic-pass at a pick cycle, or the standalone programme intro at the
-// session-settled hook the same cycle runs.
-//
-// `peek()` is the other kind of caller, and the distinction is the whole of the
-// fix in this file's second half: the wall-clock :00 session roll asks the same
-// question minutes before any music has moved. It may HOLD on the answer, but
-// it must not bank a decline — see the call-site tests below.
+// A stand-in for the queue's two counters. `ask()` is one handover OPPORTUNITY —
+// a drain/boundary cycle that could itself have aired the incoming host's first
+// words. `peek()` is the other kind of caller: the wall-clock :00 roll may HOLD
+// on the answer but must not bank a decline.
 function station() {
   let boundaries = 0;
   let held = 0;
@@ -229,16 +194,10 @@ test('once released, the rule stays released', () => {
 });
 
 test('a wall-clock ask holds the intro without spending the closing track', () => {
-  // THE REGRESSION. The :00 session roll reaches the same standalone-intro path
-  // (scheduler.rollSessionNow → programme.onSessionSettled → maybeRunIntro), but
-  // it is a cron minute, not a handover moment: at the default offset the
-  // sign-off airs at :55 over track A and A is usually still playing at :00.
-  //
-  // Banking that answer satisfies the declined-opportunity half inside the very
-  // track the sign-off ducked, so the next boundary — the START of the closing
-  // track — meets both counters and the incoming host opens with no whole track
-  // between the voices at all. That is the eager-drain column of the table this
-  // rule is documented with, reached by the other counter's back door.
+  // The :00 session roll reaches the same standalone-intro path but is a cron
+  // minute, not a handover moment: at the default offset the sign-off airs at :55
+  // over track A and A is usually still playing at :00. Banking that answer
+  // satisfies the opportunity half inside the very track the sign-off ducked.
   const s = station();
   assert.equal(s.peek(), true, ':00 — still inside track A, so the intro waits');
   assert.equal(s.peek(), true, 'and asking again changes nothing: peeking is free');
@@ -254,9 +213,6 @@ test('the thresholds are the ones the rule is documented with', () => {
   assert.deepEqual(handoverStatus().closingTrack, { boundaries: 1, held: 1 });
 });
 
-// ---------------------------------------------------------------------------
-// THE TRIGGER IS WHAT AIRED
-// ---------------------------------------------------------------------------
 
 test('only a sign-off that reached the stream starts the wait', async () => {
   // The singleton, since the class is not exported — these two methods only
@@ -283,14 +239,6 @@ test('only a sign-off that reached the stream starts the wait', async () => {
   q._handover = null;
 });
 
-// ---------------------------------------------------------------------------
-// THE CALL SITES
-//
-// The rule above is arithmetic and was already pinned; what was NOT pinned is
-// which callers feed it. Both bugs these cover live entirely in the wiring —
-// the pure function is correct in each — so they are asserted against the real
-// queue methods rather than a stand-in.
-// ---------------------------------------------------------------------------
 
 test('asking is free — only a declined OPPORTUNITY spends the closing track', async () => {
   const { queue: q } = await import('../src/broadcast/queue.js');
@@ -314,13 +262,9 @@ test('asking is free — only a declined OPPORTUNITY spends the closing track', 
 });
 
 test('a sign-off nobody ever answered does not defer a later mic-pass', async () => {
-  // The leak: the two ask sites are a pending mic-pass and a programme intro,
-  // so an hour that is neither — no persona change, no programme — answers at
-  // neither, and the stamp used to sit there with its opportunity counter at
-  // zero while boundaries piled up. The next unrelated persona changeover then
-  // inherited a hold, which handover-policy.ts is explicit is not what the rule
-  // is about: a changeover with no sign-off behind it is a designed two-voice
-  // moment and must cost nothing.
+  // The leak: the two ask sites are a pending mic-pass and a programme intro, so an
+  // hour that is neither answers at neither and the stamp sat there while boundaries
+  // piled up. A changeover with no sign-off behind it must cost nothing.
   const { queue: q } = await import('../src/broadcast/queue.js');
   q._handover = null;
   q._lastSessionId = 'sess-a';
@@ -337,10 +281,8 @@ test('a sign-off nobody ever answered does not defer a later mic-pass', async ()
 });
 
 test('a repeated maybeRoll with no roll behind it does not age the wait', async () => {
-  // maybeRoll returns the LIVE session when nothing rolled, and both call sites
-  // hand its id straight over — so the no-op case must be a no-op here too, or
-  // a station with frequent track boundaries would age the wait out inside the
-  // very changeover it is owed to.
+  // maybeRoll returns the LIVE session when nothing rolled, so the no-op case must
+  // be a no-op here too or a busy station ages the wait out.
   const { queue: q } = await import('../src/broadcast/queue.js');
   q._handover = null;
   q._lastSessionId = 'sess-a';
@@ -364,12 +306,9 @@ test('the incoming host opening settles the debt', async () => {
 });
 
 test('polling /debug never spends the wait', async () => {
-  // handoverWait() is what the admin /debug row reads, and /debug is polled
-  // every couple of seconds. It answers by asking closingTrackHolds(), so the
-  // question HAS to be free: a side-effecting predicate here would let an open
-  // admin tab burn the one required opportunity within seconds of a sign-off
-  // and release the incoming host a whole track early — the same failure as the
-  // wall-clock roll, arriving through the operator's own dashboard.
+  // handoverWait() is read by the admin /debug row, polled every couple of seconds,
+  // so the question must be free: a side-effecting predicate would burn the one
+  // required opportunity and release the incoming host a track early.
   const { queue: q } = await import('../src/broadcast/queue.js');
   q._handover = null;
   q.noteHandoverSpeech('programme-outro');
@@ -397,17 +336,12 @@ test('/debug reads the live wait, not just the configured thresholds', async () 
   q._handover = null;
 });
 
-// ---------------------------------------------------------------------------
-// THE BOUND AND THE FEATURE WINDOW
-// ---------------------------------------------------------------------------
 
 test('the largest permitted offset still clears the feature beat', () => {
   // HANDOVER_OFFSET_BOUNDS.max is justified by the feature window's literals in
+  // programme-pure.ts, which cannot import the bound, so this test is the only
+  // thing holding the two numbers together.
   // programme-pure.ts, but that file cannot import the bound (it stays
-  // import-free) and schemas/settings.ts may import only zod — so the two
-  // numbers cannot be one constant and this is the only thing standing between
-  // them. Widening the bound, or moving the feature window, fails here rather
-  // than putting a show's sign-off on top of its own feature.
   for (let off = HANDOVER_OFFSET_BOUNDS.min; off <= HANDOVER_OFFSET_BOUNDS.max; off += HANDOVER_OFFSET_STEP_MINUTES) {
     for (let m = 0; m < 60; m++) {
       const w = beatWindow(m, off, HANDOVER_OFFSET_STEP_MINUTES);
@@ -416,10 +350,8 @@ test('the largest permitted offset still clears the feature beat', () => {
       }
     }
   }
-  // And the bound is the LARGEST such offset. One step further opens the outro
-  // ON the feature window, and since the outro is tested first the feature beat
-  // is the one that silently stops happening — which is why the bound is where
-  // it is, and why moving either number has to be a deliberate edit here.
+  // And the bound is the LARGEST such offset: one step further opens the outro on
+  // the feature window, and the outro is tested first, so the beat silently stops.
   const tooFar = HANDOVER_OFFSET_BOUNDS.max + HANDOVER_OFFSET_STEP_MINUTES;
   assert.equal(60 - tooFar, 35, 'the next step up opens the outro exactly on the feature window');
   assert.equal(beatWindow(35, tooFar, HANDOVER_OFFSET_STEP_MINUTES), 'outro',

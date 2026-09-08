@@ -1,13 +1,9 @@
 // Localized sample sentences for the admin "Play sample" button. A persona's
-// `language` is free operator text ("Turkish", "Türkçe", "tr", …), so the
-// lookup normalizes (lowercase, diacritics stripped) and matches the English
-// name, native name(s), and ISO 639-1 code. Unknown or empty language → null,
-// and the caller falls back to the English default sentence.
-//
-// Deliberately a static table, NOT an LLM translation call: the audition
-// button must stay instant and keep working with the model down. "SUB/WAVE"
-// stays untranslated in every entry — same proper-noun rule as the on-air
-// languageDirective (issue #349).
+// `language` is free operator text, so the lookup normalizes (lowercase,
+// diacritics stripped) and matches English name, native name(s) and ISO 639-1
+// code; unknown/empty → null and the caller uses the English default.
+// A static table, not an LLM call, so the audition stays instant with the model
+// down. "SUB/WAVE" stays untranslated in every entry (#349).
 
 interface PreviewEntry {
   // Normalized match keys: english name, native name(s), ISO 639-1 code.
@@ -75,8 +71,8 @@ const ENTRIES: PreviewEntry[] = [
     sample: 'คุณกำลังฟัง SUB/WAVE นี่คือตัวอย่างเสียง' },
   { keys: ['indonesian', 'bahasa indonesia', 'id'],
     sample: 'Anda sedang mendengarkan SUB/WAVE. Ini adalah contoh suara.' },
-  // English is the DEFAULT_PREVIEW_TEXT fallback, but an explicit "English"
-  // should still match rather than looking like an unknown language.
+  // English is the caller's fallback anyway, but an explicit "English" should
+  // match rather than read as an unknown language.
   { keys: ['english', 'en', 'en-gb', 'en-us'],
     sample: "You're listening to SUB/WAVE. This is a voice preview." },
 ];
@@ -96,9 +92,7 @@ for (const entry of ENTRIES) {
   for (const key of entry.keys) LOOKUP.set(normalizeLanguage(key), entry.sample);
 }
 
-// The localized preview sentence for a persona's free-text `language`, or
-// null when the language is empty/unrecognized (caller keeps the English
-// default — same behaviour those personas had before this table existed).
+// The localized preview sentence, or null when empty/unrecognized.
 export function localizedPreviewText(language?: string): string | null {
   if (!language || typeof language !== 'string') return null;
   return LOOKUP.get(normalizeLanguage(language)) ?? null;

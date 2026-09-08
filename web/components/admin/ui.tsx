@@ -12,12 +12,8 @@ import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group';
 import { Switch } from '../ui/switch';
 import { Badge, badgeVariants } from '../ui/badge';
 
-/**
- * A card title reduced to a stable scroll target: `"Listener requests"` →
- * `"listener-requests"`. Lives here rather than next to its one caller because
- * the anchor is a property of the Card, and a jump table elsewhere has to be
- * able to spell the same slug without importing a panel.
- */
+/** A card title reduced to a stable scroll target: `"Listener requests"` →
+ *  `"listener-requests"`. Shared so a jump table can spell the same slug. */
 export function cardAnchor(title: string): string {
   return title
     .toLowerCase()
@@ -53,10 +49,8 @@ export interface CardProps {
 }
 
 export function Card({ title, sub, right, children, className, bodyClass, headClass, flat, anchor }: CardProps) {
-  // Anchor slug derived from the title so /admin/settings' search can scroll to
-  // a card without every section having to hand-label one. Only a plain-string
-  // title is slugged — an interpolated one ("{provider} API key") would give a
-  // slug that moves with the data, which is worse than having none.
+  // Only a plain-string title is slugged; an interpolated one would give a slug
+  // that moves with the data.
   const slug = anchor ?? (typeof title === 'string' ? cardAnchor(title) : undefined);
   return (
     <section data-card={slug} className={cn('card', flat && 'is-flat', className)}>
@@ -84,26 +78,17 @@ export interface PillProps {
   /* Toggle state for a pill used as an on/off chip. Set it and the pill
      reports aria-pressed; leave it off for pills that fire a plain action. */
   pressed?: boolean;
-  /* Unavailable, but still worth finding — a chip past a selection cap, or one
-     frozen while a save is in flight. Keep passing `onClick`: the pill swallows
-     it. Dropping the handler instead would fall back to the Badge <span> and
-     take the chip out of the tab order entirely, which is what this prop
-     exists to avoid. */
+  /* Unavailable but still focusable. Keep passing `onClick` — the pill
+     swallows it; dropping it falls back to the Badge <span> and loses the tab stop. */
   disabled?: boolean;
 }
 
 /* Tag pill over shadcn Badge. `tone` ∈ ink | accent | solid (default =
    muted outline); `dot` prepends a small currentColor dot.
 
-   With `onClick` this renders a real <button> rather than a clickable Badge.
-   Badge is a <span>, so an onClick pill was reachable by mouse only — no tab
-   stop, no Enter/Space, and nothing announcing it as actionable. That made
-   every chip-style multi-select in the admin (webhook events, show genres,
-   skill toggles) keyboard-dead. `type="button"` is load-bearing for the panels
-   that DO sit inside a <form>: without it a chip click submits the form.
-
-   Without `onClick` the Badge path is unchanged, so the ~87 read-only pills
-   render exactly as before. */
+   With `onClick` this renders a real <button>, not a clickable Badge <span>,
+   so chip multi-selects keep a tab stop and Enter/Space. `type="button"` is
+   load-bearing inside a <form>. Without `onClick` the Badge path is unchanged. */
 export function Pill({ children, tone, dot, className, onClick, title, pressed, disabled }: PillProps) {
   const content = (
     <>
@@ -115,21 +100,16 @@ export function Pill({ children, tone, dot, className, onClick, title, pressed, 
     return (
       <button
         type="button"
-        /* text-start only to match the Badge <span> exactly: a <button> centres
-           its text by default. The pill is inline-flex so this changes nothing
-           visually today — it keeps the two paths provably style-identical. */
+        /* text-start matches the Badge <span>; a <button> centres text by default. */
         className={cn(
           badgeVariants({ variant: tone || 'default' }),
           disabled ? 'cursor-default' : 'cursor-pointer',
           'text-start',
           className,
         )}
-        /* aria-disabled, NOT the `disabled` attribute. A disabled <button> is
-           removed from the tab order, so a keyboard user cannot land on it to
-           hear WHY it is unavailable — for a chip past a selection cap that is
-           the whole message. aria-disabled announces the state and keeps the
-           tab stop, so the handler has to refuse the click itself: the element
-           is still natively clickable, by pointer and by Enter/Space alike. */
+        /* aria-disabled, not the `disabled` attribute: it keeps the tab stop so
+           the state can be announced. The element stays natively clickable, so
+           the handler itself has to refuse the click. */
         onClick={disabled ? undefined : onClick}
         title={title}
         aria-pressed={pressed}
@@ -254,9 +234,8 @@ export function Seg({ value, options, accent, onChange, ...aria }: SegProps) {
       type="single"
       value={value}
       onValueChange={(v: string) => { if (v && onChange) onChange(v); }}
-      // w-fit/max-w-full keep the control hugging its tabs: a parent flex/grid
-      // `.field` (align-items:stretch) would otherwise stretch this inline-flex
-      // to full width, leaving dead bordered space to the right of the tabs.
+      // w-fit/max-w-full keep the control hugging its tabs; a parent `.field`
+      // (align-items:stretch) would otherwise stretch it to full width.
       className="inline-flex w-fit max-w-full flex-wrap gap-0 border border-ink"
     >
       {options.map((o, i) => (
@@ -284,9 +263,8 @@ export interface ToggleProps {
   on?: boolean;
   onClick?: () => void;
   disabled?: boolean;
-  /** Accessible name — the switch renders no text of its own. Required, not
-   *  optional: an unlabelled switch reads as just "switch, off" to a screen
-   *  reader, and tsc catches a call site that forgets one. */
+  /** Accessible name; the switch renders no text of its own. Required so tsc
+   *  catches a call site that forgets one. */
   ariaLabel: string;
 }
 

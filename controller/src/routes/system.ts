@@ -1,8 +1,6 @@
-// Admin-gated GET /system — per-container CPU/memory for the SUB/WAVE stack plus
-// host totals, read from the Docker Engine API (see ../system.ts). Always 200:
-// when the Docker socket isn't mounted the body carries dockerAvailable:false
-// and just the host figures, so the Stats page can show "container stats
-// unavailable" without treating it as a controller error.
+// Admin-gated GET /system — per-container CPU/memory plus host totals from the
+// Docker Engine API. Fails open: with no Docker socket the body is 200 with
+// dockerAvailable:false and host figures only.
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import * as system from '../system.js';

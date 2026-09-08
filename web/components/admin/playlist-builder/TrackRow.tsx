@@ -1,16 +1,9 @@
 'use client';
 
-// One row of the deck, sortable via dnd-kit (#1370).
-//
-// The row was HTML5-`draggable` for its whole life, which meant mouse only:
-// `dragstart` never fires on touch, and there was no keyboard path at all. Now
-// the grip is a real focusable handle carrying the sensor listeners, so the same
-// gesture works with a mouse, a finger (long-press — see the sensor setup in
-// PlaylistBuilderPanel) and the arrow keys.
-//
-// The grip is no longer `sm:`-only: it is the touch affordance, so it has to
-// exist at the width where touch is likeliest. The up/down buttons stay — a
-// keyboard user who never discovers the handle still has an explicit path.
+// One row of the deck, sortable via dnd-kit (#1370). The grip is a real
+// focusable handle carrying the sensor listeners, so the same gesture works with
+// a mouse, a finger (long-press) and the arrow keys. It is not `sm:`-only: it is
+// the touch affordance. The up/down buttons stay as the explicit keyboard path.
 
 import { useCallback, useRef } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
@@ -39,7 +32,7 @@ export function TrackRow({
   } = useSortable({ id });
 
   // dnd-kit owns the node ref; useDynamicStyle needs one of its own, because
-  // inline `style={…}` is lint-forbidden here (#50).
+  // inline `style={...}` is lint-forbidden here (#50).
   const rowRef = useRef<HTMLDivElement | null>(null);
   const setRefs = useCallback((node: HTMLDivElement | null) => {
     rowRef.current = node;
@@ -47,8 +40,7 @@ export function TrackRow({
   }, [setNodeRef]);
   useDynamicStyle(rowRef, {
     // Translate, not Transform: the sortable transform carries a scale factor
-    // for size-mismatched neighbours and rows here are uniform, so scaling only
-    // shimmers the artwork.
+    // for size-mismatched neighbours, and rows here are uniform.
     transform: CSS.Translate.toString(transform),
     transition,
     zIndex: isDragging ? 20 : null,
@@ -66,13 +58,10 @@ export function TrackRow({
         isDragging && 'bg-bg opacity-90 shadow-drawer',
       )}
     >
-      {/* `touch-none` is load-bearing, not styling. Without it the browser keeps
-          the touch gesture for itself and scrolls the page alongside the drag,
-          and that scroll is invisible to the sensor's delta — measured on a
-          430px viewport, a one-row drag landed THREE rows down, reproducibly,
-          and landed exactly right with the property on. The cost is that this
-          28px strip no longer scrolls the list; the other ~93% of the row
-          still does. */}
+      {/* `touch-none` is load-bearing, not styling: without it the browser keeps
+          the touch gesture and scrolls the page alongside the drag, invisibly to
+          the sensor's delta. The cost is that this 28px strip no longer scrolls
+          the list. */}
       <button
         type="button"
         ref={setActivatorNodeRef}
@@ -111,8 +100,6 @@ export function TrackRow({
           </div>
         )}
       </div>
-      {/* Beside three 30px icon buttons this block is ~170px;
-          stacked it costs 90px and the title keeps the rest. */}
       <div className="flex flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
         <div className="flex flex-col items-end gap-[3px]">
           <span className="font-mono text-xs text-ink">{fmtDur(t.durationSec || 0)}</span>
@@ -122,13 +109,9 @@ export function TrackRow({
           </span>
         </div>
         {/* `group-focus-within` is not decoration: at lg the cluster is hidden
-            until the row is hovered, and a keyboard user never hovers — without
-            it, tabbing lands on a button that is fully transparent, focus ring
-            and all. Hover reveals it for the mouse; focus reveals it for the
-            keyboard the same way. */}
+            until hover, and a keyboard user never hovers -- without it, tabbing
+            lands on a fully transparent button. */}
         <div className="flex items-center gap-0.5 transition-opacity lg:opacity-0 lg:group-focus-within:opacity-100 lg:group-hover:opacity-100">
-          {/* The grip drags; these are the explicit one-step path, and on mobile
-              they stay thumb-sized. */}
           <IconBtn className="size-9 sm:size-[30px]" onClick={() => onMove(i, i - 1)} disabled={i === 0} title="Move up"><ArrowUp className="size-[15px]" /></IconBtn>
           <IconBtn className="size-9 sm:size-[30px]" onClick={() => onMove(i, i + 1)} disabled={i === total - 1} title="Move down"><ArrowDown className="size-[15px]" /></IconBtn>
           <IconBtn className="size-9 sm:size-[30px]" onClick={() => onRemove(i)} title="Remove"><X className="size-[15px]" /></IconBtn>

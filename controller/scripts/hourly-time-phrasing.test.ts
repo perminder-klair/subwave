@@ -1,12 +1,7 @@
 // The hourly time check's WORDING varies while the reading stays the code's
-// (#1602). The clock is rounded into a minute band in time.ts, the band now
-// carries several equivalent phrasings of that one rounded time, and this is
-// the half that picks one and writes the clause the model is held to. The
-// rounding itself is pinned by scripts/clock-phrase.test.ts; what is pinned
-// here is that the clause never widens — it still names exactly ONE time, and
-// that time is always one the band produced.
-//
-// Run: npx tsx scripts/hourly-time-phrasing.test.ts (auto-discovered by npm test).
+// (#1602): the band carries several phrasings of one rounded time and this
+// half picks one. The rounding is pinned by clock-phrase.test.ts; here the
+// clause must never widen past exactly one time the band produced.
 import assert from 'node:assert/strict';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,7 +20,7 @@ const clockAt = (hour: number, minute: number) => ({
   spokenTimeOptions: spokenTimePhrases(hour, minute),
 });
 
-// The clause quotes the time; this is the only thing the model is told to say.
+// The clause quotes the time; the only thing the model is told to say.
 const quoted = (clause: string) => clause.match(/"([^"]+)"/)?.[1] ?? null;
 
 test('the clause announces one wording from the band, never a list of them', () => {
@@ -34,7 +29,7 @@ test('the clause announces one wording from the band, never a list of them', () 
     const clause = nextHourlyTimeClause(clock);
     const said = quoted(clause);
     assert.ok(said && clock.spokenTimeOptions.includes(said), clause);
-    // One quoted string, and the dictate-don't-offer wording of #1282 intact.
+    // One quoted string, and #1282's dictate-don't-offer wording intact.
     assert.equal(clause.match(/"/g)?.length, 2, clause);
     assert.ok(clause.includes('say exactly that time'), clause);
     assert.ok(clause.includes('never a different time'), clause);
@@ -59,8 +54,8 @@ test('the variation is real — every wording in the band gets used', () => {
 });
 
 test('a wording is never borrowed from another band', () => {
-  // The rotation state is shared across calls; a band change must not leak the
-  // previous band's phrasing (or its hour) into the next clause.
+  // Rotation state is shared across calls, so a band change must not leak the
+  // previous band's phrasing or hour.
   const bands = [0, 8, 17, 31, 45, 55];
   for (let i = 0; i < 200; i++) {
     const m = bands[i % bands.length];
@@ -75,9 +70,7 @@ test('a context that predates the options still dictates spokenTime, byte for by
     'The time to announce is "half past six in the evening" — say exactly that time, in natural spoken words — never digits or 24-hour form, never a different time.');
 });
 
-// Byte-for-byte, like the case above and for the same reason: the tail a
-// prefix check skips is the #1282 instruction ("never digits or 24-hour form,
-// never a different hour") that this whole feature exists to leave intact.
+// Byte-for-byte: the tail a prefix check skips is #1282's instruction.
 test('the hour-only and bare fallbacks are untouched, byte for byte', () => {
   assert.equal(nextHourlyTimeClause({ spokenHour: 'six in the evening' }),
     'The hour to announce is six in the evening — say exactly that hour, in natural spoken words ("just gone six in the evening", or similar) — never digits or 24-hour form, never a different hour.');
