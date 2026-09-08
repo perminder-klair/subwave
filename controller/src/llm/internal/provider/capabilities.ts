@@ -226,6 +226,24 @@ const CAPS: Record<string, ProviderCapabilities> = {
       (reasoning && !forceNoThink ? undefined : 'minimal'),
     discoverySteps: NATIVE_DISCOVERY_STEPS,
   },
+  // OrcaRouter is an OpenAI-compatible gateway built via createOpenAI with
+  // name:'orcarouter', so the top-level level resolves through the same openai
+  // code path — the level lands as `reasoning_effort`. Unlike requesty, the
+  // legal set is none/low/medium/high/xhigh only — 'minimal' is NOT in it and
+  // would 400 ("Unknown parameter" on the nested `reasoning:{effort}` block
+  // OpenRouter-style gateways send; OrcaRouter expects the flat field). So a
+  // suppressed call sends 'none', the only level that both sits in the valid
+  // set AND turns thinking off. Reasoning on → undefined (leave the model's
+  // default); non-reasoning models ignore the field. (No model-id gate — ids
+  // are `vendor/model` or `orcarouter/auto`, and the gateway tolerates the
+  // flat field.)
+  orcarouter: {
+    objectStrategy: 'native',
+    repeatPenaltyApplies: false,
+    reasoningLevel: ({ reasoning, forceNoThink }) =>
+      (reasoning && !forceNoThink ? undefined : 'none'),
+    discoverySteps: NATIVE_DISCOVERY_STEPS,
+  },
   // Vercel AI Gateway serializes the full call options — including the top-level
   // reasoning level — to the downstream provider, so 'none' suppresses whatever
   // vendor the `provider/model` id resolves to. (The old shape emitted disable

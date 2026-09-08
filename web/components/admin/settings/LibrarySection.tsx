@@ -44,6 +44,10 @@ const EMBED_MODEL_SUGGESTIONS: Record<string, { id: string; dim: number }[]> = {
     { id: 'openai/text-embedding-3-small', dim: 1536 },
     { id: 'openai/text-embedding-3-large', dim: 3072 },
   ],
+  orcarouter: [
+    { id: 'openai/text-embedding-3-small', dim: 1536 },
+    { id: 'openai/text-embedding-3-large', dim: 3072 },
+  ],
 };
 
 const LLM_BATCH_SIZES = [5, 10, 25] as const;
@@ -131,7 +135,7 @@ export function LibrarySection({ data, form, setForm, busy, saveSettings, adminF
   // (deepseek, gateway) have no embeddings endpoint (#493); OpenRouter shipped one
   // so it is back in (#522); Anthropic has no embedding API at all.
   const embedProviders = data.embedding?.providers ||
-    ['ollama', 'openai-compatible', 'locca', 'openrouter', 'openai', 'google', 'requesty'];
+    ['ollama', 'openai-compatible', 'locca', 'openrouter', 'openai', 'google', 'requesty', 'orcarouter'];
   // Keep a stale explicit choice (a chat-only provider saved before this list
   // shrank) visible so the Select isn't blank and the warning below makes sense.
   const providers = e.provider && !embedProviders.includes(e.provider)

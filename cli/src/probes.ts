@@ -185,3 +185,27 @@ export async function probeRequesty(args: {
     return { ok: false, reason: fetchErrorReason(e) };
   }
 }
+
+// Same shape as probeRequesty — OrcaRouter is an OpenAI-compatible gateway that
+// requires a key, so a bad one surfaces as a 401.
+export async function probeOrcarouter(args: {
+  apiKey: string;
+  timeoutMs?: number;
+}): Promise<ProbeResult> {
+  const { apiKey } = args;
+  const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  if (!apiKey) return { ok: false, reason: 'no api key' };
+  try {
+    const res = await fetch('https://api.orcarouter.ai/v1/models', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.status === 401) return { ok: false, reason: '401 — key rejected' };
+    if (!res.ok) return { ok: false, reason: `HTTP ${res.status}` };
+    const body = await res.json() as { data?: Array<unknown> };
+    const n = body.data?.length ?? 0;
+    return { ok: true, detail: `${n} model${n === 1 ? '' : 's'} visible` };
+  } catch (e) {
+    return { ok: false, reason: fetchErrorReason(e) };
+  }
+}
