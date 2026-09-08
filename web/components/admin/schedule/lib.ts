@@ -168,6 +168,11 @@ export function resizedRun(
   return { start: block.start, end: Math.max(Math.min(hour, SCHEDULE_HOURS), block.start + 1) };
 }
 
+export function movedRun(block: Block, hour: number): { start: number; end: number } {
+  const start = Math.min(Math.max(hour, 0), SCHEDULE_HOURS - block.span);
+  return { start, end: start + block.span };
+}
+
 /** Moves one run's boundaries to [start, end): the hours it gives up fall silent,
  *  the hours it takes over are overwritten. Clearing first is what makes a shrink
  *  work, and it must precede the write or a grow would erase its own gain. */
@@ -180,6 +185,130 @@ export function resizeBlock(
   if (!block.showId) return schedule;
   const cleared = setRange(schedule, [block.day], block.start, block.start + block.span, null);
   return setRange(cleared, [block.day], start, end, block.showId);
+}
+
+export function blockKeys(blocks: Block[]): string[] {
+  const seen = new Map<string, number>();
+  return blocks.map(b => {
+    const id = b.showId ?? '';
+    const n = seen.get(id) ?? 0;
+    seen.set(id, n + 1);
+    return b.showId ? `run:${b.showId}#${n}` : `gap:${n}`;
+  });
+}
+
+/** One booked run of a day, with the hour it currently starts at. */
+export interface DayRun {
+  showId: string;
+  span: number;
+  start: number;
+}
+
+export interface DayRuns {
+  runs: DayRun[];
+  gaps: number[];
+}
+
+export function dayRuns(schedule: Schedule, day: number): DayRuns {
+  const runs: DayRun[] = [];
+  const gaps: number[] = [0];
+  for (const b of dayBlocks(schedule, day)) {
+    if (b.showId) {
+      runs.push({ showId: b.showId, span: b.span, start: b.start });
+      gaps.push(0);
+    } else {
+      gaps[gaps.length - 1] = (gaps[gaps.length - 1] ?? 0) + b.span;
+    }
+  }
+  return { runs, gaps };
+}
+
+/** Lay a permuted run list back out over its positional gaps. */
+function layOutDay(
+  runs: DayRun[],
+  gaps: number[],
+): { cells: (string | null)[]; starts: number[] } {
+  const cells: (string | null)[] = [];
+  const starts: number[] = [];
+  runs.forEach((r, i) => {
+    for (let g = 0; g < (gaps[i] ?? 0); g++) cells.push(null);
+    starts.push(cells.length);
+    for (let h = 0; h < r.span; h++) cells.push(r.showId);
+  });
+  for (let g = 0; g < (gaps[runs.length] ?? 0); g++) cells.push(null);
+  return { cells, starts };
+}
+
+export type DragPlan =
+  | { kind: 'move'; start: number; end: number }
+  | { kind: 'reorder'; to: number };
+
+export function planRunDrag(
+  schedule: Schedule,
+  block: Block,
+  head: number,
+): DragPlan | null {
+  if (!block.showId) return null;
+  const { runs } = dayRuns(schedule, block.day);
+  const from = runs.findIndex(r => r.start === block.start);
+  if (from < 0) return null;
+  const landing = movedRun(block, head);
+  if (landing.start === block.start) return null;
+  const hit = runs
+    .map((r, i) => ({ r, i }))
+    .filter(x => x.i !== from && x.r.start < landing.end && landing.start < x.r.start + x.r.span);
+  if (hit.length === 0) return { kind: 'move', start: landing.start, end: landing.end };
+  const lifted = (i: number) => (i > from ? i - 1 : i);
+  return landing.start < block.start
+    ? { kind: 'reorder', to: lifted(hit[0]!.i) }
+    : { kind: 'reorder', to: lifted(hit[hit.length - 1]!.i) + 1 };
+}
+
+export interface RunDragResult {
+  week: Schedule;
+  start: number;
+  end: number;
+  shifted: number;
+}
+
+export function applyRunDrag(
+  schedule: Schedule,
+  block: Block,
+  plan: DragPlan,
+): RunDragResult {
+  const unchanged = {
+    week: schedule,
+    start: block.start,
+    end: block.start + block.span,
+    shifted: 0,
+  };
+  if (!block.showId) return unchanged;
+  if (plan.kind === 'move') {
+    return {
+      week: resizeBlock(schedule, block, plan.start, plan.end),
+      start: plan.start,
+      end: plan.end,
+      shifted: 0,
+    };
+  }
+  const { runs, gaps } = dayRuns(schedule, block.day);
+  const from = runs.findIndex(r => r.start === block.start);
+  if (from < 0) return unchanged;
+  const next = runs.slice();
+  const [moved] = next.splice(from, 1);
+  if (!moved) return unchanged;
+  const to = Math.min(Math.max(plan.to, 0), next.length);
+  next.splice(to, 0, moved);
+  const { cells, starts } = layOutDay(next, gaps);
+  const week = cloneWeek(schedule);
+  week[block.day] = cells;
+  const start = starts[to] ?? block.start;
+  return {
+    week,
+    start,
+    end: start + moved.span,
+    shifted: next.reduce((n, r, i) => (i !== to && starts[i] !== r.start ? n + 1 : n), 0),
+  };
 }
 
 /** Number of cells where the two grids disagree (the unsaved-edit count). */

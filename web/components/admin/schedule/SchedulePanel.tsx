@@ -26,9 +26,9 @@ import SaveBar from './SaveBar';
 import EditorBand, { LineEditor } from './EditorBand';
 import type { EditorLine, Suggestion } from './EditorBand';
 import { ColorChip, Mu } from './bits';
-import type { Block, Schedule, ScheduleShow } from './lib';
+import type { Block, DragPlan, Schedule, ScheduleShow } from './lib';
 import {
-  DAYS, SHOW_COLORS, blockAhead, blockAt, bookedHours, cloneWeek, dayBlocks,
+  DAYS, SHOW_COLORS, applyRunDrag, blockAhead, blockAt, bookedHours, cloneWeek, dayBlocks,
   dayName, diffCells, diffRanges, emptyWeek, fillDayToggle, fillHourToggle,
   hhmm, resizeBlock, setRange, showHours, weekOrders,
 } from './lib';
@@ -285,6 +285,21 @@ export default function SchedulePanel() {
     setLineShowId(b.showId);
     notify.ok(
       `“${showById(b.showId)?.name ?? 'show'}” now ${dayName(b.day)} ${hhmm(start)} – ${hhmm(end)} — unsaved until you save the week.`,
+    );
+  };
+
+  const dragRun = (b: Block, plan: DragPlan) => {
+    if (!schedule || !b.showId) return;
+    const r = applyRunDrag(schedule, b, plan);
+    if (r.week === schedule) return;
+    setSchedule(r.week);
+    setLine({ day: b.day, start: r.start, end: r.end });
+    setLineDays([b.day]);
+    setLineShowId(b.showId);
+    notify.ok(
+      `“${showById(b.showId)?.name ?? 'show'}” now ${dayName(b.day)} ${hhmm(r.start)} – ${hhmm(r.end)}`
+      + (r.shifted ? ` (${r.shifted} other show${r.shifted === 1 ? '' : 's'} shifted)` : '')
+      + ' — unsaved until you save the week.',
     );
   };
 
@@ -629,6 +644,7 @@ export default function SchedulePanel() {
           onRemove={removeRun}
           onResize={resizeRun}
           onDropShow={dropShow}
+          onDragRun={dragRun}
           armedShowId={armedId}
           onArmShow={armShow}
           onFillDay={fillDay}
