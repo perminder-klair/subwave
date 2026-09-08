@@ -219,16 +219,11 @@ export function needsVocalIds(limit?: number, includeTailMissing = false): strin
   return rows.map(r => r.id);
 }
 
-// Ids that have never had a stem-caching pass, ordered for stable resumption.
-// stems_at stamps the ATTEMPT, not disk presence, so this converges against the
-// LRU sweep's evictions.
-export function needsStemsIds(limit?: number): string[] {
-  const q =
-    `SELECT id FROM tracks WHERE stems_at IS NULL AND ${analysisFailureExclusion()} ORDER BY id` +
-    (limit && limit > 0 ? ` LIMIT ${Math.floor(limit)}` : '');
-  const rows = requireDb().prepare(q).all() as Array<{ id: string }>;
-  return rows.map(r => r.id);
-}
+// The stem-cache backfill scope moved to ./stem-scan.ts when its `ORDER BY id`
+// became a ranking (#1622 FR 14) — needsStemsIds now joins the play history and
+// projects music/stem-priority.ts, which is a page of query rather than a
+// sibling of the two backfill scopes above. Still re-exported from the same
+// library-db barrel.
 
 export function stemsCachedCount(): number {
   return (requireDb().prepare(

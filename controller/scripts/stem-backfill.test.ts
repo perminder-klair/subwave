@@ -7,6 +7,12 @@
 // already-analysed library did nothing at all and the only route was a
 // --re-analyze that wipes every vector and can't resume across runs.
 //
+// Scope only — the ORDER the scope comes back in is a ranking since #1622 FR
+// 14 and is pinned by scripts/stem-priority.test.ts, so every assertion here
+// compares SETS. Resumption never depended on the order anyway: the stems_at
+// stamp is what a resumed pass reads, which is exactly what freed the order to
+// become a ranking with a random tiebreak.
+//
 // The load-bearing contract is that stems_at stamps the ATTEMPT, not disk
 // presence. The LRU sweep deletes stem dirs by design once the cache outgrows
 // its budget, so a presence-based scope would drag every evicted track back in
@@ -45,8 +51,10 @@ async function main() {
 
   console.log('stem backfill scope:');
 
+  const scope = () => [...db.needsStemsIds()].sort();
+
   await test('every track needs stems before any pass has run', () => {
-    assert.deepEqual(db.needsStemsIds(), ['t1', 't2', 't3']);
+    assert.deepEqual(scope(), ['t1', 't2', 't3']);
     assert.equal(db.stemsCachedCount(), 0);
   });
 
@@ -54,13 +62,13 @@ async function main() {
     // This is the exact shape of the bug: bpm/key land, the track counts as
     // analysed, and nothing records a stem attempt — so it must stay in scope.
     db.upsertTrackAnalysis('t1', { bpm: 120, musicalKey: 'Am' });
-    assert.deepEqual(db.needsStemsIds(), ['t1', 't2', 't3']);
+    assert.deepEqual(scope(), ['t1', 't2', 't3']);
     assert.equal(db.stemsCachedCount(), 0);
   });
 
   await test('a pass that cached stems drops the track from the scope', () => {
     db.upsertTrackAnalysis('t1', { bpm: 120, musicalKey: 'Am', stemsAttempted: true });
-    assert.deepEqual(db.needsStemsIds(), ['t2', 't3']);
+    assert.deepEqual(scope(), ['t2', 't3']);
     assert.equal(db.stemsCachedCount(), 1);
   });
 
@@ -69,14 +77,14 @@ async function main() {
     // (analyze.ts passes stemsAttempted for stemsCached === false as well).
     // Re-targeting it every pass forever is the "275/7093" churn class.
     db.upsertTrackAnalysis('t2', { bpm: 100, stemsAttempted: true });
-    assert.deepEqual(db.needsStemsIds(), ['t3']);
+    assert.deepEqual(scope(), ['t3']);
   });
 
   await test('a later stem-less pass does not clear an existing stamp', () => {
     // COALESCE, same shape as vocal_ranges_json / outro_json: a pass with the
     // cache off passes null and must keep what an earlier stem pass recorded.
     db.upsertTrackAnalysis('t1', { bpm: 121 });
-    assert.deepEqual(db.needsStemsIds(), ['t3']);
+    assert.deepEqual(scope(), ['t3']);
     assert.equal(db.stemsCachedCount(), 2);
   });
 
@@ -85,10 +93,15 @@ async function main() {
     for (const id of ['t4', 't5', 't6']) {
       db.upsertTrackMeta(id, { title: `Song ${id}`, artist: 'A', album: 'B', duration: 200 });
     }
-    assert.deepEqual(db.needsStemsIds(2), ['t4', 't5'], 'ordered by id so the next run resumes');
-    db.upsertTrackAnalysis('t4', { bpm: 95, stemsAttempted: true });
-    db.upsertTrackAnalysis('t5', { bpm: 95, stemsAttempted: true });
-    assert.deepEqual(db.needsStemsIds(2), ['t6'], 'the next run picks up where it left off');
+    // Which two is the ranking's business (none of these rows carries a bar
+    // grid, so they tie at zero and the draw is random); that a limited run
+    // takes exactly two, and that the stamps carry the resumption, is this
+    // test's.
+    const first = db.needsStemsIds(2);
+    assert.equal(first.length, 2);
+    for (const id of first) db.upsertTrackAnalysis(id, { bpm: 95, stemsAttempted: true });
+    assert.deepEqual(scope().length, 1, 'the next run picks up where it left off');
+    assert.deepEqual(db.needsStemsIds(2), scope(), 'and only the one track is left');
   });
 
   await test('clearAnalysis only resets the stamps when the pass will rewrite stems', () => {
@@ -96,9 +109,9 @@ async function main() {
     // isn't going to rewrite stems, so clearing would re-separate the whole
     // library the next time the operator turned the cache on.
     db.clearAnalysis({ keepVocal: true });
-    assert.deepEqual(db.needsStemsIds(), ['t6'], 'stamps survive a cache-off re-analyse');
+    assert.equal(scope().length, 1, 'stamps survive a cache-off re-analyse');
     db.clearAnalysis({ keepVocal: true, clearStems: true });
-    assert.deepEqual(db.needsStemsIds(), ['t1', 't2', 't3', 't4', 't5', 't6']);
+    assert.deepEqual(scope(), ['t1', 't2', 't3', 't4', 't5', 't6']);
     assert.equal(db.stemsCachedCount(), 0);
   });
 

@@ -23,8 +23,10 @@ import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import * as sfx from './sfx.js';
 import * as jingles from './jingles.js';
+import { pickRotateJingle, onJingleRotateOwnerChange } from './jingle-rotate.js';
 import * as beds from './beds.js';
 import * as bedPolicy from './bed-policy.js';
+import { vocalRunwayMs, segmentFitsRunway } from './vocal-runway.js';
 import * as session from './session.js';
 import type { TurnMeta } from './session.js';
 import type { PromptMemoryEntry } from './prompt-memory.js';
@@ -153,9 +155,27 @@ function positiveCues(values: (number | null | undefined)[]): number[] {
 
 // Bound on a runaway loop of manual jingle presses across different filenames.
 const PENDING_JINGLE_MAX = 3;
-// A press is assumed lost after this. A mixer restart empties jingle_now_queue
-// with no signal; without a TTL that wedges the button shut. Well past any
-// single track, so a press merely waiting for its boundary is never retired.
+// The automatic rotate's own budget, counted SEPARATELY (#1619). The two must
+// not share, because the shared form is how the operator's button gets wedged
+// shut by something the operator did not do: a mixer restart empties
+// jingle_now_queue with no signal, so three rotates inside the TTL below would
+// hold every slot and the next press would answer `queue-full` — the exact
+// failure PENDING_JINGLE_TTL_MS exists to prevent, reintroduced from the other
+// side. Reserving a slot instead would still shrink the operator's headroom
+// from 3 to 2 for a caller that is not a runaway risk at all.
+//
+// ONE, not three, and that is the honest number rather than a smaller share of
+// the same budget: the rotate is one-at-a-time by construction — the counter is
+// zeroed at handoff, so it cannot come due again until N more boundaries have
+// passed — which means a SECOND pending rotate can only mean the first never
+// aired. Queuing another on top of it is precisely the stinger-stacking the
+// FIFO has no remove path to undo. A rotate refused here spends its offer and
+// skips, which is the cheaper miss radio.liq's own `source.available` gate took.
+const PENDING_ROTATE_JINGLE_MAX = 1;
+// How long a press stays pending before it is assumed lost. A mixer restart
+// empties jingle_now_queue and drops the request with no signal, so this is what
+// stops that from wedging the button shut. Generously past any single track, so
+// it never retires a press that is merely waiting for its boundary.
 const PENDING_JINGLE_TTL_MS = 30 * 60 * 1000;
 
 class Queue {
@@ -187,7 +207,14 @@ class Queue {
   _handover: { atTrackStarts: number; heldOpportunities: number; rolledOnce: boolean } | null = null; // stamped when a sign-off airs, read by closingTrackHolds() — see broadcast/handover-policy.ts
   _lastSessionId: string | null = null;  // last session id onSessionRolled saw — the clock the handover wait is aged on
   _introRenders = new IntroRenderTracker<QueueItem>(); // timed-out pre-renders stay reusable by airIntro
-  _pendingJingles = new Map<string, number>(); // manual jingle presses handed over but not yet heard — see playJingle
+  // Jingle handoffs made but not yet heard — see playJingle. ONE map for both
+  // callers on purpose: the de-duplication question ("is this clip already
+  // waiting?") has to be answered across the operator's presses and the
+  // automatic rotate together, so a second map would be a second source of
+  // truth for it. Only the CAP is per-caller, which is what `rotate` records.
+  _pendingJingles = new Map<string, { at: number; rotate: boolean }>();
+  _tracksSinceJingle = 0;       // track boundaries since the last controller-drawn jingle — the count radio.liq's rotate used to keep (#1619)
+  _lastRotateJingle: string | null = null; // last jingle the controller drew — anti-repeat for jingle-rotate.pickRotateJingle
 
   // Snapshot to disk so a controller restart doesn't turn tracks already in
   // dj_queue into untracked `auto` plays. Debounced.
@@ -200,6 +227,16 @@ class Queue {
           upcoming: this.upcoming,
           current: this.current,
           history: this.history,
+          // The rotate's boundary count (#1619). Snapshotted for the same
+          // reason the queue itself is — a controller restart is routine, every
+          // `--build controller` is one — and unlike `_trackStarts`, which is
+          // only ever read as a DIFFERENCE against a stamp taken in the same
+          // process, this one is absolute: losing it costs up to a full
+          // `jingleRatio` of tracks before the next stinger, which at the
+          // default 30 is roughly two hours of silence from the rotate after
+          // every upgrade.
+          tracksSinceJingle: this._tracksSinceJingle,
+          lastRotateJingle: this._lastRotateJingle,
           savedAt: new Date().toISOString(),
         }, null, 2));
       } catch (err) {
@@ -237,6 +274,13 @@ class Queue {
         .filter((i: QueueItem) => i?.track?.title && new Date(i.queuedAt || 0).getTime() > cutoff);
       this.current = stored.current || null;
       this.history = Array.isArray(stored.history) ? stored.history : [];
+      // Restore the rotate's count (#1619). Repaired, not trusted: this file is
+      // on the operator's disk, and a junk value here decides how long the
+      // station goes without a stinger. A snapshot written before this field
+      // existed reads as 0, which is the pre-#1619 behaviour.
+      const since = Number(stored.tracksSinceJingle);
+      this._tracksSinceJingle = Number.isFinite(since) && since >= 0 ? Math.floor(since) : 0;
+      this._lastRotateJingle = typeof stored.lastRotateJingle === 'string' ? stored.lastRotateJingle : null;
       if (this.current?.track) {
         const t = this.current.track;
         this.lastSeenKey = `${t.id || ''}|${t.title}|${t.artist || ''}`;
@@ -502,11 +546,16 @@ class Queue {
   // `linkPrev` is the track the intro back-announces; airIntro drops the
   // back-announce if something slipped in ahead. Null for request intros.
   //
-  // `linkClockAt` is the air moment a spoken clock was written against; airIntro
-  // drops the line if the real seam lands too far from it.
-  async push({ track, requestedBy = null, intent = null, introScript = null, introKind = 'dj-speak', introPersona = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null }: {
+  // `linkClockAt` is the air moment the script was written against, set only
+  // when the generator gave the model a clock to speak (#1314). airIntro drops
+  // the line if the real seam lands too far from it — the forecast is made from
+  // the on-air track's remaining play and goes badly wrong when the pick misses
+  // that seam and auto.m3u fills the slot.
+  async push({ track, requestedBy = null, operator = false, block = null, intent = null, introScript = null, introKind = 'dj-speak', introPersona = null, aiPicked = false, allowDuplicate = false, linkPrev = null, linkClockAt = null }: {
     track: Track;
     requestedBy?: string | null;
+    operator?: boolean;
+    block?: QueueItem['block'] | null;
     intent?: string | null;
     introScript?: string | null;
     introKind?: string;
@@ -541,8 +590,10 @@ class Queue {
       }
     }
     const item = {
-      track, requestedBy, intent, introScript, introKind, introPersona, aiPicked,
-      // Only stamp a back-announce target when there is an intro to air against it.
+      track, requestedBy, operator, intent, introScript, introKind, introPersona, aiPicked,
+      block: block ?? undefined,
+      // Only stamp a back-announce target when there's actually an intro/link to
+      // air against it; a bare track carries no claim about what preceded it.
       linkPrev: (introScript && linkPrev)
         ? { id: linkPrev.id ?? null, title: linkPrev.title ?? null, artist: linkPrev.artist ?? null }
         : null,
@@ -557,7 +608,14 @@ class Queue {
       confirmedInLiquidsoap: false,
     };
     this.upcoming.push(item);
-    this.log('queued', `${track.title} — ${track.artist}`, { requestedBy, queueDepth: this.upcoming.length });
+    // A block's members are deliberately SILENT here and the route logs one
+    // summary line instead (#1622 FR 4). The booth log is a 200-entry ring the
+    // operator reads back through, and thirty consecutive "queued" lines off a
+    // single press would evict most of the history that press was made against
+    // — while saying nothing the one block line does not say better.
+    if (!block) {
+      this.log('queued', `${track.title} — ${track.artist}`, { requestedBy, queueDepth: this.upcoming.length });
+    }
     this.warnIfSwallowedByCrossfade(item);
     this.persist();
     this.drainToLiquidsoap();  // fire-and-forget
@@ -705,21 +763,20 @@ class Queue {
 
     try {
       const voiceMs = speechDurationMs(item.introWav, item.introScript);
-      // Ramp budget: how long the DJ may talk before trampling the incoming
-      // track's vocal. Analysis rides the track object, else the library row.
-      const rec = item.track?.id ? library.get(item.track.id) : null;
-      // The onset is measured from byte zero and the drain may trim this track's
-      // head, so shift it onto the trimmed timeline — the same correction
-      // intro-budget's firstVocalMsFor applies, or the two disagree. null
-      // (unknown) and Infinity (instrumental) pass through untouched.
-      const rawBudgetMs = bedPolicy.rampBudgetMs({
-        vocalRanges: item.track?.vocalRanges ?? rec?.vocalRanges ?? null,
-      });
-      const budgetMs = rawBudgetMs != null && Number.isFinite(rawBudgetMs)
-        ? silenceTrim.shiftOnsetMs(item.track, rawBudgetMs)
-        : rawBudgetMs;
-      // `reason` outranks the budget for a request, so the shift above only
-      // ever decides a LINK's bed.
+      // The ramp budget is a property of the INCOMING track: how long may the
+      // DJ talk before trampling its vocal? Resolved through vocal-runway,
+      // which owns both halves of the answer — the three-state read of
+      // vocalRanges (track object first, else the library row: queued items
+      // hold only id/title/artist) and the shift onto the TRIMMED timeline,
+      // since the drain may be about to cut a leading blank off this very
+      // track. Leaving that shift out here made the bed and the link's own
+      // budget disagree about one track, with the prompt told the runway is 2s
+      // while the bed decision still thought it was 8s and declined a bed the
+      // link needed. Both readers go through the one module now (#1622), and
+      // null (unknown) / Infinity (instrumental) come back untouched.
+      const budgetMs = vocalRunwayMs(item.track);
+      // `reason` outranks the budget entirely for a request (bed-policy), so
+      // the trim correction above only ever decides a LINK's bed.
       if (!bedPolicy.bedWanted(voiceMs, budgetMs, cfg, reason)) return;
 
       // The bed's marker starts at cross-FEED time, one predecessor exit canvas
@@ -1656,6 +1713,35 @@ class Queue {
         `Holding ${p.kind} — the track's own ${KIND_LABEL[incoming!.introKind || 'dj-speak'] || 'intro'} takes this boundary`);
       return;
     }
+    // Vocal-aware timing (#1622 FR 5a). This clip lands on the HEAD of the
+    // track that just started, on the light-duck intro channel — the same
+    // runway a pick's link is trimmed against by enforceIntroBudget, and until
+    // now the one placement that was never asked about it. A clip that would
+    // still be talking when the singer comes in keeps its slot and takes the
+    // NEXT boundary, exactly as the busy-boundary hold above does: nothing is
+    // regenerated, nothing is dropped here, and the existing staleness check at
+    // the top of this method is what bounds the wait. Why the lever is timing
+    // rather than a trim, and why a long segment is deliberately unaffected,
+    // are in broadcast/vocal-runway.ts.
+    //
+    // `incoming` carries the queued item when this boundary is one of ours; an
+    // auto.m3u track never enters `upcoming`, so fall back to the id `np`
+    // reports — the measurement is a library read either way, and an
+    // unidentifiable track resolves to "unknown", which airs.
+    const runwayTrack = incoming?.track ?? (np?.subsonic_id ? { id: np.subsonic_id } : null);
+    const runwayMs = vocalRunwayMs(runwayTrack);
+    // The whole segment, not the first clip: an exchange is deferred as ONE
+    // segment and airs back-to-back, so what has to fit the runway is the sum.
+    // speechDurationMs (clip + lead-in + duck tail) is the same figure the bed
+    // decision budgets a link at, so the two agree about one clip.
+    const clipMs = p.clips.reduce((sum, c) => sum + speechDurationMs(c.wavPath, c.text), 0);
+    if (!segmentFitsRunway(clipMs, runwayMs)) {
+      this.log('scheduler',
+        // runwayMs is necessarily finite here — null (unknown) and Infinity
+        // (instrumental) both fit, so only a measured onset can refuse.
+        `Holding ${p.kind} — vocals enter "${np?.title || 'the incoming track'}" at ${Math.round(Number(runwayMs) / 1000)}s, inside this ${Math.round(clipMs / 1000)}s segment`);
+      return;
+    }
     this._pendingVoice = null;
     // The reaper deletes old WAVs. A partially reaped exchange airs what
     // survives rather than nothing.
@@ -1809,35 +1895,123 @@ class Queue {
   // queued track can't delay the press; Liquidsoap keeps it unavailable while
   // voice or a bed is live so it wins the next SAFE boundary.
   //
-  // Presses are DE-DUPLICATED, not rate-limited: jingle_now_queue has no remove
-  // path, so a repeat of a still-pending jingle would air twice with no way back
-  // short of /restart-mixer. Two DIFFERENT announcements queue normally, since
-  // an explicit operator action always fires; PENDING_JINGLE_MAX bounds a
-  // runaway loop across files.
-  async playJingle(filename: string) {
+  // It goes through its own handoff file and priority request.queue. That source
+  // sits ahead of dj_queue, so an already-queued track cannot delay the press;
+  // Liquidsoap keeps it unavailable while voice or a bed is active, preserving
+  // the request until the next SAFE boundary rather than mixing over speech or
+  // splitting a bed from the track it carries.
+  //
+  // Presses are DE-DUPLICATED, not rate-limited. jingle_now_queue is a FIFO with
+  // no remove path (dj_queue has cancelQueued via dj_queue.remove; this has
+  // nothing), and the fallback keeps selecting it while it is non-empty — so
+  // every extra push is another announcement aired back-to-back with no music
+  // between, and the only way out is /restart-mixer. An agent retrying a tool
+  // call or a double-clicked dashboard button is enough to stack them. Pressing
+  // the SAME jingle while it is still pending is that accident and is refused;
+  // two DIFFERENT announcements queue normally, because an explicit operator
+  // action always fires. PENDING_JINGLE_MAX bounds a runaway loop across files.
+  //
+  // `rotate` marks a handoff made by the AUTOMATIC rotate rather than by an
+  // operator (#1619). It changes exactly one thing — which budget the press is
+  // counted against — so the write, the de-duplication, the booth log and the
+  // session turn stay identical and a jingle is one kind of event on air
+  // however it was decided. See PENDING_ROTATE_JINGLE_MAX for why the budgets
+  // are separate rather than shared or reserved.
+  async playJingle(filename: string, { rotate = false }: { rotate?: boolean } = {}) {
     if (!filename) throw new Error('Jingle filename is required');
     const path = await jingles.getPath(filename);
     if (!path) throw new Error(`Unknown jingle: ${filename}`);
     this.retirePendingJingles();
+    // Asked across BOTH callers: a rotate must not stack on a clip an operator
+    // just pressed, and an operator pressing the clip the rotate is holding is
+    // the same double-announcement accident either way.
     if (this._pendingJingles.has(filename)) return { ok: false as const, reason: 'already-queued' as const };
-    if (this._pendingJingles.size >= PENDING_JINGLE_MAX) return { ok: false as const, reason: 'queue-full' as const };
+    const inFlight = [...this._pendingJingles.values()].filter(p => p.rotate === rotate).length;
+    if (inFlight >= (rotate ? PENDING_ROTATE_JINGLE_MAX : PENDING_JINGLE_MAX)) {
+      return { ok: false as const, reason: 'queue-full' as const };
+    }
     await writeHandoff(config.liquidsoap.jingleFile, jingles.jingleUri(path), { maxWaitMs: 5000 });
-    this._pendingJingles.set(filename, Date.now());
-    // Log the sidecar's script, not the hashed filename: every other segment
-    // turn in the booth log carries prose.
+    this._pendingJingles.set(filename, { at: Date.now(), rotate });
+    // The sidecar's own script, not the hashed filename: every other segment
+    // turn in the booth log and the DJ's chat history carries prose, and
+    // `jingle_a1b2c3d4.wav` reads as noise next to them (playSfx logs its
+    // effect NAME for the same reason).
     const label = (await jingles.list()).find(j => j.filename === filename)?.text || filename;
     this.log('jingle', `"${label}" queued — airs at the next safe boundary`);
     session.appendTurn({ role: 'segment', kind: 'jingle', text: label });
     return { ok: true as const };
   }
 
-  // Retire presses that aired, or are old enough that they never will. A mixer
-  // restart loses the request silently, so entries must expire on their own or
-  // the button wedges shut.
+  // How many track boundaries have passed since the controller last drew a
+  // jingle — the rotate's due-ness, read by the talk tick's `jingle` row
+  // (broadcast/jingle-rotate.ts owns the decision itself).
+  rotateJingleTracksSince(): number {
+    return this._tracksSinceJingle;
+  }
+
+  // Start the count again from zero. Called when the rotate CHANGES HANDS to
+  // the controller (#1619, via broadcast/jingle-rotate.ts's owner subscriber):
+  // the counter runs on every boundary regardless of owner — onTrackStarted has
+  // no business branching on a setting — so a station that has been up for
+  // hours on the default 'mixer' is already holding a count far past the ratio,
+  // and without this the very next talk tick after the toggle fires a stinger,
+  // on top of the mixer's own rotate, which has not restarted yet. Flipping the
+  // switch should start a clean N-track cycle.
+  resetRotateJingleCount() {
+    this._tracksSinceJingle = 0;
+  }
+
+  // Draw the AUTOMATIC jingle — the rotate radio.liq used to run on its own
+  // (#1619). Everything about the airing is the manual path's: the same single
+  // writer, the same de-duplication, the same priority queue, the same booth
+  // log and session turn, so a jingle is one kind of event on air however it
+  // was decided. What differs is only WHO decided, and that decision has
+  // already been made by the talk-slot planner before this is called — the row
+  // stood down for the ident, the quiet gap and the pending clip up there, not
+  // here, so this stays free of a second copy of any of it.
+  //
+  // The counter resets on the HANDOFF, not on air: the jingle reaches
+  // jingle-now.txt now and Liquidsoap places it at the next safe boundary, so
+  // counting from here is what keeps "1 every N tracks" a count of tracks
+  // rather than a count of tracks plus however long the mixer held the press.
+  //
+  // It resets whether or not a clip was actually drawn, and that is the
+  // mixer's behaviour rather than a shortcut: radio.liq's rotate is gated by
+  // `source.available`, so a jingle that came due at a boundary where the gate
+  // was shut was SKIPPED, not banked — "skipping a jingle is the cheaper miss",
+  // in that file's own words, and the station runs slightly under the
+  // configured ratio. Banking it here instead would leave the row due on every
+  // subsequent minute, holding the seam against the segment director until an
+  // empty library was filled or a pending press aged out (up to half an hour).
+  // So the offer is spent, the reason is logged, and the next one is N tracks
+  // away.
+  async playRotateJingle(): Promise<boolean> {
+    this._tracksSinceJingle = 0;
+    const filename = pickRotateJingle(
+      (await jingles.list()).map(j => j.filename),
+      this._lastRotateJingle,
+    );
+    if (!filename) {
+      this.log('scheduler', '[jingle] rotate skipped — the jingle library is empty');
+      return false;
+    }
+    const res = await this.playJingle(filename, { rotate: true });
+    if (!res.ok) {
+      this.log('scheduler', `[jingle] rotate skipped — "${filename}" ${res.reason}`);
+      return false;
+    }
+    this._lastRotateJingle = filename;
+    return true;
+  }
+
+  // Retire presses that have been heard, or that are old enough that they never
+  // will be. A mixer restart empties jingle_now_queue and loses the request
+  // silently, so every entry has to expire on its own — the button must never
+  // wedge shut on bookkeeping.
   retirePendingJingles() {
     const now = Date.now();
-    for (const [name, at] of this._pendingJingles) {
-      if (now - at > PENDING_JINGLE_TTL_MS || jingleAiredAtMs(name) >= at) {
+    for (const [name, p] of this._pendingJingles) {
+      if (now - p.at > PENDING_JINGLE_TTL_MS || jingleAiredAtMs(name) >= p.at) {
         this._pendingJingles.delete(name);
       }
     }
@@ -1863,6 +2037,12 @@ class Queue {
     // not a timer. Incremented before airPendingVoice so anything this boundary
     // airs is measured against the boundary it aired AT.
     this._trackStarts++;
+    // The rotate's own clock (#1619). Only real MUSIC boundaries reach here —
+    // a bed branches before now-playing.json's title gate and a jingle is
+    // captured outside music_meta entirely — so this counts the same thing
+    // radio.liq's `rotate(weights=[1, jingle_ratio()])` counted, and the
+    // controller can draw the stinger the mixer used to draw itself.
+    this._tracksSinceJingle++;
 
     // Air any boundary-deferred segment, unless this boundary already carries
     // the incoming track's own link (#1258). `np` is passed so it sees that item
@@ -2306,6 +2486,20 @@ class Queue {
   async removeUpcoming(trackId: string): Promise<{ ok: true } | { ok: false; reason: 'not-queued' | 'already-playing' }> {
     const item = this.upcoming.find(i => i.track?.id === trackId);
     if (!item) return { ok: false, reason: 'not-queued' };
+    return this.removeUpcomingItem(item);
+  }
+
+  // The cancel itself, addressed by ITEM rather than by track id.
+  //
+  // Split out for the block cancel (#1622 FR 4), which holds the exact items it
+  // means to remove and must not re-resolve them by id: a block can legitimately
+  // carry the same track twice (`allowDuplicate` is how an operator press gets
+  // past the #619 guard), and `find(i => i.track.id === …)` would then cancel
+  // the first copy twice and leave the second queued. Every telnet pull-back and
+  // both stem cascades stay here, in one place, for both callers.
+  async removeUpcomingItem(item: QueueItem): Promise<{ ok: true } | { ok: false; reason: 'not-queued' | 'already-playing' }> {
+    if (!this.upcoming.includes(item)) return { ok: false, reason: 'not-queued' };
+    const trackId = item.track?.id || '';
 
     if (item.sent) {
       const { rid, bedRid } = await liquidsoapControl.resolveDjQueueRidWithBed(trackId);
@@ -2372,10 +2566,89 @@ class Queue {
     return { ok: true };
   }
 
-  // Tracks played in the last `hours` hours, for the picker's repeat block.
-  // Returns BOTH ids and title|artist keys, because the boot backfill reads
-  // events-*.jsonl, which carries no track ids. Includes the current track so a
-  // mid-song pick can't re-pick it.
+  // Cancel what remains of an operator block (#1622 FR 4) — the inverse of the
+  // one press that queued it.
+  //
+  // PARTIAL BY DESIGN. `removeUpcomingItem` refuses an item Liquidsoap has
+  // already taken out of `dj_queue` ('already-playing'), and on a thirty-track
+  // block the head is very often exactly that. Refusing the whole cancel over
+  // it would leave the operator pulling twenty-nine rows by hand, which is the
+  // failure this exists to prevent; so it removes everything it can and reports
+  // what it could not. The one committed track plays out — there is no cancel
+  // for a track on its way to air, and `/dj/skip` is that tool.
+  //
+  // Walks a SNAPSHOT in queue order: each removal splices `upcoming`, so
+  // iterating the live array would skip every other item.
+  async removeUpcomingBlock(blockId: string): Promise<{ removed: number; kept: number; label: string | null }> {
+    const members = this.upcoming.filter(i => i.block?.id === blockId);
+    if (!members.length) return { removed: 0, kept: 0, label: null };
+    const label = members[0].block?.label ?? null;
+    let removed = 0;
+    let kept = 0;
+    for (const item of members) {
+      const result = await this.removeUpcomingItem(item);
+      if (result.ok) removed++;
+      else kept++;
+    }
+    this.log('scheduler',
+      `operator cancelled the rest of "${label}" — ${removed} track${removed === 1 ? '' : 's'} removed`
+      + (kept ? `, ${kept} already committed to the mixer and will play out` : ''),
+      { blockId, removed, kept });
+    return { removed, kept, label };
+  }
+
+  // When will this queued item reach air? A FORECAST, and named as one.
+  //
+  // Deliberately NOT `remainingUntilItemAirs`, which walks only the SENT chain
+  // ahead of an item. That is right for its own caller — the drain only ever
+  // asks about the first UNSENT item, so nothing unsent is ever ahead of it,
+  // and the skip there is a defensive no-op. It is wrong here: this answers a
+  // listener's "when does my request play", where an unsent album track sitting
+  // in front of them is very much going to play first. Two questions, two
+  // walks, both stated — rather than one walk that means different things to
+  // its two callers.
+  //
+  // Null when unknowable, and that is the whole of its error handling: no
+  // start stamp (boot, recover, an untracked auto play), or any item ahead with
+  // no usable duration. A caller that cannot get an answer says nothing, which
+  // is the pre-existing behaviour on every surface that reads this.
+  //
+  // IT COUNTS THE BED, and any future walk of this queue must too. A bed is
+  // written straight to `next.txt` by `maybePushBed` and is never an `upcoming`
+  // entry, so a clock that walks the queue sails straight past it — the #1574
+  // failure, where an uncounted bed put the show-boundary cut a whole link late.
+  // `bedDelayBeforeItemAirs` is that measurement and is reused rather than
+  // re-walked: it sums this item's OWN bed (which plays immediately ahead of it)
+  // plus the beds of SENT items ahead. An UNSENT item ahead legitimately
+  // contributes zero — its bed is decided at ITS drain and has not been pushed
+  // yet — so the two walks agree by construction.
+  //
+  // Both callers are understated by a miss here, in the direction that matters:
+  // the listener wait notice would say a request is closer than it is, on the
+  // one surface it exists to make honest, and `runsPastShowChange` would
+  // under-report the overrun, which reads as "this fits" when it does not.
+  airForecastSec(item: QueueItem): number | null {
+    const idx = this.upcoming.indexOf(item);
+    if (idx < 0) return null;
+    let remaining = this.remainingSecOnAir();
+    if (remaining == null) return null;
+    for (const ahead of this.upcoming.slice(0, idx)) {
+      let d = Number(ahead.track?.duration) || 0;
+      if (!d && ahead.track?.id) d = Number(library.get(ahead.track.id)?.durationSec) || 0;
+      if (!d) return null;
+      const playable = playableDurationSec(d, ahead.cueOutSec ?? null, ahead.cueInSec ?? null);
+      if (playable == null) return null;
+      remaining += playable;
+    }
+    return remaining + this.bedDelayBeforeItemAirs(item);
+  }
+
+  // Tracks played in the last `hours` hours — used by the picker to block
+  // repeats. Returns BOTH ids and `title|artist` keys, because the boot
+  // backfill (in recover()) reads from events-*.jsonl which lacks track ids;
+  // a key-based fallback lets backfilled entries still block repeats. Walks
+  // the rolling 24h sidecar (`_recentPlays`) newest-first to the cutoff and
+  // also includes the current track so a mid-song pick can't re-pick it.
   recentlyPlayed(hours = 12) {
     const cutoff = Date.now() - hours * 3_600_000;
     const ids = new Set<string>();
@@ -2442,8 +2715,38 @@ class Queue {
     return ids;
   }
 
-  // Acknowledgement for a request push() deduped (#619). The on-air case is
-  // split out so a listener isn't told something is "on the way" while it plays.
+  // How many LISTENER requests are queued and unaired — what
+  // `settings.requests.maxPending` is a bound on.
+  //
+  // `routes/request.ts` used to count `upcoming.filter(i => i.requestedBy)`
+  // inline, and that read every operator push as a listener waiting in line,
+  // because `POST /dj/queue-track` pushes `requestedBy: 'studio'` on purpose:
+  // that string is the discriminator four air-path exemptions key off (the
+  // #447 length cap, the show-boundary cut, the bed's request reason, the
+  // sub-crossfade warning), and an explicit operator action wants all four.
+  // The cost was paid on a surface with no connection to any of them — six
+  // manual Queue presses reached the default `maxPending` of 6 and answered
+  // every listener "The request queue's full" for as long as those tracks took
+  // to air, with nothing in the refusal or the booth log naming the cause.
+  //
+  // The fix is one question asked in one place rather than a second meaning
+  // hung on `requestedBy`: an operator push carries `operator: true` and is not
+  // a request the queue is holding on a listener's behalf. Counting `!sent`
+  // would be the wrong narrowing — a sent-but-unaired request is still a
+  // listener waiting, and the cap is about how deep the line gets, not about
+  // how far down it Liquidsoap has already reached.
+  //
+  // The on-air track is deliberately NOT counted: `maxPending` bounds what is
+  // still waiting, and a request that is playing has been served.
+  pendingListenerRequests(): number {
+    return this.upcoming.filter(i => i.requestedBy && !i.operator).length;
+  }
+
+  // Honest acknowledgement for a listener request whose resolved track is
+  // already queued or on air — used when push() dedups the request (issue
+  // #619). Lets the caller send a truthful line instead of a false "coming up"
+  // or a phantom second back-to-back play. Distinguishes the on-air case so the
+  // listener isn't told something is "on the way" when it's playing right now.
   dedupAck(trackId: string | null | undefined): string {
     const onAir = !!trackId && this.current?.track?.id === trackId;
     return onAir
@@ -2619,9 +2922,14 @@ class Queue {
       endedAt: i.endedAt,
       queuedAt: i.queuedAt,
       sent: i.sent,
-      // The track arrives via a pre-rendered stem blend (#1257). Stamped at pair
-      // drain and cleared on cancel, so it is definitive rather than predictive;
-      // absent = plain crossfade.
+      // The operator block this row belongs to (#1622 FR 4), or absent. Carries
+      // its own index/size rather than being counted here, so a block half
+      // played still reads "9 of 11" instead of shrinking with the queue.
+      block: i.block || undefined,
+      // The track arrives via a pre-rendered stem blend rather than a plain
+      // crossfade (#1257 — the admin queue badges the seam type). Stamped at
+      // pair drain, cleared if the clip is pulled with a cancel, so it's
+      // definitive, not a prediction; absent = plain crossfade.
       stemSeam: i.stemSeam || undefined,
     });
     return {
@@ -2666,3 +2974,14 @@ class Queue {
 export type QueueApi = InstanceType<typeof Queue>;
 
 export const queue = new Queue();
+
+// Handing the rotate to the controller starts a clean N-track cycle (#1619).
+// Registered here rather than called from settings.update() because settings.ts
+// already imports broadcast/jingle-rotate.ts and this module imports settings —
+// a direct call would close the cycle. It also catches every writer, not just
+// the admin route: a backup restore reaches update() directly. Only the switch
+// TOWARD the controller matters; going back to the mixer leaves a count nothing
+// is reading, and zeroing it would be a change the operator did not ask for.
+onJingleRotateOwnerChange(owner => {
+  if (owner === 'controller') queue.resetRotateJingleCount();
+});

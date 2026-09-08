@@ -9,13 +9,14 @@ import { Modal } from '../../ui/modal';
 import { Input } from '../../ui/input';
 import { Button } from '../../ui/button';
 import { Badge } from '../../ui/badge';
-import { Btn } from '../ui';
+import { Btn, Seg } from '../ui';
 import { PreviewButton, type SettingsData, type SaveSettings } from '../settings/shared';
 import type { JingleImportFailure, JingleImportResult, ImagingSubmitResult } from './types';
 import { notify } from '../../../lib/notify';
 import {
   IMAGING_DESCRIPTION_MAX,
   JINGLE_RATIO_BOUNDS,
+  JINGLE_ROTATE_OWNERS,
   JINGLE_TEXT_MAX,
   jingleCreateSchema,
   jingleImportSchema,
@@ -274,6 +275,11 @@ export function JinglesSection({
   const ratioRaw = data.values?.jingleRatio;
   const ratioDirty = jingleRatio !== String(ratioRaw);
   const ratioMetric = ratioRaw == null ? '—' : ratioRaw === 0 ? 'off' : `1 : ${ratioRaw}`;
+  // Who counts the tracks (#1619). Unlike the ratio this is not held in a
+  // dirty-string: a segmented control has no half-typed state, so it posts on
+  // click like every other toggle. Un-hydrated reads as the default, which is
+  // also what an older controller (no key in /settings) answers.
+  const rotateOwner = data.values?.jingleRotate === 'controller' ? 'controller' : 'mixer';
   const jingles = data.jingles || [];
   const [modal, setModal] = useState<null | 'create' | 'import'>(null);
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
@@ -339,6 +345,31 @@ export function JinglesSection({
           >
             Save · needs restart
           </Btn>
+        </div>
+        <div className="flex flex-wrap items-center gap-5 border-t border-separator-soft px-[18px] py-[18px]">
+          <div className="flex flex-wrap items-center gap-2.5 sm:flex-none">
+            <span className="font-mono text-[13px]">counted by</span>
+            <Seg
+              value={rotateOwner}
+              aria-label="Who counts the tracks between jingles"
+              options={JINGLE_ROTATE_OWNERS.map(id => ({
+                id,
+                label: id === 'mixer' ? 'Mixer' : 'Controller',
+              }))}
+              onChange={(id) => {
+                if (busy || id === rotateOwner) return;
+                void saveSettings({ jingleRotate: id });
+              }}
+            />
+          </div>
+          <p className="m-0 min-w-[220px] flex-1 text-[12px] leading-[1.55] text-muted">
+            The mixer has always counted for itself, and the DJ only found out afterwards.
+            Hand the count to the controller and a jingle becomes part of the same running
+            order as the station ID — nothing else speaks on the minute it takes, and it
+            waits its turn behind anything already queued for the next track.
+            {' '}<strong>Restart the mixer after switching</strong>, or both will count for a
+            while and you&rsquo;ll hear twice the jingles.
+          </p>
         </div>
       </PanelBox>
 

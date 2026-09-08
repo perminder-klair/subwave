@@ -80,7 +80,9 @@ import {
   STREAM_MAX_LISTENERS_BOUNDS,
   maxTrackSecondsValueSchema,
   type ScheduledBackupSettings,
+  type JingleRotateOwner,
 } from './schemas/settings.js';
+import { jingleRotateOwner, setJingleRotateOwner } from './broadcast/jingle-rotate.js';
 import { minTrackSeconds, peek, setCache } from './settings/store.js';
 import {
   SKILL_RENAMES,
@@ -357,6 +359,10 @@ export async function load() {
 
   const loaded: any = {
     jingleRatio: stored.jingleRatio ?? DEFAULTS.jingleRatio,
+    // Repaired, never trusted: a hand-edited settings.json is load()'s input
+    // and an unrecognised owner here would decide whether TWO rotates run.
+    // Anything but the explicit opt-in reads as the mixer (#1619).
+    jingleRotate: jingleRotateOwner(stored),
     crossfadeDuration: stored.crossfadeDuration ?? DEFAULTS.crossfadeDuration,
     // Bounded here as well as at the save path (load repairs, never throws):
     // an out-of-range `p` reaches radio.liq as a music BOOST under the DJ.
@@ -1074,6 +1080,10 @@ export async function load() {
     console.warn(`[settings] ignoring invalid timezone "${stored.timezone.trim()}" — using Auto (container TZ)`);
   }
   setStationTimezone(loaded.timezone);
+  // Same shape, same reason (#1619): the queue subscribes to a real ownership
+  // change so it can restart the rotate's boundary count, and it cannot be
+  // called from here directly without closing a settings ↔ queue cycle.
+  setJingleRotateOwner(loaded.jingleRotate);
   return loaded;
 }
 
@@ -1090,6 +1100,19 @@ export async function update(patch) {
     const v = parseSettingsPatchKey<number>('jingleRatio', patch.jingleRatio);
     if (v !== cur.jingleRatio) {
       next.jingleRatio = v;
+      restart = true;
+    }
+  }
+  // Who counts the tracks (#1619). Same restart flag as the ratio itself and
+  // for the same reason: this key's whole effect on the mixer is the value
+  // written into liquidsoap_jingle_ratio.txt, which is read once at startup.
+  // Until that restart the mixer is still rotating on its old ratio, so an
+  // operator who flips this and walks away hears both — which is what the
+  // control's "needs restart" wording is for.
+  if ('jingleRotate' in patch) {
+    const v = parseSettingsPatchKey<JingleRotateOwner>('jingleRotate', patch.jingleRotate);
+    if (v !== cur.jingleRotate) {
+      next.jingleRotate = v;
       restart = true;
     }
   }
@@ -2117,9 +2140,15 @@ export async function update(patch) {
   setCache(next);
   // Applied on save; the next zonedParts() call picks it up, no restart.
   setStationTimezone(next.timezone);
-  // shows + schedule persist to schedule.json; strip them from the
-  // settings.json payload so legacy installs migrate forward on the first
-  // write. The in-memory cache keeps the full merged shape.
+  // Applied-on-save too, and unlike the zone this one DOES also need the mixer
+  // restart the flag above raises — the counter reset is only the controller's
+  // half (#1619).
+  setJingleRotateOwner(next.jingleRotate);
+  // shows + schedule are persisted to their own file (schedule.json); strip
+  // them from the settings.json payload so legacy installs migrate forward
+  // on the first write. The in-memory `cache` keeps the full shape so
+  // resolveActiveShow / getEffectivePersona / the integrity sweep all
+  // continue to work against one merged view.
   const { shows: _shows, schedule: _schedule, scheduleOverride: _override, ...settingsPersist } = next;
   // Atomic replace: a crash mid-write must not take the whole config.
   await writeFileAtomic(SETTINGS_PATH, JSON.stringify(settingsPersist, null, 2));

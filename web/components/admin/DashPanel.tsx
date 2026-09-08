@@ -241,6 +241,49 @@ export default function DashPanel() {
     },
   });
 
+  // Cancel the rest of an operator block (#1622 FR 4) — the inverse of the one
+  // press that queued it. Partial success is the NORMAL answer rather than an
+  // error: a track the mixer has already taken plays out and comes back in
+  // `kept`, so the toast reports both instead of calling the cancel a failure.
+  //
+  // No optimistic patch, unlike the per-track cancel above: which members
+  // survive is the SERVER's answer, and guessing it would blank rows that are
+  // still going to air. The invalidate below is the only truth.
+  const cancelQueueBlock = useAdminMutation<
+    { removed?: number; kept?: number; label?: string | null; error?: string }, string
+  >({
+    adminFetch,
+    toastOnError: false,
+    request: async (blockId, fetcher) => {
+      const response = await fetcher(`/dj/queue/block/${encodeURIComponent(blockId)}`, { method: 'DELETE' });
+      const body = await response.json().catch(() => ({})) as { removed?: number; kept?: number; label?: string | null; error?: string };
+      if (!response.ok) throw new Error(body.error || `failed (${response.status})`);
+      return body;
+    },
+    onDone: async (_data, _id, client) => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: dashKeys.status() }),
+        client.invalidateQueries({ queryKey: dashKeys.requests() }),
+      ]);
+    },
+  });
+
+  const cancelBlock = async (block: { id: string; label: string }) => {
+    setBusy(`block:${block.id}`);
+    try {
+      const out = await cancelQueueBlock.mutateAsync(block.id);
+      const removed = out.removed ?? 0;
+      notify.ok(
+        `cancelled ${removed} track${removed === 1 ? '' : 's'} from ${out.label || block.label}`
+        + (out.kept ? ` · ${out.kept} already committed and will play out` : ''),
+      );
+    } catch (e) {
+      notify.err(`cancel block: ${errorMessage(e)}`);
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const cancelQueued = async (t: QueueEntry) => {
     const id = typeof t.subsonic_id === 'string' ? t.subsonic_id : '';
     if (!id) return;
@@ -394,6 +437,30 @@ export default function DashPanel() {
                             className="shrink-0 text-[8px] font-bold tracking-[0.14em] whitespace-nowrap text-vermilion/80 uppercase"
                           >
                             Stem blend
+                          </span>
+                        ) : null}
+                        {/* An operator block (#1622 FR 4): say which record this
+                            row belongs to and where it sits in it, and offer the
+                            inverse of the one press that queued it. Shown on the
+                            FIRST visible member only — a badge on all thirty rows
+                            is noise, and one cancel button is the whole point. */}
+                        {t.block && upcoming.findIndex(u => u.block?.id === t.block!.id) === i ? (
+                          <span className="flex shrink-0 items-center gap-1.5">
+                            <span
+                              title={`Queued as one block: ${t.block.label}`}
+                              className="text-[8px] font-bold tracking-[0.14em] whitespace-nowrap text-ink/70 uppercase"
+                            >
+                              {t.block.label} · {t.block.index}/{t.block.size}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => cancelBlock({ id: t.block!.id, label: t.block!.label })}
+                              disabled={busy === `block:${t.block.id}`}
+                              title="Cancel the rest of this block"
+                              className="text-[8px] font-bold tracking-[0.14em] whitespace-nowrap text-muted uppercase hover:text-vermilion disabled:opacity-50"
+                            >
+                              cancel the rest
+                            </button>
                           </span>
                         ) : null}
                         <QueueHeldBadge sent={t.sent} />

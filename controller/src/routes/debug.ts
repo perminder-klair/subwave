@@ -1,6 +1,7 @@
 // Admin-gated GET /debug — everything-at-a-glance for the debug UI.
 import express from 'express';
 import { readFile, readdir } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { config } from '../config.js';
 import * as dj from '../llm/dj.js';
 import * as llmProvider from '../llm/provider.js';
@@ -27,6 +28,8 @@ import { budgetStatus } from '../broadcast/dj-budget.js';
 import { voiceStatus } from '../broadcast/voice-policy.js';
 import { clockStatus } from '../broadcast/clock-policy.js';
 import { talkAirStatus } from '../broadcast/talk-air.js';
+import { jingleRotateStatus } from '../broadcast/jingle-rotate.js';
+import { LIQ_JINGLE_RATIO_PATH } from '../settings/liquidsoap.js';
 import { handoverStatus } from '../broadcast/handover-policy.js';
 import * as requestLog from '../broadcast/request-log.js';
 import { getStationTimezone } from '../time.js';
@@ -210,9 +213,33 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     // settings.djTalkOnlyBetweenTracks; true means a late-looking segment is
     // waiting for a track boundary rather than missing.
     talkAir: (() => { try { return talkAirStatus(); } catch (err: any) { return { error: err.message }; } })(),
-    // settings.handover (#1576) plus the LIVE debt: `wait` is null when no
-    // sign-off is outstanding, so an absent greeting reads as missing rather
-    // than waiting.
+    // Who draws the automatic jingle (settings.jingleRotate, #1619). `owner`
+    // answers both halves of "why are there no stingers" and "why are there
+    // two of them", and while the controller owns the rotate
+    // `tracksSinceJingle` says how close the next one is.
+    //
+    // The ratio is reported TWICE — intended (from settings) and on-disk (the
+    // verbatim bytes of the handoff file) — because they can disagree, and the
+    // disagreement IS the "why are there two of them" answer. The read is here
+    // rather than in the policy module so that module stays I/O-free; it is one
+    // small synchronous read on an admin-only route that already does several.
+    // An unreadable file reports `null`, never a guess: the file is absent on a
+    // station that has never saved settings, and that is not the same claim as
+    // the mixer having been handed the wrong value.
+    jingleRotate: (() => {
+      try {
+        let onDisk: string | null = null;
+        try { onDisk = readFileSync(LIQ_JINGLE_RATIO_PATH, 'utf8').trim(); } catch { onDisk = null; }
+        return jingleRotateStatus(settings.get(), queue.rotateJingleTracksSince(), onDisk);
+      } catch (err: any) { return { error: err.message }; }
+    })(),
+    // Show handover timing + ordering (settings.handover, #1576). `offsetMinutes`
+    // is how far before a show boundary the sign-off airs and `closingTrack` is
+    // the fixed rule that keeps the incoming host one track behind it — but the
+    // config alone cannot tell "waiting" from "missing", which is the question
+    // this row exists for. `wait` is the LIVE debt: null when no sign-off is
+    // outstanding (so an absent greeting is missing), and the two counters
+    // against those thresholds when one is (so it is waiting, and for what).
     handover: (() => {
       try { return { ...handoverStatus(), wait: queue.handoverWait() }; }
       catch (err: any) { return { error: err.message }; }

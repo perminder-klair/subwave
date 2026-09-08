@@ -239,8 +239,10 @@ export default function Concepts() {
           Which makes the trade a simple one: <strong>the cost is disk, and only
           disk</strong>. The separation is paid for during analysis whether you keep the
           output or not. Budget 13&ndash;25&nbsp;MB per track; the default 15&nbsp;GB
-          budget holds somewhere between six hundred and twelve hundred of them, and an
-          LRU sweep evicts the least recently used once you&rsquo;re over.
+          budget holds somewhere between six hundred and twelve hundred of them. Once
+          you&rsquo;re over, a sweep evicts the tracks with the least to gain from a
+          blend first &mdash; the ones the station never plays, and the ones whose
+          analysis found no beat grid to align a seam on.
         </p>
         <div className="bs-callout">
           <div className="bs-eyebrow">THE PART THAT SURPRISES PEOPLE</div>

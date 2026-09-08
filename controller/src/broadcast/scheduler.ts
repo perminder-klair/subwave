@@ -12,6 +12,7 @@ import * as silenceTrim from '../music/silence-trim.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
 import * as settings from '../settings.js';
+import { jingleRotateOwner, rotateJingleDue } from './jingle-rotate.js';
 import { normGenre, genreMatches, genreResolutionWarningOnce, inYearRange, preferEnergy, preferEnergyStrict, preferMood, applyStrictLocks, hasEraBound, eraSpan, type VocalMode } from '../music/show-filter.js';
 import { freshnessBiasedOrder } from '../music/airing.js';
 import { recencyWindowsForLibrary } from '../music/recency.js';
@@ -742,8 +743,27 @@ function talkEligible(kind: TalkKind, now: Date, rolled: SessionRoll | null): bo
   }
   if (kind === 'banter') return banterEligible(now);
   if (kind === 'segment') return segmentEligible();
-  // Programme beats carry no frequency/listener/budget gate — a planned
-  // episode's beats are the show, and dueBeat already said one is due.
+  // The automatic jingle rotate (#1619). Deliberately none of the gates above:
+  // a stinger costs no tokens and no TTS, so the daily budget has nothing to
+  // say about it, and neither the mixer's rotate nor an operator press has ever
+  // been listener-gated or muted by `tts.enabled` (voice-policy.ts names
+  // `jingleRatio: 0` as the way to silence jingles, precisely because the voice
+  // switch does not). Keeping those gates off is what makes the move from
+  // radio.liq a move rather than a redesign. Whether there is a clip to draw is
+  // NOT asked here — that is a readdir+stat sweep and this resolver is
+  // synchronous; a rotate that comes due and finds nothing spends the offer
+  // and skips, exactly as the mixer's own `source.available` gate did.
+  if (kind === 'jingle') {
+    const s = settings.get();
+    return rotateJingleDue({
+      owner: jingleRotateOwner(s),
+      ratio: Number(s?.jingleRatio) || 0,
+      tracksSinceJingle: queue.rotateJingleTracksSince(),
+    });
+  }
+  // Programme beats carry no frequency/listener/budget gate of their own — a
+  // planned episode's beats are the show. `dueBeat` (the row's external slot)
+  // has already said one is due.
   if (kind === 'programme') return programme.onAir(now);
   return false;
 }
@@ -753,12 +773,27 @@ function talkEligible(kind: TalkKind, now: Date, rolled: SessionRoll | null): bo
 // function never sees: queue.announce()/announceExchange() read it instead of a
 // flag threaded down. Manual runners are exempt by being called from OUTSIDE it.
 async function runTalkSlot(plan: Extract<TalkPlan, { act: 'fire' }>) {
-  // Warm a heavy TTS engine the sidecar may have idle-unloaded (#1579), so the
-  // load overlaps writing and rendering the script. At the FIRE, never on an
-  // open window: the rows cover ~50 minutes of the hour, so warming on an open
-  // window would reload within a tick of every unload. Fire-and-forget — a
-  // failed warm just costs the render a model load.
-  void warmHeavy();
+  // The station has just decided it is going to talk this minute, which is the
+  // earliest honest signal that a heavy engine the sidecar idle-unloaded
+  // (#1579) is about to be needed. The idle-pause release
+  // (broadcast/stream-idle.ts) is the other signal and the better one — it
+  // buys minutes — but it only exists when stream.idleWhenEmpty is ON, and
+  // that defaults OFF, so a stock station warmed the sidecar nowhere at all
+  // and paid every reload as a stall on the line itself. From here the load at
+  // least overlaps writing the script and rendering it.
+  //
+  // Fired at the FIRE, never on an open window: the talk rows cover ~50
+  // minutes of the hour, so warming whenever a window is open would reload the
+  // model within a tick of every unload and quietly switch the feature off.
+  // Fire-and-forget and total, exactly like the idle-pause call — a warm that
+  // fails costs the render a model load, which is the un-warmed behaviour.
+  //
+  // The jingle rotate (#1619) is the one row this must skip. It is the table's
+  // only row that is not speech — the clip is already rendered on disk and no
+  // engine is reached at all — so warming for it would reload a model nothing
+  // is about to use, which is the same "quietly switch the unload off" failure
+  // the fire-not-window rule above exists to avoid.
+  if (plan.kind !== 'jingle') void warmHeavy();
   return withTalkAir(plan.air, () => runTalkSlotInner(plan));
 }
 
@@ -779,6 +814,11 @@ async function runTalkSlotInner(plan: Extract<TalkPlan, { act: 'fire' }>) {
       case 'segment':
         await runSegmentTick();
         return;
+      case 'jingle':
+        // The planner has already decided the seam is this row's; the queue
+        // owns the draw and the handoff (#1619).
+        await queue.playRotateJingle();
+        return;
       case 'programme': {
         const ctx = await getFullContext();
         if (plan.slot === 'feature') await programme.featureTick(queue, ctx);
@@ -797,6 +837,7 @@ const TALK_FAILURE_LABEL: Record<TalkKind, (slot: string) => string> = {
   'station-id': () => 'Station ID',
   banter: () => 'Banter',
   segment: () => 'Segment tick',
+  jingle: () => 'Jingle rotate',
   programme: slot => `Programme ${slot} tick`,
 };
 
@@ -884,8 +925,10 @@ async function cleanup() {
   } catch (err) {
     queue.log('error', `Archive retention failed: ${err.message}`);
   }
-  // Stem cache LRU — keep the Demucs stem windows inside the byte budget. The
-  // analysis pass sweeps after itself too; this catches lazily-added dirs.
+  // Stem cache sweep — keep the per-track Demucs stem windows inside the
+  // operator's byte budget (feature: stem-blend transitions), evicting by the
+  // music/stem-priority.ts ranking rather than by age. The analysis pass
+  // sweeps after itself too; this catches lazily-added dirs.
   try {
     const { removed, freedBytes, failedDirs, overBudgetBytes } = await stemCacheStore.sweep();
     if (removed) {

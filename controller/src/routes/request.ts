@@ -23,6 +23,7 @@ import {
 import { validatePublicBody } from '../middleware/validate.js';
 import { listenerRequestSchema } from '../schemas/request.js';
 import { shuffle } from '../util/shuffle.js';
+import { requestWaitClause } from '../broadcast/queue/pure.js';
 
 export const router = express.Router();
 
@@ -178,6 +179,41 @@ function flagGuard(entry, verdict: string | null | undefined) {
   entry.guard = entry.guard ? `${entry.guard}+${verdict}` : verdict;
 }
 
+// Append an honest wait to a queued request's acknowledgement (#1622 FR 4).
+//
+// A request has always joined the back of a FIFO queue, and that queue used to
+// be one or two picks deep, so "coming up" was true within a track or two. An
+// operator block can now put a whole album in front of it — and it must, since
+// `drain-policy.ts` makes FIFO non-negotiable (a request IS the successor
+// arriving) and jumping the block would split the record the block exists to
+// keep whole. So the listener is told how long instead of being left to
+// conclude the station is broken.
+//
+// Called at the THREE sites that queue a track and report a position (the
+// more-like-this shortcut, the agent path, the stateless cascade) — one helper
+// rather than three copies of the same walk.
+//
+// Addressed by TRACK ID rather than by taking the tail of `upcoming`: there are
+// awaits between the push and here, so a concurrent request or a pick can have
+// appended in the meantime and the tail is not reliably ours. The LAST match
+// is, since `allowDuplicate` means the same id can sit in the queue twice and
+// the newest copy is the one just pushed.
+//
+// Says nothing at all when the item is gone (it aired while the acknowledgement
+// was being written) or the forecast is unknown or short — which is exactly the
+// pre-block behaviour. The phrasing rules live in the pure `requestWaitClause`,
+// never inline here.
+function withWaitNotice(ack: string | null | undefined, trackId: string | null | undefined): string | null {
+  if (!ack) return ack ?? null;
+  if (!trackId) return ack;
+  const idx = queue.upcoming.map(i => i.track?.id).lastIndexOf(trackId);
+  if (idx < 0) return ack;
+  // The LAST block ahead of it is the one still playing when this request comes
+  // round, so it is the one worth naming.
+  const blockLabel = [...queue.upcoming.slice(0, idx)].reverse().find(i => i.block)?.block?.label ?? null;
+  return `${ack}${requestWaitClause({ waitSec: queue.airForecastSec(queue.upcoming[idx]), blockLabel })}`;
+}
+
 async function resolveRequest(entry) {
   const { requester, text } = entry;
   entry.startedAt = Date.now();
@@ -308,7 +344,7 @@ async function resolveRequest(entry) {
     });
     entry.introScript = introScript || null;
     return resolved({
-      ack: ackLine,
+      ack: withWaitNotice(ackLine, pick.id),
       track: { title: pick.title, artist: pick.artist },
       queuePosition: queue.upcoming.length,
     });
@@ -346,7 +382,7 @@ async function resolveRequest(entry) {
       entry.pick = agentRes.track;
       entry.introScript = agentRes.introScript || null;
       return resolved({
-        ack: agentRes.ack,
+        ack: withWaitNotice(agentRes.ack, agentRes.track.id),
         track: agentRes.track,
         queuePosition: queue.upcoming.length,
       });
@@ -644,7 +680,7 @@ async function resolveRequest(entry) {
   entry.pickSource = pickSource;
   entry.introScript = introScript || null;
   return resolved({
-    ack,
+    ack: withWaitNotice(ack, pick.id),
     track: { title: pick.title, artist: pick.artist },
     queuePosition: queue.upcoming.length,
   });
@@ -727,7 +763,10 @@ router.post('/request', validatePublicBody(listenerRequestSchema), async (req, r
       retryAfter,
     });
   }
-  const pendingCount = queue.upcoming.filter((i: any) => i.requestedBy).length;
+  // LISTENER requests only — an operator's own studio push carries
+  // `requestedBy: 'studio'` for the air-path exemptions and must not consume a
+  // slot in the listener queue. See queue.pendingListenerRequests().
+  const pendingCount = queue.pendingListenerRequests();
   if (pendingCount >= (Number(cfg.maxPending) || 6)) {
     res.setHeader('Retry-After', String(retryAfter));
     return res.status(429).json({

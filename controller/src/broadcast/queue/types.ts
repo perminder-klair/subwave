@@ -64,6 +64,40 @@ export interface Track {
 export interface QueueItem {
   track: Track;
   requestedBy?: string | null;
+  // This item was queued by the OPERATOR, not by a listener. It exists because
+  // `requestedBy` cannot answer that question: the studio queue pushes
+  // `requestedBy: 'studio'` precisely so it inherits the four exemptions that
+  // discriminator carries (the #447 length cap, the show-boundary cut, the
+  // bed's request reason, the sub-crossfade warning), and every one of those
+  // is right for an operator push. What is NOT right is `routes/request.ts`
+  // reading the same truthiness as "a listener is waiting" — six manual Queue
+  // presses then filled `requests.maxPending` and shut the listener request
+  // line, with nothing in the refusal naming the cause.
+  //
+  // So the origin gets its own field rather than overloading that one, and the
+  // two questions stay separable. Read ONLY by `pendingListenerRequests()`;
+  // nothing on the air path may branch on it, or the exemptions above quietly
+  // acquire a second discriminator that can disagree with the first.
+  //
+  // ABSENT means "not known to be an operator push", which is what an item
+  // recovered from a `queue.json` written before this field reads as — i.e.
+  // exactly the old behaviour, for the ≤2h such a snapshot survives.
+  operator?: boolean;
+  // This item was queued as part of an operator BLOCK — a whole album, or a
+  // run of tracks for an artist show (#1622 FR 4).
+  //
+  // IDENTITY ONLY. Nothing on the air path may branch on it: the block airs as
+  // ordinary FIFO queue items, with exactly the exemptions `requestedBy:
+  // 'studio'` and `allowDuplicate` already carried, and adding a third
+  // discriminator here is how the drain would come to treat "in a block"
+  // as a fourth kind of track. It exists so three surfaces can say what a
+  // listener already hears — the booth log names the block once instead of
+  // thirty times, the admin queue badges the rows, and
+  // `DELETE /dj/queue/block/:id` can undo one press with one press.
+  //
+  // `index`/`size` are stamped from the PLAN, so they describe the block as it
+  // was queued and do not shrink as it plays out ("3 of 11" stays "3 of 11").
+  block?: { id: string; label: string; index: number; size: number };
   intent?: string | null;
   introScript?: string | null;
   introKind?: string;

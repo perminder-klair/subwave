@@ -14,7 +14,7 @@ import { Btn, Eyebrow, Metric } from '../ui';
 import { useSectionChrome, useReportDirty } from './section-chrome';
 import { Button } from '../../ui/button';
 import { FieldError } from '../../ui/field';
-import type { TransitionEffect } from '../../../lib/schemas.generated';
+import type { TransitionEffect, JingleRotateOwner } from '../../../lib/schemas.generated';
 export type { TransitionEffect } from '../../../lib/schemas.generated';
 
 export const KEY_HINTS: Record<string, string> = {
@@ -357,6 +357,11 @@ export interface JingleEntry {
 export interface SettingsData {
   values?: {
     jingleRatio?: number;
+    /** Who counts the tracks between jingles (#1619). Absent on an older
+     *  controller, which is the same thing as 'mixer'. The union comes from the
+     *  mirrored schema rather than being respelled here, so a value added to it
+     *  reaches this form. */
+    jingleRotate?: JingleRotateOwner;
     crossfadeDuration?: number;
     ducking?: { voice?: number; intro?: number };
     maxTrackSeconds?: number;

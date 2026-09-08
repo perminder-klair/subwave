@@ -20,6 +20,7 @@
 //   browse.ts       the admin browse filter + Observatory rows
 //   scenes.ts       the genre-tag vocabulary + its in-place merge
 //   plays.ts        play history
+//   stem-scan.ts    the stem backfill scope + its priority ranking
 
 export * from './library-db/handle.js';
 export * from './library-db/types.js';
@@ -36,3 +37,4 @@ export * from './library-db/queries.js';
 export * from './library-db/browse.js';
 export * from './library-db/scenes.js';
 export * from './library-db/plays.js';
+export * from './library-db/stem-scan.js';

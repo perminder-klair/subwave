@@ -349,6 +349,28 @@ export const jingleRatioSchema = settingsIntLike(
   `jingleRatio must be int in [${JINGLE_RATIO_BOUNDS.min}, ${JINGLE_RATIO_BOUNDS.max}]`,
 );
 
+/**
+ * WHO counts the tracks between jingles (#1619).
+ *
+ * `'mixer'` is the pre-existing station: radio.liq's own
+ * `rotate(weights=[1, jingle_ratio()])` draws a stinger every N tracks and the
+ * controller only learns about it afterwards, through `jingle-playing.json`.
+ * `'controller'` moves the count into the talk-slot planner, so a jingle is a
+ * row like every other thing that takes the listener's ear — and the mixer's
+ * ratio handoff file is written 0, which is already the documented way to
+ * switch its rotate off (#997).
+ *
+ * Strict, like the two switches above and for the same reason: the key is new,
+ * so there is no hand-rolled branch to inherit leniency from. `load()` still
+ * coerces an unrecognised value in a hand-edited settings.json back to
+ * `'mixer'`, so only a PATCH is refused.
+ */
+export const JINGLE_ROTATE_OWNERS = ['mixer', 'controller'] as const;
+export type JingleRotateOwner = (typeof JINGLE_ROTATE_OWNERS)[number];
+export const jingleRotateSchema = z.enum(JINGLE_ROTATE_OWNERS, {
+  error: `jingleRotate must be one of ${JINGLE_ROTATE_OWNERS.join(', ')}`,
+});
+
 export const sfxPatchSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
 });

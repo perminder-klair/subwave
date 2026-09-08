@@ -10,7 +10,7 @@ import { cn } from '../../../lib/cn';
  
 import { SkeletonRows } from '@/components/ui/skeleton';
 import { EmptyState } from '@/components/ui/empty-state';
-import type { BlockRef, BlockType, LikeIndex, TableVariant, Track } from './types';
+import type { BlockRef, BlockType, LikeIndex, QueueBlockKind, TableVariant, Track } from './types';
 import {
   CHECK_HIT,
   EnergyMeter,
@@ -22,7 +22,7 @@ import {
   unblockLabel,
   useDismissOnOutside,
 } from './bits';
-import { BlockMenu, HeartButton, likeStateFor } from './row-actions';
+import { BlockMenu, HeartButton, QueueMenu, likeStateFor } from './row-actions';
 import { ManualTagEditor } from './ManualTagEditor';
 
 interface TrackTableProps {
@@ -33,6 +33,7 @@ interface TrackTableProps {
   retagging: string | null;
   flashId: string | null;
   onQueue: (t: Track) => void;
+  onQueueBlock: (t: Track, kind: QueueBlockKind) => void;
   onRetag: (t: Track) => void;
   blocking: string | null;
   onBlock: (t: Track, type: BlockType) => void;
@@ -180,6 +181,7 @@ export function TrackTable(p: TrackTableProps) {
                 blocking={p.blocking === t.id}
                 disabled={!!p.queuing || !!p.retagging || !!p.manualBusy || !!p.blocking}
                 onQueue={p.onQueue}
+                onQueueBlock={p.onQueueBlock}
                 onEdit={p.onEdit}
                 onRetag={p.onRetag}
                 onBlock={p.onBlock}
@@ -196,9 +198,14 @@ export function TrackTable(p: TrackTableProps) {
                 busy={p.liking === t.id}
                 onToggle={p.onToggleLike}
               />
-              <Btn sm className="hidden sm:inline-flex" onClick={() => p.onQueue(t)} disabled={!!p.queuing} title="Queue on air">
-                {p.queuing === t.id ? '…' : <ListPlus size={12} />}
-              </Btn>
+              <QueueMenu
+                className="hidden sm:block"
+                track={t}
+                busy={p.queuing === t.id}
+                disabled={!!p.queuing}
+                onQueue={p.onQueue}
+                onQueueBlock={p.onQueueBlock}
+              />
               <Btn
                 sm
                 className="hidden sm:inline-flex"
@@ -266,7 +273,7 @@ export function TrackTable(p: TrackTableProps) {
 }
 
 export function RowActionsMenu({
-  track, tagged, editing, queuing, retagging, blocking, disabled, onQueue, onEdit, onRetag, onBlock, onUnblock,
+  track, tagged, editing, queuing, retagging, blocking, disabled, onQueue, onQueueBlock, onEdit, onRetag, onBlock, onUnblock,
   like, liking, onToggleLike, onClearLikes,
 }: {
   track: Track;
@@ -277,6 +284,7 @@ export function RowActionsMenu({
   blocking: boolean;
   disabled: boolean;
   onQueue: (t: Track) => void;
+  onQueueBlock: (t: Track, kind: QueueBlockKind) => void;
   onEdit: (t: Track) => void;
   onRetag: (t: Track) => void;
   onBlock: (t: Track, type: BlockType) => void;
@@ -312,6 +320,16 @@ export function RowActionsMenu({
           <button type="button" className={MENU_ITEM} disabled={disabled} onClick={() => run(() => onQueue(track))}>
             <ListPlus size={13} /> Queue on air
           </button>
+          {track.album && (
+            <button type="button" className={MENU_ITEM} disabled={disabled} onClick={() => run(() => onQueueBlock(track, 'album'))}>
+              <ListPlus size={13} /> Queue the whole album
+            </button>
+          )}
+          {track.artist && (
+            <button type="button" className={MENU_ITEM} disabled={disabled} onClick={() => run(() => onQueueBlock(track, 'artist'))}>
+              <ListPlus size={13} /> Queue a set by this artist
+            </button>
+          )}
           <button type="button" className={MENU_ITEM} disabled={disabled} onClick={() => run(() => onEdit(track))}>
             {editing ? <X size={13} /> : <Pencil size={13} />} {editing ? 'Close mood editor' : 'Edit moods'}
           </button>

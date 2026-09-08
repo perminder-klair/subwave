@@ -124,6 +124,15 @@ const allowed = new Map([
     ['diagnosis-command', { callee: 'adminResponse', method: 'GET', path: /^\/doctor$/ }],
     ['diagnosis-stream', { callee: 'adminResponse', method: 'GET', path: /^\/doctor\/stream$/ }],
   ])],
+  ['PersonasPanel.tsx', new Map([
+    // Persona bundle (#1620). A one-shot blob download, like backup-export and
+    // skill-export next door — the import half is an ordinary useAdminMutation.
+    ['persona-bundle-export', {
+      callee: 'adminResponse',
+      method: 'GET',
+      path: /^\/personas\/\$\{\}\/export$/,
+    }],
+  ])],
   ['debug/LlmCalls.tsx', new Map([
     ['llm-call-export', {
       callee: 'adminResponse',

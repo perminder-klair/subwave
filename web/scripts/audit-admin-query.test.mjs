@@ -30,6 +30,10 @@ const validImperativeFixtures = {
   // admin-query-imperative: diagnosis-stream
   return adminResponse(adminFetch, '/doctor/stream', { headers: { Accept: 'text/event-stream' } });
 }\n`,
+  'PersonasPanel.tsx': `export async function run(adminFetch, id) {
+  // admin-query-imperative: persona-bundle-export
+  return adminResponse(adminFetch, \`/personas/\${id}/export\`);
+}\n`,
   'debug/LlmCalls.tsx': `export async function run(adminFetch, format) {
   // admin-query-imperative: llm-call-export
   return adminResponse(adminFetch, \`/debug/llm-calls/export?format=\${format}\`);

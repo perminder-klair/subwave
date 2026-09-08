@@ -29,6 +29,7 @@ for the full architecture write-up.
 | `subwave_search_library` | admin | Deterministic library search (no LLM, no rate limit). |
 | `subwave_similar_tracks` | station | CLAP sound-alike neighbours for a seed track — matched on the sound, not the tags. |
 | `subwave_queue_track` | admin | Queue an exact search result — no DJ intro. |
+| `subwave_queue_block` | admin | Queue a whole album (in its own running order) or a run of an artist's tracks, in one action. |
 | `subwave_skip_track` | admin | Force-end the current track (operator override). |
 | `subwave_dj_announce` | admin | Speak an update on-air (`styled`/`raw`), optionally over an `sfx` stinger. |
 | `subwave_dj_segment` | admin | Fire a scripted segment: `station-id`, `hourly`, `link`, `banter`, `programme-*`. |

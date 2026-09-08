@@ -18,6 +18,7 @@ import {
   JINGLE_RATIO_BOUNDS,
   LOUDNESS_MAX_BOOST_DB_BOUNDS,
   LOUDNESS_TARGET_LUFS_BOUNDS,
+  type JingleRotateOwner,
 } from '../schemas/settings.js';
 import { SHOW_MAX_TRACK_SECONDS, SHOW_MIN_TRACK_LENGTH_MAX } from '../schemas/show.js';
 import { DEFAULT_THEME_ID } from '../themes.js';
@@ -37,6 +38,14 @@ import {
 
 export const DEFAULTS = {
   jingleRatio: 30, // 1 jingle per N music tracks
+  // WHO counts those tracks (#1619). 'mixer' is the pre-existing station —
+  // radio.liq's own rotate draws the stinger and the controller finds out
+  // afterwards. 'controller' moves the count into the talk-slot planner and
+  // writes the mixer's ratio handoff as 0. Default 'mixer' so an upgrade is
+  // byte-identical; see broadcast/jingle-rotate.ts for why this is opt-in
+  // rather than the only mode. Needs a mixer restart either way — the ratio
+  // file is read once at startup.
+  jingleRotate: 'mixer' as JingleRotateOwner,
   crossfadeDuration: 10.0, // seconds
   // `smooth_add`'s `p`: the fraction of music LEFT UP, not the cut (0.22 is
   // ~-13 dB, 0.30 is ~-10). Read once at mixer startup from
@@ -414,9 +423,12 @@ export const DEFAULTS = {
     // Demucs vocal-activity ranges for talk timing and intro detection.
     // Expensive, so opt-in. ANALYZE_VOCAL_ACTIVITY=1 also enables it.
     vocalActivity: false,
-    // Keep the analysis pass's head/tail Demucs stems as FLAC under
-    // state/stems/<id>/ so a transition render is a mix, not a fresh separation.
-    // ~13-25 MB per track (#1257), LRU-swept to stemCacheGb.
+    // Keep the Demucs stems the analysis pass already computes (head + tail
+    // windows) as FLAC under state/stems/<id>/, so a transition render is a fast
+    // mix instead of a fresh separation. Needs the demucs stack like
+    // vocalActivity; ~13-25 MB per track (#1257), swept to stemCacheGb by the
+    // music/stem-priority.ts ranking (lowest value out first, mtime to break
+    // ties) — the same order the backfill scans in.
     stemCache: false,
     stemCacheGb: 15,
     // Pause the analysis pass while anyone is listening, resuming after

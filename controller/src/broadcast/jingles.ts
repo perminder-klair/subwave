@@ -2,15 +2,17 @@
 // line in <stateDir>/jingles.m3u, metadata in the <stateDir>/jingles.json
 // sidecar (filename → { text, createdAt, builtin, source }).
 
-import { readFile, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile, unlink, mkdir, stat, copyFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import crypto from 'node:crypto';
+import { basename as pathBasename } from 'node:path';
 import { speak } from '../audio/tts.js';
 import { STATE_DIR, SOUNDS_DIR } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import {
   transcodeAudio, hasFfmpeg, extOf, baseName, isAcceptedAudio,
 } from '../audio/audio-import.js';
+import { JINGLE_FILENAME_RE, JINGLE_NAME_MAX, uniqueFilename } from '../personas/bundle-pure.js';
 
 const DIR = `${STATE_DIR}/jingles`;
 const PLAYLIST = `${STATE_DIR}/jingles.m3u`;
@@ -192,4 +194,100 @@ export async function ensureDefaultIdent() {
 
   await create(DEFAULT_IDENT.text, { builtin: true });
   console.log(`[jingles] generated default station ident → ${filePath}`);
+}
+
+/**
+ * Is `filename` something adopt() will accept? Pure, so a caller can ask BEFORE
+ * it has written anything (personas/bundle.ts asks for every member up front).
+ *
+ * The character-class half is the one that matters. A filename here becomes a
+ * LINE of jingles.m3u, which Liquidsoap reloads on watch, so a newline in a
+ * name adds a rotation entry nobody chose — see JINGLE_FILENAME_RE. An
+ * extension test alone leaves the rest of the name unchecked.
+ */
+export function isAdoptableName(filename: unknown): boolean {
+  const raw = String(filename ?? '');
+  const wanted = pathBasename(raw);
+  if (!wanted || wanted !== raw) return false;
+  return JINGLE_FILENAME_RE.test(wanted) && isAcceptedAudio(wanted);
+}
+
+/**
+ * The names `adopt()` WOULD use for `desired`, without writing anything.
+ *
+ * Split out from adopt so an importer can settle every filename before its
+ * first write and refuse cleanly if any of them is unusable — a refusal after
+ * the first write leaves a stinger in the rotation for a DJ that was never
+ * created. Reservations accumulate across the batch: two members that both
+ * suffix onto the same free name must not both be handed it.
+ *
+ * Reserving is not locking. The caller has to write what it reserved without
+ * awaiting another adopt in between; personas/bundle.ts serialises whole
+ * imports for exactly that reason.
+ */
+export async function reserveNames(desired: readonly string[]): Promise<string[]> {
+  const meta = await loadMeta();
+  const onDisk = await readdir(DIR).catch(() => [] as string[]);
+  const taken = new Set<string>([...Object.keys(meta.items), ...onDisk]);
+  const out: string[] = [];
+  for (const d of desired) {
+    if (!isAdoptableName(d)) throw new Error(`Unsupported audio filename: ${d}`);
+    const name = uniqueFilename(pathBasename(String(d)), taken, JINGLE_NAME_MAX);
+    taken.add(name);
+    out.push(name);
+  }
+  return out;
+}
+
+/**
+ * Adopt a jingle that arrived inside a persona bundle (#1620), keeping the
+ * filename it had on the station that exported it.
+ *
+ * Distinct from importAudio, which mints `jingle_<hex>.wav` and transcodes: a
+ * bundled jingle is already a rendered stinger from another copy of this very
+ * folder, so it is stored verbatim (an import must not need ffmpeg) under its
+ * own name — which is what makes re-importing the same bundle legible rather
+ * than filling the folder with anonymous hashes. A name already in use gets a
+ * `-2` suffix and NEVER an overwrite: the sidecar key is the only handle the
+ * playlist, the delete route and the audition route have on a file.
+ *
+ * `reserved` is the name reserveNames() already handed back for this member.
+ * Passing it is what lets an importer settle every name before its first write;
+ * omitting it reserves one here, so a lone caller is still safe. Either way the
+ * name is re-checked against the same predicate before it reaches disk.
+ *
+ * Still the same single writer of jingles.json + jingles.m3u as every other
+ * path in here.
+ */
+export async function adopt(
+  buffer: Buffer,
+  { filename, text = '', reserved = '' }: { filename: string; text?: string; reserved?: string },
+) {
+  if (!buffer?.length) throw new Error('Empty audio file');
+  if (!isAdoptableName(filename)) {
+    throw new Error(`Unsupported audio filename: ${filename}`);
+  }
+  const wanted = pathBasename(String(filename));
+  await mkdir(DIR, { recursive: true });
+  const meta = await loadMeta();
+  // The sidecar AND the directory: a file on disk with no sidecar entry is
+  // invisible to list() but is still a file, and "never overwrite" has to mean
+  // never, not "never one we have a record of".
+  const onDisk = await readdir(DIR).catch(() => [] as string[]);
+  const name = reserved || uniqueFilename(
+    wanted, [...Object.keys(meta.items), ...onDisk], JINGLE_NAME_MAX,
+  );
+  // A reservation is still a filename, and it is the one that reaches the
+  // playlist — so it answers to the same rule the desired name did.
+  if (!isAdoptableName(name)) throw new Error(`Unsupported audio filename: ${name}`);
+  await writeFile(`${DIR}/${name}`, buffer);
+  meta.items[name] = {
+    text: String(text || '').trim() || baseName(wanted) || 'Imported jingle',
+    createdAt: new Date().toISOString(),
+    builtin: false,
+    source: 'upload',
+  };
+  await saveMeta(meta);
+  await rewritePlaylist(Object.keys(meta.items));
+  return { filename: name, text: meta.items[name].text };
 }

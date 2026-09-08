@@ -431,6 +431,41 @@ export const ENDPOINT_GROUPS: EndpointGroup[] = [
       },
       {
         method: 'POST',
+        path: '/dj/queue-block',
+        summary: 'Queue a whole album or artist block',
+        description:
+          'Queue a whole album, or a run of tracks by one artist, as ONE operator ' +
+          'action. Say which with a trackId from any admin row (the server resolves ' +
+          "the album/artist off it), a pre-resolved id, or — for an artist — a name. " +
+          'An album is queued in its own disc/track order and cannot be shuffled or ' +
+          'limited; an artist block takes `limit` (default 10) and an optional ' +
+          "order: 'shuffle'. Capped at 30 tracks, with any truncation reported. " +
+          'The never-play blocklist is NOT bypassed: blocked tracks are skipped, ' +
+          'named in `skipped`, and the rest queue. `runsPastShowChange` is a warning ' +
+          'only — nothing is cut.',
+        auth: 'admin',
+        mutatesAir: true,
+        bodyExample: { kind: 'album', trackId: 'a1b2c3' },
+        responseExample: {
+          ok: true, kind: 'album', blockId: '0d9f…', label: 'Immunity — Jon Hopkins',
+          queued: 11, queuePosition: 1, truncated: 0, skipped: [], runsPastShowChange: null,
+        },
+      },
+      {
+        method: 'DELETE',
+        path: '/dj/queue/block/:blockId',
+        summary: 'Cancel the rest of a queued block',
+        description:
+          'Remove every not-yet-aired track from a block queued by /dj/queue-block — ' +
+          'the inverse of the one press that queued it. Partial success is normal, ' +
+          'not an error: a track Liquidsoap has already taken out of its queue plays ' +
+          'out and is reported in `kept` (use /dj/skip for that one).',
+        auth: 'admin',
+        mutatesAir: true,
+        responseExample: { removed: 8, kept: 1, label: 'Immunity — Jon Hopkins' },
+      },
+      {
+        method: 'POST',
         path: '/dj/refresh-playlist',
         summary: 'Rebuild fallback playlist',
         description:
@@ -627,6 +662,7 @@ export const MCP_TOOLS: McpToolDoc[] = [
   { name: 'subwave_search_library', title: 'Search library', description: 'Search the music library for queue-ready tracks.', endpoint: 'GET /dj/search', auth: 'admin' },
   { name: 'subwave_similar_tracks', title: 'Tracks that sound like this', description: 'CLAP sound-alike neighbours for a seed track.', endpoint: 'GET /similar-tracks', auth: 'station' },
   { name: 'subwave_queue_track', title: 'Queue an exact track', description: 'Push a specific track to the queue.', endpoint: 'POST /dj/queue-track', auth: 'admin', mutatesAir: true },
+  { name: 'subwave_queue_block', title: 'Queue an album or artist block', description: 'Queue a whole album, or a run of tracks by one artist, in one action.', endpoint: 'POST /dj/queue-block', auth: 'admin', mutatesAir: true },
   { name: 'subwave_skip_track', title: 'Skip the track', description: 'Force-end the current track.', endpoint: 'POST /dj/skip', auth: 'admin', mutatesAir: true },
   { name: 'subwave_dj_announce', title: 'DJ announce', description: 'Make the DJ speak text on air.', endpoint: 'POST /dj/say', auth: 'admin', mutatesAir: true },
   { name: 'subwave_dj_segment', title: 'DJ segment', description: 'Fire a canned voice segment.', endpoint: 'POST /dj/segment', auth: 'admin', mutatesAir: true },

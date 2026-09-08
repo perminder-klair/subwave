@@ -19,7 +19,7 @@ import {
   type AdminFetch,
 } from '../../../lib/admin-query';
 import type {
-  BlockEntry, BlockRef, BlockType, BrowseResponse, LikeIndex, Track,
+  BlockEntry, BlockRef, BlockType, BrowseResponse, LikeIndex, QueueBlockKind, QueueBlockResult, Track,
 } from './types';
 import { refreshPlaylistCatalogues } from '../playlist-cache';
 
@@ -74,6 +74,7 @@ export interface LibraryShared {
   eraBusy: string | null;
   blocking: string | null;
   queueTrack: (t: Track) => Promise<void>;
+  queueBlock: (t: Track, kind: QueueBlockKind) => Promise<void>;
   retagTrack: (t: Track) => Promise<void>;
   onEditTrack: (t: Track) => void;
   cancelEdit: () => void;
@@ -407,6 +408,43 @@ export function LibraryProvider({
     }
   }, [adminFetch]);
 
+  // Queue the whole record, or a set by the artist, in one press (#1622 FR 4).
+  //
+  // Only the track id goes over the wire: the server resolves the album/artist
+  // off it, exactly as POST /library/blocklist does, because a row never sees
+  // either id.
+  //
+  // The toast reports every caveat the response carries rather than just the
+  // count. A block does NOT bypass the never-play list, so a skipped track is
+  // the operator's own rule firing and must be visible; and
+  // `runsPastShowChange` is a warning, not a refusal — the block was queued in
+  // full and the operator decides what to do about the overrun.
+  const queueBlock = useCallback(async (track: Track, kind: QueueBlockKind) => {
+    setQueuing(track.id);
+    try {
+      const j = await adminJson<QueueBlockResult>(adminFetch, '/dj/queue-block', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind, trackId: track.id }),
+      });
+      const notes = [
+        j.skipped?.length ? `${j.skipped.length} skipped (never-play)` : null,
+        j.truncated ? `${j.truncated} over the 30-track limit` : null,
+        j.runsPastShowChange
+          ? `runs ~${Math.round(j.runsPastShowChange.bySec / 60)}min past ${j.runsPastShowChange.show || 'the next show'}`
+          : null,
+      ].filter(Boolean);
+      notify.ok(
+        `queued ${j.queued} track${j.queued === 1 ? '' : 's'} · ${j.label}`
+        + (notes.length ? ` · ${notes.join(' · ')}` : ''),
+      );
+    } catch (err) {
+      notify.err(errorMessage(err));
+    } finally {
+      setQueuing(null);
+    }
+  }, [adminFetch]);
+
   const retagTrack = useCallback(async (track: Track) => {
     setRetagging(track.id);
     try {
@@ -581,7 +619,7 @@ export function LibraryProvider({
     playlists, plBusy, addSelectedToPlaylist,
     vocab, seedVocab, ensureVocab,
     queuing, retagging, flashId, editingId, manualBusy, eraBusy, blocking,
-    queueTrack, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveEraYear,
+    queueTrack, queueBlock, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveEraYear,
     blockTrack, unblockRow, removeBlockEntry,
   }), [
     adminFetch, ready, coverage, reloadCoverage, tagger, restampBlockMarks,
@@ -590,7 +628,7 @@ export function LibraryProvider({
     playlists, plBusy, addSelectedToPlaylist,
     vocab, seedVocab, ensureVocab,
     queuing, retagging, flashId, editingId, manualBusy, eraBusy, blocking,
-    queueTrack, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveEraYear,
+    queueTrack, queueBlock, retagTrack, onEditTrack, cancelEdit, saveManualTag, saveEraYear,
     blockTrack, unblockRow, removeBlockEntry,
   ]);
 
