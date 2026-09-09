@@ -315,7 +315,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, curren
   // reads of a live queue across two awaits could disagree.
   const neighbourRoots = queue.neighbourArtistRoots(varietyWindow);
   const guarded = await runArtistGuard<any>({
-    song, object, current,
+    song, object, predecessor: current,
     seen: extras.seen,
     // Every queue read stays here; the policy module is handed values only.
     recentRoots: neighbourRoots,

@@ -66,11 +66,11 @@ function harness(opts: {
 
 const run = (
   h: ReturnType<typeof harness>,
-  o: { song: Cand; current: Cand | null; seen: Map<string, Cand>; recentRoots?: Set<string>; window?: number },
+  o: { song: Cand; predecessor: Cand | null; seen: Map<string, Cand>; recentRoots?: Set<string>; window?: number },
 ) => runArtistGuard<Cand>({
   song: o.song,
   object: { id: o.song.id, say: 'a line' },
-  current: o.current,
+  predecessor: o.predecessor,
   seen: o.seen,
   recentRoots: o.recentRoots ?? new Set(),
   window: o.window ?? 5,
@@ -81,7 +81,7 @@ const run = (
 
 test('an unguarded pick costs nothing and changes nothing', async () => {
   const h = harness();
-  const out = await run(h, { song: clash, current: marvin, seen: seenOf(clash, sly), recentRoots: rootsOf('Marvin Gaye') });
+  const out = await run(h, { song: clash, predecessor: marvin, seen: seenOf(clash, sly), recentRoots: rootsOf('Marvin Gaye') });
   assert.equal(out.kind, 'none');
   assert.deepEqual(h.calls, { repick: 0, poolRescue: 0 }, 'no model call, no pool call');
   assert.deepEqual(h.lines, [], 'and nothing in the booth log');
@@ -91,11 +91,31 @@ test('an unguarded pick costs nothing and changes nothing', async () => {
 
 test('back-to-back re-picks from the run when it can', async () => {
   const h = harness();
-  const out = await run(h, { song: marvin, current: marvin, seen: seenOf(marvin, clash, sly) });
+  const out = await run(h, { song: marvin, predecessor: marvin, seen: seenOf(marvin, clash, sly) });
   assert.equal(out.kind, 'repicked');
   assert.notEqual(out.kind === 'repicked' && artistRootKey(out.song), artistRootKey(marvin));
   assert.equal(h.calls.poolRescue, 0, 'a landed re-pick never reaches the pool');
-  assert.match(h.reasons[0], /already on air/, 'the model is told WHY, in the back-to-back wording');
+  assert.match(h.reasons[0], /immediately preceding track/, 'the model names adjacency without claiming the predecessor is literally on air');
+});
+
+test('a held pair-drain predecessor triggers adjacency wording without claiming on-air state', async () => {
+  const heads: Cand = { id: 'heads', title: "Heads We're Dancing", artist: 'Kate Bush' };
+  const rejected: Cand = { id: 'rejected', title: 'Running Up That Hill', artist: 'Kate Bush' };
+  const tea: Cand = { id: 'tea', title: 'Tea for Two', artist: 'Bill Stegmeyer and his Hot Eight' };
+  const h = harness({ repick: () => tea });
+
+  const out = await run(h, {
+    song: rejected,
+    predecessor: heads,
+    seen: seenOf(rejected, tea),
+    recentRoots: rootsOf('Kate Bush'),
+  });
+
+  assert.equal(out.kind, 'repicked');
+  assert.equal(out.kind === 'repicked' && out.song.id, 'tea');
+  assert.match(h.reasons[0], /immediately preceding track/);
+  assert.doesNotMatch(h.reasons[0], /already on air/);
+  assert.equal(h.events[0].cause, 'onair', 'the compatibility telemetry value is preserved');
 });
 
 test('back-to-back with a single-artist run escalates to the pool, and a queued rescue fills the slot', async () => {
@@ -103,7 +123,7 @@ test('back-to-back with a single-artist run escalates to the pool, and a queued 
   // The #1187 false negative: the run surfaced only the on-air artist (and the
   // collaboration they front, which is the same act) — that is NOT evidence
   // that the library has no one else.
-  const out = await run(h, { song: marvin, current: marvin, seen: seenOf(marvin, marvinTammi) });
+  const out = await run(h, { song: marvin, predecessor: marvin, seen: seenOf(marvin, marvinTammi) });
   assert.equal(out.kind, 'rescued', 'a rescued slot is a filled slot');
   assert.equal(h.calls.repick, 0, 'nothing to re-pick from');
   assert.deepEqual(h.rescueArgs, ['Marvin Gaye'], 'the pool is told which artist to avoid');
@@ -111,7 +131,7 @@ test('back-to-back with a single-artist run escalates to the pool, and a queued 
 
 test('back-to-back relaxes — loudly — only once the pool has nothing either', async () => {
   const h = harness({ poolRescue: 'empty' });
-  const out = await run(h, { song: marvin, current: marvin, seen: seenOf(marvin) });
+  const out = await run(h, { song: marvin, predecessor: marvin, seen: seenOf(marvin) });
   assert.equal(out.kind, 'kept');
   assert.equal(h.calls.poolRescue, 1);
   assert.equal(h.events.at(-1)?.relaxed, true, 'a repeat on air is never silent');
@@ -122,7 +142,7 @@ test('a failed back-to-back re-pick still escalates to the pool', async () => {
   // The model was offered alternatives and declined to answer with one. For
   // back-to-back that is not the end of the cascade.
   const h = harness({ repick: () => null, poolRescue: 'queued' });
-  const out = await run(h, { song: marvin, current: marvin, seen: seenOf(marvin, clash) });
+  const out = await run(h, { song: marvin, predecessor: marvin, seen: seenOf(marvin, clash) });
   assert.equal(out.kind, 'rescued');
   assert.deepEqual(h.calls, { repick: 1, poolRescue: 1 });
 });
@@ -131,7 +151,7 @@ test('a re-pick answering with an id it was not offered is refused', async () =>
   // z.enum constrains this by construction; the guard reads the id back out of
   // the NARROW map so it stays true if the schema ever loosens.
   const h = harness({ repick: () => beatles, poolRescue: 'empty' });
-  const out = await run(h, { song: marvin, current: marvin, seen: seenOf(marvin, clash) });
+  const out = await run(h, { song: marvin, predecessor: marvin, seen: seenOf(marvin, clash) });
   assert.equal(out.kind, 'kept', 'an off-list id is not a re-pick');
   assert.equal(h.calls.poolRescue, 1, 'and is treated as a failed re-pick');
 });
@@ -142,7 +162,7 @@ test('a pick inside the window is re-picked away from — the reported bug', asy
   // Legal under the old guard: Marvin is not on air, he played three slots ago.
   const h = harness();
   const out = await run(h, {
-    song: marvin, current: beatles, seen: seenOf(marvin, sly),
+    song: marvin, predecessor: beatles, seen: seenOf(marvin, sly),
     recentRoots: rootsOf('The Beatles', 'Marvin Gaye', 'The Clash'),
   });
   assert.equal(out.kind, 'repicked');
@@ -154,7 +174,7 @@ test('a pick inside the window is re-picked away from — the reported bug', asy
 test('spacing yields when every alternative is also recent — no calls at all', async () => {
   const h = harness();
   const out = await run(h, {
-    song: marvin, current: beatles, seen: seenOf(marvin, sly),
+    song: marvin, predecessor: beatles, seen: seenOf(marvin, sly),
     recentRoots: rootsOf('Marvin Gaye', 'Sly & the Family Stone'),
   });
   assert.equal(out.kind, 'kept', 'the original pick stands');
@@ -166,7 +186,7 @@ test('spacing yields when every alternative is also recent — no calls at all',
 test('spacing yields on a single-artist run without touching the pool', async () => {
   const h = harness({ poolRescue: 'queued' });
   const out = await run(h, {
-    song: marvin, current: beatles, seen: seenOf(marvin, marvinTammi),
+    song: marvin, predecessor: beatles, seen: seenOf(marvin, marvinTammi),
     recentRoots: rootsOf('Marvin Gaye'),
   });
   assert.equal(out.kind, 'kept');
@@ -179,7 +199,7 @@ test('a failed spacing re-pick keeps the pick and stops — this is the cost gua
   // the two causes were ever merged back together.
   const h = harness({ repick: () => null, poolRescue: 'queued' });
   const out = await run(h, {
-    song: marvin, current: beatles, seen: seenOf(marvin, sly),
+    song: marvin, predecessor: beatles, seen: seenOf(marvin, sly),
     recentRoots: rootsOf('Marvin Gaye'),
   });
   assert.equal(out.kind, 'kept');
@@ -197,24 +217,24 @@ test('a name variant of the on-air act is caught as back-to-back', async () => {
   const hendrixBand: Cand = { id: 'h1', title: 'Foxy Lady', artist: 'The Jimi Hendrix Experience' };
   const hendrixSolo: Cand = { id: 'h2', title: 'Angel', artist: 'Jimi Hendrix' };
   const h = harness();
-  const out = await run(h, { song: hendrixSolo, current: hendrixBand, seen: seenOf(hendrixSolo, clash) });
+  const out = await run(h, { song: hendrixSolo, predecessor: hendrixBand, seen: seenOf(hendrixSolo, clash) });
   assert.equal(out.kind, 'repicked');
   assert.equal(out.kind === 'repicked' && out.song.id, 'c1');
 });
 
 test('the window is off but back-to-back still guards — 0 is not "no guard"', async () => {
   const h = harness();
-  const spaced = await run(h, { song: marvin, current: beatles, seen: seenOf(marvin, sly), recentRoots: new Set(), window: 0 });
+  const spaced = await run(h, { song: marvin, predecessor: beatles, seen: seenOf(marvin, sly), recentRoots: new Set(), window: 0 });
   assert.equal(spaced.kind, 'none', 'spacing is off');
 
-  const adjacent = await run(h, { song: marvin, current: marvin, seen: seenOf(marvin, sly), recentRoots: new Set(), window: 0 });
+  const adjacent = await run(h, { song: marvin, predecessor: marvin, seen: seenOf(marvin, sly), recentRoots: new Set(), window: 0 });
   assert.equal(adjacent.kind, 'repicked', 'back-to-back is not operator-disableable');
 });
 
 test('an untagged pick is never guarded on either cause', async () => {
   const untagged: Cand = { id: 'u1', title: 'Unknown', artist: '' };
   const h = harness();
-  const out = await run(h, { song: untagged, current: marvin, seen: seenOf(untagged, marvin), recentRoots: rootsOf('Marvin Gaye') });
+  const out = await run(h, { song: untagged, predecessor: marvin, seen: seenOf(untagged, marvin), recentRoots: rootsOf('Marvin Gaye') });
   assert.equal(out.kind, 'none', 'no artist is not evidence of a repeat');
 });
 
@@ -222,12 +242,12 @@ test('an untagged pick is never guarded on either cause', async () => {
 
 test('every firing names its cause and window, so the two are separable in the log', async () => {
   const h = harness();
-  await run(h, { song: marvin, current: marvin, seen: seenOf(marvin, clash) });
+  await run(h, { song: marvin, predecessor: marvin, seen: seenOf(marvin, clash) });
   assert.equal(h.events[0].cause, 'onair');
 
   const h2 = harness();
   await run(h2, {
-    song: marvin, current: beatles, seen: seenOf(marvin, sly),
+    song: marvin, predecessor: beatles, seen: seenOf(marvin, sly),
     recentRoots: rootsOf('Marvin Gaye'), window: 9,
   });
   assert.equal(h2.events[0].cause, 'recent');

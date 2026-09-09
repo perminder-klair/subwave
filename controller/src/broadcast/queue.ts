@@ -855,6 +855,15 @@ class Queue {
 
     const idx = this.upcoming.indexOf(item);
     const prevTrack = (idx > 0 ? this.upcoming[idx - 1]?.track : null) || this.current?.track || null;
+    // Stable within this synchronous drain action. Do not re-read queue state
+    // after an await merely to decorate an exit-effect diagnostic.
+    const successorTrack = idx >= 0 ? this.upcoming[idx + 1]?.track ?? null : null;
+    const exitEffectMeta = {
+      exitTrackId: item.track.id ?? null,
+      exitTrackTitle: item.track.title ?? null,
+      successorTrackId: successorTrack?.id ?? null,
+      successorTrackTitle: successorTrack?.title ?? null,
+    };
     if (!prevTrack) {
       // Nothing on-air to validate against: an effect would garnish silence.
       if (item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop || item.track.loop) this.stripEffect(item.track, 'no predecessor');
@@ -1010,13 +1019,13 @@ class Queue {
     if (item.track.loop) {
       item.track.crossSec = mix.loopCrossSecondsFor(next, maxSec);
       item.track.loopBar = mix.loopBarFor(next.bpm);
-      this.log('mix', `loop armed: ${item.track.crossSec}s canvas, ${item.track.loopBar}s bar → ${item.track.title}`);
+      this.log('mix', `loop armed on own exit of "${item.track.title}"${successorTrack ? ` before "${successorTrack.title}"` : ''}: ${item.track.crossSec}s canvas, ${item.track.loopBar}s bar`, exitEffectMeta);
     }
     if (item.track.washout) {
       item.track.crossSec = mix.washoutCrossSecondsFor(next, maxSec);
       item.track.washoutDelay = mix.washoutDelayFor(next.bpm);
       const why = item.track.washoutAuto ? ' (length-cap exit)' : '';
-      this.log('mix', `washout armed${why}: ${item.track.crossSec}s canvas, ${item.track.washoutDelay}s tap → ${item.track.title}`);
+      this.log('mix', `washout armed${why} on own exit of "${item.track.title}"${successorTrack ? ` before "${successorTrack.title}"` : ''}: ${item.track.crossSec}s canvas, ${item.track.washoutDelay}s tap`, exitEffectMeta);
     }
     const effectFired = !!(item.track.sweep || item.track.washout || item.track.blend || item.track.dissolve || item.track.chop || item.track.loop);
 

@@ -20,17 +20,18 @@ export const ARTIST_VARIETY_WINDOW = 5;
 // run already surfaced.
 export type ArtistGuardCause = 'onair' | 'recent' | null;
 
-// `recentRoots` (queue.neighbourArtistRoots) already CONTAINS the on-air
-// artist; the on-air test runs first purely to name the cause, so an empty
-// window still leaves back-to-back protection intact. An untagged pick is
+// `recentRoots` (queue.neighbourArtistRoots) already CONTAINS the logical
+// predecessor artist. The predecessor test runs first purely to name the
+// compatibility telemetry cause, so an empty window still leaves back-to-back
+// protection intact. An untagged pick is
 // never guarded: no artist is not evidence of a repeat.
 export function artistGuardCause(
   pickRoot: string,
-  onAirRoot: string,
+  predecessorRoot: string,
   recentRoots: Set<string> = new Set(),
 ): ArtistGuardCause {
   if (!pickRoot) return null;
-  if (onAirRoot && pickRoot === onAirRoot) return 'onair';
+  if (predecessorRoot && pickRoot === predecessorRoot) return 'onair';
   return recentRoots.has(pickRoot) ? 'recent' : null;
 }
 
@@ -40,14 +41,14 @@ export interface AlternativePool<T> {
   // How many other-artist candidates the recency window removed.
   dropped: number;
   // Every alternative was a recently-heard artist, so the window was overridden
-  // and the bare on-air exclusion handed back. `dropped` is 0 here too, so this
+  // and the bare predecessor exclusion handed back. `dropped` is 0 here too, so this
   // tells "the window was a no-op" from "it was overruled".
   starved: boolean;
 }
 
 // The candidate set for a guard re-pick. `avoidRoot` is the rejected pick's own
-// artist key; `recentRoots` is the surrounding slots, which include the on-air
-// artist on either cause. Candidates with no artist are never dropped.
+// artist key; `recentRoots` is the surrounding slots, which include the logical
+// predecessor artist on either cause. Candidates with no artist are never dropped.
 export function alternativeCandidates<T extends CandidateLike>(
   seen: Iterable<[string, T]>,
   avoidRoot: string,
@@ -86,10 +87,13 @@ export type ArtistGuardOutcome<T> =
 // Everything injected — no queue, no settings, no model — so the wiring between
 // these decisions is testable without a model call.
 export interface ArtistGuardDeps<T> {
-  // The agent's pick and the track it would follow.
+  // The agent's candidate and its logical predecessor. The predecessor is
+  // usually the track on air, but is the held queue head when pair drain runs a
+  // deadline pick for that head's successor. A re-picked outcome replaces only
+  // `song`/`object`; it never removes or rewrites this predecessor.
   song: T;
   object: { id?: string | null } & Record<string, unknown>;
-  current: CandidateLike | null;
+  predecessor: CandidateLike | null;
   // The run's own candidates, keyed by id, as pickViaAgent's `extras.seen`.
   seen: Iterable<[string, T]>;
   // queue.neighbourArtistRoots(window) — passed in rather than fetched, so the
@@ -112,10 +116,10 @@ export interface ArtistGuardDeps<T> {
 export async function runArtistGuard<T extends CandidateLike>(
   deps: ArtistGuardDeps<T>,
 ): Promise<ArtistGuardOutcome<T>> {
-  const { song, current, seen, recentRoots, window, repick, poolRescue, log, logEvent } = deps;
+  const { song, predecessor, seen, recentRoots, window, repick, poolRescue, log, logEvent } = deps;
 
   const pickRoot = artistRootKey(song);
-  const cause = artistGuardCause(pickRoot, artistRootKey(current || {}), recentRoots);
+  const cause = artistGuardCause(pickRoot, artistRootKey(predecessor || {}), recentRoots);
   if (!cause) return { kind: 'none' };
 
   const { alt, dropped, starved } = alternativeCandidates<T>(seen, pickRoot, recentRoots);
@@ -137,7 +141,7 @@ export async function runArtistGuard<T extends CandidateLike>(
     const repicked = await repick(
       alt,
       cause === 'onair'
-        ? `The track you chose is by ${song.artist}, the artist already on air — never play the same artist twice in a row. Choose a DIFFERENT artist from the candidates above.`
+        ? `The track you chose is by ${song.artist}, the artist on the immediately preceding track — never play the same artist twice in a row. Choose a DIFFERENT artist from the candidates above.`
         : `The track you chose is by ${song.artist}, who has already played in the last few slots — space artists out across the show. Choose a DIFFERENT artist from the candidates above.`,
     );
     // Resolved from `alt`, not the full `seen`, so the re-pick can only land on

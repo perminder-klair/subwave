@@ -39,6 +39,7 @@ const { TRANSITION_EFFECTS } = await import('../src/settings/vocab.js');
 const { effectEnabled, enabledEffects } = await import('../src/settings/transition-effects.js');
 const dj = await import('../src/llm/dj.js');
 const { queue } = await import('../src/broadcast/queue.js');
+const { runArtistGuard, artistRootKey } = await import('../src/broadcast/dj-agent/artist-guard.js');
 
 const here = dirname(fileURLToPath(import.meta.url));
 const SETTINGS_PANEL = join(here, '..', '..', 'web', 'components', 'admin', 'SettingsPanel.tsx');
@@ -161,6 +162,104 @@ test('the length-cap auto-washout honours the washout switch', async () => {
     'with the washout switched off the capped cut is a plain crossfade');
 
   await settings.update({ maxTrackSeconds: 0, transitions: { effects: { washout: true } } });
+});
+
+test('a guarded pair-drain successor leaves the held predecessor first and stamps its own capped exit', async () => {
+  await seedDjMode();
+  await settings.update({ maxTrackSeconds: 120 });
+  queue.current = { track: { id: 'on-air', title: 'On air', artist: 'Someone Else', duration: 300 } } as never;
+  queue.upcoming = [];
+  queue.djLog = [];
+
+  const heads = {
+    track: {
+      id: 'heads', title: "Heads We're Dancing", artist: 'Kate Bush', duration: 300,
+      bpm: 120,
+    },
+    sent: false,
+  } as any;
+  queue.upcoming.push(heads);
+
+  const h = {
+    repick: async () => ({ id: 'tea' }),
+    poolRescue: async () => 'empty' as const,
+    log: (line: string) => queue.log('picker', line),
+    logEvent: () => {},
+  };
+  const rejected = { id: 'rejected', title: 'Running Up That Hill', artist: 'Kate Bush', duration: 240, bpm: 90 };
+  const tea = { id: 'tea', title: 'Tea for Two', artist: 'Bill Stegmeyer and his Hot Eight', duration: 180, bpm: 80 };
+  const guarded = await runArtistGuard({
+    song: rejected,
+    object: { id: rejected.id },
+    predecessor: heads.track,
+    seen: new Map([[rejected.id, rejected], [tea.id, tea]]),
+    recentRoots: new Set([artistRootKey(heads.track)]),
+    window: 5,
+    ...h,
+  });
+  assert.equal(guarded.kind, 'repicked');
+  assert.deepEqual(queue.upcoming.map(item => item.track.id), ['heads'], 'the held predecessor is untouched by the re-pick');
+
+  const realPersist = (queue as any).persist;
+  const realDrain = (queue as any).drainToLiquidsoap;
+  (queue as any).persist = () => {};
+  (queue as any).drainToLiquidsoap = async () => {};
+  try {
+    await queue.push({ track: guarded.kind === 'repicked' ? guarded.song : rejected, aiPicked: true });
+  } finally {
+    (queue as any).persist = realPersist;
+    (queue as any).drainToLiquidsoap = realDrain;
+  }
+  assert.deepEqual(queue.upcoming.map(item => item.track.id), ['heads', 'tea'], 'the guarded pick is appended as successor');
+
+  queue.applyMixTransition(heads);
+  const stamped = heads.track as Record<string, unknown>;
+  assert.equal(stamped.washout, true);
+  assert.equal(stamped.washoutAuto, true);
+  assert.equal(stamped.washoutDelay, 0.38, "tap comes from the held predecessor's 120 BPM analysis");
+  assert.equal((queue.upcoming[1].track as Record<string, unknown>).washout, undefined, 'the successor carries no exit stamp');
+  assert.equal((rejected as Record<string, unknown>).washout, undefined, 'the rejected candidate was never mutated');
+
+  const line = queue.djLog.find(entry => entry.kind === 'mix' && entry.message.includes('washout armed'));
+  assert.ok(line);
+  assert.match(line.message, /Heads We're Dancing/);
+  assert.match(line.message, /own exit/);
+  assert.doesNotMatch(line.message, /→/);
+  assert.deepEqual(line.meta, {
+    exitTrackId: 'heads',
+    exitTrackTitle: "Heads We're Dancing",
+    successorTrackId: 'tea',
+    successorTrackTitle: 'Tea for Two',
+  });
+
+  await settings.update({ maxTrackSeconds: 0 });
+});
+
+test('loop diagnostics name the flagged track as the exit owner and its known successor', async () => {
+  await seedDjMode();
+  await settings.update({ maxTrackSeconds: 0 });
+  queue.current = { track: { id: 'on-air', title: 'On air', artist: 'A', duration: 300 } } as never;
+  queue.djLog = [];
+  (queue as any)._recentEffects = [];
+
+  const looped = {
+    track: { id: 'looped', title: 'Looped Exit', artist: 'B', duration: 300, bpm: 100, loop: true },
+  } as any;
+  const successor = {
+    track: { id: 'successor', title: 'Next Track', artist: 'C', duration: 300, bpm: 90 },
+  } as any;
+  queue.upcoming = [looped, successor];
+  queue.applyMixTransition(looped);
+
+  const line = queue.djLog.find(entry => entry.kind === 'mix' && entry.message.includes('loop armed'));
+  assert.ok(line);
+  assert.match(line.message, /own exit of "Looped Exit" before "Next Track"/);
+  assert.deepEqual(line.meta, {
+    exitTrackId: 'looped',
+    exitTrackTitle: 'Looped Exit',
+    successorTrackId: 'successor',
+    successorTrackTitle: 'Next Track',
+  });
 });
 
 test('the admin form names the same six gestures the controller does', () => {
