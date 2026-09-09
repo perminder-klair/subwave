@@ -11,7 +11,7 @@ import {
 import { Kbd } from '../../ui/kbd';
 import { Pill } from '../ui';
 import {
-  SETTINGS_INDEX, sectionById, isAdvancedCard, type SectionId,
+  SETTINGS_INDEX, sectionById, isAdvancedCard, type SectionId, type SectionSpec,
 } from './registry';
 import { cardAnchor } from '../ui';
 
@@ -24,6 +24,7 @@ export interface SettingsJump {
 }
 
 interface SettingsSearchProps {
+  sections: readonly SectionSpec[];
   onJump: (jump: SettingsJump) => void;
 }
 
@@ -52,7 +53,7 @@ function isOverlayOpen(): boolean {
   ].join(','));
 }
 
-export function SettingsSearch({ onJump }: SettingsSearchProps) {
+export function SettingsSearch({ onJump, sections }: SettingsSearchProps) {
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -107,6 +108,7 @@ export function SettingsSearch({ onJump }: SettingsSearchProps) {
         <CommandList>
           <CommandEmpty>No matching settings.</CommandEmpty>
           {SETTINGS_INDEX.map((entry, index) => {
+            if (!sections.some(s => s.id === entry.section)) return null;
             const section = sectionById(entry.section);
             const anchor = cardAnchor(entry.card);
             return (

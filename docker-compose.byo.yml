@@ -181,6 +181,7 @@ services:
     environment:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=${SUBWAVE_HOMEPAGE:-player}
+      - SUBWAVE_DJ_BRAIN_ENABLED=${SUBWAVE_DJ_BRAIN_ENABLED:-false}
       - SITE_URL=${SITE_URL:-}
       # Set to 1 to keep the shared product pages (landing, docs, news,
       # catalogs) self-canonical + in this install's sitemap instead of

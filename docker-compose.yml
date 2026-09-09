@@ -201,6 +201,7 @@ services:
     environment:
       - NODE_ENV=production
       - SUBWAVE_HOMEPAGE=${SUBWAVE_HOMEPAGE:-player}
+      - SUBWAVE_DJ_BRAIN_ENABLED=${SUBWAVE_DJ_BRAIN_ENABLED:-false}
       # RUNTIME source of truth for absolute URLs (canonicals, og:url,
       # robots.txt, sitemap.xml) — the generic image serves any domain.
       - SITE_URL=${SITE_URL:-}
