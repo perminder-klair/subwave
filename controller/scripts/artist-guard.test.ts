@@ -121,7 +121,7 @@ assert.equal(
   assert.equal(
     artistGuardCause(artistRootKey('Marvin Gaye'), artistRootKey('Marvin Gaye'), recent),
     'onair',
-    'a pick matching the on-air artist is the back-to-back cause',
+    'a pick matching its anchor uses the legacy onair cause',
   );
   // The #1406 case: legal by the old guard, three slots after the same artist.
   assert.equal(
@@ -142,13 +142,13 @@ assert.equal(
       new Set(),
     ),
     'onair',
-    'a name variant of the on-air act is still back-to-back',
+    'a name variant of the anchor act still uses the strong anchor cause',
   );
-  // Window off (operator set 0) → back-to-back protection is NOT disableable.
+  // Window off (operator set 0) → pick-anchor protection is NOT disableable.
   assert.equal(
     artistGuardCause(artistRootKey('Marvin Gaye'), artistRootKey('Marvin Gaye'), new Set()),
     'onair',
-    'an empty window still guards back-to-back',
+    'an empty window still guards a pick-anchor match',
   );
   assert.equal(
     artistGuardCause(artistRootKey('The Beatles'), artistRootKey('Marvin Gaye'), new Set()),

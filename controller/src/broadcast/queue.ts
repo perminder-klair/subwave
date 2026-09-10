@@ -2236,11 +2236,13 @@ class Queue {
   }
 
   // One full DJ pick cycle: session roll, programme plan, persona handoff, link
-  // cadence, pick. `predecessorItem` lets maybeDeadlinePick run the same cycle
-  // against the HELD item the pick will follow — `current` is one track too
-  // early there for the event text, the run anchor and the back-announce.
+  // cadence, pick. `pickAnchorItem` lets maybeDeadlinePick run the same cycle
+  // against the HELD item this selection is intended to follow — `current` is
+  // one track too early there for the event text, run seed and back-announce.
+  // This is a captured pick-cycle anchor, not a promise that no request can
+  // append behind the held item while the asynchronous selection is running.
   // Fire-and-forget; pickerBusy is the reentry guard.
-  runPickCycle({ isAutonomous, predecessorItem = null }: { isAutonomous: boolean; predecessorItem?: QueueItem | null }) {
+  runPickCycle({ isAutonomous, pickAnchorItem = null }: { isAutonomous: boolean; pickAnchorItem?: QueueItem | null }) {
     let wantLink = false;
     if (this.autoLink && isAutonomous && this.history[0]) {
       this.tracksUntilLink--;
@@ -2259,13 +2261,13 @@ class Queue {
         // The lead is what REMAINS of the on-air track, never its full duration
         // — this cycle also runs mid-track from the deadline backstop and boot
         // recovery, where the elapsed part would cross the boundary early
-        // (#1205). A held predecessor adds that track's length instead.
+        // (#1205). A held pick anchor adds that track's length instead.
         //
         // This ONE date drives the whole boundary sequence below (roll, episode
         // plan, mic-pass, episode hook), so no second date can disagree with it.
         const leadSec = pickLeadSec(
           this.remainingSecOnAir(),
-          predecessorItem ? knownDurationSec(predecessorItem.track) : null,
+          pickAnchorItem ? knownDurationSec(pickAnchorItem.track) : null,
         );
         let showAt: Date | null = null;
         if (leadSec != null) {
@@ -2321,8 +2323,8 @@ class Queue {
         await djAgent.runTrackEvent(this, ctx, {
           wantLink,
           showAt,
-          predecessor: predecessorItem?.track ?? null,
-          prior: predecessorItem ? (this.current?.track ?? null) : null,
+          pickAnchor: pickAnchorItem?.track ?? null,
+          anchorPrior: pickAnchorItem ? (this.current?.track ?? null) : null,
         });
       } catch (err) {
         this.log('error', `DJ track event failed: ${(err as Error).message}`);
@@ -2361,7 +2363,7 @@ class Queue {
     // The held head needs a successor. Links only ride autonomous seams; a
     // request brings its own intro.
     this._deadlinePickAt = Date.now();
-    this.runPickCycle({ isAutonomous: !head.requestedBy, predecessorItem: head });
+    this.runPickCycle({ isAutonomous: !head.requestedBy, pickAnchorItem: head });
   }
 
   // Did the pushed item become a playable request? (#1405) Liquidsoap drops an

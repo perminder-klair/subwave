@@ -164,7 +164,7 @@ test('the length-cap auto-washout honours the washout switch', async () => {
   await settings.update({ maxTrackSeconds: 0, transitions: { effects: { washout: true } } });
 });
 
-test('a guarded pair-drain successor leaves the held predecessor first and stamps its own capped exit', async () => {
+test('an uncontended pair-drain pick stays behind its held anchor, whose own capped exit is stamped', async () => {
   await seedDjMode();
   await settings.update({ maxTrackSeconds: 120 });
   queue.current = { track: { id: 'on-air', title: 'On air', artist: 'Someone Else', duration: 300 } } as never;
@@ -191,14 +191,14 @@ test('a guarded pair-drain successor leaves the held predecessor first and stamp
   const guarded = await runArtistGuard({
     song: rejected,
     object: { id: rejected.id },
-    predecessor: heads.track,
+    pickAnchor: heads.track,
     seen: new Map([[rejected.id, rejected], [tea.id, tea]]),
     recentRoots: new Set([artistRootKey(heads.track)]),
     window: 5,
     ...h,
   });
   assert.equal(guarded.kind, 'repicked');
-  assert.deepEqual(queue.upcoming.map(item => item.track.id), ['heads'], 'the held predecessor is untouched by the re-pick');
+  assert.deepEqual(queue.upcoming.map(item => item.track.id), ['heads'], 'the held pick anchor is untouched by the re-pick');
 
   const realPersist = (queue as any).persist;
   const realDrain = (queue as any).drainToLiquidsoap;
@@ -210,13 +210,14 @@ test('a guarded pair-drain successor leaves the held predecessor first and stamp
     (queue as any).persist = realPersist;
     (queue as any).drainToLiquidsoap = realDrain;
   }
-  assert.deepEqual(queue.upcoming.map(item => item.track.id), ['heads', 'tea'], 'the guarded pick is appended as successor');
+  assert.deepEqual(queue.upcoming.map(item => item.track.id), ['heads', 'tea'],
+    'without an interleaving request, the guarded pick is appended behind its anchor');
 
   queue.applyMixTransition(heads);
   const stamped = heads.track as Record<string, unknown>;
   assert.equal(stamped.washout, true);
   assert.equal(stamped.washoutAuto, true);
-  assert.equal(stamped.washoutDelay, 0.38, "tap comes from the held predecessor's 120 BPM analysis");
+  assert.equal(stamped.washoutDelay, 0.38, "tap comes from the held anchor's 120 BPM analysis");
   assert.equal((queue.upcoming[1].track as Record<string, unknown>).washout, undefined, 'the successor carries no exit stamp');
   assert.equal((rejected as Record<string, unknown>).washout, undefined, 'the rejected candidate was never mutated');
 
