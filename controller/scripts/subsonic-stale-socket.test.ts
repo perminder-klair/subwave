@@ -7,8 +7,7 @@
 //
 // Three things are pinned here, each one easy to "simplify" back out:
 //   1. a FAST transport failure is retried once, so the walk survives it;
-//   2. a SLOW one is not — it may already have been served, and mutations ride
-//      the same chokepoint;
+//   2. a SLOW one is not — only the stale-socket-shaped failure gets a retry;
 //   3. the error an operator finally sees names the endpoint, the origin and the
 //      underlying code, and never the URL, which carries the auth token.
 
@@ -27,8 +26,8 @@ process.env.NAVIDROME_PASS = 'hunter2';
 
 const subsonic = await import('../src/music/subsonic.js');
 
-// Mirrors the constant in subsonic.ts: the boundary between "never landed" and
-// "may have been served".
+// Mirrors the constant in subsonic.ts: the boundary for a stale-socket-shaped
+// failure. Delivery safety is decided separately by each call site.
 const STALE_SOCKET_RETRY_MS = 2_000;
 
 const realFetch = globalThis.fetch;
