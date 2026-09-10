@@ -187,13 +187,19 @@ export function resizeBlock(
   return setRange(cleared, [block.day], start, end, block.showId);
 }
 
-export function blockKeys(blocks: Block[]): string[] {
-  const seen = new Map<string, number>();
+export interface RunPlacement {
+  /** The run's start before this drag. Stable identity for its preview card. */
+  fromStart: number;
+  /** The run's start in the preview/result week. */
+  start: number;
+}
+
+export function blockKeys(blocks: Block[], placements: RunPlacement[] = []): string[] {
+  const fromStartAt = new Map(placements.map(p => [p.start, p.fromStart]));
+  let gap = 0;
   return blocks.map(b => {
-    const id = b.showId ?? '';
-    const n = seen.get(id) ?? 0;
-    seen.set(id, n + 1);
-    return b.showId ? `run:${b.showId}#${n}` : `gap:${n}`;
+    if (b.showId) return `run:${b.day}:${fromStartAt.get(b.start) ?? b.start}`;
+    return `gap:${b.day}:${gap++}`;
   });
 }
 
@@ -269,6 +275,8 @@ export interface RunDragResult {
   start: number;
   end: number;
   shifted: number;
+  /** Every run's original and resulting start, used only for stable preview identity. */
+  placements: RunPlacement[];
 }
 
 export function applyRunDrag(
@@ -276,11 +284,13 @@ export function applyRunDrag(
   block: Block,
   plan: DragPlan,
 ): RunDragResult {
+  const { runs, gaps } = dayRuns(schedule, block.day);
   const unchanged = {
     week: schedule,
     start: block.start,
     end: block.start + block.span,
     shifted: 0,
+    placements: runs.map(r => ({ fromStart: r.start, start: r.start })),
   };
   if (!block.showId) return unchanged;
   if (plan.kind === 'move') {
@@ -289,9 +299,12 @@ export function applyRunDrag(
       start: plan.start,
       end: plan.end,
       shifted: 0,
+      placements: runs.map(r => ({
+        fromStart: r.start,
+        start: r.start === block.start ? plan.start : r.start,
+      })),
     };
   }
-  const { runs, gaps } = dayRuns(schedule, block.day);
   const from = runs.findIndex(r => r.start === block.start);
   if (from < 0) return unchanged;
   const next = runs.slice();
@@ -308,6 +321,7 @@ export function applyRunDrag(
     start,
     end: start + moved.span,
     shifted: next.reduce((n, r, i) => (i !== to && starts[i] !== r.start ? n + 1 : n), 0),
+    placements: next.map((r, i) => ({ fromStart: r.start, start: starts[i] ?? r.start })),
   };
 }
 

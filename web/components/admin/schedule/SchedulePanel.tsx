@@ -289,9 +289,9 @@ export default function SchedulePanel() {
   };
 
   const dragRun = (b: Block, plan: DragPlan) => {
-    if (!schedule || !b.showId) return;
+    if (!schedule || !b.showId) return null;
     const r = applyRunDrag(schedule, b, plan);
-    if (r.week === schedule) return;
+    if (r.week === schedule) return null;
     setSchedule(r.week);
     setLine({ day: b.day, start: r.start, end: r.end });
     setLineDays([b.day]);
@@ -301,6 +301,7 @@ export default function SchedulePanel() {
       + (r.shifted ? ` (${r.shifted} other show${r.shifted === 1 ? '' : 's'} shifted)` : '')
       + ' — unsaved until you save the week.',
     );
+    return r;
   };
 
   // The removed line lands in the order desk preselected, so a mis-click is one undo away.
