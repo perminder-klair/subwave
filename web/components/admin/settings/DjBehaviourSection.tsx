@@ -155,9 +155,10 @@ export function DjBehaviourSection({ form, setForm, busy, saveSettings, fieldErr
 
       <Card title="Extended Sleeve Notes" sub="coming soon">
         <p className="text-[13px] leading-[1.55] text-muted">
-          Soon, the DJ will be able to use a fuller packet of verified track facts—such as
-          album, trusted release year and station-play history—when writing links. This will
-          remain separate from show steering and other editorial context.
+          Soon, the DJ will be able to add optional, source-backed editorial notes—such as
+          release credits or wider artist context—with provider provenance. Album, trusted
+          release year and station-play history already come from today&apos;s Verified Facts
+          packet; this future layer will stay opt-in and separate from show steering.
         </p>
       </Card>
 

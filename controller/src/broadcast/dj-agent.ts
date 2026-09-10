@@ -81,8 +81,8 @@ export { pickerAgent, requestAgent } from './dj-agent/agents.js';
 // (id/reason/transition) or null; never throws, so a salvage failure falls
 // through to the caller's pick.rejected path unchanged.
 // `reason`, when given, replaces the default "you returned a bad id" framing —
-// the back-to-back artist guard (#1124) reuses this same constrained re-pick
-// but for a valid pick it wants to swap off the on-air artist, so the bad-id
+// the pick-anchor artist guard (#1124) reuses this same constrained re-pick
+// but for a valid pick it wants to swap off the anchor artist, so the bad-id
 // wording would be false and confuse the model.
 async function repickFromSeen({ seen, badId, showAt = null, playlistResolved = true, reason = null }: { seen: Map<string, any>; badId: string | null; showAt?: Date | null; playlistResolved?: boolean; reason?: string | null }) {
   const ids = [...seen.keys()];
@@ -368,7 +368,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
     throw Object.assign(new Error(failure.message), { pickFailure: failure });
   }
 
-  // Back-to-back artist guard (#1124). The discovery tools return a tight
+  // Pick-anchor artist guard (#1124). The discovery tools return a tight
   // cluster around the pick anchor — frequently a run of the SAME artist — and
   // the agent path carries no recentArtists/maxPerArtist filter, because an
   // artist strip inside the tools gutted the similarity pool to ~1 survivor on
@@ -378,7 +378,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // own `seen`, so it still reasons about flow and writes a coherent link).
   //
   // When that isn't possible, do NOT relax yet (#1187). `seen` is the RUN's view,
-  // not the library's — tracksLikeThis answering with eight tracks by the on-air
+  // not the library's — tracksLikeThis answering with eight tracks by the anchor
   // artist while no other tool contributed leaves it single-artist on a 50k
   // catalogue, and reading that as "no alternative exists" is the false negative
   // that put the repeats back on air. Ask the fallback pool for a pick that hard-
@@ -389,7 +389,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // Both sides of the comparison, and the alternative set, are keyed on the LEAD
   // artist (#1251), so "Marvin Gaye & Tammi Terrell" can't walk past a guard on
   // "Marvin Gaye". The alternatives also step around the artists of the last few
-  // plays, because a re-pick that knows only the on-air artist keeps returning to
+  // plays, because a re-pick that knows only the anchor artist keeps returning to
   // whoever ranks next-highest — the every-other-slot repeat this guard exists
   // to prevent.
   //
@@ -397,8 +397,8 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   // narrowed the re-pick pool, so the guard never fired on a pick three slots
   // after the same artist and the window was never consulted — every occurrence
   // legal, and the same artist across a whole morning show. The two causes are
-  // escalated differently on purpose (see below): back-to-back is a fault worth
-  // a pool rescue, spacing is a preference that yields to the run.
+  // escalated differently on purpose (see below): an anchor match is worth a
+  // pool rescue, while spacing is a preference that yields to the run.
   const varietyWindow = settings.get().llm?.artistVarietyWindow ?? ARTIST_VARIETY_WINDOW;
   // Read once: the album guard below steps around the same neighbours, and two
   // reads of a live queue across two awaits could disagree.
@@ -517,7 +517,7 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   const chop = wants('chop');
   const loop = wants('loop');
   // Attach the link to the pick so it airs as the pick starts (back-announcing
-  // the track on-air now), instead of immediately over that on-air track (#189).
+  // the captured pick anchor), instead of immediately over the current track (#189).
   // Stamp `pickAnchor` as the link's intended back-announce target so the queue
   // can drop the link if a request jumps ahead of this pick before it airs.
   const queued = await enqueuePick(queue, song, object.reason, 'agent', link, pickAnchor, { sweep, washout, blend, dissolve, chop, loop }, { linkClockAt: linkClockStampFor(linkAirAt, clockAllowed) });
@@ -575,13 +575,15 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
     return 'empty';
   }
   // Build the between-track link BEFORE enqueueing so it can ride on the queued
-  // item and air when the pick starts. It back-announces the track on-air right
-  // now (`pickAnchor`) and leads into the pick — it is the selection's intended
-  // predecessor, and the queue drops a stale back-announce if that changes.
+  // item and air when the pick starts. It back-announces the captured
+  // `pickAnchor` and leads into the pick — that track is the selection's
+  // intended predecessor, and the queue drops a stale back-announce if the
+  // actual FIFO predecessor changes.
   let link: string | null = null;
   // Resolved HERE rather than up in runTrackEvent: the pick call above has
   // already spent part of the runway, and linkClockAt reads the live clock, so
   // asking now is the most honest the forecast can be on this path (#1314).
+  const clockAllowed = speakClockAllowed();
   const airAt = linkClockAt(showAt, Date.now());
   if (wantLink && pickAnchor) {
     try {
@@ -593,7 +595,7 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
         // generation-time clocks aired a track late; #1314: forecast clocks
         // aired a filler track early).
         previous: pickAnchor, current: result.song, context: linkAirContext(ctx, airAt),
-        clockIsAirTime: !!airAt,
+        clockIsAirTime: !!airAt && clockAllowed,
         // Name the speaker explicitly. Left unset, scripts.generateLink falls
         // back to getEffectivePersona() on the wall clock, which disagrees with
         // the session inside the look-ahead window — the incoming DJ's line
@@ -646,7 +648,7 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
   // than on `airAt` itself, so linkAirContext still steps the daypart tags to
   // air time — "after dark" stays accurate even when the numerals are withheld.
   const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, pickAnchor, fx, {
-    linkClockAt: linkClockStampFor(airAt, speakClockAllowed()),
+    linkClockAt: linkClockStampFor(airAt, clockAllowed),
   });
   // Even the pool landed on an already-queued track (a tiny library whose pool
   // collapsed to recents). Skip the session turn and let auto.m3u backstop the

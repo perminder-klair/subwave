@@ -10,9 +10,18 @@
 import type {
   ComponentPropsWithoutRef, DragEvent, KeyboardEvent, PointerEvent,
 } from 'react';
-import { useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { FoldHorizontal, Rows2, Rows4 } from 'lucide-react';
+import { FoldHorizontal, GripVertical, Rows2, Rows4 } from 'lucide-react';
+import {
+  DndContext, KeyboardSensor, MouseSensor, TouchSensor,
+  useDraggable, useSensor, useSensors,
+} from '@dnd-kit/core';
+import type {
+  DragEndEvent, DragMoveEvent, DragStartEvent, KeyboardCoordinateGetter,
+} from '@dnd-kit/core';
+import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import { CSS } from '@dnd-kit/utilities';
 import { useDynamicStyle } from '../../../hooks/useDynamicStyle';
 import { cn } from '../../../lib/cn';
 import type { BoardDensity } from '../../../lib/adminView';
@@ -26,13 +35,44 @@ import {
 import { ScrollArea, ScrollBar } from '../../ui/scroll-area';
 import { Seg } from '../ui';
 import { ColorChip, Mu } from './bits';
-import type { Block, Schedule, ScheduleShow } from './lib';
-import { DAYS, HOURS, dayBlocks, hh, resizedRun } from './lib';
+import type {
+  Block, DragPlan, RunDragResult, RunPlacement, Schedule, ScheduleShow,
+} from './lib';
+import {
+  DAYS, HOURS, applyRunDrag, blockKeys, dayBlocks, hh, planRunDrag, resizedRun,
+} from './lib';
 
 const DND_TYPE = 'text/x-subwave-show';
+const RUN_DRAG_MODIFIERS = [restrictToVerticalAxis];
 
 function readDraggedShow(e: DragEvent): string {
   return e.dataTransfer.getData(DND_TYPE) || e.dataTransfer.getData('text/plain');
+}
+
+function rankIn(order: string[], key: string): number {
+  const i = order.indexOf(key);
+  return i < 0 ? order.length : i;
+}
+
+interface DragRun {
+  block: Block;
+  /** Pointer offset within its grabbed hour, so hour changes land at the same threshold. */
+  withinHour: number;
+  /** Keyboard movement is counted in hours; browser auto-scroll must not alter it. */
+  keyboard: boolean;
+}
+
+function grabHour(rect: { top: number; height: number }, clientY: number, span: number): number {
+  const frac = rect.height > 0 ? (clientY - rect.top) / rect.height : 0;
+  return Math.min(span - 1, Math.max(0, Math.floor(frac * span)));
+}
+
+function activationClientY(event: Event): number | null {
+  if ('touches' in event) {
+    const touchEvent = event as TouchEvent;
+    return touchEvent.touches[0]?.clientY ?? touchEvent.changedTouches[0]?.clientY ?? null;
+  }
+  return 'clientY' in event ? (event as MouseEvent).clientY : null;
 }
 
 export interface BoardProps {
@@ -48,6 +88,7 @@ export interface BoardProps {
   /** The run moves to [start, end); the hours it vacates fall silent. */
   onResize: (b: Block, start: number, end: number) => void;
   onDropShow: (b: Block, showId: string) => void;
+  onDragRun: (b: Block, plan: DragPlan) => RunDragResult | null;
   armedShowId: string | null;
   /** The same id twice disarms. */
   onArmShow: (id: string) => void;
@@ -62,7 +103,7 @@ export interface BoardProps {
 
 export default function Board({
   schedule, shows, folded, onToggleFold, todayKey,
-  colorOf, hoursOf, onPick, onRemove, onResize, onDropShow,
+  colorOf, hoursOf, onPick, onRemove, onResize, onDropShow, onDragRun,
   armedShowId, onArmShow, onFillDay, onFillHour,
   density, hourPx, onDensity,
 }: BoardProps) {
@@ -70,19 +111,166 @@ export default function Board({
   useDynamicStyle(gridRef, { '--hour-px': `${hourPx}px` });
   const armedName = shows.find(s => s.id === armedShowId)?.name ?? null;
 
+  const [dragRun, setDragRun] = useState<DragRun | null>(null);
+  const [plan, setPlan] = useState<DragPlan | null>(null);
+  const [focusAfterMove, setFocusAfterMove] = useState<{
+    week: Schedule;
+    day: number;
+    start: number;
+    showId: string;
+  } | null>(null);
+  const [runIdentities, setRunIdentities] = useState<{
+    week: Schedule;
+    day: number;
+    placements: RunPlacement[];
+  } | null>(null);
+  const activeDrag = useRef<DragRun | null>(null);
+  const keyboardSteps = useRef(0);
+  const keyboardCoordinates = useCallback<KeyboardCoordinateGetter>((event, { currentCoordinates }) => {
+    if (event.code === 'ArrowUp') {
+      keyboardSteps.current--;
+      return { ...currentCoordinates, y: currentCoordinates.y - hourPx };
+    }
+    if (event.code === 'ArrowDown') {
+      keyboardSteps.current++;
+      return { ...currentCoordinates, y: currentCoordinates.y + hourPx };
+    }
+    return undefined;
+  }, [hourPx]);
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    // A short move before this delay remains an ordinary page/board swipe.
+    useSensor(TouchSensor, { activationConstraint: { delay: 220, tolerance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: keyboardCoordinates }),
+  );
+  const endDrag = () => {
+    activeDrag.current = null;
+    keyboardSteps.current = 0;
+    setDragRun(null);
+    setPlan(null);
+  };
+  const preview = dragRun && plan ? applyRunDrag(schedule, dragRun.block, plan) : null;
+  const dragDay = dragRun?.block.day ?? null;
+  const identitiesFor = (day: number): RunPlacement[] => (
+    runIdentities?.week === schedule && runIdentities.day === day
+      ? runIdentities.placements
+      : []
+  );
+  const composeIdentities = (day: number, placements: RunPlacement[]): RunPlacement[] => {
+    const stableStartAt = new Map(identitiesFor(day).map(p => [p.start, p.fromStart]));
+    return placements.map(p => ({
+      fromStart: stableStartAt.get(p.fromStart) ?? p.fromStart,
+      start: p.start,
+    }));
+  };
+  const previewIdentities = preview && dragDay != null
+    ? composeIdentities(dragDay, preview.placements)
+    : null;
+  const dragOrder = dragRun
+    ? blockKeys(dayBlocks(schedule, dragRun.block.day), identitiesFor(dragRun.block.day))
+    : null;
+
+  const commitRun = (block: Block, nextPlan: DragPlan) => {
+    if (!block.showId) return;
+    const result = onDragRun(block, nextPlan);
+    if (!result || result.week === schedule) return;
+    const placements = composeIdentities(block.day, result.placements);
+    setRunIdentities({ week: result.week, day: block.day, placements });
+    setFocusAfterMove({
+      week: result.week,
+      day: block.day,
+      start: result.start,
+      showId: block.showId,
+    });
+  };
+
+  const planAtDelta = (moving: DragRun, deltaY: number): DragPlan | null => {
+    const steps = Math.floor((moving.withinHour + deltaY) / hourPx);
+    return planRunDrag(schedule, moving.block, moving.block.start + steps);
+  };
+
+  const onRunDragStart = (event: DragStartEvent) => {
+    const activeId = String(event.active.id);
+    const card = Array.from(
+      gridRef.current?.querySelectorAll<HTMLButtonElement>('[data-schedule-key]') ?? [],
+    ).find(el => el.dataset.scheduleKey === activeId);
+    const [dayPart, startPart] = card?.dataset.scheduleRun?.split(':') ?? [];
+    const day = Number(dayPart);
+    const currentStart = Number(startPart);
+    const block = activeId.startsWith('run:') && Number.isInteger(day) && Number.isInteger(currentStart)
+      ? dayBlocks(schedule, day).find(b => b.showId && b.start === currentStart)
+      : undefined;
+    const rect = card?.getBoundingClientRect();
+    if (!block?.showId || !rect) return;
+    const keyboardActivation = event.activatorEvent.type === 'keydown';
+    const clientY = keyboardActivation
+      ? rect.top
+      : activationClientY(event.activatorEvent) ?? rect.top + rect.height / 2;
+    const grab = keyboardActivation ? 0 : grabHour(rect, clientY, block.span);
+    const moving = {
+      block,
+      withinHour: keyboardActivation ? 0 : clientY - rect.top - grab * hourPx,
+      keyboard: keyboardActivation,
+    };
+    keyboardSteps.current = 0;
+    activeDrag.current = moving;
+    setDragRun(moving);
+  };
+
+  const onRunDragMove = (event: DragMoveEvent) => {
+    const moving = activeDrag.current;
+    // Firefox can include KeyboardSensor auto-scroll in event.delta while
+    // Chromium does not. Arrow presses are the stable unit the planner needs.
+    const deltaY = moving?.keyboard ? keyboardSteps.current * hourPx : event.delta.y;
+    const nextPlan = moving ? planAtDelta(moving, deltaY) : null;
+    setPlan(nextPlan);
+  };
+
+  const onRunDragEnd = (event: DragEndEvent) => {
+    const moving = activeDrag.current;
+    // Pointer/touch keep the active node anchored, so the final sensor delta is
+    // authoritative even after a fast last movement. Keyboard uses arrow count
+    // because Firefox includes its auto-scroll distance in the reported delta.
+    const deltaY = moving?.keyboard ? keyboardSteps.current * hourPx : event.delta.y;
+    const nextPlan = moving ? planAtDelta(moving, deltaY) : null;
+    if (moving && nextPlan) commitRun(moving.block, nextPlan);
+    endDrag();
+  };
+
+  useEffect(() => {
+    if (!focusAfterMove || schedule !== focusAfterMove.week) return;
+    const card = Array.from(
+      gridRef.current?.querySelectorAll<HTMLButtonElement>('[data-schedule-run]') ?? [],
+    ).find(el =>
+      el.dataset.scheduleRun === `${focusAfterMove.day}:${focusAfterMove.start}`
+      && el.dataset.scheduleShow === focusAfterMove.showId,
+    );
+    card?.focus({ preventScroll: true });
+    setFocusAfterMove(null);
+  }, [focusAfterMove, schedule]);
+
   return (
-    <section>
+    <DndContext
+      sensors={sensors}
+      modifiers={RUN_DRAG_MODIFIERS}
+      accessibility={{ restoreFocus: false }}
+      onDragStart={onRunDragStart}
+      onDragMove={onRunDragMove}
+      onDragEnd={onRunDragEnd}
+      onDragCancel={endDrag}
+    >
+      <section>
       <div className="mb-3 flex flex-wrap items-center gap-x-3.5 gap-y-2 px-5 sm:px-[30px]">
-        {/* Two lengths: drag-and-drop and the 7px card edges are mouse-only. */}
+        {/* Two lengths: resize handles stay mouse-only; run dragging has a touch grip. */}
         <Mu className="min-w-0 flex-1 tracking-[0.08em] sm:hidden">
           {armedName
             ? `${armedName} is armed — tap an hour to book it, or a day header for the whole day`
-            : 'Tap a silent hour to book a show — tap a card to edit its order, its × to take it off the air'}
+            : 'Tap a silent hour to book a show — tap a card to edit its order, hold its grip to move it within the day, or tap its × to take it off the air'}
         </Mu>
         <Mu className="hidden min-w-0 flex-1 tracking-[0.08em] sm:block">
           {armedName
             ? `${armedName} is armed — click any hour to book it, a day header for the whole day, or an hour in the gutter for that hour all week`
-            : 'Click a silent hour (or drag a show onto it) to book a show — click a card to edit its order, drag its top or bottom edge to change the hours, its × to take it off the air'}
+            : 'Click a silent hour (or drag a show onto it) to book a show — click a card to edit its order, drag its grip to move it within its day (drop it on another show and the two trade places), drag its top or bottom edge to change its hours, its × to take it off the air'}
         </Mu>
         <span className="ml-auto flex flex-none items-center gap-2">
           <Mu className="hidden text-[8.5px] sm:inline">Rows</Mu>
@@ -213,7 +401,7 @@ export default function Board({
                 label={d.label}
                 name={d.name}
                 today={d.key === todayKey}
-                blocks={dayBlocks(schedule, d.key)}
+                blocks={dayBlocks(preview && d.key === dragDay ? preview.week : schedule, d.key)}
                 colorOf={colorOf}
                 shows={shows}
                 density={density}
@@ -226,6 +414,16 @@ export default function Board({
                 onRemove={onRemove}
                 onResize={onResize}
                 onDropShow={onDropShow}
+                dragRun={dragRun}
+                dragStart={d.key === dragDay ? (preview?.start ?? dragRun?.block.start ?? null) : null}
+                domOrder={d.key === dragDay ? dragOrder : null}
+                runPlacements={d.key === dragDay
+                  ? previewIdentities ?? identitiesFor(d.key)
+                  : identitiesFor(d.key)}
+                onRunNudge={(b, step) => {
+                  const p = planRunDrag(schedule, b, b.start + step);
+                  if (p) commitRun(b, p);
+                }}
               />
             ),
           )}
@@ -235,13 +433,17 @@ export default function Board({
       <Mu className="mt-1 block px-5 tracking-[0.08em] sm:px-[30px]">
         Hatched hours are silent — click one to book a show, or leave the station to run itself
       </Mu>
-    </section>
+      </section>
+    </DndContext>
   );
 }
 
 function DayColumn({
   label, name, today, blocks, colorOf, shows, density, hourPx, armedShowId, armedName,
   onToggleFold, onFillDay, onPick, onRemove, onResize, onDropShow,
+  dragRun, dragStart, domOrder,
+  runPlacements,
+  onRunNudge,
 }: {
   label: string;
   name: string;
@@ -259,9 +461,25 @@ function DayColumn({
   onRemove: (b: Block) => void;
   onResize: (b: Block, start: number, end: number) => void;
   onDropShow: (b: Block, showId: string) => void;
+  dragRun: DragRun | null;
+  dragStart: number | null;
+  domOrder: string[] | null;
+  runPlacements: RunPlacement[] | null;
+  onRunNudge: (b: Block, step: number) => void;
 }) {
   const showById = (id: string | null) => shows.find(s => s.id === id) ?? null;
   const booked = blocks.reduce((a, b) => a + (b.showId ? b.span : 0), 0);
+
+  const hoursRef = useRef<HTMLDivElement>(null);
+
+  useDynamicStyle(hoursRef, { height: `calc(var(--hour-px) * ${HOURS.length} - 4px)` });
+
+  const keys = blockKeys(blocks, runPlacements ?? []);
+  const keyed = blocks.map((block, i) => ({ block, key: keys[i] ?? `${block.start}` }));
+  const ordered = domOrder
+    ? [...keyed].sort((a, b) => rankIn(domOrder, a.key) - rankIn(domOrder, b.key))
+    : keyed;
+
   return (
     // Phone: fixed-width strip so the next day peeks past the edge. From sm up
     // `min-w-0` lets the seven columns divide the board's width.
@@ -297,33 +515,48 @@ function DayColumn({
           <FoldHorizontal size={13} strokeWidth={1.75} aria-hidden />
         </button>
       </div>
-      <div className="flex flex-col gap-1 p-[5px]">
-        {blocks.map(b =>
-          b.showId ? (
-            <BoardCard
-              key={`${b.start}`}
-              block={b}
-              name={showById(b.showId)?.name ?? 'unknown show'}
-              color={colorOf(b.showId)}
-              density={density}
-              hourPx={hourPx}
-              onPick={onPick}
-              onRemove={onRemove}
-              onResize={onResize}
-              onDropShow={onDropShow}
-            />
-          ) : (
-            <DropSlot
-              key={`${b.start}`}
-              block={b}
-              shows={shows}
-              colorOf={colorOf}
-              armedShowId={armedShowId}
-              armedName={armedName}
-              onDropShow={onDropShow}
-            />
-          ),
-        )}
+      {/* The padding sits outside the ladder so the inner box starts exactly at
+          hour 0 — `landing` and the ghost both measure off it. */}
+      <div className="p-[5px]">
+        <div
+          ref={hoursRef}
+          className="relative"
+        >
+          {ordered.map(({ block: b, key }) =>
+            b.showId ? (
+              <BoardCard
+                key={key}
+                runKey={key}
+                block={b}
+                name={showById(b.showId)?.name ?? 'unknown show'}
+                color={colorOf(b.showId)}
+                density={density}
+                hourPx={hourPx}
+                previewing={dragStart != null && b.start === dragStart}
+                dragOriginStart={dragStart != null && b.start === dragStart
+                  ? dragRun?.block.start ?? null
+                  : null}
+                runDragging={!!dragRun}
+                onPick={onPick}
+                onRemove={onRemove}
+                onResize={onResize}
+                onDropShow={onDropShow}
+                onRunNudge={onRunNudge}
+              />
+            ) : (
+              <DropSlot
+                key={key}
+                block={b}
+                shows={shows}
+                colorOf={colorOf}
+                armedShowId={armedShowId}
+                armedName={armedName}
+                runDragging={!!dragRun}
+                onDropShow={onDropShow}
+              />
+            ),
+          )}
+        </div>
       </div>
       <div className="flex items-center gap-2 border-t border-separator-strong px-2.5 py-2">
         <Mu className="text-[8px]">{booked} h booked</Mu>
@@ -366,43 +599,63 @@ function FoldedRail({
   );
 }
 
-// One scheduled run as a card; height encodes duration (one `--hour-px` per
-// hour). A short card prints the name alone and leaves the range to the tooltip.
+// One scheduled run as a card, positioned by hour: `top` is its start and its
+// height encodes its duration (one `--hour-px` per hour). A short card prints
+// the name alone and leaves the range to the tooltip.
 //
-// An edge drag is a pure preview: the grid is written once, on release. Cards
-// are re-derived by `dayBlocks` keyed on `start`, so writing per step would
-// remount the handle holding the pointer capture and kill the gesture. The card
-// draws at the drafted size and pulls the difference out of its own margins.
+// Declared coordinates rather than flow order are what make the reorder
+// animate — a displaced card's `top` changes and CSS tweens it — and they are
+// also why a resize draft can just draw at the drafted geometry: it overlaps
+// its neighbours instead of displacing them, with no margin arithmetic.
+//
+// An edge drag is a pure preview: the grid is written once, on release. Writing
+// per step would remount the handle holding the pointer capture and kill the
+// gesture.
 function BoardCard({
-  block, name, color, density, hourPx, onPick, onRemove, onResize, onDropShow,
+  runKey, block, name, color, density, hourPx, previewing, dragOriginStart, runDragging,
+  onPick, onRemove, onResize, onDropShow, onRunNudge,
 }: {
+  runKey: string;
   block: Block;
   name: string;
   color: string;
   density: BoardDensity;
   hourPx: number;
+  previewing: boolean;
+  dragOriginStart: number | null;
+  runDragging: boolean;
   onPick: (b: Block) => void;
   onRemove: (b: Block) => void;
   onResize: (b: Block, start: number, end: number) => void;
   onDropShow: (b: Block, showId: string) => void;
+  onRunNudge: (b: Block, step: number) => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [over, setOver] = useState(false);
   const [draft, setDraft] = useState<{ start: number; end: number } | null>(null);
   const drag = useRef<{ edge: ResizeEdge; y0: number } | null>(null);
+  const {
+    attributes, listeners, setActivatorNodeRef, setNodeRef, transform,
+  } = useDraggable({ id: runKey, data: { block } });
+  const setRefs = useCallback((node: HTMLDivElement | null) => {
+    ref.current = node;
+    setNodeRef(node);
+  }, [setNodeRef]);
 
   const blockEnd = block.start + block.span;
   const start = draft?.start ?? block.start;
   const end = draft?.end ?? blockEnd;
   const span = end - start;
+  const visualStart = draft?.start ?? dragOriginStart ?? block.start;
 
   useDynamicStyle(ref, {
+    // The active node stays anchored at its original top and follows the
+    // sensor transform. Other cards take their preview tops. This avoids a
+    // feedback loop where dnd-kit's layout compensation erases finger delta.
+    top: `calc(var(--hour-px) * ${visualStart})`,
     height: `calc(var(--hour-px) * ${span} - 4px)`,
-    // Negative when the draft has grown past the real run, so the card overlaps
-    // its neighbours instead of displacing them.
-    marginTop: draft ? `calc(var(--hour-px) * ${start - block.start})` : undefined,
-    marginBottom: draft ? `calc(var(--hour-px) * ${blockEnd - end})` : undefined,
     background: color,
+    transform: CSS.Translate.toString(transform),
   });
 
   const commit = (r: { start: number; end: number }) => {
@@ -446,29 +699,47 @@ function BoardCard({
   const range = `${hh(start)} – ${hh(end)}`;
   return (
     <div
-      ref={ref}
-      onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setOver(true); }}
+      ref={setRefs}
+      onDragOver={e => {
+        if (runDragging) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        setOver(true);
+      }}
       onDragLeave={() => setOver(false)}
       onDrop={e => {
+        if (runDragging) return;
         e.preventDefault();
         setOver(false);
         const id = readDraggedShow(e);
         if (id) onDropShow(block, id);
       }}
       className={cn(
-        'group relative overflow-hidden text-[#f6f2ea]',
+        'group absolute inset-x-0 text-[#f6f2ea]',
         'hover:outline-2 hover:-outline-offset-1 hover:outline-ink',
+        !draft && !previewing
+          && 'transition-[top,height] duration-150 ease-out motion-reduce:transition-none',
         over && 'outline-2 -outline-offset-1 outline-ink',
         // Lifted while drafting so the overlap reads as on top of its neighbours.
         draft && 'z-20 outline-2 -outline-offset-1 outline-[var(--accent)]',
+        previewing && 'z-20 outline-2 -outline-offset-1 outline-[var(--accent)] outline-dashed',
       )}
     >
       <button
         type="button"
+        data-schedule-key={runKey}
+        data-schedule-run={`${block.day}:${block.start}`}
+        data-schedule-show={block.showId}
         onClick={() => onPick(block)}
-        title={`${name} · ${hh(block.start)} – ${hh(blockEnd)} — click to edit this order, or drag an edge to change the hours`}
+        onKeyDown={e => {
+          const step = e.key === 'ArrowUp' ? -1 : e.key === 'ArrowDown' ? 1 : 0;
+          if (!step) return;
+          e.preventDefault();
+          onRunNudge(block, step);
+        }}
+        title={`${name} · ${hh(block.start)} – ${hh(blockEnd)} — click to edit this order, drag its grip (or use the up and down arrow keys) to move these hours, or drag an edge to change them`}
         className={cn(
-          'flex size-full cursor-pointer flex-col overflow-hidden border-0 bg-transparent px-2 text-left text-inherit',
+          'flex size-full cursor-pointer flex-col overflow-hidden border-0 bg-transparent pr-2 pl-7 text-left text-inherit',
           showRange ? 'justify-between py-1.5' : 'justify-center py-0.5',
         )}
       >
@@ -480,6 +751,22 @@ function BoardCard({
             {range}
           </span>
         )}
+      </button>
+      {/* Match the playlist builder's input split: only this 28px grip owns
+          touch movement, so a swipe beginning on the card body still scrolls.
+          Its hit area is 32px high even on a one-hour compact card; the outer
+          card deliberately does not clip it. The resize edges sit above it. */}
+      <button
+        type="button"
+        ref={setActivatorNodeRef}
+        {...attributes}
+        {...listeners}
+        data-schedule-drag-handle
+        aria-label={`Move “${name}” scheduled ${hh(block.start)}:00 – ${hh(blockEnd)}:00`}
+        title={`Drag “${name}” within this day. Hold, then drag on a touch screen.`}
+        className="absolute top-1/2 left-0 z-10 grid h-8 w-7 -translate-y-1/2 cursor-grab touch-none place-items-center border-0 bg-transparent p-0 text-inherit opacity-70 focus-visible:ring-1 focus-visible:ring-white focus-visible:outline-none active:cursor-grabbing sm:opacity-0 sm:group-hover:opacity-70 sm:focus-visible:opacity-100"
+      >
+        <GripVertical size={12} strokeWidth={2} aria-hidden />
       </button>
       {/* While drafting, print the range even on short cards. */}
       {draft && !showRange && (
@@ -529,7 +816,7 @@ function ResizeHandle({
       aria-label={label}
       title={`${label}. Drag, or use the up and down arrow keys.`}
       className={cn(
-        'absolute inset-x-0 z-10 flex h-[7px] cursor-ns-resize touch-none items-center justify-center border-0 bg-transparent p-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+        'absolute inset-x-0 z-20 flex h-[7px] cursor-ns-resize touch-none items-center justify-center border-0 bg-transparent p-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
         edge === 'top' ? 'top-0' : 'bottom-0',
         // A capture can carry the pointer off the card, dropping `group-hover`.
         dragging && 'opacity-100',
@@ -544,18 +831,22 @@ function ResizeHandle({
 // One silent run as a hatched slot. With a show armed the click books it; with
 // nothing armed it opens a picker. Same write either way, and the same a drop makes.
 function DropSlot({
-  block, shows, colorOf, armedShowId, armedName, onDropShow,
+  block, shows, colorOf, armedShowId, armedName, runDragging, onDropShow,
 }: {
   block: Block;
   shows: ScheduleShow[];
   colorOf: (id: string | null | undefined) => string;
   armedShowId: string | null;
   armedName: string | null;
+  runDragging: boolean;
   onDropShow: (b: Block, showId: string) => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   const [over, setOver] = useState(false);
-  useDynamicStyle(ref, { height: `calc(var(--hour-px) * ${block.span} - 4px)` });
+  useDynamicStyle(ref, {
+    top: `calc(var(--hour-px) * ${block.start})`,
+    height: `calc(var(--hour-px) * ${block.span} - 4px)`,
+  });
   const span = `${hh(block.start)} – ${hh(block.start + block.span)}`;
 
   const slot = (
@@ -563,9 +854,15 @@ function DropSlot({
       ref={ref}
       type="button"
       onClick={armedShowId ? () => onDropShow(block, armedShowId) : undefined}
-      onDragOver={e => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; setOver(true); }}
+      onDragOver={e => {
+        if (runDragging) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        setOver(true);
+      }}
       onDragLeave={() => setOver(false)}
       onDrop={e => {
+        if (runDragging) return;
         e.preventDefault();
         setOver(false);
         const id = readDraggedShow(e);
@@ -575,7 +872,8 @@ function DropSlot({
         ? `Silent ${span} — click to put “${armedName}” here`
         : `Silent ${span} — click to book a show here, or drop one in`}
       className={cn(
-        'flex cursor-pointer flex-col items-center justify-center overflow-hidden border border-dashed bg-[repeating-linear-gradient(45deg,transparent_0_5px,var(--ink-soft)_5px_10px)] px-1.5 font-mono text-[9px] tracking-[0.12em] text-ellipsis whitespace-nowrap uppercase',
+        'absolute inset-x-0 flex cursor-pointer flex-col items-center justify-center overflow-hidden border border-dashed bg-[repeating-linear-gradient(45deg,transparent_0_5px,var(--ink-soft)_5px_10px)] px-1.5 font-mono text-[9px] tracking-[0.12em] text-ellipsis whitespace-nowrap uppercase',
+        'transition-[top,height] duration-150 ease-out motion-reduce:transition-none',
         over
           ? 'border-ink text-ink'
           : 'border-[color-mix(in_oklab,var(--ink)_32%,transparent)] text-muted hover:border-ink hover:text-ink',

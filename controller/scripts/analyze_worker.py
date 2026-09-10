@@ -1913,8 +1913,14 @@ def analyze(
     if y is None or len(y) == 0:
         raise RuntimeError("decoded empty audio")
 
-    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
-    bpm = float(np.atleast_1d(tempo)[0])
+    bpm = None
+    beat_frames = []
+    try:
+        tempo, tracked_frames = librosa.beat.beat_track(y=y, sr=sr)
+        bpm = float(np.atleast_1d(tempo)[0])
+        beat_frames = tracked_frames
+    except Exception as e:  # noqa: BLE001 — tempo/grid are garnish, never a gate
+        log(f"main beat tracking failed: {e}")
 
     # Per-beat timestamps (ms) — already computed by beat_track, previously
     # discarded. Downbeats are a 4/4 heuristic (every 4th beat from the first):
@@ -1969,10 +1975,13 @@ def analyze(
 
     # Overall confidence: dominated by how cleanly the key resolved, nudged by
     # whether we got a plausible tempo. Kept conservative on purpose.
-    confidence = round(0.5 * key_sep + (0.5 if 40 <= bpm <= 220 else 0.0), 3)
+    confidence = round(
+        0.5 * key_sep + (0.5 if bpm is not None and 40 <= bpm <= 220 else 0.0),
+        3,
+    )
 
     result = {
-        "bpm": round(bpm, 1),
+        "bpm": round(bpm, 1) if bpm is not None else None,
         "key": key,
         "intro_ms": int(intro_ms) if intro_ms is not None else None,
         "confidence": confidence,

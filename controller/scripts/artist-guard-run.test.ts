@@ -90,7 +90,7 @@ test('an unguarded pick costs nothing and changes nothing', async () => {
 
 // ── pick-anchor match: the #1124/#1187 cascade, unchanged ──────────────────
 
-test('back-to-back re-picks from the run when it can', async () => {
+test('a pick-anchor match re-picks from the run when it can', async () => {
   const h = harness();
   const out = await run(h, { song: marvin, pickAnchor: marvin, seen: seenOf(marvin, clash, sly) });
   assert.equal(out.kind, 'repicked');
@@ -122,9 +122,9 @@ test('a held pair-drain pick anchor triggers anchor wording without claiming adj
   assert.equal(h.events[0].basis, 'pick-anchor', 'telemetry states what the legacy cause actually means');
 });
 
-test('back-to-back with a single-artist run escalates to the pool, and a queued rescue fills the slot', async () => {
+test('a pick-anchor match with a single-artist run escalates to the pool, and a queued rescue fills the slot', async () => {
   const h = harness({ poolRescue: 'queued' });
-  // The #1187 false negative: the run surfaced only the on-air artist (and the
+  // The #1187 false negative: the run surfaced only the anchor artist (and the
   // collaboration they front, which is the same act) — that is NOT evidence
   // that the library has no one else.
   const out = await run(h, { song: marvin, pickAnchor: marvin, seen: seenOf(marvin, marvinTammi) });
@@ -133,7 +133,7 @@ test('back-to-back with a single-artist run escalates to the pool, and a queued 
   assert.deepEqual(h.rescueArgs, ['Marvin Gaye'], 'the pool is told which artist to avoid');
 });
 
-test('back-to-back relaxes — loudly — only once the pool has nothing either', async () => {
+test('a pick-anchor match relaxes — loudly — only once the pool has nothing either', async () => {
   const h = harness({ poolRescue: 'empty' });
   const out = await run(h, { song: marvin, pickAnchor: marvin, seen: seenOf(marvin) });
   assert.equal(out.kind, 'kept');
@@ -142,9 +142,9 @@ test('back-to-back relaxes — loudly — only once the pool has nothing either'
   assert.match(h.lines.at(-1)!, /relaxed/);
 });
 
-test('a failed back-to-back re-pick still escalates to the pool', async () => {
+test('a failed pick-anchor re-pick still escalates to the pool', async () => {
   // The model was offered alternatives and declined to answer with one. For
-  // back-to-back that is not the end of the cascade.
+  // an anchor match that is not the end of the cascade.
   const h = harness({ repick: () => null, poolRescue: 'queued' });
   const out = await run(h, { song: marvin, pickAnchor: marvin, seen: seenOf(marvin, clash) });
   assert.equal(out.kind, 'rescued');
@@ -171,7 +171,7 @@ test('a pick inside the window is re-picked away from — the reported bug', asy
   });
   assert.equal(out.kind, 'repicked');
   assert.equal(out.kind === 'repicked' && out.song.id, 's1', 'and it lands on the one fresh artist');
-  assert.match(h.reasons[0], /last few slots/, 'told in the SPACING wording, not the back-to-back one');
+  assert.match(h.reasons[0], /last few slots/, 'told in the SPACING wording, not the pick-anchor one');
   assert.equal(h.calls.poolRescue, 0);
 });
 
@@ -214,7 +214,7 @@ test('a failed spacing re-pick keeps the pick and stops — this is the cost gua
 
 // ── the two fixes are one mechanism ────────────────────────────────────────
 
-test('a name variant of the on-air act is caught as back-to-back', async () => {
+test('a name variant of the anchor act is caught as a pick-anchor match', async () => {
   // The reported bypass: "The Jimi Hendrix Experience" straight into "Jimi
   // Hendrix". Different raw tags, one artist — and before #1406 the guard was
   // blind to it because the root keys differed.
@@ -226,13 +226,13 @@ test('a name variant of the on-air act is caught as back-to-back', async () => {
   assert.equal(out.kind === 'repicked' && out.song.id, 'c1');
 });
 
-test('the window is off but back-to-back still guards — 0 is not "no guard"', async () => {
+test('the window is off but a pick-anchor match still guards — 0 is not "no guard"', async () => {
   const h = harness();
   const spaced = await run(h, { song: marvin, pickAnchor: beatles, seen: seenOf(marvin, sly), recentRoots: new Set(), window: 0 });
   assert.equal(spaced.kind, 'none', 'spacing is off');
 
   const adjacent = await run(h, { song: marvin, pickAnchor: marvin, seen: seenOf(marvin, sly), recentRoots: new Set(), window: 0 });
-  assert.equal(adjacent.kind, 'repicked', 'back-to-back is not operator-disableable');
+  assert.equal(adjacent.kind, 'repicked', 'pick-anchor protection is not operator-disableable');
 });
 
 test('an untagged pick is never guarded on either cause', async () => {

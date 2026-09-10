@@ -84,10 +84,13 @@ const DOLLAR_AMOUNT = '\\d[\\d,]*(?:\\.\\d+)?';
 const PERFORMANCE_CUE_RE = /\[[^\]\r\n]{1,80}\]/g;
 const SPOKEN_CHAR_RE = /[\p{L}\p{N}]/u;
 const PRODUCTION_CUE_RE = /\b(?:cue|square|stage|direction|fad(?:e|es|ed|ing)|music|track|vocals?|sounds?|intro(?:duction)?|outro|transition|paus(?:e|es|ed|ing)|riff(?:ing)?|build(?:ing|s)?|seconds?|\d+s)\b/i;
+const PRODUCTION_ACTION_RE = /\b(?:cue|stage|direction|fad(?:e|es|ed|ing)|intro(?:duction)?|outro|transition|paus(?:e|es|ed|ing)|riff(?:ing)?|build(?:ing|s)?|\d+s)\b/i;
 const TITLE_QUALIFIER_RE = /^(?:live\b.*|deluxe\b.*|remaster(?:ed)?\b.*|radio edit\b.*|single edit\b.*|album version\b.*|original version\b.*|mono\b.*|stereo\b.*|acoustic\b.*|demo\b.*|bonus track\b.*|anniversary\b.*|expanded edition\b.*)$/i;
+const BRACKETED_TITLE_RE = /^(?:untitled(?:\s+(?:track\s*)?(?:no\.?\s*)?#?\d+)?|track\s*(?:no\.?\s*)?#?\d+)$/i;
+const TITLE_CONTEXT_RE = /\b(?:from|with|called|titled|track|song|album|record|version|mix|cut)\s*$/i;
 
 function isTitleQualifier(body: string): boolean {
-  return TITLE_QUALIFIER_RE.test(body) && !PRODUCTION_CUE_RE.test(body);
+  return TITLE_QUALIFIER_RE.test(body) && !PRODUCTION_ACTION_RE.test(body);
 }
 
 function isPerformanceCue(body: string): boolean {
@@ -96,6 +99,17 @@ function isPerformanceCue(body: string): boolean {
     && !body.startsWith('-')
     && !/\d/.test(body)
     && !PRODUCTION_CUE_RE.test(body);
+}
+
+// Real catalogue titles include names such as "[Untitled]". Preserve that
+// known form, common edition qualifiers, and any bracketed value introduced as
+// a title. Explicit title forms such as "from [Track 2]" are safe, but a title
+// context never overrides a recognised production direction. Everything else
+// keeps the existing loose performance-cue vocabulary and bounded removal.
+function isLiteralBracket(body: string, prefix: string): boolean {
+  return isTitleQualifier(body)
+    || BRACKETED_TITLE_RE.test(body)
+    || (TITLE_CONTEXT_RE.test(prefix) && !PRODUCTION_CUE_RE.test(body));
 }
 
 function stripUnmatchedCueBrackets(text: string): string {
@@ -129,11 +143,11 @@ export function sanitizePerformanceCues(text: string, maxCues = 2): string {
     const body = cue[0].slice(1, -1).trim();
     const hasFollowingWords = SPOKEN_CHAR_RE.test(safeText.slice(end, nextStart));
     out += safeText.slice(cursor, start);
-    if (isPerformanceCue(body) && hasFollowingWords && kept < maxCues) {
+    if (isLiteralBracket(body, safeText.slice(0, start))) {
+      out += cue[0];
+    } else if (isPerformanceCue(body) && hasFollowingWords && kept < maxCues) {
       out += cue[0];
       kept += 1;
-    } else if (isTitleQualifier(body)) {
-      out += cue[0];
     } else if (!hasFollowingWords && nextStart === safeText.length) {
       // A terminal cue can carry only punctuation after its closing bracket
       // (`[sigh].`). The cue is not valid without following spoken words, and
@@ -145,6 +159,13 @@ export function sanitizePerformanceCues(text: string, maxCues = 2): string {
     cursor = end;
   }
   return (out + safeText.slice(cursor)).replace(/\s+/g, ' ').trim();
+}
+
+function literalizeBracketedSpeech(text: string): string {
+  return text.replace(PERFORMANCE_CUE_RE, (cue, offset: number) => {
+    const body = cue.slice(1, -1).trim();
+    return isLiteralBracket(body, text.slice(0, offset)) ? body : cue;
+  });
 }
 
 // Markup + entity cleanup — everything in the pipeline that is safe for a
@@ -234,6 +255,11 @@ export function normalizeForSpeech(
 ): string {
   if (!text) return text;
   let t = stripMarkup(text);
+
+  // Keep literal bracket content in the reader-facing form, but remove the
+  // cue-shaped delimiters before TTS so an expressive engine cannot interpret
+  // a real title/version such as "[Untitled]" or "[Live]" as direction.
+  t = literalizeBracketedSpeech(t);
 
   t = normalizeTtsPunctuation(t);
 

@@ -2,7 +2,7 @@
 // auto-discovery, so they actually run with the rest of the suite instead of
 // only when someone remembers `python3 scripts/<file>.py`. Each suite is
 // lightweight and isolated from the analyzer runtime (no torch / demucs /
-// librosa / audio). Two numerical suites use NumPy; when it is unavailable,
+// librosa / audio). Three numerical suites use NumPy; when it is unavailable,
 // this shim installs the pinned test-only wheel into a temporary directory, so
 // a clean checkout's `npm test` is reproducible without modifying the user's
 // Python environment. A box without python3 still skips cleanly (exit 0).
@@ -24,6 +24,7 @@ const SUITES = [
   'tts_heavy_idle_test.py', // tts-heavy idle unload + cold-engine health (#1579)
   'analyzer_noise_test.py', // decode-noise filter + capability loss (#1300)
   'analyzer_silence_test.py', // edge dead-air measurement (silence trim)
+  'analyzer_beat_test.py', // main beat tracking is best-effort (#1647)
 ];
 
 const probe = spawnSync('python3', ['--version'], { stdio: 'ignore' });

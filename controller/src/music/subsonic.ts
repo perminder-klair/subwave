@@ -79,22 +79,72 @@ function extractCount(sub, songs) {
   return 0;
 }
 
-async function call(endpoint, params = {}) {
-  const started = Date.now();
-  try {
-    const url = buildUrl(endpoint, params);
-    // Bounded fetch: a hung Navidrome must not pin the admin routes behind it (#786).
-    let res;
+// A pooled keep-alive socket Navidrome has already closed fails the next request
+// on it instantly, before a byte is written, and undici reports the bare
+// `fetch failed`. ping() and pingWith() each already worked around it; this is
+// the same mechanism at the one chokepoint every call goes through, so a walk of
+// thousands of albums no longer dies on the first idle socket. A FAST failure is
+// characteristic of the stale-socket case, but cannot prove a request did not
+// reach Navidrome. Only explicitly safe operations may spend the retry.
+const STALE_SOCKET_RETRY_MS = 2_000;
+const STALE_SOCKET_BACKOFF_MS = 250;
+
+type CallOptions = {
+  retryFastTransport?: boolean;
+};
+
+// Reads and operations that are explicitly idempotent opt in at their call
+// site. An unknown/new endpoint gets no replay unless its safety is reviewed.
+const RETRY_FAST_TRANSPORT: Readonly<CallOptions> = { retryFastTransport: true };
+
+// undici collapses every connect/socket error into `TypeError: fetch failed`, so
+// name the endpoint, the origin and the underlying code. Never the URL — it
+// carries the auth token.
+function describeTransportError(endpoint: string, err: any): Error {
+  const cause = err?.cause;
+  const code = cause?.code || cause?.errno || null;
+  const detail = cause?.message && cause.message !== err?.message ? cause.message : null;
+  let origin = config.navidrome.url;
+  try { origin = new URL(config.navidrome.url).origin; } catch { /* keep as configured */ }
+  return new Error(
+    `Subsonic ${endpoint} could not reach ${origin}: ${err?.message || 'fetch failed'}`
+    + `${code ? ` (${code})` : ''}${detail ? ` — ${detail}` : ''}`,
+  );
+}
+
+// Bounded fetch: a hung Navidrome must not pin the admin routes behind it (#786).
+async function boundedFetch(
+  endpoint: string,
+  url: string,
+  { retryFastTransport = false }: CallOptions = {},
+) {
+  for (let attempt = 0; ; attempt++) {
+    const started = Date.now();
     try {
-      res = await fetch(url, { signal: AbortSignal.timeout(config.navidrome.timeoutMs) });
-    } catch (err) {
+      return await fetch(url, { signal: AbortSignal.timeout(config.navidrome.timeoutMs) });
+    } catch (err: any) {
       if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
         throw new Error(
           `Subsonic ${endpoint} timed out after ${config.navidrome.timeoutMs}ms — is Navidrome responding?`,
         );
       }
-      throw err;
+      if (retryFastTransport && attempt === 0 && Date.now() - started < STALE_SOCKET_RETRY_MS) {
+        console.warn(
+          `[subsonic] ${endpoint}: ${err?.message || err} — retrying once (stale pooled socket)`,
+        );
+        await new Promise(resolve => setTimeout(resolve, STALE_SOCKET_BACKOFF_MS));
+        continue;
+      }
+      throw describeTransportError(endpoint, err);
     }
+  }
+}
+
+async function call(endpoint, params = {}, options: CallOptions = {}) {
+  const started = Date.now();
+  try {
+    const url = buildUrl(endpoint, params);
+    const res = await boundedFetch(endpoint, url, options);
     if (!res.ok) {
       // First 200 chars of the body, so triage sees the real server message.
       let body = '';
@@ -122,9 +172,10 @@ async function call(endpoint, params = {}) {
   }
 }
 
-// Connectivity + auth check against config.navidrome. Never throws.
-// A failure that lands instantly gets ONE retry (stale pooled fetch socket);
-// a slow failure does not, since a second wait can't change the answer.
+// Connectivity + auth check against config.navidrome. Never throws. ping owns
+// one retry across transport and HTTP/API failures instead of opting into the
+// shared transport retry and nesting the two budgets. One ping therefore never
+// sends more than two requests.
 const PING_RETRY_IF_FASTER_THAN_MS = 2_000;
 
 export async function ping(): Promise<{ ok: boolean; reason?: string }> {
@@ -228,18 +279,22 @@ const rejectArchive = (arr: any[]) =>
 // operator can review a blocked track; queue.push still refuses it. Every
 // airing path takes the default and never sees blocked songs.
 export async function search(query, { songCount = 20, songOffset = 0, includeBlocked = false } = {}) {
-  const r = await call('search3', { query, songCount, songOffset, artistCount: 5, albumCount: 5 });
+  const r = await call(
+    'search3',
+    { query, songCount, songOffset, artistCount: 5, albumCount: 5 },
+    RETRY_FAST_TRANSPORT,
+  );
   const songs = (r.searchResult3?.song || []).filter((s) => !isStationArchive(s));
   return includeBlocked ? songs : blocklist.rejectBlocked(songs);
 }
 
 export async function getRandomSongs({ size = 20, genre, fromYear, toYear }: { size?: number; genre?: string; fromYear?: number; toYear?: number } = {}) {
-  const r = await call('getRandomSongs', { size, genre, fromYear, toYear });
+  const r = await call('getRandomSongs', { size, genre, fromYear, toYear }, RETRY_FAST_TRANSPORT);
   return rejectArchive(r.randomSongs?.song || []);
 }
 
 export async function getSongsByGenre(genre, { count = 20, offset = 0 } = {}) {
-  const r = await call('getSongsByGenre', { genre, count, offset });
+  const r = await call('getSongsByGenre', { genre, count, offset }, RETRY_FAST_TRANSPORT);
   return rejectArchive(r.songsByGenre?.song || []);
 }
 
@@ -284,7 +339,7 @@ const GENRES_TTL_MS = 5 * 60 * 1000;
 // only moves on a Navidrome rescan. Failures are NOT cached — they propagate.
 export async function getGenres() {
   if (genresCache && Date.now() - genresCache.at < GENRES_TTL_MS) return genresCache.genres;
-  const r = await call('getGenres');
+  const r = await call('getGenres', {}, RETRY_FAST_TRANSPORT);
   const genres = r.genres?.genre || [];
   genresCache = { genres, at: Date.now() };
   return genres;
@@ -388,7 +443,7 @@ export async function resolveArtist(name, { artistCount = 10 } = {}) {
 }
 
 export async function getSimilarSongs(id, { count = 20 } = {}) {
-  const r = await call('getSimilarSongs2', { id, count });
+  const r = await call('getSimilarSongs2', { id, count }, RETRY_FAST_TRANSPORT);
   return rejectArchive(r.similarSongs2?.song || []);
 }
 
@@ -407,7 +462,7 @@ export async function supportsSonicSimilarity(): Promise<boolean> {
   if (sonicExtCache && Date.now() - sonicExtCache.at < EXT_PROBE_TTL_MS) return sonicExtCache.ok;
   let ok = false;
   try {
-    const r = await call('getOpenSubsonicExtensions');
+    const r = await call('getOpenSubsonicExtensions', {}, RETRY_FAST_TRANSPORT);
     const exts = r.openSubsonicExtensions || [];
     ok = exts.some((e: any) => (typeof e === 'string' ? e : e?.name) === 'sonicSimilarity');
   } catch {
@@ -418,23 +473,23 @@ export async function supportsSonicSimilarity(): Promise<boolean> {
 }
 
 export async function getSonicSimilarTracks(id, { count = 20 } = {}) {
-  const r = await call('getSonicSimilarTracks', { id, count });
+  const r = await call('getSonicSimilarTracks', { id, count }, RETRY_FAST_TRANSPORT);
   return rejectArchive(sonicSimilarSongs(r));
 }
 
 export async function getStarred() {
-  const r = await call('getStarred2');
+  const r = await call('getStarred2', {}, RETRY_FAST_TRANSPORT);
   return rejectArchive(r.starred2?.song || []);
 }
 
 // Star write-back for the listener like feature (#991) — mirrors the player
 // heart into Navidrome. Idempotent server-side.
 export async function star(id) {
-  await call('star', { id });
+  await call('star', { id }, RETRY_FAST_TRANSPORT);
 }
 
 export async function unstar(id) {
-  await call('unstar', { id });
+  await call('unstar', { id }, RETRY_FAST_TRANSPORT);
 }
 
 // Play reporting for Navidrome (#1298). submission=false is the "now playing"
@@ -455,31 +510,35 @@ export async function scrobble(
 }
 
 export async function getAlbumList(offset = 0, size = 500) {
-  const r = await call('getAlbumList2', { type: 'alphabeticalByName', size, offset });
+  const r = await call(
+    'getAlbumList2',
+    { type: 'alphabeticalByName', size, offset },
+    RETRY_FAST_TRANSPORT,
+  );
   return r.albumList2?.album || [];
 }
 
 export async function getRecentlyAddedAlbums({ size = 20 } = {}) {
-  const r = await call('getAlbumList2', { type: 'newest', size });
+  const r = await call('getAlbumList2', { type: 'newest', size }, RETRY_FAST_TRANSPORT);
   return r.albumList2?.album || [];
 }
 
 // Albums by play count. `offset` rotates the window — the top-N list barely
 // moves, so an offset-less read pins the same albums forever.
 export async function getFrequentAlbums({ size = 20, offset = 0 } = {}) {
-  const r = await call('getAlbumList2', { type: 'frequent', size, offset });
+  const r = await call('getAlbumList2', { type: 'frequent', size, offset }, RETRY_FAST_TRANSPORT);
   return r.albumList2?.album || [];
 }
 
 export async function getArtistInfo(id, { count = 10 } = {}) {
-  const r = await call('getArtistInfo2', { id, count });
+  const r = await call('getArtistInfo2', { id, count }, RETRY_FAST_TRANSPORT);
   return r.artistInfo2 || null;
 }
 
 // Last.fm "top songs" for an artist, intersected with the library. Keyed by
 // artist NAME, not id.
 export async function getTopSongs(artistName, { count = 10 } = {}) {
-  const r = await call('getTopSongs', { artist: artistName, count });
+  const r = await call('getTopSongs', { artist: artistName, count }, RETRY_FAST_TRANSPORT);
   return rejectArchive(r.topSongs?.song || []);
 }
 
@@ -522,24 +581,28 @@ export async function getRecentSongsByArtist(
 }
 
 export async function getAlbum(id) {
-  const r = await call('getAlbum', { id });
+  const r = await call('getAlbum', { id }, RETRY_FAST_TRANSPORT);
   return rejectArchive(r.album?.song || []);
 }
 
 // Single song lookup. The Child carries albumId, which is how manual album
 // tagging resolves a whole album from one track id.
 export async function getSong(id) {
-  const r = await call('getSong', { id });
+  const r = await call('getSong', { id }, RETRY_FAST_TRANSPORT);
   return r.song || null;
 }
 
 export async function getArtist(id) {
-  const r = await call('getArtist', { id });
+  const r = await call('getArtist', { id }, RETRY_FAST_TRANSPORT);
   return r.artist || null;
 }
 
 export async function searchArtists(query, { artistCount = 5 } = {}) {
-  const r = await call('search3', { query, artistCount, albumCount: 0, songCount: 0 });
+  const r = await call(
+    'search3',
+    { query, artistCount, albumCount: 0, songCount: 0 },
+    RETRY_FAST_TRANSPORT,
+  );
   return r.searchResult3?.artist || [];
 }
 
@@ -564,7 +627,7 @@ export async function getArtistLastfmTags(id, { count = 20 } = {}) {
 // response shapes normalise to a string.
 export async function getLyrics(songId) {
   try {
-    const r = await call('getLyricsBySongId', { id: songId });
+    const r = await call('getLyricsBySongId', { id: songId }, RETRY_FAST_TRANSPORT);
     // Modern: { lyricsList: { structuredLyrics: [{ line: [{ value }] }] } }
     const structured = r.lyricsList?.structuredLyrics;
     if (Array.isArray(structured) && structured.length) {
@@ -594,7 +657,7 @@ export async function getStructuredLyrics(
   songId,
 ): Promise<{ synced: boolean; lines: Array<{ startMs: number; text: string }> } | null> {
   try {
-    const r = await call('getLyricsBySongId', { id: songId });
+    const r = await call('getLyricsBySongId', { id: songId }, RETRY_FAST_TRANSPORT);
     const structured = r.lyricsList?.structuredLyrics;
     if (!Array.isArray(structured) || structured.length === 0) return null;
     // Several versions may exist (languages, synced + unsynced); only a synced
@@ -633,7 +696,7 @@ export async function* iterateAllSongs() {
     if (albums.length === 0) break;
     for (const album of albums) {
       try {
-        const r = await call('getAlbum', { id: album.id });
+        const r = await call('getAlbum', { id: album.id }, RETRY_FAST_TRANSPORT);
         const isCompilation = typeof r.album?.isCompilation === 'boolean' ? r.album.isCompilation : null;
         const ord = r.album?.originalReleaseDate?.year;
         const originalYear = Number.isFinite(ord) && ord > 0 ? ord : null;
@@ -670,12 +733,12 @@ export async function* iterateAllSongs() {
 }
 
 export async function getPlaylists() {
-  const r = await call('getPlaylists');
+  const r = await call('getPlaylists', {}, RETRY_FAST_TRANSPORT);
   return r.playlists?.playlist || [];
 }
 
 export async function getPlaylist(id) {
-  const r = await call('getPlaylist', { id });
+  const r = await call('getPlaylist', { id }, RETRY_FAST_TRANSPORT);
   return rejectArchive(r.playlist?.entry || []);
 }
 

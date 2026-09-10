@@ -3698,7 +3698,7 @@ class Queue {
   // takes the TAIL of the queue: a pick appends to the end, so its nearest
   // neighbours are the last `n` queued, not the first.
   //
-  // Sole consumer is the agent path's back-to-back artist guard (#1251), whose
+  // Sole consumer is the agent path's pick-anchor/spacing artist guard (#1251), whose
   // re-pick steps around these artists — hence root keys rather than the raw
   // keys recentArtistsSince returns; that one feeds the pool picker's relaxable
   // recentArtists filter, which matches raw against raw. Empty set when n <= 0.

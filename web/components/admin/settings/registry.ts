@@ -264,7 +264,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   // ── dj behaviour ───────────────────────────────────────────────────────────
   { label: 'Talk placement', section: 'behaviour', card: 'Talk placement', keywords: 'between tracks boundary interrupt over song duck mid-song' },
   { label: 'Show changes', section: 'behaviour', card: 'Show changes', keywords: 'handoff presenter same host acknowledgement shift transition programme' },
-  { label: 'Extended Sleeve Notes', section: 'behaviour', card: 'Extended Sleeve Notes', keywords: 'verified facts album release year station plays coming soon' },
+  { label: 'Extended Sleeve Notes', section: 'behaviour', card: 'Extended Sleeve Notes', keywords: 'source backed editorial provenance provider credits artist context coming soon' },
   { label: 'Link style', section: 'behaviour', card: 'Link style', keywords: 'release year regular occasional rare metadata sleeve notes' },
 
   // ── library tagger ─────────────────────────────────────────────────────────
