@@ -675,7 +675,15 @@ router.post('/dj/skill', requireAdmin, async (req, res) => {
     // `aired: false` is a 200, not an error: the skill ran and had nothing worth
     // saying (#1412), and the operator gets the reason.
     const run = await runCapability(name, await getFullContext());
-    res.json({ ok: true, name, aired: run.aired, spoken: run.text, reason: run.reason });
+    res.json({
+      ok: true,
+      name,
+      aired: run.aired,
+      queued: run.queued,
+      deferred: run.deferred,
+      spoken: run.text,
+      reason: run.reason,
+    });
   } catch (err) {
     queue.log('error', `/dj/skill ${name} failed: ${err.message}`);
     res.status(500).json({ error: err.message });

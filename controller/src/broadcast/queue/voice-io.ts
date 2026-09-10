@@ -153,15 +153,26 @@ export async function airVoice(
   // half of the lifecycle a consumer needs in order to prepare for speech
   // rather than react to it (#1382 follow-up). Everything it reports is known
   // by now; nothing here waits on anything.
-  { onQueued }: { onQueued?: (q: QueuedVoice) => void } = {},
+  {
+    onQueued,
+    voiceId: stableVoiceId,
+    pauseDeliveryId = null,
+    airMarkerPromise,
+  }:
+    {
+      onQueued?: (q: QueuedVoice) => void;
+      voiceId?: string;
+      pauseDeliveryId?: string | null;
+      airMarkerPromise?: Promise<number | null>;
+    } = {},
 ): Promise<VoiceHandoff> {
   // Duration is read from the bare WAV path (header parse), so compute it BEFORE
   // wrapping — the annotate URI isn't a real file. The wrapped URI is only what
   // gets written to the handoff file for Liquidsoap to consume.
   const clipMs = clipDurationMs(wavPath, text);
   const holdMs = Math.min(VOICE_HOLD_MAX_MS, clipMs + VOICE_LEADIN_MS + VOICE_TAIL_MS);
-  const voiceId = mintVoiceId();
-  const uri = voiceUri(wavPath, gainDb, voiceId);
+  const voiceId = stableVoiceId || mintVoiceId();
+  const uri = voiceUri(wavPath, gainDb, voiceId, pauseDeliveryId);
   const now = Date.now();
   const jingle = jingleWindow();
   const { waitMs, estimatedAirInMs } = airInEstimate({
@@ -190,7 +201,11 @@ export async function airVoice(
   // AIR and not the wait for this clip's turn on the shared voice chain (which
   // can legitimately be a whole segment long). The marker reader keeps a short
   // buffer of ids it saw first, so losing this race costs nothing.
-  return { voiceId, clipMs, aired: awaitVoiceAir(voiceId) };
+  return {
+    voiceId,
+    clipMs,
+    aired: airMarkerPromise ?? awaitVoiceAir(voiceId),
+  };
 }
 
 // Short, URI-safe, and unique per clip — the whole job is telling one segment's
@@ -304,8 +319,14 @@ async function waitForJingleClear() {
 // been driving these same WAV paths through it all along. The silent lead-in is
 // deliberately NOT annotated: it is pushed as its own request, and the missing
 // id is what tells the mixer's hook to skip it and mark the real clip instead.
-export function voiceUri(wavPath: string, gainDb: number, voiceId: string): string {
+export function voiceUri(
+  wavPath: string,
+  gainDb: number,
+  voiceId: string,
+  pauseDeliveryId: string | null = null,
+): string {
   const meta = [`subwave_voice="${voiceId}"`];
+  if (pauseDeliveryId) meta.push(`subwave_pause_delivery="${pauseDeliveryId}"`);
   if (gainDb !== 0) meta.unshift(`liq_amplify="${gainDb} dB"`);
   return `annotate:${meta.join(',')}:${wavPath}`;
 }

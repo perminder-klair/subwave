@@ -274,6 +274,34 @@ test("the forecast counts the item's OWN bed", async () => {
   assert.equal(queue.airForecastSec(request), bare + 18);
 });
 
+test('the forecast counts pause-and-talk silence hidden ahead of a request', async () => {
+  reset();
+  queue.current = {
+    track: { id: 'onair', title: 'On air', duration: 100 },
+    startedAt: new Date().toISOString(),
+  } as any;
+  await queue.push({ track: { id: 'next', title: 'Next', duration: 200 }, requestedBy: null });
+  await queue.push({ track: { id: 'req', title: 'Req', duration: 200 }, requestedBy: 'alice' });
+  const request = queue.upcoming[1];
+  const bare = queue.airForecastSec(request)!;
+  queue.upcoming[0].sent = true;
+  queue.upcoming[0].pauseDelaySec = 34.75;
+  assert.equal(queue.airForecastSec(request), bare + 34.75);
+});
+
+test("the forecast counts the item's OWN pause-and-talk delay", async () => {
+  reset();
+  queue.current = {
+    track: { id: 'onair', title: 'On air', duration: 100 },
+    startedAt: new Date().toISOString(),
+  } as any;
+  await queue.push({ track: { id: 'req', title: 'Req', duration: 200 }, requestedBy: 'alice' });
+  const request = queue.upcoming[0];
+  const bare = queue.airForecastSec(request)!;
+  request.pauseDelaySec = 19;
+  assert.equal(queue.airForecastSec(request), bare + 19);
+});
+
 // An UNSENT item ahead has had no bed pushed — the decision happens at ITS
 // drain — so a zero contribution is correct rather than a miss. Pinned so the
 // next person to touch bedDelayBeforeItemAirs does not "fix" the sent gate.

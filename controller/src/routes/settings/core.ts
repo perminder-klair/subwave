@@ -89,6 +89,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
         // Repaired on the way out via the same function the air path uses: a
         // profile switch or backup restore can seed an off-step value (#1576).
         handover: { offsetMinutes: handoverOffsetMinutes() },
+        djBehaviour: s.djBehaviour,
         maxTrackSeconds: s.maxTrackSeconds,
         // Crossfade-relative floor, shared with the admin/show UI so client
         // hints match server validation.
@@ -122,6 +123,8 @@ router.get('/settings', requireAdmin, async (req, res) => {
         activePersonaId: s.activePersonaId,
         shows: s.shows,
         schedule: s.schedule,
+        djTalkOnlyBetweenTracks: s.djTalkOnlyBetweenTracks,
+        pauseTalkMinSeconds: s.pauseTalkMinSeconds,
         tts: s.tts,
         llm: s.llm,
         search: s.search,
@@ -333,4 +336,3 @@ router.post('/settings/navidrome/test', requireAdmin, async (req, res) => {
   }
   res.json(await subsonic.pingWith({ url, user, pass, client: 'sub-wave-admin' }));
 });
-

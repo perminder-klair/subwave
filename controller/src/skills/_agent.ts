@@ -539,29 +539,36 @@ export async function agenticTick(ctx) {
       return;
     }
 
+    let selectedSfx: string | null = null;
+    if (seg.sfx) {
+      if (sfxCatalog.some(s => s.name === seg.sfx)) selectedSfx = seg.sfx;
+      else queue.log('error', `Segment agent picked unknown sfx "${seg.sfx}" — dropping`);
+    }
+
+    // The speaker's id rides in meta so session.windowMessages names a guest's
+    // turn as theirs rather than the host's own words.
+    const delivery = await queue.announce(seg.text.trim(), seg.kind, {
+      persona: speaker,
+      meta: { personaId: speaker?.id, personaName: speaker?.name },
+      pauseTalkEligible: true,
+      sfx: selectedSfx,
+    });
+    if (!delivery.accepted) return;
+
+    // Reserve the kind as soon as it owns an air path so a held segment is not
+    // generated twice. Durable "aired" facts wait for the voice lifecycle.
     lastFired.set(seg.kind, Date.now());
     segmentState.lastAnySegment = Date.now();
     if (seg.kind === 'weather' && ctx.weather?.condition) {
       segmentState.lastWeatherCondition = ctx.weather.condition;
     }
 
-    // The speaker's id rides in meta so session.windowMessages names a guest's
-    // turn as theirs rather than the host's own words.
-    await queue.announce(seg.text.trim(), seg.kind, {
-      persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name },
-    });
-
     // Record what aired so the durable ledger keeps both the tool and the
     // fallback path from repeating it after a restart (#577).
-    if (seg.kind === 'curiosity') recordCuriosity(seg.text.trim(), { aired: true });
-
-    // Only honour an sfx name the agent was actually offered.
-    if (seg.sfx) {
-      if (sfxCatalog.some(s => s.name === seg.sfx)) {
-        await queue.playSfx(seg.sfx, { underVoice: true });
-      } else {
-        queue.log('error', `Segment agent picked unknown sfx "${seg.sfx}" — dropping`);
-      }
+    if (seg.kind === 'curiosity') {
+      void delivery.completed.then(aired => {
+        if (aired) recordCuriosity(seg.text.trim(), { aired: true });
+      });
     }
   } catch (err) {
     // A model that couldn't produce parseable JSON was most likely trying to
@@ -648,10 +655,13 @@ export const forcedDirectorAgent = defineForcedAgent(false);
 // data tool came back with nothing usable (#1412).
 export const groundedDirectorAgent = defineForcedAgent(true);
 
-// The outcome of a forced run. `aired: false` is a normal, reportable result,
-// not an error: each caller decides what it means. Real failures still throw.
+// The outcome of a forced run. A held segment is `queued: true`, `aired: false`
+// until its boundary; a grounded stand-down is false for both. This lets an
+// operator distinguish "waiting for its break" from "nothing will play".
 export interface CapabilityRun {
   aired: boolean;
+  queued: boolean;
+  deferred: boolean;
   text: string | null;
   reason: string | null;
 }
@@ -666,7 +676,12 @@ export interface CapabilityRun {
 // Throws on an unknown/unready capability, or on empty output from a skill with
 // no grounds to stand down. Returns `{ aired: false, reason }` when a grounded
 // skill's data came back unusable (#1412, skills/abstain-policy.ts).
-export async function runCapability(which, ctx, { brief = null, persona = null }: { brief?: string | null; persona?: { id?: string; name?: string; skills?: string[]; tts?: unknown } | null } = {}): Promise<CapabilityRun> {
+export async function runCapability(
+  which,
+  ctx,
+  { brief = null, persona = null, pauseTalkEligible = true }:
+    { brief?: string | null; persona?: { id?: string; name?: string; skills?: string[]; tts?: unknown } | null; pauseTalkEligible?: boolean } = {},
+): Promise<CapabilityRun> {
   const cap = allCapabilities().find(c => c.kind === which || c.skill === which);
   if (!cap) throw new Error(`unknown skill: ${which}`);
   if (cap.ready && !cap.ready()) {
@@ -690,7 +705,7 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
     if (!host || !guests.length) {
       const reason = 'requires a co-hosted show';
       queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
-      return { aired: false, text: null, reason };
+      return { aired: false, queued: false, deferred: false, text: null, reason };
     }
     const situation = buildCohostedSituation(ctx, cap, { forced: true, brief });
     const result = await runCohostedCapability({
@@ -699,7 +714,7 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
     if (!result.aired || !result.lines) {
       const reason = result.reason || 'nothing usable to discuss';
       queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
-      return { aired: false, text: null, reason };
+      return { aired: false, queued: false, deferred: false, text: null, reason };
     }
     const aired = await queue.announceExchange(result.lines, cap.kind);
     if (!aired) throw new Error(`skill "${cap.skill}" co-hosted exchange failed to render`);
@@ -708,7 +723,7 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
     if (cap.kind === 'weather' && ctx.weather?.condition) segmentState.lastWeatherCondition = ctx.weather.condition;
     if (cap.kind === 'curiosity') recordCuriosity(result.lines.map((line) => line.text).join(' '), { aired: true });
     const text = result.lines.map((line) => `${line.persona.name || 'DJ'}: ${line.text}`).join('\n');
-    return { aired: true, text, reason: result.reason };
+    return { aired: true, queued: true, deferred: false, text, reason: result.reason };
   }
 
   const speaker = persona || settings.getEffectivePersona(new Date());
@@ -725,7 +740,7 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
   // wording whichever forced caller fired the skill.
   const standDown = (reason: string): CapabilityRun => {
     queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
-    return { aired: false, text: null, reason };
+    return { aired: false, queued: false, deferred: false, text: null, reason };
   };
 
   let object: { reason?: string; air?: boolean; text?: string; sfx?: string | null } | undefined;
@@ -779,33 +794,50 @@ export async function runCapability(which, ctx, { brief = null, persona = null }
     throw new Error(`skill "${cap.skill}" produced no text`);
   }
 
-  // Update cooldown/dedup memory so the next autonomous tick doesn't repeat
-  // what the operator just fired.
+  let selectedSfx: string | null = null;
+  const pick = object?.sfx;
+  if (pick) {
+    if (sfxCatalog.some(s => s.name === pick)) selectedSfx = pick;
+    else queue.log('error', `Segment agent picked unknown sfx "${pick}" — dropping`);
+  }
+
+  // A rotated speaker rides through announce so voice and session attribution
+  // agree (windowMessages names foreign speakers by meta id).
+  const delivery = await queue.announce(text, cap.kind, persona
+    ? {
+        persona: speaker,
+        meta: { personaId: speaker?.id, personaName: speaker?.name },
+        pauseTalkEligible,
+        sfx: selectedSfx,
+      }
+    : { pauseTalkEligible, sfx: selectedSfx });
+  if (!delivery.accepted) {
+    const reason = 'the station could not queue the rendered segment';
+    queue.log('scheduler', `[skills] "${cap.kind}" stood down — ${reason}`);
+    return { aired: false, queued: false, deferred: false, text: null, reason };
+  }
+
+  // Reserve the capability once it has an air path; the durable ledger below
+  // waits for actual post-air completion.
   lastFired.set(cap.kind, Date.now());
   segmentState.lastAnySegment = Date.now();
   if (cap.kind === 'weather' && ctx.weather?.condition) {
     segmentState.lastWeatherCondition = ctx.weather.condition;
   }
 
-  // A rotated speaker rides through announce so voice and session attribution
-  // agree (windowMessages names foreign speakers by meta id).
-  await queue.announce(text, cap.kind, persona
-    ? { persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name } }
-    : {});
-
   // Record an operator-fired curiosity line in the ledger too (#577).
-  if (cap.kind === 'curiosity') recordCuriosity(text, { aired: true });
-
-  // Only honour an sfx name the agent was offered.
-  const pick = object?.sfx;
-  if (pick) {
-    if (sfxCatalog.some(s => s.name === pick)) {
-      await queue.playSfx(pick, { underVoice: true });
-    } else {
-      queue.log('error', `Segment agent picked unknown sfx "${pick}" — dropping`);
-    }
+  if (cap.kind === 'curiosity') {
+    void delivery.completed.then(aired => {
+      if (aired) recordCuriosity(text, { aired: true });
+    });
   }
-  return { aired: true, text, reason: object?.reason?.trim() || null };
+  return {
+    aired: !delivery.deferred,
+    queued: true,
+    deferred: delivery.deferred,
+    text,
+    reason: object?.reason?.trim() || null,
+  };
 }
 
 // Skill metadata for the admin command-center UI.

@@ -22,8 +22,8 @@ behaves exactly as it did before (bpm/key/intro only) — never a hard failure.
 
 This deliberately lives OUTSIDE the controller image — librosa pulls in
 numba/scipy/soundfile, which the controller must stay lean of. It runs in the
-tts-heavy sidecar's analyzer venv, or in a standalone offline venv on the
-operator's machine. Audio is fetched from the Subsonic stream URL (auth baked
+analyzer sidecar (and the AIO's in-process venv), or in a standalone offline
+venv on the operator's machine. Audio is fetched from the Subsonic stream URL (auth baked
 into the query string) to a temp file, then only the first ANALYZE_SECONDS are
 decoded — enough for tempo/key and the intro estimate, a fraction of the bytes.
 (The CLAP embedding additionally decodes a mid-song and a late window from the

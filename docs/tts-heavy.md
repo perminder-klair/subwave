@@ -607,15 +607,15 @@ contributors on a dev machine; production should use a sidecar.
    a default service, so a plain `docker compose up -d` should start it — if
    nothing lists, it was stopped or scaled out. Bring it back with
    `docker compose up -d analyzer`. (On the AIO there's no separate container —
-   analysis runs in-process; skip to step 3.) If you only run the `tts-heavy`
-   sidecar for its analysis, check `docker ps --filter name=tts-heavy` instead.
+   analysis runs in-process; confirm `ANALYZE_PYTHON` is configured rather than
+   looking for a sidecar.)
 2. **Is it reachable?** `docker exec sub-wave-controller wget -qO- http://analyzer:8080/health`
-   (or `http://tts-heavy:8080/health`). No answer → check the logs:
-   `docker logs sub-wave-analyzer`.
+   No answer → check the logs: `docker logs sub-wave-analyzer`. If the analyzer
+   is hosted elsewhere, run the same `/health` check against `ANALYZE_URL`.
 3. **Did the model still warm up?** The first *sounds-like/vocals* run downloads
    CLAP/Demucs weights into the analyzer's HF cache; the `/health` probe may
    report not-ready for a minute or two on a cold start. Give it time, then
-   re-check the admin panel — the probe re-runs every ~30s, so it flips to
+   re-check the admin panel — the probe re-runs about once a minute, so it flips to
    available on its own. (Plain bpm/key/loudness needs no download.)
    If it never warms up, the download itself is the usual reason — see
    [the heavy image needs to reach huggingface.co once](#the-heavy-image-needs-to-reach-huggingfaceco-once).

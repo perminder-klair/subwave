@@ -398,6 +398,15 @@ export function ShowEditor({
           <Field>
             <SwitchField
               control={control}
+              name={path('pauseTalk')}
+              label="Pause-and-talk breaks"
+              description="Long skill segments pause the music at a track boundary and speak in the clear. Shorter clips still duck normally; choose the length threshold in Station voice settings."
+            />
+          </Field>
+
+          <Field>
+            <SwitchField
+              control={control}
               name={path('programme')}
               label="Programme (produced episode)"
               description="The DJ produces each airing as a full episode from the topic brief: an intro up top, a planned feature mid-hour, and a sign-off in the closing minutes. Fresh angle every episode."

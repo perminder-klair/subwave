@@ -31,7 +31,7 @@ test('an absent var is the default, silently', () => {
   assert.equal(envIssues().length, before, 'not setting a var is not a mistake');
 });
 
-test('an EMPTY var means absent, not empty — `ANALYZE_URL=` is ordinary', () => {
+test('an EMPTY var means absent, not empty — `ANALYZE_PYTHON=` is ordinary', () => {
   const before = envIssues().length;
   assert.equal(envUrl(withEnv(''), ''), '');
   assert.equal(envInt(withEnv('   '), 10), 10);

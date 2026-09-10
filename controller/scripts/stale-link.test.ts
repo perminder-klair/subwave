@@ -17,7 +17,7 @@
 // node:assert-via-tsx style, matching scripts/request-dedup.test.ts.
 
 import assert from 'node:assert/strict';
-import { shouldDropStaleLink } from '../src/broadcast/queue.js';
+import { shouldDropCrossSessionLink, shouldDropStaleLink } from '../src/broadcast/queue.js';
 
 const X = { id: 'song-X', title: 'Track Xenon', artist: 'Artist X' };
 const R = { id: 'song-R', title: 'Request Rondo', artist: 'Artist R' };
@@ -95,6 +95,37 @@ function main() {
       shouldDropStaleLink({ linkPrev: shortPrev, introScript: 'OK everyone, here we go' }, R),
       false,
     );
+  });
+
+  console.log('\ncross-show link safety-net (shouldDropCrossSessionLink):');
+
+  test('a Carol link held across a Carol → Dante show change is dropped', () => {
+    assert.equal(
+      shouldDropCrossSessionLink({ introKind: 'link', introSessionKey: 'show:bedtime' }, 'show:dante'),
+      true,
+    );
+  });
+
+  test('a Lucy link is also dropped between her adjacent Dawn Chorus and Get up and Go! shows', () => {
+    assert.equal(
+      shouldDropCrossSessionLink({ introKind: 'link', introSessionKey: 'show:dawn-chorus' }, 'show:get-up-and-go'),
+      true,
+    );
+  });
+
+  test('a link remains eligible within its originating show session', () => {
+    assert.equal(
+      shouldDropCrossSessionLink({ introKind: 'link', introSessionKey: 'show:dawn-chorus' }, 'show:dawn-chorus'),
+      false,
+    );
+  });
+
+  test('request acknowledgements and legacy links without a session stamp are unaffected', () => {
+    assert.equal(
+      shouldDropCrossSessionLink({ introKind: 'dj-speak', introSessionKey: 'show:bedtime' }, 'show:dante'),
+      false,
+    );
+    assert.equal(shouldDropCrossSessionLink({ introKind: 'link' }, 'show:dante'), false);
   });
 
   if (failures > 0) {

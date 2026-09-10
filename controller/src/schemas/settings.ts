@@ -1,40 +1,87 @@
-// Schemas for individual `POST /settings` patch keys (#1348). One schema per
-// top-level key, never one over the whole settings object: the body is a
-// partial patch and `z.object` would strip whatever a form learns to send next.
+// Shared schemas for individual `POST /settings` patch keys — the first slice
+// of the mega-endpoint conversion (#1348, split out of #1337).
 //
-// Each helper reproduces its hand-rolled branch's coercion exactly. Tightening
-// one is a behaviour change and belongs in its own PR.
+// HARD RULE: this file may import ONLY from 'zod'. It is copied verbatim into
+// the web bundle, so a project import or a node builtin here breaks the mirror.
+// Enforced by controller/eslint.config.mjs and by gen-schemas.ts.
 //
-// Bounds live here, not in defaults.ts's BOUNDS, so the browser pre-flight
-// reads the same numbers; BOUNDS re-exports them.
+// WHY A KEY AT A TIME, AND NOT ONE SCHEMA FOR THE SETTINGS OBJECT
+// ---------------------------------------------------------------
+// The `/settings` body is a partial PATCH: every admin panel posts only the keys
+// it owns. `z.object` strips unknown keys, so a schema over the whole settings
+// object would silently delete whatever a form learns to send next. Instead each
+// top-level key owns its own schema here and patch-registry.ts runs only the
+// keys a patch actually carries, keeping the stripping scoped to blocks whose
+// shape is fully known.
+//
+// FIDELITY IS THE POINT
+// ---------------------
+// No conversion may introduce a silent repair where the operator previously got
+// a refusal, or vice versa (#1337's rule). The hand-rolled branches these
+// replace carry a lot of ACCIDENTAL leniency, and reproducing it is most of the
+// work:
+//
+//   * `parseInt`/`parseFloat` stringify first, so '5' and even '5abc' parse, and
+//     a float on an int key TRUNCATES rather than failing (jingleRatio: 5.7
+//     saves as 5). `z.number().int()` refuses all three — hence
+//     settingsIntLike / settingsFloatLike.
+//   * `!!value` accepts anything, so `enabled: 1` is `true`. See settingsBoolLike.
+//   * `patch.beds || {}` makes a non-object block a silent no-op, not an error.
+//     See settingsBlockOf.
+//
+// Tightening any of these is defensible — webhooks did exactly that — but it is
+// a behaviour change and belongs in a PR that says so, so the frame itself can't
+// be what hides a regression.
+//
+// The bounds live HERE rather than in defaults.ts's BOUNDS because a mirrored
+// module may not import a non-mirrored one and the browser needs the same
+// numbers to pre-flight the form; BOUNDS re-exports them. The web side must read
+// from the mirror rather than hand-copying — which is what BedsSection did with
+// a bare `60` and `15`.
 import { z } from 'zod';
 
-// Every top-level name in schemas/*.ts shares ONE scope in the flat mirror,
-// hence the SETTINGS_/settings prefixes.
+// Every top-level name in schemas/*.ts shares ONE scope in the flat mirror
+// (module-private ones included), hence the SETTINGS_/settings prefixes.
 export interface SettingsNumericBound {
   min: number;
   max: number;
 }
 
-// 0 = jingles off entirely; radio.liq skips the rotate on a 0 ratio file (#997).
+// 0 = jingles off entirely — radio.liq skips the jingle rotate when the ratio
+// file reads 0 (issue #997).
 export const JINGLE_RATIO_BOUNDS: SettingsNumericBound = { min: 0, max: 1000 };
 
-// 0 = bed every link whose incoming vocal onset is unknown.
+// 0 = bed every link whose incoming vocal onset is unknown. The ceiling is
+// deliberately low: past ~60s the DJ has outlasted any script the generators
+// produce, so a higher value is indistinguishable from beds being off.
 export const BEDS_THRESHOLD_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 60 };
 
-// The bed's ramp into the next song; bed-policy clamps it against the bed length too.
+// The bed's ramp into the next song. bed-policy clamps this against the bed's
+// own length too, so a long ramp on a short link can't invert the arithmetic.
 export const BEDS_CROSS_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
 export const BEDS_TAIL_SEC_BOUNDS: SettingsNumericBound = { min: 0, max: 15 };
 
-// Dead-air trim: smallest edge gap worth cutting. The floor keeps the feature
-// off deliberate silence (a segued album leaves a beat between tracks).
+// Dead-air trim: the smallest edge gap worth cutting. The FLOOR is what keeps
+// the feature from eating deliberate silence — a segued album leaves a beat
+// between tracks on purpose, and a mastering blank worth a cue point is
+// measured in seconds, not frames. The ceiling bounds the same mistake from
+// the other side: past 30s an operator is describing a different problem
+// (a corrupt rip) than the one a cue point solves.
 export const SILENCE_TRIM_MIN_GAP_MS_BOUNDS: SettingsNumericBound = { min: 250, max: 30000 };
 
 /**
- * `parseInt(raw, 10)` + bounds: accepts string forms and TRUNCATES a float
- * rather than refusing it. Not `z.coerce.number().int()`, which refuses both.
- * `message` is the flat `error` string the operator sees, so it names its own
- * field; patch-registry.ts supplies the dotted path for `fieldErrors`.
+ * `parseInt(raw, 10)` + a bounds check, exactly as the hand-rolled branch did.
+ *
+ * The parse is deliberately NOT `z.coerce.number().int()`. parseInt stringifies
+ * its argument and reads a LEADING integer, so it accepts the string forms an
+ * older admin build still posts and truncates a float instead of refusing it.
+ * Swapping in a strict numeric schema turns three silent repairs into refusals
+ * at once, which is the failure #1337 rules out.
+ *
+ * `message` names its own field because it is also the flat `error` string the
+ * operator's toast shows, and those strings are unchanged from the branches
+ * this replaces. patch-registry.ts is what supplies the dotted path for
+ * `fieldErrors`, so the location is never lost.
  */
 export function settingsIntLike(bounds: SettingsNumericBound, message: string) {
   return z
@@ -48,7 +95,7 @@ export function settingsIntLike(bounds: SettingsNumericBound, message: string) {
     .transform((raw) => parseInt(raw as string, 10));
 }
 
-/** `parseFloat(raw)` + bounds. Same posture as settingsIntLike. */
+/** `parseFloat(raw)` + a bounds check. Same rationale as settingsIntLike. */
 export function settingsFloatLike(bounds: SettingsNumericBound, message: string) {
   return z
     .unknown()
@@ -62,19 +109,28 @@ export function settingsFloatLike(bounds: SettingsNumericBound, message: string)
 }
 
 /**
- * `!!value` — accepts anything. Not `z.boolean()`: backup restore posts a whole
- * settings.json through update(), and a truthy non-boolean that saves today
- * would start failing the entire restore.
+ * `!!value` — accepts anything, like the branches this replaces.
+ *
+ * Not `z.boolean()`. These keys are reached by backup restore, which posts a
+ * whole (possibly hand-edited) settings.json straight to update(); a truthy
+ * non-boolean that saves today would begin failing the entire restore.
  */
 export function settingsBoolLike() {
   return z.unknown().transform((v) => !!v);
 }
 
 /**
- * A settings BLOCK — `{ enabled?, … }` — with the branches' leniency: a
- * non-object block is an empty patch rather than an error, an explicitly
- * undefined field is absent, and unknown fields inside are DROPPED (only the
- * top-level key inventory rejects unknowns, so a newer backup still restores).
+ * A settings BLOCK — `{ enabled?, … }` — with the branches' own leniency:
+ *
+ *  - a non-object (or null) block is an empty patch, not an error, because
+ *    `patch.beds || {}` followed by `bd.x !== undefined` no-ops on anything
+ *    that isn't an object;
+ *  - an explicitly-undefined field is absent, matching `!== undefined`;
+ *  - unknown fields inside the block are dropped rather than refused. Only the
+ *    TOP-level key inventory rejects unknowns (see patch-registry.ts), and for
+ *    the same reason it is a route-only posture: a backup written by a newer
+ *    version carries block fields this one has never heard of, and restore must
+ *    not die on them.
  */
 export function settingsBlockOf<T extends z.ZodRawShape>(shape: T) {
   return z.preprocess((raw) => {
@@ -88,9 +144,14 @@ export function settingsBlockOf<T extends z.ZodRawShape>(shape: T) {
 }
 
 /**
- * `Number(raw)` + bounds, no rounding. Opposite of the parseInt family on both
- * counts: '10abc' is NaN (refused) while ''/null/[] are 0 (accepted). Not
- * interchangeable with settingsIntLike.
+ * `Number(raw)` + a bounds check, with NO rounding.
+ *
+ * A THIRD numeric family, and the distinction is load-bearing. `Number('10abc')`
+ * is NaN where `parseInt('10abc')` is 10, and `Number('')`/`Number(null)`/
+ * `Number([])` are 0 where parseInt gives NaN. Branches using `Number()` refuse
+ * junk strings and accept empty-ish values as zero — the exact opposite of the
+ * parseInt family on both counts. Reusing settingsIntLike here would silently
+ * start accepting '10abc' and start refusing null.
  */
 export function settingsNumberLike(bounds: SettingsNumericBound, message: string) {
   return z
@@ -118,9 +179,13 @@ export function settingsNumberFloorLike(bounds: SettingsNumericBound, message: s
 }
 
 /**
- * `Math.round(Number(raw))` + bounds, checked on the ROUNDED value, so a value
- * can cross a bound in either direction: with [1, 25], 0.6 is accepted and 0.4
- * refused; 25.4 accepted, 25.5 refused. likes.maxTracks / likes.windowDays.
+ * `Math.round(Number(raw))` + bounds, checked on the ROUNDED value.
+ *
+ * The rounding happens BEFORE the bounds test, so it can carry a value across
+ * a bound in both directions: with [1, 25], `0.6` rounds to 1 and is accepted
+ * while `0.4` rounds to 0 and is refused; `25.4` is accepted and `25.5` is
+ * refused. A `z.number().int().min(1).max(25)` refuses all four. Preserved
+ * deliberately — this is likes.maxTracks / likes.windowDays.
  */
 export function settingsNumberRoundLike(bounds: SettingsNumericBound, message: string) {
   return z
@@ -135,8 +200,11 @@ export function settingsNumberRoundLike(bounds: SettingsNumericBound, message: s
 }
 
 /**
- * `Number(raw)` bounds-checked BEFORE rounding, then rounded. stream.bufferSeconds
- * only: 59.6 passes `<= 60` and stores as 60, while 60.4 is refused.
+ * `Number(raw)` bounds-checked BEFORE rounding, then rounded.
+ *
+ * stream.bufferSeconds only, and the order is the whole point: `59.6` passes
+ * the `<= 60` test and stores as 60, while `60.4` fails it. Checking after the
+ * round would accept 60.4; checking without rounding would store the fraction.
  */
 export function settingsNumberPreRoundLike(bounds: SettingsNumericBound, message: string) {
   return z
@@ -165,7 +233,10 @@ export function settingsIntOneOf(allowed: readonly number[], message: string) {
 
 /**
  * Membership tested on the RAW value — no String(), no trim, no case folding.
- * Not `z.enum`: the registry carries these messages verbatim to the operator.
+ *
+ * Deliberately not `z.enum`: zod's built-in message names the constraint in its
+ * own words ('Invalid option: expected one of …'), and the registry carries the
+ * message verbatim to the operator. These strings must not change.
  */
 export function settingsStrictOneOf<T>(allowed: readonly T[], message: string) {
   return z
@@ -177,8 +248,11 @@ export function settingsStrictOneOf<T>(allowed: readonly T[], message: string) {
 }
 
 /**
- * `String(raw ?? '').trim()` + max length measured after the trim. The `?? ''`
- * makes null CLEAR the field; settingsRawStringLike is the other posture.
+ * `String(raw ?? '').trim()` + a maximum length, measured AFTER the trim.
+ *
+ * Note `?? ''`: null becomes the empty string (clearing the field), NOT the
+ * literal 'null'. Which of those a branch does varies by key and both are
+ * reproduced — see settingsRawStringLike for the other posture.
  */
 export function settingsTrimmedString(max: number, message: string) {
   return z
@@ -190,8 +264,11 @@ export function settingsTrimmedString(max: number, message: string) {
 }
 
 /**
- * `String(raw)` with NO trim and NO nullish default — search.apiKey's posture,
- * so `null` is stored as the literal string 'null'. Shipping behaviour.
+ * `String(raw)` with NO trim and NO nullish default — search.apiKey's posture.
+ *
+ * `null` becomes the four-character string 'null' and is STORED. That is not a
+ * good design, but it is the shipping one, and a secret field is the last place
+ * to change storage behaviour by accident.
  */
 export function settingsRawStringLike(max: number, message: string) {
   return z
@@ -202,15 +279,34 @@ export function settingsRawStringLike(max: number, message: string) {
     .transform((raw) => String(raw));
 }
 
-// The header-name grammar `stream.countryHeader` accepts: RFC 7230 token chars,
-// capped at 64. `broadcast/listener-country.ts` imports it, so the save path,
-// the browser pre-flight and the read path share one declaration.
+/**
+ * The header-name grammar `stream.countryHeader` accepts.
+ *
+ * RFC 7230 token characters minus the separators nobody puts in a proxy header,
+ * capped at 64. It lives HERE rather than beside the resolver because a
+ * mirrored module may import only `zod`, so the schema cannot import the
+ * constant — the resolver (`broadcast/listener-country.ts`) imports it from
+ * this file instead, keeping one declaration for the save path, the browser
+ * pre-flight and the read path alike.
+ */
 export const STREAM_COUNTRY_HEADER_RE = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
 
-// `llm.headers` / `llm.fallback.headers` (#1618). Name is the same RFC 7230
-// token, so it's an alias rather than a second copy. Values are printable ASCII
-// on one line: a CR/LF is header injection, so it is REFUSED, never repaired.
-// `applyLlmLegPatch` and `normalizeLlmHeaders` both import these.
+/**
+ * `llm.headers` / `llm.fallback.headers` — extra request headers the
+ * openai-compatible transport sends on every call (#1618).
+ *
+ * The NAME grammar is `STREAM_COUNTRY_HEADER_RE`, not a second copy of it:
+ * both fields are naming an HTTP header and the rule is the same RFC 7230
+ * token, so this is an alias for the same reason `settings/vocab.ts`'s `ID_RE`
+ * aliases `SHOW_ID_RE`. The VALUE grammar is printable ASCII on one line — a
+ * header value is latin-1 on the wire, and a CR/LF in one is header injection
+ * rather than a typo, so it is REFUSED rather than repaired.
+ *
+ * They live here for the same reason the country header's rule does: the admin
+ * form runs the mirrored copy so a bad header name is caught before the save,
+ * and the save path (`applyLlmLegPatch`) and the lenient load path
+ * (`normalizeLlmHeaders`) import them rather than each restating the rule.
+ */
 export const LLM_HEADER_NAME_RE = STREAM_COUNTRY_HEADER_RE;
 export const LLM_HEADER_VALUE_RE = /^[\x20-\x7E]+$/;
 
@@ -222,9 +318,11 @@ export const LLM_HEADER_VALUE_MAX = 500;
 export const STREAM_GEOIP_DB_PATH_MAX = 512;
 
 /**
- * `String(raw ?? '').trim()` + the header-name grammar. Empty means "don't read
- * a second header" and is accepted; anything else is matched or REFUSED, never
- * repaired into a header the operator did not name.
+ * `String(raw ?? '').trim()` + the header-name grammar, empty allowed.
+ *
+ * Empty is the default and means "don't read a second header", so it must stay
+ * accepted; anything else either matches the grammar or is REFUSED, because a
+ * repaired header name would silently read a header the operator never named.
  */
 export function settingsHeaderNameLike(message: string) {
   return z
@@ -238,8 +336,10 @@ export function settingsHeaderNameLike(message: string) {
 
 /**
  * A URL field: trim, length, then an http(s) scheme test on a non-empty value.
- * `stripTrailingSlashes` is per-field: embedding's URLs strip, search.baseUrl
- * and scrobble.listenbrainz.baseUrl keep theirs (those consumers append a path).
+ *
+ * `stripTrailingSlashes` is per-field and must be set from the branch being
+ * replaced — embedding's URLs strip them, search.baseUrl and
+ * scrobble.listenbrainz.baseUrl keep theirs (that consumer appends a path).
  */
 export function settingsUrlLike(opts: {
   max: number;
@@ -265,14 +365,17 @@ export function settingsUrlLike(opts: {
     });
 }
 
-// Vocabularies for the converted keys, re-exported by settings/vocab.ts and
-// settings/defaults.ts rather than duplicated.
+// --- vocabularies the converted keys need ----------------------------------
+// Re-exported by settings/vocab.ts and settings/defaults.ts rather than
+// duplicated: a mirrored module may not import a non-mirrored one, so whichever
+// feature converts first owns the constant.
 
-// Allowed MP3 bitrates, shared by the hourly archive and the live /stream.mp3
-// mount. %mp3(bitrate=…) needs a parse-time int, so radio.liq pre-bakes one
-// encoder branch per value: adding a value here needs a branch there.
+// Allowed MP3 bitrates — shared by the hourly archive and the live /stream.mp3
+// mount. Matches the literal branches in radio.liq — %mp3(bitrate=…) needs a
+// parse-time int, so the encoder is pre-baked for this small set. Add a branch
+// in radio.liq if you add a value here.
 export const SETTINGS_MP3_BITRATES = [64, 96, 128, 160, 192, 320] as const;
-// Opus + AAC encoders share the same parse-time-literal constraint.
+// Opus + AAC encoders share the same parse-time-literal constraint as %mp3.
 export const SETTINGS_OPUS_BITRATES = [96, 128, 192, 256, 320] as const;
 export const SETTINGS_AAC_BITRATES = [128, 192, 256] as const;
 
@@ -285,52 +388,93 @@ export const SETTINGS_LOUDNESS_SOURCES = [
 
 export const SETTINGS_SEARCH_PROVIDERS = ['duckduckgo', 'tavily', 'brave', 'searxng'] as const;
 
-// Cap for the optional SearXNG `engines=` pin (a comma-separated name list).
+/**
+ * Cap for the optional SearXNG `engines=` pin. Generous on purpose — the value
+ * is a comma-separated list of SearXNG `name:` fields, so a dozen engines with
+ * multi-word names still fits well inside it.
+ */
 export const SETTINGS_SEARXNG_ENGINES_MAX = 500;
 
 export const CROSSFADE_DURATION_BOUNDS: SettingsNumericBound = { min: 0, max: 30 };
 
-// `smooth_add`'s `p`: the fraction of the music LEFT UP under a voice channel,
-// so SMALLER is a deeper duck. 1 is no duck, 0 is a full mute under the voice.
-// Shared by both ducking layers — the same knob at two depths.
+// `smooth_add`'s `p` — the fraction of the music the mixer LEAVES UP while a
+// voice channel has signal, so it reads backwards from a dB cut: SMALLER is a
+// deeper duck. 1 is no duck at all (the DJ competes with the song) and 0 is a
+// full mute under the voice, which is a legitimate operator taste and is NOT
+// the music-paused interlude — the music keeps rolling underneath, silenced.
+// Shared by both layers because they are the same knob at two depths.
 export const DUCK_DEPTH_BOUNDS: SettingsNumericBound = { min: 0, max: 1 };
 
-// Station-clock minutes before a show boundary at which the outgoing host signs
-// off (`handover.offsetMinutes`). Must be a multiple of
-// HANDOVER_OFFSET_STEP_MINUTES or the programme row never samples the window
-// and the outro silently never airs. Max 20 keeps it clear of the :35-:39
-// feature beat.
+// How long BEFORE a show boundary the outgoing host signs off — the programme
+// outro beat's placement, in station-clock minutes (`handover.offsetMinutes`).
+//
+// The step is not decoration. The outro is a window on the STATION clock that
+// the talk table's programme row samples on a fixed PROCESS stride (see
+// HANDOVER_OFFSET_STEP_MINUTES); the row gets exactly one sample inside a
+// window only while that window is as wide as the stride and opens on a
+// multiple of it. An offset the stride cannot land on is an outro that never
+// airs at all, so the constraint is enforced at the save path rather than left
+// to be discovered on air.
+//
+// The maximum keeps the moved window clear of the feature beat at :35–:39: at
+// 20 the outro opens at :40, and anything larger would have the show sign off
+// on top of its own feature.
 export const HANDOVER_OFFSET_BOUNDS: SettingsNumericBound = { min: 5, max: 20 };
 
 // The process-minute stride the talk table's programme row samples the station
-// clock on, so also the width and alignment of every station-clock beat window.
-// broadcast/talk-scheduler.ts imports it as the row's `stride`; it lives beside
-// the bound it constrains so the two cannot drift. 5 works for every IANA zone
-// (offsets are multiples of 15, so process and station minutes agree mod 5).
+// clock on, and therefore the width and alignment every station-clock beat
+// window must have. Lives here — with the bound it constrains — rather than as
+// a literal in the table, so the row and the operator's offset cannot drift
+// apart: broadcast/talk-scheduler.ts imports it as the row's `stride`.
+//
+// 5 works for every real IANA zone because every offset is a multiple of 15
+// minutes, so process and station minutes always agree modulo 5.
 export const HANDOVER_OFFSET_STEP_MINUTES = 5;
 // −23 (EBU R128 broadcast) … −9 (very loud); −14 is the streaming standard.
 export const LOUDNESS_TARGET_LUFS_BOUNDS: SettingsNumericBound = { min: -23, max: -9 };
-// 0 disables boosting entirely (cut-only levelling).
+// 0 disables boosting entirely (cut-only levelling); 12 dB is plenty.
 export const LOUDNESS_MAX_BOOST_DB_BOUNDS: SettingsNumericBound = { min: 0, max: 12 };
-// 0 disables burst-on-connect. settings.load() bounds the stored value against
-// these same figures, so keep it reading from here rather than hand-copying.
+// 0 disables burst-on-connect; past 60 a listener is a full minute behind the
+// live edge and <queue-size> (which must exceed the burst) gets unreasonable.
+// Named rather than inline because settings.load() bounds the stored value
+// against the SAME figures — a hand-copied pair there is how the save path and
+// the load path drift.
 export const STREAM_BUFFER_SECONDS_BOUNDS: SettingsNumericBound = { min: 0, max: 60 };
 
-// Icecast's <limits><clients> ceiling. Floor is 1: 0 renders a station nobody
-// can tune into. First-class setting because some licensing bodies charge on
-// simultaneous listener capacity (#1300 FR 15).
+// Icecast's <limits><clients> ceiling. 1 is the floor because 0 would render a
+// station nobody can tune into; 10000 is far past what one homelab box serves
+// and exists only to keep a typo out of the config. Licensing bodies in some
+// countries calculate fees on simultaneous listener capacity, which is why this
+// is a first-class setting rather than a convenience (#1300 FR 15).
 export const STREAM_MAX_LISTENERS_BOUNDS: SettingsNumericBound = { min: 1, max: 10000 };
 
-// Album cooldown in HOURS (#1485 FR 3). 0 = off and is the shipped default, so
-// an upgrade picks byte-identically. Fractional hours are allowed; past 72 this
-// is a second no-repeat window rather than a cooldown.
+// Falling back to the product default is what an emptied station name does —
+// see stationSchema.
+// Album cooldown, in HOURS: how long after a track from a record airs before
+// another track from that same record may be picked (#1485 FR 3). 0 = off, and
+// off is the shipped default — the artist window already spaces everything an
+// album window below it would catch, so a non-zero default would be a
+// behaviour change on upgrade rather than a setting.
+//
+// Fractional hours are allowed (0.5 is a real answer on a small library) and
+// the ceiling is 72: past three days this stops being a cooldown and becomes a
+// second no-repeat window, which is what llm.noRepeatWindow is for, and on any
+// catalogue small enough to notice the difference it would just walk the
+// starvation cascade every pick.
 export const PICKER_ALBUM_HOURS_BOUNDS: SettingsNumericBound = { min: 0, max: 72 };
 
-// Station-wide minimum track length in SECONDS: shorter tracks are never PICKED
-// (#1573). 0 = off, the shipped default. NOT settings.minTrackSeconds(), which
-// is the crossfade-derived floor on the max-length CAP and is this key's own
-// lower bound (enforced in update(), where the crossfade is known). The ceiling
-// twins schemas/show.ts's SHOW_MIN_TRACK_LENGTH_MAX; move them together.
+// Station-wide minimum track length, in SECONDS: a track shorter than this is
+// never PICKED (#1573). 0 = off, and off is the shipped default so an upgrade
+// picks byte-identically.
+//
+// This is NOT settings.minTrackSeconds(), which is the crossfade-derived floor
+// on the max-track-length CAP. That figure is this key's own lower bound (a
+// positive value below it is refused in update(), where the crossfade is
+// known), which is why the two must not share a name.
+//
+// The ceiling twins schemas/show.ts's SHOW_MIN_TRACK_LENGTH_MAX, which bounds
+// the per-show override — a mirrored module may import only zod, so the two are
+// separate declarations of one number and must move together.
 export const PICKER_MIN_TRACK_LENGTH_BOUNDS: SettingsNumericBound = { min: 0, max: 3600 };
 
 export const SETTINGS_STATION_DEFAULT_NAME = 'SUB/WAVE';
@@ -338,12 +482,16 @@ export const SETTINGS_STATION_NAME_MAX = 80;
 export const SETTINGS_STATION_DESCRIPTION_MAX = 200;
 export const SETTINGS_DJ_HOUSE_RULES_MAX = 2000;
 
-// The skin slug is never checked against a registry: the web side resolves it
-// and falls back, so an unrecognised value is DROPPED here rather than refused.
+// The player skin is stored as a slug and never checked against a registry:
+// the WEB side resolves it and falls back on unknowns, so an unrecognised value
+// is DROPPED here rather than refused.
 export const SETTINGS_SKIN_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
-// Tracks between jingles. Needs a mixer restart, which update() decides — a
-// schema says what a value may BE, never what applying it costs.
+// --- the converted keys ----------------------------------------------------
+
+// How many tracks play between jingles. Needs a mixer restart, which update()
+// still decides — a schema says what a value may BE, never what applying it
+// costs.
 export const jingleRatioSchema = settingsIntLike(
   JINGLE_RATIO_BOUNDS,
   `jingleRatio must be int in [${JINGLE_RATIO_BOUNDS.min}, ${JINGLE_RATIO_BOUNDS.max}]`,
@@ -405,9 +553,10 @@ export const crossfadeDurationSchema = settingsFloatLike(
   `crossfadeDuration must be number in [${CROSSFADE_DURATION_BOUNDS.min}, ${CROSSFADE_DURATION_BOUNDS.max}]`,
 );
 
-// Both depths ride ONE block so the pair is posted together: they are read once
-// at mixer startup from two liquidsoap_duck_*.txt files, and a half-applied
-// pair leaves the light layer louder than the heavy one until the next save.
+// Both depths ride ONE block so the pair is edited and posted together — they
+// are read once at mixer startup out of two liquidsoap_duck_*.txt files, and a
+// half-applied pair would leave the light layer louder than the heavy one until
+// the next save.
 export const duckingPatchSchema = settingsBlockOf({
   voice: settingsFloatLike(
     DUCK_DEPTH_BOUNDS,
@@ -419,8 +568,9 @@ export const duckingPatchSchema = settingsBlockOf({
   ),
 });
 
-// Show handover timing (#1576). A block rather than a flat key so a second
-// timing knob lands beside this one.
+// Show handover timing (#1576). One field today, a block because the ordering
+// half of the handover is a placement rule with no dial — a second timing knob
+// belongs beside this one rather than as another flat top-level key.
 export const handoverOffsetMinutesSchema = settingsIntLike(
   HANDOVER_OFFSET_BOUNDS,
   `handover.offsetMinutes must be int in [${HANDOVER_OFFSET_BOUNDS.min}, ${HANDOVER_OFFSET_BOUNDS.max}]`,
@@ -433,9 +583,14 @@ export const handoverPatchSchema = settingsBlockOf({
   offsetMinutes: handoverOffsetMinutesSchema,
 });
 
-// Per-effect kill switches for the DJ transition kit (#1565). Nested rather
-// than flat beside pairDrain/stemBlends, which are drain SCHEDULING. Every
-// field is absent-means-on; settings/transition-effects.ts is the one resolver.
+// Per-effect kill switches for the DJ transition kit (#1565). A nested block
+// rather than six flat keys beside pairDrain/stemBlends: those two are drain
+// SCHEDULING, these are which gestures may air, and one operator turning off
+// the dissolve should not read as a sibling of the pair-drain kill switch.
+//
+// Every field is absent-means-on, so a station that has never written this
+// block keeps the whole kit — the resolver is settings/transition-effects.ts
+// and it is the only place that rule is stated.
 export const TRANSITION_EFFECTS = ['sweep', 'washout', 'blend', 'dissolve', 'chop', 'loop'] as const;
 export type TransitionEffect = (typeof TRANSITION_EFFECTS)[number];
 
@@ -449,8 +604,9 @@ const transitionEffectsPatchSchema = settingsBlockOf({
 });
 
 export const transitionsPatchSchema = settingsBlockOf({
-  // stemBlends needs pairDrain, but that is resolved at drain time in
-  // broadcast/drain-policy.ts and has never been a save-time refusal.
+  // stemBlends is documented as needing pairDrain, but that dependency is
+  // resolved at drain time in broadcast/drain-policy.ts and has never been a
+  // save-time refusal. Do not add one here.
   pairDrain: settingsBoolLike(),
   stemBlends: settingsBoolLike(),
   effects: transitionEffectsPatchSchema,
@@ -463,9 +619,10 @@ export const webhooksPolicyPatchSchema = settingsBlockOf({
 export const uiPatchSchema = settingsBlockOf({
   boothBuddy: settingsBoolLike(),
   tuneInOverlay: settingsBoolLike(),
-  // Silently DROPPED when it doesn't match, never refused. No `?? ''`, so
-  // String(null) is 'null' and String(7) is '7', both of which match the slug
-  // pattern and are stored today. undefined is how a field opts out.
+  // Silently DROPPED when it doesn't match, never refused — and note there is
+  // no `?? ''`, so String(null) is 'null' and String(7) is '7', both of which
+  // match the slug pattern and are stored today. Returning undefined is how a
+  // field opts out; the applier skips undefined.
   skin: z.unknown().transform((raw) => {
     const slug = String(raw).trim().toLowerCase();
     return SETTINGS_SKIN_RE.test(slug) ? slug : undefined;
@@ -493,21 +650,28 @@ export const archivePatchSchema = settingsBlockOf({
     SETTINGS_MP3_BITRATES,
     `archive.bitrate must be one of: ${SETTINGS_MP3_BITRATES.join(', ')}`,
   ),
-  // The dash in the message is an EN DASH (U+2013). Retyping it as a hyphen
-  // changes the operator's toast.
+  // The dash below is an EN DASH (U+2013), carried over verbatim from the
+  // branch this replaces. Retyping it as a hyphen changes the operator's toast.
   retentionDays: settingsIntLike(
     { min: 0, max: 3650 },
     'archive.retentionDays must be 0 (keep forever) or 1–3650 days',
   ),
 });
 
-// Scheduled, rotating backups (#1570). `off` MUST stay first: an upgraded
-// station has no `backups` block, reads as `off` and writes nothing. Cadences
-// are elapsed-time, not calendar (`monthly` is 30 days); an hourly tick applies
-// them, so a station up part of the day still gets its backup. See backup/pure.ts.
+// Scheduled, rotating backups (#1570). `off` is the default and MUST be first:
+// a station that upgrades and changes nothing has no `backups` block at all,
+// reads as `off`, and writes nothing — the absent-coerces-to-prior-behaviour
+// rule, which for a feature that DELETES files is the whole safety story.
+//
+// Cadences are elapsed-time, not calendar (`monthly` is 30 days); the tick that
+// applies them is hourly, so a station that is only up for part of the day
+// still gets its backup. See backup/pure.ts.
 export const SETTINGS_BACKUP_CADENCES = ['off', 'daily', 'weekly', 'monthly'] as const;
 
-// Named once so a cadence added here is a compile error everywhere it is not
+// The vocabulary and the block shape, named once. Every path that handles a
+// schedule — the normaliser, `update()`, the runner, the admin card's labels —
+// spells the same two names instead of restating `{ cadence: string; keep:
+// number }`, so a cadence added here is a compile error everywhere it is not
 // handled rather than a silent `?? id` fallback (#1585 review).
 export type BackupCadence = (typeof SETTINGS_BACKUP_CADENCES)[number];
 export interface ScheduledBackupSettings {
@@ -515,23 +679,35 @@ export interface ScheduledBackupSettings {
   keep: number;
 }
 
-// Keep-last-N. Floor is 1, not 0: a retention that could delete the backup the
-// run just wrote leaves nothing behind. Ceiling is disk sympathy.
+// Keep-last-N. The floor is 1, not 0: a retention that could delete the backup
+// the run just wrote is a schedule that runs forever and leaves nothing behind.
+// The ceiling is disk sympathy — a tag DB for a 30k-track library is >100 MB,
+// so 100 kept dailies is already a hundred gigabytes.
 export const BACKUP_KEEP_BOUNDS: SettingsNumericBound = { min: 1, max: 100 };
 
-// Shipped retention, and the answer every lenient path gives for an unreadable
-// `keep` — see clampBackupKeep.
+// The shipped retention, named rather than spelled `7` in three files. It is
+// also the answer every lenient path gives for a `keep` it cannot read — see
+// clampBackupKeep.
 export const BACKUP_KEEP_DEFAULT = 7;
 
 /**
- * The one lenient reading of `keep`, shared by settings.load()'s normaliser and
- * the retention sweep. An unreadable value falls to BACKUP_KEEP_DEFAULT, never
- * to the floor of 1, which is the most destructive answer available. The strict
- * path (`backupsPatchSchema`) refuses what this repairs.
+ * The one lenient reading of `keep`, shared by every path that repairs rather
+ * than refuses: `settings.load()`'s normaliser and the retention sweep itself.
+ *
+ * An unreadable value falls to BACKUP_KEEP_DEFAULT, never to the floor. The
+ * floor is 1 — "keep only the newest" — which is the most destructive answer
+ * available, and this is the only scheduled job in the station that deletes
+ * operator files. Two copies of this clamp disagreeing about that direction is
+ * exactly the drift the module boundary exists to stop, so there is one copy
+ * and it lives beside the bound it enforces.
+ *
+ * The strict path (`backupsPatchSchema`) still REFUSES what this repairs — the
+ * usual normalize-vs-validate split, neither restating the other's rule.
  */
 export function clampBackupKeep(raw: unknown): number {
-  // Absent and empty are NO answer, not zero: Number(null)/Number('') are both
-  // 0 and would clamp to the floor.
+  // Absent and empty are NO answer, not zero. `Number(null)` and `Number('')`
+  // are both 0, which would clamp to the floor of 1 — the most destructive
+  // reading available — for a settings block that simply has no `keep` in it.
   if (raw === null || raw === undefined || raw === '') return BACKUP_KEEP_DEFAULT;
   const n = Number(raw);
   if (!Number.isFinite(n)) return BACKUP_KEEP_DEFAULT;
@@ -543,8 +719,9 @@ export const backupsPatchSchema = settingsBlockOf({
     SETTINGS_BACKUP_CADENCES,
     `backups.cadence must be one of: ${SETTINGS_BACKUP_CADENCES.join(', ')}`,
   ),
-  // parseInt family, like archive.retentionDays: the admin number input posts a
-  // string on some paths, and a float is truncated rather than refused.
+  // parseInt-family, like archive.retentionDays next door: the admin number
+  // input posts a string on some paths and a float here is a typo worth
+  // truncating rather than a body worth refusing.
   keep: settingsIntLike(
     BACKUP_KEEP_BOUNDS,
     `backups.keep must be int in [${BACKUP_KEEP_BOUNDS.min}, ${BACKUP_KEEP_BOUNDS.max}]`,
@@ -569,8 +746,8 @@ export const streamPatchSchema = settingsBlockOf({
     SETTINGS_MP3_BITRATES,
     `stream.bitrate must be one of: ${SETTINGS_MP3_BITRATES.join(', ')}`,
   ),
-  // Number(), not parseInt: ''/null/[] are 0 (a legal "no burst") and '5abc' is
-  // refused. Bounds tested before the round.
+  // Number(), not parseInt — so '' / null / [] are 0 (a legal "no burst") and
+  // '5abc' is refused. Bounds tested before the round; see the helper.
   bufferSeconds: settingsNumberPreRoundLike(
     STREAM_BUFFER_SECONDS_BOUNDS,
     `stream.bufferSeconds must be a number between ${STREAM_BUFFER_SECONDS_BOUNDS.min} and ${STREAM_BUFFER_SECONDS_BOUNDS.max}`,
@@ -583,13 +760,17 @@ export const streamPatchSchema = settingsBlockOf({
     STREAM_MAX_LISTENERS_BOUNDS,
     `stream.maxListeners must be an integer between ${STREAM_MAX_LISTENERS_BOUNDS.min} and ${STREAM_MAX_LISTENERS_BOUNDS.max}`,
   ),
-  // A header NAME, not a country. Malformed is REFUSED, not dropped: the only
-  // other feedback is the Stats page staying blank a day later.
+  // A header NAME, not a country. Refused rather than dropped when malformed:
+  // this is typed by hand into a field whose only feedback is the Stats page
+  // staying blank a day later, so a silent drop is the operator watching their
+  // own input disappear — the same reasoning as the roster tag fields.
   countryHeader: settingsHeaderNameLike(
     'stream.countryHeader must be a header name (letters, digits and - _ . ~ ! # $ % & \' * + ^ ` |), or empty',
   ),
-  // Absolute path to an operator-supplied .mmdb. Not existence-checked: the
-  // bind mount may belong to another container, and the reader fails open.
+  // Absolute path to an operator-supplied MaxMind-format (.mmdb) database. Not
+  // existence-checked here: a settings save must not depend on a bind mount the
+  // broadcast container has and this process may not, and the reader already
+  // fails open with a log line naming the path it could not read.
   geoipDbPath: settingsTrimmedString(
     STREAM_GEOIP_DB_PATH_MAX,
     `stream.geoipDbPath must be ${STREAM_GEOIP_DB_PATH_MAX} characters or fewer`,
@@ -599,8 +780,8 @@ export const streamPatchSchema = settingsBlockOf({
 export const weatherPatchSchema = settingsBlockOf({
   lat: settingsFloatLike({ min: -90, max: 90 }, 'weather.lat out of range'),
   lng: settingsFloatLike({ min: -180, max: 180 }, 'weather.lng out of range'),
-  // Non-string or blank is IGNORED, not refused, so the weather label can never
-  // be blanked; over-80 truncates rather than failing.
+  // Non-string or blank is IGNORED, not refused — the weather label can never
+  // be blanked, and over-80 truncates rather than failing.
   locationName: z.unknown().transform((raw) => {
     if (typeof raw !== 'string' || !raw.trim()) return undefined;
     return raw.trim().slice(0, 80);
@@ -616,7 +797,8 @@ export const weatherPatchSchema = settingsBlockOf({
   ),
 });
 
-// Refuses over-length where load() truncates: the strict/lenient split.
+// Refuses over-length where load() truncates — the established strict/lenient
+// split, not an oversight.
 export const stationSchema = settingsTrimmedString(
   SETTINGS_STATION_NAME_MAX,
   `station name must be ${SETTINGS_STATION_NAME_MAX} chars or fewer`,
@@ -632,25 +814,67 @@ export const djHouseRulesSchema = settingsTrimmedString(
   `djHouseRules must be at most ${SETTINGS_DJ_HOUSE_RULES_MAX} chars`,
 );
 
-// The three switches below are strict `z.boolean()`, NOT settingsBoolLike():
-// only a PATCH is refused, since load() coerces a hand-edited settings.json to
-// the default. A show's own `fadeAtShowEnd` (schemas/show.ts) is the tri-state
-// that overrides the station default here.
+/**
+ * Deliberately NOT settingsBoolLike(): this key's branch has always been the
+ * strict `typeof !== 'boolean'` refusal, the same posture `requests`' booleans
+ * take, and loosening it to `!!value` here would be a behaviour change smuggled
+ * in with a conversion. A hand-edited settings.json is unaffected either way —
+ * load() coerces a non-boolean to the default, so only a PATCH is refused.
+ */
 export const djSpeakClockSchema = z.boolean({
   error: 'djSpeakClock must be a boolean',
 });
 
+/**
+ * Talk placement switch (FR 5b of #1485). Same strict posture as
+ * `djSpeakClockSchema` above and for the same reason: this key has never had a
+ * hand-rolled branch to inherit leniency from, so it starts strict rather than
+ * acquiring a coercion nobody asked for. load() still coerces a hand-edited
+ * settings.json to the default, so only a PATCH is refused.
+ */
 export const djTalkOnlyBetweenTracksSchema = z.boolean({
   error: 'djTalkOnlyBetweenTracks must be a boolean',
 });
 
+// The floor a rendered skill segment must clear before an opted-in show gives
+// it a real gap instead of a duck. settingsIntLike, like every other numeric
+// settings key: it accepts the admin form's string and truncates a float rather
+// than refusing either, and its message names the field in house style instead
+// of leaking zod's own wording.
+export const PAUSE_TALK_MIN_SECONDS_BOUNDS: SettingsNumericBound = { min: 5, max: 90 };
+export const pauseTalkMinSecondsSchema = settingsIntLike(
+  PAUSE_TALK_MIN_SECONDS_BOUNDS,
+  'pauseTalkMinSeconds must be a whole number of seconds between 5 and 90',
+);
+
+// DJ policy controls are grouped so future speaking/transition behaviour has
+// one stable home in Settings. A missing block remains the pre-existing off.
+export const djBehaviourPatchSchema = settingsBlockOf({
+  showWelcome: z.boolean({ error: 'djBehaviour.showWelcome must be a boolean' }),
+  sameHostAcknowledgement: z.boolean({ error: 'djBehaviour.sameHostAcknowledgement must be a boolean' }),
+  extendedSleeveNotes: z.boolean({ error: 'djBehaviour.extendedSleeveNotes must be a boolean' }),
+  releaseYearMentions: z.enum(['regular', 'occasional', 'rare'], {
+    error: 'djBehaviour.releaseYearMentions must be regular, occasional or rare',
+  }),
+});
+
+/**
+ * Station default for the show-boundary fade (#1574). Strict boolean, the same
+ * posture as the two switches above and for the same reason — the key is new,
+ * so there is no hand-rolled branch whose accidental leniency has to be
+ * preserved. A show's own `fadeAtShowEnd` (schemas/show.ts) is the tri-state
+ * that overrides it; this one is only ever true or false.
+ */
 export const fadeAtShowEndSchema = z.boolean({
   error: 'fadeAtShowEnd must be a boolean',
 });
 
 /**
- * Trim FIRST, then a strict pair: ' en-GB ' saves, 'en-gb' does not. Not
- * settingsStrictOneOf, which tests the raw value.
+ * Trim FIRST, then a strict pair — ' en-GB ' saves, 'en-gb' does not.
+ *
+ * Not settingsStrictOneOf: that tests the raw value, which is right for
+ * weather.units / loudness.source / search.provider (all raw `includes` today)
+ * and wrong here, where the branch coerces and trims before comparing.
  */
 export const localeSchema = z
   .unknown()
@@ -667,8 +891,8 @@ export const audioPatchSchema = settingsBlockOf({
   vocalActivity: settingsBoolLike(),
   stemCache: settingsBoolLike(),
   analyzeQuietOnly: settingsBoolLike(),
-  // Number() with NO floor: a fractional GB budget stores as a float, and
-  // load() doesn't floor it either.
+  // Number() with NO floor — a fractional GB budget is stored as a float today,
+  // and load() doesn't floor it either.
   stemCacheGb: settingsNumberLike(
     { min: 1, max: 1000 },
     'audio.stemCacheGb must be between 1 and 1000',
@@ -679,15 +903,18 @@ export const audioPatchSchema = settingsBlockOf({
   ),
 });
 
-// Track-selection windows both pick paths read. New key, so settingsNumberLike
-// is chosen on merit (refuses '6abc', keeps the fraction).
+// Track-selection windows that are neither LLM config nor stream config, and
+// that BOTH pick paths read. A new key, so there is no hand-rolled branch to
+// reproduce: `settingsNumberLike` is chosen on merit (Number() refuses '6abc'
+// and keeps the fraction) rather than to preserve an accident.
 export const pickerPatchSchema = settingsBlockOf({
   albumHours: settingsNumberLike(
     PICKER_ALBUM_HOURS_BOUNDS,
     `picker.albumHours must be between ${PICKER_ALBUM_HOURS_BOUNDS.min} and ${PICKER_ALBUM_HOURS_BOUNDS.max} (0 = off)`,
   ),
-  // Bounds only. The crossfade-derived lower bound on a positive value is a
-  // function of settings.crossfadeDuration, so update() enforces it.
+  // Bounds only. The crossfade-derived lower bound on a POSITIVE value is a
+  // function of settings.crossfadeDuration, which a stateless schema does not
+  // have — update() enforces it, exactly as it does for maxTrackSeconds.
   minTrackLengthSeconds: settingsNumberLike(
     PICKER_MIN_TRACK_LENGTH_BOUNDS,
     `picker.minTrackLengthSeconds must be between ${PICKER_MIN_TRACK_LENGTH_BOUNDS.min} and ${PICKER_MIN_TRACK_LENGTH_BOUNDS.max} (0 = off)`,
@@ -710,8 +937,9 @@ export const searchPatchSchema = settingsBlockOf({
     SETTINGS_SEARCH_PROVIDERS,
     `search.provider must be one of: ${SETTINGS_SEARCH_PROVIDERS.join(', ')}`,
   ),
-  // The one field here that TYPE-CHECKS instead of coercing: a number or null
-  // is refused, where scrobble.listenbrainz.baseUrl stringifies it. Not unified.
+  // The one field here that TYPE-CHECKS instead of coercing. A number or null
+  // is refused, where scrobble.listenbrainz.baseUrl (same shape, same message
+  // tail) stringifies it. Do not unify them.
   baseUrl: z
     .unknown()
     .superRefine((raw, ctx) => {
@@ -734,7 +962,9 @@ export const searchPatchSchema = settingsBlockOf({
     .transform((raw) => String(raw).trim()),
   apiKey: settingsRawStringLike(200, 'search.apiKey must be 0-200 chars'),
   // Optional comma-separated SearXNG engine pin (#1353), appended as the
-  // `engines=` query param when non-empty. Trimmed posture, unlike search.apiKey.
+  // `engines=` query param when non-empty. New field, so it takes the trimmed
+  // posture rather than search.apiKey's raw one — there is no stored behaviour
+  // to preserve here, and a stray space around a name is a typo, not a value.
   searxngEngines: settingsTrimmedString(
     SETTINGS_SEARXNG_ENGINES_MAX,
     `search.searxngEngines must be 0-${SETTINGS_SEARXNG_ENGINES_MAX} chars`,
@@ -761,8 +991,9 @@ const scrobbleListenbrainzSchema = settingsBlockOf({
   }),
 });
 
-// Navidrome (#1298) carries an enable flag only: the credentials are already
-// the station's own `config.navidrome`.
+// Navidrome (#1298) carries an enable flag and nothing else: the credentials
+// are already the station's own `config.navidrome` (env / setup-config), so
+// there is no key to paste here and no secret to redact.
 const scrobbleNavidromeSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
 });
@@ -774,10 +1005,13 @@ export const scrobblePatchSchema = settingsBlockOf({
 });
 
 /**
- * `''` = Auto (container TZ). A try/catch probe rather than
- * `Intl.supportedValuesOf` so aliases validate too (Europe/Kiev, US/Pacific,
- * +05:30). Case-insensitive, and the accepted string is stored verbatim.
- * time.ts re-exports this rather than keeping a second copy.
+ * `''` = Auto (container TZ). Anything else must be a zone ICU knows.
+ *
+ * A try/catch probe rather than `Intl.supportedValuesOf`, so ALIASES validate
+ * too (Europe/Kiev, US/Pacific, and numeric offsets like +05:30). It is also
+ * case-insensitive, and the accepted string is stored verbatim rather than
+ * canonicalised. `Intl` exists in the browser, so this mirrors cleanly;
+ * time.ts re-exports it rather than keeping a second copy.
  */
 export function settingsIsValidTimezone(tz: string): boolean {
   try {
@@ -795,7 +1029,7 @@ export const timezoneSchema = z
     if (v !== '' && !settingsIsValidTimezone(v)) {
       ctx.addIssue({
         code: 'custom',
-        // The dash is an EM DASH (U+2014).
+        // The dash is an EM DASH (U+2014), carried over verbatim.
         message: `invalid timezone "${v}" — use an IANA name like Europe/Athens`,
       });
     }
@@ -803,9 +1037,14 @@ export const timezoneSchema = z
   .transform((raw) => String(raw ?? '').trim());
 
 /**
- * The privacy block's FIELD rules only. The lock-needs-a-password invariant
- * reads the MERGED state, so it stays in update() alongside the listenerAuth
- * restart decision. `publishPersonaSouls` is outside that invariant.
+ * The privacy block's FIELD rules. The lock-needs-a-password invariant is NOT
+ * here and cannot be: it reads the MERGED state (a lock may be turned on by
+ * this patch while the password comes from what is already stored), so it is a
+ * property of the result rather than of the submitted value. It stays in
+ * update(), which is also where the listenerAuth restart decision lives.
+ *
+ * `publishPersonaSouls` is deliberately outside that invariant — it is a
+ * disclosure toggle, not a lock.
  */
 export const privacyPatchSchema = settingsBlockOf({
   privatePlayer: settingsBoolLike(),
@@ -819,8 +1058,9 @@ export const privacyPatchSchema = settingsBlockOf({
         ctx.addIssue({ code: 'custom', message: 'privacy.password must be 0-128 chars' });
         return;
       }
-      // The password travels in basic-auth userinfo and ?auth= query strings.
-      // trim() has stripped the ends, so this only fires on interior space.
+      // The password travels in basic-auth userinfo and ?auth= query strings;
+      // whitespace/control chars only cause client-side grief there. trim()
+      // has already stripped the ends, so this only fires on INTERIOR space.
       if (/[\s]/.test(v)) {
         ctx.addIssue({
           code: 'custom',
@@ -833,13 +1073,20 @@ export const privacyPatchSchema = settingsBlockOf({
 
 /**
  * `requests` — every field falls back to the CURRENT stored value, so the
- * schema only decides "usable or absent" and update() supplies the fallback.
- * Usable is narrow on purpose: only a number, bigint or NON-BLANK string.
- * null/''/false/[] all coerce to 0 under Number(), and an emptied admin input
- * arrives as JSON null, so without the guard it clamps to the field's floor.
+ * schema's job is to decide "usable or absent" and let update() spread the
+ * result over what is stored.
  *
- * The booleans are `typeof === 'boolean'`, NOT `!!` — a truthy non-boolean is
- * IGNORED, the opposite posture to ui/privacy. Neither may be unified.
+ * The usability rule is `intIn`'s and it is deliberately narrow: only a number,
+ * a bigint or a NON-BLANK string counts. `null`, `''`, `false` and `[]` all
+ * coerce to 0 under `Number()`, and without this guard an emptied admin input
+ * (which arrives as JSON null) clamped to the field's FLOOR and silently
+ * committed it — clearing the station hourly cap set it to 5/hour and closed
+ * the request line. Anything unusable is dropped here, which update() reads as
+ * "leave it alone".
+ *
+ * Note the booleans are `typeof === 'boolean'`, NOT `!!` — a truthy non-boolean
+ * is IGNORED rather than coerced, the opposite posture to ui/privacy. Both are
+ * shipping behaviour and neither may be unified onto the other.
  */
 function settingsRequestsInt(bounds: SettingsNumericBound) {
   return z.unknown().transform((raw) => {
@@ -868,6 +1115,8 @@ export const requestsPatchSchema = settingsBlockOf({
   perIpHourlyCap: settingsRequestsInt({ min: 1, max: 100 }),
 });
 
+// --- the mood family -------------------------------------------------------
+
 export const SETTINGS_MOODS_LIMIT = 40;
 export const SETTINGS_MOOD_NAME_MAX = 40;
 export const SETTINGS_MOOD_PROMPT_MAX = 200;
@@ -893,10 +1142,14 @@ export function settingsNormalizeMoodName(raw: unknown): string {
 }
 
 /**
- * Context the three mood maps validate against. `moodNames: null` means "this
- * caller cannot check that rule" (the ShowSchemaContext convention): the route
- * passes null and checks SHAPE only, because the effective vocabulary depends
- * on whether `moods` rides in the same patch, which is update()'s to know.
+ * The context the three mood MAPS validate against.
+ *
+ * `moodNames` is nullable and null means "this caller cannot check that rule" —
+ * the same convention ShowSchemaContext and ScheduleSchemaContext use. The
+ * route passes null: the effective vocabulary depends on whether `moods` is in
+ * the same patch and on what validating it produced, which is update()'s
+ * ordering to know, not the middleware's. So the route checks SHAPE and
+ * update() checks membership, one schema, two postures.
  */
 export interface SettingsMoodContext {
   moodNames: string[] | null;
@@ -935,7 +1188,7 @@ export const moodsSchema = z
         });
         return;
       }
-      // Duplicates are detected on the NORMALISED name, so 'Chill' + 'chill'
+      // Duplicate detection runs on the NORMALISED name, so 'Chill' + 'chill'
       // is a refusal rather than two rows.
       if (seen.has(name)) {
         ctx.addIssue({
@@ -959,10 +1212,13 @@ export const moodsSchema = z
   );
 
 /**
- * A fixed-key mood map, rebuilt over its own key set. `allowEmpty` is the one
- * difference and it is not cosmetic: moodSchedule requires all 8 periods (an
- * omitted one coerces to '' and refuses), while weatherMoods reads '' as "no
- * mood steer", so a patch naming one condition BLANKS the other five and 200s.
+ * A fixed-key mood map. Both maps are rebuilt over their own key set.
+ *
+ * `allowEmpty` is the one difference between the two and it is NOT cosmetic:
+ * moodSchedule requires every one of its 8 periods (an omitted period coerces
+ * to '' and refuses), while weatherMoods treats '' as "no mood steer" — so a
+ * weatherMoods patch naming one condition silently BLANKS the other five and
+ * answers 200. Both behaviours are preserved exactly as they are.
  */
 function settingsMoodMap(
   keys: readonly string[],
@@ -1010,11 +1266,15 @@ export function weatherMoodsSchema(ctx: SettingsMoodContext) {
   return settingsMoodMap(SETTINGS_WEATHER_CONDITIONS, 'weatherMoods', true, ctx);
 }
 
-// Festival field bounds. Named because the admin editor reads the same numbers
-// for its maxLength / min / max attributes.
+// Festival field bounds. Named rather than left as literals inside the schema
+// because the admin editor needs the same numbers for its maxLength / min / max
+// attributes, and it was hard-coding them — the drift that had already bitten
+// the persona editor.
 export const SETTINGS_FESTIVAL_NAME_MAX = 80;
 export const SETTINGS_FESTIVAL_DESCRIPTION_MAX = 200;
-// Days either side of the date on which the festival's mood applies.
+// Days either side of the date on which the festival's mood applies. The
+// ceiling is deliberately low: past a fortnight a "festival window" is just a
+// season, which is what moodSchedule is for.
 export const SETTINGS_FESTIVAL_WINDOW_DAYS_MAX = 14;
 
 export function festivalsSchema(ctx: SettingsMoodContext) {
@@ -1056,11 +1316,12 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
           add(`festivals[${i}].month must be an integer 1-12`, 'month');
           return;
         }
-        // Feb allows 29; in a common year a leap-day festival fires Mar 1
-        // (Date.UTC rolls over in getFestivalContext). Indexed off the month,
-        // so it must stay downstream of the month check. `?? 31` is
-        // unreachable but the web build typechecks the mirror under
-        // noUncheckedIndexedAccess.
+        // Feb allows 29 — in a common year a leap-day festival fires Mar 1
+        // (Date.UTC rolls the date over in getFestivalContext). The day bound
+        // is indexed off the month, so it must stay downstream of a valid one.
+        // The `?? 31` is unreachable (month is already 1-12) but the WEB build
+        // typechecks the mirror under noUncheckedIndexedAccess, where a bare
+        // index is `number | undefined`.
         const daysInMonth = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1] ?? 31;
         const day = Number(f.day);
         if (!Number.isInteger(day) || day < 1 || day > daysInMonth) {
@@ -1070,8 +1331,9 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
           );
           return;
         }
-        // '' is not allowed: it simply fails set membership.
         const mood = String(f.mood ?? '').trim();
+        // '' is NOT allowed — every festival must name a mood, so the empty
+        // string simply fails the set membership.
         if (names && !names.has(mood)) {
           add(`festivals[${i}].mood must be one of: ${list}`, 'mood');
           return;
@@ -1105,12 +1367,22 @@ export function festivalsSchema(ctx: SettingsMoodContext) {
 }
 
 
+// ── theme ────────────────────────────────────────────────────────────────────
+
 /**
- * `theme` — only `active` is a settings value; the rest is derived at serve
- * time. A non-object block is a no-op, and `{theme: {}}` is a legal no-op.
- * The "does this theme id exist" check stays in update(): it is async and it
- * FALLS BACK to the built-in default rather than refusing (#917), so a restore
- * naming a retired theme still lands.
+ * `theme` — only `active` is a settings value; everything else in the block is
+ * derived at serve time.
+ *
+ * A NON-OBJECT block is a silent no-op (`patch.theme || {}`), so it is coerced
+ * rather than refused — the settingsBlockOf posture. And `active` is optional
+ * BECAUSE the branch acts only `if (t.active !== undefined)`: a patch of
+ * `{theme: {}}` has always been a legal no-op.
+ *
+ * What stays in update(): the "is this a theme id that actually exists" check.
+ * It is async (the registry reads the themes dir) and it FALLS BACK to the
+ * built-in default rather than refusing (#917 — throwing there aborted the whole
+ * restore for any install whose active theme id had since been retired), which
+ * is a repair only the server can make.
  */
 export const themePatchSchema = z.preprocess(
   (v) => (v && typeof v === 'object' && !Array.isArray(v) ? v : {}),
@@ -1130,10 +1402,24 @@ export const themePatchSchema = z.preprocess(
   }),
 );
 
+// ── maxTrackSeconds ──────────────────────────────────────────────────────────
+
 /**
- * The station-wide track-length cap. 0 = unlimited. BOUNDS ONLY: the
- * crossfade-derived floor ("a non-zero cap must leave solo airtime") is a
- * function of a crossfade the same patch may be changing, so update() judges it.
+ * The station-wide track-length cap. 0 = unlimited.
+ *
+ * BOUNDS ONLY. The crossfade-derived FLOOR ("a non-zero cap must leave solo
+ * airtime") stays in update(), for the reason ShowSchemaContext's
+ * `minTrackSeconds: null` documents: the floor is a function of the crossfade,
+ * which the SAME patch may be changing, so only update() — which applies the
+ * crossfade first — can judge it.
+ *
+ * The legacy `maxTrackMinutes` alias is deliberately NOT registered beside this.
+ * One branch serves both keys through `rawMaxTrackSec`, whose precedence rule is
+ * "seconds wins whenever it is present and non-empty" — so when both ride along,
+ * an unusable minutes value is IGNORED today, and a schema on that key would
+ * refuse a body that currently saves. An empty/absent seconds value passes here
+ * for the same reason: precedence hands off to minutes, and update() is still
+ * the authoritative chokepoint for whatever it resolves.
  */
 export function maxTrackSecondsValueSchema(bounds: SettingsNumericBound) {
   return settingsIntLike(
@@ -1143,12 +1429,17 @@ export function maxTrackSecondsValueSchema(bounds: SettingsNumericBound) {
 }
 
 /**
- * The registry entry: same rule, one posture looser. `rawMaxTrackSec`'s
- * precedence is "seconds wins when present and non-empty", so an absent/empty
- * value beside a legacy `maxTrackMinutes` hands off rather than failing;
- * update() then validates the RESOLVED value with the schema above. The
- * `maxTrackMinutes` alias is deliberately not registered — an unusable minutes
- * value is ignored today, and a schema on it would refuse a body that saves.
+ * The REGISTRY entry — the same rule, one posture looser.
+ *
+ * `rawMaxTrackSec`'s precedence is "seconds wins whenever it is present and
+ * non-empty", so an absent or empty `maxTrackSeconds` beside a `maxTrackMinutes`
+ * is a legal body that hands off rather than a failure. update() validates the
+ * RESOLVED value with maxTrackSecondsValueSchema above, which is why the bound
+ * itself is written once.
+ *
+ * The legacy `maxTrackMinutes` alias is deliberately NOT registered: when both
+ * ride along, an unusable minutes value is IGNORED today, and a schema on that
+ * key would refuse a body that currently saves.
  */
 export function maxTrackSecondsSchema(bounds: SettingsNumericBound) {
   const value = maxTrackSecondsValueSchema(bounds);
@@ -1161,10 +1452,16 @@ export function maxTrackSecondsSchema(bounds: SettingsNumericBound) {
   });
 }
 
+// ── the DJ prompt selection ──────────────────────────────────────────────────
+
 /**
- * `activeDjPromptId` — '' selects the built-in default, otherwise a djPrompts
- * id. Coercion only: whether the id resolves is answered after `djPrompts` has
- * been applied, so it stays in update().
+ * `activeDjPromptId` — '' selects the built-in default, otherwise the id of a
+ * djPrompts entry.
+ *
+ * Coercion ONLY: `String(x ?? '').trim()` is the whole of what the branch does
+ * to this value. Whether the id resolves is a cross-key question answered after
+ * `djPrompts` has been applied, and it stays in update() — the same patch may be
+ * replacing the library the id has to name.
  */
 export const activeDjPromptIdSchema = z
   .unknown()
@@ -1172,9 +1469,12 @@ export const activeDjPromptIdSchema = z
   .transform((raw) => String(raw ?? '').trim());
 
 /**
- * `djPrompt` — the legacy single-field prompt (onboarding, older clients). The
- * MAPPING onto the library stays in update(): '' selects the default, custom
- * text reuses an identical entry or appends a new one, and can hit the cap.
+ * `djPrompt` — the legacy single-field prompt (onboarding, older clients).
+ *
+ * Its two rules are pure and convert; what stays in update() is the MAPPING onto
+ * the library — '' selects the default, and custom text reuses the entry with
+ * identical text or appends a new "Custom prompt" — which reads and writes
+ * `next.djPrompts` and can hit the library cap.
  */
 export function djPromptTextSchema(bounds: { min: number; max: number }) {
   return z

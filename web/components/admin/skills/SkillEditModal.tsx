@@ -427,11 +427,15 @@ export default function SkillEditModal({ mode, skill, personas, tagSuggestions, 
         body: JSON.stringify({ name: skill.name }),
       });
       const j = (await r.json().catch(() => ({}))) as {
-        spoken?: string | null; aired?: boolean; reason?: string | null; error?: string;
+        spoken?: string | null; aired?: boolean; queued?: boolean; deferred?: boolean;
+        reason?: string | null; error?: string;
       };
       // The skill can run and decide it has nothing usable to speak from: a 200
       // with `aired: false` (#1412).
-      if (j.aired === false) {
+      if (j.queued && j.deferred) {
+        flashFor('QUEUED FOR BREAK');
+        if (j.spoken) notify.ok(`Queued for the next break: “${j.spoken}”`);
+      } else if (j.aired === false) {
         flashFor('STOOD DOWN');
         notify.info(`${skill.name} stayed silent — ${j.reason || 'nothing usable to speak from'}`);
       } else {

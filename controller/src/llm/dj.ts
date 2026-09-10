@@ -20,6 +20,7 @@ export {
   REQUESTER_GREETING_CLAUSE,
   generateIntro,
   generateStationId,
+  signoffPrompt,
   generateSignoff,
   generateHandoffGreeting,
   generateAdLib,

@@ -28,7 +28,7 @@ function note(name: string, value: string, problem: string, usedInstead: unknown
   console.warn(`[env] ${name}="${value}" ${problem} — using ${String(usedInstead)} instead`);
 }
 
-// ABSENT and EMPTY both mean "not set" (`ANALYZE_URL=` is an ordinary compose
+// ABSENT and EMPTY both mean "not set" (`ANALYZE_PYTHON=` is an ordinary compose
 // line); a value present but unparseable warns and falls back.
 function read<T>(name: string, schema: z.ZodType<T>, fallback: T): T {
   const raw = process.env[name];

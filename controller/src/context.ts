@@ -7,10 +7,14 @@ import { resolveActiveShow, resolveOnAirLocation, get as getSettings, moodSchedu
 import * as session from './broadcast/session.js';
 import { getListenerCount } from './broadcast/listeners.js';
 import { zonedParts, zonedISODate, clockDisplay, spokenHourPhrase, spokenTimePhrases, spokenDaypartPhrase } from './time.js';
+import { nextShowChangeMs } from './broadcast/show-boundary.js';
 
-// Day-period → {vibe, show}. Vibe strings land in spoken-segment prompts, so
-// keep them non-commute-flavoured; the period names drive pick energy, not talk.
-// Each period's MOOD is operator-editable (settings.moodSchedule).
+// The day-period → {vibe, show} table stays in code (these feed spoken-segment
+// prompts and show resolution). Each period's MOOD is operator-editable
+// (settings.moodSchedule via moodScheduleFor). Note the 'drive-time' vibe reads
+// 'end of the workday', not 'drive home': the vibe string lands in every
+// spoken-segment prompt and the commute framing had the DJ doing traffic-jockey
+// patter for two hours a day. The period names keep driving pick energy, not talk.
 const PERIOD_TABLE: Array<{ from: number; to: number; period: string; vibe: string; show: string }> = [
   { from: 5, to: 9, period: 'early-morning', vibe: 'gentle waking', show: 'breakfast' },
   { from: 9, to: 12, period: 'morning', vibe: 'productive', show: 'morning' },
@@ -30,9 +34,10 @@ export function getTimeContext(date = new Date()) {
   return { period: slot.period, mood: moodScheduleFor(slot.period), vibe: slot.vibe, show: slot.show };
 }
 
-// Festival calendar comes from persisted settings. settings.load() seeds
-// FESTIVAL_DEFAULTS when the key is absent; an emptied list stays empty, so no
-// fallback here.
+// Festival calendar — read from persisted settings so the operator can
+// add/edit/remove entries from the admin UI. settings.load() seeds
+// FESTIVAL_DEFAULTS when the key is absent; an emptied list stays empty
+// (the operator turned the calendar off), so no fallback here.
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function getFestivalContext(date = new Date()) {
@@ -40,8 +45,9 @@ export function getFestivalContext(date = new Date()) {
   const today = Date.UTC(y, m - 1, d);
   for (const f of getSettings().festivals ?? []) {
     const window = f.windowDays || 0;
-    // Compare real dates so a window spans month/year boundaries; the adjacent
-    // years cover one reaching across Dec 31 / Jan 1.
+    // Compare real dates so the window spans month and year boundaries
+    // (New Year's Day with windowDays 3 is active from Dec 29). Adjacent
+    // years cover a window reaching across Dec 31 / Jan 1.
     for (const yy of [y - 1, y, y + 1]) {
       if (Math.abs(Date.UTC(yy, f.month - 1, f.day) - today) <= window * DAY_MS) {
         return { name: f.name, mood: f.mood, description: f.description || '' };
@@ -59,9 +65,11 @@ let weatherCache: { data: any; fetchedAt: number; configKey: string } = {
 };
 const WEATHER_TTL_MS = 30 * 60 * 1000;
 
-// Weather is settings-layer state: read the live settings cache, never a
-// config.weather mirror — onboarding and backup restore call settings.update()
-// directly and would leave a mirror stale until a restart.
+// Weather is settings-layer state, so read the live settings cache directly.
+// The old config.weather mirror was refreshed by POST /settings and at boot,
+// but not by onboarding or backup restore — both of which call settings.update()
+// directly. That left the saved location and the running forecast out of sync
+// until a controller restart.
 function weatherConfig() {
   return getSettings().weather || config.weather;
 }
@@ -76,15 +84,22 @@ function weatherConfigKey(weather: ReturnType<typeof weatherConfig>) {
   ].join('\u0000');
 }
 
-// Force the next getWeather() to re-fetch (location changed in /settings).
+// Force the next getWeather() call to re-fetch — used when the user changes
+// their location in /settings.
 export function invalidateWeatherCache() {
   weatherCache = { data: null, fetchedAt: 0, configKey: '' };
 }
 
-// The place the readout is ATTRIBUTED to — the broad on-air location, not the
-// precise point the forecast was fetched for; that is what keeps a public read
-// from naming the operator's town. Fed the same live weather block as the
-// forecast query so the two cannot drift.
+// The place the weather readout is ATTRIBUTED to — the broad on-air location,
+// not the precise point the forecast was actually fetched for. Every downstream
+// consumer reads this one field, so resolving it here covers all of them at
+// once: the spoken "Weather in X" line, the weather skill's tool result, GET
+// /now-playing's public context blob, and the listener-facing schedule drawer.
+// Keeping the precise locationName out of it is what stops a station's public
+// URL from naming its operator's town.
+//
+// Fed the same live weather block as the forecast query so its attributed
+// location and coordinates cannot drift across settings writers.
 function attributedLocation(weather = weatherConfig()) {
   return resolveOnAirLocation({ weather });
 }
@@ -134,15 +149,20 @@ function mapWeatherCode(code: number) {
   return 'cloudy';
 }
 
-// Operator-editable weather → mood map. '' (no steer) normalises to null so the
-// dominantMood chain (festival > weather > time) falls through to the time mood.
+// Operator-editable weather → mood map (settings.weatherMoods). '' (no steer)
+// normalises to null so the dominantMood chain (festival > weather > time)
+// falls through to the time mood, exactly as the old hardcoded default did.
 function weatherToMood(condition) {
   return weatherMoodFor(condition) || null;
 }
 
-// Geocoding via Open-Meteo for the admin/onboarding location picker: place name
-// → coordinates + IANA timezone. Cached per lowercased query for a day, with a
-// soft entry cap.
+// ---------------------------------------------------------------------------
+// Geocoding via Open-Meteo (no API key required) — powers the admin/onboarding
+// location picker: type a place name, get back coordinates + IANA timezone so
+// the operator never hand-copies lat/lng. Same provider we already use for
+// weather, so no new dependency. Results are cached per lowercased query for a
+// day (place coordinates don't move) with a soft entry cap to stay polite.
+// ---------------------------------------------------------------------------
 export interface GeocodeResult {
   name: string;
   admin1?: string;
@@ -165,8 +185,8 @@ export async function geocodePlace(query: string): Promise<GeocodeResult[]> {
   const key = q.toLowerCase();
   const hit = geocodeCache.get(key);
   if (hit && Date.now() - hit.fetchedAt < GEOCODE_TTL_MS) {
-    // Map iteration order is insertion order, so delete+set keeps the oldest
-    // entry first for eviction.
+    // Refresh recency — Map iteration order is insertion order, so delete+set
+    // keeps the oldest entry first for eviction.
     geocodeCache.delete(key);
     geocodeCache.set(key, hit);
     return hit.results;
@@ -177,7 +197,9 @@ export async function geocodePlace(query: string): Promise<GeocodeResult[]> {
     encodeURIComponent(q) +
     '&count=6&language=en&format=json';
   // Bounded because GET /geocode is public and unauthenticated: a stalled
-  // upstream would otherwise park a handler until undici's ~300s default.
+  // upstream would otherwise park a handler until undici's ~300s default, and
+  // unique queries all miss the 200-entry cache. Matches the deadline
+  // /cover/:id already puts on its proxy fetch.
   const res = await fetchWithTimeout(url, { timeoutMs: 10_000 });
   if (!res.ok) throw new Error(`geocoding upstream ${res.status}`);
   const data = (await res.json()) as { results?: any[] };
@@ -208,8 +230,10 @@ const DAY_LABELS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Fri
 const MONTH_LABELS = ['January', 'February', 'March', 'April', 'May', 'June',
                       'July', 'August', 'September', 'October', 'November', 'December'];
 
-// Meteorological seasons, hemisphere-aware: a negative lat shifts them six
-// months so a southern station reads July as winter.
+// Meteorological seasons, hemisphere-aware. Open-Meteo hands us the station's
+// latitude, so a southern-hemisphere station (negative lat) reads July as
+// winter, not summer (issue: Buenos Aires DJ talking about "summer" and "heat"
+// in July). The southern seasons are the northern ones shifted six months.
 function seasonFor(month /* 1-12 */, lat = weatherConfig().lat) {
   const m = lat < 0 ? ((month + 5) % 12) + 1 : month;
   if (m === 12 || m <= 2) return 'winter';
@@ -221,8 +245,8 @@ function seasonFor(month /* 1-12 */, lat = weatherConfig().lat) {
 export function getDateContext(date = new Date()) {
   const { dow, month, day } = zonedParts(date);
   return {
-    // Station-zone date, not UTC — toISOString() is a day off near midnight for
-    // any offset zone.
+    // Station-zone date, not UTC — toISOString() was a day off near midnight
+    // for any zone with an offset, even before timezone became configurable.
     iso: zonedISODate(date),
     dayOfWeek: dow,
     dayLabel: DAY_LABELS[dow],
@@ -235,26 +259,40 @@ export function getDateContext(date = new Date()) {
 export function getClockContext(date = new Date()) {
   const { hour: h, minute: m, dow } = zonedParts(date);
   const minutesOfDay = h * 60 + m;
-  // One band build per call: this runs on every listener's 5s /now-playing poll,
-  // and `spokenTime` is by definition the band's first form (time.ts).
+  // One band build per call, not two: this runs on every listener's 5s
+  // /now-playing poll, and `spokenTime` is by definition the band's first form
+  // (time.ts) — asking for it separately re-walked the table and allocated a
+  // second array for a value already in hand.
   const spokenTimeForms = spokenTimePhrases(h, m);
   return {
     hhmm: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
-    // The clock shape the model sees, so it follows the operator's locale
-    // (en-US → "1:05 pm") rather than feeding 24-hour digits.
+    // What the prompts show the model — the model speaks whatever clock shape
+    // it sees, so this follows the operator's locale (en-US → "1:05 pm")
+    // instead of always feeding 24-hour digits (issue: "thirteen oh five" on
+    // air with AM/PM selected in admin → Settings → Station).
     display: clockDisplay(h, m, getSettings().locale === 'en-US'),
-    // Deterministic spoken hour, so the model never converts digits itself.
+    // Deterministic spoken hour for the hourly time check ("midnight", "one
+    // in the morning") — computed here so the model never converts 24-hour
+    // digits itself (it says "one in the morning" at 00:03).
     spokenHour: spokenHourPhrase(h),
-    // Minute-aware variant for the hourly check — "just gone six" only near :00,
-    // "half past six" mid-hour (#1282).
+    // Minute-aware variant for the hourly time check — "just gone six" only
+    // near :00, "half past six" mid-hour (#1282: a manual trigger at 18:31
+    // still announced "just gone six in the evening").
     spokenTime: spokenTimeForms[0],
-    // Every equivalent wording of that rounded time (#1602); the hourly prompt
-    // picks one per check. CONTROLLER-INTERNAL: prompt plumbing, not a station
-    // fact — routes/public.ts strips it before /now-playing goes out, and
-    // anything else of this kind added here belongs on that strip list.
+    // Every equivalent wording of that same rounded time (#1602). The hourly
+    // prompt picks one per check so consecutive checks don't open with the
+    // identical five words; `spokenTime` stays the canonical single string for
+    // anything that wants one.
+    //
+    // CONTROLLER-INTERNAL: this is the picker's raw material, not a station
+    // fact, and routes/public.ts strips it before /now-playing goes out — a
+    // public read never widens to carry a behaviour internal. Anything else
+    // added here that is prompt plumbing rather than a fact about the moment
+    // belongs on that strip list too.
     spokenTimeOptions: spokenTimeForms,
-    // Daypart only, for the station ident — it airs minutes after it is written,
-    // so it must not name the hour.
+    // Daypart only, for the station ident — the one segment that must not
+    // name the hour, because it airs minutes after it is written and the
+    // hour can change in between ("three in the afternoon" on air at 3:50).
     spokenDaypart: spokenDaypartPhrase(h),
     isWeekend: dow === 0 || dow === 6,
     isLateNight: h < 5,
@@ -263,9 +301,16 @@ export function getClockContext(date = new Date()) {
   };
 }
 
-// Vocal energy: how the DJ should sound. `speed` multiplies the engine's default
-// rate (>1 brisker); `register` is a delivery label nothing acts on yet. Derived
-// from daypart + clock + a show's pinned energy, so speed 1.0 is a no-op.
+// Vocal energy for the moment — how the DJ should *sound*, not what it says.
+// `speed` is a multiplier on the engine's default speech rate (>1 brisker,
+// <1 slower); higher is faster on every engine that supports it (piper,
+// kokoro, cloud). `register` is a coarse delivery label carried forward for
+// future style/emotion hints (cloud/chatterbox) — Stage 1 only acts on speed.
+//
+// Function of the daypart + clock + the scheduled show (if it pins an energy)
+// so there's a single source of truth. A daypart that maps to speed 1.0
+// (afternoon) yields no change at all, so a station with the default
+// afternoon profile behaves exactly as before.
 const DAYPART_ENERGY: Record<string, { speed: number; register: string }> = {
   'early-morning': { speed: 0.98, register: 'warm' },      // gentle waking
   morning:         { speed: 1.02, register: 'even' },      // productive
@@ -277,9 +322,13 @@ const DAYPART_ENERGY: Record<string, { speed: number; register: string }> = {
   'after-hours':   { speed: 0.92, register: 'intimate' },  // graveyard
 };
 
-// A show's pinned energy overrides the daypart profile wholesale, including the
-// late-night/commute clamps below — a schedule slot is an explicit operator call.
-// '' (Any) keeps the autonomous daypart behaviour.
+// A show's pinned energy overrides the daypart profile wholesale — including
+// the late-night/commute clamps below, because a schedule slot is an explicit
+// operator call (a high-energy evening show should not speak at the 0.97
+// wind-down pace, and a 2am workout show should not be forced intimate).
+// '' (Any) keeps the autonomous daypart behaviour. Values stay inside the
+// daypart table's range so a pin never sounds outside the station's normal
+// delivery envelope.
 const SHOW_ENERGY_DELIVERY: Record<string, { speed: number; register: string }> = {
   high:   { speed: 1.06, register: 'up' },
   medium: { speed: 1.0,  register: 'even' },
@@ -287,24 +336,71 @@ const SHOW_ENERGY_DELIVERY: Record<string, { speed: number; register: string }> 
 };
 
 export function energyForDaypart(date = new Date()) {
-  // A multi-energy show (#929) speaks at its LEAD energy: delivery needs one
-  // register, though the pick filters treat all bands equally.
+  // A multi-energy show (#929) speaks at its LEAD energy — vocal delivery
+  // needs one register, so the first selected band wins here even though the
+  // pick filters treat all bands equally.
   const pinned = SHOW_ENERGY_DELIVERY[resolveActiveShow(date)?.energies?.[0] ?? ''];
   if (pinned) return pinned;
   const { period } = getTimeContext(date);
   const { isLateNight, isCommute } = getClockContext(date);
   const base = DAYPART_ENERGY[period] || { speed: 1.0, register: 'even' };
-  // The small hours pull the pace down whatever daypart label the hour falls under.
+  // The small hours pull the pace down regardless of which daypart label the
+  // hour technically falls under (e.g. the 00:00–01:00 tail of 'late-evening').
   if (isLateNight) return { speed: Math.min(base.speed, 0.92), register: 'intimate' };
-  // Commute windows push a touch above the daypart baseline.
+  // Commute windows get a touch more push than their daypart baseline.
   if (isCommute) return { speed: Math.max(base.speed, 1.05), register: 'up' };
   return base;
 }
 
-// Combined snapshot. Pass `at` to resolve the clock-derived parts (time,
-// festival, date, clock, active show, dominantMood) for a future moment — the
-// queue watcher picks the next track under the show that will be on air when it
-// plays. Weather and listener count stay live.
+// The next distinct scheduled show is an optional on-air fact only in the
+// final 15 minutes of the current show. It is derived from the timetable, not
+// an LLM or routing decision, so prompt writers can safely offer a brief nod
+// without exposing any selection or control-plane context.
+export function showHandoverContext(
+  now = new Date(),
+  resolveShow: (at: Date) => any = resolveActiveShow,
+  extraBoundaries?: number[],
+) {
+  const current: any = resolveShow(now);
+  if (!current?.id) return null;
+  // This fact is exposed only inside the final quarter hour, so scan exactly
+  // that window. The shared boundary scanner handles station-zone hour marks;
+  // takeover start/expiry instants are supplied as extra candidates because
+  // they can land at any minute (#930).
+  const nowMs = now.getTime();
+  const override = getSettings()?.scheduleOverride;
+  const extras = extraBoundaries ?? (override
+    ? [Number(override.startedAt), Number(override.expiresAt)]
+    : []);
+  const boundaryMs = nextShowChangeMs({
+    fromMs: nowMs,
+    horizonMs: 15 * 60_000,
+    keyAt: (ms) => resolveShow(new Date(ms))?.id ?? 'default',
+    minuteAt: (ms) => zonedParts(new Date(ms)).minute,
+    extra: extras,
+  });
+  if (boundaryMs == null) return null;
+  const boundary = new Date(boundaryMs);
+  const next: any = resolveShow(boundary);
+  if (!next?.persona?.name) return null;
+  const { hour, minute } = zonedParts(boundary);
+  return {
+    phase: 'final-quarter-hour',
+    nextShow: {
+      name: String(next.name || '').trim(),
+      presenter: String(next.persona.name).trim(),
+      startsAt: minute === 0 ? spokenHourPhrase(hour) : spokenTimePhrases(hour, minute)[0],
+    },
+  };
+}
+
+// Combined snapshot — what's the vibe right now? Pass `at` to resolve the
+// clock-derived parts (time, festival, date, clock, active show, and therefore
+// dominantMood) for a future moment instead — the queue watcher uses this to
+// pick the NEXT track under the rules of the show that will actually be on air
+// when it plays (issue: a pick made minutes before a show boundary followed the
+// outgoing show's brief). Weather and listener count stay live: they're
+// station-now facts and drift too little over one track to matter.
 export async function getFullContext(at?: Date) {
   const now = at ?? new Date();
   const time = getTimeContext(now);
@@ -313,17 +409,21 @@ export async function getFullContext(at?: Date) {
   const date = getDateContext(now);
   const clock = getClockContext(now);
 
-  // Ride Open-Meteo's is_day on the clock so the DJ stops describing daylight
-  // after dark. Only set when known: a failed fetch leaves it unset and the model
-  // infers from the wall clock.
+  // Open-Meteo reports whether the sun is up at the station right now; ride it
+  // on the clock so the DJ stops describing dusk/daylight after dark (issue:
+  // "night is starting to claim its place" / "shadows lengthen" said two hours
+  // past sunset). Only set when known — a failed weather fetch leaves it unset
+  // and the model falls back to inferring from the wall-clock time.
   if (typeof weather?.isDay === 'boolean') (clock as any).isDark = !weather.isDay;
 
-  // A scheduled show for this hour, if any; its mood wins everything below.
+  // A scheduled show for this hour, if any. Its mood wins everything below —
+  // an empty hour leaves the station running autonomously.
   const activeShow: any = resolveActiveShow(now);
 
-  // Programme shows: ride today's episode angle on the show context, but only
-  // once the session has rolled into this show — a previous session's plan must
-  // not leak across the boundary.
+  // Programme shows: ride today's episode angle on the show context so every
+  // prompt built from it (links, picker brief, segments) breathes the same
+  // episode. Only once the session has actually rolled into this show — a
+  // lingering previous session's plan must not leak across the boundary.
   if (activeShow?.programme) {
     const sess = session.getSession();
     if (sess?.key === `show:${activeShow.id}` && sess.programme?.plan?.angle) {
@@ -331,17 +431,25 @@ export async function getFullContext(at?: Date) {
     }
   }
 
-  // Mood priority: show > festival > weather > time. dominantMood is a single
-  // value by contract, so a multi-mood show leads with its FIRST mood; the pick
-  // paths union the full list themselves (#929).
+  // Show > festival > weather > time, in that order of priority for mood.
+  // dominantMood is a single value by contract (scenario lines, session keys,
+  // mood-pool seeds), so a multi-mood show leads with its FIRST mood here; the
+  // pick paths union the full moods list themselves (picker/scheduler #929).
   const dominantMood = activeShow?.moods?.[0] || festival?.mood || weather.mood || time.mood;
 
-  // From the cached Icecast monitor; `count` is null when unreadable, which
-  // callers treat as "unknown".
+  // Live audience size, from the cached Icecast monitor. `count` is null when
+  // it couldn't be read — callers treat that as "unknown" and stay quiet.
   const listeners = { count: getListenerCount() };
 
-  // The moment this context DESCRIBES, so a consumer needing a date does not fall
-  // back to the wall clock and disagree with the activeShow resolved above.
-  // Distinct from `date` (getDateContext's calendar strings).
-  return { at: now.toISOString(), time, weather, festival, dominantMood, date, clock, activeShow, listeners };
+  // The moment this context DESCRIBES, stamped so consumers can tell a
+  // look-ahead context from a live one. Without it a consumer that needs a date
+  // (session.start → getEffectivePersona) silently falls back to the wall clock
+  // and disagrees with the activeShow resolved above — which, on a look-ahead
+  // roll, stamps the OUTGOING persona onto the INCOMING show's session and
+  // makes stampRolledFrom see no persona change at all (mic-pass suppressed).
+  // Note this is distinct from `date` (getDateContext's calendar strings).
+  return {
+    at: now.toISOString(), time, weather, festival, dominantMood, date, clock,
+    activeShow, showHandover: showHandoverContext(now), listeners,
+  };
 }

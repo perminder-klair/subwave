@@ -27,6 +27,7 @@ import * as session from './session.js';
 import * as djAgent from './dj-agent.js';
 import * as programme from './programme.js';
 import { cleanupOldVoices } from '../audio/tts.js';
+import { cleanupPauseTalkSilence } from '../audio/wav-silence.js';
 import { warmHeavy } from '../audio/ttsHeavyClient.js';
 import { shouldFire } from './dj-gate.js';
 import { speakClockAllowed, stationIdDaypartStamp } from './clock-policy.js';
@@ -460,17 +461,26 @@ async function refreshAutoPlaylistInner() {
   autoPlaylistBuild.built(show);
 }
 
-// Hourly time check. Gate-free runner — also called by the /dj/segment route as
-// an operator override; the talk tick adds the gates.
-export async function runHourlyCheck() {
+// ---------------------------------------------------------------------------
+// HOURLY TIME CHECK
+// At the top of every hour, the DJ checks in.
+// ---------------------------------------------------------------------------
+
+// Gate-free runner — also called directly by the /dj/segment command route as
+// an operator override. The cron wrapper below adds the frequency gate.
+export async function runHourlyCheck({ showWelcome = false }: { showWelcome?: boolean } = {}) {
   return withTrace({ kind: 'hourly' }, async () => {
     const ctx = await getFullContext();
-    const speaker = settings.pickOnAirSpeaker();
+    // Guest rotation: on a show with co-hosts the ordinary time check may come
+    // from a guest. A show welcome belongs to the incoming host: it establishes
+    // that show's voice, rather than making a guest appear to take it over.
+    const speaker = showWelcome ? session.onAirPersona() : settings.pickOnAirSpeaker();
     const script = await dj.generateHourlyTime({
       recap: queue.getDjRecap(),
       context: ctx,
       recentOpeners: queue.getRecentOpeners(),
       persona: speaker,
+      showWelcome,
     });
     await queue.announce(script, 'hourly-check', {
       persona: speaker, meta: { personaId: speaker?.id, personaName: speaker?.name },
@@ -491,7 +501,7 @@ export async function runHourlyCheck() {
 // from the handover ordering rule; takeover EXPIRY is not (#1576). `reason`
 // names the transition in the booth log's auto-playlist line.
 export async function rollSessionNow(
-  { airHandoff = true, manual = false, reason = 'session roll' }:
+  { airHandoff = true, manual: _manual = false, reason = 'session roll' }:
     { airHandoff?: boolean; manual?: boolean; reason?: string } = {},
 ) {
   // auto.m3u follows the show too (#1111). Fire-and-forget: holding the audible
@@ -501,33 +511,36 @@ export async function rollSessionNow(
   refreshAutoPlaylistOnShowChange(reason).catch(err =>
     queue.log('error', `Auto-playlist refresh on show change failed: ${err.message}`));
   let ctx: Awaited<ReturnType<typeof getFullContext>> | null = null;
+  const priorSession = session.getSession();
+  const previousShowId = priorSession?.show?.id ?? null;
+  let showStarted = false;
   try {
     ctx = await getFullContext();
-    queue.onSessionRolled((await session.maybeRoll(ctx)).id);
+    await session.maybeRoll(ctx);
+    // Only entering an actual scheduled show earns the optional hourly
+    // welcome. A show ending into autonomous radio has nothing to welcome.
+    showStarted = !!priorSession && !!ctx.activeShow?.id && ctx.activeShow.id !== previousShowId;
   } catch (err) {
     queue.log('error', `Session roll failed: ${err.message}`);
   }
-  // No ctx → the roll didn't happen; leave the handoff pending for the next
-  // call site. The mic-pass does its own gating and marks itself aired, so
-  // whichever call site gets there first drives it and the others no-op.
-  if (!ctx) return { ctx: null, introAired: false };
-  // Plan the episode BEFORE the mic-pass, so a handoff into a programme show
-  // can weave the episode angle into the greeting.
+  // If that roll crossed a persona boundary, air the two-voice mic-pass — when
+  // this call site is allowed to (see `airHandoff`). It does its own
+  // listener/budget gating and marks itself aired, so it's safe to call
+  // unconditionally below (whichever call site rolls the session first drives
+  // it — the others no-op). No ctx → the roll above didn't happen either;
+  // leave the handoff pending for the next call site.
+  if (!ctx) return { ctx: null, introAired: false, showStarted: false };
+  // Plan the episode BEFORE the mic-pass so a persona handoff into a
+  // programme show can weave the episode angle into the greeting (the
+  // greeting doubles as the show's intro on a persona-change boundary).
   try {
     await programme.ensurePlan(ctx);
   } catch (err) {
     queue.log('error', `Programme plan failed: ${err.message}`);
   }
-  if (airHandoff) {
+  if (airHandoff && !session.boundaryHandoffAwaitsTrack()) {
     try {
-      // The #1576 ordering rule applies to the automatic call site only. Held
-      // leaves the mic-pass pending for the next boundary rather than losing it.
-      if (!manual && queue.closingTrackHolds()) {
-        queue.log('scheduler',
-          'Holding the show handover — the outgoing DJ just signed off, so a closing track plays first');
-      } else {
-        await djAgent.runPersonaHandoff(queue, ctx);
-      }
+      await djAgent.runPersonaHandoff(queue, ctx);
     } catch (err) {
       queue.log('error', `Persona handoff failed: ${err.message}`);
     }
@@ -543,7 +556,7 @@ export async function rollSessionNow(
   } catch (err) {
     queue.log('error', `Programme episode hook failed: ${err.message}`);
   }
-  return { ctx, introAired };
+  return { ctx, introAired, showStarted };
 }
 
 // Generate and air a between-track DJ link for whatever is playing now.
@@ -768,11 +781,18 @@ function talkEligible(kind: TalkKind, now: Date, rolled: SessionRoll | null): bo
   return false;
 }
 
-// Dispatch one fired row with its resolved air mode in scope. The scope
-// (talk-air.ts) is what makes `djTalkOnlyBetweenTracks` reach segments this
-// function never sees: queue.announce()/announceExchange() read it instead of a
-// flag threaded down. Manual runners are exempt by being called from OUTSIDE it.
-async function runTalkSlot(plan: Extract<TalkPlan, { act: 'fire' }>) {
+// Dispatch one fired row, with its resolved air mode in scope for everything it
+// says.
+//
+// The scope (broadcast/talk-air.ts) is what makes `djTalkOnlyBetweenTracks`
+// reach segments this function never sees: the segment director speaks from
+// four sites inside skills/_agent.ts and a programme beat from two more in
+// programme.ts, and queue.announce()/announceExchange() act on the scope rather
+// than on a flag each of those would have to pass down. Manual runners are
+// exempt because they are called from OUTSIDE it — the same exemption the voice
+// switch, the clock switch and the frequency ladder already carry, by the same
+// mechanism (the manual route never reaches the gate).
+async function runTalkSlot(plan: Extract<TalkPlan, { act: 'fire' }>, rolled: SessionRoll | null) {
   // The station has just decided it is going to talk this minute, which is the
   // earliest honest signal that a heavy engine the sidecar idle-unloaded
   // (#1579) is about to be needed. The idle-pause release
@@ -794,14 +814,14 @@ async function runTalkSlot(plan: Extract<TalkPlan, { act: 'fire' }>) {
   // is about to use, which is the same "quietly switch the unload off" failure
   // the fire-not-window rule above exists to avoid.
   if (plan.kind !== 'jingle') void warmHeavy();
-  return withTalkAir(plan.air, () => runTalkSlotInner(plan));
+  return withTalkAir(plan.air, () => runTalkSlotInner(plan, rolled));
 }
 
-async function runTalkSlotInner(plan: Extract<TalkPlan, { act: 'fire' }>) {
+async function runTalkSlotInner(plan: Extract<TalkPlan, { act: 'fire' }>, rolled: SessionRoll | null) {
   try {
     switch (plan.kind) {
       case 'hourly':
-        await runHourlyCheck();
+        await runHourlyCheck({ showWelcome: settings.get().djBehaviour.showWelcome && !!rolled?.showStarted });
         return;
       case 'station-id':
         // Read off the PLAN, not hardcoded, so the table stays the only place
@@ -887,7 +907,7 @@ async function talkTick() {
       continue;
     }
     talkFired[plan.kind] = plan.slotKey;  // claim the slot before any await — see above
-    await runTalkSlot(plan);
+    await runTalkSlot(plan, rolled);
   }
 }
 
@@ -896,6 +916,14 @@ async function cleanup() {
     await cleanupOldVoices();
   } catch (err) {
     queue.log('error', `Cleanup failed: ${err.message}`);
+  }
+  // Pause-and-talk's silence items. Their own sweep because they live outside
+  // config.piper.outDir, and nothing else deletes them — ~3 MB apiece, several
+  // an hour, on the volume session.json and the backup archive share.
+  try {
+    await cleanupPauseTalkSilence();
+  } catch (err) {
+    queue.log('error', `Pause-and-talk cleanup failed: ${err.message}`);
   }
   // Fold the library DB's WAL back in: without a periodic TRUNCATE checkpoint
   // a bulk write pass leaves it at its high-water mark and every query pays to

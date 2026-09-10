@@ -858,6 +858,7 @@ export interface NormalizedShow {
   personaId: string;
   guestPersonaIds: string[];
   banter: boolean;
+  pauseTalk: boolean;
   programme: boolean;
   segmentSkill: string;
   moods: string[];
@@ -872,6 +873,7 @@ export interface NormalizedShow {
   /** Minimum track length in seconds (#1573). null = inherit the station
    *  default, 0 = no floor. See settings/persona.effectiveMinTrackSec. */
   minTrackLengthSeconds: number | null;
+  fadeAtShowEnd: boolean | null;
   playlistIds: string[];
   playlistStrict: boolean;
   /** Full rotation (#1612): with playlistStrict on, every track in the anchor

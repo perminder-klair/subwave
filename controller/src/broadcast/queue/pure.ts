@@ -315,6 +315,21 @@ export function shouldDropStaleLink(
   return mentionsTrack(item.introScript, item.linkPrev);     // wrong predecessor — only drop if it's actually named
 }
 
+// A link is editorially written for one show session. Its audio may remain
+// queued until after the schedule rolls into another show, but it must not air
+// there: it could introduce the outgoing DJ, or carry the previous show's
+// context. Session keys, rather than persona IDs, matter here because adjacent
+// shows can deliberately share a host.
+export function shouldDropCrossSessionLink(
+  item: { introKind?: string | null; introSessionKey?: string | null } | null,
+  liveSessionKey: string | null | undefined,
+): boolean {
+  return item?.introKind === 'link'
+    && !!item.introSessionKey
+    && !!liveSessionKey
+    && item.introSessionKey !== liveSessionKey;
+}
+
 // Does the track now starting already bring its OWN spoken line to this
 // boundary — an auto-DJ link, or a listener request's intro? If so a
 // boundary-deferred wall-clock segment (the station ident) must NOT also air

@@ -81,6 +81,11 @@ test('voiceUri always carries the id, and keeps the gain form it always had', ()
     'annotate:liq_amplify="-3 dB",subwave_voice="deadbeef":/tmp/a.wav',
     'the gain keeps its exact `<n> dB` spelling and stays first',
   );
+  assert.equal(
+    voiceUri('/tmp/a.wav', 0, 'deadbeef', 'pause123'),
+    'annotate:subwave_voice="deadbeef",subwave_pause_delivery="pause123":/tmp/a.wav',
+    'a pause delivery carries the stable id the mixer acknowledges',
+  );
 });
 
 // 44-byte canonical WAV header: 8000 bytes of data at a byteRate of 8000 = 1s.

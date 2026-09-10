@@ -30,6 +30,7 @@ export function hydrateShow(s: Partial<Show>): Show {
     personaId: m.personaId ?? '',
     guestPersonaIds: Array.isArray(m.guestPersonaIds) ? m.guestPersonaIds : [],
     banter: m.banter ?? false,
+    pauseTalk: m.pauseTalk ?? false,
     moods: Array.isArray(m.moods) ? m.moods : [],
     themeId: m.themeId ?? '',
     genres: Array.isArray(m.genres) ? m.genres.map(g => String(g).trim()).filter(Boolean) : [],
@@ -100,6 +101,7 @@ export function showPayload(s: Show) {
     guestPersonaIds: (s.guestPersonaIds || []).filter(id => id !== s.personaId),
     // Banter only means something with guests in the studio.
     banter: (s.guestPersonaIds?.length ?? 0) > 0 && s.banter,
+    pauseTalk: s.pauseTalk === true,
     moods: s.moods,
     themeId: s.themeId || '',
     genres: s.genres.map(g => g.trim()).filter(Boolean),
@@ -204,5 +206,4 @@ export function showRow(
     ok,
   };
 }
-
 

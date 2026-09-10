@@ -2,8 +2,8 @@
 // pure helpers that read them. Part of the settings/ split — see ../settings.ts.
 
 import { config } from '../config.js';
-// artist-guard.ts is a leaf (imports only music/recency.ts), so no cycle back
-// through settings.
+// Pure policy constant — artist-guard.ts imports only music/recency.ts, which
+// imports nothing, so this stays a leaf and can't cycle back through settings.
 import { ARTIST_VARIETY_WINDOW } from '../broadcast/dj-agent/artist-guard.js';
 import {
   BEDS_CROSS_SEC_BOUNDS,
@@ -47,113 +47,157 @@ export const DEFAULTS = {
   // file is read once at startup.
   jingleRotate: 'mixer' as JingleRotateOwner,
   crossfadeDuration: 10.0, // seconds
-  // `smooth_add`'s `p`: the fraction of music LEFT UP, not the cut (0.22 is
-  // ~-13 dB, 0.30 is ~-10). Read once at mixer startup from
-  // liquidsoap_duck_{voice,intro}.txt, so a change needs a mixer restart.
-  // `voice` is the heavy say.txt duck; `intro` the light talk-over duck.
+  // How far the music drops under each spoken layer — `smooth_add`'s `p`, so
+  // the number is what is LEFT UP, not the cut: 0.22 is ~-13 dB, 0.30 is ~-10.
+  // These are exactly the literals radio.liq carried before they were settings,
+  // so an upgrade is byte-identical. Read once at mixer startup out of
+  // liquidsoap_duck_voice.txt / liquidsoap_duck_intro.txt — a change needs a
+  // mixer restart. `voice` is the heavy solo-DJ duck (say.txt: idents, hourly
+  // time, weather, request intros); `intro` is the light talk-over duck
+  // (intro.txt: between-track links) that leaves the song audible underneath.
   ducking: { voice: 0.22, intro: 0.30 },
-  // Cap on autonomously-picked track length; 0 = no cap (#447). A show's own
-  // maxTrackSeconds overrides it. Listener requests bypass it.
+  // Station-wide cap on autonomously-picked track length; 0 = no cap (#447). A
+  // show's own maxTrackSeconds overrides it (0 there = unlimited). Listener
+  // requests always bypass it.
   maxTrackSeconds: 0,
-  // Fade a long track out at the next show change (#1574). A show's own
-  // `fadeAtShowEnd` (null = inherit) overrides it; absent at both levels = off.
-  // The cut rides the #447 liq_cue_out stamp; policy in broadcast/show-boundary.ts.
+  // Fade a long track out at the next show change instead of letting it spill
+  // into the following show (#1574). Off by default, and a show's own
+  // `fadeAtShowEnd` (null = inherit) overrides it — absent at both levels is
+  // the pre-existing behaviour, so an upgrade sounds byte-identical. The cut
+  // rides the #447 liq_cue_out stamp; the policy is broadcast/show-boundary.ts.
   fadeAtShowEnd: false,
-  // Hourly archive output, off by default (the second MP3 encoder is the
-  // largest constant CPU cost, #137). retentionDays bounds disk growth
-  // (~1.4 GB/day at 128 kbps); 0 = keep forever.
+  // Hourly archive output. Off by default — the second MP3 encoder is the
+  // largest constant CPU cost in the broadcast container (#137). retentionDays
+  // bounds disk growth (~1.4 GB/day at 128 kbps); normalizeArchiveRetentionDays
+  // keeps pre-existing keep-forever installs at 0 so upgrades never delete tapes.
   archive: { enabled: false, bitrate: 128, retentionDays: 30 },
-  // Scheduled rotating config backups (#1570). OFF by default, load-bearing:
-  // this is the only scheduled job that DELETES operator files. `keep` is inert
-  // until a cadence is picked.
+  // Scheduled, rotating config backups (#1570). OFF by default and that is
+  // load-bearing: this is the only scheduled job that DELETES operator files,
+  // so an upgrade that changes nothing must produce byte-identical behaviour —
+  // no zips written, no zips pruned. `keep` is inert until a cadence is picked.
   backups: { cadence: 'off' as const, keep: BACKUP_KEEP_DEFAULT },
   stream: {
-    // Secondary Ogg-Opus mount, off by default: only Blink selects it and it
-    // costs a continuous encoder plus a 44.1->48k resample.
+    // Secondary Ogg-Opus mount (/stream.opus). Off by default — only Blink
+    // selects it (web/hooks/usePlayer.ts), and it costs a continuous encoder
+    // plus a 44.1→48k resample. /stream.mp3 always serves everyone.
     opusEnabled: false,
     opusBitrate: 96,
     flacEnabled: false,
     aacEnabled: false,
     aacBitrate: 192,
     bitrate: 192,
-    // Icecast <burst-size> in SECONDS, not bytes; the entrypoint converts per
-    // mount (#993). Also how far behind the live edge every listener sits, so
-    // /now-playing publishes it and players subtract it (#1114).
+    // Icecast <burst-size> expressed in SECONDS, not bytes: a fixed byte count
+    // stretches at low bitrates (512 KB is ~22s at 192k but ~66s at 64k), so the
+    // entrypoint converts per mount (#993).
+    //
+    // This is also how far behind the live edge every listener sits for their
+    // whole connection, so /now-playing publishes it as stream.bufferSeconds and
+    // players subtract it to line titles up with the audio in someone's ears (#1114).
     bufferSeconds: 22,
-    // ICY (out-of-band) titles on the Ogg mounts, on by default: most clients
-    // freeze on the in-band Ogg comment read at connect (#1052). foobar2000 is
-    // the exception, hence the toggle. MP3/AAC always use ICY.
+    // ICY (out-of-band) titles on the Ogg mounts. ON by default: most clients
+    // read the in-band Ogg comment once at connect and then freeze on that title
+    // (#1052). foobar2000 is the exception — it parses chained-Ogg tags correctly
+    // and the ICY channel breaks its Ogg-FLAC metadata — hence a toggle.
+    // MP3/AAC always use ICY and are unaffected.
     oggIcyMetadata: true,
     // Idle pause (broadcast/stream-idle.ts): after idleAfterMinutes with zero
-    // listeners the mounts serve silence and the music chain stops being pulled.
+    // listeners the mounts keep serving silence but the music chain stops being
+    // pulled — no decode, no Navidrome downloads — resuming mid-track on connect.
     idleWhenEmpty: false,
     idleAfterMinutes: 10,
-    // Icecast <limits><clients>, applied at broadcast boot. ICECAST_MAX_CLIENTS
-    // in the environment WINS over this; the entrypoint logs which it took.
+    // Icecast's <limits><clients> ceiling, applied at broadcast boot. 100 is
+    // the figure the entrypoint has always defaulted to, so an upgrade renders
+    // a byte-identical icecast.xml. An ICECAST_MAX_CLIENTS in the environment
+    // still WINS over this — the var predates the setting and is wired into
+    // every compose file — which is why the entrypoint logs which source it
+    // took. The setting exists for AIO/Unraid, where there is no .env to put
+    // the var in at all.
     maxListeners: 100,
-    // Listener-country fallbacks for the audience rollup (#1485), both empty by
-    // default (only `cf-ipcountry` is read). `countryHeader` names the header a
-    // proxy sets instead; `geoipDbPath` points at an operator-supplied MaxMind
-    // database. GEOIP_DB_PATH in the environment wins over the setting.
+    // Listener-country fallbacks for the audience rollup (#1485). Both empty by
+    // default, which is byte-identical to the pre-existing behaviour: only
+    // `cf-ipcountry` is read and a station behind a plain reverse proxy records
+    // a blank country. `countryHeader` names whatever header that proxy sets
+    // instead (`x-country-code`, `x-geoip-country`, …); `geoipDbPath` points at
+    // an operator-supplied MaxMind-format database for an offline IP lookup
+    // when no header carries the answer. GEOIP_DB_PATH in the environment wins
+    // over the setting, like every other config path.
     countryHeader: '',
     geoipDbPath: '',
   },
-  // Per-track loudness normalisation, read live at annotate time. maxBoostDb
-  // caps the upward direction only and is further limited by measured peak
-  // headroom. `source` picks ReplayGain tags vs the analyzer's LUFS (#998).
+  // Per-track loudness normalisation (music/mix.ts gainForLoudness), read live at
+  // annotate time. maxBoostDb caps the upward direction only, and the boost is
+  // further limited by the track's own measured peak headroom. `source` picks the
+  // figure: embedded ReplayGain tags (whole-file R128) vs the analyzer's measured
+  // LUFS (leading window only) (#998).
   loudness: {
     targetLufs: -14,
     maxBoostDb: 6,
     source: 'replaygain-then-measured' as LoudnessSource,
   },
   weather: {
-    // The only location Open-Meteo sees; never reaches a prompt or a public
-    // response.
+    // The ONLY location data Open-Meteo sees, and the only kind that never
+    // reaches a prompt, a listener, or a public response.
     lat: 30.7333,
     lng: 76.7794,
-    // Operator-facing label. Never spoken, never published.
+    // Operator-facing label for those coordinates. Never spoken, never published.
     locationName: 'Punjab',
-    // Where the station CLAIMS to broadcast from: the prompt's {location} and
-    // `location` in GET /dj + /now-playing. Blank falls back to locationName,
-    // so the public label can stay broader than the weather coordinates.
+    // Where the station CLAIMS to broadcast from: the prompt's {location}, and
+    // `location` in GET /dj + /now-playing. Blank falls back to locationName.
+    // Lets an operator name a broad area while the weather reads exact
+    // coordinates — a public station URL shouldn't be able to dox its operator.
     onAirLocation: '',
     units: 'metric' as 'metric' | 'imperial',
   },
-  // Substituted into the prompt's {station} and returned by GET /dj.
+  // The operator's station name (the product is still SUB/WAVE). Substituted into
+  // the prompt's {station} and returned by GET /dj.
   station: 'SUB/WAVE',
-  // Blurb for link previews. Deliberately NOT the on-air persona's tagline,
-  // which changes with the hour (#1086). Empty = the web app uses the tagline.
-  // Never enters the DJ prompt.
+  // Blurb for link previews (og:description et al). Deliberately NOT the on-air
+  // persona's tagline — that changes with the hour, so a shared link would
+  // describe itself differently depending on when it was opened (#1086). Empty =
+  // unset, and the web app falls back to the tagline. Never enters the DJ prompt.
   stationDescription: '',
-  // IANA zone for everything with local-time semantics. Empty = container TZ.
+  // IANA zone driving everything with local-time semantics (time-of-day moods,
+  // schedule slots, hourly checks, festival dates). Empty = the container's TZ.
   // Applied live via time.ts setStationTimezone().
   timezone: '',
-  // Display formatting only; does not change schedule or time-of-day semantics.
+  // Display copy / time formatting only; en-US switches visible clocks to AM/PM
+  // without changing schedule or time-of-day semantics.
   locale: 'en-GB' as 'en-GB' | 'en-US',
-  // Id only; the token map lives with the theme registry (themes.ts +
-  // ${STATE_DIR}/themes/).
+  // Station-wide palette. Stored as an id only — the token map lives with the
+  // theme registry (controller/src/themes.ts + ${STATE_DIR}/themes/) so it stays
+  // in sync with the file on disk.
   theme: { active: DEFAULT_THEME_ID },
-  // Falls back to FESTIVAL_DEFAULTS when empty/absent.
+  // Mood-forming dates the DJ leans into. Falls back to FESTIVAL_DEFAULTS when
+  // empty/absent.
   festivals: FESTIVAL_DEFAULTS,
-  // Operator-editable mood system: vocabulary + per-mood CLAP prompt, the
-  // day-period map and the weather-condition map ('' = no steer).
+  // Operator-editable mood system (/admin/moods): the vocabulary + per-mood CLAP
+  // prompt, the day-period → mood map, and the weather-condition → mood map
+  // ('' = no steer). Read live via moodVocab()/moodScheduleFor()/weatherMoodFor().
   moods: MOOD_DEFAULTS,
   moodSchedule: PERIOD_MOOD_DEFAULTS,
   weatherMoods: WEATHER_MOOD_DEFAULTS,
-  // Player toggles, read via GET /state and applied live. `skin` is a slug
-  // only: the web app owns the registry and falls back on an unknown id, so
-  // nothing validates it here.
+  // Presentational player toggles, read via GET /state and applied live.
+  // `boothBuddy` gates the DJ-line mascot. `skin` is a slug only — the web app
+  // owns the registry and falls back on an unknown id, so nothing validates it
+  // here. `tuneInOverlay` gates the full-bleed tune-in gate; off drops the
+  // takeover and listeners start via the skin's own play button.
   ui: { boothBuddy: false, skin: 'classic', tuneInOverlay: true },
-  // Two independent locks over ONE shared password (#478). `privatePlayer` is
-  // UI-level and applies live; `listenerAuth` re-renders icecast.xml so it needs
-  // a mixer restart (password changes apply live). Either lock on REQUIRES a
-  // password — see update().
-  // `publishPersonaSouls` is NOT a lock and takes no part in that rule: it gates
-  // roster-wide disclosure of persona souls. GET /dj is unaffected, having
-  // always published the ON-AIR soul one at a time.
+  // Two independent locks over ONE shared password (#478). `privatePlayer` gates
+  // the public web pages — UI-level, applies live. `listenerAuth` puts Icecast
+  // listener auth on every mount via URL auth calling back into
+  // POST /listener-auth, so toggling it re-renders icecast.xml and needs a mixer
+  // restart; password changes apply live. Either lock on requires a password —
+  // see update().
+  //
+  // `publishPersonaSouls` is NOT a lock and takes no part in that password rule.
+  // It governs disclosure on the roster-wide public reads (/schedule's persona
+  // index, GET /personas). A soul is the persona's system prompt, not a bio, so
+  // handing over every one at once is opt-in. GET /dj is deliberately unaffected:
+  // it has always published the ON-AIR soul, one at a time.
   privacy: { privatePlayer: false, listenerAuth: false, password: '', publishPersonaSouls: false },
-  // Listener-request gates, applied live: queue depth, requests/hour, per-track
-  // repeat cooldown (0 = off), minimum gap, and a single IP's share.
+  // Listener-request gates, all applied live. They bound the rate from several
+  // angles at once: queue depth, requests/hour station-wide, per-track repeat
+  // cooldown (0 = off), minimum gap between any two, and a single IP's share.
   requests: {
     enabled: true,
     maxPending: 6,
@@ -163,81 +207,136 @@ export const DEFAULTS = {
     perIpHourlyCap: 8,
     onePendingPerIp: true,
   },
-  // '' = DEFAULT_DJ_PROMPT_TEMPLATE. Always the RESOLVED text of the active
-  // djPrompts entry, so readers never have to chase the library.
+  // Global DJ prompt template; '' = DEFAULT_DJ_PROMPT_TEMPLATE. Always the
+  // RESOLVED text of the active djPrompts entry, so renderDjPrompt (and an older
+  // controller sharing the same settings.json) never has to chase the library.
   djPrompt: '',
   djPrompts: [],
   activeDjPromptId: '',
-  // Appended to EVERY spoken-output prompt (renderDjPrompt, agentPersonaPreamble,
-  // castHouseRulesBlock), none of which the djPrompt template reaches
-  // (#1182, #1420).
+  // Per-station rules (TTS control tags, "spell out numbers", orthography)
+  // appended to EVERY spoken-output prompt — renderDjPrompt, agentPersonaPreamble
+  // and the multi-voice cast prompts (castHouseRulesBlock), none of which the
+  // djPrompt template reaches (#1182, #1420).
   djHouseRules: '',
-  // false = the wall clock stays off air; daypart colour survives. Manual
-  // /dj/segment triggers stay exempt. Policy in broadcast/clock-policy.ts.
+  // Station clock switch. false = the wall clock stays off air: no time of day
+  // in links, idents, hand-overs, ad-libs, banter or programme beats, and the
+  // automatic top-of-the-hour time check stands down. Daypart colour survives
+  // ("after dark", "weekend", "late night", and the Period line) because that
+  // is atmosphere rather than a clock reading. Manual /dj/segment triggers stay
+  // exempt, so the operator's "Time check" pad still fires and still speaks the
+  // time: off means "stop doing this unprompted". Policy lives in exactly one
+  // place — broadcast/clock-policy.ts. Applies live; no restart.
   djSpeakClock: true,
-  // Talk placement (#1485 FR 5b). false = every scheduled segment but the
-  // ident airs the minute it is written, ducking the song. true = every
-  // SCHEDULED segment is held for the next track boundary, so a held segment
-  // may air a track late (bounded by PENDING_VOICE_MAX_AGE_MS). Manual /dj
-  // triggers stay exempt. Policy in broadcast/talk-air.ts.
+  // Talk placement switch (#1485 FR 5b). false = the pre-existing behaviour:
+  // every scheduled segment except the station ident airs the minute it is
+  // written, ducking whatever song is mid-play. true = every SCHEDULED spoken
+  // segment — hourly check, programme beats, banter, idents and the segment
+  // director's spots — is rendered now and held for the next track boundary,
+  // so the station only talks between songs. Manual /dj triggers stay exempt
+  // (an explicit press always fires, the same exemption djSpeakClock carries).
+  // The trade is stated where the operator can read it: a held segment may air
+  // a track later than the minute it was written for, so a time check can read
+  // the clock late — the daypart stamp and PENDING_VOICE_MAX_AGE_MS are what
+  // bound it. Policy lives in exactly one place — broadcast/talk-air.ts.
+  // Applies live; no restart.
   djTalkOnlyBetweenTracks: false,
-  // Station-clock minutes BEFORE a show boundary that the outgoing host signs
-  // off (#1576); 5 = :55 of the final hour. Must be a multiple of
-  // HANDOVER_OFFSET_STEP_MINUTES, the stride the talk table's programme row
-  // samples on — a window off that stride never airs. The ordering half carries
-  // no dial: the incoming host always waits for one closing track.
+  // Show opt-in only; clips shorter than this remain ordinary ducked speech.
+  pauseTalkMinSeconds: 20,
+  // Optional programme-opening line folded into the first hourly check after a
+  // scheduled show change. Off preserves the established terse time check.
+  djBehaviour: {
+    showWelcome: false,
+    sameHostAcknowledgement: false,
+    extendedSleeveNotes: false,
+    releaseYearMentions: 'regular',
+  },
+  // Show handover timing (#1576). How many station-clock minutes BEFORE a show
+  // boundary the outgoing host signs off — the programme outro beat's window.
+  // 5 is exactly where the beat has always fired (:55 of the final hour), so an
+  // upgrade is byte-identical; raise it to give the sign-off more room to
+  // breathe before the incoming host opens.
+  //
+  // Must be a multiple of HANDOVER_OFFSET_STEP_MINUTES: the talk table's
+  // programme row samples the station clock on that stride, and a window it
+  // cannot land on is a sign-off that never airs. Enforced at the save path and
+  // repaired at load.
+  //
+  // The ORDERING half of the handover carries no dial: the final outgoing track
+  // owns the complete sign-off/greeting pair, while between-tracks placement
+  // holds that pair for the first eligible seam at the boundary.
   handover: { offsetMinutes: 5 },
-  // One persona at a time; a scheduled show can override who is on air.
+  // One persona is active at a time; a scheduled show can override who is on air.
   personas: SEED_PERSONAS,
   activePersonaId: SEED_PERSONAS[0].id,
   shows: [],
-  // 7x24 grid of showId|null; an empty hour runs autonomously.
+  // 7-day x 24-hour grid of showId|null. An empty hour = run autonomously.
   schedule: emptyWeek(),
-  // Timed takeover (#930): an epoch-ms window outranking the weekly grid.
-  // Persisted in schedule.json.
+  // Timed takeover (#930): an epoch-ms window that outranks the weekly grid in
+  // resolveActiveShow while live. Persisted in schedule.json.
   scheduleOverride: null,
   tts: {
-    // false = music only, and scripts are never GENERATED so no tokens are
-    // spent on talk. Picks and jingles keep running (silence those with
-    // jingleRatio: 0). Manual triggers exempt. Policy in broadcast/voice-policy.ts.
+    // Station-wide voice switch. false = music only: no links, idents, hourly
+    // checks, segments, banter, mic-passes, programme beats or request intros —
+    // and the scripts are never GENERATED, so an off station spends no tokens on
+    // talk. Picks keep running and jingles keep playing (silence those with
+    // jingleRatio: 0). Manual /dj/segment triggers stay exempt. Policy lives in
+    // exactly one place: broadcast/voice-policy.ts.
     enabled: true,
     defaultEngine: 'piper',
-    // Rescue voice, the TTS analogue of settings.llm.fallback. Unlike the
-    // hardcoded chain behind it (defaultEngine -> piper -> kokoro) it carries a
-    // VOICE, not just an engine; same shape as a persona's tts block.
+    // Operator-chosen rescue voice — the TTS analogue of settings.llm.fallback.
+    // Speaks when a persona's engine is known-unavailable up front or throws
+    // mid-render. Unlike the hardcoded chain behind it (defaultEngine → piper →
+    // kokoro) it carries a VOICE, not just an engine. Same {engine, voice,
+    // cloudProvider} shape as a persona's tts block — audio/tts.ts hands it to
+    // speakWith() as a synthetic persona.
     fallback: { enabled: false, engine: 'piper', voice: '', cloudProvider: 'openai' },
-    // Advisory only; nothing branches on it (availability comes from
-    // isAvailable() at call time). The CLI reads it to decide COMPOSE_PROFILES.
+    // Advisory only: does the operator intend to run the tts-heavy sidecar?
+    // Nothing branches on it — availability is read from isAvailable() at call
+    // time. Both wizards write it so each surface knows the other's choice, and
+    // the CLI uses it to decide whether to write COMPOSE_PROFILES.
     heavyEnabled: false,
     kokoro: { voice: 'bf_isabella', lang: '' },
-    // Used when chatterbox resolves with no persona voice; empty = model default.
+    // Reference voice used when the engine resolves to chatterbox with no
+    // persona-level voice. Empty = the model's built-in default.
     chatterbox: { referenceVoice: '' },
-    // Used when pocket-tts resolves with no persona voice.
+    // Built-in voice id used when the engine resolves to pocket-tts with no
+    // persona-level voice.
     pocketTts: { voice: 'alba' },
     // Used when an engine resolves to 'cloud'. A persona chooses provider+voice;
-    // `model` is shared. `enabled: false` reports unavailable regardless of key.
+    // `model` stays shared. `enabled: false` makes the engine report unavailable
+    // regardless of key, so the pickers grey it out.
     cloud: {
       enabled: false,
       provider: 'openai',
       model: 'gpt-4o-mini-tts',
       voice: 'alloy',
-      // Legacy inline key; new credentials live in secrets.env.
+      // Legacy managed-provider inline key; new credentials live in secrets.env.
       apiKey: '',
-      // Bearer for authenticated openai-compatible servers; stays provider-scoped.
+      // Bearer for authenticated openai-compatible servers. Stays
+      // provider-scoped even when personas use compat alongside a different
+      // station-wide cloud provider.
       compatApiKey: '',
-      // Includes the /v1 suffix. Required only for 'openai-compatible'.
+      // Includes the /v1 suffix. Required — and only used — when provider is
+      // 'openai-compatible'.
       baseUrl: '',
-      // ElevenLabs voice_settings, sent only for that provider; ranges and
-      // defaults match ElevenLabs' own (#696).
+      // ElevenLabs voice_settings, sent only for that provider. Ranges match
+      // ElevenLabs' native ones; defaults mirror its UI so an unconfigured
+      // install renders like the SDK's baseline (#696).
       voiceStability: 0.5,
       voiceStyle: 0,
       voiceSimilarityBoost: 0.75,
       voiceUseSpeakerBoost: true,
-      // openai-compatible only: send `speed` upstream instead of stretching
-      // locally with ffmpeg atempo. Off by default because compat servers are
-      // uneven with the field (#942). Inert for openai/elevenlabs.
+      // openai-compatible only: send the computed speech `speed` upstream in the
+      // request body instead of applying it locally via ffmpeg atempo. Off by
+      // default because compat servers are uneven with the field (issue #942:
+      // some shims produced comb-filtered audio when `speed` was present), so we
+      // stretch locally when unsure. Turn it on when the server honours `speed`
+      // natively — e.g. the hosted DJ Brain voice — since native speed beats
+      // time-stretch artifacts. Inert for openai / elevenlabs (they always send
+      // speed). See speedDirective() in llm/internal/speech/cloud-speech.ts.
       sendSpeed: false,
-      // Fish Audio S2.1 controls; persisted always, sent only for fish-audio.
+      // Fish Audio S2.1 controls. Persisted alongside the shared cloud config so
+      // switching providers preserves the tuning, but sent only for fish-audio.
       temperature: 0.7,
       topP: 0.7,
       latency: 'normal' as 'low' | 'normal' | 'balanced',
@@ -268,83 +367,123 @@ export const DEFAULTS = {
     // Legacy single inline-key slot, superseded by `keys`. Always '' after
     // load(); resolution reads `keys`, never this.
     apiKey: '',
-    // Per-provider inline API keys (#657). Only inline-key providers
-    // (openai-compatible, locca) populate this; env-var providers use
-    // state/secrets.env. Namespacing stops a switch leaving one provider's key
-    // where another reads.
+    // Per-provider inline API keys (#657). Only the inline-key providers
+    // (openai-compatible, locca) populate this from the UI; env-var providers
+    // keep their key in state/secrets.env. Namespacing by provider means
+    // switching providers can never leave one provider's key where another reads.
     keys: {},
     // Empty → config.ollama.url. Only used when provider === 'ollama'.
     ollamaUrl: '',
-    // Per-provider base URLs (#1082); `baseUrl` below is derived from this and
-    // kept only as a migration source.
+    // Per-provider base URLs, so switching providers never overwrites another
+    // provider's saved URL (#1082). `baseUrl` below is derived from this in
+    // load()/applyLlmLegPatch() and kept only as a migration source.
     providerBaseUrls: {} as Record<string, string>,
     baseUrl: '',
-    // Extra request headers on every openai-compatible / locca call (#1618),
-    // for gateways routing on a header rather than the bearer token. Ignored by
-    // every other provider.
+    // Extra request headers sent on every openai-compatible / locca call (#1618).
+    // Empty by default, so an untouched station sends exactly what it did before
+    // the field existed. For gateways that route on a header rather than the
+    // bearer token alone (OpenCode Zen Go's `x-opencode-session` is the case
+    // this was filed for). Ignored by every other provider.
     headers: {} as Record<string, string>,
-    // Chain-of-thought for reasoning models. Off: an uncapped <think> block on a
-    // small model balloons every call.
+    // Let reasoning models emit a chain-of-thought. Off by default: the DJ writes
+    // short scripts and structured picks that don't benefit from it, and an
+    // uncapped <think> block on a small model balloons every call.
     reasoning: false,
     // How the structured-output paths force a tool call. 'required' is the
-    // reliable path for local models that ignore JSON mode; 'auto' is for servers
-    // that crash on tool_choice:"required" (#570).
+    // reliable path for local models that ignore JSON mode. Switch to 'auto' ONLY
+    // if your server crashes on tool_choice:"required" — recent vLLM implements it
+    // via a guided-decoding backend some images mishandle (#570). On 'auto' the
+    // done-tool path keeps its activeTools pinning, so a capable model still calls
+    // the tool and misses fall back to the pool picker.
     toolChoice: 'required',
     // DISCOVERY rounds the DJ agent gets before it must commit (`done`).
-    // 0 = follow the provider capability table; 1-5 overrides it (the descriptor
-    // keys off the PROVIDER and cannot know which model it serves). Every round
-    // is a separate billable call and all rounds share one agentTimeoutMs.
-    // Raising it never buys extra `done` attempts: the step cap is budget + 1.
+    // 0 = follow the provider capability table (discoveryStepsFor()); 1–5 overrides.
+    //
+    // The override exists because the descriptor keys off the PROVIDER and can't
+    // know which model it serves, and the two failure directions are opposite.
+    // RAISE it when a capable model sits behind a forced-tool provider — one
+    // cornered round plus an empty seed tool leaves it nothing to commit. LOWER it
+    // when a cloud model wanders, or to cut tokens: every round is a separate
+    // billable call against dailyTokenCap, and all rounds share one agentTimeoutMs.
+    //
+    // Raising it never buys extra attempts at `done` — the step cap is budget + 1,
+    // so the run still commits once before handing off to recovery. The picker
+    // prompt follows this number, so the model is told how many rounds it has.
     discoverySteps: 0,
-    // Ollama num_ctx (local Ollama only). Ollama's 4096 default silently
-    // truncates the front of a ~8k+ picker prompt, so the model never calls
-    // `done` (#291). 0 = don't send num_ctx.
+    // Ollama num_ctx, local Ollama only. Ollama's own 4096 default silently
+    // truncates the front of a ~8k+ picker prompt — dropping the system
+    // instructions and tool defs — so the model never calls `done` (#291). 16384
+    // holds a full turn on a 7–9B model / 12GB GPU; reasoning models need more.
+    // 0 → don't send num_ctx. Ignored for `:cloud` models and other providers.
     numCtx: 16384,
-    // Repetition penalty for local openai-compatible / locca servers; 1.0 = off.
-    // Injected into the request body (the AI SDK has no field for it) and ignored
-    // by every other provider, Ollama included.
+    // Repetition penalty for local openai-compatible / locca servers. llama.cpp
+    // defaults to 1.0 = OFF, which lets the tool-loop picker repeat a token block
+    // until it hits the output cap and never calls `done`. Raise toward 1.25 if a
+    // model still loops; 1.0 disables (e.g. a vLLM server that rejects the body
+    // field). Injected into the request body — the AI SDK has no field for it —
+    // and ignored by every other provider, Ollama included.
     repeatPenalty: 1.15,
-    // On: the session DJ agent drives picks/links/requests as a tool-loop.
-    // Off: the stateless pool picker runs instead.
+    // On: the session DJ agent drives picks, links and requests as a tool-loop
+    // over the session chat history. Off: the stateless pool picker runs instead,
+    // still inside a session and still logged.
     pickerAgent: true,
-    // Never re-air any of the last N DISTINCT plays. Non-relaxable: it survives
-    // the filterPickerCandidates starvation cascade. Clamped to library size at
-    // use; 0 disables; listener requests exempt. See music/recency.ts.
+    // The picker never re-airs any of the last N DISTINCT plays. Non-relaxable
+    // (survives the filterPickerCandidates starvation cascade), which closes the
+    // hole where a thin mood cluster let the cascade re-serve a just-played song.
+    // Clamped to library size at use so a small catalogue never fully blocks; 0
+    // disables. Listener requests are exempt. See music/recency.ts.
     noRepeatWindow: config.queue.noRepeatWindow,
-    // Artist spacing in slots. Soft: if the run surfaced nothing fresher the
-    // original pick stands, so it never costs a slot. 0 leaves only the
-    // always-on back-to-back guard.
+    // Artist spacing, in slots: the agent path re-picks when its choice repeats
+    // an artist from the last N slots, not just the one on air. Soft by design —
+    // if the run surfaced nothing fresher the original pick stands, so this
+    // never costs the station a slot. 0 leaves only the back-to-back guard,
+    // which is always on. See broadcast/dj-agent/artist-guard.ts.
     artistVarietyWindow: ARTIST_VARIETY_WINDOW,
     // Gives the listener-request agent (never the per-track picker) an
-    // `identifyRequestedTrack` tool. No-op unless searchReady().
+    // `identifyRequestedTrack` tool that resolves a DESCRIBED track via web search
+    // and matches it locally. Off by default: needs a search provider and costs a
+    // web round-trip plus a small extraction call per use. No-op unless
+    // searchReady().
     requestWebResolve: false,
-    // Wall-clock ceiling on one DJ-agent generation. Main and recovery runs each
-    // get the full budget, so worst case per pick is ~2x this.
+    // Hard wall-clock ceiling on a single DJ-agent generation, enforced by
+    // withDeadline. The main and recovery runs each get the full budget, so worst
+    // case per pick is ~2x this before the stateless fallback. Reasoning-heavy
+    // cloud models routinely need 20-40s.
     agentTimeoutMs: 45000,
-    // Pause autonomous DJ LLM work when Icecast reports zero listeners; the
-    // stream coasts on the auto playlist.
+    // Pause autonomous DJ LLM work and listener requests whenever Icecast reports
+    // zero listeners — the stream coasts on the auto playlist.
     pauseWhenEmpty: false,
-    // Daily UTC token budget; 0 = unlimited. At budgetSoftPct the DJ drops to
-    // the pool picker and mutes optional segments; at the cap it stops calling
-    // the model at all and coasts on auto.m3u. Music never stops.
-    // Enforced in broadcast/dj-budget.ts.
+    // Daily token budget against bill-shock on a metered provider (the DJ calls
+    // the model on essentially every transition, 24/7). 0 = unlimited. When set,
+    // the day's UTC usage drives two tiers: at budgetSoftPct the DJ drops to the
+    // cheap pool picker and mutes optional segments; at the cap it stops calling
+    // the model entirely and coasts on the LLM-free auto playlist — music never
+    // stops. Enforced in broadcast/dj-budget.ts.
     dailyTokenCap: 0,
-    // Percent of dailyTokenCap entering the soft tier; 0 or 100 disables it.
+    // Percent of dailyTokenCap that enters the soft tier. 0 or 100 disables it and
+    // goes straight from normal to hard at the cap.
     budgetSoftPct: 80,
-    // On: listener requests still reach the agent over the hard cap. No effect
-    // until dailyTokenCap is set.
+    // On: listener requests are still answered by the agent over the hard cap — a
+    // human asked. Off: they fall through to the stateless matcher cascade. No
+    // effect until dailyTokenCap is set.
     exemptRequests: true,
     // Per-call max OUTPUT tokens, distinct from the cumulative dailyTokenCap.
-    // 0 = the strategy built-ins (4000 text / 8000 object / 8000 agent); a value
-    // (clamped 500-8000) overrides all three (#712).
+    // 0 = the strategy primitives' built-ins (4000 text / 8000 object / 8000
+    // agent); a value (clamped 500–8000) overrides all three. The lever for a
+    // local model on a small context window, where an 8000-token allowance can
+    // crowd out the system prompt and risk truncation (#712).
     maxOutputTokens: 0,
-    // Capture every outbound request body to ${STATE_DIR}/logs/llm-debug.log
-    // (last 10, newest first) and stderr. LLM_DEBUG_RAW forces it on.
+    // Capture every outbound request body to ${STATE_DIR}/logs/llm-debug.log (last
+    // 10, newest first) and stderr. LLM_DEBUG_RAW forces it on. The admin toggle
+    // exists so no-CLI operators can flip it without editing env.
     debugRawRequests: false,
-    // Backup LLM. A call whose primary host is UNREACHABLE (refused/DNS/timeout,
-    // NOT a 429/5xx from a live host) retries once here, then routes back to the
-    // primary next call. Station-level toggles are not per-leg, and library
-    // tagging does NOT fail over.
+    // Optional backup LLM. When enabled, a call whose primary host is UNREACHABLE
+    // (connection refused / DNS / timeout — not a 429/5xx from a host that's up)
+    // retries once here, then routes straight back to the primary next call
+    // (stateless fail-back). Built for "primary is a GPU box that's sometimes
+    // powered off" (discussion #320). Station-level toggles (pickerAgent,
+    // pauseWhenEmpty) are not per-leg, and heavy work (library tagging via
+    // embeddings) does NOT fail over.
     fallback: {
       enabled: false,
       provider: 'ollama',
@@ -353,75 +492,97 @@ export const DEFAULTS = {
       ollamaUrl: '',
       providerBaseUrls: {} as Record<string, string>,
       baseUrl: '',
-      // Per-leg: the backup may be a different gateway with its own header.
+      // Per-leg like providerBaseUrls: the backup may be a different gateway
+      // with its own routing header.
       headers: {} as Record<string, string>,
       reasoning: false,
       toolChoice: 'required',
       numCtx: 16384,
       repeatPenalty: 1.15,
-      // Per-leg: the backup may run a different model, so it resolves its own
-      // budget.
+      // Per-leg like toolChoice/numCtx: the backup may be a different provider
+      // running a different model, so it resolves its own budget.
       discoverySteps: 0,
     },
   },
-  // Embedding-propagated library tagger (music/tag-library.ts). `provider`/
-  // `model` default to following settings.llm; Anthropic has no first-party
-  // embedding API, so that leg needs a different provider.
+  // Embedding-propagated library tagger (music/tag-library.ts): embed every
+  // track's metadata text once, LLM-tag a small representative seed set, then
+  // KNN-propagate moods/energy to the rest — ~10x fewer LLM calls than
+  // brute-force batched tagging.
+  //
+  // `provider`/`model` default to following settings.llm. Anthropic has no
+  // first-party embedding API, so Anthropic users need a different embedding
+  // provider or an OPENAI_API_KEY for this leg.
   embedding: {
     enabled: true,
     provider: '',         // empty → follow settings.llm.provider
     model: '',            // empty → sensible default per provider
-    // Embeddings often need a different endpoint than chat. Empty = inherit
-    // settings.llm's URL, correct only when the chat server also embeds
-    // (e.g. Ollama). See #405, #1082.
+    // Embeddings often need a DIFFERENT endpoint than chat — one llama.cpp/locca
+    // server can't serve both, so a dedicated embedding server runs on its own
+    // port. Empty → inherit settings.llm's URL, which is only correct when the
+    // chat server also does embeddings (e.g. Ollama). See #405, #1082.
     providerBaseUrls: {} as Record<string, string>,
     baseUrl: '',          // deprecated single slot — migration source only
     ollamaUrl: '',        // Ollama embedding server URL (ollama provider)
     apiKey: '',           // empty → inherit settings.llm.apiKey
     seedCount: 0,         // 0 → auto (autoSeedCount: ~4% of the library, 200–2500)
-    // Confidence is topSim x coverage, a product of two sub-1 terms
-    // (tag-propagator.ts), so these gates sit well below 1. New installs only:
-    // loadWithDefaults prefers a stored value.
+    // Confidence is topSim x coverage — a product of two sub-1 terms (see
+    // tag-propagator.ts) — so the original 0.6 gates rejected even strong matches
+    // and dumped the library into expensive active-learning. These only affect new
+    // installs: loadWithDefaults prefers a stored value, so operators are never
+    // silently overridden.
     knnNeighbours: 10,
     moodVoteThreshold: 0.4,
     confidenceThreshold: 0.35,
     maxActiveLearningRounds: 3,
-    // Weight of CLAP audio neighbours in mood propagation (fuseNeighbours).
-    // 0 = text-only; 1 = trust audio as much as text.
+    // CLAP audio fusion in mood propagation: tracks with a "sounds-like" vector
+    // also pull neighbours from the audio-KNN space, scaled by this weight, before
+    // the mood vote (tag-propagator.ts fuseNeighbours). Sound is the stronger mood
+    // signal for instrumentals and thin-metadata tracks, and CLAP neighbours don't
+    // cluster by album. 0 = text-only; 1 = trust audio as much as text.
     audioFusionWeight: 0.5,
     batchSize: 25,
     enrichment: {
-      // Last.fm crowd tags. Tri-state: true = always, false = never, null = auto
-      // (only when a Last.fm api_key is configured). Uses artist.getTopTags,
-      // falling back to Navidrome's getArtistInfo2 when forced on with no key.
+      // Last.fm crowd tags. Tri-state: true = always fetch, false = never, null =
+      // auto (only when a Last.fm api_key is configured).
+      //
+      // Tags come from the Last.fm REST API (artist.getTopTags), reusing the
+      // scrobbling api_key. The older path went through Navidrome's
+      // getArtistInfo2, where vanilla Navidrome's agent only surfaces bio +
+      // images and tags always came back empty; it stays as the fallback when
+      // forced on with no api_key, for custom Navidromes that DO expose tag[].
       lastfmTags: null as boolean | null,
       lyrics: true,       // fetch + include lyric excerpt in embed text
       // Resolve original release years for compilation tracks via MusicBrainz
-      // (#842): a compilation's `year` tag is the compilation's release date.
-      // Keyless API throttled to 1 req/s, so default-on.
+      // (#842) — a compilation's `year` tag is the compilation's release date, so
+      // era-bounded shows both mis-include and miss its tracks until each song's
+      // true year is known. Keyless API (throttled to 1 req/s), so default-on.
       originalYear: true,
     },
   },
+  // Web-search backend for the segment director's web-search capability.
   // `duckduckgo` needs no key; `tavily` and `brave` read SEARCH_API_KEY (or the
   // override here).
   search: {
     provider: 'duckduckgo',
     apiKey: '',
     baseUrl: '',
-    // Comma-separated SearXNG engine pin (#1353); empty sends no engines= param.
+    // Optional comma-separated SearXNG engine pin (#1353). Empty means "send no
+    // engines= param", i.e. the instance's own default engine set.
     searxngEngines: '',
   },
   skills: {
     enabled: {},
   },
   audio: {
-    // CLAP "sounds-like" embeddings. Needs the CLAP stack; without it the
-    // request is a clean no-op and the pass still fills bpm/key.
-    // ANALYZE_AUDIO_EMBEDDING=1 also enables it (env wins ON, never off), as do
-    // the env flags on the two toggles below.
+    // CLAP "sounds-like" embeddings — drive the audio-similar picker source, the
+    // tracksThatSoundLikeThis tool and sonic journeys. Needs the CLAP stack in the
+    // analysis backend; without it the request is a clean no-op and the pass still
+    // fills bpm/key. ANALYZE_AUDIO_EMBEDDING=1 also enables it (env wins on,
+    // never off) — as do the env flags on the two toggles below.
     embeddings: false,
-    // Demucs vocal-activity ranges for talk timing and intro detection.
-    // Expensive, so opt-in. ANALYZE_VOCAL_ACTIVITY=1 also enables it.
+    // Demucs vocal-activity ranges — drive content-aware talk timing and the
+    // vocal-absence intro detector. Needs the demucs stack; expensive, so opt-in.
+    // ANALYZE_VOCAL_ACTIVITY=1 also enables it.
     vocalActivity: false,
     // Keep the Demucs stems the analysis pass already computes (head + tail
     // windows) as FLAC under state/stems/<id>/, so a transition render is a fast
@@ -431,24 +592,28 @@ export const DEFAULTS = {
     // ties) — the same order the backfill scans in.
     stemCache: false,
     stemCacheGb: 15,
-    // Pause the analysis pass while anyone is listening, resuming after
-    // analyzeQuietMinutes listener-free (#1099). Checked between tracks inside
-    // runAnalysisPass, so it covers manual runs too. ANALYZE_QUIET_ONLY=1
-    // also enables it.
+    // Pause the analysis pass while anyone is listening, resuming once the stream
+    // has been listener-free for analyzeQuietMinutes (#1099). Checked between
+    // tracks inside runAnalysisPass, so it covers the tagger child, `npm run
+    // analyze` and manual "Analyse now" runs alike — a pass outlives the click, so
+    // the bypass is turning this off. ANALYZE_QUIET_ONLY=1 also enables it.
     analyzeQuietOnly: false,
     analyzeQuietMinutes: 10,
   },
   // Transition scheduling + stem-blend rendering (docs/stem-transitions-research.md).
   transitions: {
     // Hold each queued pick unsent until its successor is known (or the on-air
-    // track nears its end) so exit stamps can be sized for the real pair (#749).
-    // Off reverts to the eager drain.
+    // track nears its end), so its exit stamps — adaptive crossfade length, and
+    // stem-blend clips — can be sized for the actual pair (#749). Kill-switch: off
+    // reverts to the eager drain.
     pairDrain: true,
     // Needs pairDrain plus the heavy analyzer with a warmed stem cache.
     stemBlends: false,
-    // Per-effect kill switches (#1565), all on. Resolved through
-    // broadcast/transition-policy.ts, which reads an absent or malformed block
-    // as "all on".
+    // Per-effect kill switches (#1565). All on: the kit is what DJ mode IS, and
+    // before this block the only way to drop one gesture was to turn djMode off
+    // and lose all six. Resolved through broadcast/transition-policy.ts, which
+    // reads an absent or malformed block as "all on" — so this default and a
+    // station that has never written the block are the same station.
     effects: {
       sweep: true,
       washout: true,
@@ -458,48 +623,62 @@ export const DEFAULTS = {
       loop: true,
     },
   },
-  // When disabled the segment-director agent never sees the effect catalogue.
-  // The files stay on disk either way.
+  // When disabled, the segment-director agent is never shown the effect
+  // catalogue, so it stops garnishing spoken breaks with stingers. The files stay
+  // on disk either way.
   sfx: {
     enabled: true,
   },
-  // An instrumental between two songs for the DJ to talk over (broadcast/beds.ts
-  // + bed-policy.ts). Off by default. Controller-side only, so no mixer restart.
+  // Beds — an instrumental between two songs for the DJ to talk over, so a long
+  // link isn't talked over the song it's introducing (broadcast/beds.ts +
+  // bed-policy.ts). Off by default: it needs a bed the operator is happy to hear
+  // regularly, and a bed on EVERY link is morning-zoo radio. Controller-side only,
+  // so toggling costs no mixer restart (unlike jingleRatio).
   beds: {
     enabled: false,
-    // Front-pad a LISTENER REQUEST's intro with a bed rather than talking over
-    // the song's opening, however short the intro (#1465). On by default WITHIN
-    // beds.enabled, which is itself off.
+    // Front-pad a LISTENER REQUEST's intro with a bed instead of talking over
+    // the song's opening, regardless of how short the intro is (#1465). Someone
+    // asked for this track, so its first bars belong to them. On by default
+    // WITHIN beds.enabled, which is itself off by default — so a fresh station
+    // is unchanged, and a station already running beds gains this at upgrade.
+    // That second half is a deliberate behaviour change, not an oversight.
     requestIntros: true,
-    // Bed when the DJ's clip runs longer than this. Consulted ONLY when the
-    // incoming track's vocal onset is unknown; a measured onset wins. Requests
-    // ignore it (see requestIntros).
+    // Bed when the DJ's clip runs longer than this. Consulted ONLY where the
+    // incoming track's vocal onset is unknown; a measured onset wins. See
+    // bed-policy.rampBudgetMs. Requests ignore it — see requestIntros.
     thresholdSec: 12,
-    // The bed's exit crossfade: how long the next song takes to ramp in.
+    // The bed's own exit crossfade — how long the next song takes to ramp in
+    // after the tail below.
     crossSec: 6,
-    // Solo bed between the DJ's last word and that ramp (#1485 FR 5c). Sized
-    // INTO the bed, not out of it, so it is the quiet heard at any crossSec.
+    // Solo bed between the DJ's last word and the start of that ramp (#1485
+    // FR 5c). Sized INTO the bed rather than taken out of it, so this is the
+    // quiet an operator hears at any crossSec — see bed-policy.bedLengthFor.
     tailSec: 3,
   },
-  // Cut near-silent runs off a track's head/tail (music/silence-trim.ts stamps
-  // liq_cue_in / liq_cue_out; radio.liq's cue_cut does the cutting). OFF by
-  // default: it acts on a MEASUREMENT. Controller-side only, no mixer restart.
+  // Dead-air trim — cut near-silent runs off the head/tail of a track so a bad
+  // rip's leading blank or a long mastering gap doesn't air as silence
+  // (music/silence-trim.ts stamps liq_cue_in / liq_cue_out; radio.liq's
+  // cue_cut does the cutting). OFF by default: it acts on a MEASUREMENT, and
+  // an upgrade must sound byte-identical until the operator asks for this.
+  // Controller-side only — no mixer restart.
   silenceTrim: {
     enabled: false,
-    // Gaps shorter than this are left alone: a segued album's inter-track space
-    // is deliberate.
+    // Gaps shorter than this are left alone. A track legitimately opens a beat
+    // after zero, and a segued album's inter-track space is deliberate; only a
+    // gap the listener would call dead air is worth a cue point.
     minGapMs: 1500,
   },
   // Fire-and-forget station-event POSTs (event list in broadcast/webhooks.ts).
   webhooks: [] as Webhook[],
   webhooksPolicy: {
-    // track.play POSTs only when listener count > 0; fail-CLOSED on an
-    // unknown/non-finite count, like scrobble.
+    // When true, track.play POSTs only when listener count > 0 (fail-closed on
+    // null/unknown/non-finite, like scrobble).
     trackPlayListenerGated: false,
   },
-  // Each backend is independent and paste-only, gated on listener count > 0 at
-  // scrobble time; an unknown count fails CLOSED. Keys live here or in
-  // state/secrets.env (env wins). `username` is display-only.
+  // Each backend is independent, paste-only (no OAuth), and gated on listener
+  // count > 0 at scrobble time — a null/unknown count is treated as zero, i.e.
+  // fail closed. Keys live here OR in state/secrets.env (env wins). `username` is
+  // display-only.
   scrobble: {
     lastfm: {
       enabled: false,
@@ -512,34 +691,46 @@ export const DEFAULTS = {
       enabled: false,
       userToken: '',
       username: '',
-      // Self-hosted LB-compatible scrobblers; submit URL is
+      // For self-hosted LB-compatible scrobblers (e.g. Koito). Submit URL is
       // `${baseUrl}/submit-listens`. Env LISTENBRAINZ_API_URL wins.
       baseUrl: '',
     },
-    // Navidrome play reporting via Subsonic `scrobble` (#1298). Reuses
-    // config.navidrome's credentials and, unlike the two above, has NO listener
-    // gate (broadcast/scrobble-pure.ts). Off by default.
+    // Navidrome play reporting (#1298) — Subsonic `scrobble`, so playCount and
+    // lastPlayed move and `.nsp` smart playlists rotate. No credentials of its
+    // own (it reuses config.navidrome) and, unlike the two above, no listener
+    // gate: see broadcast/scrobble-pure.ts. Off by default.
     navidrome: {
       enabled: false,
     },
   },
 
-  // Track-selection windows read by BOTH pick paths.
+  // Track-selection windows read by BOTH pick paths — the pool picker's
+  // candidate filter and the agent path's point-of-choice guard.
+  //
   // `albumHours`: how long a record stays on cooldown after one of its tracks
-  // airs (#1485 FR 3). 0 = OFF; the artist window already blocks everything a
-  // shorter album window would, so it is only worth setting ABOVE that window.
+  // airs (#1485 FR 3). 0 = OFF, and that is deliberate rather than timid: the
+  // artist window already blocks everything an album window shorter than it
+  // would, so an album cooldown is only ever worth setting ABOVE the artist
+  // window — a number this code cannot pick for an operator, because it depends
+  // on how album-heavy their catalogue is. Off means an upgrade is
+  // byte-identical. See music/recency.ts albumKey.
   picker: {
     albumHours: 0,
     // Minimum track length in SECONDS below which a track is never PICKED
-    // (#1573); 0 = off. A show's own `minTrackLengthSeconds` overrides it.
-    // Distinct from settings.minTrackSeconds(), the crossfade-derived floor,
-    // which is this key's LOWER BOUND. Listener requests are exempt.
+    // (#1573) — the floor operators with libraries full of 40-second skits,
+    // interludes and album intros want. 0 = OFF, and off is the shipped
+    // default so an upgrade picks byte-identically; a show's own
+    // `minTrackLengthSeconds` (when set) overrides it. Named apart from
+    // settings.minTrackSeconds(), which is the crossfade-derived floor and a
+    // different number entirely — that one is this key's LOWER BOUND.
+    //
+    // Listener requests are exempt: an explicit ask is not a pick.
     minTrackLengthSeconds: 0,
   },
 
-  // The player heart button (#991). `starInNavidrome` mirrors a first like into
-  // Navidrome; `influenceDj` feeds top-liked tracks to both pick paths as a
-  // weighted preference, never a lock.
+  // The player heart button (#991). `starInNavidrome` mirrors each first like
+  // into Navidrome via Subsonic star. `influenceDj` feeds the most-liked tracks
+  // back to BOTH pick paths as a weighted preference — never a lock.
   likes: {
     enabled: true,
     starInNavidrome: true,
@@ -550,8 +741,9 @@ export const DEFAULTS = {
 };
 
 export const BOUNDS = {
-  // Keys converted to the shared schema (#1348) take their numbers from
-  // schemas/settings.ts: a mirrored module may not import a non-mirrored one.
+  // The keys converted to the shared schema (#1348) take their numbers from
+  // schemas/settings.ts and re-export here: a mirrored module may not import a
+  // non-mirrored one, so the schema has to own the constant.
   jingleRatio: { ...JINGLE_RATIO_BOUNDS, type: 'int' },
   crossfadeDuration: { ...CROSSFADE_DURATION_BOUNDS, type: 'float' },
   duckingVoice: { ...DUCK_DEPTH_BOUNDS, type: 'float' },
@@ -576,9 +768,10 @@ export const MP3_BITRATE_SET = new Set<number>(MP3_BITRATES);
 export const OPUS_BITRATE_SET = new Set<number>(OPUS_BITRATES);
 export const AAC_BITRATE_SET = new Set<number>(AAC_BITRATES);
 
-// True when the four ElevenLabs voice_settings knobs are all untouched, in which
-// case cloud-speech OMITS the block so ElevenLabs uses the voice's own saved
-// settings rather than these literals (#915).
+// True when the four ElevenLabs voice_settings knobs all sit at their shipped
+// defaults, i.e. the operator never tuned them. cloud-speech then OMITS the
+// voice_settings block so ElevenLabs defers to the voice's own VoiceLab-saved
+// settings instead of having these literals forced onto every call (#915).
 export function cloudVoiceSettingsAreDefault(c: unknown): boolean {
   const d = DEFAULTS.tts.cloud;
   const cc = c as {
@@ -593,9 +786,11 @@ export function cloudVoiceSettingsAreDefault(c: unknown): boolean {
     && cc?.voiceUseSpeakerBoost === d.voiceUseSpeakerBoost;
 }
 
-// Integer SECOND count. `allowNull` splits the two callers: the station default
-// has no "unset" state (missing = 0 = off), a per-show value uses null for
-// "inherit" (0 there = unlimited override). Clamps rather than throws.
+// Coerce a stored/per-show max-track-length to a clean integer SECOND count.
+// `allowNull` distinguishes the two callers: the station default has no "unset"
+// state (missing → 0 = off), whereas a per-show value uses null for "inherit the
+// station default" (vs 0 = "unlimited override"). Clamps rather than throws —
+// load() stays lenient.
 export function coerceMaxTrackSeconds(raw: unknown, allowNull: boolean): number | null {
   if (raw == null || raw === '') return allowNull ? null : 0;
   const n = Math.round(Number(raw));
@@ -603,8 +798,11 @@ export function coerceMaxTrackSeconds(raw: unknown, allowNull: boolean): number 
   return Math.min(BOUNDS.maxTrackSeconds.max, Math.max(0, n));
 }
 
-// Integer SECOND floor (#1573). Same allowNull split as coerceMaxTrackSeconds:
-// station default missing = 0 = no floor, per-show null = inherit.
+// Coerce a stored/per-show minimum-track-length FLOOR to a clean integer SECOND
+// count (#1573). Same two callers and the same allowNull split as
+// coerceMaxTrackSeconds above — station default has no "unset" state (missing →
+// 0 = no floor), a per-show value uses null for "inherit". Clamps rather than
+// throws, so a hand-edited file bounds the show instead of deleting it.
 export function coerceMinTrackLengthSeconds(raw: unknown, allowNull: boolean): number | null {
   if (raw == null || raw === '') return allowNull ? null : 0;
   const n = Math.round(Number(raw));
@@ -612,8 +810,9 @@ export function coerceMinTrackLengthSeconds(raw: unknown, allowNull: boolean): n
   return Math.min(BOUNDS.minTrackLengthSeconds.max, Math.max(0, n));
 }
 
-// Back-compat with the MINUTES-era `maxTrackMinutes`. Returns raw seconds
-// (null/''/undefined untouched) for coerceMaxTrackSeconds to clamp.
+// Back-compat: this cap was stored in MINUTES (`maxTrackMinutes`) before it moved
+// to seconds. Returns the raw seconds value (leaving null/''/undefined untouched)
+// for coerceMaxTrackSeconds to clamp.
 export function rawMaxTrackSec(o: unknown): unknown {
   if (o == null) return o;
   const rec = o as Record<string, unknown>;

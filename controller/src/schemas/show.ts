@@ -256,6 +256,9 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           .default([]),
       ),
       banter: showBool(),
+      // Long skill segments may take a genuine music-free break. This is a
+      // show-level opt-in: unscheduled/autonomous programming keeps ducking.
+      pauseTalk: showBool(),
       programme: showBool(),
       // Free text, resolved against the live skill catalog at air time.
       segmentSkill: z.preprocess(

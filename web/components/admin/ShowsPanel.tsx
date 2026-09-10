@@ -275,7 +275,7 @@ export default function ShowsPanel() {
     const newIdx = current.length;
     appendShowField({
       id, name: '', topic: '',
-      personaId: personas[0]?.id || '', guestPersonaIds: [], banter: false, moods: [],
+      personaId: personas[0]?.id || '', guestPersonaIds: [], banter: false, pauseTalk: false, moods: [],
       themeId: '', genres: [], eras: [], energies: [], vocals: '',
       filtersStrict: false, maxTrackSeconds: null, minTrackLengthSeconds: null,
       fadeAtShowEnd: null,

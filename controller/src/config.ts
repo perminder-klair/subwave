@@ -70,7 +70,11 @@ export const config = {
   // reachable → the analysis phase skips cleanly.
   analyzer: {
     // Sidecar base URL; analyzer.ts probes /health for the 'analyze' engine.
-    urls: [envUrl('ANALYZE_URL', '')].filter((u): u is string => !!u),
+    // Defaults to the compose service name, like navidrome.url above: a
+    // controller whose compose file predates the ANALYZE_URL line then still
+    // finds the default-on sidecar instead of silently disabling analysis
+    // (#1636). A host that does not resolve is an ordinary probe miss.
+    urls: [envUrl('ANALYZE_URL', 'http://analyzer:8080')].filter((u): u is string => !!u),
     python: envStr('ANALYZE_PYTHON', ''),   // empty → no local backend
     workerScript: envStr('ANALYZE_WORKER', '/app/scripts/analyze_worker.py'),
     // Analysis window, seconds. Demucs cost scales linearly with it. Keep in
@@ -175,6 +179,16 @@ export const config = {
     // no title/artist, so on_meta writes this instead of now-playing.json — and it
     // is how the controller learns to air the link OVER the bed.
     bedPlayingFile: `${STATE_DIR}/bed-playing.json`,
+    // Written by radio.liq when a `subwave_kind="pause-talk"` silence item
+    // starts. It is the boundary signal that releases the real speech through
+    // say.txt, preserving the normal mic chain and voice-playing marker.
+    pauseTalkPlayingFile: `${STATE_DIR}/pause-talk-playing.json`,
+    // Durable two-phase acknowledgement for pause-and-talk speech. poll_voice
+    // writes accepted only after voice_queue.push returns; voice_marker writes
+    // started when the first spoken sample feeds. Separate files keep one
+    // writer per marker and let a restarted controller avoid republishing.
+    pauseVoiceAcceptedFile: `${STATE_DIR}/pause-talk-voice-accepted.json`,
+    pauseVoiceStartedFile: `${STATE_DIR}/pause-talk-voice-started.json`,
     // Written by radio.liq when voice_queue/intro_queue starts a spoken clip:
     // {voiceId, channel, filename, startedAt}. `voiceId` matches the id airVoice
     // stamped into the clip's `annotate:` URI (the silent lead-in carries none and

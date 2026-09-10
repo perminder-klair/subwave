@@ -34,7 +34,9 @@ export interface WeatherCfg {
   lat: string;
   lng: string;
   locationName: string;
-  /** Broad place the DJ names on air, e.g. "the Peak District". Empty = fall back to locationName. */
+  /** Broad place the DJ names on air, e.g. "the Peak District". Empty = fall
+   *  back to locationName. Kept separate so the forecast can read an exact
+   *  point without the station broadcasting it. */
   onAirLocation: string;
   units: 'metric' | 'imperial';
 }
@@ -45,21 +47,26 @@ export interface CloudTtsCfg {
   model: string;
   voice: string;
   baseUrl: string;
-  // ElevenLabs voice_settings (#696). Saved regardless of provider; surfaced only when provider === 'elevenlabs'.
+  // ElevenLabs voice_settings (issue #696). Read + saved regardless of provider so
+  // switching preserves the tuning; only surfaced when provider === 'elevenlabs'.
   voiceStability: number;
   voiceStyle: number;
   voiceSimilarityBoost: number;
   voiceUseSpeakerBoost: boolean;
-  // Fish Audio S2.1 controls. Persisted across provider switches; sent only when provider === 'fish-audio'.
+  // Fish Audio S2.1 controls. Persisted across provider switches, surfaced and
+  // sent only when provider === 'fish-audio'.
   temperature: number;
   topP: number;
   latency: 'low' | 'normal' | 'balanced';
-  // Extra request-body fields for openai-compatible servers (#1317). Text on both
-  // sides; the controller coerces each value to its JSON type at send time.
+  // Free-form extra request-body fields for openai-compatible servers (issue
+  // #1317) — Chatterbox's temperature/seed/exaggeration and friends. Kept as
+  // text on both sides; the controller coerces each value to its JSON type at
+  // send time (settings/compat-params.ts).
   compatParams: { key: string; value: string }[];
 }
 
-// Single client-side copy. Must mirror DEFAULTS.tts.cloud in controller/src/settings.ts.
+// The single client-side copy, read by both form hydration and the dirty-check.
+// Must mirror DEFAULTS.tts.cloud in controller/src/settings.ts.
 export const ELEVENLABS_VS_DEFAULTS = {
   voiceStability: 0.5,
   voiceStyle: 0,
@@ -81,41 +88,58 @@ export interface TtsFallbackForm {
 }
 
 export interface TtsForm {
-  // false = music only: no script is generated. Jingles (jingleRatio) and manual segment triggers are unaffected.
+  // false = music only: no script is generated at all. Jingles are unaffected
+  // (jingleRatio owns those) and manual segment triggers still fire.
   enabled: boolean;
   defaultEngine: string;
-  // Operator rescue voice: this engine AND voice speaks for a persona whose own
-  // engine fails, ahead of the defaultEngine -> piper -> kokoro floor.
+  // Operator-chosen rescue voice. When on, this engine AND voice speaks for a
+  // persona whose own engine is unavailable or fails mid-render, ahead of the
+  // hardcoded defaultEngine → piper → kokoro floor behind it.
   fallback: TtsFallbackForm;
   kokoro: { voice: string };
   chatterbox: { referenceVoice: string };
   pocketTts: { voice: string };
   cloud: CloudTtsCfg;
   remote: { url: string };
-  // Keyed by engine id (hyphen in `pocket-tts`). Always all 6 engines; 0 = unity.
+  // Keyed by engine id (note the hyphen in `pocket-tts`). Always carries all 6
+  // known engines; 0 = unity.
   gainDb: Record<string, number>;
-  // Always all 6 engines; 1.0 = unity. Inert for chatterbox/pocket-tts/remote.
+  // Always carries all 6 known engines; 1.0 = unity. Inert for
+  // chatterbox/pocket-tts/remote.
   speed: Record<string, number>;
   // find→replace pairs applied to every spoken line before any engine reads it.
   corrections: { from: string; to: string }[];
 }
 
-/** One row of the custom-header editor (#1618). A LIST so a half-typed row
- *  survives; collapsed to the stored map at save time. `value` may be the
- *  literal 'set' -- what GET /settings returns for a header already on file. */
+/**
+ * One row of the custom-header editor (#1618). A LIST, not a map, because the
+ * editor has to hold a half-typed row — a map keyed by name loses the row the
+ * moment the name is blank or collides with another, which is every second
+ * keystroke while the operator types one. It is collapsed to the map the
+ * controller stores at save time.
+ *
+ * `value` may be the literal `'set'`: that is what GET /settings returns for a
+ * header already on file, and posting it back keeps the stored value.
+ */
 export interface LlmHeaderRow {
   name: string;
   value: string;
 }
 
-/** Wire map -> editor rows, in the stored order. */
+/**
+ * Wire map -> editor rows. Order is the stored order, so the list renders the
+ * way the operator left it.
+ */
 export function headerRows(raw: Record<string, string> | undefined): LlmHeaderRow[] {
   if (!raw || typeof raw !== 'object') return [];
   return Object.keys(raw).map((name) => ({ name, value: raw[name] ?? '' }));
 }
 
-/** Editor rows -> the map the controller stores. A row with no name is dropped;
- *  a LATER row wins a name collision. */
+/**
+ * Editor rows -> the map the controller stores. A row with no name is a row
+ * still being typed and is dropped rather than sent; a LATER row wins a name
+ * collision, matching what the operator sees last in the list.
+ */
 export function headerMap(rows: LlmHeaderRow[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (const r of rows) {
@@ -208,7 +232,8 @@ export interface ScrobbleListenbrainzForm {
   baseUrl: string;
 }
 
-/** Navidrome play reporting (#1298). Scrobbles through the station's existing Navidrome connection. */
+/** Navidrome play reporting (#1298). No credentials of its own — the station's
+ *  existing Navidrome connection is what it scrobbles through. */
 export interface ScrobbleNavidromeForm {
   enabled: boolean;
 }
@@ -219,12 +244,15 @@ export interface ScrobbleForm {
   navidrome: ScrobbleNavidromeForm;
 }
 
-// Track-selection windows read by BOTH pick paths. Separate from `llm` because
-// the stateless pool picker enforces the album cooldown too.
+/** Listener likes (#991) — heart button + Navidrome star + DJ influence. */
+// Track-selection windows read by BOTH pick paths. A separate top-level
+// settings key from `llm` because the album cooldown is not LLM config — the
+// stateless pool picker enforces it too.
 export interface PickerForm {
   // Hours, as typed. 0/'' = off.
   albumHours: string;
-  // Seconds, as typed. 0/'' = off. A show's own minTrackLengthSeconds overrides this; requests are exempt.
+  // Seconds, as typed. 0/'' = off (the shipped default). A show's own
+  // minTrackLengthSeconds overrides this; listener requests are exempt.
   minTrackLengthSeconds: string;
 }
 
@@ -287,8 +315,9 @@ export interface PrivacyForm {
   publishPersonaSouls: boolean;
 }
 
-/** Every field applies live and the controller clamps on save. Numbers are held
- *  as strings and parsed on save. */
+/** Every field applies live and the controller clamps on save, so the UI doesn't
+ *  need to. Numbers are held as strings and parsed on save (the weather lat/lng
+ *  idiom). */
 export interface RequestsForm {
   enabled: boolean;
   maxPending: string;
@@ -304,11 +333,19 @@ export interface SilenceTrimForm {
   minGapMs: string;
 }
 
-// settings.ducking — the two smooth_add depths radio.liq reads at mixer startup.
-// Strings: a blank input must reach saveBlock as a field error, not 0 (a full mute).
+// settings.ducking — the two smooth_add depths radio.liq reads at mixer
+// startup. Strings like every other number box: a blank input must reach
+// saveBlock as a field error, not as 0 (which is a full mute under the DJ).
 export interface DuckingForm {
   voice: string;
   intro: string;
+}
+
+export interface DjBehaviourForm {
+  showWelcome: boolean;
+  sameHostAcknowledgement: boolean;
+  extendedSleeveNotes: boolean;
+  releaseYearMentions: 'regular' | 'occasional' | 'rare';
 }
 
 export interface FormState {
@@ -328,11 +365,12 @@ export interface FormState {
   timezone: string;
   locale: StationLocale;
   kokoroLang: string;
-  /** Talk placement switch: every scheduled segment waits for the next track boundary. */
+  /** Talk placement switch — every scheduled segment waits for the next track
+   *  boundary. Flat, like djSpeakClock, and owned by DJ behaviour. */
   djTalkOnlyBetweenTracks: boolean;
-  /** settings.handover.offsetMinutes. The values are a fixed set (multiples of the
-   *  talk table's sampling stride), so it renders as a segmented control. */
-  handoverOffsetMinutes: string;
+  /** Station-wide minimum length before a show may use pause-and-talk. */
+  pauseTalkMinSeconds: string;
+  djBehaviour: DjBehaviourForm;
   weather: WeatherCfg;
   tts: TtsForm;
   llm: LlmForm;
@@ -367,8 +405,9 @@ export interface SettingsData {
     maxTrackSeconds?: number;
     minTrackSeconds?: number;
     archive?: { enabled?: boolean; bitrate?: number; retentionDays?: number };
-    /** Scheduled backups (#1570). Edited from the Backup panel; posts `{ backups }`
-     *  through the same POST /settings chokepoint. */
+    /** Scheduled backups (#1570). No FormState entry and no settings section —
+     *  the schedule is edited from the Backup panel, beside Export/Restore, and
+     *  posts `{ backups }` through the same POST /settings chokepoint. */
     backups?: { cadence?: string; keep?: number };
     transitions?: {
       pairDrain?: boolean;
@@ -393,7 +432,8 @@ export interface SettingsData {
     };
     loudness?: { targetLufs?: number; maxBoostDb?: number; source?: LoudnessSource };
     silenceTrim?: { enabled?: boolean; minGapMs?: number };
-    /** Absent on an older settings.json — false, like the controller's coercion. */
+    /** Absent on a settings.json predating the key — false, like the
+     *  controller's own coercion. */
     fadeAtShowEnd?: boolean;
     /** Shortest playable track a boundary cut can arm on (seconds), served by
      *  the controller so the hint cannot drift from the drain's own floors. */
@@ -402,9 +442,13 @@ export interface SettingsData {
     stationDescription?: string;
     timezone?: string;
     locale?: StationLocale;
-    /** Absent on an older settings.json — read as false. */
+    /** Absent on a settings.json predating the key — read it as false, which is
+     *  what the controller's own coercion does. */
     djTalkOnlyBetweenTracks?: boolean;
-    /** Absent on an older settings.json — the 5-minute default. */
+    pauseTalkMinSeconds?: number;
+    djBehaviour?: Partial<DjBehaviourForm>;
+    /** Absent on a settings.json predating the key — the controller's own
+     *  coercion reads it as the 5-minute default. */
     handover?: { offsetMinutes?: number };
     theme?: { active?: string };
     weather?: {
@@ -421,15 +465,17 @@ export interface SettingsData {
       kokoro?: { voice?: string; lang?: string };
       chatterbox?: { referenceVoice?: string };
       pocketTts?: { voice?: string };
-      // Also carries the redacted key sentinels ('set' when a key is on file, '' otherwise).
+      // The saved shape also carries the redacted key sentinels ('set' when a
+      // key is on file, '' otherwise) — GET /settings never returns raw keys.
       cloud?: Partial<CloudTtsCfg> & { apiKey?: string; compatApiKey?: string };
       remote?: { url?: string };
       gainDb?: Record<string, number>;
       speed?: Record<string, number>;
       corrections?: { from?: string; to?: string }[];
     };
-    // Wire shape diverges from the form: the controller stores and returns `headers`
-    // as a MAP (values redacted to 'set'); the editor holds an ordered row list.
+    // The wire shape diverges from the form in one place: the controller stores
+    // and returns `headers` as a MAP (values redacted to 'set'), while the
+    // editor holds an ordered row list so a half-typed row survives.
     llm?: Omit<Partial<LlmForm>, 'headers' | 'fallback'> & {
       headers?: Record<string, string>;
       fallback?: Omit<Partial<LlmFallbackForm>, 'headers'> & {
@@ -544,9 +590,15 @@ export type SaveSettings = (patch: Patch) => Promise<boolean>;
 
 export type FormUpdater = (updater: (f: FormState) => FormState) => void;
 
-// Server-side validation errors from the last `/settings` save, keyed by the
-// controller's dotted path ('beds.crossSec'). No client-side pre-flight: the
-// key-to-schema registry is not a schema module, so it isn't in the mirror.
+/**
+ * Server-side validation errors from the last `/settings` save, keyed by the
+ * controller's dotted path ('beds.crossSec', 'personas.0.name').
+ *
+ * There is deliberately NO client-side pre-flight for these: the registry that
+ * maps a settings key to its schema is not a schema module, so it isn't in the
+ * mirror, and rebuilding that map in the browser would be exactly the drift the
+ * mirror exists to prevent.
+ */
 export type SettingsFieldErrors = Record<string, string>;
 
 export interface SectionProps {
@@ -558,8 +610,13 @@ export interface SectionProps {
   fieldErrors: SettingsFieldErrors;
 }
 
-// One settings input's server error, or nothing. `path` is the controller's
-// dotted key, named at the call site.
+/**
+ * One settings input's server error, or nothing. Wraps the same vendored
+ * `FieldError` the react-hook-form-bound panels use, so a message looks and
+ * announces identically whichever admin form the operator is on. `path` is the
+ * controller's dotted key, named at the call site so a rename on either side is
+ * visible.
+ */
 export function SettingsFieldError({
   path,
   errors,
@@ -574,9 +631,12 @@ export function SettingsFieldError({
   return <FieldError id={id} errors={[{ message }]} />;
 }
 
-// ARIA for one settings input, same id conventions as lib/form.ts's `fieldAria`.
-// These sections can't use that: each control owns its own one-key save, so
-// there is no single submit to bind a form to.
+/**
+ * ARIA for one settings input, following the same id conventions as
+ * lib/form.ts's `fieldAria`. These sections can't use that directly: each
+ * control owns its own save button posting a one-key patch, so there is no
+ * single submit to bind a form to.
+ */
 export function settingsFieldAria(baseId: string, message?: string) {
   const invalid = !!message;
   return {
@@ -585,9 +645,11 @@ export function settingsFieldAria(baseId: string, message?: string) {
     labelProps: { htmlFor: baseId },
     controlProps: {
       id: baseId,
-      // Absent rather than aria-invalid="false".
+      // Absent rather than aria-invalid="false" — the attribute only carries
+      // meaning when set.
       'aria-invalid': invalid || undefined,
-      // Only reference the id when it is really in the DOM.
+      // Reference the id only when it is really in the DOM: a dangling
+      // aria-describedby is handled inconsistently across screen readers.
       'aria-describedby': invalid ? `${baseId}-error` : undefined,
     },
     errorProps: { id: `${baseId}-error` },
@@ -667,12 +729,20 @@ interface SaveBarProps {
   errors?: SettingsFieldErrors;
   /** The top-level settings keys this bar's save owns, e.g. ['search']. */
   ownedKeys?: readonly string[];
-  /** Whether this save has anything to commit -- ONLY for a section whose
-   *  editable state does not live in FormState (see `SectionSpec.formKeys`). */
+  /**
+   * Whether this save has anything to commit — ONLY for a section whose
+   * editable state does not live in FormState (see `SectionSpec.formKeys`).
+   * Everyone else leaves it undefined and the panel diffs the form itself.
+   */
   dirty?: boolean;
 }
 
-/** Filter a fieldErrors map down to the paths a given save owns. */
+/**
+ * Filter a fieldErrors map down to the paths a given save owns.
+ *
+ * Exported so a section can reuse the same scoping rule if it renders an error
+ * somewhere other than its save bar.
+ */
 export function ownedFieldErrors(
   errors: SettingsFieldErrors | undefined,
   ownedKeys: readonly string[] | undefined,
@@ -685,32 +755,48 @@ export function ownedFieldErrors(
 
 /**
  * Success/failure goes through the global toaster; a VALIDATION failure also
- * lands here, beside the button that caused it, since one click can fail
- * several fields. Authored at the end of the section it saves but rendered in
- * SettingsPanel's one sticky bar via a portal, so each save keeps its own
- * closure, note and error scoping. No portal target means nothing is unsaved.
+ * lands here, beside the button that caused it. These sections save a whole
+ * block at once, so several fields can fail one click — and each message
+ * already names its own dotted field, so grouping them loses nothing.
+ *
+ * The bar is authored HERE, at the end of the section it saves, but renders in
+ * SettingsPanel's one sticky bar via a portal. Keeping the component in the
+ * section's tree is what lets each save keep its own closure, note and error
+ * scoping — nothing had to be lifted, and a section with two independent saves
+ * (Scrobbling: Last.fm and ListenBrainz are separate services) simply portals
+ * two rows.
+ *
+ * No portal target means nothing is unsaved, and the bar renders nothing —
+ * which is also why the bar carries NOTHING but the save. A "Test" button next
+ * to it would disappear the moment the section went clean, i.e. exactly when a
+ * saved connection is worth testing. Non-save actions belong in the card.
  */
 export function SaveBar({ note, busy, onSave, saveLabel, errors, ownedKeys, dirty }: SaveBarProps) {
   const { saveSlot } = useSectionChrome();
-  // Only a section whose state does not ride FormState passes `dirty`.
+  // Only a section whose state does not ride FormState passes `dirty`; for the
+  // rest the panel already diffs the form against its saved baseline.
   useReportDirty(dirty);
   const owned = ownedFieldErrors(errors, ownedKeys);
   if (!saveSlot) return null;
   return createPortal(
     <div className="flex flex-wrap items-center gap-3 border-t border-[var(--separator-soft)] pt-2.5 first:border-0 first:pt-0">
       {owned.length > 0 && (
-        // Full width so it sits on its own row above the note/button cluster.
+        // Full width so it sits on its own row above the note/button cluster,
+        // which is where a wrapped flex child lands anyway.
         <div className="order-first w-full">
           {owned.map(([path, message]) => (
             <FieldError key={path} errors={[{ message }]} />
           ))}
         </div>
       )}
-      {/* min-w-0 + break-words: notes carry unbroken values (a long model id)
-          that would otherwise push the bar past a phone viewport. */}
+      {/* min-w-0 + break-words: notes carry unbroken values (an
+          `openai-compatible:Qwen3…gguf` model id) that would otherwise set the
+          flex item's min-content and push the bar past a phone viewport. */}
       <span className="min-w-0 flex-1 text-[12px] leading-[1.5] break-words text-muted">{note}</span>
       {/* Full-width action row on a phone; `sm:` restores the inline cluster. */}
       <span className="ml-auto flex w-full gap-2 sm:w-auto">
+        {/* whileTap fires before the network call, so the commit is felt before
+            the save toast lands. */}
         <m.span whileTap={{ scale: 0.97 }} className="inline-flex flex-1 sm:flex-none">
           <Btn tone="accent" onClick={onSave} disabled={busy} className="w-full sm:w-auto">{saveLabel}</Btn>
         </m.span>
@@ -783,8 +869,8 @@ export function KeyTestResult({ result }: KeyTestResultProps) {
   );
 }
 
-// Module-level "now previewing" handle so a second press anywhere on the admin
-// page stops the first clip.
+// Module-level "now previewing" handle so a second press anywhere on the
+// admin page stops the first clip — no overlapping audio.
 let currentPreview: { audio: HTMLAudioElement; url: string; stop: () => void } | null = null;
 
 interface PreviewButtonProps {
@@ -794,7 +880,8 @@ interface PreviewButtonProps {
 }
 
 // The audio behind /api/jingles/.../audio and /api/sfx/.../audio is admin-gated
-// (HTTP Basic), so a plain <audio src> can't send the header: adminFetch + Blob URL.
+// (HTTP Basic) and a plain <audio src> can't send the header — hence the
+// adminFetch + Blob URL, revoked when playback ends.
 export function PreviewButton({ path, adminFetch, label = 'Play' }: PreviewButtonProps) {
   const [state, setState] = useState<'idle' | 'loading' | 'playing'>('idle');
 

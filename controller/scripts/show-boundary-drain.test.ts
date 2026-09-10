@@ -124,6 +124,16 @@ test('a queued bed pushes the cut back by exactly what it delays the track', asy
   assert.equal(cutFor(pick), null, 'an unknowable chain stays unknowable, bed or no bed');
 });
 
+test('a queued pause-and-talk break pushes the boundary cut back by its net delay', async () => {
+  await seed({ station: true });
+  const plain = cutFor(stage());
+  const PAUSE_DELAY = 35;
+  const paused = cutFor(stage({ pauseDelaySec: PAUSE_DELAY }));
+  assert.ok(plain && paused, 'both pick shapes are cut');
+  near(paused.cueOutSec - plain.cueOutSec, -PAUSE_DELAY,
+    'the hidden break delays the track, so less of it plays before the boundary');
+});
+
 test('an armed cut is always earlier than the cap and the trim', async () => {
   await seed({ station: true });
   // A #447 cap stopping the track before the boundary leaves no overshoot.

@@ -46,6 +46,9 @@ jingle_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle")
 # inside one crossfade, and a shared dir would tear the write.
 jingle_now_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/jingle-now")
 bed_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/bed")
+pause_talk_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/pause-talk")
+pause_voice_accept_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/pause-voice-accept")
+pause_voice_start_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/pause-voice-start")
 starve_tmp_dir = ensure_tmp_dir("#{state_dir}/tmp/starve")
 # One per voice channel, not one for both: they write the SAME marker file, so a
 # shared dir tears when a heavy-duck segment and a talk-over link land together.
@@ -64,6 +67,11 @@ music_starved = ref(false)
 # on_meta). The rotate counts every music-chain track and a bed IS a track, so
 # without this gate a stinger lands BETWEEN the bed and the song it ramps into.
 bed_on_air = ref(false)
+
+# A pause-talk break is a silent item on the music timeline followed by speech
+# on voice_queue. Keep jingles unavailable across BOTH halves; voice_until then
+# carries the gate from the first spoken sample through its tail.
+pause_talk_on_air = ref(false)
 
 # Voice-on-air DEADLINE for the jingle gates, keeping the rotate from handing a
 # stinger to the music chain while a DJ clip is on air (#997 covered only the
@@ -1013,7 +1021,7 @@ music =
     # a voice clip is on air (can't hand a stinger over the DJ), and while the
     # music chain is starved (can't serve stingers forever over dead air).
     jingles = source.available(jingles, {
-      not bed_on_air() and not jingle_now_on_air() and
+      not bed_on_air() and not pause_talk_on_air() and not jingle_now_on_air() and
       time() > voice_until() and not music_starved()
     })
     rotate(weights=[1, jingle_ratio()], [jingles, music])
@@ -1025,7 +1033,7 @@ music =
 # even when dj_queue already holds tracks or the rotate is due. While speech or
 # a bed is live the source is unavailable but the request remains queued.
 jingle_now = source.available(jingle_now_queue, {
-  not bed_on_air() and time() > voice_until()
+  not bed_on_air() and not pause_talk_on_air() and time() > voice_until()
 })
 music = fallback(
   id="music_with_jingle_now",
@@ -1055,6 +1063,35 @@ music = cross(
 # back-announce); intro_queue = talk-over links (light duck).
 voice_queue = request.queue(id="voice_queue")
 intro_queue = request.queue(id="intro_queue")
+
+def pause_voice_delivery_id(uri) =
+  matches = string.extract(pattern="subwave_pause_delivery=\\\"([^\\\"]+)\\\"", uri)
+  list.assoc(default="", 1, matches)
+end
+
+# The acceptance marker closes the controller-restart interval between removing
+# say.txt and the voice's on_metadata. It is written only AFTER voice_queue.push
+# returns, so "accepted" means this live mixer owns the stable delivery id.
+# One writer (poll_voice), one temp dir. A failure is logged and degrades to the
+# older mixer's stable-id/start-marker compatibility path.
+def write_pause_voice_accepted(uri) =
+  delivery_id = pause_voice_delivery_id(uri)
+  if delivery_id != "" then
+    try
+      file.write(
+        data=json.stringify(compact=true, {
+          deliveryId = delivery_id,
+          acceptedAt = time()
+        }),
+        atomic=true,
+        temp_dir=pause_voice_accept_tmp_dir,
+        "#{state_dir}/pause-talk-voice-accepted.json"
+      )
+    catch err do
+      log(label="subwave", "pause voice acceptance marker failed (#{err})")
+    end
+  end
+end
 
 # AIR-TIME MARKER (#1382). on_metadata fires as the clip starts feeding, so
 # `startedAt` IS the live-edge moment the words begin (the clock
@@ -1089,6 +1126,26 @@ def voice_marker(channel, tmp_dir) =
           temp_dir=tmp_dir,
           "#{state_dir}/voice-playing.json"
         )
+
+        # Dedicated durable start acknowledgement for a pause voice. The
+        # generic marker above may be overwritten by later speech before a
+        # controller restarts; this one changes only on the next pause delivery.
+        pause_delivery_id = m["subwave_pause_delivery"]
+        if pause_delivery_id != "" then
+          try
+            file.write(
+              data=json.stringify(compact=true, {
+                deliveryId = pause_delivery_id,
+                startedAt = now
+              }),
+              atomic=true,
+              temp_dir=pause_voice_start_tmp_dir,
+              "#{state_dir}/pause-talk-voice-started.json"
+            )
+          catch err do
+            log(label="subwave", "pause voice start marker failed (#{err})")
+          end
+        end
 
         # Arm the jingle gate (see voice_until above). request.duration is
         # expensive, but this hook is synchronous=false so it runs off the
@@ -1140,6 +1197,7 @@ def poll_voice() =
         ignore(voice_queue.push(request.create(leadin_path)))
       end
       ignore(voice_queue.push(request.create(contents)))
+      write_pause_voice_accepted(contents)
     end
   end
 end
@@ -1488,8 +1546,24 @@ def on_meta(m) =
   # carries no title/artist, so it must branch BEFORE the gate below, which
   # would drop it silently — this marker is the only way the controller learns
   # "bed on air, air the link now".
-  if m["subwave_kind"] == "bed" then
+  if m["subwave_kind"] == "pause-talk" then
     jingle_now_on_air := false
+    bed_on_air := false
+    pause_talk_on_air := true
+    log("on_meta: pause-talk silence started (#{filename})")
+    file.write(
+      data=json.stringify(compact=true, {
+        filename = filename,
+        pauseId = m["subwave_pause_id"],
+        startedAt = time()
+      }),
+      atomic=true,
+      temp_dir=pause_talk_tmp_dir,
+      "#{state_dir}/pause-talk-playing.json"
+    )
+  elsif m["subwave_kind"] == "bed" then
+    jingle_now_on_air := false
+    pause_talk_on_air := false
     log("on_meta: bed started (#{filename})")
     bed_on_air := true
     file.write(
@@ -1503,6 +1577,7 @@ def on_meta(m) =
     )
   elsif title != "" or artist != "" then
     bed_on_air := false
+    pause_talk_on_air := false
     jingle_now_on_air := false
     log("on_meta: title=#{title} | artist=#{artist} | album=#{album} | id=#{subsonic_id}")
     ts = int_of_float(time())
@@ -1533,6 +1608,7 @@ def on_meta(m) =
     # bed_on_air latches true and starves the jingle rotate until the next
     # tagged song.
     bed_on_air := false
+    pause_talk_on_air := false
     jingle_now_on_air := false
   end
 end

@@ -82,6 +82,14 @@ try {
     'multi-host banter carries the policy',
   );
   assert.match(
+    banterSystem({
+      host: noLangPersona,
+      guests: [{ id: 'p_guest', name: 'Rex', soul: 'quick and warm' }],
+    }),
+    /never prefix a spoken line with any speaker name/i,
+    'multi-host banter keeps recap attribution out of the spoken text',
+  );
+  assert.match(
     exchangeSystem({
       host: noLangPersona,
       show: { name: 'The Late Shift' },

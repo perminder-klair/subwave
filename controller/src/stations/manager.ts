@@ -297,7 +297,7 @@ export function deleteStation(root: string, id: string): void {
 // the first on_meta fires.
 const STALE_IPC_FILES = [
   'next.txt', 'jingle-now.txt', 'say.txt', 'intro.txt', 'sfx.txt',
-  'now-playing.json', 'jingle-playing.json', 'bed-playing.json',
+  'now-playing.json', 'jingle-playing.json', 'bed-playing.json', 'pause-talk-playing.json',
   'music-starved.json',
 ];
 

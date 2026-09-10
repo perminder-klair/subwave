@@ -27,7 +27,10 @@ const root = mkdtempSync(join(tmpdir(), 'subwave-talk-air-'));
 process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
-const { currentTalkAir, talkAirStatus, talkOnlyBetweenTracks, withTalkAir } =
+const {
+  currentTalkAir, inTalkAirScope, suppressScheduledSpeechDuringHandoff,
+  talkAirStatus, talkOnlyBetweenTracks, withTalkAir,
+} =
   await import('../src/broadcast/talk-air.js');
 // COLD load, not load(): load() returns the in-process cache untouched, so a
 // field missing from its composition passes an in-process assertion and only
@@ -83,21 +86,33 @@ test('the air scope is what a manual trigger is outside of', async () => {
   // operator presses — speech airs immediately, whatever the switch says.
   await settings.update({ djTalkOnlyBetweenTracks: true } as never);
   assert.equal(currentTalkAir(), 'immediate', 'the switch alone defers nothing');
+  assert.equal(inTalkAirScope(), false,
+    'manual operator actions are distinguishable from scheduled immediate speech');
+  assert.equal(suppressScheduledSpeechDuringHandoff('dj-speak', true), false,
+    'a manual operator line remains eligible during a handoff');
 
   // Inside one, and still inside it several awaits deep: the scheduled runners
   // generate a script and render a WAV before they ever reach queue.announce().
   const seen = await withTalkAir('next-track', async () => {
     await new Promise(r => setTimeout(r, 1));
-    return currentTalkAir();
+    return { air: currentTalkAir(), scoped: inTalkAirScope() };
   });
-  assert.equal(seen, 'next-track');
+  assert.deepEqual(seen, { air: 'next-track', scoped: true });
   assert.equal(currentTalkAir(), 'immediate', 'the scope closes with the fire');
+  assert.equal(inTalkAirScope(), false, 'manual speech is outside the closed scheduled scope');
 
   // 'immediate' has to MEAN immediate even inside an enclosing scope, or a
   // nested manual path would inherit a deferral it never asked for.
   const nested = await withTalkAir('next-track', () =>
     withTalkAir('immediate', async () => currentTalkAir()));
   assert.equal(nested, 'immediate');
+
+  await withTalkAir('immediate', async () => {
+    assert.equal(suppressScheduledSpeechDuringHandoff('dj-speak', true), true,
+      'ordinary scheduled speech yields after the handoff claims the boundary');
+    assert.equal(suppressScheduledSpeechDuringHandoff('handoff', true), false,
+      'the handoff itself is never suppressed by its own lifecycle state');
+  });
 });
 
 test.after(() => rmSync(root, { recursive: true, force: true }));

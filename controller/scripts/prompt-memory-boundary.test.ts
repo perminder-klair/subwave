@@ -106,6 +106,21 @@ test('the incoming greeting acknowledges the presenter without ingesting their r
   assert.doesNotMatch(prompt, /ceiling fan|flight plan/i);
 });
 
+test('the outgoing sign-off names its own show and excludes the incoming show context', () => {
+  assert.equal(typeof (scripts as any).signoffPrompt, 'function');
+  const prompt = (scripts as any).signoffPrompt({
+    personaOut: { name: 'Chris' },
+    personaIn: { name: 'Carrie' },
+    showOut: 'Morning Mixtape',
+    showIn: 'Lunchtime Rocks',
+    context: context({ id: 'lunch', name: 'Lunchtime Rocks' }),
+  });
+
+  assert.match(prompt, /Morning Mixtape/);
+  assert.match(prompt, /Carrie, who's bringing you "Lunchtime Rocks"/);
+  assert.doesNotMatch(prompt, /On now: the show "Lunchtime Rocks"/);
+});
+
 test("the outgoing DJ's sign-off still reads its own show's memory", async () => {
   queue.djLog = [];
   session.start(context({ id: 's_soft_start', name: 'The Soft Start Procedure' }));

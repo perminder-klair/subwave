@@ -24,6 +24,7 @@ import { zonedParts } from '../time.js';
 import { takeoverShowId } from '../schemas/schedule.js';
 import { HANDOVER_OFFSET_STEP_MINUTES } from '../schemas/settings.js';
 import { handoverOffsetMinutes } from './handover-policy.js';
+import { nextShowBoundaryMs } from './show-boundary.js';
 
 // How long after the intro aired the generic hourly time-check stays
 // suppressed: the intro owns the top of the show's first hour (#310).
@@ -120,14 +121,20 @@ export function featureKindMenu(host: { skills?: string[] } | null | undefined, 
 // `now` defaults to the moment the CONTEXT describes, not the wall clock:
 // onTrackStarted rolls on a look-ahead context, and a live `now` inside that
 // window would compare the incoming session key against the outgoing show.
-export async function ensurePlan(ctx: SessionContext, now = session.contextDate(ctx)): Promise<void> {
-  const ep = activeEpisode(now);
-  if (!ep) return;
-  let prog = session.getProgramme();
-  if (!prog) {
-    prog = { status: 'pending', plan: null, beats: {}, introAiredAt: null };
-    session.attachProgramme(prog);
-  }
+interface PlanDeps {
+  generateProgrammePlan?: typeof dj.generateProgrammePlan;
+}
+
+type ProgrammeShow = NonNullable<ReturnType<typeof settings.resolveActiveShow>>;
+
+async function fillPlan(
+  show: ProgrammeShow,
+  ctx: SessionContext,
+  now: Date,
+  prog: session.ProgrammeState,
+  attach: (next: session.ProgrammeState) => void,
+  { generateProgrammePlan = dj.generateProgrammePlan }: PlanDeps = {},
+): Promise<void> {
   if (prog.status !== 'pending') return;
   if (!autoVoiceAllowed()) return;  // station voice is off — no beat will air, so don't buy a plan
   if (!optionalSegmentsAllowed()) return;  // over budget — stay pending, retry later
@@ -136,12 +143,12 @@ export async function ensurePlan(ctx: SessionContext, now = session.contextDate(
   // Span is measured from the show's FIRST hour; the plan covers what's left.
   const hoursLeft = Math.max(1, span.total - span.index);
   const roster = settings.getOnAirRoster(now);
-  const pinned = String(ep.show.segmentSkill || '').trim() || null;
-  const prevAngle = await previousAngle(ep.show.id);
+  const pinned = String(show.segmentSkill || '').trim() || null;
+  const prevAngle = await previousAngle(show.id);
   try {
-    const plan = await withTrace({ kind: 'programme-plan', show: ep.show.name }, () =>
-      dj.generateProgrammePlan({
-        show: ep.show,
+    const plan = await withTrace({ kind: 'programme-plan', show: show.name }, () =>
+      generateProgrammePlan({
+        show,
         spanHours: hoursLeft,
         host: roster.host,
         guests: roster.guests,
@@ -152,13 +159,45 @@ export async function ensurePlan(ctx: SessionContext, now = session.contextDate(
       }));
     prog.status = 'ok';
     prog.plan = plan;
-    session.attachProgramme(prog);
-    logEvent('programme.plan', { show: ep.show.name, angle: plan?.angle || null });
+    attach(prog);
+    logEvent('programme.plan', { show: show.name, angle: plan?.angle || null });
   } catch (err) {
     prog.status = 'fallback';
-    session.attachProgramme(prog);
-    logEvent('programme.plan', { show: ep.show.name, error: (err as Error).message });
+    attach(prog);
+    logEvent('programme.plan', { show: show.name, error: (err as Error).message });
   }
+}
+
+export async function ensurePlan(ctx: SessionContext, now = session.contextDate(ctx)): Promise<void> {
+  const ep = activeEpisode(now);
+  if (!ep) return;
+  let prog = session.getProgramme();
+  if (!prog) {
+    prog = { status: 'pending', plan: null, beats: {}, introAiredAt: null };
+    session.attachProgramme(prog);
+  }
+  await fillPlan(ep.show, ctx, now, prog, session.attachProgramme);
+}
+
+// Build the incoming episode while the final outgoing track is still live.
+// The state rides the boundary handoff and transfers on the real session roll;
+// attaching it to the current session would make the outgoing show inherit the
+// incoming programme before the boundary.
+export async function prepareBoundaryPlan(
+  ctx: SessionContext,
+  deps: PlanDeps = {},
+): Promise<void> {
+  const pending = session.pendingHandoff();
+  if (!pending || !('incomingPersonaId' in pending)) return;
+  const now = session.contextDate(ctx);
+  const show = settings.resolveActiveShow(now);
+  if (!show?.programme || pending.targetKey !== `show:${show.id}`) return;
+  let prog = session.getBoundaryProgramme();
+  if (!prog) {
+    prog = { status: 'pending', plan: null, beats: {}, introAiredAt: null };
+    session.attachBoundaryProgramme(prog);
+  }
+  await fillPlan(show, ctx, now, prog, session.attachBoundaryProgramme, deps);
 }
 
 // Intro — the top of the show. Fires from the same call sites as the persona
@@ -169,14 +208,15 @@ export async function maybeRunIntro(
   queue: QueueApi,
   ctx: SessionContext,
   now = session.contextDate(ctx),
-  { opportunity = false }: { opportunity?: boolean } = {},
+  _options: { opportunity?: boolean } = {},
 ): Promise<boolean> {
   const ep = activeEpisode(now);
   const prog = ep && session.getProgramme();
   if (!prog || prog.beats?.intro) return false;
 
   // A persona handoff at this boundary already opened the show on air.
-  if (ep.sess.rolledFrom && ep.sess.handoffAired) {
+  if ((ep.sess.rolledFrom && ep.sess.handoffAired)
+      || ep.sess.boundaryHandoff?.targetKey === ep.sess.key) {
     markIntroAired();
     return false;
   }
@@ -188,18 +228,7 @@ export async function maybeRunIntro(
   // Voice off / over budget / quiet: stays pending and unmarked, so the intro
   // can still open the remaining hours if the gate reopens.
   if (!autoVoiceAllowed()) return false;
-  if (!djCallsAllowed() || !optionalSegmentsAllowed()) return false;
-  // The ordering rule (#1576): a show whose sign-off just aired owes the
-  // listener one closing track. Asked after the pendingHandoff check so exactly
-  // one of the two counts the opportunity, and LAST of the gates so only a
-  // cycle that could otherwise have aired the intro banks a decline.
-  // `opportunity` says whether this call site is a handover moment at all — the
-  // boundary path is, the wall-clock :00 roll is not.
-  if (queue.closingTrackHolds()) {
-    if (opportunity) queue.noteHandoverOpportunityDeclined();
-    return false;
-  }
-
+  if (!djCallsAllowed() || !optionalSegmentsAllowed()) return false;  // stays pending — may air later this hour
   markIntroAired();
   await runIntro(queue, ctx, now);
   return true;
@@ -287,8 +316,11 @@ export async function runFeature(queue: QueueApi, ctx: SessionContext, { hourInd
         const run = await runCapability(kind, ctx, {
           brief: `This segment is the planned feature of the programme "${show.name}". Today's feature: ${topic}${plan?.angle ? ` (episode angle: ${plan.angle})` : ''}. Build the segment around it.`,
           persona: speaker,
+          // Programme beats keep their established ducked/boundary placement;
+          // pause-and-talk is for director/skill segments, not the feature arc.
+          pauseTalkEligible: false,
         });
-        if (run.aired && run.text) return run.text;
+        if (run.queued && run.text) return run.text;
         // Skill stood down for want of usable data (#1412). The beat is still
         // mandatory, so fall through to the straight-talk floor.
         queue.log('scheduler', `Programme feature capability "${kind}" stood down (${run.reason || 'no usable data'}) — airing straight talk instead`);
@@ -315,6 +347,15 @@ export async function outroTick(queue: QueueApi, ctx: SessionContext, now = new 
   if (!prog || prog.beats?.outro) return;
   const span = episodeSpan(now);
   if (span.index !== span.total - 1) return;  // not the final hour yet
+  // A persona-changing show boundary has its own final-track sign-off and
+  // greeting. Do not also say goodbye at the configurable programme-outro
+  // minute: that is the upstream spacer model this branch replaces.
+  const boundaryAt = nextShowBoundaryMs(now.getTime(), 2 * 3600);
+  const outgoingId = session.getSession()?.persona?.id ?? null;
+  const incomingId = boundaryAt == null
+    ? null
+    : settings.getEffectivePersona(new Date(boundaryAt))?.id ?? null;
+  if (outgoingId && incomingId && outgoingId !== incomingId) return;
   if (!autoVoiceAllowed()) return;  // station voice is off (manual /dj/segment still runs the beat)
   if (!djCallsAllowed() || !optionalSegmentsAllowed()) return;
   session.markProgrammeBeat('outro');
@@ -368,10 +409,9 @@ export async function onSessionSettled(
   queue: QueueApi,
   ctx: SessionContext,
   now = session.contextDate(ctx),
-  { opportunity }: { opportunity: boolean },
+  _options: { opportunity: boolean },
 ): Promise<boolean> {
   if (!activeEpisode(now)) return false;
   await ensurePlan(ctx, now);
-  return maybeRunIntro(queue, ctx, now, { opportunity });
+  return maybeRunIntro(queue, ctx, now);
 }
-

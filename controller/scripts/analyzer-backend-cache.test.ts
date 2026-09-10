@@ -2,12 +2,14 @@
 //
 // The bug this pins (#1591, surfaced by #1586): the resolver cached only a
 // non-null answer, so every caller with no backend re-ran the probe. On a
-// station with no ANALYZE_URL at all that costs nothing — the candidate list is
-// empty. On one pointing at a host that silently DROPS packets it costs
-// probeSidecar's full 5s timeout per candidate per call, which on a bulk
-// tagging pass is 5s of dead time per track. The fast DNS-miss path people
-// assume they are on is the case where the box is simply gone; the expensive
-// one is the box that is there and not answering.
+// station whose candidate host simply does not resolve that costs a DNS miss.
+// On one pointing at a host that silently DROPS packets it costs probeSidecar's
+// full 5s timeout per candidate per call, which on a bulk tagging pass is 5s of
+// dead time per track. The fast DNS-miss path people assume they are on is the
+// case where the box is simply gone; the expensive one is the box that is there
+// and not answering. Since #1636 the list is never empty — it defaults to the
+// compose sidecar — so the miss cache is what every backend-less station pays
+// instead of a probe per caller.
 //
 // The fix is a TIMED miss cache, and both halves matter: caching the miss
 // forever would mean a controller that probed during its own boot never sees

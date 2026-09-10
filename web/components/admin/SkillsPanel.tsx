@@ -58,6 +58,8 @@ interface SkillRunResponse {
   // false when the skill ran but had nothing usable to speak from: a normal
   // outcome, so it arrives as a 200 with a reason attached.
   aired?: boolean;
+  queued?: boolean;
+  deferred?: boolean;
   reason?: string | null;
   error?: string;
 }
@@ -210,7 +212,9 @@ export default function SkillsPanel() {
       const j = (await r.json().catch(() => ({}))) as SkillRunResponse;
       // A stand-down is reported as-is rather than as a success: the operator
       // pressed Run now and nothing went to air (#1412).
-      if (j.aired === false) {
+      if (j.queued && j.deferred) {
+        notify.ok(j.spoken ? `Queued for the next break: “${j.spoken}”` : `${name} queued for the next break`);
+      } else if (j.aired === false) {
         notify.info(`${name} stayed silent — ${j.reason || 'nothing usable to speak from'}`);
       } else {
         notify.ok(j.spoken ? `On air: “${j.spoken}”` : `${name} fired`);

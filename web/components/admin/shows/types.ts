@@ -48,6 +48,8 @@ export interface Show {
   guestPersonaIds: string[];
   /** Multi-voice exchanges, up to twice an hour. Only meaningful with guests set. */
   banter: boolean;
+  /** Long skill segments may pause music and speak in a real gap. */
+  pauseTalk: boolean;
   /** [] = Any: the autonomous mood applies while the show is on air.
    *  Multi-value (#929), all selected moods weighted equally. */
   moods: string[];
@@ -243,4 +245,3 @@ export interface SettingsResponse {
   };
   tts?: { moods?: string[] };
 }
-

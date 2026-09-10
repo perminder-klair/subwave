@@ -205,6 +205,8 @@ function resolveShowShape(show, s) {
     // would read as "inherit" on every path, which is how the #779 blocklist
     // no-op happened.
     fadeAtShowEnd: typeof show.fadeAtShowEnd === 'boolean' ? show.fadeAtShowEnd : null,
+    // Explicit opt-in; an older persisted show keeps ordinary ducked speech.
+    pauseTalk: show.pauseTalk === true,
     // Navidrome playlist anchor: the union of these playlists becomes the show's
     // candidate pool (music/show-playlist.ts). playlistStrict makes it the show's
     // entire universe; soft just lets it dominate. Empty array = no anchor.
