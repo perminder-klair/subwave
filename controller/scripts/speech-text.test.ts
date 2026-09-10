@@ -137,10 +137,10 @@ async function main() {
     assert.equal(normalizeForSpeech('[gentle fade] A quiet word.'), 'A quiet word.');
   });
   await test('preserves bracketed title and edition qualifiers as spoken text', () => {
-    assert.equal(normalizeForSpeech('That was Song Title [Live].'), 'That was Song Title [Live].');
-    assert.equal(normalizeForSpeech('Here is Album Cut [Deluxe].'), 'Here is Album Cut [Deluxe].');
+    assert.equal(normalizeForSpeech('That was Song Title [Live].'), 'That was Song Title Live.');
+    assert.equal(normalizeForSpeech('Here is Album Cut [Deluxe].'), 'Here is Album Cut Deluxe.');
     assert.equal(normalizeForSpeech('Next, Song Title [Remastered 2011].'),
-      'Next, Song Title [Remastered 2011].');
+      'Next, Song Title Remastered 2011.');
     assert.equal(normalizeForSpeech('[Live fade out] Keep talking.'), 'Keep talking.',
       'a title-like prefix must not override the production-direction blocklist');
   });

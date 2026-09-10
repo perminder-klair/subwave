@@ -12,7 +12,7 @@ import { isNamedRequester } from '../../../util/request-guard.js';
 import { introBudgetPhrase, introMsFor, firstVocalMsFor } from './intro-budget.js';
 import { trackEraYear } from '../../../music/show-filter.js';
 import { trackFeelSuffix } from './track-feel.js';
-import { announceLine } from '../../../broadcast/announce-line.js';
+import { announceLine, nextAnnounceForm } from '../../../broadcast/announce-line.js';
 import * as library from '../../../music/library.js';
 import { contextSleeveNotesFor, releaseYearMentionEligible, selectSleeveNotes, stationHistoryNoteFor } from './sleeve-notes.js';
 import { stripRecapSpokenTags, stripSpokenTags } from './recent-speech.js';
@@ -96,10 +96,11 @@ function verifiedContextPacket(context: any, current: any = null, clockIsAirTime
   const showName = String(context?.activeShow?.name || "").trim();
   if (showName) moment.push("Current show: \"" + showName + "\".");
   const handover = context?.showHandover;
-  const hasFollowingShow = handover?.phase === "final-quarter-hour" && handover?.nextShow?.name && handover?.nextShow?.presenter && handover?.nextShow?.startsAt;
+  const hasFollowingShow = handover?.phase === "final-quarter-hour" && handover?.nextShow?.name && handover?.nextShow?.presenter;
   if (hasFollowingShow) {
     moment.push("Current show is approaching its scheduled close.");
-    moment.push("Following show: \"" + String(handover.nextShow.name).trim() + "\" with " + String(handover.nextShow.presenter).trim() + ", starting " + String(handover.nextShow.startsAt).trim() + ".");
+    const startsAt = clockIsAirTime ? String(handover.nextShow.startsAt || "").trim() : "";
+    moment.push("Following show: \"" + String(handover.nextShow.name).trim() + "\" with " + String(handover.nextShow.presenter).trim() + (startsAt ? ", starting " + startsAt : "") + ".");
   }
   const playStats = current ? library.trackPlayStatsFor(current) : null;
   const playCount = playStats?.count ?? null;
@@ -390,6 +391,35 @@ export function linkPrompt({
   return sections.join('\n\n');
 }
 
+// Announce mode normally never needs a model: announceLine composes the fixed
+// English frame in code. A non-English persona or CJK artist tag does need one
+// narrow translation/romanisation pass, but it must not inherit linkPrompt's
+// editorial task, sleeve notes, recap or high-variance sampling. Those inputs
+// turn a two-word continuity job back into a natural DJ link.
+export function announceFallbackPrompt({ artist, form, persona }: {
+  artist: unknown;
+  form: 'this-is' | 'next-up';
+  persona: unknown;
+}): string {
+  const name = String(artist ?? '').replace(/\s+/g, ' ').trim().slice(0, 180);
+  const language = String(
+    (persona as { language?: unknown } | null | undefined)?.language || '',
+  ).trim() || 'English';
+  const source = form === 'this-is' ? `This is ${name}.` : `Next up, ${name}.`;
+  return [
+    'Task: Write one announce-only artist identification for radio continuity.',
+    'The only permitted source frames are "This is <artist>." and "Next up, <artist>."',
+    `Use this source frame for this line: ${JSON.stringify(source)}`,
+    `Render that same meaning naturally in ${language}. Translate only the framing words; preserve the artist's identity, using its established spelling or a natural romanisation when the on-air language uses another script.`,
+    'Output exactly one short sentence and nothing else. Do not add a track title, opinion, description, fact, scene, weather, greeting, station ident, transition, or bracketed direction.',
+  ].join('\n');
+}
+
+function announceFallbackSystem(speaker: unknown): string {
+  return 'You are a radio continuity writer. Follow the announce-only contract exactly; do not turn it into DJ commentary.'
+    + settings.languageDirective(speaker);
+}
+
 export async function generateLink(args: any) {
   const speaker = args.persona || settings.getEffectivePersona();
   if (settings.announceLinks(speaker)) {
@@ -399,6 +429,17 @@ export async function generateLink(args: any) {
     });
     if (composed) return composed;
     if (!String(args.current?.artist ?? '').trim()) return '';
+    const form = args.currentIsOnAir ? 'this-is' : nextAnnounceForm(args.lastLink ?? null);
+    return djText({
+      system: announceFallbackSystem(speaker),
+      prompt: announceFallbackPrompt({ artist: args.current.artist, form, persona: speaker }),
+      temperature: 0.2,
+      topP: 0.8,
+      repeatPenalty: 1.05,
+      seed: randomSeed(),
+      maxOutputTokens: 64,
+      kind: 'generateAnnounceLinkFallback',
+    });
   }
   return djText({
     system: djSystem(speaker),

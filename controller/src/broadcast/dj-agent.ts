@@ -582,6 +582,7 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
   // Resolved HERE rather than up in runTrackEvent: the pick call above has
   // already spent part of the runway, and linkClockAt reads the live clock, so
   // asking now is the most honest the forecast can be on this path (#1314).
+  const clockAllowed = speakClockAllowed();
   const airAt = linkClockAt(showAt, Date.now());
   if (wantLink && current) {
     try {
@@ -593,7 +594,7 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
         // generation-time clocks aired a track late; #1314: forecast clocks
         // aired a filler track early).
         previous: current, current: result.song, context: linkAirContext(ctx, airAt),
-        clockIsAirTime: !!airAt,
+        clockIsAirTime: !!airAt && clockAllowed,
         // Name the speaker explicitly. Left unset, scripts.generateLink falls
         // back to getEffectivePersona() on the wall clock, which disagrees with
         // the session inside the look-ahead window — the incoming DJ's line
@@ -645,7 +646,7 @@ async function pickViaPool(queue, ctx, { wantLink, current, showAt = null }: { w
   // than on `airAt` itself, so linkAirContext still steps the daypart tags to
   // air time — "after dark" stays accurate even when the numerals are withheld.
   const queued = await enqueuePick(queue, result.song, result.reason, result.source || 'pool', link, current, fx, {
-    linkClockAt: linkClockStampFor(airAt, speakClockAllowed()),
+    linkClockAt: linkClockStampFor(airAt, clockAllowed),
   });
   // Even the pool landed on an already-queued track (a tiny library whose pool
   // collapsed to recents). Skip the session turn and let auto.m3u backstop the

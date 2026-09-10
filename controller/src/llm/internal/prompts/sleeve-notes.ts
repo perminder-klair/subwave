@@ -25,7 +25,7 @@ export function sleeveNotesFor(track: any, playCount: number | null = null): str
     notes.push(`Release year: ${year}.`);
   }
   if (Number.isInteger(playCount) && playCount! > 0) {
-    notes.push(`Station plays before today: ${playCount}.`);
+    notes.push(`Lifetime station plays: ${playCount}.`);
   }
   return notes;
 }

@@ -14,7 +14,7 @@ const track = (over: Record<string, unknown> = {}) => ({
 });
 
 assert.deepEqual(sleeveNotesFor(track(), 3), [
-  'Album: After Laughter Comes Tears.', 'Release year: 1964.', 'Station plays before today: 3.',
+  'Album: After Laughter Comes Tears.', 'Release year: 1964.', 'Lifetime station plays: 3.',
 ]);
 assert.deepEqual(contextSleeveNotesFor(track(), {
   date: { season: 'summer' }, weather: { condition: 'cloudy', location: 'The Ribble Valley' },
@@ -28,7 +28,7 @@ assert.deepEqual(selectSleeveNotes(sleeveNotesFor(track(), 3)), [
   'Album: After Laughter Comes Tears.', 'Release year: 1964.',
 ]);
 assert.deepEqual(selectSleeveNotes(sleeveNotesFor(track(), 3), Math.random, false), [
-  'Album: After Laughter Comes Tears.', 'Station plays before today: 3.',
+  'Album: After Laughter Comes Tears.', 'Lifetime station plays: 3.',
 ]);
 
 const yearGateContext = { date: { iso: '2026-09-08' }, clock: { hhmm: '11:30' } };
