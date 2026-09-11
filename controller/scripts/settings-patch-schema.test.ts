@@ -731,6 +731,23 @@ test('scheduleOverride validates SHAPE at the route, roster membership in update
   );
 });
 
+test('shows validate SHAPE at the route, roster membership in update()', () => {
+  // The route cannot know whether this patch also replaces personas. It must
+  // accept real-looking host and guest ids here; update() checks the assembled
+  // document against its resolved persona roster before saving.
+  assert.equal(
+    validateSettingsPatch({
+      shows: [{
+        id: 'show_night',
+        name: 'Night Shift',
+        personaId: 'persona_host',
+        guestPersonaIds: ['persona_guest'],
+      }],
+    }),
+    null,
+  );
+});
+
 test('an ARRAY key roots its flat message; a block key still reports verbatim', () => {
   // personas/djPrompts stay on validatePersonasStrict / validateDjPromptsStrict
   // (server-only id minting); only the reported STRING must not differ.
