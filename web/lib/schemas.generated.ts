@@ -3620,7 +3620,7 @@ export const SHOW_VOCALS = ['instrumental', 'vocal'] as const;
 export type EraWindow = { fromYear: number | null; toYear: number | null };
 
 /**
- * Everything a show can only be judged against from outside itself. Three fields
+ * Everything a show can only be judged against from outside itself. Four fields
  * are NULLABLE and null always means "this caller cannot check that rule", which
  * is how the lenient load path and the strict save path share one schema:
  *
@@ -3628,12 +3628,12 @@ export type EraWindow = { fromYear: number | null; toYear: number | null };
  *   - `themeIds: null` — load has no theme registry; a stale id is harmless.
  *   - `minTrackSeconds: null` — the crossfade-derived floor under BOTH
  *     maxTrackSeconds and minTrackLengthSeconds; load clamps to hard bounds.
- *
- * `personaIds` is NOT nullable: a show whose host does not exist has no owner on
- * either path (strict throws, lenient drops the row).
+ *   - `personaIds: null` — a shape-only caller cannot know the effective roster
+ *     when the same patch may replace it. The strict save path supplies the
+ *     resolved roster and remains the membership chokepoint.
  */
 export interface ShowSchemaContext {
-  personaIds: string[];
+  personaIds: string[] | null;
   moodNames: string[] | null;
   themeIds: string[] | null;
   minTrackSeconds: number | null;
@@ -3812,7 +3812,7 @@ function showObjectSchema(ctx: ShowSchemaContext) {
       ),
       personaId: z
         .string({ error: 'Pick a host persona' })
-        .refine((v) => ctx.personaIds.includes(v), 'must reference an existing persona'),
+        .refine((v) => ctx.personaIds == null || ctx.personaIds.includes(v), 'must reference an existing persona'),
       // Host exclusion and dedupe happen in the object transform below.
       guestPersonaIds: z.preprocess(
         nullToUndefined,
@@ -3820,7 +3820,10 @@ function showObjectSchema(ctx: ShowSchemaContext) {
           .array(
             z
               .string()
-              .refine((v) => ctx.personaIds.includes(v), 'must reference existing personas'),
+              .refine(
+                (v) => ctx.personaIds == null || ctx.personaIds.includes(v),
+                'must reference existing personas',
+              ),
           )
           .max(GUESTS_PER_SHOW, `must have at most ${GUESTS_PER_SHOW} entries`)
           .default([]),
