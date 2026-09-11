@@ -221,6 +221,12 @@ export const config = {
     // enough to honestly supply the 36h recency boost and a maxed no-repeat
     // window. ~300KB of JSON, rewritten once per play.
     recentPlaysMax: 2500,
+    // Anti-repeat recap fed to every DJ script prompt (queue.getDjRecap): how
+    // many aired lines, how far back, and chars kept per line. Minutes cap at
+    // 240 because the session hard-rolls at 4h, so older lines don't exist.
+    recapLimit: envInt('DJ_RECAP_LIMIT', 10, { min: 1, max: 50 }),
+    recapMinutes: envInt('DJ_RECAP_MINUTES', 120, { min: 1, max: 240 }),
+    recapChars: envInt('DJ_RECAP_CHARS', 140, { min: 40, max: 1000 }),
     // Count-based hard no-repeat guard: neither pick path re-airs any of the last
     // N DISTINCT plays. Non-relaxable — it survives the filterPickerCandidates
     // starvation cascade. Clamped to library size at use (37.5% ceiling), so a
