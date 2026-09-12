@@ -5,7 +5,7 @@
 // Read methods need only the api_key — no md5 signing or session key (unlike the
 // writes in broadcast/scrobble.ts). 5s timeout, [] on any failure, no retry.
 
-import * as subsonic from './subsonic.js';
+import * as subsonic from './source.js';
 import { LASTFM_API, resolveLastfmApiKey } from './lastfm-shared.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 

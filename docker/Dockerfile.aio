@@ -40,6 +40,17 @@ FROM caddy:2 AS caddybin
 # behind it rather than riding the web-image fix.
 FROM node:22-bookworm-slim AS nodebin
 
+# ---- librespot: Spotify Connect receiver for the spotify music source --------
+# Same stage as Dockerfile.broadcast (kept in lockstep): pipe backend, static
+# rustls TLS, no audio system, no mDNS. Inert unless the mixer boots in spotify
+# mode (liquidsoap_music_mode.txt).
+FROM rust:1-bookworm AS librespot
+ARG LIBRESPOT_VERSION=0.8.0
+# --locked from the git tag — see Dockerfile.broadcast for why.
+RUN cargo install --locked --git https://github.com/librespot-org/librespot \
+        --tag "v${LIBRESPOT_VERSION}" --no-default-features \
+        --features rustls-tls-webpki-roots librespot
+
 # ---- final: everything under the liquidsoap (Debian) base -------------------
 # v2.4.5 minimum — same reason as Dockerfile.broadcast (2.4.4's O(n) clock scan
 # stalled the stream at every DJ-effect crossfade).
@@ -193,6 +204,9 @@ COPY --from=webbuild /web/content /web/content
 # --- Broadcast + edge config + bundled audio --------------------------------
 COPY docker/icecast.xml.template /etc/icecast2/icecast.xml.template
 COPY liquidsoap/radio.liq /etc/liquidsoap/radio.liq
+COPY --from=librespot /usr/local/cargo/bin/librespot /usr/local/bin/librespot
+COPY docker/spotify/librespot-run.sh docker/spotify/librespot-event.sh /app/spotify/
+RUN chmod +x /app/spotify/*.sh
 COPY sounds /sounds
 COPY docker/aio/Caddyfile /etc/caddy/Caddyfile
 COPY docker/aio/supervisor.sh /usr/local/bin/subwave-supervisor

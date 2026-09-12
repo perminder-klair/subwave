@@ -9,7 +9,7 @@
 import express from 'express';
 import { queue } from '../broadcast/queue.js';
 import * as likes from '../broadcast/likes.js';
-import * as subsonic from '../music/subsonic.js';
+import * as subsonic from '../music/source.js';
 import * as db from '../music/library-db.js';
 import * as settings from '../settings.js';
 import { requireAdmin } from '../middleware/auth.js';

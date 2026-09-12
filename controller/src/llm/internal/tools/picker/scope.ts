@@ -16,6 +16,8 @@ import { applyTrackFloor } from '../../../../music/track-floor.js';
 import { freshnessBiasedOrder } from '../../../../music/airing.js';
 import { SEED_NOT_A_PICK_CLAUSE } from '../../../../util/pick-seed.js';
 import { slim } from './slim.js';
+import { activeCapabilities } from '../../../../music/source.js';
+import type { SourceCapabilities } from '../../../../music/sources/capabilities.js';
 
 export interface PickerScope {
   recentIds: Set<string>;
@@ -108,9 +110,16 @@ export interface PickerContext {
   hasTextEmbeddings: boolean;
   hasAudioEmbeddings: boolean;
   hasEmbeddingProvider: boolean;
-  // True when most of the text index is label-only vectors, i.e. "semantic
-  // similarity" is really artist-string proximity. The text-similarity tools
-  // adjust their descriptions accordingly.
+  // What the ACTIVE music source can serve (music/sources/capabilities.ts). A
+  // server-backed tool (similar songs, stars, top songs, newest albums,
+  // playlists) gates on its flag here, for the same reason the embedding gates
+  // above exist: a tool whose backing data cannot exist spends the single
+  // discovery call on a guaranteed-empty result.
+  sourceCaps: SourceCapabilities;
+  // True when most of the text index is label-only vectors (artist/title/album
+  // text with no tags/lyrics/acoustics), i.e. "semantic similarity" is really
+  // artist-string proximity. The text-similarity tools adjust their
+  // descriptions so the model weighs their results for what they actually are.
   textIndexDegraded: boolean;
 }
 
@@ -247,5 +256,7 @@ export function buildPickerContext(scope: PickerScope): PickerContext {
     return { tracks: [] as any[], matched: 0, fellBack: false };
   };
 
-  return { scope, seen, collect, emptyResult, seedSimilarity, knnExclude, stats, hasTextEmbeddings, hasAudioEmbeddings, hasEmbeddingProvider, textIndexDegraded };
+  const sourceCaps = activeCapabilities();
+
+  return { scope, seen, collect, emptyResult, seedSimilarity, knnExclude, stats, hasTextEmbeddings, hasAudioEmbeddings, hasEmbeddingProvider, sourceCaps, textIndexDegraded };
 }

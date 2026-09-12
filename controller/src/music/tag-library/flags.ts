@@ -2,7 +2,7 @@
 // Navidrome, reconciling deleted tracks, and folding the wizard's overlay in.
 // See ../tag-library.ts for main().
 
-import * as subsonic from '../subsonic.js';
+import * as subsonic from '../source.js';
 import * as db from '../library-db.js';
 import * as embeddings from '../embeddings.js';
 import { config } from '../../config.js';
@@ -10,6 +10,7 @@ import { loadSecretsIntoEnv } from '../../setup/secrets.js';
 import { loadSetupConfig } from '../../setup/config.js';
 import { reportProgress } from '../tagger-progress.js';
 import { logEvent } from './log.js';
+import { prunePermitted, pruneSkippedLine } from '../prune-policy.js';
 import { backfillOriginalYears, pendingOriginalYearIds } from './enrich.js';
 
 function parseIntFlag(args: string[], name: string): number | null {
@@ -169,20 +170,29 @@ export async function reconcileOnly() {
   console.log('[tag] reconcile-only: walking Navidrome to prune orphaned rows');
   const { walked, liveIds } = await walkNavidrome();
   let pruned = 0;
-  if (walked > 0) {
+  let skipped: string | null = null;
+  const decision = prunePermitted({ walked, health: await subsonic.catalogHealth() });
+  if (decision.ok) {
     pruned = db.pruneMissingTracks(liveIds);
-    console.log(`[tag] reconcile pruned ${pruned} orphaned tracks no longer in Navidrome`);
+    console.log(`[tag] reconcile pruned ${pruned} orphaned tracks no longer in the library`);
     const resolved = await backfillOriginalYears(pendingOriginalYearIds(false), false, 4);
     if (resolved) console.log(`[tag] reconcile resolved ${resolved} original years via MusicBrainz`);
   } else {
-    // A transient empty Navidrome response must never wipe the DB.
-    console.warn('[tag] reconcile: Navidrome returned 0 tracks — skipping prune');
+    // The walk could not be trusted as the complete live set — a transient empty
+    // response, or (on a partially-degrading source) a short one. Either way,
+    // deleting against it would throw away live tags.
+    skipped = pruneSkippedLine(decision.reason);
+    console.warn(`[tag] reconcile: ${skipped}`);
   }
   reportProgress({
     phase: 'done',
-    label: pruned > 0
-      ? `Removed ${pruned} track${pruned === 1 ? '' : 's'} no longer in Navidrome`
-      : 'Library is in sync with Navidrome',
+    // A skipped prune must NOT read as "in sync" — that is the one wording an
+    // operator would take as confirmation that nothing needed removing.
+    label: skipped
+      ? 'Reconcile skipped — the library walk was incomplete, so nothing was removed'
+      : pruned > 0
+        ? `Removed ${pruned} track${pruned === 1 ? '' : 's'} no longer in the library`
+        : 'Library is in sync',
     done: pruned,
   });
   console.log(`[tag] reconcile complete (walked ${walked}, pruned ${pruned})`);

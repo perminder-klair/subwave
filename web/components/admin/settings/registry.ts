@@ -55,7 +55,7 @@ export const SECTIONS = [
   },
   {
     id: 'music', group: 'the station', label: 'Music source',
-    hint: 'navidrome · subsonic', icon: Music2,
+    hint: 'navidrome · subsonic · spotify', icon: Music2,
     formKeys: [],
   },
   {
@@ -222,6 +222,7 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
   { label: 'Server URL', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic host url' },
   { label: 'Username', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic login user' },
   { label: 'Password', section: 'music', card: 'Navidrome server', keywords: 'navidrome subsonic secret salt token' },
+  { label: 'Verbose Spotify logging', section: 'music', card: 'Seam tracing', keywords: 'spotify debug trace verbose seam log unavailable refused' },
 
   // ── skin & themes ──────────────────────────────────────────────────────────
   { label: 'Station skin', section: 'theme', card: 'Player skin', keywords: 'classic unit platter drift subamp tty listen face' },

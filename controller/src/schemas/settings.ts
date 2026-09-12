@@ -921,6 +921,120 @@ export const pickerPatchSchema = settingsBlockOf({
   ),
 });
 
+// Pluggable music sources — the enum backing settings.music.source (upstream
+// #843's key). One active source at a time. Only list sources with a registered
+// implementation (music/sources/registry.ts): validating a source nothing can
+// build would let an operator strand the station on a backend that resolves to
+// nothing. A new source appends here in the PR that registers it.
+export const MUSIC_SOURCES: readonly string[] = ['subsonic', 'spotify'];
+
+export const musicPatchSchema = settingsBlockOf({
+  source: settingsStrictOneOf(
+    MUSIC_SOURCES,
+    `music.source must be one of: ${MUSIC_SOURCES.join(', ')}`,
+  ),
+});
+
+// Spotify source knobs (settings.spotify). Credentials are NOT here — they are
+// secrets (state/secrets.env, routes/settings/spotify.ts).
+export const SPOTIFY_BITRATES: readonly number[] = [96, 160, 320];
+export const SPOTIFY_MISMATCH_MODES: readonly string[] = ['reclaim', 'follow'];
+export const SPOTIFY_POOL_MAX_TRACKS_BOUNDS: SettingsNumericBound = { min: 100, max: 50_000 };
+export const SPOTIFY_SEAM_LEAD_MS_BOUNDS: SettingsNumericBound = { min: 0, max: 10_000 };
+// How often a FULL catalogue walk replaces a cheap snapshot revalidate. A
+// revalidate re-walks only the playlists whose `snapshot_id` moved, so it costs
+// a handful of requests where a full walk costs one per fifty tracks; the full
+// walk still runs on this cadence because the saved-tracks fingerprint is a
+// count plus a newest id and cannot see a swap that keeps both.
+export const SPOTIFY_POOL_FULL_WALK_HOURS_BOUNDS: SettingsNumericBound = { min: 1, max: 168 };
+// The pacer's ceiling for NON-CRITICAL requests in a rolling 30-second window.
+// A starting point, not a contract: Spotify publishes no number for Development
+// Mode, and since July 2026 the budget is shared with every other app on the
+// developer account, so the client halves this on a 429 and eases back. Lower it
+// on an account that runs other apps.
+export const SPOTIFY_REQUESTS_PER_30S_BOUNDS: SettingsNumericBound = { min: 10, max: 1000 };
+// Artist genres cost ONE REQUEST EACH (the batch read was removed in February
+// 2026 and not restored), so enrichment is a paced drip rather than a burst.
+// 0 turns it off: the pool still plays, genre shows and genre picking just stay
+// as sparse as whatever is already cached on disk.
+export const SPOTIFY_GENRES_PER_HOUR_BOUNDS: SettingsNumericBound = { min: 0, max: 5000 };
+export const SPOTIFY_ID_RE = /^[0-9A-Za-z]{22}$/;
+
+// A list of Spotify playlist ids. Accepts an array or a comma/newline-separated
+// string, and each entry may be a bare id, a `spotify:playlist:` URI or an
+// open.spotify.com link — operators paste whatever the app copied. Anything
+// that is not a playlist reference is refused, naming it.
+export const spotifyPlaylistIdsSchema = z
+  .unknown()
+  .transform((raw, ctx) => {
+    const parts = Array.isArray(raw)
+      ? raw.map((v) => String(v ?? ''))
+      : typeof raw === 'string'
+        ? raw.split(/[\n,]/)
+        : null;
+    if (parts === null) {
+      ctx.addIssue({ code: 'custom', message: 'spotify.pool.playlistIds must be a list of playlist ids or links' });
+      return z.NEVER;
+    }
+    const out: string[] = [];
+    for (const p of parts) {
+      const v = p.trim();
+      if (!v) continue;
+      const m = /^spotify:playlist:([0-9A-Za-z]{22})$/.exec(v)
+        || /open\.spotify\.com\/playlist\/([0-9A-Za-z]{22})/.exec(v)
+        || (SPOTIFY_ID_RE.test(v) ? [v, v] : null);
+      if (!m) {
+        ctx.addIssue({ code: 'custom', message: `spotify.pool.playlistIds: "${v.slice(0, 40)}" is not a Spotify playlist id or link` });
+        return z.NEVER;
+      }
+      if (!out.includes(m[1])) out.push(m[1]);
+    }
+    if (out.length > 200) {
+      ctx.addIssue({ code: 'custom', message: 'spotify.pool.playlistIds: at most 200 playlists' });
+      return z.NEVER;
+    }
+    return out;
+  });
+
+export const spotifyPatchSchema = settingsBlockOf({
+  deviceName: settingsRawStringLike(64, 'spotify.deviceName must be at most 64 characters'),
+  bitrate: z.unknown().superRefine((raw, ctx) => {
+    if (!SPOTIFY_BITRATES.includes(Number(raw))) ctx.addIssue({ code: 'custom', message: `spotify.bitrate must be one of: ${SPOTIFY_BITRATES.join(', ')}` });
+  }).transform((raw) => Number(raw)),
+  pool: settingsBlockOf({
+    playlistIds: spotifyPlaylistIdsSchema,
+    includeSaved: settingsBoolLike(),
+    includeSavedAlbums: settingsBoolLike(),
+    maxTracks: settingsNumberRoundLike(
+      SPOTIFY_POOL_MAX_TRACKS_BOUNDS,
+      `spotify.pool.maxTracks must be between ${SPOTIFY_POOL_MAX_TRACKS_BOUNDS.min} and ${SPOTIFY_POOL_MAX_TRACKS_BOUNDS.max}`,
+    ),
+    fullWalkHours: settingsNumberRoundLike(
+      SPOTIFY_POOL_FULL_WALK_HOURS_BOUNDS,
+      `spotify.pool.fullWalkHours must be between ${SPOTIFY_POOL_FULL_WALK_HOURS_BOUNDS.min} and ${SPOTIFY_POOL_FULL_WALK_HOURS_BOUNDS.max}`,
+    ),
+  }),
+  quota: settingsBlockOf({
+    requestsPer30s: settingsNumberRoundLike(
+      SPOTIFY_REQUESTS_PER_30S_BOUNDS,
+      `spotify.quota.requestsPer30s must be between ${SPOTIFY_REQUESTS_PER_30S_BOUNDS.min} and ${SPOTIFY_REQUESTS_PER_30S_BOUNDS.max}`,
+    ),
+    genresPerHour: settingsNumberRoundLike(
+      SPOTIFY_GENRES_PER_HOUR_BOUNDS,
+      `spotify.quota.genresPerHour must be between ${SPOTIFY_GENRES_PER_HOUR_BOUNDS.min} and ${SPOTIFY_GENRES_PER_HOUR_BOUNDS.max} (0 = off)`,
+    ),
+  }),
+  seamLeadMs: settingsNumberRoundLike(
+    SPOTIFY_SEAM_LEAD_MS_BOUNDS,
+    `spotify.seamLeadMs must be between ${SPOTIFY_SEAM_LEAD_MS_BOUNDS.min} and ${SPOTIFY_SEAM_LEAD_MS_BOUNDS.max}`,
+  ),
+  mismatch: settingsStrictOneOf(
+    SPOTIFY_MISMATCH_MODES,
+    `spotify.mismatch must be one of: ${SPOTIFY_MISMATCH_MODES.join(', ')}`,
+  ),
+  verboseLog: settingsBoolLike(),
+});
+
 export const likesPatchSchema = settingsBlockOf({
   enabled: settingsBoolLike(),
   starInNavidrome: settingsBoolLike(),

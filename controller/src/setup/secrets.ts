@@ -40,6 +40,17 @@ export const SECRET_ENV_KEYS = [
   'LASTFM_SESSION_KEY',
   'LISTENBRAINZ_USER_TOKEN',
   'LISTENBRAINZ_API_URL',
+  // Spotify music source (music/sources/spotify). The client id/secret are the
+  // operator's own Developer-app credentials; the refresh token is minted by the
+  // admin Connect flow (routes/settings/spotify.ts) and may be ROTATED by
+  // Spotify on refresh, which is why the client writes it back here.
+  'SPOTIFY_CLIENT_ID',
+  'SPOTIFY_CLIENT_SECRET',
+  'SPOTIFY_REFRESH_TOKEN',
+  // The RECEIVER's refresh token (music/sources/spotify/receiver-auth.ts):
+  // minted for Spotify's own desktop client id, so librespot can be re-signed
+  // in without the operator whenever its credential cache is gone.
+  'SPOTIFY_RECEIVER_REFRESH_TOKEN',
 ];
 
 // An unquoted value carrying a `#`: dotenv truncates there (correct .env
@@ -105,12 +116,24 @@ export async function loadSecretsIntoEnv(): Promise<{ loaded: string[]; skipped:
     }
     process.env[key] = value;
     loaded.push(key);
+    loadedKeys.add(key);
   }
   return { loaded, skipped, warnings };
 }
 
-// Persist a batch of API keys, merged over what is already there. An empty value
-// is written as `KEY=` rather than deleted, so the next boot falls back to env.
+// Which keys came from THIS file rather than the root .env. A route that lets
+// the operator edit a secret needs the distinction: env-managed keys are refused
+// (env wins on boot, so a saved value would be shadowed again), file-managed ones
+// are editable. Keys saved through saveSecrets join the set too.
+const loadedKeys = new Set<string>();
+export function loadedSecretKeys(): ReadonlySet<string> {
+  return loadedKeys;
+}
+
+// Persist a batch of API keys to state/secrets.env. Merges with whatever is
+// already there so a wizard re-run that only changes one key doesn't clobber
+// the others. Empty values are written through as `KEY=` rather than deleting
+// the entry — the next boot then sees an empty string and falls back to env.
 export async function saveSecrets(patch: Record<string, string>): Promise<void> {
   // Same reader as the boot path: this rewrites the whole file, so a value read
   // wrong here is a stored secret destroyed on disk.
@@ -132,9 +155,12 @@ export async function saveSecrets(patch: Record<string, string>): Promise<void> 
   // crash mid-write can't truncate existing secrets.
   await writeFileAtomic(PATH, body, { mode: 0o600 });
   await chmod(PATH, 0o600);
-  // Only after the file is on disk, so a value envEscape rejected never takes
-  // effect in-process while being absent from the file. Live env and disk stay in
-  // lockstep, and a later AI SDK call sees the new key without a restart.
+  for (const key of Object.keys(patch)) if (SECRET_ENV_KEYS.includes(key)) loadedKeys.add(key);
+  // Only now — after the file is safely on disk — mutate the live process env,
+  // so any subsequent AI SDK call sees the new key without a restart. Doing this
+  // after the write (rather than in the merge loop above) means a value rejected
+  // by envEscape (newline/quote) never takes effect in-process while being absent
+  // from the file: the live env and disk stay in lockstep.
   for (const [key, value] of Object.entries(patch)) {
     if (!SECRET_ENV_KEYS.includes(key) || !value) continue;
     process.env[key] = value;

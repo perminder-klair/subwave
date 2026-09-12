@@ -4,7 +4,7 @@
 // the same names whichever way it reached a track — stable ids to reference and
 // enough signal to reason about flow.
 
-import * as subsonic from '../../../../music/subsonic.js';
+import * as subsonic from '../../../../music/source.js';
 import * as library from '../../../../music/library.js';
 import { durationSeconds } from '../../../../music/recency.js';
 import { unairedFlag } from '../../../../music/airing.js';

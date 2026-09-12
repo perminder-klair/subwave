@@ -1,0 +1,35 @@
+# Overlay: repoint every SUB/WAVE-published image at a local private registry
+# instead of ghcr.io/perminder-klair — for running a fork's own images (e.g. on
+# Unraid) without publishing to GHCR. Build with scripts/push-local-registry.sh.
+#
+# Usage (stack alongside the existing overlays as needed):
+#   docker compose -f docker-compose.yml -f docker-compose.spotify.yml \
+#     -f docker-compose.local-registry.yml pull
+#   docker compose -f docker-compose.yml -f docker-compose.spotify.yml \
+#     -f docker-compose.local-registry.yml up -d
+#
+# LOCAL_REGISTRY defaults to 192.168.1.50:5000; override in .env if it moves.
+# SUBWAVE_VERSION selects the tag, same variable the base file already reads.
+# docker-socket-proxy is a third-party image (ghcr.io/tecnativa/...) and is
+# intentionally left untouched.
+
+services:
+  caddy:
+    image: ${LOCAL_REGISTRY:-192.168.1.50:5000}/subwave-caddy:${SUBWAVE_VERSION:-latest}
+
+  broadcast:
+    image: ${LOCAL_REGISTRY:-192.168.1.50:5000}/subwave-broadcast:${SUBWAVE_VERSION:-latest}
+
+  controller:
+    image: ${LOCAL_REGISTRY:-192.168.1.50:5000}/subwave-controller:${SUBWAVE_VERSION:-latest}
+
+  web:
+    image: ${LOCAL_REGISTRY:-192.168.1.50:5000}/subwave-web:${SUBWAVE_VERSION:-latest}
+
+  # Mirrors the base file's own heavy/lean suffix so ANALYZER_HEAVY still works.
+  analyzer:
+    image: ${LOCAL_REGISTRY:-192.168.1.50:5000}/subwave-analyzer${ANALYZER_HEAVY:+-heavy}:${SUBWAVE_VERSION:-latest}
+
+  # Profile-gated (tts-heavy) — repointed too so it's ready if ever enabled.
+  tts-heavy:
+    image: ${LOCAL_REGISTRY:-192.168.1.50:5000}/subwave-tts-heavy:${SUBWAVE_VERSION:-latest}

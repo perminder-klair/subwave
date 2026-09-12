@@ -1,0 +1,7 @@
+# Files that run INSIDE Linux containers must reach the image build with LF
+# endings even when the repo is checked out on Windows (core.autocrlf=true):
+# bash chokes on \r ("$'\r': command not found"), and Liquidsoap's parser
+# rejects it too. Docker COPY takes the working copy, not the index.
+*.sh text eol=lf
+*.liq text eol=lf
+Dockerfile* text eol=lf

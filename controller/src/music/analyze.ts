@@ -6,7 +6,7 @@ import { readFile, rm } from 'node:fs/promises';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';
 import * as stemCacheStore from './stem-cache.js';
-import * as subsonic from './subsonic.js';
+import * as subsonic from './source.js';
 import * as settings from '../settings.js';
 import { config } from '../config.js';
 import { deriveVocalFromLyrics, clipRangesToTail, type LyricVocalResult } from './lyric-vocal.js';

@@ -1,0 +1,15 @@
+# Optional overlay for the Spotify music source:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.spotify.yml up -d
+#
+# It publishes the controller on 127.0.0.1:5588 — the loopback address Spotify
+# redirects to after the RECEIVER sign-in (librespot's own client id registers
+# http://127.0.0.1:5588/login; it is not ours to change). With this overlay the
+# controller's GET /login completes the sign-in itself; without it the browser
+# lands on a connection error and the operator pastes that URL into the admin
+# page instead. Loopback only: nothing else should ever reach this port.
+# See docs/spotify-source.md.
+services:
+  controller:
+    ports:
+      - "127.0.0.1:5588:7701"

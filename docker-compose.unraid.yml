@@ -1,0 +1,355 @@
+# SUB/WAVE — pre-merged convenience file for single-paste GUI compose tools
+# (Compose Manager Plus, Portainer stacks, etc.) that don't reliably support
+# stacking multiple named compose files. Paste THIS ONE FILE into the stack's
+# Compose editor.
+#
+# What it is: docker-compose.yml + docker-compose.local-registry.yml, merged by
+# hand, with two deliberate departures from the base file:
+#
+#   1. NO `build:` blocks. A GUI stack's project directory holds this file and
+#      a .env, not a source checkout — every `build:` here would name a
+#      `context: .` and a `docker/Dockerfile.*` that do not exist, so a plain
+#      "Compose Up" would try to build and fail. Images are built on a machine
+#      that HAS the source and pushed to the local registry; see below.
+#   2. NO 127.0.0.1:5588 controller port (docker-compose.spotify.yml). See the
+#      note on the controller service — it would not help here even if the port
+#      were free.
+#
+# Build and publish the images BEFORE bringing this stack up, from a checkout
+# of this branch:
+#
+#   bash scripts/push-local-registry.sh
+#
+# That builds caddy, broadcast, controller, web and analyzer and pushes each as
+# :latest and :sha-<shortsha>. NOTE the variable names differ on the two sides:
+# the script reads REGISTRY, this file reads LOCAL_REGISTRY. They default to the
+# same 192.168.1.50:5000, so out of the box they agree — if you move the
+# registry, set BOTH. The registry must be trusted as an insecure (HTTP)
+# registry in the Docker daemon on the build machine AND on this host.
+#
+# CLI users (SSH/terminal) with a source checkout: use the separate files and
+# their `build:` blocks instead, so a future edit to any one of them doesn't
+# also require regenerating this file:
+#   docker compose -f docker-compose.yml -f docker-compose.local-registry.yml up -d
+#
+# If you change docker-compose.yml or docker-compose.local-registry.yml,
+# re-apply the same edits here too.
+
+# State lives on the array/pool, never on the USB flash. A GUI compose project
+# directory is on /boot, so the base file's `./state` default would put the
+# SQLite library, sessions, archives and Spotify credentials on the boot stick —
+# slow, wearing, and vfat cannot give SQLite the locking or file modes it needs.
+# Hence an ABSOLUTE default here rather than the base file's relative one.
+x-state: &state-mount ${STATE_DIR:-/mnt/user/appdata/subwave/state}:/var/sub-wave
+# Optional host relocation for the stem cache (STEMS_DIR in .env). The
+# container path is fixed because compose cannot know which station is active;
+# SUBWAVE_STEMS_DIR hands that path to the controller and the broadcast
+# entrypoint, which re-append the per-station segment under it. Unset leaves
+# the cache under the state dir, exactly as before.
+x-stems: &stems-mount ${STEMS_DIR:-${STATE_DIR:-/mnt/user/appdata/subwave/state}/stems}:/var/sub-wave/stems
+
+# Cap container log growth (10m × 3 ≈ 30MB/service) — the default json-file
+# driver is unbounded and eventually fills the host disk.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  # -------------------------------------------------------------------------
+  # CADDY — public edge, the only service bound to a host port
+  # -------------------------------------------------------------------------
+  caddy:
+    image: ${LOCAL_REGISTRY:-192.168.1.50:5000}/subwave-caddy:${SUBWAVE_VERSION:-latest}
+    container_name: sub-wave-caddy
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      # web has no healthcheck (static Next.js server) — started is enough.
+      # Gate the edge on controller + broadcast health to avoid cold-boot 502s.
+      web:
+        condition: service_started
+      controller:
+        condition: service_healthy
+      broadcast:
+        condition: service_healthy
+    ports:
+      - "${CADDY_PORT:-7700}:80"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+
+  # -------------------------------------------------------------------------
+  # BROADCAST — icecast2 + liquidsoap in one container
+  # -------------------------------------------------------------------------
+  # The entrypoint resolves ICECAST_* passwords, renders icecast.xml, and
+  # launches both; if either dies the container exits and restarts the pair.
+  #
+  # This image also carries librespot, the Spotify Connect receiver used when
+  # settings.music.source = spotify. It is compiled into THIS fork's image; the
+  # upstream ghcr.io/perminder-klair tag does not have it, which is the whole
+  # reason this stack pulls from the local registry. If the receiver never shows
+  # up in your Spotify device list, read
+  # <STATE_DIR>/logs/librespot.log — an EMPTY log there means the running image
+  # has no librespot, i.e. something pulled the upstream tag.
+  broadcast:
+    image: ${LOCAL_REGISTRY:-192.168.1.50:5000}/subwave-broadcast:${SUBWAVE_VERSION:-latest}
+    container_name: sub-wave-broadcast
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      # Optional — blank means random values generated on first boot and
+      # persisted to state/icecast-secrets.env (delete that file + restart
+      # broadcast to rotate).
+      - ICECAST_SOURCE_PASSWORD=${ICECAST_SOURCE_PASSWORD:-}
+      - ICECAST_ADMIN_PASSWORD=${ICECAST_ADMIN_PASSWORD:-}
+      - ICECAST_RELAY_PASSWORD=${ICECAST_RELAY_PASSWORD:-}
+      # Concurrent-listener ceiling (<limits><clients>). Empty → 100.
+      - ICECAST_MAX_CLIENTS=${ICECAST_MAX_CLIENTS:-}
+      # Proxies whose X-Forwarded-For icecast should believe (real listener IPs
+      # in admin → Listeners). Unset resolves the bundled `caddy` by name at
+      # render time — lands on every restart but misses the very first cold
+      # boot (caddy waits on this service's healthcheck). Pin an IP here for
+      # first-boot accuracy.
+      - ICECAST_TRUSTED_PROXY_IPS=${ICECAST_TRUSTED_PROXY_IPS:-}
+      - ICECAST_TRUSTED_PROXY_HOSTS=${ICECAST_TRUSTED_PROXY_HOSTS:-}
+      # Keeps the hourly archive paths (%Y-%m-%d/%H-00.mp3) on local wall time.
+      - TZ=${TZ:-Europe/London}
+      # Container path of the STEMS_DIR bind mount above — empty when the
+      # operator did not relocate, which keeps the cache under the state dir
+      # exactly as before. Named apart from STEMS_DIR on purpose: that one is a
+      # HOST path and reaches the controller through `env_file: ./.env`.
+      - SUBWAVE_STEMS_DIR=${STEMS_DIR:+/var/sub-wave/stems}
+    extra_hosts:
+      # Liquidsoap fetching Subsonic URLs that point at host services
+      # (e.g. NAVIDROME_URL=http://host.docker.internal:4533).
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - *state-mount
+      - *stems-mount
+      - ${STATE_DIR:-/mnt/user/appdata/subwave/state}/logs:/var/log/liquidsoap
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7702/status-json.xsl > /dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+
+  # -------------------------------------------------------------------------
+  # CONTROLLER — AI DJ brain
+  # -------------------------------------------------------------------------
+  controller:
+    image: ${LOCAL_REGISTRY:-192.168.1.50:5000}/subwave-controller:${SUBWAVE_VERSION:-latest}
+    container_name: sub-wave-controller
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      broadcast:
+        condition: service_healthy
+      # So a selective `up -d controller` also brings the socket-proxy up.
+      # Remove this entry too if you drop the proxy below.
+      docker-socket-proxy:
+        condition: service_started
+    # No 127.0.0.1:5588:7701 port here (docker-compose.spotify.yml adds it), and
+    # it would not help on a headless box anyway. That loopback port is where
+    # Spotify sends the browser after the one-time receiver sign-in —
+    # librespot's own hardcoded redirect_uri, which neither this file nor
+    # SUB/WAVE can change. It has to be loopback on the machine running the
+    # BROWSER, which for an Unraid server is your laptop, not the server. (On
+    # this host it is also already taken by another stack.) So the redirect page
+    # will fail to load: copy the whole URL out of the address bar and paste it
+    # into admin → Settings → Music source → Playback → *Finish sign-in*.
+    # See docs/spotify-source.md.
+    environment:
+      # Enables the production-only admin gate (refuses to boot without
+      # ADMIN_USER + ADMIN_PASS).
+      - NODE_ENV=production
+      # Schedule slots are day-of-week + hour via date.getHours(); without TZ
+      # the container runs UTC and fires shows an hour early during BST.
+      - TZ=${TZ:-Europe/London}
+      - STATE_DIR=/var/sub-wave
+      - SOUNDS_DIR=/sounds
+      # Container path of the STEMS_DIR bind mount above — empty when the
+      # operator did not relocate, which keeps the cache under the state dir
+      # exactly as before. Named apart from STEMS_DIR on purpose: that one is a
+      # HOST path and reaches the controller through `env_file: ./.env`.
+      - SUBWAVE_STEMS_DIR=${STEMS_DIR:+/var/sub-wave/stems}
+      # Optional Chatterbox/PocketTTS sidecar (--profile tts-heavy). When the
+      # profile is off the URL is unreachable and TTS falls back to Piper.
+      - TTS_HEAVY_URL=${TTS_HEAVY_URL:-http://tts-heavy:8080}
+      # Acoustic-analysis sidecar (default-on below). Probed first, then a
+      # local venv; falls through to NULL analysis. See music/analyzer.ts.
+      - ANALYZE_URL=${ANALYZE_URL:-http://analyzer:8080}
+      # Per-container stats for the admin Stats panel, via the socket-proxy —
+      # the controller never touches the raw Docker socket. Unset to disable.
+      - DOCKER_HOST=tcp://docker-socket-proxy:2375
+    env_file:
+      # All controller config (Navidrome creds, LLM keys, ADMIN_*, …). Unset
+      # vars are simply absent — settings.json covers what the wizard manages.
+      # Relative to the STACK's project directory, which is where the GUI's
+      # ".env" tab writes — so this one path is correct on flash.
+      - ./.env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - *state-mount
+      - *stems-mount
+    # curl is in the controller image; /health is served at the router root.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:7701/health > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+
+  # -------------------------------------------------------------------------
+  # DOCKER-SOCKET-PROXY — locked-down Docker API for the Stats system panel
+  # -------------------------------------------------------------------------
+  # Owns the real /var/run/docker.sock and exposes a read-only, GET-only,
+  # CONTAINERS-section-only slice over internal TCP. Optional: remove it (plus
+  # the controller's DOCKER_HOST + depends_on entry) to drop the Stats panel.
+  # Third-party image — deliberately NOT repointed at the local registry.
+  docker-socket-proxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:0.3.0
+    container_name: sub-wave-docker-proxy
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      - CONTAINERS=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  # -------------------------------------------------------------------------
+  # WEB — Next.js listener UI
+  # -------------------------------------------------------------------------
+  # NEXT_PUBLIC_GA_ID is a BUILD-time inline in the base file; with no build
+  # here, set it on the build machine (push-local-registry.sh reads it) if you
+  # want it in the client bundle. Everything below is read at runtime.
+  web:
+    image: ${LOCAL_REGISTRY:-192.168.1.50:5000}/subwave-web:${SUBWAVE_VERSION:-latest}
+    container_name: sub-wave-web
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      # The homepage renders per-request against the controller — starting web
+      # before it is healthy serves broken first pages.
+      controller:
+        condition: service_healthy
+    environment:
+      - NODE_ENV=production
+      - SUBWAVE_HOMEPAGE=${SUBWAVE_HOMEPAGE:-player}
+      # RUNTIME source of truth for absolute URLs (canonicals, og:url,
+      # robots.txt, sitemap.xml) — the generic image serves any domain.
+      - SITE_URL=${SITE_URL:-}
+      # Set to 1 to keep the shared product pages (landing, docs, news,
+      # catalogs) self-canonical + in this install's sitemap instead of
+      # crediting getsubwave.com (web/lib/site.ts IS_OFFICIAL_SITE).
+      - SUBWAVE_INDEX_ALL=${SUBWAVE_INDEX_ALL:-}
+      # GA Measurement ID at RUNTIME (web/lib/ga.ts) — analytics turn on with a
+      # `web` recreate, no rebuild.
+      - GA_ID=${NEXT_PUBLIC_GA_ID:-}
+      # Server-side base URL for generateMetadata; internal compose name, not
+      # exposed to the browser (which uses /api via Caddy).
+      - CONTROLLER_INTERNAL_URL=http://controller:7701
+
+  # -------------------------------------------------------------------------
+  # TTS-HEAVY (optional) — sidecar for Chatterbox + PocketTTS
+  # -------------------------------------------------------------------------
+  # Heavy PyTorch engines kept out of the controller image (#103). NOT started
+  # by default: set COMPOSE_PROFILES=tts-heavy in .env. With the profile off,
+  # TTS_HEAVY_URL is unreachable and the dispatcher falls back to Piper.
+  #
+  # push-local-registry.sh does NOT build this image (it is multi-GB and the
+  # profile is off by default), so enabling the profile without pushing it first
+  # fails the pull. Build it explicitly on the build machine before you switch
+  # the profile on. GPU/torch build args are source-build only and live there.
+  tts-heavy:
+    image: ${LOCAL_REGISTRY:-192.168.1.50:5000}/subwave-tts-heavy:${SUBWAVE_VERSION:-latest}
+    # amd64-only image; pinned so it runs under emulation on arm64 hosts.
+    platform: linux/amd64
+    container_name: sub-wave-tts-heavy
+    restart: unless-stopped
+    logging: *default-logging
+    # OOM containment: a runaway model load dies here instead of triggering the
+    # host OOM-killer and taking broadcast/controller down. Default is generous.
+    mem_limit: ${TTS_HEAVY_MEM_LIMIT:-10g}
+    profiles: ["tts-heavy"]
+    environment:
+      # 'cpu' or 'cuda'; the server falls back to cpu when CUDA is absent.
+      - TTS_HEAVY_DEVICE=${TTS_HEAVY_DEVICE:-cpu}
+      # Default PocketTTS voice when a persona doesn't override it.
+      - POCKET_TTS_VOICE=${POCKET_TTS_VOICE:-alba}
+      # Which engines to load (comma-separated). Each costs RAM + a first-boot
+      # weight download; set a single engine if you only use one.
+      - TTS_HEAVY_ENGINES=${TTS_HEAVY_ENGINES:-chatterbox,pocket-tts}
+      # Optional — PocketTTS voice CLONING (#238): the cloning weights are
+      # gated on HF; accept the terms at huggingface.co/kyutai/pocket-tts and
+      # set HF_TOKEN. Without it, cloned .wav voices revert to a built-in.
+      - HF_TOKEN=${HF_TOKEN:-}
+    volumes:
+      # Shared with the controller — WAVs land in /var/sub-wave/voice/*.
+      - *state-mount
+      # Persist HF caches across recreates, or the multi-GB boot-time weight
+      # fetch repeats on every pull/rebuild.
+      - tts-heavy-chatterbox-cache:/opt/chatterbox/hf-cache
+      - tts-heavy-pocket-cache:/opt/pocket-tts/hf-cache
+
+  # -------------------------------------------------------------------------
+  # ANALYZER — acoustic-analysis sidecar (bpm/key/intro/loudness; optional
+  # CLAP "sounds-like" embeddings + Demucs vocal ranges)
+  # -------------------------------------------------------------------------
+  # Starts by default (only the tts-heavy voices stay opt-in). To skip it,
+  # `docker compose stop analyzer` after boot.
+  #
+  # ANALYZER_HEAVY=1 switches the image name to `subwave-analyzer-heavy`, which
+  # push-local-registry.sh does NOT build — it publishes the LEAN image only
+  # (WITH_CLAP=0, WITH_DEMUCS=0). Leave ANALYZER_HEAVY unset unless you have
+  # built and pushed a heavy image yourself, or the pull fails.
+  analyzer:
+    image: ${LOCAL_REGISTRY:-192.168.1.50:5000}/subwave-analyzer${ANALYZER_HEAVY:+-heavy}:${SUBWAVE_VERSION:-latest}
+    container_name: sub-wave-analyzer
+    restart: unless-stopped
+    logging: *default-logging
+    # OOM containment: a runaway analysis dies here instead of triggering the
+    # host OOM-killer and taking broadcast/controller down. Default is generous.
+    mem_limit: ${ANALYZER_MEM_LIMIT:-6g}
+    environment:
+      # Force CLAP / Demucs on for the whole pass. Usually unnecessary — the
+      # admin toggles drive these per request. Inert on the lean image.
+      - ANALYZE_AUDIO_EMBEDDING=${ANALYZE_AUDIO_EMBEDDING:-}
+      - ANALYZE_VOCAL_ACTIVITY=${ANALYZE_VOCAL_ACTIVITY:-}
+      # Torch device for CLAP/Demucs: auto (default) / cpu / cuda. Only
+      # meaningful on the cuda flavour; cpu-wheel images resolve to cpu.
+      - ANALYZE_DEVICE=${ANALYZE_DEVICE:-}
+      # Idle seconds before the worker drops CLAP/Demucs models (0 = never).
+      # Default 300 on cuda (frees VRAM), 1800 on cpu — otherwise one backfill
+      # parks ~GBs in swap on a small host (#1204).
+      - ANALYZE_IDLE_UNLOAD_S=${ANALYZE_IDLE_UNLOAD_S:-}
+      # Idle seconds before the sidecar recycles the whole worker process —
+      # reclaims the ~1GB of scratch a model release can't return (default
+      # 3600; 0 = never). Requests racing a recycle queue behind the respawn.
+      - ANALYZE_RECYCLE_IDLE_S=${ANALYZE_RECYCLE_IDLE_S:-}
+      - CLAP_MODEL=${CLAP_MODEL:-}
+      - CLAP_MODEL_PATH=${CLAP_MODEL_PATH:-}
+      # Demucs model + analysis-window overrides (see .env.example).
+      - DEMUCS_MODEL=${DEMUCS_MODEL:-}
+      - ANALYZE_SECONDS=${ANALYZE_SECONDS:-}
+      - ANALYZE_CONCURRENCY=${ANALYZE_CONCURRENCY:-}
+      - ANALYZE_CLAP_WINDOWS=${ANALYZE_CLAP_WINDOWS:-}
+      - ANALYZE_OUTRO_SECONDS=${ANALYZE_OUTRO_SECONDS:-}
+      # CLAP isn't gated, but anonymous HF downloads are rate-limited. Same var
+      # as tts-heavy — set once and both sidecars pick it up.
+      - HF_TOKEN=${HF_TOKEN:-}
+    volumes:
+      # Shared mount — reads tracks pre-fetched into /var/sub-wave/analyze-tmp.
+      - *state-mount
+      - *stems-mount
+      - analyzer-cache:/opt/analyzer/hf-cache
+
+volumes:
+  caddy-data:
+  caddy-config:
+  tts-heavy-chatterbox-cache:
+  tts-heavy-pocket-cache:
+  analyzer-cache:

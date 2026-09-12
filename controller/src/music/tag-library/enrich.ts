@@ -1,7 +1,7 @@
 // Phase 0 - enrichment: Last.fm tags, lyric excerpts, and MusicBrainz
 // original-year resolution for compilation tracks. See ../tag-library.ts for main().
 
-import * as subsonic from '../subsonic.js';
+import * as subsonic from '../source.js';
 import * as lastfm from '../lastfm.js';
 import * as musicbrainz from '../musicbrainz.js';
 import * as db from '../library-db.js';

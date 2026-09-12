@@ -19,6 +19,7 @@ import { getFullContext } from './context.js';
 import { loadCuriosityLedger } from './skills/curiosity.js';
 import { startScheduler } from './broadcast/scheduler.js';
 import { startListenerMonitor } from './broadcast/listeners.js';
+import { startSpotifyTransportIfActive } from './music/sources/spotify/transport.js';
 import { startStreamIdleMonitor } from './broadcast/stream-idle.js';
 import { startAudienceMonitor } from './broadcast/audience.js';
 import * as likes from './broadcast/likes.js';
@@ -293,6 +294,11 @@ app.listen(config.server.port, async () => {
   // every restart (#1256). Bounded internally, so never a boot hang.
   await startListenerMonitor();
   queue.startWatcher();
+  // A live-transport music source (Spotify) drives playback from its own tick
+  // and registers itself as the queue's transport; in file mode this registers
+  // nothing and the queue writes next.txt exactly as before.
+  await startSpotifyTransportIfActive().catch((err: any) =>
+    console.error('[spotify] transport start failed:', err?.message || err));
   startStreamIdleMonitor();
   startAudienceMonitor().catch(err => console.error('[audience] init failed:', err.message));
   // Up front so the sync readers see data from the first pick.

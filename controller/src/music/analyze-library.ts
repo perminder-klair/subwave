@@ -11,7 +11,7 @@
 //
 // The walk otherwise runs only on an empty catalogue (first-run bootstrap).
 
-import * as subsonic from './subsonic.js';
+import * as subsonic from './source.js';
 import * as db from './library-db.js';
 import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
@@ -22,6 +22,7 @@ import { runAnalysisPass } from './analyze.js';
 import * as analyzer from './analyzer.js';
 import { reportProgress, makeEventLogger } from './tagger-progress.js';
 import { acquireStandaloneLock, installPidfileCleanup } from './tagger-lock.js';
+import { prunePermitted, pruneSkippedLine } from './prune-policy.js';
 
 const logEvent = makeEventLogger('analyze');
 
@@ -131,11 +132,17 @@ async function main() {
     }
     logEvent('info', `Scanned ${walked.toLocaleString('en-GB')} tracks`);
 
-    // Only a complete walk is authoritative, hence the non-empty guard.
-    if (walked > 0) {
+    // Reconcile: drop rows for tracks no longer in the library so the analysis
+    // scope reflects the live catalogue, not orphans from past full rescans.
+    // Gated on the walk being authoritative — see music/prune-policy.ts.
+    const decision = prunePermitted({ walked, health: await subsonic.catalogHealth() });
+    if (!decision.ok) {
+      console.warn(`[analyze] ${pruneSkippedLine(decision.reason)}`);
+      logEvent('warning', pruneSkippedLine(decision.reason));
+    } else {
       const pruned = db.pruneMissingTracks(liveIds);
       if (pruned > 0) {
-        console.log(`[analyze] pruned ${pruned} orphaned tracks no longer in Navidrome`);
+        console.log(`[analyze] pruned ${pruned} orphaned tracks no longer in the library`);
       }
     }
   }

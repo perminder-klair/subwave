@@ -7,7 +7,7 @@ import * as likes from '../broadcast/likes.js';
 import * as db from '../music/library-db.js';
 import * as analyzer from '../music/analyzer.js';
 import * as coverage from '../music/library-coverage.js';
-import * as subsonic from '../music/subsonic.js';
+import * as subsonic from '../music/source.js';
 import * as sceneVocab from '../music/scene-vocab.js';
 import { sceneReferences } from '../music/scene-references.js';
 import * as lastfm from '../music/lastfm.js';

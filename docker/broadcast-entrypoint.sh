@@ -64,9 +64,11 @@ bootstrap_state_dirs() {
     local sub
     state_prepare_dir "$root"
     state_prepare_dir "$dir"
-    # stems + transitions are the analyzer's (uid 10001); a fresh bind mount
-    # lands root-owned 755, which it cannot write without the same 777.
-    for sub in voice voices archive jingles logs sessions sfx stems transitions; do
+    # stems + transitions are the analyzer's (uid 10001), and the only two
+    # dirs worth relocating to a bigger disk. A fresh bind mount lands
+    # root-owned 755, which the analyzer cannot write without the same 777
+    # treatment as the rest.
+    for sub in voice voices archive jingles logs sessions sfx spotify stems transitions; do
         state_prepare_dir "$dir/$sub"
     done
     # A RELOCATED stem cache (STEMS_DIR in .env, container path

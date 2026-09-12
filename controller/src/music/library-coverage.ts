@@ -8,7 +8,7 @@
 
 import { readFileSync, writeFileSync, renameSync, existsSync } from 'node:fs';
 import { config } from '../config.js';
-import * as subsonic from './subsonic.js';
+import * as subsonic from './source.js';
 import * as library from './library.js';
 import * as db from './library-db.js';
 import * as analyzer from './analyzer.js';

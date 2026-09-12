@@ -8,6 +8,23 @@
 # chains (~30 operators) peg a core and stall the stream clock at every
 # crossfade ("Latency is too high" → dead-air source resets). 2.4.5 makes
 # clock propagation push-based/O(1).
+
+# --- librespot: the Spotify Connect receiver for the spotify music source -----
+# Built from crates.io (no binary releases). Only the pipe backend (always
+# compiled in) and a static rustls TLS stack — no ALSA/PulseAudio, no mDNS
+# discovery (the controller logs it in with credentials, so nothing needs to
+# find it on the LAN), no OpenSSL runtime dependency to keep in step with the
+# base image. Liquidsoap runs it via docker/spotify/librespot-run.sh in spotify
+# mode only (radio.liq); in file mode the binary is inert.
+FROM rust:1-bookworm AS librespot
+ARG LIBRESPOT_VERSION=0.8.0
+# --locked from the git tag: the crates.io build script pulls an UNLOCKED
+# vergen and a newer minor broke it (E0277 in librespot-core, measured on
+# 0.8.0); the repository lockfile pins what the release was built with.
+RUN cargo install --locked --git https://github.com/librespot-org/librespot \
+        --tag "v${LIBRESPOT_VERSION}" --no-default-features \
+        --features rustls-tls-webpki-roots librespot
+
 FROM savonet/liquidsoap:v2.4.5
 
 USER root
@@ -32,6 +49,12 @@ COPY sounds /sounds
 
 COPY docker/broadcast-entrypoint.sh /usr/local/bin/broadcast-entrypoint
 RUN chmod +x /usr/local/bin/broadcast-entrypoint
+
+# Spotify music source: the receiver binary + the wrapper/event scripts
+# radio.liq's spotify mode runs (see docs/spotify-source.md).
+COPY --from=librespot /usr/local/cargo/bin/librespot /usr/local/bin/librespot
+COPY docker/spotify/librespot-run.sh docker/spotify/librespot-event.sh /app/spotify/
+RUN chmod +x /app/spotify/*.sh
 
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=6 \
     CMD curl -fsS http://localhost:7702/status-json.xsl > /dev/null || exit 1

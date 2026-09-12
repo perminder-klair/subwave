@@ -1,6 +1,6 @@
 import * as library from './library.js';
 import * as settings from '../settings.js';
-import * as subsonic from './subsonic.js';
+import * as subsonic from './source.js';
 import { applyStrictLocks, hasEraBound, type VocalMode } from './show-filter.js';
 import { applyTrackFloor } from './track-floor.js';
 import { resolveExcludedPlaylistIds, resolveShowPlaylistPool } from './show-playlist.js';

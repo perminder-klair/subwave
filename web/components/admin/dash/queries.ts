@@ -169,6 +169,12 @@ export interface NavidromeStatus {
   ok: boolean;
   reason?: string;
   url?: string;
+  // The ACTIVE music source id — the banner names it rather than assuming
+  // Navidrome, which on a Spotify station was both wrong and misleading.
+  source?: string;
+  // A rate-limit / quota hold rather than an outage: `ok` stays true because
+  // nothing is broken and it clears itself.
+  holding?: boolean;
 }
 
 export function fetchNavidromeStatus(fetcher: AdminFetch, signal: AbortSignal): Promise<NavidromeStatus> {

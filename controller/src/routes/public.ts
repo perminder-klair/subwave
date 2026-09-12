@@ -5,7 +5,7 @@ import { existsSync } from 'node:fs';
 import { stat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import * as subsonic from '../music/subsonic.js';
+import * as subsonic from '../music/source.js';
 import * as library from '../music/library.js';
 import * as blocklist from '../music/blocklist.js';
 import * as settings from '../settings.js';
@@ -15,6 +15,7 @@ import * as session from '../broadcast/session.js';
 import { getStreamStatus } from '../broadcast/listeners.js';
 import { isIdle } from '../broadcast/stream-idle.js';
 import { currentStarve } from '../broadcast/music-starve.js';
+import { liveTransport } from '../broadcast/queue/transport.js';
 import { getSetupStatusSync } from '../setup/firstRun.js';
 import { getStationTimezone } from '../time.js';
 import { listThemesAnnotated, DEFAULT_THEME_ID } from '../themes.js';
@@ -110,18 +111,28 @@ router.get('/cover/:id', async (req, res) => {
     return sendCover(hit);
   }
 
-  try {
-    const r = await fetchWithTimeout(subsonic.getCoverArtUrl(id, 512), { timeoutMs: 5000 });
-    if (!r.ok) return res.status(502).end();
-    const entry = {
-      buf: Buffer.from(await r.arrayBuffer()),
-      contentType: r.headers.get('content-type') || 'image/jpeg',
-    };
+  const store = (entry: { buf: Buffer; contentType: string }) => {
     coverCache.set(id, entry);
     if (coverCache.size > COVER_CACHE_MAX) {
       coverCache.delete(coverCache.keys().next().value!);
     }
     sendCover(entry);
+  };
+
+  try {
+    // The active source hands back either a proxied URL (Subsonic, Spotify —
+    // fetch the bytes here so creds never reach the browser) or the bytes
+    // directly (a source that holds art itself).
+    const art = await subsonic.getCoverArt(id, 512);
+    if (!art) return res.status(404).end();
+    if ('buf' in art) return store(art);
+
+    const r = await fetchWithTimeout(art.url, { timeoutMs: 5000 });
+    if (!r.ok) return res.status(502).end();
+    store({
+      buf: Buffer.from(await r.arrayBuffer()),
+      contentType: r.headers.get('content-type') || 'image/jpeg',
+    });
   } catch {
     res.status(502).end();
   }
@@ -437,6 +448,10 @@ router.get('/state', (req, res) => {
     // is a deliberate pause.
     musicStarved: starve.starved,
     musicStarvedSince: starve.since,
+    // The live playback transport's state when the active music source has
+    // one (Spotify): what the receiver is playing / awaiting / holding, or null
+    // in file mode. Operator surface — live edge, like everything else here.
+    transport: liveTransport()?.status() ?? null,
     theme: { active: activeThemeId },
     // Ride along like the theme so the player flips them on the next poll.
     ui: {

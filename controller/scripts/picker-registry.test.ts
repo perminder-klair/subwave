@@ -133,3 +133,29 @@ if (failures) {
   process.exit(1);
 }
 console.log('\nall tests passed');
+
+console.log('\nmusic-source capability gating:');
+
+test('server-backed tools are gated OFF when the active source cannot serve them', async () => {
+  // A source with everything off (the DEFAULT_CAPS table entry) must hide the
+  // five tools that read a server-side signal — similar songs, stars, top
+  // songs, newest albums, playlists — for the same reason the embedding gates
+  // exist: a dead tool spends the single discovery call on nothing. The rest of
+  // the picker keeps working off search, genre, random and the library DB.
+  const { DEFAULT_CAPS } = await import('../src/music/sources/capabilities.js');
+  const offered = namesOf(bareCtx({ sourceCaps: DEFAULT_CAPS }));
+  for (const n of ['similarSongs', 'starredSongs', 'topSongsByArtist', 'recentlyAdded', 'showPlaylistTracks']) {
+    assert.ok(!offered.includes(n), `${n} must be gated off for a source without that capability`);
+  }
+  for (const n of ['searchLibrary', 'recentByArtist', 'songsByGenre', 'tracksByMood', 'tracksByEnergy', 'randomSongs']) {
+    assert.ok(offered.includes(n), `${n} must stay offered — it needs no server-side signal`);
+  }
+});
+
+test('the default (subsonic) context carries every capability ON, so the bare-install set is unchanged', () => {
+  const ctx = bareCtx();
+  for (const [k, v] of Object.entries(ctx.sourceCaps)) {
+    if (k === 'hasLiveTransport') continue;
+    assert.equal(v, true, `subsonic sourceCaps.${k}`);
+  }
+});

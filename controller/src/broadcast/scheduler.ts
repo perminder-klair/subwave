@@ -7,7 +7,7 @@ import { config } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import { shuffle } from '../util/shuffle.js';
 import { mapPool } from '../util/async-pool.js';
-import * as subsonic from '../music/subsonic.js';
+import * as subsonic from '../music/source.js';
 import * as silenceTrim from '../music/silence-trim.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
@@ -109,6 +109,10 @@ export async function refreshAutoPlaylistOnShowChange(reason: string): Promise<b
 }
 
 async function refreshAutoPlaylistInner() {
+  // A live-transport source (Spotify) has no request URIs to write into
+  // auto.m3u — the transport's own pool fallback plays that role. Building the
+  // file would only ask the facade for a URI it refuses to make.
+  if (subsonic.activeCapabilities().hasLiveTransport) return;
   const ctx = await getFullContext();
   const mood = ctx.dominantMood;
   // Same library-scaled recency window as the live picker, keyed by BOTH id and

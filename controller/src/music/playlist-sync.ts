@@ -2,7 +2,7 @@
 // appends library songs that are (a) new since the last sync and (b) still match
 // the recipe — reusing the builder's own candidate-pool engine, no LLM call.
 
-import * as subsonic from './subsonic.js';
+import * as subsonic from './source.js';
 import * as library from './library.js';
 import { buildCandidatePool, type GenerateInput } from './playlist-gen.js';
 import { selectAppendable } from './playlist-gen-pure.js';

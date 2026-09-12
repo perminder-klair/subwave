@@ -131,10 +131,59 @@ export async function subhttpProbeOutcome(probeId: string): Promise<ResolveProbe
   }
 }
 
-// Force auto.m3u to re-read from disk. The playlist's reload_mode="watch"
-// inotify watch orphans itself because the controller rewrites the file by
-// atomic rename (new inode), and a missed watch loops the last snapshot forever
-// (#874). Best-effort: errors are swallowed so a refresh never fails here.
+// ── Spotify mode (radio.liq spotify branch) ─────────────────────────────────
+// The three commands exist only when the mixer booted in spotify mode; on a
+// file-mode mixer the server answers with an error and these resolve to their
+// "unknown" shapes, which every caller treats as "do nothing".
+
+// "Track X just started": a JSON object of metadata keys (title, artist, album,
+// subsonic_id — the same keys annotate: carries in file mode). The mixer inserts
+// it WITH a track mark, delayed by its buffered length. Returns the lag it
+// applied, or null when the command was refused/unavailable.
+export async function spotifyTrack(meta: Record<string, string>): Promise<{ lagSec: number } | null> {
+  try {
+    const out = await sendCommand(`spotify_track ${JSON.stringify(meta)}`, 3000);
+    const m = /OK lag=([0-9.]+)/.exec(out);
+    return m ? { lagSec: Number(m[1]) } : null;
+  } catch {
+    return null;
+  }
+}
+
+// Declare (or clear) an intentional gap: while on, the mixer airs silence from
+// the spotify_gap leg instead of the emergency loop when the feed starves.
+export async function spotifyGap(on: boolean): Promise<boolean> {
+  try {
+    return /OK/.test(await sendCommand(`spotify_gap ${on ? 'on' : 'off'}`, 2000));
+  } catch {
+    return false;
+  }
+}
+
+export interface SpotifyFeedStatus { ready: boolean; bufferSec: number; gap: boolean }
+
+export async function spotifyStatus(): Promise<SpotifyFeedStatus | null> {
+  try {
+    const out = await sendCommand('spotify_status', 2000);
+    const ready = /ready=true/.test(out);
+    const buf = /buffer=([0-9.]+)/.exec(out);
+    const gap = /gap=true/.test(out);
+    if (!buf && !/ready=/.test(out)) return null;
+    return { ready, bufferSec: buf ? Number(buf[1]) : 0, gap };
+  } catch {
+    return null;
+  }
+}
+
+// Force the auto.m3u fallback playlist to re-read from disk. The playlist
+// (id="auto" in radio.liq) uses reload_mode="watch", but that inotify watch can
+// silently orphan itself — the controller rewrites auto.m3u via atomic rename,
+// which swaps the inode each time, and a single missed watch means Liquidsoap
+// loops the last-loaded ~30-track snapshot forever until the container restarts
+// (issue #874). Calling the playlist's built-in `auto.reload` telnet command
+// after every write makes the reload deterministic instead of trusting inotify.
+// Best-effort: swallow errors (telnet may be unreachable in dev or mid-restart)
+// so a refresh never fails on the reload.
 export async function reloadAutoPlaylist(): Promise<boolean> {
   try {
     await sendCommand('auto.reload', 2000);

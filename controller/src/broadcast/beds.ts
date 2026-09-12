@@ -11,7 +11,7 @@ import { STATE_DIR, SOUNDS_DIR } from '../config.js';
 import { BED_MIN_SEC } from '../schemas/imaging.js';
 import { transcodeAudio, hasFfmpeg, extOf, isAcceptedAudio, probeDurationSec } from '../audio/audio-import.js';
 import { generateBed, BED_GEN_MAX_SEC } from '../audio/bed-gen.js';
-import { escAnnotate } from '../music/subsonic.js';
+import { escAnnotate } from '../music/source.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
 import { slugify } from '../util/slug.js';
 

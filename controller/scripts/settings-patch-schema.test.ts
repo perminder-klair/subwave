@@ -604,11 +604,11 @@ test('the converted keys are exactly the ones with schemas', () => {
     'djBehaviour', 'djHouseRules', 'djPrompt', 'djPrompts', 'djSpeakClock',
     'djTalkOnlyBetweenTracks', 'ducking', 'fadeAtShowEnd', 'festivals',
     'handover', 'jingleRatio', 'jingleRotate', 'likes',
-    'locale', 'loudness', 'maxTrackSeconds', 'moodSchedule', 'moods',
+    'locale', 'loudness', 'maxTrackSeconds', 'moodSchedule', 'moods', 'music',
     'pauseTalkMinSeconds', 'personas',
     'picker',
     'privacy', 'requests', 'schedule', 'scheduleOverride', 'scrobble', 'search',
-    'sfx', 'shows', 'silenceTrim', 'station', 'stationDescription', 'stream',
+    'sfx', 'shows', 'silenceTrim', 'spotify', 'station', 'stationDescription', 'stream',
     'theme', 'timezone', 'transitions', 'ui', 'weather', 'weatherMoods',
     'webhooks', 'webhooksPolicy',
   ]);

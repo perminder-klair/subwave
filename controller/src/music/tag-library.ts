@@ -27,8 +27,10 @@
 //                         untagged remainder
 
 import * as db from './library-db.js';
+import * as subsonic from './source.js';
 import * as settings from '../settings.js';
 import * as embeddings from './embeddings.js';
+import { prunePermitted, pruneSkippedLine } from './prune-policy.js';
 import { selectSeeds } from './seed-selector.js';
 import { selectEnrichIds } from './enrich-scope.js';
 import { vote, fuseNeighbours } from './tag-propagator.js';
@@ -255,10 +257,16 @@ async function main() {
   // non-empty walk so a transient empty Navidrome response can't wipe the DB.
   if (flags.noPrune) {
     console.log('[tag] --no-prune: skipping orphan prune (reconcile step deselected)');
-  } else if (walked > 0) {
-    const pruned = db.pruneMissingTracks(liveIds);
-    if (pruned > 0) {
-      console.log(`[tag] pruned ${pruned} orphaned tracks no longer in Navidrome`);
+  } else {
+    const decision = prunePermitted({ walked, health: await subsonic.catalogHealth() });
+    if (!decision.ok) {
+      console.warn(`[tag] ${pruneSkippedLine(decision.reason)}`);
+      logEvent('warning', pruneSkippedLine(decision.reason));
+    } else {
+      const pruned = db.pruneMissingTracks(liveIds);
+      if (pruned > 0) {
+        console.log(`[tag] pruned ${pruned} orphaned tracks no longer in the library`);
+      }
     }
   }
   lap('walk');

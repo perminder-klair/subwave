@@ -728,6 +728,61 @@ export const DEFAULTS = {
     minTrackLengthSeconds: 0,
   },
 
+  // Active music source (upstream #843's key). Only `source` lives here —
+  // per-source connection config stays where it already is (Navidrome creds in
+  // config.navidrome / the setup overlay; cloud keys in secrets.env). See
+  // music/sources/registry.ts.
+  music: {
+    source: 'subsonic',
+  },
+
+  // Spotify music source (music/sources/spotify). Credentials are SECRETS
+  // (state/secrets.env), never here. `pool` is the station's library on
+  // Spotify: the operator's playlists (empty = every playlist the account
+  // owns/follows) plus saved tracks/albums. `deviceName` is the Spotify Connect
+  // receiver librespot registers as ('' = the constant "SUB/WAVE" — never the
+  // station name, which can change while the receiver runs). `seamLeadMs` is how
+  // early the transport commands the next track before the current one ends;
+  // `mismatch` is what to do when playback was moved off the station device
+  // (reclaim = transfer back, follow = adopt what is playing).
+  spotify: {
+    deviceName: '',
+    bitrate: 320,
+    pool: {
+      playlistIds: [],
+      includeSaved: true,
+      includeSavedAlbums: false,
+      maxTracks: 5000,
+      // A snapshot revalidate re-walks only the playlists Spotify says changed;
+      // a full walk is one request per fifty tracks. Daily is often enough to
+      // catch what the saved-tracks fingerprint (count + newest id) cannot see.
+      fullWalkHours: 24,
+    },
+    // What the station may spend on Spotify. `requestsPer30s` is the pacer's
+    // STARTING ceiling for everything except the player commands that keep the
+    // music on air — Spotify publishes no Development Mode number and since
+    // July 2026 the budget is shared across the whole developer account, so the
+    // client halves this on a 429 and eases back rather than trusting it.
+    // `genresPerHour` paces artist-genre enrichment, which costs one request
+    // per artist; 0 turns it off and leaves whatever is already cached.
+    // 60/hour, not 750. Genres are the most optional thing the station does and
+    // the only one that costs a request per item; at 750 a cold cache spent
+    // ~18k requests a day against an undocumented per-ACCOUNT budget shared with
+    // every other app the operator owns. A 123-artist pool still finishes in two
+    // hours, a big one fills over days, and neither competes with playback.
+    quota: {
+      requestsPer30s: 90,
+      genresPerHour: 60,
+    },
+    seamLeadMs: 1500,
+    mismatch: 'reclaim',
+    // Per-tick seam tracing to the container log + the durable event stream
+    // (never the booth log — see music/sources/spotify/trace.ts). Read live, so
+    // an operator can turn it on mid-incident without a restart; SPOTIFY_VERBOSE_LOG
+    // can force it on but never off.
+    verboseLog: false,
+  },
+
   // The player heart button (#991). `starInNavidrome` mirrors each first like
   // into Navidrome via Subsonic star. `influenceDj` feeds the most-liked tracks
   // back to BOTH pick paths as a weighted preference — never a lock.

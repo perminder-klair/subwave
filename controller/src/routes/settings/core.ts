@@ -4,6 +4,7 @@
 import express from 'express';
 import { config } from '../../config.js';
 import * as subsonic from '../../music/subsonic.js';
+import { spotifyStatus, receiverStatus } from './spotify.js';
 import { clearPoolCache } from '../../music/picker.js';
 import { clearNavidromeCache } from '../../doctor.js';
 import { refreshAutoPlaylist } from '../../broadcast/scheduler.js';
@@ -77,7 +78,11 @@ router.get('/settings', requireAdmin, async (req, res) => {
           pass: !!process.env.NAVIDROME_PASS,
         },
       },
-      // What timezone '' (Auto) resolves to, for the UI's Auto label.
+      // Spotify source connection state — secrets never leave the process
+      // (set/connected flags only); the pool summary is what the section shows.
+      spotify: { ...spotifyStatus(req), receiver: await receiverStatus() },
+      // What the configured zone resolves to when timezone is '' (Auto) —
+      // lets the UI label the Auto option with the actual server zone.
       serverTimezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
       values: {
         jingleRatio: s.jingleRatio,
@@ -133,6 +138,10 @@ router.get('/settings', requireAdmin, async (req, res) => {
         // The admin form hydrates the album-cooldown/min-length inputs from
         // this; omit it and the next save on that card zeroes them.
         picker: s.picker,
+        // The active music source + the Spotify knobs — what MusicSection /
+        // SpotifySection render and diff against.
+        music: s.music,
+        spotify: s.spotify,
         audio: s.audio,
         transitions: s.transitions,
         sfx: s.sfx,

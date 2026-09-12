@@ -93,8 +93,16 @@ import {
 import { validateCompatParams } from './settings/compat-params.js';
 import { parseSettingsPatchKey } from './settings/patch-registry.js';
 import {
+  MUSIC_SOURCES,
   PAUSE_TALK_MIN_SECONDS_BOUNDS,
   PICKER_ALBUM_HOURS_BOUNDS,
+  SPOTIFY_BITRATES,
+  SPOTIFY_MISMATCH_MODES,
+  SPOTIFY_POOL_MAX_TRACKS_BOUNDS,
+  SPOTIFY_POOL_FULL_WALK_HOURS_BOUNDS,
+  SPOTIFY_REQUESTS_PER_30S_BOUNDS,
+  SPOTIFY_GENRES_PER_HOUR_BOUNDS,
+  SPOTIFY_SEAM_LEAD_MS_BOUNDS,
   STREAM_BUFFER_SECONDS_BOUNDS,
   STREAM_COUNTRY_HEADER_RE,
   STREAM_GEOIP_DB_PATH_MAX,
@@ -137,6 +145,7 @@ import {
   LIQ_JINGLE_RATIO_PATH,
   LIQ_OPUS_ENABLED_PATH,
   LIQ_STREAM_BITRATE_PATH,
+  LIQ_MUSIC_MODE_PATH,
   LIQ_STREAM_BUFFER_SECONDS_PATH,
   writeLiquidsoapSettings,
 } from './settings/liquidsoap.js';
@@ -1201,6 +1210,62 @@ export async function load() {
         coerceMinTrackLengthSeconds(stored.picker?.minTrackLengthSeconds, false)
         ?? DEFAULTS.picker.minTrackLengthSeconds,
     },
+    // Active music source. An unknown or absent value falls back to subsonic so
+    // an upgrade is byte-identical; the strict refusal is the patch path's.
+    music: {
+      source: MUSIC_SOURCES.includes(stored.music?.source)
+        ? stored.music.source
+        : DEFAULTS.music.source,
+    },
+    // Spotify source knobs — every field repaired to its default (load() is
+    // lenient by contract; the strict refusal is spotifyPatchSchema's). A
+    // settings.json written before this block existed loads byte-identically.
+    spotify: {
+      deviceName:
+        typeof stored.spotify?.deviceName === 'string'
+          ? stored.spotify.deviceName.slice(0, 64)
+          : DEFAULTS.spotify.deviceName,
+      bitrate: SPOTIFY_BITRATES.includes(Number(stored.spotify?.bitrate))
+        ? Number(stored.spotify.bitrate)
+        : DEFAULTS.spotify.bitrate,
+      pool: {
+        playlistIds: Array.isArray(stored.spotify?.pool?.playlistIds)
+          ? stored.spotify.pool.playlistIds.filter((v: unknown) => typeof v === 'string' && v.trim()).map((v: string) => v.trim()).slice(0, 200)
+          : DEFAULTS.spotify.pool.playlistIds,
+        includeSaved:
+          typeof stored.spotify?.pool?.includeSaved === 'boolean'
+            ? stored.spotify.pool.includeSaved
+            : DEFAULTS.spotify.pool.includeSaved,
+        includeSavedAlbums:
+          typeof stored.spotify?.pool?.includeSavedAlbums === 'boolean'
+            ? stored.spotify.pool.includeSavedAlbums
+            : DEFAULTS.spotify.pool.includeSavedAlbums,
+        maxTracks: Number.isFinite(Number(stored.spotify?.pool?.maxTracks))
+          ? Math.round(Math.min(SPOTIFY_POOL_MAX_TRACKS_BOUNDS.max, Math.max(SPOTIFY_POOL_MAX_TRACKS_BOUNDS.min, Number(stored.spotify.pool.maxTracks))))
+          : DEFAULTS.spotify.pool.maxTracks,
+        fullWalkHours: Number.isFinite(Number(stored.spotify?.pool?.fullWalkHours))
+          ? Math.round(Math.min(SPOTIFY_POOL_FULL_WALK_HOURS_BOUNDS.max, Math.max(SPOTIFY_POOL_FULL_WALK_HOURS_BOUNDS.min, Number(stored.spotify.pool.fullWalkHours))))
+          : DEFAULTS.spotify.pool.fullWalkHours,
+      },
+      quota: {
+        requestsPer30s: Number.isFinite(Number(stored.spotify?.quota?.requestsPer30s))
+          ? Math.round(Math.min(SPOTIFY_REQUESTS_PER_30S_BOUNDS.max, Math.max(SPOTIFY_REQUESTS_PER_30S_BOUNDS.min, Number(stored.spotify.quota.requestsPer30s))))
+          : DEFAULTS.spotify.quota.requestsPer30s,
+        genresPerHour: Number.isFinite(Number(stored.spotify?.quota?.genresPerHour))
+          ? Math.round(Math.min(SPOTIFY_GENRES_PER_HOUR_BOUNDS.max, Math.max(SPOTIFY_GENRES_PER_HOUR_BOUNDS.min, Number(stored.spotify.quota.genresPerHour))))
+          : DEFAULTS.spotify.quota.genresPerHour,
+      },
+      seamLeadMs: Number.isFinite(Number(stored.spotify?.seamLeadMs))
+        ? Math.round(Math.min(SPOTIFY_SEAM_LEAD_MS_BOUNDS.max, Math.max(SPOTIFY_SEAM_LEAD_MS_BOUNDS.min, Number(stored.spotify.seamLeadMs))))
+        : DEFAULTS.spotify.seamLeadMs,
+      mismatch: SPOTIFY_MISMATCH_MODES.includes(stored.spotify?.mismatch)
+        ? stored.spotify.mismatch
+        : DEFAULTS.spotify.mismatch,
+      verboseLog:
+        typeof stored.spotify?.verboseLog === 'boolean'
+          ? stored.spotify.verboseLog
+          : DEFAULTS.spotify.verboseLog,
+    },
     likes: {
       enabled:
         typeof stored.likes?.enabled === 'boolean'
@@ -1966,6 +2031,41 @@ export async function update(patch) {
       next.picker.minTrackLengthSeconds = v;
     }
   }
+  if ('music' in patch) {
+    const mu = parseSettingsPatchKey<Record<string, unknown>>('music', patch.music);
+    // A source switch changes how the mixer BUILDS its music chain (request
+    // URIs vs a live librespot feed) — liquidsoap_music_mode.txt, read once.
+    if (mu.source !== undefined && mu.source !== cur.music?.source) {
+      next.music.source = mu.source as string;
+      restart = true;
+    }
+  }
+  if ('spotify' in patch) {
+    const sp = parseSettingsPatchKey<Record<string, any>>('spotify', patch.spotify);
+    // The receiver's name and bitrate are librespot launch flags
+    // (liquidsoap_spotify.txt), so like every other handoff file a change is a
+    // mixer restart — gated on a real change so an untouched pair never drags
+    // the mixer down.
+    if (sp.deviceName !== undefined && sp.deviceName !== cur.spotify?.deviceName) {
+      next.spotify.deviceName = sp.deviceName as string;
+      restart = true;
+    }
+    if (sp.bitrate !== undefined && sp.bitrate !== cur.spotify?.bitrate) {
+      next.spotify.bitrate = sp.bitrate as number;
+      restart = true;
+    }
+    if (sp.seamLeadMs !== undefined) next.spotify.seamLeadMs = sp.seamLeadMs as number;
+    if (sp.healthPollSec !== undefined) next.spotify.healthPollSec = sp.healthPollSec as number;
+    if (sp.mismatch !== undefined) next.spotify.mismatch = sp.mismatch as string;
+    if (sp.verboseLog !== undefined) next.spotify.verboseLog = sp.verboseLog as boolean;
+    if (sp.pool !== undefined) {
+      const pool = sp.pool as Record<string, unknown>;
+      if (pool.playlistIds !== undefined) next.spotify.pool.playlistIds = pool.playlistIds as string[];
+      if (pool.includeSaved !== undefined) next.spotify.pool.includeSaved = pool.includeSaved as boolean;
+      if (pool.includeSavedAlbums !== undefined) next.spotify.pool.includeSavedAlbums = pool.includeSavedAlbums as boolean;
+      if (pool.maxTracks !== undefined) next.spotify.pool.maxTracks = pool.maxTracks as number;
+    }
+  }
   if ('search' in patch) {
     const sr = parseSettingsPatchKey<Record<string, unknown>>('search', patch.search);
     if (sr.provider !== undefined) next.search.provider = sr.provider as string;
@@ -2449,7 +2549,8 @@ export async function ensureLiquidsoapSettingsFile() {
     !existsSync(LIQ_OPUS_ENABLED_PATH) ||
     !existsSync(LIQ_STREAM_BITRATE_PATH) ||
     !existsSync(LIQ_STREAM_BUFFER_SECONDS_PATH) ||
-    !existsSync(ICECAST_LISTENER_AUTH_PATH)
+    !existsSync(ICECAST_LISTENER_AUTH_PATH) ||
+    !existsSync(LIQ_MUSIC_MODE_PATH)
   ) {
     await writeLiquidsoapSettings(s);
   }

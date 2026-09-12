@@ -88,7 +88,7 @@ function bootstrap(
 // "relocate the stem cache to a bigger disk" did not work even once the
 // entrypoint stopped aborting.
 const SUBDIRS = [
-  'voice', 'voices', 'archive', 'jingles', 'logs', 'sessions', 'sfx', 'stems', 'transitions',
+  'voice', 'voices', 'archive', 'jingles', 'logs', 'sessions', 'sfx', 'spotify', 'stems', 'transitions',
 ];
 
 const tmp = mkdtempSync(join(tmpdir(), 'subwave-state-bootstrap-'));

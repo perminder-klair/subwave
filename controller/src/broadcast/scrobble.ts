@@ -19,7 +19,7 @@ import {
 } from '../music/lastfm-shared.js';
 import { fetchWithTimeout } from '../util/fetch-timeout.js';
 import { config } from '../config.js';
-import * as subsonic from '../music/subsonic.js';
+import * as subsonic from '../music/source.js';
 import {
   elapsedSeconds,
   isEligibleScrobble,

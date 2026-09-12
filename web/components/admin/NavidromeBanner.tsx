@@ -39,10 +39,14 @@ export default function NavidromeBanner({
       className="flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--danger)] bg-[color-mix(in_oklab,var(--danger)_10%,transparent)] px-5 py-2 text-[11px] text-ink sm:px-7"
     >
       <AlertTriangle size={14} className="shrink-0 text-[var(--danger)]" aria-hidden="true" />
+      {/* Name the source that actually failed. This said "Can't reach
+          Navidrome … check that Navidrome is running" on every station,
+          including Spotify ones with no Navidrome at all — and the fix it
+          suggested (reconnect the source) is the one that rebuilds the pool. */}
       <span>
-        <b>Can&rsquo;t reach Navidrome.</b> The DJ has no music source
-        {status.reason ? <> — {status.reason}</> : null}. Check the connection in Settings &rarr;
-        Music source and that Navidrome is running.
+        <b>Can&rsquo;t reach {status.source === 'spotify' ? 'Spotify' : 'Navidrome'}.</b> The DJ has no music source
+        {status.reason ? <> — {status.reason}</> : null}. Check the connection in Settings &rarr; Music source
+        {status.source === 'spotify' ? '.' : ' and that Navidrome is running.'}
       </span>
       <Link
         href="/admin/settings?section=music"

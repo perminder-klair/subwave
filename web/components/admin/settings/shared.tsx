@@ -525,6 +525,25 @@ export interface SettingsData {
       albumHours?: number;
       minTrackLengthSeconds?: number;
     };
+    // The active MusicSource (settings.music.source) and the Spotify source's knobs.
+    music?: { source?: string };
+    spotify?: {
+      deviceName?: string;
+      bitrate?: number;
+      pool?: { playlistIds?: string[]; includeSaved?: boolean; includeSavedAlbums?: boolean; maxTracks?: number; fullWalkHours?: number };
+      // What the station may spend on Spotify. `requestsPer30s` is the pacer's
+      // starting ceiling (it halves on a 429 and eases back — no Development
+      // Mode number is published, and since July 2026 the budget is shared
+      // across the whole developer account); `genresPerHour` paces artist-genre
+      // enrichment, which costs one request per artist. 0 = off.
+      quota?: { requestsPer30s?: number; genresPerHour?: number };
+      seamLeadMs?: number;
+      healthPollSec?: number;
+      mismatch?: string;
+      // Per-tick seam tracing to the container log + the durable event stream.
+      // Read live, so it can be turned on mid-incident without a restart.
+      verboseLog?: boolean;
+    };
     likes?: {
       enabled?: boolean;
       starInNavidrome?: boolean;
@@ -579,6 +598,68 @@ export interface SettingsData {
     user?: string;
     passSet?: boolean;
     env?: { url?: boolean; user?: boolean; pass?: boolean };
+  };
+  // Spotify source connection state (routes/settings/spotify.ts spotifyStatus):
+  // set/connected flags only — no secret value ever reaches the browser.
+  spotify?: {
+    clientIdSet?: boolean;
+    clientSecretSet?: boolean;
+    connected?: boolean;
+    env?: { clientId?: boolean; clientSecret?: boolean; refreshToken?: boolean };
+    redirectUri?: string;
+    // `notes` is WHY a build came back partial, in operator words — `partial`
+    // on its own only pointed at the container logs. `genresPending` and
+    // `rateLimitedMs` describe the artist-genre fill, which converges over
+    // several builds and pauses when Spotify holds us off.
+    pool?: {
+      tracks: number; albums: number; playlists: number; builtAt: number;
+      partial: boolean; notes?: string[];
+      artists?: number; genresPending?: number; rateLimitedMs?: number;
+      // Walk stopped at maxTracks — a prefix of the library, which also keeps
+      // the tagger's orphan reconcile switched off.
+      truncated?: boolean;
+      // When a FULL catalogue walk last ran, as opposed to the cheap
+      // snapshot_id revalidate a normal refresh does.
+      walkedAt?: number;
+      // Restored from the saved snapshot and not yet re-checked against Spotify
+      // in this process — which is why the station was playing seconds after
+      // boot, and also why the orphan reconcile stands down until it is.
+      fromDisk?: boolean;
+      // Which refusal is being sat out. 'quota' is the developer ACCOUNT budget
+      // (shared by every app on the account since July 2026) and clears on
+      // Spotify's schedule; 'rate-limit' is the rolling 30-second window.
+      hold?: { kind?: 'rate-limit' | 'quota'; msLeft?: number; endpoint?: string };
+      // Why the genre drip did nothing on its last tick, in operator words —
+      // null when it is working. A background job with no on-air evidence has
+      // to say when it is standing down, or a pause reads as a finished job.
+      dripSkip?: string | null;
+      dripAt?: number;
+      // What the client is currently willing to spend, so a slow catalogue walk
+      // reads as pacing rather than as a fault.
+      pacer?: { ceiling?: number; usedInWindow?: number; configured?: number };
+      // What the shared read memos hold — the albums and searches that are no
+      // longer costing a request each time a pick asks for them again.
+      reads?: { albums?: number; searches?: number };
+    } | null;
+    // Tracks Spotify refused to play, remembered so the picker cannot keep
+    // choosing them. Availability is only knowable at play time (February 2026
+    // removed every field that could have said so in advance), so this list is
+    // the only record — and a library that quietly shrinks has to be visible.
+    unplayable?: {
+      count: number;
+      ttlDays: number;
+      recent?: Array<{ id: string; title: string; artist: string; reason: string; hits: number; at: number; lastAt: number }>;
+    };
+    // The RECEIVER's (librespot) sign-in — a second login for Spotify's own
+    // client id; see music/sources/spotify/receiver-auth.ts.
+    receiver?: {
+      tokenPresent?: boolean;
+      tokenValid?: boolean;
+      tokenExpiresAt?: number | null;
+      refreshTokenPresent?: boolean;
+      credentialsCached?: boolean;
+      redirectUri?: string;
+    };
   };
   streamOnAir?: boolean;
   // What timezone '' (Auto) resolves to — the controller's own zone.

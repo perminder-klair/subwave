@@ -17,7 +17,7 @@ import { randomBytes } from 'node:crypto';
 import { basename } from 'node:path';
 import { config } from '../config.js';
 import { writeFileAtomic } from '../util/atomic-file.js';
-import * as subsonic from '../music/subsonic.js';
+import * as subsonic from '../music/source.js';
 import * as mix from '../music/mix.js';
 import * as library from '../music/library.js';
 import * as loudness from '../music/loudness.js';
@@ -81,6 +81,7 @@ import {
 import * as webhooks from './webhooks.js';
 import * as scrobble from './scrobble.js';
 import * as liquidsoapControl from './liquidsoap-control.js';
+import { liveTransport } from './queue/transport.js';
 import {
   drainAction,
   introRenderBudgetSec,
@@ -1633,6 +1634,21 @@ class Queue {
         // while we were awaiting the TTS render above — don't hand a removed
         // track to Liquidsoap.
         if (!this.upcoming.includes(item)) continue;
+
+        // A live-transport music source (Spotify): there is no request URI to
+        // write. Hand the item to the transport, which starts it at the seam,
+        // confirms it began and tells the mixer — from where now-playing.json,
+        // onTrackStarted and airIntro run exactly as they do for a file. The
+        // intro WAV above is already rendered for it. Everything below is
+        // file/URL work (mix stamps, loudness, beds, cue points, clip URIs) and
+        // does not apply; `sent` keeps its meaning of "handed over".
+        const live = liveTransport();
+        if (live) {
+          await live.handoff(item);
+          item.sent = true;
+          this.persist();
+          continue;
+        }
 
         // DJ-mode mixing (features 1 & 2): shape the transition INTO this track
         // from its tempo/harmonic compatibility with the track it follows. The
@@ -3279,10 +3295,31 @@ class Queue {
     }
   }
 
+  // Point a queued item at a different recording of the same song — the live
+  // transport found the release it was handed unplayable and another one that
+  // is. The ITEM is kept and only its track swapped, because `pending` and
+  // `expected` on the transport side are identity comparisons against this
+  // object; replacing it would strand both. The already-rendered intro still
+  // fits by construction: a substitute has to match on title and artist.
+  substituteTrack(item: QueueItem, track: any) {
+    if (!item || !track?.id) return;
+    const from = item.track;
+    item.track = track;
+    this.persist();
+    this.log('queued',
+      `Swapped "${from?.title ?? 'unknown'}" for another release — ${track.title}${track.album ? ` (${track.album})` : ''}`,
+      { fromId: from?.id ?? null, toId: track.id, title: track.title ?? null, artist: track.artist ?? null });
+  }
+
   // A push Liquidsoap never resolved: drop the dead item and re-pick now, so a
   // bad URL costs seconds of auto playlist instead of the ~3 tracks the
   // reconcile sweep needs to notice.
-  onPushResolveFailed(item: QueueItem) {
+  // `opts` lets a caller that KNOWS why replace the wording. The default is the
+  // file-path explanation, which names a `protocol.subhttp` line in the
+  // broadcast log — accurate for Liquidsoap, and a dead end on a live-transport
+  // source like Spotify, where there is no such line and no such log. Absent,
+  // the message is byte-identical to what it always was.
+  onPushResolveFailed(item: QueueItem, opts: { reason?: string; detail?: string } = {}) {
     const idx = this.upcoming.indexOf(item);
     if (idx < 0) return;  // raced with a cancel/air between verdict and action
     this.upcoming.splice(idx, 1);
@@ -3290,8 +3327,22 @@ class Queue {
     this.persist();
 
     const who = item.requestedBy ? ` (requested by ${item.requestedBy})` : '';
+    const title = item.track?.title || 'unknown';
+    const artist = item.track?.artist || 'unknown';
+    const detail = opts.detail
+      || 'it left dj_queue without airing. The music source returned an error instead of audio, or the file is missing/unreadable — check the broadcast log for a "protocol.subhttp" line and the music server\'s own log.';
+    // The track id used to reach nothing machine-readable at all — not the log
+    // entry's meta bag, not the event stream — so nothing downstream could tell
+    // that the same track was failing over and over.
     this.log('error',
-      `Liquidsoap never resolved "${item.track?.title || 'unknown'} — ${item.track?.artist || 'unknown'}"${who}: it left dj_queue without airing. The music source returned an error instead of audio, or the file is missing/unreadable — check the broadcast log for a "protocol.subhttp" line and the music server's own log. Dropped from the queue.`);
+      `${opts.detail ? 'Could not play' : 'Liquidsoap never resolved'} "${title} — ${artist}"${who}: ${detail} Dropped from the queue.`,
+      { trackId: item.track?.id ?? null, title, artist, requestedBy: item.requestedBy ?? null, reason: opts.reason ?? 'unresolved', streak: this._resolveFailStreak });
+    logEvent('pick.unresolved', {
+      trackId: item.track?.id ?? null, title, artist,
+      requestedBy: item.requestedBy ?? null,
+      reason: opts.reason ?? 'unresolved',
+      streak: this._resolveFailStreak,
+    });
 
     // A whole origin being down fails every re-pick the same way, and each one
     // costs an LLM call to queue a track that cannot air. Past the budget the

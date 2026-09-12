@@ -4,7 +4,7 @@
 import express from 'express';
 import { requireAdmin } from '../middleware/auth.js';
 import { validateBody } from '../middleware/validate.js';
-import * as subsonic from '../music/subsonic.js';
+import * as subsonic from '../music/source.js';
 import * as library from '../music/library.js';
 import { queue } from '../broadcast/queue.js';
 import { generatePlaylist, type GenerateInput } from '../music/playlist-gen.js';

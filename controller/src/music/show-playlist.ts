@@ -3,7 +3,7 @@
 // pool picker, the DJ agent's tools and the LLM-free fallback. getPlaylist already
 // drops station-archive entries, so this is only union + dedupe.
 
-import * as subsonic from './subsonic.js';
+import * as subsonic from './source.js';
 import { trackKey } from './recency.js';
 
 export type PlaylistPool = {

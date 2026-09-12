@@ -1,7 +1,7 @@
 // The "pool path": build a balanced candidate pool from 7 Subsonic/library
 // sources, one LLM call to pick one. Fallback for the session DJ agent.
 
-import * as subsonic from './subsonic.js';
+import * as subsonic from './source.js';
 import * as library from './library.js';
 import * as dj from '../llm/dj.js';
 import { nearestId } from '../llm/sdk.js';
@@ -435,7 +435,18 @@ async function buildCandidates(mood: string | null | undefined, recentIds: Set<s
   } catch {}
 
   // 6. Similar-artist top songs — adjacency through Last.fm artist graph.
-  if (currentTrack?.artist) {
+  //
+  // Gated on the capabilities the chain actually needs. Without BOTH, the block
+  // is guaranteed to return nothing: the facade answers `null` for artist info
+  // and `[]` for top songs, so the similar-artist list is empty and there is
+  // nothing to collect. The `searchArtists` call at the head is a real request
+  // either way, and on Spotify it is a metered `/search` spent once per artist
+  // per cache window to feed two calls that were already switched off — the
+  // pool picker's version of the bug the agent's picker tools avoid by gating
+  // each tool on `sourceCaps` (a tool offered without its backing index spends
+  // the call on a guaranteed-empty answer).
+  const caps = subsonic.activeCapabilities();
+  if (currentTrack?.artist && caps.hasArtistInfo && caps.hasTopSongs) {
     try {
       const similarArtistTracks = await memo(
         `similar-artist:${currentTrack.artist}`,

@@ -8,7 +8,8 @@ import * as blocklist from '../music/blocklist.js';
 import { zipUpload } from '../middleware/upload.js';
 import { queue } from '../broadcast/queue.js';
 import * as dj from '../llm/dj.js';
-import * as subsonic from '../music/subsonic.js';
+import * as subsonic from '../music/source.js';
+import { liveTransport } from '../broadcast/queue/transport.js';
 import * as library from '../music/library.js';
 import { isInstrumental } from '../music/lyric-vocal.js';
 import * as settings from '../settings.js';
@@ -713,6 +714,15 @@ router.post('/dj/auto-link', requireAdmin, (req, res) => {
 // shows as next rather than an auto.m3u fill; the response says which happened.
 router.post('/dj/skip', requireAdmin, async (req, res) => {
   try {
+    // Live transport (Spotify): the mixer's `skip` would only mark a boundary
+    // on a feed that keeps playing the same song. The transport ends the track
+    // by commanding the next one — the same commit-first intent, one hop up.
+    const live = liveTransport();
+    if (live) {
+      const ok = await live.skip();
+      queue.log('scheduler', ok ? 'track skipped by operator (transport)' : 'skip refused — the transport is mid-command, try again');
+      return res.json({ ok, pending: false, committed: ok });
+    }
     const prep = await queue.commitBeforeSkip();
     await skipTrack();
     if (prep.pending && !prep.committed) {
@@ -819,12 +829,29 @@ router.get('/dj/playlists', requireAdmin, async (_req, res) => {
   }
 });
 
-// Recently added tracks. Navidrome sorts only albums by recency, so expand the
-// newest albums into songs and flatten.
+// ---------------------------------------------------------------------------
+// GET /dj/recent — most recently added tracks, for the manual queue UI.
+// Navidrome only sorts albums by recency, so we expand the newest albums into
+// their songs and flatten. Results are queue-ready /dj/search-shaped objects.
+//
+// A source that can answer "newest tracks" itself is asked FIRST, because the
+// album fan-out below is one request per album — fine against a local Navidrome,
+// and the single most expensive call in the codebase against a per-request
+// metered source (~51 requests for one panel at limit=50). The capability is
+// declared in music/sources/capabilities.ts and the facade returns the neutral
+// empty for a source that lacks it, so this stays one code path rather than a
+// branch on the source id.
+// ---------------------------------------------------------------------------
 router.get('/dj/recent', requireAdmin, async (req, res) => {
   const limit = Math.min(Math.max(parseInt(String(req.query?.limit || ''), 10) || 20, 1), 50);
   try {
     await library.load();
+    // Empty means "cannot answer right now" (a pool not built yet), NOT "there
+    // are none" — so fall through to the fan-out rather than rendering blank.
+    const direct = await subsonic.getRecentSongs({ size: limit });
+    if (direct.length) {
+      return res.json({ results: direct.slice(0, limit).map(toAdminRow) });
+    }
     const albums = await subsonic.getRecentlyAddedAlbums({ size: limit });
     // Bounded fan-out: unbounded Promise.all fired ~21 parallel getAlbum calls
     // and tipped a loaded Navidrome into failures (#786).

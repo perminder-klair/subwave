@@ -6,7 +6,7 @@
 //   4. k-means over embedding space for the remainder
 // Layers 1-3 are deterministic; layer 4 uses Math.random.
 
-import * as subsonic from './subsonic.js';
+import * as subsonic from './source.js';
 import * as db from './library-db.js';
 import { moodVocab } from '../settings.js';
 import { shuffle } from '../util/shuffle.js';

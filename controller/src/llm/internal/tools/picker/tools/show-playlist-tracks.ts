@@ -9,7 +9,7 @@ import { definePickerTool } from '../defs.js';
 // agent should lead with it; in a SOFT show it's the strongly-preferred source.
 export default definePickerTool({
   name: 'showPlaylistTracks',
-  available: ({ scope }) => !!(scope.playlistTracks && scope.playlistTracks.length),
+  available: ({ scope, sourceCaps }) => sourceCaps.hasPlaylists && !!(scope.playlistTracks && scope.playlistTracks.length),
   build: ({ collect, emptyResult, scope }) => tool({
     description: "Tracks from the show's pinned playlist(s) — the operator's hand-picked selection for this show. Prefer these: call this first and choose from what it returns. Takes no input.",
     inputSchema: z.object({}),

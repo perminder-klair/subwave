@@ -98,7 +98,7 @@ bootstrap_state_dirs() {
 	# stems + transitions are the analyzer's, and the only two dirs worth
 	# relocating to a bigger disk — a bind mount there lands root-owned 755,
 	# which the analyzer cannot write without this chmod.
-	for sub in voice voices archive jingles logs sessions sfx stems transitions; do
+	for sub in voice voices archive jingles logs sessions sfx spotify stems transitions; do
 		state_prepare_dir "$dir/$sub"
 	done
 	# A RELOCATED stem cache (SUBWAVE_STEMS_DIR — the container path of the

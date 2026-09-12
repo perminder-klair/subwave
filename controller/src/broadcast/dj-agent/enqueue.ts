@@ -3,7 +3,7 @@
 
 import * as settings from '../../settings.js';
 import * as session from '../session.js';
-import * as subsonic from '../../music/subsonic.js';
+import * as subsonic from '../../music/source.js';
 import * as dj from '../../llm/dj.js';
 import { stripThinking } from '../../llm/sdk.js';
 import { recordPick } from '../../llm/log.js';

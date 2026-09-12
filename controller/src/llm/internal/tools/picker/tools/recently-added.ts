@@ -1,10 +1,11 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import * as subsonic from '../../../../../music/subsonic.js';
+import * as subsonic from '../../../../../music/source.js';
 import { definePickerTool } from '../defs.js';
 
 export default definePickerTool({
   name: 'recentlyAdded',
+  available: ({ sourceCaps }) => sourceCaps.hasRecentlyAdded,
   build: ({ collect }) => tool({
     description: 'A sample of tracks from recently-added albums — "new in the crates". Takes no seed, so results are unrelated to what is on air: reach for it when the set has earned a reset, not when holding a flow.',
     inputSchema: z.object({}),

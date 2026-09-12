@@ -51,7 +51,7 @@ import { StationSection } from './settings/StationSection';
 import { ThemeSection } from './settings/ThemeSection';
 import { ScrobbleSection } from './settings/ScrobbleSection';
 import { LikesSection } from './settings/LikesSection';
-import { NavidromeSection } from './settings/NavidromeSection';
+import { MusicSection } from './settings/MusicSection';
 import {
   useSettingsMutation,
   useSettingsQuery,
@@ -1024,7 +1024,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
               />
             )}
             {activeSection === 'music' && (
-              <NavidromeSection data={data} adminFetch={adminFetch} refresh={refresh} />
+              <MusicSection data={data} busy={busy} saveSettings={saveSettings} adminFetch={adminFetch} refresh={refresh} />
             )}
             {activeSection === 'theme' && (
               <ThemeSection

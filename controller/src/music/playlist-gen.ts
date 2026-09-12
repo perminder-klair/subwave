@@ -5,7 +5,7 @@
 // token-budget gated.
 
 import { z } from 'zod';
-import * as subsonic from './subsonic.js';
+import * as subsonic from './source.js';
 import * as library from './library.js';
 import * as embeddings from './embeddings.js';
 import * as analyzer from './analyzer.js';
