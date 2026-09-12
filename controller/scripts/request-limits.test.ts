@@ -1,7 +1,7 @@
 // Pins settings.requests (raid hardening, 2026-07-28): defaults when absent,
 // clamped when patched, byte-tolerant of pre-upgrade settings.json files.
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -137,13 +137,26 @@ assert.equal(shape.parse({ ack: 'ack line', intro: 'intro line' }).id, null);
 const { matchRequest } = await import('../src/llm/dj.js'); // import only — no call (LLM)
 assert.equal(typeof matchRequest, 'function');
 
+// Listener requests must never revive the old tool loop, and their one
+// structured call must stay on djObject's text-only JSON transport. This is a
+// source-level assertion deliberately: exercising it would require a live
+// provider, while the contract is about which provider capability the call is
+// allowed to require.
+const requestPromptSource = readFileSync(new URL('../src/llm/internal/prompts/request.ts', import.meta.url), 'utf8');
+assert.match(requestPromptSource, /djPlainObject\(/);
+const requestRouteSource = readFileSync(new URL('../src/routes/request.ts', import.meta.url), 'utf8');
+assert.doesNotMatch(requestRouteSource, /djAgent\.runRequest/);
+assert.doesNotMatch(requestRouteSource, /djShortlistPick|music\/dj-pick/);
+const plainObjectSource = readFileSync(new URL('../src/llm/internal/strategy/plain-object.ts', import.meta.url), 'utf8');
+assert.doesNotMatch(plainObjectSource, /objectViaToolCall|output:\s*Output\.object/);
+
 // --- cascade `kind` never fails a request on a weak/local model miss --------
 // A required z.enum() field a model omits or botches would otherwise throw
 // out of djObject (both legs fail: coerceModelPayload deliberately leaves a
 // missing non-nullable key alone, and no field-level fallback exists), which
 // crashes a genuine music request straight to `failed` — no LLM call needed
 // to pin this, it's a pure schema.parse() check.
-const { REQUEST_SCHEMA_TOLERANT } = await import('../src/llm/internal/prompts/request.js');
+const { REQUEST_SCHEMA_TOLERANT, fallbackRequestMatch } = await import('../src/llm/internal/prompts/request.js');
 const validRest = {
   search_terms: ['test'], artist: null, genre: null, language: null,
   sort: null, scope: 'song', mood: null,
@@ -162,5 +175,17 @@ assert.equal(badKind.kind, 'track', 'an unrecognised "kind" value parses as "tra
 // A well-formed classification still passes through untouched either way.
 assert.equal(REQUEST_SCHEMA_TOLERANT.parse({ ...validRest, kind: 'track' }).kind, 'track');
 assert.equal(REQUEST_SCHEMA_TOLERANT.parse({ ...validRest, kind: 'chat' }).kind, 'chat');
+
+// A failed/malformed text-only response does not fail the listener's request:
+// the controller falls back to a direct local-library query, never to the old
+// agent or another tool-capable LLM path.
+assert.deepEqual(fallbackRequestMatch('  Midnight City by M83  '), {
+  kind: 'track', search_terms: ['Midnight City by M83'], artist: null,
+  genre: null, language: null, sort: null, scope: 'song', mood: null,
+  intent: 'Direct library search after request matching was unavailable.',
+  ack: 'I’ll look through the library for that.',
+});
+assert.match(requestRouteSource, /dj\.fallbackRequestMatch\(text\)/);
+assert.match(requestRouteSource, /cascade-direct-search/);
 
 console.log('request-limits.test.ts: all assertions passed');

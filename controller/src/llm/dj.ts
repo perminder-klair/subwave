@@ -13,7 +13,7 @@ export {
   normalizeContextFields,
 } from './internal/prompts/context.js';
 export { introBudgetPhrase, enforceIntroBudget, firstVocalMsFor } from './internal/prompts/intro-budget.js';
-export { matchRequest, identifyTrackFromText } from './internal/prompts/request.js';
+export { matchRequest, fallbackRequestMatch, identifyTrackFromText } from './internal/prompts/request.js';
 export {
   AIR_TIME_CLAUSE,
   REQUESTER_NAME_CLAUSE,

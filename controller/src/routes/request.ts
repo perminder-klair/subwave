@@ -6,9 +6,9 @@ import { randomUUID } from 'node:crypto';
 import * as subsonic from '../music/subsonic.js';
 import * as dj from '../llm/dj.js';
 import * as library from '../music/library.js';
+import { exactTitleByArtist } from '../music/request-match.js';
 import { getFullContext } from '../context.js';
 import { queue } from '../broadcast/queue.js';
-import * as djAgent from '../broadcast/dj-agent.js';
 import * as session from '../broadcast/session.js';
 import * as requestLog from '../broadcast/request-log.js';
 import * as listeners from '../broadcast/listeners.js';
@@ -350,54 +350,26 @@ async function resolveRequest(entry) {
     });
   }
 
-  // Conversational DJ agent. On any failure fall through to the stateless
-  // cascade below, so a request is never dropped.
-  try {
-    const agentRes = await djAgent.runRequest(queue, ctx, { requester, text });
-    if (agentRes) {
-      // Thread the agent's own echo-guard verdict into the durable log; the
-      // other paths set it inline.
-      if (agentRes.guard) flagGuard(entry, agentRes.guard);
-      if (!agentRes.track) {
-        // Chat escape: the agent answered in persona, nothing to queue. Only an
-        // EXPLICIT kind:"chat" lands here; an omitted id falls to the cascade.
-        queue.log('request', `agent chat-answered (no track)`);
-        entry.path = 'chat';
-        entry.pickSource = 'agent-chat';
-        return resolved({ ack: agentRes.ack, track: null, queuePosition: null });
-      }
-      if (agentRes.refused) {
-        // The agent declined to queue and returned the track only so the ack and
-        // log can name it: no queue position, no one-pending hold.
-        queue.log('request', `agent refused (${agentRes.refused}): ${agentRes.track.title} — ${agentRes.track.artist}`);
-        entry.path = 'agent';
-        entry.pickSource = `agent:${agentRes.refused}`;
-        entry.pick = agentRes.track;
-        entry.refused = true;
-        return resolved({ ack: agentRes.ack, track: agentRes.track, queuePosition: null });
-      }
-      queue.log('request', `agent resolved: ${agentRes.track.title} — ${agentRes.track.artist}`);
-      entry.path = 'agent';
-      entry.pickSource = 'agent';
-      entry.pick = agentRes.track;
-      entry.introScript = agentRes.introScript || null;
-      return resolved({
-        ack: withWaitNotice(agentRes.ack, agentRes.track.id),
-        track: agentRes.track,
-        queuePosition: queue.upcoming.length,
-      });
-    }
-  } catch (err) {
-    queue.log('error', `DJ agent request failed: ${err.message} — falling back`);
-  }
-
-  // 1. LLM matches intent; the current track lets vibe queries be read against
-  // what is on air.
+  // 1. A single no-tool LLM call normalises intent; the controller executes the
+  // entire discovery cascade below. This is intentionally not conditional on
+  // the Agentic Picker setting: listener requests remain available to models
+  // without a tool interface.
   const currentTrack = queue.current?.track || null;
-  const matched = await dj.matchRequest(text, {
-    listenerName: requester,
-    nowPlaying: currentTrack,
-  });
+  let matched;
+  try {
+    matched = await dj.matchRequest(text, {
+      listenerName: requester,
+      nowPlaying: currentTrack,
+    });
+  } catch (err) {
+    // A matcher outage or malformed plain-JSON reply must not fail a genuine
+    // listener request. Search the original request locally; this keeps the
+    // public receipt/poll lifecycle intact without reintroducing an agent or
+    // any tool-capable fallback.
+    matched = dj.fallbackRequestMatch(text);
+    entry.matcherFallback = true;
+    queue.log('error', `Request matcher failed; using direct library search: ${err.message}`);
+  }
   queue.log('intent', `"${text}" → ${matched.intent || '(no intent)'}`, {
     mood: matched.mood,
     scope: matched.scope,
@@ -422,7 +394,7 @@ async function resolveRequest(entry) {
   }
 
   // Matcher breakdown for the debug record; only the stateless cascade gets here.
-  entry.path = 'cascade';
+  entry.path = entry.matcherFallback ? 'cascade-direct-search' : 'cascade';
   entry.intent = matched.intent || null;
   entry.mood = matched.mood || null;
   entry.scope = matched.scope || null;
@@ -517,6 +489,31 @@ async function resolveRequest(entry) {
       return true;
     });
     if (terms.length > 0) {
+      // An explicit "title by artist" request must not be reduced to the
+      // ordinary broad search pool. That pool intentionally includes both the
+      // title and artist result sets and is randomly spread for open-ended
+      // requests — which let another song by the named artist beat an exact
+      // title already in the library. Query title terms' first page once,
+      // then accept only an exact normalised title + artist pair. All misses
+      // continue through the unchanged forgiving cascade below.
+      const titleTerms = terms.filter((term: string) => term.toLowerCase().trim() !== artistLc);
+      if (matched.artist && titleTerms.length > 0) {
+        const exactCandidates: any[] = [];
+        for (const title of titleTerms) {
+          try {
+            exactCandidates.push(...await subsonic.search(title, { songCount: 25 }));
+          } catch (err) {
+            queue.log('error', `exact request search failed: ${err.message}`);
+          }
+        }
+        pick = exactTitleByArtist(exactCandidates, { titles: titleTerms, artist: matched.artist });
+        if (pick) pickSource = 'search:exact-title-artist';
+      }
+
+      if (pick) {
+        // The exact result above is intentionally deterministic. Do not feed
+        // it into the randomized broad pool below.
+      } else {
       let candidates: any[] = [];
       for (const term of terms) {
         const songOffset = Math.floor(Math.random() * 3) * 25;
@@ -535,6 +532,7 @@ async function resolveRequest(entry) {
       });
       pick = randomFresh(unique);
       if (pick) pickSource = 'search';
+      }
     }
   }
 
