@@ -445,6 +445,7 @@ async function main() {
     assert.equal(repeatPenaltyApplies({ provider: 'locca' }), false);
     assert.equal(appliedNumCtx({ provider: 'ollama', model: 'qwen3', numCtx: 8192 }), 8192);
     assert.equal(appliedNumCtx({ provider: 'openai', model: 'gpt-4.1-mini', numCtx: 8192 }), null);
+    assert.equal(appliedNumCtx({ provider: 'openai-compatible', model: 'qwen3', numCtx: 8192 }), null);
     assert.equal(appliedNumCtx({ provider: 'locca', model: 'qwen3', numCtx: 8192 }), null);
   });
   await test('appliedRepeatPenalty: body-injection providers only, and only when > 1.0', () => {

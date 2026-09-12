@@ -27,6 +27,10 @@ export const PERSONA_TAGLINE_MAX = 80;
 export const PERSONA_LANGUAGE_MAX = 60;
 // A soul rides in the system prompt on every call: a per-call token cost.
 export const PERSONA_SOUL_MAX = 2000;
+// Unlike Soul, musical leanings are a compact backstage selection cue. Keeping
+// this deliberately shorter prevents a second persona prompt from growing into
+// an unbounded editorial brief on every pick.
+export const PERSONA_MUSIC_LEAN_MAX = 500;
 export const PERSONA_SKILLS_LIMIT = 64;
 
 // Freeform organisation tags. Third copy of one pattern (skill.ts, show.ts) —
@@ -355,6 +359,7 @@ export interface PersonaParsed {
   localColour: number;
   warmth: number;
   soul: string;
+  musicLean: string;
   language: string;
   avatar: string;
   tts: TtsVoiceSlot;
@@ -407,6 +412,9 @@ export const personaSchema = z
   .object({
     name: personaCoercedText('name', 1, PERSONA_NAME_MAX),
     soul: personaCoercedText('soul', 1, PERSONA_SOUL_MAX),
+    // An optional backstage steer for final track selection. It is never a
+    // speaking instruction and never overrides show filters or safety policy.
+    musicLean: personaCoercedText('musicLean', 0, PERSONA_MUSIC_LEAN_MAX),
     tagline: personaCoercedText('tagline', 0, PERSONA_TAGLINE_MAX),
     // Optional free text. Absent/empty → '' (English, no directive injected).
     // Unlike name/soul this REFUSES a non-string instead of coercing.
@@ -514,6 +522,7 @@ export const personaSchema = z
       localColour: p.localColour,
       warmth: p.warmth,
       soul: p.soul,
+      musicLean: p.musicLean,
       language: p.language,
       avatar: p.avatar,
       tts: p.tts,
@@ -546,6 +555,9 @@ export function repairPersonaForLoad(
     id: typeof raw.id === 'string' && PERSONA_ID_RE.test(raw.id) ? raw.id : undefined,
     name: typeof raw.name === 'string' ? raw.name.trim().slice(0, PERSONA_NAME_MAX) : undefined,
     soul: typeof raw.soul === 'string' ? raw.soul.trim().slice(0, PERSONA_SOUL_MAX) : undefined,
+    musicLean: typeof raw.musicLean === 'string'
+      ? raw.musicLean.trim().slice(0, PERSONA_MUSIC_LEAN_MAX)
+      : '',
     tagline:
       typeof raw.tagline === 'string' ? raw.tagline.trim().slice(0, PERSONA_TAGLINE_MAX) : '',
     language:

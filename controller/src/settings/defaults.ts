@@ -716,6 +716,10 @@ export const DEFAULTS = {
   // byte-identical. See music/recency.ts albumKey.
   picker: {
     albumHours: 0,
+    // Three passes cover Context → Continuity → Exploration. Higher values
+    // repeat context and continuity for breadth; lower values are deliberate
+    // narrow-list controls, not a legacy-Agentic compatibility mode.
+    shortlistPasses: 3,
     // Minimum track length in SECONDS below which a track is never PICKED
     // (#1573) — the floor operators with libraries full of 40-second skits,
     // interludes and album intros want. 0 = OFF, and off is the shipped

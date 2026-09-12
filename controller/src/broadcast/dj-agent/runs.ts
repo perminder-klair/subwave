@@ -138,3 +138,11 @@ export function runActive(): boolean {
   return !!(runState && runState.remaining > 0);
 }
 
+// The operator discovery bench needs to show the same journey source that the
+// next live pick would receive. Peek only: advancing is owned by advanceRun()
+// when a real track event begins.
+export function activeJourneyWaypoint(): number[] | null {
+  if (!runState || runState.remaining <= 0 || !runState.waypoints?.length) return null;
+  const idx = Math.min(runState.step ?? 0, runState.waypoints.length - 1);
+  return runState.waypoints[idx];
+}

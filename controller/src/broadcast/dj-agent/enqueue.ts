@@ -68,7 +68,25 @@ export function trimLinkToIntro(text: string | null | undefined, song: any): str
   // vocal entry leaves no runway.
   const spoken = normalizeForSpeech(clean, settings.get().tts?.corrections);
   const pace = speechPaceScale('link') * spokenWordScale(display, spoken);
-  return dj.enforceIntroBudget(display, introMsOf(song), pace, dj.firstVocalMsFor(song)) || null;
+  const introMs = introMsOf(song);
+  const firstVocalMs = dj.firstVocalMsFor(song);
+  const fitted = dj.enforceIntroBudget(display, introMs, pace, firstVocalMs);
+  if (fitted) return fitted;
+
+  // The model occasionally ignores a short-runway instruction and writes one
+  // long sentence. Keep its extra wording out of the voice path, but retain a
+  // concise, controller-grounded identification instead of losing the link
+  // altogether. The same budget still suppresses it where vocals start almost
+  // immediately.
+  const title = String(song?.title ?? '').trim();
+  const artist = String(song?.artist ?? '').trim();
+  const fallback = title && artist
+    ? `${title} by ${artist}.`
+    : (artist ? `${artist}.` : '');
+  if (!fallback) return null;
+  const fallbackSpoken = normalizeForSpeech(fallback, settings.get().tts?.corrections);
+  const fallbackPace = speechPaceScale('link') * spokenWordScale(fallback, fallbackSpoken);
+  return dj.enforceIntroBudget(fallback, introMs, fallbackPace, firstVocalMs) || null;
 }
 
 // `link` is attached to the queued item so the queue airs it at the transition
@@ -128,5 +146,4 @@ export async function enqueuePick(
   recordPick({ song, reason, source });
   return pos;
 }
-
 

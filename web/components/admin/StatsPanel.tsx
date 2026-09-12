@@ -83,6 +83,7 @@ interface LlmStats {
   cost?: { usd: number; complete: boolean } | null;
   provider?: string;
   agent: { calls: number; avgSteps?: number; avgTools?: number };
+  shortlist?: { calls: number; ok: number; failed: number; avgPasses?: number };
   byKind: ByKindRow[];
   byModel: ByModelRow[];
   activeModel?: string;
@@ -823,9 +824,9 @@ export default function StatsPanel() {
                     sub={llm.tokens
                       ? `${fmtTokens(llm.tokens.input)} in · ${fmtTokens(llm.tokens.output)} out`
                       : 'provider reports none'} />
-                  <StatCell label="Agent runs" value={fmtInt(llm.agent.calls)} last
-                    sub={llm.agent.calls
-                      ? `${llm.agent.avgSteps} steps · ${llm.agent.avgTools} tools avg`
+                  <StatCell label="Track shortlists" value={fmtInt(llm.shortlist?.calls)} last
+                    sub={llm.shortlist?.calls
+                      ? `${llm.shortlist.ok}/${llm.shortlist.calls} ok · ${llm.shortlist.avgPasses} discovery passes avg`
                       : 'none'} />
                 </MetricStrip>
 

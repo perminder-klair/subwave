@@ -17,6 +17,7 @@ const persona: Persona = {
   localColour: 5,
   warmth: 5,
   soul: 'Calm and observant.',
+  musicLean: '',
   language: '',
   avatar: '',
   tts: {

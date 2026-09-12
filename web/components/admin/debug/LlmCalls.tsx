@@ -98,6 +98,7 @@ function filenameFrom(res: Response, fallback: string): string {
 export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
   const { adminFetch } = useAdminAuth();
   const calls = llm?.recentCalls || [];
+  const contextWindow = llm?.shortlistContextWindow;
   const [filter, setFilter] = useState('all');
   const [exporting, setExporting] = useState<'json' | 'ndjson' | null>(null);
 
@@ -207,6 +208,29 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
           <code className="break-all">{dbg?.file || `${'…'}/logs/llm-debug.log`}</code>
         </span>
       </div>
+      <div className="mb-2 grid gap-1 border border-separator-strong p-2.5">
+        <span className="caption">Shortlist context benchmark · since controller start</span>
+        {contextWindow?.suggestedTokens ? (
+          <>
+            <span className="text-[14px] font-bold">
+              Suggested server context window: {contextWindow.suggestedTokens.toLocaleString()} tokens
+            </span>
+            <span className="field-hint">
+              Peak picker prompt {contextWindow.peakInputTokens?.toLocaleString()} tokens across
+              {' '}{contextWindow.samples} successful call{contextWindow.samples === 1 ? '' : 's'},
+              plus {contextWindow.headroomPct}% headroom and a
+              {' '}{contextWindow.responseReserveTokens?.toLocaleString()}-token response reserve.
+              Set this at the compatible server (for example llama.cpp <code>--ctx-size</code>),
+              then restart that server.
+            </span>
+          </>
+        ) : (
+          <span className="field-hint">
+            {contextWindow?.message || 'Waiting for shortlist picker evidence.'} This resets when
+            the controller restarts, so it reflects the current station setup.
+          </span>
+        )}
+      </div>
       <ScrollArea className="max-h-[600px]">
         <div className="grid gap-1.5">
           {shown.length === 0 && (
@@ -215,6 +239,10 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
             </span>
           )}
           {shown.map((c, i) => (
+            (() => {
+              const isShortlistPick = c.kind === 'djShortlistPick';
+              const sourceRuns = c.toolCalls?.length || 0;
+              return (
             <details
               key={i}
               className={cn(
@@ -230,8 +258,12 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 </span>
                 <span className="truncate text-[12px] font-bold">{c.kind}</span>
                 <span className="caption text-[10px] whitespace-nowrap">
-                  {c.toolCalls?.length ? `🔧 ${c.toolCalls.length}` : ''}
-                  {c.steps != null ? `${c.toolCalls?.length ? ' · ' : ''}${c.steps} steps` : ''}
+                  {isShortlistPick
+                    ? (sourceRuns ? `${sourceRuns} discovery passes` : '')
+                    : <>
+                        {c.toolCalls?.length ? `🔧 ${c.toolCalls.length}` : ''}
+                        {c.steps != null ? `${c.toolCalls?.length ? ' · ' : ''}${c.steps} steps` : ''}
+                      </>}
                 </span>
                 <span className="mono-num text-[11px] text-muted">{c.ms}ms</span>
                 <span className="mono-num text-[10px] text-muted">
@@ -276,7 +308,7 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 )}
                 {Array.isArray(c.toolCalls) && c.toolCalls.length > 0 && (
                   <CallSection
-                    label="tools"
+                    label={isShortlistPick ? 'candidate sources' : 'tools'}
                     count={c.toolCalls.length}
                     preview={c.toolCalls.map(t => t.name).join(' → ')}
                   >
@@ -290,10 +322,11 @@ export function LlmCalls({ llm }: { llm: DebugLlm | undefined }) {
                 )}
               </div>
             </details>
+              );
+            })()
           ))}
         </div>
       </ScrollArea>
     </Card>
   );
 }
-

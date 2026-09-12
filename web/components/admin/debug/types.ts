@@ -109,6 +109,14 @@ export interface DebugLlm {
   provider?: string;
   budget?: DebugBudget;
   recentCalls?: LlmCall[];
+  shortlistContextWindow?: {
+    samples?: number;
+    peakInputTokens?: number | null;
+    suggestedTokens?: number | null;
+    headroomPct?: number;
+    responseReserveTokens?: number;
+    message?: string;
+  };
   /** Raw-request capture status — drives the toggle + file-path hint. */
   debug?: {
     enabled?: boolean;
@@ -215,5 +223,4 @@ export interface DebugData {
   mounts?: DebugMounts;
   error?: string;
 }
-
 

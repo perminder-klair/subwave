@@ -140,6 +140,19 @@ export function summarizeLlm(calls) {
     avgTools: round1(avg(agentCalls.map(c => c.toolCalls?.length || 0))),
   };
 
+  // Native shortlisting is deliberately not an AI SDK tool-loop.  It has a
+  // bounded number of discovery passes followed by one editorial choice, so
+  // reporting it as an "agent run" obscures both the new path and its cost.
+  const shortlistCalls = calls.filter(c => c.kind === 'djShortlistPick');
+  const shortlist = {
+    calls: shortlistCalls.length,
+    ok: shortlistCalls.filter(c => c.ok).length,
+    failed: shortlistCalls.filter(c => !c.ok).length,
+    // `toolCalls` is the recorded source-run trace.  Do not use `steps` here:
+    // it also counts the final structured editorial choice.
+    avgPasses: round1(avg(shortlistCalls.map(c => c.toolCalls?.length || 0))),
+  };
+
   return {
     window: 120,
     count: calls.length,
@@ -152,6 +165,7 @@ export function summarizeLlm(calls) {
     byKind,
     byModel,
     agent,
+    shortlist,
   };
 }
 

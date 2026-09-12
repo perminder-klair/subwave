@@ -60,6 +60,10 @@ export async function djObject({
   maxOutputTokens = resolveMaxOutputTokens(MAX_TOKENS_OBJECT),
   kind = 'sdk.djObject',
   leg = undefined,
+  // Optional controller-produced trace data. Object calls have no model tool
+  // loop of their own, but callers such as native shortlisting can attach the
+  // work that led to the final structured choice for Debug and Stats.
+  telemetry = {},
   // Optional caller-supplied abort signal. No live caller wraps djObject in
   // withDeadline today, so this is inert unless one starts to — kept in the
   // shape as a precaution so a future deadline-wrapped call can cut the
@@ -155,7 +159,7 @@ export async function djObject({
             // the ring buffer holds only 120 entries so size isn't a concern.
             // (A .slice(0, 500) here used to cut pick reasons mid-sentence in
             // /admin/debug; the durable events.jsonl still caps via cap().)
-            extra: { system, user: prompt, response: JSON.stringify(object) },
+            extra: { system, user: prompt, response: JSON.stringify(object), ...telemetry },
           };
         } catch (err) {
           lastErr = err;

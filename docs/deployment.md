@@ -545,8 +545,8 @@ the token usage. **Export JSON** downloads all of them as one document;
 # every call that failed, newest first
 jq -c 'select(.ok == false) | {t, kind, model, error}' subwave-llm-calls-*.ndjson
 
-# how long each pick took
-jq -r 'select(.kind == "djAgentPick") | [.t, .ms, .model] | @tsv' subwave-llm-calls-*.ndjson
+# how long each normal shortlist pick (or corrective re-pick) took
+jq -r 'select(.kind == "djShortlistPick" or .kind == "djShortlistRepick") | [.t, .kind, .ms, .model] | @tsv' subwave-llm-calls-*.ndjson
 ```
 
 The file holds exactly what the panel shows — same admin credential, same

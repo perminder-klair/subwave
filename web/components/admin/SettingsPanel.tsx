@@ -613,6 +613,7 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
         },
       },
       picker: {
+        shortlistPasses: typeof v.picker?.shortlistPasses === 'number' ? v.picker.shortlistPasses : 3,
         // 0 = off, and that IS the shipped default — an absent key must read as
         // off rather than inventing a cooldown the operator never asked for.
         albumHours: String(typeof v.picker?.albumHours === 'number' ? v.picker.albumHours : 0),

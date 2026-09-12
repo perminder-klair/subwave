@@ -484,7 +484,10 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                 Any OpenAI-compatible server (llama.cpp, vLLM, LM Studio…),
                 including the <code>/v1</code> suffix. Must be reachable from the
                 controller container. Use the host’s LAN or Tailscale IP, not
-                <code>127.0.0.1</code>.
+                <code>127.0.0.1</code>. Context window is controlled by this
+                server: Subwave does not send <code>num_ctx</code> on this route.
+                Your saved Ollama context setting ({form.llm.numCtx || 'Ollama default'}
+                {' '}tokens) is retained for when you switch back to Ollama.
               </div>
             </div>
           )}
@@ -834,7 +837,11 @@ export function LlmSection({ data, form, setForm, busy, saveSettings, adminFetch
                   />
                   <div className="field-hint">
                     OpenAI-compatible server URL including the <code>/v1</code>
-                    suffix, required for this provider.
+                    suffix, required for this provider. Context window is controlled
+                    by the backup server; Subwave does not send <code>num_ctx</code>
+                    for this route. The saved backup Ollama setting
+                    {' '}({form.llm.fallback.numCtx || 'Ollama default'} tokens) is
+                    retained for when you switch back to Ollama.
                   </div>
                 </div>
               )}

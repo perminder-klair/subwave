@@ -36,8 +36,193 @@ import { getStationTimezone } from '../time.js';
 import { publicOrigin } from './public.js';
 import { requireAdmin } from '../middleware/auth.js';
 import { BadStatePathError, listStateDir } from '../util/state-tree.js';
+import { shortlistContextWindow } from '../music/shortlist-context-window.js';
+import { buildPickerTools, PICKER_TOOLS } from '../llm/tools.js';
+import { livePickerScope } from '../broadcast/dj-agent.js';
+import { activeJourneyWaypoint } from '../broadcast/dj-agent/runs.js';
+import { pickerAgent } from '../broadcast/dj-agent/agents.js';
+import { buildShortlist } from '../music/shortlist.js';
+import { djPick } from '../music/dj-pick.js';
 
 export const router = express.Router();
+// ---------------------------------------------------------------------------
+// Discovery bench — read-only execution of the exact picker-tool registry.
+// It deliberately does not call an LLM, enqueue a track, or write any station
+// state: this is the operator's way to inspect the candidate sources a normal
+// next-track run has available.
+// ---------------------------------------------------------------------------
+const REQUEST_ONLY_PICKER_TOOL = 'identifyRequestedTrack';
+
+async function discoveryBench() {
+  const { scope } = await livePickerScope(queue, { audioWaypoint: activeJourneyWaypoint() });
+  const { tools } = buildPickerTools(scope);
+  return { scope, tools };
+}
+
+router.get('/debug/discovery', requireAdmin, async (_req, res) => {
+  try {
+    const { tools } = await discoveryBench();
+    const current = queue.current?.track ?? null;
+    res.json({
+      current: current ? { id: current.id, title: current.title, artist: current.artist, genre: current.genre } : null,
+      tools: PICKER_TOOLS
+        .filter((entry) => entry.name !== REQUEST_ONLY_PICKER_TOOL)
+        .map((entry) => ({
+          name: entry.name,
+          available: !!tools[entry.name],
+          description: (tools[entry.name] as any)?.description ?? null,
+        })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+router.post('/debug/discovery/tool/:tool', requireAdmin, async (req, res) => {
+  try {
+    const name = String(req.params.tool || '');
+    if (name === REQUEST_ONLY_PICKER_TOOL || !PICKER_TOOLS.some((entry) => entry.name === name)) {
+      return res.status(404).json({ error: 'unknown next-track discovery tool' });
+    }
+    const { tools } = await discoveryBench();
+    const tool: any = tools[name];
+    if (!tool) return res.status(409).json({ error: `${name} is unavailable for the current picker scope` });
+    const args = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const parsed = tool.inputSchema?.safeParse?.(args);
+    if (parsed && !parsed.success) return res.status(400).json({ error: parsed.error.issues?.[0]?.message || 'invalid tool input' });
+    const started = performance.now();
+    const result = await tool.execute(parsed?.data ?? args, { toolCallId: `discovery-bench:${name}`, messages: [] });
+    res.json({ name, elapsedMs: Math.round(performance.now() - started), result });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+// One non-airing, like-for-like discovery comparison. The station's configured
+// Agentic Picker budget must already be three: this route never mutates live
+// settings merely to make a benchmark happen.
+router.post('/debug/discovery/compare', requireAdmin, async (_req, res) => {
+  try {
+    if (dj.promptDiscoverySteps() !== 3) {
+      return res.status(409).json({ error: 'Set Agentic discovery rounds to 3 before running this comparison.' });
+    }
+    const waypoint = activeJourneyWaypoint();
+    const { scope } = await livePickerScope(queue, { audioWaypoint: waypoint });
+    const current = queue.current?.track ?? null;
+    const show = settings.resolveActiveShow();
+    const criteria = showCriteria(show);
+    const legacyStart = performance.now();
+    const legacyBefore = new Set(dj.recentCalls);
+    const legacy = await pickerAgent.run({
+      scope,
+      messages: session.windowMessages(),
+    });
+    const legacyCalls = callsSince(legacyBefore, 'djAgentPick');
+    const legacyElapsedMs = Math.round(performance.now() - legacyStart);
+    const nativeStart = performance.now();
+    const nativeBefore = new Set(dj.recentCalls);
+    const native = await buildShortlist({
+      scope,
+      currentTrackId: current?.id ?? null,
+      discoveryPasses: 3,
+      moods: show?.moods ?? null,
+      energies: show?.energies ?? null,
+    });
+    const nativeSelection = native.candidates.length
+      ? await djPick({
+          candidates: native.candidates,
+          playlistResolved: !!scope.playlistTracks?.length,
+          sourceRuns: native.sourceRuns,
+          context: {
+            currentTrack: compactTrack(current),
+            showCriteria: criteria,
+            link: 'No link is needed: this is a non-airing discovery comparison.',
+          },
+        })
+      : null;
+    const nativeCalls = callsSince(nativeBefore, 'djShortlistPick');
+    res.json({
+      current: compactTrack(current),
+      showCriteria: criteria,
+      agentic: legacy.toolCalls.map((call: any, index: number) => ({
+        round: call.round || index + 1,
+        source: call.name || 'unknown',
+        tracks: tracksFromDiscoveryResult(call.result),
+      })),
+      shortlist: native.sourceRuns.map((run, index) => ({
+        round: index + 1,
+        source: run.source,
+        tracks: run.tracks || [],
+      })),
+      outcomes: {
+        agentic: comparisonOutcome({
+          selection: trackFromId(legacy.object?.id, legacy.extras.seen),
+          elapsedMs: legacyElapsedMs,
+          calls: legacyCalls,
+        }),
+        shortlist: comparisonOutcome({
+          selection: trackFromId(nativeSelection?.id, new Map(native.candidates.map((candidate) => [candidate.id, candidate]))),
+          elapsedMs: Math.round(performance.now() - nativeStart),
+          calls: nativeCalls,
+        }),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || String(err) });
+  }
+});
+
+function compactTrack(track: any) {
+  return track?.id ? { id: track.id, title: String(track.title || ''), artist: String(track.artist || '') } : null;
+}
+
+function trackFromId(id: unknown, tracks: Map<string, any>) {
+  return typeof id === 'string' ? compactTrack(tracks.get(id)) : null;
+}
+
+function showCriteria(show: any) {
+  if (!show) return null;
+  return {
+    name: String(show.name || ''),
+    topic: String(show.topic || ''),
+    strict: !!show.filtersStrict,
+    moods: show.moods || [],
+    genres: show.genres || [],
+    energies: show.energies || [],
+    eras: show.eras || [],
+    vocals: show.vocals || null,
+    playlistStrict: !!show.playlistStrict,
+    playlistCount: show.playlistIds?.length || 0,
+  };
+}
+
+function callsSince(before: Set<any>, kind: string) {
+  return dj.recentCalls.filter((call: any) => !before.has(call) && call.kind === kind);
+}
+
+function comparisonOutcome({ selection, elapsedMs, calls }: { selection: any; elapsedMs: number; calls: any[] }) {
+  const tokenTotal = calls.reduce((sum, call) => sum + (Number(call.usage?.total) || 0), 0);
+  return {
+    selected: selection,
+    elapsedMs,
+    llmCalls: calls.length,
+    tokens: tokenTotal || null,
+    fallback: selection
+      ? 'not required; not exercised — comparison does not enqueue or fall through to the pool picker'
+      : 'no selection — comparison does not enqueue or exercise the pool fallback',
+  };
+}
+
+function tracksFromDiscoveryResult(result: unknown) {
+  const tracks = Array.isArray(result)
+    ? result
+    : result && typeof result === 'object' && Array.isArray((result as any).tracks)
+      ? (result as any).tracks
+      : [];
+  return tracks.flatMap((track: any) => typeof track?.id === 'string'
+    ? [{ id: track.id, title: String(track.title || ''), artist: String(track.artist || '') }]
+    : []);
+}
 
 // Recent listener requests and how the DJ resolved each. Durable across
 // restarts via request-log's on-disk JSONL.
@@ -243,8 +428,7 @@ async function buildDebugSnapshot(req: express.Request): Promise<any> {
     // retries.
     agentDoneRetries: agentDoneRetryCount(),
     recentCalls: dj.recentCalls,
-    // viaEnv means LLM_DEBUG_RAW forces capture on and the UI toggle can't
-    // turn it off.
+    shortlistContextWindow: shortlistContextWindow(dj.recentCalls),
     debug: {
       enabled: rawDebugEnabled(),
       viaEnv: rawDebugEnabledViaEnv(),

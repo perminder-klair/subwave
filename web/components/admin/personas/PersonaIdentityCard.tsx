@@ -3,7 +3,7 @@ import type { Control } from 'react-hook-form';
 import { useController } from 'react-hook-form';
 import type { Persona, PersonasFormValues } from './types';
 import type { AdminAuth } from '../../../lib/adminAuth';
-import { NAME_MAX, TAGLINE_MAX, SOUL_MAX, LANGUAGE_MAX, TAGS_MAX, TAG_MAX, TAG_RE } from './constants';
+import { NAME_MAX, TAGLINE_MAX, SOUL_MAX, MUSIC_LEAN_MAX, LANGUAGE_MAX, TAGS_MAX, TAG_MAX, TAG_RE } from './constants';
 import { Card } from '../ui';
 import { TagField } from '../TagField';
 import { Label } from '../../ui/label';
@@ -37,6 +37,7 @@ export function PersonaIdentityCard({
   onUpdate, onPickAvatar, onGenerateAvatar, onClearAvatar,
 }: PersonaIdentityCardProps) {
   const soulLen = persona.soul.trim().length;
+  const musicLeanLen = persona.musicLean.trim().length;
   const tagsCtl = useController({ control, name: `personas.${index}.tags` });
   return (
     <Card flat title="Identity">
@@ -145,6 +146,21 @@ export function PersonaIdentityCard({
           <div className="field-hint">
             One short personality sketch. Injected into the prompt as <code>{'{soul}'}</code>.
             <span className="ml-2 text-muted">{soulLen} / {SOUL_MAX}</span>
+          </div>
+          <div className="mt-4">
+            <TextareaField
+              control={control}
+              name={`personas.${index}.musicLean`}
+              label="Musical Leanings"
+              rows={4}
+              placeholder="e.g. favour melodic post-punk, deep soul cuts and surprising cover versions"
+              maxLength={MUSIC_LEAN_MAX}
+            />
+            <div className="field-hint">
+              A private, soft tie-breaker for track selection. It never changes the presenter&apos;s voice,
+              overrides show rules, or goes on air.
+              <span className="ml-2 text-muted">{musicLeanLen} / {MUSIC_LEAN_MAX}</span>
+            </div>
           </div>
         </div>
       </div>

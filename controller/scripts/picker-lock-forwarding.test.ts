@@ -140,12 +140,13 @@ test('locks compose — all of them apply together, none overrides another', () 
 
 console.log('\nthe scope reaches the tools whole:');
 
-test('pickViaAgent builds ONE scope and hands it over unpacked', () => {
+test('pickViaAgent builds ONE scope and native shortlisting hands it over unpacked', () => {
   const src = read('../src/broadcast/dj-agent.ts');
   assert.match(src, /const scope = pickerScope\(\{/,
     'pickViaAgent should assemble a single pickerScope(...) value');
-  assert.match(src, /pickerAgent\.run\(\{[^}]*\bscope,/s,
-    'the picker run must receive the scope as one value');
+  const shortlist = read('../src/music/shortlist.ts');
+  assert.match(shortlist, /buildPickerTools\(context\.scope\)/,
+    'the native builder must forward the scope object itself');
 });
 
 test('buildTools passes the scope straight through — no per-field re-listing', () => {

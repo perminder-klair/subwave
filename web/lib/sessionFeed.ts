@@ -82,10 +82,14 @@ export function eventTurnSummary(turn: SessionTurn | null | undefined): string |
   const text = turn.text || '';
   if (text.length <= 160) return null;
   if (turn.kind === 'pick') {
-    // Head is `Now playing "X" by Y [id: …] (after "A" by B)`: keep it, drop
-    // the raw Subsonic id, reduce the instruction tail to flags.
-    const head = (text.split('. Pick the track to play next.')[0] ?? text)
-      .replace(/\s*\[id:[^\]]*\]/g, '');
+    // Picker events are model instructions, not booth copy. Keep their useful
+    // operational state without exposing the prompt's control language.
+    const anchor = text.match(/(?:Now playing|Pick-cycle anchor):?\s*"([^"]+)" by ([^\[.(]+?)(?:\s*\[|\s*\(|\. Pick)/);
+    const title = anchor?.[1];
+    const artist = anchor?.[2]?.trim();
+    const head = title && artist
+      ? `Choosing a follow-up to ${title} — ${artist}`
+      : 'Choosing the next track';
     const parts = [
       `${head} → pick next`,
       text.includes('Stay silent') ? 'silent' : 'with link',

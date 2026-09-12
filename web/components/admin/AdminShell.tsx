@@ -213,6 +213,7 @@ const NAV_SECTIONS: NavSection[] = [
         ],
       },
       { href: '/admin/settings', id: 'settings', label: 'Settings', icon: SlidersHorizontal },
+      { href: '/admin/discovery', id: 'discovery', label: 'Discovery', icon: Telescope },
       { href: '/admin/debug', id: 'debug', label: 'Debug', icon: Terminal },
     ],
   },
