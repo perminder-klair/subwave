@@ -115,19 +115,14 @@ test('saving an override then restarting keeps it — the operator story', async
 });
 
 test('the per-provider budget reaches only the agents that opted in', async () => {
-  // The director's maxSteps: 2 is load-bearing, so it must not opt in.
-  // Without the opt-in runDiscoverySteps pins the historical single step
-  // whatever the provider or override says.
   const { runDiscoverySteps } = await import('../src/llm/internal/provider/capabilities.js');
   const llm = await coldLoad({ ...CLOUD_LLM, discoverySteps: 5 });
   assert.equal(runDiscoverySteps(llm, true), 5, 'opted-in agents follow descriptor + override');
   assert.equal(runDiscoverySteps(llm, false), 1, 'everyone else keeps the single historical step');
 
   const { pickerAgent, requestAgent } = await import('../src/broadcast/dj-agent/agents.js');
-  const { directorAgent } = await import('../src/skills/_agent.js');
   assert.equal(pickerAgent.providerDiscoveryBudget, true, 'picker opts in');
   assert.equal(requestAgent.providerDiscoveryBudget, true, 'request matcher opts in');
-  assert.equal(directorAgent.providerDiscoveryBudget, false, 'the director must NOT opt in');
 });
 
 test('the prompt promises the MINIMUM across the legs that could run', async () => {

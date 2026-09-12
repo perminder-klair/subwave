@@ -57,14 +57,14 @@ test('a successful run maps immutable speaker ids back to the full persona objec
   const result = await runCohostedCapability({
     capability: { kind: 'case-discussion', desc: 'Discuss one case.' },
     host, guests, context: {}, situation: 'The current moment.', segmentState: {}, forced: true,
-    runAgent: async () => ({ object: full, steps: 0, toolCalls: [] }),
+    runObject: async () => full,
   });
   assert.equal(result.aired, true);
   assert.deepEqual(result.lines?.map((line: any) => line.persona), cast);
   assert.deepEqual(result.lines?.map((line: any) => line.text), full.lines.map(line => line.text));
 });
 
-test('a grounded skill must observe usable data before it may return dialogue', async () => {
+test('a grounded skill fetches usable data before it may return dialogue', async () => {
   const capability = {
     kind: 'case-discussion', desc: 'Discuss one case.', toolName: 'skill_case_discussion',
     toolDesc: 'Search for one historical case.', toolInputs: { query: 'case to find' },
@@ -72,10 +72,7 @@ test('a grounded skill must observe usable data before it may return dialogue', 
   };
   const result = await runCohostedCapability({
     capability, host, guests, context: {}, situation: 'The current moment.', segmentState: {}, forced: true,
-    runAgent: async (args: any) => {
-      await args.tools.skill_case_discussion.execute({ query: 'historical murder case' });
-      return { object: full, steps: 1, toolCalls: [] };
-    },
+    runObject: async () => full,
   });
   assert.equal(result.aired, true);
 });
@@ -88,10 +85,7 @@ test('unavailable or failed grounded data stands down before any dialogue can ai
     };
     const result = await runCohostedCapability({
       capability, host, guests, context: {}, situation: 'The current moment.', segmentState: {}, forced: true,
-      runAgent: async (args: any) => {
-        await args.tools.skill_case_discussion.execute({});
-        return { object: full, steps: 1, toolCalls: [] };
-      },
+      runObject: async () => full,
     });
     assert.equal(result.aired, false);
     assert.equal(result.lines, null);
@@ -99,28 +93,21 @@ test('unavailable or failed grounded data stands down before any dialogue can ai
   }
 });
 
-test('the agent leg pins maxSteps at 2, never djAgent’s default of 8', async () => {
-  // directorAgent's own cap documents the failure this reinstates: a taller
-  // budget grows an "I already declined" trail on providers that don't comply
-  // on the first forced attempt, and burned the FULL agentTimeoutMs before
-  // recovery got a turn (#555).
+test('the direct runtime makes one structured call without model tools', async () => {
   let seen: any = null;
   await runCohostedCapability({
     capability: { kind: 'case-discussion', desc: 'Discuss one case.' },
     host, guests, context: {}, situation: 'The current moment.', segmentState: {}, forced: true,
-    runAgent: async (args: any) => { seen = args; return { object: full, steps: 1, toolCalls: [] }; },
+    runObject: async (args: any) => { seen = args; return full; },
   });
-  assert.equal(seen.maxSteps, 2);
+  assert.equal(seen.tools, undefined);
+  assert.equal(seen.kind, 'generateCohostedSkill');
 });
 
-test('pool mode fetches in code and makes ONE structured call — never a tool loop', async () => {
-  // llm.pickerAgent off means the operator's model isn't trusted with tool
-  // loops. Running one anyway left a grounded co-hosted skill unable to ever
-  // clear its grounding check (the tool is reachable only by a model tool
-  // call), so it stood down every tick after a full wasted agent run.
+test('the direct runtime fetches in code and makes ONE structured call', async () => {
   const settings = await import('../src/settings.js');
   await settings.load();
-  await settings.update({ llm: { pickerAgent: false } });
+  await settings.update({ llm: { pickerAgent: true } });
   try {
     let toolCalls = 0;
     const capability = {
@@ -131,7 +118,6 @@ test('pool mode fetches in code and makes ONE structured call — never a tool l
     let objectArgs: any = null;
     const result = await runCohostedCapability({
       capability, host, guests, context: {}, situation: 'The current moment.', segmentState: {}, forced: true,
-      runAgent: async () => { throw new Error('pool mode must not run the skill tool loop'); },
       runObject: async (args: any) => { objectArgs = args; return full; },
     });
     assert.equal(result.aired, true);
@@ -139,14 +125,12 @@ test('pool mode fetches in code and makes ONE structured call — never a tool l
     assert.equal(objectArgs.tools, undefined, 'the single structured call is offered no tools');
     assert.match(String(objectArgs.prompt), /Bakersfield/, 'the fetched source data is inlined into the prompt');
     assert.ok(objectArgs.signal, 'the unbounded djObject call carries a deadline signal');
-  } finally {
-    await settings.update({ llm: { pickerAgent: true } });
-  }
+  } finally { await settings.update({ llm: { pickerAgent: false } }); }
 });
 
-test('pool mode stands a grounded discussion down BEFORE any model call', async () => {
+test('the direct runtime stands a grounded discussion down BEFORE any model call', async () => {
   const settings = await import('../src/settings.js');
-  await settings.update({ llm: { pickerAgent: false } });
+  await settings.update({ llm: { pickerAgent: true } });
   try {
     for (const returned of [{ available: false }, { error: 'search offline' }]) {
       const capability = {
@@ -156,16 +140,13 @@ test('pool mode stands a grounded discussion down BEFORE any model call', async 
       };
       const result = await runCohostedCapability({
         capability, host, guests, context: {}, situation: 'The current moment.', segmentState: {}, forced: true,
-        runAgent: async () => { throw new Error('no tool loop in pool mode'); },
         runObject: async () => { throw new Error('a model must not be asked to write from unusable data'); },
       });
       assert.equal(result.aired, false);
       assert.equal(result.lines, null);
       assert.ok(result.reason);
     }
-  } finally {
-    await settings.update({ llm: { pickerAgent: true } });
-  }
+  } finally { await settings.update({ llm: { pickerAgent: false } }); }
 });
 
 test('a forced prompt-only discussion cannot decline or omit dialogue', async () => {
@@ -173,7 +154,7 @@ test('a forced prompt-only discussion cannot decline or omit dialogue', async ()
     runCohostedCapability({
       capability: { kind: 'case-discussion', desc: 'Discuss one case.' },
       host, guests, context: {}, situation: 'The current moment.', segmentState: {}, forced: true,
-      runAgent: async () => ({ object: { reason: 'No.', air: false, lines: [] }, steps: 0, toolCalls: [] }),
+      runObject: async () => ({ reason: 'No.', air: false, lines: [] }),
     }),
     /produced no co-hosted discussion|declined/i,
   );

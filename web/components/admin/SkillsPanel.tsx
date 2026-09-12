@@ -595,6 +595,12 @@ export default function SkillsPanel() {
                     </V3Alert>
                   )}
 
+                  {s.warning && (
+                    <V3Alert title="Skill review needed">
+                      {s.warning}
+                    </V3Alert>
+                  )}
+
                   <p className="line-clamp-2 text-[12px] leading-[1.55] text-muted italic">
                     <SkillDescription text={s.description} keyUrl={s.keyUrl} />
                   </p>

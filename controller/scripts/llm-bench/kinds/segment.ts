@@ -1,17 +1,16 @@
-// Segment kinds — the pool-mode single-call path (generateSegment) and the
-// tool-loop segment director (djAgentSegment), autonomous and forced variants.
-// All builders are the live ones from skills/_agent.ts.
+// Segment kinds — all Segment generation uses the one-call generateSegment
+// runtime. Builders are the live ones from skills/_agent.ts.
 
 import type { KindSpec } from './types.js';
 import { djObject } from '../../../src/llm/sdk.js';
 import {
   simpleSystem, simpleSegmentSchema, dataBlock, buildSituation, effectiveContextFields,
-  forcedSystem, forcedSchema, directorAgent, forcedDirectorAgent,
+  forcedSystem, forcedSchema,
 } from '../../../src/skills/_agent.js';
 import { checkSpokenLine } from '../rules.js';
 import {
   benchContext, HOST, SFX_CATALOG, weatherCap, newsCap,
-  WEATHER_FRESH, WEATHER_DULL, NEWS_DATA, freshSegmentState,
+  WEATHER_FRESH, WEATHER_DULL, NEWS_DATA,
 } from '../fixtures.js';
 
 const SFX_NAMES = new Set(SFX_CATALOG.map(s => s.name));
@@ -41,29 +40,6 @@ function simpleScenario(name: string, cap: any, data: any) {
   };
 }
 
-function directorScenario(name: string, caps: any[]) {
-  return {
-    name,
-    run: async () => {
-      const ctx = benchContext();
-      const { object } = await directorAgent.run({
-        messages: [{ role: 'user', content: buildSituation(ctx, {}) }],
-        persona: HOST, caps, freq: 'moderate', sfxCatalog: SFX_CATALOG,
-        ctx, segmentState: freshSegmentState(),
-      });
-      return { object, offered: caps.map(c => c.kind) };
-    },
-    check: (out: any) => {
-      const seg = out?.object?.air ? out?.object?.segment : null;
-      if (!seg) return []; // silence — a legitimate outcome for the autonomous tick
-      const v: string[] = [];
-      if (!out.offered.includes(seg.kind)) v.push('unoffered-kind');
-      v.push(...checkSpokenLine(seg.text), ...checkSfx(seg.sfx));
-      return v;
-    },
-  };
-}
-
 export const specs: KindSpec[] = [
   {
     kind: 'generateSegment',
@@ -85,28 +61,6 @@ export const specs: KindSpec[] = [
           temperature: 0.9,
           kind: 'generateSegment',
         }),
-        check: (out: any) => [...checkSpokenLine(out?.text), ...checkSfx(out?.sfx)],
-      },
-    ],
-  },
-  {
-    kind: 'djAgentSegment',
-    group: 'segment',
-    mode: 'agent',
-    scenarios: [
-      directorScenario('autonomous-weather+news', [weatherCap(WEATHER_FRESH), newsCap()]),
-      {
-        name: 'forced-weather',
-        run: async () => {
-          const cap = weatherCap(WEATHER_FRESH);
-          const ctx = benchContext();
-          const { object } = await forcedDirectorAgent.run({
-            messages: [{ role: 'user', content: buildSituation(ctx, { forced: true, contextFields: effectiveContextFields(cap) }) }],
-            persona: HOST, cap, sfxCatalog: SFX_CATALOG,
-            ctx, segmentState: freshSegmentState(),
-          });
-          return object;
-        },
         check: (out: any) => [...checkSpokenLine(out?.text), ...checkSfx(out?.sfx)],
       },
     ],

@@ -36,7 +36,7 @@ import { talkTickPlan, type TalkKind, type TalkPlan } from './talk-scheduler.js'
 import { djCallsAllowed } from './listeners.js';
 import { autoVoiceAllowed } from './voice-policy.js';
 import { optionalSegmentsAllowed } from './dj-budget.js';
-import { agenticTick, skillCatalog, runCapability } from '../skills/_agent.js';
+import { segmentTick, skillCatalog, runCapability } from '../skills/_agent.js';
 import { loadedCapabilities } from '../skills/loader.js';
 import { skillEligible } from '../skills/eligibility.js';
 import { getStationTimezone, onStationTimezoneChange } from '../time.js';
@@ -645,7 +645,7 @@ function segmentEligible(): boolean {
 async function runSegmentTick() {
   await withTrace({ kind: 'segment' }, async () => {
     const ctx = await getFullContext();
-    await agenticTick(ctx);
+    await segmentTick(ctx);
   });
 }
 

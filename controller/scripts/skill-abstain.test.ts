@@ -53,7 +53,7 @@ writeSkill('own-material', 'export const requiresData = false;\nexport default a
 
 const { requiresGrounding, unusableDataReason, standDownReason, declaredBool } =
   await import('../src/skills/abstain-policy.js');
-const { agenticTick, forcedSchema, forcedSystem, runCapability } = await import('../src/skills/_agent.js');
+const { segmentTick, forcedSchema, forcedSystem, runCapability } = await import('../src/skills/_agent.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const webSearch = (await import('../src/skills/builtins/web-search/tool.mjs')).default;
 
@@ -243,10 +243,12 @@ test('a forced run on empty data stands down without ever calling the model', as
   assert.match(String(run.reason), /nothing fresh/);
 });
 
-test('pool mode skips generation and backs off when grounded data is unavailable', async () => {
+test('the direct runtime skips generation and backs off when grounded data is unavailable', async () => {
   const settings = await import('../src/settings.js');
   await settings.update({
-    llm: { pickerAgent: false, provider: 'openai', apiKey: '', agentTimeoutMs: 5_000 },
+    // pickerAgent stays enabled to prove Segments no longer branch into its
+    // tool loop. It still controls music picking elsewhere.
+    llm: { pickerAgent: true, provider: 'openai', apiKey: '', agentTimeoutMs: 5_000 },
     skills: { enabled: { 'dry-well': true } },
     personas: settings.get().personas.map((p: { id: string }, i: number) =>
       (i === 0 ? { ...p, frequency: 'aggressive', djMode: false } : p)),
@@ -258,7 +260,7 @@ test('pool mode skips generation and backs off when grounded data is unavailable
   const before = attempts();
   queue.djLog = [];
 
-  await agenticTick({ time: {}, clock: {} });
+  await segmentTick({ time: {}, clock: {} });
 
   assert.equal(attempts(), before + 1, 'the first tick fetches the selected skill once');
   assert.ok(
@@ -267,11 +269,11 @@ test('pool mode skips generation and backs off when grounded data is unavailable
     'the booth log exposes the pre-LLM skip and selected skill',
   );
   assert.ok(
-    !queue.djLog.some(e => e.kind === 'error' && e.message.startsWith('Segment agent failed:')),
+    !queue.djLog.some(e => e.kind === 'error' && e.message.startsWith('Segment director failed:')),
     'unavailable source data never reaches the LLM failure path',
   );
 
-  await agenticTick({ time: {}, clock: {} });
+  await segmentTick({ time: {}, clock: {} });
   assert.equal(attempts(), before + 1, 'the unavailable skill is backed off on the next scheduler tick');
 });
 

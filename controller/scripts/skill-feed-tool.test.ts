@@ -131,7 +131,7 @@ const realLog = queue.log.bind(queue);
 (queue as any).log = (level: string, msg: string) => { logged.push(`${level}: ${msg}`); return realLog(level, msg); };
 
 const { loadSkills, readTemplate } = await import('../src/skills/loader.js');
-const { buildSegmentTools, fetchSegmentData } = await import('../src/llm/internal/tools/segment-tools.js');
+const { fetchSegmentData } = await import('../src/llm/internal/tools/segment-tools.js');
 const { resolveFeedConfig, FEED_ITEMS_PER_FIRE } = await import('../src/skills/feed.js');
 const { requiresGrounding } = await import('../src/skills/abstain-policy.js');
 
@@ -140,16 +140,13 @@ const capOf = (kind: string) => caps.find(c => c.kind === kind);
 
 test.after(() => { server.close(); });
 
-test('a feed: line alone earns the skill a skill_<name> fetch tool', async () => {
+test('a feed: line alone earns the skill a data provider', async () => {
   const cap = capOf('giveaway');
   assert.ok(cap, 'the skill loaded');
   assert.equal(cap.toolName, 'skill_giveaway');
   assert.equal(typeof cap.toolFn, 'function');
 
-  const tools = buildSegmentTools({ time: {} }, {}, [cap]);
-  assert.ok(tools.skill_giveaway, 'the generated tool reaches the agent tool set');
-
-  const result: any = await tools.skill_giveaway.execute({});
+  const result: any = await fetchSegmentData(cap, { time: {} }, {});
   assert.equal(result.headlines[0].title, 'Story 1');
   assert.equal(result.headlines[0].detail, 'Blurb 1');
 });

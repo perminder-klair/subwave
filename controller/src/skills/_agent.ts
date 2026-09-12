@@ -1,13 +1,13 @@
-// Segment-director agent. agenticTick() (the 5-minute scheduler.skillsTick)
-// hands a tool-loop agent a snapshot of the moment plus real-world data tools
-// (llm/segment-tools.js) and asks whether anything is worth saying between
-// tracks; it writes ONE spoken line or stays silent. It is deliberately NOT
-// given the track-pick session history, which derails small models into
-// reasoning about music; its anti-repeat context is queue.getDjRecap().
+// Segment director. segmentTick() (the 5-minute scheduler.skillsTick) picks
+// one eligible capability, gathers its source data in code, then asks the
+// model whether that one between-track segment is worth airing. It writes ONE
+// spoken line or stays silent. It is deliberately NOT given the track-pick
+// session history, which derails small models into reasoning about music; its
+// anti-repeat context is queue.getDjRecap().
 //
-// `runCapability()` is the /dj/skill manual override: the same loop forced to
-// one capability with every automatic gate bypassed. The capability registry
-// comes from skills/loader.js.
+// `runCapability()` is the /dj/skill manual override: the same direct path,
+// forced to one capability with every automatic gate bypassed. The capability
+// registry comes from skills/loader.js.
 //
 // Guard rails the autonomous tick cannot talk its way past (the operator
 // override bypasses all of them): per-kind cooldown from SKILL.md, a
@@ -17,10 +17,9 @@
 import { z } from 'zod';
 import { queue } from '../broadcast/queue.js';
 import * as settings from '../settings.js';
-import { defineAgent } from '../llm/agent.js';
 import { djObject, modelTolerant } from '../llm/sdk.js';
 import { buildContextLines, CONTEXT_FIELDS, lengthMode, lengthPhrase } from '../llm/dj.js';
-import { buildSegmentTools, fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
+import { fetchSegmentData, dataBlock } from '../llm/segment-tools.js';
 import { recordCuriosity, recentAiredCuriosity } from './curiosity.js';
 import { loadedCapabilities } from './loader.js';
 import { skillEligible } from './eligibility.js';
@@ -55,56 +54,6 @@ export function effectiveContextFields(cap: { contextFields?: unknown } | null |
   return list.length ? list : DEFAULT_SEGMENT_CONTEXT;
 }
 
-// The director makes ONE decision over many capabilities, so it sees a field if
-// ANY offered capability wants it. On ticks where the weather skill isn't
-// eligible the director never sees weather and can't tempt a line into it.
-function unionContextFields(caps): string[] {
-  const out = new Set<string>();
-  for (const c of caps) for (const f of effectiveContextFields(c)) out.add(f);
-  return [...out];
-}
-
-// Schema factories, resolved per run (defineAgent's function-schema form) so the
-// spoken-line length follows the persona's scriptLength.
-//
-// Field order is deliberate: models generate JSON in property order, so `reason`
-// comes FIRST (justify before writing), then `air`, then the segment. The
-// boolean is the unambiguous silence token — small models encoded silence
-// through a nullable nested object as bare top-level `null` or prose instead
-// (isBareNullSilent / isSilentFailure below).
-function segmentSchema() {
-  return modelTolerant(z.object({
-    reason: z.string().describe('one short internal sentence on why this segment (or why silent) — never shown to the listener; write this BEFORE deciding the segment'),
-    air: z.boolean().describe('true to air one segment now, false to stay silent — silence is a perfectly good answer, often the best one, when the data is dull, stale, unchanged, or there is nothing fresh worth a listener\'s attention'),
-    // NOT .nullable(): a nullable nested object loses its `properties` in
-    // llama.cpp's peg-gemma4 tool serializer (#906). Silence rides entirely on
-    // the `air` boolean, so a non-null segment on a silent tick is ignored at
-    // the consumption site.
-    segment: z.object({
-      // A free string, not an enum, so operator-dropped skills get valid kinds
-      // too. agenticTick drops any kind it wasn't offered.
-      kind: z.string()
-        .describe('the segment kind — MUST be one of the kinds offered in the system prompt for this tick'),
-      text: z.string().describe(`the spoken line in the DJ voice — ${lengthPhrase('segment')}`),
-      sfx: z.string().nullable().describe('the exact name of one sound effect from the catalogue in the system prompt to play under this line, or null for no effect (null is usually right — most segments need none)'),
-    }).describe('the segment to air when air is true; ignored when air is false (empty strings for kind/text, null sfx when silent)'),
-  }), {
-    // A missing or double-JSON-encoded `segment` would throw under a plain
-    // required object, which djAgent cannot tell from "the model never called
-    // done" and which burns a full recovery cascade on a call that succeeded.
-    // modelTolerant rescues the double-encoded form; this fallback covers the
-    // rest, safe because the consumption site treats an empty segment as
-    // silence regardless of `air`.
-    objectFallbacks: { segment: { kind: '', text: '', sfx: null } },
-    // Log content-bearing discards so /debug can tell "we threw a written
-    // segment away" from "the model chose silence".
-    onDiscard: (field, value) => {
-      let preview = '';
-      try { preview = JSON.stringify(value).slice(0, 200); } catch { preview = String(value).slice(0, 200); }
-      console.warn(`[djAgentSegment] discarding malformed ${field} from model output: ${preview}`);
-    },
-  });
-}
 
 // Operator-override schema: the kind is already known, so only the spoken line
 // comes back. `mayAbstain` (decided by skills/abstain-policy.ts) adds the same
@@ -219,22 +168,6 @@ function availableCapabilities(ctx, now: Date) {
   return out;
 }
 
-// Ultra-minimal: persona plus per-tick context only. Response shape, length and
-// tool exploration are conveyed through the AI SDK's own channels (tool and
-// schema field descriptions, the done tool, the buildSituation() user message),
-// same principle as pickSystem.
-function directorSystem(persona, caps, freq: string, sfxCatalog) {
-  const capList = caps.map((c) => `- ${c.kind}: ${c.desc}`).join('\n');
-  const tone = stationTone(freq);
-
-  return `${settings.agentPersonaPreamble(persona)}
-
-Your job: decide whether to air ONE between-track segment, or stay silent. You are NOT choosing music. ${tone}
-
-Capabilities available this tick (pick one of these kinds, or stay silent):
-${capList}${sfxBlock(sfxCatalog)}${settings.agentLanguageReminder(persona, 'the "text" line')}`;
-}
-
 // 'silent' never reaches the auto tick (the frequency floor blocks it); a
 // forced run treats it like quiet.
 function stationTone(freq: string) {
@@ -253,32 +186,7 @@ function segmentDeadline(): number {
   return settings.get().llm?.agentTimeoutMs ?? 45000;
 }
 
-// The autonomous segment director. Schema, prompt and tool builder bundled
-// here; agenticTick only feeds the dynamic per-tick state.
-export const directorAgent = defineAgent({
-  kind: 'djAgentSegment',
-  schema: () => segmentSchema(),
-  // Discovery (step 0) + exactly one committed done-tool attempt (step 1), same
-  // reasoning as pickerAgent.maxSteps: a taller budget only grows an "I already
-  // declined" trail on providers that don't comply first time, and burned the
-  // full agentTimeoutMs before recovery got a turn. The per-provider discovery
-  // widening is opt-in precisely so it can't override this; the director does
-  // not opt in.
-  maxSteps: 2,
-  // Wall-clock ceiling. Without it a model that ignores toolChoice can drive the
-  // done-tool recovery into a multi-step stall (#555) and hang the tick; the
-  // deadline turns that into a clean throw, handled as silence below.
-  timeoutMs: segmentDeadline,
-  buildSystem: ({ persona, caps, freq, sfxCatalog }) =>
-    directorSystem(persona, caps, freq, sfxCatalog),
-  buildTools: ({ ctx, segmentState, caps }) => ({
-    // Co-hosted skills run their own cast-shaped tool loop after selection.
-    // Their data tools must not be called in this generic selection pass.
-    tools: buildSegmentTools(ctx, segmentState, caps.filter((cap) => !cap.cohosts)),
-  }),
-});
-
-// The situation handed to the agent as its single user turn: what is on air plus
+// The situation handed to the model: what is on air plus
 // queue.getDjRecap(), never the track-pick session history.
 export function buildSituation(ctx, { forced = false, contextFields, recentCuriosity }: { forced?: boolean; contextFields?: string[]; recentCuriosity?: string[] } = {}) {
   const lines = ['The current moment:'];
@@ -316,13 +224,9 @@ function buildCohostedSituation(ctx, cap, { forced = false, brief = null }: { fo
   return situation;
 }
 
-// Simple (non-agentic) director, the pool-mode counterpart of directorAgent.
-// `settings.llm.pickerAgent` off is the operator's signal that the model can't
-// be trusted with tool loops, so the segment path must not be the one place
-// still running one. Code picks the capability, calls its data tool directly,
-// inlines the result and asks for the same {air, text, sfx} decision, so the
-// model still gets to choose silence. Everything downstream is shared with
-// agenticTick.
+// The direct director picks the capability, calls its data provider in code,
+// then inlines the result into one structured-output request. The model still
+// decides whether to air it, but never decides which provider to call.
 
 // Which capability the simple path airs. Weather wins when the condition
 // actually changed (the one segment with a hard freshness signal) and is dropped
@@ -384,9 +288,9 @@ async function deadlinedSegmentObject(args: Record<string, unknown>) {
   }
 }
 
-// One tick of the simple path: choose, fetch, and — only when the source is
+// One tick of the direct path: choose, fetch, and — only when the source is
 // usable or the skill permits free generation — one djObject call. Returns the
-// same shape agenticTick consumes from the agent, seg null for silence. Unusable
+// shape segmentTick consumes, seg null for silence. Unusable
 // data is silence with no model call at all.
 async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
   const cap = chooseCapability(caps, ctx);
@@ -435,7 +339,7 @@ async function runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }) {
 
 // Called by the scheduler's 5-minute cron. Picks at most one segment to air,
 // or stays silent. Never throws — failures are logged and the tick ends.
-export async function agenticTick(ctx) {
+export async function segmentTick(ctx) {
   if (tickBusy) return;
 
   const now = new Date();
@@ -447,7 +351,7 @@ export async function agenticTick(ctx) {
   const freq = settings.effectiveFrequency(persona);
 
   // Floor on the gap between any two spoken breaks. lastAnySegment sees only
-  // what THIS agent aired, but the scheduler's idents and hourly checks share
+  // what this director aired, but the scheduler's idents and hourly checks share
   // the voice and land on this tick, so without queue's view the DJ could talk
   // twice in a minute (#310). Narrowed to the wall-clock talkers on purpose:
   // track-tied links/intros fire every few tracks and would mute the director
@@ -469,49 +373,11 @@ export async function agenticTick(ctx) {
 
   tickBusy = true;
   try {
-    // Empty catalogue when SFX are disabled — the agent is never offered effects.
+    // Empty catalogue when SFX are disabled — no segment is offered effects.
     const sfxCatalog = settings.get().sfx?.enabled === false ? [] : await sfx.catalog();
 
-    let seg: { kind: string; text: string; sfx: string | null } | null = null;
-    let exchange: { kind: string; lines: Array<{ persona: any; text: string }> } | null = null;
-    let silentReason: string | undefined;
-    let skippedBeforeLlm: string | undefined;
-    if (!settings.get().llm?.pickerAgent) {
-      ({ seg, exchange, reason: silentReason, skippedBeforeLlm } = await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog }));
-    } else {
-      // Brief the agent with aired curiosity so a pool-exhausted fallback
-      // doesn't repeat itself (#577).
-      const recentCuriosity = caps.some(c => c.kind === 'curiosity') ? recentAiredCuriosity() : undefined;
-      const { object } = await directorAgent.run({
-        messages: [{ role: 'user', content: buildSituation(ctx, { contextFields: unionContextFields(caps), recentCuriosity }) }],
-        persona: speaker, caps, freq, sfxCatalog,
-        ctx, segmentState,
-      });
-      // `air: false` is the explicit silence signal; a missing segment despite
-      // air=true degrades to silence rather than erroring.
-      seg = object?.air ? object?.segment : null;
-      silentReason = object?.reason;
-      const selectedKind = seg?.kind;
-      const selected = selectedKind ? caps.find(c => c.kind === selectedKind) : null;
-      if (selected?.cohosts) {
-        const { host, guests } = settings.getOnAirRoster();
-        if (!host || !guests.length) {
-          seg = null;
-          silentReason = 'requires a co-hosted show';
-        } else {
-          const result = await runCohostedCapability({
-            capability: selected, host, guests, context: ctx,
-            situation: buildCohostedSituation(ctx, selected),
-            segmentState, forced: false,
-          });
-          exchange = result.aired ? { kind: selected.kind, lines: result.lines || [] } : null;
-          if (result.aired) lastUnavailable.delete(selected.kind);
-          else lastUnavailable.set(selected.kind, Date.now());
-          seg = null;
-          silentReason = result.reason || undefined;
-        }
-      }
-    }
+    const { seg, exchange, reason: silentReason, skippedBeforeLlm } =
+      await runSimpleDirector(ctx, { caps, speaker, freq, sfxCatalog });
 
     if (exchange) {
       const aired = await queue.announceExchange(exchange.lines, exchange.kind);
@@ -527,22 +393,21 @@ export async function agenticTick(ctx) {
       if (skippedBeforeLlm) {
         queue.log('scheduler', `[segment] ${skippedBeforeLlm} → unavailable → skipped before LLM — ${silentReason}`);
       } else {
-        queue.log('scheduler', `Segment agent stayed silent — ${silentReason || 'nothing to add'}`);
+        queue.log('scheduler', `Segment director stayed silent — ${silentReason || 'nothing to add'}`);
       }
       return;
     }
 
-    // The agent must pick a kind it was actually offered.
     const cap = caps.find(c => c.kind === seg.kind);
     if (!cap) {
-      queue.log('error', `Segment agent returned unoffered kind "${seg.kind}" — dropping`);
+      queue.log('error', `Segment director returned unoffered kind "${seg.kind}" — dropping`);
       return;
     }
 
     let selectedSfx: string | null = null;
     if (seg.sfx) {
       if (sfxCatalog.some(s => s.name === seg.sfx)) selectedSfx = seg.sfx;
-      else queue.log('error', `Segment agent picked unknown sfx "${seg.sfx}" — dropping`);
+      else queue.log('error', `Segment director picked unknown sfx "${seg.sfx}" — dropping`);
     }
 
     // The speaker's id rides in meta so session.windowMessages names a guest's
@@ -576,11 +441,11 @@ export async function agenticTick(ctx) {
     // the same, so report it as silence with a parse note. Real failures
     // (network, model not loaded, retries exhausted) still log as errors.
     if (isBareNullSilent(err)) {
-      queue.log('scheduler', `Segment agent stayed silent — model emitted bare null (treating as intended silence)`);
+      queue.log('scheduler', `Segment director stayed silent — model emitted bare null (treating as intended silence)`);
     } else if (isSilentFailure(err)) {
-      queue.log('scheduler', `Segment agent stayed silent — output not parseable (${err.message.slice(0, 80)})`);
+      queue.log('scheduler', `Segment director stayed silent — output not parseable (${err.message.slice(0, 80)})`);
     } else {
-      queue.log('error', `Segment agent failed: ${err.message}`);
+      queue.log('error', `Segment director failed: ${err.message}`);
     }
   } finally {
     tickBusy = false;
@@ -588,16 +453,13 @@ export async function agenticTick(ctx) {
 }
 
 // "No parseable object" errors, which usually mean the model wanted to stay
-// silent but botched the JSON. Used by agenticTick only: the operator override
-// demands real output, so a parse failure there IS a failure. `did not call the
-// done tool` (#555) is included for the same reason — on the autonomous tick a
-// botched done call is the model staying silent in prose.
+// silent but botched the JSON. Used by segmentTick only: the operator override
+// demands real output, so a parse failure there IS a failure.
 function isSilentFailure(err) {
   const msg = String(err?.message || err || '').toLowerCase();
   return msg.includes('no object generated')
       || msg.includes('no output generated')
-      || msg.includes('did not match schema')
-      || msg.includes('did not call the done tool');
+      || msg.includes('did not match schema');
 }
 
 // The "model emitted bare `null`" pattern: silence encoded at the wrong nesting
@@ -627,33 +489,6 @@ The operator asked you to air ONE ${cap.kind} segment now — ${mandate} You are
 
 ${cap.desc}${sfxBlock(sfxCatalog)}${settings.agentLanguageReminder(persona, 'the "text" line')}`;
 }
-
-// The operator-override variant of directorAgent. Two module-level agents rather
-// than one reading mayAbstain per run: defineAgent resolves `schema` with no run
-// arguments, so the abstention field can only vary by defining the pair.
-//
-// `onData` is how runCapability sees what the skill's tool returned — the agent
-// calls the tool itself, so without a recorder the "was there anything to write
-// from" check would exist only in the prompt. Optional: it must not be
-// load-bearing for a run that doesn't pass one.
-function defineForcedAgent(mayAbstain: boolean) {
-  return defineAgent({
-    kind: 'djAgentSegment',
-    schema: () => forcedSchema({ mayAbstain }),
-    // Same wall-clock ceiling as the autonomous director (#555).
-    timeoutMs: segmentDeadline,
-    buildSystem: ({ persona, cap, sfxCatalog }) =>
-      forcedSystem(persona, cap, sfxCatalog, { mayAbstain }),
-    buildTools: ({ ctx, segmentState, cap, onData }) => ({
-      tools: buildSegmentTools(ctx, segmentState, [cap], { onResult: onData }),
-    }),
-  });
-}
-
-export const forcedDirectorAgent = defineForcedAgent(false);
-// Grounded variant: same run, plus the option to stand down when the skill's own
-// data tool came back with nothing usable (#1412).
-export const groundedDirectorAgent = defineForcedAgent(true);
 
 // The outcome of a forced run. A held segment is `queued: true`, `aired: false`
 // until its boundary; a grounded stand-down is false for both. This lets an
@@ -727,14 +562,14 @@ export async function runCapability(
   }
 
   const speaker = persona || settings.getEffectivePersona(new Date());
-  // Empty catalogue when SFX are disabled — the agent is never offered effects.
+  // Empty catalogue when SFX are disabled — no segment is offered effects.
   const sfxCatalog = settings.get().sfx?.enabled === false ? [] : await sfx.catalog();
   const recentCuriosity = cap.kind === 'curiosity' ? recentAiredCuriosity() : undefined;
   const situation = buildSituation(ctx, { forced: true, contextFields: effectiveContextFields(cap), recentCuriosity })
     + (brief ? `\n\n${brief}` : '');
 
-  // Whether this skill may stand down at all: decided once, applied identically
-  // to both paths below.
+  // Whether this skill may stand down at all: decided before its data provider
+  // is called, then applied to the fetched result.
   const mayAbstain = requiresGrounding(cap);
   // Logged here rather than at each caller, so the booth log carries one
   // wording whichever forced caller fired the skill.
@@ -743,43 +578,21 @@ export async function runCapability(
     return { aired: false, queued: false, deferred: false, text: null, reason };
   };
 
-  let object: { reason?: string; air?: boolean; text?: string; sfx?: string | null } | undefined;
-  if (!settings.get().llm?.pickerAgent) {
-    // Pool mode: fetch the data directly, one structured call. A skill that
-    // writes from the moment survives a failed fetch (it writes from the brief
-    // and the moment alone); a GROUNDED skill does not, since its whole segment
-    // was to be about what the fetch didn't return, so there is no model call.
-    const data = await fetchSegmentData(cap, ctx, segmentState);
-    const blocked = standDownReason(cap, data);
-    if (blocked) return standDown(blocked);
-    object = await deadlinedSegmentObject({
+  // Fetch in code, then make one structured generation call. A skill that
+  // writes from the moment survives a failed fetch (it writes from the brief
+  // and moment alone); a grounded skill does not, since its whole segment was
+  // to be about what the fetch did not return.
+  const data = await fetchSegmentData(cap, ctx, segmentState);
+  const blocked = standDownReason(cap, data);
+  if (blocked) return standDown(blocked);
+  const object: { reason?: string; air?: boolean; text?: string; sfx?: string | null } | undefined =
+    await deadlinedSegmentObject({
       system: forcedSystem(speaker, cap, sfxCatalog, { mayAbstain }),
       prompt: situation + (data && !data.error ? dataBlock(data) : ''),
       schema: forcedSchema({ mayAbstain }),
       temperature: 0.9,
       kind: 'generateSegment',
     });
-  } else {
-    // Agent mode: the agent calls the tool itself, so the check runs on what
-    // the tool reported (onData). Enforced in code, not only in the prompt — a
-    // model handed nothing and speaking anyway is the whole bug.
-    //
-    // Judged across ALL of the tool's calls: the agent may search twice, and one
-    // empty result after a good one is no reason to discard the good one. A
-    // single usable result clears the run; the reason kept is the last failure.
-    let usableSeen = false;
-    let blocked: string | null = null;
-    ({ object } = await (mayAbstain ? groundedDirectorAgent : forcedDirectorAgent).run({
-      messages: [{ role: 'user', content: situation }],
-      persona: speaker, cap, sfxCatalog,
-      ctx, segmentState,
-      onData: (_kind: string, data: unknown) => {
-        const why = standDownReason(cap, data as never);
-        if (why) blocked = why; else usableSeen = true;
-      },
-    }));
-    if (!usableSeen && blocked) return standDown(blocked);
-  }
 
   // An explicit decline, reachable only when the schema offered `air` at all.
   if (mayAbstain && object?.air === false) {
@@ -798,7 +611,7 @@ export async function runCapability(
   const pick = object?.sfx;
   if (pick) {
     if (sfxCatalog.some(s => s.name === pick)) selectedSfx = pick;
-    else queue.log('error', `Segment agent picked unknown sfx "${pick}" — dropping`);
+    else queue.log('error', `Segment director picked unknown sfx "${pick}" — dropping`);
   }
 
   // A rotated speaker rides through announce so voice and session attribution
@@ -884,6 +697,9 @@ export function skillCatalog() {
       requiresKey,
       keyUrl,
       hint,
+      warning: c.legacyInputs?.length
+        ? `Legacy tool.mjs inputs (${c.legacyInputs.join(', ')}) now use the provider's default input. Review this Skill before relying on it on air.`
+        : null,
       // The "right now" fields this situation may include (#471), resolved to
       // the default profile when unset so the admin UI needn't guess.
       contextFields: effectiveContextFields(c),

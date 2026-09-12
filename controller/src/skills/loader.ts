@@ -257,10 +257,10 @@ export async function discoverSeededKinds(): Promise<Set<string>> {
   return SEEDED_KINDS;
 }
 
-// A tool.mjs `inputs` export declares agent-steerable string parameters:
-// a flat { paramName: 'description for the agent' } object. Sanitised here —
-// only identifier-shaped keys with string descriptions survive, so a malformed
-// export narrows to nothing instead of breaking the tool-call JSON schema.
+// A tool.mjs `inputs` export is legacy agent-steerable parameter metadata. The
+// deterministic runtime preserves it for visibility and compatibility, but
+// always calls providers with their default `{}` input. Sanitised here so only
+// identifier-shaped keys with string descriptions survive.
 const INPUT_KEY_RE = /^[a-zA-Z_][a-zA-Z0-9_]{0,48}$/;
 function sanitizeToolInputs(raw: any): Record<string, string> | undefined {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
@@ -404,11 +404,13 @@ async function loadSkillDir(dir: string, slug: string, { seeded }: { seeded: boo
     cap.toolName = toolNameFor(name);
     cap.toolDesc = (toolMod.description || data.toolDescription || '').trim()
       || `Fetch live data for the ${label} segment before speaking. Returns { available: false } when there is nothing fresh worth airing.`;
-    // Optional agent-steerable parameters ({ name: description }, strings
-    // only) — becomes the tool's input schema in llm/segment-tools.js and is
-    // handed to toolFn as its 5th argument. Absent → zero-arg tool, the
-    // historical shape.
+    // Kept so the catalogue can flag an imported legacy skill. The direct
+    // runtime always calls toolFn with `{}` as its fifth argument.
     cap.toolInputs = toolMod.inputs;
+    if (toolMod.inputs) {
+      cap.legacyInputs = Object.keys(toolMod.inputs);
+      queue.log('warn', `[skills] "${slug}" declares legacy tool.mjs inputs (${cap.legacyInputs.join(', ')}) — the deterministic Segment runtime calls it with {}. Move defaults into the tool or configure them in SKILL.md.`);
+    }
     // Operator knobs travel with the tool, not the kind — a duplicated skill
     // copies tool.mjs and keeps its settings form (#1300).
     cap.configFields = toolMod.configFields || [];

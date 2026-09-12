@@ -16,6 +16,7 @@ export interface Skill {
   ready?: boolean;
   requiresKey?: string;
   keyUrl?: string;
+  warning?: string | null;
   cooldownMs?: number;
   custom?: boolean;
   tags?: string[];

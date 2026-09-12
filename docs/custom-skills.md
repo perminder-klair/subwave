@@ -70,15 +70,15 @@ context: time, festival   # OPTIONAL: which "right now" fields this segment may 
 requiresKey: SOME_API_KEY # OPTIONAL: env var the skill needs; if unset, the skill stays inert
 feed: https://…/rss.xml   # OPTIONAL: an RSS/Atom feed this skill reads before it speaks (see below)
 feedMaxItems: 10          # OPTIONAL: how much of that feed to read per fire (1-50, default 10)
-toolDescription: ...      # OPTIONAL: how the DJ-facing tool is described
+toolDescription: ...      # Legacy compatibility metadata; not used by the direct runtime
 ---
 The markdown body is the DJ's brief for this segment. Keep it tight: what to
-say, in what tone, and — importantly — when to stay silent. The agent reads
+say, in what tone, and — importantly — when to stay silent. The DJ model reads
 this verbatim. One short sentence on air is the norm.
 ```
 
 Only a **non-empty body** is required; every frontmatter key has a default. The
-body becomes the per-segment briefing the DJ agent follows (the same role the
+body becomes the per-segment briefing the DJ model follows (the same role the
 inline `desc:` strings play for built-in skills) and the description shown in the
 admin UI.
 
@@ -171,13 +171,12 @@ error, exactly like a data-backed skill that found nothing to say. Ordinary
 skills, including ones with no `cohosts` field, keep the existing one-speaker
 path.
 
-If the skill has a `tool.mjs`, the co-hosted discussion gathers its data the same
-way every other segment does: the skill's own tool loop when `llm.pickerAgent`
-is on, and a code-driven fetch plus one structured call when it is off (pool
-mode, for models that aren't trusted with tool loops). Data-backed skills must
-obtain usable source data before anyone speaks; `{ available: false }` or a tool
-error stands the whole exchange down instead of letting several personas amplify
-an invented fact.
+If the skill has a `tool.mjs`, Subwave runs it in code before the discussion is
+written, then supplies the result to one structured writing call. Data-backed
+skills must obtain usable source data before anyone speaks; `{ available: false
+}` or a tool error stands the whole exchange down instead of letting several
+personas amplify an invented fact. `llm.pickerAgent` continues to control music
+picking, but does not change how Segments gather data.
 
 Set it in the admin editor with **Co-hosted discussion**, or in frontmatter:
 
@@ -254,7 +253,7 @@ editor flags it the next time you open that skill.
 Set it from the admin UI too: **/admin/skills → Edit → Cron timer**.
 
 **A cron speaks whenever it has something to speak from.** This is the thing to
-get right before adding one. The autonomous segment tick asks the agent whether
+get right before adding one. The autonomous segment tick asks the model whether
 to air at all, and silence is a first-class answer it takes whenever the data is
 dull or unchanged. A cron takes the same path as **Run now**, which is *forced*:
 the segment is required to produce a line, and the model is not offered a "stay
@@ -271,11 +270,11 @@ is exactly what the web-search skill did when a search came back empty
 `{ available: false }` merely means "no external item this time" — that is what
 the built-in `curiosity` does.
 
-On the autonomous pool-mode tick, grounded `{ available: false }` results are
-skipped before the LLM call and logged with the selected skill. The scheduler
-then backs that skill off in memory for the shorter of its configured cooldown
-or 15 minutes, so an empty source does not consume retrieval work again on the
-next five-minute tick. Successful-air cooldowns remain separate.
+On the autonomous tick, grounded `{ available: false }` results are skipped
+before the LLM call and logged with the selected skill. The scheduler then backs
+that skill off in memory for the shorter of its configured cooldown or 15
+minutes, so an empty source does not consume retrieval work again on the next
+five-minute tick. Successful-air cooldowns remain separate.
 
 So a cron suits a skill that is worth hearing at a fixed moment every time — a
 morning bulletin, a sign-off, a running joke tied to a particular hour. It still
@@ -339,10 +338,10 @@ logged and skipped — it never crashes the controller.
 
 ## tool.mjs (optional)
 
-If present, the default export is wrapped as an [AI SDK](https://sdk.vercel.ai)
-tool the segment director can call **before** writing the line. This is the
-**exact same mechanism the built-ins use** — the seven shipped skills are just
-directories with a `SKILL.md` and a `tool.mjs`, loaded the same way as yours.
+If present, the default export is run by Subwave **before** the DJ model writes
+the line. This is the **exact same mechanism the built-ins use** — the shipped
+skills are just directories with a `SKILL.md` and a `tool.mjs`, loaded the same
+way as yours.
 
 ```js
 export default async function (ctx, state, services, config, input) {
@@ -350,14 +349,14 @@ export default async function (ctx, state, services, config, input) {
   // state    — cross-tick dedup memory (persists between firings)
   // services — the curated station facade (see below)
   // config   — this skill's own SKILL.md frontmatter (e.g. a custom `feed:`)
-  // input    — the agent's values for your declared `inputs` (see below); {}
-  //            when you declare none
+  // input    — {} (the provider's own default input)
   // Return any JSON-serialisable object. The `{ available: false }` convention
-  // tells the agent there's nothing worth airing right now.
+  // tells Subwave there is nothing worth airing right now.
   return { available: true, foo: 'bar' };
 }
 
-// OPTIONAL: a richer tool description shown to the agent (else a generic one).
+// Legacy compatibility metadata. It is retained when importing an existing
+// skill, but the direct runtime does not show it to the model.
 export const description = 'Fetch X for the … segment.';
 
 // OPTIONAL: gate the whole skill on a runtime condition — when this returns
@@ -373,11 +372,10 @@ export const ready = (services) => services.searchReady();
 // which wins over this.
 export const requiresData = false;
 
-// OPTIONAL: agent-steerable parameters — a flat { name: description } object of
-// string params. The agent may pass a value or null for each; handle null by
-// falling back to your own default (see the web-search built-in's `query`).
-// Without this export the tool is zero-arg, which small models handle best —
-// only declare inputs the agent genuinely benefits from steering.
+// Legacy compatibility metadata. The direct runtime always supplies {}, so
+// providers should use their own default query or derive it from ctx. Subwave
+// flags a Skill that exports this in the booth log and the Skills admin page.
+// This will be replaced by explicit Segment/provider configuration later.
 export const inputs = { query: 'what to search for; null for the default dig' };
 
 // OPTIONAL: operator knobs — the settings this skill gets its own fields for in
