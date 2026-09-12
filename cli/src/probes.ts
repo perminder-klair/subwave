@@ -110,6 +110,52 @@ export async function probeOpenAI(args: {
   }
 }
 
+// Azure OpenAI authenticates with `api-key`, not a bearer, and has no hosted
+// endpoint — so the probe needs the operator's own resource URL. It asks for the
+// DEPLOYMENTS list rather than a models list: on Azure the two are different
+// questions, and "which deployments exist" is the one that catches the mistake
+// this probe is here for (a key that works against a resource where nothing is
+// deployed under the name the operator typed).
+//
+// A resource or policy that does not serve the legacy deployments list answers
+// non-200 with a valid key, so that case reports honestly as unverified rather
+// than as a bad key — the CLI treats it as a warning, and the admin UI's own
+// Test key button calls the deployment directly.
+export async function probeAzure(args: {
+  apiKey: string;
+  baseUrl: string;
+  deployment?: string;
+  timeoutMs?: number;
+}): Promise<ProbeResult> {
+  const { apiKey, deployment } = args;
+  const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  if (!apiKey) return { ok: false, reason: 'no api key' };
+  const root = (args.baseUrl || '')
+    .replace(/\?.*$/, '')
+    .replace(/\/+$/, '')
+    .replace(/\/openai(\/v1)?$/i, '');
+  if (!root) return { ok: false, reason: 'no resource endpoint' };
+  try {
+    const res = await fetch(`${root}/openai/deployments?api-version=2023-03-15-preview`, {
+      headers: { 'api-key': apiKey },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.status === 401 || res.status === 403) return { ok: false, reason: `${res.status} — key rejected` };
+    if (!res.ok) return { ok: true, detail: `key accepted, deployment list unavailable (HTTP ${res.status})` };
+    const body = await res.json() as { data?: Array<{ id?: unknown }> };
+    const names = (body.data ?? [])
+      .map((d) => (typeof d?.id === 'string' ? d.id : ''))
+      .filter(Boolean);
+    if (deployment && names.length && !names.includes(deployment)) {
+      return { ok: false, reason: `no deployment named "${deployment}" on this resource` };
+    }
+    const n = names.length;
+    return { ok: true, detail: `${n} deployment${n === 1 ? '' : 's'} visible` };
+  } catch (e) {
+    return { ok: false, reason: fetchErrorReason(e) };
+  }
+}
+
 // Anthropic wants `x-api-key` plus an `anthropic-version` header, not a bearer.
 export async function probeAnthropic(args: {
   apiKey: string;

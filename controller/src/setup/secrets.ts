@@ -23,6 +23,9 @@ const PATH = `${STATE_DIR}/secrets.env`;
 export const SECRET_ENV_KEYS = [
   'ANTHROPIC_API_KEY',
   'OPENAI_API_KEY',
+  // Azure OpenAI. The resource endpoint and deployment name are settings
+  // (llm.providerBaseUrls.azure / llm.model); only the key is a secret.
+  'AZURE_API_KEY',
   'GOOGLE_GENERATIVE_AI_API_KEY',
   'OPENROUTER_API_KEY',
   'REQUESTY_API_KEY',

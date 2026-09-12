@@ -902,6 +902,13 @@ export async function load() {
       headers: normalizeLlmHeaders(stored.llm?.headers),
       reasoning:
         typeof stored.llm?.reasoning === 'boolean' ? stored.llm.reasoning : DEFAULTS.llm.reasoning,
+      // Azure's declared reasoning dialect. This block does NOT spread
+      // DEFAULTS, so omitting the line drops the operator's tick on the next
+      // restart. A pre-field settings.json reads false — the old behaviour.
+      reasoningModel:
+        typeof stored.llm?.reasoningModel === 'boolean'
+          ? stored.llm.reasoningModel
+          : DEFAULTS.llm.reasoningModel,
       // Only 'auto' downgrades the forced tool_choice; anything else (incl. a
       // pre-field settings.json) lands on the 'required' default. See issue #570.
       toolChoice: stored.llm?.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.toolChoice,
@@ -979,6 +986,10 @@ export async function load() {
           headers: normalizeLlmHeaders(fb.headers),
           reasoning:
             typeof fb.reasoning === 'boolean' ? fb.reasoning : DEFAULTS.llm.fallback.reasoning,
+          reasoningModel:
+            typeof fb.reasoningModel === 'boolean'
+              ? fb.reasoningModel
+              : DEFAULTS.llm.fallback.reasoningModel,
           toolChoice: fb.toolChoice === 'auto' ? 'auto' : DEFAULTS.llm.fallback.toolChoice,
           numCtx: clampNumCtx(fb.numCtx, DEFAULTS.llm.fallback.numCtx),
           repeatPenalty: clampRepeatPenalty(fb.repeatPenalty, DEFAULTS.llm.fallback.repeatPenalty),

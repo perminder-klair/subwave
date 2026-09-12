@@ -389,6 +389,22 @@ export const DEFAULTS = {
     // short scripts and structured picks that don't benefit from it, and an
     // uncapped <think> block on a small model balloons every call.
     reasoning: false,
+    // Is the model behind this leg a REASONING model (o-series, gpt-5.x)?
+    //
+    // Distinct from `reasoning` above, which asks whether the operator WANTS a
+    // chain-of-thought. This asks what the endpoint accepts, and the two are
+    // independent: a reasoning deployment with the toggle off still rejects
+    // temperature, top_p and max_tokens.
+    //
+    // Only `azure` reads it, and only because Azure's `model` is a DEPLOYMENT
+    // name — an alias the operator chose, which is not evidence about the model
+    // behind it. Every other provider's `model` IS a model id, so its
+    // capabilities descriptor can answer this itself.
+    //
+    // false = the pre-existing behaviour exactly: the dialect is learned from
+    // Azure's own 400s instead of declared, so an upgraded station is
+    // byte-identical. Ticking it only moves the same answer earlier.
+    reasoningModel: false,
     // How the structured-output paths force a tool call. 'required' is the
     // reliable path for local models that ignore JSON mode. Switch to 'auto' ONLY
     // if your server crashes on tool_choice:"required" — recent vLLM implements it
@@ -496,6 +512,9 @@ export const DEFAULTS = {
       // with its own routing header.
       headers: {} as Record<string, string>,
       reasoning: false,
+      // Per-leg like providerBaseUrls: the backup may be a different Azure
+      // resource, or a different deployment on the same one.
+      reasoningModel: false,
       toolChoice: 'required',
       numCtx: 16384,
       repeatPenalty: 1.15,

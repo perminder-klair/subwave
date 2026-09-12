@@ -53,6 +53,13 @@ export const llmProbeSchema = z
   .refine(
     (c) => c.provider !== 'openai-compatible' || Boolean(c.baseUrl),
     'baseUrl is required for openai-compatible',
+  )
+  // Azure OpenAI has no hosted endpoint: without the operator's resource URL
+  // there is nothing to call, so the wizard holds its Test button shut on the
+  // same rule the route would otherwise discover by failing.
+  .refine(
+    (c) => c.provider !== 'azure' || Boolean(c.baseUrl),
+    'baseUrl (the Azure resource endpoint) is required for azure',
   );
 export type LlmProbeInput = z.output<typeof llmProbeSchema>;
 

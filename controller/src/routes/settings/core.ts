@@ -186,6 +186,7 @@ router.get('/settings', requireAdmin, async (req, res) => {
       // its "key missing" alerts off this.
       env: {
         OPENAI_API_KEY: !!process.env.OPENAI_API_KEY,
+        AZURE_API_KEY: !!process.env.AZURE_API_KEY,
         ELEVENLABS_API_KEY: !!process.env.ELEVENLABS_API_KEY,
         FISH_API_KEY: !!process.env.FISH_API_KEY,
         ANTHROPIC_API_KEY: !!process.env.ANTHROPIC_API_KEY,

@@ -17,8 +17,9 @@ export default function ModelsAndTokens() {
           Every word the DJ speaks and every track it picks comes from one language
           model, chosen under <strong>Admin &rarr; LLM</strong>. The default is Ollama on
           your own hardware (no API key, no per-token bill), but you can point the
-          station at a hosted provider (Anthropic, OpenAI, Google, OpenRouter and others)
-          instead. Switching reroutes every call immediately, with no redeploy.
+          station at a hosted provider (Anthropic, OpenAI, Azure OpenAI, Google, OpenRouter
+          and others) instead. Switching reroutes every call immediately, with no
+          redeploy.
         </p>
         <p>
           &ldquo;On your own hardware&rdquo; isn&rsquo;t only Ollama — there are three local
@@ -54,6 +55,64 @@ export default function ModelsAndTokens() {
           structured output its own way: a model that fails through one route can be
           flawless through another. When you evaluate a model, evaluate it through the
           provider you&rsquo;ll actually run.
+        </p>
+      </section>
+
+      <section className="bs-section">
+        <p className="bs-eyebrow">YOUR OWN CLOUD</p>
+        <h2>Azure OpenAI is three things away from OpenAI.</h2>
+        <p>
+          <strong>Azure OpenAI</strong> runs the same GPT models on a resource you own, on
+          your subscription and inside your compliance boundary. Everything the station
+          does works there &mdash; the DJ, the picker, and the library tagger&rsquo;s
+          embeddings. Three things differ from picking plain OpenAI, and all three are
+          places operators get stuck.
+        </p>
+        <ul className="bs-list">
+          <li>
+            <strong>The Model field is a deployment name, not a model id.</strong> On Azure
+            you deploy a model and give that deployment a name &mdash; it can be{' '}
+            <code>gpt-4o-mini</code>, or it can be <code>radio-dj</code>. That name is what
+            goes in Model. Nothing can guess it, so unlike every other provider there is no
+            default: leaving it blank is an error rather than a fallback.
+          </li>
+          <li>
+            <strong>The resource endpoint is required.</strong> There is no hosted address
+            to fall back to. Paste the <em>bare root</em> from the portal (your resource
+            &rarr; Keys and Endpoint), e.g.{' '}
+            <code>https://my-resource.openai.azure.com</code>. An Azure AI Foundry{' '}
+            <em>project</em> endpoint works as-is too. Only if your resource is pinned to a
+            dated API version should you paste the endpoint with its{' '}
+            <code>?api-version=&hellip;</code> query attached &mdash; that switches to the
+            older per-deployment address, which cannot reach the newest models, so avoid it
+            unless you have to.
+          </li>
+          <li>
+            <strong>Your embedding deployment is separate from your chat deployment.</strong>{' '}
+            The library tagger needs its own: deploy{' '}
+            <code>text-embedding-3-small</code> on the same resource and enter{' '}
+            <em>that</em> deployment&rsquo;s name under Library tagger &rarr; Embedding.
+            Leave the endpoint there blank and it inherits the one from the LLM tab, so an
+            Azure DJ needs nothing extra.
+          </li>
+        </ul>
+        <p>
+          <strong>If your deployment runs o-series or GPT-5.x, turn on &ldquo;Reasoning
+          deployment&rdquo;.</strong> Those models reject <code>temperature</code>,{' '}
+          <code>top_p</code> and <code>max_tokens</code>, which GPT-4-class deployments
+          accept &mdash; and because the deployment name is an alias, nothing in the request
+          says which kind you have. The switch is how you tell the station. Leave it off and
+          the station still works it out from Azure&rsquo;s own rejections; turning it on
+          just means the first request is already right. Leave it off for GPT-4-class
+          deployments, and for <code>gpt-5-chat</code>, which despite the name is not a
+          reasoning model &mdash; though <code>gpt-5.1-chat</code> is.
+        </p>
+        <p>
+          Two things Azure does not offer through this path: the{' '}
+          <strong>codex</strong> variants, plus <code>gpt-5-pro</code> and{' '}
+          <code>o3-pro</code>, are served only by Azure&rsquo;s Responses API, and the
+          station speaks Chat Completions &mdash; the one surface every other deployment
+          serves. Pick a non-codex deployment.
         </p>
       </section>
 

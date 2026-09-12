@@ -71,7 +71,7 @@ here stays complete and free either way.
 - **AI DJ that picks and talks.** Curates tracks, writes intros, and reads station idents, the time, and the weather.
 - **Plain-language requests.** "Play something more upbeat" or "anything by Radiohead" works.
 - **Your own music library.** Pulls from Navidrome over the Subsonic API. No external catalogue.
-- **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Google, DeepSeek, OpenRouter, Requesty, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy. A daily token budget can cap hosted-model spend; past the cap the music keeps playing without the chatter.
+- **Swappable LLM provider.** Ollama, Anthropic, OpenAI, Azure OpenAI, Google, DeepSeek, OpenRouter, Requesty, Vercel AI Gateway, or any OpenAI-compatible server. Change it from the admin UI with no redeploy. A daily token budget can cap hosted-model spend; past the cap the music keeps playing without the chatter.
 - **Six TTS engines.** Piper and Kokoro (multilingual) in-process for fast local speech, plus an optional `tts-heavy` sidecar (`docker compose --profile tts-heavy up -d`) that adds Chatterbox (zero-shot voice cloning) and PocketTTS (6× real-time, EN/FR/DE/IT/ES/PT). Cloud (OpenAI / ElevenLabs) and a Remote engine (any self-hosted HTTP endpoint, audio over the wire) round it out. Pick a different engine per kind of speech.
 - **Multiple DJ personas.** Up to 24 in the roster, each with its own voice and writing style. A show can seat up to three guest co-hosts who trade scripted banter with the host, and ready-made personas install from the [community catalog](https://www.getsubwave.com/personas).
 - **Multi-format broadcast.** MP3 always served (configurable bitrate) for Sonos, hardware radios, and cars; optional Opus, AAC, and lossless FLAC mounts, each toggleable from the admin UI. The web player picks automatically.
@@ -109,8 +109,8 @@ is the second kind:
   by Navidrome over the Subsonic API. The LLM picks what's next and talks
   between tracks. It doesn't generate music and it doesn't replace your taste.
 - **Self-hosted and swappable.** Runs on one Linux box behind Cloudflare. The
-  LLM provider is swappable at runtime (Ollama, Anthropic, OpenAI, Google,
-  OpenRouter, Vercel AI Gateway) with no redeploy.
+  LLM provider is swappable at runtime (Ollama, Anthropic, OpenAI, Azure
+  OpenAI, Google, OpenRouter, Vercel AI Gateway) with no redeploy.
 
 ## Quick start (CLI — recommended)
 

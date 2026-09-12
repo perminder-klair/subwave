@@ -278,6 +278,7 @@ type ProbeCode =
   | 'unreachable'         // connection refused / DNS / timeout
   | 'not_embedding_model' // server reached, but it's a chat model / no pooling (#319)
   | 'no_embeddings'       // provider is chat-only — no embeddings endpoint at all (#493)
+  | 'no_model'            // azure: no DEPLOYMENT name set, and none can be guessed
   | 'bad_url'             // baseUrl missing/malformed — fetch can't parse the URL
   | 'unknown';            // anything else — message has the raw error
 
@@ -300,6 +301,13 @@ function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
   // codes: it's a config error, not a reachability one.
   if (txt.includes('has no text-embedding support')) {
     return { code: 'no_embeddings', raw };
+  }
+  // Azure's model id is a DEPLOYMENT name, so buildEmbeddingModel refuses a
+  // blank one rather than guessing. Config error, not a reachability one — and
+  // it must be matched BEFORE 'not found', whose substring test would otherwise
+  // claim a deployment was looked for and missing when none was ever named.
+  if (txt.includes('no model is set')) {
+    return { code: 'no_model', raw };
   }
   if (status === 404 || txt.includes('not found') || txt.includes('try pulling')) {
     return { code: 'not_found', raw };
@@ -331,7 +339,8 @@ function classifyEmbeddingError(err: any): { code: ProbeCode; raw: string } {
   if (
     txt.includes('failed to parse url') ||
     txt.includes('invalid url') ||
-    txt.includes('no embedding server url is set')
+    txt.includes('no embedding server url is set') ||
+    txt.includes('no azure endpoint is set')
   ) {
     return { code: 'bad_url', raw };
   }
@@ -353,9 +362,31 @@ function actionableMessage(
           `  Or pick another model in /admin/settings → Embedding (e.g. nomic-embed-text).`
         );
       }
+      if (provider === 'azure') {
+        // Azure answers an unknown deployment with 404 DeploymentNotFound, so
+        // this code means "no such DEPLOYMENT on your resource", never "no such
+        // model" — and the fix is in the Azure portal, not in a model dropdown.
+        return (
+          `No embedding deployment named "${model}" exists on your Azure resource.\n` +
+          `  The name is the DEPLOYMENT name you chose in Azure, not the model id.\n` +
+          `  Check Azure AI Foundry → Deployments, and note that your embedding\n` +
+          `  deployment is separate from your chat deployment — deploy\n` +
+          `  text-embedding-3-small if you have not yet.\n` +
+          `  Then set it in /admin/settings → Library tagger → Embedding.`
+        );
+      }
       return (
         `Embedding model "${model}" was not found on provider "${provider}".\n` +
         `  Pick a different model in /admin/settings → Embedding.`
+      );
+    case 'no_model':
+      // Only azure reaches here: every other provider has a real default model.
+      return (
+        `Provider "azure" needs an embedding DEPLOYMENT name — there is no default\n` +
+        `  to fall back to, because the id is whatever you named the deployment.\n` +
+        `  Deploy an embedding model on your resource (e.g. text-embedding-3-small,\n` +
+        `  separate from your chat deployment) and enter that name in\n` +
+        `  /admin/settings → Library tagger → Embedding.`
       );
     case 'unauthorized':
       if (provider === 'ollama') {
@@ -388,7 +419,7 @@ function actionableMessage(
         `  library tagger can't use it. (The DJ still works on "${provider}".)\n` +
         `  Pick an embedding-capable provider in /admin/settings → Embedding:\n` +
         `    • Ollama   — local + free (ollama pull nomic-embed-text; auto-pulled)\n` +
-        `    • OpenAI / Google / OpenRouter — cloud (needs the matching API key)\n` +
+        `    • OpenAI / Azure / Google / OpenRouter — cloud (needs the matching key)\n` +
         `    • locca / openai-compatible — your own embedding server`
       );
     case 'not_embedding_model':
@@ -429,6 +460,17 @@ function actionableMessage(
           `  then in /admin/settings → Embedding set:\n` +
           `        baseUrl = http://<host>:8090/v1   (full URL, with http:// and /v1)\n` +
           `        model   = nomic-embed-text\n` +
+          `  (${raw})`
+        );
+      }
+      if (provider === 'azure') {
+        return (
+          `No Azure resource endpoint is set for embeddings.\n` +
+          `  Paste it from the Azure portal (your resource → Keys and Endpoint) into\n` +
+          `  /admin/settings → Library tagger → Embedding, e.g.\n` +
+          `        https://my-resource.openai.azure.com\n` +
+          `  If your resource is pinned to a dated api-version, paste the endpoint\n` +
+          `  WITH its ?api-version=... query and it will be used as-is.\n` +
           `  (${raw})`
         );
       }
