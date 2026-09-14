@@ -489,6 +489,8 @@ export async function load() {
         typeof stored.stream?.bitrate === 'number' && MP3_BITRATE_SET.has(stored.stream.bitrate)
           ? stored.stream.bitrate
           : DEFAULTS.stream.bitrate,
+      // Legacy wire/storage key: it now controls only Opus. Preserve every
+      // stored boolean; FLAC's native metadata policy lives in radio.liq.
       oggIcyMetadata:
         typeof stored.stream?.oggIcyMetadata === 'boolean'
           ? stored.stream.oggIcyMetadata
