@@ -74,37 +74,15 @@ function lastErrorText(): string | null {
 // Live handle for stopTagger() — cleared on the exit handler.
 let activeChild: ChildProcess | null = null;
 
-// Single-flight wrapper around the ID-rotation state migration. Two callers can
-// fire close together — the child's [rotation] sentinel mid-run and the exit
-// handler's belt-and-braces retry — and they must not interleave: each store's
-// remap is a read-modify-write over an in-memory cache plus a file flush, so
-// two overlapping passes can land the file in the earlier of the two states.
-// Chaining also gives the exit call its natural meaning: "if the sentinel apply
-// is still running, wait for it, then check whether anything is left."
-//
-// applyPendingRotation is a stat call when there is no manifest, which is every
-// normal run, and deletes the manifest when there is — so a serialised repeat
-// is a no-op rather than a second migration.
-// Resolves to whether the migration is settled (nothing pending, or applied
-// cleanly). Never rejects — the manifest survives a failure, so both the exit
-// handler and the next boot get another go, and a rejected chain here would
-// strand every later call behind it.
-let rotationApply: Promise<boolean> = Promise.resolve(true);
-
-function applyRotationNow(): Promise<boolean> {
-  const next = rotationApply.then(async () => {
-    try {
-      // `complete: false` = the track half landed but the playlist half is
-      // deferred (Navidrome unreachable). The manifest is still on disk, so
-      // this is "not settled" and the playlist sync must not run.
-      return (await applyPendingRotation()).complete;
-    } catch (err: any) {
-      queue.log('error', `id-rotation state migration failed (will retry): ${err?.message || err}`);
-      return false;
-    }
-  });
-  rotationApply = next;
-  return next;
+// applyPendingRotation serializes boot, sentinel and exit attempts itself.
+// Failed/deferred state writes must hold the post-tag playlist sync.
+async function applyRotationNow(): Promise<boolean> {
+  try {
+    return (await applyPendingRotation()).complete;
+  } catch (err: any) {
+    queue.log('error', `id-rotation state migration failed (will retry): ${err?.message || err}`);
+    return false;
+  }
 }
 
 // Spawn the tagger as a detached-from-our-event-loop child process. Caller is
@@ -311,19 +289,8 @@ function spawnChild(mode: TaggerMode, args: string[], detail: string) {
     // The run just walked the catalogue, and nothing else recounts unattended
     // (#1570), so this is the one moment the total can refresh unasked.
     coverage.refresh().catch(() => {});
-    // Rotation apply runs on EVERY outcome, not just 'ok'. The [rotation]
-    // sentinel above normally already did it mid-run, but a child that died
-    // between the manifest write and the flush — or one whose sentinel line was
-    // malformed — still leaves a manifest, and the state files it describes are
-    // what the LIVE controller enforces. Gating this on a clean exit meant a
-    // failed or Stopped run left the blocklist pointing at dead ids until the
-    // next controller restart, and blocklist TRACK entries never name-match, so
-    // a blocked track aired.
-    //
-    // The playlist sync stays gated on 'ok' — and strictly AFTER the rotation
-    // apply, because until the recipe store is rewritten every syncRecipe()
-    // reads its playlist id as vanished and DELETES the recipe. On an apply
-    // failure the manifest stays for the next attempt and the sync is skipped.
+    // Apply even after Stop/failure: adoption may already have committed.
+    // Recipes must be migrated before sync can classify a playlist as missing.
     applyRotationNow()
       .then((settled) => {
         if (!settled) {

@@ -54,20 +54,9 @@ export function reportEvent(e: Omit<TaggerEvent, 'at'>): void {
   console.log(EVENT_PREFIX + JSON.stringify({ ...e, at: new Date().toISOString() }));
 }
 
-// Third sentinel channel: "I just adopted rotated Navidrome ids, the manifest
-// is on disk, apply it NOW" (music/id-rotation.ts).
-//
-// Unlike the two above this one is not reporting — it is a request, and the
-// timing is the point. Adoption happens in the child's WALK, phase 0 of a run
-// that then spends hours tagging; until the controller applies the manifest it
-// keeps enforcing a blocklist, a likes store and a recipe set full of dead ids,
-// and blocklist TRACK entries never name-match, so a blocked track airs. Waiting
-// for the child to exit meant that window was the whole run — and if the run
-// failed or the operator pressed Stop, the exit hook was skipped entirely and
-// the window stayed open until the next controller restart.
-//
-// A host-side CLI run has no parent listening; the line is then just stdout
-// noise and the controller picks the manifest up at its next boot.
+// Adoption is phase 0 of a potentially long run. Tell the controller as soon
+// as the recovery map is durable so track blocks/likes/pins follow the new IDs.
+// The exit and boot hooks also replay it if this notification is lost.
 export const ROTATION_PREFIX = '[rotation] ';
 
 export interface TaggerRotation {

@@ -152,7 +152,8 @@ export function remapIds(
       }
     }
   }
-  if (changed) persist(store);
+  // A failed persist leaves the cache changed; replay must still flush it.
+  persist(store);
   return changed;
 }
 

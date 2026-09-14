@@ -236,6 +236,7 @@ export function adoptRotatedIds(liveIds: ReadonlySet<string>): AdoptionResult {
   const delAudioVec = d.prepare('DELETE FROM track_audio_vectors WHERE id = ?');
   const movePlays = d.prepare('UPDATE plays SET track_id = ? WHERE track_id = ?');
   const delTrack = d.prepare('DELETE FROM tracks WHERE id = ?');
+  const journal = d.prepare('INSERT OR REPLACE INTO id_rotation_journal (old_id, new_id) VALUES (?, ?)');
 
   // Only pairs the transaction actually applied. Reporting the CANDIDATE list
   // would hand the controller a manifest entry for a row that never received
@@ -275,6 +276,7 @@ export function adoptRotatedIds(liveIds: ReadonlySet<string>): AdoptionResult {
       carry.run(...cols.map((c) => merged[c] ?? null), neu);
 
       movePlays.run(neu, old);
+      journal.run(old, neu);
       delTrack.run(old);
       applied.push([old, neu]);
     }

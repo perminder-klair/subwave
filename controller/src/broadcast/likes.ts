@@ -160,7 +160,8 @@ export async function remapTrackIds(trackMap: ReadonlyMap<string, string>): Prom
     }
     if (touched) changed++;
   }
-  if (changed) await flushStrict();
+  // Retry the write even when an earlier attempt already changed the cache.
+  await flushStrict();
   return changed;
 }
 

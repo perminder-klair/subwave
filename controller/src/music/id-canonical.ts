@@ -1,6 +1,6 @@
-// Port of Navidrome PR #5824's canonicalID() — the deterministic, idempotent
+// Port of Navidrome 0.64.0's canonicalID() (PR #5824) — the deterministic, idempotent
 // shape transform its `uniform_canonical_ids` migration applies to every id in
-// the Navidrome DB. When that release lands, most media_file/playlist ids
+// the Navidrome DB. On upgrading to 0.64.0, most media_file/playlist ids
 // change value; replaying the same transform over our stored ids lets the sync
 // walk ADOPT rotated rows (library-db/id-adoption.ts) instead of pruning a
 // whole library's worth of tags, analysis and vectors.

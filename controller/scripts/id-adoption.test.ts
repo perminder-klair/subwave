@@ -238,19 +238,11 @@ async function main() {
     const payload = JSON.parse(line.slice(ROTATION_PREFIX.length));
     assert.equal(payload.adopted, 4);
     assert.ok(payload.at, 'stamped');
-    // It has to follow the manifest write: the parent reads the file the
-    // moment it sees this line.
-    assert.ok(
-      stdout.indexOf(line) > stdout.findIndex((l) => l.includes('[id-rotation] adopted')),
-      'sentinel comes after the manifest is on disk',
-    );
+    assert.equal(db.pendingIdRotations().size, 4, 'map is durable before notification');
   });
 
-  await test('the manifest records the confirmed map for the controller to apply', () => {
-    const manifest = JSON.parse(readFileSync(join(stateDir, 'id-rotation.json'), 'utf8'));
-    assert.equal(manifest.version, 1);
-    assert.ok(manifest.at);
-    assert.deepEqual(manifest.trackMap, {
+  await test('the journal records the confirmed map for the controller to apply', () => {
+    assert.deepEqual(Object.fromEntries(db.pendingIdRotations()), {
       [OLD_HEX]: NEW_HEX, [OLD_NANO]: NEW_NANO,
       [OLD_FAIL]: NEW_FAIL, [OLD_REDONE]: NEW_REDONE,
     });

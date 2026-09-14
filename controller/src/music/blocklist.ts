@@ -304,8 +304,10 @@ export async function remapIds(
     // path owns that call, and remapping must not start depending on Navidrome
     // being reachable.
     if (playlistRulesTouched) playlistMembersAt = 0;
-    await persist();
   }
+  // A previous attempt may have changed the cache but failed its write.
+  // Persist on every replay before the caller acknowledges the recovery map.
+  await persist();
   return changed;
 }
 

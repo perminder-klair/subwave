@@ -383,6 +383,18 @@ export async function migrate(embeddingDim: number, reseed = false, adoptStoredD
     d.pragma('user_version = 25');
   }
 
+  if (userVersion < 26) {
+    // Keep the old→new map until controller-owned state files are durable.
+    // The row migration inserts it inside the same transaction as adoption.
+    runDdl(d, `
+      CREATE TABLE IF NOT EXISTS id_rotation_journal (
+        old_id TEXT PRIMARY KEY,
+        new_id TEXT NOT NULL
+      );
+    `);
+    d.pragma('user_version = 26');
+  }
+
   // Reconcile the requested embedding dim against what physically exists. The
   // vec0 table's FLOAT[N] schema is the authority for what inserts accept, not
   // embedding_meta, which is written separately by the tagger and can lag.
