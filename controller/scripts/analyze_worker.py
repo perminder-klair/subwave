@@ -1665,7 +1665,43 @@ def fetch_audio(url):
     return path, read < ANALYZE_MAX_BYTES
 
 
-def ensure_fast_decode(path):
+def _is_native_flac(path):
+    try:
+        with open(path, "rb") as source:
+            return source.read(4) == b"fLaC"
+    except OSError:
+        return False
+
+
+def _has_readable_pcm(sf, path):
+    """Validate actual bounded PCM from an ffmpeg-produced WAV."""
+    try:
+        with quiet_decoder_noise(), sf.SoundFile(path) as decoded:
+            if (
+                decoded.format != "WAV"
+                or decoded.subtype != "PCM_16"
+                or decoded.samplerate <= 0
+                or decoded.channels <= 0
+            ):
+                return False
+            block = decoded.read(frames=4096, dtype="int16", always_2d=True)
+            return (
+                len(block.shape) == 2
+                and block.shape[0] > 0
+                and block.shape[1] == decoded.channels
+            )
+    except Exception:  # noqa: BLE001 — invalid recovery output is a normal fallback
+        return False
+
+
+def _usable_recovery_wav(sf, path):
+    try:
+        return os.path.getsize(path) > 1024 and _has_readable_pcm(sf, path)
+    except OSError:
+        return False
+
+
+def ensure_fast_decode(path, complete=None):
     """Give libsndfile a file it can open, or fall back to the original path.
 
     librosa's fast path is soundfile/libsndfile; when that can't open the
@@ -1676,20 +1712,26 @@ def ensure_fast_decode(path):
     warning per call, and audioread is removed in librosa 1.0. Probe once; if
     libsndfile can't open the file, decode it ONCE to a temp WAV (native
     rate/channels — the stereo BS.1770 loudness sum needs the real channel
-    layout) and run the whole request off that. Returns (use_path,
-    tmp_wav_or_None); the caller removes the tmp. Any failure — soundfile
-    absent, no ffmpeg on PATH (bare local venv), decode error — returns the
-    original path, i.e. exactly today's behaviour."""
+    layout) and run the whole request off that. A known-incomplete FLAC is also
+    decoded once so its recoverable prefix does not depend on libsndfile
+    reaching a byte-cut final frame. Returns (use_path, tmp_wav_or_None); the
+    caller removes the tmp. Any failure — soundfile absent, no ffmpeg on PATH
+    (bare local venv), decode error — returns the original path, i.e. exactly
+    today's behaviour for inputs outside that narrow recovery case."""
+    sf = None
+    recovery_eligible = False
     try:
         import soundfile as sf
 
         # Quieted like every other decode: libmpg123 narrates its resync over
         # ID3 padding right here, on the probe of a file it goes on to open
         # perfectly well.
-        with quiet_decoder_noise(), sf.SoundFile(path):
-            return path, None
+        with quiet_decoder_noise(), sf.SoundFile(path) as source:
+            recovery_eligible = complete is False and source.format == "FLAC"
+            if not recovery_eligible:
+                return path, None
     except Exception:  # noqa: BLE001 — any open failure routes to the pre-decode
-        pass
+        recovery_eligible = complete is False and _is_native_flac(path)
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         return path, None
@@ -1705,14 +1747,32 @@ def ensure_fast_decode(path):
             timeout=FFMPEG_DECODE_TIMEOUT_S,
         )
         if os.path.getsize(wav) > 1024:
-            log("libsndfile can't open this container; pre-decoded once via ffmpeg")
-            return wav, wav
+            if not recovery_eligible or (sf is not None and _usable_recovery_wav(sf, wav)):
+                if recovery_eligible:
+                    log("incomplete FLAC prefix pre-decoded once via ffmpeg")
+                else:
+                    log("libsndfile can't open this container; pre-decoded once via ffmpeg")
+                return wav, wav
         log("ffmpeg pre-decode produced no audio; falling back to per-load decode")
     except subprocess.CalledProcessError as e:
         err = (e.stderr or b"").decode("utf-8", "replace").strip()[:200]
+        if (
+            recovery_eligible
+            and e.returncode > 0
+            and sf is not None
+            and _usable_recovery_wav(sf, wav)
+        ):
+            log(f"incomplete FLAC prefix recovered despite ffmpeg error ({err or e})")
+            return wav, wav
         log(f"ffmpeg pre-decode failed ({err or e}); falling back to per-load decode")
     except Exception as e:  # noqa: BLE001 — pre-decode is best-effort
         log(f"ffmpeg pre-decode failed ({e}); falling back to per-load decode")
+    except BaseException:
+        try:
+            os.remove(wav)
+        except OSError:
+            pass
+        raise
     try:
         os.remove(wav)
     except OSError:
@@ -1777,7 +1837,7 @@ def analyze(
     # keeps the original download for the ownership cleanup; the WAV is always
     # ours to remove.
     src_path = path
-    path, decoded_tmp = ensure_fast_decode(path)
+    path, decoded_tmp = ensure_fast_decode(path, complete=complete)
     audio_embedding = None
     vocal_ranges = None
     outro = None

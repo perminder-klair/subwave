@@ -10,6 +10,7 @@ import io
 import math
 import os
 import sys
+import tempfile
 import types
 
 
@@ -104,7 +105,7 @@ def test_clap_windows_share_one_model_forward():
 def test_embedding_only_skips_baseline_acoustic_work():
     original = (aw.ensure_fast_decode, aw.get_embedder, aw.embed_windows, aw.load_audio)
     try:
-        aw.ensure_fast_decode = lambda path: (path, None)
+        aw.ensure_fast_decode = lambda path, complete=None: (path, None)
         aw.get_embedder = lambda force=False: object()
         aw.embed_windows = lambda embedder, path, librosa, duration: [0.25, 0.75]
 
@@ -119,6 +120,50 @@ def test_embedding_only_skips_baseline_acoustic_work():
         aw.ensure_fast_decode, aw.get_embedder, aw.embed_windows, aw.load_audio = original
 
     assert result == {"audio_embedding": [0.25, 0.75]}, result
+
+
+def test_url_embedding_only_propagates_incomplete_and_cleans_owned_files():
+    original = (
+        aw.fetch_audio, aw.ensure_fast_decode, aw.get_embedder,
+        aw.embed_windows, aw.load_audio,
+    )
+    src_fd, src = tempfile.mkstemp(suffix=".audio")
+    decoded_fd, decoded = tempfile.mkstemp(suffix=".wav")
+    os.close(src_fd)
+    os.close(decoded_fd)
+    seen = []
+    try:
+        aw.fetch_audio = lambda _url: (src, False)
+
+        def predecode(path, complete=None):
+            seen.append((path, complete))
+            return decoded, decoded
+
+        aw.ensure_fast_decode = predecode
+        aw.get_embedder = lambda force=False: object()
+
+        def embed(_embedder, path, _librosa, _duration):
+            assert path == decoded, path
+            return [0.5, 0.5]
+
+        aw.embed_windows = embed
+        aw.load_audio = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("embedding-only analysis decoded baseline audio")
+        )
+        result = aw.analyze(
+            FakeLibrosa(), url="https://music.invalid/track", embed=True,
+            embedding_only=True,
+        )
+    finally:
+        (
+            aw.fetch_audio, aw.ensure_fast_decode, aw.get_embedder,
+            aw.embed_windows, aw.load_audio,
+        ) = original
+
+    assert result == {"audio_embedding": [0.5, 0.5]}, result
+    assert seen == [(src, False)], seen
+    assert not os.path.exists(src), src
+    assert not os.path.exists(decoded), decoded
 
 
 def test_onnx_exports_keep_the_safe_sequential_fallback():
@@ -283,6 +328,7 @@ def test_cuda_batch_failure_retries_windows_sequentially():
 print("analyzer embedding efficiency:")
 test("CLAP windows share one model forward", test_clap_windows_share_one_model_forward)
 test("embedding-only skips baseline acoustic work", test_embedding_only_skips_baseline_acoustic_work)
+test("URL embedding-only passes completeness and cleans files", test_url_embedding_only_propagates_incomplete_and_cleans_owned_files)
 test("ONNX exports retain sequential fallback", test_onnx_exports_keep_the_safe_sequential_fallback)
 test("non-CUDA windows decode and embed one at a time", test_non_cuda_windows_decode_and_embed_one_at_a_time)
 test("only CUDA transformers batch windows", test_only_cuda_transformers_batches_windows)

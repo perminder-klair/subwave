@@ -10,6 +10,7 @@
 import math
 import os
 import sys
+import tempfile
 
 try:
     import numpy as np
@@ -86,7 +87,11 @@ def _analyze(beat):
         "log": aw.log,
     }
     try:
-        aw.ensure_fast_decode = lambda path: (path, None)
+        def fake_decode(path, complete=None):
+            assert complete is False, complete
+            return path, None
+
+        aw.ensure_fast_decode = fake_decode
         aw.load_audio = lambda *_args, **_kwargs: (y, aw.ANALYZE_SR)
         aw.estimate_key = lambda _chroma: ("8A", 0.6)
         aw.estimate_key_ranges = lambda *_args, **_kwargs: []
@@ -120,6 +125,7 @@ def t_main_beat_failure_keeps_independent_analysis():
     assert result["loudness_lufs"] == -9.5, result
     assert math.isfinite(result["confidence"]), result
     assert result["confidence"] == 0.3, "unknown BPM must not receive the tempo confidence bonus"
+    assert "outro" not in result and "tail_silence_ms" not in result, result
     assert any("float division by zero" in line for line in logs), logs
 
 
@@ -133,9 +139,53 @@ def t_main_beat_success_keeps_numeric_bpm_and_grid():
     assert not logs, logs
 
 
+def t_baseline_failure_removes_recovered_wav_but_not_caller_input():
+    source_fd, source = tempfile.mkstemp(suffix=".audio")
+    decoded_fd, decoded = tempfile.mkstemp(suffix=".wav")
+    os.close(source_fd)
+    os.close(decoded_fd)
+    originals = {
+        "ensure_fast_decode": aw.ensure_fast_decode,
+        "get_embedder": aw.get_embedder,
+        "load_audio": aw.load_audio,
+    }
+    seen = []
+    try:
+        def predecode(path, complete=None):
+            assert path == source, path
+            assert complete is False, complete
+            return decoded, decoded
+
+        aw.ensure_fast_decode = predecode
+        aw.get_embedder = lambda force=False: None
+
+        def fail_baseline(_librosa, path, **_kwargs):
+            seen.append(path)
+            raise RuntimeError("baseline decode failed")
+
+        aw.load_audio = fail_baseline
+        try:
+            aw.analyze(
+                _FakeLibrosa(_SuccessfulBeat()), path=source, embed=False,
+                vocal=False, complete=False,
+            )
+            raise AssertionError("baseline failure was swallowed")
+        except RuntimeError as err:
+            assert str(err) == "baseline decode failed", err
+    finally:
+        for name, value in originals.items():
+            setattr(aw, name, value)
+
+    assert seen == [decoded], seen
+    assert os.path.exists(source), source
+    assert not os.path.exists(decoded), decoded
+    os.remove(source)
+
+
 print("main beat tracking")
 test("a beat tracker exception keeps the rest of analysis", t_main_beat_failure_keeps_independent_analysis)
 test("a successful beat tracker keeps numeric BPM and grids", t_main_beat_success_keeps_numeric_bpm_and_grid)
+test("baseline errors clean recovered WAVs but preserve caller inputs", t_baseline_failure_removes_recovered_wav_but_not_caller_input)
 
 if failures:
     print(f"✗ analyzer_beat_test.py: {failures} failure(s)")
