@@ -17,6 +17,7 @@ const root = mkdtempSync(join(tmpdir(), 'subwave-prompt-memory-'));
 process.env.STATE_DIR = root;
 
 const session = await import('../src/broadcast/session.js');
+const settings = await import('../src/settings.js');
 const { queue } = await import('../src/broadcast/queue.js');
 const scripts = await import('../src/llm/internal/prompts/scripts.js');
 const { exchangeSegment } = await import('../src/broadcast/queue/pure.js');
@@ -194,6 +195,39 @@ function pushTurn(kind: string, text: string, agoMs: number) {
     t: new Date(Date.now() - agoMs).toISOString(), role: 'segment', kind, text, meta: {},
   });
 }
+
+test('saved DJ behaviour controls the recap defaults used by the queue', async () => {
+  await settings.update({
+    djBehaviour: { recapLimit: 2, recapMinutes: 30, recapChars: 40 },
+  } as never);
+  try {
+    queue.djLog = [];
+    session.start(context({ id: 's_tuned_recap', name: 'The Tuned Recap' }));
+    pushTurn('link', 'This old line sits beyond the configured time window.', 45 * 60_000);
+    pushTurn('link', 'The first recent line is deliberately longer than forty characters.', 3 * 60_000);
+    pushTurn('link', 'The second recent line is deliberately longer than forty characters.', 2 * 60_000);
+    pushTurn('link', 'The newest recent line is deliberately longer than forty characters.', 60_000);
+
+    const limited = queue.getDjRecap() || '';
+    const limitedLines = limited.split('\n');
+    assert.equal(limitedLines.length, 2, 'the saved line limit is the queue default');
+    assert.doesNotMatch(limited, /first recent|old line/);
+    for (const line of limitedLines) {
+      const quoted = line.match(/: "(.*)"$/)?.[1];
+      assert.equal(quoted?.length, 40, 'the saved character cap is the queue default');
+      assert.match(quoted || '', /…$/);
+    }
+
+    const widened = queue.getDjRecap({ limit: 50 }) || '';
+    assert.equal(widened.split('\n').length, 3, 'an explicit limit override still wins');
+    assert.match(widened, /first recent/);
+    assert.doesNotMatch(widened, /old line/, 'the saved time window remains the default');
+  } finally {
+    await settings.update({
+      djBehaviour: { recapLimit: 10, recapMinutes: 120, recapChars: 140 },
+    } as never);
+  }
+});
 
 test('the recap window measures from the newest turn, not the oldest', () => {
   queue.djLog = [];

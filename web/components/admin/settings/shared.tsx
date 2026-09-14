@@ -346,6 +346,21 @@ export interface DjBehaviourForm {
   sameHostAcknowledgement: boolean;
   extendedSleeveNotes: boolean;
   releaseYearMentions: 'regular' | 'occasional' | 'rare';
+  recapLimit: string;
+  recapMinutes: string;
+  recapChars: string;
+}
+
+/** The controller returns persisted numeric values; the editor keeps them as
+ *  strings so a temporarily blank number input survives until Save. */
+export interface DjBehaviourValues {
+  showWelcome?: boolean;
+  sameHostAcknowledgement?: boolean;
+  extendedSleeveNotes?: boolean;
+  releaseYearMentions?: 'regular' | 'occasional' | 'rare';
+  recapLimit?: number;
+  recapMinutes?: number;
+  recapChars?: number;
 }
 
 export interface FormState {
@@ -446,7 +461,7 @@ export interface SettingsData {
      *  what the controller's own coercion does. */
     djTalkOnlyBetweenTracks?: boolean;
     pauseTalkMinSeconds?: number;
-    djBehaviour?: Partial<DjBehaviourForm>;
+    djBehaviour?: DjBehaviourValues;
     /** Absent on a settings.json predating the key — the controller's own
      *  coercion reads it as the 5-minute default. */
     handover?: { offsetMinutes?: number };

@@ -93,6 +93,9 @@ import {
 import { validateCompatParams } from './settings/compat-params.js';
 import { parseSettingsPatchKey } from './settings/patch-registry.js';
 import {
+  DJ_RECAP_CHARS_BOUNDS,
+  DJ_RECAP_LIMIT_BOUNDS,
+  DJ_RECAP_MINUTES_BOUNDS,
   PAUSE_TALK_MIN_SECONDS_BOUNDS,
   PICKER_ALBUM_HOURS_BOUNDS,
   STREAM_BUFFER_SECONDS_BOUNDS,
@@ -295,6 +298,18 @@ const intIn = (v: unknown, def: number, min: number, max: number) => {
   }
   const n = Number(v);
   return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : def;
+};
+
+// `settingsIntLike` is parseInt-based on the strict save path. Keep the cold
+// load in the same numeric family, but repair a hand-edited out-of-range value
+// to the nearest bound instead of ever wedging controller startup.
+const parsedIntIn = (
+  v: unknown,
+  def: number,
+  bounds: { min: number; max: number },
+) => {
+  const n = parseInt(v as string, 10);
+  return Number.isFinite(n) ? Math.min(bounds.max, Math.max(bounds.min, n)) : def;
 };
 
 export async function load() {
@@ -599,6 +614,21 @@ export async function load() {
         ? stored.djBehaviour.extendedSleeveNotes : DEFAULTS.djBehaviour.extendedSleeveNotes,
       releaseYearMentions: ['regular', 'occasional', 'rare'].includes(stored.djBehaviour?.releaseYearMentions)
         ? stored.djBehaviour.releaseYearMentions : DEFAULTS.djBehaviour.releaseYearMentions,
+      recapLimit: parsedIntIn(
+        stored.djBehaviour?.recapLimit,
+        DEFAULTS.djBehaviour.recapLimit,
+        DJ_RECAP_LIMIT_BOUNDS,
+      ),
+      recapMinutes: parsedIntIn(
+        stored.djBehaviour?.recapMinutes,
+        DEFAULTS.djBehaviour.recapMinutes,
+        DJ_RECAP_MINUTES_BOUNDS,
+      ),
+      recapChars: parsedIntIn(
+        stored.djBehaviour?.recapChars,
+        DEFAULTS.djBehaviour.recapChars,
+        DJ_RECAP_CHARS_BOUNDS,
+      ),
     },
     // Repaired rather than refused, like ducking above: an offset the talk
     // table's programme row cannot sample is a sign-off that never airs, and a
@@ -1561,7 +1591,15 @@ export async function update(patch) {
     next.pauseTalkMinSeconds = parseSettingsPatchKey<number>('pauseTalkMinSeconds', patch.pauseTalkMinSeconds);
   }
   if ('djBehaviour' in patch) {
-    const behaviour = parseSettingsPatchKey<Record<string, boolean | string | undefined>>(
+    const behaviour = parseSettingsPatchKey<{
+      showWelcome?: boolean;
+      sameHostAcknowledgement?: boolean;
+      extendedSleeveNotes?: boolean;
+      releaseYearMentions?: string;
+      recapLimit?: number;
+      recapMinutes?: number;
+      recapChars?: number;
+    }>(
       'djBehaviour', patch.djBehaviour,
     );
     for (const key of ['showWelcome', 'sameHostAcknowledgement', 'extendedSleeveNotes'] as const) {
@@ -1569,6 +1607,9 @@ export async function update(patch) {
     }
     if (behaviour.releaseYearMentions !== undefined) {
       next.djBehaviour.releaseYearMentions = behaviour.releaseYearMentions as typeof next.djBehaviour.releaseYearMentions;
+    }
+    for (const key of ['recapLimit', 'recapMinutes', 'recapChars'] as const) {
+      if (behaviour[key] !== undefined) next.djBehaviour[key] = behaviour[key];
     }
   }
   if ('handover' in patch) {

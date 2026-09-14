@@ -67,7 +67,7 @@ export const SECTIONS = [
   // frame the service-specific configuration which follows.
   {
     id: 'behaviour', group: 'the dj', label: 'DJ behaviour',
-    hint: 'talk placement · show changes', icon: MessageCircle,
+    hint: 'talk placement · prompt memory', icon: MessageCircle,
     formKeys: ['djTalkOnlyBetweenTracks', 'pauseTalkMinSeconds', 'djBehaviour'],
   },
   {
@@ -263,6 +263,9 @@ export const SETTINGS_INDEX: readonly IndexEntry[] = [
 
   // ── dj behaviour ───────────────────────────────────────────────────────────
   { label: 'Talk placement', section: 'behaviour', card: 'Talk placement', keywords: 'between tracks boundary interrupt over song duck mid-song' },
+  { label: 'Recent lines', section: 'behaviour', card: 'Prompt memory', keywords: 'recap repeat anti-repeat context history limit' },
+  { label: 'Lookback window', section: 'behaviour', card: 'Prompt memory', keywords: 'minutes recap repeat anti-repeat context history' },
+  { label: 'Characters per line', section: 'behaviour', card: 'Prompt memory', keywords: 'chars length recap tokens context' },
   { label: 'Show changes', section: 'behaviour', card: 'Show changes', keywords: 'handoff presenter same host acknowledgement shift transition programme' },
   { label: 'Extended Sleeve Notes', section: 'behaviour', card: 'Extended Sleeve Notes', keywords: 'source backed editorial provenance provider credits artist context coming soon' },
   { label: 'Link style', section: 'behaviour', card: 'Link style', keywords: 'release year regular occasional rare metadata sleeve notes' },

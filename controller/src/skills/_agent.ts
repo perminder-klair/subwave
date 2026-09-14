@@ -290,7 +290,7 @@ export function buildSituation(ctx, { forced = false, contextFields, recentCurio
   // a long persona's segment is cut after its first sentence, hiding a repeated
   // topic from the anti-repeat instruction.
   const RECAP_CHARS: Record<string, number> = { extended: 360, storyteller: 520 };
-  // undefined (concise) falls through to getDjRecap's DJ_RECAP_CHARS default.
+  // undefined (concise) falls through to the station's saved recapChars setting.
   const recap = queue.getDjRecap({ maxChars: RECAP_CHARS[lengthMode()] });
   if (recap) {
     lines.push(`\nWhat you have already said on air recently (do NOT repeat these topics or phrasing):\n${recap}`);

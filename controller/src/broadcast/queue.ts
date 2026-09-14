@@ -565,9 +565,9 @@ class Queue {
   // `prior` reads the session a hard roll just archived instead of the live one
   // — the mic-pass sign-off is the single caller (session.priorPromptMemory).
   getDjRecap({
-    limit = config.queue.recapLimit,
-    withinMinutes = config.queue.recapMinutes,
-    maxChars = config.queue.recapChars,
+    limit = settings.get().djBehaviour.recapLimit,
+    withinMinutes = settings.get().djBehaviour.recapMinutes,
+    maxChars = settings.get().djBehaviour.recapChars,
     prior = false,
   }: { limit?: number; withinMinutes?: number; maxChars?: number; prior?: boolean } = {}) {
     const cutoff = Date.now() - withinMinutes * 60_000;
