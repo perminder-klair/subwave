@@ -1678,7 +1678,7 @@ def _has_readable_pcm(sf, path):
     try:
         with quiet_decoder_noise(), sf.SoundFile(path) as decoded:
             if (
-                decoded.format != "WAV"
+                decoded.format not in ("WAV", "WAVEX")
                 or decoded.subtype != "PCM_16"
                 or decoded.samplerate <= 0
                 or decoded.channels <= 0

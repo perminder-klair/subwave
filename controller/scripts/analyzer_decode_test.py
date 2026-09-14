@@ -36,15 +36,21 @@ class _AudioFrames:
 
 
 class _SoundFile:
-    def __init__(self, path, fail_source=False, wav_subtype="PCM_16"):
+    def __init__(
+        self, path, fail_source=False, wav_format="WAV", wav_subtype="PCM_16",
+        wav_samplerate=None, wav_channels=None, read_error=False,
+    ):
         self.path = path
         self._reader = None
         if path.endswith(".wav"):
             self._reader = wave.open(path, "rb")
-            self.format = "WAV"
+            self.format = wav_format
             self.subtype = wav_subtype
-            self.samplerate = self._reader.getframerate()
-            self.channels = self._reader.getnchannels()
+            self.samplerate = (
+                self._reader.getframerate() if wav_samplerate is None else wav_samplerate
+            )
+            self.channels = self._reader.getnchannels() if wav_channels is None else wav_channels
+            self.read_error = read_error
         else:
             if fail_source:
                 raise RuntimeError("container open failed")
@@ -63,6 +69,8 @@ class _SoundFile:
         return False
 
     def read(self, frames, dtype, always_2d):
+        if self.read_error:
+            raise RuntimeError("PCM read failed")
         assert frames == 4096
         assert dtype == "int16"
         assert always_2d is True
@@ -72,13 +80,13 @@ class _SoundFile:
 
 
 class _SoundFileModule(types.ModuleType):
-    def __init__(self, fail_source=False, wav_subtype="PCM_16"):
+    def __init__(self, fail_source=False, **wav_options):
         super().__init__("soundfile")
         self.fail_source = fail_source
-        self.wav_subtype = wav_subtype
+        self.wav_options = wav_options
 
     def SoundFile(self, path):
-        return _SoundFile(path, self.fail_source, self.wav_subtype)
+        return _SoundFile(path, fail_source=self.fail_source, **self.wav_options)
 
 
 class _Completed:
@@ -106,6 +114,10 @@ def _runner(output="valid", returncode=0, error=None, calls=None, channels=2):
         elif output == "corrupt":
             with open(wav, "wb") as out:
                 out.write(b"not a wav" + b"\0" * 2048)
+        elif output == "padded-header":
+            _write_pcm_wav(wav, frames=0)
+            with open(wav, "ab") as out:
+                out.write(b"\0" * 2048)
         if error is not None:
             raise error(command)
         if returncode:
@@ -196,7 +208,7 @@ def t_unopenable_native_flac_is_recovered_without_extension():
 def t_recovery_preserves_native_multichannel_and_legacy_conversion():
     calls = []
     with tempfile.TemporaryDirectory() as tmp, _PatchedDecode(
-        _SoundFileModule(), _runner(calls=calls, channels=4)
+        _SoundFileModule(wav_format="WAVEX"), _runner(calls=calls, channels=4)
     ):
         source = _source(tmp)
         decoded, owned = aw.ensure_fast_decode(source, complete=False)
@@ -233,23 +245,35 @@ def t_positive_nonzero_valid_pcm_is_accepted_only_for_recovery():
         assert not os.path.exists(calls[0][-1]), calls[0][-1]
 
 
+def t_complete_and_unknown_nonzero_outputs_stay_strict():
+    for complete in (True, None):
+        calls = []
+        with tempfile.TemporaryDirectory() as tmp, _PatchedDecode(
+            _SoundFileModule(fail_source=True), _runner(returncode=7, calls=calls)
+        ):
+            source = _source(tmp)
+            decoded = aw.ensure_fast_decode(source, complete=complete)
+            assert decoded == (source, None), (complete, decoded)
+            assert len(calls) == 1, (complete, calls)
+            assert not os.path.exists(calls[0][-1]), (complete, calls[0][-1])
+
+
 def t_signal_status_and_unusable_outputs_are_rejected_and_removed():
     cases = [
-        ("signal", _SoundFileModule(), _runner(returncode=-9)),
-        ("empty", _SoundFileModule(), _runner(output="empty")),
-        ("corrupt", _SoundFileModule(), _runner(output="corrupt")),
-        ("wrong PCM subtype", _SoundFileModule(wav_subtype="FLOAT"), _runner()),
+        ("signal", _SoundFileModule(), "valid", -9),
+        ("empty", _SoundFileModule(), "empty", 0),
+        ("padded header", _SoundFileModule(), "padded-header", 0),
+        ("corrupt", _SoundFileModule(), "corrupt", 0),
+        ("wrong container", _SoundFileModule(wav_format="AIFF"), "valid", 0),
+        ("wrong PCM subtype", _SoundFileModule(wav_subtype="FLOAT"), "valid", 0),
+        ("invalid sample rate", _SoundFileModule(wav_samplerate=0), "valid", 0),
+        ("invalid channels", _SoundFileModule(wav_channels=0), "valid", 0),
+        ("PCM read error", _SoundFileModule(read_error=True), "valid", 0),
     ]
-    for label, sf_module, runner in cases:
+    for label, sf_module, output, returncode in cases:
         calls = []
-        wrapped = _runner(output="valid", calls=calls)
-        if label == "signal":
-            wrapped = _runner(returncode=-9, calls=calls)
-        elif label == "empty":
-            wrapped = _runner(output="empty", calls=calls)
-        elif label == "corrupt":
-            wrapped = _runner(output="corrupt", calls=calls)
-        with tempfile.TemporaryDirectory() as tmp, _PatchedDecode(sf_module, wrapped):
+        runner = _runner(output=output, returncode=returncode, calls=calls)
+        with tempfile.TemporaryDirectory() as tmp, _PatchedDecode(sf_module, runner):
             source = _source(tmp)
             assert aw.ensure_fast_decode(source, complete=False) == (source, None), label
             assert len(calls) == 1, (label, calls)
@@ -306,9 +330,48 @@ def run_lightweight():
     test("native FLAC header recovers an unopenable .audio file", t_unopenable_native_flac_is_recovered_without_extension)
     test("native multichannel and legacy conversion stay supported", t_recovery_preserves_native_multichannel_and_legacy_conversion)
     test("positive nonzero output is recovery-only", t_positive_nonzero_valid_pcm_is_accepted_only_for_recovery)
+    test("complete and unknown nonzero outputs stay strict", t_complete_and_unknown_nonzero_outputs_stay_strict)
     test("signals and unusable WAVs are rejected and removed", t_signal_status_and_unusable_outputs_are_rejected_and_removed)
     test("timeout and missing ffmpeg preserve fallback", t_timeout_missing_ffmpeg_and_validation_errors_fall_back_cleanly)
     test("missing output and interruption clean temporary WAVs", t_missing_nonzero_output_and_interruption_clean_up)
+
+
+def run_multichannel_integration():
+    try:
+        import numpy as np
+        import soundfile as sf
+    except ImportError as err:
+        raise RuntimeError(f"integration dependencies unavailable: {err}") from err
+    ffmpeg = aw.shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError("integration dependency unavailable: ffmpeg")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        source = os.path.join(tmp, "four-channel.audio")
+        probe_wav = os.path.join(tmp, "four-channel.wav")
+        rng = np.random.default_rng(1670)
+        pcm = rng.integers(-16000, 16000, size=(44100 * 2, 4), dtype=np.int16)
+        sf.write(source, pcm, 44100, subtype="PCM_16", format="FLAC")
+        subprocess.run(
+            [ffmpeg, "-v", "error", "-y", "-i", source,
+             "-map", "0:a:0", "-acodec", "pcm_s16le", "-f", "wav", probe_wav],
+            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        with sf.SoundFile(probe_wav) as probe:
+            assert probe.format == "WAVEX", probe.format
+            assert probe.subtype == "PCM_16", probe.subtype
+            block = probe.read(frames=4096, dtype="int16", always_2d=True)
+            assert block.shape == (4096, 4), block.shape
+        os.remove(probe_wav)
+
+        decoded, decoded_tmp = aw.ensure_fast_decode(source, complete=False)
+        assert decoded == decoded_tmp and decoded != source, (decoded, decoded_tmp)
+        with sf.SoundFile(decoded) as recovered:
+            assert recovered.format == "WAVEX", recovered.format
+            assert recovered.channels == 4, recovered.channels
+            block = recovered.read(frames=4096, dtype="int16", always_2d=True)
+            assert block.shape == (4096, 4), block.shape
+        os.remove(decoded_tmp)
 
 
 def run_integration():
@@ -363,8 +426,9 @@ def run_integration():
 
 
 if "--integration" in sys.argv:
-    print("real truncated FLAC integration")
-    test("real recovered PCM reaches baseline analysis", run_integration)
+    print("real FLAC integration")
+    test("real four-channel WAVEX is accepted", run_multichannel_integration)
+    test("real truncated PCM reaches baseline analysis", run_integration)
 else:
     run_lightweight()
 
