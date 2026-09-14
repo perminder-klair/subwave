@@ -4,6 +4,8 @@ Why the sidecars, the Icecast config rendering and the state directory are
 shaped the way they are. The short invariants are in the root `CLAUDE.md`; read
 the matching section here before changing any of them.
 
+**Controller startup readiness.** The HTTP socket opens before asynchronous initialization, but `middleware/startup.ts` returns uncached HTTP 503 with `Retry-After: 1` until persisted settings, blocklist, session/queue recovery, orphaned tagger recovery and listener initialization have completed. `/health` uses the same barrier as the API, so Docker cannot advertise a ready controller that still accepts jobs ahead of its recovery pass. CORS preflight remains available. Do not open only the job routes early: settings writes and reads of privacy defaults also race hydration. Startup recovery must still terminate an actual old worker; ignoring a live pidfile would permit two writers. A held-read integration test in `scripts/startup-readiness.test.ts` proves early requests leave that pidfile alone and a post-ready managed reconciliation completes.
+
 The recurring trap: **`docker/broadcast-entrypoint.sh` and the AIO supervisor's
 `render_icecast()` / `bootstrap_state_dirs` must stay in lockstep.** Five things
 live in both — per-mount burst/queue sizing, the listener-auth blocks, the
