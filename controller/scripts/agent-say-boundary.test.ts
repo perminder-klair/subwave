@@ -33,7 +33,7 @@ const agentStart = agentSource.indexOf('async function pickViaAgent');
 const agentEnd = agentSource.indexOf('\nasync function ', agentStart + 1);
 const pickViaAgentSource = agentSource.slice(agentStart, agentEnd < 0 ? undefined : agentEnd);
 const timingAt = pickViaAgentSource.indexOf('const linkAirAt = clockAllowed ? linkClockAt(showAt, Date.now()) : null;');
-const writerAt = pickViaAgentSource.indexOf('rawLink = await dj.generateLink');
+const writerAt = pickViaAgentSource.indexOf('const generated = await generatePickLink');
 const finalGuardAt = pickViaAgentSource.indexOf('const albumHours =');
 assert.ok(timingAt > finalGuardAt && timingAt < writerAt,
   'the writer clock must be recomputed after selection guards and immediately before link generation');

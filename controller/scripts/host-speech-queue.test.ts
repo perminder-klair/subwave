@@ -14,8 +14,13 @@ process.env.STATE_DIR = root;
 const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
 const { queue } = await import('../src/broadcast/queue.js');
-const { enqueuePick } = await import('../src/broadcast/dj-agent/enqueue.js');
+const { enqueuePick, generatePickLink } = await import('../src/broadcast/dj-agent/enqueue.js');
 const { config } = await import('../src/config.js');
+const realBedCatalog = (queue as any)._bedCatalog;
+const realBedGetPath = (queue as any)._bedGetPath;
+const realWriteHandoff = (queue as any)._writeHandoff;
+const realSpeak = (queue as any)._speak;
+const realAirVoice = (queue as any)._airVoice;
 
 const template = settings.get().personas[0];
 const A = { ...template, id: 'p_a', name: 'Host A' };
@@ -56,6 +61,11 @@ beforeEach(async () => {
   queue.upcoming = [];
   queue.current = null;
   queue.history = [];
+  (queue as any)._bedCatalog = realBedCatalog;
+  (queue as any)._bedGetPath = realBedGetPath;
+  (queue as any)._writeHandoff = realWriteHandoff;
+  (queue as any)._speak = realSpeak;
+  (queue as any)._airVoice = realAirVoice;
   await seed();
 });
 
@@ -129,27 +139,40 @@ test('legacy same-show AI links with a known old author are invalidated', async 
   assert.equal(legacy.track.title, 'Song');
 });
 
-test('a delayed old-host link is discarded at enqueue without losing its song or relabelling it', async () => {
-  const oldStamp = session.captureHostSpeech();
-  const oldPersona = session.onAirPersona();
+test('the production generation seam discards a delayed A link across A to B to A without losing its song', async () => {
+  const generation = deferred<string>();
+  let generatedFor: string | null = null;
+  const pending = generatePickLink(
+    { previous: null, current: { id: 'song-new', title: 'New Song', artist: 'Artist' } },
+    async (args) => {
+      generatedFor = (args.persona as any)?.id ?? null;
+      return generation.promise;
+    },
+  );
+  await new Promise(resolve => setImmediate(resolve));
   await settings.update({ shows: [show(B.id)] } as never);
+  await settings.update({ shows: [show(A.id)] } as never);
+  generation.resolve('An obsolete Host A link.');
+  const generated = await pending;
+
   let pushed: any = null;
   const fakeQueue = {
     push: async (entry: any) => { pushed = entry; return 1; },
     log: () => {},
   };
-
   const result = await enqueuePick(
     fakeQueue,
     { id: 'song-new', title: 'New Song', artist: 'Artist', duration: 240 },
     'reason',
     'agent',
-    'An obsolete Host A link.',
+    generated.link,
     null,
     {},
-    { introPersona: oldPersona, hostSpeech: oldStamp },
+    { introPersona: generated.introPersona, hostSpeech: generated.hostSpeech },
   );
 
+  assert.equal(generatedFor, A.id, 'the actual writer received the captured A persona');
+  assert.equal(generated.link, null, 'returning to A does not revive the old A generation');
   assert.equal(result, 1);
   assert.equal(pushed.track.id, 'song-new');
   assert.equal(pushed.introScript, null);
@@ -202,4 +225,169 @@ test('a stale uncommitted deferred host clip is settled false, while a committed
   await settings.update({ shows: [show(B.id)] } as never);
   assert.ok(queue.pendingVoiceTalk(), 'the mixer-owned pause commitment cannot be cancelled');
   (queue as any)._pendingVoice = null;
+});
+
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+function bedItem() {
+  const queued = item();
+  queued.introScript = 'Host A carries a deliberately long spoken link across enough words to require an instrumental bed before this incoming song begins for listeners tonight.';
+  queued.introWav = '/tmp/host-a-link.wav';
+  queued.track = { id: 'bed-song', title: 'Bed Song', artist: 'Artist', duration: 240 };
+  return queued;
+}
+
+test('a host save during bed lookup prevents the obsolete bed from being committed', async () => {
+  await settings.update({ beds: { enabled: true, thresholdSec: 1 } } as never);
+  const queued = bedItem();
+  queue.upcoming = [queued];
+  const catalog = deferred<{ name: string; durationSec: number }[]>();
+  let writes = 0;
+  (queue as any)._bedCatalog = () => catalog.promise;
+  (queue as any)._bedGetPath = async () => '/tmp/bed.mp3';
+  (queue as any)._writeHandoff = async () => { writes += 1; };
+
+  const pushing = (queue as any).maybePushBed(queued);
+  await new Promise(resolve => setImmediate(resolve));
+  await settings.update({ shows: [show(B.id)] } as never);
+  catalog.resolve([{ name: 'test-bed', durationSec: 120 }]);
+  await pushing;
+
+  assert.equal(writes, 0, 'no bed reaches next.txt after its speech was invalidated');
+  assert.notEqual(queued.bedded, true);
+  assert.equal(queued.introScript, null);
+});
+
+test('a bed is protected as committed while its handoff write is pending', async () => {
+  await settings.update({ beds: { enabled: true, thresholdSec: 1 } } as never);
+  const queued = bedItem();
+  queue.upcoming = [queued];
+  const handoff = deferred<void>();
+  let writeStarted = false;
+  (queue as any)._bedCatalog = async () => [{ name: 'test-bed', durationSec: 120 }];
+  (queue as any)._bedGetPath = async () => '/tmp/bed.mp3';
+  (queue as any)._writeHandoff = async () => {
+    writeStarted = true;
+    await handoff.promise;
+  };
+
+  const pushing = (queue as any).maybePushBed(queued);
+  while (!writeStarted) await new Promise(resolve => setImmediate(resolve));
+  await settings.update({ shows: [show(B.id)] } as never);
+
+  assert.equal(queued.bedded, true, 'the in-progress mixer handoff is already a timeline commitment');
+  assert.ok(queued.introScript, 'committed speech is not rewritten during the handoff');
+  handoff.resolve();
+  await pushing;
+  assert.equal(queued.bedded, true);
+});
+
+
+test('late queue render completion cannot restore an invalidated unsent link', async () => {
+  const queued = item();
+  queued.introWav = null;
+  queue.upcoming = [queued];
+  const rendered = deferred<string>();
+  (queue as any)._speak = () => rendered.promise;
+
+  const pending = (queue as any).startIntroRender(queued);
+  await settings.update({ shows: [show(B.id)] } as never);
+  rendered.resolve('/tmp/late-host-a.wav');
+  await pending;
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(queued.introScript, null);
+  assert.equal(queued.introWav, null, 'the old observer cannot put its WAV back');
+});
+
+test('a render already committed to the mixer may complete after the host changes', async () => {
+  const committed = item();
+  committed.introWav = null;
+  committed.sent = true;
+  queue.upcoming = [committed];
+  const rendered = deferred<string>();
+  (queue as any)._speak = () => rendered.promise;
+
+  const pending = (queue as any).startIntroRender(committed);
+  await settings.update({ shows: [show(B.id)] } as never);
+  rendered.resolve('/tmp/committed-host-a.wav');
+  await pending;
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(committed.introScript, 'Host A wrote this.');
+  assert.equal(committed.introWav, '/tmp/committed-host-a.wav');
+});
+
+test('a timed-out render transferred to current is reused and accepted once', async () => {
+  const queued = item();
+  queued.introWav = null;
+  queued.sent = true;
+  queue.upcoming = [queued];
+  const rendered = deferred<string>();
+  (queue as any)._speak = () => rendered.promise;
+  let accepted = 0;
+  (queue as any)._airVoice = async (_file: string, _wav: string, _text: string, _gain: number, opts: any) => {
+    accepted += 1;
+    opts?.onQueued?.({ voiceId: 'voice-current', clipMs: 1000, estimatedAirInMs: 0 });
+    return { voiceId: 'voice-current', clipMs: 1000, aired: Promise.resolve(null) };
+  };
+
+  const pending = (queue as any).startIntroRender(queued);
+  const current = { ...queued, startedAt: new Date().toISOString() };
+  queue.current = current;
+  queue.upcoming = [];
+  (queue as any)._introRenders.transfer(queued, current);
+  const airing = queue.airIntro(current);
+  const wav = join(root, 'transferred.wav');
+  writeFileSync(wav, 'wav');
+  rendered.resolve(wav);
+  await pending;
+  await airing;
+
+  assert.equal(current.introWav, wav);
+  assert.equal(accepted, 1);
+});
+
+test('standalone host speech is refused after stale TTS, but remains accepted once it enters the voice chain', async () => {
+  const staleStamp = session.captureHostSpeech();
+  const firstRender = deferred<string>();
+  let accepted = 0;
+  (queue as any)._speak = () => firstRender.promise;
+  (queue as any)._airVoice = async () => {
+    accepted += 1;
+    return { voiceId: 'unexpected', clipMs: 1000, aired: Promise.resolve(null) };
+  };
+  const staleAnnounce = queue.announce('Old host automatic ident', 'station-id', {
+    persona: A, hostSpeech: staleStamp,
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  await settings.update({ shows: [show(B.id)] } as never);
+  firstRender.resolve('/tmp/stale-standalone.wav');
+  const staleOutcome = await staleAnnounce;
+  assert.equal(staleOutcome.accepted, false);
+  assert.equal(accepted, 0);
+
+  await seed(A.id);
+  const committedStamp = session.captureHostSpeech();
+  (queue as any)._speak = async () => '/tmp/accepted-standalone.wav';
+  const chain = deferred<any>();
+  let entered = false;
+  (queue as any)._airVoice = async (_file: string, _wav: string, _text: string, _gain: number, opts: any) => {
+    entered = true;
+    opts?.onQueued?.({ voiceId: 'accepted', clipMs: 1000, estimatedAirInMs: 0 });
+    return chain.promise;
+  };
+  const acceptedAnnounce = queue.announce('Committed host automatic ident', 'station-id', {
+    persona: A, hostSpeech: committedStamp,
+  });
+  while (!entered) await new Promise(resolve => setImmediate(resolve));
+  await settings.update({ shows: [show(B.id)] } as never);
+  chain.resolve({ voiceId: 'accepted', clipMs: 1000, aired: Promise.resolve(null) });
+  const acceptedOutcome = await acceptedAnnounce;
+  assert.equal(acceptedOutcome.accepted, true, 'voice-chain acceptance is the commitment boundary');
 });

@@ -106,9 +106,9 @@ export interface QueueItem {
   // drainToLiquidsoap and aired in airIntro, both later than generation and
   // both of which used to re-resolve the speaker from the wall clock — so
   // across a show boundary a line written for the incoming DJ got spoken in the
-  // outgoing DJ's voice. Decided once, at push time. Not persisted: a restart
-  // drops unrendered intros anyway, and a stale persona blob is worse than the
-  // live fallback.
+  // outgoing DJ's voice. Decided once at generation and persisted in the
+  // wholesale queue snapshot, so recovery keeps the real author. Host-owned
+  // speech is separately freshness-stamped below and invalidated before redrain.
   introPersona?: Persona | null;
   /** Explicit ownership of ordinary host speech, captured when its script was written. */
   introHostSpeech?: HostSpeechStamp | null;

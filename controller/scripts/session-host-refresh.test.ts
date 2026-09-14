@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -13,6 +13,7 @@ process.env.STATE_DIR = root;
 
 const settings = await import('../src/settings.js');
 const session = await import('../src/broadcast/session.js');
+const { config } = await import('../src/config.js');
 await import('../src/broadcast/queue.js');
 
 const template = settings.get().personas[0];
@@ -143,6 +144,9 @@ test('recovery repairs a persisted same-show session before returning it', async
   const recovered = await session.recover(context());
   assert.equal(recovered.persona?.id, SARA.id);
   assert.ok((recovered.hostRevision ?? 0) >= 1);
+  const persisted = JSON.parse(readFileSync(config.session.currentFile, 'utf8'));
+  assert.equal(persisted.persona?.id, SARA.id, 'recovery persists the repaired host before returning');
+  assert.equal(persisted.hostRevision, recovered.hostRevision);
 });
 
 

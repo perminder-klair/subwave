@@ -15,6 +15,29 @@ import { speechPaceScale } from '../../audio/tts.js';
 import { normalizeForDisplay, normalizeForSpeech, spokenWordScale } from '../../audio/speech-text.js';
 import { introMsOf } from './runs.js';
 
+export interface GeneratedHostLink {
+  link: string | null;
+  introPersona: Persona | null;
+  hostSpeech: HostSpeechStamp | null;
+}
+
+// The shared production seam for both picker paths: capture the author at the
+// actual listener-facing model call, then invalidate its result if the active
+// same-show host epoch changed while that call was in flight.
+export async function generatePickLink(
+  args: Record<string, unknown>,
+  generate: (input: Record<string, unknown>) => Promise<string> = dj.generateLink,
+): Promise<GeneratedHostLink> {
+  const hostSpeech = session.captureHostSpeech();
+  const introPersona = session.onAirPersona();
+  const generated = await generate({ ...args, persona: introPersona });
+  return {
+    link: hostSpeech && !session.isHostSpeechCurrent(hostSpeech) ? null : generated,
+    introPersona,
+    hostSpeech,
+  };
+}
+
 export function trackFields(song) {
   return {
     id: song.id,

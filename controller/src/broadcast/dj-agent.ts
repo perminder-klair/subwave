@@ -53,7 +53,7 @@ import {
   breakerOpen,
   breakerSuccess,
 } from './dj-agent/breaker.js';
-import { dropEchoedLink, enqueuePick, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
+import { dropEchoedLink, enqueuePick, generatePickLink, trackFields, trimLinkToIntro } from './dj-agent/enqueue.js';
 import { advanceRun, runActive } from './dj-agent/runs.js';
 import { pickSchemaBase, pickSystem, requestSystem } from './dj-agent/schemas.js';
 import { guardIntro, screenAck, isNamedRequester } from '../util/request-guard.js';
@@ -480,20 +480,20 @@ async function pickViaAgent(queue, ctx, { wantLink, audioWaypoint = null, pickAn
   let linkHostSpeech: ReturnType<typeof session.captureHostSpeech> = null;
   if (wantLink && pickAnchor) {
     try {
-      linkHostSpeech = session.captureHostSpeech();
-      linkPersona = session.onAirPersona();
-      rawLink = await dj.generateLink({
+      const generated = await generatePickLink({
         previous: pickAnchor, current: song, context: linkAirContext(ctx, linkAirAt),
-        clockIsAirTime: !!linkAirAt, persona: linkPersona,
+        clockIsAirTime: !!linkAirAt,
         recap: queue.getDjRecap(), recentTracks: queue.getRecentTracks(),
         recentOpeners: queue.getRecentOpeners(),
         lastLink: queue.getLastLinkText(),
       });
+      rawLink = generated.link || '';
+      linkPersona = generated.introPersona;
+      linkHostSpeech = generated.hostSpeech;
     } catch (err: any) {
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
-  if (linkHostSpeech && !session.isHostSpeechCurrent(linkHostSpeech)) rawLink = '';
   const say = dropEchoedLink(trimLinkToIntro(rawLink, song), queue) || '';
   const link = say || null;
   const fxActive = settings.effectsActive();
@@ -594,9 +594,7 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
   const airAt = linkClockAt(showAt, Date.now());
   if (wantLink && pickAnchor) {
     try {
-      linkHostSpeech = session.captureHostSpeech();
-      linkPersona = session.onAirPersona();
-      link = await dj.generateLink({
+      const generated = await generatePickLink({
         // ctx with the clock stepped to the link's air moment — showAt's own
         // clock carries the show-attribution padding and ran two minutes fast
         // on air (#1282). Only with the look-ahead resolved AND enough runway
@@ -609,7 +607,6 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
         // back to getEffectivePersona() on the wall clock, which disagrees with
         // the session inside the look-ahead window — the incoming DJ's line
         // written in the outgoing DJ's voice.
-        persona: linkPersona,
         recap: queue.getDjRecap(),
         recentTracks: queue.getRecentTracks(),
         recentOpeners: queue.getRecentOpeners(),
@@ -617,11 +614,13 @@ async function pickViaPool(queue, ctx, { wantLink, pickAnchor, showAt = null }: 
         // queue read stays at the call site, the prompt layer is handed values.
         lastLink: queue.getLastLinkText(),
       });
+      link = generated.link;
+      linkPersona = generated.introPersona;
+      linkHostSpeech = generated.hostSpeech;
     } catch (err) {
       queue.log('error', `DJ link failed: ${err.message}`);
     }
   }
-  if (linkHostSpeech && !session.isHostSpeechCurrent(linkHostSpeech)) link = null;
   // Talk-within-the-intro rides enqueuePick's trimLinkToIntro chokepoint —
   // the pool link needs no enforcement of its own here (#962 follow-up).
   // Transition effects ride the pool path too (pickNextTrack only offers the

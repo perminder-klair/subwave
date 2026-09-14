@@ -19,7 +19,7 @@
 
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -32,6 +32,7 @@ const { queue } = await import('../src/broadcast/queue.js');
 const djAgent = await import('../src/broadcast/dj-agent.js');
 const programme = await import('../src/broadcast/programme.js');
 const { currentTalkAir } = await import('../src/broadcast/talk-air.js');
+const { config } = await import('../src/config.js');
 
 after(() => {
   rmSync(root, { recursive: true, force: true });
@@ -488,4 +489,49 @@ test('a handoff pair settles only after its final live-edge marker', async () =>
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(session.boundaryHandoffStatus()?.state, 'aired',
     'the final line marker settles the complete pair');
+});
+
+
+test('same-show recovery repairs the host without disturbing armed, queued, or aired boundary handoffs', async () => {
+  for (const state of ['armed', 'queued', 'aired'] as const) {
+    const emptyWeek: Record<number, (string | null)[]> = {};
+    for (let day = 0; day < 7; day++) emptyWeek[day] = Array(24).fill(null);
+    await settings.update({
+      personas: [WREN, GIGI], activePersonaId: WREN.id,
+      shows: [], schedule: emptyWeek, scheduleOverride: null,
+    } as never);
+    const now = Date.now();
+    const outgoing = context({ id: 's_same_show', name: 'Same Show' }, now);
+    const incoming = context({ id: 's_next_show', name: 'Next Show' }, now + 60_000);
+    session.start(outgoing);
+    session.appendTurn({ role: 'segment', kind: 'link', text: 'Already aired continuity.', meta: { personaId: WREN.id } });
+    await settings.update({ activePersonaId: GIGI.id } as never);
+    assert.equal(session.armBoundaryHandoff(incoming), true);
+    session.attachBoundaryProgramme({
+      status: 'ok', plan: { angle: `${state} plan` }, beats: { intro: true }, introAiredAt: new Date().toISOString(),
+    });
+    if (state === 'queued' || state === 'aired') session.markHandoffQueued();
+    if (state === 'aired') session.markHandoffAired();
+    const stale = structuredClone(session.getSession()!);
+    const before = { id: stale.id, key: stale.key, startedAt: stale.startedAt, messages: stale.messages.length };
+    await new Promise(resolve => setTimeout(resolve, 1_100));
+
+    const week: Record<number, string[]> = {};
+    for (let day = 0; day < 7; day++) week[day] = Array(24).fill('s_same_show');
+    await settings.update({
+      activePersonaId: WREN.id,
+      shows: [{ id: 's_same_show', name: 'Same Show', topic: 'tests', personaId: GIGI.id }],
+      schedule: week,
+    } as never);
+    writeFileSync(config.session.currentFile, JSON.stringify(stale, null, 2));
+
+    const recovered = await session.recover(outgoing);
+    assert.equal(recovered.persona?.id, GIGI.id, state);
+    assert.equal(session.boundaryHandoffStatus()?.state, state, state);
+    assert.equal(recovered.boundaryHandoff?.programme?.plan?.angle, `${state} plan`, state);
+    assert.equal(recovered.id, before.id, state);
+    assert.equal(recovered.key, before.key, state);
+    assert.equal(recovered.startedAt, before.startedAt, state);
+    assert.ok(recovered.messages.length > before.messages, state);
+  }
 });

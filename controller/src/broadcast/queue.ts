@@ -276,6 +276,37 @@ function pauseTrackKey(item: QueueItem): string {
   return item.track.id ? `id:${item.track.id}` : `track:${trackKey(item.track)}`;
 }
 
+interface IntroSpeechIdentity {
+  script: string | null | undefined;
+  wav: string | null | undefined;
+  kind: string | null | undefined;
+  persona: Persona | null;
+  hostSpeech: HostSpeechStamp | null;
+}
+
+function introSpeechIdentity(item: QueueItem): IntroSpeechIdentity {
+  return {
+    script: item.introScript,
+    wav: item.introWav,
+    kind: item.introKind,
+    persona: item.introPersona ?? null,
+    hostSpeech: item.introHostSpeech ? { ...item.introHostSpeech } : null,
+  };
+}
+
+function sameHostSpeechStamp(a: HostSpeechStamp | null | undefined, b: HostSpeechStamp | null | undefined): boolean {
+  if (!a || !b) return a == null && b == null;
+  return a.showKey === b.showKey && a.personaId === b.personaId && a.revision === b.revision;
+}
+
+function introSpeechUnchanged(item: QueueItem, expected: IntroSpeechIdentity): boolean {
+  return item.introScript === expected.script
+    && item.introWav === expected.wav
+    && item.introKind === expected.kind
+    && (item.introPersona?.id ?? null) === (expected.persona?.id ?? null)
+    && sameHostSpeechStamp(item.introHostSpeech, expected.hostSpeech);
+}
+
 // Manual jingle presses that may be pending at once (see playJingle). A bound on
 // a runaway loop across different filenames, not a policy on how many
 // announcements an operator may line up.
@@ -338,6 +369,28 @@ class Queue {
   _pendingJingles = new Map<string, { at: number; rotate: boolean }>();
   _tracksSinceJingle = 0;       // track boundaries since the last controller-drawn jingle — the count radio.liq's rotate used to keep (#1619)
   _lastRotateJingle: string | null = null; // last jingle the controller drew — anti-repeat for jingle-rotate.pickRotateJingle
+  _bedCatalog = beds.catalog;
+  _bedGetPath = beds.getPath;
+  _writeHandoff = writeHandoff;
+  _speak = speak;
+  _airVoice = airVoice;
+
+  startIntroRender(item: QueueItem) {
+    const expected = introSpeechIdentity(item);
+    const kind = expected.kind || 'dj-speak';
+    const render = this._introRenders.start(item, () => this._speak(expected.script!, {
+      kind,
+      persona: expected.persona,
+    }));
+    void render.then(result => {
+      if (result.status === 'rendered') {
+        if (!item.introAired && introSpeechUnchanged(item, expected)) item.introWav = result.wav;
+      } else {
+        this.log('error', `TTS failed: ${(result.error as Error).message}`);
+      }
+    });
+    return render;
+  }
 
   // Drop only uncommitted ordinary host speech. The music item remains in the
   // same position with all request and transition metadata intact.
@@ -1004,6 +1057,7 @@ class Queue {
       return;
     }
     if (!item.introWav || !item.introScript || item.introAired) return;
+    const speechIdentity = introSpeechIdentity(item);
 
     // Whatever plays right before this item is what the bed crosses in under —
     // the item just ahead in the (FIFO) queue, else the track on air now.
@@ -1047,15 +1101,21 @@ class Queue {
       const entryCrossSec = Math.min(15, Math.max(0, Number.isFinite(rawCross) ? rawCross : 10));
 
       const { bedSec, crossSec } = bedPolicy.bedLengthFor(voiceMs, cfg, entryCrossSec);
-      const pick = bedPolicy.pickBed(await beds.catalog(), bedSec, this._lastBed, Math.random());
+      const pick = bedPolicy.pickBed(await this._bedCatalog(), bedSec, this._lastBed, Math.random());
       if (!pick) {
         this.log('beds', `no bed long enough for a ${bedSec}s link — talking over "${item.track?.title}" instead`);
         return;
       }
-      const path = await beds.getPath(pick.name);
+      const path = await this._bedGetPath(pick.name);
       if (!path) return;
+      // Catalog and path lookup both await operator-owned disk state. Re-check
+      // the exact speech that justified this bed immediately before accepting a
+      // music-timeline commitment. A same-show A -> B -> A toggle is stale by
+      // revision even when the visible author id returned to A.
+      if (!introSpeechUnchanged(item, speechIdentity)
+          || (speechIdentity.hostSpeech && !session.isHostSpeechCurrent(speechIdentity.hostSpeech))) return;
 
-      await writeHandoff(config.liquidsoap.queueFile, beds.bedUri(path, { bedSec, crossSec }));
+      const previousBed = this._lastBed;
       item.bedded = true;
       item.bedEntrySec = entryCrossSec;
       // What the bed costs this item's air time. bedSec was built as
@@ -1066,6 +1126,19 @@ class Queue {
       // that walks the queue therefore cannot see it (#1574).
       item.bedDelaySec = Math.max(0, Math.round((bedSec - entryCrossSec - crossSec) * 100) / 100);
       this._lastBed = pick.name;
+      try {
+        // Marked committed before the await: once this handoff enters the
+        // serialized next.txt writer, a host edit must not strip the matching
+        // speech and leave an instrumental bed airing naked.
+        await this._writeHandoff(config.liquidsoap.queueFile, beds.bedUri(path, { bedSec, crossSec }));
+      } catch (err) {
+        delete item.bedded;
+        delete item.bedEntrySec;
+        delete item.bedDelaySec;
+        if (this._lastBed === pick.name) this._lastBed = previousBed;
+        this.invalidateObsoleteHostSpeech();
+        throw err;
+      }
 
       // The entry-side transition effects applyMixTransition armed on this
       // track (sweep/dissolve/chop/blend, validated for the predecessor→item
@@ -1642,26 +1715,10 @@ class Queue {
             // the race: a render that lands after the budget still reaches the
             // item (airIntro then finds a WAV instead of re-rendering), and a
             // late rejection can never surface as an unhandled rejection.
-            const script = item.introScript;
-            const kind = item.introKind || 'dj-speak';
-            const persona = item.introPersona || null;
-            const hostSpeech = item.introHostSpeech ? { ...item.introHostSpeech } : null;
-            const render = this._introRenders.start(item, () => speak(script!, { kind, persona }));
             // The tracker turns rejection into a result so a late failure can
-            // never surface unhandled. This observer owns the item mutation and
-            // error log even after the drain stops waiting.
-            void render.then(result => {
-              if (result.status === 'rendered') {
-                const sameStamp = JSON.stringify(item.introHostSpeech ?? null) === JSON.stringify(hostSpeech);
-                if (!item.introAired
-                    && item.introScript === script
-                    && (item.introKind || 'dj-speak') === kind
-                    && (item.introPersona?.id ?? null) === (persona?.id ?? null)
-                    && sameStamp) item.introWav = result.wav;
-              } else {
-                this.log('error', `TTS failed: ${(result.error as Error).message}`);
-              }
-            });
+            // never surface unhandled. startIntroRender snapshots the full
+            // speech identity and owns mutation even after the drain stops waiting.
+            const render = this.startIntroRender(item);
             const result = await awaitIntroRender(
               render,
               budgetSec == null ? null : budgetSec * 1000,
@@ -1937,7 +1994,7 @@ class Queue {
       return { accepted: false, deferred: false, completed: Promise.resolve(false) };
     }
     try {
-      const wavPath = await speak(safeText, { kind, persona });
+      const wavPath = await this._speak(safeText, { kind, persona });
       if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) {
         return { accepted: false, deferred: false, completed: Promise.resolve(false) };
       }
@@ -1981,7 +2038,7 @@ class Queue {
       if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) {
         return { accepted: false, deferred: false, completed: Promise.resolve(false) };
       }
-      const handoff = await airVoice(targetFile, wavPath, safeText, voiceGainDb(kind, persona), {
+      const handoff = await this._airVoice(targetFile, wavPath, safeText, voiceGainDb(kind, persona), {
         onQueued: q => this.onQueued(q, seg),
       });
       // Bookkeeping runs when the words reach the stream, not at handoff
@@ -2092,7 +2149,7 @@ class Queue {
       for (const l of lines) {
         const text = normalizeForDisplay(l.text || '');
         if (!text) continue;
-        const wavPath = await speak(text, { kind, persona: l.persona });
+        const wavPath = await this._speak(text, { kind, persona: l.persona });
         rendered.push({ ...l, text, wavPath });
       }
     } catch (err) {
@@ -2125,7 +2182,7 @@ class Queue {
           ...exchangeSegment(l, kind),
           settlesHandoff: kind === 'handoff' ? index === rendered.length - 1 : undefined,
         };
-        const handoff = await airVoice(config.liquidsoap.sayFile, l.wavPath, l.text, voiceGainDb(kind, l.persona), {
+        const handoff = await this._airVoice(config.liquidsoap.sayFile, l.wavPath, l.text, voiceGainDb(kind, l.persona), {
           onQueued: q => this.onQueued(q, seg),
         });
         this.onSpoken(handoff, seg);
@@ -2164,7 +2221,7 @@ class Queue {
       return;
     }
     try {
-      const wavPath = await speak(safeText, { kind, persona });
+      const wavPath = await this._speak(safeText, { kind, persona });
       if (hostSpeech && !session.isHostSpeechCurrent(hostSpeech)) return;
       if (suppressScheduledSpeechDuringHandoff(kind, session.handoffInProgress())) {
         this.log('scheduler', `Dropped ${kind} — the show handoff completed while it rendered`);
@@ -2548,7 +2605,7 @@ class Queue {
               settlesHandoff: clip.settlesHandoff,
             }
           : { kind: p.kind, channel: 'intro', text: clip.text, meta: clip.meta, persona: clip.persona };
-        const handoff = await airVoice(config.liquidsoap.introFile, clip.wavPath, clip.text, voiceGainDb(p.kind, clip.persona), {
+        const handoff = await this._airVoice(config.liquidsoap.introFile, clip.wavPath, clip.text, voiceGainDb(p.kind, clip.persona), {
           onQueued: q => this.onQueued(q, seg),
         });
         completions.push(this.onSpoken(handoff, seg));
@@ -2655,7 +2712,7 @@ class Queue {
     if (!item.introWav || !existsSync(item.introWav)) {
       if (!item.introScript) return;
       try {
-        item.introWav = await speak(item.introScript, {
+        item.introWav = await this._speak(item.introScript, {
           kind: item.introKind || 'dj-speak',
           // Same persona the script was written under — speak() would
           // otherwise resolve getEffectivePersona() at AIR time, the wrong
@@ -2694,7 +2751,7 @@ class Queue {
           ? { personaId: item.introPersona.id, personaName: item.introPersona.name }
           : {},
       };
-      const handoff = await airVoice(targetFile, item.introWav, item.introScript || '', voiceGainDb(kind, item.introPersona || undefined), {
+      const handoff = await this._airVoice(targetFile, item.introWav, item.introScript || '', voiceGainDb(kind, item.introPersona || undefined), {
         onQueued: q => this.onQueued(q, seg),
       });
       // Not deferred: introAired is already set and the queue state has to reach
@@ -3986,7 +4043,7 @@ class Queue {
           };
           this.log('scheduler', `Pause-and-talk ${p.kind} recovery observed voice ${observed.phase} — not republishing ${deliveryId}`);
         } else {
-          handoff = await airVoice(
+          handoff = await this._airVoice(
             config.liquidsoap.sayFile,
             clip.wavPath,
             clip.text,
