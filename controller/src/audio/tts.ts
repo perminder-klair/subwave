@@ -180,10 +180,11 @@ export function voiceGainDb(kind: string, persona?: any): number {
 }
 
 // Speech-rate multiplier for `kind` (1.0 = engine default), clamped to
-// [0.5, 2.0]: engine base x persona x daypart energy. The engine base applies
-// universally, jingles included; persona x daypart only to persona-voiced kinds,
-// so a jingle cut at 2am carries no 2am pacing. `liveOverride` replaces the
-// persona/daypart term but still composes with the engine base. Reads the
+// [0.5, 2.0]: engine base x persona x current programme pace. The engine base
+// applies universally, jingles included; persona x programme pace only to
+// persona-voiced kinds, so a jingle cut at 2am carries no 2am pacing.
+// `liveOverride` replaces the persona/programme term but still composes with
+// the engine base. Reads the
 // RESOLVED engine, like voiceGainDb(). Also feeds the intro-budget word
 // ceiling (#962) in dj-agent.ts.
 export function speechPaceScale(kind: string, persona?: any, liveOverride?: number | null): number {
@@ -196,9 +197,9 @@ export function speechPaceScale(kind: string, persona?: any, liveOverride?: numb
     : GLOBAL_VOICE_KINDS.has(kind)
       ? 1
       : (personaTts ? settings.clampTtsSpeed(personaTts.speed) : 1) * energyForDaypart().speed;
-  // Bounds-clamp but do NOT snap to the 0.05 grid: daypart energy is a non-grid
-  // value. Snapping applies only to the stored per-engine/per-persona knobs.
-  return Math.min(settings.TTS_SPEED_MAX, Math.max(settings.TTS_SPEED_MIN, engineSpeed * live));
+  // Bounds-clamp but do NOT snap to the 0.05 grid: programme pacing is a
+  // non-grid value. Snapping applies only to the stored engine/persona knobs.
+  return settings.clampEffectiveTtsSpeed(engineSpeed * live);
 }
 
 async function speakWith(engine: string, text: string, opts: any, personaTts: any) {
@@ -302,7 +303,10 @@ export async function synthesizeSample(
     ? settings.normalizeTtsCorrections(corrections)
     : settings.get().tts?.corrections;
   const sample = normalizeForSpeech(raw.slice(0, PREVIEW_TEXT_MAX), activeCorrections);
-  const scale = settings.clampTtsSpeed(speed);
+  // `speed` is already the final preview multiplier. A persona preview can
+  // compose two saved 0.05-grid controls into a non-grid rate (0.90 x 1.15 =
+  // 1.035), so only bounds-clamp here; snapping again would diverge from air.
+  const scale = settings.clampEffectiveTtsSpeed(speed);
   let previewCloudModel: string | undefined;
   if (engine === 'cloud' && cloudModel !== undefined) {
     const v = String(cloudModel).trim();

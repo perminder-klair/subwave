@@ -204,7 +204,8 @@ export async function speak(
     text: text.trim(),
     voice: voice || config.kokoro.voice,
     lang: lang || config.kokoro.lang,
-    // Per-call speedScale (daypart energy) composes on top of the config speed.
+    // Per-call speedScale (persona + current programme pacing) composes on top
+    // of the engine config speed.
     speed: config.kokoro.speed * (speedScale != null ? speedScale : 1),
     out: outPath,
   });

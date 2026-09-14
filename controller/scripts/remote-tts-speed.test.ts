@@ -104,14 +104,24 @@ if (scenario) {
       const previewPath = await tts.synthesizeSample({ engine: 'remote', voice: 'preview-host', speed: 1.1 });
       assert.equal(readFileSync(previewPath, 'utf8'), 'processed:1.1');
 
+      // A persona preview composes two saved 0.05-grid controls before it gets
+      // here. The product is an effective rate, not another saved knob, so it
+      // must keep its non-grid precision just like the on-air dispatcher.
+      const composedPreviewPath = await tts.synthesizeSample({
+        engine: 'remote',
+        voice: 'preview-host',
+        speed: 1.035, // 0.90 engine × 1.15 persona
+      });
+      assert.equal(readFileSync(composedPreviewPath, 'utf8'), 'processed:1.035');
+
       assert.ok(requests.every(request => Object.keys(request.body).sort().join(',') === 'text,voice'));
       const args = readFileSync(process.env.FFMPEG_CAPTURE!, 'utf8');
-      for (const factor of ['0.5000', '0.9000', '1.0600', '2.0000', '0.9400', '1.1000']) {
+      for (const factor of ['0.5000', '0.9000', '1.0600', '2.0000', '0.9400', '1.1000', '1.0350']) {
         assert.match(args, new RegExp(`atempo=${factor.replace('.', '\\.')}`));
       }
       assert.match(args, /-c:a pcm_s16le/);
       assert.doesNotMatch(args, /loudnorm/);
-      assert.equal(warnings.length, directCases.length + 2, 'voice warnings survive stretched direct, dispatch and preview paths');
+      assert.equal(warnings.length, directCases.length + 3, 'voice warnings survive stretched direct, dispatch and preview paths');
     } else if (scenario === 'missing' || scenario === 'failed') {
       const outPath = path.join(stateDir, `${scenario}.wav`);
       assert.equal(

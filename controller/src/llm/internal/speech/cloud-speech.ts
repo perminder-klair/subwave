@@ -344,15 +344,16 @@ export async function speak(
     c.baseUrl = base.baseUrl;
   }
 
-  // Speech rate — the per-call speedScale (daypart energy) composes on top of
-  // CLOUD_TTS_SPEED / TTS_SPEED, then clamped to the provider's range. Only
+  // Speech rate — the per-call speedScale (persona + current programme pacing)
+  // composes on top of CLOUD_TTS_SPEED / TTS_SPEED, then is clamped to the
+  // provider's range. Only
   // sent when it differs from default so default stations are unaffected and
   // providers that ignore the field never see it.
   //
   // openai-compatible servers default to NOT receiving `speed` — implementations
   // are wildly uneven (#942: a Chatterbox shim behind LiteLLM produced
   // comb-filtered "echo chamber" audio with broken mp3 frame timestamps whenever
-  // `speed` was present, and daypart energy makes it non-unity most of the day).
+  // `speed` was present, and programme pacing makes it non-unity much of the day).
   // The server renders at 1x and the rate is applied locally via ffmpeg atempo
   // below, so every knob still works without the fragile server-side path.
   //

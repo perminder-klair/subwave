@@ -140,10 +140,16 @@ the far side shouldn't lose the segment.
 ## Speech rate
 
 Remote supports the same engine and persona speed controls as Piper, Kokoro and
-Cloud. SUB/WAVE composes the Remote engine rate with the persona's delivery rate
-and the current daypart or show's energy, then applies that effective rate
-locally with ffmpeg's pitch-preserving `atempo` filter. Live and admin preview
-rates use the same path.
+Cloud. For persona-voiced speech on air, SUB/WAVE composes the Remote engine
+rate with the persona's delivery rate and the current daypart or show's energy,
+then applies that effective rate locally with ffmpeg's pitch-preserving
+`atempo` filter. Global voice kinds such as jingles use the engine rate alone.
+
+Admin previews stay deterministic: the station preview auditions the engine
+rate by itself, while a persona preview composes the saved engine and persona
+rates. Neither preview adds the current daypart/show factor, which can change by
+the time a segment airs. Preview and live audio otherwise use the same local
+processing path.
 
 This means an upgrade can make pacing audible even when both saved sliders still
 show `1.00×`: automatic daypart rates normally range around unity, and an active

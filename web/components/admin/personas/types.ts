@@ -9,8 +9,8 @@ export interface PersonaTts {
   voice: string;
   // −12..+12, 0 = no change. Stacks on the per-engine gain (settings.ts:clampTtsGain).
   gainDb: number;
-  // 0.5..2.0×, 1.0 = no change. Composes with the per-engine speed + daypart
-  // energy; Piper/Kokoro/cloud only (settings.ts:clampTtsSpeed).
+  // 0.5..2.0×, 1.0 = no change. Composes with the per-engine speed and, on
+  // air, programme pacing; Piper/Kokoro/Cloud/Remote only.
   speed: number;
 }
 
@@ -106,10 +106,14 @@ export interface SettingsResponse {
     djPrompts?: Array<Partial<DjPromptPreset>>;
     activeDjPromptId?: string;
     djHouseRules?: string;
-    // The slice resolvePersonaVoiceSlot() needs: an 'inherit' persona takes its
-    // engine from defaultEngine and, when that is cloud, its provider + voice
-    // from this block. Kept in step with StationVoiceDefaults in the mirror.
-    tts?: { defaultEngine?: string; cloud?: { provider?: string; voice?: string } | null };
+    // An 'inherit' persona takes its engine and station speed from this block;
+    // when that engine is cloud it also takes the provider + voice. Kept in
+    // step with the public /settings projection used by this editor.
+    tts?: {
+      defaultEngine?: string;
+      speed?: Record<string, number>;
+      cloud?: { provider?: string; voice?: string } | null;
+    };
   };
   defaults?: { djPrompt?: string };
   skills?: { catalog?: SkillCatalogEntry[] };

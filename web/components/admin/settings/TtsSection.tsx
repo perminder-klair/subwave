@@ -176,7 +176,7 @@ function TtsSpeedField({
       <div className="field-hint">
         {supported
           ? engineId === 'remote'
-            ? <>Slow down or speed up this engine. <code>1.00×</code> = no change. Remote applies other rates locally with ffmpeg when available; otherwise it uses the original audio.</>
+            ? <>Slow down or speed up this engine. <code>1.00×</code> = no change. Remote applies this base rate locally with ffmpeg when available; persona and programme pacing compose for persona-voiced speech on air. Without ffmpeg, it uses the original audio.</>
             : <>Slow down or speed up this engine. <code>1.00×</code> = no change.</>
           : <>Not supported by this engine: Piper, Kokoro, cloud and Remote honour speed.</>}
       </div>
@@ -1421,8 +1421,8 @@ export function TtsSection({ data, form, setForm, busy, saveSettings, adminFetch
                   adminFetch={adminFetch}
                 />
                 <div className="field-hint">
-                  Plays a short sample in the selected engine &amp; voice. Reflects voice
-                  and speed; the dB trim is applied later, on air.
+                  Auditions the selected engine&apos;s base voice and speed. For persona-voiced
+                  speech, persona and programme pacing are applied later on air; so is the dB trim.
                   {e === 'kokoro' || e === 'pocket-tts' ? "Sample text is English; non-English language settings may sound strange" : ""}
                 </div>
               </div>

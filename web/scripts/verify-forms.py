@@ -48,6 +48,7 @@ locator's OWN id (a plain field) or aria-labelledby (a group control —
 fieldAria's groupProps carries no id, see lib/form.ts).
 """
 import base64
+import io
 import json
 import os
 import re
@@ -55,8 +56,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import traceback
+import wave
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
@@ -1364,6 +1368,43 @@ def onboarding(page):
 PERSONA_VERIFY_NAME = "Verify Persona"
 
 
+def preview_wav(seconds=4, sample_rate=24000):
+    """A real, browser-decodable PCM WAV served by the fake Remote endpoint."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(sample_rate)
+        wav.writeframes(b"\x00\x00" * (seconds * sample_rate))
+    return buf.getvalue()
+
+
+class PreviewRemoteTtsHandler(BaseHTTPRequestHandler):
+    audio = preview_wav()
+    speak_bodies = []
+
+    def do_GET(self):
+        body = b'{"ok":true}' if self.path == "/health" else b"not found"
+        self.send_response(200 if self.path == "/health" else 404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self):
+        size = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(size) or b"{}")
+        type(self).speak_bodies.append(body)
+        self.send_response(200 if self.path == "/speak" else 404)
+        self.send_header("Content-Type", "audio/wav")
+        self.send_header("Content-Length", str(len(self.audio)))
+        self.end_headers()
+        self.wfile.write(self.audio)
+
+    def log_message(self, _format, *_args):
+        pass
+
+
 @check
 def personas(page):
     """PersonasPanel (Task 9) — the roster + system-prompt library on
@@ -1540,6 +1581,121 @@ def personas(page):
         )
     finally:
         page.unroute("**/settings", mock_tts_refusal)
+
+
+@check
+def persona_preview_rate(page):
+    """A persona preview auditions engine speed × persona speed.
+
+    The preview API accepts one final rate. This drives a real inherited Remote
+    persona through the browser, captures that request, and decodes the WAV the
+    isolated controller actually returns. Programme/daypart pacing is
+    intentionally absent: previews are stable auditions of the two saved
+    controls, while the live dispatcher applies the current programme factor.
+    """
+    before = json.loads(api("/settings"))["values"]
+    before_tts = before["tts"]
+    before_personas = before["personas"]
+    personas_for_preview = []
+    for persona in before_personas:
+        copy = json.loads(json.dumps(persona))
+        if copy.get("name") == "Wren":
+            copy["tts"]["engine"] = "inherit"
+            copy["tts"]["speed"] = 2
+        personas_for_preview.append(copy)
+
+    PreviewRemoteTtsHandler.speak_bodies = []
+    remote = ThreadingHTTPServer(("127.0.0.1", 0), PreviewRemoteTtsHandler)
+    remote_thread = threading.Thread(target=remote.serve_forever, daemon=True)
+    remote_thread.start()
+    remote_url = f"http://127.0.0.1:{remote.server_address[1]}"
+
+    try:
+        api_write("POST", "/settings", {
+            "tts": {
+                "defaultEngine": "remote",
+                "remote": {"url": remote_url},
+                "speed": {**before_tts["speed"], "remote": 0.5},
+            },
+            "personas": personas_for_preview,
+        })
+
+        def open_wren():
+            page.goto(f"{WEB}/admin/personas")
+            page.wait_for_selector("text=The voices on your station.")
+            page.get_by_role("button", name="Edit Wren").click()
+            dialog = page.get_by_role("dialog")
+            dialog.wait_for()
+            slider = dialog.get_by_label("Speech speed multiplier")
+            assert slider.is_enabled(), "inherited Remote persona speed is disabled"
+            assert slider.input_value() == "2", "persona speed did not hydrate at 2x"
+            return dialog
+
+        def assert_preview(dialog, expected_rate, min_duration, max_duration):
+            with page.expect_response(
+                lambda response: response.url.endswith("/settings/tts/preview")
+                and response.request.method == "POST"
+            ) as response_info:
+                dialog.get_by_role("button", name="Play sample").click()
+
+            response = response_info.value
+            assert response.status == 200, f"preview returned HTTP {response.status}"
+            preview_body = response.request.post_data_json
+            assert preview_body["speed"] == expected_rate, (
+                f"persona preview posted {preview_body['speed']!r}, expected {expected_rate}"
+            )
+            assert PreviewRemoteTtsHandler.speak_bodies, "fake Remote endpoint received no /speak call"
+            assert set(PreviewRemoteTtsHandler.speak_bodies[-1]) == {"text", "voice"}, (
+                "preview changed the Remote /speak wire contract"
+            )
+
+            audio = dialog.locator("audio")
+            # media-chrome keeps its slotted <audio> element visually hidden;
+            # the browser still decodes it and exposes duration metadata.
+            audio.wait_for(state="attached")
+            duration = audio.evaluate("""element => new Promise((resolve, reject) => {
+              const finish = () => Number.isFinite(element.duration)
+                ? resolve(element.duration)
+                : reject(new Error('preview duration is not finite'));
+              if (element.readyState >= 1) finish();
+              else {
+                element.addEventListener('loadedmetadata', finish, { once: true });
+                element.addEventListener('error', () => reject(new Error('preview audio failed to decode')), { once: true });
+              }
+            })""")
+            assert min_duration <= duration <= max_duration, (
+                f"preview duration {duration:.6f}s fell outside "
+                f"[{min_duration:.3f}, {max_duration:.3f}]s"
+            )
+            return preview_body["speed"], duration
+
+        # Saved 0.5x engine × 2x persona composes to unity, preserving all four
+        # seconds of the endpoint's WAV.
+        unity_rate, unity_duration = assert_preview(open_wren(), 1, 3.95, 4.05)
+
+        # Exercise the actual non-unity Remote path too: 0.75x × 2x = 1.5x,
+        # so the same 4s source decodes to about 2.667s in the browser.
+        api_write("POST", "/settings", {
+            "tts": {"speed": {**before_tts["speed"], "remote": 0.75}},
+        })
+        shaped_rate, shaped_duration = assert_preview(open_wren(), 1.5, 2.62, 2.72)
+        print(
+            "  persona preview evidence: "
+            f"posted {unity_rate}x -> {unity_duration:.6f}s; "
+            f"posted {shaped_rate}x -> {shaped_duration:.6f}s"
+        )
+    finally:
+        remote.shutdown()
+        remote.server_close()
+        remote_thread.join(timeout=5)
+        api_write("POST", "/settings", {
+            "tts": {
+                "defaultEngine": before_tts["defaultEngine"],
+                "remote": before_tts["remote"],
+                "speed": before_tts["speed"],
+            },
+            "personas": before_personas,
+        })
 
 
 SHOW_VERIFY_NAME = "Verify Show"

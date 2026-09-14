@@ -110,7 +110,7 @@ export async function speak(
   if (audio.length === 0) throw new Error('remote TTS returned an empty response body');
 
   // The endpoint keeps its deliberately small { text, voice } contract. Apply
-  // the already-composed engine/persona/daypart rate locally, exactly once.
+  // the already-composed engine/persona/current-programme rate locally, once.
   // Invalid direct-call values degrade to unity; the dispatcher owns the normal
   // 0.5–2.0 bounds. Unity is an exact-byte fast path and does not probe ffmpeg.
   const rate = Number.isFinite(speedScale) && speedScale! > 0 ? speedScale! : 1;

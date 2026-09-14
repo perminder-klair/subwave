@@ -104,8 +104,8 @@ export interface TtsForm {
   // Keyed by engine id (note the hyphen in `pocket-tts`). Always carries all 6
   // known engines; 0 = unity.
   gainDb: Record<string, number>;
-  // Always carries all 6 known engines; 1.0 = unity. Inert for
-  // chatterbox/pocket-tts/remote.
+  // Always carries all 6 known engines; 1.0 = unity. Piper, Kokoro, Cloud and
+  // Remote honour it; Chatterbox/PocketTTS leave it inert.
   speed: Record<string, number>;
   // find→replace pairs applied to every spoken line before any engine reads it.
   corrections: { from: string; to: string }[];

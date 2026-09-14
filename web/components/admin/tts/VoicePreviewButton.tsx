@@ -23,7 +23,8 @@ interface VoicePreviewButtonProps {
   voice: string;
   cloudProvider?: string;
   cloudModel?: string;
-  // Final rate multiplier to audition (server clamps to 0.5–2.0×).
+  // Final saved-control rate to audition (server bounds-clamps to 0.5–2.0×);
+  // current programme pacing is deliberately excluded from stable previews.
   speed?: number;
   // Kokoro phonemizer language override (e.g. "en-gb", "ja").
   lang?: string;

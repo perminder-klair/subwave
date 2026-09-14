@@ -353,9 +353,9 @@ export const DEFAULTS = {
     // level the loudness gap between engines. Stacks with each persona's own
     // tts.gainDb. See TTS_GAIN_CLAMP_DB and audio/tts.ts:voiceGainDb().
     gainDb: { piper: 0, kokoro: 0, chatterbox: 0, 'pocket-tts': 0, cloud: 0, remote: 0 },
-    // Per-engine speech-rate multiplier (0.5–2.0x), composed on top of the
-    // daypart energy and each persona's tts.speed. Only piper/kokoro/cloud honour
-    // it — the other entries are inert. See clampTtsSpeed().
+    // Per-engine speech-rate multiplier (0.5–2.0x), composed with each
+    // persona's tts.speed and, on air, programme pacing. Piper, Kokoro, Cloud
+    // and Remote honour it; Chatterbox/PocketTTS leave it inert.
     speed: { piper: 1, kokoro: 1, chatterbox: 1, 'pocket-tts': 1, cloud: 1, remote: 1 },
     // Find→replace pairs applied to every booth-bound line before any engine sees
     // it (audio/speech-text.ts), e.g. { from: 'GHz', to: 'gigahertz' }.

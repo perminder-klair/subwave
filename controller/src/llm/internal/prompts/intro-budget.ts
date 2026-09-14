@@ -67,7 +67,7 @@ export function introBudgetPhrase(introMs: number | null | undefined, firstVocal
 // above is advisory — a small model will still occasionally overrun. This
 // enforces it deterministically. Base speaking pace is ~2.5 words/sec, scaled
 // by `paceScale` — the live speech-rate multiplier from
-// audio/tts.speechPaceScale() (engine × persona × daypart) — so a persona
+// audio/tts.speechPaceScale() (engine × persona × current programme pace) — so a persona
 // speaking at 0.8× gets a proportionally smaller word ceiling; 1 (the
 // default) is the historical fixed-pace assumption.
 //

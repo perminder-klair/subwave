@@ -191,6 +191,29 @@ def speak():
           <code className="bs-code-inline">X-TTS-Fell-Back-Reason</code>) and SUB/WAVE logs
           the substitution instead of leaving you to guess why the voice changed.
         </p>
+        <p>
+          <strong>Speech rate stays local.</strong> Remote supports the station and
+          persona speed controls without changing that two-field request. For
+          persona-voiced speech on air, SUB/WAVE composes the engine rate, the
+          persona&apos;s delivery rate, and the current daypart or show pacing, then
+          applies the result with ffmpeg&apos;s pitch-preserving{' '}
+          <code className="bs-code-inline">atempo</code> filter. Global voice kinds
+          such as jingles use the engine rate alone.
+        </p>
+        <p>
+          Previews are deliberately stable: the station preview auditions the engine
+          rate alone, while a persona preview combines the saved engine and persona
+          rates. Current programme pacing is added only when speech airs. A final rate
+          of exactly <code className="bs-code-inline">1.00×</code> preserves the server
+          bytes unchanged; if ffmpeg is unavailable or conversion fails, SUB/WAVE logs
+          a warning and uses the original audio at 1× instead of changing voice.
+        </p>
+        <p className="text-muted">
+          After an upgrade, automatic programme pacing and previously stored Remote
+          speed values can become audible even when both visible sliders are still at
+          <code className="bs-code-inline">1.00×</code>. No migration or server-side
+          rate support is required.
+        </p>
       </section>
 
       <section className="bs-section">
