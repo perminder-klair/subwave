@@ -1839,18 +1839,19 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                     (FLAC/ALAC/WAV); for a lossy-source library (e.g. AAC/MP3) it faithfully
                     carries lossy audio and adds no fidelity over MP3/Opus. Meant for external
                     players (VLC, foobar2000, a network streamer); the web and mobile players
-                    stay on MP3/Opus and won&apos;t auto-select it. The mandatory{' '}
-                    <code>/stream.mp3</code> mount always serves everyone.
+                    stay on MP3/Opus and won&apos;t auto-select it. Changing title, artist, and
+                    album metadata is carried automatically as native chained Ogg tags. The
+                    mandatory <code>/stream.mp3</code> mount always serves everyone.
                   </div>
                 </div>
               </Card>
             )}
 
             {form && (
-              <Card title="Ogg metadata" sub="ICY titles on /stream.opus + /stream.flac">
+              <Card title="Ogg metadata" sub="Opus ICY compatibility; FLAC tags are automatic">
                 <div className="field">
                   <div className="flex items-center gap-2">
-                    <Label>Push ICY track titles on the Ogg mounts</Label>
+                    <Label>Push ICY track titles on the Opus mount</Label>
                     <Pill tone="ink">restart required</Pill>
                   </div>
                   <div className="flex items-center gap-2">
@@ -1869,13 +1870,12 @@ export default function SettingsPanel({ djBrainEnabled = false }: { djBrainEnabl
                   </div>
                   <SettingsFieldError path="stream.oggIcyMetadata" errors={fieldErrors} />
                   <div className="field-hint">
-                    On by default. Sends each track&apos;s title out-of-band (ICY) on the Opus and
-                    FLAC mounts, which most internet-radio players and Cast receivers need: they
-                    read the in-band Ogg tags only once, at connect, and otherwise stay stuck on
-                    the first title. Turn it <strong>off</strong> if your listeners use
-                    foobar2000: it reads the in-band tags correctly, and the extra ICY channel
-                    breaks its FLAC metadata display. The MP3 and AAC mounts always use ICY and
-                    are unaffected either way.
+                    On by default for legacy Opus compatibility. This controls out-of-band ICY
+                    updates on <code>/stream.opus</code> only. <code>/stream.flac</code> always
+                    carries changing title, artist, and album metadata as native chained Ogg tags;
+                    a missing <code>Icy-MetaInt</code> response header there is expected. Receiver
+                    support varies, and this setting does not embed or guarantee artwork. MP3 and
+                    AAC behavior is unaffected.
                   </div>
                 </div>
               </Card>

@@ -94,11 +94,9 @@ export const DEFAULTS = {
     // whole connection, so /now-playing publishes it as stream.bufferSeconds and
     // players subtract it to line titles up with the audio in someone's ears (#1114).
     bufferSeconds: 22,
-    // ICY (out-of-band) titles on the Ogg mounts. ON by default: most clients
-    // read the in-band Ogg comment once at connect and then freeze on that title
-    // (#1052). foobar2000 is the exception — it parses chained-Ogg tags correctly
-    // and the ICY channel breaks its Ogg-FLAC metadata — hence a toggle.
-    // MP3/AAC always use ICY and are unaffected.
+    // Legacy ICY (out-of-band) title compatibility for the Opus mount. FLAC
+    // always uses native chained Ogg tags; MP3/AAC behavior is unaffected. Keep
+    // this key and its default for stored-settings and Opus compatibility.
     oggIcyMetadata: true,
     // Idle pause (broadcast/stream-idle.ts): after idleAfterMinutes with zero
     // listeners the mounts keep serving silence but the music chain stops being
